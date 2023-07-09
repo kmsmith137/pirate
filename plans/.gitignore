@@ -1,0 +1,5 @@
+plan_float16_float16.txt
+plan_float16_float32.txt
+plan_float32_float32.txt
+plan_int8_float16.txt
+plan_int8_float32.txt

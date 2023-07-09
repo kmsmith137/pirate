@@ -1,0 +1,56 @@
+BW per GPU per beam: 128 KB/s      [rounded up to multiple of 4KB/s?]
+BW per beam (128 GPUs): 16 MB/s    [up to 16.5 MB/s?]
+BW per GPU (200 beams): 25.6 MB/s  [up to ]
+Total BW (200 beams assumed): 3.2-3.3 GB/s (25.6-26.4 Gbps)
+
+Some schemes:
+ 2: non-zerocopy read into temp buffer, then "assemble" into chunks
+ 1a: zerocopy read into temp buffer, then "assemble" into chunks
+   in both cases 1a and 2, chunk size can be very large, say (25.6 MB) * (packet length / 1 sec)
+ 1b: non-zerocopy read into chunks
+ 1: zerocopy read into chunks
+
+Stream format
+ - control block (
+ 
+Common packet format which
+ - bit_depth
+ - nt_packet
+ - frame_size: 0 for "auto"
+ - upchannelization scheme
+
+Control block: send once per Tpacket
+ - Timestamp
+ - 
+
+Tests which can be done with example code:
+ - Is there a measurable differene without zero-copy?
+    (either in throughput or memory BW measured at controller)
+ - Is there a measurable difference if frames are not 4K?
+ - Is there a measurable difference with hugepages? mmap(... | MAP_HUGETLB).
+ - What happens if we make the chunk size short?
+ - What happens if I add GPU transfers, downsampling kernels, SSD bandwidth?
+
+Then add ingredients:
+ - receive buffer scattered into small chunks (I think just do -C)
+ - multiple senders and multiplexing
+ - varying chunk sizes
+
+Both sender and receiver do setsockopt(TCP_MAXSEG, 4096+12).
+How can receiver check it?
+
+Receiver data structure:
+ - Assume 1 second chunks
+ - Each chunk is minimum 16MB, max (16MB + 128*4KB) = 16.5 MB
+ - DS level 1: (16M samples) * (5 bits/sample) = 10 MB
+ - DS level 2: (8M samples) * (6 bits/sample) = 6 MB
+ - DS level 3: (4M samples) * (7 bits/sample) = 3.5 MB
+ - DS level 4: (2M samples) * (8 bits/sample) = 2 MB
+ - So natural chunk size is 0.5 MB (gives ~2M chunks in 1TB memory pool)
+ 
+tcp_mmap_c:
+ - Both sender and receiver do setsockopt(TCP_MAXSEG, 4096+12).
+ - Receiver: allocate buffer with mmap()
+
+How to inspect memory controller?
+Is there anything wrong with using mmap-ed huge pages in GPU?

@@ -1,0 +1,23 @@
+PipelineStage
+
+  - init()
+
+    arguments:
+
+      - bool on_gpu ?
+      - some sort of object defining memory layout
+         - namespace of "live" arrays
+	 - persistent array layout
+	 - scratch
+
+    can do the following:
+
+      - request access to "live" array in namespace
+          -> return value is handle object which returns Array<> when get() is called later
+      - add new "live" array to namespace
+          -> return value is similar handle object
+      - declare need for scratch local array
+      - declare need for persistent local array
+          automatically saved in AssembledChunk!
+          therefore, must be named somehow
+	  

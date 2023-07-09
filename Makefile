@@ -1,0 +1,93 @@
+ARCH =
+# ARCH += -gencode arch=compute_80,code=sm_80
+ARCH += -gencode arch=compute_86,code=sm_86
+# ARCH += -gencode arch=compute_89,code=sm_89
+# ARCH += -gencode arch=compute_90,code=sm_90
+
+GPUTILS_INCDIR=../gputils/include
+GPUTILS_LIBDIR=../gputils/lib
+
+NVCC=nvcc -std=c++17 $(ARCH) -m64 -O3 -I$(GPUTILS_INCDIR) --compiler-options -Wall,-march=native
+SHELL := /bin/bash
+
+.DEFAULT_GOAL: all
+.PHONY: all clean .FORCE
+
+HFILES = \
+  include/pirate/constants.hpp \
+  include/pirate/Dedisperser.hpp \
+  include/pirate/DedispersionConfig.hpp \
+  include/pirate/DedispersionPlan.hpp \
+  include/pirate/avx256/downsample.hpp \
+  include/pirate/avx256/m64_outbuf.hpp \
+  include/pirate/avx256/m128_outbuf.hpp \
+  include/pirate/gpu/reduce2.hpp \
+  include/pirate/gpu/DownsampleKernel.hpp \
+  include/pirate/gpu/TransposeKernel.hpp \
+  include/pirate/internals/bitvec.hpp \
+  include/pirate/internals/cpu_downsample.hpp \
+  include/pirate/internals/gpu_downsample.hpp \
+  include/pirate/internals/gpu_transpose.hpp \
+  include/pirate/internals/inlines.hpp \
+  include/pirate/internals/utils.hpp \
+  include/pirate/internals/CacheLineRingbuf.hpp \
+  include/pirate/internals/FakeCorrelator.hpp \
+  include/pirate/internals/FakeServer.hpp \
+  include/pirate/internals/GpuDedispersionKernel.hpp \
+  include/pirate/internals/LaggedCacheLine.hpp \
+  include/pirate/internals/ReferenceDedisperser.hpp
+
+XFILES = \
+  bin/chord_2023_receiver \
+  bin/chord_2023_sender \
+  bin/fake_correlator \
+  bin/fake_server \
+  bin/scratch \
+  bin/show_chord_plan \
+  bin/test-avx256-m64-outbuf \
+  bin/test-cpu-downsampler \
+  bin/test-gpu-dedispersion-kernels \
+  bin/test-gpu-downsample \
+  bin/test-gpu-reduce2 \
+  bin/test-gpu-transpose \
+  bin/test-reference-dedisperser \
+  bin/test-reference-tree \
+  bin/time-cpu-downsample \
+  bin/time-gpu-dedispersion-kernels \
+  bin/time-gpu-downsample \
+  bin/time-gpu-transpose
+
+OFILES = \
+  src_lib/cpu_downsample.o \
+  src_lib/gpu_downsample.o \
+  src_lib/gpu_transpose.o \
+  src_lib/utils.o \
+  src_lib/CacheLineRingbuf.o \
+  src_lib/Dedisperser.o \
+  src_lib/DedispersionConfig.o \
+  src_lib/DedispersionPlan.o \
+  src_lib/FakeCorrelator.o \
+  src_lib/FakeServer.o \
+  src_lib/GpuDedispersionKernel.o \
+  src_lib/LaggedCacheLine.o \
+  src_lib/ReferenceDedisperser.o
+
+# Used in 'make clean' and 'make source_files.txt'
+SRCDIRS = . src_bin src_lib include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
+
+all: $(XFILES)
+
+%.o: %.cu $(HFILES)
+	$(NVCC) -c -o $@ $<
+
+bin/%: src_bin/%.o $(OFILES)
+	mkdir -p bin && $(NVCC) -o $@ $^ $(GPUTILS_LIBDIR)/libgputils.a
+
+# Not part of 'make all', needs explicit 'make source_files.txt'
+source_files.txt: .FORCE
+	rm -f source_files.txt
+	shopt -s nullglob && for d in $(SRCDIRS); do for f in $$d/*.cu $$d/*.hpp $$d/*.cuh; do echo $$f; done; done >$@
+
+clean:
+	rm -f $(XFILES) source_files.txt *~ template_instantiations/*.cu
+	shopt -s nullglob && for d in $(SRCDIRS); do rm -f $$d/*~ $$d/*.o; done
