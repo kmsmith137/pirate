@@ -2,3 +2,4 @@
 
 An experimental GPU-based fast transient search, intended for use in CHORD.
 
+Contact: Kendrick Smith <kmsmith@perimeterinstitute.ca>
