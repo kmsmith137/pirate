@@ -28,11 +28,14 @@ HFILES = \
   include/pirate/internals/cpu_downsample.hpp \
   include/pirate/internals/gpu_downsample.hpp \
   include/pirate/internals/gpu_transpose.hpp \
+  include/pirate/internals/file_utils.hpp \
   include/pirate/internals/inlines.hpp \
   include/pirate/internals/utils.hpp \
   include/pirate/internals/CacheLineRingbuf.hpp \
+  include/pirate/internals/Directory.hpp \
   include/pirate/internals/FakeCorrelator.hpp \
   include/pirate/internals/FakeServer.hpp \
+  include/pirate/internals/File.hpp \
   include/pirate/internals/GpuDedispersionKernel.hpp \
   include/pirate/internals/LaggedCacheLine.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp
@@ -59,6 +62,7 @@ XFILES = \
 
 OFILES = \
   src_lib/cpu_downsample.o \
+  src_lib/file_utils.o \
   src_lib/gpu_downsample.o \
   src_lib/gpu_transpose.o \
   src_lib/utils.o \
@@ -66,8 +70,10 @@ OFILES = \
   src_lib/Dedisperser.o \
   src_lib/DedispersionConfig.o \
   src_lib/DedispersionPlan.o \
+  src_lib/Directory.o \
   src_lib/FakeCorrelator.o \
   src_lib/FakeServer.o \
+  src_lib/File.o \
   src_lib/GpuDedispersionKernel.o \
   src_lib/LaggedCacheLine.o \
   src_lib/ReferenceDedisperser.o
@@ -81,7 +87,7 @@ all: $(XFILES)
 	$(NVCC) -c -o $@ $<
 
 bin/%: src_bin/%.o $(OFILES)
-	mkdir -p bin && $(NVCC) -o $@ $^ $(GPUTILS_LIBDIR)/libgputils.a
+	mkdir -p bin && $(NVCC) -o $@ $^ $(GPUTILS_LIBDIR)/libgputils.a -lyaml-cpp
 
 # Not part of 'make all', needs explicit 'make source_files.txt'
 source_files.txt: .FORCE
