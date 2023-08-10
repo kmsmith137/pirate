@@ -33,12 +33,14 @@ HFILES = \
   include/pirate/internals/utils.hpp \
   include/pirate/internals/CacheLineRingbuf.hpp \
   include/pirate/internals/Directory.hpp \
+  include/pirate/internals/Epoll.hpp \
   include/pirate/internals/FakeCorrelator.hpp \
   include/pirate/internals/FakeServer.hpp \
   include/pirate/internals/File.hpp \
   include/pirate/internals/GpuDedispersionKernel.hpp \
   include/pirate/internals/LaggedCacheLine.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp \
+  include/pirate/internals/Socket.hpp \
   include/pirate/internals/YamlFile.hpp
 
 XFILES = \
@@ -73,12 +75,14 @@ OFILES = \
   src_lib/DedispersionConfig.o \
   src_lib/DedispersionPlan.o \
   src_lib/Directory.o \
+  src_lib/Epoll.o \
   src_lib/FakeCorrelator.o \
   src_lib/FakeServer.o \
   src_lib/File.o \
   src_lib/GpuDedispersionKernel.o \
   src_lib/LaggedCacheLine.o \
   src_lib/ReferenceDedisperser.o \
+  src_lib/Socket.o \
   src_lib/YamlFile.o
 
 # Used in 'make clean' and 'make source_files.txt'

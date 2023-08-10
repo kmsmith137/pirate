@@ -1,10 +1,10 @@
 #include "../include/pirate/internals/FakeCorrelator.hpp"
+#include "../include/pirate/internals/Socket.hpp"
 
 #include <thread>
 #include <sstream>
 #include <iostream>
 
-#include <gputils/Socket.hpp>
 #include <gputils/mem_utils.hpp>
 #include <gputils/system_utils.hpp>
 
@@ -59,7 +59,7 @@ void FakeCorrelator::sender_main(const string &ipaddr)
     
     shared_ptr<char> buf = gputils::af_alloc<char> (params.send_bufsize, aflags);
     
-    gputils::Socket socket(PF_INET, SOCK_STREAM);
+    Socket socket(PF_INET, SOCK_STREAM);
     // later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)
     socket.connect(ipaddr, 8787);  // TCP port 8787
     

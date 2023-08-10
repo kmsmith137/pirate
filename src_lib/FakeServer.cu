@@ -5,8 +5,6 @@
 #include <iostream>
 #include <condition_variable>
 
-#include <gputils/Epoll.hpp>
-#include <gputils/Socket.hpp>
 #include <gputils/Barrier.hpp>
 #include <gputils/mem_utils.hpp>
 #include <gputils/cuda_utils.hpp>
@@ -19,6 +17,8 @@
 #include "../include/pirate/DedispersionConfig.hpp"
 
 #include "../include/pirate/internals/File.hpp"
+#include "../include/pirate/internals/Epoll.hpp"
+#include "../include/pirate/internals/Socket.hpp"
 #include "../include/pirate/internals/inlines.hpp"
 #include "../include/pirate/internals/cpu_downsample.hpp"
 
@@ -78,11 +78,11 @@ struct FakeServer::Receiver
 
     // Initialized in initialize().
     shared_ptr<char> recv_buf;
-    gputils::Socket listening_socket;
-    gputils::Epoll epoll;
+    Socket listening_socket;
+    Epoll epoll;
 
     // Initialized in accept().
-    vector<gputils::Socket> data_sockets;
+    vector<Socket> data_sockets;
 
     // Used to print summary statistics in announcer thread.
     std::mutex lock;
