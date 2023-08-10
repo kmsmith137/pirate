@@ -38,7 +38,8 @@ HFILES = \
   include/pirate/internals/File.hpp \
   include/pirate/internals/GpuDedispersionKernel.hpp \
   include/pirate/internals/LaggedCacheLine.hpp \
-  include/pirate/internals/ReferenceDedisperser.hpp
+  include/pirate/internals/ReferenceDedisperser.hpp \
+  include/pirate/internals/YamlFile.hpp
 
 XFILES = \
   bin/chord_2023_receiver \
@@ -47,6 +48,7 @@ XFILES = \
   bin/fake_server \
   bin/scratch \
   bin/show_chord_plan \
+  bin/show_dedispersion_plan \
   bin/test-avx256-m64-outbuf \
   bin/test-cpu-downsampler \
   bin/test-gpu-dedispersion-kernels \
@@ -76,7 +78,8 @@ OFILES = \
   src_lib/File.o \
   src_lib/GpuDedispersionKernel.o \
   src_lib/LaggedCacheLine.o \
-  src_lib/ReferenceDedisperser.o
+  src_lib/ReferenceDedisperser.o \
+  src_lib/YamlFile.o
 
 # Used in 'make clean' and 'make source_files.txt'
 SRCDIRS = . src_bin src_lib include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals

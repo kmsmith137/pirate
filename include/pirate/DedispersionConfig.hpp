@@ -2,7 +2,12 @@
 #define _PIRATE_DEDISPERSION_CONFIG_HPP
 
 #include <vector>
+#include <string>
 #include <iostream>
+
+namespace YAML { class Emitter; }      // #include <yaml-cpp/yaml.h>
+namespace pirate { struct YamlFile; }  // #include <pirate/internals/YamlFile.hpp>
+
 
 namespace pirate {
 #if 0
@@ -50,7 +55,24 @@ struct DedispersionConfig
     // Note: no 'get_bytes_per_uncompressed_segment()' (use constants::bytes_per_segment).
     
     void validate() const;
+
+    // Write in informal text format (e.g. for log files)
+    // FIXME I might phase this out, in favor of yaml everywhere.
     void print(std::ostream &os = std::cout, int indent=0) const;
+
+    // Write in YAML format.
+    void to_yaml(YAML::Emitter &emitter) const;
+    void to_yaml(const std::string &filename) const;    
+    std::string to_yaml_string() const;
+
+    // Construct from YAML file.
+    // The 'verbosity' argument has the following meaning:
+    //   0 = quiet
+    //   1 = announce default values for all unspecified parameters
+    //   2 = announce all parameters
+
+    static DedispersionConfig from_yaml(const std::string &filename, int verbosity=0);
+    static DedispersionConfig from_yaml(const YamlFile &file);
     
     // Helper functions for constructing DedispersionConfig instances.
     void add_early_trigger(ssize_t ds_level, ssize_t tree_rank);

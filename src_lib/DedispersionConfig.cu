@@ -1,13 +1,18 @@
 #include "../include/pirate/DedispersionConfig.hpp"
 
+#include <cstring>                   // strlen()
 #include <algorithm>                 // std::sort()
 #include <gputils/cuda_utils.hpp>    // CUDA_CALL()
 #include <gputils/rand_utils.hpp>    // gputils::rand_*()
 #include <gputils/string_utils.hpp>  // gputils::tuple_str()
 
 #include "../include/pirate/constants.hpp"
+#include "../include/pirate/internals/File.hpp"
 #include "../include/pirate/internals/utils.hpp"    // check_rank(), is_empty_string()
 #include "../include/pirate/internals/inlines.hpp"  // xdiv(), pow2(), print_kv()
+#include "../include/pirate/internals/YamlFile.hpp"
+
+#include <yaml-cpp/emitter.h>
 
 using namespace std;
 
@@ -243,7 +248,101 @@ void DedispersionConfig::print(ostream &os, int indent) const
 }
 
 
+void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
+{
+    this->validate();
+    
+    emitter
+	<< YAML::BeginMap
+	<< YAML::Key << "tree_rank" << YAML::Value << tree_rank
+	<< YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels
+	<< YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk
+	<< YAML::Key << "uncompressed_dtype" << YAML::Value << uncompressed_dtype
+	<< YAML::Key << "compressed_dtype" << YAML::Value << compressed_dtype
+	<< YAML::Key << "early_triggers"
+	<< YAML::Value 
+	<< YAML::BeginSeq;
+
+    for (const auto &early_trigger: this->early_triggers) {
+	emitter
+	    << YAML::Flow
+	    << YAML::BeginMap
+	    << YAML::Key << "ds_level" << YAML::Value << early_trigger.ds_level
+	    << YAML::Key << "tree_rank" << YAML::Value << early_trigger.tree_rank
+	    << YAML::EndMap;
+    }
+    
+    emitter
+	<< YAML::EndSeq
+	<< YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu
+	<< YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch
+	<< YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
+	<< YAML::Key << "gmem_nbytes_per_gpu" << YAML::Value << gmem_nbytes_per_gpu
+	<< YAML::Comment(gputils::nbytes_to_str(gmem_nbytes_per_gpu))
+	<< YAML::EndMap;
+}
+
+
+string DedispersionConfig::to_yaml_string() const
+{
+    YAML::Emitter emitter;
+    this->to_yaml(emitter);
+    return emitter.c_str();
+}
+
+
+void DedispersionConfig::to_yaml(const std::string &filename) const
+{
+    YAML::Emitter emitter;
+    this->to_yaml(emitter);
+    const char *s = emitter.c_str();
+
+    File f(filename, O_WRONLY | O_CREAT | O_TRUNC);
+    f.write(s, strlen(s));
+}
+
+
 // -------------------------------------------------------------------------------------------------
+
+
+// static member function
+DedispersionConfig DedispersionConfig::from_yaml(const string &filename, int verbosity)
+{
+    YamlFile f(filename, verbosity);
+    return DedispersionConfig::from_yaml(f);
+}
+
+
+// static member function
+DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
+{
+    DedispersionConfig ret;
+
+    ret.tree_rank = f.get_scalar<long> ("tree_rank");
+    ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
+    ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
+    ret.uncompressed_dtype = f.get_scalar<string> ("uncompressed_dtype");
+    ret.compressed_dtype = f.get_scalar<string> ("compressed_dtype");
+    ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
+    ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
+    ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
+    ret.gmem_nbytes_per_gpu = f.get_scalar<long> ("gmem_nbytes_per_gpu");
+
+    YamlFile ets = f["early_triggers"];
+
+    for (long i = 0; i < ets.size(); i++) {
+	YamlFile et = ets[i];
+	long ds_level = et.get_scalar<long> ("ds_level");
+	long tree_rank = et.get_scalar<long> ("tree_rank");
+	ret.add_early_trigger(ds_level, tree_rank);
+	et.check_for_invalid_keys();
+    }	
+    
+    f.check_for_invalid_keys();
+    
+    ret.validate();
+    return ret;
+}
 
 
 // static member function
