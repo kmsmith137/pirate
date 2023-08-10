@@ -5,7 +5,6 @@
 #include <iostream>
 #include <condition_variable>
 
-#include <gputils/File.hpp>
 #include <gputils/Epoll.hpp>
 #include <gputils/Socket.hpp>
 #include <gputils/Barrier.hpp>
@@ -19,6 +18,7 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 
+#include "../include/pirate/internals/File.hpp"
 #include "../include/pirate/internals/inlines.hpp"
 #include "../include/pirate/internals/cpu_downsample.hpp"
 
@@ -611,7 +611,7 @@ struct SsdWorker : public FakeServer::Worker
 	    ss << root_dir << "/file_" << iter << "_" << ifile;
 	    string filename = ss.str();
 
-	    gputils::File f(filename, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT | O_SYNC);
+	    File f(filename, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT | O_SYNC);
 
 	    for (int iwrite = 0; iwrite < params.nwrites_per_file; iwrite++)
 		f.write(data.get() + iwrite * nbytes_per_write, nbytes_per_write);
