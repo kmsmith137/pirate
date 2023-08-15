@@ -49,6 +49,9 @@ struct FakeServer
 	ssize_t nbytes_g2h = 0;  // memcpy host->gpu (per GPU)
 	ssize_t memcpy_blocksize = 0;
 	
+	ssize_t nbytes_gmem_kernel = 0;  // use memory bandwidth on GPU, using a GPU kernel (not cudaMemcpyDeviceToDevice())
+	ssize_t gmem_kernel_blocksize = 0;
+	
 	ssize_t nbytes_per_ssd = 0;
 	ssize_t nthreads_per_ssd = 0;
 	ssize_t nwrites_per_file = 0;

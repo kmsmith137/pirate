@@ -8,9 +8,10 @@
 #include <gputils/Barrier.hpp>
 #include <gputils/mem_utils.hpp>
 #include <gputils/cuda_utils.hpp>
+#include <gputils/time_utils.hpp>
 #include <gputils/string_utils.hpp>
 #include <gputils/system_utils.hpp>
-#include <gputils/time_utils.hpp>
+#include <gputils/memcpy_kernels.hpp>
 
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
@@ -296,6 +297,7 @@ struct FakeServer::Worker
     ssize_t nbytes_h2g = 0;
     ssize_t nbytes_g2h = 0;
     ssize_t nbytes_h2h = 0;
+    ssize_t nbytes_gmem = 0;
     ssize_t nbytes_ssd = 0;
     
     Worker(const FakeServer::Params &params_) : params(params_) { }
@@ -351,6 +353,7 @@ struct FakeServer::Worker
 	_show_bandwidth("host->gpu", ws, this->nbytes_h2g);
 	_show_bandwidth("gpu->host", ws, this->nbytes_g2h);
 	_show_bandwidth("host->host", ws, this->nbytes_h2h);
+	_show_bandwidth("gmem", ws, this->nbytes_gmem);
 	_show_bandwidth("ssd", ws, this->nbytes_ssd);
 	
 	cout << endl;
@@ -408,6 +411,7 @@ struct DedispersionWorker : public FakeServer::Worker
 	this->worker_name = ss.str();
 	this->nbytes_h2g = plan->pcie_nbytes_per_chunk;
 	this->nbytes_g2h = plan->pcie_nbytes_per_chunk;
+	// FIXME initialized this->nbytes_gmem
 	this->dedisperser = make_shared<Dedisperser> (plan);
     }
 
@@ -491,9 +495,9 @@ struct MemcpyWorker : public FakeServer::Worker
 	if ((src_device < 0) && (dst_device < 0))
 	    this->nbytes_h2h = this->nbytes = params.nbytes_h2h;
 	else if (src_device < 0)
-	    this->nbytes_h2g = this->nbytes = params.nbytes_h2g;
+	    this->nbytes_h2g = this->nbytes_gmem = this->nbytes = params.nbytes_h2g;
 	else if (dst_device < 0)
-	    this->nbytes_g2h = this->nbytes = params.nbytes_g2h;
+	    this->nbytes_g2h = this->nbytes_gmem = this->nbytes = params.nbytes_g2h;
 	else
 	    throw runtime_error("MemcpyWorker: device->device is currrently unsupported");
 
@@ -526,10 +530,26 @@ struct MemcpyWorker : public FakeServer::Worker
     virtual void worker_initialize() override
     {
 	int dev = max(src_device, dst_device);
+	int cuda_stream_priority = -1;  // lower numerical value = higher priority
 	
 	if (dev >= 0) {
 	    CUDA_CALL(cudaSetDevice(dev));  // initialize CUDA device in worker thread
-	    this->stream = gputils::CudaStreamWrapper().p;  // RAII stream
+	    this->stream = gputils::CudaStreamWrapper(cuda_stream_priority).p;  // RAII stream
+	    
+#if 0
+	    // Just curious what the allowed priority range is.
+	    // (On an A40 it turned out to be [-5,0].)
+	    int leastPriority = 137;
+	    int greatestPriority = 137;
+	    CUDA_CALL(cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority));
+	    cout << "XXX " << leastPriority << " " << greatestPriority << endl;
+#endif
+
+#if 0
+	    int pri = 137;
+	    CUDA_CALL(cudaStreamGetPriority(this->stream.get(), &pri));
+	    cout << "XXX pri=" << pri << endl;
+#endif
 	}
 
 	this->psrc = server_alloc(nbytes, params.use_hugepages, (src_device >= 0));
@@ -554,6 +574,78 @@ struct MemcpyWorker : public FakeServer::Worker
     }
     
     virtual ~MemcpyWorker() { }
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// GmemWorker: uses memory bandwidth on GPU, but from a kernel instead of cudaMemcpyDeviceToDevice().
+
+
+struct GmemWorker : public FakeServer::Worker
+{
+    // string worker_name;    // inherited from 'Worker' base class
+
+    const int device;
+
+    ssize_t nbytes_copy = 0;
+    ssize_t blocksize = 0;
+    
+    shared_ptr<char> psrc;
+    shared_ptr<char> pdst;
+
+    // Reminder: cudaStream_t is a typedef for (CUstream_st *)
+    shared_ptr<CUstream_st> stream;
+
+    
+    GmemWorker(const FakeServer::Params &params_, int device_) :
+	FakeServer::Worker(params_), device(device_)
+    {
+	this->nbytes_copy = xdiv(params.nbytes_gmem_kernel, 2);
+	this->blocksize = params.gmem_kernel_blocksize;
+
+	if (blocksize <= 0)
+	    blocksize = 4L * 1024L * 1024L * 1024L;
+
+	blocksize = min(blocksize, nbytes_copy);
+	
+	stringstream ss;
+	ss << "GmemKernel(device= " << device
+	   << ", nbytes=" << gputils::nbytes_to_str(2 * nbytes_copy)
+	   << ", blocksize=" << gputils::nbytes_to_str(blocksize)
+	   << ")";
+
+	this->nbytes_gmem = 2 * this->nbytes_copy;
+	this->worker_name = ss.str();
+    }
+
+
+    virtual void worker_initialize() override
+    {
+	CUDA_CALL(cudaSetDevice(this->device));  // initialize CUDA device in worker thread
+	this->stream = gputils::CudaStreamWrapper().p;  // RAII stream
+
+	int flags = gputils::af_gpu | gputils::af_zero;
+
+	this->psrc = gputils::af_alloc<char> (blocksize, flags);
+	this->pdst = gputils::af_alloc<char> (blocksize, flags);
+    }
+    
+
+    virtual void worker_body(int iter) override
+    {
+	ssize_t nbytes_cumul = 0;
+
+	while (nbytes_cumul < nbytes_copy) {
+	    ssize_t nbytes_block = min(nbytes_copy - nbytes_cumul, blocksize);
+	    gputils::launch_memcpy_kernel(pdst.get(), psrc.get(), nbytes_block, stream.get());
+	    nbytes_cumul += nbytes_block;
+	}
+
+	CUDA_CALL(cudaStreamSynchronize(stream.get()));
+    }
+    
+    virtual ~GmemWorker() { }
 };
 
 
@@ -689,7 +781,7 @@ FakeServer::FakeServer(const Params &params_)
     
     assert(params.num_iterations > 0);
     
-    bool gpus_requested = (params.dedispersion_plan) || (params.nbytes_h2g > 0) || (params.nbytes_g2h > 0);
+    bool gpus_requested = (params.dedispersion_plan) || (params.nbytes_h2g > 0) || (params.nbytes_g2h > 0) || (params.nbytes_gmem_kernel > 0);
     bool nics_requested = (params.nconn_per_ipaddr > 0) || (params.ipaddr_list.size() > 0);
     bool ssds_requested = (params.nbytes_per_ssd > 0);
     
@@ -727,6 +819,12 @@ FakeServer::FakeServer(const Params &params_)
 	assert((params.nbytes_g2h % params.memcpy_blocksize) == 0);
 	assert((params.nbytes_h2g % params.memcpy_blocksize) == 0);
     }
+
+    if (params.nbytes_gmem_kernel > 0) {
+	assert((params.nbytes_gmem_kernel % 256) == 0);
+	assert(params.gmem_kernel_blocksize >= 0);
+	assert((params.gmem_kernel_blocksize % 128) == 0);
+    }
     
     // ------------------------------  Receivers and workers  ------------------------------
     
@@ -751,6 +849,11 @@ FakeServer::FakeServer(const Params &params_)
     if (params.nbytes_g2h > 0) {
 	for (int igpu = 0; igpu < params.ngpu; igpu++)	    
 	    workers.push_back(make_shared<MemcpyWorker> (params, igpu, -1));
+    }
+
+    if (params.nbytes_gmem_kernel > 0) {
+	for (int igpu = 0; igpu < params.ngpu; igpu++)	    
+	    workers.push_back(make_shared<GmemWorker> (params, igpu));
     }
     
     if (params.nbytes_downsample > 0) {

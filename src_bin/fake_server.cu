@@ -114,6 +114,24 @@ void test_05_dedispersion_plan()
 }
 
 
+void test_06_pcie_gmem()
+{
+    FakeServer::Params sp;
+    sp.server_name = "Full server + dedispersion plan";
+
+    // Note: only using one GPU for now!
+    sp.ngpu = 1;
+
+    sp.nbytes_h2g = 5L * 1024L * 1024L * 1024L;
+    sp.nbytes_g2h = 5L * 1024L * 1024L * 1024L;
+    sp.memcpy_blocksize = 1L * 1024L * 1024L * 1024L;
+
+    sp.nbytes_gmem_kernel = 140L * 1024L * 1024L * 1024L;
+    
+    FakeServer::run(sp);
+}
+
+
 int main(int argc, char **argv)
 {
     gputils::mlockall_x();
@@ -122,7 +140,8 @@ int main(int argc, char **argv)
     // test_02_ssds();
     // test_03_receive_data();
     // test_04_full_server();
-    test_05_dedispersion_plan();
-   
+    // test_05_dedispersion_plan();
+    test_06_pcie_gmem();
+    
     return 0;
 }
