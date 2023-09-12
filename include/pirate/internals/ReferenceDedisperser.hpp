@@ -26,6 +26,8 @@ class ReferenceReducer;
 
 struct ReferenceDedisperser
 {
+    // The ReferenceDedisperser has a 'sophistication' argument, which is one of {0,1,2,3}.
+    //
     // sophistication=0:
     //   - downsampling implemented by throwing away bottom half of output
     //   - early triggers implemented by independent trees
@@ -55,12 +57,33 @@ struct ReferenceDedisperser
     int nds = 0;
     ssize_t pos = 0;  // counts cumulative calls to dedisperse()
 
+    // The 'in' array represents one "chunk", with shape (2^input_rank, input_nt).
+    // To process multiple chunks, call the dedipserse() method in a loop.
     void dedisperse(const gputils::Array<float> &in);
+    
     void print(std::ostream &os=std::cout, int indent=0) const;
 
-    std::vector<gputils::Array<float>> downsampled_inputs;   // length nds
+    // downsampled_inputs: only used if sophistication == 0.
+    // downsampled_inputs[ids] has shape (2^input_rank, input_nt/2^ids), where 0 <= ids < nds.
+    // It contains the input array after downsampling by a factor 2^ids.
+    
+    std::vector<gputils::Array<float>> downsampled_inputs;  // length nds
     void _allocate_downsampled_inputs();
     void _compute_downsampled_inputs(const gputils::Array<float> &in);
+
+    // lagged_downsampled_inputs: used if sophistication >= 1.
+    // It contains the input array after applying the ReferenceLaggedDownsampler.
+    //
+    // lagged_downsampled_inputs[ids] has shape:
+    //   (2^input_rank, input_nt)            if ids == 0
+    //   (2^(input_rank-1), input_nt/2^ids)  if ids > 0
+
+    std::vector<gputils::Array<float>> lagged_downsampled_inputs;  // length nds
+    void _allocate_lagged_downsampled_inputs();
+    void _compute_lagged_downsampled_inputs(const gputils::Array<float> &in);
+
+    // FIXME temporary kludge
+    std::vector<std::shared_ptr<ReferenceReducer>> reducer_hack;
 
     // The "intermediate" arrays are the iobufs of the Stage0Trees.
     std::vector<gputils::Array<float>> intermediate_arrays;   // length nds
@@ -77,6 +100,13 @@ struct ReferenceDedisperser
     
     struct SimpleTree
     {
+	// SimpleTree: only used if sophistication==0.
+	//
+	//  - Uses one-stage dedispersion instead of two stages.
+	//  - Assumes that caller has applied appropriate downsampling before calling dedisperse().
+	//  - If tree is downsampled, then we compute twice as many DMs as necessary, then drop the bottom half.
+	//  - Each early trigger is computed independently "from scratch", by disregarding some input channels.
+	
 	SimpleTree(const DedispersionPlan::Stage1Tree &st1);
 
 	// Input array will be an element of this->downsampled_inputs.
@@ -84,9 +114,9 @@ struct ReferenceDedisperser
 	
 	void dedisperse(const gputils::Array<float> &in, gputils::Array<float> &out);
 
-	const bool is_downsampled;
-	const int output_rank;
-	const int nt_ds;
+	const bool is_downsampled;    // (st1.ds_level > 0)
+	const int output_rank;        // (st1.rank0 + st1.rank1_trigger)
+	const int nt_ds;              // (st1.nt_ds)
 	
 	std::shared_ptr<ReferenceTree> rtree;  // rank = is_downsampled ? (output_rank+1) : output_rank
 	gputils::Array<float> rstate;          // length rtree->nrstate
@@ -199,6 +229,13 @@ struct ReferenceDedisperser
 
 class ReferenceTree
 {
+    // ReferenceTree: simple, self-contained reference implementation of tree dedispersion.
+    // Processes input incrementally in chunks of shape (2^rank, ntime).
+    //
+    // The RefrerenceTree is unaware of the larger dedispersion plan (stage0/stage1 split,
+    // early triggers, downsampling, etc.) but can be used as a "building block" to implement
+    // these features.
+    
 public:
     ReferenceTree(int rank, int ntime);
 
@@ -222,6 +259,10 @@ protected:
 class ReferenceLagbuf
 {
 public:
+    // ReferenceLagbuf: a very simple class which applies a channel-dependent lag
+    // (specified by a length-nchan integer-valued vector of lags) incrementally to
+    // an input array of shape (nchan, ntime).
+    
     ReferenceLagbuf(const std::vector<int> &lags, int ntime);
 
     int nchan = 0; // lags.size()
