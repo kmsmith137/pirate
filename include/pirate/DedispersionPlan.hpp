@@ -35,7 +35,8 @@ struct DedispersionPlan
 	int num_stage1_trees = 0;        // number of associated Stage1Trees (= num_early_triggers + 1)
 	int stage1_base_tree_index = 0;  // base Stage1Tree index, within this->stage1_trees.
 	
-	int segments_per_row = 0;    // always equal to (nt_ds / nelts_per_segment)
+	int segments_per_row = 0;    // equal to (nt_ds / nelts_per_segment)
+	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * segments_per_row
         int iobuf_base_segment = 0;  // base segment index, within single-beam stage0_iobuf
 
 	// "rstate" = dedispersion state kept in registers, stored persistently on GPU between chunks
@@ -52,7 +53,8 @@ struct DedispersionPlan
 	int rank1_trigger = 0;   // Can be smaller than rank1_ambient, for early trigger
 	int nt_ds = 0;           // Same as Stage0Tree::nt_ds
 
-	int segments_per_row = 0;    // always equal to (nt_ds / nelts_per_segment)
+	int segments_per_row = 0;    // equal to (nt_ds / nelts_per_segment)
+	int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * segments_per_row
         int iobuf_base_segment = 0;  // base segment index, within single-beam stage1_iobuf
 
 	// For each row of the tree, we compute a lag (in time samples), then split the lag
@@ -108,6 +110,26 @@ struct DedispersionPlan
     ssize_t pcie_nbytes_per_chunk = 0;      // host <-> GPU bandwidth per chunk (EACH WAY), including factor 'total_beams_per_gpu'
     ssize_t pcie_memcopies_per_chunk = 0;   // host <-> GPU memcopy call count per chunk (EACH WAY)
 
+    // GPU global memory bandwidth, in bytes/chunk (not bytes/sec!), including factor 'total_beams_per_gpu'.
+    struct {
+	ssize_t init_stage0_ds0 = 0;        // FIXME underestimates, since input (4-bit?) array is not included
+	ssize_t init_stage0_higher_ds = 0;
+	ssize_t dedisperse_stage0_main = 0;
+	ssize_t dedisperse_stage0_rstate = 0;
+	ssize_t copy_stage0_to_staging = 0;
+	ssize_t copy_staging_to_staging = 0;
+	ssize_t copy_staging_to_stage1 = 0;
+	ssize_t copy_staging_to_gmem_ringbuf = 0;
+	ssize_t copy_staging_to_hmem_ringbuf = 0;
+	ssize_t copy_gmem_ringbuf_to_staging = 0;
+	ssize_t copy_hmem_ringbuf_to_staging = 0;
+	ssize_t copy_stage0_to_stage1 = 0;
+	ssize_t copy_stage1_to_stage1 = 0;
+	ssize_t dedisperse_stage1_main = 0;
+	ssize_t dedisperse_stage1_rstate = 0;
+	ssize_t peak_finding = 0;           // FIXME underestimates, since output coarse-grained array is not included
+    } gmem_bw_nbytes_per_chunk;
+    
     // FIXME locator arrays
     //   stage0 -> compressed staging
     //   compressed staging -> gpu ring buffer

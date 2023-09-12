@@ -33,11 +33,22 @@ extern ssize_t rstate_ds_len(int output_rank);
 // If uflag=true, then we're computing the upper half of a (rank0+rank1+1) tree.
 extern int rb_lag(int i, int j, int rank0, int rank1, bool uflag=false);
 
-// Returns my current guess for the CHORD dedispersion config.
-// FIXME will go away, after I define a YAML format for configs.
-extern DedispersionConfig
-make_chord_dedispersion_config(const std::string &compressed_dtype = "int8",
-			       const std::string &uncompressed_dtype = "float32");
+
+// Setup for mean_bytes_per_unaligned_chunk(): we have a long array in GPU global memory
+//
+//   arr[nouter][nbytes];
+//
+// where:
+//
+//   nouter >> 1
+//   0 < nbytes <= constants::bytes_per_gpu_cache_line
+//   base address of 'arr' is aligned
+//
+// Suppose we read one "chunk" of the form arr[i,:]. Depending on the (assumed random) value
+// of i, the memory controller will read either one or two cache lines. This function returns
+// the expectation value (expressed as byte count, not cache line count).
+
+extern int mean_bytes_per_unaligned_chunk(int nbytes);
 
 
 }  // namespace pirate

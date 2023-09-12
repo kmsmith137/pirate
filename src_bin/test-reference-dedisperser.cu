@@ -57,9 +57,11 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int so
 // -------------------------------------------------------------------------------------------------
 
 
-int main(int argc, char **argv)
+static void run_random_small_configs(int niter)
 {
-    for (int iter = 0; iter < 100; iter++) {
+    for (int iter = 0; iter < niter; iter++) {
+	cout << "\n    *** Running random small config " << iter << "/" << niter << " ***\n" << endl;
+	
 	auto config = DedispersionConfig::make_random();
 	config.planner_verbosity = 1;
 
@@ -71,19 +73,31 @@ int main(int argc, char **argv)
 	
 	test_reference_dedispersion(config, 0, 3, nchunks, true);  // noisy=true
     }
+}
 
-    cout << "\n"
-	 << "   *** This concludes our test of 100 randomly generated 'small' configs ***\n"
-	 << "   *** Now running a long test with the CHORD config ***\n"
-	 << "   *** This will take about 45 minutes!! ***\n"
-	 << "   *** Most of the time, you'll want to exit early with control-C ***\n"
-	 << endl;
 
-    DedispersionConfig chord_config = make_chord_dedispersion_config();
+int main(int argc, char **argv)
+{
+    if (argc == 1) {
+	const int niter = 100;
+	
+	cout << "No command-line arguments were specified; running "
+	     << niter << " randomly generated 'small' configs" << endl;
+	
+	run_random_small_configs(niter);
+	
+	cout << "\nThis concludes our test of " << niter << " randomly generated 'small' configs.\n"
+	     << "To run a long test, specify a config on the command line, e.g.\n"
+	     << "   ./bin/test-reference-dedisperser configs/dedispersion/chord_zen3/chord_zen3_int8_float16.yml\n";
+    }
+
+    for (int iarg = 1; iarg < argc; iarg++) {
+	auto config = DedispersionConfig::from_yaml(argv[iarg]);
     
-    int chord_nt = 1024 * 1024;
-    int chord_nchunks = xdiv(chord_nt, chord_config.time_samples_per_chunk);
-    test_reference_dedispersion(chord_config, 0, 3, chord_nchunks, true);  // noisy=true
+	int nt_tot = 1024 * 1024;  // FIXME promote to command-line arg?
+	int nchunks = xdiv(nt_tot, config.time_samples_per_chunk);
+	test_reference_dedispersion(config, 0, 3, nchunks, true);  // noisy=true
+    }
     
     cout << "\ntest-reference-dedisperser: pass" << endl;
     return 0;

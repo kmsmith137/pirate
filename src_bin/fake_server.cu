@@ -97,6 +97,7 @@ void test_04_full_server()
 }
 
 
+#if 0
 void test_05_dedispersion_plan()
 {
     // One FakeServer iteration is supposed to represent 128 beams, and two seconds of data.
@@ -107,11 +108,16 @@ void test_05_dedispersion_plan()
     sp.num_iterations = 250;
     // sp.use_hugepages = false;
 
+    // FIXME bitrotted -- the function make_chord_dedispersion_config() no longer exists.
+    // My plan here is to define a YAML format for the FakeServer. Then the FakeServer YAML
+    // file would include dedispersion plan info.
     DedispersionConfig config = make_chord_dedispersion_config();
+    
     sp.dedispersion_plan = make_shared<DedispersionPlan> (config);
 
     FakeServer::run(sp);
 }
+#endif
 
 
 void test_06_pcie_gmem()

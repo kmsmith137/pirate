@@ -49,7 +49,6 @@ XFILES = \
   bin/fake_correlator \
   bin/fake_server \
   bin/scratch \
-  bin/show_chord_plan \
   bin/show_dedispersion_plan \
   bin/test-avx256-m64-outbuf \
   bin/test-cpu-downsampler \

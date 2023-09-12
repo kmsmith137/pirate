@@ -104,30 +104,43 @@ ssize_t rstate_ds_len(int rk)
 }
 
 
-DedispersionConfig make_chord_dedispersion_config(const string &compressed_dtype, const string &uncompressed_dtype)
+// Only used in mean_bytes_per_unaligned_chunk().
+int gcd(int m, int n)
 {
-    DedispersionConfig config;
-    config.tree_rank = 15;
-    config.num_downsampling_levels = 5;
-    config.time_samples_per_chunk = 2048;
-    //config.num_downsampling_levels = 1;
+    assert(m > 0);
+    assert(n > 0);
 
-    config.uncompressed_dtype = uncompressed_dtype;
-    config.compressed_dtype = compressed_dtype;
-    
-    config.beams_per_gpu = 128;
-    config.beams_per_batch = 2;    // ?
-    config.num_active_batches = 2;  // ?
-    config.gmem_nbytes_per_gpu = 32L * 1024L * 1024L * 1024L;  // A40 assumed
-    
-    config.add_early_triggers(1, {13});
-    config.add_early_triggers(2, {12,13});
-    config.add_early_triggers(3, {11,12,13});
-    config.add_early_triggers(4, {10,11,12,13});
-    // config.force_ring_buffers_to_host = true;
+    if (m > n)
+	std::swap(m, n);
 
-    config.validate();
-    return config;
+    while (m > 0) {
+	int mold = m;
+	m = n % m;
+	n = mold;
+    }
+
+    return n;
+}
+
+
+int mean_bytes_per_unaligned_chunk(int nbytes)
+{
+    assert(nbytes > 0);
+    assert(nbytes <= constants::bytes_per_gpu_cache_line);
+
+    int g = gcd(nbytes, constants::bytes_per_gpu_cache_line);
+    
+    // int n = xdiv(constants::bytes_per_gpu_cache_line, g);
+    // int m = xdiv(nbytes, g);
+    //
+    // n possible alignments
+    //   (n-m+1) alignments produce 1 cache line
+    //   (m-1) alignments produce 2 cache lines
+    //
+    // Expected number of cache lines = (n+m-1)/n
+    // Expected number of bytes = (n+m-1)/n * (n*g) = (n*g + m*g - g)
+
+    return constants::bytes_per_gpu_cache_line + nbytes - g;  // (n*g + m*g - g)
 }
 
 

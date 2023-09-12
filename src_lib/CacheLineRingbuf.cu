@@ -133,7 +133,7 @@ void CacheLineRingbuf::finalize()
     ssize_t active_beams = config.beams_per_batch * config.num_active_batches;
     ssize_t beams_per_gpu = config.beams_per_gpu;
     ssize_t gmem_offset = cargs.gmem_nbytes_used_so_far;
-    int sb = config.get_bytes_per_compressed_segment();;
+    int sb = config.get_bytes_per_compressed_segment();
     
     // First loop over Buffers assigns staging buffer sizes.
     
@@ -144,6 +144,7 @@ void CacheLineRingbuf::finalize()
 	ssize_t nsec = align_up(sb * buf.secondary_entries.size(), constants::bytes_per_segment);
 	
 	buf.primary_nbytes_per_beam_per_chunk = npri;
+	buf.secondary_nbytes_per_beam_per_chunk = nsec;
 	buf.total_nbytes_per_beam_per_chunk = (npri + nsec);
 	buf.total_nbytes = rb_lag * beams_per_gpu * (npri + nsec);
 	buf.staging_buffer_byte_offset = gmem_offset;

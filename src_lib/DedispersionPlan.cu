@@ -1,7 +1,7 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/internals/utils.hpp"    // bit_reverse_slow(), rb_lag(), rstate_len()
+#include "../include/pirate/internals/utils.hpp"    // bit_reverse_slow(), rb_lag(), rstate_len(), mean_bytes_per_unaligned_chunk()
 #include "../include/pirate/internals/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
 #include "../include/pirate/internals/CacheLineRingbuf.hpp"
 
@@ -64,6 +64,7 @@ void DedispersionPlan::_init_trees()
 	st0.num_stage1_trees = trigger_ranks.size();
 	st0.stage1_base_tree_index = this->stage1_trees.size();
 	st0.segments_per_row = xdiv(st0.nt_ds, nelts_per_segment);
+	st0.segments_per_beam = pow2(st0_rank) * st0.segments_per_row;
 	st0.iobuf_base_segment = this->stage0_iobuf_segments_per_beam;
 
 	int max_rank = ids ? 7 : 8;
@@ -71,7 +72,7 @@ void DedispersionPlan::_init_trees()
 	assert(st0.nt_ds > 0);
 	
 	this->stage0_trees.push_back(st0);
-	this->stage0_iobuf_segments_per_beam += pow2(st0_rank) * st0.segments_per_row;
+	this->stage0_iobuf_segments_per_beam += st0.segments_per_beam;
 
 	for (int trigger_rank: trigger_ranks) {
 	    Stage1Tree st1;
@@ -81,6 +82,7 @@ void DedispersionPlan::_init_trees()
 	    st1.rank1_trigger = trigger_rank - st1.rank0;
 	    st1.nt_ds = st0.nt_ds;
 	    st1.segments_per_row = xdiv(st1.nt_ds, nelts_per_segment);
+	    st1.segments_per_beam = pow2(trigger_rank) * st1.segments_per_row;
 	    st1.iobuf_base_segment = this->stage1_iobuf_segments_per_beam;
 	    st1.segment_lags = gputils::Array<int> ({pow2(trigger_rank)}, gputils::af_rhost);
 	    st1.residual_lags = gputils::Array<int> ({pow2(trigger_rank)}, gputils::af_rhost);
@@ -95,7 +97,7 @@ void DedispersionPlan::_init_trees()
 	    }
 		     
 	    this->stage1_trees.push_back(st1);
-	    this->stage1_iobuf_segments_per_beam += pow2(trigger_rank) * st1.segments_per_row;
+	    this->stage1_iobuf_segments_per_beam += st1.segments_per_beam;
 	}
     }
     
@@ -141,18 +143,18 @@ void DedispersionPlan::_init_rstate_footprints()
 	cout << "DedispersionPlan constructor: initializing rstate footprints" << endl;
     
     for (Stage0Tree &st0: this->stage0_trees) {
-	// FIXME in the future, I'll probably bookkeep rstate_ds_len separately (rather than including
-	// it in the Stage0Tree) since it will correspond to a separate GPU kernel.
+	// FIXME rough value -- exact value is GpuDedispersionKernel::params::state_nelts_per_small_tree.
+	// FIXME second term is kludge to roughly account for downsampling kernel rstate.
 	ssize_t nelts_per_small_tree = rstate_len(st0.rank0) + (st0.ds_level ? rstate_ds_len(st0.rank0) : 0);
-	
 	st0.rstate_nbytes_per_beam = nelts_per_small_tree * pow2(st0.rank1) * uncompressed_dtype_size;
 	st0.rstate_nbytes_per_beam = align_up(st0.rstate_nbytes_per_beam, constants::bytes_per_gpu_cache_line);
+	    
 	this->gmem_nbytes_stage0_rstate += config.beams_per_gpu * st0.rstate_nbytes_per_beam;
     }
 
     for (Stage1Tree &st1: this->stage1_trees) {
-	ssize_t nelts_per_beam = pow2(st1.rank0) * rstate_len(st1.rank1_trigger);
-	
+	// FIXME rough value -- exact value is GpuDedispersionKernel::params::state_nelts_per_small_tree.
+	ssize_t nelts_per_beam = pow2(st1.rank0) * rstate_len(st1.rank1_trigger);	
 	for (int i = 0; i < st1.residual_lags.size; i++) {
 	    int rlag = st1.residual_lags.at({i});
 	    assert(rlag >= 0);
@@ -260,6 +262,54 @@ void DedispersionPlan::_init_ring_buffers()
     this->gmem_nbytes_tot += this->gmem_nbytes_staging_buf;
     this->gmem_nbytes_tot += this->gmem_nbytes_ringbuf;
 
+    auto &gmem_bw = this->gmem_bw_nbytes_per_chunk;
+    auto rb = this->cache_line_ringbuf;
+    ssize_t nb = config.beams_per_gpu;
+    
+    ssize_t sb = constants::bytes_per_segment;
+    ssize_t sc = this->bytes_per_compressed_segment;
+    ssize_t su = mean_bytes_per_unaligned_chunk(sc);  // defined in internals/utils.hpp
+
+    gmem_bw.init_stage0_ds0 = nb * this->stage0_trees[0].segments_per_beam * sb;
+    gmem_bw.init_stage0_higher_ds = nb * stage0_iobuf_segments_per_beam * sb;
+    gmem_bw.dedisperse_stage0_main = 2 * nb * stage0_iobuf_segments_per_beam * sb;  // note factor 2
+    gmem_bw.dedisperse_stage0_rstate = 2 * gmem_nbytes_stage0_rstate;               // note factor 2, no factor nb (already included)
+    gmem_bw.copy_stage0_to_stage1 = 2 * nb * rb->stage0_stage1_copies.size() * sb;  // note factors (2, nb)
+    gmem_bw.copy_stage1_to_stage1 = 2 * nb * rb->stage1_stage1_copies.size() * sb;  // note factors (2, nb)
+    gmem_bw.dedisperse_stage1_main = 2 * nb * stage1_iobuf_segments_per_beam * sb;  // note factors (2, nb)
+    gmem_bw.dedisperse_stage1_rstate = 2 * gmem_nbytes_stage1_rstate;               // note factor 2, no factor nb (already included)
+    gmem_bw.peak_finding = nb * stage1_iobuf_segments_per_beam * sb;                // note no factor nb (already included)
+
+    // This next loop is responsible for initializing the following members:
+    //
+    //     gmem_bw.copy_stage0_to_staging
+    //     gmem_bw.copy_staging_to_staging
+    //     gmem_bw.copy_staging_to_gmem_ringbuf
+    //     gmem_bw.copy_staging_to_hmem_ringbuf
+    //     gmem_bw.copy_gmem_ringbuf_to_staging
+    //     gmem_bw.copy_hmem_ringbuf_to_staging
+    //     gmem_bw.copy_staging_to_stage1
+    //
+    // FIXME a lot of logic here which feels out of place, but I think this logic will spontaneously move
+    // to kernel methods, as GPU kernels get implemented.
+        
+    for (const auto &buf: rb->buffers) {
+	ssize_t npri = buf.primary_entries.size();
+	ssize_t nsec = buf.secondary_entries.size();
+	gmem_bw.copy_stage0_to_staging += nb * npri * (sb+sc);         // (uncompressed) -> (compressed aligned)
+	gmem_bw.copy_staging_to_staging += nb * nsec  * (su+sc);       // (compressed unaligned) -> (compressed aligned)
+	gmem_bw.copy_staging_to_stage1 += nb * (npri+nsec) * (sb+sc);  // (compressed aligned) -> (uncompressed)
+
+	ssize_t n = nb * buf.total_nbytes_per_beam_per_chunk;
+	gmem_bw.copy_staging_to_gmem_ringbuf += (buf.on_gpu ? (2*n) : 0);
+	gmem_bw.copy_staging_to_hmem_ringbuf += (buf.on_gpu ? 0 : n);
+	gmem_bw.copy_gmem_ringbuf_to_staging += (buf.on_gpu ? (2*n) : 0);
+	gmem_bw.copy_hmem_ringbuf_to_staging += (buf.on_gpu ? 0 : n);
+
+	// copy_staging_to_stage1
+    }
+    
+    
     if (config.planner_verbosity >= 1)
 	this->print_footprints(cout, 4);  // indent=4
 }
@@ -322,6 +372,14 @@ void DedispersionPlan::print_trees(ostream &os, int indent) const
 }
 
 
+// Helper called by print_footprints()
+inline ssize_t _print_gmem_bw(ostream &os, int indent, const char *k, ssize_t n, const char *units = nullptr) 
+{
+    print_kv(k, gputils::nbytes_to_str(n), os, indent+4, units);
+    return n;
+}
+
+
 void DedispersionPlan::print_footprints(ostream &os, int indent) const
 {
     // Usage reminder: print_kv(key, val, os, indent, units=nullptr)
@@ -342,6 +400,31 @@ void DedispersionPlan::print_footprints(ostream &os, int indent) const
 
     print_kv("pcie_memcopies_per_chunk", this->pcie_memcopies_per_chunk,
 	     os, indent, "copies/chunk (not copies/s!), per-GPU each way");
+
+
+    os << Indent(indent) << "Global memory bandwidth analysis (all values bytes/chunk, not bytes/s!):" << endl;
+    
+    const auto &gmem_bw = this->gmem_bw_nbytes_per_chunk;    
+    ssize_t ntot = 0;
+    
+    ntot += _print_gmem_bw(os, indent, "init_stage0_ds0", gmem_bw.init_stage0_ds0, "(does not include input BW, which is subdominant)");
+    ntot += _print_gmem_bw(os, indent, "init_stage0_higher_ds", gmem_bw.init_stage0_higher_ds, "(does not include rstate, which is minimal)");
+    ntot += _print_gmem_bw(os, indent, "dedisperse_stage0_main", gmem_bw.dedisperse_stage0_main);
+    ntot += _print_gmem_bw(os, indent, "dedisperse_stage0_rstate", gmem_bw.dedisperse_stage0_rstate);
+    ntot += _print_gmem_bw(os, indent, "copy_stage0_to_staging", gmem_bw.copy_stage0_to_staging);
+    ntot += _print_gmem_bw(os, indent, "copy_staging_to_staging", gmem_bw.copy_staging_to_staging);
+    ntot += _print_gmem_bw(os, indent, "copy_staging_to_stage1", gmem_bw.copy_staging_to_stage1);
+    ntot += _print_gmem_bw(os, indent, "copy_staging_to_gmem_ringbuf", gmem_bw.copy_staging_to_gmem_ringbuf);
+    ntot += _print_gmem_bw(os, indent, "copy_staging_to_hmem_ringbuf", gmem_bw.copy_staging_to_hmem_ringbuf);
+    ntot += _print_gmem_bw(os, indent, "copy_gmem_ringbuf_to_staging", gmem_bw.copy_gmem_ringbuf_to_staging);
+    ntot += _print_gmem_bw(os, indent, "copy_hmem_ringbuf_to_staging", gmem_bw.copy_hmem_ringbuf_to_staging);
+    ntot += _print_gmem_bw(os, indent, "copy_stage0_to_stage1", gmem_bw.copy_stage0_to_stage1);
+    ntot += _print_gmem_bw(os, indent, "copy_stage1_to_stage1", gmem_bw.copy_stage1_to_stage1);
+    ntot += _print_gmem_bw(os, indent, "dedisperse_stage1_main", gmem_bw.dedisperse_stage1_main);
+    ntot += _print_gmem_bw(os, indent, "dedisperse_stage1_rstate", gmem_bw.dedisperse_stage1_rstate);
+    ntot += _print_gmem_bw(os, indent, "peak_finding", gmem_bw.peak_finding);
+
+    print_kv("total", gputils::nbytes_to_str(ntot), os, indent+4, "(reminder: bytes/chunk, not bytes/s!)");
 }
 
 

@@ -84,6 +84,7 @@ struct CacheLineRingbuf
 	// Fields below are initialized in CacheLineRingbuf::finalize().
 	
 	ssize_t primary_nbytes_per_beam_per_chunk = 0;
+	ssize_t secondary_nbytes_per_beam_per_chunk = 0;
 	ssize_t total_nbytes_per_beam_per_chunk = 0;
 	ssize_t total_nbytes = 0;        // includes factors 'rb_len' and 'beams_per_gpu'
 	ssize_t staging_buffer_byte_offset = -1;
