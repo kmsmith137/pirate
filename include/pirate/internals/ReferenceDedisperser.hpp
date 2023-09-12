@@ -129,9 +129,8 @@ struct ReferenceDedisperser
     {
 	FirstTree(const DedispersionPlan::Stage0Tree &st0);
 
-	// Input array will be an element of this->downsampled_inputs.
+	// Input array will be an element of this->lagged_downsampled_inputs.
 	// Output array will be an element of this->intermediate_arrays.
-	// Warning: modifies input array if is_downsampled==true!
 	
 	void dedisperse(gputils::Array<float> &in, gputils::Array<float> &out);
 	
@@ -141,7 +140,6 @@ struct ReferenceDedisperser
 	const int nt_ds;
 	    
 	std::shared_ptr<ReferenceTree> rtree;       // rank = output_rank0
-	std::shared_ptr<ReferenceReducer> reducer;  // only used if (is_donwsampled == true).
 	gputils::Array<float> rstate;
 	gputils::Array<float> scratch;
     };

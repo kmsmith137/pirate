@@ -669,12 +669,10 @@ void ReferenceDedisperser::print(ostream &os, int indent) const
     print_kv("pos", pos, os, indent);
 
     if (first_trees.size() > 0) {
+	// FIXME should include lagged_downsampler rstate
 	ssize_t nelts_per_beam = 0;
-	for (const FirstTree &t: first_trees) {
+	for (const FirstTree &t: first_trees)
 	    nelts_per_beam += t.rstate.size;
-	    if (t.reducer)
-		nelts_per_beam += t.reducer->nrstate;
-	}
 	
 	ssize_t nbytes = nelts_per_beam * config.beams_per_gpu * plan->uncompressed_dtype_size;
 	print_kv_nbytes("stage0 rstate", nbytes, os, indent);
@@ -763,9 +761,6 @@ ReferenceDedisperser::FirstTree::FirstTree(const DedispersionPlan::Stage0Tree &s
     this->rtree = make_shared<ReferenceTree> (output_rank0, nt_ds);
     this->rstate = Array<float> ({pow2(output_rank1) * rtree->nrstate}, af_uhost | af_zero);
     this->scratch = Array<float> ({rtree->nscratch}, af_uhost | af_zero);
-    
-    if (is_downsampled)
-	this->reducer = make_shared<ReferenceReducer> (output_rank0, output_rank1, nt_ds);
 }
 
 
@@ -773,23 +768,10 @@ ReferenceDedisperser::FirstTree::FirstTree(const DedispersionPlan::Stage0Tree &s
 void ReferenceDedisperser::FirstTree::dedisperse(gputils::Array<float> &in, gputils::Array<float> &out)
 {
     int output_rank = output_rank0 + output_rank1;
-    int input_rank = is_downsampled ? (output_rank+1) : output_rank;
 
-#if 0
-    // Old -- input array is unreduced
-    assert(in.shape_equals({ pow2(input_rank), nt_ds }));
-    assert(out.shape_equals({ pow2(output_rank), nt_ds }));
-
-    if (is_downsampled)
-	reducer->reduce(in, out);
-    else
-	out.fill(in);
-#else
-    // New -- input array is reduced
     assert(in.shape_equals({ pow2(output_rank), nt_ds }));
     assert(out.shape_equals({ pow2(output_rank), nt_ds }));
     out.fill(in);
-#endif
 
     int ndm0 = pow2(output_rank0);
     float *rp = rstate.data;
