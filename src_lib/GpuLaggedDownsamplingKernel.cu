@@ -1,9 +1,9 @@
-#include "../include/pirate/internals/GpuDedispersionKernel.hpp"
+#include "../include/pirate/internals/GpuLaggedDownsamplingKernel.hpp"
 #include "../include/pirate/internals/inlines.hpp"   // pow2(), simd32_type
 #include "../include/pirate/constants.hpp"
 
 #include <sstream>
-#include <gputils/cuda_utils.hpp>  // CUDA_CALL()
+#include <gputils/cuda_utils.hpp>    // CUDA_CALL()
 
 using namespace std;
 using namespace gputils;
@@ -161,17 +161,17 @@ __half2 f16_align(__half2 a, __half2 b)
 
 // dtype_shift<T>(): returns (0 if float32, or 1 if __half2).
 // Useful in a few places below.
-template<typename T> int dtype_shift();
-template int dtype_shift<float>() { return 0; }
-template int dtype_shift<__half2>() { return 1; }
+template<typename T> __device__ int dtype_shift();
+template<> __device__ int dtype_shift<float>() { return 0; }
+template<> __device__ int dtype_shift<__half2>() { return 1; }
 
 extern __shared__ float shmem_f[];
 extern __shared__ __half2 shmem_h2[];
 
 // shmem_base<T>(): returns a (T*) pointer to shared memory.
-template<typename T> T *shmem_base();
-template float *shmem_base<float> () { return shmem_f; }
-template __half2 *shmem_base<__half2> () { return shmem_h2; }
+template<typename T> __device__ T *shmem_base();
+template<> __device__ float *shmem_base<float> () { return shmem_f; }
+template<> __device__ __half2 *shmem_base<__half2> () { return shmem_h2; }
 
 
 // -------------------------------------------------------------------------------------------------
@@ -258,6 +258,7 @@ struct wparams
     
     wparams(int D)
     {
+	const int A = blockDim.z * gridDim.y;
 	const int M = blockDim.y * gridDim.x;  // 2^(r-2)
 	const int nr = 2*M;                    // 2^(r-1)
 
@@ -321,12 +322,12 @@ __device__ void ld_lag_pair(float &x, float &y, float &rs)
 
 // Lags both 'x' and 'y' by one element (float16, i.e. half of a __half2).
 // Cycles 'rs' by one lane.
-__device__ void ld_lag_pair(__half2 &x, __half2 &y, float &rs)
+__device__ void ld_lag_pair(__half2 &x, __half2 &y, __half2 &rs)
 {
-    __half2 t = __highs2half(x, y);  // (x[1], y[1])
-    t = lag_register(t, rs);         // (x[-1], y[-1])
+    __half2 t = __highs2half2(x, y);  // (x[1], y[1])
+    t = lag_register(t, rs);          // (x[-1], y[-1])
 
-    x = __lows2half(t, x);   // (x[-1], x[0])
+    x = __lows2half2(t, x);   // (x[-1], x[0])
     y = f16_align(t, y);     // (y[-1], y[0])
 }
 
@@ -377,8 +378,8 @@ __device__ void ld_transpose(T &x, T &y)
 
     // lane = [ 0 2 4 ... 30 1 3 ... 31 ]
     int lane = (laneId << 1) | (laneId >> 4);
-    T t = __shfl_sync(0xffffffff, t, lane);
-    T u = __shfl_sync(0xffffffff, u, lane ^ 0x1);
+    t = __shfl_sync(0xffffffff, t, lane);
+    u = __shfl_sync(0xffffffff, u, lane ^ 0x1);
 
     // r <-> (i5 + i0)
     // t4 t3 t2 t1 t0 <-> i5 i4 i3 i2 i1
@@ -433,7 +434,7 @@ struct ld_kernel
     int rpos1;
 
 
-    void ld_kernel(const wparams<T> &wp, long ntime_cumulative)
+    ld_kernel(const wparams<T> &wp, long ntime_cumulative)
 	: next_kernel(wp, ntime_cumulative >> 1)   // Note right-shift by 1 here!
     {
 	// FIXME uses more %-operators than necessary.
@@ -650,7 +651,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
     const wparams<T> wp(D);
     T rs = restore_state<T,D> (wp, persistent_state);
 
-    ld_kernel<T,D> kernel(wp, ntime_cumulative);
+    ld_kernel<T,D,true> kernel(wp, ntime_cumulative);  // last template argument is RestoreRs=true
 
     in += (blockIdx.z * bstride_in) + threadIdx.x;  // laneId included in 'in'
     out += (blockIdx.z * bstride_out);              // laneId not included in 'out'
@@ -664,11 +665,11 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 	T x000 = in[i_off];                // (2*i, 0)
 	T x001 = in[i_off + 32];           // (2*i, 32)
 	T x010 = in[i_off + ntime];        // (2*i+1, 0)
-	T x010 = in[i_off + ntime + 32];   // (2*i+1, 32)
+	T x011 = in[i_off + ntime + 32];   // (2*i+1, 32)
 	T x100 = in[j_off];                // (2*j, 0)
 	T x101 = in[j_off + 32];           // (2*j, 32)
 	T x110 = in[j_off + ntime];        // (2*j+1, 0)
-	T x110 = in[j_off + ntime + 32];   // (2*j+1, 32)
+	T x111 = in[j_off + ntime + 32];   // (2*j+1, 32)
 
 	ld_transpose(x000, x001);
 	ld_transpose(x010, x011);
@@ -689,7 +690,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 
 
 template<typename T>
-using kernel_t = GpuLaggedDownsamplingKernel<T>::kernel_t;
+using kernel_t = typename GpuLaggedDownsamplingKernel<T>::kernel_t;
 
 
 template<typename T, int Dmax>
@@ -697,7 +698,7 @@ static vector<kernel_t<T>> _make_kernels()
 {
     if constexpr (Dmax > 0) {
 	kernel_t<T> k = lagged_downsample<T,Dmax>;
-	vector<kernel_t<T>> ret = make_kernels<T,Dmax-1> ();
+	vector<kernel_t<T>> ret = _make_kernels<T,Dmax-1> ();
 	ret.push_back(k);
 	return ret;
     }
@@ -725,7 +726,7 @@ static vector<kernel_t<T>> make_kernels()
 
 
 template<typename T>
-static int shmem_nbytes(int r, int D, int W, bool align=true)
+static int get_shmem_nbytes(int r, int D, int W, bool align=true)
 {
     int S = (pow2(r-2) * (sizeof(T)/2)) - 1;
     int nbytes = W * D * (S+2) * 4;
@@ -737,7 +738,7 @@ template<typename T>
 static int target_warps_per_threadblock(int r, int D)
 {
     // shared memory bytes per warp, without 128-byte alignment
-    int nb1 = shmem_nbytes(r, D, 1, false);
+    int nb1 = get_shmem_nbytes<T> (r, D, 1, false);
 
     for (int W = 1; W <= 4; W++)
 	if (W*nb1 > 12*1024)
@@ -753,7 +754,7 @@ shared_ptr<GpuLaggedDownsamplingKernel<T>>
 GpuLaggedDownsamplingKernel<T>::make(int small_input_rank, int large_input_rank, int num_downsampling_levels)
 {
     // FIXME do something thread-safe here
-    static vector<kernel_t<T>> kernels;
+    static vector<kernel_t> kernels;
 
     if (kernels.size() == 0)
 	kernels = make_kernels<T> ();
@@ -775,19 +776,19 @@ GpuLaggedDownsamplingKernel<T>::make(int small_input_rank, int large_input_rank,
     int Wtar = target_warps_per_threadblock<T> (small_input_rank, num_downsampling_levels);
     
     params.Wy = min(M, Wtar);
-    params.Wz = min(A, xdiv(Wtar,M));
+    params.Wz = min(A, (int)xdiv(Wtar,M));
     params.warps_per_threadblock = params.Wy * params.Wz;
 
     params.Bx = xdiv(M, params.Wy);
     params.By = xdiv(A, params.Wz);
     params.threadblocks_per_beam = params.Bx * params.By;
 
-    int nb = shmem_nbytes(small_input_rank, num_downsampling_levels, params.warps_per_threadblock);
+    int nb = get_shmem_nbytes<T> (small_input_rank, num_downsampling_levels, params.warps_per_threadblock, true);  // align=true
     params.ntime_divisibility_requirement = (128 / sizeof(T)) * pow2(num_downsampling_levels);
     params.state_nelts_per_beam = params.threadblocks_per_beam * (nb / sizeof(T));
     params.shmem_nbytes = nb;
 
-    kernel_t<T> k = kernels.at(num_downsampling_levels);
+    kernel_t k = kernels.at(num_downsampling_levels);
     GpuLaggedDownsamplingKernel<T> *kernel = new GpuLaggedDownsamplingKernel (params, k);
     return shared_ptr<GpuLaggedDownsamplingKernel<T>> (kernel);
 }
@@ -801,7 +802,7 @@ GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &params
     // Here, just some asserts to make sure I didn't forget to initialize something!
 
     assert(params.small_input_rank > 0);
-    assert(params.large_input_rank >= small_input_rank);
+    assert(params.large_input_rank >= params.small_input_rank);
     assert(params.num_downsampling_levels > 0);
     assert(params.ntime_divisibility_requirement > 0);
     assert(params.state_nelts_per_beam > 0);
@@ -850,8 +851,7 @@ void GpuLaggedDownsamplingKernel<T>::launch(
 	if (!out[i].shape_equals({ nbeams, ntree_out, ntime_out })) {
 	    stringstream ss;
 	    ss << "GpuLaggedDownsamplingKernel::launch(): out[" << i
-	       << "]: expected shape "
-	       << gputils::tuple_str({nbeams, ntree_out, ntime_out})
+	       << "]: expected shape (" << nbeams << "," << ntree_out << "," << ntime_out << ")"
 	       << ", got shape "
 	       << out[i].shape_str();
 	    throw runtime_error(ss.str());
@@ -862,7 +862,7 @@ void GpuLaggedDownsamplingKernel<T>::launch(
 	
 	if (out[i].data != (out[0].data + nout)) {
 	    throw runtime_error("GpuLaggedDownsamplingKernel::launch(): output arrays must be 'adjacent' "
-				+ "(see comment at beginning of pirate/src_lib/GpuLaggedDownsampler.cu)");
+				"(see comment at beginning of pirate/src_lib/GpuLaggedDownsampler.cu)");
 	}
 
 	if (out[i].strides[0] != out[0].strides[0])
@@ -879,12 +879,12 @@ void GpuLaggedDownsamplingKernel<T>::launch(
     
     dim3 block_dims;
     block_dims.x = 32;
-    block_dims.y = Wy;
-    block_dims.z = Wz;
+    block_dims.y = params.Wy;
+    block_dims.z = params.Wz;
 
     dim3 grid_dims;
-    grid_dims.x = Bx;
-    grid_dims.y = By;
+    grid_dims.x = params.Bx;
+    grid_dims.y = params.By;
     grid_dims.z = nbeams;
     
     this->kernel
@@ -895,14 +895,14 @@ void GpuLaggedDownsamplingKernel<T>::launch(
 	 ntime_cumulative,
 	 in.strides[0],      // bstride_in,
 	 out[0].strides[0],  // bstride_out,
-	 reinterpret_cast<T32 *> (persistent_state));
+	 reinterpret_cast<T32 *> (persistent_state.data));
 
     CUDA_PEEK("lagged downsampling kernel");
 }
 
 
 template<typename T>
-void GpuDownsamplingKernel<T>::print(ostream &os, int indent) const
+void GpuLaggedDownsamplingKernel<T>::print(ostream &os, int indent) const
 {
     // Usage reminder: print_kv(key, val, os, indent, units=nullptr)
     print_kv("small_input_rank", params.small_input_rank, os, indent);
@@ -917,16 +917,16 @@ void GpuDownsamplingKernel<T>::print(ostream &os, int indent) const
     print_kv("warps_per_threadblock", sw.str(), os, indent);
     
     stringstream sb;
-    bw << params.threadblocks_per_beam << " (Bx=" << params.Bx << ",By=" << params.By << ")";
+    sb << params.threadblocks_per_beam << " (Bx=" << params.Bx << ",By=" << params.By << ")";
     print_kv("threadblocks_per_beam", sb.str(), os, indent);
 }
 
 
 #define INSTANTIATE(T) \
-    template GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &); \
-    template shared_ptr<GpuLaggedDownsamplingKernel<T>> GpuDownsamplingKernel<T>::make(int,int,int); \
-    template void GpuDownsamplingKernel<T>::launch(const Array<T>&, vector<Array<T>>&, Array<T>&, long, cudaStream_t) const; \
-    template void GpuDownsamplingKernel<T>::print(ostream &, int) const
+    template GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &, kernel_t); \
+    template shared_ptr<GpuLaggedDownsamplingKernel<T>> GpuLaggedDownsamplingKernel<T>::make(int,int,int); \
+    template void GpuLaggedDownsamplingKernel<T>::launch(const Array<T>&, vector<Array<T>>&, Array<T>&, long, cudaStream_t) const; \
+    template void GpuLaggedDownsamplingKernel<T>::print(ostream &, int) const
 
 INSTANTIATE(float);
 INSTANTIATE(__half);

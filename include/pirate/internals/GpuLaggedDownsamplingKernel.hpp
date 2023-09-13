@@ -5,6 +5,8 @@
 #include <cuda_fp16.h>  // __half, __half2
 #include <gputils/Array.hpp>
 
+#include "inlines.hpp"  // simd32_type
+
 namespace pirate {
 #if 0
 }  // editor auto-indent
@@ -69,7 +71,7 @@ public:
     void print(std::ostream &os=std::cout, int indent=0) const;
     
 protected:
-    using T32 = simd32_type<T>::type;
+    using T32 = typename simd32_type<T>::type;
 
     using kernel_t = void (*)(const T32 *,   // in
 			      T32 *,         // out

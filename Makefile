@@ -82,6 +82,7 @@ OFILES = \
   src_lib/FakeServer.o \
   src_lib/File.o \
   src_lib/GpuDedispersionKernel.o \
+  src_lib/GpuLaggedDownsamplingKernel.o \
   src_lib/LaggedCacheLine.o \
   src_lib/ReferenceDedisperser.o \
   src_lib/ReferenceLagbuf.o \
