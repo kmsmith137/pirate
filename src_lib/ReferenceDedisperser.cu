@@ -54,8 +54,8 @@ ReferenceDedisperser::ReferenceDedisperser(const shared_ptr<DedispersionPlan> &p
     }
     
     if (sophistication >= 1) {
-	_allocate_lagged_downsampled_inputs();
 	_allocate_intermediate_arrays();
+	_init_lagged_downsampler();
 	_init_first_trees();
 	_init_second_trees();
     }
@@ -81,20 +81,20 @@ void ReferenceDedisperser::dedisperse(const Array<float> &in)
 	_apply_simple_trees();
     }
     else if (sophistication == 1) {
-	_compute_lagged_downsampled_inputs(in);
+	_apply_lagged_downsampler(in);
 	_apply_first_trees();
 	_apply_big_lagbufs();
 	_apply_second_trees();	
     }
     else if (sophistication == 2) {
-	_compute_lagged_downsampled_inputs(in);
+	_apply_lagged_downsampler(in);
 	_apply_first_trees();	
 	_apply_max_ringbuf();
 	_apply_residual_lagbufs();
 	_apply_second_trees();
     }
     else if (sophistication == 3) {
-	_compute_lagged_downsampled_inputs(in);
+	_apply_lagged_downsampler(in);
 	_apply_first_trees();	
 	_proper_ringbuf_to_staging();
 	_proper_s0_to_staging();
@@ -135,45 +135,35 @@ void ReferenceDedisperser::_compute_downsampled_inputs(const Array<float> &in)
 }
 
 
-void ReferenceDedisperser::_allocate_lagged_downsampled_inputs()
+void ReferenceDedisperser::_init_lagged_downsampler()
 {
-    // FIXME temporary kludge
-    this->_allocate_downsampled_inputs();
+    if (nds <= 1)
+	return;
     
-    this->lagged_downsampled_inputs.resize(nds);
-
-    for (int ids = 0; ids < nds; ids++) {
-	int rank = ids ? (input_rank-1) : input_rank;
-	int nt_ds = xdiv(input_nt, pow2(ids));	
-	this->lagged_downsampled_inputs[ids] = Array<float> ({pow2(rank),nt_ds}, af_uhost | af_zero);
-    }
-
-    if (nds > 1) {
-	const DedispersionPlan::Stage0Tree &st0 = this->plan->stage0_trees[1];
+    const DedispersionPlan::Stage0Tree &st0 = this->plan->stage0_trees[1];
 	
-	ReferenceLaggedDownsampler::Params ld_params;
-	ld_params.small_input_rank = st0.rank0 + 1;
-	ld_params.large_input_rank = st0.rank0 + st0.rank1 + 1;
-	ld_params.num_downsampling_levels = nds - 1;
-	ld_params.nbeams = 1;
-	ld_params.ntime = config.time_samples_per_chunk;
+    ReferenceLaggedDownsampler::Params ld_params;
+    ld_params.small_input_rank = st0.rank0 + 1;
+    ld_params.large_input_rank = st0.rank0 + st0.rank1 + 1;
+    ld_params.num_downsampling_levels = nds - 1;
+    ld_params.nbeams = 1;
+    ld_params.ntime = config.time_samples_per_chunk;
 
-	this->lagged_downsampler = make_shared<ReferenceLaggedDownsampler> (ld_params);
-    }
+    this->lagged_downsampler = make_shared<ReferenceLaggedDownsampler> (ld_params);
 }
 
 
-void ReferenceDedisperser::_compute_lagged_downsampled_inputs(const Array<float> &in)
+void ReferenceDedisperser::_apply_lagged_downsampler(const gputils::Array<float> &in)
 {
-    assert(lagged_downsampled_inputs.size() == nds);  // check that _allocate_lagged_downsampled_inputs() was called
+    assert(intermediate_arrays.size() == nds);  // check that _allocate_intermediate_arrays() was called
+    assert(intermediate_arrays[0].shape_equals({pow2(input_rank), input_nt}));
     assert(in.shape_equals({pow2(input_rank), input_nt}));
     assert(in.strides[1] == 1);
 
-    // FIXME is this copy necessary?
-    lagged_downsampled_inputs[0].fill(in);
+    intermediate_arrays[0].fill(in);
     
     if (nds > 1)
-	this->lagged_downsampler->apply(in, &lagged_downsampled_inputs[1]);
+	this->lagged_downsampler->apply(in, &intermediate_arrays[1]);
 }
 
     
@@ -256,12 +246,11 @@ void ReferenceDedisperser::_init_first_trees()
 
 void ReferenceDedisperser::_apply_first_trees()
 {
-    assert(lagged_downsampled_inputs.size() == nds);   // check that _allocate_lagged_downsampled_inputs() was called
     assert(intermediate_arrays.size() == nds);         // check that _allocate_intermediate_arrays() was called
     assert(first_trees.size() == nds);                 // check that _init_first_trees() was called
 
     for (int ids = 0; ids < nds; ids++)
-	first_trees.at(ids).dedisperse(lagged_downsampled_inputs.at(ids), intermediate_arrays.at(ids));
+	first_trees.at(ids).dedisperse(intermediate_arrays.at(ids));
 }
 
 
@@ -769,19 +758,16 @@ ReferenceDedisperser::FirstTree::FirstTree(const DedispersionPlan::Stage0Tree &s
 
 
 // Output goes to FirstTree::iobuf. Modifies input if is_downsampled==true!
-void ReferenceDedisperser::FirstTree::dedisperse(gputils::Array<float> &in, gputils::Array<float> &out)
+void ReferenceDedisperser::FirstTree::dedisperse(gputils::Array<float> &arr)
 {
     int output_rank = output_rank0 + output_rank1;
-
-    assert(in.shape_equals({ pow2(output_rank), nt_ds }));
-    assert(out.shape_equals({ pow2(output_rank), nt_ds }));
-    out.fill(in);
+    assert(arr.shape_equals({ pow2(output_rank), nt_ds }));
 
     int ndm0 = pow2(output_rank0);
     float *rp = rstate.data;
     
     for (int i = 0; i < pow2(output_rank1); i++) {
-	Array<float> s = out.slice(0, i*ndm0, (i+1)*ndm0);
+	Array<float> s = arr.slice(0, i*ndm0, (i+1)*ndm0);
 	rtree->dedisperse(s, rp, scratch.data);
 	rp += rtree->nrstate;
     }

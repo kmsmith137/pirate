@@ -74,22 +74,6 @@ struct ReferenceDedisperser
     void _allocate_downsampled_inputs();
     void _compute_downsampled_inputs(const gputils::Array<float> &in);
 
-    // Used if sophistication > 0.
-    std::shared_ptr<ReferenceLaggedDownsampler> lagged_downsampler;
-
-    // FIXME can be deleted
-    //
-    // lagged_downsampled_inputs: used if sophistication >= 1.
-    // It contains the input array after applying the ReferenceLaggedDownsampler.
-    //
-    // lagged_downsampled_inputs[ids] has shape:
-    //   (2^input_rank, input_nt)            if ids == 0
-    //   (2^(input_rank-1), input_nt/2^ids)  if ids > 0
-
-    std::vector<gputils::Array<float>> lagged_downsampled_inputs;  // length nds
-    void _allocate_lagged_downsampled_inputs();
-    void _compute_lagged_downsampled_inputs(const gputils::Array<float> &in);
-
     // The "intermediate" arrays are the iobufs of the Stage0Trees.
     std::vector<gputils::Array<float>> intermediate_arrays;   // length nds
     gputils::Array<float> intermediate_flattened;
@@ -134,10 +118,8 @@ struct ReferenceDedisperser
     {
 	FirstTree(const DedispersionPlan::Stage0Tree &st0);
 
-	// Input array will be an element of this->lagged_downsampled_inputs.
-	// Output array will be an element of this->intermediate_arrays.
-	
-	void dedisperse(gputils::Array<float> &in, gputils::Array<float> &out);
+	// Array argument will be an element of this->intermediate_arrays.	
+	void dedisperse(gputils::Array<float> &arr);
 	
 	const bool is_downsampled;
 	const int output_rank0;   // same as DedispersionPlan::Stage0Tree::rank0
@@ -170,6 +152,11 @@ struct ReferenceDedisperser
     std::vector<SimpleTree> simple_trees;
     void _init_simple_trees();
     void _apply_simple_trees();
+
+    // Used if sophistication > 0.
+    std::shared_ptr<ReferenceLaggedDownsampler> lagged_downsampler;
+    void _init_lagged_downsampler();
+    void _apply_lagged_downsampler(const gputils::Array<float> &in);
 
     // Used if sophistication > 0.
     std::vector<FirstTree> first_trees;
