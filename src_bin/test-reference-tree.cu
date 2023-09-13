@@ -1,8 +1,7 @@
 #include "../include/pirate/internals/ReferenceDedisperser.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2()
-#include "../include/pirate/internals/utils.hpp"    // rb_lag(), rstate_len(), check_rank()
+#include "../include/pirate/internals/inlines.hpp"
+#include "../include/pirate/internals/utils.hpp"
 
-#include <gputils/Array.hpp>
 #include <gputils/rand_utils.hpp>    // rand_int()
 #include <gputils/test_utils.hpp>    // assert_arrays_equal()
 #include <gputils/string_utils.hpp>  // tuple_str()

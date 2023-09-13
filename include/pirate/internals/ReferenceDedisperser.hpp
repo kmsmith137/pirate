@@ -9,6 +9,9 @@
 #include "../DedispersionConfig.hpp"
 #include "../DedispersionPlan.hpp"
 
+#include "ReferenceTree.hpp"
+#include "ReferenceLagbuf.hpp"
+
 
 namespace pirate {
 #if 0
@@ -16,8 +19,7 @@ namespace pirate {
 #endif
 
 // Defined later in this file.
-class ReferenceTree;
-class ReferenceLagbuf;
+// FIXME get rid of this
 class ReferenceReducer;
 
 
@@ -222,64 +224,8 @@ struct ReferenceDedisperser
 
 // -------------------------------------------------------------------------------------------------
 //
-// Helper classes: ReferenceTree, ReferenceLagbuf, ReferenceReducer
+// FIXME get rid of ReferenceReducer
 
-
-class ReferenceTree
-{
-    // ReferenceTree: simple, self-contained reference implementation of tree dedispersion.
-    // Processes input incrementally in chunks of shape (2^rank, ntime).
-    //
-    // The RefrerenceTree is unaware of the larger dedispersion plan (stage0/stage1 split,
-    // early triggers, downsampling, etc.) but can be used as a "building block" to implement
-    // these features.
-    
-public:
-    ReferenceTree(int rank, int ntime);
-
-    int rank = 0;
-    int ntime = 0;
-    int nrstate = 0;
-    int nscratch = 0;
-
-    // 2-d array of shape (2^rank, ntime).
-    // Dedispersion is done in place -- output index is a bit-reversed delay.
-    void dedisperse(gputils::Array<float> &arr, float *rstate, float *scratch) const; 
-    void dedisperse(float *arr, int stride, float *rstate, float *scratch) const;
-
-protected:
-    std::shared_ptr<ReferenceTree> prev_tree;
-    std::vector<int> lags;  // length 2^(rank-1)
-};
-
-
-
-class ReferenceLagbuf
-{
-public:
-    // ReferenceLagbuf: a very simple class which applies a channel-dependent lag
-    // (specified by a length-nchan integer-valued vector of lags) incrementally to
-    // an input array of shape (nchan, ntime).
-    
-    ReferenceLagbuf(const std::vector<int> &lags, int ntime);
-
-    int nchan = 0; // lags.size()
-    int ntime = 0;
-    int nrstate = 0;
-
-    // 2-d array of shape (nchan, ntime).
-    // Lags are applied in place.
-    void apply_lags(gputils::Array<float> &arr) const;
-    void apply_lags(float *arr, int stride) const;
-
-protected:
-    std::vector<int> lags;  // length nchan
-    gputils::Array<float> rstate;
-    gputils::Array<float> scratch;
-};
-
-
-// FIXME write comment explaining the ReferenceReducer!
 
 class ReferenceReducer
 {
@@ -299,29 +245,6 @@ protected:
     std::shared_ptr<ReferenceLagbuf> lagbuf1; // applied to input array after freq downsampling (all lags < 2^rank0_out)
 };
 
-
-// -------------------------------------------------------------------------------------------------
-//
-// Helper functions
-
-
-// Downsamples (freq,time) array by a factor 2 along either frequency or time axis.
-// Each pair of elements will be averaged/summed, depending on whether the 'normalize' flag is true/false.
-extern void reference_downsample_freq(const gputils::Array<float> &in, gputils::Array<float> &out, bool normalize);
-extern void reference_downsample_time(const gputils::Array<float> &in, gputils::Array<float> &out, bool normalize);
-
-// Reduces (dm_brev, time) array by a factor 2, by keeping only odd (dm_brev)-indices.
-// FIXME if I ever implement Array<float>::slice() with strides, then this would be a special case.
-extern void reference_extract_odd_channels(const gputils::Array<float> &in, gputils::Array<float> &out);
-
-// lag_non_incremental() is only used for testing the ReferenceLagbuf.
-// Lagging is done in place.
-extern void lag_non_incremental(gputils::Array<float> &arr, const std::vector<int> &lags);
-
-// dedisperse_non_incremental() is only used for testing the ReferenceTree.
-// Dedispersion is done in place -- output index is a bit-reversed delay.
-extern void dedisperse_non_incremental(gputils::Array<float> &arr);
-				       
 
 }  // namespace pirate
 

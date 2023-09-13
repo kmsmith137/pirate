@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 using namespace std;
+using namespace gputils;
 
 namespace pirate {
 #if 0
@@ -141,6 +142,133 @@ int mean_bytes_per_unaligned_chunk(int nbytes)
     // Expected number of bytes = (n+m-1)/n * (n*g) = (n*g + m*g - g)
 
     return constants::bytes_per_gpu_cache_line + nbytes - g;  // (n*g + m*g - g)
+}
+
+
+void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool normalize)
+{
+    assert(out.ndim == 2);
+    assert(out.strides[1] == 1);
+
+    assert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
+    assert(in.strides[1] == 1);
+
+    float w = normalize ? 0.5 : 1.0;
+    int nchan_out = out.shape[0];
+    int nt = out.shape[1];
+
+    for (int c = 0; c < nchan_out; c++) {
+	const float *src_row0 = in.data + (2*c) * in.strides[0];
+	const float *src_row1 = in.data + (2*c+1) * in.strides[0];
+	float *dst_row = out.data + c * out.strides[0];
+
+	for (int t = 0; t < nt; t++)
+	    dst_row[t] = w * (src_row0[t] + src_row1[t]);
+    }
+}
+
+    
+void reference_downsample_time(const Array<float> &in, Array<float> &out, bool normalize)
+{
+    assert(out.ndim == 2);
+    assert(out.strides[1] == 1);
+
+    assert(in.shape_equals({ out.shape[0], 2*out.shape[1] }));
+    assert(in.strides[1] == 1);
+
+    float w = normalize ? 0.5 : 1.0;
+    int nchan = out.shape[0];
+    int nt_out = out.shape[1];
+
+    for (int c = 0; c < nchan; c++) {
+	const float *src_row = in.data + c * in.strides[0];
+	float *dst_row = out.data + c * out.strides[0];
+
+	for (int t = 0; t < nt_out; t++)
+	    dst_row[t] = w * (src_row[2*t] + src_row[2*t+1]);
+    }
+}
+
+
+void reference_extract_odd_channels(const Array<float> &in, Array<float> &out)
+{
+    assert(out.ndim == 2);
+    assert(out.strides[1] == 1);
+
+    assert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
+    assert(in.strides[1] == 1);
+
+    int nchan_out = out.shape[0];
+    int nt = out.shape[1];
+
+    for (int c = 0; c < nchan_out; c++) {
+	memcpy(out.data + c * out.strides[0],
+	       in.data + (2*c+1) * in.strides[0],
+	       nt * sizeof(float));
+    }
+}
+
+
+void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
+{
+    assert(arr.ndim == 2);
+    assert(arr.shape[0] == lags.size());
+    assert(arr.strides[1] == 1);
+
+    int nchan = arr.shape[0];
+    int ntime = arr.shape[1];
+	
+    for (int c = 0; c < nchan; c++) {
+	assert(lags[c] >= 0);
+	int lag = std::min(lags[c], ntime);
+	
+	float *row = arr.data + c*arr.strides[0];
+	memmove(row+lag, row, (ntime-lag) * sizeof(float));
+	memset(row, 0, lag * sizeof(float));
+    }
+}
+
+
+void dedisperse_non_incremental(Array<float> &arr)
+{
+    assert(arr.ndim == 2);
+    assert(arr.strides[1] == 1);
+
+    int nfreq = arr.shape[0];
+    int ntime = arr.shape[1];
+    assert(nfreq > 0);
+    assert(ntime > 0);
+    
+    int rank = int(log2(nfreq) + 0.5);
+    
+    if (nfreq != pow2(rank)) {
+	stringstream ss;
+	ss << "dedisperse_non_incremental(): arr.shape[0]=" << nfreq << " is not a power of two";
+	throw runtime_error(ss.str());
+    }
+
+    for (int r = 0; r < rank; r++) {
+	int pr = pow2(r);
+	
+	for (int i = 0; i < nfreq; i += 2*pr) {
+	    for (int j = 0; j < pr; j++) {
+		float *row0 = arr.data + (i+j)*arr.strides[0];
+		float *row1 = row0 + pr*arr.strides[0];
+		
+		int lag = bit_reverse_slow(j,r) + 1;
+		float x0 = (ntime >= lag) ? row0[ntime-lag] : 0.0;
+		
+		for (int t = ntime-1; t >= 0; t--) {
+		    float y = row1[t];
+		    float x1 = x0;
+		    x0 = (t >= lag) ? row0[t-lag] : 0.0;
+
+		    row0[t] = x1 + y;
+		    row1[t] = x0 + y;
+		}
+	    }
+	}
+    }
 }
 
 
