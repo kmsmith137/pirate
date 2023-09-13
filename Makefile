@@ -41,6 +41,7 @@ HFILES = \
   include/pirate/internals/LaggedCacheLine.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
+  include/pirate/internals/ReferenceLaggedDownsampler.hpp \
   include/pirate/internals/ReferenceTree.hpp \
   include/pirate/internals/Socket.hpp \
   include/pirate/internals/YamlFile.hpp
@@ -84,6 +85,7 @@ OFILES = \
   src_lib/LaggedCacheLine.o \
   src_lib/ReferenceDedisperser.o \
   src_lib/ReferenceLagbuf.o \
+  src_lib/ReferenceLaggedDownsampler.o \
   src_lib/ReferenceTree.o \
   src_lib/Socket.o \
   src_lib/YamlFile.o
