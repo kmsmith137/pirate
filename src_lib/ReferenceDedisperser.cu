@@ -806,48 +806,4 @@ void ReferenceDedisperser::SecondTree::dedisperse(Array<float> &arr)
 }
 
 
-// -------------------------------------------------------------------------------------------------
-//
-// ReferenceReducer
-
-
-ReferenceReducer::ReferenceReducer(int rank0_out_, int rank1_, int ntime_) :
-    rank0_out(rank0_out_),
-    rank1(rank1_),
-    ntime(ntime_)
-{
-    check_rank(rank0_out + rank1 + 1, "ReferenceReducer constructor [rank_in]", 1);
-    check_rank(rank0_out, "ReferenceReducer constructor [rank0_out]");
-    check_rank(rank1, "ReferenceReducer constructor [rank1]");
-
-    int n0 = pow2(rank0_out);
-    int nout = pow2(rank0_out + rank1);
-    
-    vector<int> lags0(2*nout);
-    vector<int> lags1(nout);
-    
-    for (int c = 0; c < 2*nout; c++)
-	lags0[c] = (c & 1) ? 0 : 1;
-    
-    for (int c = 0; c < nout; c++)
-	lags1[c] = n0 - 1 - (c % n0);
-    
-    this->lagbuf0 = make_shared<ReferenceLagbuf> (lags0, ntime);
-    this->lagbuf1 = make_shared<ReferenceLagbuf> (lags1, ntime);
-    this->nrstate = lagbuf0->nrstate + lagbuf1->nrstate;
-}
-
-
-void ReferenceReducer::reduce(Array<float> &in, Array<float> &out) const
-{
-    int nchan_out = pow2(rank0_out + rank1);
-    assert(in.shape_equals({ 2*nchan_out, ntime }));
-    assert(out.shape_equals({ nchan_out, ntime }));
-    
-    lagbuf0->apply_lags(in);
-    reference_downsample_freq(in, out, false);  // normalize=false
-    lagbuf1->apply_lags(out);
-}
-
-
 }  // namespace pirate

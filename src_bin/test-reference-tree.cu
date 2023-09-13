@@ -165,22 +165,19 @@ static void test_reference_tree(bool noisy=false)
 // -------------------------------------------------------------------------------------------------
 
 
-static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks, bool uflag, bool noisy=false)
+static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks, bool noisy=false)
 {
     if (noisy) {
 	cout << "test_reference_tree_recursion(rank0=" << rank0 << ", rank1=" << rank1
-	     << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks
-	     << ", uflag=" << (uflag ? "true" : "false") << ")" << endl;
+	     << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks << endl;
     }
 
     int rank_tot = rank0 + rank1;
-    int rank_big = uflag ? (rank_tot+1) : rank_tot;
     
     check_rank(rank0, "test_tree_recursion [rank0]");
     check_rank(rank1, "test_tree_recursion [rank1]");
-    check_rank(rank_big, "test_tree_recursion [rank_big]");
+    check_rank(rank_tot, "test_tree_recursion [rank_tot]");
 	       
-    int nfreq_big = pow2(rank_big);
     int nfreq_tot = pow2(rank_tot);
     int nfreq0 = pow2(rank0);
     int nfreq1 = pow2(rank1);
@@ -188,18 +185,16 @@ static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks,
     vector<int> lags(nfreq_tot);
     for (int i = 0; i < nfreq1; i++)
 	for (int j = 0; j < nfreq0; j++)
-	    lags[i*nfreq0+j] = rb_lag(i, j, rank0, rank1, uflag);
+	    lags[i*nfreq0+j] = rb_lag(i, j, rank0, rank1, false);  // uflag=false
 
-    ReferenceTree big_tree(rank_big, nt_chunk);
+    ReferenceTree big_tree(rank_tot, nt_chunk);
     ReferenceTree tree0(rank0, nt_chunk);
     ReferenceTree tree1(rank1, nt_chunk);
     ReferenceLagbuf lagbuf(lags, nt_chunk);
-    shared_ptr<ReferenceReducer> reducer;
-    
-    if (uflag)
-	reducer = make_shared<ReferenceReducer> (rank0, rank1, nt_chunk);
     
     int nrstate1 = (nfreq1 * tree0.nrstate) + (nfreq0 * tree1.nrstate);
+    assert(nrstate1 + lagbuf.nrstate == rstate_len(rank_tot));
+    
     Array<float> rstate0({big_tree.nrstate}, af_uhost | af_zero);
     Array<float> rstate1({nrstate1}, af_uhost | af_zero);
 
@@ -208,25 +203,14 @@ static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks,
     nscratch = std::max(nscratch, tree1.nscratch);    
     Array<float> scratch({nscratch}, af_uhost | af_random);
 
-    if (!uflag)
-	assert(nrstate1 + lagbuf.nrstate == rstate_len(rank_tot));
-
-    Array<float> chunk1_big({nfreq_big, nt_chunk}, af_uhost | af_zero);
     Array<float> chunk1({nfreq_tot, nt_chunk}, af_uhost | af_zero);
-    Array<float> chunk0({nfreq_tot, nt_chunk}, af_uhost | af_zero);
     
     for (int c = 0; c < nchunks; c++) {
-	Array<float> chunk0_big({nfreq_big, nt_chunk}, af_uhost | af_random);
+	Array<float> chunk0({nfreq_tot, nt_chunk}, af_uhost | af_random);
 
-	// First step: chunk0_big -> chunk1 -> dedisperse
+	// First step: chunk0 -> chunk1 -> dedisperse
 
-	if (uflag) {
-	    chunk1_big.fill(chunk0_big);
-	    reducer->reduce(chunk1_big, chunk1);
-	}
-	else
-	    chunk1.fill(chunk0_big);
-	
+	chunk1.fill(chunk0);
 	float *rp = rstate1.data;
 	
 	for (int i = 0; i < nfreq1; i++) {
@@ -241,17 +225,11 @@ static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks,
 	    rp += tree1.nrstate;
 	}
 
-	// Second step: chunk0_big -> dedisperse -> chunk0
+	// Second step: chunk0 -> dedisperse -> chunk0
 	
-	big_tree.dedisperse(chunk0_big, rstate0.data, scratch.data);
-
-	if (uflag)
-	    reference_extract_odd_channels(chunk0_big, chunk0);
-	else
-	    chunk0.fill(chunk0_big);
+	big_tree.dedisperse(chunk0, rstate0.data, scratch.data);
 
 	// Third step: compare chunk0 / chunk1
-
 	// (arr0, arr1, name0, name1, axis_names)
 	gputils::assert_arrays_equal(chunk0, chunk1, "unfactored", "factored", {"dm_brev","t"});
     }
@@ -266,9 +244,8 @@ static void test_tree_recursion(bool noisy=false)
     int nt_chunk = rand_int(1, pow2(std::max(rank0,rank1)+1));
     int maxchunks = std::max(3L, 10000 / (pow2(rank) * nt_chunk));
     int nchunks = rand_int(1, maxchunks+1);
-    bool uflag = rand_int(0, 2);
     
-    test_tree_recursion(rank0, rank1, nt_chunk, nchunks, uflag, noisy);
+    test_tree_recursion(rank0, rank1, nt_chunk, nchunks, noisy);
 }
 
 

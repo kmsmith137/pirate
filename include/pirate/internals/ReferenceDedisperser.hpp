@@ -19,10 +19,6 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-// Defined later in this file.
-// FIXME get rid of this
-class ReferenceReducer;
-
 
 // -------------------------------------------------------------------------------------------------
 
@@ -209,30 +205,6 @@ struct ReferenceDedisperser
     ssize_t _print_ringbuf(const std::string &name,
 			   const std::vector<gputils::Array<float>> &arr_vec, 
 			   std::ostream &os, int indent, bool active_beams_only) const;
-};
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// FIXME get rid of ReferenceReducer
-
-
-class ReferenceReducer
-{
-public:
-    ReferenceReducer(int rank0_out, int rank1, int ntime);
-
-    int rank0_out = 0;
-    int rank1 = 0;
-    int ntime = 0;
-    int nrstate = 0;
-
-    // Warning: modifies input array!!
-    void reduce(gputils::Array<float> &in, gputils::Array<float> &out) const;
-
-protected:
-    std::shared_ptr<ReferenceLagbuf> lagbuf0; // applied to input array before freq downsampling (all lags 0 or 1)
-    std::shared_ptr<ReferenceLagbuf> lagbuf1; // applied to input array after freq downsampling (all lags < 2^rank0_out)
 };
 
 
