@@ -173,6 +173,11 @@ template<typename T> __device__ T *shmem_base();
 template<> __device__ float *shmem_base<float> () { return shmem_f; }
 template<> __device__ __half2 *shmem_base<__half2> () { return shmem_h2; }
 
+// zero<T>(): returns zero
+template<typename T> __device__ T zero();
+template<> __device__ float zero<float>() { return 0.0f; }
+template<> __device__ __half2 zero<__half2>() { return __half2half2(0.0f); }
+    
 
 // -------------------------------------------------------------------------------------------------
 
@@ -219,7 +224,7 @@ __device__ T shmem_rb_cycle(T x, T *rb, int lag, int &rpos)
 
 
 template<typename T>
-int init_rpos(int lag, long ntime_cumulative)
+__device__ int init_rpos(int lag, long ntime_cumulative)
 {
     // init_rpos<T>: Used to initialize 'rpos' argument to shmem_rb_cycle().
     // As explained above, we return rpos = (nreg_cumulative + laneId) % lag.
@@ -256,7 +261,7 @@ struct wparams
     int lag0;
     int lag1;
     
-    wparams(int D)
+    __device__ wparams(int D)
     {
 	const int A = blockDim.z * gridDim.y;
 	const int M = blockDim.y * gridDim.x;  // 2^(r-2)
@@ -344,7 +349,7 @@ __device__ void ld_lag_switch(__half2 &x, __half2 &y, __half2 &rs, bool yflag)
 }
 
 // In the float32 case, ld_lag_switch() is still defined, but is a no-op.
-__device__ void ld_lag_switch(float &x, float &y, __half2 &rs, bool yflag)
+__device__ void ld_lag_switch(float &x, float &y, float &rs, bool yflag)
 {
     return;
 }
@@ -434,7 +439,7 @@ struct ld_kernel
     int rpos1;
 
 
-    ld_kernel(const wparams<T> &wp, long ntime_cumulative)
+    __device__ ld_kernel(const wparams<T> &wp, long ntime_cumulative)
 	: next_kernel(wp, ntime_cumulative >> 1)   // Note right-shift by 1 here!
     {
 	// FIXME uses more %-operators than necessary.
@@ -455,8 +460,8 @@ struct ld_kernel
     // If RestoreRs==true, then 'rs' is fully cycled (by 32 registers).
     // If RestoreRs==false, then 'rs' is cycled by (2*D) registers.
 
-    void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs,
-		 T x000, T x001, T x010, T x011, T x100, T x101, T x110, T x111)
+    __device__ void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs,
+			    T x000, T x001, T x010, T x011, T x100, T x101, T x110, T x111)
     {
 	const int laneId = threadIdx.x;
 	const int W = blockDim.y * blockDim.z;
@@ -496,8 +501,8 @@ struct ld_kernel
 	// Reminder: shared memory ring buffer is an array of shape (D,W,S).
 
 	int S = wp.lag0 + wp.lag1;
-	T *rb0 = ((D-1)*W + w) * S;  // length wp.lag0
-	T *rb1 = rb0 + wp.lag0;      // length wp.lag1
+	T *rb0 = shmem_base<T>() + ((D-1)*W + w) * S;  // length wp.lag0
+	T *rb1 = rb0 + wp.lag0;                        // length wp.lag1
 	
 	x0 = shmem_rb_cycle(x0, rb0, wp.lag0, rpos0);
 	x1 = shmem_rb_cycle(x1, rb1, wp.lag1, rpos1);
@@ -532,7 +537,7 @@ struct ld_half_kernel
     T y00, y01, y10, y11;
     ld_kernel<T,D,false> base_kernel;  // RestoreRs=false
 
-    ld_half_kernel(const wparams<T> &wp, long ntime_cumulative)
+    __device__ ld_half_kernel(const wparams<T> &wp, long ntime_cumulative)
 	: base_kernel(wp, ntime_cumulative)
     { }
 
@@ -545,7 +550,7 @@ struct ld_half_kernel
     //
     // Cycles 'rs' by (2*D) registers.
 
-    void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs, T x00, T x01, T x10, T x11)
+    __device__ void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs, T x00, T x01, T x10, T x11)
     {
 	if (counter & 1) {
 	    ld_transpose(y00, x00);
@@ -570,7 +575,8 @@ struct ld_half_kernel
 template<typename T>
 struct ld_half_kernel<T,0>
 {
-    ld_half_kernel(const wparams<T> &wp, long ntime_cumulative) { }
+    __device__ ld_half_kernel(const wparams<T> &wp, long ntime_cumulative) { }
+    __device__ void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs, T x00, T x01, T x10, T x11) { }
 };
 
 
@@ -587,12 +593,12 @@ struct state_params
     int rs_idx;       // shared memory index of 'rs' on this thread
     bool rs_flag;     // is 'rs' valid on this thread?
 
-    state_params(const wparams<T> &wp)
+    __device__ state_params(const wparams<T> &wp)
     {
 	const int W = blockDim.y * blockDim.z;
 	const int w = threadIdx.y + threadIdx.z * blockDim.y;
 	const int S = wp.lag0 + wp.lag1;
-	const int ri = threadIdx.x + (2*D-32);
+	const int ri = (int)threadIdx.x + (2*D-32);
 	
 	threadId = threadIdx.x + 32 * (threadIdx.y + threadIdx.z * blockDim.y);
 	nthreads = blockDim.x * blockDim.y * blockDim.z;
@@ -617,7 +623,7 @@ __device__ T restore_state(const wparams<T> &wp, const T *persistent_state)
     __syncthreads();
 
     // Warp divergence
-    T rs = sp.rs_flag ? shmem[sp.rs_idx] : 0;
+    T rs = sp.rs_flag ? shmem[sp.rs_idx] : zero<T>();
     __syncwarp();
     
     return rs;
@@ -659,6 +665,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
     const int i_off = (2*wp.iext) * ntime;
     const int j_off = (2*wp.jext) * ntime;
     const int ntime_out = ntime >> 1;
+    int counter = 0;
 
     for (int it = 0; it < ntime_out; it += 32) {
 	// FIXME use wide loads/stores here
@@ -680,6 +687,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 		       x000, x001, x010, x011, x100, x101, x110, x111);
 	
 	in += 64;
+	counter++;
     }
 
     save_state<T,D> (wp, persistent_state, rs);
@@ -696,8 +704,10 @@ using kernel_t = typename GpuLaggedDownsamplingKernel<T>::kernel_t;
 template<typename T, int Dmax>
 static vector<kernel_t<T>> _make_kernels()
 {
+    using T32 = typename simd32_type<T>::type;
+    
     if constexpr (Dmax > 0) {
-	kernel_t<T> k = lagged_downsample<T,Dmax>;
+	kernel_t<T> k = lagged_downsample<T32,Dmax>;
 	vector<kernel_t<T>> ret = _make_kernels<T,Dmax-1> ();
 	ret.push_back(k);
 	return ret;

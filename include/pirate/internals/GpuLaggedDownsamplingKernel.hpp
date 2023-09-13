@@ -70,7 +70,6 @@ public:
 
     void print(std::ostream &os=std::cout, int indent=0) const;
     
-protected:
     using T32 = typename simd32_type<T>::type;
 
     using kernel_t = void (*)(const T32 *,   // in
@@ -80,7 +79,8 @@ protected:
 			      long,          // bstride_in
 			      long,          // bstride_out
 			      T32 *);        // persistent_state
-
+    
+protected:
     kernel_t kernel;
 
     // Constructor is protected (to construct GpuLaggedDownsamplingKernel
