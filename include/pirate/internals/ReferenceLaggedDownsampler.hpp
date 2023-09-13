@@ -17,6 +17,13 @@ class ReferenceLagbuf;
 
 struct ReferenceLaggedDownsampler
 {
+    // A potential source of confusion: denote
+    //
+    //    rld_nds = ReferenceLaggedDownsampler::Params::num_downsmapling_levels
+    //    dc_nds = DedispersionConfig::num_downsampling_levels
+    //
+    // Then rld_nds = (dc_nds - 1)!
+    
     struct Params
     {
 	int small_input_rank = 0;
@@ -33,7 +40,9 @@ struct ReferenceLaggedDownsampler
     std::shared_ptr<ReferenceLaggedDownsampler> next;
 
     ReferenceLaggedDownsampler(const Params &params);
-    
+
+    // 'out' has outer length nds = Params::num_downsampling_levels.
+    // out[i] has shape (nbeams, 2^(large_input_rank-1), ntime/2^(i+1)).
     void apply(const gputils::Array<float> &in, std::vector<gputils::Array<float>> &out);
     void apply(const gputils::Array<float> &in, gputils::Array<float> *outp);
 };

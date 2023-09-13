@@ -131,7 +131,7 @@ void ReferenceDedisperser::_compute_downsampled_inputs(const Array<float> &in)
 
     downsampled_inputs[0].fill(in);  // FIXME is this copy necessary?
     for (int ids = 1; ids < nds; ids++)
-	reference_downsample_time(downsampled_inputs[ids-1], downsampled_inputs[ids], true);  // normalize=true
+	reference_downsample_time(downsampled_inputs[ids-1], downsampled_inputs[ids], false);  // normalize=false, i.e. no factor 0.5
 }
 
 
@@ -151,6 +151,19 @@ void ReferenceDedisperser::_allocate_lagged_downsampled_inputs()
     // FIXME temporary kludge
     this->reducer_hack.resize(nds);
 
+    if (nds > 1) {
+	const DedispersionPlan::Stage0Tree &st0 = this->plan->stage0_trees[1];
+	
+	ReferenceLaggedDownsampler::Params ld_params;
+	ld_params.small_input_rank = st0.rank0 + 1;
+	ld_params.large_input_rank = st0.rank0 + st0.rank1 + 1;
+	ld_params.num_downsampling_levels = nds - 1;
+	ld_params.nbeams = 1;
+	ld_params.ntime = config.time_samples_per_chunk;
+
+	this->lagged_downsampler = make_shared<ReferenceLaggedDownsampler> (ld_params);
+    }
+    
     for (int ids = 1; ids < nds; ids++) {
 	int nt_ds = xdiv(input_nt, pow2(ids));
 	const DedispersionPlan::Stage0Tree &st0 = this->plan->stage0_trees.at(ids);
@@ -170,9 +183,14 @@ void ReferenceDedisperser::_compute_lagged_downsampled_inputs(const Array<float>
 
     // FIXME is this copy necessary?
     lagged_downsampled_inputs[0].fill(in);
-    
+
+#if 0
     for (int ids = 1; ids < nds; ids++)
 	this->reducer_hack[ids]->reduce(downsampled_inputs[ids], lagged_downsampled_inputs[ids]);
+#else
+    if (nds > 1)
+	this->lagged_downsampler->apply(in, &lagged_downsampled_inputs[1]);
+#endif
 }
 
     

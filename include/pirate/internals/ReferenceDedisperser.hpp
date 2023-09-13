@@ -11,6 +11,7 @@
 
 #include "ReferenceTree.hpp"
 #include "ReferenceLagbuf.hpp"
+#include "ReferenceLaggedDownsampler.hpp"
 
 
 namespace pirate {
@@ -86,6 +87,7 @@ struct ReferenceDedisperser
 
     // FIXME temporary kludge
     std::vector<std::shared_ptr<ReferenceReducer>> reducer_hack;
+    std::shared_ptr<ReferenceLaggedDownsampler> lagged_downsampler;
 
     // The "intermediate" arrays are the iobufs of the Stage0Trees.
     std::vector<gputils::Array<float>> intermediate_arrays;   // length nds

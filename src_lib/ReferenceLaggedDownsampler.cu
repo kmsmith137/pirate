@@ -19,7 +19,7 @@ namespace pirate {
 ReferenceLaggedDownsampler::ReferenceLaggedDownsampler(const Params &params_)
     : params(params_)
 {
-    assert(params.small_input_rank >= 2);
+    assert(params.small_input_rank >= 1);
     assert(params.small_input_rank <= 8);
     assert(params.large_input_rank >= params.small_input_rank);
     assert(params.large_input_rank <= constants::max_tree_rank);
@@ -31,14 +31,14 @@ ReferenceLaggedDownsampler::ReferenceLaggedDownsampler(const Params &params_)
 
     int r = params.large_input_rank;
     int s = params.small_input_rank;
-    
+
     vector<int> small_lags(pow2(r));
     vector<int> large_lags(pow2(r-1));
     
     for (int i = 0; i < pow2(r); i++)
 	small_lags[i] = (i & 1) ? 0 : 1;
     
-    for (int i = 0; i < pow2(r-s-1); i++)
+    for (int i = 0; i < pow2(r-s); i++)
 	for (int j = 0; j < pow2(s-1); j++)
 	    large_lags[i*pow2(s-1)+j] = pow2(s-1)-j-1;
     
@@ -66,14 +66,35 @@ void ReferenceLaggedDownsampler::apply(const Array<float> &in, vector<Array<floa
 }
 
 
+// Helper for ReferenceLaggedDownsampler::apply()
+static void _check_shape(const char *name, const Array<float> &arr, ssize_t nbeams, ssize_t nfreq, ssize_t ntime)
+{
+    if (arr.shape_equals({ nbeams, nfreq, ntime }))
+	return;
+
+    if ((nbeams == 1) && arr.shape_equals({nfreq,ntime}))
+	return;
+
+    stringstream ss;
+    ss << "ReferenceLaggedDownsampler::apply(): expected '" << name << "' array to have"
+       << " shape=(" << nbeams << "," << nfreq << "," << ntime << ")";
+
+    if (nbeams == 1)
+	ss << " or shape=(" << nfreq << "," << ntime << ")";
+
+    ss << ", got shape=" << arr.shape_str();
+    throw runtime_error(ss.str());
+}
+
+
 void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *outp)
 {
     int r = params.large_input_rank;
     int nbeams = params.nbeams;
     long ntime = params.ntime;
-    
-    assert(in.shape_equals({ nbeams, pow2(r), ntime }));
-    assert(outp[0].shape_equals({ nbeams, pow2(r-1), xdiv(ntime,2) }));
+
+    _check_shape("in", in, nbeams, pow2(r), ntime);
+    _check_shape("out", outp[0], nbeams, pow2(r-1), xdiv(ntime,2));
     
     // Input/output arrays, reshaped to 2-d.
     Array<float> in_2d = in.reshape_ref({ nbeams * pow2(r), ntime });
