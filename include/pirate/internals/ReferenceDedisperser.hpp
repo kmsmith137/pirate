@@ -74,6 +74,11 @@ struct ReferenceDedisperser
     void _allocate_downsampled_inputs();
     void _compute_downsampled_inputs(const gputils::Array<float> &in);
 
+    // Used if sophistication > 0.
+    std::shared_ptr<ReferenceLaggedDownsampler> lagged_downsampler;
+
+    // FIXME can be deleted
+    //
     // lagged_downsampled_inputs: used if sophistication >= 1.
     // It contains the input array after applying the ReferenceLaggedDownsampler.
     //
@@ -84,10 +89,6 @@ struct ReferenceDedisperser
     std::vector<gputils::Array<float>> lagged_downsampled_inputs;  // length nds
     void _allocate_lagged_downsampled_inputs();
     void _compute_lagged_downsampled_inputs(const gputils::Array<float> &in);
-
-    // FIXME temporary kludge
-    std::vector<std::shared_ptr<ReferenceReducer>> reducer_hack;
-    std::shared_ptr<ReferenceLaggedDownsampler> lagged_downsampler;
 
     // The "intermediate" arrays are the iobufs of the Stage0Trees.
     std::vector<gputils::Array<float>> intermediate_arrays;   // length nds
