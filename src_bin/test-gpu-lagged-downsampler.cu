@@ -38,43 +38,10 @@ struct TestInstance
     int bstride_out = 0;
     
 
-    Array<T> alloc_input(bool use_bstride_in, int aflags)
-    {
-	long nr = pow2(large_input_rank);
-	long bstride = use_bstride_in ? bstride_in : min_bstride_in();
-	return Array<T> ({nbeams,nr,nt_chunk}, {bstride,nt_chunk,1}, aflags);
-    }
-
-    
-    vector<Array<T>> alloc_output(bool use_bstride_out, int aflags)
-    {
-	long bstride_min = min_bstride_out();
-	long bstride = use_bstride_out ? bstride_out : bstride_min;
-	long nr = pow2(large_input_rank - 1);
-
-	Array<T> big_arr({nbeams,bstride_min}, {bstride,1}, aflags);
-	vector<Array<T>> ret;
-	long nt_cumul = 0;
-	
-	for (int i = 0; i < num_downsampling_levels; i++) {
-	    long nt_ds = xdiv(nt_chunk, pow2(i+1));
-	    Array<T> a = big_arr.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
-	    Array<T> b = a.reshape({ nbeams, nr, nt_ds });
-	    
-	    ret.push_back(b);
-	    nt_cumul += nt_ds;
-	}
-
-	assert(nr * nt_cumul == bstride_min);
-	return ret;
-    }
-    
-
     long min_bstride_in() const
     {
 	return pow2(large_input_rank) * nt_chunk;
     }
-
     
     long min_bstride_out() const
     {
@@ -83,7 +50,6 @@ struct TestInstance
 	    nt_out += xdiv(nt_chunk, pow2(d));
 	return pow2(large_input_rank-1) * nt_out;
     }
-
     
     void randomize()
     {
@@ -107,6 +73,64 @@ struct TestInstance
     }
     
 
+
+    // ---------------------------------------------------------------------------------------------
+    //
+    // Helpers for input/output array allocation.
+    
+
+    // alloc_input() returns array of shape (nbeams, 2^large_input_rank, nt_chunk).
+    // The beam axis may have a non-contiguous stride -- see below.    
+    template<typename T2> 
+    Array<T2> alloc_input(bool use_bstride_in, int aflags)
+    {
+	long nr = pow2(large_input_rank);
+	long bstride = use_bstride_in ? bstride_in : min_bstride_in();
+	return Array<T2> ({nbeams,nr,nt_chunk}, {bstride,nt_chunk,1}, aflags);
+    }
+
+
+    // Return type from alloc_output().
+    template<typename T2> struct OutputArrays
+    {
+	// big_arr has shape (nbeams, min_bstride_out).
+	// The beam axis may have a non-contiguous stride.
+	Array<T2> big_arr;
+
+	// small_arrs[ids] has shape (nbeams, 2^(large_input_rank-1), nt_chunk/2^(ids+1)).
+	// The beam axis will usually have a non-contiguous stride.
+	vector<Array<T2>> small_arrs;
+    };
+
+
+    template<typename T2>
+    OutputArrays<T2> alloc_output(bool use_bstride_out, int aflags)
+    {
+	long bstride_min = min_bstride_out();
+	long bstride = use_bstride_out ? bstride_out : bstride_min;
+	long nr = pow2(large_input_rank - 1);
+	long nt_cumul = 0;
+
+	OutputArrays<T2> ret;
+	ret.big_arr = Array<T2>({nbeams,bstride_min}, {bstride,1}, aflags);
+	ret.small_arrs.resize(num_downsampling_levels);
+	
+	for (int i = 0; i < num_downsampling_levels; i++) {
+	    long nt_ds = xdiv(nt_chunk, pow2(i+1));
+	    Array<T2> a = big_arr.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
+	    
+	    ret.small_arrs[i] = a.reshape({ nbeams, nr, nt_ds });
+	    nt_cumul += nt_ds;
+	}
+
+	assert(nr * nt_cumul == bstride_min);
+	return ret;
+    }
+
+
+    // ---------------------------------------------------------------------------------------------
+    
+
     void run(bool noisy)
     {
 	if (noisy) {
@@ -121,7 +145,17 @@ struct TestInstance
 		 << "    bstride_out = " << bstride_out << " (min: " << min_bstride_out() << ")\n";
 	}
 
-	assert(small_input_rank >= );
+	assert(small_input_rank > 0);
+	assert(large_input_rank >= small_input_rank);
+	assert(large_input_rank >= constants::max_tree_rank);
+	assert(num_downsampling_levels > 0);
+	assert(num_downsampling_levels <= constants::max_downsampling_level-1);
+	assert(nbeams > 0);
+	assert(nchunks > 0);
+	assert(nt_chunk > 0);
+	assert((nt_chunk * sizeof(T)) % (pow2(num_downsampling_levels) * constants::bytes_per_gpu_cache_line) == 0);
+	assert(bstride_in >= min_bstride_in());
+	assert(bstride_out >= max_bstride_in());
 
 	ReferenceLaggedDownsampler::Params ref_params;
 	ref_params.small_input_rank = small_input_rank;
@@ -138,59 +172,36 @@ struct TestInstance
 	    gpu_kernel->print(cout, 8);
 	    cout << flush;
 	}
-	
-	Array<T> gpu_in = alloc_input(true, af_gpu | af_zero);
+
+	Array<T> gpu_in = alloc_input<T> (true, af_gpu | af_zero);       // use_bstride_in = true
 	Array<T> gpu_state({ params.nbeams, gpu_kernel.params.state_nelts_per_beam }, af_gpu | af_zero);
 
-	// Next task is to allocate the 'cpu_out' and 'gpu_out' arrays.
-	
-	vector<Array<float>> cpu_out;
-	vector<Array<T>> gpu_out;
-	
-	int nr = pow2(large_input_rank-1);
-	long nt_cumul = 0;
+	OutputArrays<T> gpu_out = alloc_output<T> (true, af_gpu | af_zero);  // use_bstride_out = true
+	OutputArrays<float> cpu_out = alloc_output<
 
-	Array<T> gpu_out0({ nbeams, min_bstride_out() },  // shape
-			  { bstride_out, 1 },             // strides
-			  af_gpu | af_zero);              // aflags
-	
-	for (int i = 0; i < num_downsampling_levels; i++) {
-	    long nt_ds = xdiv(params.nt_chunk, pow2(i+1));
-	    
-	    Array<float> cpu_out1({ nbeams, nr, nt_ds }, af_rhost | af_zero);
-	    cpu_out.push_back(cpu_out1);
-	    
-	    Array<T> gpu_out1 = gpu_out0.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
-	    Array<T> gpu_out2 = gpu_out1.reshape_ref({ nbeams, nr, nt_ds });
-	    gpu_out.push_back(gpu_out2);
-	    
-	    nt_cumul += nt_ds;
-	}
-	
 	for (int ichunk = 0; ichunk < nchunks; ichunk++) {
 #if 1
 	    // Random chunk gives strongest test.
-	    Array<float> cpu_in = alloc_input(false, af_rhost | af_random);
+	    Array<float> cpu_in = alloc_input<float> (false, af_rhost | af_random);  // use_bstride_in = false
 #else
 	    // One-hot chunk is sometimes useful for debugging.
-	    Array<float> cpu_in = alloc_input(false, af_rhost | af_zero);
+	    Array<float> cpu_in = alloc_input<float> (false, af_rhost | af_zero);    // use_bstride_in = false
 	    int ibeam = rand_int(0, nbeams);
 	    int irow = rand_int(0, pow2(large_input_rank));
 	    int it = rand_int(0, nt_chunk);
 	    cout << "   one-hot chunk: ibeam=" << ibeam << "; irow=" << irow << "; it=" << it << ";" << endl;
-	    ref_chunk.at({ibeam,irow,it}) = 1.0;
+	    cpu_in.at({ibeam,irow,it}) = 1.0;
 #endif
 
-	    ref_kernel->apply(cpu_in, cpu_out);
+	    ref_kernel->apply(cpu_in, cpu_out.small_arrs);
 
 	    gpu_in.fill(cpu_in.convert_dtype<T> ());
 	    gpu_kernel->launch(gpu_in, gpu_out, gpu_state, ichunk * nt_chunk);
 	    CUDA_CALL(cudaDeviceSynchronize());
 
 	    for (int ids = 0; ids < num_downsampling_levels; ids++) {
-		Array<float> from_gpu = gpu_out[ids].to_host().convert_dtype<float> ();
-		double epsabs = 0.003 * pow(1.414, rank);
-		assert_arrays_equal(ref_chunk, gpu_output, "ref", "gpu", {"beam","amb","dmbr","time"}, epsabs, 0.003);		
+		Array<float> from_gpu = gpu_out.small_arrs[ids].to_host().convert_dtype<float> ();
+		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","amb","dmbr","time"}, 0.005, 0.003);
 	    }
 	}
     }
