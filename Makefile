@@ -57,6 +57,7 @@ XFILES = \
   bin/test-cpu-downsampler \
   bin/test-gpu-dedispersion-kernels \
   bin/test-gpu-downsample \
+  bin/test-gpu-lagged-downsampler \
   bin/test-gpu-reduce2 \
   bin/test-gpu-transpose \
   bin/test-reference-dedisperser \
