@@ -44,7 +44,7 @@ namespace pirate {
 //
 // Each warp processes four rows of the input tree, and writes two rows of the output tree.
 // We define M = 2^(r-2). Thus, each "small" tree corresponds to M warps, and each "large"
-// (ambient) tree corresponds to A*M warps. This factor of A*M can be factored arbitrarily:
+// (ambient) tree corresponds to A*M warps. This factor of A*M can be factored arbitrarily
 // between warps in a threadblock, and threadblocks in a kernel:
 //
 //   A = A_B * A_W     M = M_B * M_W
@@ -747,11 +747,13 @@ static int get_shmem_nbytes(int r, int D, int W, bool align=true)
 template<typename T>
 static int target_warps_per_threadblock(int r, int D)
 {
-    // shared memory bytes per warp, without 128-byte alignment
+    // Shared memory bytes per warp, without 128-byte alignment
     int nb1 = get_shmem_nbytes<T> (r, D, 1, false);
 
+    // Aim for 8 warps per threadblock (semi-arbitrary), but use fewer warps
+    // if we get into trouble with shared memory.
     for (int W = 1; W <= 4; W++)
-	if (W*nb1 > 12*1024)
+	if (W*nb1 > 48*1024)
 	    return W;
 
     return 8;
@@ -780,22 +782,24 @@ GpuLaggedDownsamplingKernel<T>::make(int small_input_rank, int large_input_rank,
     params.small_input_rank = small_input_rank;
     params.large_input_rank = large_input_rank;
     params.num_downsampling_levels = num_downsampling_levels;
-
+    
     int M = pow2(small_input_rank - 2);
     int A = pow2(large_input_rank - small_input_rank);
-    int Wtar = target_warps_per_threadblock<T> (small_input_rank, num_downsampling_levels);
-    
-    params.Wy = min(M, Wtar);
-    params.Wz = min(A, (int)xdiv(Wtar,M));
-    params.warps_per_threadblock = params.Wy * params.Wz;
+    int W_target = target_warps_per_threadblock<T> (small_input_rank, num_downsampling_levels);
 
-    params.Bx = xdiv(M, params.Wy);
-    params.By = xdiv(A, params.Wz);
-    params.threadblocks_per_beam = params.Bx * params.By;
+    // Each "large" tree corresponds to A*M warps. This factor of A*M can be factored
+    // arbitrarily between warps in a threadblock, and threadblocks in a kernel:
+    //
+    //   A = A_B * A_W     M = M_B * M_W
 
-    int nb = get_shmem_nbytes<T> (small_input_rank, num_downsampling_levels, params.warps_per_threadblock, true);  // align=true
+    params.M_W = min(M, W_target);
+    params.A_W = min(A, (int)xdiv(W_target, params.M_W));
+    params.M_B = xdiv(M, params.M_W);
+    params.A_B = xdiv(A, params.A_W);
+
+    int nb = get_shmem_nbytes<T> (small_input_rank, num_downsampling_levels, params.warps_per_threadblock(), true);  // align=true
     params.ntime_divisibility_requirement = (128 / sizeof(T)) * pow2(num_downsampling_levels);
-    params.state_nelts_per_beam = params.threadblocks_per_beam * (nb / sizeof(T));
+    params.state_nelts_per_beam = params.threadblocks_per_beam() * (nb / sizeof(T));
     params.shmem_nbytes = nb;
 
     kernel_t k = kernels.at(num_downsampling_levels);
@@ -811,19 +815,21 @@ GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &params
     // Assume "real" argument-checking has been done in GpuLaggedDownsamplingKernel::make().
     // Here, just some asserts to make sure I didn't forget to initialize something!
 
-    assert(params.small_input_rank > 0);
+    assert(params.small_input_rank >= 2);   // currently required by GPU kernel
     assert(params.large_input_rank >= params.small_input_rank);
     assert(params.num_downsampling_levels > 0);
     assert(params.ntime_divisibility_requirement > 0);
     assert(params.state_nelts_per_beam > 0);
     assert(params.shmem_nbytes > 0);
-    assert(params.warps_per_threadblock == params.Wy * params.Wz);
-    assert(params.threadblocks_per_beam == params.Bx * params.By);
-    assert(params.Wy > 0);
-    assert(params.Wz > 0);
-    assert(params.Bx > 0);
-    assert(params.By > 0);
+    assert(params.M_W > 0);
+    assert(params.M_B > 0);
+    assert(params.A_W > 0);
+    assert(params.A_B > 0);
     assert(kernel != nullptr);
+
+    assert(params.M_W * params.M_B == pow2(params.small_input_rank - 2));
+    assert(params.A_W * params.A_B == pow2(params.large_input_rank - params.small_input_rank));
+    assert(params.warps_per_threadblock() <= 32);
 }
 
 
@@ -886,16 +892,16 @@ void GpuLaggedDownsamplingKernel<T>::launch(
 
     // Required by CUDA (max alllowed value of gridDims.z)
     assert(nbeams < 65536);
-    
+
     dim3 block_dims;
+    block_dims.z = params.A_W;
+    block_dims.y = params.M_W;
     block_dims.x = 32;
-    block_dims.y = params.Wy;
-    block_dims.z = params.Wz;
 
     dim3 grid_dims;
-    grid_dims.x = params.Bx;
-    grid_dims.y = params.By;
     grid_dims.z = nbeams;
+    grid_dims.y = params.A_B;
+    grid_dims.x = params.M_B;
     
     this->kernel
 	<<< grid_dims, block_dims, params.shmem_nbytes, stream >>>
@@ -923,11 +929,11 @@ void GpuLaggedDownsamplingKernel<T>::print(ostream &os, int indent) const
     print_kv("shmem_nbytes", params.shmem_nbytes, os, indent);
 
     stringstream sw;
-    sw << params.warps_per_threadblock << " (Wy=" << params.Wy << ",Wz=" << params.Wz << ")";
+    sw << params.warps_per_threadblock() << " (M_W=" << params.M_W << ", A_W=" << params.A_W << ")";
     print_kv("warps_per_threadblock", sw.str(), os, indent);
     
     stringstream sb;
-    sb << params.threadblocks_per_beam << " (Bx=" << params.Bx << ",By=" << params.By << ")";
+    sb << params.threadblocks_per_beam() << " (M_B=" << params.M_B << ", A_B=" << params.A_B << ")";
     print_kv("threadblocks_per_beam", sb.str(), os, indent);
 }
 

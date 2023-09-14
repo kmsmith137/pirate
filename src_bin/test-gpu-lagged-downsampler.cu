@@ -32,12 +32,12 @@ struct TestInstance
     int large_input_rank = 0;
     int num_downsampling_levels = 0;
 
-    int nbeams = 0;
-    int nchunks = 0;
-    int nt_chunk = 0;
+    long nbeams = 0;
+    long nchunks = 0;
+    long nt_chunk = 0;
     
-    int bstride_in = 0;
-    int bstride_out = 0;
+    long bstride_in = 0;
+    long bstride_out = 0;
     
 
     long min_bstride_in() const
@@ -55,19 +55,19 @@ struct TestInstance
     
     void randomize()
     {
-	small_input_rank = rand_int(1, 9);
+	small_input_rank = rand_int(2, 9);  // GpuLaggedDownsamplingKernel needs small_input_rank >= 2
 	large_input_rank = rand_int(small_input_rank, 13);
 	num_downsampling_levels = rand_int(1, constants::max_downsampling_level + 1);
 	nchunks = rand_int(2, 11);
 
 	// Bytes per time sample per beam.
-	int nb0 = pow2(large_input_rank) * sizeof(T);
+	long nb0 = pow2(large_input_rank) * sizeof(T);
 
-	int nt_divisor = xdiv(128, sizeof(T)) * pow2(num_downsampling_levels+1);
-	int imax = min(10, (int)(2.0e9 / nb0 / nt_divisor));
+	long nt_divisor = xdiv(128,sizeof(T)) * pow2(num_downsampling_levels+1);
+	long imax = min(10L, (long)(2.0e9 / nb0 / nt_divisor));
 	nt_chunk = nt_divisor * rand_int(1, imax+1);
 
-	int bmax = min(10, (int)(2.1e9 / nb0 / nt_chunk));
+	long bmax = min(10L, (long)(2.1e9 / nb0 / nt_chunk));
 	nbeams = rand_int(1, bmax+1);
 	
 	bstride_in = rand_stride<T> (min_bstride_in());
@@ -148,7 +148,7 @@ struct TestInstance
 
 	assert(small_input_rank > 0);
 	assert(large_input_rank >= small_input_rank);
-	assert(large_input_rank >= constants::max_tree_rank);
+	assert(large_input_rank <= constants::max_tree_rank);
 	assert(num_downsampling_levels > 0);
 	assert(num_downsampling_levels <= constants::max_downsampling_level-1);
 	assert(nbeams > 0);
@@ -187,9 +187,9 @@ struct TestInstance
 #else
 	    // One-hot chunk is sometimes useful for debugging.
 	    Array<float> cpu_in = alloc_input<float> (false, af_rhost | af_zero);    // use_bstride_in = false
-	    int ibeam = rand_int(0, nbeams);
-	    int irow = rand_int(0, pow2(large_input_rank));
-	    int it = rand_int(0, nt_chunk);
+	    long ibeam = rand_int(0, nbeams);
+	    long irow = rand_int(0, pow2(large_input_rank));
+	    long it = rand_int(0, nt_chunk);
 	    cout << "   one-hot chunk: ibeam=" << ibeam << "; irow=" << irow << "; it=" << it << ";" << endl;
 	    cpu_in.at({ibeam,irow,it}) = 1.0;
 #endif

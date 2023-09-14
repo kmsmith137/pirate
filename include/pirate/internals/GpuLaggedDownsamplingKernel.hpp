@@ -28,15 +28,16 @@ public:
 	int state_nelts_per_beam = 0;
 	int shmem_nbytes = 0;
 
-	// Each threadblock is a shape-(Wx,Wy,Wz) thread array, where Wx=32.
-	int Wy = 0;
-	int Wz = 0;
-	int warps_per_threadblock = 0;  // = (Wy * Wz)
+	// These parameters are supplied automatically by make().
+	// They determine how the kernel is divided into threadblocks.
+	// See GpuLaggedDownsamplingKernel.cu for more info.
+	int M_W = 0;
+	int M_B = 0;
+	int A_W = 0;
+	int A_B = 0;
 
-	 // Each kernel is a shape-(Bx,By,B) array, where B = number of beams 
-	int Bx = 0;
-	int By = 0;
-	int threadblocks_per_beam = 0;  // = (Bx * By)
+	int warps_per_threadblock() const { return M_W * A_W; }
+	int threadblocks_per_beam() const { return M_B * A_B; }
     };
 
     const Params params;
@@ -69,7 +70,7 @@ public:
 		cudaStream_t stream = nullptr) const;
 
     void print(std::ostream &os=std::cout, int indent=0) const;
-    
+
     using T32 = typename simd32_type<T>::type;
 
     using kernel_t = void (*)(const T32 *,   // in
