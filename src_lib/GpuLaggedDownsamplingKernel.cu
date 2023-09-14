@@ -852,7 +852,7 @@ void GpuLaggedDownsamplingKernel<T>::launch(
 
     assert(nbeams > 0);
     assert(ntime_in > 0);
-    assert(ntime_cumulative > 0);
+    assert(ntime_cumulative >= 0);
     assert(ntime_in < 2L * 1024L * 1024L * 1024L);
     assert((ntime_in % params.ntime_divisibility_requirement) == 0);
     assert((ntime_cumulative % params.ntime_divisibility_requirement) == 0);

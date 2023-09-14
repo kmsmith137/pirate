@@ -29,16 +29,17 @@ ReferenceLaggedDownsampler::ReferenceLaggedDownsampler(const Params &params_)
     assert(params.ntime > 0);
     assert((params.ntime % pow2(params.num_downsampling_levels)) == 0);
 
+    int nb = params.nbeams;
     int r = params.large_input_rank;
     int s = params.small_input_rank;
 
-    vector<int> small_lags(pow2(r));
-    vector<int> large_lags(pow2(r-1));
+    vector<int> small_lags(nb * pow2(r), 0);
+    vector<int> large_lags(nb * pow2(r-1), 0);
     
-    for (int i = 0; i < pow2(r); i++)
+    for (int i = 0; i < nb * pow2(r); i++)
 	small_lags[i] = (i & 1) ? 0 : 1;
     
-    for (int i = 0; i < pow2(r-s); i++)
+    for (int i = 0; i < nb * pow2(r-s); i++)
 	for (int j = 0; j < pow2(s-1); j++)
 	    large_lags[i*pow2(s-1)+j] = pow2(s-1)-j-1;
     

@@ -202,7 +202,7 @@ struct TestInstance
 
 	    for (int ids = 0; ids < num_downsampling_levels; ids++) {
 		Array<float> from_gpu = gpu_out.small_arrs[ids].to_host().template convert_dtype<float> ();
-		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","amb","dmbr","time"}, 0.005, 0.003);
+		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","freq","time"}, 0.005, 0.003);
 	    }
 	}
     }
