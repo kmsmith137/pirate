@@ -1,5 +1,7 @@
+#include "../include/pirate/internals/ReferenceLaggedDownsampler.hpp"
 #include "../include/pirate/internals/GpuLaggedDownsamplingKernel.hpp"
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
+#include "../include/pirate/constants.hpp"
 
 #include <gputils/Array.hpp>
 #include <gputils/cuda_utils.hpp>
@@ -62,10 +64,10 @@ struct TestInstance
 	int nb0 = pow2(large_input_rank) * sizeof(T);
 
 	int nt_divisor = xdiv(128, sizeof(T)) * pow2(num_downsampling_levels+1);
-	int imax = min(10, 2.0e9 / nb0 / nt_divisor);
+	int imax = min(10, (int)(2.0e9 / nb0 / nt_divisor));
 	nt_chunk = nt_divisor * rand_int(1, imax+1);
 
-	int bmax = min(10, 2.1e9 / nb0 / nt_chunk);
+	int bmax = min(10, (int)(2.1e9 / nb0 / nt_chunk));
 	nbeams = rand_int(1, bmax+1);
 	
 	bstride_in = rand_stride<T> (min_bstride_in());
@@ -117,9 +119,8 @@ struct TestInstance
 	
 	for (int i = 0; i < num_downsampling_levels; i++) {
 	    long nt_ds = xdiv(nt_chunk, pow2(i+1));
-	    Array<T2> a = big_arr.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
-	    
-	    ret.small_arrs[i] = a.reshape({ nbeams, nr, nt_ds });
+	    Array<T2> a = ret.big_arr.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
+	    ret.small_arrs[i] = a.reshape_ref({ nbeams, nr, nt_ds });
 	    nt_cumul += nt_ds;
 	}
 
@@ -155,7 +156,7 @@ struct TestInstance
 	assert(nt_chunk > 0);
 	assert((nt_chunk * sizeof(T)) % (pow2(num_downsampling_levels) * constants::bytes_per_gpu_cache_line) == 0);
 	assert(bstride_in >= min_bstride_in());
-	assert(bstride_out >= max_bstride_in());
+	assert(bstride_out >= min_bstride_out());
 
 	ReferenceLaggedDownsampler::Params ref_params;
 	ref_params.small_input_rank = small_input_rank;
@@ -165,7 +166,7 @@ struct TestInstance
 	ref_params.ntime = nt_chunk;
 
 	auto ref_kernel = make_shared<ReferenceLaggedDownsampler> (ref_params);
-	auto gpu_kernel = GpuLaggedDownsamplingKernel<T>::make(small_input_rank, large_input_rank, num_downsampling_kernels);
+	auto gpu_kernel = GpuLaggedDownsamplingKernel<T>::make(small_input_rank, large_input_rank, num_downsampling_levels);
 
 	if (noisy) {
 	    cout << "    GPU kernel params\n";
@@ -174,10 +175,10 @@ struct TestInstance
 	}
 
 	Array<T> gpu_in = alloc_input<T> (true, af_gpu | af_zero);       // use_bstride_in = true
-	Array<T> gpu_state({ params.nbeams, gpu_kernel.params.state_nelts_per_beam }, af_gpu | af_zero);
+	Array<T> gpu_state({ nbeams, gpu_kernel->params.state_nelts_per_beam }, af_gpu | af_zero);
 
-	OutputArrays<T> gpu_out = alloc_output<T> (true, af_gpu | af_zero);  // use_bstride_out = true
-	OutputArrays<float> cpu_out = alloc_output<
+	OutputArrays<T> gpu_out = alloc_output<T> (true, af_gpu | af_zero);            // use_bstride_out = true
+	OutputArrays<float> cpu_out = alloc_output<float> (false, af_uhost | af_zero); // use_bstride_out = false
 
 	for (int ichunk = 0; ichunk < nchunks; ichunk++) {
 #if 1
@@ -196,16 +197,16 @@ struct TestInstance
 	    ref_kernel->apply(cpu_in, cpu_out.small_arrs);
 
 	    gpu_in.fill(cpu_in.convert_dtype<T> ());
-	    gpu_kernel->launch(gpu_in, gpu_out, gpu_state, ichunk * nt_chunk);
+	    gpu_kernel->launch(gpu_in, gpu_out.small_arrs, gpu_state, ichunk * nt_chunk);
 	    CUDA_CALL(cudaDeviceSynchronize());
 
 	    for (int ids = 0; ids < num_downsampling_levels; ids++) {
-		Array<float> from_gpu = gpu_out.small_arrs[ids].to_host().convert_dtype<float> ();
+		Array<float> from_gpu = gpu_out.small_arrs[ids].to_host().template convert_dtype<float> ();
 		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","amb","dmbr","time"}, 0.005, 0.003);
 	    }
 	}
     }
-}
+};
 
 
 // -------------------------------------------------------------------------------------------------
@@ -219,7 +220,7 @@ int main(int argc, char **argv)
 #if 0
     // Uncomment to enable specific test
     for (int i = 0; i < 100; i++) {
-	TestInstance t;
+	TestInstance<float> t;
 	t.small_input_rank = 2;
 	t.large_input_rank = 3;
 	t.num_downsampling_levels = 3;
@@ -233,10 +234,14 @@ int main(int argc, char **argv)
     return 0;
 #endif
     
-    for (int i = 0; i < 100; i++) {
-	TestInstance t;
-	t.randomize();
-	t.run(noisy);
+    for (int i = 0; i < 50; i++) {
+	TestInstance<float> t32;
+	t32.randomize();
+	t32.run(noisy);
+	
+	TestInstance<__half> t16;
+	t16.randomize();
+	t16.run(noisy);
     }
 
     cout << "test-gpu-lagged-downsampler: pass" << endl;
