@@ -95,7 +95,7 @@ namespace pirate {
 // If T=__half2, then ring buffers have length div2(i) and div2(2^(r-1)-i-1), where div2(n) = (n >> 1).
 // Total length S = 2^(r-2) - 1.
 //
-// It will be convenient to define
+// Therefore, we define:
 //   S = 2^(r-1) - 1    if T = float32
 //     = 2^(r-2) - 1    if T = __half2
 //
@@ -593,6 +593,11 @@ struct state_params
     int rs_idx;       // shared memory index of 'rs' on this thread
     bool rs_flag;     // is 'rs' valid on this thread?
 
+    // The __global__ kernel gets an argument (T *persistent_state).
+    // This per-threadblock offset (in 4-bit elements) gets applied to the pointer.
+    // Note that the offset depends on blockIdx.*, but not threadIdx.*
+    long persistent_state_block_offset;
+    
     __device__ state_params(const wparams<T> &wp)
     {
 	const int W = blockDim.y * blockDim.z;
@@ -607,6 +612,12 @@ struct state_params
 	
 	shmem_nelts = D * W * (S+2);
 	shmem_nelts = (shmem_nelts + 31) & ~0x1f;
+
+	int block_id = blockIdx.z;
+	block_id = (block_id * gridDim.z) + blockIdx.y;
+	block_id = (block_id * gridDim.y) + blockIdx.x;
+
+	persistent_state_block_offset = long(block_id) * long(shmem_nelts);
     }
 };
 
@@ -617,6 +628,9 @@ __device__ T restore_state(const wparams<T> &wp, const T *persistent_state)
     T *shmem = shmem_base<T> ();
     state_params<T,D> sp(wp);
 
+    // FIXME avoid duplicating in {restore,save}_state().
+    persistent_state += sp.persistent_state_block_offset;
+    
     for (int s = sp.threadId; s < sp.shmem_nelts; s += sp.nthreads)
 	shmem[s] = persistent_state[s];
 
@@ -641,6 +655,9 @@ __device__ void save_state(const wparams<T> &wp, T *persistent_state, T rs)
 	shmem[sp.rs_idx] = rs;
 
     __syncthreads();
+    
+    // FIXME avoid duplicating in {restore,save}_state().
+    persistent_state += sp.persistent_state_block_offset;
     
     for (int s = sp.threadId; s < sp.shmem_nelts; s += sp.nthreads)
 	persistent_state[s] = shmem[s];

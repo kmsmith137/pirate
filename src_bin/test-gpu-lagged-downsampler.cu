@@ -201,6 +201,8 @@ struct TestInstance
 	    CUDA_CALL(cudaDeviceSynchronize());
 
 	    for (int ids = 0; ids < num_downsampling_levels; ids++) {
+		if (noisy)
+		    cout << "ichunk=" << ichunk << ", ids=" << ids << endl;
 		Array<float> from_gpu = gpu_out.small_arrs[ids].to_host().template convert_dtype<float> ();
 		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","freq","time"}, 0.005, 0.003);
 	    }
@@ -219,18 +221,16 @@ int main(int argc, char **argv)
 
 #if 0
     // Uncomment to enable specific test
-    for (int i = 0; i < 100; i++) {
-	TestInstance<float> t;
-	t.small_input_rank = 2;
-	t.large_input_rank = 3;
-	t.num_downsampling_levels = 3;
-	t.nbeams = 2;
-	t.nchunks = 2;
-	t.nt_chunk = 320;
-	t.bstride_in = pow2(t.large_input_rank) * t.nt_chunk + 32;
-	t.bstride_out = pow2(t.large_input_rank-1) * t.nt_chunk + 64;
-	t.run(noisy);
-    }
+    TestInstance<float> t;
+    t.small_input_rank = 2;
+    t.large_input_rank = 2;
+    t.num_downsampling_levels = 1;
+    t.nbeams = 2;
+    t.nchunks = 10;
+    t.nt_chunk = 320;
+    t.bstride_in = pow2(t.large_input_rank) * t.nt_chunk + 0; // 32;
+    t.bstride_out = pow2(t.large_input_rank-1) * t.nt_chunk + 0; // 64;
+    t.run(noisy);
     return 0;
 #endif
     
