@@ -233,7 +233,7 @@ __device__ int init_rpos(int lag, long ntime_cumulative)
     //   nreg_cumulative = ntime_cumulative/2    for T=__half2.
 
     int laneId = threadIdx.x;
-    long nreg_cumulative = ntime_cumulative >> dtype_shift<T>();
+    long nreg_cumulative = ntime_cumulative >> (dtype_shift<T>()+1);  // FIXME explain (+1) here
     return (nreg_cumulative + laneId) % lag;
 }
 

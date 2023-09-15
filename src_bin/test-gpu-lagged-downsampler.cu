@@ -175,7 +175,7 @@ struct TestInstance
 	}
 
 	Array<T> gpu_in = alloc_input<T> (true, af_gpu | af_zero);       // use_bstride_in = true
-	Array<T> gpu_state({ nbeams, gpu_kernel->params.state_nelts_per_beam }, af_gpu | af_zero);
+	Array<T> gpu_state({ nbeams, gpu_kernel->params.state_nelts_per_beam }, af_gpu | af_zero);  // af_zero is important here
 
 	OutputArrays<T> gpu_out = alloc_output<T> (true, af_gpu | af_zero);            // use_bstride_out = true
 	OutputArrays<float> cpu_out = alloc_output<float> (false, af_uhost | af_zero); // use_bstride_out = false
@@ -219,17 +219,17 @@ int main(int argc, char **argv)
     // FIXME switch to 'false' when no longer actively developing
     const bool noisy = true;
 
-#if 0
+#if 1
     // Uncomment to enable specific test
     TestInstance<float> t;
     t.small_input_rank = 2;
-    t.large_input_rank = 2;
+    t.large_input_rank = 7;
     t.num_downsampling_levels = 1;
-    t.nbeams = 2;
-    t.nchunks = 10;
-    t.nt_chunk = 320;
-    t.bstride_in = pow2(t.large_input_rank) * t.nt_chunk + 0; // 32;
-    t.bstride_out = pow2(t.large_input_rank-1) * t.nt_chunk + 0; // 64;
+    t.nbeams = 1;
+    t.nchunks = 1;
+    t.nt_chunk = 64;
+    t.bstride_in = t.min_bstride_in(); // + 32;
+    t.bstride_out = t.min_bstride_out(); // + 64;
     t.run(noisy);
     return 0;
 #endif
