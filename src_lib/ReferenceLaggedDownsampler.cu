@@ -96,11 +96,11 @@ void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *out
 
     _check_shape("in", in, nbeams, pow2(r), ntime);
     _check_shape("out", outp[0], nbeams, pow2(r-1), xdiv(ntime,2));
-    
-    // Input/output arrays, reshaped to 2-d.
-    Array<float> in_2d = in.reshape_ref({ nbeams * pow2(r), ntime });
-    Array<float> out_2d = outp[0].reshape_ref({ nbeams * pow2(r-1), ntime/2 });
 
+    // Reshape input array to 2-d, since reference_downsample_time() assumes a 2-d array.
+    Array<float> in_2d = in.clone();   // copy, to avoid reshape failure if strides are non-contiguous
+    in_2d = in_2d.reshape_ref({ nbeams * pow2(r), ntime });
+    
     // Reshaped time-downsampled input array: (nbeams * 2^r, ntime/2)
     Array<float> in_ds({ nbeams * pow2(r), ntime/2 }, af_uhost | af_zero);
     reference_downsample_time(in_2d, in_ds, false);  // normalize=false, i.e. sum with no factor 0.5
@@ -110,9 +110,14 @@ void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *out
     lagbuf_small->apply_lags(in_ds2);
 
     // Downsample in frequency, and apply "large" lags.
-    reference_downsample_freq(in_ds2, out_2d, false);   // normalize=false, i.e. sum with no factor 0.5
-    lagbuf_large->apply_lags(out_2d);
-
+    Array<float> out_tmp({ nbeams * pow2(r-1), ntime/2 }, af_uhost | af_zero);
+    reference_downsample_freq(in_ds2, out_tmp, false);   // normalize=false, i.e. sum with no factor 0.5
+    lagbuf_large->apply_lags(out_tmp);
+    
+    // Reshape output_tmp array from 2-d to 3-d, and copy to caller-specified array.
+    out_tmp = out_tmp.reshape_ref({ nbeams, pow2(r-1), ntime/2 });
+    outp[0].fill(out_tmp);
+    
     if (params.num_downsampling_levels == 1)
 	return;
     
