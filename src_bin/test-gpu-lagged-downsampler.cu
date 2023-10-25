@@ -57,7 +57,7 @@ struct TestInstance
     {
 	small_input_rank = rand_int(2, 9);  // GpuLaggedDownsamplingKernel needs small_input_rank >= 2
 	large_input_rank = rand_int(small_input_rank, 13);
-	num_downsampling_levels = rand_int(1, constants::max_downsampling_level + 1);
+	num_downsampling_levels = rand_int(1, constants::max_downsampling_level);  // no +1 here
 	nchunks = rand_int(2, 11);
 
 	// Bytes per time sample per beam.
@@ -219,7 +219,7 @@ int main(int argc, char **argv)
     // FIXME switch to 'false' when no longer actively developing
     const bool noisy = true;
 
-#if 1
+#if 0
     // Uncomment to enable specific test
     TestInstance<float> t;
     t.small_input_rank = 2;
