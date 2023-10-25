@@ -905,7 +905,7 @@ void GpuLaggedDownsamplingKernel<T>::launch(
 	if (out[i].strides[0] != out[0].strides[0])
 	    throw runtime_error("GpuLaggedDownsamplingKernel::launch(): all output arrays must have same beam_stride");
 
-	nout += nbeams * ntree_out * ntime_out;
+	nout += ntree_out * ntime_out;
     }
 	
     assert(persistent_state.shape_equals({ nbeams, params.state_nelts_per_beam }));
