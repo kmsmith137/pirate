@@ -483,7 +483,9 @@ struct ld_kernel
 
 	// Apply one-sample lag to x00 and x01.
 	// Cycles 'rs' by either 1 or 2 lanes, depending on whether float16 or float32.
-	
+
+	T x00u = x00;  // save "un-lagged" x00, for use in next_kernel.process() below
+	T x10u = x10;  // save "un-lagged" x10, for use in next_kernel.process() below
 	ld_lag_pair(x00, x10, rs);
 
 	// Downsample in frequency.
@@ -519,7 +521,7 @@ struct ld_kernel
 
 	int ntime2 = ntime_out >> 1;
 	T *out2 = out + (wp.nrext * ntime_out);
-	next_kernel.process(wp, out2, ntime2, counter, rs, x00, x01, x10, x11);
+	next_kernel.process(wp, out2, ntime2, counter, rs, x00u, x01, x10u, x11);
 
 	if constexpr (RestoreRs)
 	    rs = __shfl_sync(0xffffffff, rs, laneId + 2*D);
@@ -569,7 +571,7 @@ struct ld_half_kernel
 	    y00 = x00;
 	    y01 = x01;
 	    y10 = x10;
-	    y11 = y11;
+	    y11 = x11;
 	    rs = __shfl_sync(0xffffffff, rs, threadIdx.x + 32 - 2*D);
 	}
     }
@@ -703,7 +705,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 	ld_transpose(x010, x011);
 	ld_transpose(x100, x101);
 	ld_transpose(x110, x111);
-
+	
 	kernel.process(wp, out, ntime_out, counter, rs,
 		       x000, x001, x010, x011, x100, x101, x110, x111);
 	
