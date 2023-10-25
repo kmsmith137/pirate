@@ -195,8 +195,8 @@ struct TestInstance
 #endif
 
 	    ref_kernel->apply(cpu_in, cpu_out.small_arrs);
-
-	    gpu_in.fill(cpu_in.convert_dtype<T> ());
+	    
+	    gpu_in.fill(cpu_in.convert_dtype<T> ());	    
 	    gpu_kernel->launch(gpu_in, gpu_out.small_arrs, gpu_state, ichunk * nt_chunk);
 	    CUDA_CALL(cudaDeviceSynchronize());
 

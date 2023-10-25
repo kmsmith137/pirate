@@ -25,8 +25,8 @@ public:
 
 	// "Derived" parameters.
 	int ntime_divisibility_requirement = 0;
+	int shmem_nbytes_per_threadblock = 0;
 	int state_nelts_per_beam = 0;
-	int shmem_nbytes = 0;
 
 	// These parameters are supplied automatically by make().
 	// They determine how the kernel is divided into threadblocks.

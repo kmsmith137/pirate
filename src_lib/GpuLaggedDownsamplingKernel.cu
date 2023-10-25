@@ -177,7 +177,11 @@ template<> __device__ __half2 *shmem_base<__half2> () { return shmem_h2; }
 template<typename T> __device__ T zero();
 template<> __device__ float zero<float>() { return 0.0f; }
 template<> __device__ __half2 zero<__half2>() { return __half2half2(0.0f); }
-    
+
+// For debugging
+template<typename T> struct is_float { static constexpr bool value = false; };
+template<> struct is_float<float> { static constexpr bool value = true; };
+
 
 // -------------------------------------------------------------------------------------------------
 
@@ -589,7 +593,7 @@ struct state_params
 {
     int threadId;
     int nthreads;
-    int shmem_nelts;  // total shared memory size (in 32-bit registers)
+    int shmem_nelts;  // total shared memory size per threadblock (in 32-bit registers)
     int rs_idx;       // shared memory index of 'rs' on this thread
     bool rs_flag;     // is 'rs' valid on this thread?
 
@@ -611,11 +615,11 @@ struct state_params
 	rs_flag = (ri >= 0);
 	
 	shmem_nelts = D * W * (S+2);
-	shmem_nelts = (shmem_nelts + 31) & ~0x1f;
+	shmem_nelts = (shmem_nelts + 31) & ~0x1f;  // round up to multiple of 32
 
 	int block_id = blockIdx.z;
-	block_id = (block_id * gridDim.z) + blockIdx.y;
-	block_id = (block_id * gridDim.y) + blockIdx.x;
+	block_id = (block_id * gridDim.y) + blockIdx.y;
+	block_id = (block_id * gridDim.x) + blockIdx.x;
 
 	persistent_state_block_offset = long(block_id) * long(shmem_nelts);
     }
@@ -753,7 +757,7 @@ static vector<kernel_t<T>> make_kernels()
 
 
 template<typename T>
-static int get_shmem_nbytes(int r, int D, int W, bool align=true)
+static int get_shmem_nbytes_per_threadblock(int r, int D, int W, bool align=true)
 {
     int S = (pow2(r-2) * (sizeof(T)/2)) - 1;
     int nbytes = W * D * (S+2) * 4;
@@ -765,7 +769,7 @@ template<typename T>
 static int target_warps_per_threadblock(int r, int D)
 {
     // Shared memory bytes per warp, without 128-byte alignment
-    int nb1 = get_shmem_nbytes<T> (r, D, 1, false);
+    int nb1 = get_shmem_nbytes_per_threadblock<T> (r, D, 1, false);
 
     // Aim for 8 warps per threadblock (semi-arbitrary), but use fewer warps
     // if we get into trouble with shared memory.
@@ -814,10 +818,10 @@ GpuLaggedDownsamplingKernel<T>::make(int small_input_rank, int large_input_rank,
     params.M_B = xdiv(M, params.M_W);
     params.A_B = xdiv(A, params.A_W);
 
-    int nb = get_shmem_nbytes<T> (small_input_rank, num_downsampling_levels, params.warps_per_threadblock(), true);  // align=true
+    int nb = get_shmem_nbytes_per_threadblock<T> (small_input_rank, num_downsampling_levels, params.warps_per_threadblock(), true);  // align=true
     params.ntime_divisibility_requirement = (128 / sizeof(T)) * pow2(num_downsampling_levels);
     params.state_nelts_per_beam = params.threadblocks_per_beam() * (nb / sizeof(T));
-    params.shmem_nbytes = nb;
+    params.shmem_nbytes_per_threadblock = nb;
 
     kernel_t k = kernels.at(num_downsampling_levels);
     GpuLaggedDownsamplingKernel<T> *kernel = new GpuLaggedDownsamplingKernel (params, k);
@@ -837,7 +841,7 @@ GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &params
     assert(params.num_downsampling_levels > 0);
     assert(params.ntime_divisibility_requirement > 0);
     assert(params.state_nelts_per_beam > 0);
-    assert(params.shmem_nbytes > 0);
+    assert(params.shmem_nbytes_per_threadblock > 0);
     assert(params.M_W > 0);
     assert(params.M_B > 0);
     assert(params.A_W > 0);
@@ -921,7 +925,7 @@ void GpuLaggedDownsamplingKernel<T>::launch(
     grid_dims.x = params.M_B;
     
     this->kernel
-	<<< grid_dims, block_dims, params.shmem_nbytes, stream >>>
+	<<< grid_dims, block_dims, params.shmem_nbytes_per_threadblock, stream >>>
 	(reinterpret_cast<const T32 *> (in.data),
 	 reinterpret_cast<T32 *> (out[0].data),
 	 ntime_in,
@@ -942,8 +946,8 @@ void GpuLaggedDownsamplingKernel<T>::print(ostream &os, int indent) const
     print_kv("large_input_rank", params.large_input_rank, os, indent);
     print_kv("num_downsampling_levels", params.num_downsampling_levels, os, indent);
     print_kv("ntime_divisibility_requirement", params.ntime_divisibility_requirement, os, indent);
+    print_kv("shmem_nbytes_per_threadblock", params.shmem_nbytes_per_threadblock, os, indent);
     print_kv("state_nelts_per_beam", params.state_nelts_per_beam, os, indent);
-    print_kv("shmem_nbytes", params.shmem_nbytes, os, indent);
 
     stringstream sw;
     sw << params.warps_per_threadblock() << " (M_W=" << params.M_W << ", A_W=" << params.A_W << ")";
