@@ -65,6 +65,7 @@ XFILES = \
   bin/time-cpu-downsample \
   bin/time-gpu-dedispersion-kernels \
   bin/time-gpu-downsample \
+  bin/time-gpu-lagged-downsampler \
   bin/time-gpu-transpose
 
 OFILES = \
