@@ -201,10 +201,18 @@ struct TestInstance
 	    CUDA_CALL(cudaDeviceSynchronize());
 
 	    for (int ids = 0; ids < num_downsampling_levels; ids++) {
+		// Note: if the definition of the LaggedDownsampler changes to include factors of 0.5,
+		// then the value of 'rms' may ned to change.
+		
+		double eps = (sizeof(T)==4) ? 3.0e-7 : 3.0e-3;   // float32 vs float16
+		double rms = sqrt(4 << ids);                     // rms of output array
+		double epsabs = eps * rms * sqrt(ids+2);
+		
 		if (noisy)
-		    cout << "ichunk=" << ichunk << ", ids=" << ids << endl;
+		    cout << "ichunk=" << ichunk << ", ids=" << ids << ", epsabs=" << epsabs << endl;
+		
 		Array<float> from_gpu = gpu_out.small_arrs[ids].to_host().template convert_dtype<float> ();
-		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","freq","time"}, 0.005, 0.003);
+		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","freq","time"}, epsabs, 0.0);  // epsrel=0
 	    }
 	}
     }
@@ -223,14 +231,14 @@ int main(int argc, char **argv)
 #if 0
     // Uncomment to enable specific test
     TestInstance<__half> t;
-    t.small_input_rank = 2;
-    t.large_input_rank = 2;
-    t.num_downsampling_levels = 1;
-    t.nbeams = 1;
-    t.nchunks = 1;
-    t.nt_chunk = 128;
-    t.bstride_in = t.min_bstride_in(); // + 32;
-    t.bstride_out = t.min_bstride_out(); // + 64;
+    t.small_input_rank = 8;
+    t.large_input_rank = 9;
+    t.num_downsampling_levels = 5;
+    t.nbeams = 4;
+    t.nchunks = 5;
+    t.nt_chunk = 12288;
+    t.bstride_in = t.min_bstride_in() + 64;
+    t.bstride_out = t.min_bstride_out() + 128;
     t.run(noisy);
     return 0;
 #endif
@@ -242,10 +250,11 @@ int main(int argc, char **argv)
 	t32.randomize();
 	t32.run(noisy);
 
-	// FIXME
-	// TestInstance<__half> t16;
-	// t16.randomize();
-	// t16.run(noisy);
+	cout << endl;
+	
+	TestInstance<__half> t16;
+	t16.randomize();
+	t16.run(noisy);
     }
 
     cout << "test-gpu-lagged-downsampler: pass" << endl;

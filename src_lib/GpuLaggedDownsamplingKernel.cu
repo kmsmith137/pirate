@@ -181,6 +181,8 @@ template<> __device__ __half2 zero<__half2>() { return __half2half2(0.0f); }
 // For debugging
 template<typename T> struct is_float { static constexpr bool value = false; };
 template<> struct is_float<float> { static constexpr bool value = true; };
+__device__ inline float hlo(__half2 x) { return __low2float(x); }
+__device__ inline float hhi(__half2 x) { return __high2float(x); }
 
 
 // -------------------------------------------------------------------------------------------------
@@ -337,7 +339,7 @@ __device__ void ld_lag_pair(__half2 &x, __half2 &y, __half2 &rs)
     t = lag_register(t, rs);          // (x[-1], y[-1])
 
     x = __lows2half2(t, x);   // (x[-1], x[0])
-    y = f16_align(t, y);     // (y[-1], y[0])
+    y = f16_align(t, y);      // (y[-1], y[0])
 }
 
 
@@ -461,10 +463,15 @@ struct ld_kernel
     // The 'counter' argument starts at zero, and is incremented every time
     // process() is called.
     //
+    // The 'nreg_out' argument is the number of registers needed to store
+    // one row of the output array:
+    //   nreg_out = ntime_in/2 = ntime_out     if T=float32
+    //   nreg_out = ntime_in/4 = ntime_out/2   if T=__half2
+    //
     // If RestoreRs==true, then 'rs' is fully cycled (by 32 registers).
     // If RestoreRs==false, then 'rs' is cycled by (2*D) registers.
 
-    __device__ void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs,
+    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs,
 			    T x000, T x001, T x010, T x011, T x100, T x101, T x110, T x111)
     {
 	const int laneId = threadIdx.x;
@@ -514,14 +521,14 @@ struct ld_kernel
 	x1 = shmem_rb_cycle(x1, rb1, wp.lag1, rpos1);
 	
 	// Write output.
-	// Output array has shape (wp.nrext, ntime_out)
+	// Output array has shape (wp.nrext, nreg_out)
 
-	out[wp.iext * ntime_out + 32*counter + laneId] = x0;
-	out[wp.jext * ntime_out + 32*counter + laneId] = x1;
+	out[wp.iext * nreg_out + 32*counter + laneId] = x0;
+	out[wp.jext * nreg_out + 32*counter + laneId] = x1;
 
-	int ntime2 = ntime_out >> 1;
-	T *out2 = out + (wp.nrext * ntime_out);
-	next_kernel.process(wp, out2, ntime2, counter, rs, x00u, x01, x10u, x11);
+	int nreg2 = nreg_out >> 1;
+	T *out2 = out + (wp.nrext * nreg_out);
+	next_kernel.process(wp, out2, nreg2, counter, rs, x00u, x01, x10u, x11);
 
 	if constexpr (RestoreRs)
 	    rs = __shfl_sync(0xffffffff, rs, laneId + 2*D);
@@ -556,7 +563,7 @@ struct ld_half_kernel
     //
     // Cycles 'rs' by (2*D) registers.
 
-    __device__ void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs, T x00, T x01, T x10, T x11)
+    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T x00, T x01, T x10, T x11)
     {
 	if (counter & 1) {
 	    ld_transpose(y00, x00);
@@ -565,7 +572,7 @@ struct ld_half_kernel
 	    ld_transpose(y11, x11);
 
 	    int counter2 = counter >> 1;
-	    base_kernel.process(wp, out, ntime_out, counter2, rs, y00, x00, y01, x01, y10, x10, y11, x11);
+	    base_kernel.process(wp, out, nreg_out, counter2, rs, y00, x00, y01, x01, y10, x10, y11, x11);
 	}
 	else {
 	    y00 = x00;
@@ -582,7 +589,7 @@ template<typename T>
 struct ld_half_kernel<T,0>
 {
     __device__ ld_half_kernel(const wparams<T> &wp, long ntime_cumulative) { }
-    __device__ void process(const wparams<T> &wp, T *out, long ntime_out, int counter, T &rs, T x00, T x01, T x10, T x11) { }
+    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T x00, T x01, T x10, T x11) { }
 };
 
 
@@ -682,31 +689,36 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 
     ld_kernel<T,D,true> kernel(wp, ntime_cumulative);  // last template argument is RestoreRs=true
 
-    in += (blockIdx.z * bstride_in) + threadIdx.x;  // laneId included in 'in'
-    out += (blockIdx.z * bstride_out);              // laneId not included in 'out'
+    // Apply beam offsets (blockIdx.z = beam id)
+    in += ((blockIdx.z * bstride_in) >> dtype_shift<T>()) + threadIdx.x;  // Also include laneId in 'in'
+    out += (blockIdx.z * bstride_out) >> dtype_shift<T>();                // Don't include laneId in 'out'
 
-    const int i_off = (2*wp.iext) * ntime;
-    const int j_off = (2*wp.jext) * ntime;
-    const int ntime_out = ntime >> 1;
+    // 32-bit offsets in input array
+    const int row_off = ntime >> dtype_shift<T>();
+    const int i_off = (2*wp.iext) * row_off;
+    const int j_off = (2*wp.jext) * row_off;
+
+    const int nreg_out = row_off >> 1;   // 32-bit offset in output array
     int counter = 0;
 
-    for (int it = 0; it < ntime_out; it += 32) {
+    // Note row_off here (not ntime)
+    for (int i = 0; i < row_off; i += 64) {
 	// FIXME use wide loads/stores here
-	T x000 = in[i_off];                // (2*i, 0)
-	T x001 = in[i_off + 32];           // (2*i, 32)
-	T x010 = in[i_off + ntime];        // (2*i+1, 0)
-	T x011 = in[i_off + ntime + 32];   // (2*i+1, 32)
-	T x100 = in[j_off];                // (2*j, 0)
-	T x101 = in[j_off + 32];           // (2*j, 32)
-	T x110 = in[j_off + ntime];        // (2*j+1, 0)
-	T x111 = in[j_off + ntime + 32];   // (2*j+1, 32)
+	T x000 = in[i_off];                 // (2*i, 0)
+	T x001 = in[i_off + 32];            // (2*i, 32)
+	T x010 = in[i_off + row_off];       // (2*i+1, 0)
+	T x011 = in[i_off + row_off + 32];  // (2*i+1, 32)
+	T x100 = in[j_off];                 // (2*j, 0)
+	T x101 = in[j_off + 32];            // (2*j, 32)
+	T x110 = in[j_off + row_off];       // (2*j+1, 0)
+	T x111 = in[j_off + row_off + 32];  // (2*j+1, 32)
 
 	ld_transpose(x000, x001);
 	ld_transpose(x010, x011);
 	ld_transpose(x100, x101);
 	ld_transpose(x110, x111);
 	
-	kernel.process(wp, out, ntime_out, counter, rs,
+	kernel.process(wp, out, nreg_out, counter, rs,
 		       x000, x001, x010, x011, x100, x101, x110, x111);
 	
 	in += 64;
