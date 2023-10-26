@@ -13,6 +13,7 @@ namespace pirate {
 #endif
 
 
+// T = float or __half (not __half2)
 template<typename T>
 class GpuLaggedDownsamplingKernel
 {
@@ -55,13 +56,18 @@ public:
     //
     //  - 'in': array of shape (nbeams, 2^(large_input_rank), ntime).
     //
+    //      Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
+    //
     //  - 'out': vector of length (num_downsampling_levels).
-    //      The i-th element should have shape (nbeams, 2^(large_input_rank-1), ntime/2^(i+1)).
+    //
+    //       The i-th element should have shape (nbeams, 2^(large_input_rank-1), ntime/2^(i+1)).
+    //       Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
+    //
+    //       There is also an "adjacency" requirement: out[i][0,:,:] and out[i+1][0,:,:] must
+    //       be adjacent in memory. Relatedly, all 'out' arrays must have the same beam stride.
     //
     //  - 'persistent_state': contiguous array of shape (nbeams, state_nelts_per_beam)
     //      Must be zeroed on first call to launch().
-    // 
-    // XXX explain stride requirements for 'in' and 'out'.
     
     void launch(const gputils::Array<T> &in,
 		std::vector<gputils::Array<T>> &out,
