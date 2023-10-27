@@ -29,7 +29,6 @@ struct ReferenceDedisperser
     //
     // sophistication=0:
     //   - Uses one-stage dedispersion instead of two stages.
-    //   - Assumes that caller has applied appropriate downsampling before calling dedisperse().
     //   - In downsampled trees, compute twice as many DMs as necessary, then drop the bottom half.
     //   - Each early trigger is computed in an independent tree, by disregarding some input channels.
     //
@@ -64,14 +63,6 @@ struct ReferenceDedisperser
     
     void print(std::ostream &os=std::cout, int indent=0) const;
 
-    // downsampled_inputs: only used if sophistication == 0.
-    // downsampled_inputs[ids] has shape (2^input_rank, input_nt/2^ids), where 0 <= ids < nds.
-    // It contains the input array after downsampling by a factor 2^ids.
-    
-    std::vector<gputils::Array<float>> downsampled_inputs;  // length nds
-    void _allocate_downsampled_inputs();
-    void _compute_downsampled_inputs(const gputils::Array<float> &in);
-
     // The "intermediate" arrays are the iobufs of the Stage0Trees.
     std::vector<gputils::Array<float>> intermediate_arrays;   // length nds
     gputils::Array<float> intermediate_flattened;
@@ -83,22 +74,22 @@ struct ReferenceDedisperser
 
     
     // -------------------------------------------------------------------------------------------------
+    //
+    // Sophistication 0
+    //
+    //   - Uses one-stage dedispersion instead of two stages.
+    //   - In downsampled trees, compute twice as many DMs as necessary, then drop the bottom half.
+    //   - Each early trigger is computed in an independent tree, by disregarding some input channels.
+    //   - First, make a copy of the data at each downsampling factor
+    //   - Then, for each output tree (i.e. choice of downsampling factor and early trigger), dedisperse.
 
     
-    struct SimpleTree
+    struct Soph0Tree
     {
-	// SimpleTree: only used if sophistication==0.
-	//
-	//  - Uses one-stage dedispersion instead of two stages.
-	//  - Assumes that caller has applied appropriate downsampling before calling dedisperse().
-	//  - If tree is downsampled, then we compute twice as many DMs as necessary, then drop the bottom half.
-	//  - Each early trigger is computed independently "from scratch", by disregarding some input channels.
-	
-	SimpleTree(const DedispersionPlan::Stage1Tree &st1);
+	Soph0Tree(const DedispersionPlan::Stage1Tree &st1);
 
-	// Input array will be an element of this->downsampled_inputs.
+	// Input array will be an element of this->soph0_ds_inputs (see below)
 	// Output array will be an element of this->output_arrays.
-	
 	void dedisperse(const gputils::Array<float> &in, gputils::Array<float> &out);
 
 	const bool is_downsampled;    // (st1.ds_level > 0)
@@ -111,6 +102,21 @@ struct ReferenceDedisperser
 	gputils::Array<float> iobuf;           // shape (pow2(rtree->rank), nt_ds)
     };
 
+    // soph0_ds_inputs[ids] has shape (2^input_rank, input_nt/2^ids), where 0 <= ids < nds.
+    // It contains the input array after downsampling by a factor 2^ids.
+    
+    std::vector<gputils::Array<float>> soph0_ds_inputs;  // length nds
+    void _allocate_soph0_ds_inputs();
+    void _compute_soph0_ds_inputs(const gputils::Array<float> &in);
+    
+    // Used if sophistication == 0.
+    std::vector<Soph0Tree> soph0_trees;
+    void _init_soph0_trees();
+    void _apply_soph0_trees();
+
+    
+    // -------------------------------------------------------------------------------------------------
+    
     
     struct FirstTree
     {
@@ -145,11 +151,6 @@ struct ReferenceDedisperser
 	gputils::Array<float> rstate;
 	gputils::Array<float> scratch;
     };
-    
-    // Used if sophistication == 0.
-    std::vector<SimpleTree> simple_trees;
-    void _init_simple_trees();
-    void _apply_simple_trees();
 
     // Used if sophistication > 0.
     std::shared_ptr<ReferenceLaggedDownsampler> lagged_downsampler;

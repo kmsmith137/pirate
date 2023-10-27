@@ -49,8 +49,8 @@ ReferenceDedisperser::ReferenceDedisperser(const shared_ptr<DedispersionPlan> &p
     _allocate_output_arrays();
 
     if (sophistication == 0) {
-	_allocate_downsampled_inputs();
-	_init_simple_trees();
+	_allocate_soph0_ds_inputs();
+	_init_soph0_trees();
     }
     
     if (sophistication >= 1) {
@@ -77,8 +77,8 @@ ReferenceDedisperser::ReferenceDedisperser(const shared_ptr<DedispersionPlan> &p
 void ReferenceDedisperser::dedisperse(const Array<float> &in)
 {
     if (sophistication == 0) {
-	_compute_downsampled_inputs(in);
-	_apply_simple_trees();
+	_compute_soph0_ds_inputs(in);
+	_apply_soph0_trees();
     }
     else if (sophistication == 1) {
 	_apply_lagged_downsampler(in);
@@ -111,28 +111,117 @@ void ReferenceDedisperser::dedisperse(const Array<float> &in)
 }
 
 
-void ReferenceDedisperser::_allocate_downsampled_inputs()
+// -------------------------------------------------------------------------------------------------
+//
+// Sophistication 0
+//
+//   _allocate_soph0_ds_inputs()
+//   _compute_soph0_ds_inputs()
+//   _init_soph0_trees()
+//   _apply_soph0_trees()
+//
+//     + class Soph0Tree 
+
+
+void ReferenceDedisperser::_allocate_soph0_ds_inputs()
 {
-    this->downsampled_inputs.resize(nds);
+    // For each downsampling factor 0 <= ids < nds, allocate soph0_ds_inputs[ids]
+    // with shape (2^input_rank, input_nt/2^ids).
+    
+    this->soph0_ds_inputs.resize(nds);
 
     for (int ids = 0; ids < nds; ids++) {
 	int nchan = pow2(input_rank);
 	int nt_ds = xdiv(input_nt, pow2(ids));	
-	this->downsampled_inputs[ids] = Array<float> ({nchan,nt_ds}, af_uhost | af_zero);
+	this->soph0_ds_inputs[ids] = Array<float> ({nchan,nt_ds}, af_uhost | af_zero);
     }    
 }
 
 
-void ReferenceDedisperser::_compute_downsampled_inputs(const Array<float> &in)
+void ReferenceDedisperser::_compute_soph0_ds_inputs(const Array<float> &in)
 {
-    assert(downsampled_inputs.size() == nds);  // check that _allocate_downsampled_inputs() was called
+    // For each downsampling factor 0 <= ids < nds, fill soph0_ds_inputs[ids]
+    // with a copy of the input array after downsampling by a factor 2^ids.
+
+    assert(soph0_ds_inputs.size() == nds);  // check that _allocate_soph0_ds_inputs() was called
     assert(in.shape_equals({pow2(input_rank), input_nt}));
     assert(in.strides[1] == 1);
 
-    downsampled_inputs[0].fill(in);  // FIXME is this copy necessary?
+    soph0_ds_inputs[0].fill(in);
     for (int ids = 1; ids < nds; ids++)
-	reference_downsample_time(downsampled_inputs[ids-1], downsampled_inputs[ids], false);  // normalize=false, i.e. no factor 0.5
+	reference_downsample_time(soph0_ds_inputs[ids-1], soph0_ds_inputs[ids], false);  // normalize=false, i.e. no factor 0.5
 }
+
+
+void ReferenceDedisperser::_init_soph0_trees()
+{
+    // Construct one Soph0Tree for each output array
+    //   ... or equivalently, for each choice of (downsampling factor, early trigger)
+    //   ... or equivalently, for each DedispersionPlan::Stage1Tree
+    
+    for (const DedispersionPlan::Stage1Tree &st1: plan->stage1_trees)
+	this->soph0_trees.push_back(Soph0Tree(st1));
+}
+
+
+void ReferenceDedisperser::_apply_soph0_trees()
+{
+    // For each Soph0Tree, call the dedisperse() method 
+    
+    assert(soph0_ds_inputs.size() == nds);          // check that _allocate_soph0_ds_inputs() was called
+    assert(output_arrays.size() == output_ntrees);  // check that _allocate_output_arrays() was called
+    assert(soph0_trees.size() == output_ntrees);    // check that _init_soph0_trees() was called
+    
+    for (int itree = 0; itree < output_ntrees; itree++) {
+	int ids = plan->stage1_trees[itree].ds_level;
+	soph0_trees[itree].dedisperse(soph0_ds_inputs.at(ids), output_arrays.at(itree));
+    }
+}
+
+
+ReferenceDedisperser::Soph0Tree::Soph0Tree(const DedispersionPlan::Stage1Tree &st1) :
+    is_downsampled(st1.ds_level > 0),
+    output_rank(st1.rank0 + st1.rank1_trigger),
+    nt_ds(st1.nt_ds)
+{
+    int rtree_rank = is_downsampled ? (output_rank+1) : output_rank;
+
+    this->rtree = make_shared<ReferenceTree> (rtree_rank, nt_ds);
+    this->rstate = Array<float> ({rtree->nrstate}, af_uhost | af_zero);
+    this->scratch = Array<float> ({rtree->nscratch}, af_uhost | af_zero);
+    this->iobuf = Array<float> ({pow2(rtree_rank), nt_ds}, af_uhost | af_zero);
+}
+
+
+void ReferenceDedisperser::Soph0Tree::dedisperse(const gputils::Array<float> &in, gputils::Array<float> &out)
+{
+    // Input array will be an element of this->soph0_ds_inputs.
+    // Output array will be an element of this->output_arrays.
+    
+    assert(in.ndim == 2);
+    assert(in.shape[0] >= pow2(rtree->rank));
+    assert(in.shape[1] == nt_ds);
+    assert(in.strides[1] == 1);
+    assert(out.shape_equals({pow2(output_rank), nt_ds}));
+
+    // If sophistication==0, then we implement early triggers by taking a subset
+    // of the input array.
+    Array<float> s = in.slice(0, 0, pow2(rtree->rank));
+    iobuf.fill(s);
+
+    // Dedisperse.
+    rtree->dedisperse(iobuf, rstate.data, scratch.data);
+
+    // If sophistication==0, then in downsampled trees, we compute twice as many DMs
+    // as necessary, then drop the bottom half.
+    if (is_downsampled)
+	reference_extract_odd_channels(iobuf, out);
+    else
+	out.fill(iobuf);
+}
+
+
+// -------------------------------------------------------------------------------------------------
 
 
 void ReferenceDedisperser::_init_lagged_downsampler()
@@ -214,26 +303,6 @@ void ReferenceDedisperser::_allocate_output_arrays()
     }
 
     assert(pos == nflat);
-}
-
-
-void ReferenceDedisperser::_init_simple_trees()
-{
-    for (const DedispersionPlan::Stage1Tree &st1: plan->stage1_trees)
-	this->simple_trees.push_back(SimpleTree(st1));
-}
-
-
-void ReferenceDedisperser::_apply_simple_trees()
-{
-    assert(downsampled_inputs.size() == nds);       // check that _allocate_downsampled_inputs() was called
-    assert(output_arrays.size() == output_ntrees);  // check that _allocate_output_arrays() was called
-    assert(simple_trees.size() == output_ntrees);   // check that _init_simple_trees() was called
-    
-    for (int itree = 0; itree < output_ntrees; itree++) {
-	int ids = plan->stage1_trees[itree].ds_level;
-	simple_trees[itree].dedisperse(downsampled_inputs.at(ids), output_arrays.at(itree));
-    }
 }
 
 
@@ -703,41 +772,7 @@ void ReferenceDedisperser::print(ostream &os, int indent) const
 
 // -------------------------------------------------------------------------------------------------
 //
-// ReferenceDedisperser::SimpleTree
-
-
-ReferenceDedisperser::SimpleTree::SimpleTree(const DedispersionPlan::Stage1Tree &st1) :
-    is_downsampled(st1.ds_level > 0),
-    output_rank(st1.rank0 + st1.rank1_trigger),
-    nt_ds(st1.nt_ds)
-{
-    int rtree_rank = is_downsampled ? (output_rank+1) : output_rank;
-
-    this->rtree = make_shared<ReferenceTree> (rtree_rank, nt_ds);
-    this->rstate = Array<float> ({rtree->nrstate}, af_uhost | af_zero);
-    this->scratch = Array<float> ({rtree->nscratch}, af_uhost | af_zero);
-    this->iobuf = Array<float> ({pow2(rtree_rank), nt_ds}, af_uhost | af_zero);
-}
-
-
-void ReferenceDedisperser::SimpleTree::dedisperse(const gputils::Array<float> &in, gputils::Array<float> &out)
-{
-    assert(in.ndim == 2);
-    assert(in.shape[0] >= pow2(rtree->rank));
-    assert(in.shape[1] == nt_ds);
-    assert(in.strides[1] == 1);
-    assert(out.shape_equals({pow2(output_rank), nt_ds}));
-
-    Array<float> s = in.slice(0, 0, pow2(rtree->rank));
-    iobuf.fill(s);
-
-    rtree->dedisperse(iobuf, rstate.data, scratch.data);
-
-    if (is_downsampled)
-	reference_extract_odd_channels(iobuf, out);
-    else
-	out.fill(iobuf);
-}
+// ReferenceDedisperser::Soph0Tree
 
 
 // -------------------------------------------------------------------------------------------------
