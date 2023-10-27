@@ -19,10 +19,10 @@ struct ReferenceLaggedDownsampler
 {
     // A potential source of confusion: denote
     //
-    //    rld_nds = ReferenceLaggedDownsampler::Params::num_downsmapling_levels
+    //    ld_nds = GpuLaggedDownsampler::Params::num_downsmapling_levels
     //    dc_nds = DedispersionConfig::num_downsampling_levels
     //
-    // Then rld_nds = (dc_nds - 1)!
+    // Then ld_nds = (dc_nds - 1)!
     
     struct Params
     {

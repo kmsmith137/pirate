@@ -129,9 +129,7 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 //
 // FIXME should have an .hpp file with float16 cuda helpers.
-
-
-// FIXME add "wide" float16 loads/stores (not obvious how to do this!)
+// FIXME add "wide" float16 loads/stores (awkward, since nvidia does not define __half4 or __half8)
 
 
 // Given __half2 variables a = [a0,a1] and b = [b0,b1]:

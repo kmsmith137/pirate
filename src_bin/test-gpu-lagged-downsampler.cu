@@ -110,11 +110,13 @@ struct TestInstance
     {
 	long bstride_min = min_bstride_out();
 	long bstride = use_bstride_out ? bstride_out : bstride_min;
+	vector<ssize_t> strides = { bstride, 1 };
+	
 	long nr = pow2(large_input_rank - 1);
 	long nt_cumul = 0;
-
+	
 	OutputArrays<T2> ret;
-	ret.big_arr = Array<T2>({nbeams,bstride_min}, {bstride,1}, aflags);
+	ret.big_arr = Array<T2>({nbeams,bstride_min}, strides, aflags);
 	ret.small_arrs.resize(num_downsampling_levels);
 	
 	for (int i = 0; i < num_downsampling_levels; i++) {
