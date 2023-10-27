@@ -49,9 +49,10 @@ struct DedispersionConfig
     // Note: rather than calling these functions directly, you probably want the
     // DedispersionPlan (not DedispersionConfig) members 'nelts_per_segment',
     // 'uncompressed_dtype_size', and 'bytes_per_compressed_segment'.
-    int get_nelts_per_segment() const;
-    int get_uncompressed_dtype_size() const;
-    int get_bytes_per_compressed_segment() const;
+    
+    int get_nelts_per_segment() const;             // returns constants::bytes_per_segment / sizeof(uncompressed_dtype)
+    int get_uncompressed_dtype_size() const;       // returns sizeof(uncompressed_type)
+    int get_bytes_per_compressed_segment() const;  // nontrivial (e.g. returns 66 if uncompressed=float16 and compressed=int8)
     // Note: no 'get_bytes_per_uncompressed_segment()' (use constants::bytes_per_segment).
     
     void validate() const;

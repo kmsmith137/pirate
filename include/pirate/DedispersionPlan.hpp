@@ -41,8 +41,7 @@ struct DedispersionPlan
 
 	// "rstate" = dedispersion state kept in registers, stored persistently on GPU between chunks
 	// Initialized in _init_footprints().
-	
-	ssize_t rstate_nbytes_per_beam = 0;
+	ssize_t rstate_nbytes_per_beam = 0;   // FIXME placeholder value -- improve
     };
 
     struct Stage1Tree
@@ -68,7 +67,8 @@ struct DedispersionPlan
 	// "rstate" = dedispersion state kept in registers, stored persistently on GPU between chunks.
 	// Initialized in _init_footprints().
 	
-	ssize_t rstate_nbytes_per_beam = 0;
+	// FIXME approximate value used for bandwidth analysis -- either improve or move elsewhere.
+	ssize_t rstate_nbytes_per_beam = 0;    // FIXME placeholder value -- improve
     };
 
     
@@ -78,9 +78,9 @@ struct DedispersionPlan
     const DedispersionConfig config;
 
     // Initialized at beginning of constructor.
-    int nelts_per_segment = 0;
-    int uncompressed_dtype_size = 0;
-    int bytes_per_compressed_segment = 0;
+    int nelts_per_segment = 0;            // constants::bytes_per_segment / sizeof(uncompressed_dtype)
+    int uncompressed_dtype_size = 0;      // sizeof(uncompressed_type)
+    int bytes_per_compressed_segment = 0; // nontrivial (e.g. 66 if uncompressed=float16 and compressed=int8)
     // Note: no 'bytes_per_uncompressed_segment' (use constants::bytes_per_segment).
     
     // Initialized in _init_trees() and _init_lags().

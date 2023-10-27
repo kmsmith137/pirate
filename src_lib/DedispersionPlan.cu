@@ -67,6 +67,8 @@ void DedispersionPlan::_init_trees()
 	st0.segments_per_beam = pow2(st0_rank) * st0.segments_per_row;
 	st0.iobuf_base_segment = this->stage0_iobuf_segments_per_beam;
 
+	// FIXME should replace hardcoded 7,8 by something more descriptive
+	// (GpuDedispersionKernel::max_rank?)
 	int max_rank = ids ? 7 : 8;
 	assert((st0.rank0 >= 0) && (st0.rank0 <= max_rank));
 	assert(st0.nt_ds > 0);

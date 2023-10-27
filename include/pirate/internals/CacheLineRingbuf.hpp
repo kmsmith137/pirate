@@ -60,8 +60,16 @@ struct CacheLineRingbuf
     
 
     // -------------------------------------------------------------------------------------------------
-
+    //
+    // The CacheLineRingbuf consists of:
+    //
+    //   - a list of stage0 -> stage1 copies
+    //   - a list of stage1 -> stage1 copies
+    //   - for each rb_lag, one Buffer, which contains:
+    //      - list of PrimaryEntries, representing ring buffer inputs from the stage0 iobuf
+    //      - list of SecondaryEntries, representing ring buffer inputs from the output of another ring buffer
     
+
     struct PrimaryEntry
     {
 	int src_segment = -1;

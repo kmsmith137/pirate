@@ -11,8 +11,9 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
-// LaggedCacheLine: represents one source cache line, and one or more destination cache lines
-// (with clags).
+// LaggedCacheLine: represents one source segment, and one or more destination cache lines,
+// represented as (clag, dst_segment) pairs. Note that the (clag, dst_segment) pairs are
+// lexicographically sorted.
 
 
 struct LaggedCacheLine

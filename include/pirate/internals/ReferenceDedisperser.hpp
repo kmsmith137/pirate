@@ -28,8 +28,10 @@ struct ReferenceDedisperser
     // The ReferenceDedisperser has a 'sophistication' argument, which is one of {0,1,2,3}.
     //
     // sophistication=0:
-    //   - downsampling implemented by throwing away bottom half of output
-    //   - early triggers implemented by independent trees
+    //   - Uses one-stage dedispersion instead of two stages.
+    //   - Assumes that caller has applied appropriate downsampling before calling dedisperse().
+    //   - In downsampled trees, compute twice as many DMs as necessary, then drop the bottom half.
+    //   - Each early trigger is computed in an independent tree, by disregarding some input channels.
     //
     // sophistication=1:
     //   - use same tree/lag structure as plan, but don't use LaggedCacheLines
