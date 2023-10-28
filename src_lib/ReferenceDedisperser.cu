@@ -54,10 +54,10 @@ ReferenceDedisperser::ReferenceDedisperser(const shared_ptr<DedispersionPlan> &p
     }
     
     if (sophistication >= 1) {
-	_allocate_intermediate_arrays();
+	_allocate_pass0_iobuf();
 	_init_lagged_downsampler();
-	_init_first_trees();
-	_init_second_trees();
+	_init_pass0_trees();
+	_init_pass1_trees();
     }
     
     if (sophistication == 1)
@@ -82,20 +82,20 @@ void ReferenceDedisperser::dedisperse(const Array<float> &in)
     }
     else if (sophistication == 1) {
 	_apply_lagged_downsampler(in);
-	_apply_first_trees();
+	_apply_pass0_trees();
 	_apply_big_lagbufs();
-	_apply_second_trees();	
+	_apply_pass1_trees();	
     }
     else if (sophistication == 2) {
 	_apply_lagged_downsampler(in);
-	_apply_first_trees();	
+	_apply_pass0_trees();	
 	_apply_max_ringbuf();
 	_apply_residual_lagbufs();
-	_apply_second_trees();
+	_apply_pass1_trees();
     }
     else if (sophistication == 3) {
 	_apply_lagged_downsampler(in);
-	_apply_first_trees();	
+	_apply_pass0_trees();	
 	_proper_ringbuf_to_staging();
 	_proper_s0_to_staging();
 	_proper_staging_to_staging();
@@ -104,10 +104,40 @@ void ReferenceDedisperser::dedisperse(const Array<float> &in)
 	_proper_s0_to_s1();
 	_proper_s1_to_s1();
 	_apply_residual_lagbufs();
-	_apply_second_trees();
+	_apply_pass1_trees();
     }
 
     this->pos++;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// _allocate_output_arrays() is called for all values of ReferenceDedisperser::sophistication
+
+
+void ReferenceDedisperser::_allocate_output_arrays()
+{
+    ssize_t nflat = plan->stage1_iobuf_segments_per_beam * plan->nelts_per_segment;
+    ssize_t pos = 0;
+    
+    this->output_flattened = Array<float> ({nflat}, af_uhost | af_zero);
+    this->output_arrays.resize(output_ntrees);
+    
+    for (int itree = 0; itree < output_ntrees; itree++) {
+	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees[itree];
+	assert(pos == st1.iobuf_base_segment * plan->nelts_per_segment);
+	
+	ssize_t rank = st1.rank0 + st1.rank1_trigger;
+	ssize_t nt_ds = st1.nt_ds;
+	ssize_t nelts = pow2(rank) * nt_ds;
+
+	Array<float> s = output_flattened.slice(0, pos, pos+nelts);
+	this->output_arrays[itree] = s.reshape_ref({pow2(rank), nt_ds});
+	pos += nelts;
+    }
+
+    assert(pos == nflat);
 }
 
 
@@ -222,6 +252,43 @@ void ReferenceDedisperser::Soph0Tree::dedisperse(const gputils::Array<float> &in
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// General structure for (sophistication >= 1).
+//
+//   _allocate_pass0_iobuf()
+//   _init_lagged_downsampler()
+//   _apply_lagged_downsampler()
+//   _init_pass0_trees()
+//   _apply_pass0_trees()
+//   _init_pass1_trees()
+//   _apply_pass1_trees()
+//
+//     + classes Pass0Tree, Pass1Tree
+
+
+void ReferenceDedisperser::_allocate_pass0_iobuf()
+{
+    ssize_t nflat = plan->stage0_iobuf_segments_per_beam * plan->nelts_per_segment;
+    ssize_t pos = 0;
+    
+    this->pass0_iobuf_flattened = Array<float> ({nflat}, af_uhost | af_zero);
+    this->pass0_iobufs.resize(nds);
+    
+    for (int ids = 0; ids < nds; ids++) {
+	const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees[ids];
+	assert(pos == st0.iobuf_base_segment * plan->nelts_per_segment);
+	
+	ssize_t rank = st0.rank0 + st0.rank1;
+	ssize_t nt_ds = st0.nt_ds;
+	ssize_t nelts = pow2(rank) * nt_ds;
+
+	Array<float> s = pass0_iobuf_flattened.slice(0, pos, pos+nelts);
+	this->pass0_iobufs[ids] = s.reshape_ref({pow2(rank), nt_ds});
+	pos += nelts;
+    }
+
+    assert(pos == nflat);    
+}
 
 
 void ReferenceDedisperser::_init_lagged_downsampler()
@@ -244,83 +311,109 @@ void ReferenceDedisperser::_init_lagged_downsampler()
 
 void ReferenceDedisperser::_apply_lagged_downsampler(const gputils::Array<float> &in)
 {
-    assert(intermediate_arrays.size() == nds);  // check that _allocate_intermediate_arrays() was called
-    assert(intermediate_arrays[0].shape_equals({pow2(input_rank), input_nt}));
+    assert(pass0_iobufs.size() == nds);  // check that _allocate_pass0_iobuf() was called
+    assert(pass0_iobufs[0].shape_equals({pow2(input_rank), input_nt}));
     assert(in.shape_equals({pow2(input_rank), input_nt}));
     assert(in.strides[1] == 1);
 
-    intermediate_arrays[0].fill(in);
+    pass0_iobufs[0].fill(in);
     
     if (nds > 1)
-	this->lagged_downsampler->apply(in, &intermediate_arrays[1]);
-}
-
-    
-void ReferenceDedisperser::_allocate_intermediate_arrays()
-{
-    ssize_t nflat = plan->stage0_iobuf_segments_per_beam * plan->nelts_per_segment;
-    ssize_t pos = 0;
-    
-    this->intermediate_flattened = Array<float> ({nflat}, af_uhost | af_zero);
-    this->intermediate_arrays.resize(nds);
-    
-    for (int ids = 0; ids < nds; ids++) {
-	const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees[ids];
-	assert(pos == st0.iobuf_base_segment * plan->nelts_per_segment);
-	
-	ssize_t rank = st0.rank0 + st0.rank1;
-	ssize_t nt_ds = st0.nt_ds;
-	ssize_t nelts = pow2(rank) * nt_ds;
-
-	Array<float> s = intermediate_flattened.slice(0, pos, pos+nelts);
-	this->intermediate_arrays[ids] = s.reshape_ref({pow2(rank), nt_ds});
-	pos += nelts;
-    }
-
-    assert(pos == nflat);    
+	this->lagged_downsampler->apply(in, &pass0_iobufs[1]);
 }
 
 
-void ReferenceDedisperser::_allocate_output_arrays()
-{
-    ssize_t nflat = plan->stage1_iobuf_segments_per_beam * plan->nelts_per_segment;
-    ssize_t pos = 0;
-    
-    this->output_flattened = Array<float> ({nflat}, af_uhost | af_zero);
-    this->output_arrays.resize(output_ntrees);
-    
-    for (int itree = 0; itree < output_ntrees; itree++) {
-	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees[itree];
-	assert(pos == st1.iobuf_base_segment * plan->nelts_per_segment);
-	
-	ssize_t rank = st1.rank0 + st1.rank1_trigger;
-	ssize_t nt_ds = st1.nt_ds;
-	ssize_t nelts = pow2(rank) * nt_ds;
 
-	Array<float> s = output_flattened.slice(0, pos, pos+nelts);
-	this->output_arrays[itree] = s.reshape_ref({pow2(rank), nt_ds});
-	pos += nelts;
-    }
-
-    assert(pos == nflat);
-}
-
-
-void ReferenceDedisperser::_init_first_trees()
+void ReferenceDedisperser::_init_pass0_trees()
 {
     for (const DedispersionPlan::Stage0Tree &st0: plan->stage0_trees)
-	this->first_trees.push_back(FirstTree(st0));
+	this->pass0_trees.push_back(Pass0Tree(st0));
 }
 
 
-void ReferenceDedisperser::_apply_first_trees()
+void ReferenceDedisperser::_apply_pass0_trees()
 {
-    assert(intermediate_arrays.size() == nds);         // check that _allocate_intermediate_arrays() was called
-    assert(first_trees.size() == nds);                 // check that _init_first_trees() was called
+    assert(pass0_iobufs.size() == nds);         // check that _allocate_pass0_iobuf() was called
+    assert(pass0_trees.size() == nds);                 // check that _init_pass0_trees() was called
 
     for (int ids = 0; ids < nds; ids++)
-	first_trees.at(ids).dedisperse(intermediate_arrays.at(ids));
+	pass0_trees.at(ids).dedisperse(pass0_iobufs.at(ids));
 }
+
+
+void ReferenceDedisperser::_init_pass1_trees()
+{
+    for (const DedispersionPlan::Stage1Tree &st1: plan->stage1_trees)
+	this->pass1_trees.push_back(Pass1Tree(st1));
+}
+
+
+void ReferenceDedisperser::_apply_pass1_trees()
+{
+    assert(output_arrays.size() == output_ntrees);   // check that _allocate_output_arrays() was called
+    assert(pass1_trees.size() == output_ntrees);    // check that _init_pass1_trees() was called
+
+    for (int itree = 0; itree < output_ntrees; itree++)
+	pass1_trees.at(itree).dedisperse(output_arrays.at(itree));
+}
+
+
+ReferenceDedisperser::Pass0Tree::Pass0Tree(const DedispersionPlan::Stage0Tree &st0) :
+    is_downsampled(st0.ds_level > 0),
+    output_rank0(st0.rank0),
+    output_rank1(st0.rank1),
+    nt_ds(st0.nt_ds)
+{
+    this->rtree = make_shared<ReferenceTree> (output_rank0, nt_ds);
+    this->rstate = Array<float> ({pow2(output_rank1) * rtree->nrstate}, af_uhost | af_zero);
+    this->scratch = Array<float> ({rtree->nscratch}, af_uhost | af_zero);
+}
+
+
+void ReferenceDedisperser::Pass0Tree::dedisperse(gputils::Array<float> &arr)
+{
+    int output_rank = output_rank0 + output_rank1;
+    assert(arr.shape_equals({ pow2(output_rank), nt_ds }));
+
+    int ndm0 = pow2(output_rank0);
+    float *rp = rstate.data;
+    
+    for (int i = 0; i < pow2(output_rank1); i++) {
+	Array<float> s = arr.slice(0, i*ndm0, (i+1)*ndm0);
+	rtree->dedisperse(s, rp, scratch.data);
+	rp += rtree->nrstate;
+    }
+}
+
+
+ReferenceDedisperser::Pass1Tree::Pass1Tree(const DedispersionPlan::Stage1Tree &st1) :
+    rank0(st1.rank0),
+    rank1(st1.rank1_trigger),
+    nt_ds(st1.nt_ds)
+{
+    this->rtree = make_shared<ReferenceTree> (rank1, nt_ds);
+    this->rstate = Array<float> ({ pow2(rank0) * rtree->nrstate }, af_uhost | af_zero);
+    this->scratch = Array<float> ({ rtree->nscratch }, af_uhost | af_zero);
+}
+
+
+void ReferenceDedisperser::Pass1Tree::dedisperse(Array<float> &arr)
+{
+    assert(arr.shape_equals({ pow2(rank0+rank1), nt_ds }));
+    assert(arr.strides[1] == 1);
+
+    float *rp = rstate.data;
+    int s = arr.strides[0];
+    int nj = pow2(rank0);
+    
+    for (int j = 0; j < nj; j++) {
+	rtree->dedisperse(arr.data + j*s, nj*s, rp, scratch.data);
+	rp += rtree->nrstate;
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
 
 
 void ReferenceDedisperser::_init_big_lagbufs()
@@ -352,13 +445,13 @@ void ReferenceDedisperser::_init_big_lagbufs()
 
 void ReferenceDedisperser::_apply_big_lagbufs()
 {
-    assert(intermediate_arrays.size() == nds);       // check that _allocate_intermediate_arrays() was called
+    assert(pass0_iobufs.size() == nds);       // check that _allocate_pass0_iobuf() was called
     assert(output_arrays.size() == output_ntrees);   // check that _allocate_output_arrays() was called
     assert(big_lagbufs.size() == output_ntrees);     // check that _init_big_lagbufs() was called
 
     for (int itree = 0; itree < output_ntrees; itree++) {
 	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(itree);
-	const Array<float> &in = intermediate_arrays.at(st1.ds_level);
+	const Array<float> &in = pass0_iobufs.at(st1.ds_level);
 	Array<float> &out = output_arrays.at(itree);
 
 	int nchan = pow2(st1.rank0 + st1.rank1_trigger);
@@ -370,6 +463,9 @@ void ReferenceDedisperser::_apply_big_lagbufs()
 }
 
 
+// -------------------------------------------------------------------------------------------------
+
+
 void ReferenceDedisperser::_init_max_ringbuf()
 {
     assert(config.bloat_dedispersion_plan);
@@ -379,7 +475,7 @@ void ReferenceDedisperser::_init_max_ringbuf()
 	    this->max_clag = std::max(max_clag, cl.dst_clag[idst]);
     }
 
-    ssize_t nint = intermediate_flattened.size;
+    ssize_t nint = pass0_iobuf_flattened.size;
     
     assert(max_clag >= 0);
     assert(nint > 0);
@@ -390,12 +486,12 @@ void ReferenceDedisperser::_init_max_ringbuf()
 
 void ReferenceDedisperser::_apply_max_ringbuf()
 {
-    assert(intermediate_arrays.size() == nds);       // check that _allocate_intermediate_arrays() was called
+    assert(pass0_iobufs.size() == nds);       // check that _allocate_pass0_iobuf() was called
     assert(output_arrays.size() == output_ntrees);   // check that _allocate_output_arrays() was called
     assert(max_clag >= 0);                           // check that _init_max_ringbuf() was called
 
     ssize_t nseg = plan->nelts_per_segment;
-    ssize_t nint = intermediate_flattened.size;
+    ssize_t nint = pass0_iobuf_flattened.size;
     ssize_t nout = output_flattened.size;
     ssize_t rpos = pos % (max_clag+1);
 
@@ -403,7 +499,7 @@ void ReferenceDedisperser::_apply_max_ringbuf()
     assert(nout > 0);
 
     memcpy(max_ringbuf.data + rpos * nint,
-	   intermediate_flattened.data,
+	   pass0_iobuf_flattened.data,
 	   nint * sizeof(float));
     
     for (const LaggedCacheLine &cl: plan->lagged_cache_lines) {
@@ -424,6 +520,9 @@ void ReferenceDedisperser::_apply_max_ringbuf()
 	}
     }
 }
+
+
+// -------------------------------------------------------------------------------------------------
 
 
 void ReferenceDedisperser::_init_residual_lagbufs()
@@ -458,21 +557,7 @@ void ReferenceDedisperser::_apply_residual_lagbufs()
 }
 
 
-void ReferenceDedisperser::_init_second_trees()
-{
-    for (const DedispersionPlan::Stage1Tree &st1: plan->stage1_trees)
-	this->second_trees.push_back(SecondTree(st1));
-}
-
-
-void ReferenceDedisperser::_apply_second_trees()
-{
-    assert(output_arrays.size() == output_ntrees);   // check that _allocate_output_arrays() was called
-    assert(second_trees.size() == output_ntrees);    // check that _init_second_trees() was called
-
-    for (int itree = 0; itree < output_ntrees; itree++)
-	second_trees.at(itree).dedisperse(output_arrays.at(itree));
-}
+// -------------------------------------------------------------------------------------------------
 
 
 void ReferenceDedisperser::_init_proper_ringbufs()
@@ -518,8 +603,8 @@ void ReferenceDedisperser::_proper_s0_to_staging()
     ssize_t nsrc = plan->stage0_iobuf_segments_per_beam * nseg;
     ssize_t nbuf = plan->cache_line_ringbuf->buffers.size();
 
-    // Check that _init_intermediate_arrays() and _init_proper_ringbufs() were called.
-    assert(intermediate_flattened.shape_equals({nsrc}));
+    // Check that _init_pass0_iobufs() and _init_proper_ringbufs() were called.
+    assert(pass0_iobuf_flattened.shape_equals({nsrc}));
     assert(staging_outbufs.size() == nbuf);
 
     for (unsigned int rb_lag = 1; rb_lag < nbuf; rb_lag++) {
@@ -534,7 +619,7 @@ void ReferenceDedisperser::_proper_s0_to_staging()
 	    assert((isrc >= 0) && (isrc + nseg <= nsrc));
 
 	    memcpy(dst.data + ipri*nseg,
-		   intermediate_flattened.data + isrc,
+		   pass0_iobuf_flattened.data + isrc,
 		   nseg * sizeof(float));
 	}
     }
@@ -638,7 +723,7 @@ void ReferenceDedisperser::_proper_s0_to_s1()
     ssize_t nsrc = plan->stage0_iobuf_segments_per_beam * nseg;
     ssize_t ndst = plan->stage1_iobuf_segments_per_beam * nseg;
     
-    assert(intermediate_flattened.shape_equals({nsrc}));  // check that _allocate_intermediate_arrays() was called
+    assert(pass0_iobuf_flattened.shape_equals({nsrc}));  // check that _allocate_pass0_iobuf() was called
     assert(output_flattened.shape_equals({ndst}));        // check that _allocate_output_arrays() was called
 
     for (const CacheLineRingbuf::PrimaryEntry &e: plan->cache_line_ringbuf->stage0_stage1_copies) {
@@ -648,7 +733,7 @@ void ReferenceDedisperser::_proper_s0_to_s1()
 	assert((isrc >= 0) && (isrc+nseg <= nsrc));
 	assert((idst >= 0) && (idst+nseg <= ndst));
 
-	memcpy(output_flattened.data + idst, intermediate_flattened.data + isrc, nseg * sizeof(float));
+	memcpy(output_flattened.data + idst, pass0_iobuf_flattened.data + isrc, nseg * sizeof(float));
     }
 }
 
@@ -671,6 +756,11 @@ void ReferenceDedisperser::_proper_s1_to_s1()
 	memcpy(output_flattened.data + idst, output_flattened.data + isrc, nseg * sizeof(float));
     }
 }
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// ReferenceDedisperser::print() and helpers.
 
 
 // Helper for ReferenceDedisperser::print().
@@ -730,19 +820,19 @@ void ReferenceDedisperser::print(ostream &os, int indent) const
     print_kv("nds", nds, os, indent);
     print_kv("pos", pos, os, indent);
 
-    if (first_trees.size() > 0) {
+    if (pass0_trees.size() > 0) {
 	// FIXME should include lagged_downsampler rstate
 	ssize_t nelts_per_beam = 0;
-	for (const FirstTree &t: first_trees)
+	for (const Pass0Tree &t: pass0_trees)
 	    nelts_per_beam += t.rstate.size;
 	
 	ssize_t nbytes = nelts_per_beam * config.beams_per_gpu * plan->uncompressed_dtype_size;
 	print_kv_nbytes("stage0 rstate", nbytes, os, indent);
     }
 
-    if (second_trees.size() > 0) {
+    if (pass1_trees.size() > 0) {
 	ssize_t nelts_per_beam = 0;
-	for (const SecondTree &t: second_trees)
+	for (const Pass1Tree &t: pass1_trees)
 	    nelts_per_beam += t.rstate.size;
 	
 	ssize_t nbytes = nelts_per_beam * config.beams_per_gpu * plan->uncompressed_dtype_size;
@@ -758,8 +848,8 @@ void ReferenceDedisperser::print(ostream &os, int indent) const
 	print_kv_nbytes("stage1 rstate [residual]", nbytes, os, indent);
     }	
     
-    this->_print_array("intermediate_flattened [stage0 iobuf]",
-		       intermediate_flattened, os, indent, true);
+    this->_print_array("pass0_iobuf_flattened [stage0 iobuf]",
+		       pass0_iobuf_flattened, os, indent, true);
     
     this->_print_array("output_flattened [stage1 iobuf]",
 		       output_flattened, os, indent, true);
@@ -767,77 +857,6 @@ void ReferenceDedisperser::print(ostream &os, int indent) const
     this->_print_ringbuf("proper_ringbufs", proper_ringbufs, os, indent, false);
     this->_print_ringbuf("staging_inbufs", staging_inbufs, os, indent, true);
     this->_print_ringbuf("staging_outbufs", staging_outbufs, os, indent, true);
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// ReferenceDedisperser::Soph0Tree
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// ReferenceDedisperser::FirstTree
-
-
-ReferenceDedisperser::FirstTree::FirstTree(const DedispersionPlan::Stage0Tree &st0) :
-    is_downsampled(st0.ds_level > 0),
-    output_rank0(st0.rank0),
-    output_rank1(st0.rank1),
-    nt_ds(st0.nt_ds)
-{
-    this->rtree = make_shared<ReferenceTree> (output_rank0, nt_ds);
-    this->rstate = Array<float> ({pow2(output_rank1) * rtree->nrstate}, af_uhost | af_zero);
-    this->scratch = Array<float> ({rtree->nscratch}, af_uhost | af_zero);
-}
-
-
-// Output goes to FirstTree::iobuf. Modifies input if is_downsampled==true!
-void ReferenceDedisperser::FirstTree::dedisperse(gputils::Array<float> &arr)
-{
-    int output_rank = output_rank0 + output_rank1;
-    assert(arr.shape_equals({ pow2(output_rank), nt_ds }));
-
-    int ndm0 = pow2(output_rank0);
-    float *rp = rstate.data;
-    
-    for (int i = 0; i < pow2(output_rank1); i++) {
-	Array<float> s = arr.slice(0, i*ndm0, (i+1)*ndm0);
-	rtree->dedisperse(s, rp, scratch.data);
-	rp += rtree->nrstate;
-    }
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// ReferenceDedisperser::SecondTree
-
-
-ReferenceDedisperser::SecondTree::SecondTree(const DedispersionPlan::Stage1Tree &st1) :
-    rank0(st1.rank0),
-    rank1(st1.rank1_trigger),
-    nt_ds(st1.nt_ds)
-{
-    this->rtree = make_shared<ReferenceTree> (rank1, nt_ds);
-    this->rstate = Array<float> ({ pow2(rank0) * rtree->nrstate }, af_uhost | af_zero);
-    this->scratch = Array<float> ({ rtree->nscratch }, af_uhost | af_zero);
-}
-
-
-void ReferenceDedisperser::SecondTree::dedisperse(Array<float> &arr)
-{
-    assert(arr.shape_equals({ pow2(rank0+rank1), nt_ds }));
-    assert(arr.strides[1] == 1);
-
-    float *rp = rstate.data;
-    int s = arr.strides[0];
-    int nj = pow2(rank0);
-    
-    for (int j = 0; j < nj; j++) {
-	rtree->dedisperse(arr.data + j*s, nj*s, rp, scratch.data);
-	rp += rtree->nrstate;
-    }
 }
 
 
