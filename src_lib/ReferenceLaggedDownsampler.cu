@@ -90,10 +90,21 @@ static void _check_shape(const char *name, const Array<float> &arr, ssize_t nbea
 
 void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *outp)
 {
+    // Reminder: the input/output arrays have the following shapes:
+    //
+    //   in.shape = (nbeams, 2^large_input_rank, ntime)
+    //   out[i].shape = (nbeams, 2^(large_input_rank-1), ntime/2^(i+1))
+    //   out.size() = Params::num_downsampling_levels
+    //
+    // Note: if nbeams == 1, then the beam axis can be omitted, i.e. the following are okay:
+    //   in.shape = (2^large_input_rank, ntime)
+    //   out[i].shape = (2^(large_input_rank-1), ntime/2^(i+1))
+
     int r = params.large_input_rank;
     int nbeams = params.nbeams;
     long ntime = params.ntime;
 
+    // Note: _check_shape() allows beam axis to be omitted if nbeams == 1.
     _check_shape("in", in, nbeams, pow2(r), ntime);
     _check_shape("out", outp[0], nbeams, pow2(r-1), xdiv(ntime,2));
 
@@ -114,8 +125,10 @@ void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *out
     reference_downsample_freq(in_ds2, out_tmp, false);   // normalize=false, i.e. sum with no factor 0.5
     lagbuf_large->apply_lags(out_tmp);
     
-    // Reshape output_tmp array from 2-d to 3-d, and copy to caller-specified array.
-    out_tmp = out_tmp.reshape_ref({ nbeams, pow2(r-1), ntime/2 });
+    // Reshape output_tmp array from 2-d to target shape, and copy to caller-specified array.
+    // Note that the call to reshape_ref() correctly handles the case where nbeams==1, and the caller
+    // has chosen to omit the beam axis (see "reminder" above).
+    out_tmp = out_tmp.reshape_ref(outp[0].ndim, outp[0].shape);
     outp[0].fill(out_tmp);
     
     if (params.num_downsampling_levels == 1)

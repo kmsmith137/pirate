@@ -29,7 +29,6 @@ struct ReferenceDedisperser
     //
     // sophistication=0:
     //   - Uses one-stage dedispersion instead of two stages.
-    //   - Assumes that caller has applied appropriate downsampling before calling dedisperse().
     //   - In downsampled trees, compute twice as many DMs as necessary, then drop the bottom half.
     //   - Each early trigger is computed in an independent tree, by disregarding some input channels.
     //
@@ -56,26 +55,15 @@ struct ReferenceDedisperser
     int input_nt = 0;
     int output_ntrees = 0;
     int nds = 0;
-    ssize_t pos = 0;  // counts cumulative calls to dedisperse()
+    
+    // Counts cumulative calls to dedisperse()
+    ssize_t pos = 0;
 
     // The 'in' array represents one "chunk", with shape (2^input_rank, input_nt).
     // To process multiple chunks, call the dedipserse() method in a loop.
     void dedisperse(const gputils::Array<float> &in);
     
     void print(std::ostream &os=std::cout, int indent=0) const;
-
-    // downsampled_inputs: only used if sophistication == 0.
-    // downsampled_inputs[ids] has shape (2^input_rank, input_nt/2^ids), where 0 <= ids < nds.
-    // It contains the input array after downsampling by a factor 2^ids.
-    
-    std::vector<gputils::Array<float>> downsampled_inputs;  // length nds
-    void _allocate_downsampled_inputs();
-    void _compute_downsampled_inputs(const gputils::Array<float> &in);
-
-    // The "intermediate" arrays are the iobufs of the Stage0Trees.
-    std::vector<gputils::Array<float>> intermediate_arrays;   // length nds
-    gputils::Array<float> intermediate_flattened;
-    void _allocate_intermediate_arrays();
     
     std::vector<gputils::Array<float>> output_arrays;  // length output_ntrees
     gputils::Array<float> output_flattened;
@@ -83,22 +71,22 @@ struct ReferenceDedisperser
 
     
     // -------------------------------------------------------------------------------------------------
+    //
+    // Sophistication 0
+    //
+    //   - Uses one-stage dedispersion instead of two stages.
+    //   - In downsampled trees, compute twice as many DMs as necessary, then drop the bottom half.
+    //   - Each early trigger is computed in an independent tree, by disregarding some input channels.
+    //   - First, make a copy of the data at each downsampling factor
+    //   - Then, for each output tree (i.e. choice of downsampling factor and early trigger), dedisperse.
 
     
-    struct SimpleTree
+    struct Soph0Tree
     {
-	// SimpleTree: only used if sophistication==0.
-	//
-	//  - Uses one-stage dedispersion instead of two stages.
-	//  - Assumes that caller has applied appropriate downsampling before calling dedisperse().
-	//  - If tree is downsampled, then we compute twice as many DMs as necessary, then drop the bottom half.
-	//  - Each early trigger is computed independently "from scratch", by disregarding some input channels.
-	
-	SimpleTree(const DedispersionPlan::Stage1Tree &st1);
+	Soph0Tree(const DedispersionPlan::Stage1Tree &st1);
 
-	// Input array will be an element of this->downsampled_inputs.
+	// Input array will be an element of this->soph0_ds_inputs (see below)
 	// Output array will be an element of this->output_arrays.
-	
 	void dedisperse(const gputils::Array<float> &in, gputils::Array<float> &out);
 
 	const bool is_downsampled;    // (st1.ds_level > 0)
@@ -111,12 +99,50 @@ struct ReferenceDedisperser
 	gputils::Array<float> iobuf;           // shape (pow2(rtree->rank), nt_ds)
     };
 
+    // soph0_ds_inputs[ids] has shape (2^input_rank, input_nt/2^ids), where 0 <= ids < nds.
+    // It contains the input array after downsampling by a factor 2^ids.
     
-    struct FirstTree
-    {
-	FirstTree(const DedispersionPlan::Stage0Tree &st0);
+    std::vector<gputils::Array<float>> soph0_ds_inputs;  // length nds
+    void _allocate_soph0_ds_inputs();
+    void _compute_soph0_ds_inputs(const gputils::Array<float> &in);
+    
+    // Used if sophistication == 0.
+    std::vector<Soph0Tree> soph0_trees;
+    void _init_soph0_trees();
+    void _apply_soph0_trees();
 
-	// Array argument will be an element of this->intermediate_arrays.	
+    
+    // -------------------------------------------------------------------------------------------------
+    //
+    // General structure for (sophistication >= 1).
+    //
+    // The following logic is shared by all cases with sophistication >= 1.
+    //
+    //   - Dedispersion is done in two stages, with classes Pass0Tree and Pass1Tree.
+    //     These are in 1-1 correspondence with DedispersionPlan::{Stage0Tree,Stage1Tree}.
+    //     (For no good reason, We use "Pass" in the ReferenceDedipserse, and "Stage" in the DedispersionPlan.)
+    //
+    //   - The Pass0Trees all operate on a 'pass0_iobuf' array, and the Pass1Trees all operate
+    //     on the 'output_array' (see above).
+    //
+    //   - First, we run a ReferenceLaggedDownsampler, which populates the pass0_iobuf.
+    //
+    //   - Second, we run the Pass0Trees, which operate in-place on the pass0_iobuf.
+    //
+    //   - Third, we populate the output_array with current+previous elements of the pass0_iobuf,
+    //     using some lagging logic.
+    //
+    //     **NOTE** The different sophistication values {1,2,3} just differ in the details of
+    //      how this lagging logic is implemented.
+    //
+    //   - Fourth, we run the Pass1Trees, which operate in-place on the output_arrays.
+    
+    
+    struct Pass0Tree
+    {
+	Pass0Tree(const DedispersionPlan::Stage0Tree &st0);
+
+	// Array argument will be an element of this-pass0_iobufs.
 	void dedisperse(gputils::Array<float> &arr);
 	
 	const bool is_downsampled;
@@ -130,9 +156,9 @@ struct ReferenceDedisperser
     };
 
 
-    struct SecondTree
+    struct Pass1Tree
     {
-	SecondTree(const DedispersionPlan::Stage1Tree &st1);
+	Pass1Tree(const DedispersionPlan::Stage1Tree &st1);
 
 	// Array argument will be an element of this->output_arrays.
 	void dedisperse(gputils::Array<float> &arr);
@@ -145,27 +171,28 @@ struct ReferenceDedisperser
 	gputils::Array<float> rstate;
 	gputils::Array<float> scratch;
     };
-    
-    // Used if sophistication == 0.
-    std::vector<SimpleTree> simple_trees;
-    void _init_simple_trees();
-    void _apply_simple_trees();
 
-    // Used if sophistication > 0.
+    
+    std::vector<gputils::Array<float>> pass0_iobufs;   // length nds, elements are 2-d arrays
+    gputils::Array<float> pass0_iobuf_flattened;       // 1-d array, for addressing by segment id
+    void _allocate_pass0_iobuf();
+
     std::shared_ptr<ReferenceLaggedDownsampler> lagged_downsampler;
     void _init_lagged_downsampler();
-    void _apply_lagged_downsampler(const gputils::Array<float> &in);
+    void _apply_lagged_downsampler(const gputils::Array<float> &in);   // populates pass0_iobufs
 
-    // Used if sophistication > 0.
-    std::vector<FirstTree> first_trees;
-    void _init_first_trees();
-    void _apply_first_trees();
+    std::vector<Pass0Tree> pass0_trees;
+    void _init_pass0_trees();
+    void _apply_pass0_trees();    // operates on pass0_iobufs
     
-    // Used if sophistication > 0.
-    std::vector<SecondTree> second_trees;
-    void _init_second_trees();
-    void _apply_second_trees();
+    std::vector<Pass1Tree> pass1_trees;
+    void _init_pass1_trees();
+    void _apply_pass1_trees();    // operates on pass0_iobufs
 
+
+    // -------------------------------------------------------------------------------------------------
+
+    
     // Used if sophistication == 1.
     std::vector<std::shared_ptr<ReferenceLagbuf>> big_lagbufs;
     void _init_big_lagbufs();

@@ -20,6 +20,14 @@ class GpuLaggedDownsamplingKernel
 public:
     struct Params {
 	// "Primary" parameters specified when make() is called.
+	//
+	// A potential source of confusion: denote
+	//
+	//    ld_nds = GpuLaggedDownsampler::Params::num_downsmapling_levels
+	//    dc_nds = DedispersionConfig::num_downsampling_levels
+	//
+	// Then ld_nds = (dc_nds - 1)!
+
 	int small_input_rank = 0;
 	int large_input_rank = 0;
 	int num_downsampling_levels = 0;
