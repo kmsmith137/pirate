@@ -132,10 +132,11 @@ void CacheLineRingbuf::finalize()
 
     ssize_t active_beams = config.beams_per_batch * config.num_active_batches;
     ssize_t beams_per_gpu = config.beams_per_gpu;
-    ssize_t gmem_offset = cargs.gmem_nbytes_used_so_far;
     int sb = config.get_bytes_per_compressed_segment();
     
     // First loop over Buffers assigns staging buffer sizes.
+
+    this->gmem_nbytes_staging_buf = 0;
     
     for (size_t rb_lag = 0; rb_lag < this->buffers.size(); rb_lag++) {
 	Buffer &buf = this->buffers[rb_lag];
@@ -146,38 +147,46 @@ void CacheLineRingbuf::finalize()
 	buf.primary_nbytes_per_beam_per_chunk = npri;
 	buf.secondary_nbytes_per_beam_per_chunk = nsec;
 	buf.total_nbytes_per_beam_per_chunk = (npri + nsec);
-	buf.total_nbytes = rb_lag * beams_per_gpu * (npri + nsec);
-	buf.staging_buffer_byte_offset = gmem_offset;
+	buf.total_ringbuf_nbytes = rb_lag * beams_per_gpu * (npri + nsec);
+	buf.total_staging_buffer_nbytes = 2 * active_beams * (npri + nsec);
+	buf.staging_buffer_byte_offset = gmem_nbytes_staging_buf;
 
-	ssize_t nstage = 2 * active_beams * buf.total_nbytes_per_beam_per_chunk;
-	this->gmem_nbytes_staging_buf += nstage;
-	gmem_offset += nstage;
+	this->gmem_nbytes_staging_buf += buf.total_staging_buffer_nbytes;
     }
-    
-    if (gmem_offset > config.gmem_nbytes_per_gpu) {
+
+    ssize_t gmem_tot = cargs.gmem_nbytes_used_so_far + gmem_nbytes_staging_buf;
+
+    if (gmem_tot > config.gmem_nbytes_per_gpu) {
 	stringstream ss;
 	ss << "DedispersionConfig::gmem_nbytes_per_gpu (" << gputils::nbytes_to_str(config.gmem_nbytes_per_gpu)
-	   << ") is too small (must be at least " << gputils::nbytes_to_str(gmem_offset) << ")";
+	   << ") is too small (must be at least " << gputils::nbytes_to_str(gmem_tot) << ")";
 	throw runtime_error(ss.str());
     }
 
     // Second loop over Buffers assigns each Buffer to either GPU memory or host memory.
 
+    this->gmem_nbytes_ringbuf = 0;
+    this->hmem_nbytes_ringbuf = 0;
+    this->pcie_nbytes_per_chunk = 0;
+    this->pcie_memcopies_per_chunk = 0;
+    
     for (size_t rb_lag = 0; rb_lag < this->buffers.size(); rb_lag++) {
 	Buffer &buf = this->buffers[rb_lag];
 	ssize_t n0 = buf.total_nbytes_per_beam_per_chunk;
-	ssize_t ntot = buf.total_nbytes;
+	ssize_t ntot = buf.total_ringbuf_nbytes;
 	
-	if (!config.force_ring_buffers_to_host && (gmem_offset + ntot <= config.gmem_nbytes_per_gpu)) {
+	if (!config.force_ring_buffers_to_host && (gmem_tot + ntot <= config.gmem_nbytes_per_gpu)) {
 	    buf.on_gpu = true;
-	    buf.gmem_byte_offset = gmem_offset;
+	    buf.gmem_ringbuf_byte_offset = gmem_nbytes_ringbuf;
+	    buf.hmem_ringbuf_byte_offset = -1;
 	    
 	    this->gmem_nbytes_ringbuf += ntot;
-	    gmem_offset += ntot;
+	    gmem_tot += ntot;
 	}
 	else {
 	    buf.on_gpu = false;
-	    buf.hmem_byte_offset = this->hmem_nbytes_ringbuf;
+	    buf.gmem_ringbuf_byte_offset = -1;
+	    buf.hmem_ringbuf_byte_offset = hmem_nbytes_ringbuf;
 	    buf.pcie_xfer_size = config.beams_per_batch * n0;
 	    
 	    this->hmem_nbytes_ringbuf += ntot;
@@ -212,12 +221,12 @@ void CacheLineRingbuf::print(std::ostream &os, int indent) const
 	os << Indent(indent+4)
 	   << "rb_lag=" << rb_lag
 	   << ": on_gpu=" << buf.on_gpu
-	   << ", nbytes=" << gputils::nbytes_to_str(buf.total_nbytes);
+	   << ", nbytes=" << gputils::nbytes_to_str(buf.total_ringbuf_nbytes);
 
 	if (buf.on_gpu)
-	    os << ", gmem_offset=" << gputils::nbytes_to_str(buf.gmem_byte_offset);
+	    os << ", gmem_offset=" << gputils::nbytes_to_str(buf.gmem_ringbuf_byte_offset);
 	else
-	    os << ", hmem_offset=" << gputils::nbytes_to_str(buf.hmem_byte_offset)
+	    os << ", hmem_offset=" << gputils::nbytes_to_str(buf.hmem_ringbuf_byte_offset)
 	       << ", pcie_xfer_size=" << gputils::nbytes_to_str(buf.pcie_xfer_size);
 	
 	os << endl;

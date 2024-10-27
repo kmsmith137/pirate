@@ -40,6 +40,7 @@ HFILES = \
   include/pirate/internals/GpuDedispersionKernel.hpp \
   include/pirate/internals/LaggedCacheLine.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp \
+  include/pirate/internals/ReferenceDedispersionKernel.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
   include/pirate/internals/ReferenceLaggedDownsampler.hpp \
   include/pirate/internals/ReferenceTree.hpp \
@@ -87,6 +88,7 @@ OFILES = \
   src_lib/GpuLaggedDownsamplingKernel.o \
   src_lib/LaggedCacheLine.o \
   src_lib/ReferenceDedisperser.o \
+  src_lib/ReferenceDedispersionKernel.o \
   src_lib/ReferenceLagbuf.o \
   src_lib/ReferenceLaggedDownsampler.o \
   src_lib/ReferenceTree.o \

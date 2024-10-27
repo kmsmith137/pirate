@@ -171,6 +171,9 @@ void DedispersionConfig::validate() const
     assert((beams_per_gpu % beams_per_batch) == 0);
     assert((num_active_batches * beams_per_batch) <= beams_per_gpu);
 
+    // Assumed for convenience, to simplify logic in a few places -- might revisit later.
+    assert((beams_per_gpu % beams_per_batch) == 0);
+
     int min_rank = (num_downsampling_levels > 1) ? 1 : 0;
     check_rank(tree_rank, "DedispersionConfig", min_rank);
 
@@ -346,17 +349,21 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 
 
 // static member function
-DedispersionConfig DedispersionConfig::make_random()
+DedispersionConfig DedispersionConfig::make_random(bool reference)
 {
     DedispersionConfig ret;
     ret.num_downsampling_levels = gputils::rand_int(1, 5);
+    ret.compressed_dtype = "float32";
+    ret.uncompressed_dtype = "float32";
 
-    // Ensure compressed_dtype is narrower than uncompressed_dtype.
-    do {
-	ret.uncompressed_dtype = gputils::rand_element({ "float32", "float16" });
-	ret.compressed_dtype = gputils::rand_element({ "float32", "float16", "int8" });
-    } while (dtype_size(ret.compressed_dtype) > dtype_size(ret.uncompressed_dtype));
-
+    if (!reference) {
+	// Ensure compressed_dtype is narrower than uncompressed_dtype.
+	do {
+	    ret.uncompressed_dtype = gputils::rand_element({ "float32", "float16" });
+	    ret.compressed_dtype = gputils::rand_element({ "float32", "float16", "int8" });
+	} while (dtype_size(ret.compressed_dtype) > dtype_size(ret.uncompressed_dtype));
+    }
+    
     // Randomly choose a tree rank, but bias toward a high number.
     int max_rank = 10;
     int min_rank = (ret.num_downsampling_levels > 1) ? 1 : 0;
@@ -402,6 +409,7 @@ DedispersionConfig DedispersionConfig::make_random()
     ret.beams_per_batch = 1;
     ret.num_active_batches = 1;
     ret.gmem_nbytes_per_gpu = 10L * 1000L * 1000L * 1000L;
+    ret.force_ring_buffers_to_host = reference;
 
     ret.validate();
     return ret;

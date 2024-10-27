@@ -1,7 +1,8 @@
 #include "../include/pirate/internals/GpuDedispersionKernel.hpp"
-#include "../include/pirate/internals/ReferenceDedisperser.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2()
-#include "../include/pirate/internals/utils.hpp"    // integer_log2()
+#include "../include/pirate/internals/ReferenceDedispersionKernel.hpp"
+#include "../include/pirate/internals/inlines.hpp"    // pow2()
+#include "../include/pirate/internals/utils.hpp"      // integer_log2()
+#include "../include/pirate/constants.hpp"            // constants::bytes_per_segment
 
 #include <gputils/Array.hpp>
 #include <gputils/cuda_utils.hpp>
@@ -13,117 +14,9 @@ using namespace pirate;
 using namespace gputils;
 
 
-
-template<typename T>
-struct ReferenceDedispersionKernel
-{
-    using RLagType = typename GpuDedispersionKernel<T>::RLagType;
-
-    struct Params {
-	int rank = 0;
-	int ntime = 0;
-	int nambient = 0;
-	int nbeams = 0;
-	RLagType rlag_type = RLagType::RLagInvalid;
-    };
-
-    const Params params;
-
-    shared_ptr<ReferenceTree> tree;
-    Array<float> rstate;
-    Array<float> scratch;
-
-    // If rlag_type == RLagInput
-    shared_ptr<ReferenceLagbuf> rlag_buf;
-
-    
-    ReferenceDedispersionKernel(const Params &params_)
-	: params(params_)
-    {
-	// FIXME should have proper argument checking here.
-	// Right now, I'm just making sure that everything is initialized.
-	
-	assert(params.rank > 0);
-	assert(params.ntime > 0);
-	assert(params.nambient > 0);
-	assert(params.nbeams > 0);
-	assert((params.rlag_type == RLagType::RLagNone) || (params.rlag_type == RLagType::RLagInput));
-	assert(is_power_of_two(params.nambient));
-
-	int B = params.nbeams;
-	int A = params.nambient;
-	int F = pow2(params.rank);
-	int Ar = integer_log2(A);
-	
-	this->tree = make_shared<ReferenceTree> (params.rank, params.ntime);
-	this->rstate = Array<float> ({ B, A, tree->nrstate }, af_uhost | af_zero);
-	this->scratch = Array<float> ({ tree->nscratch }, af_uhost | af_zero);
-	
-	if (params.rlag_type != RLagType::RLagInput)
-	    return;
-
-	// Remaining code initializes this->rlag_buf, in case RLagType == RLagInput.
-	
-	vector<int> rlags(B*A*F);
-	constexpr int R = 128 / sizeof(T);
-
-	for (int b = 0; b < B; b++) {
-	    for (int a = 0; a < A; a++) {
-		// Ambient index represents a bit-reversed DM.
-		int dm = bit_reverse_slow(a, Ar);
-		
-		for (int f = 0; f < F; f++)
-		    rlags[b*A*F + a*F + f] = (dm * (F-f-1)) % R;
-	    }
-	}
-	
-	this->rlag_buf = make_shared<ReferenceLagbuf> (rlags, params.ntime);
-    }
-
-    
-    void apply(Array<float> &iobuf) const
-    {
-	int B = params.nbeams;
-	int A = params.nambient;
-	int F = pow2(params.rank);
-
-	assert(iobuf.shape_equals({B,A,F,params.ntime}));
-
-	if (params.rlag_type == RLagType::RLagInput) {
-	    
-	    // FIXME reshape_ref() can fail if A/B/F strides are not compatible.
-	    // Some possible solutions:
-	    //  - modify ReferenceLagbuf so that 'state' array is passed by caller
-	    //  - modify ReferenceLagbuf to allow higher-dimensional data arrays
-	    
-	    Array<float> iobuf_2d = iobuf.reshape_ref({ B*A*F, params.ntime });
-	    rlag_buf->apply_lags(iobuf_2d);
-	}
-
-	for (int b = 0; b < B; b++) {
-	    for (int a = 0; a < A; a++) {
-		Array<float> io_slice = iobuf.slice(0,b).slice(0,a);
-		Array<float> rs_slice = rstate.slice(0,b).slice(0,a);
-
-		assert(io_slice.shape_equals({ F, params.ntime }));
-		assert(rs_slice.shape_equals({ tree->nrstate }));
-		    
-		// ReferenceTree::dedisperse(float *arr, int stride, float *rstate, float *scratch)
-		tree->dedisperse(io_slice.data, io_slice.strides[0], rs_slice.data, scratch.data);
-	    }
-	}
-    }
-};
-
-
-// -------------------------------------------------------------------------------------------------
-
-
 template<typename T>
 struct TestInstance
 {
-    using RLagType = typename GpuDedispersionKernel<T>::RLagType;
-
     int rank = 0;
     int ntime = 0;
     int nambient = 1;
@@ -132,8 +25,9 @@ struct TestInstance
     long row_stride = 0;
     long ambient_stride = 0;
     long beam_stride = 0;
-    RLagType rlag_type = RLagType::RLagInvalid;
-
+    bool apply_input_residual_lags = false;
+    bool is_downsampled_tree = false;
+    
 
     int rand_n(long nmax)
     {
@@ -151,12 +45,12 @@ struct TestInstance
     void randomize()
     {
 	const long max_nelts = 30 * 1000 * 1000;
-	// const bool is_float32 = (sizeof(T) == 4);
 
 	rank = rand_int(1, 9);
 	nchunks = rand_int(1, 10);
 	nambient = pow2(rand_int(0,4));
-	rlag_type = (rand_uniform() < 0.5) ? RLagType::RLagNone : RLagType::RLagInput;
+	apply_input_residual_lags = (rand_uniform() < 0.66) ? true : false;
+	is_downsampled_tree = (rand_uniform() < 0.5) ? true : false;
 
 	long nelts = pow2(rank) * nchunks * nambient;
 	ntime = 64 * rand_n(max_nelts / (64 * nelts));
@@ -198,21 +92,23 @@ struct TestInstance
 		 << "    row_stride = " << row_stride << " (minimum: " << min_row_stride << ")\n"
 		 << "    ambient_stride = " << ambient_stride << " (minimum: " << min_ambient_stride << ")\n"
 		 << "    beam_stride = " << beam_stride << " (minimum: " << min_beam_stride << ")\n"
-		 << "    rlag_type = " << GpuDedispersionKernel<T>::rlag_str(rlag_type)
+		 << "    apply_input_residual_lags = " << (apply_input_residual_lags ? "true\n" : "false\n")
+		 << "    is_downsampled_tree = " << (is_downsampled_tree ? "true" : "false")
 		 << endl;
 	}
 
-	using RefParams = typename ReferenceDedispersionKernel<T>::Params;
-	RefParams ref_params;
+	ReferenceDedispersionKernel::Params ref_params;
 	ref_params.rank = rank;
 	ref_params.ntime = ntime;
 	ref_params.nambient = nambient;
 	ref_params.nbeams = nbeams;
-	ref_params.rlag_type = rlag_type;
+	ref_params.apply_input_residual_lags = apply_input_residual_lags;
+	ref_params.is_downsampled_tree = is_downsampled_tree;
+	ref_params.nelts_per_segment = xdiv(constants::bytes_per_segment, sizeof(T));  // matches DedispersionConfig::get_nelts_per_segment()
 
-	ReferenceDedispersionKernel<T> ref_kernel(ref_params);
+	ReferenceDedispersionKernel ref_kernel(ref_params);
 
-	shared_ptr<GpuDedispersionKernel<T>> gpu_kernel = GpuDedispersionKernel<T>::make(rank, rlag_type);
+	shared_ptr<GpuDedispersionKernel<T>> gpu_kernel = GpuDedispersionKernel<T>::make(rank, apply_input_residual_lags, is_downsampled_tree);
 
 	if (noisy)
 	    gpu_kernel->print(cout, 4);  // indent=4
@@ -227,11 +123,16 @@ struct TestInstance
 	for (int ichunk = 0; ichunk < nchunks; ichunk++) {
 #if 1
 	    // Random chunk gives strongest test.
-	    Array<float> ref_chunk({nbeams, nambient, pow2(rank), ntime}, af_rhost | af_random);
+	    Array<float> ref_chunk({nbeams, nambient, pow2(rank), ntime},
+				   { beam_stride, ambient_stride, row_stride, 1 },  // strides
+				   af_rhost | af_random);
 #else
 	    // One-hot chunk is sometimes useful for debugging.
 	    // (Note that if nchunks > 0, then the one-hot chunk will be repeated multiple times.)
-	    Array<float> ref_chunk({nbeams, nambient, pow2(rank), ntime}, af_rhost | af_zero);
+	    Array<float> ref_chunk({nbeams, nambient, pow2(rank), ntime},
+				   { beam_stride, ambient_stride, row_stride, 1 },  // strides
+				   af_rhost | af_zero);
+	    
 	    cout << "   ichunk=" << ichunk << endl;
 	    int ibeam = rand_int(0, nbeams);
 	    int iamb = rand_int(0, nambient);
@@ -295,7 +196,7 @@ int main(int argc, char **argv)
 	t.row_stride = t.ntime + 64;
 	t.ambient_stride = t.row_stride * pow2(t.rank) + 64*3;
 	t.beam_stride = t.ambient_stride * t.nambient + 64*11;
-	t.rlag_type = GpuDedispersionKernel<T>::RLagType::RLagInput;
+	t.apply_input_residual_lags = true;
 	t.run(noisy);
     }
     return 0;

@@ -25,13 +25,13 @@ struct DedispersionConfig
     std::string uncompressed_dtype;  // "float32" or "float16"
     std::string compressed_dtype;    // "float32", "float16", or "int8"
     
-    // Early triggers.
     struct EarlyTrigger
     {
 	ssize_t ds_level = -1;
 	ssize_t tree_rank = 0;
     };
 
+    // Sorted (by ds_level first, then tree_rank).
     std::vector<EarlyTrigger> early_triggers;
 
     // GPU configuration.
@@ -76,11 +76,20 @@ struct DedispersionConfig
     static DedispersionConfig from_yaml(const YamlFile &file);
     
     // Helper functions for constructing DedispersionConfig instances.
+    // Add early triggers, while maintaining invariant that 'early_triggers' is sorted.
     void add_early_trigger(ssize_t ds_level, ssize_t tree_rank);
     void add_early_triggers(ssize_t ds_level, std::initializer_list<ssize_t> tree_ranks);
 
-    // For unit tests.
-    static DedispersionConfig make_random();
+    // make_random(): used for unit tests.
+    //
+    // If reference=true, then impose some constraints needed by ReferenceDedisperser:
+    //   - uncompressed_dtype == compressed_dtype == "float32"
+    //   - beams_per_gpu == beams_per_batch == num_active_batches == 1
+    //   - force_ring_buffers_to_host = true
+    //
+    // (Eventually, I hope to relax these constrains and remove the 'reference' argument).
+    
+    static DedispersionConfig make_random(bool reference=false);
 };
 
 extern bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);

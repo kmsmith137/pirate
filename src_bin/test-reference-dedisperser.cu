@@ -2,7 +2,6 @@
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/internals/ReferenceDedisperser.hpp"
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
-#include "../include/pirate/internals/utils.hpp"    // make_chord_dedispersion_config()
 
 #include <gputils/Array.hpp>
 #include <gputils/rand_utils.hpp>
@@ -13,42 +12,42 @@ using namespace gputils;
 using namespace pirate;
 
 
-// -------------------------------------------------------------------------------------------------
-
-
-static void test_reference_dedispersion(const DedispersionConfig &config, int soph1, int soph2, int nchunks, bool noisy=false)
+static void test_reference_dedispersion(const DedispersionConfig &config, int nchunks)
 {
-    if (noisy) {
-	cout << "test_reference_dedispersion(soph1=" << soph1
-	     << ", soph2=" << soph2 << ", nchunks=" << nchunks << ")" << endl;
-	config.print(cout, 4);
-    }
+    cout << "\n" << "test_reference_dedispersion2: nchunks=" << nchunks << endl;
+    config.print(cout, 4);
     
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    ReferenceDedisperser rdd1(plan, soph1);
-    ReferenceDedisperser rdd2(plan, soph2);
-
-    assert(rdd1.output_ntrees == rdd2.output_ntrees);
+    // plan->print(cout, 8);
     
+    shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, 0);
+    shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);
+    shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, 1);
+    
+    assert(rdd0->output_ntrees == rdd1->output_ntrees);
+    assert(rdd0->output_ntrees == rdd2->output_ntrees);
+    
+    int ntrees = rdd0->output_ntrees;    
     int nfreq = pow2(config.tree_rank);
     int nt_chunk = config.time_samples_per_chunk;
-    int ntrees = rdd1.output_ntrees;
     
     for (int c = 0; c < nchunks; c++) {
-	if (noisy)
-	    cout << "    chunk " << c << "/" << nchunks << endl;
+	cout << "    chunk " << c << "/" << nchunks << endl;
 	
 	Array<float> arr({nfreq,nt_chunk}, af_uhost | af_random);
 	// Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
 	// arr.at({0,0}) = 1.0;
 	
-	rdd1.dedisperse(arr);
-	rdd2.dedisperse(arr);
+	rdd0->dedisperse(arr);
+	rdd1->dedisperse(arr);
+	rdd2->dedisperse(arr);
 
 	for (int itree = 0; itree < ntrees; itree++) {
-	    const Array<float> &arr1 = rdd1.output_arrays.at(itree);
-	    const Array<float> &arr2 = rdd2.output_arrays.at(itree);
-	    assert_arrays_equal(arr1, arr2, "A", "B", {"dm_brev","t"});
+	    const Array<float> &arr0 = rdd0->output_arrays.at(itree);
+	    const Array<float> &arr1 = rdd1->output_arrays.at(itree);
+	    const Array<float> &arr2 = rdd2->output_arrays.at(itree);
+	    assert_arrays_equal(arr0, arr1, "soph0", "soph1", {"dm_brev","t"});
+	    assert_arrays_equal(arr0, arr2, "soph0", "soph2", {"dm_brev","t"});
 	}
     }
 }
@@ -62,7 +61,7 @@ static void run_random_small_configs(int niter)
     for (int iter = 0; iter < niter; iter++) {
 	cout << "\n    *** Running random small config " << iter << "/" << niter << " ***\n" << endl;
 	
-	auto config = DedispersionConfig::make_random();
+	auto config = DedispersionConfig::make_random(true);   // reference=true
 	config.planner_verbosity = 1;
 
 	int max_nt = 8192;
@@ -71,7 +70,7 @@ static void run_random_small_configs(int niter)
 	int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
 	int nchunks = gputils::rand_int(1, max_nchunks+1);
 	
-	test_reference_dedispersion(config, 0, 3, nchunks, true);  // noisy=true
+	test_reference_dedispersion(config, nchunks);
     }
 }
 
@@ -96,7 +95,7 @@ int main(int argc, char **argv)
     
 	int nt_tot = 1024 * 1024;  // FIXME promote to command-line arg?
 	int nchunks = xdiv(nt_tot, config.time_samples_per_chunk);
-	test_reference_dedispersion(config, 0, 3, nchunks, true);  // noisy=true
+	test_reference_dedispersion(config, nchunks);
     }
     
     cout << "\ntest-reference-dedisperser: pass" << endl;

@@ -11,9 +11,10 @@ using namespace pirate;
 
 
 template<typename T>
-static void time_gpu_dedispersion_kernel(int rank, typename GpuDedispersionKernel<T>::RLagType rlag_type)
+static void time_gpu_dedispersion_kernel(int rank, bool apply_input_residual_lags)
 {
-    shared_ptr<GpuDedispersionKernel<T>> kernel = GpuDedispersionKernel<T>::make(rank, rlag_type);
+    bool is_downsampled_tree = false;  // shouldn't affect timing
+    shared_ptr<GpuDedispersionKernel<T>> kernel = GpuDedispersionKernel<T>::make(rank, apply_input_residual_lags, is_downsampled_tree);
     
     long nstreams = 1;
     long ncallbacks = 10;
@@ -40,7 +41,7 @@ static void time_gpu_dedispersion_kernel(int rank, typename GpuDedispersionKerne
     
     stringstream kernel_name;
     kernel_name << "dedisperse(" << gputils::type_name<T>() << ", rank=" << rank
-		<< ", " << GpuDedispersionKernel<T>::rlag_str(rlag_type) << ")";
+		<< ", apply_input_residual_lags=" << (apply_input_residual_lags ? "true" : "false");
     
     CudaStreamPool pool(callback, ncallbacks, nstreams, kernel_name.str());
     pool.monitor_throughput("global memory (GB/s)", gmem_gb);
@@ -51,10 +52,10 @@ static void time_gpu_dedispersion_kernel(int rank, typename GpuDedispersionKerne
 int main(int argc, char **argv)
 {
     for (int rank = 1; rank <= 8; rank++) {
-	time_gpu_dedispersion_kernel<float> (rank, GpuDedispersionKernel<float>::RLagNone);
-	time_gpu_dedispersion_kernel<float> (rank, GpuDedispersionKernel<float>::RLagInput);
-	time_gpu_dedispersion_kernel<__half> (rank, GpuDedispersionKernel<__half>::RLagNone);
-	time_gpu_dedispersion_kernel<__half> (rank, GpuDedispersionKernel<__half>::RLagInput);
+	for (bool apply_input_residual_lags: { false, true }) {
+	    time_gpu_dedispersion_kernel<float> (rank, apply_input_residual_lags);
+	    time_gpu_dedispersion_kernel<__half> (rank, apply_input_residual_lags);
+	}
     }
     
     return 0;

@@ -48,7 +48,7 @@ struct CacheLineRingbuf
     ssize_t gmem_nbytes_ringbuf = 0;       // GPU ring buffer, including factor 'total_beams_per_gpu'
     ssize_t hmem_nbytes_ringbuf = 0;       // host ring buffer, including factor 'total_beams_per_gpu'
     ssize_t pcie_nbytes_per_chunk = 0;     // host <-> GPU bandwidth per chunk (EACH WAY), including factor 'total_beams_per_gpu'
-    ssize_t pcie_memcopies_per_chunk = 0;  // host <-> GPU memcopy call count per chunk (EACH WAY)
+    ssize_t pcie_memcopies_per_chunk = 0;  // host <-> GPU memcpy call count per chunk (EACH WAY)
 
     
     CacheLineRingbuf(const DedispersionConfig &config, const ConstructorArgs &cargs);
@@ -90,17 +90,21 @@ struct CacheLineRingbuf
 	std::vector<SecondaryEntry> secondary_entries;
 
 	// Fields below are initialized in CacheLineRingbuf::finalize().
-	
-	ssize_t primary_nbytes_per_beam_per_chunk = 0;
-	ssize_t secondary_nbytes_per_beam_per_chunk = 0;
-	ssize_t total_nbytes_per_beam_per_chunk = 0;
-	ssize_t total_nbytes = 0;        // includes factors 'rb_len' and 'beams_per_gpu'
+
+	// These fields do not include the factor 2 from [ 'h2g', 'g2h' ].
+	// (This factor of 2 is appropriate for the staging buffer, but not the ring buffer.)
+	ssize_t primary_nbytes_per_beam_per_chunk = 0;    // cache-aligned
+	ssize_t secondary_nbytes_per_beam_per_chunk = 0;  // cache-aligned
+	ssize_t total_nbytes_per_beam_per_chunk = 0;      // sum of prev two fields
+
+	ssize_t total_ringbuf_nbytes = 0;         // = (rb_lag * total_beams_per_gpu * total_nbytes_per_beam_per_chunk)
+	ssize_t total_staging_buffer_nbytes = 0;  // = (2 * active_beams_per_gpu * total_nbytes_per_beam_per_chunk)
 	ssize_t staging_buffer_byte_offset = -1;
 	
 	bool on_gpu = false;
-	ssize_t gmem_byte_offset = -1;   // only >= 0 if on_gpu
-	ssize_t hmem_byte_offset = -1;   // only >= 0 if !on_gpu
-	ssize_t pcie_xfer_size = 0;      // only nonzero if !on_gpu
+	ssize_t gmem_ringbuf_byte_offset = -1;   // only >= 0 if on_gpu
+	ssize_t hmem_ringbuf_byte_offset = -1;   // only >= 0 if !on_gpu
+	ssize_t pcie_xfer_size = 0;              // only nonzero if !on_gpu
 	//   ... more to come
     };
     

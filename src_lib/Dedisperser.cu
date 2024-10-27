@@ -66,13 +66,13 @@ void Dedisperser::launch_h2g_copies(ssize_t chunk, int beam, cudaStream_t stream
 
 	if (buf.on_gpu)
 	    continue;
-	if (buf.total_nbytes == 0)
+	if (buf.total_ringbuf_nbytes == 0)
 	    continue;
 
 	ssize_t i = isrc % (rb_lag * config.beams_per_gpu);  // wrapped
 	ssize_t n = config.beams_per_batch * buf.total_nbytes_per_beam_per_chunk;
 	
-	char *src = host_buffer.get() + buf.hmem_byte_offset + (i * buf.total_nbytes_per_beam_per_chunk);
+	char *src = host_buffer.get() + buf.hmem_ringbuf_byte_offset + (i * buf.total_nbytes_per_beam_per_chunk);
 	char *dst = gpu_buffer.get() + buf.staging_buffer_byte_offset + (idst * buf.total_nbytes_per_beam_per_chunk);
 
 	CUDA_CALL(cudaMemcpyAsync(dst, src, n, cudaMemcpyHostToDevice, stream));
@@ -96,14 +96,14 @@ void Dedisperser::launch_g2h_copies(ssize_t chunk, int beam, cudaStream_t stream
 
 	if (buf.on_gpu)
 	    continue;
-	if (buf.total_nbytes == 0)
+	if (buf.total_ringbuf_nbytes == 0)
 	    continue;
 
 	ssize_t i = idst % (rb_lag * config.beams_per_gpu);  // wrapped
 	ssize_t n = config.beams_per_batch * buf.total_nbytes_per_beam_per_chunk;
 	
 	char *src = gpu_buffer.get() + buf.staging_buffer_byte_offset + (isrc * buf.total_nbytes_per_beam_per_chunk);
-	char *dst = host_buffer.get() + buf.hmem_byte_offset + (i * buf.total_nbytes_per_beam_per_chunk);
+	char *dst = host_buffer.get() + buf.hmem_ringbuf_byte_offset + (i * buf.total_nbytes_per_beam_per_chunk);
 
 	CUDA_CALL(cudaMemcpyAsync(dst, src, n, cudaMemcpyDeviceToHost, stream));
     }    

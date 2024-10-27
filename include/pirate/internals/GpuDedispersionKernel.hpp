@@ -16,17 +16,11 @@ class GpuDedispersionKernel
 public:
     // Each kernel has an rlag_type which determines whether residual lags are applied.
     // See long comment below for details.
-    
-    enum RLagType {
-	RLagInvalid = 0,
-	RLagNone = 1,
-	RLagInput = 2
-	// I may add more later! (FIXME explain this)
-    };
 
     struct Params {
 	int rank = 0;
-	RLagType rlag_type = RLagInvalid;
+	bool apply_input_residual_lags = false;   // see below
+	bool is_downsampled_tree = false;
 
 	// Kernel persistent state is an array of shape
 	// { nbeams, nambient, state_nelts_per_small_tree }.
@@ -53,21 +47,21 @@ public:
     // are kernel arguments.
     //
     // The 'beam' index is always a "pure spectator" index.
-    // The meaning of the 'ambient' index depends on the rlag_type:
+    // The meaning of the 'ambient' index depends on the value of params.apply_input_residual_lags:
     //
-    //   - RLagNone:
+    //   - apply_input_residual_lags == false:
     //
     //       Ambient index is a pure spectator.
     //
-    //   - RLagInput:
+    //   - apply_input_residual_lags == true:
     //
     //       Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
     //       The "row" index represents a coarse frequency 0 <= f < 2^(rank).
     //       Before dedispersing the data, the following residual lag is applied:
     //
-    //        constexpr int N = constants::bytes_per_gpu_cache_line / sizeof(T)
-    //        int ff = 2^rank - 1 - f;
-    //        int lag = (ff * d) % N;
+    //        int nelts_per_segment = constants::bytes_per_gpu_cache_line / sizeof(T);
+    //        int lag = rb_lag(f, d, ambient_rank, rank, params.is_downsampled_tree);
+    //        int residual_lag = lag % nelts_per_segment;
     
     void launch(gputils::Array<T> &iobuf,
 		gputils::Array<T> &rstate,
@@ -83,12 +77,9 @@ public:
 		cudaStream_t stream = nullptr) const;
     
     // Use this factory function to create GpuDedispersionKernel instances (constructor is protected).
-    static std::shared_ptr<GpuDedispersionKernel> make(int rank, RLagType rlag_type);
+    static std::shared_ptr<GpuDedispersionKernel> make(int rank, bool apply_input_residual_lags, bool is_downsampled_tree);
 
     void print(std::ostream &os=std::cout, int indent=0) const;
-    
-    // For printing RLagType (defining operator<<() didn't work due to C++ weirdness)
-    static std::string rlag_str(RLagType rlag_type);
 
 protected:
     // If T==float, then T32 is also 'float'.
@@ -118,13 +109,14 @@ protected:
 			      long,             // ambient_stride
 			      int,              // row_stride
 			      int,              // nt_cl
-			      unsigned int *);  // integer_constants
+			      uint *,           // integer_constants
+			      uint);            // flags
 
     kernel_t kernel;
 
     // FIXME only on current cuda device (at time of construction).
     // Should either add run-time check, or switch to using constant memory.
-    gputils::Array<unsigned int> integer_constants;
+    gputils::Array<uint> integer_constants;
     
     // Protected constructor (called by GpuDedispersionKernel::make())
     GpuDedispersionKernel(const Params &params, kernel_t kernel,

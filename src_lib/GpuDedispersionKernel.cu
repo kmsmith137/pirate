@@ -15,11 +15,13 @@ namespace pirate {
 #endif
 
 // FIXME important but deprioritized: dedispersion kernels should use "wide" global memory loads/stores
-
-// FIXME factors of 0.5, to make everything more overflow-resistant! Should be in reference kernels too?
 //
+// FIXME factors of 0.5, to make everything more overflow-resistant! Should be in reference kernels too?
 // Note that when we put in these factors of 0.5, we'll want to change values of (epsabs, epsrel) in
 // src_bin/test-gpu-dedispersion-kernels.cu (see comment in that source file).
+//
+// FIXME(?): I'm slightly overallocating persistent state ("rstate") in the RlagInput case, since I'm
+// saving entire cache lines, rather than residual cache lines.
 
 
 // The following line evaluates to 'true' if T==float32, and 'false' if T==__half2.
@@ -140,6 +142,7 @@ __device__ void dd_step(float &x0, float &x1, float &rs)
 }
 
 
+// apply_rlag(), float version (see below for __half2 version)
 __device__ float apply_rlag(float x, float &xprev, int rlag)
 {
     rlag = rlag & 0x1f;   // (rlag % 32)
@@ -261,6 +264,7 @@ __device__ __half2 lag_half2(__half2 x, __half2 &rs)
 }
 
 
+// apply_rlag(), __half2 version (see above for float version)
 __device__ __half2 apply_rlag(__half2 x, __half2 &xprev, int rlag)
 {
     rlag = rlag & 0x3f;  // (rlag % 64)
@@ -522,8 +526,9 @@ __device__ void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 //
 //   dedisperse_rRANK(__half2 *iobuf, __half2 *rstate,
 //                    long beam_stride, long ambient_stride,
-//                    int row_stride, int ntime,
-//                    unsigned int *integer_constants);
+//                    int row_stride, int nt_cl,
+//                    uint *integer_constants,
+//                    uint flags);
 //
 // The 'iobuf' and 'rstate' arrays have logical shapes:
 //
@@ -536,22 +541,26 @@ __device__ void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 // Kernel grid dimensions are (x,y,z) = (ambient_ix, beam_ix, 1),
 // and thread block dimensions are (x,y,z) = (32 * warps_per_threadblock, 1, 1).
 //
+// The 'flags' argument is a placeholder for future expansion.
+// Currently, only one flag is defined:
+//
+//   df_downsampled;   // ambient tree is downsampled (only matters if RLagInput == true)
+//
 // The kernels are not externally visible, but get called via GpuDedispersionKernel::make() below.
 // FIXME replace 'integer_constants' argument with constant memory.
 
 
-template<typename T, int RLag>
-__global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
-{
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;
-    constexpr int gmem_ncl = (RLag == RLagInput) ? 2 : 1;
+// Flags (more to come)
+static constexpr int df_downsampled = 0x1;
 
-    static_assert(sizeof(T) == 4);
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
-    
+
+template<typename T, bool RLagInput>
+__global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+{
+    static_assert(sizeof(T) == 4);    
     // assert(blockDim.x == 32);
-    
+
+    constexpr int gmem_ncl = RLagInput ? 2 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
@@ -572,9 +581,10 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
     int dm;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + 32];
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
+	dm += (flags & df_downsampled) ? gridDim.x : 0;
     }
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
@@ -583,7 +593,7 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x0 = iobuf[0];
 	T x1 = iobuf[s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
@@ -602,24 +612,19 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
 
     rstate[threadIdx.x] = rs;
     
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + 32] = xp0;
     }
 }
 
 
-template<typename T, int RLag>
-__global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
+template<typename T, bool RLagInput>
+__global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
 {
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;
-    constexpr int gmem_ncl = (RLag == RLagInput) ? 4 : 1;
-
     static_assert(sizeof(T) == 4);
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
-
     // assert(blockDim.x == 32);
     
+    constexpr int gmem_ncl = RLagInput ? 4 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
@@ -640,11 +645,12 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
     int dm;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + 32];
 	xp1 = rstate[threadIdx.x + 64];
 	xp2 = rstate[threadIdx.x + 96];
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
+	dm += (flags & df_downsampled) ? gridDim.x : 0;
     }
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
@@ -655,7 +661,7 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x2 = iobuf[2*s];
 	T x3 = iobuf[3*s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
@@ -679,7 +685,7 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 
     rstate[threadIdx.x] = rs;
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + 32] = xp0;
 	rstate[threadIdx.x + 64] = xp1;
 	rstate[threadIdx.x + 96] = xp2;
@@ -687,18 +693,13 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 }
 
 
-template<typename T, int RLag>
-__global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
+template<typename T, bool RLagInput>
+__global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
 {
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;
-    constexpr int gmem_ncl = (RLag == RLagInput) ? 8 : 1;
-
     static_assert(sizeof(T) == 4);
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
-
     // assert(blockDim.x == 32);
 
+    constexpr int gmem_ncl = RLagInput ? 8 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
@@ -719,7 +720,7 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
     int dm;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + 32];
 	xp1 = rstate[threadIdx.x + 2*32];
 	xp2 = rstate[threadIdx.x + 3*32];
@@ -728,6 +729,7 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 	xp5 = rstate[threadIdx.x + 6*32];
 	xp6 = rstate[threadIdx.x + 7*32];
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
+	dm += (flags & df_downsampled) ? gridDim.x : 0;
     }
     
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
@@ -742,7 +744,7 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x6 = iobuf[6*s];
 	T x7 = iobuf[7*s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
@@ -774,7 +776,7 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 
     rstate[threadIdx.x] = rs;
     
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + 32] = xp0;
 	rstate[threadIdx.x + 2*32] = xp1;
 	rstate[threadIdx.x + 3*32] = xp2;
@@ -786,21 +788,16 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 }
 
 
-template<typename T, int RLag>
-__global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
+template<typename T, bool RLagInput>
+__global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
 {
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;    
-    constexpr bool is_float32 = _is_float32<T>::value;
-    
     static_assert(sizeof(T) == 4);  // float or __half2
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
-    
-    constexpr int nrs_per_thread = is_float32 ? 3 : 2;
-    constexpr int nrp_per_thread = (RLag == RLagInput) ? 15 : 0;
-    constexpr int gmem_ncl = nrs_per_thread + nrp_per_thread;
-    
     // assert(blockDim.x == 32);
+    
+    constexpr bool is_float32 = _is_float32<T>::value;    
+    constexpr int nrs_per_thread = is_float32 ? 3 : 2;
+    constexpr int nrp_per_thread = RLagInput ? 15 : 0;
+    constexpr int gmem_ncl = nrs_per_thread + nrp_per_thread;
     
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
@@ -826,7 +823,7 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7, xp8, xp9, xp10, xp11, xp12, xp13, xp14;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + 32 * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + 32 * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + 32 * (nrs_per_thread+2)];
@@ -864,15 +861,16 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x14 = iobuf[14*s];
 	T x15 = iobuf[15*s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
 	    //   int N = is_float32 ? 32 : 64;
 	    //   int rlag = (ff * d) % N
 
-	    const int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-
+	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
+	    dm += (flags & df_downsampled) ? gridDim.x : 0;
+	    
 	    x0 = apply_rlag(x0, xp0, 15*dm);
 	    x1 = apply_rlag(x1, xp1, 14*dm);
 	    x2 = apply_rlag(x2, xp2, 13*dm);
@@ -920,7 +918,7 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     if constexpr (is_float32)
 	rstate[threadIdx.x + 64] = rs3;
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + 32 * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + 32 * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + 32 * (nrs_per_thread+2)] = xp2;
@@ -1058,10 +1056,10 @@ static __host__ int get_shmem_nbytes(int rank, bool is_float32)
 // If on_gpu=false, array is returned on host
 // If on_gpu=true, array is returned on GPU.
 
-static __host__ Array<unsigned int> make_integer_constants(int rank, bool is_float32, bool on_gpu)
+static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bool on_gpu)
 {
     if (rank <= 4)
-	return Array<unsigned int> ();
+	return Array<uint> ();
 
     assert(rank <= 8);
     int rank0 = rank >> 1;  // round down
@@ -1072,17 +1070,17 @@ static __host__ Array<unsigned int> make_integer_constants(int rank, bool is_flo
     
     // Total size of integer_constants array (control_words + gmem_specs)
     int ret_nelts = align_up(pow2(rank) + 2*gs_ncl, 32);
-    Array<unsigned int> ret({ret_nelts}, af_rhost | af_zero);
+    Array<uint> ret({ret_nelts}, af_rhost | af_zero);
 
     // Tracks current shared memory footprint.
-    unsigned int shmem_nreg = 0;
+    uint shmem_nreg = 0;
 
     // Tracks current gmem spec.
-    unsigned int gs_icl = 0;    // global memory cache line index
-    unsigned int gs_ireg = 0;   // global memory register within cache line (in 0,1,...,31).
-    unsigned int gs_spos = 0;   // shared memory position (in 32-bit registers)
-    unsigned int gs_sbase = 0;  // shared memory "base" position (i.e. value at ireg=0).
-    unsigned int gs_gbits = 0;  // gap bits (initialized at ...)
+    uint gs_icl = 0;    // global memory cache line index
+    uint gs_ireg = 0;   // global memory register within cache line (in 0,1,...,31).
+    uint gs_spos = 0;   // shared memory position (in 32-bit registers)
+    uint gs_sbase = 0;  // shared memory "base" position (i.e. value at ireg=0).
+    uint gs_gbits = 0;  // gap bits (initialized at ...)
 
     // We order the ring buffers so that all the zero-lag buffers are first, followed
     // by the nonzero-lag buffers. We implement this by running the loop twice.
@@ -1125,7 +1123,7 @@ static __host__ Array<unsigned int> make_integer_constants(int rank, bool is_flo
 			gs_gbits = 0;
 		    }
 
-		    unsigned int spos = shmem_nreg + l;
+		    uint spos = shmem_nreg + l;
 		    
 		    if (gs_ireg == 0)
 			gs_sbase = gs_spos = spos;
@@ -1183,7 +1181,7 @@ static __host__ Array<unsigned int> make_integer_constants(int rank, bool is_flo
 //  i,j values changes.)
 
 template<int Rank>
-__device__ unsigned int read_control_words(const unsigned int *integer_constants)
+__device__ uint read_control_words(const uint *integer_constants)
 {
     static_assert((Rank >= 5) && (Rank <= 8));
     
@@ -1193,7 +1191,7 @@ __device__ unsigned int read_control_words(const unsigned int *integer_constants
     constexpr int N1 = 1 << Rank1;
     constexpr int N = 1 << Rank;
    
-    extern __shared__ unsigned int shmem_i[];
+    extern __shared__ uint shmem_i[];
     
     // (Global memory) -> (Shared memory).
     // Note: two-to-one shared memory bank conflict here!
@@ -1245,8 +1243,8 @@ __device__ unsigned int read_control_words(const unsigned int *integer_constants
     // To get "reader offset", set pos=0 by applying mask 0xff007fff.
 
     int s = (N0+1)*i + j;   // Note shared memory layout
-    unsigned int mask = (l < 16) ? 0xffffffff : 0xff007fff;
-    unsigned int control_word = shmem_i[s] & mask;
+    uint mask = (l < 16) ? 0xffffffff : 0xff007fff;
+    uint control_word = shmem_i[s] & mask;
 
     return control_word;
 }
@@ -1272,7 +1270,7 @@ __device__ unsigned int read_control_words(const unsigned int *integer_constants
 
 
 template<typename T, int Rank, bool GmemToShmem>
-__device__ void gmem_shmem_exchange(T *gmem, const unsigned int *integer_constants)
+__device__ void gmem_shmem_exchange(T *gmem, const uint *integer_constants)
 {
     T *shmem = _shmem_base<T>();
     constexpr int gs_ncl = _gs_ncl<T,Rank>::value;
@@ -1280,14 +1278,14 @@ __device__ void gmem_shmem_exchange(T *gmem, const unsigned int *integer_constan
     const int warpId = threadIdx.x >> 5;
     const int nwarps = blockDim.x >> 5;
     const int laneId = threadIdx.x & 0x1f;
-    const unsigned int lane_mask = (1U << (laneId+1)) - 1;
+    const uint lane_mask = (1U << (laneId+1)) - 1;
     
     // FIXME each warp processes cache lines in "batches" of 16, which leads
     // to suboptimal load-balancing. I think this will naturally fix itself
     // if I switch to using constant memory.
     
     for (int icl0 = 16*warpId; icl0 < gs_ncl; icl0 += 16*nwarps) {
-	unsigned int gmem_spec = integer_constants[(1 << Rank) + 2*icl0 + laneId];
+	uint gmem_spec = integer_constants[(1 << Rank) + 2*icl0 + laneId];
 	int ninner = min(16, gs_ncl - icl0);
 	
 	for (int i = 0; i < ninner; i++) {
@@ -1295,9 +1293,9 @@ __device__ void gmem_shmem_exchange(T *gmem, const unsigned int *integer_constan
 	    int g = 32*(icl0+i) + laneId;
 
 	    // Shared memory index
-	    unsigned int shmem_base = __shfl_sync(0xffffffff, gmem_spec, 2*i);
-	    unsigned int gap_bits = __shfl_sync(0xffffffff, gmem_spec, 2*i+1);
-	    unsigned int s = shmem_base + (__popc(gap_bits & lane_mask) << 5) + laneId;
+	    uint shmem_base = __shfl_sync(0xffffffff, gmem_spec, 2*i);
+	    uint gap_bits = __shfl_sync(0xffffffff, gmem_spec, 2*i+1);
+	    uint s = shmem_base + (__popc(gap_bits & lane_mask) << 5) + laneId;
 
 	    if constexpr (GmemToShmem)
 		shmem[s] = gmem[g];
@@ -1322,12 +1320,12 @@ __device__ int rb_advance(int rb_pos, int rb_size, int step)
 // rb_size <= 288), so that eight 32-bit registers suffice to hold the contents of
 // the ring buffer. This condition is checked in make_integer_constants() above.
 
-__device__ void align_ring_buffer(unsigned int control_word, int control_lane)
+__device__ void align_ring_buffer(uint control_word, int control_lane)
 {
     const int laneId = (threadIdx.x & 0x1f);
 
     // Unpack control_word into (rb_base, rb_pos, rb_size).
-    unsigned int w = __shfl_sync(0xffffffff, control_word, control_lane);
+    uint w = __shfl_sync(0xffffffff, control_word, control_lane);
     int rb_base = (w & 0x7fff);
     int rb_pos = ((w >> 15) & 0x1ff);
     int rb_size = (w >> 24) + 32;  // Note (+32) here (rb_lag -> rb_size)
@@ -1340,8 +1338,8 @@ __device__ void align_ring_buffer(unsigned int control_word, int control_lane)
     // We use 32-bit uints to hold data from the ring buffer. (The actual data is either
     // float or __half2, but it's opaque to align_ring_buffer().)
 
-    extern __shared__ unsigned int shmem_i[];
-    unsigned int x0, x1, x2, x3, x4, x5, x6, x7;
+    extern __shared__ uint shmem_i[];
+    uint x0, x1, x2, x3, x4, x5, x6, x7;
 
     // Read ring buffer.
     // The do-while loop here is ugly, but I thought a goto-statement was even uglier :)
@@ -1437,7 +1435,7 @@ __device__ void align_ring_buffer(unsigned int control_word, int control_lane)
 // before copying ring buffers to shared memory with gmem_shmem_exchange<false> ();
 
 template<int Rank>
-__device__ void align_all_ring_buffers(unsigned int control_word)
+__device__ void align_all_ring_buffers(uint control_word)
 {
     constexpr int Rank1 = Rank - (Rank >> 1);
     constexpr int N1 = (1 << Rank1);
@@ -1467,21 +1465,21 @@ __device__ void align_all_ring_buffers(unsigned int control_word)
 //   uint8  rb_size;   // ring buffer size (in 32-bit __half2s), always equal to (lag+32)
 
 
-__device__ int rbloc(unsigned int control_word, int control_lane)
+__device__ int rbloc(uint control_word, int control_lane)
 {    
     const int laneId = (threadIdx.x & 0x1f);
     
-    unsigned int w = __shfl_sync(0xffffffff, control_word, control_lane);
-    unsigned int rb_base = (w & 0x7fff);
-    unsigned int rb_pos = ((w >> 15) & 0x1ff) + laneId;   // Note laneId here
-    unsigned int rb_size = (w >> 24) + 32;                // Note (+32) here (rb_lag -> rb_size)
-    unsigned int downshift = (rb_pos >= rb_size) ? rb_size : 0;
+    uint w = __shfl_sync(0xffffffff, control_word, control_lane);
+    uint rb_base = (w & 0x7fff);
+    uint rb_pos = ((w >> 15) & 0x1ff) + laneId;   // Note laneId here
+    uint rb_size = (w >> 24) + 32;                // Note (+32) here (rb_lag -> rb_size)
+    uint downshift = (rb_pos >= rb_size) ? rb_size : 0;
 
     return rb_base + rb_pos - downshift;
 }
 
 
-__device__ unsigned int advance_control_word(unsigned int control_word)
+__device__ uint advance_control_word(uint control_word)
 {
     int pos15 = (control_word & 0xff8000);
     int lag15 = ((control_word >> 9) & 0xff8000);
@@ -1491,11 +1489,11 @@ __device__ unsigned int advance_control_word(unsigned int control_word)
 }
 
 
-__device__ void print_control_word(unsigned int cw)
+__device__ void print_control_word(uint cw)
 {
-    unsigned int rb_base = (cw & 0x7fff);
-    unsigned int rb_pos = ((cw >> 15) & 0x1ff);
-    unsigned int rb_lag = (cw >> 24);
+    uint rb_base = (cw & 0x7fff);
+    uint rb_pos = ((cw >> 15) & 0x1ff);
+    uint rb_lag = (cw >> 24);
 
     printf("rb_base=%d rb_pos=%d, rb_lag=%d\n", rb_base, rb_pos, rb_lag);
 }
@@ -1556,25 +1554,21 @@ __device__ void align1_s8(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 // -------------------------------------------------------------------------------------------------
 
 
-template<typename T, int RLag>
+template<typename T, bool RLagInput>
 __global__ void __launch_bounds__(128, 8)
-dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
+    dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
 {
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;
-    constexpr bool is_float32 = _is_float32<T>::value;
-
     static_assert(sizeof(T) == 4);  // float or __half2
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
-
+    
     // 4 warps, 8 data registers/warp.
     constexpr int nwarps = 4;  // 2^rank0
     constexpr int nrdata = 8;  // 2^rank1
     constexpr int nthreads = 32 * nwarps;
     
+    constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,5>::value;
     constexpr int nrs_per_thread = 1;
-    constexpr int nrp_per_thread = (RLag == RLagInput) ? nrdata : 0;
+    constexpr int nrp_per_thread = RLagInput ? nrdata : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + nwarps * nr_per_thread;
 
@@ -1591,7 +1585,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     rstate += ambient_ix * (32 * gmem_ncl);
     
     // read_control_words() uses shared memory, so must precede gmem_shmem_exchange<true>().
-    unsigned int cw = read_control_words<5> (integer_constants);
+    uint cw = read_control_words<5> (integer_constants);
 
     // Need __syncthreads() between read_control_words() and gmem_shmem_exchange().
     __syncthreads();
@@ -1604,7 +1598,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + nthreads * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + nthreads * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + nthreads * (nrs_per_thread+2)];
@@ -1636,7 +1630,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x6 = iobuf[s0 + 6*s];
 	T x7 = iobuf[s0 + 7*s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -1644,8 +1638,9 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	    //   int N = is_float32 ? 32 : 64;
 	    //   int rlag = (ff * d) % N
 
-	    const int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    const int ff0 = 31 - ((threadIdx.x & ~0x1f) >> 2);             // 31 - (8 * warpId)
+	    int ff0 = 31 - ((threadIdx.x & ~0x1f) >> 2);             // 31 - (8 * warpId)
+	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
+	    dm += (flags & df_downsampled) ? gridDim.x : 0;
 
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
@@ -1745,7 +1740,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     // Save register state to global memory.
     rstate[threadIdx.x] = rs;
     
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + nthreads * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+2)] = xp2;
@@ -1761,22 +1756,17 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 }
 
 
-template<typename T, int RLag>
+template<typename T, bool RLagInput>
 __global__ void __launch_bounds__(256, 4)
-dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
+dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
 {
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;
-    constexpr bool is_float32 = _is_float32<T>::value;
-
     static_assert(sizeof(T) == 4);  // float or __half2
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
-    
     // assert(blockDim.x == 256);
 
+    constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,6>::value;
     constexpr int nrs_per_thread = is_float32 ? 2 : 1;
-    constexpr int nrp_per_thread = (RLag == RLagInput) ? 8 : 0;
+    constexpr int nrp_per_thread = RLagInput ? 8 : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + 8 * nr_per_thread;
 
@@ -1793,7 +1783,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     rstate += ambient_ix * (32 * gmem_ncl);
     
     // read_control_words() uses shared memory, so must precede gmem_shmem_exchange<true>().
-    unsigned int cw = read_control_words<6> (integer_constants);
+    uint cw = read_control_words<6> (integer_constants);
 
     // Need __syncthreads() between read_control_words() and gmem_shmem_exchange().
     __syncthreads();
@@ -1810,7 +1800,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + 256 * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + 256 * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + 256 * (nrs_per_thread+2)];
@@ -1842,7 +1832,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x6 = iobuf[s0 + 6*s];
 	T x7 = iobuf[s0 + 7*s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -1850,9 +1840,10 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	    //   int N = is_float32 ? 32 : 64;
 	    //   int rlag = (ff * d) % N
 
-	    const int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    const int ff0 = 63 - ((threadIdx.x & ~0x1f) >> 2);             // 63 - (8 * warpId)
-
+	    int ff0 = 63 - ((threadIdx.x & ~0x1f) >> 2);             // 63 - (8 * warpId)
+	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
+	    dm += (flags & df_downsampled) ? gridDim.x : 0;
+	    
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
 	    x2 = apply_rlag(x2, xp2, dm * (ff0-2));
@@ -1955,7 +1946,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     if constexpr (is_float32)
 	rstate[threadIdx.x + 256] = rs2;
     
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + 256 * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + 256 * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + 256 * (nrs_per_thread+2)] = xp2;
@@ -1971,25 +1962,21 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 }
 
 
-template<typename T, int RLag>
+template<typename T, bool RLagInput>
 __global__ void __launch_bounds__(256, 3)
-dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
+dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
 {
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;
-    constexpr bool is_float32 = _is_float32<T>::value;
-
     static_assert(sizeof(T) == 4);  // float or __half2
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
 
     // 8 warps, 16 data registers/warp
     constexpr int nwarps = 8;   // 2^rank0
     constexpr int nrdata = 16;  // 2^rank1
     constexpr int nthreads = 32 * nwarps;
     
+    constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,7>::value;
     constexpr int nrs_per_thread = is_float32 ? 4 : 3;
-    constexpr int nrp_per_thread = (RLag == RLagInput) ? nrdata : 0;
+    constexpr int nrp_per_thread = RLagInput ? nrdata : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + nwarps * nr_per_thread;
 
@@ -2006,7 +1993,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     rstate += ambient_ix * (32 * gmem_ncl);
     
     // read_control_words() uses shared memory, so must precede gmem_shmem_exchange<true>().
-    unsigned int cw = read_control_words<7> (integer_constants);
+    uint cw = read_control_words<7> (integer_constants);
 
     // Need __syncthreads() between read_control_words() and gmem_shmem_exchange().
     __syncthreads();
@@ -2028,7 +2015,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7, xp8, xp9, xp10, xp11, xp12, xp13, xp14, xp15;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + nthreads * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + nthreads * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + nthreads * (nrs_per_thread+2)];
@@ -2076,7 +2063,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x14 = iobuf[s0 + 14*s];
 	T x15 = iobuf[s0 + 15*s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -2084,8 +2071,9 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	    //   int N = is_float32 ? 32 : 64;
 	    //   int rlag = (ff * d) % N
 
-	    const int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    const int ff0 = 127 - ((threadIdx.x & ~0x1f) >> 1);            // 127 - (16 * warpId)
+	    int ff0 = 127 - ((threadIdx.x & ~0x1f) >> 1);            // 127 - (16 * warpId)
+	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
+	    dm += (flags & df_downsampled) ? gridDim.x : 0;
 
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
@@ -2231,7 +2219,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     if constexpr (is_float32)
 	rstate[threadIdx.x + 3*nthreads] = rs4;
     
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + nthreads * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+2)] = xp2;
@@ -2255,22 +2243,17 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 }
 
 
-template<typename T, int RLag>
+template<typename T, bool RLagInput>
 __global__ void __launch_bounds__(512, 1)
-dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, unsigned int *integer_constants)
+dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
 {
-    constexpr int RLagNone = GpuDedispersionKernel<T>::RLagNone;
-    constexpr int RLagInput = GpuDedispersionKernel<T>::RLagInput;
-    constexpr bool is_float32 = _is_float32<T>::value;
-
     static_assert(sizeof(T) == 4);  // float or __half2
-    static_assert((RLag == RLagNone) || (RLag == RLagInput));
-    
     // assert(blockDim.x == 512);
 
+    constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,8>::value;
     constexpr int nrs_per_thread = is_float32 ? 5 : 4;
-    constexpr int nrp_per_thread = (RLag == RLagInput) ? 16 : 0;
+    constexpr int nrp_per_thread = RLagInput ? 16 : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + 16 * nr_per_thread;
 
@@ -2287,7 +2270,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     rstate += ambient_ix * (32 * gmem_ncl);
     
     // read_control_words() uses shared memory, so must precede gmem_shmem_exchange<true>().
-    unsigned int cw = read_control_words<8> (integer_constants);
+    uint cw = read_control_words<8> (integer_constants);
 
     // Need __syncthreads() between read_control_words() and gmem_shmem_exchange().
     __syncthreads();
@@ -2310,7 +2293,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7, xp8, xp9, xp10, xp11, xp12, xp13, xp14, xp15;
 #pragma nv_diag_default 177
 
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + 512 * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + 512 * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + 512 * (nrs_per_thread+2)];
@@ -2358,7 +2341,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x14 = iobuf[s0 + 14*s];
 	T x15 = iobuf[s0 + 15*s];
 
-	if constexpr (RLag == RLagInput) {
+	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -2366,8 +2349,9 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	    //   int N = is_float32 ? 32 : 64;
 	    //   int rlag = (ff * d) % N
 
-	    const int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    const int ff0 = 255 - ((threadIdx.x & ~0x1f) >> 1);            // 255 - (16 * warpId)
+	    int ff0 = 255 - ((threadIdx.x & ~0x1f) >> 1);            // 255 - (16 * warpId)
+	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
+	    dm += (flags & df_downsampled) ? gridDim.x : 0;
 
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
@@ -2504,7 +2488,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     if constexpr (is_float32)
 	rstate[threadIdx.x + 4*512] = rs5;
     
-    if constexpr (RLag == RLagInput) {
+    if constexpr (RLagInput) {
 	rstate[threadIdx.x + 512 * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + 512 * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + 512 * (nrs_per_thread+2)] = xp2;
@@ -2580,6 +2564,7 @@ void GpuDedispersionKernel<T>::launch(T *iobuf, T *rstate,
     T32 *iobuf2 = reinterpret_cast<T32 *> (iobuf);
     T32 *rstate2 = reinterpret_cast<T32 *> (rstate);
     long nt_cl = ntime / elts_per_cache_line;
+    bool flags = params.is_downsampled_tree ? df_downsampled : 0;
 
     // Convert (T strides) to (T32 strides).
     int s = integer_log2(4 / sizeof(T));
@@ -2594,7 +2579,7 @@ void GpuDedispersionKernel<T>::launch(T *iobuf, T *rstate,
 
     this->kernel
 	<<< grid_dims, 32 * params.warps_per_threadblock, params.shmem_nbytes, stream >>>
-        (iobuf2, rstate2, beam_stride2, ambient_stride2, row_stride2, nt_cl, this->integer_constants.data);
+        (iobuf2, rstate2, beam_stride2, ambient_stride2, row_stride2, nt_cl, this->integer_constants.data, flags);
     
     CUDA_PEEK("dedispersion kernel");
 }
@@ -2644,13 +2629,12 @@ void GpuDedispersionKernel<T>::launch(Array<T> &iobuf, Array<T> &rstate, cudaStr
 
 template<typename T>
 GpuDedispersionKernel<T>::GpuDedispersionKernel(const Params &params_, kernel_t kernel_,
-						const Array<unsigned int> &integer_constants_) :
+						const Array<uint> &integer_constants_) :
     params(params_), kernel(kernel_), integer_constants(integer_constants_)
 {
     assert(params.rank > 0);
     assert(params.warps_per_threadblock > 0);
     assert(params.state_nelts_per_small_tree > 0);
-    assert(params.rlag_type != RLagInvalid);
     assert(kernel != nullptr);
 
     if (params.shmem_nbytes > 48*1024) {
@@ -2667,61 +2651,60 @@ GpuDedispersionKernel<T>::GpuDedispersionKernel(const Params &params_, kernel_t 
 
 // Static member function.
 template<typename T>
-shared_ptr<GpuDedispersionKernel<T>> GpuDedispersionKernel<T>::make(int rank, RLagType rlag_type)
+shared_ptr<GpuDedispersionKernel<T>> GpuDedispersionKernel<T>::make(int rank, bool apply_input_residual_lags, bool is_downsampled_tree)
 {
     constexpr int is_float32 = _is_float32<T>::value;
     
     Params params;
     params.rank = rank;
-    params.rlag_type = rlag_type;
+    params.apply_input_residual_lags = apply_input_residual_lags;
+    params.is_downsampled_tree = is_downsampled_tree;
 
     int nrs_per_thread = 0;
     kernel_t kernel = nullptr;
 
-    assert((rlag_type == RLagNone) || (rlag_type == RLagInput));
-    
     // Remaining code should initialize:
     //   kernel
     //   params.warps_per_threadblock
     //   nrs_per_thread
     
     if (rank == 1) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r1<T32,RLagInput> : dedisperse_r1<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r1<T32,true> : dedisperse_r1<T32,false>;
 	params.warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
     else if (rank == 2) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r2<T32,RLagInput> : dedisperse_r2<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r2<T32,true> : dedisperse_r2<T32,false>;
 	params.warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
     else if (rank == 3) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r3<T32,RLagInput> : dedisperse_r3<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r3<T32,true> : dedisperse_r3<T32,false>;
 	params.warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
     else if (rank == 4) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r4<T32,RLagInput> : dedisperse_r4<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r4<T32,true> : dedisperse_r4<T32,false>;
 	params.warps_per_threadblock = 1;
 	nrs_per_thread = is_float32 ? 3 : 2;
     }
     else if (rank == 5) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r5<T32,RLagInput> : dedisperse_r5<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r5<T32,true> : dedisperse_r5<T32,false>;
 	params.warps_per_threadblock = 4;
 	nrs_per_thread = 1;
     }
     else if (rank == 6) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r6<T32,RLagInput> : dedisperse_r6<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r6<T32,true> : dedisperse_r6<T32,false>;
 	params.warps_per_threadblock = 8;
 	nrs_per_thread = is_float32 ? 2 : 1;
     }
     else if (rank == 7) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r7<T32,RLagInput> : dedisperse_r7<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r7<T32,true> : dedisperse_r7<T32,false>;
 	params.warps_per_threadblock = 8;
 	nrs_per_thread = is_float32 ? 4 : 3;
     }
     else if (rank == 8) {
-	kernel = (rlag_type == RLagInput) ? dedisperse_r8<T32,RLagInput> : dedisperse_r8<T32,RLagNone>;
+	kernel = apply_input_residual_lags ? dedisperse_r8<T32,true> : dedisperse_r8<T32,false>;
 	params.warps_per_threadblock = 16;
 	nrs_per_thread = is_float32 ? 5 : 4;
     }
@@ -2736,7 +2719,7 @@ shared_ptr<GpuDedispersionKernel<T>> GpuDedispersionKernel<T>::make(int rank, RL
     assert(params.warps_per_threadblock > 0);
 
     int swflag = (params.warps_per_threadblock == 1);
-    int rp_ncl = (rlag_type == RLagInput) ? (pow2(rank) - swflag) : 0;
+    int rp_ncl = apply_input_residual_lags ? (pow2(rank) - swflag) : 0;
     int rs_ncl = params.warps_per_threadblock * nrs_per_thread;
     int gs_ncl = get_gs_ncl(rank, is_float32);
 
@@ -2745,7 +2728,7 @@ shared_ptr<GpuDedispersionKernel<T>> GpuDedispersionKernel<T>::make(int rank, RL
     if (gs_ncl > 0)
 	params.shmem_nbytes = 128 * (gs_ncl + pow2(rank));
 
-    Array<unsigned int> integer_constants = make_integer_constants(rank, is_float32, true);   // on_gpu=true
+    Array<uint> integer_constants = make_integer_constants(rank, is_float32, true);   // on_gpu=true
 	
     auto kp = new GpuDedispersionKernel(params, kernel, integer_constants);
     return shared_ptr<GpuDedispersionKernel> (kp);
@@ -2757,7 +2740,8 @@ void GpuDedispersionKernel<T>::print(ostream &os, int indent) const
 {
     os << Indent(indent) << "GpuDedispersionKernel<" << gputils::type_name<T>() << ">\n"
        << Indent(indent+4) << "rank = " << params.rank << "\n"
-       << Indent(indent+4) << "rlag_type = " << rlag_str(params.rlag_type) << "\n"
+       << Indent(indent+4) << "apply_input_residual_lags = " << (params.apply_input_residual_lags ? "true" : "false") << "\n"
+       << Indent(indent+4) << "is_downsampled_tree = " << (params.is_downsampled_tree ? "true" : "false") << "\n"
        << Indent(indent+4) << "state_nelts_per_small_tree = " << params.state_nelts_per_small_tree << "\n"
        << Indent(indent+4) << "warps_per_threadblock = " << params.warps_per_threadblock << "\n"
        << Indent(indent+4) << "shmem_nbytes = " << params.shmem_nbytes
@@ -2765,26 +2749,13 @@ void GpuDedispersionKernel<T>::print(ostream &os, int indent) const
 }
 
 
-// Static member function
-template<typename T>
-string GpuDedispersionKernel<T>::rlag_str(RLagType rlag_type)
-{
-    if (rlag_type == RLagNone)
-	return "RLagNone";
-    else if (rlag_type == RLagInput)
-	return "RLagInput";
-    else
-	return "RLagInvalid";
-}
-
 
 #define INSTANTIATE(T) \
     template void GpuDedispersionKernel<T>::launch(T*, T*, long, long, long, long, long, long, cudaStream_t) const; \
     template void GpuDedispersionKernel<T>::launch(Array<T> &, Array<T> &, cudaStream_t) const; \
-    template GpuDedispersionKernel<T>::GpuDedispersionKernel(const Params &, kernel_t, const Array<unsigned int> &); \
-    template shared_ptr<GpuDedispersionKernel<T>> GpuDedispersionKernel<T>::make(int, RLagType); \
-    template void GpuDedispersionKernel<T>::print(ostream &os, int indent) const; \
-    template string GpuDedispersionKernel<T>::rlag_str(RLagType)
+    template GpuDedispersionKernel<T>::GpuDedispersionKernel(const Params &, kernel_t, const Array<uint> &); \
+    template shared_ptr<GpuDedispersionKernel<T>> GpuDedispersionKernel<T>::make(int, bool, bool); \
+    template void GpuDedispersionKernel<T>::print(ostream &os, int indent) const
 
 INSTANTIATE(__half);
 INSTANTIATE(float);
