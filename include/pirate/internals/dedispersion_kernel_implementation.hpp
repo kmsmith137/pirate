@@ -561,6 +561,8 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
     iobuf += threadIdx.x;  // laneId
+    T *inbuf = iobuf;
+    T *outbuf = iobuf;
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -581,10 +583,9 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
     }
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	const int s = row_stride;
-	
-	T x0 = iobuf[0];
-	T x1 = iobuf[s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
@@ -598,9 +599,9 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
 
 	dd_r1<CycleRev> (x0, x1, rs);
 
-	iobuf[0] = x0;
-	iobuf[s] = x1;
-	iobuf += 32;
+	outbuf[0] = x0;
+	outbuf[row_stride] = x1;
+	outbuf += 32;
     }
 
     rstate[threadIdx.x] = rs;
@@ -625,6 +626,8 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
     iobuf += threadIdx.x;  // laneId
+    T *inbuf = iobuf;
+    T *outbuf = iobuf;
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -647,12 +650,11 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
     }
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	const int s = row_stride;
-
-	T x0 = iobuf[0];
-	T x1 = iobuf[s];
-	T x2 = iobuf[2*s];
-	T x3 = iobuf[3*s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	T x2 = inbuf[2 * row_stride];
+	T x3 = inbuf[3 * row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
@@ -668,12 +670,11 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 
 	dd_r2<CycleRev> (x0, x1, x2, x3, rs);
 
-	iobuf[0] = x0;
-	iobuf[s] = x1;
-	iobuf[2*s] = x2;
-	iobuf[3*s] = x3;
-	
-	iobuf += 32;
+	outbuf[0] = x0;
+	outbuf[row_stride] = x1;
+	outbuf[2 * row_stride] = x2;
+	outbuf[3 * row_stride] = x3;
+	outbuf += 32;
     }
 
     rstate[threadIdx.x] = rs;
@@ -700,6 +701,8 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
     iobuf += threadIdx.x;  // laneId
+    T *inbuf = iobuf;
+    T *outbuf = iobuf;
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -726,16 +729,15 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
     }
     
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	const int s = row_stride;
-
-	T x0 = iobuf[0];
-	T x1 = iobuf[s];
-	T x2 = iobuf[2*s];
-	T x3 = iobuf[3*s];
-	T x4 = iobuf[4*s];
-	T x5 = iobuf[5*s];
-	T x6 = iobuf[6*s];
-	T x7 = iobuf[7*s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	T x2 = inbuf[2 * row_stride];
+	T x3 = inbuf[3 * row_stride];
+	T x4 = inbuf[4 * row_stride];
+	T x5 = inbuf[5 * row_stride];
+	T x6 = inbuf[6 * row_stride];
+	T x7 = inbuf[7 * row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
@@ -755,16 +757,15 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 
 	dd_r3<CycleRev> (x0, x1, x2, x3, x4, x5, x6, x7, rs);
 
-	iobuf[0] = x0;
-	iobuf[s] = x1;
-	iobuf[2*s] = x2;
-	iobuf[3*s] = x3;
-	iobuf[4*s] = x4;
-	iobuf[5*s] = x5;
-	iobuf[6*s] = x6;
-	iobuf[7*s] = x7;
-	
-	iobuf += 32;
+	outbuf[0] = x0;
+	outbuf[row_stride] = x1;
+	outbuf[2 * row_stride] = x2;
+	outbuf[3 * row_stride] = x3;
+	outbuf[4 * row_stride] = x4;
+	outbuf[5 * row_stride] = x5;
+	outbuf[6 * row_stride] = x6;
+	outbuf[7 * row_stride] = x7;
+	outbuf += 32;
     }
 
     rstate[threadIdx.x] = rs;
@@ -799,6 +800,8 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
     iobuf += threadIdx.x;  // laneId
+    T *inbuf = iobuf;
+    T *outbuf = iobuf;
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -835,24 +838,23 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     }    
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	const int s = row_stride;
-
-	T x0 = iobuf[0];
-	T x1 = iobuf[s];
-	T x2 = iobuf[2*s];
-	T x3 = iobuf[3*s];
-	T x4 = iobuf[4*s];
-	T x5 = iobuf[5*s];
-	T x6 = iobuf[6*s];
-	T x7 = iobuf[7*s];
-	T x8 = iobuf[8*s];
-	T x9 = iobuf[9*s];
-	T x10 = iobuf[10*s];
-	T x11 = iobuf[11*s];
-	T x12 = iobuf[12*s];
-	T x13 = iobuf[13*s];
-	T x14 = iobuf[14*s];
-	T x15 = iobuf[15*s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	T x2 = inbuf[2 * row_stride];
+	T x3 = inbuf[3 * row_stride];
+	T x4 = inbuf[4 * row_stride];
+	T x5 = inbuf[5 * row_stride];
+	T x6 = inbuf[6 * row_stride];
+	T x7 = inbuf[7 * row_stride];
+	T x8 = inbuf[8 * row_stride];
+	T x9 = inbuf[9 * row_stride];
+	T x10 = inbuf[10 * row_stride];
+	T x11 = inbuf[11 * row_stride];
+	T x12 = inbuf[12 * row_stride];
+	T x13 = inbuf[13 * row_stride];
+	T x14 = inbuf[14 * row_stride];
+	T x15 = inbuf[15 * row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -885,24 +887,23 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
 			 x8, x9, x10, x11, x12, x13, x14, x15,
 			 rs, rs3, rs2);
 	
-	iobuf[0] = x0;
-	iobuf[s] = x1;
-	iobuf[2*s] = x2;
-	iobuf[3*s] = x3;
-	iobuf[4*s] = x4;
-	iobuf[5*s] = x5;
-	iobuf[6*s] = x6;
-	iobuf[7*s] = x7;
-	iobuf[8*s] = x8;
-	iobuf[9*s] = x9;
-	iobuf[10*s] = x10;
-	iobuf[11*s] = x11;
-	iobuf[12*s] = x12;
-	iobuf[13*s] = x13;
-	iobuf[14*s] = x14;
-	iobuf[15*s] = x15;
-	
-	iobuf += 32;
+	outbuf[0] = x0;
+	outbuf[row_stride] = x1;
+	outbuf[2 * row_stride] = x2;
+	outbuf[3 * row_stride] = x3;
+	outbuf[4 * row_stride] = x4;
+	outbuf[5 * row_stride] = x5;
+	outbuf[6 * row_stride] = x6;
+	outbuf[7 * row_stride] = x7;
+	outbuf[8 * row_stride] = x8;
+	outbuf[9 * row_stride] = x9;
+	outbuf[10 * row_stride] = x10;
+	outbuf[11 * row_stride] = x11;
+	outbuf[12 * row_stride] = x12;
+	outbuf[13 * row_stride] = x13;
+	outbuf[14 * row_stride] = x14;
+	outbuf[15 * row_stride] = x15;
+	outbuf += 32;
     }
 
     rstate[threadIdx.x] = rs;
@@ -1438,7 +1439,9 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
-    iobuf += (threadIdx.x & 0x1f);  // laneId
+    iobuf += (threadIdx.x & 0x1f);  // laneId    
+    T *inbuf = iobuf + (threadIdx.x >> 5) * (nrdata * row_stride);
+    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1478,17 +1481,15 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
 
-	const int s0 = (threadIdx.x >> 5) * (nrdata * row_stride);
-	const int s = row_stride;
-	
-	T x0 = iobuf[s0];
-	T x1 = iobuf[s0 + s];
-	T x2 = iobuf[s0 + 2*s];
-	T x3 = iobuf[s0 + 3*s];
-	T x4 = iobuf[s0 + 4*s];
-	T x5 = iobuf[s0 + 5*s];
-	T x6 = iobuf[s0 + 6*s];
-	T x7 = iobuf[s0 + 7*s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	T x2 = inbuf[2 * row_stride];
+	T x3 = inbuf[3 * row_stride];
+	T x4 = inbuf[4 * row_stride];
+	T x5 = inbuf[5 * row_stride];
+	T x6 = inbuf[6 * row_stride];
+	T x7 = inbuf[7 * row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -1576,20 +1577,17 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
 
-	const int u0 = (threadIdx.x >> 5) * row_stride;
-	const int u = (row_stride << 2);
-
-	iobuf[u0] = x0;
-	iobuf[u0 + u] = x1;
-	iobuf[u0 + 2*u] = x2;
-	iobuf[u0 + 3*u] = x3;
-	iobuf[u0 + 4*u] = x4;
-	iobuf[u0 + 5*u] = x5;
-	iobuf[u0 + 6*u] = x6;
-	iobuf[u0 + 7*u] = x7;
-
+	outbuf[0] = x0;
+	outbuf[(row_stride << 2)] = x1;
+	outbuf[2 * (row_stride << 2)] = x2;
+	outbuf[3 * (row_stride << 2)] = x3;
+	outbuf[4 * (row_stride << 2)] = x4;
+	outbuf[5 * (row_stride << 2)] = x5;
+	outbuf[6 * (row_stride << 2)] = x6;
+	outbuf[7 * (row_stride << 2)] = x7;
+	outbuf += 32;
+	
 	cw = advance_control_word(cw);
-	iobuf += 32;
     }
 
     align_all_ring_buffers<5> (cw);
@@ -1637,7 +1635,9 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
     iobuf += (threadIdx.x & 0x1f);  // laneId
-
+    T *inbuf = iobuf + (threadIdx.x >> 5) * (row_stride << 3);
+    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
+    
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
     rstate += ambient_ix * (32 * gmem_ncl);
@@ -1680,17 +1680,15 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
 
-	const int s0 = (threadIdx.x >> 5) * (row_stride << 3);
-	const int s = row_stride;
-	
-	T x0 = iobuf[s0];
-	T x1 = iobuf[s0 + s];
-	T x2 = iobuf[s0 + 2*s];
-	T x3 = iobuf[s0 + 3*s];
-	T x4 = iobuf[s0 + 4*s];
-	T x5 = iobuf[s0 + 5*s];
-	T x6 = iobuf[s0 + 6*s];
-	T x7 = iobuf[s0 + 7*s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	T x2 = inbuf[2 * row_stride];
+	T x3 = inbuf[3 * row_stride];
+	T x4 = inbuf[4 * row_stride];
+	T x5 = inbuf[5 * row_stride];
+	T x6 = inbuf[6 * row_stride];
+	T x7 = inbuf[7 * row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -1779,20 +1777,17 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
 
-	const int u0 = (threadIdx.x >> 5) * row_stride;
-	const int u = (row_stride << 3);
-
-	iobuf[u0] = x0;
-	iobuf[u0 + u] = x1;
-	iobuf[u0 + 2*u] = x2;
-	iobuf[u0 + 3*u] = x3;
-	iobuf[u0 + 4*u] = x4;
-	iobuf[u0 + 5*u] = x5;
-	iobuf[u0 + 6*u] = x6;
-	iobuf[u0 + 7*u] = x7;
+	outbuf[0] = x0;
+	outbuf[(row_stride << 3)] = x1;
+	outbuf[2 * (row_stride << 3)] = x2;
+	outbuf[3 * (row_stride << 3)] = x3;
+	outbuf[4 * (row_stride << 3)] = x4;
+	outbuf[5 * (row_stride << 3)] = x5;
+	outbuf[6 * (row_stride << 3)] = x6;
+	outbuf[7 * (row_stride << 3)] = x7;
+	outbuf += 32;
 
 	cw = advance_control_word(cw);
-	iobuf += 32;
     }
 
     align_all_ring_buffers<6> (cw);
@@ -1847,7 +1842,9 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
     iobuf += (threadIdx.x & 0x1f);  // laneId
-
+    T *inbuf = iobuf + (threadIdx.x >> 5) * (nrdata * row_stride);
+    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
+    
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
     rstate += ambient_ix * (32 * gmem_ncl);
@@ -1903,25 +1900,23 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
 
-	const int s0 = (threadIdx.x >> 5) * (nrdata * row_stride);
-	const int s = row_stride;
-	
-	T x0 = iobuf[s0];
-	T x1 = iobuf[s0 + s];
-	T x2 = iobuf[s0 + 2*s];
-	T x3 = iobuf[s0 + 3*s];
-	T x4 = iobuf[s0 + 4*s];
-	T x5 = iobuf[s0 + 5*s];
-	T x6 = iobuf[s0 + 6*s];
-	T x7 = iobuf[s0 + 7*s];
-	T x8 = iobuf[s0 + 8*s];
-	T x9 = iobuf[s0 + 9*s];
-	T x10 = iobuf[s0 + 10*s];
-	T x11 = iobuf[s0 + 11*s];
-	T x12 = iobuf[s0 + 12*s];
-	T x13 = iobuf[s0 + 13*s];
-	T x14 = iobuf[s0 + 14*s];
-	T x15 = iobuf[s0 + 15*s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	T x2 = inbuf[2 * row_stride];
+	T x3 = inbuf[3 * row_stride];
+	T x4 = inbuf[4 * row_stride];
+	T x5 = inbuf[5 * row_stride];
+	T x6 = inbuf[6 * row_stride];
+	T x7 = inbuf[7 * row_stride];
+	T x8 = inbuf[8 * row_stride];
+	T x9 = inbuf[9 * row_stride];
+	T x10 = inbuf[10 * row_stride];
+	T x11 = inbuf[11 * row_stride];
+	T x12 = inbuf[12 * row_stride];
+	T x13 = inbuf[13 * row_stride];
+	T x14 = inbuf[14 * row_stride];
+	T x15 = inbuf[15 * row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -2042,28 +2037,25 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
 
-	const int u0 = (threadIdx.x >> 5) * row_stride;
-	const int u = (row_stride << 3);
-
-	iobuf[u0] = x0;
-	iobuf[u0 + u] = x1;
-	iobuf[u0 + 2*u] = x2;
-	iobuf[u0 + 3*u] = x3;
-	iobuf[u0 + 4*u] = x4;
-	iobuf[u0 + 5*u] = x5;
-	iobuf[u0 + 6*u] = x6;
-	iobuf[u0 + 7*u] = x7;
-	iobuf[u0 + 8*u] = x8;
-	iobuf[u0 + 9*u] = x9;
-	iobuf[u0 + 10*u] = x10;
-	iobuf[u0 + 11*u] = x11;
-	iobuf[u0 + 12*u] = x12;
-	iobuf[u0 + 13*u] = x13;
-	iobuf[u0 + 14*u] = x14;
-	iobuf[u0 + 15*u] = x15;
+	outbuf[0] = x0;
+	outbuf[(row_stride << 3)] = x1;
+	outbuf[2*(row_stride << 3)] = x2;
+	outbuf[3*(row_stride << 3)] = x3;
+	outbuf[4*(row_stride << 3)] = x4;
+	outbuf[5*(row_stride << 3)] = x5;
+	outbuf[6*(row_stride << 3)] = x6;
+	outbuf[7*(row_stride << 3)] = x7;
+	outbuf[8*(row_stride << 3)] = x8;
+	outbuf[9*(row_stride << 3)] = x9;
+	outbuf[10*(row_stride << 3)] = x10;
+	outbuf[11*(row_stride << 3)] = x11;
+	outbuf[12*(row_stride << 3)] = x12;
+	outbuf[13*(row_stride << 3)] = x13;
+	outbuf[14*(row_stride << 3)] = x14;
+	outbuf[15*(row_stride << 3)] = x15;
+	outbuf += 32;
 
 	cw = advance_control_word(cw);
-	iobuf += 32;
     }
 
     align_all_ring_buffers<7> (cw);
@@ -2124,6 +2116,8 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     iobuf += beam_ix * beam_stride;
     iobuf += ambient_ix * ambient_stride;
     iobuf += (threadIdx.x & 0x1f);  // laneId
+    T *inbuf = iobuf + (threadIdx.x >> 5) * (row_stride << 4);
+    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -2181,25 +2175,23 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
 
-	const int s0 = (threadIdx.x >> 5) * (row_stride << 4);
-	const int s = row_stride;
-	
-	T x0 = iobuf[s0];
-	T x1 = iobuf[s0 + s];
-	T x2 = iobuf[s0 + 2*s];
-	T x3 = iobuf[s0 + 3*s];
-	T x4 = iobuf[s0 + 4*s];
-	T x5 = iobuf[s0 + 5*s];
-	T x6 = iobuf[s0 + 6*s];
-	T x7 = iobuf[s0 + 7*s];
-	T x8 = iobuf[s0 + 8*s];
-	T x9 = iobuf[s0 + 9*s];
-	T x10 = iobuf[s0 + 10*s];
-	T x11 = iobuf[s0 + 11*s];
-	T x12 = iobuf[s0 + 12*s];
-	T x13 = iobuf[s0 + 13*s];
-	T x14 = iobuf[s0 + 14*s];
-	T x15 = iobuf[s0 + 15*s];
+	T x0 = inbuf[0];
+	T x1 = inbuf[row_stride];
+	T x2 = inbuf[2 * row_stride];
+	T x3 = inbuf[3 * row_stride];
+	T x4 = inbuf[4 * row_stride];
+	T x5 = inbuf[5 * row_stride];
+	T x6 = inbuf[6 * row_stride];
+	T x7 = inbuf[7 * row_stride];
+	T x8 = inbuf[8 * row_stride];
+	T x9 = inbuf[9 * row_stride];
+	T x10 = inbuf[10 * row_stride];
+	T x11 = inbuf[11 * row_stride];
+	T x12 = inbuf[12 * row_stride];
+	T x13 = inbuf[13 * row_stride];
+	T x14 = inbuf[14 * row_stride];
+	T x15 = inbuf[15 * row_stride];
+	inbuf += 32;
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -2310,28 +2302,25 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
 
-	const int u0 = (threadIdx.x >> 5) * row_stride;
-	const int u = (row_stride << 4);
-
-	iobuf[u0] = x0;
-	iobuf[u0 + u] = x1;
-	iobuf[u0 + 2*u] = x2;
-	iobuf[u0 + 3*u] = x3;
-	iobuf[u0 + 4*u] = x4;
-	iobuf[u0 + 5*u] = x5;
-	iobuf[u0 + 6*u] = x6;
-	iobuf[u0 + 7*u] = x7;
-	iobuf[u0 + 8*u] = x8;
-	iobuf[u0 + 9*u] = x9;
-	iobuf[u0 + 10*u] = x10;
-	iobuf[u0 + 11*u] = x11;
-	iobuf[u0 + 12*u] = x12;
-	iobuf[u0 + 13*u] = x13;
-	iobuf[u0 + 14*u] = x14;
-	iobuf[u0 + 15*u] = x15;
+	outbuf[0] = x0;
+	outbuf[(row_stride << 4)] = x1;
+	outbuf[2*(row_stride << 4)] = x2;
+	outbuf[3*(row_stride << 4)] = x3;
+	outbuf[4*(row_stride << 4)] = x4;
+	outbuf[5*(row_stride << 4)] = x5;
+	outbuf[6*(row_stride << 4)] = x6;
+	outbuf[7*(row_stride << 4)] = x7;
+	outbuf[8*(row_stride << 4)] = x8;
+	outbuf[9*(row_stride << 4)] = x9;
+	outbuf[10*(row_stride << 4)] = x10;
+	outbuf[11*(row_stride << 4)] = x11;
+	outbuf[12*(row_stride << 4)] = x12;
+	outbuf[13*(row_stride << 4)] = x13;
+	outbuf[14*(row_stride << 4)] = x14;
+	outbuf[15*(row_stride << 4)] = x15;
+	outbuf += 32;
 
 	cw = advance_control_word(cw);
-	iobuf += 32;
     }
 
     align_all_ring_buffers<8> (cw);
