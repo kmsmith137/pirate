@@ -25,6 +25,7 @@ HFILES = \
   include/pirate/gpu/TransposeKernel.hpp \
   include/pirate/internals/bitvec.hpp \
   include/pirate/internals/cpu_downsample.hpp \
+  include/pirate/internals/dedispersion_kernel_implementation.hpp \
   include/pirate/internals/gpu_downsample.hpp \
   include/pirate/internals/gpu_transpose.hpp \
   include/pirate/internals/file_utils.hpp \
@@ -85,10 +86,14 @@ OFILES = \
   src_lib/ReferenceLaggedDownsampler.o \
   src_lib/ReferenceTree.o \
   src_lib/Socket.o \
-  src_lib/YamlFile.o
+  src_lib/YamlFile.o \
+  src_lib/template_instantiations/dedisp_float32_nolag.o \
+  src_lib/template_instantiations/dedisp_float32_lag.o \
+  src_lib/template_instantiations/dedisp_float16_nolag.o \
+  src_lib/template_instantiations/dedisp_float16_lag.o
 
 # Used in 'make clean' and 'make source_files.txt'
-SRCDIRS = . src_bin src_lib include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
+SRCDIRS = . src_bin src_lib src_lib/template_instantiations include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
 
 all: $(XFILES)
 

@@ -10,6 +10,17 @@ namespace pirate {
 #endif
 
 
+// Defined in dedispersion_kernel_templates.hpp
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+template<typename T, bool RLagInput> extern __global__ void dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags);
+
+
 template<typename T>
 class GpuDedispersionKernel
 {
