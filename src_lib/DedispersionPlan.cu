@@ -26,7 +26,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     this->bytes_per_compressed_segment = config.get_bytes_per_compressed_segment();
     
     this->_init_trees();
-    this->_init_lags();
     this->_init_ring_buffers();
     
     if (config.planner_verbosity >= 1)
@@ -82,44 +81,12 @@ void DedispersionPlan::_init_trees()
 	    st1.segments_per_row = xdiv(st1.nt_ds, nelts_per_segment);
 	    st1.segments_per_beam = pow2(trigger_rank) * st1.segments_per_row;
 	    st1.iobuf_base_segment = this->stage1_iobuf_segments_per_beam;
-	    st1.segment_lags = Array<int> ({pow2(trigger_rank)}, af_rhost);
-	    st1.residual_lags = Array<int> ({pow2(trigger_rank)}, af_rhost);
 
 	    assert((st1.rank1_trigger >= 0) && (st1.rank1_trigger <= 8));
 	    assert(st1.rank1_trigger <= st1.rank1_ambient);
-
-	    // The 'segment_lags' and 'residual_lags' will be initialized later, in DedispersionPlan::_init_lags().
-	    for (int i = 0; i < pow2(trigger_rank); i++) {
-		st1.segment_lags.data[i] = -1;
-		st1.residual_lags.data[i] = -1;
-	    }
 		     
 	    this->stage1_trees.push_back(st1);
 	    this->stage1_iobuf_segments_per_beam += st1.segments_per_beam;
-	}
-    }
-}
-
-
-void DedispersionPlan::_init_lags()
-{
-    if (config.planner_verbosity >= 1)
-	cout << "DedispersionPlan constructor: initializing lags" << endl;
-
-    for (Stage1Tree &st1: this->stage1_trees) {
-	int rank0 = st1.rank0;
-	int rank1 = st1.rank1_trigger;
-	bool is_downsampled = (st1.ds_level > 0);
-
-	for (ssize_t i = 0; i < pow2(rank1); i++) {       // pow2(rank1) in outer loop
-	    for (ssize_t j = 0; j < pow2(rank0); j++) {   // pow2(rank0) in inner loop
-		int row = i * pow2(rank0) + j;
-		int lag = rb_lag(i, j, rank0, rank1, is_downsampled);
-		
-		// Split the lag into 'segment_lag' and 'residual_lag'.
-		st1.segment_lags.at({row}) = lag / nelts_per_segment;   // round down
-		st1.residual_lags.at({row}) = lag % nelts_per_segment;
-	    }
 	}
     }
 }

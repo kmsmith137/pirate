@@ -33,10 +33,6 @@ struct DedispersionPlan
 	int segments_per_row = 0;    // equal to (nt_ds / nelts_per_segment)
 	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * segments_per_row
         int iobuf_base_segment = 0;  // base segment index, within single-beam stage0_iobuf
-
-	// "rstate" = dedispersion state kept in registers, stored persistently on GPU between chunks
-	// Initialized in _init_footprints().
-	ssize_t rstate_nbytes_per_beam = 0;   // FIXME placeholder value -- improve
     };
 
     struct Stage1Tree
@@ -50,20 +46,6 @@ struct DedispersionPlan
 	int segments_per_row = 0;    // equal to (nt_ds / nelts_per_segment)
 	int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * segments_per_row
         int iobuf_base_segment = 0;  // base segment index, within single-beam stage1_iobuf
-
-	// For each row of the tree, we compute a lag (in time samples), then split the lag
-	// into a 'segment_lag' (slag) and 'residual_lag' (rlag) as:
-	//
-	//    lag = N*slag + rlag     (where N = nelts_per_segment, and 0 <= rlag < N)
-	
-	gputils::Array<int> segment_lags;   // Length 2^rank, initialized in _init_lags()
-	gputils::Array<int> residual_lags;  // Length 2^rank, initialized in _init_lags()
-		
-	// "rstate" = dedispersion state kept in registers, stored persistently on GPU between chunks.
-	// Initialized in _init_footprints().
-	
-	// FIXME approximate value used for bandwidth analysis -- either improve or move elsewhere.
-	ssize_t rstate_nbytes_per_beam = 0;    // FIXME placeholder value -- improve
     };
 
     struct Ringbuf
@@ -84,7 +66,7 @@ struct DedispersionPlan
     int bytes_per_compressed_segment = 0; // nontrivial (e.g. 66 if uncompressed=float16 and compressed=int8)
     // Note: no 'bytes_per_uncompressed_segment' (use constants::bytes_per_segment).
     
-    // Initialized in _init_trees() and _init_lags().
+    // Initialized in _init_trees().
     std::vector<Stage0Tree> stage0_trees;
     std::vector<Stage1Tree> stage1_trees;
 
@@ -125,7 +107,6 @@ struct DedispersionPlan
     
     // Helper functions called by constructor
     void _init_trees();
-    void _init_lags();
     void _init_ring_buffers();
     
     void print(std::ostream &os=std::cout, int indent=0) const;

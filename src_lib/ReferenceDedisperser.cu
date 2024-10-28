@@ -345,16 +345,19 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
 
     for (int itree = 0; itree < output_ntrees; itree++) {
 	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(itree);
-	long nfreq = pow2(st1.rank0 + st1.rank1_trigger);
+	int rank0 = st1.rank0;
+	int rank1 = st1.rank1_trigger;
+	bool is_downsampled = (st1.ds_level > 0);
 
-	assert(st1.segment_lags.size == nfreq);
-	assert(st1.residual_lags.size == nfreq);
-	Array<int> lags({1,nfreq}, af_uhost);
-	
-	for (int i = 0; i < nfreq; i++) {
-	    int slag = st1.segment_lags.data[i];
-	    // int rlag = st1.residual_lags.data[i];
-	    lags.data[i] = slag*S; // + rlag
+	Array<int> lags({1, pow2(rank0+rank1)}, af_uhost);
+
+	for (ssize_t i1 = 0; i1 < pow2(rank1); i1++) {
+	    for (ssize_t i0 = 0; i0 < pow2(rank0); i0++) {
+		int row = i1 * pow2(rank0) + i0;
+		int lag = rb_lag(i1, i0, rank0, rank1, is_downsampled);
+		int segment_lag = lag / S;   // round down
+		lags.data[row] = segment_lag * S;
+	    }
 	}
 	
 	stage1_lagbufs.at(itree) = make_shared<ReferenceLagbuf> (lags, st1.nt_ds);
