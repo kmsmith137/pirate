@@ -217,16 +217,14 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     sophistication(sophistication_)
 {
     // FIXME relax these constraints
-    assert(config.compressed_dtype == "float32");
-    assert(config.uncompressed_dtype == "float32");
+    assert(config.dtype == "float32");
     assert(config.beams_per_gpu == 1);
     assert(config.beams_per_batch == 1);
     assert(config.num_active_batches == 1);
-    assert(config.force_ring_buffers_to_host);
 
-    assert(plan->uncompressed_dtype_size == 4);
-    assert(plan->nelts_per_segment == constants::bytes_per_segment/4);
-    assert(plan->bytes_per_compressed_segment == constants::bytes_per_segment);
+    // FIXME do I need these asserts?
+    assert(plan->nelts_per_segment == xdiv(constants::bytes_per_gpu_cache_line, 4));
+    assert(plan->nbytes_per_segment == constants::bytes_per_gpu_cache_line);
     
     this->input_rank = config.tree_rank;
     this->input_nt = config.time_samples_per_chunk;
@@ -399,10 +397,8 @@ void ReferenceDedisperser1::_dedisperse(const gputils::Array<float> &in)
 // -------------------------------------------------------------------------------------------------
 
 
-static float *get_rb(const Array<float> &gpu_ringbuf, const uint *rb_locs, uint pos)
+static float *get_rb(const Array<float> &gpu_ringbuf, const uint *rb_locs, uint pos, uint nelts_per_segment)
 {
-    long S = 32; // nelts_per_segment (FIXME)
-    
     uint rb_offset = rb_locs[0];  // in segments, not bytes
     uint rb_phase = rb_locs[1];   // index of (time chunk, beam) pair, relative to current pair
     uint rb_len = rb_locs[2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
@@ -412,7 +408,7 @@ static float *get_rb(const Array<float> &gpu_ringbuf, const uint *rb_locs, uint 
     uint i = (pos + rb_phase) % rb_len;
     long s = rb_offset + (i * rb_nseg);
     
-    return gpu_ringbuf.data + (s*S);
+    return gpu_ringbuf.data + (s * nelts_per_segment);
 }
 
 
@@ -460,7 +456,7 @@ void ReferenceDedisperser2::_dedisperse(const gputils::Array<float> &in)
 	    for (long i1 = 0; i1 < nchan1; i1++) {
 		for (long i0 = 0; i0 < nchan0; i0++) {
 		    long iseg0 = st0.iobuf_base_segment + s*nchan1*nchan0 + i1*nchan0 + i0;
-		    float *dst = get_rb(this->gpu_ringbuf, rb_locs0 + 4*iseg0, this->pos);
+		    float *dst = get_rb(this->gpu_ringbuf, rb_locs0 + 4*iseg0, this->pos, S);
 		    float *src = buf.data + (i1*nchan0+i0)*nt_ds + s*S;
 		    memcpy(dst, src, S * sizeof(float));
 		}
@@ -483,7 +479,7 @@ void ReferenceDedisperser2::_dedisperse(const gputils::Array<float> &in)
 	    for (long i0 = 0; i0 < nchan0; i0++) {
 		for (long i1 = 0; i1 < nchan1; i1++) {
 		    long iseg1 = st1.iobuf_base_segment + s*nchan1*nchan0 + i0*nchan1 + i1;
-		    float *src = get_rb(this->gpu_ringbuf, rb_locs1 + 4*iseg1, this->pos);
+		    float *src = get_rb(this->gpu_ringbuf, rb_locs1 + 4*iseg1, this->pos, S);
 		    float *dst = buf.data + (i1*nchan0+i0)*nt_ds + s*S;
 		    memcpy(dst, src, S * sizeof(float));
 		}

@@ -79,7 +79,8 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 //
 // Sophistication == 1:
 //
-//   - Uses same two-level tree/lag structure as plan, but don't split lags into chunks/segments/residuals.
+//   - Uses same two-stage tree/lag structure as plan.
+//   - Lags are split into segments + residuals, but not further split into chunks.
 //   - Lags are applied with a per-tree ReferenceLagbuf, rather than using ring/staging buffers.
 
 

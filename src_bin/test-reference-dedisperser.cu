@@ -62,7 +62,6 @@ static void run_random_small_configs(int niter)
 	cout << "\n    *** Running random small config " << iter << "/" << niter << " ***\n" << endl;
 	
 	auto config = DedispersionConfig::make_random(true);   // reference=true
-	config.planner_verbosity = 1;
 
 	int max_nt = 8192;
 	assert(config.time_samples_per_chunk <= max_nt);

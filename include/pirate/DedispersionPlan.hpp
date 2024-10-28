@@ -58,10 +58,8 @@ struct DedispersionPlan
     
     const DedispersionConfig config;
 
-    int nelts_per_segment = 0;            // constants::bytes_per_segment / sizeof(uncompressed_dtype)
-    int uncompressed_dtype_size = 0;      // sizeof(uncompressed_type)
-    int bytes_per_compressed_segment = 0; // nontrivial (e.g. 66 if uncompressed=float16 and compressed=int8)
-    // Note: no 'bytes_per_uncompressed_segment' (use constants::bytes_per_segment).
+    int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
+    int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
     
     std::vector<Stage0Tree> stage0_trees;
     std::vector<Stage1Tree> stage1_trees;

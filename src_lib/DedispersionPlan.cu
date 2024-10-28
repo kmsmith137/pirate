@@ -18,13 +18,13 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 {
     config.validate();
 
+    // 'nelts_per_segment' is always (constants::bytes_per_gpu_cache_line / sizeof(dtype)).
     this->nelts_per_segment = config.get_nelts_per_segment();
-    this->uncompressed_dtype_size = config.get_uncompressed_dtype_size();
-    this->bytes_per_compressed_segment = config.get_bytes_per_compressed_segment();
+    this->nbytes_per_segment = constants::bytes_per_gpu_cache_line;
 
     // Part 1:
-    //   - Initialize trees
-    //   - Initialize max_n1 (max number of Stage1Trees, per Stage0Tree)
+    //   - Initialize stage0_trees, stage1_trees.
+    //   - Initialize max_n1 (max number of Stage1Trees, per Stage0Tree).
 
     int max_n1 = 0;
     
@@ -261,9 +261,7 @@ void DedispersionPlan::print(ostream &os, int indent) const
     this->config.print(os, indent+4);
     
     print_kv("nelts_per_segment", nelts_per_segment, os, indent);
-    print_kv("uncompressed_dtype_size", uncompressed_dtype_size, os, indent);
-    print_kv("bytes_per_compressed_segment", bytes_per_compressed_segment, os, indent);
-    print_kv("bytes_per_segment", constants::bytes_per_segment, os, indent);
+    print_kv("nbytes_per_segment", nbytes_per_segment, os, indent);
 
     os << Indent(indent) << "Stage0Trees" << endl;
 

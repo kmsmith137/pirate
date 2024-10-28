@@ -2,7 +2,7 @@
 #include "../include/pirate/internals/ReferenceDedispersionKernel.hpp"
 #include "../include/pirate/internals/inlines.hpp"    // pow2()
 #include "../include/pirate/internals/utils.hpp"      // integer_log2()
-#include "../include/pirate/constants.hpp"            // constants::bytes_per_segment
+#include "../include/pirate/constants.hpp"            // constants::bytes_per_gpu_cache_line
 
 #include <gputils/Array.hpp>
 #include <gputils/cuda_utils.hpp>
@@ -104,7 +104,7 @@ struct TestInstance
 	ref_params.nbeams = nbeams;
 	ref_params.apply_input_residual_lags = apply_input_residual_lags;
 	ref_params.is_downsampled_tree = is_downsampled_tree;
-	ref_params.nelts_per_segment = xdiv(constants::bytes_per_segment, sizeof(T));  // matches DedispersionConfig::get_nelts_per_segment()
+	ref_params.nelts_per_segment = xdiv(constants::bytes_per_gpu_cache_line, sizeof(T));  // matches DedispersionConfig::get_nelts_per_segment()
 
 	ReferenceDedispersionKernel ref_kernel(ref_params);
 
