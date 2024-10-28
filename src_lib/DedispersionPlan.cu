@@ -16,27 +16,17 @@ namespace pirate {
 DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     config(config_)
 {
-    if (config.planner_verbosity >= 1)
-	cout << "DedispersionPlan constructor: start" << endl;
-    
     config.validate();
 
     this->nelts_per_segment = config.get_nelts_per_segment();
     this->uncompressed_dtype_size = config.get_uncompressed_dtype_size();
     this->bytes_per_compressed_segment = config.get_bytes_per_compressed_segment();
-    
-    this->_init_trees();
-    this->_init_ring_buffers();
-    
-    if (config.planner_verbosity >= 1)
-	cout << "DedispersionPlan constructor: done" << endl;
-}
 
+    // Part 1:
+    //   - Initialize trees
+    //   - Initialize max_n1 (max number of Stage1Trees, per Stage0Tree)
 
-void DedispersionPlan::_init_trees()
-{
-    if (config.planner_verbosity >= 1)
-	cout << "DedispersionPlan constructor: creating trees" << endl;
+    int max_n1 = 0;
     
     for (int ids = 0; ids < config.num_downsampling_levels; ids++) {
 	int st0_rank = ids ? (config.tree_rank - 1) : config.tree_rank;
@@ -56,8 +46,6 @@ void DedispersionPlan::_init_trees()
 	st0.rank0 = st0_rank0;
 	st0.rank1 = st0_rank - st0.rank0;
 	st0.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
-	st0.num_stage1_trees = trigger_ranks.size();
-	st0.stage1_base_tree_index = this->stage1_trees.size();
 	st0.segments_per_row = xdiv(st0.nt_ds, nelts_per_segment);
 	st0.segments_per_beam = pow2(st0_rank) * st0.segments_per_row;
 	st0.iobuf_base_segment = this->stage0_iobuf_segments_per_beam;
@@ -88,31 +76,17 @@ void DedispersionPlan::_init_trees()
 	    this->stage1_trees.push_back(st1);
 	    this->stage1_iobuf_segments_per_beam += st1.segments_per_beam;
 	}
+
+	max_n1 = max(max_n1, int(trigger_ranks.size()));
     }
-}
-
-
-void DedispersionPlan::_init_ring_buffers()
-{
-    // _init_ring_buffers() is responsible for initializing the following members:
-    //
-    //    max_clag
-    //    gmem_ringbuf_nseg
-    //    {gmem,g2h,h2g,h2h}_ringbufs
-    //    {stage0,stage1}_rb_locs
     
-    // Part 1:
+    // Part 2:
     //  - Initialize this->max_clag
     //  - Allocate 'segmap', which maps iseg0 -> (list of (clag,iseg1) pairs).
     //    (This is a temporary object that will be used "locally" in this function.)
     
     int nseg0 = this->stage0_iobuf_segments_per_beam;
     int nseg1 = this->stage1_iobuf_segments_per_beam;
-
-    // Max number of Stage1Trees, per Stage0Tree.
-    int max_n1 = 0;
-    for (const Stage0Tree &st0: this->stage0_trees)
-	max_n1 = max(max_n1, st0.num_stage1_trees);
 
     Array<uint> segmap_n1({nseg0}, af_uhost | af_zero);
     Array<uint> segmap_clag({nseg0,max_n1}, af_uhost | af_zero);
@@ -169,7 +143,7 @@ void DedispersionPlan::_init_ring_buffers()
 	}
     }
 
-    // Part 2:
+    // Part 3:
     //  - allocate ringbufs
     //  - initialize Ringbuf::rb_len.
 
@@ -182,7 +156,7 @@ void DedispersionPlan::_init_ring_buffers()
     for (int clag = 0; clag <= max_clag; clag++)
 	gmem_ringbufs.at(clag).rb_len = clag*BT + BA;
 
-    // Part 3:
+    // Part 4:
     //  - initialize Ringbuf::nseg_per_beam
     //  - pseudo-initialize stage0_rb_locs (*)
     //  - pseudo-initialize stage1_rb_locs (*)
@@ -237,7 +211,7 @@ void DedispersionPlan::_init_ring_buffers()
     for (int iseg1 = 0; iseg1 < nseg1; iseg1++)
 	assert(coverage[iseg1]);
 
-    // Part 4:
+    // Part 5:
     //  - initialize this->gmem_ringbuf_nbytes
     //  - initialize Ringbuf::base_segment
     //  - fully initialize stage0_rb_locs (**)
@@ -301,8 +275,6 @@ void DedispersionPlan::print(ostream &os, int indent) const
 	   << ", rank0=" << st0.rank0
 	   << ", rank1=" << st0.rank1
 	   << ", nt_ds=" << st0.nt_ds
-	   << ", nst1=" << st0.num_stage1_trees
-	   << ", st1_base=" << st0.stage1_base_tree_index
 	   << endl;
     }
     

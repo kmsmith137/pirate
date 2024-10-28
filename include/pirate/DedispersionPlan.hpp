@@ -18,6 +18,8 @@ struct DedispersionPlan
 {
     DedispersionPlan(const DedispersionConfig &config);
     
+    void print(std::ostream &os=std::cout, int indent=0) const;
+    
     // --------------------  Helper classes  --------------------
     
     struct Stage0Tree
@@ -26,9 +28,6 @@ struct DedispersionPlan
 	int rank0 = 0;      // rank of Stage0Tree
 	int rank1 = 0;      // rank of subsequent Stage1Tree (if no early trigger)
 	int nt_ds = 0;      // number of time samples per chunk (after downsampling)
-
-	int num_stage1_trees = 0;        // number of associated Stage1Trees (= num_early_triggers + 1)
-	int stage1_base_tree_index = 0;  // base Stage1Tree index, within this->stage1_trees.
 	
 	int segments_per_row = 0;    // equal to (nt_ds / nelts_per_segment)
 	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * segments_per_row
@@ -56,25 +55,19 @@ struct DedispersionPlan
     };
     
     // --------------------  Members  --------------------
-
     
     const DedispersionConfig config;
 
-    // Initialized at beginning of constructor.
     int nelts_per_segment = 0;            // constants::bytes_per_segment / sizeof(uncompressed_dtype)
     int uncompressed_dtype_size = 0;      // sizeof(uncompressed_type)
     int bytes_per_compressed_segment = 0; // nontrivial (e.g. 66 if uncompressed=float16 and compressed=int8)
     // Note: no 'bytes_per_uncompressed_segment' (use constants::bytes_per_segment).
     
-    // Initialized in _init_trees().
     std::vector<Stage0Tree> stage0_trees;
     std::vector<Stage1Tree> stage1_trees;
 
-    // Iniitialized in _init_trees().
     ssize_t stage0_iobuf_segments_per_beam = 0;
     ssize_t stage1_iobuf_segments_per_beam = 0;
-
-    // Everything after this is initialized in _init_ring_buffers().
 
     int max_clag = 0;
     long gmem_ringbuf_nseg = 0;
@@ -101,15 +94,6 @@ struct DedispersionPlan
 
     gputils::Array<uint> stage0_rb_locs;   // shape (stage0_iobuf_segments_per_beam, 4)
     gputils::Array<uint> stage1_rb_locs;   // shape (stage1_iobuf_segments_per_beam, 4)
-
-
-    // --------------------  Methods  --------------------
-    
-    // Helper functions called by constructor
-    void _init_trees();
-    void _init_ring_buffers();
-    
-    void print(std::ostream &os=std::cout, int indent=0) const;
 };
 
 
