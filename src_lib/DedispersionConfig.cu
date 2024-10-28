@@ -134,25 +134,14 @@ void DedispersionConfig::validate() const
 
     // Assumed for convenience, to simplify logic in a few places -- might revisit later.
     assert((beams_per_gpu % beams_per_batch) == 0);
-    
-    // Check validity of early triggers.
 
-    int dslevel_curr = 0;
-    int ntrigger_curr = 0;  // running trigger count at current downsampling level
-    
+    // Check validity of early triggers.
     for (const EarlyTrigger &et: early_triggers) {
 	ssize_t ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
 	ssize_t ds_rank0 = ds_rank / 2;
 	
 	assert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
 	assert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
-
-	if (et.ds_level != dslevel_curr) {
-	    dslevel_curr = et.ds_level;
-	    ntrigger_curr = 0;
-	}
-
-	ntrigger_curr++;
     }
 }
 

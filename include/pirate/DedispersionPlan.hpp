@@ -29,9 +29,8 @@ struct DedispersionPlan
 	int rank1 = 0;      // rank of subsequent Stage1Tree (if no early trigger)
 	int nt_ds = 0;      // number of time samples per chunk (after downsampling)
 	
-	int segments_per_row = 0;    // equal to (nt_ds / nelts_per_segment)
-	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * segments_per_row
-        int iobuf_base_segment = 0;  // base segment index, within single-beam stage0_iobuf
+	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * (nt_ds / nelts_per_segment)
+        int base_segment = 0;        // cumulative (over all Stage0Trees) segment count
     };
 
     struct Stage1Tree
@@ -42,9 +41,8 @@ struct DedispersionPlan
 	int rank1_trigger = 0;   // Can be smaller than rank1_ambient, for early trigger
 	int nt_ds = 0;           // Same as Stage0Tree::nt_ds
 		
-	int segments_per_row = 0;    // equal to (nt_ds / nelts_per_segment)
-	int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * segments_per_row
-        int iobuf_base_segment = 0;  // base segment index, within single-beam stage1_iobuf
+	int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * (nt_ds / nelts_per_segment)
+        int base_segment = 0;        // cumulative (over all Stage1Trees) segment count
     };
 
     struct Ringbuf
@@ -64,8 +62,8 @@ struct DedispersionPlan
     std::vector<Stage0Tree> stage0_trees;
     std::vector<Stage1Tree> stage1_trees;
 
-    ssize_t stage0_iobuf_segments_per_beam = 0;
-    ssize_t stage1_iobuf_segments_per_beam = 0;
+    ssize_t stage0_total_segments_per_beam = 0;
+    ssize_t stage1_total_segments_per_beam = 0;
 
     int max_clag = 0;
     long gmem_ringbuf_nseg = 0;
@@ -90,8 +88,8 @@ struct DedispersionPlan
     //  iseg0 -> (time/nelts_per_segment, 2^rank1, 2^rank0)
     //  iseg1 -> (time/nelts_per_segment, 2^rank0, 2^rank1)   note transpose
 
-    gputils::Array<uint> stage0_rb_locs;   // shape (stage0_iobuf_segments_per_beam, 4)
-    gputils::Array<uint> stage1_rb_locs;   // shape (stage1_iobuf_segments_per_beam, 4)
+    gputils::Array<uint> stage0_rb_locs;   // shape (stage0_total_segments_per_beam, 4)
+    gputils::Array<uint> stage1_rb_locs;   // shape (stage1_total_segments_per_beam, 4)
 };
 
 

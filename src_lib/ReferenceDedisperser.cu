@@ -22,10 +22,10 @@ static Array<float> stage0_tree_view(const shared_ptr<DedispersionPlan> &plan, c
 {
     long S = plan->nelts_per_segment;
     assert((ids >= 0) && (ids < plan->stage0_trees.size()));
-    assert(stage0_iobuf.shape_equals({plan->stage0_iobuf_segments_per_beam * S}));
+    assert(stage0_iobuf.shape_equals({plan->stage0_total_segments_per_beam * S}));
     
     const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
-    long start = st0.iobuf_base_segment * S;
+    long start = st0.base_segment * S;
     long nelts = st0.segments_per_beam * S;
     long rank = st0.rank0 + st0.rank1;
     long nt_ds = st0.nt_ds;
@@ -40,10 +40,10 @@ static Array<float> stage1_tree_view(const shared_ptr<DedispersionPlan> &plan, c
 {
     long S = plan->nelts_per_segment;
     assert((itree >= 0) && (itree < plan->stage1_trees.size()));
-    assert(stage1_iobuf.shape_equals({plan->stage1_iobuf_segments_per_beam * S}));
+    assert(stage1_iobuf.shape_equals({plan->stage1_total_segments_per_beam * S}));
     
     const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(itree);
-    long start = st1.iobuf_base_segment * S;
+    long start = st1.base_segment * S;
     long nelts = st1.segments_per_beam * S;
     long rank = st1.rank0 + st1.rank1_trigger;
     long nt_ds = st1.nt_ds;
@@ -325,8 +325,8 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     ReferenceDedisperserBase(plan_, 1)
 {
     long S = nelts_per_segment;
-    long nseg0 = plan->stage0_iobuf_segments_per_beam;
-    long nseg1 = plan->stage1_iobuf_segments_per_beam;
+    long nseg0 = plan->stage0_total_segments_per_beam;
+    long nseg1 = plan->stage1_total_segments_per_beam;
 
     this->stage0_iobuf = Array<float> ({nseg0*S}, af_uhost | af_zero);
     this->stage1_iobuf = Array<float> ({nseg1*S}, af_uhost | af_zero);
@@ -411,8 +411,8 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     ReferenceDedisperserBase(plan_, 2)
 {
     long S = nelts_per_segment;
-    long nseg0 = plan->stage0_iobuf_segments_per_beam;
-    long nseg1 = plan->stage1_iobuf_segments_per_beam;
+    long nseg0 = plan->stage0_total_segments_per_beam;
+    long nseg1 = plan->stage1_total_segments_per_beam;
     
     this->stage0_iobuf = Array<float> ({nseg0*S}, af_uhost | af_zero);
     this->stage1_iobuf = Array<float> ({nseg1*S}, af_uhost | af_zero);
@@ -450,7 +450,7 @@ void ReferenceDedisperser2::_dedisperse(const gputils::Array<float> &in)
 	for (long s = 0; s < ns; s++) {
 	    for (long i1 = 0; i1 < nchan1; i1++) {
 		for (long i0 = 0; i0 < nchan0; i0++) {
-		    long iseg0 = st0.iobuf_base_segment + s*nchan1*nchan0 + i1*nchan0 + i0;
+		    long iseg0 = st0.base_segment + s*nchan1*nchan0 + i1*nchan0 + i0;
 		    float *dst = get_rb(this->gpu_ringbuf, rb_locs0 + 4*iseg0, this->pos, S);
 		    float *src = buf.data + (i1*nchan0+i0)*nt_ds + s*S;
 		    memcpy(dst, src, S * sizeof(float));
@@ -473,7 +473,7 @@ void ReferenceDedisperser2::_dedisperse(const gputils::Array<float> &in)
 	for (long s = 0; s < ns; s++) {
 	    for (long i0 = 0; i0 < nchan0; i0++) {
 		for (long i1 = 0; i1 < nchan1; i1++) {
-		    long iseg1 = st1.iobuf_base_segment + s*nchan1*nchan0 + i0*nchan1 + i1;
+		    long iseg1 = st1.base_segment + s*nchan1*nchan0 + i0*nchan1 + i1;
 		    float *src = get_rb(this->gpu_ringbuf, rb_locs1 + 4*iseg1, this->pos, S);
 		    float *dst = buf.data + (i1*nchan0+i0)*nt_ds + s*S;
 		    memcpy(dst, src, S * sizeof(float));

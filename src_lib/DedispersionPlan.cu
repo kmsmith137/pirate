@@ -46,9 +46,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	st0.rank0 = st0_rank0;
 	st0.rank1 = st0_rank - st0.rank0;
 	st0.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
-	st0.segments_per_row = xdiv(st0.nt_ds, nelts_per_segment);
-	st0.segments_per_beam = pow2(st0_rank) * st0.segments_per_row;
-	st0.iobuf_base_segment = this->stage0_iobuf_segments_per_beam;
+	st0.segments_per_beam = pow2(st0_rank) * xdiv(st0.nt_ds, nelts_per_segment);
+	st0.base_segment = this->stage0_total_segments_per_beam;
 
 	// FIXME should replace hardcoded 7,8 by something more descriptive
 	// (GpuDedispersionKernel::max_rank?)
@@ -57,7 +56,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	assert(st0.nt_ds > 0);
 	
 	this->stage0_trees.push_back(st0);
-	this->stage0_iobuf_segments_per_beam += st0.segments_per_beam;
+	this->stage0_total_segments_per_beam += st0.segments_per_beam;
 
 	for (int trigger_rank: trigger_ranks) {
 	    Stage1Tree st1;
@@ -66,15 +65,14 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	    st1.rank1_ambient = st0.rank1;
 	    st1.rank1_trigger = trigger_rank - st1.rank0;
 	    st1.nt_ds = st0.nt_ds;
-	    st1.segments_per_row = xdiv(st1.nt_ds, nelts_per_segment);
-	    st1.segments_per_beam = pow2(trigger_rank) * st1.segments_per_row;
-	    st1.iobuf_base_segment = this->stage1_iobuf_segments_per_beam;
+	    st1.segments_per_beam = pow2(trigger_rank) * xdiv(st1.nt_ds, nelts_per_segment);
+	    st1.base_segment = this->stage1_total_segments_per_beam;
 
 	    assert((st1.rank1_trigger >= 0) && (st1.rank1_trigger <= 8));
 	    assert(st1.rank1_trigger <= st1.rank1_ambient);
 		     
 	    this->stage1_trees.push_back(st1);
-	    this->stage1_iobuf_segments_per_beam += st1.segments_per_beam;
+	    this->stage1_total_segments_per_beam += st1.segments_per_beam;
 	}
 
 	max_n1 = max(max_n1, int(trigger_ranks.size()));
@@ -85,8 +83,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //  - Allocate 'segmap', which maps iseg0 -> (list of (clag,iseg1) pairs).
     //    (This is a temporary object that will be used "locally" in this function.)
     
-    int nseg0 = this->stage0_iobuf_segments_per_beam;
-    int nseg1 = this->stage1_iobuf_segments_per_beam;
+    int nseg0 = this->stage0_total_segments_per_beam;
+    int nseg1 = this->stage1_total_segments_per_beam;
 
     Array<uint> segmap_n1({nseg0}, af_uhost | af_zero);
     Array<uint> segmap_clag({nseg0,max_n1}, af_uhost | af_zero);
@@ -121,13 +119,13 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 		    // iseg0 -> (s,i1,i0)
 		    int iseg0 = (s0 * pow2(st0.rank1)) + i1;
 		    iseg0 = (iseg0 * pow2(st0.rank0)) + i0;
-		    iseg0 += st0.iobuf_base_segment;
+		    iseg0 += st0.base_segment;
 		    assert((iseg0 >= 0) && (iseg0 < nseg0));
 
 		    // iseg1 -> (s,i0,i1)
 		    int iseg1 = (s1 * nchan0) + i0;
 		    iseg1 = (iseg1 * nchan1) + i1;
-		    iseg1 += st1.iobuf_base_segment;
+		    iseg1 += st1.base_segment;
 		    assert((iseg1 >= 0) && (iseg1 < nseg1));
 
 		    // Add (clag, iseg1) to segmap[iseg0].
