@@ -217,14 +217,9 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     sophistication(sophistication_)
 {
     // FIXME relax these constraints
-    assert(config.dtype == "float32");
     assert(config.beams_per_gpu == 1);
     assert(config.beams_per_batch == 1);
     assert(config.num_active_batches == 1);
-
-    // FIXME do I need these asserts?
-    assert(plan->nelts_per_segment == xdiv(constants::bytes_per_gpu_cache_line, 4));
-    assert(plan->nbytes_per_segment == constants::bytes_per_gpu_cache_line);
     
     this->input_rank = config.tree_rank;
     this->input_nt = config.time_samples_per_chunk;

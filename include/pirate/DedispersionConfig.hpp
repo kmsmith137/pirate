@@ -75,9 +75,7 @@ struct DedispersionConfig
     // make_random(): used for unit tests.
     //
     // If reference=true, then impose some constraints needed by ReferenceDedisperser:
-    //   - dtype == "float32"
     //   - beams_per_gpu == beams_per_batch == num_active_batches == 1
-    //   - force_ring_buffers_to_host = true
     //
     // (Eventually, I hope to relax these constrains and remove the 'reference' argument).
     

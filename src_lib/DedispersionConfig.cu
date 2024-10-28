@@ -272,10 +272,7 @@ DedispersionConfig DedispersionConfig::make_random(bool reference)
 {
     DedispersionConfig ret;
     ret.num_downsampling_levels = gputils::rand_int(1, 5);
-    ret.dtype = "float32";
-
-    if (!reference && (gputils::rand_uniform() < 0.5))
-	ret.dtype = "float16";
+    ret.dtype = (gputils::rand_uniform() < 0.5) ? "float32" : "float16";
     
     // Randomly choose a tree rank, but bias toward a high number.
     int max_rank = 10;
