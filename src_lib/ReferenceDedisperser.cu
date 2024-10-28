@@ -1,5 +1,6 @@
 #include "../include/pirate/internals/ReferenceDedisperser.hpp"
-#include "../include/pirate/internals/CacheLineRingbuf.hpp"
+
+#include "../include/pirate/constants.hpp"
 #include "../include/pirate/internals/inlines.hpp"
 #include "../include/pirate/internals/utils.hpp"
 
@@ -212,7 +213,6 @@ static DedispersionPlan *deref(const shared_ptr<DedispersionPlan> &p)
 
 ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<DedispersionPlan> &plan_, int sophistication_) :
     plan(plan_),
-    clbuf(deref(plan_)->cache_line_ringbuf),
     config(deref(plan_)->config),
     sophistication(sophistication_)
 {

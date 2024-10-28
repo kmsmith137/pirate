@@ -7,15 +7,11 @@
 #include <memory>  // shared_ptr
 #include <gputils/Array.hpp>
 
-#include "internals/LaggedCacheLine.hpp"
 
 namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
-
-// Defined in pirate/internals/CacheLineRingbuf.hpp
-struct CacheLineRingbuf;
 
 
 struct DedispersionPlan
@@ -96,7 +92,7 @@ struct DedispersionPlan
     ssize_t stage0_iobuf_segments_per_beam = 0;
     ssize_t stage1_iobuf_segments_per_beam = 0;
 
-    // Everything after this is initialized in _init_ring_buffers2().
+    // Everything after this is initialized in _init_ring_buffers().
 
     int max_clag = 0;
     long gmem_ringbuf_nseg = 0;
@@ -124,61 +120,15 @@ struct DedispersionPlan
     gputils::Array<uint> stage0_rb_locs;   // shape (stage0_iobuf_segments_per_beam, 4)
     gputils::Array<uint> stage1_rb_locs;   // shape (stage1_iobuf_segments_per_beam, 4)
 
-    
-    // ---------------- XXX Cut here XXX --------------------
-
-    // Initialized in _init_ring_buffers().
-    // Only present if DedispersionConfig::bloat_dedispersion_plan == true.
-    std::vector<LaggedCacheLine> lagged_cache_lines;
-    
-    // Initialized in _init_ring_buffers().
-    std::shared_ptr<CacheLineRingbuf> cache_line_ringbuf;
-
-    // Initialized in _init_trees(), _init_rstate_footprints(), _init_ring_buffers().
-    ssize_t gmem_nbytes_tot = 0;
-    ssize_t gmem_nbytes_stage0_iobufs = 0;  // Core dedispersion array, including factor 'active_beams_per_gpu'
-    ssize_t gmem_nbytes_stage1_iobufs = 0;  // Core dedispersion array, including factor 'active_beams_per_gpu'
-    ssize_t gmem_nbytes_stage0_rstate = 0;  // Saved kernel register state, including factor 'total_beams_per_gpu'
-    ssize_t gmem_nbytes_stage1_rstate = 0;  // Saved kernel register state, including factor 'total_beams_per_gpu'
-    ssize_t gmem_nbytes_staging_buf = 0;    // GPU staging buffer, including factor 'active_beams_per_gpu'
-    ssize_t gmem_nbytes_ringbuf = 0;        // GPU ring buffer, including factor 'total_beams_per_gpu'
-    ssize_t hmem_nbytes_ringbuf = 0;        // host ring buffer, including factor 'total_beams_per_gpu'
-    ssize_t pcie_nbytes_per_chunk = 0;      // host <-> GPU bandwidth per chunk (EACH WAY), including factor 'total_beams_per_gpu'
-    ssize_t pcie_memcopies_per_chunk = 0;   // host <-> GPU memcopy call count per chunk (EACH WAY)
-
-    // GPU global memory bandwidth, in bytes/chunk (not bytes/sec!), including factor 'total_beams_per_gpu'.
-    struct {
-	ssize_t init_stage0_ds0 = 0;        // FIXME underestimates, since input (4-bit?) array is not included
-	ssize_t init_stage0_higher_ds = 0;
-	ssize_t dedisperse_stage0_main = 0;
-	ssize_t dedisperse_stage0_rstate = 0;
-	ssize_t copy_stage0_to_staging = 0;
-	ssize_t copy_staging_to_staging = 0;
-	ssize_t copy_staging_to_stage1 = 0;
-	ssize_t copy_staging_to_gmem_ringbuf = 0;
-	ssize_t copy_staging_to_hmem_ringbuf = 0;
-	ssize_t copy_gmem_ringbuf_to_staging = 0;
-	ssize_t copy_hmem_ringbuf_to_staging = 0;
-	ssize_t copy_stage0_to_stage1 = 0;
-	ssize_t copy_stage1_to_stage1 = 0;
-	ssize_t dedisperse_stage1_main = 0;
-	ssize_t dedisperse_stage1_rstate = 0;
-	ssize_t peak_finding = 0;           // FIXME underestimates, since output coarse-grained array is not included
-    } gmem_bw_nbytes_per_chunk;
 
     // --------------------  Methods  --------------------
     
     // Helper functions called by constructor
     void _init_trees();
     void _init_lags();
-    void _init_rstate_footprints();
     void _init_ring_buffers();
-    void _init_ring_buffers2();
     
     void print(std::ostream &os=std::cout, int indent=0) const;
-    void print_segment_info(std::ostream &os=std::cout, int indent=0) const;
-    void print_trees(std::ostream &os=std::cout, int indent=0) const;
-    void print_footprints(std::ostream &os=std::cout, int indent=0) const;
 };
 
 

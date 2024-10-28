@@ -26,7 +26,6 @@ struct DedispersionPlan;
 //    - Receiver
 //    - Worker
 //       - SleepyWorker
-//       - DedispersionWorker
 //       - DownsamplingWorker
 //       - MemcpyWorker
 //       - SsdWorker
@@ -41,8 +40,6 @@ struct FakeServer
 	std::string server_name = "Server";
 	ssize_t num_iterations = 20;
 	bool use_hugepages = true;
-	
-	std::shared_ptr<DedispersionPlan> dedispersion_plan;
 	
 	ssize_t nbytes_h2h = 0;  // memcpy host->host
 	ssize_t nbytes_h2g = 0;  // memcpy host->gpu (per GPU)

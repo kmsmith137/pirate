@@ -27,7 +27,6 @@ struct ReferenceDedisperserBase
     ReferenceDedisperserBase(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication_);
     
     std::shared_ptr<DedispersionPlan> plan;
-    std::shared_ptr<CacheLineRingbuf> clbuf;
     const DedispersionConfig config;   // same as plan->config
     const int sophistication;
     
