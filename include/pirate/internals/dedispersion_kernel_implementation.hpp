@@ -1,10 +1,11 @@
-#ifndef _DEDISPERSION_KERNEL_TEMPLATES_HPP
-#define _DEDISPERSION_KERNEL_TEMPLATES_HPP
+#ifndef _PIRATE_INTERNALS_DEDISPERSION_KERNEL_IMPLEMENTATION_HPP
+#define _PIRATE_INTERNALS_DEDISPERSION_KERNEL_IMPLEMENTATION_HPP
 
+#include "dedispersion_inbufs.hpp"  // FIXME remove
+#include "dedispersion_outbufs.hpp"  // FIXME remove
 #include <cuda_fp16.h>
 
 using namespace std;
-// using namespace gputils;
 
 namespace pirate {
 #if 0
@@ -556,13 +557,22 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
     constexpr int gmem_ncl = RLagInput ? 2 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
+
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
     
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += threadIdx.x;  // laneId
-    T *inbuf = iobuf;
-    T *outbuf = iobuf;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -579,13 +589,13 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
     if constexpr (RLagInput) {
 	xp0 = rstate[threadIdx.x + 32];
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
-	dm += (flags & 1) ? gridDim.x : 0;
+	dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
     }
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	inbuf += 32;
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
@@ -599,9 +609,9 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
 
 	dd_r1<CycleRev> (x0, x1, rs);
 
-	outbuf[0] = x0;
-	outbuf[row_stride] = x1;
-	outbuf += 32;
+	outbuf.store(0, x0);
+	outbuf.store(1, x1);
+	outbuf.advance();
     }
 
     rstate[threadIdx.x] = rs;
@@ -621,13 +631,22 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
     constexpr int gmem_ncl = RLagInput ? 4 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
+
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
     
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += threadIdx.x;  // laneId
-    T *inbuf = iobuf;
-    T *outbuf = iobuf;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -646,15 +665,15 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 	xp1 = rstate[threadIdx.x + 64];
 	xp2 = rstate[threadIdx.x + 96];
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
-	dm += (flags & 1) ? gridDim.x : 0;
+	dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
     }
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	T x2 = inbuf[2 * row_stride];
-	T x3 = inbuf[3 * row_stride];
-	inbuf += 32;
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	T x2 = inbuf.load(2);
+	T x3 = inbuf.load(3);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
@@ -670,11 +689,11 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 
 	dd_r2<CycleRev> (x0, x1, x2, x3, rs);
 
-	outbuf[0] = x0;
-	outbuf[row_stride] = x1;
-	outbuf[2 * row_stride] = x2;
-	outbuf[3 * row_stride] = x3;
-	outbuf += 32;
+	outbuf.store(0, x0);
+	outbuf.store(1, x1);
+	outbuf.store(2, x2);
+	outbuf.store(3, x3);
+	outbuf.advance();
     }
 
     rstate[threadIdx.x] = rs;
@@ -696,13 +715,22 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
     constexpr int gmem_ncl = RLagInput ? 8 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
+
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
     
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += threadIdx.x;  // laneId
-    T *inbuf = iobuf;
-    T *outbuf = iobuf;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -725,19 +753,19 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 	xp5 = rstate[threadIdx.x + 6*32];
 	xp6 = rstate[threadIdx.x + 7*32];
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
-	dm += (flags & 1) ? gridDim.x : 0;
+	dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
     }
     
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	T x2 = inbuf[2 * row_stride];
-	T x3 = inbuf[3 * row_stride];
-	T x4 = inbuf[4 * row_stride];
-	T x5 = inbuf[5 * row_stride];
-	T x6 = inbuf[6 * row_stride];
-	T x7 = inbuf[7 * row_stride];
-	inbuf += 32;
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	T x2 = inbuf.load(2);
+	T x3 = inbuf.load(3);
+	T x4 = inbuf.load(4);
+	T x5 = inbuf.load(5);
+	T x6 = inbuf.load(6);
+	T x7 = inbuf.load(7);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
@@ -756,16 +784,16 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 	}
 
 	dd_r3<CycleRev> (x0, x1, x2, x3, x4, x5, x6, x7, rs);
-
-	outbuf[0] = x0;
-	outbuf[row_stride] = x1;
-	outbuf[2 * row_stride] = x2;
-	outbuf[3 * row_stride] = x3;
-	outbuf[4 * row_stride] = x4;
-	outbuf[5 * row_stride] = x5;
-	outbuf[6 * row_stride] = x6;
-	outbuf[7 * row_stride] = x7;
-	outbuf += 32;
+	
+	outbuf.store(0, x0);
+	outbuf.store(1, x1);
+	outbuf.store(2, x2);
+	outbuf.store(3, x3);
+	outbuf.store(4, x4);
+	outbuf.store(5, x5);
+	outbuf.store(6, x6);
+	outbuf.store(7, x7);
+	outbuf.advance();
     }
 
     rstate[threadIdx.x] = rs;
@@ -795,13 +823,22 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
+
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
     
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += threadIdx.x;  // laneId
-    T *inbuf = iobuf;
-    T *outbuf = iobuf;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -838,23 +875,23 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     }    
 
     for (int it_cl = 0; it_cl < nt_cl; it_cl++) {
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	T x2 = inbuf[2 * row_stride];
-	T x3 = inbuf[3 * row_stride];
-	T x4 = inbuf[4 * row_stride];
-	T x5 = inbuf[5 * row_stride];
-	T x6 = inbuf[6 * row_stride];
-	T x7 = inbuf[7 * row_stride];
-	T x8 = inbuf[8 * row_stride];
-	T x9 = inbuf[9 * row_stride];
-	T x10 = inbuf[10 * row_stride];
-	T x11 = inbuf[11 * row_stride];
-	T x12 = inbuf[12 * row_stride];
-	T x13 = inbuf[13 * row_stride];
-	T x14 = inbuf[14 * row_stride];
-	T x15 = inbuf[15 * row_stride];
-	inbuf += 32;
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	T x2 = inbuf.load(2);
+	T x3 = inbuf.load(3);
+	T x4 = inbuf.load(4);
+	T x5 = inbuf.load(5);
+	T x6 = inbuf.load(6);
+	T x7 = inbuf.load(7);
+	T x8 = inbuf.load(8);
+	T x9 = inbuf.load(9);
+	T x10 = inbuf.load(10);
+	T x11 = inbuf.load(11);
+	T x12 = inbuf.load(12);
+	T x13 = inbuf.load(13);
+	T x14 = inbuf.load(14);
+	T x15 = inbuf.load(15);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -864,7 +901,7 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
 	    //   int rlag = (ff * d) % N
 
 	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    dm += (flags & 1) ? gridDim.x : 0;
+	    dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
 	    
 	    x0 = apply_rlag(x0, xp0, 15*dm);
 	    x1 = apply_rlag(x1, xp1, 14*dm);
@@ -887,23 +924,23 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
 			 x8, x9, x10, x11, x12, x13, x14, x15,
 			 rs, rs3, rs2);
 	
-	outbuf[0] = x0;
-	outbuf[row_stride] = x1;
-	outbuf[2 * row_stride] = x2;
-	outbuf[3 * row_stride] = x3;
-	outbuf[4 * row_stride] = x4;
-	outbuf[5 * row_stride] = x5;
-	outbuf[6 * row_stride] = x6;
-	outbuf[7 * row_stride] = x7;
-	outbuf[8 * row_stride] = x8;
-	outbuf[9 * row_stride] = x9;
-	outbuf[10 * row_stride] = x10;
-	outbuf[11 * row_stride] = x11;
-	outbuf[12 * row_stride] = x12;
-	outbuf[13 * row_stride] = x13;
-	outbuf[14 * row_stride] = x14;
-	outbuf[15 * row_stride] = x15;
-	outbuf += 32;
+	outbuf.store(0, x0);
+	outbuf.store(1, x1);
+	outbuf.store(2, x2);
+	outbuf.store(3, x3);
+	outbuf.store(4, x4);
+	outbuf.store(5, x5);
+	outbuf.store(6, x6);
+	outbuf.store(7, x7);
+	outbuf.store(8, x8);
+	outbuf.store(9, x9);
+	outbuf.store(10, x10);
+	outbuf.store(11, x11);
+	outbuf.store(12, x12);
+	outbuf.store(13, x13);
+	outbuf.store(14, x14);
+	outbuf.store(15, x15);
+	outbuf.advance();
     }
 
     rstate[threadIdx.x] = rs;
@@ -1436,12 +1473,21 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
 
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += (threadIdx.x & 0x1f);  // laneId    
-    T *inbuf = iobuf + (threadIdx.x >> 5) * (nrdata * row_stride);
-    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
+    
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, nrdata);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1480,16 +1526,16 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
-
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	T x2 = inbuf[2 * row_stride];
-	T x3 = inbuf[3 * row_stride];
-	T x4 = inbuf[4 * row_stride];
-	T x5 = inbuf[5 * row_stride];
-	T x6 = inbuf[6 * row_stride];
-	T x7 = inbuf[7 * row_stride];
-	inbuf += 32;
+	
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	T x2 = inbuf.load(2);
+	T x3 = inbuf.load(3);
+	T x4 = inbuf.load(4);
+	T x5 = inbuf.load(5);
+	T x6 = inbuf.load(6);
+	T x7 = inbuf.load(7);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -1501,7 +1547,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 	    int ff0 = 31 - ((threadIdx.x & ~0x1f) >> 2);             // 31 - (8 * warpId)
 	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    dm += (flags & 1) ? gridDim.x : 0;
+	    dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
 
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
@@ -1576,16 +1622,16 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
-
-	outbuf[0] = x0;
-	outbuf[(row_stride << 2)] = x1;
-	outbuf[2 * (row_stride << 2)] = x2;
-	outbuf[3 * (row_stride << 2)] = x3;
-	outbuf[4 * (row_stride << 2)] = x4;
-	outbuf[5 * (row_stride << 2)] = x5;
-	outbuf[6 * (row_stride << 2)] = x6;
-	outbuf[7 * (row_stride << 2)] = x7;
-	outbuf += 32;
+	
+	outbuf.store(0, x0);
+	outbuf.store(4, x1);
+	outbuf.store(2*4, x2);
+	outbuf.store(3*4, x3);
+	outbuf.store(4*4, x4);
+	outbuf.store(5*4, x5);
+	outbuf.store(6*4, x6);
+	outbuf.store(7*4, x7);
+	outbuf.advance();
 	
 	cw = advance_control_word(cw);
     }
@@ -1631,12 +1677,21 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
 
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += (threadIdx.x & 0x1f);  // laneId
-    T *inbuf = iobuf + (threadIdx.x >> 5) * (row_stride << 3);
-    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
+    
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 8);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
     
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1679,16 +1734,16 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
-
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	T x2 = inbuf[2 * row_stride];
-	T x3 = inbuf[3 * row_stride];
-	T x4 = inbuf[4 * row_stride];
-	T x5 = inbuf[5 * row_stride];
-	T x6 = inbuf[6 * row_stride];
-	T x7 = inbuf[7 * row_stride];
-	inbuf += 32;
+	
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	T x2 = inbuf.load(2);
+	T x3 = inbuf.load(3);
+	T x4 = inbuf.load(4);
+	T x5 = inbuf.load(5);
+	T x6 = inbuf.load(6);
+	T x7 = inbuf.load(7);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -1700,7 +1755,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 	    int ff0 = 63 - ((threadIdx.x & ~0x1f) >> 2);             // 63 - (8 * warpId)
 	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    dm += (flags & 1) ? gridDim.x : 0;
+	    dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
 	    
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
@@ -1776,16 +1831,16 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
-
-	outbuf[0] = x0;
-	outbuf[(row_stride << 3)] = x1;
-	outbuf[2 * (row_stride << 3)] = x2;
-	outbuf[3 * (row_stride << 3)] = x3;
-	outbuf[4 * (row_stride << 3)] = x4;
-	outbuf[5 * (row_stride << 3)] = x5;
-	outbuf[6 * (row_stride << 3)] = x6;
-	outbuf[7 * (row_stride << 3)] = x7;
-	outbuf += 32;
+	
+	outbuf.store(0, x0);
+	outbuf.store(8, x1);
+	outbuf.store(2*8, x2);
+	outbuf.store(3*8, x3);
+	outbuf.store(4*8, x4);
+	outbuf.store(5*8, x5);
+	outbuf.store(6*8, x6);
+	outbuf.store(7*8, x7);
+	outbuf.advance();
 
 	cw = advance_control_word(cw);
     }
@@ -1838,12 +1893,21 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
 
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += (threadIdx.x & 0x1f);  // laneId
-    T *inbuf = iobuf + (threadIdx.x >> 5) * (nrdata * row_stride);
-    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
+    
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, nrdata);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
     
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1900,23 +1964,23 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
 
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	T x2 = inbuf[2 * row_stride];
-	T x3 = inbuf[3 * row_stride];
-	T x4 = inbuf[4 * row_stride];
-	T x5 = inbuf[5 * row_stride];
-	T x6 = inbuf[6 * row_stride];
-	T x7 = inbuf[7 * row_stride];
-	T x8 = inbuf[8 * row_stride];
-	T x9 = inbuf[9 * row_stride];
-	T x10 = inbuf[10 * row_stride];
-	T x11 = inbuf[11 * row_stride];
-	T x12 = inbuf[12 * row_stride];
-	T x13 = inbuf[13 * row_stride];
-	T x14 = inbuf[14 * row_stride];
-	T x15 = inbuf[15 * row_stride];
-	inbuf += 32;
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	T x2 = inbuf.load(2);
+	T x3 = inbuf.load(3);
+	T x4 = inbuf.load(4);
+	T x5 = inbuf.load(5);
+	T x6 = inbuf.load(6);
+	T x7 = inbuf.load(7);
+	T x8 = inbuf.load(8);
+	T x9 = inbuf.load(9);
+	T x10 = inbuf.load(10);
+	T x11 = inbuf.load(11);
+	T x12 = inbuf.load(12);
+	T x13 = inbuf.load(13);
+	T x14 = inbuf.load(14);
+	T x15 = inbuf.load(15);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -1928,7 +1992,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 	    int ff0 = 127 - ((threadIdx.x & ~0x1f) >> 1);            // 127 - (16 * warpId)
 	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    dm += (flags & 1) ? gridDim.x : 0;
+	    dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
 
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
@@ -2037,23 +2101,23 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
 
-	outbuf[0] = x0;
-	outbuf[(row_stride << 3)] = x1;
-	outbuf[2*(row_stride << 3)] = x2;
-	outbuf[3*(row_stride << 3)] = x3;
-	outbuf[4*(row_stride << 3)] = x4;
-	outbuf[5*(row_stride << 3)] = x5;
-	outbuf[6*(row_stride << 3)] = x6;
-	outbuf[7*(row_stride << 3)] = x7;
-	outbuf[8*(row_stride << 3)] = x8;
-	outbuf[9*(row_stride << 3)] = x9;
-	outbuf[10*(row_stride << 3)] = x10;
-	outbuf[11*(row_stride << 3)] = x11;
-	outbuf[12*(row_stride << 3)] = x12;
-	outbuf[13*(row_stride << 3)] = x13;
-	outbuf[14*(row_stride << 3)] = x14;
-	outbuf[15*(row_stride << 3)] = x15;
-	outbuf += 32;
+	outbuf.store(0, x0);
+	outbuf.store(8, x1);
+	outbuf.store(2*8, x2);
+	outbuf.store(3*8, x3);
+	outbuf.store(4*8, x4);
+	outbuf.store(5*8, x5);
+	outbuf.store(6*8, x6);
+	outbuf.store(7*8, x7);
+	outbuf.store(8*8, x8);
+	outbuf.store(9*8, x9);
+	outbuf.store(10*8, x10);
+	outbuf.store(11*8, x11);
+	outbuf.store(12*8, x12);
+	outbuf.store(13*8, x13);
+	outbuf.store(14*8, x14);
+	outbuf.store(15*8, x15);
+	outbuf.advance();
 
 	cw = advance_control_word(cw);
     }
@@ -2112,12 +2176,21 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
 
-    // Apply (beam, ambient) strides to iobuf. (Note laneId shift)
-    iobuf += beam_ix * beam_stride;
-    iobuf += ambient_ix * ambient_stride;
-    iobuf += (threadIdx.x & 0x1f);  // laneId
-    T *inbuf = iobuf + (threadIdx.x >> 5) * (row_stride << 4);
-    T *outbuf = iobuf + (threadIdx.x >> 5) * row_stride;
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
+    inbuf_args.in = iobuf;
+    inbuf_args.beam_stride = beam_stride;
+    inbuf_args.ambient_stride = ambient_stride;
+    inbuf_args.freq_stride = row_stride;
+    inbuf_args.is_downsampled = flags & 1;
+
+    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
+    outbuf_args.out = iobuf;
+    outbuf_args.beam_stride = beam_stride;
+    outbuf_args.ambient_stride = ambient_stride;
+    outbuf_args.dm_stride = row_stride;
+    
+    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 16);
+    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -2174,24 +2247,24 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
-
-	T x0 = inbuf[0];
-	T x1 = inbuf[row_stride];
-	T x2 = inbuf[2 * row_stride];
-	T x3 = inbuf[3 * row_stride];
-	T x4 = inbuf[4 * row_stride];
-	T x5 = inbuf[5 * row_stride];
-	T x6 = inbuf[6 * row_stride];
-	T x7 = inbuf[7 * row_stride];
-	T x8 = inbuf[8 * row_stride];
-	T x9 = inbuf[9 * row_stride];
-	T x10 = inbuf[10 * row_stride];
-	T x11 = inbuf[11 * row_stride];
-	T x12 = inbuf[12 * row_stride];
-	T x13 = inbuf[13 * row_stride];
-	T x14 = inbuf[14 * row_stride];
-	T x15 = inbuf[15 * row_stride];
-	inbuf += 32;
+	
+	T x0 = inbuf.load(0);
+	T x1 = inbuf.load(1);
+	T x2 = inbuf.load(2);
+	T x3 = inbuf.load(3);
+	T x4 = inbuf.load(4);
+	T x5 = inbuf.load(5);
+	T x6 = inbuf.load(6);
+	T x7 = inbuf.load(7);
+	T x8 = inbuf.load(8);
+	T x9 = inbuf.load(9);
+	T x10 = inbuf.load(10);
+	T x11 = inbuf.load(11);
+	T x12 = inbuf.load(12);
+	T x13 = inbuf.load(13);
+	T x14 = inbuf.load(14);
+	T x15 = inbuf.load(15);
+	inbuf.advance();
 
 	if constexpr (RLagInput) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
@@ -2203,7 +2276,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 	    int ff0 = 255 - ((threadIdx.x & ~0x1f) >> 1);            // 255 - (16 * warpId)
 	    int dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM
-	    dm += (flags & 1) ? gridDim.x : 0;
+	    dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
 
 	    x0 = apply_rlag(x0, xp0, dm * ff0);
 	    x1 = apply_rlag(x1, xp1, dm * (ff0-1));
@@ -2301,24 +2374,24 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 	// When writing to the output array, we write to array index (2^rank0)*i + j.
 	// Currently, j = warpId (might change later) and i = (register index).
-
-	outbuf[0] = x0;
-	outbuf[(row_stride << 4)] = x1;
-	outbuf[2*(row_stride << 4)] = x2;
-	outbuf[3*(row_stride << 4)] = x3;
-	outbuf[4*(row_stride << 4)] = x4;
-	outbuf[5*(row_stride << 4)] = x5;
-	outbuf[6*(row_stride << 4)] = x6;
-	outbuf[7*(row_stride << 4)] = x7;
-	outbuf[8*(row_stride << 4)] = x8;
-	outbuf[9*(row_stride << 4)] = x9;
-	outbuf[10*(row_stride << 4)] = x10;
-	outbuf[11*(row_stride << 4)] = x11;
-	outbuf[12*(row_stride << 4)] = x12;
-	outbuf[13*(row_stride << 4)] = x13;
-	outbuf[14*(row_stride << 4)] = x14;
-	outbuf[15*(row_stride << 4)] = x15;
-	outbuf += 32;
+	
+	outbuf.store(0, x0);
+	outbuf.store(16, x1);
+	outbuf.store(2*16, x2);
+	outbuf.store(3*16, x3);
+	outbuf.store(4*16, x4);
+	outbuf.store(5*16, x5);
+	outbuf.store(6*16, x6);
+	outbuf.store(7*16, x7);
+	outbuf.store(8*16, x8);
+	outbuf.store(9*16, x9);
+	outbuf.store(10*16, x10);
+	outbuf.store(11*16, x11);
+	outbuf.store(12*16, x12);
+	outbuf.store(13*16, x13);
+	outbuf.store(14*16, x14);
+	outbuf.store(15*16, x15);
+	outbuf.advance();
 
 	cw = advance_control_word(cw);
     }
@@ -2374,4 +2447,4 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 
 }  // namespace pirate
 
-#endif // _DEDISPERSION_KERNEL_TEMPLATES_HPP
+#endif // _PIRATE_INTERNALS_DEDISPERSION_KERNEL_IMPLEMENTATION_HPP
