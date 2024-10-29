@@ -1,8 +1,6 @@
 #ifndef _PIRATE_INTERNALS_DEDISPERSION_KERNEL_IMPLEMENTATION_HPP
 #define _PIRATE_INTERNALS_DEDISPERSION_KERNEL_IMPLEMENTATION_HPP
 
-#include "dedispersion_inbufs.hpp"  // FIXME remove
-#include "dedispersion_outbufs.hpp"  // FIXME remove
 #include <cuda_fp16.h>
 
 using namespace std;
@@ -18,8 +16,8 @@ namespace pirate {
 // Note that when we put in these factors of 0.5, we'll want to change values of (epsabs, epsrel) in
 // src_bin/test-gpu-dedispersion-kernels.cu (see comment in that source file).
 //
-// FIXME(?): I'm slightly overallocating persistent state ("rstate") in the RlagInput case, since I'm
-// saving entire cache lines, rather than residual cache lines.
+// FIXME(?): I'm slightly overallocating persistent state ("rstate") in the case where input is lagged,
+// since I'm saving entire cache lines, rather than residual cache lines.
 
 
 // The following line evaluates to 'true' if T==float32, and 'false' if T==__half2.
@@ -539,40 +537,22 @@ __device__ inline void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 // Kernel grid dimensions are (x,y,z) = (ambient_ix, beam_ix, 1),
 // and thread block dimensions are (x,y,z) = (32 * warps_per_threadblock, 1, 1).
 //
-// The 'flags' argument is a placeholder for future expansion.
-// Currently, only one flag is defined:
-//
-//   df_downsampled = 1;   // ambient tree is downsampled (only matters if RLagInput == true)
-//
 // The kernels are not externally visible, but get called via GpuDedispersionKernel::make() below.
 // FIXME replace 'integer_constants' argument with constant memory.
 
 
-template<typename T, bool RLagInput>
-__global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+template<typename T, class Inbuf, class Outbuf>
+__global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);    
     // assert(blockDim.x == 32);
 
-    constexpr int gmem_ncl = RLagInput ? 2 : 1;
+    constexpr int gmem_ncl = Inbuf::is_lagged ? 2 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
+    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Outbuf::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -586,7 +566,7 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
     int dm;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + 32];
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
 	dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
@@ -597,7 +577,7 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x1 = inbuf.load(1);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
@@ -616,37 +596,24 @@ __global__ void dedisperse_r1(T *iobuf, T *rstate, long beam_stride, long ambien
 
     rstate[threadIdx.x] = rs;
     
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + 32] = xp0;
     }
 }
 
 
-template<typename T, bool RLagInput>
-__global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+template<typename T, class Inbuf, class Outbuf>
+__global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);
     // assert(blockDim.x == 32);
     
-    constexpr int gmem_ncl = RLagInput ? 4 : 1;
+    constexpr int gmem_ncl = Inbuf::is_lagged ? 4 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
+    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Outbuf::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -660,7 +627,7 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
     int dm;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + 32];
 	xp1 = rstate[threadIdx.x + 64];
 	xp2 = rstate[threadIdx.x + 96];
@@ -675,7 +642,7 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x3 = inbuf.load(3);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
@@ -698,7 +665,7 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 
     rstate[threadIdx.x] = rs;
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + 32] = xp0;
 	rstate[threadIdx.x + 64] = xp1;
 	rstate[threadIdx.x + 96] = xp2;
@@ -706,31 +673,18 @@ __global__ void dedisperse_r2(T *iobuf, T *rstate, long beam_stride, long ambien
 }
 
 
-template<typename T, bool RLagInput>
-__global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+template<typename T, class Inbuf, class Outbuf>
+__global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);
     // assert(blockDim.x == 32);
 
-    constexpr int gmem_ncl = RLagInput ? 8 : 1;
+    constexpr int gmem_ncl = Inbuf::is_lagged ? 8 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
+    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Outbuf::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -744,7 +698,7 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
     int dm;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + 32];
 	xp1 = rstate[threadIdx.x + 2*32];
 	xp2 = rstate[threadIdx.x + 3*32];
@@ -767,7 +721,7 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x7 = inbuf.load(7);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
@@ -798,7 +752,7 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 
     rstate[threadIdx.x] = rs;
     
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + 32] = xp0;
 	rstate[threadIdx.x + 2*32] = xp1;
 	rstate[threadIdx.x + 3*32] = xp2;
@@ -810,35 +764,22 @@ __global__ void dedisperse_r3(T *iobuf, T *rstate, long beam_stride, long ambien
 }
 
 
-template<typename T, bool RLagInput>
-__global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+template<typename T, class Inbuf, class Outbuf>
+__global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 32);
     
     constexpr bool is_float32 = _is_float32<T>::value;    
     constexpr int nrs_per_thread = is_float32 ? 3 : 2;
-    constexpr int nrp_per_thread = RLagInput ? 15 : 0;
+    constexpr int nrp_per_thread = Inbuf::is_lagged ? 15 : 0;
     constexpr int gmem_ncl = nrs_per_thread + nrp_per_thread;
     
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 0);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
+    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Outbuf::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -856,7 +797,7 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7, xp8, xp9, xp10, xp11, xp12, xp13, xp14;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + 32 * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + 32 * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + 32 * (nrs_per_thread+2)];
@@ -893,7 +834,7 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
 	T x15 = inbuf.load(15);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // Residual lag is computed as folows:
 	    //   int ff = 2^rank - 1 - f;
@@ -949,7 +890,7 @@ __global__ void dedisperse_r4(T *iobuf, T *rstate, long beam_stride, long ambien
     if constexpr (is_float32)
 	rstate[threadIdx.x + 64] = rs3;
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + 32 * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + 32 * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + 32 * (nrs_per_thread+2)] = xp2;
@@ -1452,9 +1393,9 @@ __device__ inline void align1_s8(__half2 &x0, __half2 &x1, __half2 &x2, __half2 
 // -------------------------------------------------------------------------------------------------
 
 
-template<typename T, bool RLagInput>
+template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(128, 8)
-dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     
@@ -1466,28 +1407,15 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,5>::value;
     constexpr int nrs_per_thread = 1;
-    constexpr int nrp_per_thread = RLagInput ? nrdata : 0;
+    constexpr int nrp_per_thread = Inbuf::is_lagged ? nrdata : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + nwarps * nr_per_thread;
 
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, nrdata);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
+    typename Inbuf::device_state inbuf(inbuf_args, nrdata);
+    typename Outbuf::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1507,7 +1435,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + nthreads * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + nthreads * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + nthreads * (nrs_per_thread+2)];
@@ -1537,7 +1465,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x7 = inbuf.load(7);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -1644,7 +1572,7 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     // Save register state to global memory.
     rstate[threadIdx.x] = rs;
     
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + nthreads * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+2)] = xp2;
@@ -1660,9 +1588,9 @@ dedisperse_r5(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 }
 
 
-template<typename T, bool RLagInput>
+template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(256, 4)
-dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 256);
@@ -1670,29 +1598,16 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,6>::value;
     constexpr int nrs_per_thread = is_float32 ? 2 : 1;
-    constexpr int nrp_per_thread = RLagInput ? 8 : 0;
+    constexpr int nrp_per_thread = Inbuf::is_lagged ? 8 : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + 8 * nr_per_thread;
 
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 8);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
-    
+    typename Inbuf::device_state inbuf(inbuf_args, 8);
+    typename Outbuf::device_state outbuf(outbuf_args);
+
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
     rstate += ambient_ix * (32 * gmem_ncl);
@@ -1715,7 +1630,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + 256 * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + 256 * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + 256 * (nrs_per_thread+2)];
@@ -1745,7 +1660,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x7 = inbuf.load(7);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -1856,7 +1771,7 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     if constexpr (is_float32)
 	rstate[threadIdx.x + 256] = rs2;
     
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + 256 * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + 256 * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + 256 * (nrs_per_thread+2)] = xp2;
@@ -1872,9 +1787,9 @@ dedisperse_r6(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 }
 
 
-template<typename T, bool RLagInput>
+template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(256, 3)
-dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
 
@@ -1886,28 +1801,15 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,7>::value;
     constexpr int nrs_per_thread = is_float32 ? 4 : 3;
-    constexpr int nrp_per_thread = RLagInput ? nrdata : 0;
+    constexpr int nrp_per_thread = Inbuf::is_lagged ? nrdata : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + nwarps * nr_per_thread;
 
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, nrdata);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
+    typename Inbuf::device_state inbuf(inbuf_args, nrdata);
+    typename Outbuf::device_state outbuf(outbuf_args);
     
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1936,7 +1838,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7, xp8, xp9, xp10, xp11, xp12, xp13, xp14, xp15;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + nthreads * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + nthreads * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + nthreads * (nrs_per_thread+2)];
@@ -1982,7 +1884,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x15 = inbuf.load(15);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -2135,7 +2037,7 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     if constexpr (is_float32)
 	rstate[threadIdx.x + 3*nthreads] = rs4;
     
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + nthreads * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + nthreads * (nrs_per_thread+2)] = xp2;
@@ -2159,9 +2061,9 @@ dedisperse_r7(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 }
 
 
-template<typename T, bool RLagInput>
+template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(512, 1)
-dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, int nt_cl, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 512);
@@ -2169,28 +2071,15 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     constexpr bool is_float32 = _is_float32<T>::value;
     constexpr int gs_ncl = _gs_ncl<T,8>::value;
     constexpr int nrs_per_thread = is_float32 ? 5 : 4;
-    constexpr int nrp_per_thread = RLagInput ? 16 : 0;
+    constexpr int nrp_per_thread = Inbuf::is_lagged ? 16 : 0;
     constexpr int nr_per_thread = nrs_per_thread + nrp_per_thread;
     constexpr int gmem_ncl = gs_ncl + 16 * nr_per_thread;
 
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
-
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_args inbuf_args;
-    inbuf_args.in = iobuf;
-    inbuf_args.beam_stride = beam_stride;
-    inbuf_args.ambient_stride = ambient_stride;
-    inbuf_args.freq_stride = row_stride;
-    inbuf_args.is_downsampled = flags & 1;
-
-    typename dedispersion_simple_outbuf<T>::device_args outbuf_args;
-    outbuf_args.out = iobuf;
-    outbuf_args.beam_stride = beam_stride;
-    outbuf_args.ambient_stride = ambient_stride;
-    outbuf_args.dm_stride = row_stride;
     
-    typename dedispersion_simple_inbuf<T,RLagInput>::device_state inbuf(inbuf_args, 16);
-    typename dedispersion_simple_outbuf<T>::device_state outbuf(outbuf_args);
+    typename Inbuf::device_state inbuf(inbuf_args, 16);
+    typename Outbuf::device_state outbuf(outbuf_args);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -2220,7 +2109,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     T xp0, xp1, xp2, xp3, xp4, xp5, xp6, xp7, xp8, xp9, xp10, xp11, xp12, xp13, xp14, xp15;
 #pragma nv_diag_default 177
 
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	xp0 = rstate[threadIdx.x + 512 * (nrs_per_thread)];
 	xp1 = rstate[threadIdx.x + 512 * (nrs_per_thread+1)];
 	xp2 = rstate[threadIdx.x + 512 * (nrs_per_thread+2)];
@@ -2266,7 +2155,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 	T x15 = inbuf.load(15);
 	inbuf.advance();
 
-	if constexpr (RLagInput) {
+	if constexpr (Inbuf::is_lagged) {
 	    // Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
 	    // "Row" index represents a coarse frequency 0 <= f < 2^(rank).
 	    // Residual lag is computed as folows:
@@ -2410,7 +2299,7 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
     if constexpr (is_float32)
 	rstate[threadIdx.x + 4*512] = rs5;
     
-    if constexpr (RLagInput) {
+    if constexpr (Inbuf::is_lagged) {
 	rstate[threadIdx.x + 512 * (nrs_per_thread)] = xp0;
 	rstate[threadIdx.x + 512 * (nrs_per_thread+1)] = xp1;
 	rstate[threadIdx.x + 512 * (nrs_per_thread+2)] = xp2;
@@ -2434,15 +2323,15 @@ dedisperse_r8(T *iobuf, T *rstate, long beam_stride, long ambient_stride, int ro
 }
 
 
-#define INSTANTIATE_DEDISPERSION_KERNELS(T, RLagInput) \
-    template __global__ void dedisperse_r1<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags); \
-    template __global__ void dedisperse_r2<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags); \
-    template __global__ void dedisperse_r3<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags); \
-    template __global__ void dedisperse_r4<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags); \
-    template __global__ void dedisperse_r5<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags); \
-    template __global__ void dedisperse_r6<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags); \
-    template __global__ void dedisperse_r7<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags); \
-    template __global__ void dedisperse_r8<T,RLagInput> (T *iobuf, T *rstate, long beam_stride, long ambient_stride, int row_stride, int nt_cl, uint *integer_constants, uint flags)
+#define INSTANTIATE_DEDISPERSION_KERNELS(T, Inbuf, Outbuf) \
+    template __global__ void dedisperse_r1<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants); \
+    template __global__ void dedisperse_r2<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants); \
+    template __global__ void dedisperse_r3<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants); \
+    template __global__ void dedisperse_r4<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants); \
+    template __global__ void dedisperse_r5<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants); \
+    template __global__ void dedisperse_r6<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants); \
+    template __global__ void dedisperse_r7<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants); \
+    template __global__ void dedisperse_r8<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants)
 
 
 }  // namespace pirate

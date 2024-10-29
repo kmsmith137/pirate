@@ -13,8 +13,12 @@ using namespace pirate;
 template<typename T>
 static void time_gpu_dedispersion_kernel(int rank, bool apply_input_residual_lags)
 {
-    bool is_downsampled_tree = false;  // shouldn't affect timing
-    shared_ptr<GpuDedispersionKernel<T>> kernel = GpuDedispersionKernel<T>::make(rank, apply_input_residual_lags, is_downsampled_tree);
+    typename GpuDedispersionKernel<T>::Params params;
+    params.rank = rank;
+    params.apply_input_residual_lags = apply_input_residual_lags;
+    params.is_downsampled_tree = false;  // shouldn't affect timing
+
+    shared_ptr<GpuDedispersionKernel<T>> kernel = make_shared<GpuDedispersionKernel<T>> (params);
     
     long nstreams = 1;
     long ncallbacks = 10;
@@ -24,10 +28,10 @@ static void time_gpu_dedispersion_kernel(int rank, bool apply_input_residual_lag
     long niter = 20;
 
     Array<T> iobuf({nstreams, nbeams, nambient, pow2(rank), ntime}, af_zero | af_gpu);
-    Array<T> rstate({nstreams, nbeams, nambient, kernel->params.state_nelts_per_small_tree}, af_zero | af_gpu);
+    Array<T> rstate({nstreams, nbeams, nambient, kernel->state_nelts_per_small_tree}, af_zero | af_gpu);
     
     long iobuf_bytes_per_stream = nbeams * nambient * pow2(rank) * ntime * sizeof(T);
-    long rstate_bytes_per_stream = nbeams * nambient * kernel->params.state_nelts_per_small_tree * sizeof(T);
+    long rstate_bytes_per_stream = nbeams * nambient * kernel->state_nelts_per_small_tree * sizeof(T);
     double gmem_gb = 2.0e-9 * niter * (iobuf_bytes_per_stream + rstate_bytes_per_stream);  // factor 2 from read+write
     
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)

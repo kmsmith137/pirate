@@ -106,9 +106,13 @@ struct TestInstance
 	ref_params.is_downsampled_tree = is_downsampled_tree;
 	ref_params.nelts_per_segment = xdiv(constants::bytes_per_gpu_cache_line, sizeof(T));  // matches DedispersionConfig::get_nelts_per_segment()
 
-	ReferenceDedispersionKernel ref_kernel(ref_params);
+	typename GpuDedispersionKernel<T>::Params gpu_params;
+	gpu_params.rank = rank;
+	gpu_params.apply_input_residual_lags = apply_input_residual_lags;
+	gpu_params.is_downsampled_tree = is_downsampled_tree;
 
-	shared_ptr<GpuDedispersionKernel<T>> gpu_kernel = GpuDedispersionKernel<T>::make(rank, apply_input_residual_lags, is_downsampled_tree);
+	ReferenceDedispersionKernel ref_kernel(ref_params);
+	shared_ptr<GpuDedispersionKernel<T>> gpu_kernel = make_shared<GpuDedispersionKernel<T>> (gpu_params);
 
 	if (noisy)
 	    gpu_kernel->print(cout, 4);  // indent=4
@@ -117,7 +121,7 @@ struct TestInstance
 			   { beam_stride, ambient_stride, row_stride, 1 },  // strides
 			   af_gpu | af_zero);
 	
-	Array<T> gpu_rstate({ nbeams, nambient, gpu_kernel->params.state_nelts_per_small_tree },
+	Array<T> gpu_rstate({ nbeams, nambient, gpu_kernel->state_nelts_per_small_tree },
 			    af_gpu | af_zero);
 	
 	for (int ichunk = 0; ichunk < nchunks; ichunk++) {
