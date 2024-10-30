@@ -520,19 +520,13 @@ __device__ inline void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 //
 // For now, dedispersion kernels have interface
 //
-//   dedisperse_rRANK(__half2 *iobuf, __half2 *rstate,
-//                    long beam_stride, long ambient_stride,
-//                    int row_stride, int nt_cl,
-//                    uint *integer_constants,
-//                    uint flags);
+//   dedisperse_rRANK(Inbuf::device_args inbuf_args,
+//                    Outbuf::device_args outbuf_args,
+//                    T *rstate, int nt_cl, uint *integer_constants);
 //
-// The 'iobuf' and 'rstate' arrays have logical shapes:
+// The 'rstate' array is fully contiguous, with shape:
 //
-//   float16 iobuf[nbeams][nambient][2^rank][ntime];
 //   float16 rstate[nbeams][nambient][state_nelts_per_small_tree]
-//
-// The iobuf array has strides (beam_stride, ambient_stride, row_stride, 1),
-// and the rstate array is fully contiguous.
 //
 // Kernel grid dimensions are (x,y,z) = (ambient_ix, beam_ix, 1),
 // and thread block dimensions are (x,y,z) = (32 * warps_per_threadblock, 1, 1).

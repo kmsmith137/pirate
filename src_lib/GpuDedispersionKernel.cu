@@ -256,7 +256,6 @@ void GpuDedispersionKernel<T>::launch(T *iobuf, T *rstate,
     T32 *iobuf2 = reinterpret_cast<T32 *> (iobuf);
     T32 *rstate2 = reinterpret_cast<T32 *> (rstate);
     long nt_cl = ntime / elts_per_cache_line;
-    bool flags = params.is_downsampled_tree ? 1 : 0;
 
     // Convert (T strides) to (T32 strides).
     int s = integer_log2(4 / sizeof(T));
