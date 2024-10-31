@@ -19,14 +19,14 @@ namespace pirate {
 
 // Defined in dedispersion_kernel_implementation.hpp
 // Instantiated in src_lib/template_instantiations/*.cu
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r1(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r2(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r3(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r4(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r5(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r6(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r7(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r8(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, int nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r1(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r2(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r3(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r4(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r5(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r6(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r7(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r8(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
 
 
 template<typename T> struct _is_float32 { };
@@ -363,7 +363,7 @@ struct GpuDedispersionKernelImpl : public GpuDedispersionKernel
     virtual void launch(const UntypedArray &in, UntypedArray &out, long itime, long ibeam, cudaStream_t stream) override;
 
     // (inbuf, outbuf, rstate, nt_cl, integer_constants)
-    void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, int, uint *) = nullptr;
+    void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, long, uint *) = nullptr;
 };
 
 
