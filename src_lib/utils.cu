@@ -232,20 +232,14 @@ void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
 void dedisperse_non_incremental(Array<float> &arr)
 {
     assert(arr.ndim == 2);
-    assert(arr.strides[1] == 1);
 
     int nfreq = arr.shape[0];
     int ntime = arr.shape[1];
     assert(nfreq > 0);
     assert(ntime > 0);
+    assert((ntime ==1) || (arr.strides[1] == 1));
     
-    int rank = int(log2(nfreq) + 0.5);
-    
-    if (nfreq != pow2(rank)) {
-	stringstream ss;
-	ss << "dedisperse_non_incremental(): arr.shape[0]=" << nfreq << " is not a power of two";
-	throw runtime_error(ss.str());
-    }
+    int rank = integer_log2(nfreq);
 
     for (int r = 0; r < rank; r++) {
 	int pr = pow2(r);

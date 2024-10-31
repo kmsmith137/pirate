@@ -26,9 +26,9 @@ struct ReferenceLaggedDownsampler
     
     struct Params
     {
-	int small_input_rank = 0;
-	int large_input_rank = 0;
-	int num_downsampling_levels = 0;
+	int small_input_rank = -1;
+	int large_input_rank = -1;
+	int num_downsampling_levels = -1;
 	int nbeams = 0;
 	long ntime = 0;
     };
@@ -44,6 +44,9 @@ struct ReferenceLaggedDownsampler
     // Note: if nbeams == 1, then the beam axis can be omitted, i.e. the following are okay:
     //   in.shape = (2^large_input_rank, ntime)
     //   out[i].shape = (2^(large_input_rank-1), ntime/2^(i+1))
+    //
+    // Note: the ReferenceLaggedDownsampler stores all ring buffer state needed to call
+    // apply() incrementally.
     
     void apply(const gputils::Array<float> &in, std::vector<gputils::Array<float>> &out);
     void apply(const gputils::Array<float> &in, gputils::Array<float> *outp);

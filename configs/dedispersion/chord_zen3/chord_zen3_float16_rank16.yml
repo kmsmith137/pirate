@@ -1,8 +1,7 @@
 tree_rank: 16
 num_downsampling_levels: 4
 time_samples_per_chunk: 2048
-uncompressed_dtype: float16
-compressed_dtype: int8
+dtype: float16
 early_triggers:
   - {ds_level: 1, tree_rank: 14}
   - {ds_level: 2, tree_rank: 13}

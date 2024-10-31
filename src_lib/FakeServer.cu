@@ -13,10 +13,6 @@
 #include <gputils/system_utils.hpp>
 #include <gputils/memcpy_kernels.hpp>
 
-#include "../include/pirate/Dedisperser.hpp"
-#include "../include/pirate/DedispersionPlan.hpp"
-#include "../include/pirate/DedispersionConfig.hpp"
-
 #include "../include/pirate/internals/File.hpp"
 #include "../include/pirate/internals/Epoll.hpp"
 #include "../include/pirate/internals/Socket.hpp"
@@ -384,87 +380,6 @@ struct SleepyWorker : public FakeServer::Worker
 
 // -------------------------------------------------------------------------------------------------
 //
-// DedispersionWorker
-//
-// Currently only does g2h and h2g copies (i.e. no g2g copies or kernel launches yet!)
-
-
-struct DedispersionWorker : public FakeServer::Worker
-{
-    const int device;
-    shared_ptr<Dedisperser> dedisperser;
-
-    // Reminder: cudaStream_t is a typedef for (CUstream_st *)
-    shared_ptr<CUstream_st> h2g_stream;
-    shared_ptr<CUstream_st> g2h_stream;
-
-    
-    DedispersionWorker(const FakeServer::Params &params_, const shared_ptr<DedispersionPlan> &plan, int device_)
-	: FakeServer::Worker(params_), device(device_)
-    {
-	assert(plan);
-	assert(device >= 0);
-
-	stringstream ss;
-	ss << "Dedispersion(device=" << device << ")";
-
-	this->worker_name = ss.str();
-	this->nbytes_h2g = plan->pcie_nbytes_per_chunk;
-	this->nbytes_g2h = plan->pcie_nbytes_per_chunk;
-	// FIXME initialized this->nbytes_gmem
-	this->dedisperser = make_shared<Dedisperser> (plan);
-    }
-
-    virtual void worker_initialize() override
-    {
-	CUDA_CALL(cudaSetDevice(device));  // initialize CUDA device in worker thread
-	this->h2g_stream = gputils::CudaStreamWrapper().p;  // RAII stream
-	this->g2h_stream = gputils::CudaStreamWrapper().p;  // RAII stream
-	this->dedisperser->allocate();
-    }
-
-    virtual void worker_body(int iter) override
-    {
-	const DedispersionConfig &cfg = dedisperser->config;
-	
-	int nb_tot = xdiv(cfg.beams_per_gpu, cfg.beams_per_batch);  // total batches
-	int nb_act = cfg.num_active_batches;                        // active batches
-	int ev_flags = cudaEventBlockingSync | cudaEventDisableTiming;
-
-	vector<shared_ptr<CUevent_st>> events_g2h(nb_tot);
-	vector<shared_ptr<CUevent_st>> events_h2g(nb_tot);
-	
-	for (int b = 0; b < nb_tot; b++) {
-	    if (b >= nb_act) {
-		CUDA_CALL(cudaEventSynchronize(events_g2h[b-nb_act].get()));
-		CUDA_CALL(cudaEventSynchronize(events_h2g[b-nb_act].get()));
-	    }
-
-	    int chunk = iter;
-	    int beam = b * cfg.beams_per_batch;
-	    
-	    dedisperser->launch_g2h_copies(chunk, beam, g2h_stream.get());
-	    events_g2h[b] = CudaEventWrapper(ev_flags).p;
-	    CUDA_CALL(cudaEventRecord(events_g2h[b].get(), g2h_stream.get()));
-
-	    chunk = ((b+nb_act) < nb_tot) ? iter : (iter+1);
-	    beam = ((b+nb_act) % nb_tot) * cfg.beams_per_batch;
-	    
-	    dedisperser->launch_h2g_copies(iter, beam, h2g_stream.get());
-	    events_h2g[b] = CudaEventWrapper(ev_flags).p;
-	    CUDA_CALL(cudaEventRecord(events_h2g[b].get(), h2g_stream.get()));
-	}
-	
-	CUDA_CALL(cudaStreamSynchronize(h2g_stream.get()));
-	CUDA_CALL(cudaStreamSynchronize(g2h_stream.get()));
-    }
-
-    virtual ~DedispersionWorker() { }
-};
-
-
-// -------------------------------------------------------------------------------------------------
-//
 // MemcpyWorker (either host->host, host->device, or device->host)
 //
 //  - Currently use host->host MemcpyWorker as crude placeholder for packet assembler.
@@ -781,7 +696,7 @@ FakeServer::FakeServer(const Params &params_)
     
     assert(params.num_iterations > 0);
     
-    bool gpus_requested = (params.dedispersion_plan) || (params.nbytes_h2g > 0) || (params.nbytes_g2h > 0) || (params.nbytes_gmem_kernel > 0);
+    bool gpus_requested = (params.nbytes_h2g > 0) || (params.nbytes_g2h > 0) || (params.nbytes_gmem_kernel > 0);
     bool nics_requested = (params.nconn_per_ipaddr > 0) || (params.ipaddr_list.size() > 0);
     bool ssds_requested = (params.nbytes_per_ssd > 0);
     
@@ -831,11 +746,6 @@ FakeServer::FakeServer(const Params &params_)
     if (params.ipaddr_list.size() > 0) {
 	for (unsigned int irecv = 0; irecv < params.ipaddr_list.size(); irecv++)
 	    receivers.push_back(make_shared<Receiver> (params, irecv));
-    }
-    
-    if (params.dedispersion_plan) {
-	for (int igpu = 0; igpu < params.ngpu; igpu++)	    
-	    workers.push_back(make_shared<DedispersionWorker> (params, params.dedispersion_plan, igpu));
     }
 
     if (params.nbytes_h2h > 0)

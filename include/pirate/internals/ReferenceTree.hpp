@@ -13,7 +13,10 @@ namespace pirate {
 
 
 // ReferenceTree: simple, self-contained reference implementation of tree dedispersion.
-// Processes input incrementally in chunks of shape (2^rank, ntime).
+//
+// Processes input incrementally in chunks of shape (..., nfreq, ..., ntime), where "..."
+// represents an arbitrary number of spectator axes. The time axis must be last, and be
+// contiguous (i.e. stride=1). The number of frequencies must be a power of two.
 //
 // The RefrerenceTree is unaware of the larger dedispersion plan (stage0/stage1 split,
 // early triggers, downsampling, etc.) but can be used as a "building block" to implement
@@ -23,21 +26,35 @@ namespace pirate {
 class ReferenceTree
 {
 public:
-    ReferenceTree(int rank, int ntime);
+    // By default, the frequency axis is second-to-last.
+    ReferenceTree(std::initializer_list<long> shape);
+    ReferenceTree(std::initializer_list<long> shape, int freq_axis);
+    ReferenceTree(int ndim, const long *shape, int freq_axis);
+    
+    // Dedispersion is done in-place, on an array of shape 'shape'.
+    void dedisperse(gputils::Array<float> &arr);
 
-    int rank = 0;
-    int ntime = 0;
-    int nrstate = 0;
-    int nscratch = 0;
-
-    // 2-d array of shape (2^rank, ntime).
-    // Dedispersion is done in place -- output index is a bit-reversed delay.
-    void dedisperse(gputils::Array<float> &arr, float *rstate, float *scratch) const; 
-    void dedisperse(float *arr, int stride, float *rstate, float *scratch) const;
-
+    // Morally equivalent to make_shared<ReferenceTree> (...).
+    // (Necessary since make_shared doesn't seem to work with initializer lists.)
+    static std::shared_ptr<ReferenceTree> make(std::initializer_list<long> shape);
+    static std::shared_ptr<ReferenceTree> make(std::initializer_list<long> shape, int freq_axis);
+    
 protected:
-    std::shared_ptr<ReferenceTree> prev_tree;
-    std::vector<int> lags;  // length 2^(rank-1)
+    std::vector<long> shape;
+    int freq_axis = -1;
+
+    int ndim = -1;
+    int nfreq = -1;
+    int ntime = -1;
+    int rank = -1;
+    long nrstate = 0;
+    
+    gputils::Array<float> rstate;          // can be large
+    gputils::Array<float> scratch;         // always small (length ntime+1)
+
+    // Used temporarily in dedisperse().
+    std::vector<long> tmp_shape;
+    std::vector<long> tmp_strides;
 };
 
 

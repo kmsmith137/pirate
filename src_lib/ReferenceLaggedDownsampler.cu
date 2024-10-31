@@ -19,11 +19,11 @@ namespace pirate {
 ReferenceLaggedDownsampler::ReferenceLaggedDownsampler(const Params &params_)
     : params(params_)
 {
-    assert(params.small_input_rank >= 1);
+    assert(params.small_input_rank >= 0);
     assert(params.small_input_rank <= 8);
     assert(params.large_input_rank >= params.small_input_rank);
     assert(params.large_input_rank <= constants::max_tree_rank);
-    assert(params.num_downsampling_levels > 0);
+    assert(params.num_downsampling_levels >= 0);
     assert(params.num_downsampling_levels <= constants::max_downsampling_level);
     assert(params.nbeams > 0);
     assert(params.ntime > 0);
@@ -32,27 +32,32 @@ ReferenceLaggedDownsampler::ReferenceLaggedDownsampler(const Params &params_)
     int nb = params.nbeams;
     int r = params.large_input_rank;
     int s = params.small_input_rank;
+    int nds = params.num_downsampling_levels;
 
-    vector<int> small_lags(nb * pow2(r), 0);
-    vector<int> large_lags(nb * pow2(r-1), 0);
+    if (nds == 0)
+	return;
+
+    assert(params.small_input_rank > 0);
+    Array<int> small_lags({nb * pow2(r)}, af_uhost | af_zero);
+    Array<int> large_lags({nb * pow2(r-1)}, af_uhost | af_zero);
     
     for (int i = 0; i < nb * pow2(r); i++)
-	small_lags[i] = (i & 1) ? 0 : 1;
+	small_lags.data[i] = (i & 1) ? 0 : 1;
     
     for (int i = 0; i < nb * pow2(r-s); i++)
 	for (int j = 0; j < pow2(s-1); j++)
-	    large_lags[i*pow2(s-1)+j] = pow2(s-1)-j-1;
+	    large_lags.data[i*pow2(s-1)+j] = pow2(s-1)-j-1;
     
     this->lagbuf_small = make_shared<ReferenceLagbuf> (small_lags, params.ntime/2);
     this->lagbuf_large = make_shared<ReferenceLagbuf> (large_lags, params.ntime/2);
-
-    if (params.num_downsampling_levels == 1)
+    
+    if (nds == 1)
 	return;
     
     Params next_params;
     next_params.small_input_rank = params.small_input_rank;
     next_params.large_input_rank = params.large_input_rank;
-    next_params.num_downsampling_levels = params.num_downsampling_levels - 1;
+    next_params.num_downsampling_levels = nds-1;
     next_params.ntime = xdiv(params.ntime, 2);
     next_params.nbeams = params.nbeams;
     
@@ -103,9 +108,14 @@ void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *out
     int r = params.large_input_rank;
     int nbeams = params.nbeams;
     long ntime = params.ntime;
+    long nds = params.num_downsampling_levels;
 
     // Note: _check_shape() allows beam axis to be omitted if nbeams == 1.
     _check_shape("in", in, nbeams, pow2(r), ntime);
+    
+    if (nds == 0)
+	return;
+    
     _check_shape("out", outp[0], nbeams, pow2(r-1), xdiv(ntime,2));
 
     // Reshape input array to 2-d, since reference_downsample_time() assumes a 2-d array.
@@ -130,8 +140,8 @@ void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *out
     // has chosen to omit the beam axis (see "reminder" above).
     out_tmp = out_tmp.reshape_ref(outp[0].ndim, outp[0].shape);
     outp[0].fill(out_tmp);
-    
-    if (params.num_downsampling_levels == 1)
+
+    if (nds == 1)
 	return;
     
     // Recurse to next downsampling level.

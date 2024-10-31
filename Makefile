@@ -15,7 +15,6 @@ SHELL := /bin/bash
 
 HFILES = \
   include/pirate/constants.hpp \
-  include/pirate/Dedisperser.hpp \
   include/pirate/DedispersionConfig.hpp \
   include/pirate/DedispersionPlan.hpp \
   include/pirate/avx256/downsample.hpp \
@@ -26,20 +25,22 @@ HFILES = \
   include/pirate/gpu/TransposeKernel.hpp \
   include/pirate/internals/bitvec.hpp \
   include/pirate/internals/cpu_downsample.hpp \
+  include/pirate/internals/dedispersion_kernel_implementation.hpp \
+  include/pirate/internals/dedispersion_inbufs.hpp \
+  include/pirate/internals/dedispersion_outbufs.hpp \
   include/pirate/internals/gpu_downsample.hpp \
   include/pirate/internals/gpu_transpose.hpp \
   include/pirate/internals/file_utils.hpp \
   include/pirate/internals/inlines.hpp \
   include/pirate/internals/utils.hpp \
-  include/pirate/internals/CacheLineRingbuf.hpp \
   include/pirate/internals/Directory.hpp \
   include/pirate/internals/Epoll.hpp \
   include/pirate/internals/FakeCorrelator.hpp \
   include/pirate/internals/FakeServer.hpp \
   include/pirate/internals/File.hpp \
   include/pirate/internals/GpuDedispersionKernel.hpp \
-  include/pirate/internals/LaggedCacheLine.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp \
+  include/pirate/internals/ReferenceDedispersionKernel.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
   include/pirate/internals/ReferenceLaggedDownsampler.hpp \
   include/pirate/internals/ReferenceTree.hpp \
@@ -47,8 +48,6 @@ HFILES = \
   include/pirate/internals/YamlFile.hpp
 
 XFILES = \
-  bin/chord_2023_receiver \
-  bin/chord_2023_sender \
   bin/fake_correlator \
   bin/fake_server \
   bin/scratch \
@@ -74,8 +73,6 @@ OFILES = \
   src_lib/gpu_downsample.o \
   src_lib/gpu_transpose.o \
   src_lib/utils.o \
-  src_lib/CacheLineRingbuf.o \
-  src_lib/Dedisperser.o \
   src_lib/DedispersionConfig.o \
   src_lib/DedispersionPlan.o \
   src_lib/Directory.o \
@@ -85,16 +82,20 @@ OFILES = \
   src_lib/File.o \
   src_lib/GpuDedispersionKernel.o \
   src_lib/GpuLaggedDownsamplingKernel.o \
-  src_lib/LaggedCacheLine.o \
   src_lib/ReferenceDedisperser.o \
+  src_lib/ReferenceDedispersionKernel.o \
   src_lib/ReferenceLagbuf.o \
   src_lib/ReferenceLaggedDownsampler.o \
   src_lib/ReferenceTree.o \
   src_lib/Socket.o \
-  src_lib/YamlFile.o
+  src_lib/YamlFile.o \
+  src_lib/template_instantiations/dedisp_float32_nolag.o \
+  src_lib/template_instantiations/dedisp_float32_lag.o \
+  src_lib/template_instantiations/dedisp_float16_nolag.o \
+  src_lib/template_instantiations/dedisp_float16_lag.o
 
 # Used in 'make clean' and 'make source_files.txt'
-SRCDIRS = . src_bin src_lib include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
+SRCDIRS = . src_bin src_lib src_lib/template_instantiations include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
 
 all: $(XFILES)
 

@@ -14,27 +14,23 @@ namespace pirate {
 class ReferenceLagbuf
 {
 public:
-    // ReferenceLagbuf: a very simple class which applies a channel-dependent lag
-    // (specified by a length-nchan integer-valued vector of lags) incrementally to
-    // an input array of shape (nchan, ntime).
+    // ReferenceLagbuf: applies a lag incrementally to an input array of shape
+    // (n_0, n_1, ..., n_{d-1}, T). The lags are specified as an integer-valued
+    // array of shape (n_0, n_1, ..., n_{d-1}).
     
-    ReferenceLagbuf(const std::vector<int> &lags, int ntime);
+    ReferenceLagbuf(const gputils::Array<int> &lags, int ntime);
 
-    int nchan = 0; // lags.size()
+    std::vector<ssize_t> expected_shape;  // (n_0, ..., n_{d-1}, T)
     int ntime = 0;
-    int nrstate = 0;
 
-    // 2-d array of shape (nchan, ntime).
-    // Lags are applied in place.
     void apply_lags(gputils::Array<float> &arr) const;
-    void apply_lags(float *arr, int stride) const;
 
 protected:
-    std::vector<int> lags;  // length nchan
+    gputils::Array<int> lags;     // shape (n_0, ..., n_{d-1})
     gputils::Array<float> rstate;
     gputils::Array<float> scratch;
 };
-				       
+
 
 }  // namespace pirate
 

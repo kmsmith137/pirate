@@ -57,50 +57,23 @@ ostream &operator<<(ostream &os, const DedispersionConfig::EarlyTrigger &et)
 // -------------------------------------------------------------------------------------------------
 
 
-// Helper for DedispersionConfig::get_bytes_per_compressed_segment() and related methods.
-static int dtype_size(const string &dtype)
-{
-    assert(!is_empty_string(dtype));
-    const char *s = dtype.c_str();
-
-    if (!strcmp(s, "float32"))
-	return 4;
-    else if (!strcmp(s, "float16"))
-	return 2;
-    else if (!strcmp(s, "int8"))
-	return 1;
-
-    stringstream ss;
-    ss << "dtype_size(): unrecognized dtype '" << dtype << "'";
-    throw runtime_error(ss.str());
-}
-
-
-int DedispersionConfig::get_uncompressed_dtype_size() const
-{
-    assert(!is_empty_string(this->uncompressed_dtype));
-    return dtype_size(uncompressed_dtype);
-}
-
+// Also validates DedispersionConfig::dtype.
 int DedispersionConfig::get_nelts_per_segment() const
 {
-    assert(!is_empty_string(this->uncompressed_dtype));
-    return xdiv(constants::bytes_per_segment, dtype_size(uncompressed_dtype));
+    if (is_empty_string(dtype))
+	throw runtime_error("DedispersionConfig::dtype is unintialized");
+
+    if (dtype == "float32")
+	return xdiv(constants::bytes_per_gpu_cache_line, 4);
+    else if (dtype == "float16")
+	return xdiv(constants::bytes_per_gpu_cache_line, 2);
+
+    stringstream ss;
+    ss << "DedispersionConfig: dtype='" << dtype << "' is invalid."
+       << " Valid values are 'float32' and 'float16'.";
+    
+    throw runtime_error(ss.str());
 }
-
-int DedispersionConfig::get_bytes_per_compressed_segment() const
-{
-    assert(!is_empty_string(this->compressed_dtype));
-    assert(!is_empty_string(this->uncompressed_dtype));
-
-    int nelts = this->get_nelts_per_segment();
-    int usize = dtype_size(uncompressed_dtype);
-    int csize = dtype_size(compressed_dtype);
-
-    assert(csize <= usize);
-    return (nelts * csize) + ((csize < usize) ? usize : 0);
-}
-
 
 void DedispersionConfig::add_early_trigger(ssize_t ds_level, ssize_t tree_rank)
 {
@@ -127,29 +100,6 @@ void DedispersionConfig::add_early_triggers(ssize_t ds_level, std::initializer_l
     std::sort(early_triggers.begin(), early_triggers.end());
 }
 
-
-// Helper for DedispersionConfig::validate()
-static void check_dtype(const char *name, const string &val, const std::vector<const char *> &valid_vals)
-{
-    if (is_empty_string(val)) {
-	stringstream ss;
-	ss << "DedispersionConfig::" << name << " is uninitialized";
-	throw runtime_error(ss.str());
-    }
-
-    const char *vs = val.c_str();
-    
-    for (const char *valid_val: valid_vals)
-	if (!strcmp(vs, valid_val))
-	    return;
-
-    stringstream ss2;
-    ss2 << "DedispersionConfig::" << name << " '" << val << "' is invalid."
-       << " Valid values are: " << gputils::tuple_str(valid_vals);
-    
-    throw runtime_error(ss2.str());
-}
-
 			
 void DedispersionConfig::validate() const
 {
@@ -162,19 +112,11 @@ void DedispersionConfig::validate() const
     assert(beams_per_batch > 0);
     assert(num_active_batches > 0);
     assert(gmem_nbytes_per_gpu > 0);
-    
-    check_dtype("uncompressed_dtype", uncompressed_dtype, {"float32","float16"});
-    check_dtype("compressed_dtype", compressed_dtype, {"float32","float16","int8"});
-    assert(dtype_size(compressed_dtype) <= dtype_size(uncompressed_dtype));
-
-    // GPU configuration.
-    assert((beams_per_gpu % beams_per_batch) == 0);
-    assert((num_active_batches * beams_per_batch) <= beams_per_gpu);
 
     int min_rank = (num_downsampling_levels > 1) ? 1 : 0;
     check_rank(tree_rank, "DedispersionConfig", min_rank);
 
-    // Note: call get->nelts_per_segment() after check_dtype(uncompressed_dtype).
+    // Note: calling get_nelts_per_segment() checks 'dtype' for validity.
     int nelts_per_segment = this->get_nelts_per_segment();
     int min_nt = nelts_per_segment * pow2(num_downsampling_levels-1);
     
@@ -185,38 +127,21 @@ void DedispersionConfig::validate() const
 	   << " (this value depends on dtype and num_downsampling levels)";
 	throw runtime_error(ss.str());
     }
-    
-    // Check validity of early triggers.
 
-    int dslevel_curr = 0;
-    int ntrigger_curr = 0;  // running trigger count at current downsampling level
-    int ntrigger_max = 0;   // max trigger count, over all downsampling levels
-    
+    // GPU configuration.
+    assert((beams_per_gpu % beams_per_batch) == 0);
+    assert((num_active_batches * beams_per_batch) <= beams_per_gpu);
+
+    // Assumed for convenience, to simplify logic in a few places -- might revisit later.
+    assert((beams_per_gpu % beams_per_batch) == 0);
+
+    // Check validity of early triggers.
     for (const EarlyTrigger &et: early_triggers) {
 	ssize_t ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
 	ssize_t ds_rank0 = ds_rank / 2;
 	
 	assert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
 	assert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
-
-	if (et.ds_level != dslevel_curr) {
-	    dslevel_curr = et.ds_level;
-	    ntrigger_curr = 0;
-	}
-
-	ntrigger_curr++;
-	ntrigger_max = std::max(ntrigger_max, ntrigger_curr);
-    }
-
-    if (ntrigger_max > constants::max_early_triggers_per_downsampling_level) {
-	stringstream ss;
-	ss << "DedispersionConfig: per-dslevel early trigger count (="
-	   << ntrigger_max << ") exceeds maximum (="
-	   << constants::max_early_triggers_per_downsampling_level
-	   << "). You can either use fewer early triggers, or recompile pirate"
-	   << "after changing max_early_triggers_per_downsampling_level in "
-	   << "include/pirate/constants.hpp.";
-	throw runtime_error(ss.str());
     }
 }
 
@@ -226,25 +151,13 @@ void DedispersionConfig::print(ostream &os, int indent) const
     print_kv("tree_rank", tree_rank, os, indent);
     print_kv("num_downsampling_levels", num_downsampling_levels, os, indent);
     print_kv("time_samples_per_chunk", time_samples_per_chunk, os, indent);
-    print_kv("uncompressed_dtype", uncompressed_dtype, os, indent);
-    print_kv("compressed_dtype", compressed_dtype, os, indent);
+    print_kv("dtype", dtype, os, indent);
     print_kv("early_triggers", gputils::tuple_str(early_triggers, " "), os, indent);
     
     print_kv("beams_per_gpu", beams_per_gpu, os, indent);
     print_kv("beams_per_batch", beams_per_batch, os, indent);
     print_kv("num_active_batches", num_active_batches, os, indent);
     print_kv_nbytes("gmem_nbytes_per_gpu", gmem_nbytes_per_gpu, os, indent);
-
-    // Only print these members if they differ from default values.
-    
-    if (!use_hugepages)
-	print_kv("use_hugepages", use_hugepages, os, indent);
-    if (force_ring_buffers_to_host)
-	print_kv("force_ring_buffers_to_host", force_ring_buffers_to_host, os, indent);
-    if (bloat_dedispersion_plan)
-	print_kv("bloat_dedispersion_plan", bloat_dedispersion_plan, os, indent);
-    if (planner_verbosity > 0)
-	print_kv("planner_verbosity", planner_verbosity, os, indent);
 }
 
 
@@ -257,8 +170,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
 	<< YAML::Key << "tree_rank" << YAML::Value << tree_rank
 	<< YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels
 	<< YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk
-	<< YAML::Key << "uncompressed_dtype" << YAML::Value << uncompressed_dtype
-	<< YAML::Key << "compressed_dtype" << YAML::Value << compressed_dtype
+	<< YAML::Key << "dtype" << YAML::Value << dtype
 	<< YAML::Key << "early_triggers"
 	<< YAML::Value 
 	<< YAML::BeginSeq;
@@ -321,8 +233,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
     ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
-    ret.uncompressed_dtype = f.get_scalar<string> ("uncompressed_dtype");
-    ret.compressed_dtype = f.get_scalar<string> ("compressed_dtype");
+    ret.dtype = f.get_scalar<string> ("dtype");
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
     ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
@@ -346,24 +257,19 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 
 
 // static member function
-DedispersionConfig DedispersionConfig::make_random()
+DedispersionConfig DedispersionConfig::make_random(bool reference)
 {
     DedispersionConfig ret;
     ret.num_downsampling_levels = gputils::rand_int(1, 5);
-
-    // Ensure compressed_dtype is narrower than uncompressed_dtype.
-    do {
-	ret.uncompressed_dtype = gputils::rand_element({ "float32", "float16" });
-	ret.compressed_dtype = gputils::rand_element({ "float32", "float16", "int8" });
-    } while (dtype_size(ret.compressed_dtype) > dtype_size(ret.uncompressed_dtype));
-
+    ret.dtype = (gputils::rand_uniform() < 0.5) ? "float32" : "float16";
+    
     // Randomly choose a tree rank, but bias toward a high number.
     int max_rank = 10;
     int min_rank = (ret.num_downsampling_levels > 1) ? 1 : 0;
     double x = gputils::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
     ret.tree_rank = int(sqrt(x));
 
-    // Note: call ret.get_nelts_per_segment() after setting ret.uncompressed_dtype
+    // Note: call ret.get_nelts_per_segment() after setting ret.dtype
     int max_nt_chunk = 2048;
     int min_nt_chunk = ret.get_nelts_per_segment() * pow2(ret.num_downsampling_levels-1);
     int nchunks = gputils::rand_int(1, xdiv(max_nt_chunk,min_nt_chunk)+1);
@@ -375,8 +281,10 @@ DedispersionConfig DedispersionConfig::make_random()
 	int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;;
 	int min_et_rank = rank/2;
 	int max_et_rank = rank-1;
+	
+	// Use at most 4 early triggers per downsampling level (arbitrary cutoff)
 	int num_candidates = max_et_rank - min_et_rank + 1;
-	int max_triggers = std::min(num_candidates, constants::max_early_triggers_per_downsampling_level);
+	int max_triggers = std::min(num_candidates, 4);
 
 	if (max_triggers <= 0)
 	    continue;
