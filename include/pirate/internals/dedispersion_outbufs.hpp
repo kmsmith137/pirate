@@ -1,8 +1,8 @@
 #ifndef _PIRATE_INTERNALS_DEDISPERSION_OUTBUFS_HPP
 #define _PIRATE_INTERNALS_DEDISPERSION_OUTBUFS_HPP
 
-#include "inlines.hpp"  // simd32_type
-#include "GpuDedispersionKernel.hpp"
+#include "inlines.hpp"                // simd32_type
+#include "GpuDedispersionKernel.hpp"  // UntypedArray, GpuDedispersionKernel::Params
 
 namespace pirate {
 #if 0
@@ -23,7 +23,10 @@ struct dedispersion_simple_outbuf
 	T32 *out;
 	long beam_stride32;     // 32-bit stride
 	long ambient_stride32;  // 32-bit stride
-	long dm_stride32;     // 32-bit stride
+	long dm_stride32;       // 32-bit stride
+	
+	// Defined in GpuDedispersionKernel.cu
+	__host__ device_args(const UntypedArray &uarr, const GpuDedispersionKernel::Params &params);
     };
 
     struct device_state
@@ -55,16 +58,6 @@ struct dedispersion_simple_outbuf
 	    out += 32;
 	}
     };
-
-    struct host_args
-    {
-	device_args kernel_args;
-	long nbeams;
-	long ntime;
-
-	__host__ host_args(UntypedArray &Uarr, const GpuDedispersionKernel::Params &params);
-    };
-
 };
 
 

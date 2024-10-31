@@ -32,6 +32,8 @@ static void time_gpu_dedispersion_kernel(int rank, bool apply_input_residual_lag
     params.rank = rank;
     params.nambient = nambient;
     params.total_beams = nbeams;
+    params.beams_per_kernel_launch = nbeams;
+    params.ntime = ntime;
     params.apply_input_residual_lags = apply_input_residual_lags;
     params.input_is_downsampled_tree = false;  // shouldn't affect timing
     params.nelts_per_segment = is_float32 ? 32 : 64;

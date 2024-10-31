@@ -42,6 +42,8 @@ public:
 	int rank = -1;          // satisfies 1 <= rank <= 8
 	int nambient = 0;
 	int total_beams = 0;
+	int beams_per_kernel_launch = 0;
+	int ntime = 0;
 
 	// Input/output buffer types.
 	bool input_is_ringbuf = false;

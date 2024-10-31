@@ -265,7 +265,7 @@ static bool dtype_is_float32(const string &dtype)
 
 
 template<typename T, bool Lagged>
-dedispersion_simple_inbuf<T,Lagged>::host_args::host_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
+dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -275,40 +275,39 @@ dedispersion_simple_inbuf<T,Lagged>::host_args::host_args(const UntypedArray &in
     constexpr int denom = 4 / sizeof(T);
     static_assert(denom * sizeof(T) == 4);
 
-    Array<T> in = uarr_get<T> (in_uarr, "in");
+    Array<T> in_arr = uarr_get<T> (in_uarr, "in");
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime).
-    assert(in.ndim == 4);
-    assert(in.shape[1] == params.nambient);
-    assert(in.shape[2] == pow2(params.rank));
-    assert(in.get_ncontig() >= 1);
-    assert(in.on_gpu());
+    assert(in_arr.ndim == 4);
+    assert(in_arr.shape[0] == params.beams_per_kernel_launch);
+    assert(in_arr.shape[1] == params.nambient);
+    assert(in_arr.shape[2] == pow2(params.rank));
+    assert(in_arr.shape[3] == params.ntime);
+    assert(in_arr.get_ncontig() >= 1);
+    assert(in_arr.on_gpu());
 
-    nbeams = in.shape[0];
-    ntime = in.shape[3];
-
-    kernel_args.in = (T32 *) in.data;
-    kernel_args.beam_stride32 = xdiv(in.strides[0], denom);     // 32-bit stride
-    kernel_args.ambient_stride32 = xdiv(in.strides[1], denom);  // 32-bit stride
-    kernel_args.freq_stride32 = xdiv(in.strides[2], denom);     // 32-bit stride
-    kernel_args.is_downsampled = params.input_is_downsampled_tree;
+    this->in = (T32 *) in_arr.data;
+    this->beam_stride32 = xdiv(in_arr.strides[0], denom);     // 32-bit stride
+    this->ambient_stride32 = xdiv(in_arr.strides[1], denom);  // 32-bit stride
+    this->freq_stride32 = xdiv(in_arr.strides[2], denom);     // 32-bit stride
+    this->is_downsampled = params.input_is_downsampled_tree;
 
     // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
-    assert(is_aligned(kernel_args.in, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
-    assert((kernel_args.beam_stride32 % elts_per_cache_line) == 0);
-    assert((kernel_args.ambient_stride32 % elts_per_cache_line) == 0);
-    assert((kernel_args.freq_stride32 % elts_per_cache_line) == 0);
+    assert(is_aligned(in, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
+    assert((beam_stride32 % elts_per_cache_line) == 0);
+    assert((ambient_stride32 % elts_per_cache_line) == 0);
+    assert((freq_stride32 % elts_per_cache_line) == 0);
     
     // FIXME could improve these checks, by verifying that strides are non-overlapping.
-    assert(kernel_args.beam_stride32 != 0);
-    assert(kernel_args.ambient_stride32 != 0);
-    assert(kernel_args.freq_stride32 != 0);
+    assert(beam_stride32 != 0);
+    assert(ambient_stride32 != 0);
+    assert(freq_stride32 != 0);
 }
 
 
 // FIXME reduce cut-and-paste between Inbuf::host_args and Outbuf::host_args constructors.
 template<typename T>
-dedispersion_simple_outbuf<T>::host_args::host_args(UntypedArray &out_uarr, const GpuDedispersionKernel::Params &params)
+dedispersion_simple_outbuf<T>::device_args::device_args(const UntypedArray &out_uarr, const GpuDedispersionKernel::Params &params)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -318,33 +317,32 @@ dedispersion_simple_outbuf<T>::host_args::host_args(UntypedArray &out_uarr, cons
     constexpr int denom = 4 / sizeof(T);
     static_assert(denom * sizeof(T) == 4);
 
-    Array<T> out = uarr_get<T> (out_uarr, "in");
+    Array<T> out_arr = uarr_get<T> (out_uarr, "in");
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime)
-    assert(out.ndim == 4);
-    assert(out.shape[1] == params.nambient);
-    assert(out.shape[2] == pow2(params.rank));
-    assert(out.get_ncontig() >= 1);
-    assert(out.on_gpu());
+    assert(out_arr.ndim == 4);
+    assert(out_arr.shape[0] == params.beams_per_kernel_launch);
+    assert(out_arr.shape[1] == params.nambient);
+    assert(out_arr.shape[2] == pow2(params.rank));
+    assert(out_arr.shape[3] == params.ntime);
+    assert(out_arr.get_ncontig() >= 1);
+    assert(out_arr.on_gpu());
 
-    nbeams = out.shape[0];
-    ntime = out.shape[3];
-
-    kernel_args.out = (T32 *) out.data;
-    kernel_args.beam_stride32 = xdiv(out.strides[0], denom);     // 32-bit stride
-    kernel_args.ambient_stride32 = xdiv(out.strides[1], denom);  // 32-bit stride
-    kernel_args.dm_stride32 = xdiv(out.strides[2], denom);     // 32-bit stride
+    this->out = (T32 *) out_arr.data;
+    this->beam_stride32 = xdiv(out_arr.strides[0], denom);     // 32-bit stride
+    this->ambient_stride32 = xdiv(out_arr.strides[1], denom);  // 32-bit stride
+    this->dm_stride32 = xdiv(out_arr.strides[2], denom);     // 32-bit stride
     
     // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
-    assert(is_aligned(kernel_args.out, constants::bytes_per_gpu_cache_line));   // also checks non-NULL
-    assert((kernel_args.beam_stride32 % elts_per_cache_line) == 0);
-    assert((kernel_args.ambient_stride32 % elts_per_cache_line) == 0);
-    assert((kernel_args.dm_stride32 % elts_per_cache_line) == 0);
+    assert(is_aligned(out, constants::bytes_per_gpu_cache_line));   // also checks non-NULL
+    assert((beam_stride32 % elts_per_cache_line) == 0);
+    assert((ambient_stride32 % elts_per_cache_line) == 0);
+    assert((dm_stride32 % elts_per_cache_line) == 0);
     
     // FIXME could improve these checks, by verifying that strides are non-overlapping.
-    assert(kernel_args.beam_stride32 != 0);
-    assert(kernel_args.ambient_stride32 != 0);
-    assert(kernel_args.dm_stride32 != 0);
+    assert(beam_stride32 != 0);
+    assert(ambient_stride32 != 0);
+    assert(dm_stride32 != 0);
 }
 
 
@@ -406,42 +404,21 @@ GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Param
 template<typename T, class Inbuf, class Outbuf>
 void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_arr, UntypedArray &out_arr, long itime, long ibeam, cudaStream_t stream)
 {
-    typename Inbuf::host_args in(in_arr, params);
-    typename Outbuf::host_args out(out_arr, params);
+    typename Inbuf::device_args in(in_arr, params);
+    typename Outbuf::device_args out(out_arr, params);
 
-    if (in.nbeams != out.nbeams)
-	throw runtime_error("GpuDedispersionKernel: nbeams mismatch between input/output arrays");
-    if (in.ntime != out.ntime)
-	throw runtime_error("GpuDedispersionKernel: ntime mismatch between input/output arrays");
-
-    long nbeams = in.nbeams;
-    long ntime = out.ntime;
-    
-    // Check nbeams.
-    assert(nbeams > 0);
-    assert(nbeams <= params.total_beams);
-    assert(nbeams <= constants::cuda_max_y_blocks);
-
-    // Check ntime.
-    //
-    // Reminder: instead of using 'ntime' as a kernel argument, we use
-    //
-    //    nt_cl = number of cache lines spanned by 'ntime' time samples
-    //          = (ntime * sizeof(T)) / 128
-    
+    // FIXME nt_cl will go away soon.
     constexpr int nelts_per_cache_line = 128 / sizeof(T);
-
-    assert(ntime > 0);
-    assert((ntime % nelts_per_cache_line) == 0);
-    long nt_cl = ntime / nelts_per_cache_line;
+    long nt_cl = params.ntime / nelts_per_cache_line;
 
     // Compare (itime, ibeam) with expected values.
     assert(itime == expected_itime);
     assert(ibeam == expected_ibeam);
-    assert(ibeam + nbeams <= params.total_beams);
 
     // Update expected (itime, ibeam).
-    expected_ibeam += nbeams;
+    expected_ibeam += params.beams_per_kernel_launch;
+    assert(expected_ibeam <= params.total_beams);
+    
     if (expected_ibeam == params.total_beams) {
 	expected_ibeam = 0;
 	expected_itime++;
@@ -454,12 +431,12 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
     // to the kernel via gridDim.y, gridDim.x.
     dim3 grid_dims;
     grid_dims.x = params.nambient;
-    grid_dims.y = nbeams;
+    grid_dims.y = params.beams_per_kernel_launch;
     grid_dims.z = 1;
 
     this->cuda_kernel
 	<<< grid_dims, 32 * warps_per_threadblock, shmem_nbytes, stream >>>
-	(in.kernel_args, out.kernel_args, (T32 *) rp, nt_cl, this->integer_constants.data);
+	(in, out, (T32 *) rp, nt_cl, this->integer_constants.data);
     
     CUDA_PEEK("dedispersion kernel");
 }
@@ -471,14 +448,20 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    // Error-checks params.dtype.
+    // Call to dtype_is_float32() error-checks params.dtype.
     bool is_float32 = dtype_is_float32(params.dtype);
+    int nelts_per_cache_line = is_float32 ? 32 : 64;
 
     assert(params.rank > 0);
     assert(params.rank <= 8);
     assert(params.nambient > 0);
     assert(params.total_beams > 0);
-    
+    assert(params.beams_per_kernel_launch > 0);
+    assert(params.beams_per_kernel_launch <= constants::cuda_max_y_blocks);
+    assert((params.total_beams % params.beams_per_kernel_launch) == 0);
+    assert(params.ntime > 0);
+    assert((params.ntime % nelts_per_cache_line) == 0);
+
     // Placeholders for future expansion.
     // FIXME when ringbufs are implemented, don't forget to error-check params.ringbuf_locations.
     assert(!params.input_is_ringbuf);

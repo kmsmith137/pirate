@@ -118,6 +118,8 @@ struct TestInstance
 	gpu_params.rank = rank;
 	gpu_params.nambient = nambient;
 	gpu_params.total_beams = nbeams;  // FIXME process in batches
+	gpu_params.beams_per_kernel_launch = nbeams;
+	gpu_params.ntime = ntime;
 	gpu_params.apply_input_residual_lags = apply_input_residual_lags;
 	gpu_params.input_is_downsampled_tree = is_downsampled_tree;
 	gpu_params.nelts_per_segment = is_float32 ? 32 : 64;

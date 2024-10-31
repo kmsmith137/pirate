@@ -1,8 +1,8 @@
 #ifndef _PIRATE_INTERNALS_DEDISPERSION_INBUFS_HPP
 #define _PIRATE_INTERNALS_DEDISPERSION_INBUFS_HPP
 
-#include "inlines.hpp"  // simd32_type
-#include "GpuDedispersionKernel.hpp"
+#include "inlines.hpp"                // simd32_type
+#include "GpuDedispersionKernel.hpp"  // UntypedArray, GpuDedispersionKernel::Params
 
 namespace pirate {
 #if 0
@@ -26,8 +26,11 @@ struct dedispersion_simple_inbuf
 	long ambient_stride32;  // 32-bit stride
 	long freq_stride32;     // 32-bit stride
 	bool is_downsampled;    // only used if Lagged=True.
-
+	
 	__device__ __forceinline__ bool _is_downsampled() { return is_downsampled; }
+
+	// Defined in GpuDedispersionKernel.cu
+	__host__ device_args(const UntypedArray &uarr, const GpuDedispersionKernel::Params &params);
     };
 
     struct device_state
@@ -58,15 +61,6 @@ struct dedispersion_simple_inbuf
 	{
 	    in += 32;
 	}
-    };
-
-    struct host_args
-    {
-	device_args kernel_args;
-	long nbeams;
-	long ntime;
-
-	__host__ host_args(const UntypedArray &Uarr, const GpuDedispersionKernel::Params &params);
     };
 };
 
