@@ -3,8 +3,9 @@
 
 #include <gputils/string_utils.hpp>  // gputils::nbytes_to_str()
 
-#include <string>
+#include <cmath>
 #include <cassert>
+#include <string>
 #include <iostream>
 #include <cuda_fp16.h>  // __half, __half2
 
@@ -31,6 +32,14 @@ inline ssize_t align_up(ssize_t n, ssize_t nalign)
     assert(nalign > 0);
     assert(is_power_of_two(nalign));
     return (n + nalign - 1) & ~(nalign - 1);
+}
+
+inline long round_up_to_power_of_two(long n)
+{
+    if (n <= 1)
+	return 1;
+    double x = log2(n - 0.5);
+    return 1L << (int(x) + 1);
 }
 
 inline ssize_t xdiv(ssize_t m, ssize_t n)

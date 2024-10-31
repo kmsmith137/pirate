@@ -30,7 +30,7 @@ struct TestInstance
 
     void randomize()
     {
-	const long max_nelts = 30 * 1000 * 1000;
+	const long max_nelts = 100 * 1000 * 1000;
 	
 	bool is_float32 = (rand_uniform() < 0.5);
 	params.dtype = is_float32 ? "float32" : "float16";
@@ -54,7 +54,7 @@ struct TestInstance
 	pmax = min(pmax, 42L);
 
 	auto v = gputils::random_integers_with_bounded_product(4, pmax);
-	params.nambient = v[0];
+	params.nambient = round_up_to_power_of_two(v[0]);
 	params.total_beams = v[1] * v[2];
 	params.beams_per_kernel_launch = v[2];
 
@@ -83,6 +83,7 @@ static void run_test(const TestInstance &tp)
 	 << "    total_beams = " << p.total_beams << "\n"
 	 << "    beams_per_kernel_launch = " << p.beams_per_kernel_launch << "\n"
 	 << "    ntime = " << p.ntime << "\n"
+	 << "    nchunks = " << tp.nchunks << "\n"
 	 << "    input_is_ringbuf = " << (p.input_is_ringbuf ? "true" : "false")  << "\n"
 	 << "    output_is_ringbuf = " << (p.output_is_ringbuf ? "true" : "false")  << "\n"
 	 << "    apply_input_residual_lags = " << (p.apply_input_residual_lags ? "true" : "false")  << "\n"
@@ -115,7 +116,7 @@ static void run_test(const TestInstance &tp)
 
     Array<float> cpu_in_big(big_shape, af_rhost | af_random);  // contiguous
     Array<float> cpu_out_big(big_shape, af_uhost | af_zero);   // contiguous
-    Array<float> cpu_in_small(medium_shape, tp.cpu_istrides, af_uhost | af_zero);
+    Array<float> cpu_in_small(medium_shape, af_uhost | af_zero);  // contiguous for now (FIXME)
     // Array<float> cpu_out_small = tp.in_place ? cpu_in_small : Array<float> (small_shape, tp.cpu_ostrides, af_uhost | af_zero);
     
     UntypedArray gpu_in_big;
@@ -162,7 +163,7 @@ static void run_test(const TestInstance &tp)
 
 	    gpu_kernel->launch(gpu_in_small, gpu_out_small, ichunk, b);
 
-	    t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+	    t = gpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
 	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 	    t.fill(gpu_out_small);
 	}
@@ -179,6 +180,7 @@ static void run_test(const TestInstance &tp)
     double epsrel = is_float32 ? 1.0e-6 : 0.003;
     double epsabs = epsrel * pow(1.414, p.rank);
     gputils::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
+    cout << endl;
 }
 
 
@@ -187,7 +189,7 @@ static void run_test(const TestInstance &tp)
 
 int main(int argc, char **argv)
 {
-    const int niter = 500;
+    const int niter = 200;
     
     for (int i = 0; i < niter; i++) {
 	cout << "Iteration " << i << "/" << niter << "\n\n";
