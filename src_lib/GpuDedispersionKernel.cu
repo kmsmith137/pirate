@@ -247,15 +247,15 @@ template<> Array<__half> uarr_get(const UntypedArray &uarr, const char *arr_name
 }
 
 
-bool UntypedArray::_is_float32(const char *name)
+bool UntypedArray::_is_float32(const char *name) const
 {
     bool have_float32 = (this->data_float32.data != nullptr);
     bool have_float16 = (this->data_float16.data != nullptr);
 
     if (have_float32 && !have_float16)
 	return true;
-    return false;
-	ret.data_float16 = this->data_float16.slice(axis, start, stop);
+    else if (!have_float32 && have_float16)
+	return false;
     else if (have_float32 && have_float16)
 	throw runtime_error(string(name) + " has multiple dtypes?!");
     else
@@ -291,7 +291,7 @@ void UntypedArray::fill(const UntypedArray &x)
 }
 
 
-bool GpuDedispersionKernel::Params::is_float32(const string &dtype) const
+bool GpuDedispersionKernel::Params::is_float32() const
 {
     // Currently only "float32" and "float16" are allowed.
     if (dtype == "float32")
@@ -575,7 +575,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 // Static member function
 shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &params)
 {
-    bool is_float32 = dtype_is_float32(params.dtype);
+    bool is_float32 = params.is_float32();
 
     // Select subclass template instantiation.
     // Currently 4 cases here -- more to come.

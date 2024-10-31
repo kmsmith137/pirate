@@ -131,14 +131,14 @@ static void run_test(const TestInstance &tp)
     }
     else {
 	// FIXME confirm that cudaMemcpy() is synchronous.
-	Array<float> t = cpu_in_big.convert_dtype<__half> ();
+	Array<__half> t = cpu_in_big.convert_dtype<__half> ();
 	gpu_in_big.data_float16 = t.to_gpu();
 	gpu_out_big.data_float16 = Array<__half> (big_shape, af_gpu | af_zero);
 	gpu_in_small.data_float16 = Array<__half> (small_shape, tp.gpu_istrides, af_gpu | af_zero);
 	gpu_out_small.data_float16 = tp.in_place ? gpu_in_small.data_float16 : Array<__half> (small_shape, tp.gpu_ostrides, af_gpu | af_zero);
     }
     
-    for (ichunk = 0; ichunk < nchunks; ichunk++) {
+    for (long ichunk = 0; ichunk < tp.nchunks; ichunk++) {
 	Array<float> s;
 
 	// Reference dedispersion.
@@ -160,7 +160,7 @@ static void run_test(const TestInstance &tp)
 	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 	    gpu_in_small.fill(t);
 
-	    gpu_kernel->apply(gpu_in_small, gpu_out_small, ichunk, b);
+	    gpu_kernel->launch(gpu_in_small, gpu_out_small, ichunk, b);
 
 	    t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
 	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
@@ -177,8 +177,8 @@ static void run_test(const TestInstance &tp)
     
     // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
     double epsrel = is_float32 ? 1.0e-6 : 0.003;
-    double epsabs = epsrel * pow(1.414, rank);
-    gputils::assert_arrays_equal(cpu_out_big, gpu_out_big, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
+    double epsabs = epsrel * pow(1.414, p.rank);
+    gputils::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
 }
 
 
