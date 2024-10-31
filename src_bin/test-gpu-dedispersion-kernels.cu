@@ -23,8 +23,10 @@ struct TestInstance
 
     // Strides for input/output arrays.
     // Reminder: arrays have shape (params.beams_per_kernel_launch, params.nambient, pow2(params.rank), params.ntime).
-    vector<ssize_t> istrides;
-    vector<ssize_t> ostrides;
+    vector<ssize_t> gpu_istrides;
+    vector<ssize_t> gpu_ostrides;
+    vector<ssize_t> cpu_istrides;
+    vector<ssize_t> cpu_ostrides;
 
     void randomize()
     {
@@ -58,9 +60,10 @@ struct TestInstance
 
 	// Strides
 	vector<ssize_t> shape = { params.beams_per_kernel_launch, params.nambient, pow2(params.rank), params.ntime };
-	istrides = gputils::make_random_strides(shape, 1, params.nelts_per_segment);
-	ostrides = gputils::make_random_strides(shape, 1, params.nelts_per_segment);
-	ostrides = in_place ? istrides : ostrides;
+	gpu_istrides = gputils::make_random_strides(shape, 1, params.nelts_per_segment);
+	cpu_istrides = gputils::make_random_strides(shape, 1, params.nelts_per_segment);
+	gpu_ostrides = in_place ? gpu_istrides : gputils::make_random_strides(shape, 1, params.nelts_per_segment);
+	cpu_ostrides = in_place ? cpu_istrides : gputils::make_random_strides(shape, 1, params.nelts_per_segment);
     }
 };
 
@@ -86,8 +89,10 @@ static void run_test(const TestInstance &tp)
 	 << "    input_is_downsampled_tree = " << (p.input_is_downsampled_tree ? "true" : "false")  << "\n"
 	 << "    nelts_per_segment = " << p.nelts_per_segment << "\n"
 	 << "    in_place = " << (tp.in_place ? "true" : "false") << "\n"
-	 << "    istrides = " << gputils::tuple_str(tp.istrides) << "\n"
-	 << "    ostrides = " << gputils::tuple_str(tp.ostrides)
+	 << "    gpu_istrides = " << gputils::tuple_str(tp.gpu_istrides) << "\n"
+	 << "    gpu_ostrides = " << gputils::tuple_str(tp.gpu_ostrides) << "\n"
+	 << "    cpu_istrides = " << gputils::tuple_str(tp.cpu_istrides) << "\n"
+	 << "    cpu_ostrides = " << gputils::tuple_str(tp.cpu_ostrides)
 	 << endl;
 
     // FIXME unify ReferenceDedispersionKernel::Params and GpuDedispersionKernel::Params
@@ -104,236 +109,77 @@ static void run_test(const TestInstance &tp)
     shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(p);
 
     bool is_float32 = p.is_float32();
-    vector<shape> big_shape = { p.total_beams, p.nambient, pow2(p.rank), p.ntime };
-    vector<shape> small_shape = { p.beams_per_kernel_launch, p.nambient, pow2(p.rank), p.ntime };
+    vector<ssize_t> big_shape = { p.total_beams, p.nambient, pow2(p.rank), tp.nchunks * p.ntime };
+    vector<ssize_t> medium_shape = { p.total_beams, p.nambient, pow2(p.rank), p.ntime };
+    vector<ssize_t> small_shape = { p.beams_per_kernel_launch, p.nambient, pow2(p.rank), p.ntime };
 
-    Array<float> chunk0(big_shape, af_rhost | af_zero);      // no strides, in order to call randomize().
-    Array<float> ref_chunk(big_shape, af_rhost | af_zero);   // FIXME reference kernel uses big_shape, in-place
-
-    UntypedArray gpu_input_chunk;
-    UntypedArray gpu_output_chunk;
+    Array<float> cpu_in_big(big_shape, af_rhost | af_random);  // contiguous
+    Array<float> cpu_out_big(big_shape, af_uhost | af_zero);   // contiguous
+    Array<float> cpu_in_small(medium_shape, tp.cpu_istrides, af_uhost | af_zero);
+    // Array<float> cpu_out_small = tp.in_place ? cpu_in_small : Array<float> (small_shape, tp.cpu_ostrides, af_uhost | af_zero);
+    
+    UntypedArray gpu_in_big;
+    UntypedArray gpu_out_big;
+    UntypedArray gpu_in_small;
+    UntypedArray gpu_out_small;
 
     if (is_float32) {
-	gpu_input_chunk.data_float32 = Array<float> (big_shape, tp.istride, af_gpu | af_zero);
-	gpu_output_chunk.data_float32 = tp.in_place ? gpu_input_chunk.data_float32 : Array<float> (small_shape, tp.istride, af_gpu | af_zero);
+	gpu_in_big.data_float32 = cpu_in_big.to_gpu();
+	gpu_out_big.data_float32 = Array<float> (big_shape, af_gpu | af_zero);
+	gpu_in_small.data_float32 = Array<float> (small_shape, tp.gpu_istrides, af_gpu | af_zero);
+	gpu_out_small.data_float32 = tp.in_place ? gpu_in_small.data_float32 : Array<float> (small_shape, tp.gpu_ostrides, af_gpu | af_zero);
     }
     else {
-	gpu_input_chunk.data_float16 = Array<__half> (big_shape, tp.istride, af_gpu | af_zero);
-	gpu_output_chunk.data_float16 = tp.in_place ? gpu_input_chunk.data_float16 : Array<__half> (small_shape, tp.istride, af_gpu | af_zero);
+	// FIXME confirm that cudaMemcpy() is synchronous.
+	Array<float> t = cpu_in_big.convert_dtype<__half> ();
+	gpu_in_big.data_float16 = t.to_gpu();
+	gpu_out_big.data_float16 = Array<__half> (big_shape, af_gpu | af_zero);
+	gpu_in_small.data_float16 = Array<__half> (small_shape, tp.gpu_istrides, af_gpu | af_zero);
+	gpu_out_small.data_float16 = tp.in_place ? gpu_in_small.data_float16 : Array<__half> (small_shape, tp.gpu_ostrides, af_gpu | af_zero);
     }
     
     for (ichunk = 0; ichunk < nchunks; ichunk++) {
-	// cout << "   chunk " << ichunk << "/" << nchunks << endl;
-
-#if 1
-	// Simulate chunk0.
-	// Random chunk gives strongest test.
-	gputils::randomize(chunk0.data, chunk0.size);
-#else
-	// One-hot chunk is sometimes useful for debugging.
-	// (Note that if nchunks > 0, then the one-hot chunk will be repeated multiple times.)
-	memset(chunk0.data, 0, chunk0.size * sizeof(float));
-	int ibeam = rand_int(0, p.total_beams);   // FIXME I think "chunk0" will become a small chunk.
-	int iamb = rand_int(0, p.nambient);
-	int irow = rand_int(0, pow2(p.rank));
-	int it = rand_int(0, p.ntime);
-	// ibeam=0; iamb=0; irow=0; it=9; // Uncomment if you want a non-random one-hot test
-	cout << "   one-hot chunk: ibeam=" << ibeam << "; iamb=" << iamb << "; irow=" << irow << "; it=" << it << ";" << endl;
-	chunk0.at({ibeam,iamb,irow,it}) = 1.0;
-#endif
+	Array<float> s;
 
 	// Reference dedispersion.
-	// FIXME no strides on ref_chunk for now.
-	ref_chunk.fill(chunk0);
-	ref_kernel->apply(ref_chunk);
+	// FIXME currently in-place, and processing all beams
 
-	// Incrementally copy chunk to GPU and dedisperse.
+	s = cpu_in_big.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+	cpu_in_small.fill(s);
+	
+	ref_kernel->apply(cpu_in_small);
+	
+	s = cpu_out_big.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+	s.fill(cpu_in_small);
+
+	// GPU dedispersion.
 	for (int b = 0; b < p.total_beams; b += p.beams_per_kernel_launch) {
+	    UntypedArray t;
 	    
+	    t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+	    gpu_in_small.fill(t);
+
+	    gpu_kernel->apply(gpu_in_small, gpu_out_small, ichunk, b);
+
+	    t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+	    t.fill(gpu_out_small);
 	}
     }
+
+    if (is_float32)
+	gpu_out_big.data_float32 = gpu_out_big.data_float32.to_host();
+    else {
+	gpu_out_big.data_float16 = gpu_out_big.data_float16.to_host();
+	gpu_out_big.data_float32 = gpu_out_big.data_float16.convert_dtype<float> ();
+    }
+    
+    // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
+    double epsrel = is_float32 ? 1.0e-6 : 0.003;
+    double epsabs = epsrel * pow(1.414, rank);
+    gputils::assert_arrays_equal(cpu_out_big, gpu_out_big, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
 }
-
-
-#if 0
-
-
-// FIXME delete after de-templating.
-template<typename T> struct _is_float32 { };
-template<> struct _is_float32<float>   { static constexpr bool value = true; };
-template<> struct _is_float32<__half>  { static constexpr bool value = false; };
-
-
-template<typename T>
-struct TestInstance
-{
-    int rank = 0;
-    int ntime = 0;
-    int nambient = 1;
-    int nbeams = 1;
-    int nchunks = 1;
-    long row_stride = 0;
-    long ambient_stride = 0;
-    long beam_stride = 0;
-    bool apply_input_residual_lags = false;
-    bool is_downsampled_tree = false;
-    
-
-    int rand_n(long nmax)
-    {
-	nmax = min(nmax, 10L);
-	nmax = max(nmax, 1L);
-	return rand_int(1, nmax+1);
-    }
-
-    long rand_stride(long smin)
-    {
-	int n = max(0L, rand_int(-10,10));
-	return smin + 64 * n;  // FIXME 64 -> (128 / sizeof(T))
-    }
-    
-    void randomize()
-    {
-	const long max_nelts = 30 * 1000 * 1000;
-
-	rank = rand_int(1, 9);
-	nchunks = rand_int(1, 10);
-	nambient = pow2(rand_int(0,4));
-	apply_input_residual_lags = (rand_uniform() < 0.66) ? true : false;
-	is_downsampled_tree = (rand_uniform() < 0.5) ? true : false;
-
-	long nelts = pow2(rank) * nchunks * nambient;
-	ntime = 64 * rand_n(max_nelts / (64 * nelts));
-	nelts *= ntime;
-	
-	nbeams = rand_n(max_nelts / nelts);
-	nelts *= nbeams;
-	
-	row_stride = rand_stride(ntime);
-	ambient_stride = rand_stride(row_stride * pow2(rank));
-	beam_stride = rand_stride(ambient_stride * nambient);
-    }
-    
-    
-    void run(bool noisy)
-    {
-	// No real argument checking, but check that everything was initialized.
-	assert(rank > 0);
-	assert(ntime > 0);
-	assert(nambient > 0);
-	assert(nbeams > 0);
-	assert(nchunks > 0);
-	assert(row_stride > 0);
-	assert(ambient_stride > 0);
-	assert(beam_stride > 0);
-	
-	if (noisy) {
-	    long min_row_stride = ntime;
-	    long min_ambient_stride = row_stride * pow2(rank);
-	    long min_beam_stride = ambient_stride * nambient;
-	    
-	    cout << "Test GpuDedispersionKernel\n"
-		 << "    dtype = " << gputils::type_name<T>() << "\n"
-		 << "    rank = " << rank << "\n"
-		 << "    ntime = " << ntime << "\n"
-		 << "    nambient = " << nambient << "\n"
-		 << "    nbeams = " << nbeams << "\n"
-		 << "    nchunks = " << nchunks << "\n"
-		 << "    row_stride = " << row_stride << " (minimum: " << min_row_stride << ")\n"
-		 << "    ambient_stride = " << ambient_stride << " (minimum: " << min_ambient_stride << ")\n"
-		 << "    beam_stride = " << beam_stride << " (minimum: " << min_beam_stride << ")\n"
-		 << "    apply_input_residual_lags = " << (apply_input_residual_lags ? "true\n" : "false\n")
-		 << "    is_downsampled_tree = " << (is_downsampled_tree ? "true" : "false")
-		 << endl;
-	}
-
-	ReferenceDedispersionKernel::Params ref_params;
-	ref_params.rank = rank;
-	ref_params.ntime = ntime;
-	ref_params.nambient = nambient;
-	ref_params.nbeams = nbeams;
-	ref_params.apply_input_residual_lags = apply_input_residual_lags;
-	ref_params.is_downsampled_tree = is_downsampled_tree;
-	ref_params.nelts_per_segment = xdiv(constants::bytes_per_gpu_cache_line, sizeof(T));  // matches DedispersionConfig::get_nelts_per_segment()
-
-	constexpr bool is_float32 = _is_float32<T>::value;
-	typename GpuDedispersionKernel::Params gpu_params;
-	gpu_params.dtype = is_float32 ? "float32" : "float16";
-	gpu_params.rank = rank;
-	gpu_params.nambient = nambient;
-	gpu_params.total_beams = nbeams;  // FIXME process in batches
-	gpu_params.beams_per_kernel_launch = nbeams;
-	gpu_params.ntime = ntime;
-	gpu_params.apply_input_residual_lags = apply_input_residual_lags;
-	gpu_params.input_is_downsampled_tree = is_downsampled_tree;
-	gpu_params.nelts_per_segment = is_float32 ? 32 : 64;
-
-	ReferenceDedispersionKernel ref_kernel(ref_params);
-	shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(gpu_params);
-
-	Array<T> gpu_iobuf({ nbeams, nambient, pow2(rank), ntime },         // shape
-			   { beam_stride, ambient_stride, row_stride, 1 },  // strides
-			   af_gpu | af_zero);
-
-	UntypedArray gpu_ubuf;
-	if constexpr (is_float32)
-	    gpu_ubuf.data_float32 = gpu_iobuf;
-	else
-	    gpu_ubuf.data_float16 = gpu_iobuf;
-	
-	for (int ichunk = 0; ichunk < nchunks; ichunk++) {
-#if 1
-	    // Random chunk gives strongest test.
-	    Array<float> ref_chunk({nbeams, nambient, pow2(rank), ntime},
-				   { beam_stride, ambient_stride, row_stride, 1 },  // strides
-				   af_rhost | af_random);
-#else
-	    // One-hot chunk is sometimes useful for debugging.
-	    // (Note that if nchunks > 0, then the one-hot chunk will be repeated multiple times.)
-	    Array<float> ref_chunk({nbeams, nambient, pow2(rank), ntime},
-				   { beam_stride, ambient_stride, row_stride, 1 },  // strides
-				   af_rhost | af_zero);
-	    
-	    cout << "   ichunk=" << ichunk << endl;
-	    int ibeam = rand_int(0, nbeams);
-	    int iamb = rand_int(0, nambient);
-	    int irow = rand_int(0, pow2(rank));
-	    int it = rand_int(0, ntime);
-	    // ibeam=0; iamb=0; irow=0; it=9; // Uncomment if you want a non-random one-hot test
-	    cout << "   one-hot chunk: ibeam=" << ibeam << "; iamb=" << iamb << "; irow=" << irow << "; it=" << it << ";" << endl;
-	    ref_chunk.at({ibeam,iamb,irow,it}) = 1.0;
-#endif
-
-	    // Copy array to GPU before doing reference dedispersion, since reference dedispersion modifies array in-place.
-	    gpu_iobuf.fill(ref_chunk.convert_dtype<T>());
-	    gpu_kernel->launch(gpu_ubuf, gpu_ubuf, ichunk, 0);
-	    CUDA_CALL(cudaDeviceSynchronize());
-	    Array<float> gpu_output = gpu_iobuf.to_host().template convert_dtype<float> ();
-	    
-	    ref_kernel.apply(ref_chunk);
-
-#if 0
-	    // Sometimes useful for debugging
-	    cout << "Printing reference output from chunk " << ichunk << endl;
-	    print_array(ref_chunk, {"beam","amb","dmbr","time"});
-	    cout << "Printing gpu output from chunk " << ichunk << endl;
-	    print_array(gpu_output, {"beam","amb","dmbr","time"});
-	    cout << "Printing gpu rstate from chunk " << ichunk << endl;
-	    print_array(gpu_rstate.to_host().convert_dtype<float>(), {"beam","amb","ix"});
-#endif
-
-	    // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
-	    double epsrel = (sizeof(T)==4) ? 1.0e-6 : 0.003;   // float32 vs float16
-	    double epsabs = epsrel * pow(1.414, rank);
-	    assert_arrays_equal(ref_chunk, gpu_output, "ref", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
-	}
-
-	if (noisy)
-	    cout << endl;
-    }
-};
-
-#endif
 
 
 // -------------------------------------------------------------------------------------------------
@@ -342,30 +188,9 @@ struct TestInstance
 int main(int argc, char **argv)
 {
     const int niter = 500;
-
-#if 0
-    for (int i = 0; i < niter; i++) {
-	cout << "Iteration " << i << "/" << niter << "\n\n";
-	
-	using T = __half;  // float or __half
-	TestInstance<T> t;
-	t.rank = 7;
-	t.ntime = 192;
-        t.nambient = 4;
-	t.nbeams = 2; 
-	t.nchunks = 9;
-	t.row_stride = t.ntime + 64;
-	t.ambient_stride = t.row_stride * pow2(t.rank) + 64*3;
-	t.beam_stride = t.ambient_stride * t.nambient + 64*11;
-	t.apply_input_residual_lags = true;
-	t.run(noisy);
-    }
-    return 0;
-#endif
     
     for (int i = 0; i < niter; i++) {
 	cout << "Iteration " << i << "/" << niter << "\n\n";
-
 	TestInstance ti;
 	ti.randomize();
 	run_test(ti);

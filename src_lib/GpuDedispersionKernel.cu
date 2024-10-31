@@ -247,7 +247,51 @@ template<> Array<__half> uarr_get(const UntypedArray &uarr, const char *arr_name
 }
 
 
-bool UntypedArray::is_float32(const string &dtype) const
+bool UntypedArray::_is_float32(const char *name)
+{
+    bool have_float32 = (this->data_float32.data != nullptr);
+    bool have_float16 = (this->data_float16.data != nullptr);
+
+    if (have_float32 && !have_float16)
+	return true;
+    return false;
+	ret.data_float16 = this->data_float16.slice(axis, start, stop);
+    else if (have_float32 && have_float16)
+	throw runtime_error(string(name) + " has multiple dtypes?!");
+    else
+	throw runtime_error(string(name) + " is empty or uninitialized");
+}
+
+
+UntypedArray UntypedArray::slice(int axis, int start, int stop) const
+{
+    UntypedArray ret;
+
+    if (this->_is_float32("UntypedArray::slice() argument"))
+	ret.data_float32 = this->data_float32.slice(axis, start, stop);
+    else
+	ret.data_float16 = this->data_float16.slice(axis, start, stop);
+
+    return ret;
+}
+
+
+void UntypedArray::fill(const UntypedArray &x)
+{
+    bool dst32 = this->_is_float32("UntypedArray::fill() destination argument");
+    bool src32 = x._is_float32("UntypedArray::fill() source argument");
+
+    if (dst32 != src32)
+	throw runtime_error("UntypedArray::fill(): source and destination types do not match");
+    
+    if (dst32)
+	this->data_float32.fill(x.data_float32);
+    else
+	this->data_float16.fill(x.data_float16);
+}
+
+
+bool GpuDedispersionKernel::Params::is_float32(const string &dtype) const
 {
     // Currently only "float32" and "float16" are allowed.
     if (dtype == "float32")

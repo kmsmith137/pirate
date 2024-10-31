@@ -14,6 +14,12 @@ struct UntypedArray
 {
     gputils::Array<float> data_float32;
     gputils::Array<__half> data_float16;
+
+    UntypedArray slice(int axis, int start, int stop) const;
+    void fill(const UntypedArray &x);
+
+    // Helper for slice(), fill()
+    bool _is_float32(const char *name) const;
 };
 
 
