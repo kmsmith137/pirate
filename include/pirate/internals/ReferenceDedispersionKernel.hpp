@@ -35,7 +35,8 @@ struct ReferenceDedispersionKernel
     };
 
     ReferenceDedispersionKernel(const Params &params_);
-    
+
+    // iobuf has shape (nbeams, nambient, pow2(rank), ntime).
     void apply(gputils::Array<float> &iobuf) const;
 
     const Params params;

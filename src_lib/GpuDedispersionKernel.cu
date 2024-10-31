@@ -208,7 +208,7 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 
 // -------------------------------------------------------------------------------------------------
 //
-// Some helper functions which are symptoms of a bad design -- can I get rid of these?
+// Some helper functions which should go away, after I implement gputils::Array<void>.
 
 
 // Usage: Array<float> arr = uarr_get(x, "x");   // where x is an UntypedArray
@@ -247,7 +247,7 @@ template<> Array<__half> uarr_get(const UntypedArray &uarr, const char *arr_name
 }
 
 
-static bool dtype_is_float32(const string &dtype)
+bool UntypedArray::is_float32(const string &dtype) const
 {
     // Currently only "float32" and "float16" are allowed.
     if (dtype == "float32")
@@ -444,8 +444,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    // Call to dtype_is_float32() error-checks params.dtype.
-    bool is_float32 = dtype_is_float32(params.dtype);
+    bool is_float32 = params.is_float32();  // note: error-checks dtype
     int nelts_per_cache_line = is_float32 ? 32 : 64;
 
     assert(params.rank > 0);

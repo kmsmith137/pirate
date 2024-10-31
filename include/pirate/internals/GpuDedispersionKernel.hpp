@@ -57,6 +57,10 @@ public:
 	// Placeholder for future expansion.
 	// Only used if (input_is_ringbuf || output_is_ringbuf)
 	gputils::Array<uint> ringbuf_locations;
+
+	// Returns true if (dtype == "float32"), false if (dtype == "float16").
+	// Otherwise, throws an exception.
+	bool is_float32() const;
     };
 
     // To construct GpuDedispersionKernel instances, call this function.
