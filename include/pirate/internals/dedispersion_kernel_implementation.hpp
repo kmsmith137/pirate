@@ -522,7 +522,12 @@ __device__ inline void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 //
 //   dedisperse_rRANK(Inbuf::device_args inbuf_args,
 //                    Outbuf::device_args outbuf_args,
-//                    T *rstate, long nt_cl, uint *integer_constants);
+//                    T *rstate,
+//                    long ntime,
+//                    uint *integer_constants);
+//
+// NOTE!! caller must check that ntime is divisible by either 32 (if float32) or 64 (if __half2).
+// (This check is in the GpuDedispersionKernel constructor.)
 //
 // The 'rstate' array is fully contiguous, with shape:
 //
@@ -536,11 +541,12 @@ __device__ inline void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+__global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);    
     // assert(blockDim.x == 32);
 
+    constexpr int nelts_per_cache_line = _is_float32<T>::value ? 32 : 64;
     constexpr int gmem_ncl = Inbuf::is_lagged ? 2 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
@@ -566,7 +572,7 @@ __global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename O
 	dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
     }
 
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	T x0 = inbuf.load(0);
 	T x1 = inbuf.load(1);
 	inbuf.advance();
@@ -597,11 +603,12 @@ __global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename O
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+__global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);
     // assert(blockDim.x == 32);
-    
+
+    constexpr int nelts_per_cache_line = _is_float32<T>::value ? 32 : 64;
     constexpr int gmem_ncl = Inbuf::is_lagged ? 4 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
@@ -629,7 +636,7 @@ __global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename O
 	dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
     }
 
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	T x0 = inbuf.load(0);
 	T x1 = inbuf.load(1);
 	T x2 = inbuf.load(2);
@@ -668,11 +675,12 @@ __global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename O
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+__global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);
     // assert(blockDim.x == 32);
 
+    constexpr int nelts_per_cache_line = _is_float32<T>::value ? 32 : 64;
     constexpr int gmem_ncl = Inbuf::is_lagged ? 8 : 1;
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
@@ -703,8 +711,8 @@ __global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename O
 	dm = __brev(blockIdx.x) >> (33 - __ffs(gridDim.x));  // bit-reversed DM, see below
 	dm += inbuf_args._is_downsampled() ? gridDim.x : 0;
     }
-    
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	T x0 = inbuf.load(0);
 	T x1 = inbuf.load(1);
 	T x2 = inbuf.load(2);
@@ -759,11 +767,12 @@ __global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename O
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+__global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 32);
     
+    constexpr int nelts_per_cache_line = _is_float32<T>::value ? 32 : 64;
     constexpr bool is_float32 = _is_float32<T>::value;    
     constexpr int nrs_per_thread = is_float32 ? 3 : 2;
     constexpr int nrp_per_thread = Inbuf::is_lagged ? 15 : 0;
@@ -809,7 +818,7 @@ __global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename O
 	xp14 = rstate[threadIdx.x + 32 * (nrs_per_thread+14)];
     }    
 
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	T x0 = inbuf.load(0);
 	T x1 = inbuf.load(1);
 	T x2 = inbuf.load(2);
@@ -1389,7 +1398,7 @@ __device__ inline void align1_s8(__half2 &x0, __half2 &x1, __half2 &x2, __half2 
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(128, 8)
-dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     
@@ -1399,6 +1408,7 @@ dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     constexpr int nthreads = 32 * nwarps;
     
     constexpr bool is_float32 = _is_float32<T>::value;
+    constexpr int nelts_per_cache_line = is_float32 ? 32 : 64;
     constexpr int gs_ncl = _gs_ncl<T,5>::value;
     constexpr int nrs_per_thread = 1;
     constexpr int nrp_per_thread = Inbuf::is_lagged ? nrdata : 0;
@@ -1443,8 +1453,8 @@ dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     // Restore shared memory ring buffer (from previous chunk) from global memory.
     gmem_shmem_exchange<T,5,true> (rstate + nthreads * nr_per_thread, integer_constants);
     __syncthreads();
-    
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
@@ -1584,12 +1594,13 @@ dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(256, 4)
-dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 256);
 
     constexpr bool is_float32 = _is_float32<T>::value;
+    constexpr int nelts_per_cache_line = is_float32 ? 32 : 64;
     constexpr int gs_ncl = _gs_ncl<T,6>::value;
     constexpr int nrs_per_thread = is_float32 ? 2 : 1;
     constexpr int nrp_per_thread = Inbuf::is_lagged ? 8 : 0;
@@ -1638,8 +1649,8 @@ dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     // Restore shared memory ring buffer (from previous chunk) from global memory.
     gmem_shmem_exchange<T,6,true> (rstate + 256*nr_per_thread, integer_constants);
     __syncthreads();
-    
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
@@ -1783,7 +1794,7 @@ dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(256, 3)
-dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
 
@@ -1793,6 +1804,7 @@ dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     constexpr int nthreads = 32 * nwarps;
     
     constexpr bool is_float32 = _is_float32<T>::value;
+    constexpr int nelts_per_cache_line = is_float32 ? 32 : 64;
     constexpr int gs_ncl = _gs_ncl<T,7>::value;
     constexpr int nrs_per_thread = is_float32 ? 4 : 3;
     constexpr int nrp_per_thread = Inbuf::is_lagged ? nrdata : 0;
@@ -1854,8 +1866,8 @@ dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     // Restore shared memory ring buffer (from previous chunk) from global memory.
     gmem_shmem_exchange<T,7,true> (rstate + nthreads * nr_per_thread, integer_constants);
     __syncthreads();
-    
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
@@ -2057,12 +2069,13 @@ dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(512, 1)
-dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long nt_cl, uint *integer_constants)
+dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 512);
 
     constexpr bool is_float32 = _is_float32<T>::value;
+    constexpr int nelts_per_cache_line = is_float32 ? 32 : 64;
     constexpr int gs_ncl = _gs_ncl<T,8>::value;
     constexpr int nrs_per_thread = is_float32 ? 5 : 4;
     constexpr int nrp_per_thread = Inbuf::is_lagged ? 16 : 0;
@@ -2125,8 +2138,8 @@ dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     // Restore shared memory ring buffer (from previous chunk) from global memory.
     gmem_shmem_exchange<T,8,true> (rstate + 512*nr_per_thread, integer_constants);
     __syncthreads();
-    
-    for (long it_cl = 0; it_cl < nt_cl; it_cl++) {
+
+    for (long itime = 0; itime < ntime; itime += nelts_per_cache_line) {
 	
 	// When reading the input array, we read from array index (2^rank0)*i + j.
 	// Currently, i = warpId (might change later), and j = register index.
@@ -2318,14 +2331,14 @@ dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 
 #define INSTANTIATE_DEDISPERSION_KERNELS(T, Inbuf, Outbuf) \
-    template __global__ void dedisperse_r1<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants); \
-    template __global__ void dedisperse_r2<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants); \
-    template __global__ void dedisperse_r3<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants); \
-    template __global__ void dedisperse_r4<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants); \
-    template __global__ void dedisperse_r5<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants); \
-    template __global__ void dedisperse_r6<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants); \
-    template __global__ void dedisperse_r7<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants); \
-    template __global__ void dedisperse_r8<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants)
+    template __global__ void dedisperse_r1<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
+    template __global__ void dedisperse_r2<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
+    template __global__ void dedisperse_r3<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
+    template __global__ void dedisperse_r4<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
+    template __global__ void dedisperse_r5<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
+    template __global__ void dedisperse_r6<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
+    template __global__ void dedisperse_r7<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
+    template __global__ void dedisperse_r8<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants)
 
 
 }  // namespace pirate

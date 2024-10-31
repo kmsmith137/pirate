@@ -19,14 +19,14 @@ namespace pirate {
 
 // Defined in dedispersion_kernel_implementation.hpp
 // Instantiated in src_lib/template_instantiations/*.cu
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r1(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r2(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r3(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r4(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r5(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r6(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r7(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r8(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long nt_cl, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r1(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r2(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r3(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r4(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r5(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r6(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r7(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r8(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
 
 
 template<typename T> struct _is_float32 { };
@@ -360,7 +360,7 @@ struct GpuDedispersionKernelImpl : public GpuDedispersionKernel
 
     virtual void launch(const UntypedArray &in, UntypedArray &out, long itime, long ibeam, cudaStream_t stream) override;
 
-    // (inbuf, outbuf, rstate, nt_cl, integer_constants)
+    // (inbuf, outbuf, rstate, ntime, integer_constants)
     void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, long, uint *) = nullptr;
 };
 
@@ -407,10 +407,6 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
     typename Inbuf::device_args in(in_arr, params);
     typename Outbuf::device_args out(out_arr, params);
 
-    // FIXME nt_cl will go away soon.
-    constexpr int nelts_per_cache_line = 128 / sizeof(T);
-    long nt_cl = params.ntime / nelts_per_cache_line;
-
     // Compare (itime, ibeam) with expected values.
     assert(itime == expected_itime);
     assert(ibeam == expected_ibeam);
@@ -436,7 +432,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 
     this->cuda_kernel
 	<<< grid_dims, 32 * warps_per_threadblock, shmem_nbytes, stream >>>
-	(in, out, (T32 *) rp, nt_cl, this->integer_constants.data);
+	(in, out, (T32 *) rp, params.ntime, this->integer_constants.data);
     
     CUDA_PEEK("dedispersion kernel");
 }
@@ -458,8 +454,11 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     assert(params.total_beams > 0);
     assert(params.beams_per_kernel_launch > 0);
     assert(params.beams_per_kernel_launch <= constants::cuda_max_y_blocks);
-    assert((params.total_beams % params.beams_per_kernel_launch) == 0);
     assert(params.ntime > 0);
+
+    // Note: the second check (on ntime) is assumed by the GPU kernels.
+    // If it not satisfied, then the GPU kernels will silently compute the wrong answer!
+    assert((params.total_beams % params.beams_per_kernel_launch) == 0);
     assert((params.ntime % nelts_per_cache_line) == 0);
 
     // Placeholders for future expansion.
@@ -469,7 +468,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 
     if (params.apply_input_residual_lags) {
 	assert(params.nelts_per_segment > 0);
-	assert(params.nelts_per_segment == (is_float32 ? 32 : 64));
+	assert(params.nelts_per_segment == nelts_per_cache_line);
     }
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
