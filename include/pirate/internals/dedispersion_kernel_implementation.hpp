@@ -979,7 +979,7 @@ template<> struct _gs_ncl<__half2,8>  { static constexpr int value = 224; };
 // A ring buffer "control word" consists of:
 //
 //   uint15 rb_base;   // base shared memory location of ring buffer (in 32-bit registers)
-//   uint9  rb_pos;    // current position, satisfying 0 <= rb_pos < (rb_lag + 32)
+//   uint8  rb_pos;    // current position, satisfying 0 <= rb_pos < (rb_lag + 32)
 //   uint8  rb_lag;    // ring buffer lag (in 32-bit registers), note that capacity = lag + 32.
 //
 // Depending on context, 'shmem_curr_pos' may point to either the end of the buffer

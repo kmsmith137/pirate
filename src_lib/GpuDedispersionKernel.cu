@@ -1,5 +1,7 @@
 #include "../include/pirate/internals/GpuDedispersionKernel.hpp"
-#include "../include/pirate/internals/inlines.hpp"   // pow2()
+#include "../include/pirate/internals/dedispersion_inbufs.hpp"
+#include "../include/pirate/internals/dedispersion_outbufs.hpp"
+#include "../include/pirate/internals/inlines.hpp"   // pow2(), is_aligned(), simd_type
 #include "../include/pirate/internals/utils.hpp"     // bit_reverse_slow()
 #include "../include/pirate/constants.hpp"
 
@@ -79,7 +81,7 @@ static __host__ int get_shmem_nbytes(int rank, bool is_float32)
 // A ring buffer "control word" consists of:
 //
 //   uint15 rb_base;   // base shared memory location of ring buffer (in 32-bit registers)
-//   uint9  rb_pos;    // current position, satisfying 0 <= rb_pos < (rb_lag + 32)
+//   uint8  rb_pos;    // current position, satisfying 0 <= rb_pos < (rb_lag + 32)
 //   uint8  rb_lag;    // ring buffer lag (in 32-bit registers), note that capacity = lag + 32.
 //
 // Depending on context, 'shmem_curr_pos' may point to either the end of the buffer
@@ -205,262 +207,365 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// Some helper functions which are symptoms of a bad design -- can I get rid of these?
 
 
-template<typename T>
-void GpuDedispersionKernel<T>::launch(T *iobuf, T *rstate,
-				      long nbeams, long beam_stride,
-				      long nambient, long ambient_stride,
-				      long row_stride, long ntime,   // number of rows is always 2^rank
-				      cudaStream_t stream) const
+// Usage: Array<float> arr = uarr_get(x, "x");   // where x is an UntypedArray
+template<typename T> Array<T> uarr_get(const UntypedArray &arr, const char *arr_name);
+
+template<> Array<float> uarr_get(const UntypedArray &uarr, const char *arr_name)
 {
-    constexpr int elts_per_cache_line = constants::bytes_per_gpu_cache_line / sizeof(T);
+    bool have_float32 = (uarr.data_float32.data != nullptr);
+    bool have_float16 = (uarr.data_float16.data != nullptr);
 
-    // Check alignment (also checks that 'iobuf' and 'rstate' are non-NULL)
-    // Most of these are not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
+    if (!have_float32 || have_float16) {
+	stringstream ss;
+	ss << "GpuDedispersionKernel::launch: expected "
+	   << arr_name << ".data_float32 to be nonempty, and "
+	   << arr_name << ".data_float16 to be empty";
+	throw runtime_error(ss.str());
+    }
+
+    return uarr.data_float32;
+}
+
+template<> Array<__half> uarr_get(const UntypedArray &uarr, const char *arr_name)
+{
+    bool have_float32 = (uarr.data_float32.data != nullptr);
+    bool have_float16 = (uarr.data_float16.data != nullptr);
+
+    if (have_float32 || !have_float16) {
+	stringstream ss;
+	ss << "GpuDedispersionKernel::launch: expected "
+	   << arr_name << ".data_float32 to be empty, and "
+	   << arr_name << ".data_float16 to be nonempty";
+	throw runtime_error(ss.str());
+    }
+
+    return uarr.data_float16;
+}
+
+
+static bool dtype_is_float32(const string &dtype)
+{
+    // Currently only "float32" and "float16" are allowed.
+    if (dtype == "float32")
+	return true;
+    else if (dtype == "float16")
+	return false;
+    else if (dtype.empty())
+	throw runtime_error("GpuDedispersionKernel::Params::dtype is uninitialized (or empty string)");
+    else
+	throw runtime_error("GpuDedispersionKernel::Params: unrecognizd dtype '" + dtype + "' (expected 'float32' or 'float16')");
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+template<typename T, bool Lagged>
+dedispersion_simple_inbuf<T,Lagged>::host_args::host_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
+{
+    // If T==float, then T32 is also 'float'.
+    // If T==__half, then T32 is '__half2'.
+    using T32 = typename simd32_type<T>::type;
+
+    constexpr int elts_per_cache_line = constants::bytes_per_gpu_cache_line / 4;
+    constexpr int denom = 4 / sizeof(T);
+    static_assert(denom * sizeof(T) == 4);
+
+    Array<T> in = uarr_get<T> (in_uarr, "in");
     
-    assert(is_aligned(iobuf, constants::bytes_per_gpu_cache_line));
-    assert(is_aligned(rstate, constants::bytes_per_gpu_cache_line));
-    assert((beam_stride % elts_per_cache_line) == 0);
-    assert((ambient_stride % elts_per_cache_line) == 0);
-    assert((row_stride % elts_per_cache_line) == 0);
-    assert((ntime % elts_per_cache_line) == 0);
+    // Expected shape is (nbeams, nambient, pow2(rank), ntime).
+    assert(in.ndim == 4);
+    assert(in.shape[1] == params.nambient);
+    assert(in.shape[2] == pow2(params.rank));
+    assert(in.get_ncontig() >= 1);
+    assert(in.on_gpu());
 
-    assert(ntime > 0);
-    assert(nbeams > 0);
-    assert(nambient > 0);
-    assert(is_power_of_two(nambient));
+    nbeams = in.shape[0];
+    ntime = in.shape[3];
 
-    // Currently we only support two-stage dedispersion, where each stage has rank <= 8.
-    // Therefore, we expect nambient <= 2^8. (The kernel can handle larger values, but larger values
-    // would be unintentional and indicate a bug somewhere.)
-    assert(nambient <= 256);
+    kernel_args.in = (T32 *) in.data;
+    kernel_args.beam_stride32 = xdiv(in.strides[0], denom);     // 32-bit stride
+    kernel_args.ambient_stride32 = xdiv(in.strides[1], denom);  // 32-bit stride
+    kernel_args.freq_stride32 = xdiv(in.strides[2], denom);     // 32-bit stride
+    kernel_args.is_downsampled = params.input_is_downsampled_tree;
 
-    // Required by CUDA (max allowed value of gridDims.y)
-    assert(nbeams < 65536);
+    // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
+    assert(is_aligned(kernel_args.in, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
+    assert((kernel_args.beam_stride32 % elts_per_cache_line) == 0);
+    assert((kernel_args.ambient_stride32 % elts_per_cache_line) == 0);
+    assert((kernel_args.freq_stride32 % elts_per_cache_line) == 0);
     
     // FIXME could improve these checks, by verifying that strides are non-overlapping.
-    assert(beam_stride != 0);
-    assert(ambient_stride != 0);
-    assert(row_stride != 0);
+    assert(kernel_args.beam_stride32 != 0);
+    assert(kernel_args.ambient_stride32 != 0);
+    assert(kernel_args.freq_stride32 != 0);
+}
 
-    // Overflow checking.
 
-    long max_offset = pow2(params.rank) * abs(row_stride) / 2;
+// FIXME reduce cut-and-paste between Inbuf::host_args and Outbuf::host_args constructors.
+template<typename T>
+dedispersion_simple_outbuf<T>::host_args::host_args(UntypedArray &out_uarr, const GpuDedispersionKernel::Params &params)
+{
+    // If T==float, then T32 is also 'float'.
+    // If T==__half, then T32 is '__half2'.
+    using T32 = typename simd32_type<T>::type;
 
-    if (max_offset >= (1L << 31))
-	throw runtime_error("row_stride 32-bit overflow");
-    if (ntime >= (1L << 31))
-	throw runtime_error("ntime 32-bit overflow");
+    constexpr int elts_per_cache_line = constants::bytes_per_gpu_cache_line / 4;
+    constexpr int denom = 4 / sizeof(T);
+    static_assert(denom * sizeof(T) == 4);
+
+    Array<T> out = uarr_get<T> (out_uarr, "in");
     
-    T32 *iobuf2 = reinterpret_cast<T32 *> (iobuf);
-    T32 *rstate2 = reinterpret_cast<T32 *> (rstate);
-    long nt_cl = ntime / elts_per_cache_line;
+    // Expected shape is (nbeams, nambient, pow2(rank), ntime)
+    assert(out.ndim == 4);
+    assert(out.shape[1] == params.nambient);
+    assert(out.shape[2] == pow2(params.rank));
+    assert(out.get_ncontig() >= 1);
+    assert(out.on_gpu());
 
-    // Convert (T strides) to (T32 strides).
-    int s = integer_log2(4 / sizeof(T));
-    long beam_stride2 = beam_stride >> s;
-    long ambient_stride2 = ambient_stride >> s;
-    long row_stride2 = row_stride >> s;
+    nbeams = out.shape[0];
+    ntime = out.shape[3];
+
+    kernel_args.out = (T32 *) out.data;
+    kernel_args.beam_stride32 = xdiv(out.strides[0], denom);     // 32-bit stride
+    kernel_args.ambient_stride32 = xdiv(out.strides[1], denom);  // 32-bit stride
+    kernel_args.dm_stride32 = xdiv(out.strides[2], denom);     // 32-bit stride
     
+    // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
+    assert(is_aligned(kernel_args.out, constants::bytes_per_gpu_cache_line));   // also checks non-NULL
+    assert((kernel_args.beam_stride32 % elts_per_cache_line) == 0);
+    assert((kernel_args.ambient_stride32 % elts_per_cache_line) == 0);
+    assert((kernel_args.dm_stride32 % elts_per_cache_line) == 0);
+    
+    // FIXME could improve these checks, by verifying that strides are non-overlapping.
+    assert(kernel_args.beam_stride32 != 0);
+    assert(kernel_args.ambient_stride32 != 0);
+    assert(kernel_args.dm_stride32 != 0);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+template<typename T, class Inbuf, class Outbuf>
+struct GpuDedispersionKernelImpl : public GpuDedispersionKernel
+{    
+    // If T==float, then T32 is also 'float'.
+    // If T==__half, then T32 is '__half2'.
+    using T32 = typename simd32_type<T>::type;
+
+    GpuDedispersionKernelImpl(const GpuDedispersionKernel::Params &params);
+
+    virtual void launch(const UntypedArray &in, UntypedArray &out, long itime, long ibeam, cudaStream_t stream) override;
+
+    // (inbuf, outbuf, rstate, nt_cl, integer_constants)
+    void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, int, uint *) = nullptr;
+};
+
+
+template<typename T, class Inbuf, class Outbuf>
+GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Params &params_) :
+    GpuDedispersionKernel(params_)
+{
+    if (params.rank == 1)
+	this->cuda_kernel = dedisperse_r1<T32, Inbuf, Outbuf>;
+    else if (params.rank == 2)
+	this->cuda_kernel = dedisperse_r2<T32, Inbuf, Outbuf>;
+    else if (params.rank == 3)
+	this->cuda_kernel = dedisperse_r3<T32, Inbuf, Outbuf>;
+    else if (params.rank == 4)
+	this->cuda_kernel = dedisperse_r4<T32, Inbuf, Outbuf>;
+    else if (params.rank == 5)
+	this->cuda_kernel = dedisperse_r5<T32, Inbuf, Outbuf>;
+    else if (params.rank == 6)
+	this->cuda_kernel = dedisperse_r6<T32, Inbuf, Outbuf>;
+    else if (params.rank == 7)
+	this->cuda_kernel = dedisperse_r7<T32, Inbuf, Outbuf>;
+    else if (params.rank == 8)
+	this->cuda_kernel = dedisperse_r8<T32, Inbuf, Outbuf>;
+    else
+	throw runtime_error("expected 1 <= GpuDedispersionKernel::Params::active_rank <= 8");
+
+    // Note: this->shmem_bytes is initialized by the base class constructor.
+    
+    if (shmem_nbytes > 48*1024) {
+        CUDA_CALL(cudaFuncSetAttribute(
+	    cuda_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shmem_nbytes
+        ));
+    }
+}
+
+
+// virtual override
+template<typename T, class Inbuf, class Outbuf>
+void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_arr, UntypedArray &out_arr, long itime, long ibeam, cudaStream_t stream)
+{
+    typename Inbuf::host_args in(in_arr, params);
+    typename Outbuf::host_args out(out_arr, params);
+
+    if (in.nbeams != out.nbeams)
+	throw runtime_error("GpuDedispersionKernel: nbeams mismatch between input/output arrays");
+    if (in.ntime != out.ntime)
+	throw runtime_error("GpuDedispersionKernel: ntime mismatch between input/output arrays");
+
+    long nbeams = in.nbeams;
+    long ntime = out.ntime;
+    
+    // Check nbeams.
+    assert(nbeams > 0);
+    assert(nbeams <= params.total_beams);
+    assert(nbeams <= constants::cuda_max_y_blocks);
+
+    // Check ntime.
+    //
+    // Reminder: instead of using 'ntime' as a kernel argument, we use
+    //
+    //    nt_cl = number of cache lines spanned by 'ntime' time samples
+    //          = (ntime * sizeof(T)) / 128
+    
+    constexpr int nelts_per_cache_line = 128 / sizeof(T);
+
+    assert(ntime > 0);
+    assert((ntime % nelts_per_cache_line) == 0);
+    long nt_cl = ntime / nelts_per_cache_line;
+
+    // Compare (itime, ibeam) with expected values.
+    assert(itime == expected_itime);
+    assert(ibeam == expected_ibeam);
+    assert(ibeam + nbeams <= params.total_beams);
+
+    // Update expected (itime, ibeam).
+    expected_ibeam += nbeams;
+    if (expected_ibeam == params.total_beams) {
+	expected_ibeam = 0;
+	expected_itime++;
+    }
+
+    Array<T> rstate = uarr_get<T> (this->persistent_state, "rstate");
+    T *rp = rstate.data + (ibeam * this->state_nelts_per_beam);
+
+    // Note: the number of beams and 'ambient' tree channels are implicitly supplied
+    // to the kernel via gridDim.y, gridDim.x.
     dim3 grid_dims;
-    grid_dims.x = nambient;
+    grid_dims.x = params.nambient;
     grid_dims.y = nbeams;
     grid_dims.z = 1;
 
-    typename dedispersion_simple_outbuf<T>::device_args outbuf;
-    outbuf.out = iobuf2;
-    outbuf.beam_stride = beam_stride2;        // 32-bit stride
-    outbuf.ambient_stride = ambient_stride2;  // 32-bit stride
-    outbuf.dm_stride = row_stride2;           // 32-bit stride
-    
-    if (params.apply_input_residual_lags) {
-	typename dedispersion_simple_inbuf<T,true>::device_args inbuf;
-	inbuf.in = iobuf2;
-	inbuf.beam_stride = beam_stride2;        // 32-bit stride
-        inbuf.ambient_stride = ambient_stride2;  // 32-bit stride
-        inbuf.freq_stride = row_stride2;         // 32-bit stride
-        inbuf.is_downsampled = params.is_downsampled_tree;
-	
-	this->kernel_lagged
-	    <<< grid_dims, 32 * warps_per_threadblock, shmem_nbytes, stream >>>
-	    (inbuf, outbuf, rstate2, nt_cl, this->integer_constants.data);
-    }
-    else {
-	typename dedispersion_simple_inbuf<T,false >::device_args inbuf;
-	inbuf.in = iobuf2;
-	inbuf.beam_stride = beam_stride2;        // 32-bit stride
-        inbuf.ambient_stride = ambient_stride2;  // 32-bit stride
-        inbuf.freq_stride = row_stride2;         // 32-bit stride
-        inbuf.is_downsampled = params.is_downsampled_tree;
-	
-	this->kernel_unlagged
-	    <<< grid_dims, 32 * warps_per_threadblock, shmem_nbytes, stream >>>
-	    (inbuf, outbuf, rstate2, nt_cl, this->integer_constants.data);
-    }	
+    this->cuda_kernel
+	<<< grid_dims, 32 * warps_per_threadblock, shmem_nbytes, stream >>>
+	(in.kernel_args, out.kernel_args, (T32 *) rp, nt_cl, this->integer_constants.data);
     
     CUDA_PEEK("dedispersion kernel");
 }
 
 
-template<typename T>
-void GpuDedispersionKernel<T>::launch(Array<T> &iobuf, Array<T> &rstate, cudaStream_t stream) const
-{
-    if (!iobuf.on_gpu())
-	throw runtime_error("GpuDedispersionKernel::launch_kernek(): iobuf array must be on GPU");
-    if (!rstate.on_gpu())
-	throw runtime_error("GpuDedispersionKernel::launch(): rstate array must be on GPU");
-    
-    // The 'iobuf' amd 'rstate' arrays must have shapes
-    //   iobuf.shape = { nbeams, nambient, 2^rank, ntime }   // (beam, ambient, row, time)
-    //   rstate.shape = { nbeams, nambient, state_nelts_per_small_tree }
-
-    assert(iobuf.ndim == 4);
-    assert(rstate.ndim == 3);
-    assert(iobuf.shape[2] == pow2(params.rank));
-    assert(rstate.shape[2] == state_nelts_per_small_tree);
-    assert(iobuf.shape[0] == rstate.shape[0]);
-    assert(iobuf.shape[1] == rstate.shape[1]);
-
-    assert(iobuf.get_ncontig() >= 1);
-    assert(rstate.is_fully_contiguous());
-
-    // Hand off to "bare pointer" version of launch(), which will do more shape/stride
-    // checking, and then launch the cuda kernel.
-    
-    this->launch(iobuf.data,
-		 rstate.data,
-		 iobuf.shape[0],    // nbeams
-		 iobuf.strides[0],  // beam_stride
-		 iobuf.shape[1],    // nambient
-		 iobuf.strides[1],  // ambient_stride
-		 iobuf.strides[2],  // row_stride,
-		 iobuf.shape[3],    // ntime
-		 stream);
-}
-    
-
 // -------------------------------------------------------------------------------------------------
 
 
-template<typename T>
-GpuDedispersionKernel<T>::GpuDedispersionKernel(const Params &params_) :
+GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    constexpr int is_float32 = _is_float32<T>::value;
+    // Error-checks params.dtype.
+    bool is_float32 = dtype_is_float32(params.dtype);
 
-    int nrs_per_thread = 0;
+    assert(params.rank > 0);
+    assert(params.rank <= 8);
+    assert(params.nambient > 0);
+    assert(params.total_beams > 0);
+    
+    // Placeholders for future expansion.
+    // FIXME when ringbufs are implemented, don't forget to error-check params.ringbuf_locations.
+    assert(!params.input_is_ringbuf);
+    assert(!params.output_is_ringbuf);
+
+    if (params.apply_input_residual_lags) {
+	assert(params.nelts_per_segment > 0);
+	assert(params.nelts_per_segment == (is_float32 ? 32 : 64));
+    }
+	
+    // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
+
+    int nrs_per_thread;
     
     if (params.rank == 1) {
-	this->kernel_lagged = dedisperse_r1<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r1<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
     else if (params.rank == 2) {
-	this->kernel_lagged = dedisperse_r2<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r2<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
     else if (params.rank == 3) {
-	this->kernel_lagged = dedisperse_r3<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r3<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
     else if (params.rank == 4) {
-	this->kernel_lagged = dedisperse_r4<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r4<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = is_float32 ? 3 : 2;
     }
     else if (params.rank == 5) {
-	this->kernel_lagged = dedisperse_r5<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r5<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 4;
 	nrs_per_thread = 1;
     }
     else if (params.rank == 6) {
-	this->kernel_lagged = dedisperse_r6<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r6<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 8;
 	nrs_per_thread = is_float32 ? 2 : 1;
     }
     else if (params.rank == 7) {
-	this->kernel_lagged = dedisperse_r7<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r7<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 8;
 	nrs_per_thread = is_float32 ? 4 : 3;
     }
     else if (params.rank == 8) {
-	this->kernel_lagged = dedisperse_r8<T32, dedispersion_simple_inbuf<T,true>, dedispersion_simple_outbuf<T>>;
-	this->kernel_unlagged = dedisperse_r8<T32, dedispersion_simple_inbuf<T,false>, dedispersion_simple_outbuf<T>>;
 	this->warps_per_threadblock = 16;
 	nrs_per_thread = is_float32 ? 5 : 4;
     }
-    else {
-	stringstream ss;
-	ss << "GpuDedispersionKernel::make(): rank=" << params.rank << " is not implemented";
-	throw runtime_error(ss.str());
-    }
-
-    assert(kernel_lagged != nullptr);
-    assert(kernel_unlagged != nullptr);
-    assert(nrs_per_thread > 0);
-    assert(warps_per_threadblock > 0);
-
-    int swflag = (warps_per_threadblock == 1);
-    int rp_ncl = params.apply_input_residual_lags ? (pow2(params.rank) - swflag) : 0;
-    int rs_ncl = warps_per_threadblock * nrs_per_thread;
-    int gs_ncl = get_gs_ncl(params.rank, is_float32);
-
-    this->state_nelts_per_small_tree = (rs_ncl + rp_ncl + gs_ncl) * (128/sizeof(T));
+    else
+	throw runtime_error("GpuDedispersionKernel constructor: should never get here");
+    
+    long swflag = (warps_per_threadblock == 1);
+    long rp_ncl = params.apply_input_residual_lags ? (pow2(params.rank) - swflag) : 0;
+    long rs_ncl = warps_per_threadblock * nrs_per_thread;
+    long gs_ncl = get_gs_ncl(params.rank, is_float32);
+    long nelts_per_small_tree = (rs_ncl + rp_ncl + gs_ncl) * (is_float32 ? 32 : 64);
+    this->state_nelts_per_beam = params.nambient * nelts_per_small_tree;
     
     if (gs_ncl > 0)
 	this->shmem_nbytes = 128 * (gs_ncl + pow2(params.rank));
+
+    if (is_float32)
+	this->persistent_state.data_float32 = Array<float> ({params.total_beams, state_nelts_per_beam}, af_zero | af_gpu);    
+    else
+	this->persistent_state.data_float16 = Array<__half> ({params.total_beams, state_nelts_per_beam}, af_zero | af_gpu);
     
-    if (shmem_nbytes > 48*1024) {
-        // FIXME: I'm asusming here that cudaFuncSetAttribute() is thread-safe.
-        // Should try to confirm this somehow!
-        CUDA_CALL(cudaFuncSetAttribute(
-            kernel_lagged,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_nbytes
-        ));
-        CUDA_CALL(cudaFuncSetAttribute(
-            kernel_unlagged,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shmem_nbytes
-        ));
-    }
-   
     this->integer_constants = make_integer_constants(params.rank, is_float32, true);   // on_gpu=true
 }
 
 
-template<typename T>
-void GpuDedispersionKernel<T>::print(ostream &os, int indent) const
+// Static member function
+shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &params)
 {
-    os << Indent(indent) << "GpuDedispersionKernel<" << gputils::type_name<T>() << ">\n"
-       << Indent(indent+4) << "rank = " << params.rank << "\n"
-       << Indent(indent+4) << "apply_input_residual_lags = " << (params.apply_input_residual_lags ? "true" : "false") << "\n"
-       << Indent(indent+4) << "is_downsampled_tree = " << (params.is_downsampled_tree ? "true" : "false") << "\n"
-       << Indent(indent+4) << "state_nelts_per_small_tree = " << this->state_nelts_per_small_tree << "\n"
-       << Indent(indent+4) << "warps_per_threadblock = " << this->warps_per_threadblock << "\n"
-       << Indent(indent+4) << "shmem_nbytes = " << this->shmem_nbytes
-       << endl;
+    bool is_float32 = dtype_is_float32(params.dtype);
+
+    // Select subclass template instantiation.
+    // Currently 4 cases here -- more to come.
+
+    if (!params.apply_input_residual_lags && is_float32)
+	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,false>, dedispersion_simple_outbuf<float>>> (params);
+    else if (!params.apply_input_residual_lags && !is_float32)
+	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_simple_inbuf<__half,false>, dedispersion_simple_outbuf<__half>>> (params);
+    else if (params.apply_input_residual_lags && is_float32)
+	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,true>, dedispersion_simple_outbuf<float>>> (params);
+    else if (params.apply_input_residual_lags && !is_float32)
+	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_simple_inbuf<__half,true>, dedispersion_simple_outbuf<__half>>> (params);
+    
+    throw runtime_error("GpuDedispersionKernel::make(): shouldn't get here");
 }
-
-
-#define INSTANTIATE(T) \
-    template void GpuDedispersionKernel<T>::launch(T*, T*, long, long, long, long, long, long, cudaStream_t) const; \
-    template void GpuDedispersionKernel<T>::launch(Array<T> &, Array<T> &, cudaStream_t) const; \
-    template GpuDedispersionKernel<T>::GpuDedispersionKernel(const Params &); \
-    template void GpuDedispersionKernel<T>::print(ostream &os, int indent) const
-
-INSTANTIATE(__half);
-INSTANTIATE(float);
 
 
 }  // namespace pirate

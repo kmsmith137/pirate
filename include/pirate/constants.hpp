@@ -22,6 +22,10 @@ struct constants
     
     static constexpr int max_downsampling_level = 6;
 
+    // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
+    static constexpr int cuda_max_y_blocks = 65535;
+    static constexpr int cuda_max_z_blocks = 65535;
+    
     // These assumptions are made all over the place.
     // (Placement of static_asserts in this source file is arbitrary.)
     static_assert(sizeof(int) == 4);

@@ -1,10 +1,6 @@
 #ifndef _PIRATE_INTERNALS_GPU_DEDISPERSION_KERNEL_HPP
 #define _PIRATE_INTERNALS_GPU_DEDISPERSION_KERNEL_HPP
 
-#include "inlines.hpp"  // simd32_type
-#include "dedispersion_inbufs.hpp"
-#include "dedispersion_outbufs.hpp"
-
 #include <gputils/Array.hpp>
 
 namespace pirate {
@@ -13,83 +9,90 @@ namespace pirate {
 #endif
 
 
-template<typename T>
+// FIXME temporary hack that will go away, after I implement gputils::Array<void>.
+struct UntypedArray
+{
+    gputils::Array<float> data_float32;
+    gputils::Array<__half> data_float16;
+};
+
+
+// The GpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
+// but internally allocates and manages its persistent state ("rstate").
+
 class GpuDedispersionKernel
 {
 public:
-    // Each kernel has an rlag_type which determines whether residual lags are applied.
-    // See long comment below for details.
+   
+    // The meaning of Params::apply_residual_lags needs some explanation!
+    //
+    // This is used in the second dedisperser stage, where each tree channel is labelled
+    // by two indices:
+    //
+    //   - a bit-reversed DM 0 <= d < 2^(total_rank-active_rank)
+    //   - a coarse frequency 0 <= f < 2^(active_rank).
+    //
+    // Before dedispersing the data, the following residual lag is applied:
+    //
+    //   int lag = rb_lag(f, d, total_rank-active_rank, active_rank, params.input_is_downsampled_tree);
+    //   int residual_lag = lag % nelts_per_segment;
 
     struct Params {
-	int rank = 0;
-	bool apply_input_residual_lags = false;   // see below
-	bool is_downsampled_tree = false;
+	std::string dtype;      // either "float32" or "float16"
+	int rank = -1;          // satisfies 1 <= rank <= 8
+	int nambient = 0;
+	int total_beams = 0;
+
+	// Input/output buffer types.
+	bool input_is_ringbuf = false;
+	bool output_is_ringbuf = false;
+
+	// Residual lags (see comment above).
+	bool apply_input_residual_lags = false;
+	bool input_is_downsampled_tree = false;   // only matters if apply_input_residual_lags=true
+	int nelts_per_segment = 0;                // only matters if apply_input_residual_lags=true
+
+	// Placeholder for future expansion.
+	// Only used if (input_is_ringbuf || output_is_ringbuf)
+	gputils::Array<uint> ringbuf_locations;
     };
 
-    GpuDedispersionKernel(const Params &params);
+    // To construct GpuDedispersionKernel instances, call this function.
+    static std::shared_ptr<GpuDedispersionKernel> make(const Params &params);
     
-    const Params params;
+    Params params;
     
-    // Kernel persistent state is an array of shape
-    // { nbeams, nambient, state_nelts_per_small_tree }.
-    long state_nelts_per_small_tree = 0;
-
-    // Array interface to launch().
-    //
-    // The 'iobuf' amd 'rstate' arrays must have shapes
-    //   int N = constants::bytes_per_gpu_cache_line / sizeof(T);
-    //   iobuf.shape = { nbeams, nambient, 2^rank, ntime }
-    //   rstate.shape = { nbeams, nambient, state_nelts_per_small_tree }
-    //
-    // This may be more array dimensions than you need -- if so, just call Array::reshape().
-    //
-    // The last axis of 'iobuf' (representing time) must be contiguous, and the 'rstate'
-    // array must be fully contiguous. Remaining iobuf axis strides (beam, ambient, row)
-    // are kernel arguments.
-    //
-    // The 'beam' index is always a "pure spectator" index.
-    // The meaning of the 'ambient' index depends on the value of params.apply_input_residual_lags:
-    //
-    //   - apply_input_residual_lags == false:
-    //
-    //       Ambient index is a pure spectator.
-    //
-    //   - apply_input_residual_lags == true:
-    //
-    //       Ambient index represents a bit-reversed DM 0 <= d < 2^(ambient_rank).
-    //       The "row" index represents a coarse frequency 0 <= f < 2^(rank).
-    //       Before dedispersing the data, the following residual lag is applied:
-    //
-    //        int nelts_per_segment = constants::bytes_per_gpu_cache_line / sizeof(T);
-    //        int lag = rb_lag(f, d, ambient_rank, rank, params.is_downsampled_tree);
-    //        int residual_lag = lag % nelts_per_segment;
-    
-    void launch(gputils::Array<T> &iobuf,
-		gputils::Array<T> &rstate,
-		cudaStream_t stream = nullptr) const;
-    
-    // Bare pointer interface to launch().
-    // All stride arguments are "T" strides, i.e. byte offset is obtained by multiplying by sizeof(T).
-    
-    void launch(T *iobuf, T *rstate,
-		long nbeams, long beam_stride,
-		long nambient, long ambient_stride,
-		long row_stride, long ntime,   // number of rows is always 2^rank
-		cudaStream_t stream = nullptr) const;
-
-    void print(std::ostream &os=std::cout, int indent=0) const;
-
-protected:
     // Used internally by GpuDedispersionKernel::launch().
+    int state_nelts_per_beam = 0;
     int warps_per_threadblock = 0;
     int shmem_nbytes = 0;
+    
+    // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
+    //
+    // The 'in' array has different meanings, depending on Params::input_is_ringbuf:
+    //   - If (!input_is_ringbuf): shape is (nbeams, nambient, pow2(rank), ntime).
+    //   - If (input_is_ringbuf): shape is (ntime/nelts_per_segment, nambient, pow2(rank), 4).
+    //
+    // Similarly, the 'out' array has different meanings, depending on Params::output_is_ringbuf:
+    //   - If (!output_is_ringbuf): shape is (nbeams, nambient, pow2(rank), ntime).
+    //   - If (output_is_ringbuf): shape is (ntime/nelts_per_segment, nambient, pow2(rank), 4).
+    //
+    // The 'itime' and 'ibeam' arguments are not logically necessary, but enable a debug check.
 
-    // If T==float, then T32 is also 'float'.
-    // If T==__half, then T32 is '__half2'.
-    using T32 = typename simd32_type<T>::type;
+    virtual void launch(const UntypedArray &in, UntypedArray &out, long itime, long ibeam, cudaStream_t stream=nullptr) = 0;
+
+protected:
+    // Don't call constructor directly -- call GpuDedispersionKernel::make() instead!
+    GpuDedispersionKernel(const Params &params);
+
+    // Shape (total_beams, state_nelts_per_beam).
+    UntypedArray persistent_state;
+
+    // Enables a debug check.
+    long expected_itime = 0;
+    long expected_ibeam = 0;
     
     // __global__ CUDA kernels (defined in GpuDedispersionKernel.cu)
-    // FIXME replace 'integer_constants' argument with constant memory.
     //
     // A few notes, relative to launch() above:
     //
@@ -105,12 +108,8 @@ protected:
     //     but 64-bit in launch() above. The necessary overflow checking
     //     is done in launch().
 
-    // (inbuf, outbuf, rstate, nt_cl, integer_constants)
-    void (*kernel_unlagged)(typename dedispersion_simple_inbuf<T,false>::device_args, typename dedispersion_simple_outbuf<T>::device_args, T32 *, int, uint *) = nullptr;
-    void (*kernel_lagged)(typename dedispersion_simple_inbuf<T,true>::device_args, typename dedispersion_simple_outbuf<T>::device_args, T32 *, int, uint *) = nullptr;
-
     // FIXME only on current cuda device (at time of construction).
-    // Should either add run-time check, or switch to using constant memory.
+    // FIXME should either add run-time check, or switch to using constant memory.
     gputils::Array<uint> integer_constants;
 };
 

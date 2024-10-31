@@ -14,6 +14,12 @@ using namespace pirate;
 using namespace gputils;
 
 
+// FIXME delete after de-templating.
+template<typename T> struct _is_float32 { };
+template<> struct _is_float32<float>   { static constexpr bool value = true; };
+template<> struct _is_float32<__half>  { static constexpr bool value = false; };
+
+
 template<typename T>
 struct TestInstance
 {
@@ -106,23 +112,28 @@ struct TestInstance
 	ref_params.is_downsampled_tree = is_downsampled_tree;
 	ref_params.nelts_per_segment = xdiv(constants::bytes_per_gpu_cache_line, sizeof(T));  // matches DedispersionConfig::get_nelts_per_segment()
 
-	typename GpuDedispersionKernel<T>::Params gpu_params;
+	constexpr bool is_float32 = _is_float32<T>::value;
+	typename GpuDedispersionKernel::Params gpu_params;
+	gpu_params.dtype = is_float32 ? "float32" : "float16";
 	gpu_params.rank = rank;
+	gpu_params.nambient = nambient;
+	gpu_params.total_beams = nbeams;  // FIXME process in batches
 	gpu_params.apply_input_residual_lags = apply_input_residual_lags;
-	gpu_params.is_downsampled_tree = is_downsampled_tree;
+	gpu_params.input_is_downsampled_tree = is_downsampled_tree;
+	gpu_params.nelts_per_segment = is_float32 ? 32 : 64;
 
 	ReferenceDedispersionKernel ref_kernel(ref_params);
-	shared_ptr<GpuDedispersionKernel<T>> gpu_kernel = make_shared<GpuDedispersionKernel<T>> (gpu_params);
-
-	if (noisy)
-	    gpu_kernel->print(cout, 4);  // indent=4
+	shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(gpu_params);
 
 	Array<T> gpu_iobuf({ nbeams, nambient, pow2(rank), ntime },         // shape
 			   { beam_stride, ambient_stride, row_stride, 1 },  // strides
 			   af_gpu | af_zero);
-	
-	Array<T> gpu_rstate({ nbeams, nambient, gpu_kernel->state_nelts_per_small_tree },
-			    af_gpu | af_zero);
+
+	UntypedArray gpu_ubuf;
+	if constexpr (is_float32)
+	    gpu_ubuf.data_float32 = gpu_iobuf;
+	else
+	    gpu_ubuf.data_float16 = gpu_iobuf;
 	
 	for (int ichunk = 0; ichunk < nchunks; ichunk++) {
 #if 1
@@ -149,7 +160,7 @@ struct TestInstance
 
 	    // Copy array to GPU before doing reference dedispersion, since reference dedispersion modifies array in-place.
 	    gpu_iobuf.fill(ref_chunk.convert_dtype<T>());
-	    gpu_kernel->launch(gpu_iobuf, gpu_rstate);
+	    gpu_kernel->launch(gpu_ubuf, gpu_ubuf, ichunk, 0);
 	    CUDA_CALL(cudaDeviceSynchronize());
 	    Array<float> gpu_output = gpu_iobuf.to_host().template convert_dtype<float> ();
 	    
