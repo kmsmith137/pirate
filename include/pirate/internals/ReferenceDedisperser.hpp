@@ -29,22 +29,30 @@ struct ReferenceDedisperserBase
     std::shared_ptr<DedispersionPlan> plan;
     const DedispersionConfig config;   // same as plan->config
     const int sophistication;
+        
+    int config_rank = 0;         // same as config.tree_rank
+    int config_ntime = 0;        // same as config.time_samples_per_chunk
+    int total_beams;             // same as config.beams_per_gpu
+    int beams_per_batch;         // same as config.beams_per_batch
     
-    int input_rank = 0;          // same as config.tree_rank
-    int input_nt = 0;            // same as config.time_samples_per_chunk
     int nds = 0;                 // same as plan->stage0_trees.size(), i.e. number of downsampling (ids) values
     int output_ntrees = 0;       // same as plan->stage1_trees.size(), i.e. number of (ids, early_trigger) pairs
     int nelts_per_segment = 0;   // same as plan->nelts_per_segment
-    
-    // Counts cumulative calls to dedisperse()
-    ssize_t pos = 0;
 
-    // The 'in' array represents one "chunk", with shape (2^input_rank, input_nt).
     // To process multiple chunks, call the dedisperse() method in a loop.
-    void dedisperse(const gputils::Array<float> &in);
+    void dedisperse(long itime, long ibeam);
 
-    // After dedisperse() completes, dedispersion output is stored here.
-    std::vector<gputils::Array<float>> output_arrays;  // length output_ntrees
+    // Before calling dedisperse(), caller should fill 'input_array'.
+    // Shape is (beams_per_batch, 2^config_rank, input_nt).
+    // 
+    // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
+    // output_arrays[itree] has shape (beams_per_batch, 2^output_rank, config_ntime / pow2(ids)), where:
+    //
+    //   ids = downsampling factor of tree 'itree' (same as DedispersionPlan::Stage0Tree::ds_level)
+    //   output_rank = rank of tree 'itree' (same as Stage1Tree::rank0 + Stage1Tree::rank1_trigger)
+    
+    gputils::Array<float> input_array;
+    std::vector<gputils::Array<float>> output_arrays;
 
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
@@ -69,9 +77,12 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 
     virtual void _dedisperse(const gputils::Array<float> &in) override;
 
-    std::vector<gputils::Array<float>> downsampled_inputs;    // length nds
+    // Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
+    // Outer length is nds, inner shape is (beams_per_batch, 2^config_rank, input_nt / pow2(ids)).
+    std::vector<gputils::Array<float>> downsampled_inputs;
+    
     std::vector<gputils::Array<float>> dedispersion_buffers;  // length output_ntrees
-    std::vector<std::shared_ptr<ReferenceTree>> trees;       // length output_ntrees
+    std::vector<std::shared_ptr<ReferenceTree>> trees;        // length output_ntrees
 };
 
 

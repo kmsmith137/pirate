@@ -232,8 +232,8 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     assert(config.beams_per_batch == 1);
     assert(config.num_active_batches == 1);
     
-    this->input_rank = config.tree_rank;
-    this->input_nt = config.time_samples_per_chunk;
+    this->config_rank = config.tree_rank;
+    this->config_ntime = config.time_samples_per_chunk;
     this->output_ntrees = plan->stage1_trees.size();
     this->nds = plan->stage0_trees.size();
     this->nelts_per_segment = plan->nelts_per_segment;
@@ -248,14 +248,13 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
 }
 
 
-void ReferenceDedisperserBase::dedisperse(const gputils::Array<float> &in)
+void ReferenceDedisperserBase::dedisperse(const gputils::Array<float> &in, )
 {
-    assert(in.shape_equals({pow2(input_rank), input_nt}));
+    assert(in.shape_equals({beams_per_batch, pow2(config_rank), config_ntime}));
     assert(in.is_fully_contiguous());   // probably not necessary
     assert(in.on_host());
     
     this->_dedisperse(in);
-    this->pos++;
 }
 
 
@@ -274,7 +273,11 @@ std::shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const s
 
 // -------------------------------------------------------------------------------------------------
 //
-// ReferenceDedisperser0
+// Sophistication == 0:
+//
+//   - Uses one-stage dedispersion instead of two stages.
+//   - In downsampled trees, compute twice as many DMs as necessary, then drop the bottom half.
+//   - Each early trigger is computed in an independent tree, by disregarding some input channels.
 
 
 ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan_) :
@@ -285,9 +288,10 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
     this->trees.resize(output_ntrees);
 
     for (int ids = 0; ids < nds; ids++) {
-	long nfreq = pow2(input_rank);
-	long nt_ds = xdiv(input_nt, pow2(ids));
-	downsampled_inputs.at(ids) = Array<float> ({nfreq,nt_ds}, af_uhost | af_zero);
+	long nbeams = beams_per_batch;  // not total_beams
+	long nfreq = pow2(config_rank);
+	long nt_ds = xdiv(config_ntime, pow2(ids));
+	downsampled_inputs.at(ids) = Array<float> ({nbeams, nfreq, nt_ds}, af_uhost | af_zero);
     }
 
     for (int itree = 0; itree < output_ntrees; itree++) {
@@ -326,6 +330,8 @@ void ReferenceDedisperser0::_dedisperse(const gputils::Array<float> &in)
     }
 }
 
+
+#if 0
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -496,6 +502,8 @@ void ReferenceDedisperser2::_dedisperse(const gputils::Array<float> &in)
     // Stage-1 dedispersion, and copy stage1_iobuf -> this->output_arrays.
     apply_stage1_dedispersion_kernels(plan, stage1_kernels, stage1_iobuf, output_arrays, this->pos);
 }
+
+#endif
 
 
 }  // namespace pirate
