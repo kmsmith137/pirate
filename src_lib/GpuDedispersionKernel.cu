@@ -305,6 +305,38 @@ bool GpuDedispersionKernel::Params::is_float32() const
 }
 
 
+void GpuDedispersionKernel::Params::validate() const
+{
+    int nelts_per_cache_line = is_float32() ? 32 : 64;
+
+    assert(rank >= 0);
+    assert(rank <= 8);
+    assert(nambient > 0);
+    assert(total_beams > 0);
+    assert(beams_per_kernel_launch > 0);
+    assert(beams_per_kernel_launch <= constants::cuda_max_y_blocks);
+    assert(ntime > 0);
+
+    // Not really necessary, but failure probably indicates an unintentional bug.
+    assert(is_power_of_two(nambient));
+    
+    // Note: the second check (on ntime) is assumed by the GPU kernels.
+    // If it not satisfied, then the GPU kernels will silently compute the wrong answer!
+    assert((total_beams % beams_per_kernel_launch) == 0);
+    assert((ntime % nelts_per_cache_line) == 0);
+
+    // Placeholders for future expansion.
+    // FIXME when ringbufs are implemented, don't forget to error-check ringbuf_locations.
+    assert(!input_is_ringbuf);
+    assert(!output_is_ringbuf);
+
+    if (apply_input_residual_lags) {
+	assert(nelts_per_segment > 0);
+	assert(nelts_per_segment == nelts_per_cache_line);
+    }
+}
+
+
 // -------------------------------------------------------------------------------------------------
 
 
@@ -488,34 +520,12 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    bool is_float32 = params.is_float32();  // note: error-checks dtype
-    int nelts_per_cache_line = is_float32 ? 32 : 64;
-
-    assert(params.rank > 0);
-    assert(params.rank <= 8);
-    assert(params.nambient > 0);
-    assert(params.total_beams > 0);
-    assert(params.beams_per_kernel_launch > 0);
-    assert(params.beams_per_kernel_launch <= constants::cuda_max_y_blocks);
-    assert(params.ntime > 0);
-
-    // Note: the second check (on ntime) is assumed by the GPU kernels.
-    // If it not satisfied, then the GPU kernels will silently compute the wrong answer!
-    assert((params.total_beams % params.beams_per_kernel_launch) == 0);
-    assert((params.ntime % nelts_per_cache_line) == 0);
-
-    // Placeholders for future expansion.
-    // FIXME when ringbufs are implemented, don't forget to error-check params.ringbuf_locations.
-    assert(!params.input_is_ringbuf);
-    assert(!params.output_is_ringbuf);
-
-    if (params.apply_input_residual_lags) {
-	assert(params.nelts_per_segment > 0);
-	assert(params.nelts_per_segment == nelts_per_cache_line);
-    }
+    params.validate();
+    assert(params.rank > 0);  // FIXME define _r0 for testing
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
 
+    bool is_float32 = params.is_float32();  // note: error-checks dtype
     int nrs_per_thread;
     
     if (params.rank == 1) {

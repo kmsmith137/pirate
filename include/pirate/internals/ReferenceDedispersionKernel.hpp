@@ -1,7 +1,7 @@
 #ifndef _PIRATE_INTERNALS_REFERENCE_DEDISPERSION_KERNEL_HPP
 #define _PIRATE_INTERNALS_REFERENCE_DEDISPERSION_KERNEL_HPP
 
-#include <gputils/Array.hpp>
+#include "GpuDedispersionKernel.hpp"  // GpuDedispersionKernel::Params
 
 namespace pirate {
 #if 0
@@ -15,35 +15,23 @@ struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
 
 struct ReferenceDedispersionKernel
 {
-    struct Params {
-	int rank = -1;	
-	int ntime = 0;
-	int nambient = 0;
-	int nbeams = 0;
+    using Params = GpuDedispersionKernel::Params;
 
-	// The 'nelts_per_segment' argument has the same meaning as DedisperisonPlan::nelts_per_segment.
-	// It affects the computation of residual lags, and is only used if apply_input_residual_lags == true.
-	//
-	// Similarly, 'is_downsampled_tree' affects residual lags, and only used if apply_input_residual_lags == true.
-	//
-	// (Note that the ReferenceDedispersionKernel always uses float32, unlike the GpuDedispersionPlan
-	// where there is some connection between the dtype and the value of 'nelts_per_segment'.)
-	
-	bool apply_input_residual_lags = false;
-	bool is_downsampled_tree = false;  // only used if apply_input_residual_lags == true
-	int nelts_per_segment = 0;         // only used if apply_input_residual_lags == true
-    };
-
-    ReferenceDedispersionKernel(const Params &params_);
-
-    // iobuf has shape (nbeams, nambient, pow2(rank), ntime).
-    void apply(gputils::Array<float> &iobuf) const;
+    ReferenceDedispersionKernel(const Params &params);
 
     const Params params;
-    std::shared_ptr<ReferenceTree> tree;
     
-    // Only used if params.apply_input_residual_lags == true.
-    std::shared_ptr<ReferenceLagbuf> rlag_buf;
+    // The 'in' and 'out' arrays have shape (params.beams_per_kernel, nambient, pow2(rank), ntime).
+    // The 'itime' and 'ibeam' arguments are not logically necessary, but enable a debug check.
+    void apply(gputils::Array<float> &in, gputils::Array<float> &out, long itime, long ibeam);
+
+    // A bit awkward -- number of trees is (total_beams / beams_per_kernel).
+    std::vector<std::shared_ptr<ReferenceTree>> trees;
+    std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;   // only used if params.apply_input_residual_lags == true.
+
+    // Enables a debug check.
+    long expected_itime = 0;
+    long expected_ibeam = 0;    
 };
 
 

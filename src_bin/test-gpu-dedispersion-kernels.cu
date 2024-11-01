@@ -96,28 +96,17 @@ static void run_test(const TestInstance &tp)
 	 << "    cpu_ostrides = " << gputils::tuple_str(tp.cpu_ostrides)
 	 << endl;
 
-    // FIXME unify ReferenceDedispersionKernel::Params and GpuDedispersionKernel::Params
-    ReferenceDedispersionKernel::Params ref_params;
-    ref_params.rank = p.rank;
-    ref_params.ntime = p.ntime;
-    ref_params.nambient = p.nambient;
-    ref_params.nbeams = p.total_beams;
-    ref_params.apply_input_residual_lags = p.apply_input_residual_lags;
-    ref_params.is_downsampled_tree = p.input_is_downsampled_tree;
-    ref_params.nelts_per_segment = p.nelts_per_segment;
-
-    shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (ref_params);
+    shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
     shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(p);
 
     bool is_float32 = p.is_float32();
     vector<ssize_t> big_shape = { p.total_beams, p.nambient, pow2(p.rank), tp.nchunks * p.ntime };
-    vector<ssize_t> medium_shape = { p.total_beams, p.nambient, pow2(p.rank), p.ntime };
     vector<ssize_t> small_shape = { p.beams_per_kernel_launch, p.nambient, pow2(p.rank), p.ntime };
 
     Array<float> cpu_in_big(big_shape, af_rhost | af_random);  // contiguous
     Array<float> cpu_out_big(big_shape, af_uhost | af_zero);   // contiguous
-    Array<float> cpu_in_small(medium_shape, af_uhost | af_zero);  // contiguous for now (FIXME)
-    // Array<float> cpu_out_small = tp.in_place ? cpu_in_small : Array<float> (small_shape, tp.cpu_ostrides, af_uhost | af_zero);
+    Array<float> cpu_in_small(small_shape, tp.cpu_istrides, af_uhost | af_zero);
+    Array<float> cpu_out_small = tp.in_place ? cpu_in_small : Array<float> (small_shape, tp.cpu_ostrides, af_uhost | af_zero);
     
     UntypedArray gpu_in_big;
     UntypedArray gpu_out_big;
@@ -131,7 +120,6 @@ static void run_test(const TestInstance &tp)
 	gpu_out_small.data_float32 = tp.in_place ? gpu_in_small.data_float32 : Array<float> (small_shape, tp.gpu_ostrides, af_gpu | af_zero);
     }
     else {
-	// FIXME confirm that cudaMemcpy() is synchronous.
 	Array<__half> t = cpu_in_big.convert_dtype<__half> ();
 	gpu_in_big.data_float16 = t.to_gpu();
 	gpu_out_big.data_float16 = Array<__half> (big_shape, af_gpu | af_zero);
@@ -140,22 +128,23 @@ static void run_test(const TestInstance &tp)
     }
     
     for (long ichunk = 0; ichunk < tp.nchunks; ichunk++) {
-	Array<float> s;
-
-	// Reference dedispersion.
-	// FIXME currently in-place, and processing all beams
-
-	s = cpu_in_big.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
-	cpu_in_small.fill(s);
-	
-	ref_kernel->apply(cpu_in_small);
-	
-	s = cpu_out_big.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
-	s.fill(cpu_in_small);
-
-	// GPU dedispersion.
 	for (int b = 0; b < p.total_beams; b += p.beams_per_kernel_launch) {
+	    Array<float> s;
 	    UntypedArray t;
+
+	    // Reference dedispersion.
+	    
+	    s = cpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+	    s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+	    cpu_in_small.fill(s);
+
+	    ref_kernel->apply(cpu_in_small, cpu_out_small, ichunk, b);
+
+	    s = cpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
+	    s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+	    s.fill(cpu_out_small);
+	    
+	    // GPU dedipersion.
 	    
 	    t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
 	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);

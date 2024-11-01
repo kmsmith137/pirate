@@ -110,10 +110,17 @@ make_stage0_dedispersion_kernels(const shared_ptr<DedispersionPlan> &plan)
 	const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
 	
 	ReferenceDedispersionKernel::Params params;
+	params.dtype = plan->config.dtype;
 	params.rank = st0.rank0;
-	params.ntime = st0.nt_ds;
 	params.nambient = pow2(st0.rank1);
-	params.nbeams = 1;
+	params.total_beams = 1;  // FIXME
+	params.beams_per_kernel_launch = 1;  // FIXME
+	params.ntime = st0.nt_ds;
+	params.input_is_ringbuf = false;
+	params.output_is_ringbuf = false;
+	params.apply_input_residual_lags = false;
+	params.input_is_downsampled_tree = (ids > 0);
+	params.nelts_per_segment = plan->nelts_per_segment;;
 	
         kernels.at(ids) = make_shared<ReferenceDedispersionKernel> (params);
     }
@@ -125,7 +132,7 @@ make_stage0_dedispersion_kernels(const shared_ptr<DedispersionPlan> &plan)
 static void apply_stage0_dedispersion_kernels(
     const shared_ptr<DedispersionPlan> &plan,
     const vector<shared_ptr<ReferenceDedispersionKernel>> &stage0_kernels,
-    Array<float> &stage0_iobuf)
+    Array<float> &stage0_iobuf, long pos)
 {
     int nds = plan->stage0_trees.size();
     assert(stage0_kernels.size() == nds);
@@ -134,7 +141,7 @@ static void apply_stage0_dedispersion_kernels(
 	const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
 	Array<float> buf = stage0_tree_view(plan, stage0_iobuf, ids);             // shape (1, 2^rank, nt_ds)
 	buf = buf.reshape_ref({1, pow2(st0.rank1), pow2(st0.rank0), st0.nt_ds});  // shape (1, 2^rank1, 2^rank0, nt_ds)
-	stage0_kernels.at(ids)->apply(buf);
+	stage0_kernels.at(ids)->apply(buf, buf, pos, 0);
     }
 }
 
@@ -152,12 +159,16 @@ make_stage1_dedispersion_kernels(const shared_ptr<DedispersionPlan> &plan)
 	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(itree);
 
 	ReferenceDedispersionKernel::Params params;
+	params.dtype = plan->config.dtype;
 	params.rank = st1.rank1_trigger;
-	params.ntime = st1.nt_ds;
 	params.nambient = pow2(st1.rank0);
-	params.nbeams = 1;
+	params.total_beams = 1;  // FIXME
+	params.beams_per_kernel_launch = 1;  // FIXME
+	params.ntime = st1.nt_ds;
+	params.input_is_ringbuf = false;
+	params.output_is_ringbuf = false;
 	params.apply_input_residual_lags = true;
-	params.is_downsampled_tree = (st1.ds_level > 0);
+	params.input_is_downsampled_tree = (st1.ds_level > 0);
 	params.nelts_per_segment = plan->nelts_per_segment;
 	
 	kernels.at(itree) = make_shared<ReferenceDedispersionKernel> (params);
@@ -171,7 +182,7 @@ static void apply_stage1_dedispersion_kernels(
     const shared_ptr<DedispersionPlan> &plan,
     const vector<shared_ptr<ReferenceDedispersionKernel>> &stage1_kernels,
     Array<float> &stage1_iobuf,
-    vector<Array<float>> &output_arrays)
+    vector<Array<float>> &output_arrays, long pos)
 {
     int output_ntrees = plan->stage1_trees.size();
     assert(stage1_kernels.size() == output_ntrees);
@@ -187,7 +198,7 @@ static void apply_stage1_dedispersion_kernels(
 	// Stage-1 dedispersion.
 	buf1 = buf1.reshape_ref({1, pow2(rank1), pow2(rank0), st1.nt_ds});       // shape (1, 2^rank1, 2^rank0, nt_ds)
 	Array<float> buf2 = buf1.transpose({0,2,1,3});                           // shape (1, 2^rank0, 2^rank1, nt_ds)
-	stage1_kernels.at(itree)->apply(buf2);
+	stage1_kernels.at(itree)->apply(buf2, buf2, pos, 0);
 
 	// Copy stage1_iobuf -> output_arrays.
 	buf1 = buf1.reshape_ref({pow2(rank0+rank1), st1.nt_ds});                 // shape (2^rank, nt_ds)
@@ -365,7 +376,7 @@ void ReferenceDedisperser1::_dedisperse(const gputils::Array<float> &in)
     apply_lagged_downsampler(plan, lagged_downsampler, in, stage0_iobuf);
 
     // Stage-0 dedispersion.
-    apply_stage0_dedispersion_kernels(plan, stage0_kernels, stage0_iobuf);
+    apply_stage0_dedispersion_kernels(plan, stage0_kernels, stage0_iobuf, this->pos);
 
     // Copy stage0_iobuf -> stage1_iobuf, and apply lags.
     for (int itree = 0; itree < output_ntrees; itree++) {
@@ -385,7 +396,7 @@ void ReferenceDedisperser1::_dedisperse(const gputils::Array<float> &in)
     }
 
     // Stage-1 dedispersion, and copy stage1_iobuf -> this->output_arrays.
-    apply_stage1_dedispersion_kernels(plan, stage1_kernels, stage1_iobuf, output_arrays);;
+    apply_stage1_dedispersion_kernels(plan, stage1_kernels, stage1_iobuf, output_arrays, this->pos);
 }
 
 
@@ -434,7 +445,7 @@ void ReferenceDedisperser2::_dedisperse(const gputils::Array<float> &in)
     apply_lagged_downsampler(plan, lagged_downsampler, in, stage0_iobuf);
 
     // Stage-0 dedispersion.
-    apply_stage0_dedispersion_kernels(plan, stage0_kernels, stage0_iobuf);
+    apply_stage0_dedispersion_kernels(plan, stage0_kernels, stage0_iobuf, this->pos);
 
     // Copy stage0_iobuf -> gpu_ringbuf.
 
@@ -483,7 +494,7 @@ void ReferenceDedisperser2::_dedisperse(const gputils::Array<float> &in)
     }
     
     // Stage-1 dedispersion, and copy stage1_iobuf -> this->output_arrays.
-    apply_stage1_dedispersion_kernels(plan, stage1_kernels, stage1_iobuf, output_arrays);
+    apply_stage1_dedispersion_kernels(plan, stage1_kernels, stage1_iobuf, output_arrays, this->pos);
 }
 
 

@@ -67,6 +67,9 @@ public:
 	// Returns true if (dtype == "float32"), false if (dtype == "float16").
 	// Otherwise, throws an exception.
 	bool is_float32() const;
+
+	// Throws an exception if anything is wrong.
+	void validate() const;
     };
 
     // To construct GpuDedispersionKernel instances, call this function.
@@ -103,22 +106,6 @@ protected:
     // Enables a debug check.
     long expected_itime = 0;
     long expected_ibeam = 0;
-    
-    // __global__ CUDA kernels (defined in GpuDedispersionKernel.cu)
-    //
-    // A few notes, relative to launch() above:
-    //
-    //   - The 'nbeams' and 'nambient' arguments to launch() are implicitly
-    //     supplied to the kernel via (GridDims.y, GridDims.x).
-    //
-    //   - Instead of using 'ntime' as a kernel argument, we use
-    //
-    //       nt_cl = number of cache lines spanned by 'ntime' time samples
-    //             = (ntime * sizeof(T)) / 128
-    //
-    //   - Some arguments (row_stride, nt_cl) are 32-bit in the cuda kernel,
-    //     but 64-bit in launch() above. The necessary overflow checking
-    //     is done in launch().
 
     // FIXME only on current cuda device (at time of construction).
     // FIXME should either add run-time check, or switch to using constant memory.
