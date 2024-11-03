@@ -82,7 +82,10 @@ struct ReferenceDedisperserBase
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
     
     // Dedispersion implementation supplied by subclass.
-    virtual void _dedisperse(const gputils::Array<float> &in) = 0;
+    virtual void _dedisperse(long itime, long ibeam) = 0;
+
+    // Helper function called by subclass
+    void check_iobuf_shapes();
 };
 
 

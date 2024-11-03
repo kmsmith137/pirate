@@ -28,7 +28,7 @@ struct Stage0Buffers
     long nseg = 0;                 // same as plan->stage0_total_segments_per_beam
     long nelts_per_segment = 0;    // same as plan->nelts_per_segment
     long beams_per_batch = 0;      // same as plan->config.beams_per_batch
-    long total_beams = 0;          // same as plan->config.total_beams
+    long total_beams = 0;          // same as plan->config.beams_per_gpu
     long nbatches = 0;             // same as (total_beams / beams_per_batch)
     
     Array<float> flat_buf;         // shape (beams_per_batch, nseg * nelts_per_segment)
@@ -44,7 +44,7 @@ struct Stage0Buffers
 	this->nseg = plan->stage0_total_segments_per_beam;
 	this->nelts_per_segment = plan->nelts_per_segment;
 	this->beams_per_batch = plan->config.beams_per_batch;
-	this->total_beams = plan->config.total_beams;
+	this->total_beams = plan->config.beams_per_gpu;
 	this->nbatches = xdiv(total_beams, beams_per_batch);
 
 	this->dd_bufs.resize(nds);
@@ -100,7 +100,7 @@ struct Stage0Buffers
 	    params.dtype = plan->config.dtype;
 	    params.rank = st0.rank0;
 	    params.nambient = pow2(st0.rank1);
-	    params.total_beams = plan->config.total_beams;
+	    params.total_beams = plan->config.beams_per_gpu;
 	    params.beams_per_kernel_launch = plan->config.beams_per_batch;
 	    params.ntime = st0.nt_ds;
 	    params.input_is_ringbuf = false;
@@ -127,7 +127,7 @@ struct Stage0Buffers
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
 	    Array<float> buf = dd_bufs.at(ids);
 	    buf = buf.reshape_ref({beams_per_batch, pow2(st0.rank1), pow2(st0.rank0), st0.nt_ds});  // shape (1, 2^rank1, 2^rank0, nt_ds)
-	    stage0_kernels.at(ids)->apply(buf, buf, itime, ibeam);
+	    dd_kernels.at(ids)->apply(buf, buf, itime, ibeam);
 	}
     }
 };
@@ -147,9 +147,10 @@ struct Stage1Buffers
     long nseg = 0;                // same as plan->stage1_total_segments_per_beam
     long nelts_per_segment = 0;   // same as plan->nelts_per_segment
     long beams_per_batch = 0;     // same as plan->config.beams_per_batch
-    long total_beams = 0;         // same as plan->config.total_beams
+    long total_beams = 0;         // same as plan->config.beams_per_gpu
     long nbatches = 0;            // same as (total_beams / beams_per_batch)
-    
+
+    Array<float> flat_buf;         // shape (beams_per_batch, nseg * nelts_per_segment)
     vector<Array<float>> dd_bufs;  // length nout, inner shape is (beams_per_batch, pow2(st1.rank), nt_ds)
     vector<shared_ptr<ReferenceDedispersionKernel>> dd_kernels;   // length (nout)
 
@@ -160,7 +161,7 @@ struct Stage1Buffers
 	this->nseg = plan->stage1_total_segments_per_beam;
 	this->nelts_per_segment = plan->nelts_per_segment;
 	this->beams_per_batch = plan->config.beams_per_batch;
-	this->total_beams = plan->config.total_beams;
+	this->total_beams = plan->config.beams_per_gpu;
 	this->nbatches = xdiv(total_beams, beams_per_batch);
 
 	this->dd_bufs.resize(nout);
@@ -219,7 +220,7 @@ struct Stage1Buffers
 	    Array<float> buf = dd_bufs.at(iout);  // shape (beams_per_batch, 2^(rank0+rank1), nt_ds)
 	    buf = buf.reshape_ref({beams_per_batch, pow2(rank1), pow2(rank0), st1.nt_ds});
 	    buf = buf.transpose({0,2,1,3});       // shape (beams_per_batch, 2^rank0, 2^rank1, nt_ds)
-	    dd_kernels.at(iout)->apply(buf1, buf1, itime, ibeam);
+	    dd_kernels.at(iout)->apply(buf, buf, itime, ibeam);
 	}
     }
 };
@@ -247,7 +248,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
 {
     this->config_rank = config.tree_rank;
     this->config_ntime = config.time_samples_per_chunk;
-    this->total_beams = config.total_beams;
+    this->total_beams = config.beams_per_gpu;
     this->beams_per_batch = config.beams_per_batch;
     this->nbatches = xdiv(total_beams, beams_per_batch);
 
@@ -262,13 +263,13 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
 
 void ReferenceDedisperserBase::check_iobuf_shapes()
 {
-    assert(input_array.shape_eq({ beams_per_batch, pow2(config_rank), config_ntime }));
+    assert(input_array.shape_equals({ beams_per_batch, pow2(config_rank), config_ntime }));
     assert(output_arrays.size() == nout);
 
     for (long iout = 0; iout < nout; iout++) {
 	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(iout);
 	int rank = st1.rank0 + st1.rank1_trigger;
-	assert(output_arrays.at(iout).shape_eq({ beams_per_batch, pow2(rank), st1.nt_ds }));
+	assert(output_arrays.at(iout).shape_equals({ beams_per_batch, pow2(rank), st1.nt_ds }));
     }
 }
 
@@ -279,7 +280,7 @@ void ReferenceDedisperserBase::dedisperse(long itime, long ibeam)
     
     this->_dedisperse(itime, ibeam);
 
-    expeted_ibeam += beams_per_batch;
+    expected_ibeam += beams_per_batch;
 
     if (expected_ibeam >= total_beams) {
 	expected_itime++;
@@ -288,17 +289,7 @@ void ReferenceDedisperserBase::dedisperse(long itime, long ibeam)
 }
 
 
-// Static member function
-shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const shared_ptr<DedispersionPlan> &plan_, int sophistication)
-{
-    if (sophistication == 0)
-	return make_shared<ReferenceDedisperser0> (plan_);
-    else if (sophistication == 1)
-	return make_shared<ReferenceDedisperser1> (plan_);
-    else if (sophistication == 2)
-	return make_shared<ReferenceDedisperser2> (plan_);
-    throw runtime_error("ReferenceDedisperserBase::make(): invalid value of 'sophistication' parameter");
-}
+// Note: ReferenceDedisperserBase::make() is defined at the end of the file.
 
 
 // -------------------------------------------------------------------------------------------------
@@ -314,7 +305,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 {
     ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan);
 
-    virtual void _dedisperse(const Array<float> &in) override;
+    virtual void _dedisperse(long itime, long ibeam) override;
 
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
     // Outer length is nds, inner shape is (beams_per_batch, 2^config_rank, input_nt / pow2(ids)).
@@ -351,7 +342,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 
     for (int ids = 0; ids < nds; ids++) {
 	long nt_ds = xdiv(config_ntime, pow2(ids));
-	downsampled_inputs.at(ids) = Array<float> ({beams_per_patch, pow2(config_rank), nt_ds}, af_uhost | af_zero);
+	downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(config_rank), nt_ds}, af_uhost | af_zero);
     }
     
     for (int iout = 0; iout < nout; iout++) {
@@ -364,13 +355,13 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 	this->output_arrays.at(iout) = Array<float>({beams_per_batch, pow2(out_rank), st1.nt_ds}, af_uhost | af_zero);
 
 	for (int batch = 0; batch < nbatches; batch++)
-	    this->trees.at(b*nout + iout) = ReferenceTree::make({ beams_per_batch, pow2(weird_rank), st1.nt_ds });
+	    this->trees.at(batch*nout + iout) = ReferenceTree::make({ beams_per_batch, pow2(weird_rank), st1.nt_ds });
     }
     
     // Reminder: 'input_array' and 'output_arrays' are members of ReferenceDedisperserBase,
     // but are initialized by the subclass constructor.
 
-    this->input_array = downsampled_input.at(0);   // alias
+    this->input_array = downsampled_inputs.at(0);   // alias
     this->check_iobuf_shapes();
 }
 
@@ -402,7 +393,7 @@ void ReferenceDedisperser0::_dedisperse(long itime, long ibeam)
 	// Step 3: apply tree dedispersion (one-stage, not two-stage).
 	// Vector length is (nbatches * nout).
 	
-	long batch = xdiv(ibeam, nbeams_per_batch);
+	long batch = xdiv(ibeam, beams_per_batch);
 	auto tree = trees.at(batch*nout + iout);
 	tree->dedisperse(dd);
 	
@@ -450,6 +441,8 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     stage0_buffers(plan_),
     stage1_buffers(plan_)
 {
+    long S = nelts_per_segment;
+    
     // Reminder: 'input_array' and 'output_arrays' are members of ReferenceDedisperserBase,
     // but are initialized by the subclass constructor.
 
@@ -501,7 +494,7 @@ void ReferenceDedisperser1::_dedisperse(long itime, long ibeam)
 	// Step 3: copy stage0 -> stage1
 	
 	Array<float> src = stage0_buffers.dd_bufs.at(st1.ds_level);  // shape (beams_per_batch, 2^rank_ambient, nt_ds)
-	src = src.slice(1, 0, pow(rank0+rank1));                     // shape (beams_per_batch, 2^rank, nt_ds)
+	src = src.slice(1, 0, pow2(rank0+rank1));                    // shape (beams_per_batch, 2^rank, nt_ds)
 
 	Array<float> dst = stage1_buffers.dd_bufs.at(iout);
 	dst.fill(src);
@@ -526,6 +519,8 @@ void ReferenceDedisperser1::_dedisperse(long itime, long ibeam)
 struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 {
     ReferenceDedisperser2(const std::shared_ptr<DedispersionPlan> &plan);
+
+    virtual void _dedisperse(long itime, long ibeam) override;
     
     // Step 1: run LaggedDownsampler.
     // Step 2: run stage0 dedispersion kernels.
@@ -545,6 +540,7 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     stage0_buffers(plan_),
     stage1_buffers(plan_)
 {
+    long S = nelts_per_segment;
     this->gpu_ringbuf = Array<float> ({plan->gmem_ringbuf_nseg * S}, af_uhost | af_zero);
     
     // Reminder: 'input_array' and 'output_arrays' are members of ReferenceDedisperserBase,
@@ -576,7 +572,7 @@ void ReferenceDedisperser2::_dedisperse(long itime, long ibeam)
 {
     long S = nelts_per_segment;
     long rb_pos = itime*total_beams + ibeam;
-    float *rbuf = plan->gpu_ringbuf.data;
+    float *rbuf = gpu_ringbuf.data;
     
     // Step 1: run LaggedDownsampler.
     // Step 2: run stage0 dedispersion kernels.
@@ -628,7 +624,7 @@ void ReferenceDedisperser2::_dedisperse(long itime, long ibeam)
 
 	// (rb_locs0, dst0) = base pointers for tree
 	const uint *rb_locs0 = plan->stage1_rb_locs.data + (4 * st1.base_segment);
-	const float *dst0 = stage1_buffers.dd_bufs.at(iout).data;
+	float *dst0 = stage1_buffers.dd_bufs.at(iout).data;
 	long dst_bstride = stage1_buffers.dd_bufs.at(iout).strides[0];
 
 	// Loop over segments in tree.
@@ -638,7 +634,7 @@ void ReferenceDedisperser2::_dedisperse(long itime, long ibeam)
 		    // (rb_locs1, dst1) = base pointers for segment.
 		    long iseg1 = s*nchan1*nchan0 + i0*nchan1 + i1;
 		    const uint *rb_locs1 = rb_locs0 + 4*iseg1;
-		    const float *dst1 = dst0 + (i1*nchan0+i0)*nt_ds + s*S;
+		    float *dst1 = dst0 + (i1*nchan0+i0)*nt_ds + s*S;
 
 		    for (long b = 0; b < beams_per_batch; b++) {
 			long s = rb_segment(rb_locs1, rb_pos+b, S);
@@ -651,6 +647,22 @@ void ReferenceDedisperser2::_dedisperse(long itime, long ibeam)
 
     // Step 5: run stage1 dedispersion kernels
     this->stage1_buffers.apply_dedispersion_kernels(itime, ibeam);    
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+// Static member function
+shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const shared_ptr<DedispersionPlan> &plan_, int sophistication)
+{
+    if (sophistication == 0)
+	return make_shared<ReferenceDedisperser0> (plan_);
+    else if (sophistication == 1)
+	return make_shared<ReferenceDedisperser1> (plan_);
+    else if (sophistication == 2)
+	return make_shared<ReferenceDedisperser2> (plan_);
+    throw runtime_error("ReferenceDedisperserBase::make(): invalid value of 'sophistication' parameter");
 }
 
 

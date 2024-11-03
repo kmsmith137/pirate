@@ -20,36 +20,46 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int nc
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
     // plan->print(cout, 8);
     
-    shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, 0);
-    shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);
-    shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, 1);
-    
-    assert(rdd0->output_ntrees == rdd1->output_ntrees);
-    assert(rdd0->output_ntrees == rdd2->output_ntrees);
-    
-    int ntrees = rdd0->output_ntrees;    
     int nfreq = pow2(config.tree_rank);
     int nt_chunk = config.time_samples_per_chunk;
+    int beams_per_batch = config.beams_per_batch;
+    int nbatches = xdiv(config.beams_per_gpu, beams_per_batch);
+    int nout = plan->stage1_trees.size();
     
-    for (int c = 0; c < nchunks; c++) {
-	cout << "    chunk " << c << "/" << nchunks << endl;
-	
-	Array<float> arr({nfreq,nt_chunk}, af_uhost | af_random);
-	// Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
-	// arr.at({0,0}) = 1.0;
-	
-	rdd0->dedisperse(arr);
-	rdd1->dedisperse(arr);
-	rdd2->dedisperse(arr);
+    shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, 0);
+    shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);
+    shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, 2);
 
-	for (int itree = 0; itree < ntrees; itree++) {
-	    const Array<float> &arr0 = rdd0->output_arrays.at(itree);
-	    const Array<float> &arr1 = rdd1->output_arrays.at(itree);
-	    const Array<float> &arr2 = rdd2->output_arrays.at(itree);
-	    assert_arrays_equal(arr0, arr1, "soph0", "soph1", {"dm_brev","t"});
-	    assert_arrays_equal(arr0, arr2, "soph0", "soph2", {"dm_brev","t"});
+    for (int c = 0; c < nchunks; c++) {
+	for (int b = 0; b < nbatches; b++) {
+	    cout << "chunk " << c << "/" << nchunks
+		 << ", batch " << b << "/" << nbatches
+		 << endl;
+	
+	    Array<float> arr({nfreq, nt_chunk}, af_uhost | af_random);
+	    // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
+	    // arr.at({0,0}) = 1.0;
+
+	    rdd0->input_array.fill(arr);
+	    rdd0->dedisperse(c, b*beams_per_batch);
+
+	    rdd1->input_array.fill(arr);
+	    rdd1->dedisperse(c, b*beams_per_batch);
+
+	    rdd2->input_array.fill(arr);
+	    rdd2->dedisperse(c, b*beams_per_batch);
+	    
+	    for (int iout = 0; iout < nout; iout++) {
+		const Array<float> &arr0 = rdd0->output_arrays.at(iout);
+		const Array<float> &arr1 = rdd1->output_arrays.at(iout);
+		const Array<float> &arr2 = rdd2->output_arrays.at(iout);
+		assert_arrays_equal(arr0, arr1, "soph0", "soph1", {"beam","dm_brev","t"});
+		assert_arrays_equal(arr0, arr2, "soph0", "soph2", {"beam","dm_brev","t"});
+	    }
 	}
     }
+    
+    cout << endl;
 }
 
 
