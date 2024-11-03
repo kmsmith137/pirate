@@ -73,13 +73,7 @@ struct DedispersionConfig
     int get_nelts_per_segment() const;
 
     // make_random(): used for unit tests.
-    //
-    // If reference=true, then impose some constraints needed by ReferenceDedisperser:
-    //   - beams_per_gpu == beams_per_batch == num_active_batches == 1
-    //
-    // (Eventually, I hope to relax these constrains and remove the 'reference' argument).
-    
-    static DedispersionConfig make_random(bool reference=false);
+    static DedispersionConfig make_random();
 };
 
 extern bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);

@@ -32,9 +32,9 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int nc
 
     for (int c = 0; c < nchunks; c++) {
 	for (int b = 0; b < nbatches; b++) {
-	    cout << "chunk " << c << "/" << nchunks
-		 << ", batch " << b << "/" << nbatches
-		 << endl;
+	    //cout << "chunk " << c << "/" << nchunks
+	    //<< ", batch " << b << "/" << nbatches
+	    //<< endl;
 	
 	    Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost | af_random);
 	    // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
@@ -71,7 +71,7 @@ static void run_random_small_configs(int niter)
     for (int iter = 0; iter < niter; iter++) {
 	cout << "\n    *** Running random small config " << iter << "/" << niter << " ***\n" << endl;
 	
-	auto config = DedispersionConfig::make_random(true);   // reference=true
+	auto config = DedispersionConfig::make_random();
 
 	int max_nt = 8192;
 	assert(config.time_samples_per_chunk <= max_nt);

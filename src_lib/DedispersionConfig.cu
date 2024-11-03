@@ -257,7 +257,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 
 
 // static member function
-DedispersionConfig DedispersionConfig::make_random(bool reference)
+DedispersionConfig DedispersionConfig::make_random()
 {
     DedispersionConfig ret;
     ret.num_downsampling_levels = gputils::rand_int(1, 5);
@@ -304,11 +304,12 @@ DedispersionConfig DedispersionConfig::make_random(bool reference)
 	for (int et_rank: et_ranks)
 	    ret.add_early_trigger(ds_level, et_rank);
     }
-	
+
     // FIXME support these members
-    ret.beams_per_gpu = 1;
-    ret.beams_per_batch = 1;
-    ret.num_active_batches = 1;
+    int nbatches = gputils::rand_int(1,4);
+    ret.beams_per_batch = gputils::rand_int(1,4);
+    ret.beams_per_gpu = ret.beams_per_batch * nbatches;
+    ret.num_active_batches = gputils::rand_int(1,nbatches+1);
     ret.gmem_nbytes_per_gpu = 10L * 1000L * 1000L * 1000L;
 
     ret.validate();
