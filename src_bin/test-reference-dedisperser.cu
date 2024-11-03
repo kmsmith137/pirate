@@ -36,7 +36,7 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int nc
 		 << ", batch " << b << "/" << nbatches
 		 << endl;
 	
-	    Array<float> arr({nfreq, nt_chunk}, af_uhost | af_random);
+	    Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost | af_random);
 	    // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
 	    // arr.at({0,0}) = 1.0;
 

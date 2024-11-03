@@ -369,12 +369,21 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 // virtual override
 void ReferenceDedisperser0::_dedisperse(long itime, long ibeam)
 {
-    for (int ids = 1; ids < nds; ids++) {	
+    for (int ids = 1; ids < nds; ids++) {
+	
 	// Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
 	// Outer length is nds, inner shape is (beams_per_batch, 2^config_rank, input_nt / pow2(ids)).
 	// Reminder: 'input_array' is an alias for downsampled_inputs[0].
-	
-	reference_downsample_time(downsampled_inputs.at(ids-1), downsampled_inputs.at(ids), false);   // normalize=false, i.e. no factor 0.5
+
+	Array<float> src = downsampled_inputs.at(ids-1);
+	Array<float> dst = downsampled_inputs.at(ids);
+
+	// FIXME reference_downsample_time() should operate on N-dimensional array.
+	for (long b = 0; b < beams_per_batch; b++) {
+	    Array<float> src2 = src.slice(0,b);
+	    Array<float> dst2 = dst.slice(0,b);
+	    reference_downsample_time(src2, dst2, false);  // normalize=false, i.e. no factor 0.5
+	}
     }
 
     for (int iout = 0; iout < nout; iout++) {
@@ -402,8 +411,15 @@ void ReferenceDedisperser0::_dedisperse(long itime, long ibeam)
 	
 	if (ids == 0)
 	    out.fill(dd);
-	else
-	    reference_extract_odd_channels(dd, out);
+	else {
+	    // FIXME refence_extract_odd_channels() should operate on N-dimensional array.
+	    // reference_extract_odd_channels(dd, out);
+	    for (long b = 0; b < beams_per_batch; b++) {
+		Array<float> src2 = dd.slice(0,b);
+		Array<float> dst2 = out.slice(0,b);
+		reference_extract_odd_channels(src2, dst2);
+	    }
+	}
     }
 }
 
@@ -563,7 +579,7 @@ static long rb_segment(const uint *rb_locs, long rb_pos, uint nelts_per_segment)
 
     uint i = (rb_pos + rb_phase) % rb_len;
     long s = rb_offset + (i * rb_nseg);
-    
+
     return s;
 }
 
