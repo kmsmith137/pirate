@@ -74,6 +74,8 @@ struct ReferenceDedisperserBase
     //
     //   ids = downsampling factor of tree 'iout' (same as DedispersionPlan::Stage0Tree::ds_level)
     //   output_rank = rank of tree 'iout' (same as Stage1Tree::rank0 + Stage1Tree::rank1_trigger)
+    //
+    // Warning: dedisperse() may modify 'input_array'!
     
     gputils::Array<float> input_array;
     std::vector<gputils::Array<float>> output_arrays;

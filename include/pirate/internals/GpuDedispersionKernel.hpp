@@ -49,7 +49,7 @@ public:
 	int nambient = 0;
 	int total_beams = 0;
 	int beams_per_kernel_launch = 0;
-	int ntime = 0;
+	int ntime = 0;          // includes downsampling factor, if any
 
 	// Input/output buffer types.
 	bool input_is_ringbuf = false;
@@ -63,7 +63,8 @@ public:
 	// Placeholder for future expansion.
 	// Only used if (input_is_ringbuf || output_is_ringbuf)
 	gputils::Array<uint> ringbuf_locations;
-
+	long ringbuf_nseg = 0;
+	
 	// Returns true if (dtype == "float32"), false if (dtype == "float16").
 	// Otherwise, throws an exception.
 	bool is_float32() const;

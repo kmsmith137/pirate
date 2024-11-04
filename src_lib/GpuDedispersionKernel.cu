@@ -307,8 +307,6 @@ bool GpuDedispersionKernel::Params::is_float32() const
 
 void GpuDedispersionKernel::Params::validate() const
 {
-    int nelts_per_cache_line = is_float32() ? 32 : 64;
-
     assert(rank >= 0);
     assert(rank <= 8);
     assert(nambient > 0);
@@ -320,19 +318,32 @@ void GpuDedispersionKernel::Params::validate() const
     // Not really necessary, but failure probably indicates an unintentional bug.
     assert(is_power_of_two(nambient));
     
-    // Note: the second check (on ntime) is assumed by the GPU kernels.
-    // If it not satisfied, then the GPU kernels will silently compute the wrong answer!
+    // Currently assumed throughout the pirate code.
     assert((total_beams % beams_per_kernel_launch) == 0);
-    assert((ntime % nelts_per_cache_line) == 0);
 
-    // Placeholders for future expansion.
-    // FIXME when ringbufs are implemented, don't forget to error-check ringbuf_locations.
-    assert(!input_is_ringbuf);
-    assert(!output_is_ringbuf);
+    // Currently assumed by the GPU kernels.
+    int nelts_per_cache_line = is_float32() ? 32 : 64;
+    assert(nelts_per_segment == nelts_per_cache_line);
 
-    if (apply_input_residual_lags) {
-	assert(nelts_per_segment > 0);
-	assert(nelts_per_segment == nelts_per_cache_line);
+    assert((ntime % nelts_per_segment) == 0);
+    assert(!input_is_ringbuf || !output_is_ringbuf);
+    
+    if (input_is_ringbuf || output_is_ringbuf) {
+	long nseg = xdiv(ntime,nelts_per_segment) * nambient * pow2(rank);
+	assert(ringbuf_locations.shape_equals({ nseg, 4 }));
+	assert(ringbuf_locations.is_fully_contiguous());
+	assert(ringbuf_locations.on_host());
+	assert(ringbuf_nseg > 0);
+	assert(ringbuf_nseg <= UINT_MAX);
+
+	for (long iseg = 0; iseg < nseg; iseg++) {
+	    const uint *rb_locs = ringbuf_locations.data + (4*iseg);
+	    long rb_offset = rb_locs[0];  // in segments, not bytes
+	    // long rb_phase = rb_locs[1];   // index of (time chunk, beam) pair, relative to current pair
+	    long rb_len = rb_locs[2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+	    long rb_nseg = rb_locs[3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+	    assert(rb_offset + (rb_len-1)*rb_nseg < ringbuf_nseg);
+	}
     }
 }
 
@@ -522,6 +533,8 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 {
     params.validate();
     assert(params.rank > 0);  // FIXME define _r0 for testing
+    assert(!params.input_is_ringbuf);   // FIXME
+    assert(!params.output_is_ringbuf);  // FIXME
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
 

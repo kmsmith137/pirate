@@ -62,11 +62,17 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
 {
     long B = params.beams_per_kernel_launch;
     long A = params.nambient;
-    long F = pow2(params.rank);
+    long N = pow2(params.rank);
     long T = params.ntime;
+    long R = params.ringbuf_nseg;
+    long S = params.nelts_per_segment;
 
-    assert(in.shape_equals({B,A,F,T}));
-    assert(out.shape_equals({B,A,F,T}));
+    std::initializer_list<ssize_t> dd_shape = {B,A,N,T};
+    std::initializer_list<ssize_t> rb_shape = {R*S};
+
+    assert(!params.input_is_ringbuf || !params.output_is_ringbuf);
+    assert(in.shape_equals(params.input_is_ringbuf ? rb_shape : dd_shape));
+    assert(out.shape_equals(params.output_is_ringbuf ? rb_shape : dd_shape));
 
     // Compare (itime, ibeam) with expected values.
     assert(itime == expected_itime);
@@ -80,16 +86,117 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
 	expected_ibeam = 0;
 	expected_itime++;
     }
-
-    if (out.data != in.data)
-	out.fill(in);
-
-    int n = xdiv(ibeam, B);
     
-    if (params.apply_input_residual_lags)
-	rlag_bufs.at(n)->apply_lags(out);
+    int batch = xdiv(ibeam, B);
+    long rb_pos = itime * params.total_beams + ibeam;
 
-    trees.at(n)->dedisperse(out);
+    Array<float> dd = params.output_is_ringbuf ? in : out;
+
+    if (params.input_is_ringbuf)
+	_copy_from_ringbuf(in, dd, rb_pos);
+    else if (dd.data != in.data)
+	dd.fill(in);
+	
+    if (params.apply_input_residual_lags)
+	rlag_bufs.at(batch)->apply_lags(dd);
+
+    trees.at(batch)->dedisperse(dd);
+
+    if (params.output_is_ringbuf)
+	_copy_to_ringbuf(dd, out, rb_pos);
+    else
+	assert(out.data == dd.data);
+}
+
+
+void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
+{
+    long B = params.beams_per_kernel_launch;
+    long A = params.nambient;
+    long N = pow2(params.rank);
+    long T = params.ntime;
+    long R = params.ringbuf_nseg;
+    long S = params.nelts_per_segment;
+    long ns = xdiv(T,S);
+
+    assert(in.shape_equals({B,A,N,T}));  // dedispersion buffer
+    assert(in.get_ncontig() >= 3);
+    assert(out.shape_equals({R*S}));     // ringbuf
+    assert(out.is_fully_contiguous());
+    assert(params.ringbuf_locations.shape_equals({ns*A*N,4}));
+
+    const uint *rb_loc = params.ringbuf_locations.data;
+    const float *dd = in.data;
+    float *ringbuf = out.data;
+    long dd_bstride = in.strides[0];
+    
+    // Loop over segments in tree.
+    for (long s = 0; s < ns; s++) {
+	for (long a = 0; a < A; a++) {
+	    for (long n = 0; n < N; n++) {
+		long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
+		const float *dd0 = dd + (a*N+n)*T + s*S;   // address in dedispersion buf (at beam 0)
+
+		uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
+		uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
+		uint rb_len = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+		uint rb_nseg = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+		
+		for (long b = 0; b < B; b++) {
+		    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
+		    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
+		    memcpy(ringbuf + s*S, dd0 + b*dd_bstride, S * sizeof(float));
+		}
+	    }
+	}
+    }
+}
+
+
+void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
+{
+    long B = params.beams_per_kernel_launch;
+    long A = params.nambient;
+    long N = pow2(params.rank);
+    long T = params.ntime;
+    long R = params.ringbuf_nseg;
+    long S = params.nelts_per_segment;
+    long ns = xdiv(T,S);
+
+    assert(in.shape_equals({R*S}));  // ringbuf
+    assert(in.is_fully_contiguous());
+    assert(out.shape_equals({B,A,N,T}));  // dedispersion buffer
+    assert(out.get_ncontig() >= 1);
+    assert(params.ringbuf_locations.shape_equals({ns*A*N,4}));
+
+    const uint *rb_loc = params.ringbuf_locations.data;
+    const float *ringbuf = in.data;
+    float *dd = out.data;
+    
+    long dd_bstride = out.strides[0];
+    long dd_astride = out.strides[1];
+    long dd_nstride = out.strides[2];
+
+    // Loop over segments in tree.
+    for (long s = 0; s < ns; s++) {
+	for (long a = 0; a < A; a++) {
+	    for (long n = 0; n < N; n++) {
+		long iseg = s*A*N + a*N + n;         // index in rb_loc array (same for all beams)
+		float *dd0 = dd + n*dd_nstride + a*dd_astride + s*S; // address in dedispersion buf (at beam 0)
+		
+		uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
+		uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
+		uint rb_len = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+		uint rb_nseg = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+		
+		for (long b = 0; b < B; b++) {
+		    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
+		    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
+		    memcpy(dd0 + b*dd_bstride, ringbuf + s*S, S * sizeof(float));
+		}
+	    }
+	}
+    }
 }
 
 

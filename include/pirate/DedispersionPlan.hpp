@@ -68,7 +68,7 @@ struct DedispersionPlan
     ssize_t stage1_total_segments_per_beam = 0;
 
     int max_clag = 0;
-    long gmem_ringbuf_nseg = 0;
+    long gmem_ringbuf_nseg = 0;    // includes gmem + g2h + h2g
 
     // All vector<Ringbuf> objects have length (max_clag + 1).
     // T = total beams, A = active beams, B = beams per batch.
