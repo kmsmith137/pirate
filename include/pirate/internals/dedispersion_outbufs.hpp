@@ -92,7 +92,7 @@ struct dedispersion_ring_outbuf
 	    const uint beam_ix = blockIdx.y;
 	    
 	    this->rb_base = args.rb_base;
-	    this->rb_loc = args.rb_loc + (ambient_ix << active_rank);
+	    this->rb_loc = args.rb_loc + (ambient_ix << active_rank) + (threadIdx.x >> 5);
 	    this->rb_loc_seg_stride = (nambient << active_rank);
 	    this->rb_pos = rb_pos + beam_ix;
 	}

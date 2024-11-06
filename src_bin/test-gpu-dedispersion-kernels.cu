@@ -47,8 +47,33 @@ struct TestInstance
 	const long max_nelts = 100 * 1000 * 1000;
 
 	// Initialize:
+	//  params.input_is_ringbuf
+	//  params.output_is_ringbuf
+	//  params.apply_input_residual_lags
+	//  this->in_place
+
+	cout << "XXX FIXME XXX\n";
+	if (rand_uniform() < -0.33) {
+	     params.input_is_ringbuf = true;
+	     params.output_is_ringbuf = false;
+	     params.apply_input_residual_lags = true;
+	     this->in_place = false;
+	}
+	else if (rand_uniform() < 0.5) {
+	    params.input_is_ringbuf = false;
+	    params.output_is_ringbuf = true;
+	    params.apply_input_residual_lags = false;
+	    this->in_place = false;
+	}
+	else {
+	    params.input_is_ringbuf = false;
+	    params.output_is_ringbuf = false;
+	    params.apply_input_residual_lags = (rand_uniform() < 0.5);
+	    this->in_place = (rand_uniform() < 0.5);
+	}
+	
+	// Initialize:
 	//   params.dtype
-	//   params.apply_input_residual_lags
 	//   params.input_is_downsampled_tree
 	//   params.nelts_per_segment
 	//   params.rank
@@ -60,7 +85,6 @@ struct TestInstance
 	
 	bool is_float32 = (rand_uniform() < 0.5);
 	params.dtype = is_float32 ? "float32" : "float16";
-	params.apply_input_residual_lags = (rand_uniform() < 0.5);
 	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
 
 	params.nelts_per_segment = is_float32 ? 32 : 64;
@@ -82,24 +106,6 @@ struct TestInstance
 	params.nambient = round_up_to_power_of_two(v[0]);
 	params.total_beams = v[1] * v[2];
 	params.beams_per_kernel_launch = v[2];
-
-	// Initialize:
-	//  params.input_is_ringbuf
-	//  params.output_is_ringbuf
-	//  this->in_place
-
-	params.input_is_ringbuf = false;
-	params.output_is_ringbuf = false;
-	this->in_place = false;
-	
-	cout << "XXX FIXME XXX\n";
-	// if (rand_uniform() < 0.33)
-	// params.input_is_ringbuf = true;
-	//else
-	if (rand_uniform() < 0.5)
-	    params.output_is_ringbuf = true;
-	else if (rand_uniform() < 0.5)
-	    this->in_place = true;
 	
 	// Now a sequence of steps to initialize:
 	//

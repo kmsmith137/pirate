@@ -656,7 +656,7 @@ shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &para
     else if (!rb_in && rb_out && !rlag && !is_float32)
 	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_simple_inbuf<__half,false>, dedispersion_ring_outbuf<__half>>> (params);
     
-    throw runtime_error("GpuDedispersionKernel::make(): shouldn't get here");
+    throw runtime_error("GpuDedispersionKernel::make(): no suitable precompiled kernel could be found");
 }
 
 
