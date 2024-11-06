@@ -55,25 +55,23 @@ struct TestInstance
     
     void randomize()
     {
-	small_input_rank = rand_int(2, 9);  // GpuLaggedDownsamplingKernel needs small_input_rank >= 2
-	large_input_rank = rand_int(small_input_rank, 13);
-	num_downsampling_levels = rand_int(1, constants::max_downsampling_level);  // no +1 here
-	nchunks = rand_int(2, 11);
-
-	// Bytes per time sample per beam.
-	long nb0 = pow2(large_input_rank) * sizeof(T);
+	this->small_input_rank = rand_int(2,9);  // GpuLaggedDownsamplingKernel needs small_input_rank >= 2
+	this->large_input_rank = small_input_rank + rand_int(0,4);
+	this->num_downsampling_levels = rand_int(1, constants::max_downsampling_level);  // no +1 here
+	this->nbeams = rand_int(1,5);
 
 	long nt_divisor = xdiv(128,sizeof(T)) * pow2(num_downsampling_levels+1);
-	long imax = min(10L, (long)(2.0e9 / nb0 / nt_divisor));
-	nt_chunk = nt_divisor * rand_int(1, imax+1);
+	long p = nbeams * pow2(large_input_rank) * nt_divisor;
+	long q = (10*1000*1000) / p;
+	q = max(q, 4L);
 
-	long bmax = min(10L, (long)(2.1e9 / nb0 / nt_chunk));
-	nbeams = rand_int(1, bmax+1);
+	auto v = gputils::random_integers_with_bounded_product(2,q);
+	this->nt_chunk = nt_divisor * v[0];
+	this->nchunks = v[1];
 	
-	bstride_in = rand_stride<T> (min_bstride_in());
-	bstride_out = rand_stride<T> (min_bstride_out());
+	this->bstride_in = rand_stride<T> (min_bstride_in());
+	this->bstride_out = rand_stride<T> (min_bstride_out());
     }
-    
 
 
     // ---------------------------------------------------------------------------------------------
@@ -134,19 +132,17 @@ struct TestInstance
     // ---------------------------------------------------------------------------------------------
     
 
-    void run(bool noisy)
+    void run()
     {
-	if (noisy) {
-	    cout << "Test GpuLaggedDownsamplingKernel<" << type_name<T>() << ">\n"
-		 << "    small_input_rank = " << small_input_rank << "\n"
-		 << "    large_input_rank = " << large_input_rank << "\n"
-		 << "    num_downsampling_levels = " << num_downsampling_levels << "\n"
-		 << "    nbeams = " << nbeams << "\n"
-		 << "    nchunks = " << nchunks << "\n"
-		 << "    nt_chunk = " << nt_chunk << "\n"
-		 << "    bstride_in = " << bstride_in << " (min: " << min_bstride_in() << ")\n"
-		 << "    bstride_out = " << bstride_out << " (min: " << min_bstride_out() << ")\n";
-	}
+	cout << "Test GpuLaggedDownsamplingKernel<" << type_name<T>() << ">\n"
+	     << "    small_input_rank = " << small_input_rank << "\n"
+	     << "    large_input_rank = " << large_input_rank << "\n"
+	     << "    num_downsampling_levels = " << num_downsampling_levels << "\n"
+	     << "    nbeams = " << nbeams << "\n"
+	     << "    nchunks = " << nchunks << "\n"
+	     << "    nt_chunk = " << nt_chunk << "\n"
+	     << "    bstride_in = " << bstride_in << " (min: " << min_bstride_in() << ")\n"
+	     << "    bstride_out = " << bstride_out << " (min: " << min_bstride_out() << ")\n";
 
 	assert(small_input_rank > 0);
 	assert(large_input_rank >= small_input_rank);
@@ -170,11 +166,9 @@ struct TestInstance
 	auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
 	auto gpu_kernel = GpuLaggedDownsamplingKernel<T>::make(small_input_rank, large_input_rank, num_downsampling_levels);
 
-	if (noisy) {
-	    cout << "    GPU kernel params\n";
-	    gpu_kernel->print(cout, 8);
-	    cout << flush;
-	}
+	cout << "    GPU kernel params\n";
+	gpu_kernel->print(cout, 8);
+	cout << flush;
 
 	Array<T> gpu_in = alloc_input<T> (true, af_gpu | af_zero);       // use_bstride_in = true
 	Array<T> gpu_state({ nbeams, gpu_kernel->params.state_nelts_per_beam }, af_gpu | af_zero);  // af_zero is important here
@@ -210,8 +204,7 @@ struct TestInstance
 		double rms = sqrt(4 << ids);                     // rms of output array
 		double epsabs = eps * rms * sqrt(ids+2);
 		
-		if (noisy)
-		    cout << "ichunk=" << ichunk << ", ids=" << ids << ", epsabs=" << epsabs << endl;
+		// cout << "ichunk=" << ichunk << ", ids=" << ids << ", epsabs=" << epsabs << endl;
 		
 		Array<float> from_gpu = gpu_out.small_arrs[ids].to_host().template convert_dtype<float> ();
 		assert_arrays_equal(cpu_out.small_arrs[ids], from_gpu, "ref", "gpu", {"beam","freq","time"}, epsabs, 0.0);  // epsrel=0
@@ -226,10 +219,6 @@ struct TestInstance
 
 int main(int argc, char **argv)
 {
-    // FIXME switch to 'false' when no longer actively developing
-    const bool noisy = true;
-    const int ntests = 50;
-
 #if 0
     // Uncomment to enable specific test
     TestInstance<__half> t;
@@ -241,22 +230,25 @@ int main(int argc, char **argv)
     t.nt_chunk = 12288;
     t.bstride_in = t.min_bstride_in() + 64;
     t.bstride_out = t.min_bstride_out() + 128;
-    t.run(noisy);
+    t.run();
     return 0;
 #endif
+
+    const int ntests = 50;
     
     for (int i = 0; i < ntests; i++) {
 	cout << "\nTest " << i << "/" << ntests << "\n\n";
-	
-	TestInstance<float> t32;
-	t32.randomize();
-	t32.run(noisy);
 
-	cout << endl;
-	
-	TestInstance<__half> t16;
-	t16.randomize();
-	t16.run(noisy);
+	if (rand_uniform() < 0.5) {
+	    TestInstance<float> t32;
+	    t32.randomize();
+	    t32.run();
+	}
+	else {
+	    TestInstance<__half> t16;
+	    t16.randomize();
+	    t16.run();
+	}
     }
 
     cout << "test-gpu-lagged-downsampler: pass" << endl;
