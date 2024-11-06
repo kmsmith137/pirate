@@ -19,9 +19,13 @@ static void time_gpu_dedispersion_kernel(int small_input_rank, int large_input_r
     long nt_chunk = 2048;
     long nbeams = 4;
     long niter = 20;
-    
-    shared_ptr<GpuLaggedDownsamplingKernel<T>> kernel
-	= GpuLaggedDownsamplingKernel<T>::make(small_input_rank, large_input_rank, num_downsampling_levels);
+
+    typename GpuLaggedDownsamplingKernel<T>::Params gpu_params;
+    gpu_params.small_input_rank = small_input_rank;
+    gpu_params.large_input_rank = large_input_rank;
+    gpu_params.num_downsampling_levels = num_downsampling_levels;
+
+    shared_ptr<GpuLaggedDownsamplingKernel<T>> kernel = make_shared<GpuLaggedDownsamplingKernel<T>> (gpu_params);
 
     long ninner = 0;
     for (int ids = 0; ids < num_downsampling_levels; ids++)
@@ -29,7 +33,7 @@ static void time_gpu_dedispersion_kernel(int small_input_rank, int large_input_r
     
     long out_nelts_per_stream = nbeams * ninner;
     long in_nelts_per_stream = nbeams * pow2(large_input_rank) * nt_chunk;
-    long pstate_nelts_per_stream = nbeams * kernel->params.state_nelts_per_beam;
+    long pstate_nelts_per_stream = nbeams * kernel->state_nelts_per_beam;
     long footprint_nelts_per_stream = out_nelts_per_stream + in_nelts_per_stream + pstate_nelts_per_stream;
     long footprint_nbytes = nstreams * footprint_nelts_per_stream * sizeof(T);
 
@@ -58,7 +62,7 @@ static void time_gpu_dedispersion_kernel(int small_input_rank, int large_input_r
 	 << "    gpu memory footprint = " << gputils::nbytes_to_str(footprint_nbytes) << endl;
 
     gputils::Array<T> in({ nstreams, nbeams, pow2(large_input_rank), nt_chunk }, af_gpu | af_zero);
-    gputils::Array<T> pstate({ nstreams, nbeams, kernel->params.state_nelts_per_beam }, af_gpu | af_zero);
+    gputils::Array<T> pstate({ nstreams, nbeams, kernel->state_nelts_per_beam }, af_gpu | af_zero);
     gputils::Array<T> out_flattened({ nstreams, nbeams, ninner }, af_gpu | af_zero);
 
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)

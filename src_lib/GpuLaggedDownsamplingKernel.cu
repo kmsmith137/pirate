@@ -735,37 +735,13 @@ using kernel_t = typename GpuLaggedDownsamplingKernel<T>::kernel_t;
 
 
 template<typename T, int Dmax>
-static vector<kernel_t<T>> _make_kernels()
+static kernel_t<T> get_kernel(int d)
 {
-    using T32 = typename simd32_type<T>::type;
-    
-    if constexpr (Dmax > 0) {
-	kernel_t<T> k = lagged_downsample<T32,Dmax>;
-	vector<kernel_t<T>> ret = _make_kernels<T,Dmax-1> ();
-	ret.push_back(k);
-	return ret;
-    }
+    if constexpr (Dmax == 0)
+	throw runtime_error("GpuLaggedDownsamplingKernel: precompiled kernel not found");
     else
-	return vector<kernel_t<T>> (1, nullptr);
+	return (d == Dmax) ? lagged_downsample<T,Dmax> : get_kernel<T,Dmax-1> (d);
 }
-
-
-template<typename T>
-static vector<kernel_t<T>> make_kernels()
-{
-    constexpr int Dmax = constants::max_downsampling_level;
-    vector<kernel_t<T>> ret = _make_kernels<T,Dmax> ();
-    
-    for (int d = 1; d <= Dmax; d++) {
-	CUDA_CALL(cudaFuncSetAttribute(
-	    ret[d],
-	    cudaFuncAttributeMaxDynamicSharedMemorySize,
-	    99 * 1024
-	));
-    }
-
-    return ret;
-}	
 
 
 template<typename T>
@@ -793,76 +769,48 @@ static int target_warps_per_threadblock(int r, int D)
 }
 
 
-// Static member function
 template<typename T>
-shared_ptr<GpuLaggedDownsamplingKernel<T>>
-GpuLaggedDownsamplingKernel<T>::make(int small_input_rank, int large_input_rank, int num_downsampling_levels)
+GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &params_) :
+    params(params_)
 {
-    // FIXME do something thread-safe here
-    static vector<kernel_t> kernels;
-
-    if (kernels.size() == 0)
-	kernels = make_kernels<T> ();
-	
-    assert(small_input_rank >= 2);
-    assert(small_input_rank <= 8);
-    assert(large_input_rank >= small_input_rank);
-    assert(large_input_rank <= constants::max_tree_rank);
-    assert(num_downsampling_levels >= 1);
-    assert(num_downsampling_levels <= constants::max_downsampling_level);
-
-    Params params;
-    params.small_input_rank = small_input_rank;
-    params.large_input_rank = large_input_rank;
-    params.num_downsampling_levels = num_downsampling_levels;
+    assert(params.small_input_rank >= 2);  // currently required by GPU kernel
+    assert(params.small_input_rank <= 8);
+    assert(params.large_input_rank >= params.small_input_rank);
+    assert(params.large_input_rank <= constants::max_tree_rank);
+    assert(params.num_downsampling_levels >= 1);
+    assert(params.num_downsampling_levels <= constants::max_downsampling_level);
     
-    int M = pow2(small_input_rank - 2);
-    int A = pow2(large_input_rank - small_input_rank);
-    int W_target = target_warps_per_threadblock<T> (small_input_rank, num_downsampling_levels);
+    int M = pow2(params.small_input_rank - 2);
+    int A = pow2(params.large_input_rank - params.small_input_rank);
+    int W_target = target_warps_per_threadblock<T> (params.small_input_rank, params.num_downsampling_levels);
 
     // Each "large" tree corresponds to A*M warps. This factor of A*M can be factored
     // arbitrarily between warps in a threadblock, and threadblocks in a kernel:
     //
     //   A = A_B * A_W     M = M_B * M_W
+    // 
+    // FIXME call gputils::assign_kernel_dims() instead?
 
-    params.M_W = min(M, W_target);
-    params.A_W = min(A, (int)xdiv(W_target, params.M_W));
-    params.M_B = xdiv(M, params.M_W);
-    params.A_B = xdiv(A, params.A_W);
+    this->M_W = min(M, W_target);
+    this->A_W = min(A, (int)xdiv(W_target, M_W));
+    this->M_B = xdiv(M, M_W);
+    this->A_B = xdiv(A, A_W);
 
-    int nb = get_shmem_nbytes_per_threadblock<T> (small_input_rank, num_downsampling_levels, params.warps_per_threadblock(), true);  // align=true
-    params.ntime_divisibility_requirement = (128 / sizeof(T)) * pow2(num_downsampling_levels);
-    params.state_nelts_per_beam = params.threadblocks_per_beam() * (nb / sizeof(T));
-    params.shmem_nbytes_per_threadblock = nb;
+    assert(warps_per_threadblock() <= 32);
 
-    kernel_t k = kernels.at(num_downsampling_levels);
-    GpuLaggedDownsamplingKernel<T> *kernel = new GpuLaggedDownsamplingKernel (params, k);
-    return shared_ptr<GpuLaggedDownsamplingKernel<T>> (kernel);
-}
+    this->kernel = get_kernel<T32, constants::max_downsampling_level> (params.num_downsampling_levels);
 
+    // FIXME rethink?
+    CUDA_CALL(cudaFuncSetAttribute(
+        this->kernel,
+	cudaFuncAttributeMaxDynamicSharedMemorySize,
+	99 * 1024
+    ));
 
-template<typename T>
-GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &params_, kernel_t kernel_)
-    : params(params_), kernel(kernel_)
-{
-    // Assume "real" argument-checking has been done in GpuLaggedDownsamplingKernel::make().
-    // Here, just some asserts to make sure I didn't forget to initialize something!
-
-    assert(params.small_input_rank >= 2);   // currently required by GPU kernel
-    assert(params.large_input_rank >= params.small_input_rank);
-    assert(params.num_downsampling_levels > 0);
-    assert(params.ntime_divisibility_requirement > 0);
-    assert(params.state_nelts_per_beam > 0);
-    assert(params.shmem_nbytes_per_threadblock > 0);
-    assert(params.M_W > 0);
-    assert(params.M_B > 0);
-    assert(params.A_W > 0);
-    assert(params.A_B > 0);
-    assert(kernel != nullptr);
-
-    assert(params.M_W * params.M_B == pow2(params.small_input_rank - 2));
-    assert(params.A_W * params.A_B == pow2(params.large_input_rank - params.small_input_rank));
-    assert(params.warps_per_threadblock() <= 32);
+    int nb = get_shmem_nbytes_per_threadblock<T> (params.small_input_rank, params.num_downsampling_levels, warps_per_threadblock(), true);  // align=true
+    this->ntime_divisibility_requirement = (128 / sizeof(T)) * pow2(params.num_downsampling_levels);
+    this->state_nelts_per_beam = threadblocks_per_beam() * (nb / sizeof(T));
+    this->shmem_nbytes_per_threadblock = nb;
 }
 
 
@@ -887,8 +835,8 @@ void GpuLaggedDownsamplingKernel<T>::launch(
     assert(ntime_in > 0);
     assert(ntime_cumulative >= 0);
     assert(ntime_in < 2L * 1024L * 1024L * 1024L);
-    assert((ntime_in % params.ntime_divisibility_requirement) == 0);
-    assert((ntime_cumulative % params.ntime_divisibility_requirement) == 0);
+    assert((ntime_in % ntime_divisibility_requirement) == 0);
+    assert((ntime_cumulative % ntime_divisibility_requirement) == 0);
     
     assert(out.size() == params.num_downsampling_levels);
     long nout = 0;
@@ -920,24 +868,24 @@ void GpuLaggedDownsamplingKernel<T>::launch(
 	nout += ntree_out * ntime_out;
     }
 	
-    assert(persistent_state.shape_equals({ nbeams, params.state_nelts_per_beam }));
+    assert(persistent_state.shape_equals({ nbeams, state_nelts_per_beam }));
     assert(persistent_state.is_fully_contiguous());
 
     // Required by CUDA (max alllowed value of gridDims.z)
     assert(nbeams < 65536);
 
     dim3 block_dims;
-    block_dims.z = params.A_W;
-    block_dims.y = params.M_W;
+    block_dims.z = A_W;
+    block_dims.y = M_W;
     block_dims.x = 32;
 
     dim3 grid_dims;
     grid_dims.z = nbeams;
-    grid_dims.y = params.A_B;
-    grid_dims.x = params.M_B;
+    grid_dims.y = A_B;
+    grid_dims.x = M_B;
     
     this->kernel
-	<<< grid_dims, block_dims, params.shmem_nbytes_per_threadblock, stream >>>
+	<<< grid_dims, block_dims, shmem_nbytes_per_threadblock, stream >>>
 	(reinterpret_cast<const T32 *> (in.data),
 	 reinterpret_cast<T32 *> (out[0].data),
 	 ntime_in,
@@ -957,23 +905,22 @@ void GpuLaggedDownsamplingKernel<T>::print(ostream &os, int indent) const
     print_kv("small_input_rank", params.small_input_rank, os, indent);
     print_kv("large_input_rank", params.large_input_rank, os, indent);
     print_kv("num_downsampling_levels", params.num_downsampling_levels, os, indent);
-    print_kv("ntime_divisibility_requirement", params.ntime_divisibility_requirement, os, indent);
-    print_kv("shmem_nbytes_per_threadblock", params.shmem_nbytes_per_threadblock, os, indent);
-    print_kv("state_nelts_per_beam", params.state_nelts_per_beam, os, indent);
+    print_kv("ntime_divisibility_requirement", ntime_divisibility_requirement, os, indent);
+    print_kv("shmem_nbytes_per_threadblock", shmem_nbytes_per_threadblock, os, indent);
+    print_kv("state_nelts_per_beam", state_nelts_per_beam, os, indent);
 
     stringstream sw;
-    sw << params.warps_per_threadblock() << " (M_W=" << params.M_W << ", A_W=" << params.A_W << ")";
+    sw << warps_per_threadblock() << " (M_W=" << M_W << ", A_W=" << A_W << ")";
     print_kv("warps_per_threadblock", sw.str(), os, indent);
     
     stringstream sb;
-    sb << params.threadblocks_per_beam() << " (M_B=" << params.M_B << ", A_B=" << params.A_B << ")";
+    sb << threadblocks_per_beam() << " (M_B=" << M_B << ", A_B=" << A_B << ")";
     print_kv("threadblocks_per_beam", sb.str(), os, indent);
 }
 
 
 #define INSTANTIATE(T) \
-    template GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &, kernel_t); \
-    template shared_ptr<GpuLaggedDownsamplingKernel<T>> GpuLaggedDownsamplingKernel<T>::make(int,int,int); \
+    template GpuLaggedDownsamplingKernel<T>::GpuLaggedDownsamplingKernel(const Params &); \
     template void GpuLaggedDownsamplingKernel<T>::launch(const Array<T>&, vector<Array<T>>&, Array<T>&, long, cudaStream_t) const; \
     template void GpuLaggedDownsamplingKernel<T>::print(ostream &, int) const
 

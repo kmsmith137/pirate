@@ -13,7 +13,7 @@ namespace pirate {
 #endif
 
 
-// T = float or __half (not __half2)
+
 template<typename T>
 class GpuLaggedDownsamplingKernel
 {
@@ -32,34 +32,9 @@ public:
 	int small_input_rank = 0;
 	int large_input_rank = 0;
 	int num_downsampling_levels = 0;
-
-	// "Derived" parameters.
-	int ntime_divisibility_requirement = 0;
-	int shmem_nbytes_per_threadblock = 0;
-	int state_nelts_per_beam = 0;
-
-	// These parameters are supplied automatically by make().
-	// They determine how the kernel is divided into threadblocks.
-	// See GpuLaggedDownsamplingKernel.cu for more info.
-	int M_W = 0;
-	int M_B = 0;
-	int A_W = 0;
-	int A_B = 0;
-
-	int warps_per_threadblock() const { return M_W * A_W; }
-	int threadblocks_per_beam() const { return M_B * A_B; }
     };
 
-    const Params params;
-
-    // To construct instances of 'class GpuLaggedDownsamplingKernel',
-    // use this factory function (not constructor, which  is private).
-    
-    static std::shared_ptr<GpuLaggedDownsamplingKernel<T>> make(
-        int small_input_rank,
-	int large_input_rank,
-	int num_downsampling_levels
-    );
+    GpuLaggedDownsamplingKernel(const Params &params);
 
     // launch() arguments:
     //
@@ -84,6 +59,23 @@ public:
 		long ntime_cumulative,
 		cudaStream_t stream = nullptr) const;
 
+    const Params params;
+    
+    // These parameters determine how the kernel is divided into threadblocks.
+    // See GpuLaggedDownsamplingKernel.cu for more info.
+    int M_W = 0;
+    int M_B = 0;
+    int A_W = 0;
+    int A_B = 0;
+    
+    int warps_per_threadblock() const { return M_W * A_W; }
+    int threadblocks_per_beam() const { return M_B * A_B; }
+
+    // More parameters computed in constructor.
+    int ntime_divisibility_requirement = 0;
+    int shmem_nbytes_per_threadblock = 0;
+    int state_nelts_per_beam = 0;
+
     void print(std::ostream &os=std::cout, int indent=0) const;
 
     using T32 = typename simd32_type<T>::type;
@@ -96,13 +88,7 @@ public:
 			      long,          // bstride_out
 			      T32 *);        // persistent_state
     
-protected:
     kernel_t kernel;
-
-    // Constructor is protected (to construct GpuLaggedDownsamplingKernel
-    // instances, call the public factory function make() above).
-
-    GpuLaggedDownsamplingKernel(const Params &params, kernel_t kernel);
 };
 
 

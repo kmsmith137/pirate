@@ -163,15 +163,20 @@ struct TestInstance
 	ref_params.nbeams = nbeams;
 	ref_params.ntime = nt_chunk;
 
+	typename GpuLaggedDownsamplingKernel<T>::Params gpu_params;
+	gpu_params.small_input_rank = small_input_rank;
+	gpu_params.large_input_rank = large_input_rank;
+	gpu_params.num_downsampling_levels = num_downsampling_levels;
+	
 	auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
-	auto gpu_kernel = GpuLaggedDownsamplingKernel<T>::make(small_input_rank, large_input_rank, num_downsampling_levels);
+	auto gpu_kernel = make_shared<GpuLaggedDownsamplingKernel<T>> (gpu_params);
 
 	cout << "    GPU kernel params\n";
 	gpu_kernel->print(cout, 8);
 	cout << flush;
 
 	Array<T> gpu_in = alloc_input<T> (true, af_gpu | af_zero);       // use_bstride_in = true
-	Array<T> gpu_state({ nbeams, gpu_kernel->params.state_nelts_per_beam }, af_gpu | af_zero);  // af_zero is important here
+	Array<T> gpu_state({ nbeams, gpu_kernel->state_nelts_per_beam }, af_gpu | af_zero);  // af_zero is important here
 
 	OutputArrays<T> gpu_out = alloc_output<T> (true, af_gpu | af_zero);            // use_bstride_out = true
 	OutputArrays<float> cpu_out = alloc_output<float> (false, af_uhost | af_zero); // use_bstride_out = false
