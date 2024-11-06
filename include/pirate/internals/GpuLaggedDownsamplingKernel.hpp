@@ -19,6 +19,7 @@ class GpuLaggedDownsamplingKernel
 {
 public:
     struct Params {
+	
 	// "Primary" parameters specified when make() is called.
 	//
 	// A potential source of confusion: denote

@@ -311,15 +311,15 @@ void GpuDedispersionKernel::Params::validate(bool on_gpu) const
     assert(rank <= 8);
     assert(nambient > 0);
     assert(total_beams > 0);
-    assert(beams_per_kernel_launch > 0);
-    assert(beams_per_kernel_launch <= constants::cuda_max_y_blocks);
+    assert(beams_per_batch > 0);
+    assert(beams_per_batch <= constants::cuda_max_y_blocks);
     assert(ntime > 0);
 
     // Not really necessary, but failure probably indicates an unintentional bug.
     assert(is_power_of_two(nambient));
     
     // Currently assumed throughout the pirate code.
-    assert((total_beams % beams_per_kernel_launch) == 0);
+    assert((total_beams % beams_per_batch) == 0);
 
     // Currently assumed by the GPU kernels.
     int nelts_per_cache_line = is_float32() ? 32 : 64;
@@ -372,7 +372,7 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const UntypedArray
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime).
     assert(in_arr.ndim == 4);
-    assert(in_arr.shape[0] == params.beams_per_kernel_launch);
+    assert(in_arr.shape[0] == params.beams_per_batch);
     assert(in_arr.shape[1] == params.nambient);
     assert(in_arr.shape[2] == pow2(params.rank));
     assert(in_arr.shape[3] == params.ntime);
@@ -414,7 +414,7 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const UntypedArray &out_
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime)
     assert(out_arr.ndim == 4);
-    assert(out_arr.shape[0] == params.beams_per_kernel_launch);
+    assert(out_arr.shape[0] == params.beams_per_batch);
     assert(out_arr.shape[1] == params.nambient);
     assert(out_arr.shape[2] == pow2(params.rank));
     assert(out_arr.shape[3] == params.ntime);
@@ -565,7 +565,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
     assert(ibeam == expected_ibeam);
 
     // Update expected (itime, ibeam).
-    expected_ibeam += params.beams_per_kernel_launch;
+    expected_ibeam += params.beams_per_batch;
     assert(expected_ibeam <= params.total_beams);
     
     if (expected_ibeam == params.total_beams) {
@@ -581,7 +581,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
     // to the kernel via gridDim.y, gridDim.x.
     dim3 grid_dims;
     grid_dims.x = params.nambient;
-    grid_dims.y = params.beams_per_kernel_launch;
+    grid_dims.y = params.beams_per_batch;
     grid_dims.z = 1;
 
     this->cuda_kernel

@@ -24,7 +24,7 @@ static void time_gpu_dedispersion_kernel(const string &dtype, int rank, bool app
     params.rank = rank;
     params.nambient = nambient;
     params.total_beams = nbeams;
-    params.beams_per_kernel_launch = nbeams;
+    params.beams_per_batch = nbeams;
     params.ntime = ntime;
     params.apply_input_residual_lags = apply_input_residual_lags;
     params.input_is_downsampled_tree = false;  // shouldn't affect timing

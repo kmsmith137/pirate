@@ -18,7 +18,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 {
     params.validate(false);    // on_gpu=false
 
-    long B = params.beams_per_kernel_launch;
+    long B = params.beams_per_batch;
     long A = params.nambient;
     long F = pow2(params.rank);
     long T = params.ntime;
@@ -60,7 +60,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 
 void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, long itime, long ibeam)
 {
-    long B = params.beams_per_kernel_launch;
+    long B = params.beams_per_batch;
     long A = params.nambient;
     long N = pow2(params.rank);
     long T = params.ntime;
@@ -111,7 +111,7 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
 
 void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
-    long B = params.beams_per_kernel_launch;
+    long B = params.beams_per_batch;
     long A = params.nambient;
     long N = pow2(params.rank);
     long T = params.ntime;
@@ -158,7 +158,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
 
 void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
-    long B = params.beams_per_kernel_launch;
+    long B = params.beams_per_batch;
     long A = params.nambient;
     long N = pow2(params.rank);
     long T = params.ntime;

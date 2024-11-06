@@ -117,7 +117,7 @@ struct Stage0Buffers
 	    params.rank = st0.rank0;
 	    params.nambient = pow2(st0.rank1);
 	    params.total_beams = plan->config.beams_per_gpu;
-	    params.beams_per_kernel_launch = plan->config.beams_per_batch;
+	    params.beams_per_batch = plan->config.beams_per_batch;
 	    params.ntime = st0.nt_ds;
 	    params.input_is_ringbuf = false;
 	    params.output_is_ringbuf = output_is_ringbuf;
@@ -238,7 +238,7 @@ struct Stage1Buffers
 	    params.rank = st1.rank1_trigger;
 	    params.nambient = pow2(st1.rank0);
 	    params.total_beams = total_beams;
-	    params.beams_per_kernel_launch = beams_per_batch;
+	    params.beams_per_batch = beams_per_batch;
 	    params.ntime = st1.nt_ds;
 	    params.input_is_ringbuf = input_is_ringbuf;
 	    params.output_is_ringbuf = false;

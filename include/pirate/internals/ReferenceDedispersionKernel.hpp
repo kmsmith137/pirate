@@ -24,7 +24,7 @@ struct ReferenceDedispersionKernel
     // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
     //
-    //   - dedispersion buffer has shape (params.beams_per_kernel, nambient, pow2(rank), ntime).
+    //   - dedispersion buffer has shape (params.beams_per_batch, nambient, pow2(rank), ntime).
     //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
     //
     // The 'itime' and 'ibeam' arguments are not logically necessary, but enable a debug check.
@@ -32,7 +32,7 @@ struct ReferenceDedispersionKernel
     
     void apply(gputils::Array<float> &in, gputils::Array<float> &out, long itime, long ibeam);
 
-    // A bit awkward -- number of trees is (total_beams / beams_per_kernel).
+    // A bit awkward -- number of trees is (total_beams / beams_per_batch).
     std::vector<std::shared_ptr<ReferenceTree>> trees;
     std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;   // only used if params.apply_input_residual_lags == true.
 

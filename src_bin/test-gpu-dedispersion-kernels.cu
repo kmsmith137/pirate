@@ -30,13 +30,13 @@ struct TestInstance
     vector<long> rb_zone_base_seg;  // length rb_nzones
 
     // "Big" shapes are either ringbufs, or dedisp bufs with B = (params.beams_per_gpu) and T = (params.ntime * this->nchunks).
-    // "Small" shapes are dedisp bufs with B = (params.beams_per_kernel_launch) and T = (params.ntime).
+    // "Small" shapes are dedisp bufs with B = (params.beams_per_batch) and T = (params.ntime).
     vector<ssize_t> big_ishape;
     vector<ssize_t> big_oshape;
     vector<ssize_t> small_shape;
     
     // Strides for input/output arrays.
-    // Reminder: arrays have shape (params.beams_per_kernel_launch, params.nambient, pow2(params.rank), params.ntime).
+    // Reminder: arrays have shape (params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime).
     vector<ssize_t> gpu_istrides;
     vector<ssize_t> gpu_ostrides;
     vector<ssize_t> cpu_istrides;
@@ -79,7 +79,7 @@ struct TestInstance
 	//   params.ntime
 	//   params.nambient
 	//   params.total_beams
-	//   params.beams_per_kernel_launch
+	//   params.beams_per_batch
 	//   this->nchunks
 	
 	bool is_float32 = (rand_uniform() < 0.5);
@@ -96,7 +96,7 @@ struct TestInstance
 	long cmax = (10*nchan + 10*params.ntime) / params.ntime;
 	nchunks = rand_int(1, cmax+1);
 	
-	// nambient, (total_beams/beams_per_kernel_launch), beams_per_kernel_launch
+	// nambient, (total_beams/beams_per_batch), beams_per_batch
 	long pmax = max_nelts / (pow2(params.rank) * params.ntime * nchunks);
 	pmax = max(pmax, 4L);
 	pmax = min(pmax, 42L);
@@ -104,7 +104,7 @@ struct TestInstance
 	auto v = gputils::random_integers_with_bounded_product(4, pmax);
 	params.nambient = round_up_to_power_of_two(v[0]);
 	params.total_beams = v[1] * v[2];
-	params.beams_per_kernel_launch = v[2];
+	params.beams_per_batch = v[2];
 	
 	// Now a sequence of steps to initialize:
 	//
@@ -121,7 +121,7 @@ struct TestInstance
 	this->rb_zone_base_seg = vector<long> (rb_nzones, 0);
 	
 	for (long z = 0; z < rb_nzones; z++) {
-	    long lmin = params.beams_per_kernel_launch;   // assumes that GPU does not run multiple batches in parallel
+	    long lmin = params.beams_per_batch;   // assumes that GPU does not run multiple batches in parallel
 	    long lmax = params.total_beams * nchunks;
 	    rb_zone_len[z] = rand_int(lmin, lmax+1);
 	}
@@ -164,7 +164,7 @@ struct TestInstance
 	vector<ssize_t> dd_shape = { params.total_beams, params.nambient, pow2(params.rank), nchunks * params.ntime };
 	this->big_ishape = params.input_is_ringbuf ? rb_shape : dd_shape;
 	this->big_oshape = params.output_is_ringbuf ? rb_shape : dd_shape;
-	this->small_shape = { params.beams_per_kernel_launch, params.nambient, pow2(params.rank), params.ntime };
+	this->small_shape = { params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime };
 	
 	// Dedispersion buffer strides (note that ringbufs are always contiguous).
 	this->cpu_istrides = gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
@@ -206,7 +206,7 @@ static void run_test(const TestInstance &tp)
 	 << "    rank = " << p.rank << "\n"
 	 << "    nambient = " << p.nambient << "\n"
 	 << "    total_beams = " << p.total_beams << "\n"
-	 << "    beams_per_kernel_launch = " << p.beams_per_kernel_launch << "\n"
+	 << "    beams_per_batch = " << p.beams_per_batch << "\n"
 	 << "    ntime = " << p.ntime << "\n"
 	 << "    nchunks = " << tp.nchunks << "\n"
 	 << "    input_is_ringbuf = " << (p.input_is_ringbuf ? "true" : "false")  << "\n"
@@ -259,14 +259,14 @@ static void run_test(const TestInstance &tp)
     }
     
     for (long ichunk = 0; ichunk < tp.nchunks; ichunk++) {
-	for (int b = 0; b < p.total_beams; b += p.beams_per_kernel_launch) {
+	for (int b = 0; b < p.total_beams; b += p.beams_per_batch) {
 	    Array<float> s;
 	    UntypedArray t;
 
 	    // Reference dedispersion.
 
 	    if (!p.input_is_ringbuf) {
-		s = cpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+		s = cpu_in_big.slice(0, b, b + p.beams_per_batch);
 		s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		cpu_in.fill(s);
 	    }
@@ -274,7 +274,7 @@ static void run_test(const TestInstance &tp)
 	    ref_kernel->apply(cpu_in, cpu_out, ichunk, b);
 
 	    if (!p.output_is_ringbuf) {
-		s = cpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
+		s = cpu_out_big.slice(0, b, b + p.beams_per_batch);
 		s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		s.fill(cpu_out);
 	    }
@@ -282,7 +282,7 @@ static void run_test(const TestInstance &tp)
 	    // GPU dedipersion.
 
 	    if (!p.input_is_ringbuf) {
-		t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+		t = gpu_in_big.slice(0, b, b + p.beams_per_batch);
 		t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		gpu_in.fill(t);
 	    }
@@ -290,7 +290,7 @@ static void run_test(const TestInstance &tp)
 	    gpu_kernel->launch(gpu_in, gpu_out, ichunk, b);
 
 	    if (!p.output_is_ringbuf) {
-		t = gpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
+		t = gpu_out_big.slice(0, b, b + p.beams_per_batch);
 		t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		t.fill(gpu_out);
 	    }
