@@ -11,8 +11,8 @@
 
 #include "ReferenceTree.hpp"
 #include "ReferenceLagbuf.hpp"
-#include "ReferenceLaggedDownsampler.hpp"
 #include "ReferenceDedispersionKernel.hpp"
+#include "ReferenceLaggedDownsamplingKernel.hpp"
 
 
 namespace pirate {

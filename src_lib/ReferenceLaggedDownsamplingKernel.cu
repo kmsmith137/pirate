@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/ReferenceLaggedDownsampler.hpp"
+#include "../include/pirate/internals/ReferenceLaggedDownsamplingKernel.hpp"
 #include "../include/pirate/internals/ReferenceLagbuf.hpp"
 
 #include "../include/pirate/constants.hpp"

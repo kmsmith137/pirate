@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/ReferenceLaggedDownsampler.hpp"
+#include "../include/pirate/internals/ReferenceLaggedDownsamplingKernel.hpp"
 #include "../include/pirate/internals/GpuLaggedDownsamplingKernel.hpp"
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 #include "../include/pirate/constants.hpp"
