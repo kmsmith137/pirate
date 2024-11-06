@@ -160,14 +160,14 @@ struct TestInstance
 	assert(bstride_in >= min_bstride_in());
 	assert(bstride_out >= min_bstride_out());
 
-	ReferenceLaggedDownsampler::Params ref_params;
+	ReferenceLaggedDownsamplingKernel::Params ref_params;
 	ref_params.small_input_rank = small_input_rank;
 	ref_params.large_input_rank = large_input_rank;
 	ref_params.num_downsampling_levels = num_downsampling_levels;
 	ref_params.nbeams = nbeams;
 	ref_params.ntime = nt_chunk;
 
-	auto ref_kernel = make_shared<ReferenceLaggedDownsampler> (ref_params);
+	auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
 	auto gpu_kernel = GpuLaggedDownsamplingKernel<T>::make(small_input_rank, large_input_rank, num_downsampling_levels);
 
 	if (noisy) {

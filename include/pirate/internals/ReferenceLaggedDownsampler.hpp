@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_REFERENCE_LAGGED_DOWNSAMPLER_HPP
-#define _PIRATE_INTERNALS_REFERENCE_LAGGED_DOWNSAMPLER_HPP
+#ifndef _PIRATE_INTERNALS_REFERENCE_LAGGED_DOWNSAMPLING_KERNEL_HPP
+#define _PIRATE_INTERNALS_REFERENCE_LAGGED_DOWNSAMPLING_KERNEL_HPP
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -15,7 +15,7 @@ namespace pirate {
 class ReferenceLagbuf;
 
 
-struct ReferenceLaggedDownsampler
+struct ReferenceLaggedDownsamplingKernel
 {
     // A potential source of confusion: denote
     //
@@ -33,7 +33,7 @@ struct ReferenceLaggedDownsampler
 	long ntime = 0;
     };
 
-    ReferenceLaggedDownsampler(const Params &params);
+    ReferenceLaggedDownsamplingKernel(const Params &params);
 
     // apply(): the input/output arrays have the following shapes:
     //
@@ -45,7 +45,7 @@ struct ReferenceLaggedDownsampler
     //   in.shape = (2^large_input_rank, ntime)
     //   out[i].shape = (2^(large_input_rank-1), ntime/2^(i+1))
     //
-    // Note: the ReferenceLaggedDownsampler stores all ring buffer state needed to call
+    // Note: the ReferenceLaggedDownsamplingKernel stores all ring buffer state needed to call
     // apply() incrementally.
     
     void apply(const gputils::Array<float> &in, std::vector<gputils::Array<float>> &out);
@@ -55,10 +55,10 @@ struct ReferenceLaggedDownsampler
 
     std::shared_ptr<ReferenceLagbuf> lagbuf_small;
     std::shared_ptr<ReferenceLagbuf> lagbuf_large;
-    std::shared_ptr<ReferenceLaggedDownsampler> next;
+    std::shared_ptr<ReferenceLaggedDownsamplingKernel> next;
 };
 
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_REFERENCE_LAGGED_DOWNSAMPLER_HPP
+#endif // _PIRATE_INTERNALS_REFERENCE_LAGGED_DOWNSAMPLING_KERNEL_HPP

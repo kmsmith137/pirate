@@ -39,7 +39,7 @@ struct Stage0Buffers
     vector<Array<float>> dd_bufs;  // length nds, inner shape is (beams_per_batch, pow2(st0.rank), nt_ds)
     vector<Array<float>> ds_bufs;  // length (nds-1), same as dd_bufs[1:]
     
-    vector<shared_ptr<ReferenceLaggedDownsampler>> lds_kernels;   // length (nbatches)
+    vector<shared_ptr<ReferenceLaggedDownsamplingKernel>> lds_kernels;   // length (nbatches)
     vector<shared_ptr<ReferenceDedispersionKernel>> dd_kernels;   // length (nds)
 
     Stage0Buffers(const shared_ptr<DedispersionPlan> &plan_, Array<float> ringbuf_) :
@@ -93,7 +93,7 @@ struct Stage0Buffers
 	// LaggedDownsampler kernels.
 
 	if (nds > 1) {
-	    ReferenceLaggedDownsampler::Params ld_params;
+	    ReferenceLaggedDownsamplingKernel::Params ld_params;
 	    ld_params.small_input_rank = plan->stage0_trees.at(1).rank0 + 1;
 	    ld_params.large_input_rank = plan->config.tree_rank;
 	    ld_params.num_downsampling_levels = nds - 1;   // note (-1) here!
@@ -101,7 +101,7 @@ struct Stage0Buffers
 	    ld_params.ntime = plan->config.time_samples_per_chunk;
 
 	    for (long b = 0; b < nbatches; b++)
-		this->lds_kernels.at(b) = make_shared<ReferenceLaggedDownsampler> (ld_params);
+		this->lds_kernels.at(b) = make_shared<ReferenceLaggedDownsamplingKernel> (ld_params);
 	}
 
 	// Dedispersion kernels.

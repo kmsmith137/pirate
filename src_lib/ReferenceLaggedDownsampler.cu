@@ -16,7 +16,7 @@ namespace pirate {
 #endif
 
 
-ReferenceLaggedDownsampler::ReferenceLaggedDownsampler(const Params &params_)
+ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Params &params_)
     : params(params_)
 {
     assert(params.small_input_rank >= 0);
@@ -61,18 +61,18 @@ ReferenceLaggedDownsampler::ReferenceLaggedDownsampler(const Params &params_)
     next_params.ntime = xdiv(params.ntime, 2);
     next_params.nbeams = params.nbeams;
     
-    this->next = make_shared<ReferenceLaggedDownsampler> (next_params);
+    this->next = make_shared<ReferenceLaggedDownsamplingKernel> (next_params);
 }
 
 
-void ReferenceLaggedDownsampler::apply(const Array<float> &in, vector<Array<float>> &out)
+void ReferenceLaggedDownsamplingKernel::apply(const Array<float> &in, vector<Array<float>> &out)
 {
     assert(out.size() == params.num_downsampling_levels);
     this->apply(in, &out[0]);
 }
 
 
-// Helper for ReferenceLaggedDownsampler::apply()
+// Helper for ReferenceLaggedDownsamplingKernel::apply()
 static void _check_shape(const char *name, const Array<float> &arr, ssize_t nbeams, ssize_t nfreq, ssize_t ntime)
 {
     if (arr.shape_equals({ nbeams, nfreq, ntime }))
@@ -82,7 +82,7 @@ static void _check_shape(const char *name, const Array<float> &arr, ssize_t nbea
 	return;
 
     stringstream ss;
-    ss << "ReferenceLaggedDownsampler::apply(): expected '" << name << "' array to have"
+    ss << "ReferenceLaggedDownsamplingKernel::apply(): expected '" << name << "' array to have"
        << " shape=(" << nbeams << "," << nfreq << "," << ntime << ")";
 
     if (nbeams == 1)
@@ -93,7 +93,7 @@ static void _check_shape(const char *name, const Array<float> &arr, ssize_t nbea
 }
 
 
-void ReferenceLaggedDownsampler::apply(const Array<float> &in, Array<float> *outp)
+void ReferenceLaggedDownsamplingKernel::apply(const Array<float> &in, Array<float> *outp)
 {
     // Reminder: the input/output arrays have the following shapes:
     //
