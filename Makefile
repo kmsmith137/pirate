@@ -89,10 +89,12 @@ OFILES = \
   src_lib/ReferenceTree.o \
   src_lib/Socket.o \
   src_lib/YamlFile.o \
-  src_lib/template_instantiations/dedisp_float32_nolag.o \
-  src_lib/template_instantiations/dedisp_float32_lag.o \
-  src_lib/template_instantiations/dedisp_float16_nolag.o \
-  src_lib/template_instantiations/dedisp_float16_lag.o
+  src_lib/template_instantiations/dedisp_simple_float16.o \
+  src_lib/template_instantiations/dedisp_simple_float32.o \
+  src_lib/template_instantiations/dedisp_simple_nolag_float16.o \
+  src_lib/template_instantiations/dedisp_simple_nolag_float32.o \
+  src_lib/template_instantiations/dedisp_stage0_float16.o \
+  src_lib/template_instantiations/dedisp_stage0_float32.o
 
 # Used in 'make clean' and 'make source_files.txt'
 SRCDIRS = . src_bin src_lib src_lib/template_instantiations include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals

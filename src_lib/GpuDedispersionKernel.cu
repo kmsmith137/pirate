@@ -19,14 +19,14 @@ namespace pirate {
 
 // Defined in dedispersion_kernel_implementation.hpp
 // Instantiated in src_lib/template_instantiations/*.cu
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r1(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r2(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r3(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r4(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r5(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r6(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r7(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
-template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r8(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r1(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r2(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r3(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r4(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r5(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r6(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r7(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
+template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r8(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
 
 
 template<typename T> struct _is_float32 { };
@@ -305,7 +305,7 @@ bool GpuDedispersionKernel::Params::is_float32() const
 }
 
 
-void GpuDedispersionKernel::Params::validate() const
+void GpuDedispersionKernel::Params::validate(bool on_gpu) const
 {
     assert(rank >= 0);
     assert(rank <= 8);
@@ -332,10 +332,16 @@ void GpuDedispersionKernel::Params::validate() const
 	long nseg = xdiv(ntime,nelts_per_segment) * nambient * pow2(rank);
 	assert(ringbuf_locations.shape_equals({ nseg, 4 }));
 	assert(ringbuf_locations.is_fully_contiguous());
-	assert(ringbuf_locations.on_host());
 	assert(ringbuf_nseg > 0);
 	assert(ringbuf_nseg <= UINT_MAX);
 
+	if (on_gpu) {
+	    assert(ringbuf_locations.on_gpu());
+	    return;
+	}
+
+	assert(ringbuf_locations.on_host());
+	
 	for (long iseg = 0; iseg < nseg; iseg++) {
 	    const uint *rb_locs = ringbuf_locations.data + (4*iseg);
 	    long rb_offset = rb_locs[0];  // in segments, not bytes
@@ -390,6 +396,37 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const UntypedArray
     assert(ambient_stride32 != 0);
     assert(freq_stride32 != 0);
 }
+
+
+template<typename T>
+dedispersion_ring_outbuf<T>::device_args::device_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
+{
+    // If T==float, then T32 is also 'float'.
+    // If T==__half, then T32 is '__half2'.
+    using T32 = typename simd32_type<T>::type;
+
+    constexpr int denom = 4 / sizeof(T);
+    static_assert(denom * sizeof(T) == 4);
+
+    Array<T> in_arr = uarr_get<T> (in_uarr, "in");
+    assert(in_arr.ndim == 1);
+    assert(in_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
+    assert(in_arr.get_ncontig() == 1);
+    assert(in_arr.on_gpu());
+
+    Array<uint> rb_loc = params.ringbuf_locations;
+    assert(rb_loc.ndim == 2);
+    assert(rb_loc.shape[0] == params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment));
+    assert(rb_loc.shape[1] == 4);
+    assert(rb_loc.is_fully_contiguous());
+    assert(rb_loc.on_gpu());
+
+    this->rb_base = (T32 *) in_arr.data;
+    this->rb_loc = (const uint4 *) rb_loc.data;
+}
+
+
+// -------------------------------------------------------------------------------------------------
 
 
 // FIXME reduce cut-and-paste between Inbuf::host_args and Outbuf::host_args constructors.
@@ -447,8 +484,8 @@ struct GpuDedispersionKernelImpl : public GpuDedispersionKernel
 
     virtual void launch(const UntypedArray &in, UntypedArray &out, long itime, long ibeam, cudaStream_t stream) override;
 
-    // (inbuf, outbuf, rstate, ntime, integer_constants)
-    void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, long, uint *) = nullptr;
+    // (inbuf, outbuf, rstate, ntime, integer_constants, rb_pos)
+    void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, long, uint *, long) = nullptr;
 };
 
 
@@ -509,6 +546,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 
     Array<T> rstate = uarr_get<T> (this->persistent_state, "rstate");
     T *rp = rstate.data + (ibeam * this->state_nelts_per_beam);
+    long rb_pos = itime * params.total_beams + ibeam;
 
     // Note: the number of beams and 'ambient' tree channels are implicitly supplied
     // to the kernel via gridDim.y, gridDim.x.
@@ -519,7 +557,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 
     this->cuda_kernel
 	<<< grid_dims, 32 * warps_per_threadblock, shmem_nbytes, stream >>>
-	(in, out, (T32 *) rp, params.ntime, this->integer_constants.data);
+	(in, out, (T32 *) rp, params.ntime, this->integer_constants.data, rb_pos);
     
     CUDA_PEEK("dedispersion kernel");
 }
@@ -531,10 +569,9 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    params.validate();
+    params.validate(true);    // on_gpu=true
     assert(params.rank > 0);  // FIXME define _r0 for testing
     assert(!params.input_is_ringbuf);   // FIXME
-    assert(!params.output_is_ringbuf);  // FIXME
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
 
@@ -598,19 +635,26 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 // Static member function
 shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &params)
 {
+    bool rb_in = params.input_is_ringbuf;
+    bool rb_out = params.output_is_ringbuf;
+    bool rlag = params.apply_input_residual_lags;
     bool is_float32 = params.is_float32();
 
     // Select subclass template instantiation.
-    // Currently 4 cases here -- more to come.
+    // Currently 6 cases here -- more to come.
 
-    if (!params.apply_input_residual_lags && is_float32)
+    if (!rb_in && !rb_out && !rlag && is_float32)
 	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,false>, dedispersion_simple_outbuf<float>>> (params);
-    else if (!params.apply_input_residual_lags && !is_float32)
+    else if (!rb_in && !rb_out && !rlag && !is_float32)
 	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_simple_inbuf<__half,false>, dedispersion_simple_outbuf<__half>>> (params);
-    else if (params.apply_input_residual_lags && is_float32)
+    else if (!rb_in && !rb_out && rlag && is_float32)
 	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,true>, dedispersion_simple_outbuf<float>>> (params);
-    else if (params.apply_input_residual_lags && !is_float32)
+    else if (!rb_in && !rb_out && rlag && !is_float32)
 	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_simple_inbuf<__half,true>, dedispersion_simple_outbuf<__half>>> (params);
+    else if (!rb_in && rb_out && !rlag && is_float32)
+	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,false>, dedispersion_ring_outbuf<float>>> (params);
+    else if (!rb_in && rb_out && !rlag && !is_float32)
+	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_simple_inbuf<__half,false>, dedispersion_ring_outbuf<__half>>> (params);
     
     throw runtime_error("GpuDedispersionKernel::make(): shouldn't get here");
 }

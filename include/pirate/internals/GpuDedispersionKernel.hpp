@@ -60,7 +60,6 @@ public:
 	bool input_is_downsampled_tree = false;   // only matters if apply_input_residual_lags=true
 	int nelts_per_segment = 0;                // only matters if apply_input_residual_lags=true
 
-	// Placeholder for future expansion.
 	// Only used if (input_is_ringbuf || output_is_ringbuf)
 	gputils::Array<uint> ringbuf_locations;
 	long ringbuf_nseg = 0;
@@ -70,7 +69,7 @@ public:
 	bool is_float32() const;
 
 	// Throws an exception if anything is wrong.
-	void validate() const;
+	void validate(bool on_gpu) const;
     };
 
     // To construct GpuDedispersionKernel instances, call this function.

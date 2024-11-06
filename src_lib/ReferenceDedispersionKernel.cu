@@ -16,7 +16,7 @@ namespace pirate {
 ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    params.validate();
+    params.validate(false);    // on_gpu=false
 
     long B = params.beams_per_kernel_launch;
     long A = params.nambient;
@@ -120,22 +120,25 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
     long ns = xdiv(T,S);
 
     assert(in.shape_equals({B,A,N,T}));  // dedispersion buffer
-    assert(in.get_ncontig() >= 3);
     assert(out.shape_equals({R*S}));     // ringbuf
     assert(out.is_fully_contiguous());
     assert(params.ringbuf_locations.shape_equals({ns*A*N,4}));
 
+    long dd_bstride = in.strides[0];
+    long dd_astride = in.strides[1];
+    long dd_nstride = in.strides[2];
+    assert(in.strides[3] == 1);
+
     const uint *rb_loc = params.ringbuf_locations.data;
     const float *dd = in.data;
     float *ringbuf = out.data;
-    long dd_bstride = in.strides[0];
     
     // Loop over segments in tree.
     for (long s = 0; s < ns; s++) {
 	for (long a = 0; a < A; a++) {
 	    for (long n = 0; n < N; n++) {
 		long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
-		const float *dd0 = dd + (a*N+n)*T + s*S;   // address in dedispersion buf (at beam 0)
+		const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*S;  // address in dedispersion buf (at beam 0)
 
 		uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
 		uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
@@ -166,7 +169,6 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
     assert(in.shape_equals({R*S}));  // ringbuf
     assert(in.is_fully_contiguous());
     assert(out.shape_equals({B,A,N,T}));  // dedispersion buffer
-    assert(out.get_ncontig() >= 1);
     assert(params.ringbuf_locations.shape_equals({ns*A*N,4}));
 
     const uint *rb_loc = params.ringbuf_locations.data;
@@ -176,6 +178,7 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
     long dd_bstride = out.strides[0];
     long dd_astride = out.strides[1];
     long dd_nstride = out.strides[2];
+    assert(out.strides[3] == 1);
 
     // Loop over segments in tree.
     for (long s = 0; s < ns; s++) {

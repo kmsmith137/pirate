@@ -541,7 +541,7 @@ __device__ inline void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+__global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);    
     // assert(blockDim.x == 32);
@@ -552,7 +552,7 @@ __global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename O
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, 0);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 1, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -603,7 +603,7 @@ __global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename O
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+__global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);
     // assert(blockDim.x == 32);
@@ -614,7 +614,7 @@ __global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename O
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, 0);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 2, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -675,7 +675,7 @@ __global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename O
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+__global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);
     // assert(blockDim.x == 32);
@@ -686,7 +686,7 @@ __global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename O
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, 0);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 3, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -767,7 +767,7 @@ __global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename O
 
 
 template<typename T, class Inbuf, class Outbuf>
-__global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+__global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 32);
@@ -782,7 +782,7 @@ __global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename O
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, 0);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 4, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1398,7 +1398,7 @@ __device__ inline void align1_s8(__half2 &x0, __half2 &x1, __half2 &x2, __half2 
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(128, 8)
-dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     
@@ -1419,7 +1419,7 @@ dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, nrdata);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 5, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1594,7 +1594,7 @@ dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(256, 4)
-dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 256);
@@ -1611,7 +1611,7 @@ dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, 8);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 6, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -1794,7 +1794,7 @@ dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(256, 3)
-dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
 
@@ -1815,7 +1815,7 @@ dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, nrdata);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 7, rb_pos);
     
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -2069,7 +2069,7 @@ dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 template<typename T, class Inbuf, class Outbuf>
 __global__ void __launch_bounds__(512, 1)
-dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants)
+dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_args outbuf_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 {
     static_assert(sizeof(T) == 4);  // float or __half2
     // assert(blockDim.x == 512);
@@ -2086,7 +2086,7 @@ dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int beam_ix = blockIdx.y;
     
     typename Inbuf::device_state inbuf(inbuf_args, 16);
-    typename Outbuf::device_state outbuf(outbuf_args);
+    typename Outbuf::device_state outbuf(outbuf_args, 8, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
     rstate += beam_ix * gridDim.x * (32 * gmem_ncl);
@@ -2331,14 +2331,14 @@ dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
 
 
 #define INSTANTIATE_DEDISPERSION_KERNELS(T, Inbuf, Outbuf) \
-    template __global__ void dedisperse_r1<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
-    template __global__ void dedisperse_r2<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
-    template __global__ void dedisperse_r3<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
-    template __global__ void dedisperse_r4<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
-    template __global__ void dedisperse_r5<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
-    template __global__ void dedisperse_r6<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
-    template __global__ void dedisperse_r7<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants); \
-    template __global__ void dedisperse_r8<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants)
+    template __global__ void dedisperse_r1<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos); \
+    template __global__ void dedisperse_r2<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos); \
+    template __global__ void dedisperse_r3<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos); \
+    template __global__ void dedisperse_r4<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos); \
+    template __global__ void dedisperse_r5<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos); \
+    template __global__ void dedisperse_r6<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos); \
+    template __global__ void dedisperse_r7<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos); \
+    template __global__ void dedisperse_r8<T, Inbuf, Outbuf> (Inbuf::device_args, Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos)
 
 
 }  // namespace pirate

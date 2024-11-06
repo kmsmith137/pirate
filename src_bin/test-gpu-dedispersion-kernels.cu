@@ -18,26 +18,51 @@ struct TestInstance
 {
     GpuDedispersionKernel::Params params;
 
-    bool in_place = true;
     long nchunks = 0;
 
+    // Can only be 'true' if params.input_is_ringbuf == params.output_is_ringbuf == false.
+    bool in_place = false;
+    
+    // Ring buffer (only used if params.input_is_ringbuf || params.output_is_ringbuf)
+    long rb_nzones = 0;
+    vector<long> rb_zone_len;   // length rb_nzones
+    vector<long> rb_zone_nseg;  // length rb_nzones
+    vector<long> rb_zone_base_seg;  // length rb_nzones
+
+    // "Big" shapes are either ringbufs, or dedisp bufs with B = (params.beams_per_gpu) and T = (params.ntime * this->nchunks).
+    // "Small" shapes are dedisp bufs with B = (params.beams_per_kernel_launch) and T = (params.ntime).
+    vector<ssize_t> big_ishape;
+    vector<ssize_t> big_oshape;
+    vector<ssize_t> small_shape;
+    
     // Strides for input/output arrays.
     // Reminder: arrays have shape (params.beams_per_kernel_launch, params.nambient, pow2(params.rank), params.ntime).
     vector<ssize_t> gpu_istrides;
     vector<ssize_t> gpu_ostrides;
     vector<ssize_t> cpu_istrides;
     vector<ssize_t> cpu_ostrides;
-
+    
     void randomize()
     {
 	const long max_nelts = 100 * 1000 * 1000;
+
+	// Initialize:
+	//   params.dtype
+	//   params.apply_input_residual_lags
+	//   params.input_is_downsampled_tree
+	//   params.nelts_per_segment
+	//   params.rank
+	//   params.ntime
+	//   params.nambient
+	//   params.total_beams
+	//   params.beams_per_kernel_launch
+	//   this->nchunks
 	
 	bool is_float32 = (rand_uniform() < 0.5);
 	params.dtype = is_float32 ? "float32" : "float16";
 	params.apply_input_residual_lags = (rand_uniform() < 0.5);
 	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
-	this->in_place = (rand_uniform() < 0.5);
-	
+
 	params.nelts_per_segment = is_float32 ? 32 : 64;
 	params.rank = rand_int(1, 9);
 
@@ -58,14 +83,113 @@ struct TestInstance
 	params.total_beams = v[1] * v[2];
 	params.beams_per_kernel_launch = v[2];
 
-	// Strides
-	vector<ssize_t> shape = { params.beams_per_kernel_launch, params.nambient, pow2(params.rank), params.ntime };
-	gpu_istrides = gputils::make_random_strides(shape, 1, params.nelts_per_segment);
-	cpu_istrides = gputils::make_random_strides(shape, 1, params.nelts_per_segment);
-	gpu_ostrides = in_place ? gpu_istrides : gputils::make_random_strides(shape, 1, params.nelts_per_segment);
-	cpu_ostrides = in_place ? cpu_istrides : gputils::make_random_strides(shape, 1, params.nelts_per_segment);
+	// Initialize:
+	//  params.input_is_ringbuf
+	//  params.output_is_ringbuf
+	//  this->in_place
+
+	params.input_is_ringbuf = false;
+	params.output_is_ringbuf = false;
+	this->in_place = false;
+	
+	cout << "XXX FIXME XXX\n";
+	// if (rand_uniform() < 0.33)
+	// params.input_is_ringbuf = true;
+	//else
+	if (rand_uniform() < 0.5)
+	    params.output_is_ringbuf = true;
+	else if (rand_uniform() < 0.5)
+	    this->in_place = true;
+	
+	// Now a sequence of steps to initialize:
+	//
+	//   params.ringbuf_locations;
+        //   params.ringbuf_nseg;
+	//   this->rb_nzones;
+	//   this->rb_zone_len;
+	//   this->rb_zone_nseg;
+	//   this->rb_zone_base_seg;
+
+	this->rb_nzones = rand_int(1, 11);
+	this->rb_zone_len = vector<long> (rb_nzones, 0);
+	this->rb_zone_nseg = vector<long> (rb_nzones, 0);
+	this->rb_zone_base_seg = vector<long> (rb_nzones, 0);
+	
+	for (long z = 0; z < rb_nzones; z++) {
+	    long lmin = params.beams_per_kernel_launch;   // assumes that GPU does not run multiple batches in parallel
+	    long lmax = params.total_beams * nchunks;
+	    rb_zone_len[z] = rand_int(lmin, lmax+1);
+	}
+
+	long nseg = nchan * params.nambient * xdiv(params.ntime, params.nelts_per_segment);
+	vector<pair<long,long>> pairs(nseg);   // map segment -> (rb_zone, rb_seg)
+	
+	for (long iseg = 0; iseg < nseg; iseg++) {
+	    long z = rand_int(0, rb_nzones);
+	    long n = rb_zone_nseg[z]++;
+	    pairs[iseg] = {z,n};
+	}
+	
+	gputils::randomly_permute(pairs);
+
+	params.ringbuf_nseg = 0;
+	for (long z = 0; z < rb_nzones; z++) {
+	    this->rb_zone_base_seg[z] = params.ringbuf_nseg;
+	    params.ringbuf_nseg += rb_zone_len[z] * rb_zone_nseg[z];
+	}
+	
+	params.ringbuf_locations = Array<uint> ({nseg,4}, af_rhost | af_zero);
+	uint *rb_loc = params.ringbuf_locations.data;
+	
+	for (long iseg = 0; iseg < nseg; iseg++) {
+	    long z = pairs[iseg].first;
+	    long n = pairs[iseg].second;
+	    long s = rb_zone_nseg[z];
+	    long l = rb_zone_len[z];
+	    
+	    rb_loc[4*iseg] = rb_zone_base_seg[z] + n;    // rb_offset (in segments, not bytes)
+	    rb_loc[4*iseg+1] = rand_int(0, 2*l+1);        // rb_phase
+	    rb_loc[4*iseg+2] = l;                         // rb_len
+	    rb_loc[4*iseg+3] = s;                         // rb_nseg
+	}
+
+	// Shape, strides.
+
+	vector<ssize_t> rb_shape = { params.ringbuf_nseg * params.nelts_per_segment };
+	vector<ssize_t> dd_shape = { params.total_beams, params.nambient, pow2(params.rank), nchunks * params.ntime };
+	this->big_ishape = params.input_is_ringbuf ? rb_shape : dd_shape;
+	this->big_oshape = params.output_is_ringbuf ? rb_shape : dd_shape;
+	this->small_shape = { params.beams_per_kernel_launch, params.nambient, pow2(params.rank), params.ntime };
+	
+	// Dedispersion buffer strides (note that ringbufs are always contiguous).
+	this->cpu_istrides = gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->gpu_istrides = gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->cpu_ostrides = in_place ? cpu_istrides : gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->gpu_ostrides = in_place ? gpu_istrides : gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
     }
 };
+
+
+// Helper for run_test()
+template<typename T>
+void _setup_io_arrays(Array<T> &in, Array<T> &out, const Array<T> &in_big, const Array<T> &out_big, const TestInstance &tp, bool on_gpu)
+{
+    int aflags = (on_gpu ? af_gpu : af_uhost) | af_zero;
+    vector<ssize_t> istrides = on_gpu ? tp.gpu_istrides : tp.cpu_istrides;
+    vector<ssize_t> ostrides = on_gpu ? tp.gpu_ostrides : tp.cpu_ostrides;
+    
+    if (tp.params.input_is_ringbuf)
+	in = in_big;
+    else
+	in = Array<T> (tp.small_shape, istrides, aflags);
+
+    if (tp.in_place)
+	out = in;
+    else if (tp.params.output_is_ringbuf)
+	out = out_big;
+    else
+	out = Array<T> (tp.small_shape, ostrides, aflags);
+}
 
 
 static void run_test(const TestInstance &tp)
@@ -74,7 +198,6 @@ static void run_test(const TestInstance &tp)
     
     // Placeholders for future expansion.
     assert(!p.input_is_ringbuf);
-    assert(!p.output_is_ringbuf);
     
     cout << "Test GpuDedispersionKernel\n"
 	 << "    dtype = " << p.dtype << "\n"
@@ -96,35 +219,41 @@ static void run_test(const TestInstance &tp)
 	 << "    cpu_ostrides = " << gputils::tuple_str(tp.cpu_ostrides)
 	 << endl;
 
+    GpuDedispersionKernel::Params gp = p;
+    if (p.input_is_ringbuf || p.output_is_ringbuf)
+	gp.ringbuf_locations = gp.ringbuf_locations.to_gpu();
+    
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
-    shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(p);
+    shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(gp);
 
     bool is_float32 = p.is_float32();
-    vector<ssize_t> big_shape = { p.total_beams, p.nambient, pow2(p.rank), tp.nchunks * p.ntime };
-    vector<ssize_t> small_shape = { p.beams_per_kernel_launch, p.nambient, pow2(p.rank), p.ntime };
 
-    Array<float> cpu_in_big(big_shape, af_rhost | af_random);  // contiguous
-    Array<float> cpu_out_big(big_shape, af_uhost | af_zero);   // contiguous
-    Array<float> cpu_in_small(small_shape, tp.cpu_istrides, af_uhost | af_zero);
-    Array<float> cpu_out_small = tp.in_place ? cpu_in_small : Array<float> (small_shape, tp.cpu_ostrides, af_uhost | af_zero);
+    // Array allocation starts here.
+    // FIXME there is some cut-and-paste that will go away when I define Array<void>.
+    
+    // "Big" arrays can be either ringbufs, or "big" dedispersion bufs.
+    Array<float> cpu_in_big(tp.big_ishape, af_rhost | af_random);  // contiguous
+    Array<float> cpu_out_big(tp.big_oshape, af_uhost | af_zero);   // contiguous
+
+    // These are the input/output arrays for the ReferenceDedispersionKernel.
+    // They can be either "small" dedispersion bufs, or references to a "big" ringbuf.
+    Array<float> cpu_in, cpu_out;
+    _setup_io_arrays(cpu_in, cpu_out, cpu_in_big, cpu_out_big, tp, false);  // on_gpu = false
     
     UntypedArray gpu_in_big;
     UntypedArray gpu_out_big;
-    UntypedArray gpu_in_small;
-    UntypedArray gpu_out_small;
+    UntypedArray gpu_in, gpu_out;
 
     if (is_float32) {
 	gpu_in_big.data_float32 = cpu_in_big.to_gpu();
-	gpu_out_big.data_float32 = Array<float> (big_shape, af_gpu | af_zero);
-	gpu_in_small.data_float32 = Array<float> (small_shape, tp.gpu_istrides, af_gpu | af_zero);
-	gpu_out_small.data_float32 = tp.in_place ? gpu_in_small.data_float32 : Array<float> (small_shape, tp.gpu_ostrides, af_gpu | af_zero);
+	gpu_out_big.data_float32 = Array<float> (tp.big_oshape, af_gpu | af_zero);
+	_setup_io_arrays(gpu_in.data_float32, gpu_out.data_float32, gpu_in_big.data_float32, gpu_out_big.data_float32, tp, true);  // on_gpu = true
     }
     else {
 	Array<__half> t = cpu_in_big.convert_dtype<__half> ();
 	gpu_in_big.data_float16 = t.to_gpu();
-	gpu_out_big.data_float16 = Array<__half> (big_shape, af_gpu | af_zero);
-	gpu_in_small.data_float16 = Array<__half> (small_shape, tp.gpu_istrides, af_gpu | af_zero);
-	gpu_out_small.data_float16 = tp.in_place ? gpu_in_small.data_float16 : Array<__half> (small_shape, tp.gpu_ostrides, af_gpu | af_zero);
+	gpu_out_big.data_float16 = Array<__half> (tp.big_oshape, af_gpu | af_zero);
+	_setup_io_arrays(gpu_in.data_float16, gpu_out.data_float16, gpu_in_big.data_float16, gpu_out_big.data_float16, tp, true);  // on_gpu = true
     }
     
     for (long ichunk = 0; ichunk < tp.nchunks; ichunk++) {
@@ -133,28 +262,36 @@ static void run_test(const TestInstance &tp)
 	    UntypedArray t;
 
 	    // Reference dedispersion.
-	    
-	    s = cpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
-	    s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
-	    cpu_in_small.fill(s);
 
-	    ref_kernel->apply(cpu_in_small, cpu_out_small, ichunk, b);
+	    if (!p.input_is_ringbuf) {
+		s = cpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+		s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+		cpu_in.fill(s);
+	    }
 
-	    s = cpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
-	    s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
-	    s.fill(cpu_out_small);
+	    ref_kernel->apply(cpu_in, cpu_out, ichunk, b);
+
+	    if (!p.output_is_ringbuf) {
+		s = cpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
+		s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+		s.fill(cpu_out);
+	    }
 	    
 	    // GPU dedipersion.
-	    
-	    t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
-	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
-	    gpu_in_small.fill(t);
 
-	    gpu_kernel->launch(gpu_in_small, gpu_out_small, ichunk, b);
+	    if (!p.input_is_ringbuf) {
+		t = gpu_in_big.slice(0, b, b + p.beams_per_kernel_launch);
+		t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+		gpu_in.fill(t);
+	    }
 
-	    t = gpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
-	    t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
-	    t.fill(gpu_out_small);
+	    gpu_kernel->launch(gpu_in, gpu_out, ichunk, b);
+
+	    if (!p.output_is_ringbuf) {
+		t = gpu_out_big.slice(0, b, b + p.beams_per_kernel_launch);
+		t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
+		t.fill(gpu_out);
+	    }
 	}
     }
 
@@ -168,7 +305,12 @@ static void run_test(const TestInstance &tp)
     // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
     double epsrel = is_float32 ? 1.0e-6 : 0.003;
     double epsabs = epsrel * pow(1.414, p.rank);
-    gputils::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
+
+    if (p.output_is_ringbuf)
+	gputils::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"i"}, epsabs, epsrel);
+    else
+	gputils::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
+    
     cout << endl;
 }
 
