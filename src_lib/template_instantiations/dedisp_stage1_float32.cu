@@ -4,8 +4,8 @@
     
 namespace pirate
 {
-    using Inbuf = pirate::dedispersion_simple_inbuf<__half, false>;  // Lagged=false
-    using Outbuf = pirate::dedispersion_ring_outbuf<__half>;
+    using Inbuf = pirate::dedispersion_ring_inbuf<float>;   // lagged
+    using Outbuf = pirate::dedispersion_simple_outbuf<float>;
     
-    INSTANTIATE_DEDISPERSION_KERNELS(__half2, Inbuf, Outbuf);
+    INSTANTIATE_DEDISPERSION_KERNELS(float, Inbuf, Outbuf);
 }

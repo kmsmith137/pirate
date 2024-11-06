@@ -52,8 +52,7 @@ struct TestInstance
 	//  params.apply_input_residual_lags
 	//  this->in_place
 
-	cout << "XXX FIXME XXX\n";
-	if (rand_uniform() < -0.33) {
+	if (rand_uniform() < 0.33) {
 	     params.input_is_ringbuf = true;
 	     params.output_is_ringbuf = false;
 	     params.apply_input_residual_lags = true;
@@ -201,9 +200,6 @@ void _setup_io_arrays(Array<T> &in, Array<T> &out, const Array<T> &in_big, const
 static void run_test(const TestInstance &tp)
 {
     const GpuDedispersionKernel::Params &p = tp.params;
-    
-    // Placeholders for future expansion.
-    assert(!p.input_is_ringbuf);
     
     cout << "Test GpuDedispersionKernel\n"
 	 << "    dtype = " << p.dtype << "\n"

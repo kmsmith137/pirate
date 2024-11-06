@@ -398,37 +398,6 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const UntypedArray
 }
 
 
-template<typename T>
-dedispersion_ring_outbuf<T>::device_args::device_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
-{
-    // If T==float, then T32 is also 'float'.
-    // If T==__half, then T32 is '__half2'.
-    using T32 = typename simd32_type<T>::type;
-
-    constexpr int denom = 4 / sizeof(T);
-    static_assert(denom * sizeof(T) == 4);
-
-    Array<T> in_arr = uarr_get<T> (in_uarr, "in");
-    assert(in_arr.ndim == 1);
-    assert(in_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
-    assert(in_arr.get_ncontig() == 1);
-    assert(in_arr.on_gpu());
-
-    Array<uint> rb_loc = params.ringbuf_locations;
-    assert(rb_loc.ndim == 2);
-    assert(rb_loc.shape[0] == params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment));
-    assert(rb_loc.shape[1] == 4);
-    assert(rb_loc.is_fully_contiguous());
-    assert(rb_loc.on_gpu());
-
-    this->rb_base = (T32 *) in_arr.data;
-    this->rb_loc = (const uint4 *) rb_loc.data;
-}
-
-
-// -------------------------------------------------------------------------------------------------
-
-
 // FIXME reduce cut-and-paste between Inbuf::host_args and Outbuf::host_args constructors.
 template<typename T>
 dedispersion_simple_outbuf<T>::device_args::device_args(const UntypedArray &out_uarr, const GpuDedispersionKernel::Params &params)
@@ -467,6 +436,66 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const UntypedArray &out_
     assert(beam_stride32 != 0);
     assert(ambient_stride32 != 0);
     assert(dm_stride32 != 0);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+template<typename T>
+dedispersion_ring_inbuf<T>::device_args::device_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
+{
+    // If T==float, then T32 is also 'float'.
+    // If T==__half, then T32 is '__half2'.
+    using T32 = typename simd32_type<T>::type;
+
+    constexpr int denom = 4 / sizeof(T);
+    static_assert(denom * sizeof(T) == 4);
+
+    Array<T> in_arr = uarr_get<T> (in_uarr, "in");
+    assert(in_arr.ndim == 1);
+    assert(in_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
+    assert(in_arr.get_ncontig() == 1);
+    assert(in_arr.on_gpu());
+
+    Array<uint> rb_loc = params.ringbuf_locations;
+    assert(rb_loc.ndim == 2);
+    assert(rb_loc.shape[0] == params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment));
+    assert(rb_loc.shape[1] == 4);
+    assert(rb_loc.is_fully_contiguous());
+    assert(rb_loc.on_gpu());
+
+    this->rb_base = (const T32 *) in_arr.data;
+    this->rb_loc = (const uint4 *) rb_loc.data;
+    this->is_downsampled = params.input_is_downsampled_tree;
+}
+
+
+template<typename T>
+dedispersion_ring_outbuf<T>::device_args::device_args(const UntypedArray &out_uarr, const GpuDedispersionKernel::Params &params)
+{
+    // If T==float, then T32 is also 'float'.
+    // If T==__half, then T32 is '__half2'.
+    using T32 = typename simd32_type<T>::type;
+
+    constexpr int denom = 4 / sizeof(T);
+    static_assert(denom * sizeof(T) == 4);
+
+    Array<T> out_arr = uarr_get<T> (out_uarr, "out");
+    assert(out_arr.ndim == 1);
+    assert(out_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
+    assert(out_arr.get_ncontig() == 1);
+    assert(out_arr.on_gpu());
+
+    Array<uint> rb_loc = params.ringbuf_locations;
+    assert(rb_loc.ndim == 2);
+    assert(rb_loc.shape[0] == params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment));
+    assert(rb_loc.shape[1] == 4);
+    assert(rb_loc.is_fully_contiguous());
+    assert(rb_loc.on_gpu());
+
+    this->rb_base = (T32 *) out_arr.data;
+    this->rb_loc = (const uint4 *) rb_loc.data;
 }
 
 
@@ -571,7 +600,6 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 {
     params.validate(true);    // on_gpu=true
     assert(params.rank > 0);  // FIXME define _r0 for testing
-    assert(!params.input_is_ringbuf);   // FIXME
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
 
@@ -641,7 +669,7 @@ shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &para
     bool is_float32 = params.is_float32();
 
     // Select subclass template instantiation.
-    // Currently 6 cases here -- more to come.
+    // Note: templates are instantiated and compiled in src_lib/template_instatiations/.cu
 
     if (!rb_in && !rb_out && !rlag && is_float32)
 	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,false>, dedispersion_simple_outbuf<float>>> (params);
@@ -655,6 +683,10 @@ shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &para
 	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,false>, dedispersion_ring_outbuf<float>>> (params);
     else if (!rb_in && rb_out && !rlag && !is_float32)
 	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_simple_inbuf<__half,false>, dedispersion_ring_outbuf<__half>>> (params);
+    else if (rb_in && !rb_out && rlag && is_float32)
+	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_ring_inbuf<float>, dedispersion_simple_outbuf<float>>> (params);
+    else if (rb_in && !rb_out && rlag && !is_float32)
+	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_ring_inbuf<__half>, dedispersion_simple_outbuf<__half>>> (params);
     
     throw runtime_error("GpuDedispersionKernel::make(): no suitable precompiled kernel could be found");
 }

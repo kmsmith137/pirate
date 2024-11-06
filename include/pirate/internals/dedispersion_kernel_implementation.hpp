@@ -551,7 +551,7 @@ __global__ void dedisperse_r1(typename Inbuf::device_args inbuf_args, typename O
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Inbuf::device_state inbuf(inbuf_args, 0, 1, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 1, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
@@ -613,7 +613,7 @@ __global__ void dedisperse_r2(typename Inbuf::device_args inbuf_args, typename O
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Inbuf::device_state inbuf(inbuf_args, 0, 2, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 2, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
@@ -685,7 +685,7 @@ __global__ void dedisperse_r3(typename Inbuf::device_args inbuf_args, typename O
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Inbuf::device_state inbuf(inbuf_args, 0, 3, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 3, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
@@ -781,7 +781,7 @@ __global__ void dedisperse_r4(typename Inbuf::device_args inbuf_args, typename O
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, 0);
+    typename Inbuf::device_state inbuf(inbuf_args, 0, 4, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 4, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
@@ -1418,7 +1418,7 @@ dedisperse_r5(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, nrdata);
+    typename Inbuf::device_state inbuf(inbuf_args, nrdata, 5, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 5, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
@@ -1610,7 +1610,7 @@ dedisperse_r6(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, 8);
+    typename Inbuf::device_state inbuf(inbuf_args, 8, 6, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 6, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
@@ -1814,7 +1814,7 @@ dedisperse_r7(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, nrdata);
+    typename Inbuf::device_state inbuf(inbuf_args, nrdata, 7, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 7, rb_pos);
     
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)
@@ -2085,7 +2085,7 @@ dedisperse_r8(typename Inbuf::device_args inbuf_args, typename Outbuf::device_ar
     const int ambient_ix = blockIdx.x;
     const int beam_ix = blockIdx.y;
     
-    typename Inbuf::device_state inbuf(inbuf_args, 16);
+    typename Inbuf::device_state inbuf(inbuf_args, 16, 8, rb_pos);
     typename Outbuf::device_state outbuf(outbuf_args, 8, rb_pos);
 
     // Apply (beam, ambient) strides to rstate. (Note no laneId shift here.)

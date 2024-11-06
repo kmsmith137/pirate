@@ -94,7 +94,9 @@ OFILES = \
   src_lib/template_instantiations/dedisp_simple_nolag_float16.o \
   src_lib/template_instantiations/dedisp_simple_nolag_float32.o \
   src_lib/template_instantiations/dedisp_stage0_float16.o \
-  src_lib/template_instantiations/dedisp_stage0_float32.o
+  src_lib/template_instantiations/dedisp_stage0_float32.o \
+  src_lib/template_instantiations/dedisp_stage1_float16.o \
+  src_lib/template_instantiations/dedisp_stage1_float32.o
 
 # Used in 'make clean' and 'make source_files.txt'
 SRCDIRS = . src_bin src_lib src_lib/template_instantiations include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
