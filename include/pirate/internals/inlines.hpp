@@ -42,6 +42,13 @@ inline long round_up_to_power_of_two(long n)
     return 1L << (int(x) + 1);
 }
 
+inline long round_down_to_power_of_two(long n)
+{
+    assert(n >= 1);
+    double x = log2(n + 0.5);
+    return 1L << int(x);
+}
+
 inline ssize_t xdiv(ssize_t m, ssize_t n)
 {
     assert(m >= 0);

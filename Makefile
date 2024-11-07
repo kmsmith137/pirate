@@ -45,6 +45,7 @@ HFILES = \
   include/pirate/internals/ReferenceLaggedDownsamplingKernel.hpp \
   include/pirate/internals/ReferenceTree.hpp \
   include/pirate/internals/Socket.hpp \
+  include/pirate/internals/UntypedArray.hpp \
   include/pirate/internals/YamlFile.hpp
 
 XFILES = \
@@ -88,6 +89,7 @@ OFILES = \
   src_lib/ReferenceLaggedDownsamplingKernel.o \
   src_lib/ReferenceTree.o \
   src_lib/Socket.o \
+  src_lib/UntypedArray.o \
   src_lib/YamlFile.o \
   src_lib/template_instantiations/dedisp_simple_float16.o \
   src_lib/template_instantiations/dedisp_simple_float32.o \

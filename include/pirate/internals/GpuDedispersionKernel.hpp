@@ -2,25 +2,12 @@
 #define _PIRATE_INTERNALS_GPU_DEDISPERSION_KERNEL_HPP
 
 #include <gputils/Array.hpp>
+#include "UntypedArray.hpp"
 
 namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
-
-
-// FIXME temporary hack that will go away, after I implement gputils::Array<void>.
-struct UntypedArray
-{
-    gputils::Array<float> data_float32;
-    gputils::Array<__half> data_float16;
-
-    UntypedArray slice(int axis, int start, int stop) const;
-    void fill(const UntypedArray &x);
-
-    // Helper for slice(), fill()
-    bool _is_float32(const char *name) const;
-};
 
 
 // The GpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
