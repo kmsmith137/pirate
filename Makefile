@@ -7,7 +7,7 @@ MAKEFLAGS += --no-builtin-variables
 
 # Default target 'all' must be first target in Makefile.
 # The 'bin' target builds a bunch of binaries in bin/...
-# The 'lib' target builds the C++ library lib/libpirate.so, and the python extension pirate/pirate_pybind11...so.
+# The 'lib' target builds the C++ library lib/libpirate.so, and the python extension pirate_frb/pirate_pybind11...so.
 # The 'build_wheel' and 'build_sdist' targets are invoked by 'pip' (or 'make all').
 all: bin lib build_wheel build_sdist
 
@@ -61,7 +61,7 @@ makefile_helper.out: makefile_helper.py Makefile
 # The main output of the build process is these two libraries.
 # Reminder: PYEXT_SUFFIX is something like .cpython-312-x86_64-linux-gnu.so.
 PIRATE_LIB := lib/libpirate.so
-PIRATE_PYEXT := pirate/pirate_pybind11$(PYEXT_SUFFIX)
+PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 
 # These get compiled into lib/libpirate.so.
 LIB_SRCFILES = \
@@ -97,14 +97,14 @@ LIB_SRCFILES = \
   src_lib/template_instantiations/dedisp_stage1_float16.cu \
   src_lib/template_instantiations/dedisp_stage1_float32.cu
 
-# These get compiled into pirate/pirate_pybind11....so.
+# These get compiled into pirate_frb/pirate_pybind11....so.
 PYEXT_SRCFILES = \
   src_pybind11/pirate_pybind11.cu
 
 # Must list all python source files here.
 # (Otherwise they won't show up in 'pip install' or pypi.)
 PYFILES = \
-  pirate/__init__.py
+  pirate_frb/__init__.py
 
 # These are in 1-1 corresponding with executables in bin/
 # For example, 'src_bin/fake_correlator.cu' gets compiled to 'bin/fake_correlator'.
@@ -157,6 +157,7 @@ HFILES = \
   include/pirate/internals/FakeServer.hpp \
   include/pirate/internals/File.hpp \
   include/pirate/internals/GpuDedispersionKernel.hpp \
+  include/pirate/internals/GpuLaggedDownsamplingKernel.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp \
   include/pirate/internals/ReferenceDedispersionKernel.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
@@ -167,14 +168,14 @@ HFILES = \
   include/pirate/internals/YamlFile.hpp
 
 # 'make clean' deletes {*~, *.o, *.d, *.so, *.pyc} from these dirs.
-CLEAN_DIRS := . lib src_bin src_lib src_lib/template_instantiations pirate/__pycache__ include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
+CLEAN_DIRS := . lib src_bin src_lib src_lib/template_instantiations pirate_frb/__pycache__ include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
 
 # Extra files to be deleted by 'make clean'.
-# Note that 'pirate/include' and 'pirate/lib' are symlinks, so we put them in CLEAN_FILES, not CLEAN_RMDIRS
-CLEAN_FILES := sdist_files.txt wheel_files.txt makefile_helper.out pirate/include pirate/lib
+# Note that 'pirate_frb/include' and 'pirate_frb/lib' are symlinks, so we put them in CLEAN_FILES, not CLEAN_RMDIRS
+CLEAN_FILES := sdist_files.txt wheel_files.txt makefile_helper.out pirate_frb/include pirate_frb/lib
 
 # Directories that should be empty at the end of 'make clean', and can be deleted.
-CLEAN_RMDIRS := bin lib pirate/__pycache__
+CLEAN_RMDIRS := bin lib pirate_frb/__pycache__
 
 
 ####################################################################################################
@@ -192,11 +193,11 @@ SDIST_FILES := pyproject.toml Makefile makefile_helper.py
 SDIST_FILES += $(PYFILES) $(ALL_SRCFILES) $(HFILES)
 
 # Some symlinks for the wheel:
-#  - header file include/%.hpp gets symlinked to pirate/include/%.hpp
-#  - library lib/libpirate.so gets symlinked to pirate/lib/libpirate.so
-#  - python extension pirate/pirate_pybind11...so does not need to be symlinked/renamed.
-WHEEL_FILES := $(PYFILES) $(PIRATE_PYEXT) pirate/$(PIRATE_LIB)
-WHEEL_FILES += $(HFILES:%=pirate/%)
+#  - header file include/%.hpp gets symlinked to pirate_frb/include/%.hpp
+#  - library lib/libpirate.so gets symlinked to pirate_frb/lib/libpirate.so
+#  - python extension pirate_frb/pirate_pybind11...so does not need to be symlinked/renamed.
+WHEEL_FILES := $(PYFILES) $(PIRATE_PYEXT) pirate_frb/$(PIRATE_LIB)
+WHEEL_FILES += $(HFILES:%=pirate_frb/%)
 
 # Phony targets. The special targets 'build_wheel' and 'build_sdist' are needed by pip/pipmake.
 lib: $(PIRATE_LIB) $(PIRATE_PYEXT)
@@ -204,10 +205,10 @@ bin: $(BIN_XFILES)
 build_wheel: wheel_files.txt $(PIRATE_LIB) $(PIRATE_PYEXT)
 build_sdist: sdist_files.txt
 
-# Symlink {include,lib} into python directory 'pirate'.
-pirate/include:
+# Symlink {include,lib} into python directory 'pirate_frb'.
+pirate_frb/include:
 	ln -s ../include $@
-pirate/lib:
+pirate_frb/lib:
 	ln -s ../lib $@
 
 # Build object files in src_lib/, src_bin/, and src_lib/template_instantiations/ with default flags.
@@ -239,8 +240,8 @@ bin/%: src_bin/%.o $(PIRATE_LIB)
 	@mkdir -p bin/
 	$(NVCC) $(NVCC_ARCH) -o $@ $^ -lksgpu -lyaml-cpp -L$(KSGPU_DIR)/lib -Xcompiler '"-Wl,-rpath=$(KSGPU_DIR)/lib"'
 
-# Build the python extension (pirate/pirate_pybind11...so)
-# We want it to automatically pull in the C++ library pirate/lib/libpirate.so.
+# Build the python extension (pirate_frb/pirate_pybind11...so)
+# We want it to automatically pull in the C++ library pirate_frb/lib/libpirate.so.
 #
 # The python extension has been built correctly if 'objdump -x' shows the following:
 #   NEEDED   libpirate.so
@@ -254,17 +255,17 @@ bin/%: src_bin/%.o $(PIRATE_LIB)
 # Note that we don't link to libksgpu.so or ksgpu_pybind11...so in this step.
 # These libraries end up getting imported as follows:
 #
-#  1. When 'pirate' is imported, we do 'import ksgpu' (in pirate/__init__.py)
+#  1. When 'pirate_frb' is imported, we do 'import ksgpu' (in pirate_frb/__init__.py)
 #     before 'import pirate_pybind11'.
 #
 #  2. When 'ksgpu' is imported, we use the "ctypes trick" (see comment in ksgpu/__init__.py)
 #     to load the libraries libksgpu.so and ksgpu_pybind11...so with globally visible symbols.
 
-$(PIRATE_PYEXT): $(PYEXT_OFILES) $(PIRATE_LIB) pirate/lib
-	$(NVCC) $(NVCC_ARCH) -shared -o $@ $(PYEXT_OFILES) -lpirate -Lpirate/lib -Xcompiler '"-Wl,-rpath=\\$$ORIGIN/lib"'
+$(PIRATE_PYEXT): $(PYEXT_OFILES) $(PIRATE_LIB) pirate_frb/lib
+	$(NVCC) $(NVCC_ARCH) -shared -o $@ $(PYEXT_OFILES) -lpirate -Lpirate_frb/lib -Xcompiler '"-Wl,-rpath=\\$$ORIGIN/lib"'
 
 # Needed by pip/pipmake: list of all files that go into the (non-editable) wheel.
-wheel_files.txt: Makefile pirate/include pirate/lib
+wheel_files.txt: Makefile pirate_frb/include pirate_frb/lib
 	rm -f $@
 	for f in $(WHEEL_FILES); do echo $$f; done >>$@
 

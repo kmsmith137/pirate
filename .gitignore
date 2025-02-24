@@ -3,9 +3,9 @@
 *.d
 *.so
 bin/
-pirate/lib
-pirate/include
-pirate/__pycache__/
+pirate_frb/lib
+pirate_frb/include
+pirate_frb/__pycache__/
 makefile_helper.out
 sdist_files.txt
 wheel_files.txt
