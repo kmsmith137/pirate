@@ -1,12 +1,13 @@
+#include <cassert>
 #include <iostream>
-#include <gputils/Array.hpp>
-#include <gputils/CudaStreamPool.hpp>
-#include <gputils/string_utils.hpp>
+#include <ksgpu/Array.hpp>
+#include <ksgpu/CudaStreamPool.hpp>
+#include <ksgpu/string_utils.hpp>
 
 #include "../include/pirate/internals/gpu_downsample.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

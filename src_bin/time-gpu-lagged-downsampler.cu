@@ -1,12 +1,12 @@
 #include <iostream>
-#include <gputils/Array.hpp>
-#include <gputils/CudaStreamPool.hpp>
+#include <ksgpu/Array.hpp>
+#include <ksgpu/CudaStreamPool.hpp>
 
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 #include "../include/pirate/internals/GpuLaggedDownsamplingKernel.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 
@@ -56,7 +56,7 @@ static void time_gpu_dedispersion_kernel(const GpuLaggedDownsamplingKernel::Para
 	 << "    nt_chunk = " << nt_chunk << endl
 	 << "    nbeams = " << nbeams << endl
 	 << "    niter = " << niter << endl
-	 << "    gpu memory footprint = " << gputils::nbytes_to_str(footprint_nbytes) << endl;
+	 << "    gpu memory footprint = " << ksgpu::nbytes_to_str(footprint_nbytes) << endl;
 
     UntypedArray in;
     UntypedArray pstate;

@@ -4,14 +4,14 @@
 #include "../include/pirate/internals/utils.hpp"      // integer_log2()
 #include "../include/pirate/constants.hpp"            // constants::bytes_per_gpu_cache_line
 
-#include <gputils/Array.hpp>
-#include <gputils/cuda_utils.hpp>
-#include <gputils/rand_utils.hpp>    // rand_int()
-#include <gputils/test_utils.hpp>    // assert_arrays_equal()
+#include <ksgpu/Array.hpp>
+#include <ksgpu/cuda_utils.hpp>
+#include <ksgpu/rand_utils.hpp>    // rand_int()
+#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
 
 using namespace std;
 using namespace pirate;
-using namespace gputils;
+using namespace ksgpu;
 
 
 struct TestInstance
@@ -101,7 +101,7 @@ struct TestInstance
 	pmax = max(pmax, 4L);
 	pmax = min(pmax, 42L);
 
-	auto v = gputils::random_integers_with_bounded_product(4, pmax);
+	auto v = ksgpu::random_integers_with_bounded_product(4, pmax);
 	params.nambient = round_up_to_power_of_two(v[0]);
 	params.total_beams = v[1] * v[2];
 	params.beams_per_batch = v[2];
@@ -135,7 +135,7 @@ struct TestInstance
 	    pairs[iseg] = {z,n};
 	}
 	
-	gputils::randomly_permute(pairs);
+	ksgpu::randomly_permute(pairs);
 
 	params.ringbuf_nseg = 0;
 	for (long z = 0; z < rb_nzones; z++) {
@@ -167,10 +167,10 @@ struct TestInstance
 	this->small_shape = { params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime };
 	
 	// Dedispersion buffer strides (note that ringbufs are always contiguous).
-	this->cpu_istrides = gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->gpu_istrides = gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->cpu_ostrides = in_place ? cpu_istrides : gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->gpu_ostrides = in_place ? gpu_istrides : gputils::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->cpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->gpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->cpu_ostrides = in_place ? cpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->gpu_ostrides = in_place ? gpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
     }
 };
 
@@ -215,10 +215,10 @@ static void run_test(const TestInstance &tp)
 	 << "    input_is_downsampled_tree = " << (p.input_is_downsampled_tree ? "true" : "false")  << "\n"
 	 << "    nelts_per_segment = " << p.nelts_per_segment << "\n"
 	 << "    in_place = " << (tp.in_place ? "true" : "false") << "\n"
-	 << "    gpu_istrides = " << gputils::tuple_str(tp.gpu_istrides) << "\n"
-	 << "    gpu_ostrides = " << gputils::tuple_str(tp.gpu_ostrides) << "\n"
-	 << "    cpu_istrides = " << gputils::tuple_str(tp.cpu_istrides) << "\n"
-	 << "    cpu_ostrides = " << gputils::tuple_str(tp.cpu_ostrides)
+	 << "    gpu_istrides = " << ksgpu::tuple_str(tp.gpu_istrides) << "\n"
+	 << "    gpu_ostrides = " << ksgpu::tuple_str(tp.gpu_ostrides) << "\n"
+	 << "    cpu_istrides = " << ksgpu::tuple_str(tp.cpu_istrides) << "\n"
+	 << "    cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides)
 	 << endl;
 
     GpuDedispersionKernel::Params gp = p;
@@ -309,9 +309,9 @@ static void run_test(const TestInstance &tp)
     double epsabs = epsrel * pow(1.414, p.rank);
 
     if (p.output_is_ringbuf)
-	gputils::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"i"}, epsabs, epsrel);
+	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"i"}, epsabs, epsrel);
     else
-	gputils::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
+	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
     
     cout << endl;
 }

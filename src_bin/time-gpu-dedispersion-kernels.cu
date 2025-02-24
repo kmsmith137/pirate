@@ -1,12 +1,12 @@
 #include <iostream>
-#include <gputils/Array.hpp>
-#include <gputils/CudaStreamPool.hpp>
+#include <ksgpu/Array.hpp>
+#include <ksgpu/CudaStreamPool.hpp>
 
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 #include "../include/pirate/internals/GpuDedispersionKernel.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <yaml-cpp/yaml.h>
 
-#include <gputils/string_utils.hpp>  // tuple_str(), type_name()
+#include <ksgpu/string_utils.hpp>  // tuple_str(), type_name()
 
 
 namespace pirate {
@@ -116,7 +116,7 @@ inline T YamlFile::as_scalar() const
     
     T ret;
     if (!_yaml_node_to_scalar<T> (node, ret))
-	throw std::runtime_error(name + ": parse failure (expected type " + gputils::type_name<T>() + ")");
+	throw std::runtime_error(name + ": parse failure (expected type " + ksgpu::type_name<T>() + ")");
 
     if (verbosity >= 2)
 	std::cout << name << " = " << ret << std::endl;
@@ -137,11 +137,11 @@ inline std::vector<T> YamlFile::as_vector() const
 	YAML::Node child_node = node[i];
 
 	if (!child_node.IsScalar() || !_yaml_node_to_scalar<T> (child_node, ret[i]))
-	    throw std::runtime_error(name + ": parse failure (expected type vector<" + gputils::type_name<T>() + ">)");
+	    throw std::runtime_error(name + ": parse failure (expected type vector<" + ksgpu::type_name<T>() + ">)");
     }
     
     if (verbosity >= 2)
-	std::cout << name << " = " << gputils::tuple_str(ret) << std::endl;
+	std::cout << name << " = " << ksgpu::tuple_str(ret) << std::endl;
 
     return ret;
 }
@@ -185,7 +185,7 @@ inline std::vector<T> YamlFile::get_vector(const std::string &k, const std::vect
 	return child.as_vector<T> ();
 	
     if (verbosity >= 1)
-	std::cout << child.name << " = " << gputils::tuple_str(default_value) << " (using default value)" << std::endl;
+	std::cout << child.name << " = " << ksgpu::tuple_str(default_value) << " (using default value)" << std::endl;
 
     return default_value;
 }

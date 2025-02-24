@@ -1,7 +1,7 @@
 #ifndef _PIRATE_INTERNALS_GPU_DEDISPERSION_KERNEL_HPP
 #define _PIRATE_INTERNALS_GPU_DEDISPERSION_KERNEL_HPP
 
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 #include "UntypedArray.hpp"
 
 namespace pirate {
@@ -48,7 +48,7 @@ public:
 	int nelts_per_segment = 0;                // only matters if apply_input_residual_lags=true
 
 	// Only used if (input_is_ringbuf || output_is_ringbuf)
-	gputils::Array<uint> ringbuf_locations;
+	ksgpu::Array<uint> ringbuf_locations;
 	long ringbuf_nseg = 0;
 	
 	// Returns true if (dtype == "float32"), false if (dtype == "float16").
@@ -96,7 +96,7 @@ protected:
 
     // FIXME only on current cuda device (at time of construction).
     // FIXME should either add run-time check, or switch to using constant memory.
-    gputils::Array<uint> integer_constants;
+    ksgpu::Array<uint> integer_constants;
 };
 
 

@@ -1,11 +1,11 @@
 // A placeholder file (already integrated into Makefile) for debugging
 
-#include <gputils.hpp>
+#include <ksgpu.hpp>
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/internals/YamlFile.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

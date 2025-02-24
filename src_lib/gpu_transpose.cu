@@ -1,9 +1,10 @@
-#include <gputils/Array.hpp>
+#include <cassert>
+#include <ksgpu/Array.hpp>
 
 #include "../include/pirate/internals/gpu_transpose.hpp"
 #include "../include/pirate/gpu/TransposeKernel.hpp"
 
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0

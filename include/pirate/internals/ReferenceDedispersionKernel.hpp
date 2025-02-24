@@ -30,7 +30,7 @@ struct ReferenceDedispersionKernel
     // The 'itime' and 'ibeam' arguments are not logically necessary, but enable a debug check.
     // Warning: if 'in' is not a ringbuf, then apply() may modify 'in'!
     
-    void apply(gputils::Array<float> &in, gputils::Array<float> &out, long itime, long ibeam);
+    void apply(ksgpu::Array<float> &in, ksgpu::Array<float> &out, long itime, long ibeam);
 
     // A bit awkward -- number of trees is (total_beams / beams_per_batch).
     std::vector<std::shared_ptr<ReferenceTree>> trees;
@@ -41,8 +41,8 @@ struct ReferenceDedispersionKernel
     long expected_ibeam = 0;
 
     // Used internally
-    void _copy_to_ringbuf(const gputils::Array<float> &in, gputils::Array<float> &out, long rb_pos);
-    void _copy_from_ringbuf(const gputils::Array<float> &in, gputils::Array<float> &out, long rb_pos);
+    void _copy_to_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
+    void _copy_from_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
 };
 
 

@@ -1,12 +1,12 @@
 #include <iostream>
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 #include "../include/pirate/avx256/m64_outbuf.hpp"
 #include "../include/pirate/avx256/downsample.hpp"
 #include "../include/pirate/internals/bitvec.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

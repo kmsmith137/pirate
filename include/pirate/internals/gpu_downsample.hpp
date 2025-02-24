@@ -1,7 +1,7 @@
 #ifndef _PIRATE_INTERNALS_GPU_DOWNSAMPLE_HPP
 #define _PIRATE_INTERNALS_GPU_DOWNSAMPLE_HPP
 
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 namespace pirate {
 #if 0
@@ -9,8 +9,8 @@ namespace pirate {
 #endif
 
 
-extern void launch_downsample(gputils::Array<float> &dst_i, gputils::Array<float> &dst_w,
-			      const gputils::Array<float> &src_i, const gputils::Array<float> &src_w,
+extern void launch_downsample(ksgpu::Array<float> &dst_i, ksgpu::Array<float> &dst_w,
+			      const ksgpu::Array<float> &src_i, const ksgpu::Array<float> &src_w,
 			      int Df, int Dt, bool transpose_output, cudaStream_t stream=nullptr);
 
 

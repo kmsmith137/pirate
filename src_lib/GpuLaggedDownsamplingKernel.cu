@@ -3,10 +3,10 @@
 #include "../include/pirate/constants.hpp"
 
 #include <sstream>
-#include <gputils/cuda_utils.hpp>    // CUDA_CALL()
+#include <ksgpu/cuda_utils.hpp>    // CUDA_CALL()
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0
@@ -782,7 +782,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) 
     //
     //   A = A_B * A_W     M = M_B * M_W
     // 
-    // FIXME call gputils::assign_kernel_dims() instead?
+    // FIXME call ksgpu::assign_kernel_dims() instead?
 
     this->M_W = min(M, W_target);
     this->A_W = min(A, (int)xdiv(W_target, M_W));

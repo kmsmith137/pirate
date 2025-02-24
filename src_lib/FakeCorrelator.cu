@@ -2,15 +2,15 @@
 #include "../include/pirate/internals/Socket.hpp"
 
 #include <thread>
+#include <cassert>
 #include <sstream>
 #include <iostream>
 
-#include <gputils/mem_utils.hpp>
-#include <gputils/system_utils.hpp>
+#include <ksgpu/mem_utils.hpp>
 
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 
 namespace pirate {
@@ -53,11 +53,11 @@ void FakeCorrelator::sender_main(const string &ipaddr)
 {
     ssize_t nbytes_total = 0;
     
-    int aflags = gputils::af_uhost;
+    int aflags = ksgpu::af_uhost;
     if (params.use_mmap)
-	aflags |= (params.use_hugepages ? gputils::af_mmap_huge : gputils::af_mmap_small);
+	aflags |= (params.use_hugepages ? ksgpu::af_mmap_huge : ksgpu::af_mmap_small);
     
-    shared_ptr<char> buf = gputils::af_alloc<char> (params.send_bufsize, aflags);
+    shared_ptr<char> buf = ksgpu::af_alloc<char> (params.send_bufsize, aflags);
     
     Socket socket(PF_INET, SOCK_STREAM);
     // later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)

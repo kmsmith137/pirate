@@ -1,12 +1,12 @@
 #include <iostream>
-#include <gputils/Array.hpp>
-#include <gputils/cuda_utils.hpp>
-#include <gputils/test_utils.hpp>
+#include <ksgpu/Array.hpp>
+#include <ksgpu/cuda_utils.hpp>
+#include <ksgpu/test_utils.hpp>
 
 #include "../include/pirate/internals/gpu_transpose.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

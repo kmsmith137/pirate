@@ -1,15 +1,16 @@
+#include <cassert>
 #include <iostream>
 #include <immintrin.h>
 
-#include <gputils/Array.hpp>
-#include <gputils/CpuThreadPool.hpp>
-#include <gputils/string_utils.hpp>
-#include <gputils/time_utils.hpp>
+#include <ksgpu/Array.hpp>
+#include <ksgpu/CpuThreadPool.hpp>
+#include <ksgpu/string_utils.hpp>
+#include <ksgpu/time_utils.hpp>
 
 #include "../include/pirate/internals/cpu_downsample.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

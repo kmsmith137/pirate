@@ -3,13 +3,13 @@
 #include "../include/pirate/internals/inlines.hpp"
 #include "../include/pirate/internals/utils.hpp"  // dedisperse_non_incremental(), lag_non_incremental()
 
-#include <gputils/rand_utils.hpp>    // rand_int()
-#include <gputils/test_utils.hpp>    // assert_arrays_equal()
-#include <gputils/string_utils.hpp>  // tuple_str()
+#include <ksgpu/rand_utils.hpp>    // rand_int()
+#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
+#include <ksgpu/string_utils.hpp>  // tuple_str()
 
 using namespace std;
 using namespace pirate;
-using namespace gputils;
+using namespace ksgpu;
 
 
 // -------------------------------------------------------------------------------------------------
@@ -156,7 +156,7 @@ static void test_reference_lagbuf(const Array<int> &lags, const vector<ssize_t> 
 	arr_sm_ref.fill(s);
 
 	// Compare arr_sm, arr_sm_ref.
-	gputils::assert_arrays_equal(arr_sm, arr_sm_ref, "incremental", "non-incremental", axis_names);
+	ksgpu::assert_arrays_equal(arr_sm, arr_sm_ref, "incremental", "non-incremental", axis_names);
     }
 }
 
@@ -270,7 +270,7 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
     axis_names[ndim-1] = "t";
     std::swap(axis_names[freq_axis], axis_names[ndim-2]);
 
-    gputils::assert_arrays_equal(arr1, arr0, "non-incremental", "incremental", axis_names);
+    ksgpu::assert_arrays_equal(arr1, arr0, "non-incremental", "incremental", axis_names);
 }
 
 
@@ -280,11 +280,11 @@ static void test_reference_tree()
     int ndim = rand_int(2, 6);
     int freq_axis = rand_int(0, ndim-1);
 
-    vector<long> shape = gputils::random_integers_with_bounded_product(ndim, 30000 / pow2(rank));
+    vector<long> shape = ksgpu::random_integers_with_bounded_product(ndim, 30000 / pow2(rank));
     int nchunks = shape[freq_axis];
     shape[freq_axis] = pow2(rank);
 
-    vector<long> strides = gputils::make_random_strides(shape, 1);  // ncontig=1
+    vector<long> strides = ksgpu::make_random_strides(shape, 1);  // ncontig=1
 
     test_reference_tree(shape, strides, freq_axis, nchunks);
 }
@@ -334,7 +334,7 @@ static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
 
 	// Third step: compare chunk0 / chunk1
 	// (arr0, arr1, name0, name1, axis_names)
-	gputils::assert_arrays_equal(chunk0, chunk1, "1-step", "2-step", {"dm_brev","t"});
+	ksgpu::assert_arrays_equal(chunk0, chunk1, "1-step", "2-step", {"dm_brev","t"});
     }
 }
 

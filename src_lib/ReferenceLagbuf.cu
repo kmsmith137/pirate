@@ -3,7 +3,7 @@
 #include <cstring>
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0
@@ -40,7 +40,7 @@ static long _sum_lags(const int *lags, int nd, const ssize_t *shape, const ssize
 }
 
 
-ReferenceLagbuf::ReferenceLagbuf(const gputils::Array<int> &lags_, int ntime_) :
+ReferenceLagbuf::ReferenceLagbuf(const ksgpu::Array<int> &lags_, int ntime_) :
     lags(lags_), ntime(ntime_)
 {
     assert(ntime > 0);
@@ -103,7 +103,7 @@ static float *_apply_lags(float *data, const int *lags, float *rstate, float *sc
 }
 
 
-void ReferenceLagbuf::apply_lags(gputils::Array<float> &arr) const
+void ReferenceLagbuf::apply_lags(ksgpu::Array<float> &arr) const
 {
     assert(arr.shape_equals(expected_shape));
     assert((arr.shape[arr.ndim-1] == 1) || (arr.strides[arr.ndim-1] == 1));

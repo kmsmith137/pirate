@@ -5,7 +5,7 @@
 
 #include <vector>
 #include <memory>  // shared_ptr
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 
 namespace pirate {
@@ -90,8 +90,8 @@ struct DedispersionPlan
     //  iseg0 -> (time/nelts_per_segment, 2^rank1, 2^rank0)
     //  iseg1 -> (time/nelts_per_segment, 2^rank0, 2^rank1)   note transpose
 
-    gputils::Array<uint> stage0_rb_locs;   // shape (stage0_total_segments_per_beam, 4)
-    gputils::Array<uint> stage1_rb_locs;   // shape (stage1_total_segments_per_beam, 4)
+    ksgpu::Array<uint> stage0_rb_locs;   // shape (stage0_total_segments_per_beam, 4)
+    ksgpu::Array<uint> stage1_rb_locs;   // shape (stage1_total_segments_per_beam, 4)
 };
 
 

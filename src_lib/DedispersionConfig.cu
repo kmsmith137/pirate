@@ -1,10 +1,10 @@
 #include "../include/pirate/DedispersionConfig.hpp"
 
-#include <cstring>                   // strlen()
-#include <algorithm>                 // std::sort()
-#include <gputils/cuda_utils.hpp>    // CUDA_CALL()
-#include <gputils/rand_utils.hpp>    // gputils::rand_*()
-#include <gputils/string_utils.hpp>  // gputils::tuple_str()
+#include <cstring>                 // strlen()
+#include <algorithm>               // std::sort()
+#include <ksgpu/cuda_utils.hpp>    // CUDA_CALL()
+#include <ksgpu/rand_utils.hpp>    // ksgpu::rand_*()
+#include <ksgpu/string_utils.hpp>  // ksgpu::tuple_str()
 
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/internals/File.hpp"
@@ -152,7 +152,7 @@ void DedispersionConfig::print(ostream &os, int indent) const
     print_kv("num_downsampling_levels", num_downsampling_levels, os, indent);
     print_kv("time_samples_per_chunk", time_samples_per_chunk, os, indent);
     print_kv("dtype", dtype, os, indent);
-    print_kv("early_triggers", gputils::tuple_str(early_triggers, " "), os, indent);
+    print_kv("early_triggers", ksgpu::tuple_str(early_triggers, " "), os, indent);
     
     print_kv("beams_per_gpu", beams_per_gpu, os, indent);
     print_kv("beams_per_batch", beams_per_batch, os, indent);
@@ -190,7 +190,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
 	<< YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch
 	<< YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
 	<< YAML::Key << "gmem_nbytes_per_gpu" << YAML::Value << gmem_nbytes_per_gpu
-	<< YAML::Comment(gputils::nbytes_to_str(gmem_nbytes_per_gpu))
+	<< YAML::Comment(ksgpu::nbytes_to_str(gmem_nbytes_per_gpu))
 	<< YAML::EndMap;
 }
 
@@ -260,19 +260,19 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 DedispersionConfig DedispersionConfig::make_random()
 {
     DedispersionConfig ret;
-    ret.num_downsampling_levels = gputils::rand_int(1, 5);
-    ret.dtype = (gputils::rand_uniform() < 0.5) ? "float32" : "float16";
+    ret.num_downsampling_levels = ksgpu::rand_int(1, 5);
+    ret.dtype = (ksgpu::rand_uniform() < 0.5) ? "float32" : "float16";
     
     // Randomly choose a tree rank, but bias toward a high number.
     int max_rank = 10;
     int min_rank = (ret.num_downsampling_levels > 1) ? 1 : 0;
-    double x = gputils::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
+    double x = ksgpu::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
     ret.tree_rank = int(sqrt(x));
 
     // Note: call ret.get_nelts_per_segment() after setting ret.dtype
     int max_nt_chunk = 2048;
     int min_nt_chunk = ret.get_nelts_per_segment() * pow2(ret.num_downsampling_levels-1);
-    int nchunks = gputils::rand_int(1, xdiv(max_nt_chunk,min_nt_chunk)+1);
+    int nchunks = ksgpu::rand_int(1, xdiv(max_nt_chunk,min_nt_chunk)+1);
     ret.time_samples_per_chunk = min_nt_chunk * nchunks;
 
     // Early triggers
@@ -290,14 +290,14 @@ DedispersionConfig DedispersionConfig::make_random()
 	    continue;
 
 	// Randomly choose a trigger count, but bias toward a low number.
-	double y = gputils::rand_uniform(-1.0, log(max_triggers+0.5));
+	double y = ksgpu::rand_uniform(-1.0, log(max_triggers+0.5));
 	int num_triggers = int(exp(y));
 
 	vector<int> et_ranks(num_candidates);
 	for (int i = 0; i < num_candidates; i++)
 	    et_ranks[i] = min_et_rank + i;
 
-	gputils::randomly_permute(et_ranks);
+	ksgpu::randomly_permute(et_ranks);
 	et_ranks.resize(num_triggers);
 	std::sort(et_ranks.begin(), et_ranks.end());
 
@@ -306,10 +306,10 @@ DedispersionConfig DedispersionConfig::make_random()
     }
 
     // FIXME support these members
-    int nbatches = gputils::rand_int(1,4);
-    ret.beams_per_batch = gputils::rand_int(1,4);
+    int nbatches = ksgpu::rand_int(1,4);
+    ret.beams_per_batch = ksgpu::rand_int(1,4);
     ret.beams_per_gpu = ret.beams_per_batch * nbatches;
-    ret.num_active_batches = gputils::rand_int(1,nbatches+1);
+    ret.num_active_batches = ksgpu::rand_int(1,nbatches+1);
     ret.gmem_nbytes_per_gpu = 10L * 1000L * 1000L * 1000L;
 
     ret.validate();

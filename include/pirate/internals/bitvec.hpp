@@ -5,8 +5,9 @@
 #define _PIRATE_INTERNALS_BITVEC_HPP
 
 #include <vector>
+#include <cassert>
 #include <cstdint>
-#include <gputils/rand_utils.hpp>
+#include <ksgpu/rand_utils.hpp>
 
 namespace pirate {
 #if 0
@@ -19,7 +20,7 @@ inline std::vector<bool> make_bitvec(int nbits)
 {
     std::vector<bool> ret(nbits);
     for (int i = 0; i < nbits; i++)
-	ret[i] = (gputils::rand_uniform() > 0.5);
+	ret[i] = (ksgpu::rand_uniform() > 0.5);
     return ret;
 }
 

@@ -5,7 +5,7 @@
 #include "../include/pirate/internals/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0

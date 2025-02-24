@@ -3,12 +3,12 @@
 #include "../include/pirate/internals/ReferenceDedisperser.hpp"
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 
-#include <gputils/Array.hpp>
-#include <gputils/rand_utils.hpp>
-#include <gputils/test_utils.hpp>    // assert_arrays_equal()
+#include <ksgpu/Array.hpp>
+#include <ksgpu/rand_utils.hpp>
+#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 
@@ -77,7 +77,7 @@ static void run_random_small_configs(int niter)
 	assert(config.time_samples_per_chunk <= max_nt);
 	
 	int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
-	int nchunks = gputils::rand_int(1, max_nchunks+1);
+	int nchunks = ksgpu::rand_int(1, max_nchunks+1);
 	
 	test_reference_dedispersion(config, nchunks);
     }

@@ -1,4 +1,12 @@
 *~
 *.o
-*.pyc
+*.d
+*.so
 bin/
+pirate/lib
+pirate/include
+pirate/__pycache__/
+makefile_helper.out
+sdist_files.txt
+wheel_files.txt
+

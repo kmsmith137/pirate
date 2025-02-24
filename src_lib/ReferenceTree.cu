@@ -7,7 +7,7 @@
 #include <cassert>
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0
@@ -122,7 +122,7 @@ ReferenceTree::ReferenceTree(int ndim_, const long *shape_, int freq_axis_) :
 }
 
 
-void ReferenceTree::dedisperse(gputils::Array<float> &arr)
+void ReferenceTree::dedisperse(ksgpu::Array<float> &arr)
 {
     assert(arr.on_host());
     assert(arr.shape_equals(this->shape));

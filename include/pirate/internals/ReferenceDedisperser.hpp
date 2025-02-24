@@ -4,7 +4,7 @@
 #include <vector>
 #include <memory>  // shared_ptr
 #include <iostream>
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 #include "../DedispersionConfig.hpp"
 #include "../DedispersionPlan.hpp"
@@ -77,8 +77,8 @@ struct ReferenceDedisperserBase
     //
     // Warning: dedisperse() may modify 'input_array'!
     
-    gputils::Array<float> input_array;
-    std::vector<gputils::Array<float>> output_arrays;
+    ksgpu::Array<float> input_array;
+    std::vector<ksgpu::Array<float>> output_arrays;
 
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);

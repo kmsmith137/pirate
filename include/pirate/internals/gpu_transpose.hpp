@@ -1,7 +1,7 @@
 #ifndef _PIRATE_INTERNALS_GPU_TRANSPOSE_HPP
 #define _PIRATE_INTERNALS_GPU_TRANSPOSE_HPP
 
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 namespace pirate {
 #if 0
@@ -9,7 +9,7 @@ namespace pirate {
 #endif
 
 
-extern void launch_transpose(gputils::Array<float> &dst, const gputils::Array<float> &src, cudaStream_t stream=nullptr);
+extern void launch_transpose(ksgpu::Array<float> &dst, const ksgpu::Array<float> &src, cudaStream_t stream=nullptr);
 
 
 } // namespace pirate

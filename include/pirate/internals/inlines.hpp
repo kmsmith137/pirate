@@ -1,7 +1,7 @@
 #ifndef _PIRATE_INTERNALS_INLINES_HPP
 #define _PIRATE_INTERNALS_INLINES_HPP
 
-#include <gputils/string_utils.hpp>  // gputils::nbytes_to_str()
+#include <ksgpu/string_utils.hpp>  // ksgpu::nbytes_to_str()
 
 #include <cmath>
 #include <cassert>
@@ -133,7 +133,7 @@ inline void print_kv_nbytes(const char *key, ssize_t nbytes, std::ostream &os, i
     if (nbytes >= 1024)
 	os << " = " << nbytes;
 
-    os << " = " << gputils::nbytes_to_str(nbytes) << std::endl;
+    os << " = " << ksgpu::nbytes_to_str(nbytes) << std::endl;
 }
 
 

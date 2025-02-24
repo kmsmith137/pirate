@@ -5,7 +5,7 @@
 #include "../include/pirate/internals/utils.hpp"       // bit_reverse_slow()
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0

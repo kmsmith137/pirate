@@ -6,10 +6,10 @@
 #include "../include/pirate/constants.hpp"
 
 #include <sstream>
-#include <gputils/cuda_utils.hpp>  // CUDA_CALL()
+#include <ksgpu/cuda_utils.hpp>  // CUDA_CALL()
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0

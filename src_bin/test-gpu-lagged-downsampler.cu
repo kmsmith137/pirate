@@ -3,14 +3,14 @@
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 #include "../include/pirate/constants.hpp"
 
-#include <gputils/Array.hpp>
-#include <gputils/cuda_utils.hpp>
-#include <gputils/rand_utils.hpp>    // rand_int()
-#include <gputils/test_utils.hpp>    // assert_arrays_equal()
+#include <ksgpu/Array.hpp>
+#include <ksgpu/cuda_utils.hpp>
+#include <ksgpu/rand_utils.hpp>    // rand_int()
+#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
 
 using namespace std;
 using namespace pirate;
-using namespace gputils;
+using namespace ksgpu;
 
 
 // -------------------------------------------------------------------------------------------------
@@ -63,7 +63,7 @@ struct TestInstance
 	long q = (10*1000*1000) / p;
 	q = max(q, 4L);
 
-	auto v = gputils::random_integers_with_bounded_product(2,q);
+	auto v = ksgpu::random_integers_with_bounded_product(2,q);
 	this->nt_chunk = nt_divisor * v[0];
 	this->nchunks = v[1];
 	

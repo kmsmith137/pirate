@@ -104,7 +104,7 @@ void YamlFile::check_for_invalid_keys() const
 
     stringstream ss;
     ss << name << ": the following unexpected key(s) were present: "
-       << gputils::tuple_str(unrequested_keys);
+       << ksgpu::tuple_str(unrequested_keys);
 
     throw runtime_error(ss.str());
 }

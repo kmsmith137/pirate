@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <memory>  // shared_ptr
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 
 namespace pirate {
@@ -32,7 +32,7 @@ public:
     ReferenceTree(int ndim, const long *shape, int freq_axis);
     
     // Dedispersion is done in-place, on an array of shape 'shape'.
-    void dedisperse(gputils::Array<float> &arr);
+    void dedisperse(ksgpu::Array<float> &arr);
 
     // Morally equivalent to make_shared<ReferenceTree> (...).
     // (Necessary since make_shared doesn't seem to work with initializer lists.)
@@ -49,8 +49,8 @@ protected:
     int rank = -1;
     long nrstate = 0;
     
-    gputils::Array<float> rstate;          // can be large
-    gputils::Array<float> scratch;         // always small (length ntime+1)
+    ksgpu::Array<float> rstate;          // can be large
+    ksgpu::Array<float> scratch;         // always small (length ntime+1)
 
     // Used temporarily in dedisperse().
     std::vector<long> tmp_shape;

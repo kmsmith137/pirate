@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <memory>  // shared_ptr
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 
 namespace pirate {
@@ -48,8 +48,8 @@ struct ReferenceLaggedDownsamplingKernel
     // Note: the ReferenceLaggedDownsamplingKernel stores all ring buffer state needed to call
     // apply() incrementally.
     
-    void apply(const gputils::Array<float> &in, std::vector<gputils::Array<float>> &out);
-    void apply(const gputils::Array<float> &in, gputils::Array<float> *outp);
+    void apply(const ksgpu::Array<float> &in, std::vector<ksgpu::Array<float>> &out);
+    void apply(const ksgpu::Array<float> &in, ksgpu::Array<float> *outp);
 
     const Params params;
 

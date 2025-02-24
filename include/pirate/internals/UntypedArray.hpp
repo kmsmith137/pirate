@@ -1,7 +1,7 @@
 #ifndef _PIRATE_INTERNALS_UNTYPED_ARRAY_HPP
 #define _PIRATE_INTERNALS_UNTYPED_ARRAY_HPP
 
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 namespace pirate {
 #if 0
@@ -9,11 +9,11 @@ namespace pirate {
 #endif
 
 
-// FIXME temporary hack that will go away, after I implement gputils::Array<void>.
+// FIXME temporary hack that will go away, after I implement ksgpu::Array<void>.
 struct UntypedArray
 {
-    gputils::Array<float> data_float32;
-    gputils::Array<__half> data_float16;
+    ksgpu::Array<float> data_float32;
+    ksgpu::Array<__half> data_float16;
 
     void allocate(std::initializer_list<ssize_t> shape, int aflags, bool is_float32);
     void allocate(std::initializer_list<ssize_t> shape, std::initializer_list<ssize_t> strides, int aflags, bool is_float32);
@@ -30,7 +30,7 @@ struct UntypedArray
 
 // Usage: Array<float> arr = uarr_get<float> (x, "x");   // where x is an UntypedArray
 template<typename T>
-extern gputils::Array<T> uarr_get(const UntypedArray &arr, const char *arr_name);
+extern ksgpu::Array<T> uarr_get(const UntypedArray &arr, const char *arr_name);
 
 
 }  // namespace pirate

@@ -1,11 +1,12 @@
+#include <cassert>
 #include <stdexcept>
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 #include "../include/pirate/internals/gpu_downsample.hpp"
 #include "../include/pirate/gpu/DownsampleKernel.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0

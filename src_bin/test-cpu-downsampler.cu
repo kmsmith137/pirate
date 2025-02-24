@@ -1,11 +1,12 @@
+#include <cassert>
 #include <iostream>
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 
 #include "../include/pirate/internals/bitvec.hpp"
 #include "../include/pirate/internals/cpu_downsample.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

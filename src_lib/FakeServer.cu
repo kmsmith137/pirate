@@ -1,27 +1,29 @@
 #include "../include/pirate/internals/FakeServer.hpp"
 
 #include <thread>
+#include <cassert>
 #include <sstream>
 #include <iostream>
 #include <condition_variable>
 
-#include <gputils/Barrier.hpp>
-#include <gputils/mem_utils.hpp>
-#include <gputils/cuda_utils.hpp>
-#include <gputils/time_utils.hpp>
-#include <gputils/string_utils.hpp>
-#include <gputils/system_utils.hpp>
-#include <gputils/memcpy_kernels.hpp>
+#include <ksgpu/Barrier.hpp>
+#include <ksgpu/mem_utils.hpp>
+#include <ksgpu/cuda_utils.hpp>
+#include <ksgpu/time_utils.hpp>
+#include <ksgpu/string_utils.hpp>
+#include <ksgpu/memcpy_kernels.hpp>
 
 #include "../include/pirate/internals/File.hpp"
 #include "../include/pirate/internals/Epoll.hpp"
 #include "../include/pirate/internals/Socket.hpp"
 #include "../include/pirate/internals/inlines.hpp"
+#include "../include/pirate/internals/file_utils.hpp"
+#include "../include/pirate/internals/system_utils.hpp"
 #include "../include/pirate/internals/cpu_downsample.hpp"
 
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 
 
 namespace pirate {
@@ -44,13 +46,13 @@ shared_ptr<char> server_alloc(ssize_t nbytes, bool use_hugepages, bool on_gpu=fa
 {
     assert(nbytes > 0);
     
-    int aflags = on_gpu ? gputils::af_gpu : gputils::af_rhost;
+    int aflags = on_gpu ? ksgpu::af_gpu : ksgpu::af_rhost;
     // aflags |= af_verbose;
 
     if (use_hugepages && !on_gpu)
-	aflags |= gputils::af_mmap_huge;
+	aflags |= ksgpu::af_mmap_huge;
 	
-    return gputils::af_alloc<char> (nbytes, aflags);
+    return ksgpu::af_alloc<char> (nbytes, aflags);
 }
 
 
@@ -153,7 +155,7 @@ struct FakeServer::Receiver
 	assert(data_sockets.size() > 0);
 
 	if (!tv_initialized) {
-	    this->tv_start = gputils::get_time();
+	    this->tv_start = ksgpu::get_time();
 	    this->tv_initialized = true;
 	}
 	
@@ -165,7 +167,7 @@ struct FakeServer::Receiver
 	    _receive_no_epoll(stats);
 
 	std::unique_lock ul(lock);
-	this->cumulative_stats.elapsed_time = gputils::time_since(tv_start);
+	this->cumulative_stats.elapsed_time = ksgpu::time_since(tv_start);
 	this->cumulative_stats.nbytes_read += stats.nbytes_read;
 	this->cumulative_stats.num_read_calls += stats.num_read_calls;
 	this->cumulative_stats.num_epoll_calls += stats.num_epoll_calls;
@@ -373,7 +375,7 @@ struct SleepyWorker : public FakeServer::Worker
 
     virtual void worker_body(int iter) override
     {
-	usleep_x(params.sleep_usec);
+	sys_usleep(params.sleep_usec);
     }
 };
 
@@ -422,8 +424,8 @@ struct MemcpyWorker : public FakeServer::Worker
 	stringstream ss;
 	ss << "Memcpy(src=" << devstr(src_device)
 	   << ", dst=" << devstr(dst_device)
-	   << ", nbytes=" << gputils::nbytes_to_str(nbytes)
-	   << ", blocksize=" << gputils::nbytes_to_str(blocksize)
+	   << ", nbytes=" << ksgpu::nbytes_to_str(nbytes)
+	   << ", blocksize=" << ksgpu::nbytes_to_str(blocksize)
 	   << ")";
 	    
 	this->worker_name = ss.str();
@@ -449,7 +451,7 @@ struct MemcpyWorker : public FakeServer::Worker
 	
 	if (dev >= 0) {
 	    CUDA_CALL(cudaSetDevice(dev));  // initialize CUDA device in worker thread
-	    this->stream = gputils::CudaStreamWrapper(cuda_stream_priority).p;  // RAII stream
+	    this->stream = ksgpu::CudaStreamWrapper(cuda_stream_priority).p;  // RAII stream
 	    
 #if 0
 	    // Just curious what the allowed priority range is.
@@ -526,8 +528,8 @@ struct GmemWorker : public FakeServer::Worker
 	
 	stringstream ss;
 	ss << "GmemKernel(device= " << device
-	   << ", nbytes=" << gputils::nbytes_to_str(2 * nbytes_copy)
-	   << ", blocksize=" << gputils::nbytes_to_str(blocksize)
+	   << ", nbytes=" << ksgpu::nbytes_to_str(2 * nbytes_copy)
+	   << ", blocksize=" << ksgpu::nbytes_to_str(blocksize)
 	   << ")";
 
 	this->nbytes_gmem = 2 * this->nbytes_copy;
@@ -538,12 +540,12 @@ struct GmemWorker : public FakeServer::Worker
     virtual void worker_initialize() override
     {
 	CUDA_CALL(cudaSetDevice(this->device));  // initialize CUDA device in worker thread
-	this->stream = gputils::CudaStreamWrapper().p;  // RAII stream
+	this->stream = ksgpu::CudaStreamWrapper().p;  // RAII stream
 
-	int flags = gputils::af_gpu | gputils::af_zero;
+	int flags = ksgpu::af_gpu | ksgpu::af_zero;
 
-	this->psrc = gputils::af_alloc<char> (blocksize, flags);
-	this->pdst = gputils::af_alloc<char> (blocksize, flags);
+	this->psrc = ksgpu::af_alloc<char> (blocksize, flags);
+	this->pdst = ksgpu::af_alloc<char> (blocksize, flags);
     }
     
 
@@ -553,7 +555,7 @@ struct GmemWorker : public FakeServer::Worker
 
 	while (nbytes_cumul < nbytes_copy) {
 	    ssize_t nbytes_block = min(nbytes_copy - nbytes_cumul, blocksize);
-	    gputils::launch_memcpy_kernel(pdst.get(), psrc.get(), nbytes_block, stream.get());
+	    ksgpu::launch_memcpy_kernel(pdst.get(), psrc.get(), nbytes_block, stream.get());
 	    nbytes_cumul += nbytes_block;
 	}
 
@@ -592,14 +594,13 @@ struct SsdWorker : public FakeServer::Worker
 	stringstream ss2;
 	ss2 << "Ssd(dir=" << root_dir
 	    << ", nfiles=" << nfiles_per_iteration
-	    << ", nbytes_per_file=" << gputils::nbytes_to_str(params.nbytes_per_file)
+	    << ", nbytes_per_file=" << ksgpu::nbytes_to_str(params.nbytes_per_file)
 	    << ", nwrites_per_file=" << params.nwrites_per_file
 	    << ")";
 	
 	this->worker_name = ss2.str();
 	
-	// Create directory
-	gputils::mkdir_x(root_dir);
+	pirate::makedir(root_dir, false);  // throw_exception_if_directory_exists = false
     }
 
     virtual void worker_initialize() override
@@ -886,16 +887,16 @@ void FakeServer::worker_main(int iworker)
     barrier.wait();  // wait at barrier [1/3]
     barrier.wait();  // wait at barrier [2/3]
     
-    struct timeval tv_start = gputils::get_time();
+    struct timeval tv_start = ksgpu::get_time();
 	
     for (int niter = 0; niter < params.num_iterations; niter++) {
-	struct timeval tv0 = gputils::get_time();
+	struct timeval tv0 = ksgpu::get_time();
 	worker->worker_body(niter);
-	struct timeval tv1 = gputils::get_time();
+	struct timeval tv1 = ksgpu::get_time();
 	
 	std::unique_lock ul(worker->lock);
-	worker->cumulative_stats.total_time = gputils::time_diff(tv_start, tv1);
-	worker->cumulative_stats.active_time += gputils::time_diff(tv0, tv1);
+	worker->cumulative_stats.total_time = ksgpu::time_diff(tv_start, tv1);
+	worker->cumulative_stats.active_time += ksgpu::time_diff(tv0, tv1);
 	worker->cumulative_stats.num_iterations = niter+1;
 	ul.unlock();
 	

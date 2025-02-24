@@ -1,8 +1,7 @@
 #include "../include/pirate/internals/FakeServer.hpp"
-#include "../include/pirate/internals/utils.hpp"  // make_chord_dedispersion_config()
+#include "../include/pirate/internals/utils.hpp"     // make_chord_dedispersion_config()
+#include "../include/pirate/internals/system_utils.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
-
-#include <gputils/system_utils.hpp>  // gputils::mlockall_x()
 
 using namespace std;
 using namespace pirate;
@@ -140,7 +139,7 @@ void test_06_pcie_gmem()
 
 int main(int argc, char **argv)
 {
-    gputils::mlockall_x();
+    sys_mlockall();
     
     // test_01_weird_lucky_unlucky_pcie_behavior();
     // test_02_ssds();

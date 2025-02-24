@@ -1,0 +1,15 @@
+[project]
+name = 'pirate'
+version = '0.0.1'
+dependencies = [ 'pybind11', 'numpy', 'ksgpu' ]
+description = 'Perimeter Institute RAdio Transient Engine'
+requires-python = '>=3.8'
+# readme = 'README.md'
+# license = {file = 'LICENSE.txt'}
+# authors = [ {name = 'Kendrick Smith', email = 'kmsmith@perimeterinstitute.ca'} ]
+
+[build-system]
+build-backend = 'pipmake'
+requires = [ 'pipmake', 'pybind11', 'numpy' ]
+
+# NOTE: cupy is not a dependency, but may be in the future.

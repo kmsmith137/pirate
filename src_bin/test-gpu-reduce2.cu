@@ -1,10 +1,10 @@
 #include <iostream>
-#include <gputils.hpp>
+#include <ksgpu.hpp>
 
 #include "../include/pirate/gpu/reduce2.hpp"
 
 using namespace std;
-using namespace gputils;
+using namespace ksgpu;
 using namespace pirate;
 
 

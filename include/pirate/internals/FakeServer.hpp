@@ -6,7 +6,7 @@
 #include <string>
 #include <memory> // shared_ptr
 #include <condition_variable>
-#include <gputils/Barrier.hpp>
+#include <ksgpu/Barrier.hpp>
 
 
 namespace pirate {
@@ -118,7 +118,7 @@ struct FakeServer
     //   - after initialization (e.g. allocating memory)
     //   - after all TCP connections have been accepted
     //   - after all iterations have finished.
-    gputils::Barrier barrier;
+    ksgpu::Barrier barrier;
     
     std::mutex lock;
     std::condition_variable cv;
