@@ -20,11 +20,9 @@ all: bin lib build_wheel build_sdist
 #
 # FIXME some day I'll define a configure-script mechanism for setting these variables.
 # For now, if you want to change the defaults, just edit the Makfile.
-#
-# FIXME should replace -march=native by minimal flags enabling avx256.
 
 PYTHON ?= python3
-NVCC ?= nvcc -std=c++17 -m64 -O3 --compiler-options -Wall,-fPIC,-march=native
+NVCC ?= nvcc -std=c++17 -m64 -O3 --compiler-options -Wall,-fPIC,-march=x86-64-v3
 
 # Extra nvcc flags needed to build Makefile dependencies
 #   -MMD create dep file, omitting "system" headers
@@ -169,7 +167,7 @@ HFILES = \
   include/pirate/internals/YamlFile.hpp
 
 # 'make clean' deletes {*~, *.o, *.d, *.so, *.pyc} from these dirs.
-CLEAN_DIRS := . lib src_bin src_lib src_lib/template_instantiations include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
+CLEAN_DIRS := . lib src_bin src_lib src_lib/template_instantiations pirate/__pycache__ include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
 
 # Extra files to be deleted by 'make clean'.
 # Note that 'pirate/include' and 'pirate/lib' are symlinks, so we put them in CLEAN_FILES, not CLEAN_RMDIRS
