@@ -1,7 +1,7 @@
 [project]
 name = 'pirate'
 version = '0.0.1'
-dependencies = [ 'pybind11', 'numpy', 'ksgpu' ]
+dependencies = [ 'pybind11', 'numpy', 'ksgpu >= 1.0.3' ]
 description = 'Perimeter Institute RAdio Transient Engine'
 requires-python = '>=3.8'
 # readme = 'README.md'
@@ -10,6 +10,6 @@ requires-python = '>=3.8'
 
 [build-system]
 build-backend = 'pipmake'
-requires = [ 'pipmake', 'pybind11', 'numpy' ]
+requires = [ 'pipmake >= 0.0.2', 'pybind11', 'numpy', 'ksgpu >= 1.0.3' ]
 
 # NOTE: cupy is not a dependency, but may be in the future.
