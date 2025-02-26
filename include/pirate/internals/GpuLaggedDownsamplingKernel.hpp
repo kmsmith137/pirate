@@ -5,7 +5,7 @@
 #include <iostream>
 #include <cuda_fp16.h>  // __half, __half2
 
-#include <gputils/Array.hpp>
+#include <ksgpu/Array.hpp>
 #include "UntypedArray.hpp"
 
 
