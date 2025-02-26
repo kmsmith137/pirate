@@ -113,14 +113,14 @@ UntypedArray UntypedArray::slice(int axis, int start, int stop) const
 }
 
 
-UntypedArray UntypedArray::reshape_ref(std::initializer_list<ssize_t> shape) const
+UntypedArray UntypedArray::reshape(std::initializer_list<ssize_t> shape) const
 {
     UntypedArray ret;
 
-    if (this->_is_float32("UntypedArray::reshape_ref() argument"))
-	ret.data_float32 = this->data_float32.reshape_ref(shape);
+    if (this->_is_float32("UntypedArray::reshape() argument"))
+	ret.data_float32 = this->data_float32.reshape(shape);
     else
-	ret.data_float16 = this->data_float16.reshape_ref(shape);
+	ret.data_float16 = this->data_float16.reshape(shape);
 
     return ret;
 }

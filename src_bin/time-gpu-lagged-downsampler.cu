@@ -79,7 +79,7 @@ static void time_gpu_dedispersion_kernel(const GpuLaggedDownsamplingKernel::Para
 	    for (int ids = 0; ids < params.num_downsampling_levels; ids++) {
 		long nt_ds = nt_chunk >> (ids+1);
 		UntypedArray a = outf_s.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
-		out[ids] = a.reshape_ref({ nbeams, nr, nt_ds });
+		out[ids] = a.reshape({ nbeams, nr, nt_ds });
 		nt_cumul += nt_ds;
 	    }
 

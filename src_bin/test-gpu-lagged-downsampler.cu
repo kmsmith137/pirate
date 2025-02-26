@@ -131,9 +131,9 @@ struct TestInstance
 	    UntypedArray a = ret.big_arr.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
 
 	    if (is_float32)
-		ret.small_arrs[i].data_float32 = a.data_float32.reshape_ref({ nbeams, nr, nt_ds });
+		ret.small_arrs[i].data_float32 = a.data_float32.reshape({ nbeams, nr, nt_ds });
 	    else
-		ret.small_arrs[i].data_float16 = a.data_float16.reshape_ref({ nbeams, nr, nt_ds });
+		ret.small_arrs[i].data_float16 = a.data_float16.reshape({ nbeams, nr, nt_ds });
 	    
 	    nt_cumul += nt_ds;
 	}

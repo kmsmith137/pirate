@@ -89,9 +89,9 @@ static void lag_non_incremental(Array<float> &arr, const Array<int> &lags)
     long nchan = lags.size;
     long nt = arr.shape[arr.ndim-1];
     
-    Array<float> arr_2d = arr.reshape_ref({nchan, nt});
+    Array<float> arr_2d = arr.reshape({nchan, nt});
     Array<int> lags_1d = lags.clone();
-    lags_1d = lags_1d.reshape_ref({nchan});
+    lags_1d = lags_1d.reshape({nchan});
 
     for (long i = 0; i < nchan; i++) {
 	float *row = arr_2d.data + i*nt;
@@ -231,7 +231,7 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
 	nouter *= arr1.shape[d];
     
     arr1 = arr1.clone();  // note deep copy here
-    arr1 = arr1.reshape_ref({nouter, nfreq, nt_tot});
+    arr1 = arr1.reshape({nouter, nfreq, nt_tot});
 
     // Step 3. loop over outer spectator axis, and call dedisperse_non_incremental().
     
@@ -246,7 +246,7 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
     vector<long> transposed_shape = big_shape;
     std::swap(transposed_shape[freq_axis], transposed_shape[ndim-2]);
     
-    arr1 = arr1.reshape_ref(transposed_shape);
+    arr1 = arr1.reshape(transposed_shape);
     arr1 = arr1.transpose(ax_swap);
 
     // Now apply incremental dedispersion in chunks, and compare.
@@ -323,11 +323,11 @@ static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
 
 	// "Two-step" dedispersion.
 	Array<float> chunk1 = chunk0.clone();
-	chunk1 = chunk1.reshape_ref({nfreq1, nfreq0, nt_chunk});
+	chunk1 = chunk1.reshape({nfreq1, nfreq0, nt_chunk});
 	tree0.dedisperse(chunk1);
 	lagbuf.apply_lags(chunk1);
 	tree1.dedisperse(chunk1);
-	chunk1 = chunk1.reshape_ref({nfreq_tot, nt_chunk});
+	chunk1 = chunk1.reshape({nfreq_tot, nt_chunk});
 
 	// "One-step" dedispersion.
 	big_tree.dedisperse(chunk0);

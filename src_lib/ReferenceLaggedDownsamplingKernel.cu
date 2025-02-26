@@ -120,7 +120,7 @@ void ReferenceLaggedDownsamplingKernel::apply(const Array<float> &in, Array<floa
 
     // Reshape input array to 2-d, since reference_downsample_time() assumes a 2-d array.
     Array<float> in_2d = in.clone();   // copy, to avoid reshape failure if strides are non-contiguous
-    in_2d = in_2d.reshape_ref({ nbeams * pow2(r), ntime });
+    in_2d = in_2d.reshape({ nbeams * pow2(r), ntime });
     
     // Reshaped time-downsampled input array: (nbeams * 2^r, ntime/2)
     Array<float> in_ds({ nbeams * pow2(r), ntime/2 }, af_uhost | af_zero);
@@ -136,16 +136,16 @@ void ReferenceLaggedDownsamplingKernel::apply(const Array<float> &in, Array<floa
     lagbuf_large->apply_lags(out_tmp);
     
     // Reshape output_tmp array from 2-d to target shape, and copy to caller-specified array.
-    // Note that the call to reshape_ref() correctly handles the case where nbeams==1, and the caller
+    // Note that the call to reshape() correctly handles the case where nbeams==1, and the caller
     // has chosen to omit the beam axis (see "reminder" above).
-    out_tmp = out_tmp.reshape_ref(outp[0].ndim, outp[0].shape);
+    out_tmp = out_tmp.reshape(outp[0].ndim, outp[0].shape);
     outp[0].fill(out_tmp);
 
     if (nds == 1)
 	return;
     
     // Recurse to next downsampling level.
-    in_ds = in_ds.reshape_ref({ nbeams, pow2(r), ntime/2 });
+    in_ds = in_ds.reshape({ nbeams, pow2(r), ntime/2 });
     next->apply(in_ds, outp+1);
 }
 

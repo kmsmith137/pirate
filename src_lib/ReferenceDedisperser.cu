@@ -80,7 +80,7 @@ struct Stage0Buffers
 
 	    assert(nelts == pow2(rank) * nt_ds);
 	    Array<float> view = flat_buf.slice(1, pos, pos+nelts);
-	    view = view.reshape_ref({ beams_per_batch, pow2(rank), nt_ds });
+	    view = view.reshape({ beams_per_batch, pow2(rank), nt_ds });
 
 	    dd_bufs.at(ids) = view;
 	    
@@ -148,7 +148,7 @@ struct Stage0Buffers
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
 	    
 	    Array<float> in = dd_bufs.at(ids);
-	    in = in.reshape_ref({beams_per_batch, pow2(st0.rank1), pow2(st0.rank0), st0.nt_ds});  // shape (1, 2^rank1, 2^rank0, nt_ds)
+	    in = in.reshape({beams_per_batch, pow2(st0.rank1), pow2(st0.rank0), st0.nt_ds});  // shape (1, 2^rank1, 2^rank0, nt_ds)
 	    
 	    Array<float> out = output_is_ringbuf ? ringbuf : in;
 	    dd_kernels.at(ids)->apply(in, out, itime, ibeam);
@@ -219,7 +219,7 @@ struct Stage1Buffers
 
 	    assert(nelts == pow2(rank) * nt_ds);
 	    Array<float> view = flat_buf.slice(1, pos, pos+nelts);
-	    view = view.reshape_ref({ beams_per_batch, pow2(rank), nt_ds });
+	    view = view.reshape({ beams_per_batch, pow2(rank), nt_ds });
 
 	    dd_bufs.at(iout) = view;
 	    pos += nelts;
@@ -263,7 +263,7 @@ struct Stage1Buffers
 	    long rank1 = st1.rank1_trigger;
 
 	    Array<float> out = dd_bufs.at(iout);  // shape (beams_per_batch, 2^(rank0+rank1), nt_ds)
-	    out = out.reshape_ref({beams_per_batch, pow2(rank1), pow2(rank0), st1.nt_ds});
+	    out = out.reshape({beams_per_batch, pow2(rank1), pow2(rank0), st1.nt_ds});
 	    out = out.transpose({0,2,1,3});       // shape (beams_per_batch, 2^rank0, 2^rank1, nt_ds)
 
 	    Array<float> in = input_is_ringbuf ? ringbuf : out;

@@ -22,7 +22,7 @@ struct UntypedArray
 
     UntypedArray slice(int axis, int ix) const;
     UntypedArray slice(int axis, int start, int stop) const;
-    UntypedArray reshape_ref(std::initializer_list<ssize_t> shape) const;
+    UntypedArray reshape(std::initializer_list<ssize_t> shape) const;
     
     bool _is_float32(const char *name) const;
 };
