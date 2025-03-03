@@ -135,7 +135,7 @@ struct DownsampleKernel
 };
 
 
-// FIXME should some strides be ssize_t?
+// FIXME should some strides be long?
 template<int D>
 __global__ void __launch_bounds__(32 * DownsampleKernel::warps_per_block, DownsampleKernel::blocks_per_sm)
 downsample_kernel(float *dst_i, float *dst_w, const float *src_i, const float *src_w, int Df, int Dt, int src_fstride, int src_bstride, int dst_tstride, int dst_bstride)

@@ -20,7 +20,7 @@ public:
     
     ReferenceLagbuf(const ksgpu::Array<int> &lags, int ntime);
 
-    std::vector<ssize_t> expected_shape;  // (n_0, ..., n_{d-1}, T)
+    std::vector<long> expected_shape;  // (n_0, ..., n_{d-1}, T)
     int ntime = 0;
 
     void apply_lags(ksgpu::Array<float> &arr) const;

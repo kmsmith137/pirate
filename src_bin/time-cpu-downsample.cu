@@ -32,7 +32,7 @@ inline void fake_5bit_store(__m256i *p, __m256i x)
     
     
 
-static void fake_5bit_downsampler(const uint8_t *src, uint8_t *dst, ssize_t src_nbytes, ssize_t dst_nbytes)
+static void fake_5bit_downsampler(const uint8_t *src, uint8_t *dst, long src_nbytes, long dst_nbytes)
 {
     constexpr int src_bytes_per_chunk = 5*64;
     constexpr int dst_bytes_per_chunk = 3*64;
@@ -41,7 +41,7 @@ static void fake_5bit_downsampler(const uint8_t *src, uint8_t *dst, ssize_t src_
     assert(src_nbytes >= 0);
     assert(dst_nbytes >= 0);
 
-    ssize_t nchunks = src_nbytes / src_bytes_per_chunk;
+    long nchunks = src_nbytes / src_bytes_per_chunk;
     assert(src_nbytes == nchunks * src_bytes_per_chunk);
     assert(dst_nbytes == nchunks * dst_bytes_per_chunk);
 
@@ -49,7 +49,7 @@ static void fake_5bit_downsampler(const uint8_t *src, uint8_t *dst, ssize_t src_
     __m256i *dp = (__m256i *) dst;
     __m256i x = _mm256_setzero_si256();
     
-    for (ssize_t i = 0; i < nchunks; i++) {
+    for (long i = 0; i < nchunks; i++) {
 	x = _mm256_xor_si256(x, _mm256_load_si256(sp));
 	x = _mm256_xor_si256(x, _mm256_load_si256(sp+1));
 	x = _mm256_xor_si256(x, _mm256_load_si256(sp+2));
@@ -86,8 +86,8 @@ struct TimingSetup
     int src_bit_depth = 0;
     int nthreads = 0;
     
-    ssize_t src_nbytes = 0;
-    ssize_t dst_nbytes = 0;
+    long src_nbytes = 0;
+    long dst_nbytes = 0;
     double gb_per_thread = 0.0;
     
     Array<uint8_t> src;  // shape (nthreads, src_nbytes)
@@ -98,11 +98,11 @@ struct TimingSetup
 	this->src_bit_depth = src_bit_depth_;
 	this->nthreads = nthreads_;
 
-	ssize_t approximate_bytes_per_thread = 1L << 30;
+	long approximate_bytes_per_thread = 1L << 30;
 	int src_bytes_per_chunk = cpu_downsample_src_bytes_per_chunk(src_bit_depth);
 	int dst_bytes_per_chunk = (src_bytes_per_chunk * (src_bit_depth+1)) / (2*src_bit_depth);
 	
-	ssize_t nchunks = approximate_bytes_per_thread / (src_bytes_per_chunk + dst_bytes_per_chunk);
+	long nchunks = approximate_bytes_per_thread / (src_bytes_per_chunk + dst_bytes_per_chunk);
 	nchunks = 2 * (nchunks / 2);  // force even
 	
 	this->src_nbytes = nchunks * src_bytes_per_chunk;
@@ -117,8 +117,8 @@ struct TimingSetup
     {
 	uint8_t *sp = src.data;
 	uint8_t *dp = dst.data;
-	ssize_t ss = src_nbytes;
-	ssize_t ds = dst_nbytes;
+	long ss = src_nbytes;
+	long ds = dst_nbytes;
 	
 	auto callback = [&](const CpuThreadPool &pool, int ithread)
 	    {
@@ -140,8 +140,8 @@ struct TimingSetup
 	
 	uint8_t *sp = src.data;
 	uint8_t *dp = dst.data;
-	ssize_t ss = src_nbytes;
-	ssize_t ds = dst_nbytes;
+	long ss = src_nbytes;
+	long ds = dst_nbytes;
 	
 	auto callback = [&](const CpuThreadPool &pool, int ithread)
 	    {

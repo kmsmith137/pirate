@@ -3,7 +3,6 @@
 
 #include <string>
 #include <fcntl.h>      // open flags (O_RDONLY, etc.)
-#include <sys/types.h>  // ssize_t
 
 namespace pirate {
 #if 0
@@ -23,7 +22,7 @@ struct File
     File(const std::string &filename, int oflags, int mode=0644);
     ~File();
 
-    void write(const void *p, ssize_t nbytes);
+    void write(const void *p, long nbytes);
     // FIXME add more member functions, including read().
     
     // The File class is noncopyable, but if copy semantics are needed, you can do

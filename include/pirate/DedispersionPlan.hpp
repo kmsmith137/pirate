@@ -64,8 +64,8 @@ struct DedispersionPlan
     std::vector<Stage0Tree> stage0_trees;
     std::vector<Stage1Tree> stage1_trees;
 
-    ssize_t stage0_total_segments_per_beam = 0;
-    ssize_t stage1_total_segments_per_beam = 0;
+    long stage0_total_segments_per_beam = 0;
+    long stage1_total_segments_per_beam = 0;
 
     int max_clag = 0;
     long gmem_ringbuf_nseg = 0;    // includes gmem + g2h + h2g

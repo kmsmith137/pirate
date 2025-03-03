@@ -12,7 +12,7 @@ namespace pirate {
 
 
 extern void sys_mlockall(int flags = MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT);
-extern void sys_usleep(ssize_t usec);
+extern void sys_usleep(long usec);
 
 
 // -------------------------------------------------------------------------------------------------

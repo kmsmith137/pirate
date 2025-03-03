@@ -30,12 +30,12 @@ struct Socket
     void close();
 
     // Reminder: read() returns zero if connection ended, or if socket is nonblocking and no data is ready.
-    ssize_t read(void *buf, ssize_t maxbytes);
+    long read(void *buf, long maxbytes);
 
     // If receiver closes connection, then send() returns zero and sets Socket::connreset = true.
     // If send() is called subsequently (with Socket::connreset == true), then an exception is thrown.
     // This provides a mechanism for the sender to detect a closed connection.
-    ssize_t send(const void *buf, ssize_t count, int flags=0);
+    long send(const void *buf, long count, int flags=0);
 
     // FIXME in current API, sender's IP address is thrown away!
     Socket accept();
@@ -68,7 +68,7 @@ struct Socket
 //   s.connect("127.0.0.0", 1370);      // (dst IP address, port)
 //   s.get_zerocopy();                  // optional
 //   s.set_pacing_rate(bytes_per_sec);  // optional
-//   ssize_t nbytes_sent = s.send(buf, maxbytes);
+//   long nbytes_sent = s.send(buf, maxbytes);
 //
 // Receiving TCP data from single connection:
 //
@@ -78,7 +78,7 @@ struct Socket
 //   s.listen();
 //
 //   Socket sd = s.accept();
-//   ssize_t nbytes_received = s.read(buf, maxbytes);
+//   long nbytes_received = s.read(buf, maxbytes);
 
 
 }  // namespace pirate

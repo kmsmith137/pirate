@@ -25,15 +25,15 @@ int main(int argc, char **argv)
     assert((Df >= 1) && ((2048 % Df) == 0));
     assert((Dt >= 1) && ((2048 % Dt) == 0));
     
-    ssize_t nbeams = 64;
-    ssize_t nfreq_src = 2048;
-    ssize_t ntime_src = 2048;
-    ssize_t niter = 100;
-    ssize_t num_callbacks = 20;
-    ssize_t nstreams = 2;
+    long nbeams = 64;
+    long nfreq_src = 2048;
+    long ntime_src = 2048;
+    long niter = 100;
+    long num_callbacks = 20;
+    long nstreams = 2;
     
-    ssize_t nfreq_dst = nfreq_src / Df;
-    ssize_t ntime_dst = ntime_src / Dt;
+    long nfreq_dst = nfreq_src / Df;
+    long ntime_dst = ntime_src / Dt;
     double gmem_gb = 8. * nbeams * niter * double(nfreq_src * ntime_src + nfreq_dst * ntime_dst) / pow(2,30.);
     
     Array<float> src_si({nstreams, nbeams, nfreq_src, ntime_src}, af_gpu | af_zero);

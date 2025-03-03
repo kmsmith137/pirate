@@ -16,7 +16,7 @@ namespace pirate {
 // ReferenceLagbuf constructor.
 
 
-static long _sum_lags(const int *lags, int nd, const ssize_t *shape, const ssize_t *strides)
+static long _sum_lags(const int *lags, int nd, const long *shape, const long *strides)
 {
     assert(nd > 0);
     
@@ -66,8 +66,8 @@ ReferenceLagbuf::ReferenceLagbuf(const ksgpu::Array<int> &lags_, int ntime_) :
 
 // Applies (N-1)-dimensional lag array to N-dimensional data array.
 static float *_apply_lags(float *data, const int *lags, float *rstate, float *scratch,
-			  int data_ndim, const ssize_t *data_shape, const ssize_t *data_strides,
-			  const ssize_t *lag_strides)
+			  int data_ndim, const long *data_shape, const long *data_strides,
+			  const long *lag_strides)
 {
     if (data_ndim == 1) {
 	int lag = *lags;

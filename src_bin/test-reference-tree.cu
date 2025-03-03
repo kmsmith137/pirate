@@ -104,7 +104,7 @@ static void lag_non_incremental(Array<float> &arr, const Array<int> &lags)
 }
 
 
-static void test_reference_lagbuf(const Array<int> &lags, const vector<ssize_t> data_strides, int nt_chunk, int nchunks)
+static void test_reference_lagbuf(const Array<int> &lags, const vector<long> data_strides, int nt_chunk, int nchunks)
 {
     cout << "test_reference_lagbuf:"
 	 << " lags.shape=" << lags.shape_str()
@@ -125,8 +125,8 @@ static void test_reference_lagbuf(const Array<int> &lags, const vector<ssize_t> 
 	axis_names[i] = "ix" + to_string(i);
     axis_names[d] = "t";
     
-    vector<ssize_t> shape_lg(d+1);
-    vector<ssize_t> shape_sm(d+1);
+    vector<long> shape_lg(d+1);
+    vector<long> shape_sm(d+1);
     
     for (int i = 0; i < d; i++)
 	shape_lg[i] = shape_sm[i] = lags.shape[i];
@@ -167,17 +167,17 @@ static void test_reference_lagbuf()
     int nd = rand_int(1, 4);
 
     // lags.shape + (nt_chunk, nchunks)
-    vector<ssize_t> v = random_integers_with_bounded_product(nd+2, 10000);
+    vector<long> v = random_integers_with_bounded_product(nd+2, 10000);
     int nt_chunk = v[nd];
     int nchunks = v[nd+1];
     
-    vector<ssize_t> lag_shape(nd);
-    vector<ssize_t> data_shape(nd+1);
-    memcpy(&data_shape[0], &v[0], (nd+1) * sizeof(ssize_t));
-    memcpy(&lag_shape[0], &v[0], nd * sizeof(ssize_t));
+    vector<long> lag_shape(nd);
+    vector<long> data_shape(nd+1);
+    memcpy(&data_shape[0], &v[0], (nd+1) * sizeof(long));
+    memcpy(&lag_shape[0], &v[0], nd * sizeof(long));
 
-    vector<ssize_t> lag_strides = make_random_strides(lag_shape);
-    vector<ssize_t> data_strides = make_random_strides(data_shape, 1);   // time axis guaranteed continuous
+    vector<long> lag_strides = make_random_strides(lag_shape);
+    vector<long> data_strides = make_random_strides(data_shape, 1);   // time axis guaranteed continuous
 
     Array<int> lags(lag_shape, lag_strides, af_uhost | af_zero);
     double maxlog = log(1.5 * nt_chunk * nchunks);

@@ -12,12 +12,12 @@ using namespace pirate;
 
 
 // FIXME could move somewhere more general
-static Array<float> make_random_weights(const vector<ssize_t> &shape)
+static Array<float> make_random_weights(const vector<long> &shape)
 {
     Array<float> ret(shape, af_rhost);
     assert(ret.is_fully_contiguous());
 
-    for (ssize_t i = 0; i < ret.size; i++)
+    for (long i = 0; i < ret.size; i++)
 	ret.data[i] = rand_uniform();
     
     return ret;
@@ -87,11 +87,11 @@ int main(int argc, char **argv)
 	int Df = rand_int(1,6);
 	int Dt = (rand_uniform() < 0.5) ? (1 << rand_int(0,2)) : (4 * rand_int(1,4));
 	
-	ssize_t nbeams = rand_int(1, 6);
-	ssize_t nfreq_dst = 32 * rand_int(1, 6);
-	ssize_t ntime_dst = 32 * rand_int(1, 6);
-	ssize_t nfreq_src = Df * nfreq_dst;
-	ssize_t ntime_src = Dt * ntime_dst;
+	long nbeams = rand_int(1, 6);
+	long nfreq_dst = 32 * rand_int(1, 6);
+	long ntime_dst = 32 * rand_int(1, 6);
+	long nfreq_src = Df * nfreq_dst;
+	long ntime_src = Dt * ntime_dst;
 	
 	auto src_strides = make_random_strides({nbeams, nfreq_src, ntime_src}, 1, 4);  // ncontig=1, nalign=4
 	auto dst_strides = make_random_strides({nbeams, ntime_dst, nfreq_dst}, 1, 4);  // ncontig=1, nalign=4

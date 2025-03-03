@@ -131,10 +131,10 @@ void Socket::close()
 }
 
     
-ssize_t Socket::read(void *buf, ssize_t count)
+long Socket::read(void *buf, long count)
 {
     assert(count > 0);
-    ssize_t nbytes = ::read(this->fd, buf, count);
+    long nbytes = ::read(this->fd, buf, count);
 
     if (_unlikely(nbytes < 0))
 	throw runtime_error(errstr(fd, "Socket::read"));
@@ -144,7 +144,7 @@ ssize_t Socket::read(void *buf, ssize_t count)
 }
 
 
-ssize_t Socket::send(const void *buf, ssize_t count, int flags)
+long Socket::send(const void *buf, long count, int flags)
 {
     assert(count > 0);
 
@@ -154,7 +154,7 @@ ssize_t Socket::send(const void *buf, ssize_t count, int flags)
     if (zerocopy)
 	flags |= MSG_ZEROCOPY;
     
-    ssize_t nbytes = ::send(this->fd, buf, count, flags);
+    long nbytes = ::send(this->fd, buf, count, flags);
 
     if (nbytes < 0) {
 	// If receiver closes connection, then send() returns zero and sets Socket::connreset = true.

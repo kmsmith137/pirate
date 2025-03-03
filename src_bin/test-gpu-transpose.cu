@@ -39,9 +39,9 @@ static void test_transpose(int nx, int ny, int nz, int src_ystride, int src_zstr
 int main(int argc, char **argv)
 {
     for (int i = 0; i < 50; i++) {
-	ssize_t nx = 32 * rand_int(1, 10);
-	ssize_t ny = 32 * rand_int(1, 10);
-	ssize_t nz = rand_int(1, 10);
+	long nx = 32 * rand_int(1, 10);
+	long ny = 32 * rand_int(1, 10);
+	long nz = rand_int(1, 10);
 	
 	auto src_strides = make_random_strides({nz,ny,nx}, 1, 4);  // ncontig=1, nalign=4
 	auto dst_strides = make_random_strides({nz,nx,ny}, 1, 4);  // ncontig=1, nalign=4

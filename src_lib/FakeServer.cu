@@ -42,7 +42,7 @@ inline int vmin(const vector<int> &v)
 }
 
 
-shared_ptr<char> server_alloc(ssize_t nbytes, bool use_hugepages, bool on_gpu=false)
+shared_ptr<char> server_alloc(long nbytes, bool use_hugepages, bool on_gpu=false)
 {
     assert(nbytes > 0);
     
@@ -64,9 +64,9 @@ shared_ptr<char> server_alloc(ssize_t nbytes, bool use_hugepages, bool on_gpu=fa
 struct ReceiverStats
 {
     double elapsed_time = 0.0;
-    ssize_t nbytes_read = 0;
-    ssize_t num_read_calls = 0;
-    ssize_t num_epoll_calls = 0;
+    long nbytes_read = 0;
+    long num_read_calls = 0;
+    long num_epoll_calls = 0;
 };
 
 
@@ -174,12 +174,12 @@ struct FakeServer::Receiver
     }
 
 
-    inline ssize_t _read_socket(uint32_t ids, ReceiverStats &stats)
+    inline long _read_socket(uint32_t ids, ReceiverStats &stats)
     {
 	assert(ids < data_sockets.size());
 	
-	ssize_t max_read = std::min(params.recv_bufsize, params.network_sync_cadence - stats.nbytes_read);
-	ssize_t nbytes_read = data_sockets[ids].read(recv_buf.get(), max_read);
+	long max_read = std::min(params.recv_bufsize, params.network_sync_cadence - stats.nbytes_read);
+	long nbytes_read = data_sockets[ids].read(recv_buf.get(), max_read);
 	    
 	stats.num_read_calls++;
 	stats.nbytes_read += nbytes_read;
@@ -195,7 +195,7 @@ struct FakeServer::Receiver
 	
 	while (stats.nbytes_read < params.network_sync_cadence) {
 	    // Blocking read()
-	    ssize_t nbytes_read = _read_socket(0, stats);
+	    long nbytes_read = _read_socket(0, stats);
 	    
 	    if (nbytes_read == 0)
 		throw runtime_error("TCP connection ended prematurely");
@@ -207,7 +207,7 @@ struct FakeServer::Receiver
     void _receive_epoll(ReceiverStats &stats)
     {
 	while (stats.nbytes_read < params.network_sync_cadence) {
-	    ssize_t nbytes_prev = stats.nbytes_read;
+	    long nbytes_prev = stats.nbytes_read;
 	    
 	    int num_events = epoll.wait();  // blocking
 	    stats.num_epoll_calls++;
@@ -220,7 +220,7 @@ struct FakeServer::Receiver
 
 		// Non-blocking read()
 		unsigned int ids = epoll.events[iev].data.u32;
-		ssize_t nbytes_read = _read_socket(ids, stats);
+		long nbytes_read = _read_socket(ids, stats);
 
 		// FIXME read() can return zero, even with EPOLLIN set?!
 		// I'd like to revisit this, just for the sake of general understanding.
@@ -282,7 +282,7 @@ struct WorkerStats
 {
     double total_time = 0.0;
     double active_time = 0.0;
-    ssize_t num_iterations = 0;
+    long num_iterations = 0;
 };
 
 
@@ -292,11 +292,11 @@ struct FakeServer::Worker
     string worker_name = "Anonymous worker";
 
     // Per-iteration
-    ssize_t nbytes_h2g = 0;
-    ssize_t nbytes_g2h = 0;
-    ssize_t nbytes_h2h = 0;
-    ssize_t nbytes_gmem = 0;
-    ssize_t nbytes_ssd = 0;
+    long nbytes_h2g = 0;
+    long nbytes_g2h = 0;
+    long nbytes_h2h = 0;
+    long nbytes_gmem = 0;
+    long nbytes_ssd = 0;
     
     Worker(const FakeServer::Params &params_) : params(params_) { }
     virtual ~Worker() { }
@@ -315,7 +315,7 @@ struct FakeServer::Worker
 
 
     // Helper function for show().
-    static void _show_bandwidth(const string &label, const WorkerStats &ws, ssize_t nbytes_per_iter)
+    static void _show_bandwidth(const string &label, const WorkerStats &ws, long nbytes_per_iter)
     {
 	if (nbytes_per_iter <= 0)
 	    return;
@@ -395,9 +395,9 @@ struct MemcpyWorker : public FakeServer::Worker
     const int src_device;   // -1 for host
     const int dst_device;   // -1 for host
 
-    ssize_t nbytes = 0;
-    ssize_t blocksize = 0;
-    ssize_t nblocks = 0;
+    long nbytes = 0;
+    long blocksize = 0;
+    long nblocks = 0;
     
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
@@ -476,7 +476,7 @@ struct MemcpyWorker : public FakeServer::Worker
 
     virtual void worker_body(int iter) override
     {
-	for (ssize_t i = 0; i < nblocks; i++) {
+	for (long i = 0; i < nblocks; i++) {
 	    char *dp = pdst.get() + i * blocksize;
 	    const char *sp = psrc.get() + i * blocksize;
 	    
@@ -505,8 +505,8 @@ struct GmemWorker : public FakeServer::Worker
 
     const int device;
 
-    ssize_t nbytes_copy = 0;
-    ssize_t blocksize = 0;
+    long nbytes_copy = 0;
+    long blocksize = 0;
     
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
@@ -551,10 +551,10 @@ struct GmemWorker : public FakeServer::Worker
 
     virtual void worker_body(int iter) override
     {
-	ssize_t nbytes_cumul = 0;
+	long nbytes_cumul = 0;
 
 	while (nbytes_cumul < nbytes_copy) {
-	    ssize_t nbytes_block = min(nbytes_copy - nbytes_cumul, blocksize);
+	    long nbytes_block = min(nbytes_copy - nbytes_cumul, blocksize);
 	    ksgpu::launch_memcpy_kernel(pdst.get(), psrc.get(), nbytes_block, stream.get());
 	    nbytes_cumul += nbytes_block;
 	}
@@ -577,8 +577,8 @@ struct SsdWorker : public FakeServer::Worker
 
     string root_dir;
     shared_ptr<char> data;
-    ssize_t nfiles_per_iteration = 0;
-    ssize_t nbytes_per_write = 0;
+    long nfiles_per_iteration = 0;
+    long nbytes_per_write = 0;
 
     SsdWorker(const FakeServer::Params &params_, const string &ssd, int ithread) :
 	FakeServer::Worker(params_)
@@ -641,8 +641,8 @@ struct DownsamplingWorker : public FakeServer::Worker
 
     const int src_bit_depth;
     
-    ssize_t src_nbytes = 0;
-    ssize_t dst_nbytes = 0;
+    long src_nbytes = 0;
+    long dst_nbytes = 0;
 
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
@@ -653,11 +653,11 @@ struct DownsamplingWorker : public FakeServer::Worker
     {
 	assert((src_bit_depth >= 4) && (src_bit_depth <= 7));
 
-	ssize_t src_nelts = xdiv(params.nbytes_downsample, (1 << (src_bit_depth-4)));
+	long src_nelts = xdiv(params.nbytes_downsample, (1 << (src_bit_depth-4)));
 	this->src_nbytes = xdiv(src_nelts, 8) * src_bit_depth;
 	this->dst_nbytes = xdiv(src_nelts, 16) * (src_bit_depth+1);
 
-	ssize_t nbytes_per_chunk = cpu_downsample_src_bytes_per_chunk(src_bit_depth);
+	long nbytes_per_chunk = cpu_downsample_src_bytes_per_chunk(src_bit_depth);
 	assert((src_nbytes % nbytes_per_chunk) == 0);
 
 	stringstream ss;
@@ -677,7 +677,7 @@ struct DownsamplingWorker : public FakeServer::Worker
     
     virtual void worker_body(int iter) override
     {
-	// cpu_downsample(int src_bit_depth, const uint8_t *src, uint8_t *dst, ssize_t src_nbytes, ssize_t dst_nbytes);
+	// cpu_downsample(int src_bit_depth, const uint8_t *src, uint8_t *dst, long src_nbytes, long dst_nbytes);
 	cpu_downsample(src_bit_depth, reinterpret_cast<const uint8_t *> (psrc.get()), reinterpret_cast<uint8_t *> (pdst.get()), src_nbytes, dst_nbytes);
     }
 

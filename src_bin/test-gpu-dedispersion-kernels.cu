@@ -32,16 +32,16 @@ struct TestInstance
 
     // "Big" shapes are either ringbufs, or dedisp bufs with B = (params.beams_per_gpu) and T = (params.ntime * this->nchunks).
     // "Small" shapes are dedisp bufs with B = (params.beams_per_batch) and T = (params.ntime).
-    vector<ssize_t> big_ishape;
-    vector<ssize_t> big_oshape;
-    vector<ssize_t> small_shape;
+    vector<long> big_ishape;
+    vector<long> big_oshape;
+    vector<long> small_shape;
     
     // Strides for input/output arrays.
     // Reminder: arrays have shape (params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime).
-    vector<ssize_t> gpu_istrides;
-    vector<ssize_t> gpu_ostrides;
-    vector<ssize_t> cpu_istrides;
-    vector<ssize_t> cpu_ostrides;
+    vector<long> gpu_istrides;
+    vector<long> gpu_ostrides;
+    vector<long> cpu_istrides;
+    vector<long> cpu_ostrides;
     
     void randomize()
     {
@@ -161,8 +161,8 @@ struct TestInstance
 
 	// Shape, strides.
 
-	vector<ssize_t> rb_shape = { params.ringbuf_nseg * params.nelts_per_segment };
-	vector<ssize_t> dd_shape = { params.total_beams, params.nambient, pow2(params.rank), nchunks * params.ntime };
+	vector<long> rb_shape = { params.ringbuf_nseg * params.nelts_per_segment };
+	vector<long> dd_shape = { params.total_beams, params.nambient, pow2(params.rank), nchunks * params.ntime };
 	this->big_ishape = params.input_is_ringbuf ? rb_shape : dd_shape;
 	this->big_oshape = params.output_is_ringbuf ? rb_shape : dd_shape;
 	this->small_shape = { params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime };
@@ -180,8 +180,8 @@ struct TestInstance
 void _setup_io_arrays(Array<void> &in, Array<void> &out, const Array<void> &in_big, const Array<void> &out_big, const TestInstance &tp, bool on_gpu)
 {
     int aflags = (on_gpu ? af_gpu : af_uhost) | af_zero;
-    vector<ssize_t> istrides = on_gpu ? tp.gpu_istrides : tp.cpu_istrides;
-    vector<ssize_t> ostrides = on_gpu ? tp.gpu_ostrides : tp.cpu_ostrides;
+    vector<long> istrides = on_gpu ? tp.gpu_istrides : tp.cpu_istrides;
+    vector<long> ostrides = on_gpu ? tp.gpu_ostrides : tp.cpu_ostrides;
     
     if (tp.params.input_is_ringbuf)
 	in = in_big;

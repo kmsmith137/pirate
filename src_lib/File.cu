@@ -38,7 +38,7 @@ File::~File()
 }
 
 
-void File::write(const void *p, ssize_t nbytes)
+void File::write(const void *p, long nbytes)
 {
     if (nbytes == 0)
 	return;
@@ -51,7 +51,7 @@ void File::write(const void *p, ssize_t nbytes)
     const char *pc = reinterpret_cast<const char *> (p);
 	
     while (nbytes > 0) {
-	ssize_t n = ::write(fd, pc, nbytes);
+	long n = ::write(fd, pc, nbytes);
 	
 	if (n < 0) {
 	    stringstream ss;

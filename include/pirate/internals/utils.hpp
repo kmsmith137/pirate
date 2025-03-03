@@ -20,12 +20,12 @@ extern int bit_reverse_slow(int i, int nbits);
 extern int integer_log2(long n);
 
 // Returns total ring buffer size needed for tree of given rank (assuming no padding).
-extern ssize_t rstate_len(int rank);
+extern long rstate_len(int rank);
 
 // Returns total ring buffer size needed by the tree downsampler. (The
 // "tree downsampler" operates on 2^(output_rank+1) input channels, and
 // outputs 2^(output_rank) output channels.)
-extern ssize_t rstate_ds_len(int output_rank);
+extern long rstate_ds_len(int output_rank);
 
 // rb_lag(): returns lag needed for two-stage dedispersion.
 // The index 0 <= i < pow2(rank1) represents a coarse frequency.

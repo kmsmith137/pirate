@@ -73,7 +73,7 @@ void ReferenceLaggedDownsamplingKernel::apply(const Array<float> &in, vector<Arr
 
 
 // Helper for ReferenceLaggedDownsamplingKernel::apply()
-static void _check_shape(const char *name, const Array<float> &arr, ssize_t nbeams, ssize_t nfreq, ssize_t ntime)
+static void _check_shape(const char *name, const Array<float> &arr, long nbeams, long nfreq, long ntime)
 {
     if (arr.shape_equals({ nbeams, nfreq, ntime }))
 	return;

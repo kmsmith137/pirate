@@ -21,7 +21,7 @@ static exception bad_bit_depth(const char *where, int src_bit_depth)
 }
 				
 
-ssize_t cpu_downsample_src_bytes_per_chunk(int src_bit_depth)
+long cpu_downsample_src_bytes_per_chunk(int src_bit_depth)
 {
     if (src_bit_depth == 4)
 	return avx256_4bit_downsampler::src_bytes_per_chunk;
@@ -37,7 +37,7 @@ ssize_t cpu_downsample_src_bytes_per_chunk(int src_bit_depth)
 
 
 template<typename T>
-static void _cpu_downsample(const uint8_t *src, uint8_t *dst, ssize_t src_nbytes, ssize_t dst_nbytes)
+static void _cpu_downsample(const uint8_t *src, uint8_t *dst, long src_nbytes, long dst_nbytes)
 {
     constexpr int S = T::src_bytes_per_chunk;
     constexpr int D = T::dst_bytes_per_chunk;
@@ -50,7 +50,7 @@ static void _cpu_downsample(const uint8_t *src, uint8_t *dst, ssize_t src_nbytes
 
     T kernel(dst);
     
-    for (ssize_t i = 0; i < src_nbytes; i += T::src_bytes_per_chunk)
+    for (long i = 0; i < src_nbytes; i += T::src_bytes_per_chunk)
 	kernel.advance_chunk(src+i);
 
     // Kernel uses streaming writes, so don't forget the fence!!
@@ -58,7 +58,7 @@ static void _cpu_downsample(const uint8_t *src, uint8_t *dst, ssize_t src_nbytes
 }
 
 
-void cpu_downsample(int src_bit_depth, const uint8_t *src, uint8_t *dst, ssize_t src_nbytes, ssize_t dst_nbytes)
+void cpu_downsample(int src_bit_depth, const uint8_t *src, uint8_t *dst, long src_nbytes, long dst_nbytes)
 {
     if (src_bit_depth == 4)
 	_cpu_downsample <avx256_4bit_downsampler> (src, dst, src_nbytes, dst_nbytes);

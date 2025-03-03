@@ -84,7 +84,7 @@ int rb_lag(int i, int j, int rank0, int rank1, bool uflag)
 }
 
 
-ssize_t rstate_len(int rk)
+long rstate_len(int rk)
 {
     check_rank(rk, "rstate_len");
     
@@ -96,7 +96,7 @@ ssize_t rstate_len(int rk)
 
 
 // FIXME needs unit test.
-ssize_t rstate_ds_len(int rk)
+long rstate_ds_len(int rk)
 {
     check_rank(rk, "rstate_ds_len");
     

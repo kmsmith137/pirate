@@ -67,8 +67,8 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
     long R = params.ringbuf_nseg;
     long S = params.nelts_per_segment;
 
-    std::initializer_list<ssize_t> dd_shape = {B,A,N,T};
-    std::initializer_list<ssize_t> rb_shape = {R*S};
+    std::initializer_list<long> dd_shape = {B,A,N,T};
+    std::initializer_list<long> rb_shape = {R*S};
 
     assert(!params.input_is_ringbuf || !params.output_is_ringbuf);
     assert(in.shape_equals(params.input_is_ringbuf ? rb_shape : dd_shape));

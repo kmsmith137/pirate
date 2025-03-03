@@ -51,7 +51,7 @@ struct TransposeKernel
 };
 
 
-// FIXME should some strides be ssize_t?
+// FIXME should some strides be long?
 __global__ void __launch_bounds__(32 * TransposeKernel::warps_per_block, TransposeKernel::blocks_per_sm)
 transpose_kernel(float *dst, const float *src, int src_ystride, int src_zstride, int dst_xstride, int dst_zstride)
 {

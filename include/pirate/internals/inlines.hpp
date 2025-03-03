@@ -15,18 +15,18 @@ namespace pirate {
 #endif
 
 
-inline bool is_power_of_two(ssize_t n)
+inline bool is_power_of_two(long n)
 {
     return (n > 0) && !(n & (n-1));
 }
 
-inline ssize_t pow2(int n)
+inline long pow2(int n)
 {
     assert((n >= 0) && (n <= 32));
     return 1L << n;
 }
 
-inline ssize_t align_up(ssize_t n, ssize_t nalign)
+inline long align_up(long n, long nalign)
 {
     assert(n >= 0);
     assert(nalign > 0);
@@ -49,7 +49,7 @@ inline long round_down_to_power_of_two(long n)
     return 1L << int(x);
 }
 
-inline ssize_t xdiv(ssize_t m, ssize_t n)
+inline long xdiv(long m, long n)
 {
     assert(m >= 0);
     assert(n > 0);
@@ -126,7 +126,7 @@ inline void print_kv(const char *key, bool val, std::ostream &os, int indent, co
 }
 
 
-inline void print_kv_nbytes(const char *key, ssize_t nbytes, std::ostream &os, int indent)
+inline void print_kv_nbytes(const char *key, long nbytes, std::ostream &os, int indent)
 {
     os << Indent(indent) << key;
     

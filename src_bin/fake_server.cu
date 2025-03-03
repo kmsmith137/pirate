@@ -15,7 +15,7 @@ void test_01_weird_lucky_unlucky_pcie_behavior()
     sp.num_iterations = 50;
     // sp.use_hugepages = false;
     
-    ssize_t nb = 1024L * 1024L * 1024L;    
+    long nb = 1024L * 1024L * 1024L;    
     sp.nbytes_h2g = nb;
     sp.nbytes_g2h = 0;
     sp.ngpu = 1;

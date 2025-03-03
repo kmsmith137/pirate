@@ -70,7 +70,7 @@ int DedispersionConfig::get_nelts_per_segment() const
     throw runtime_error("DedispersionConfig: invalid dtype: " + dtype.str());
 }
 
-void DedispersionConfig::add_early_trigger(ssize_t ds_level, ssize_t tree_rank)
+void DedispersionConfig::add_early_trigger(long ds_level, long tree_rank)
 {
     EarlyTrigger e;
     e.ds_level = ds_level;
@@ -82,9 +82,9 @@ void DedispersionConfig::add_early_trigger(ssize_t ds_level, ssize_t tree_rank)
 }
 
 
-void DedispersionConfig::add_early_triggers(ssize_t ds_level, std::initializer_list<ssize_t> tree_ranks)
+void DedispersionConfig::add_early_triggers(long ds_level, std::initializer_list<long> tree_ranks)
 {
-    for (ssize_t tree_rank: tree_ranks) {
+    for (long tree_rank: tree_ranks) {
 	EarlyTrigger e;
 	e.ds_level = ds_level;
 	e.tree_rank = tree_rank;
@@ -132,8 +132,8 @@ void DedispersionConfig::validate() const
 
     // Check validity of early triggers.
     for (const EarlyTrigger &et: early_triggers) {
-	ssize_t ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
-	ssize_t ds_rank0 = ds_rank / 2;
+	long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
+	long ds_rank0 = ds_rank / 2;
 	
 	assert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
 	assert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));

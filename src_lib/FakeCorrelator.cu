@@ -51,7 +51,7 @@ void FakeCorrelator::throw_exception_if_aborted()
     
 void FakeCorrelator::sender_main(const string &ipaddr)
 {
-    ssize_t nbytes_total = 0;
+    long nbytes_total = 0;
     
     int aflags = ksgpu::af_uhost;
     if (params.use_mmap)
@@ -72,7 +72,7 @@ void FakeCorrelator::sender_main(const string &ipaddr)
 	socket.set_zerocopy();
     
     do {
-	ssize_t nbytes_sent = socket.send(buf.get(), params.send_bufsize);
+	long nbytes_sent = socket.send(buf.get(), params.send_bufsize);
 	nbytes_total += nbytes_sent;
 	throw_exception_if_aborted();
     } while (!socket.connreset);

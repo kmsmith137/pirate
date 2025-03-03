@@ -20,9 +20,9 @@ namespace pirate {
 struct DedispersionConfig
 {
     // Core dedispersion parameters.
-    ssize_t tree_rank = -1;
-    ssize_t num_downsampling_levels = -1;
-    ssize_t time_samples_per_chunk = 0;
+    long tree_rank = -1;
+    long num_downsampling_levels = -1;
+    long time_samples_per_chunk = 0;
 
     // For now, there is only one dtype, which can be either float32 or float16.
     // Later, I might split this into "compute" and "ringbuf" dtypes, and allow compressed
@@ -32,18 +32,18 @@ struct DedispersionConfig
     
     struct EarlyTrigger
     {
-	ssize_t ds_level = -1;
-	ssize_t tree_rank = 0;
+	long ds_level = -1;
+	long tree_rank = 0;
     };
 
     // Sorted (by ds_level first, then tree_rank).
     std::vector<EarlyTrigger> early_triggers;
 
     // GPU configuration.
-    ssize_t beams_per_gpu = 0;
-    ssize_t beams_per_batch = 0;
-    ssize_t num_active_batches = 0;
-    ssize_t gmem_nbytes_per_gpu = 0;
+    long beams_per_gpu = 0;
+    long beams_per_batch = 0;
+    long num_active_batches = 0;
+    long gmem_nbytes_per_gpu = 0;
     
     void validate() const;
 
@@ -67,8 +67,8 @@ struct DedispersionConfig
     
     // Helper functions for constructing DedispersionConfig instances.
     // Add early triggers, while maintaining invariant that 'early_triggers' is sorted.
-    void add_early_trigger(ssize_t ds_level, ssize_t tree_rank);
-    void add_early_triggers(ssize_t ds_level, std::initializer_list<ssize_t> tree_ranks);
+    void add_early_trigger(long ds_level, long tree_rank);
+    void add_early_triggers(long ds_level, std::initializer_list<long> tree_ranks);
 
     // Note: rather than calling this function directly, you probably want the
     // DedispersionPlan (not DedispersionConfig) member 'nelts_per_segment'.
