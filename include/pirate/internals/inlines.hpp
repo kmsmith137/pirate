@@ -4,7 +4,6 @@
 #include <ksgpu/string_utils.hpp>  // ksgpu::nbytes_to_str()
 
 #include <cmath>
-#include <cassert>
 #include <string>
 #include <iostream>
 #include <cuda_fp16.h>  // __half, __half2
@@ -22,15 +21,15 @@ inline bool is_power_of_two(long n)
 
 inline long pow2(int n)
 {
-    assert((n >= 0) && (n <= 32));
+    xassert((n >= 0) && (n <= 32));
     return 1L << n;
 }
 
 inline long align_up(long n, long nalign)
 {
-    assert(n >= 0);
-    assert(nalign > 0);
-    assert(is_power_of_two(nalign));
+    xassert(n >= 0);
+    xassert(nalign > 0);
+    xassert(is_power_of_two(nalign));
     return (n + nalign - 1) & ~(nalign - 1);
 }
 
@@ -44,16 +43,16 @@ inline long round_up_to_power_of_two(long n)
 
 inline long round_down_to_power_of_two(long n)
 {
-    assert(n >= 1);
+    xassert(n >= 1);
     double x = log2(n + 0.5);
     return 1L << int(x);
 }
 
 inline long xdiv(long m, long n)
 {
-    assert(m >= 0);
-    assert(n > 0);
-    assert((m % n) == 0);
+    xassert(m >= 0);
+    xassert(n > 0);
+    xassert_divisible(m, n);
     return m/n;
 }
 
@@ -65,7 +64,7 @@ inline bool is_empty_string(const std::string &s)
 template<typename T>
 inline bool is_sorted(const std::vector<T> &v, int min_length=0, bool allow_duplicates=false)
 {
-    assert((int)v.size() >= min_length);
+    xassert((int)v.size() >= min_length);
 
     for (unsigned int i = 1; i < v.size(); i++) {
 	if (v[i-1] > v[i])
@@ -83,7 +82,7 @@ inline bool is_aligned(const void *ptr, int nalign, bool allow_null=false)
     if (!allow_null && !ptr)
 	return false;
     
-    assert(nalign > 0);
+    xassert(nalign > 0);
     return (((unsigned long)ptr) % nalign) == 0;
 }
 		       

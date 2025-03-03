@@ -1,9 +1,9 @@
-#include <cassert>
+#include "../include/pirate/internals/cpu_downsample.hpp"
+#include "../include/pirate/avx256/downsample.hpp"
+
 #include <sstream>
 #include <stdexcept>
-
-#include "../include/pirate/avx256/downsample.hpp"
-#include "../include/pirate/internals/cpu_downsample.hpp"
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 
@@ -43,10 +43,10 @@ static void _cpu_downsample(const uint8_t *src, uint8_t *dst, long src_nbytes, l
     constexpr int D = T::dst_bytes_per_chunk;
     
     // FIXME pointer alignment asserts
-    assert(src_nbytes >= 0);
-    assert(dst_nbytes >= 0);
-    assert((src_nbytes * D) == (dst_nbytes * S));
-    assert((src_nbytes % S) == 0);
+    xassert(src_nbytes >= 0);
+    xassert(dst_nbytes >= 0);
+    xassert_eq(src_nbytes * D, dst_nbytes * S);
+    xassert_divisible(src_nbytes, S);
 
     T kernel(dst);
     

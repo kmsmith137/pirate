@@ -7,7 +7,7 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>    // rand_int()
-#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
+#include <ksgpu/test_utils.hpp>    // make_random_strides()
 
 using namespace std;
 using namespace pirate;

@@ -2,9 +2,10 @@
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 #include "../include/pirate/constants.hpp"          // constants::max_tree_rank
 
-#include <cassert>
 #include <sstream>
 #include <stdexcept>
+
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -33,8 +34,8 @@ int check_rank(int rank, const char *where, int min_rank)
 
 int bit_reverse_slow(int i, int nbits)
 {
-    assert((nbits >= 0) && (nbits <= 30));
-    assert((i >= 0) && (i < (1 << nbits)));
+    xassert((nbits >= 0) && (nbits <= 30));
+    xassert((i >= 0) && (i < (1 << nbits)));
     
     int j = 0;
     
@@ -54,7 +55,7 @@ extern int integer_log2(long n)
     int p = log2f(f);
 
     // If this fails, then n is not a power of 2.
-    assert(n == (1L << p));
+    xassert(n == (1L << p));
 
     return p;
 }
@@ -62,15 +63,15 @@ extern int integer_log2(long n)
 
 int rb_lag(int i, int j, int rank0, int rank1, bool uflag)
 {
-    assert(rank0 >= 0);
-    assert(rank1 >= 0);
-    assert((rank0+rank1) <= constants::max_tree_rank);
+    xassert(rank0 >= 0);
+    xassert(rank1 >= 0);
+    xassert((rank0+rank1) <= constants::max_tree_rank);
 
     int n0 = 1 << rank0;
     int n1 = 1 << rank1;
     
-    assert((i >= 0) && (i < n1));
-    assert((j >= 0) && (j < n0));
+    xassert((i >= 0) && (i < n1));
+    xassert((j >= 0) && (j < n0));
 
     int dm = bit_reverse_slow(j, rank0);
     
@@ -78,7 +79,7 @@ int rb_lag(int i, int j, int rank0, int rank1, bool uflag)
 	dm += n0;
 
     int lag = (n1-1-i) * dm;
-    assert(lag >= 0);
+    xassert(lag >= 0);
 
     return lag;
 }
@@ -108,8 +109,8 @@ long rstate_ds_len(int rk)
 // Only used in mean_bytes_per_unaligned_chunk().
 int gcd(int m, int n)
 {
-    assert(m > 0);
-    assert(n > 0);
+    xassert(m > 0);
+    xassert(n > 0);
 
     if (m > n)
 	std::swap(m, n);
@@ -126,8 +127,8 @@ int gcd(int m, int n)
 
 int mean_bytes_per_unaligned_chunk(int nbytes)
 {
-    assert(nbytes > 0);
-    assert(nbytes <= constants::bytes_per_gpu_cache_line);
+    xassert(nbytes > 0);
+    xassert(nbytes <= constants::bytes_per_gpu_cache_line);
 
     int g = gcd(nbytes, constants::bytes_per_gpu_cache_line);
     
@@ -147,11 +148,11 @@ int mean_bytes_per_unaligned_chunk(int nbytes)
 
 void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool normalize)
 {
-    assert(out.ndim == 2);
-    assert(out.strides[1] == 1);
+    xassert(out.ndim == 2);
+    xassert(out.strides[1] == 1);
 
-    assert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
-    assert(in.strides[1] == 1);
+    xassert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
+    xassert(in.strides[1] == 1);
 
     float w = normalize ? 0.5 : 1.0;
     int nchan_out = out.shape[0];
@@ -170,11 +171,11 @@ void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool n
     
 void reference_downsample_time(const Array<float> &in, Array<float> &out, bool normalize)
 {
-    assert(out.ndim == 2);
-    assert(out.strides[1] == 1);
+    xassert(out.ndim == 2);
+    xassert(out.strides[1] == 1);
 
-    assert(in.shape_equals({ out.shape[0], 2*out.shape[1] }));
-    assert(in.strides[1] == 1);
+    xassert(in.shape_equals({ out.shape[0], 2*out.shape[1] }));
+    xassert(in.strides[1] == 1);
 
     float w = normalize ? 0.5 : 1.0;
     int nchan = out.shape[0];
@@ -192,11 +193,11 @@ void reference_downsample_time(const Array<float> &in, Array<float> &out, bool n
 
 void reference_extract_odd_channels(const Array<float> &in, Array<float> &out)
 {
-    assert(out.ndim == 2);
-    assert(out.strides[1] == 1);
+    xassert(out.ndim == 2);
+    xassert(out.strides[1] == 1);
 
-    assert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
-    assert(in.strides[1] == 1);
+    xassert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
+    xassert(in.strides[1] == 1);
 
     int nchan_out = out.shape[0];
     int nt = out.shape[1];
@@ -211,15 +212,15 @@ void reference_extract_odd_channels(const Array<float> &in, Array<float> &out)
 
 void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
 {
-    assert(arr.ndim == 2);
-    assert(arr.shape[0] == lags.size());
-    assert(arr.strides[1] == 1);
+    xassert(arr.ndim == 2);
+    xassert(arr.shape[0] == long(lags.size()));
+    xassert(arr.strides[1] == 1);
 
     int nchan = arr.shape[0];
     int ntime = arr.shape[1];
 	
     for (int c = 0; c < nchan; c++) {
-	assert(lags[c] >= 0);
+	xassert(lags[c] >= 0);
 	int lag = std::min(lags[c], ntime);
 	
 	float *row = arr.data + c*arr.strides[0];
@@ -231,13 +232,13 @@ void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
 
 void dedisperse_non_incremental(Array<float> &arr)
 {
-    assert(arr.ndim == 2);
+    xassert(arr.ndim == 2);
 
     int nfreq = arr.shape[0];
     int ntime = arr.shape[1];
-    assert(nfreq > 0);
-    assert(ntime > 0);
-    assert((ntime ==1) || (arr.strides[1] == 1));
+    xassert(nfreq > 0);
+    xassert(ntime > 0);
+    xassert((ntime ==1) || (arr.strides[1] == 1));
     
     int rank = integer_log2(nfreq);
 

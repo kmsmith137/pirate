@@ -70,17 +70,17 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
     std::initializer_list<long> dd_shape = {B,A,N,T};
     std::initializer_list<long> rb_shape = {R*S};
 
-    assert(!params.input_is_ringbuf || !params.output_is_ringbuf);
-    assert(in.shape_equals(params.input_is_ringbuf ? rb_shape : dd_shape));
-    assert(out.shape_equals(params.output_is_ringbuf ? rb_shape : dd_shape));
+    xassert(!params.input_is_ringbuf || !params.output_is_ringbuf);
+    xassert(in.shape_equals(params.input_is_ringbuf ? rb_shape : dd_shape));
+    xassert(out.shape_equals(params.output_is_ringbuf ? rb_shape : dd_shape));
 
     // Compare (itime, ibeam) with expected values.
-    assert(itime == expected_itime);
-    assert(ibeam == expected_ibeam);
+    xassert_eq(itime, expected_itime);
+    xassert_eq(ibeam, expected_ibeam);
 
     // Update expected (itime, ibeam).
     expected_ibeam += B;
-    assert(expected_ibeam <= params.total_beams);
+    xassert_le(expected_ibeam, params.total_beams);
     
     if (expected_ibeam == params.total_beams) {
 	expected_ibeam = 0;
@@ -105,7 +105,7 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
     if (params.output_is_ringbuf)
 	_copy_to_ringbuf(dd, out, rb_pos);
     else
-	assert(out.data == dd.data);
+	xassert(out.data == dd.data);
 }
 
 
@@ -119,15 +119,15 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
     long S = params.nelts_per_segment;
     long ns = xdiv(T,S);
 
-    assert(in.shape_equals({B,A,N,T}));  // dedispersion buffer
-    assert(out.shape_equals({R*S}));     // ringbuf
-    assert(out.is_fully_contiguous());
-    assert(params.ringbuf_locations.shape_equals({ns*A*N,4}));
+    xassert_shape_eq(in, ({B,A,N,T}));  // dedispersion buffer
+    xassert_shape_eq(out, ({R*S}));     // ringbuf
+    xassert_shape_eq(params.ringbuf_locations, ({ns*A*N,4}));
+    xassert(out.is_fully_contiguous());
 
     long dd_bstride = in.strides[0];
     long dd_astride = in.strides[1];
     long dd_nstride = in.strides[2];
-    assert(in.strides[3] == 1);
+    xassert(in.strides[3] == 1);
 
     const uint *rb_loc = params.ringbuf_locations.data;
     const float *dd = in.data;
@@ -166,10 +166,10 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
     long S = params.nelts_per_segment;
     long ns = xdiv(T,S);
 
-    assert(in.shape_equals({R*S}));  // ringbuf
-    assert(in.is_fully_contiguous());
-    assert(out.shape_equals({B,A,N,T}));  // dedispersion buffer
-    assert(params.ringbuf_locations.shape_equals({ns*A*N,4}));
+    xassert_shape_eq(in, ({R*S}));  // ringbuf
+    xassert_shape_eq(out, ({B,A,N,T}));  // dedispersion buffer
+    xassert_shape_eq(params.ringbuf_locations, ({ns*A*N,4}));
+    xassert(in.is_fully_contiguous());
 
     const uint *rb_loc = params.ringbuf_locations.data;
     const float *ringbuf = in.data;
@@ -178,7 +178,7 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
     long dd_bstride = out.strides[0];
     long dd_astride = out.strides[1];
     long dd_nstride = out.strides[2];
-    assert(out.strides[3] == 1);
+    xassert(out.strides[3] == 1);
 
     // Loop over segments in tree.
     for (long s = 0; s < ns; s++) {

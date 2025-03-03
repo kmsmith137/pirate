@@ -5,7 +5,7 @@
 #include "../include/pirate/internals/inlines.hpp"  // pow2(), bit_reverse_slow()
 #include "../include/pirate/internals/utils.hpp"    // reference_downsample_freq(), reference_downsample_time()
 
-#include <cassert>
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -19,15 +19,15 @@ namespace pirate {
 ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Params &params_)
     : params(params_)
 {
-    assert(params.small_input_rank >= 0);
-    assert(params.small_input_rank <= 8);
-    assert(params.large_input_rank >= params.small_input_rank);
-    assert(params.large_input_rank <= constants::max_tree_rank);
-    assert(params.num_downsampling_levels >= 0);
-    assert(params.num_downsampling_levels <= constants::max_downsampling_level);
-    assert(params.nbeams > 0);
-    assert(params.ntime > 0);
-    assert((params.ntime % pow2(params.num_downsampling_levels)) == 0);
+    xassert(params.small_input_rank >= 0);
+    xassert(params.small_input_rank <= 8);
+    xassert(params.large_input_rank >= params.small_input_rank);
+    xassert(params.large_input_rank <= constants::max_tree_rank);
+    xassert(params.num_downsampling_levels >= 0);
+    xassert(params.num_downsampling_levels <= constants::max_downsampling_level);
+    xassert(params.nbeams > 0);
+    xassert(params.ntime > 0);
+    xassert((params.ntime % pow2(params.num_downsampling_levels)) == 0);
 
     int nb = params.nbeams;
     int r = params.large_input_rank;
@@ -37,7 +37,7 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Param
     if (nds == 0)
 	return;
 
-    assert(params.small_input_rank > 0);
+    xassert(params.small_input_rank > 0);
     Array<int> small_lags({nb * pow2(r)}, af_uhost | af_zero);
     Array<int> large_lags({nb * pow2(r-1)}, af_uhost | af_zero);
     
@@ -67,7 +67,7 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Param
 
 void ReferenceLaggedDownsamplingKernel::apply(const Array<float> &in, vector<Array<float>> &out)
 {
-    assert(out.size() == params.num_downsampling_levels);
+    xassert(long(out.size()) == params.num_downsampling_levels);
     this->apply(in, &out[0]);
 }
 

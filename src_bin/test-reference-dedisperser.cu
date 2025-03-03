@@ -4,8 +4,8 @@
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 
 #include <ksgpu/Array.hpp>
+#include <ksgpu/xassert.hpp>
 #include <ksgpu/rand_utils.hpp>
-#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
 
 using namespace std;
 using namespace ksgpu;
@@ -74,7 +74,7 @@ static void run_random_small_configs(int niter)
 	auto config = DedispersionConfig::make_random();
 
 	int max_nt = 8192;
-	assert(config.time_samples_per_chunk <= max_nt);
+	xassert(config.time_samples_per_chunk <= max_nt);
 	
 	int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
 	int nchunks = ksgpu::rand_int(1, max_nchunks+1);

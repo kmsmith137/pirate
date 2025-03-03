@@ -762,7 +762,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) 
     // Actual warps per threadblock.
     int W = M_W * A_W;  // actual warps per threadblock
     int B = M_B * A_B;  // threadblocks per beam
-    assert(W <= 32);
+    xassert(W <= 32);
 
     this->ntime_divisibility_requirement = pow2(D) * xdiv(128, ST);
     this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);

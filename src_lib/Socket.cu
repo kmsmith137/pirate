@@ -4,15 +4,11 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-#include <cassert>
 #include <sstream>
 #include <iostream>
 #include <stdexcept>
 
-// Branch predictor hint
-#ifndef _unlikely
-#define _unlikely(cond)  (__builtin_expect(cond,0))
-#endif
+#include <ksgpu/xassert.hpp>  // note: defines _unlikely()
 
 using namespace std;
 
@@ -133,20 +129,20 @@ void Socket::close()
     
 long Socket::read(void *buf, long count)
 {
-    assert(count > 0);
+    xassert(count > 0);
     long nbytes = ::read(this->fd, buf, count);
 
     if (_unlikely(nbytes < 0))
 	throw runtime_error(errstr(fd, "Socket::read"));
 
-    assert(nbytes <= count);
+    xassert(nbytes <= count);
     return nbytes;
 }
 
 
 long Socket::send(const void *buf, long count, int flags)
 {
-    assert(count > 0);
+    xassert(count > 0);
 
     if (_unlikely(connreset))
 	throw runtime_error("Socket::send() called after connection was reset");
@@ -174,7 +170,7 @@ long Socket::send(const void *buf, long count, int flags)
     if (_unlikely(nbytes == 0))
 	throw runtime_error("send() returned zero?!");
 
-    assert(nbytes <= count);
+    xassert(nbytes <= count);
     return nbytes;
 }
 
@@ -197,8 +193,8 @@ Socket Socket::accept()
 
 void Socket::getopt(int level, int optname, void *optval, socklen_t *optlen)
 {
-    assert(optval != nullptr);
-    assert(optlen != nullptr);
+    xassert(optval != nullptr);
+    xassert(optlen != nullptr);
 
     int err = getsockopt(fd, level, optname, optval, optlen);
     
@@ -209,7 +205,7 @@ void Socket::getopt(int level, int optname, void *optval, socklen_t *optlen)
 
 void Socket::setopt(int level, int optname, const void *optval, socklen_t optlen)
 {
-    assert(optval != nullptr);
+    xassert(optval != nullptr);
 	
     int err = setsockopt(fd, level, optname, optval, optlen);
 
@@ -244,7 +240,7 @@ void Socket::set_nonblocking()
 
 void Socket::set_pacing_rate(double bytes_per_sec)
 {
-    assert(bytes_per_sec >= 1.0);
+    xassert(bytes_per_sec >= 1.0);
 
     if (_unlikely(bytes_per_sec > 4.0e9)) {
 	stringstream ss;

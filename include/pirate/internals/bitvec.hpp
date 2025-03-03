@@ -5,8 +5,9 @@
 #define _PIRATE_INTERNALS_BITVEC_HPP
 
 #include <vector>
-#include <cassert>
 #include <cstdint>
+
+#include <ksgpu/xassert.hpp>
 #include <ksgpu/rand_utils.hpp>
 
 namespace pirate {
@@ -65,7 +66,7 @@ inline void write_bitvec(unsigned char *p, const std::vector<bool> &v)
 
 inline std::vector<bool> read_bitvec(const unsigned char *p, int nbits)
 {
-    assert(nbits >= 0);
+    xassert(nbits >= 0);
     std::vector<bool> ret(nbits);
     
     for (int i = 0; i < nbits; i++) {
@@ -78,10 +79,10 @@ inline std::vector<bool> read_bitvec(const unsigned char *p, int nbits)
 
 inline uint64_t bitvec_to_uint64(const std::vector<bool> &v, int nbits, int pos)
 {
-    assert(nbits >= 0);
-    assert(nbits < 64);
-    assert(pos >= 0);
-    assert(pos+nbits <= int(v.size()));
+    xassert(pos >= 0);
+    xassert(nbits >= 0);
+    xassert(nbits < 64);
+    xassert(pos+nbits <= int(v.size()));
     
     uint64_t ret = 0;
     for (int i = 0; i < nbits; i++)
@@ -93,7 +94,7 @@ inline uint64_t bitvec_to_uint64(const std::vector<bool> &v, int nbits, int pos)
 
 inline uint64_t bitvec_to_uint64(const std::vector<bool> &v)
 {
-    assert(v.size() <= 64);
+    xassert(v.size() <= 64);
     return bitvec_to_uint64(v, v.size(), 0);
 }
 

@@ -42,6 +42,8 @@ namespace pirate {
 //   vector<int> y = f.get_vector<int>("y");
 //
 //   f.assert_all_keys_requested();
+//
+// FIXME to do: implement YamlFile::assert_all_keys_requested().
 
 
 struct YamlFile {

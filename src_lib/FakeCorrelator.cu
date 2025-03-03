@@ -2,11 +2,11 @@
 #include "../include/pirate/internals/Socket.hpp"
 
 #include <thread>
-#include <cassert>
 #include <sstream>
 #include <iostream>
 
 #include <ksgpu/mem_utils.hpp>
+#include <ksgpu/xassert.hpp>
 
 
 using namespace std;
@@ -22,9 +22,9 @@ namespace pirate {
 FakeCorrelator::FakeCorrelator(const Params &params_)
     : params(params_)
 {
-    assert(params.nconn_per_ipaddr > 0);
-    assert(params.ipaddr_list.size() > 0);
-    assert(params.send_bufsize > 0);
+    xassert(params.nconn_per_ipaddr > 0);
+    xassert(params.ipaddr_list.size() > 0);
+    xassert(params.send_bufsize > 0);
 }
 	
     

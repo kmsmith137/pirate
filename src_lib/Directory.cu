@@ -1,5 +1,7 @@
 #include "../include/pirate/internals/Directory.hpp"
+
 #include <stdexcept>
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 
@@ -30,7 +32,7 @@ Directory::~Directory()
 
 dirent *Directory::read_next()
 {
-    assert(dirp != nullptr);
+    xassert(dirp != nullptr);
 
     dirent *entry = readdir(dirp);
 

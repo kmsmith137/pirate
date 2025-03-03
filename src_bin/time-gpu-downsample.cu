@@ -1,8 +1,8 @@
-#include <cassert>
 #include <iostream>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/CudaStreamPool.hpp>
 #include <ksgpu/string_utils.hpp>
+#include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/internals/gpu_downsample.hpp"
 
@@ -22,8 +22,8 @@ int main(int argc, char **argv)
     int Dt = from_str<int> (argv[2]);
     bool transpose_output = true;  // FIXME
     
-    assert((Df >= 1) && ((2048 % Df) == 0));
-    assert((Dt >= 1) && ((2048 % Dt) == 0));
+    xassert((Df >= 1) && ((2048 % Df) == 0));
+    xassert((Dt >= 1) && ((2048 % Dt) == 0));
     
     long nbeams = 64;
     long nfreq_src = 2048;

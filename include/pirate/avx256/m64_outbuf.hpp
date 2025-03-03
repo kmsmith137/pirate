@@ -2,6 +2,7 @@
 #define _PIRATE_AVX256_M64_OUTBUF_HPP
 
 #include <immintrin.h>
+#include <ksgpu/xassert.hpp>
 
 namespace pirate {
 #if 0
@@ -52,10 +53,10 @@ struct avx256_m64_outbuf
 	static_assert((P4 >= P3) && (P4 <= P3+64));
 
 #if 0
-	assert(_mm256_extract_epi64(P_reg,0) == P0);
-	assert(_mm256_extract_epi64(P_reg,1) == P1);
-	assert(_mm256_extract_epi64(P_reg,2) == P2);
-	assert(_mm256_extract_epi64(P_reg,3) == P3);
+	xassert(_mm256_extract_epi64(P_reg,0) == P0);
+	xassert(_mm256_extract_epi64(P_reg,1) == P1);
+	xassert(_mm256_extract_epi64(P_reg,2) == P2);
+	xassert(_mm256_extract_epi64(P_reg,3) == P3);
 #endif
 
 	// P_reg &= 0x3f

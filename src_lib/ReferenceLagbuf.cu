@@ -1,5 +1,4 @@
 #include "../include/pirate/internals/ReferenceLagbuf.hpp"
-#include <cassert>
 #include <cstring>
 
 using namespace std;
@@ -18,7 +17,7 @@ namespace pirate {
 
 static long _sum_lags(const int *lags, int nd, const long *shape, const long *strides)
 {
-    assert(nd > 0);
+    xassert(nd > 0);
     
     long n = shape[0];
     long s = strides[0];    
@@ -27,7 +26,7 @@ static long _sum_lags(const int *lags, int nd, const long *shape, const long *st
     if (nd == 1) {
 	for (long i = 0; i < n; i++) {
 	    int lag = lags[i*s];
-	    assert(lag >= 0);
+	    xassert(lag >= 0);
 	    ret += lag;
 	}
     }
@@ -43,8 +42,8 @@ static long _sum_lags(const int *lags, int nd, const long *shape, const long *st
 ReferenceLagbuf::ReferenceLagbuf(const ksgpu::Array<int> &lags_, int ntime_) :
     lags(lags_), ntime(ntime_)
 {
-    assert(ntime > 0);
-    assert(lags.ndim > 0);
+    xassert(ntime > 0);
+    xassert(lags.ndim > 0);
 
     int d = lags.ndim;
     long nr = _sum_lags(lags.data, d, lags.shape, lags.strides);
@@ -105,11 +104,11 @@ static float *_apply_lags(float *data, const int *lags, float *rstate, float *sc
 
 void ReferenceLagbuf::apply_lags(ksgpu::Array<float> &arr) const
 {
-    assert(arr.shape_equals(expected_shape));
-    assert((arr.shape[arr.ndim-1] == 1) || (arr.strides[arr.ndim-1] == 1));
+    xassert(arr.shape_equals(expected_shape));
+    xassert((arr.shape[arr.ndim-1] == 1) || (arr.strides[arr.ndim-1] == 1));
     
     float *rstate_end = _apply_lags(arr.data, lags.data, rstate.data, scratch.data, arr.ndim, arr.shape, arr.strides, lags.strides);				
-    assert(rstate_end == rstate.data + rstate.size);
+    xassert(rstate_end == rstate.data + rstate.size);
 }
 
 

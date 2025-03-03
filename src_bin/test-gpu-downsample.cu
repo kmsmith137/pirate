@@ -1,8 +1,8 @@
-#include <cassert>
 #include <iostream>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/test_utils.hpp>
+#include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/internals/gpu_downsample.hpp"
 
@@ -15,7 +15,7 @@ using namespace pirate;
 static Array<float> make_random_weights(const vector<long> &shape)
 {
     Array<float> ret(shape, af_rhost);
-    assert(ret.is_fully_contiguous());
+    xassert(ret.is_fully_contiguous());
 
     for (long i = 0; i < ret.size; i++)
 	ret.data[i] = rand_uniform();

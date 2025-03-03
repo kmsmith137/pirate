@@ -1,6 +1,7 @@
-#include <cassert>
 #include <stdexcept>
+
 #include <ksgpu/Array.hpp>
+#include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/internals/gpu_downsample.hpp"
 #include "../include/pirate/gpu/DownsampleKernel.hpp"
@@ -18,23 +19,23 @@ void launch_downsample(Array<float> &dst_i, Array<float> &dst_w,
 		       const Array<float> &src_i, const Array<float> &src_w,
 		       int Df, int Dt, bool transpose_output, cudaStream_t stream)
 {
-    assert(Df >= 1);
-    assert(Dt >= 1);
-    assert((Dt == 1) || (Dt == 2) || ((Dt % 4) == 0));
+    xassert(Df >= 1);
+    xassert(Dt >= 1);
+    xassert((Dt == 1) || (Dt == 2) || ((Dt % 4) == 0));
 
     if (!transpose_output)
 	throw runtime_error("launch_downsample(transpose_output=false) not implemented yet!");
-    
-    assert(dst_i.ndim == 3);
-    assert(dst_w.ndim == 3);
-    assert(src_i.ndim == 3);
-    assert(src_w.ndim == 3);
+
+    xassert(dst_i.ndim == 3);
+    xassert(dst_w.ndim == 3);
+    xassert(src_i.ndim == 3);
+    xassert(src_w.ndim == 3);
     
     for (int d = 0; d < 3; d++) {
-	assert(dst_i.shape[d] == dst_w.shape[d]);
-	assert(dst_i.strides[d] == dst_w.strides[d]);
-	assert(src_i.shape[d] == src_w.shape[d]);
-	assert(src_i.strides[d] == src_w.strides[d]);
+	xassert(dst_i.shape[d] == dst_w.shape[d]);
+	xassert(dst_i.strides[d] == dst_w.strides[d]);
+	xassert(src_i.shape[d] == src_w.shape[d]);
+	xassert(src_i.strides[d] == src_w.strides[d]);
     }
     
     // Source array: (beam, freq, time)
@@ -47,17 +48,17 @@ void launch_downsample(Array<float> &dst_i, Array<float> &dst_w,
     unsigned int ntime_dst = dst_i.shape[1];
     unsigned int nfreq_dst = dst_i.shape[2];
 
-    assert(nbeams_src == nbeams_dst);
-    assert(nfreq_src == Df * nfreq_dst);
-    assert(ntime_src == Dt * ntime_dst);
+    xassert(nbeams_src == nbeams_dst);
+    xassert(nfreq_src == Df * nfreq_dst);
+    xassert(ntime_src == Dt * ntime_dst);
 
-    assert((src_i.strides[0] % 4) == 0);
-    assert((src_i.strides[1] % 4) == 0);
-    assert(src_i.strides[2] == 1);
+    xassert((src_i.strides[0] % 4) == 0);
+    xassert((src_i.strides[1] % 4) == 0);
+    xassert(src_i.strides[2] == 1);
     
-    assert((dst_i.strides[0] % 4) == 0);
-    assert((dst_i.strides[1] % 4) == 0);
-    assert(dst_i.strides[2] == 1);
+    xassert((dst_i.strides[0] % 4) == 0);
+    xassert((dst_i.strides[1] % 4) == 0);
+    xassert(dst_i.strides[2] == 1);
     
     int src_bstride = src_i.strides[0];
     int src_fstride = src_i.strides[1];

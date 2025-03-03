@@ -12,6 +12,9 @@ namespace pirate {
 
 
 extern void sys_mlockall(int flags = MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT);
+
+// FIXME usleep() is deprecated. In hindsight the I think the best interface is
+//    void sys_sleep(double seconds);  // fills nanosleep() data structures "under the hood"
 extern void sys_usleep(long usec);
 
 

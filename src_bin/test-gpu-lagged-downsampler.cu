@@ -6,7 +6,7 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>    // rand_int()
-#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 using namespace pirate;
@@ -123,7 +123,7 @@ struct TestInstance
 	    nt_cumul += nt_ds;
 	}
 
-	assert(nr * nt_cumul == bstride_min);
+	xassert(nr * nt_cumul == bstride_min);
 	return ret;
     }
 
@@ -144,17 +144,17 @@ struct TestInstance
 	     << "    bstride_in = " << bstride_in << " (min: " << min_bstride_in() << ")\n"
 	     << "    bstride_out = " << bstride_out << " (min: " << min_bstride_out() << ")\n";
 	
-	assert(params.small_input_rank > 0);
-	assert(params.large_input_rank >= params.small_input_rank);
-	assert(params.large_input_rank <= constants::max_tree_rank);
-	assert(params.num_downsampling_levels > 0);
-	assert(params.num_downsampling_levels <= constants::max_downsampling_level-1);
-	assert(nbeams > 0);
-	assert(nchunks > 0);
-	assert(nt_chunk > 0);
-	// assert((nt_chunk * sizeof(T)) % (pow2(num_downsampling_levels) * constants::bytes_per_gpu_cache_line) == 0);
-	assert(bstride_in >= min_bstride_in());
-	assert(bstride_out >= min_bstride_out());
+	xassert(params.small_input_rank > 0);
+	xassert(params.large_input_rank >= params.small_input_rank);
+	xassert(params.large_input_rank <= constants::max_tree_rank);
+	xassert(params.num_downsampling_levels > 0);
+	xassert(params.num_downsampling_levels <= constants::max_downsampling_level-1);
+	xassert(nbeams > 0);
+	xassert(nchunks > 0);
+	xassert(nt_chunk > 0);
+	// xassert((nt_chunk * sizeof(T)) % (pow2(num_downsampling_levels) * constants::bytes_per_gpu_cache_line) == 0);
+	xassert(bstride_in >= min_bstride_in());
+	xassert(bstride_out >= min_bstride_out());
 
 	ReferenceLaggedDownsamplingKernel::Params ref_params;
 	ref_params.small_input_rank = params.small_input_rank;

@@ -1,4 +1,3 @@
-#include <cassert>
 #include <iostream>
 #include <ksgpu/Array.hpp>
 
@@ -17,12 +16,12 @@ static void test_cpu_downsampler(int src_bit_depth, int nchunks)
     
     int src_nbytes = nchunks * cpu_downsample_src_bytes_per_chunk(S);
     int src_nbits = 8 * src_nbytes;
-    assert((src_nbits % (2*S)) == 0);
+    xassert_divisible(src_nbits, 2*S);
 
     int dst_nelts = src_nbits / (2*S);
     int dst_nbits = dst_nelts * D;
     int dst_nbytes = dst_nbits / 8;
-    assert(dst_nbits == (8 * dst_nbytes));
+    xassert(dst_nbits == (8 * dst_nbytes));
     
     vector<bool> src_bitvec = make_bitvec(src_nbits);
     

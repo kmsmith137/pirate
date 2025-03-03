@@ -3,19 +3,13 @@
 #include <thread>
 #include <string>
 #include <sstream>
-#include <cassert>
 #include <stdexcept>
 
 #include <errno.h>
 #include <sched.h>
 #include <unistd.h>
 
-// #include <thread>
-// #include <cassert>
-// #include <sstream>
-// #include <stdexcept>
-// #include <pthread.h>
-// #include <sys/stat.h>
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 
@@ -44,7 +38,7 @@ void sys_usleep(long usec)
     // According to usleep() manpage, sleeping for longer than this is an error!
     static constexpr long max_usleep = 1000000;
 	
-    assert(usec >= 0);
+    xassert(usec >= 0);
 
     while (usec > 0) {
 	long n = std::min(usec, max_usleep);

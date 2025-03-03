@@ -72,13 +72,13 @@ struct Stage0Buffers
 	
 	for (long ids = 0; ids < nds; ids++) {
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
-	    assert(pos == st0.base_segment * nelts_per_segment);
+	    xassert(pos == st0.base_segment * nelts_per_segment);
 	    
 	    long nelts = st0.segments_per_beam * nelts_per_segment;
 	    long rank = st0.rank0 + st0.rank1;
 	    long nt_ds = st0.nt_ds;
 
-	    assert(nelts == pow2(rank) * nt_ds);
+	    xassert(nelts == pow2(rank) * nt_ds);
 	    Array<float> view = flat_buf.slice(1, pos, pos+nelts);
 	    view = view.reshape({ beams_per_batch, pow2(rank), nt_ds });
 
@@ -129,7 +129,7 @@ struct Stage0Buffers
 	    
 	    dd_kernels.at(ids) = make_shared<ReferenceDedispersionKernel> (params);
 	    
-	    assert(pos == st0.base_segment);
+	    xassert(pos == st0.base_segment);
 	    pos += nseg;
 	}
     }
@@ -211,13 +211,13 @@ struct Stage1Buffers
 
 	for (long iout = 0; iout < nout; iout++) {
 	    const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(iout);
-	    assert(pos == st1.base_segment * nelts_per_segment);
+	    xassert(pos == st1.base_segment * nelts_per_segment);
 	    
 	    long nelts = st1.segments_per_beam * nelts_per_segment;
 	    long rank = st1.rank0 + st1.rank1_trigger;
 	    long nt_ds = st1.nt_ds;
 
-	    assert(nelts == pow2(rank) * nt_ds);
+	    xassert(nelts == pow2(rank) * nt_ds);
 	    Array<float> view = flat_buf.slice(1, pos, pos+nelts);
 	    view = view.reshape({ beams_per_batch, pow2(rank), nt_ds });
 
@@ -250,7 +250,7 @@ struct Stage1Buffers
 	    
 	    dd_kernels.at(iout) = make_shared<ReferenceDedispersionKernel> (params);
 	    
-	    assert(pos == st1.base_segment);
+	    xassert(pos == st1.base_segment);
 	    pos += nseg;
 	}
     }
@@ -310,20 +310,20 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
 
 void ReferenceDedisperserBase::check_iobuf_shapes()
 {
-    assert(input_array.shape_equals({ beams_per_batch, pow2(config_rank), config_ntime }));
-    assert(output_arrays.size() == nout);
+    xassert_shape_eq(input_array, ({ beams_per_batch, pow2(config_rank), config_ntime }));
+    xassert_eq(output_arrays.size(), nout);
 
     for (long iout = 0; iout < nout; iout++) {
 	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(iout);
 	int rank = st1.rank0 + st1.rank1_trigger;
-	assert(output_arrays.at(iout).shape_equals({ beams_per_batch, pow2(rank), st1.nt_ds }));
+	xassert_shape_eq(output_arrays.at(iout), ({ beams_per_batch, pow2(rank), st1.nt_ds }));
     }
 }
 
 void ReferenceDedisperserBase::dedisperse(long itime, long ibeam)
 {
-    assert(itime == expected_itime);
-    assert(ibeam == expected_ibeam);
+    xassert_eq(itime, expected_itime);
+    xassert_eq(ibeam, expected_ibeam);
     
     this->_dedisperse(itime, ibeam);
 

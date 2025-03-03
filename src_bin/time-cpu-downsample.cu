@@ -1,4 +1,3 @@
-#include <cassert>
 #include <iostream>
 #include <immintrin.h>
 
@@ -6,6 +5,7 @@
 #include <ksgpu/CpuThreadPool.hpp>
 #include <ksgpu/string_utils.hpp>
 #include <ksgpu/time_utils.hpp>
+#include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/internals/cpu_downsample.hpp"
 
@@ -38,12 +38,12 @@ static void fake_5bit_downsampler(const uint8_t *src, uint8_t *dst, long src_nby
     constexpr int dst_bytes_per_chunk = 3*64;
 
     // FIXME pointer alignment asserts
-    assert(src_nbytes >= 0);
-    assert(dst_nbytes >= 0);
+    xassert(src_nbytes >= 0);
+    xassert(dst_nbytes >= 0);
 
     long nchunks = src_nbytes / src_bytes_per_chunk;
-    assert(src_nbytes == nchunks * src_bytes_per_chunk);
-    assert(dst_nbytes == nchunks * dst_bytes_per_chunk);
+    xassert(src_nbytes == nchunks * src_bytes_per_chunk);
+    xassert(dst_nbytes == nchunks * dst_bytes_per_chunk);
 
     const __m256i *sp = (const __m256i *) src;
     __m256i *dp = (__m256i *) dst;
@@ -136,7 +136,7 @@ struct TimingSetup
     void time_fake_downsample()
     {
 	// Only this case is implemented.
-	assert(src_bit_depth == 5);
+	xassert(src_bit_depth == 5);
 	
 	uint8_t *sp = src.data;
 	uint8_t *dp = dst.data;

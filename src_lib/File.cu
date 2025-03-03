@@ -1,11 +1,10 @@
 #include "../include/pirate/internals/File.hpp"
 
-#include <cassert>
 #include <sstream>
 #include <stdexcept>
-
 #include <fcntl.h>
 #include <unistd.h>
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 
@@ -43,9 +42,9 @@ void File::write(const void *p, long nbytes)
     if (nbytes == 0)
 	return;
     
-    assert(p != nullptr);
-    assert(nbytes > 0);
-    assert(fd >= 0);
+    xassert(p != nullptr);
+    xassert(nbytes > 0);
+    xassert(fd >= 0);
 
     // C++ doesn't alllow '+=' on a (const void *).
     const char *pc = reinterpret_cast<const char *> (p);

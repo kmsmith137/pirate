@@ -1,8 +1,9 @@
 #include "../include/pirate/DedispersionPlan.hpp"
-
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/internals/utils.hpp"    // bit_reverse_slow(), rb_lag(), rstate_len(), mean_bytes_per_unaligned_chunk()
 #include "../include/pirate/internals/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
+
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -39,7 +40,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	}
 
 	trigger_ranks.push_back(st0_rank);
-	assert(is_sorted(trigger_ranks));
+	xassert(is_sorted(trigger_ranks));
 
 	Stage0Tree st0;
 	st0.ds_level = ids;
@@ -52,8 +53,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	// FIXME should replace hardcoded 7,8 by something more descriptive
 	// (GpuDedispersionKernel::max_rank?)
 	int max_rank = ids ? 7 : 8;
-	assert((st0.rank0 >= 0) && (st0.rank0 <= max_rank));
-	assert(st0.nt_ds > 0);
+	xassert((st0.rank0 >= 0) && (st0.rank0 <= max_rank));
+	xassert(st0.nt_ds > 0);
 	
 	this->stage0_trees.push_back(st0);
 	this->stage0_total_segments_per_beam += st0.segments_per_beam;
@@ -68,8 +69,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	    st1.segments_per_beam = pow2(trigger_rank) * xdiv(st1.nt_ds, nelts_per_segment);
 	    st1.base_segment = this->stage1_total_segments_per_beam;
 
-	    assert((st1.rank1_trigger >= 0) && (st1.rank1_trigger <= 8));
-	    assert(st1.rank1_trigger <= st1.rank1_ambient);
+	    xassert((st1.rank1_trigger >= 0) && (st1.rank1_trigger <= 8));
+	    xassert(st1.rank1_trigger <= st1.rank1_ambient);
 		     
 	    this->stage1_trees.push_back(st1);
 	    this->stage1_total_segments_per_beam += st1.segments_per_beam;
@@ -96,10 +97,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	const Stage0Tree &st0 = this->stage0_trees.at(st1.ds_level);
 
 	// Some truly paranoid asserts.
-	assert(st0.nt_ds == st1.nt_ds);
-	assert(st0.rank0 == st1.rank0);
-	assert(st0.ds_level == st1.ds_level);
-	assert(st0.rank1 == st1.rank1_ambient);
+	xassert(st0.nt_ds == st1.nt_ds);
+	xassert(st0.rank0 == st1.rank0);
+	xassert(st0.ds_level == st1.ds_level);
+	xassert(st0.rank1 == st1.rank1_ambient);
 
 	int nchan0 = pow2(st1.rank0);
 	int nchan1 = pow2(st1.rank1_trigger);  // not rank1_ambient
@@ -114,23 +115,23 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 		for (int s0 = 0; s0 < ns; s0++) {
 		    int clag = (s0 + slag) / ns;
 		    int s1 = (s0 + slag) - (clag * ns);
-		    assert((s1 >= 0) && (s1 < ns));
+		    xassert((s1 >= 0) && (s1 < ns));
 
 		    // iseg0 -> (s,i1,i0)
 		    int iseg0 = (s0 * pow2(st0.rank1)) + i1;
 		    iseg0 = (iseg0 * pow2(st0.rank0)) + i0;
 		    iseg0 += st0.base_segment;
-		    assert((iseg0 >= 0) && (iseg0 < nseg0));
+		    xassert((iseg0 >= 0) && (iseg0 < nseg0));
 
 		    // iseg1 -> (s,i0,i1)
 		    int iseg1 = (s1 * nchan0) + i0;
 		    iseg1 = (iseg1 * nchan1) + i1;
 		    iseg1 += st1.base_segment;
-		    assert((iseg1 >= 0) && (iseg1 < nseg1));
+		    xassert((iseg1 >= 0) && (iseg1 < nseg1));
 
 		    // Add (clag, iseg1) to segmap[iseg0].
 		    int n1 = segmap_n1.data[iseg0]++;
-		    assert((n1 >= 0) && (n1 < max_n1));
+		    xassert((n1 >= 0) && (n1 < max_n1));
 		    segmap_clag.data[iseg0*max_n1 + n1] = clag;
 		    segmap_iseg1.data[iseg0*max_n1 + n1] = iseg1;
 
@@ -174,10 +175,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     
     for (int iseg0 = 0; iseg0 < nseg0; iseg0++) {
 	int n1 = segmap_n1.data[iseg0];
-	assert((n1 >= 0) && (n1 <= max_n1));
+	xassert((n1 >= 0) && (n1 <= max_n1));
 	
 	int rb_clag = segmap_clag.data[iseg0*max_n1 + n1-1];
-	assert((rb_clag >= 0) && (rb_clag <= max_clag));
+	xassert((rb_clag >= 0) && (rb_clag <= max_clag));
 	
 	Ringbuf &rb = gmem_ringbufs.at(rb_clag);
 	int rb_seg = rb.nseg_per_beam++;
@@ -191,13 +192,13 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	    int clag1 = segmap_clag.data[iseg0*max_n1 + i1];
 	    int iseg1 = segmap_iseg1.data[iseg0*max_n1 + i1];
 	    
-	    assert((clag1 >= 0) && (clag1 <= rb_clag));  // segmap_clags must be sorted
-	    assert((iseg1 >= 0) && (iseg1 < nseg1));
-	    assert(!coverage[iseg1]);
+	    xassert((clag1 >= 0) && (clag1 <= rb_clag));  // segmap_clags must be sorted
+	    xassert((iseg1 >= 0) && (iseg1 < nseg1));
+	    xassert(!coverage[iseg1]);
 	    coverage[iseg1] = true;
 
 	    int rb_phase = rb.rb_len - (clag1 * BT);
-	    assert(rb_phase > 0);
+	    xassert(rb_phase > 0);
 	    
 	    uint *rb_loc1 = stage1_rb_locs.data + (4*iseg1);
 	    rb_loc1[0] = rb_seg;
@@ -207,7 +208,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     }
 
     for (int iseg1 = 0; iseg1 < nseg1; iseg1++)
-	assert(coverage[iseg1]);
+	xassert(coverage[iseg1]);
 
     // Part 5:
     //  - initialize this->gmem_ringbuf_nbytes

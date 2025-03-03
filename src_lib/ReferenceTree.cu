@@ -4,7 +4,7 @@
 #include "../include/pirate/internals/inlines.hpp"  // pow2(), bit_reverse_slow()
 #include "../include/pirate/internals/utils.hpp"    // check_rank()
 
-#include <cassert>
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -25,10 +25,10 @@ static float *_dedisperse(float *arr, int ndim, const long *shape, const long *s
 	return rp;
     }
 
-    assert(ndim == 2);    
-    assert(shape[0] == pow2(rank));
-    assert(shape[1] == ntime);
-    assert((ntime == 1) || (strides[1] == 1));
+    xassert(ndim == 2);    
+    xassert(shape[0] == pow2(rank));
+    xassert(shape[1] == ntime);
+    xassert((ntime == 1) || (strides[1] == 1));
 
     long rstride = strides[0];
     
@@ -93,16 +93,16 @@ ReferenceTree::ReferenceTree(std::initializer_list<long> shape_, int freq_axis_)
 ReferenceTree::ReferenceTree(int ndim_, const long *shape_, int freq_axis_) :
     freq_axis(freq_axis_), ndim(ndim_)
 {
-    assert(ndim >= 2);
-    assert(freq_axis >= 0);
-    assert(freq_axis < ndim-1);
+    xassert(ndim >= 2);
+    xassert(freq_axis >= 0);
+    xassert(freq_axis < ndim-1);
     
     this->shape.resize(ndim);
     this->nrstate = 1;
 
     for (int d = 0; d < ndim; d++) {
 	shape[d] = shape_[d];
-	assert(shape[d] > 0);
+	xassert(shape[d] > 0);
 	
 	if ((d < ndim-1) && (d != freq_axis))
 	    nrstate *= shape[d];
@@ -111,7 +111,7 @@ ReferenceTree::ReferenceTree(int ndim_, const long *shape_, int freq_axis_) :
     this->nfreq = shape[freq_axis];
     this->ntime = shape[ndim-1];
     
-    assert(is_power_of_two(nfreq));
+    xassert(is_power_of_two(nfreq));
     this->rank = integer_log2(nfreq);
     this->nrstate *= rstate_len(rank);   // rstate_len() is declared in utils.hpp
     
@@ -124,9 +124,9 @@ ReferenceTree::ReferenceTree(int ndim_, const long *shape_, int freq_axis_) :
 
 void ReferenceTree::dedisperse(ksgpu::Array<float> &arr)
 {
-    assert(arr.on_host());
-    assert(arr.shape_equals(this->shape));
-    assert((ntime == 1) || (arr.strides[ndim-1] == 1));
+    xassert(arr.on_host());
+    xassert(arr.shape_equals(this->shape));
+    xassert((ntime == 1) || (arr.strides[ndim-1] == 1));
 	
     if (rank == 0)
 	return;
@@ -142,7 +142,7 @@ void ReferenceTree::dedisperse(ksgpu::Array<float> &arr)
     }
     
     float *rp_end = _dedisperse(arr.data, ndim, &tmp_shape[0], &tmp_strides[0], rank, ntime, rstate.data, scratch.data);
-    assert(rp_end == rstate.data + nrstate);
+    xassert(rp_end == rstate.data + nrstate);
 }    
 
 

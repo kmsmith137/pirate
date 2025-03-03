@@ -1,7 +1,7 @@
 #include "../include/pirate/internals/YamlFile.hpp"
 #include "../include/pirate/internals/file_utils.hpp"  // file_exists()
 
-#include <cassert>
+#include <ksgpu/xassert.hpp>
 
 using namespace std;
 
@@ -55,7 +55,7 @@ YamlFile YamlFile::operator[](long ix) const
     ss << name << "[" << ix << "]";
 
     YamlFile child(ss.str(), node[ix], verbosity);
-    assert(child.node);  // shhould never fail
+    xassert(child.node);  // should never fail
 
     return child;
 }

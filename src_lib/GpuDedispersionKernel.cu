@@ -6,6 +6,7 @@
 #include "../include/pirate/constants.hpp"
 
 #include <sstream>
+#include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>  // CUDA_CALL()
 
 using namespace std;
@@ -105,7 +106,7 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
     if (rank <= 4)
 	return Array<uint> ();
 
-    assert(rank <= 8);
+    xassert_le(rank, 8);
     int rank0 = rank >> 1;  // round down
     int rank1 = rank - rank0;
     
@@ -145,8 +146,8 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 		    continue;
 
 		// Ensure no overflow in control word.
-		assert(shmem_nreg < 32768);  // uint15 rb_base
-		assert(lag < 256);           // uint8 rb_lag
+		xassert_lt(shmem_nreg, 32768);  // uint15 rb_base
+		xassert_lt(lag, 256);           // uint8 rb_lag
 		
 		// Control words are stored in global memory at "writer offset".
 		// To get "reader offset", set pos=0 by applying mask 0xff007fff.
@@ -158,7 +159,7 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 		for (int l = 0; l < lag; l++) {
 		    if (gs_ireg == 32) {
 			// Write completed gmem_spec to 'integer_constants' array.
-			assert(gs_icl < gs_ncl);
+			xassert(int(gs_icl) < gs_ncl);
 			ret.at({pow2(rank) + 2*gs_icl}) = gs_sbase;
 			ret.at({pow2(rank) + 2*gs_icl+1}) = gs_gbits;
 			gs_icl++;
@@ -177,7 +178,7 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 			gs_spos += 32;
 		    }
 
-		    assert(gs_spos == spos);
+		    xassert(gs_spos == spos);
 		    gs_ireg++;
 		    gs_spos++;
 		}
@@ -189,14 +190,14 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
     }
     
     // After loop completes, the last gmem spec should be partially or fully complete.
-    assert(gs_ireg > 0);
-    assert(gs_ireg <= 32);
-    assert(gs_icl == (gs_ncl-1));
+    xassert(gs_ireg > 0);
+    xassert(gs_ireg <= 32);
+    xassert(int(gs_icl) == (gs_ncl-1));
 
     // This assert ensures that we have enough shared memory "headroom".
     int gs_smax = gs_spos + (32 - gs_ireg);
-    assert(gs_smax <= shmem_nreg);
-    assert(shmem_nreg*4 <= shmem_nbytes);
+    xassert_le(gs_smax, int(shmem_nreg));
+    xassert_le(4*int(shmem_nreg), shmem_nbytes);
 
     // Write last gmem spec.
     ret.at({pow2(rank) + 2*gs_icl}) = gs_sbase;
@@ -211,42 +212,41 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 
 void GpuDedispersionKernel::Params::validate(bool on_gpu) const
 {
-    assert(rank >= 0);
-    assert(rank <= 8);
-    assert(nambient > 0);
-    assert(total_beams > 0);
-    assert(beams_per_batch > 0);
-    assert(beams_per_batch <= constants::cuda_max_y_blocks);
-    assert(ntime > 0);
+    xassert_ge(rank, 0);
+    xassert_le(rank, 8);
+    xassert_gt(nambient, 0);
+    xassert_gt(total_beams, 0);
+    xassert_gt(beams_per_batch, 0);
+    xassert_le(beams_per_batch, constants::cuda_max_y_blocks);
+    xassert_ge(ntime, 0);
 
-    assert((dtype == Dtype::native<float>()) || (dtype == Dtype::native<__half>()));
+    xassert((dtype == Dtype::native<float>()) || (dtype == Dtype::native<__half>()));
+    xassert(!input_is_ringbuf || !output_is_ringbuf);
     
     // Not really necessary, but failure probably indicates an unintentional bug.
-    assert(is_power_of_two(nambient));
+    xassert(is_power_of_two(nambient));
     
     // Currently assumed throughout the pirate code.
-    assert((total_beams % beams_per_batch) == 0);
+    xassert_divisible(total_beams, beams_per_batch);
 
     // Currently assumed by the GPU kernels.
-    int nelts_per_cache_line = xdiv(1024, dtype.nbits);
-    assert(nelts_per_segment == nelts_per_cache_line);
-
-    assert((ntime % nelts_per_segment) == 0);
-    assert(!input_is_ringbuf || !output_is_ringbuf);
+    int nelts_per_cache_line = xdiv(8 * constants::bytes_per_gpu_cache_line, dtype.nbits);
+    xassert_eq(nelts_per_segment, nelts_per_cache_line);
+    xassert_divisible(ntime, nelts_per_segment);
     
     if (input_is_ringbuf || output_is_ringbuf) {
 	long nseg = xdiv(ntime,nelts_per_segment) * nambient * pow2(rank);
-	assert(ringbuf_locations.shape_equals({ nseg, 4 }));
-	assert(ringbuf_locations.is_fully_contiguous());
-	assert(ringbuf_nseg > 0);
-	assert(ringbuf_nseg <= UINT_MAX);
+	xassert_shape_eq(ringbuf_locations, ({ nseg, 4 }));
+	xassert(ringbuf_locations.is_fully_contiguous());
+	xassert(ringbuf_nseg > 0);
+	xassert(ringbuf_nseg <= UINT_MAX);
 
 	if (on_gpu) {
-	    assert(ringbuf_locations.on_gpu());
+	    xassert(ringbuf_locations.on_gpu());
 	    return;
 	}
 
-	assert(ringbuf_locations.on_host());
+	xassert(ringbuf_locations.on_host());
 	
 	for (long iseg = 0; iseg < nseg; iseg++) {
 	    const uint *rb_locs = ringbuf_locations.data + (4*iseg);
@@ -254,7 +254,7 @@ void GpuDedispersionKernel::Params::validate(bool on_gpu) const
 	    // long rb_phase = rb_locs[1];   // index of (time chunk, beam) pair, relative to current pair
 	    long rb_len = rb_locs[2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
 	    long rb_nseg = rb_locs[3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
-	    assert(rb_offset + (rb_len-1)*rb_nseg < ringbuf_nseg);
+	    xassert(rb_offset + (rb_len-1)*rb_nseg < ringbuf_nseg);
 	}
     }
 }
@@ -277,13 +277,9 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> 
     Array<T> in_arr = in_arr_.template cast<T> ("dedispersion_simple_inbuf input array");
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime).
-    assert(in_arr.ndim == 4);
-    assert(in_arr.shape[0] == params.beams_per_batch);
-    assert(in_arr.shape[1] == params.nambient);
-    assert(in_arr.shape[2] == pow2(params.rank));
-    assert(in_arr.shape[3] == params.ntime);
-    assert(in_arr.get_ncontig() >= 1);
-    assert(in_arr.on_gpu());
+    xassert_shape_eq(in_arr, ({params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime}));
+    xassert(in_arr.get_ncontig() >= 1);
+    xassert(in_arr.on_gpu());
 
     this->in = (T32 *) in_arr.data;
     this->beam_stride32 = xdiv(in_arr.strides[0], denom);     // 32-bit stride
@@ -292,15 +288,15 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> 
     this->is_downsampled = params.input_is_downsampled_tree;
 
     // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
-    assert(is_aligned(in, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
-    assert((beam_stride32 % elts_per_cache_line) == 0);
-    assert((ambient_stride32 % elts_per_cache_line) == 0);
-    assert((freq_stride32 % elts_per_cache_line) == 0);
+    xassert(is_aligned(in, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
+    xassert_divisible(beam_stride32, elts_per_cache_line);
+    xassert_divisible(ambient_stride32, elts_per_cache_line);
+    xassert_divisible(freq_stride32, elts_per_cache_line);
     
     // FIXME could improve these checks, by verifying that strides are non-overlapping.
-    assert(beam_stride32 != 0);
-    assert(ambient_stride32 != 0);
-    assert(freq_stride32 != 0);
+    xassert(beam_stride32 != 0);
+    xassert(ambient_stride32 != 0);
+    xassert(freq_stride32 != 0);
 }
 
 
@@ -319,13 +315,9 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_a
     Array<T> out_arr = out_arr_.template cast<T> ("dedispersion_simple_outbuf output array");
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime)
-    assert(out_arr.ndim == 4);
-    assert(out_arr.shape[0] == params.beams_per_batch);
-    assert(out_arr.shape[1] == params.nambient);
-    assert(out_arr.shape[2] == pow2(params.rank));
-    assert(out_arr.shape[3] == params.ntime);
-    assert(out_arr.get_ncontig() >= 1);
-    assert(out_arr.on_gpu());
+    xassert_shape_eq(out_arr, ({ params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime }));
+    xassert(out_arr.get_ncontig() >= 1);
+    xassert(out_arr.on_gpu());
 
     this->out = (T32 *) out_arr.data;
     this->beam_stride32 = xdiv(out_arr.strides[0], denom);     // 32-bit stride
@@ -333,15 +325,15 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_a
     this->dm_stride32 = xdiv(out_arr.strides[2], denom);     // 32-bit stride
     
     // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
-    assert(is_aligned(out, constants::bytes_per_gpu_cache_line));   // also checks non-NULL
-    assert((beam_stride32 % elts_per_cache_line) == 0);
-    assert((ambient_stride32 % elts_per_cache_line) == 0);
-    assert((dm_stride32 % elts_per_cache_line) == 0);
+    xassert(is_aligned(out, constants::bytes_per_gpu_cache_line));   // also checks non-NULL
+    xassert_divisible(beam_stride32, elts_per_cache_line);
+    xassert_divisible(ambient_stride32, elts_per_cache_line);
+    xassert_divisible(dm_stride32, elts_per_cache_line);
     
     // FIXME could improve these checks, by verifying that strides are non-overlapping.
-    assert(beam_stride32 != 0);
-    assert(ambient_stride32 != 0);
-    assert(dm_stride32 != 0);
+    xassert(beam_stride32 != 0);
+    xassert(ambient_stride32 != 0);
+    xassert(dm_stride32 != 0);
 }
 
 
@@ -359,17 +351,14 @@ dedispersion_ring_inbuf<T>::device_args::device_args(const Array<void> &in_arr_,
     static_assert(denom * sizeof(T) == 4);
 
     Array<T> in_arr = in_arr_.template cast<T> ("dedispersion_ring_inbuf input array");
-    assert(in_arr.ndim == 1);
-    assert(in_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
-    assert(in_arr.get_ncontig() == 1);
-    assert(in_arr.on_gpu());
+    xassert_shape_eq(in_arr, ({ params.ringbuf_nseg * params.nelts_per_segment }));
+    xassert(in_arr.get_ncontig() == 1);
+    xassert(in_arr.on_gpu());
 
     Array<uint> rb_loc = params.ringbuf_locations;
-    assert(rb_loc.ndim == 2);
-    assert(rb_loc.shape[0] == params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment));
-    assert(rb_loc.shape[1] == 4);
-    assert(rb_loc.is_fully_contiguous());
-    assert(rb_loc.on_gpu());
+    xassert_shape_eq(rb_loc, ({ params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
+    xassert(rb_loc.is_fully_contiguous());
+    xassert(rb_loc.on_gpu());
 
     this->rb_base = (const T32 *) in_arr.data;
     this->rb_loc = (const uint4 *) rb_loc.data;
@@ -388,17 +377,14 @@ dedispersion_ring_outbuf<T>::device_args::device_args(const Array<void> &out_arr
     static_assert(denom * sizeof(T) == 4);
 
     Array<T> out_arr = out_arr_.template cast<T> ("dedispersion_ring_outbuf output array");
-    assert(out_arr.ndim == 1);
-    assert(out_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
-    assert(out_arr.get_ncontig() == 1);
-    assert(out_arr.on_gpu());
+    xassert_shape_eq(out_arr, ({ params.ringbuf_nseg * params.nelts_per_segment }));
+    xassert(out_arr.get_ncontig() == 1);
+    xassert(out_arr.on_gpu());
 
     Array<uint> rb_loc = params.ringbuf_locations;
-    assert(rb_loc.ndim == 2);
-    assert(rb_loc.shape[0] == params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment));
-    assert(rb_loc.shape[1] == 4);
-    assert(rb_loc.is_fully_contiguous());
-    assert(rb_loc.on_gpu());
+    xassert_shape_eq(rb_loc, ({ params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
+    xassert(rb_loc.is_fully_contiguous());
+    xassert(rb_loc.on_gpu());
 
     this->rb_base = (T32 *) out_arr.data;
     this->rb_loc = (const uint4 *) rb_loc.data;
@@ -467,12 +453,12 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const Array<void> &in_arr
     typename Outbuf::device_args out(out_arr, params);
 
     // Compare (itime, ibeam) with expected values.
-    assert(itime == expected_itime);
-    assert(ibeam == expected_ibeam);
+    xassert_eq(itime, expected_itime);
+    xassert_eq(ibeam, expected_ibeam);
 
     // Update expected (itime, ibeam).
     expected_ibeam += params.beams_per_batch;
-    assert(expected_ibeam <= params.total_beams);
+    xassert_le(expected_ibeam, params.total_beams);
     
     if (expected_ibeam == params.total_beams) {
 	expected_ibeam = 0;
@@ -505,7 +491,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
     params.validate(true);    // on_gpu=true
-    assert(params.rank > 0);  // FIXME define _r0 for testing
+    xassert(params.rank > 0);  // FIXME define _r0 for testing
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
 

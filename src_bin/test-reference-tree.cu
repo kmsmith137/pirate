@@ -4,8 +4,8 @@
 #include "../include/pirate/internals/utils.hpp"  // dedisperse_non_incremental(), lag_non_incremental()
 
 #include <ksgpu/rand_utils.hpp>    // rand_int()
-#include <ksgpu/test_utils.hpp>    // assert_arrays_equal()
 #include <ksgpu/string_utils.hpp>  // tuple_str()
+#include <ksgpu/test_utils.hpp>    // make_random_strides()
 
 using namespace std;
 using namespace pirate;
@@ -43,8 +43,8 @@ static void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, 
     }
 	
     check_rank(rank, "test_non_incremental_dedispersion");
-    assert((dm_brev >= 0) && (dm_brev < pow2(rank)));
-    assert((t0 >= 0) && (t0 < ntime));
+    xassert((dm_brev >= 0) && (dm_brev < pow2(rank)));
+    xassert((t0 >= 0) && (t0 < ntime));
 
     int nchan = pow2(rank);
     Array<float> arr({nchan, ntime}, af_uhost | af_random);
@@ -60,7 +60,7 @@ static void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, 
     float y = arr.at({dm_brev,t0});
 
     float eps = fabs(x-y) / sqrt(nchan);
-    assert(eps < 1.0e-5);
+    xassert(eps < 1.0e-5);
 }
 
 
@@ -82,9 +82,9 @@ static void test_non_incremental_dedispersion(bool noisy=false)
 
 static void lag_non_incremental(Array<float> &arr, const Array<int> &lags)
 {
-    assert(arr.ndim > 1);
-    assert(lags.shape_equals(arr.ndim-1, arr.shape));
-    assert(arr.is_fully_contiguous());
+    xassert(arr.ndim > 1);
+    xassert(lags.shape_equals(arr.ndim-1, arr.shape));
+    xassert(arr.is_fully_contiguous());
 
     long nchan = lags.size;
     long nt = arr.shape[arr.ndim-1];
@@ -113,8 +113,8 @@ static void test_reference_lagbuf(const Array<int> &lags, const vector<long> dat
 	 << ", nt_chunk=" << nt_chunk
 	 << ", nchunks=" << nchunks << endl;
 
-    assert(data_strides.size() == lags.ndim+1);
-    assert(data_strides[lags.ndim] == 1);
+    xassert(data_strides.size() == lags.ndim+1);
+    xassert(data_strides[lags.ndim] == 1);
     
     int d = lags.ndim;
     int nt_tot = nt_chunk * nchunks;

@@ -4,6 +4,7 @@
 #include <algorithm>               // std::sort()
 
 #include <ksgpu/Dtype.hpp>
+#include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>    // CUDA_CALL()
 #include <ksgpu/rand_utils.hpp>    // ksgpu::rand_*()
 #include <ksgpu/string_utils.hpp>  // ksgpu::tuple_str()
@@ -99,14 +100,14 @@ void DedispersionConfig::add_early_triggers(long ds_level, std::initializer_list
 void DedispersionConfig::validate() const
 {
     // Check that all members have been initialized.
-    assert(tree_rank >= 0);
-    assert(num_downsampling_levels > 0);
-    assert(time_samples_per_chunk > 0);
-    assert(is_sorted(early_triggers));
-    assert(beams_per_gpu > 0);
-    assert(beams_per_batch > 0);
-    assert(num_active_batches > 0);
-    assert(gmem_nbytes_per_gpu > 0);
+    xassert(tree_rank >= 0);
+    xassert(num_downsampling_levels > 0);
+    xassert(time_samples_per_chunk > 0);
+    xassert(is_sorted(early_triggers));
+    xassert(beams_per_gpu > 0);
+    xassert(beams_per_batch > 0);
+    xassert(num_active_batches > 0);
+    xassert(gmem_nbytes_per_gpu > 0);
 
     int min_rank = (num_downsampling_levels > 1) ? 1 : 0;
     check_rank(tree_rank, "DedispersionConfig", min_rank);
@@ -124,19 +125,16 @@ void DedispersionConfig::validate() const
     }
 
     // GPU configuration.
-    assert((beams_per_gpu % beams_per_batch) == 0);
-    assert((num_active_batches * beams_per_batch) <= beams_per_gpu);
-
-    // Assumed for convenience, to simplify logic in a few places -- might revisit later.
-    assert((beams_per_gpu % beams_per_batch) == 0);
+    xassert_divisible(beams_per_gpu, beams_per_batch);  // assumed for convenience
+    xassert_le(num_active_batches * beams_per_batch, beams_per_gpu);
 
     // Check validity of early triggers.
     for (const EarlyTrigger &et: early_triggers) {
 	long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
 	long ds_rank0 = ds_rank / 2;
 	
-	assert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
-	assert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
+	xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
+	xassert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
     }
 }
 

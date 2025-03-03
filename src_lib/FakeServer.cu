@@ -1,7 +1,6 @@
 #include "../include/pirate/internals/FakeServer.hpp"
 
 #include <thread>
-#include <cassert>
 #include <sstream>
 #include <iostream>
 #include <condition_variable>
@@ -12,6 +11,7 @@
 #include <ksgpu/time_utils.hpp>
 #include <ksgpu/string_utils.hpp>
 #include <ksgpu/memcpy_kernels.hpp>
+#include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/internals/File.hpp"
 #include "../include/pirate/internals/Epoll.hpp"
@@ -34,7 +34,7 @@ namespace pirate {
 
 inline int vmin(const vector<int> &v)
 {
-    assert(v.size() > 0);
+    xassert(v.size() > 0);
     int ret = v[0];
     for (unsigned i = 1; i < v.size(); i++)
 	ret = std::min(ret, v[i]);
@@ -44,7 +44,7 @@ inline int vmin(const vector<int> &v)
 
 shared_ptr<char> server_alloc(long nbytes, bool use_hugepages, bool on_gpu=false)
 {
-    assert(nbytes > 0);
+    xassert(nbytes > 0);
     
     int aflags = on_gpu ? ksgpu::af_gpu : ksgpu::af_rhost;
     // aflags |= af_verbose;
@@ -97,10 +97,10 @@ struct FakeServer::Receiver
 	epoll(false)  // 'epoll' is constructed in an uninitialized state, and gets initialized in Receiver::initialize()
     {
 	int num_ipaddr = params.ipaddr_list.size();
-	assert((irecv >= 0) && (irecv < num_ipaddr));
-	assert(params.nconn_per_ipaddr > 0);
-	assert(params.recv_bufsize > 0);
-	assert(params.network_sync_cadence > 0);
+	xassert((irecv >= 0) && (irecv < num_ipaddr));
+	xassert(params.nconn_per_ipaddr > 0);
+	xassert(params.recv_bufsize > 0);
+	xassert(params.network_sync_cadence > 0);
 	
 	this->ip_addr = params.ipaddr_list[irecv];
     }
@@ -108,7 +108,7 @@ struct FakeServer::Receiver
     
     void initialize()
     {
-	assert(!recv_buf);  // detect double call to initialize().
+	xassert(!recv_buf);  // detect double call to initialize().
 	this->recv_buf = server_alloc(params.recv_bufsize, params.use_hugepages);
 
 	this->listening_socket = Socket(PF_INET, SOCK_STREAM);
@@ -122,9 +122,9 @@ struct FakeServer::Receiver
     
     void accept()
     {
-	assert(recv_buf);    // detect call to accept() without initialize()
-	assert(data_sockets.size() == 0);  // detect double call to accept()
-	assert(params.nconn_per_ipaddr > 0);
+	xassert(recv_buf);    // detect call to accept() without initialize()
+	xassert(data_sockets.size() == 0);  // detect double call to accept()
+	xassert(params.nconn_per_ipaddr > 0);
 	
 	this->data_sockets.resize(params.nconn_per_ipaddr);
 	this->listening_socket.listen();
@@ -151,8 +151,8 @@ struct FakeServer::Receiver
     // Receives (params.network_sync_cadence) bytes of data, and updates this->cumulative_stats.
     void receive_data()
     {
-	assert(recv_buf);
-	assert(data_sockets.size() > 0);
+	xassert(recv_buf);
+	xassert(data_sockets.size() > 0);
 
 	if (!tv_initialized) {
 	    this->tv_start = ksgpu::get_time();
@@ -176,7 +176,7 @@ struct FakeServer::Receiver
 
     inline long _read_socket(uint32_t ids, ReceiverStats &stats)
     {
-	assert(ids < data_sockets.size());
+	xassert(ids < data_sockets.size());
 	
 	long max_read = std::min(params.recv_bufsize, params.network_sync_cadence - stats.nbytes_read);
 	long nbytes_read = data_sockets[ids].read(recv_buf.get(), max_read);
@@ -191,7 +191,7 @@ struct FakeServer::Receiver
     // Helper for receive_data(). (Called if use_epoll=false.)
     void _receive_no_epoll(ReceiverStats &stats)
     {
-	assert(data_sockets.size() == 1);
+	xassert(data_sockets.size() == 1);
 	
 	while (stats.nbytes_read < params.network_sync_cadence) {
 	    // Blocking read()
@@ -259,8 +259,8 @@ struct FakeServer::Receiver
 	    return;
 	}
 
-	assert(rs.elapsed_time > 0.0);
-	assert(rs.num_read_calls > 0);
+	xassert(rs.elapsed_time > 0.0);
+	xassert(rs.num_read_calls > 0);
 
 	cout << ": Gbps=" << (8.0e-9 * rs.nbytes_read / rs.elapsed_time)
 	     << ", bytes/read()=" << (rs.nbytes_read / double(rs.num_read_calls));
@@ -344,8 +344,8 @@ struct FakeServer::Worker
 	    return;
 	}
 
-	assert(ws.active_time > 0.0);
-	assert(ws.total_time > 0.0);
+	xassert(ws.active_time > 0.0);
+	xassert(ws.total_time > 0.0);
 
 	cout << ", loadfrac=" << (ws.active_time / ws.total_time);
 	_show_bandwidth("host->gpu", ws, this->nbytes_h2g);
@@ -369,7 +369,7 @@ struct SleepyWorker : public FakeServer::Worker
     SleepyWorker(const FakeServer::Params &params_)
 	: FakeServer::Worker(params_)
     {
-	assert(params.sleep_usec > 0);
+	xassert(params.sleep_usec > 0);
 	this->worker_name = "SleepyWorker(usec=" + to_string(params.sleep_usec) + ")";
     }
 
@@ -651,14 +651,14 @@ struct DownsamplingWorker : public FakeServer::Worker
     DownsamplingWorker(const FakeServer::Params &params_, int src_bit_depth_) :
 	FakeServer::Worker(params_), src_bit_depth(src_bit_depth_)
     {
-	assert((src_bit_depth >= 4) && (src_bit_depth <= 7));
+	xassert((src_bit_depth >= 4) && (src_bit_depth <= 7));
 
 	long src_nelts = xdiv(params.nbytes_downsample, (1 << (src_bit_depth-4)));
 	this->src_nbytes = xdiv(src_nelts, 8) * src_bit_depth;
 	this->dst_nbytes = xdiv(src_nelts, 16) * (src_bit_depth+1);
 
 	long nbytes_per_chunk = cpu_downsample_src_bytes_per_chunk(src_bit_depth);
-	assert((src_nbytes % nbytes_per_chunk) == 0);
+	xassert((src_nbytes % nbytes_per_chunk) == 0);
 
 	stringstream ss;
 	ss << "Downsample(bit depth " << src_bit_depth
@@ -695,7 +695,7 @@ FakeServer::FakeServer(const Params &params_)
 {
     // ------------------------------  Error checking  ------------------------------
     
-    assert(params.num_iterations > 0);
+    xassert(params.num_iterations > 0);
     
     bool gpus_requested = (params.nbytes_h2g > 0) || (params.nbytes_g2h > 0) || (params.nbytes_gmem_kernel > 0);
     bool nics_requested = (params.nconn_per_ipaddr > 0) || (params.ipaddr_list.size() > 0);
@@ -705,7 +705,7 @@ FakeServer::FakeServer(const Params &params_)
 	if (params.ngpu < 0) {
 	    CUDA_CALL(cudaGetDeviceCount(&params.ngpu));
 	    cout << params.server_name << ": " << params.ngpu << " GPU(s) detected in cudaGetDeviceCount()" << endl;
-	    assert(params.ngpu >= 0);
+	    xassert(params.ngpu >= 0);
 	}
 	
 	if (params.ngpu == 0)
@@ -714,32 +714,32 @@ FakeServer::FakeServer(const Params &params_)
     
     if (nics_requested) {
 	// FIXME are these fully asserted in Receiver methods?
-	assert(params.ipaddr_list.size() > 0);
-	assert(params.nconn_per_ipaddr > 0);
-	assert(params.use_epoll || (params.nconn_per_ipaddr == 1));
-	assert(params.recv_bufsize > 0);
-	assert(params.network_sync_cadence > 0);
+	xassert(params.ipaddr_list.size() > 0);
+	xassert(params.nconn_per_ipaddr > 0);
+	xassert(params.use_epoll || (params.nconn_per_ipaddr == 1));
+	xassert(params.recv_bufsize > 0);
+	xassert(params.network_sync_cadence > 0);
     }
     
     if (ssds_requested) {
-	assert(params.nthreads_per_ssd > 0);
-	assert(params.nbytes_per_file > 0);
-	assert(params.nwrites_per_file > 0);
-	assert(params.ssd_list.size() > 0);
-	assert((params.nbytes_per_ssd % (params.nthreads_per_ssd * params.nbytes_per_file)) == 0);
-	assert((params.nbytes_per_file % params.nwrites_per_file) == 0);
+	xassert(params.nthreads_per_ssd > 0);
+	xassert(params.nbytes_per_file > 0);
+	xassert(params.nwrites_per_file > 0);
+	xassert(params.ssd_list.size() > 0);
+	xassert((params.nbytes_per_ssd % (params.nthreads_per_ssd * params.nbytes_per_file)) == 0);
+	xassert((params.nbytes_per_file % params.nwrites_per_file) == 0);
     }
     
     if (params.memcpy_blocksize > 0) {
-	assert((params.nbytes_h2h % params.memcpy_blocksize) == 0);
-	assert((params.nbytes_g2h % params.memcpy_blocksize) == 0);
-	assert((params.nbytes_h2g % params.memcpy_blocksize) == 0);
+	xassert((params.nbytes_h2h % params.memcpy_blocksize) == 0);
+	xassert((params.nbytes_g2h % params.memcpy_blocksize) == 0);
+	xassert((params.nbytes_h2g % params.memcpy_blocksize) == 0);
     }
 
     if (params.nbytes_gmem_kernel > 0) {
-	assert((params.nbytes_gmem_kernel % 256) == 0);
-	assert(params.gmem_kernel_blocksize >= 0);
-	assert((params.gmem_kernel_blocksize % 128) == 0);
+	xassert((params.nbytes_gmem_kernel % 256) == 0);
+	xassert(params.gmem_kernel_blocksize >= 0);
+	xassert((params.gmem_kernel_blocksize % 128) == 0);
     }
     
     // ------------------------------  Receivers and workers  ------------------------------
@@ -797,8 +797,8 @@ FakeServer::FakeServer(const Params &params_)
 void FakeServer::increment_counter(int ix, int expected_value)
 {
     std::unique_lock<mutex> lk(lock);
-    assert((ix >= 0) && (ix < int(counters.size())));
-    assert(counters[ix] == expected_value);
+    xassert((ix >= 0) && (ix < int(counters.size())));
+    xassert(counters[ix] == expected_value);
     
     if (aborted)
 	throw runtime_error(abort_msg);
@@ -857,10 +857,10 @@ void FakeServer::abort(const string &msg)
 void FakeServer::receiver_main(int irecv)
 {
     int num_receivers = receivers.size();
-    assert((irecv >= 0) && (irecv < num_receivers));
+    xassert((irecv >= 0) && (irecv < num_receivers));
     
     shared_ptr<Receiver> receiver = receivers[irecv];
-    assert(receiver);
+    xassert(receiver);
     
     receiver->initialize();
     barrier.wait();  // wait at barrier [1/3]
@@ -878,10 +878,10 @@ void FakeServer::receiver_main(int irecv)
 void FakeServer::worker_main(int iworker)
 {
     int num_workers = workers.size();;
-    assert((iworker >= 0) && (iworker < num_workers));
+    xassert((iworker >= 0) && (iworker < num_workers));
     
     shared_ptr<Worker> worker = workers[iworker];
-    assert(worker);
+    xassert(worker);
     
     worker->worker_initialize();
     barrier.wait();  // wait at barrier [1/3]
