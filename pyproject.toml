@@ -1,7 +1,7 @@
 [project]
 name = 'pirate_frb'
-version = '0.0.2'
-dependencies = [ 'pybind11', 'numpy', 'ksgpu >= 1.0.3' ]
+version = '1.0.0'
+dependencies = [ 'pybind11', 'numpy', 'ksgpu >= 1.1.0' ]
 description = 'Perimeter Institute RAdio Transient Engine'
 requires-python = '>=3.8'
 # readme = 'README.md'

@@ -16,6 +16,7 @@ using namespace ksgpu;
 
 struct TestInstance
 {
+    // Reminder: includes 'dtype', 'input_is_ringbuf', 'output_is_ringbuf'.
     GpuDedispersionKernel::Params params;
 
     long nchunks = 0;
@@ -83,7 +84,7 @@ struct TestInstance
 	//   this->nchunks
 	
 	bool is_float32 = (rand_uniform() < 0.5);
-	params.dtype = is_float32 ? "float32" : "float16";
+	params.dtype = is_float32 ? Dtype::native<float>() : Dtype::native<__half>();
 	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
 
 	params.nelts_per_segment = is_float32 ? 32 : 64;
@@ -176,8 +177,7 @@ struct TestInstance
 
 
 // Helper for run_test()
-template<typename T>
-void _setup_io_arrays(Array<T> &in, Array<T> &out, const Array<T> &in_big, const Array<T> &out_big, const TestInstance &tp, bool on_gpu)
+void _setup_io_arrays(Array<void> &in, Array<void> &out, const Array<void> &in_big, const Array<void> &out_big, const TestInstance &tp, bool on_gpu)
 {
     int aflags = (on_gpu ? af_gpu : af_uhost) | af_zero;
     vector<ssize_t> istrides = on_gpu ? tp.gpu_istrides : tp.cpu_istrides;
@@ -186,14 +186,14 @@ void _setup_io_arrays(Array<T> &in, Array<T> &out, const Array<T> &in_big, const
     if (tp.params.input_is_ringbuf)
 	in = in_big;
     else
-	in = Array<T> (tp.small_shape, istrides, aflags);
+	in = Array<void> (in_big.dtype, tp.small_shape, istrides, aflags);
 
     if (tp.in_place)
 	out = in;
     else if (tp.params.output_is_ringbuf)
 	out = out_big;
     else
-	out = Array<T> (tp.small_shape, ostrides, aflags);
+	out = Array<void> (out_big.dtype, tp.small_shape, ostrides, aflags);
 }
 
 
@@ -228,10 +228,7 @@ static void run_test(const TestInstance &tp)
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
     shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(gp);
 
-    bool is_float32 = p.is_float32();
-
     // Array allocation starts here.
-    // FIXME there is some cut-and-paste that will go away when I define Array<void>.
     
     // "Big" arrays can be either ringbufs, or "big" dedispersion bufs.
     Array<float> cpu_in_big(tp.big_ishape, af_rhost | af_random);  // contiguous
@@ -241,27 +238,21 @@ static void run_test(const TestInstance &tp)
     // They can be either "small" dedispersion bufs, or references to a "big" ringbuf.
     Array<float> cpu_in, cpu_out;
     _setup_io_arrays(cpu_in, cpu_out, cpu_in_big, cpu_out_big, tp, false);  // on_gpu = false
-    
-    UntypedArray gpu_in_big;
-    UntypedArray gpu_out_big;
-    UntypedArray gpu_in, gpu_out;
 
-    if (is_float32) {
-	gpu_in_big.data_float32 = cpu_in_big.to_gpu();
-	gpu_out_big.data_float32 = Array<float> (tp.big_oshape, af_gpu | af_zero);
-	_setup_io_arrays(gpu_in.data_float32, gpu_out.data_float32, gpu_in_big.data_float32, gpu_out_big.data_float32, tp, true);  // on_gpu = true
-    }
-    else {
-	Array<__half> t = cpu_in_big.convert_dtype<__half> ();
-	gpu_in_big.data_float16 = t.to_gpu();
-	gpu_out_big.data_float16 = Array<__half> (tp.big_oshape, af_gpu | af_zero);
-	_setup_io_arrays(gpu_in.data_float16, gpu_out.data_float16, gpu_in_big.data_float16, gpu_out_big.data_float16, tp, true);  // on_gpu = true
-    }
+    Array<void> h2g(tp.params.dtype, tp.big_ishape, af_rhost);        // contiguous
+    Array<void> gpu_in_big(tp.params.dtype, tp.big_ishape, af_gpu);   // contiguous
+    Array<void> gpu_out_big(tp.params.dtype, tp.big_oshape, af_gpu);  // contiguous
+
+    array_convert(h2g, cpu_in_big);
+    array_fill(gpu_in_big, h2g);
+
+    Array<void> gpu_in, gpu_out;
+    _setup_io_arrays(gpu_in, gpu_out, gpu_in_big, gpu_out_big, tp, true);  // on_gpu = true
     
     for (long ichunk = 0; ichunk < tp.nchunks; ichunk++) {
 	for (int b = 0; b < p.total_beams; b += p.beams_per_batch) {
 	    Array<float> s;
-	    UntypedArray t;
+	    Array<void> t;
 
 	    // Reference dedispersion.
 
@@ -296,22 +287,15 @@ static void run_test(const TestInstance &tp)
 	    }
 	}
     }
-
-    if (is_float32)
-	gpu_out_big.data_float32 = gpu_out_big.data_float32.to_host();
-    else {
-	gpu_out_big.data_float16 = gpu_out_big.data_float16.to_host();
-	gpu_out_big.data_float32 = gpu_out_big.data_float16.convert_dtype<float> ();
-    }
     
     // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
-    double epsrel = is_float32 ? 1.0e-6 : 0.003;
-    double epsabs = epsrel * pow(1.414, p.rank);
+    double epsrel = 3 * tp.params.dtype.precision();
+    double epsabs = 3 * tp.params.dtype.precision() * pow(1.414, p.rank);
 
     if (p.output_is_ringbuf)
-	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"i"}, epsabs, epsrel);
+	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big, "cpu", "gpu", {"i"}, epsabs, epsrel);
     else
-	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big.data_float32, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
+	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
     
     cout << endl;
 }

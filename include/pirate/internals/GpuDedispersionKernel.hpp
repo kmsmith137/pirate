@@ -2,7 +2,6 @@
 #define _PIRATE_INTERNALS_GPU_DEDISPERSION_KERNEL_HPP
 
 #include <ksgpu/Array.hpp>
-#include "UntypedArray.hpp"
 
 namespace pirate {
 #if 0
@@ -31,12 +30,12 @@ public:
     //   int residual_lag = lag % nelts_per_segment;
 
     struct Params {
-	std::string dtype;      // either "float32" or "float16"
-	int rank = -1;          // satisfies 1 <= rank <= 8
+	ksgpu::Dtype dtype;   // either "float32" or "float16"
+	int rank = -1;        // satisfies 1 <= rank <= 8
 	int nambient = 0;
 	int total_beams = 0;
 	int beams_per_batch = 0;
-	int ntime = 0;          // includes downsampling factor, if any
+	int ntime = 0;        // includes downsampling factor, if any
 
 	// Input/output buffer types.
 	bool input_is_ringbuf = false;
@@ -50,10 +49,6 @@ public:
 	// Only used if (input_is_ringbuf || output_is_ringbuf)
 	ksgpu::Array<uint> ringbuf_locations;
 	long ringbuf_nseg = 0;
-	
-	// Returns true if (dtype == "float32"), false if (dtype == "float16").
-	// Otherwise, throws an exception.
-	bool is_float32() const;
 
 	// Throws an exception if anything is wrong.
 	void validate(bool on_gpu) const;
@@ -81,14 +76,14 @@ public:
     //
     // The 'itime' and 'ibeam' arguments are not logically necessary, but enable a debug check.
 
-    virtual void launch(const UntypedArray &in, UntypedArray &out, long itime, long ibeam, cudaStream_t stream=nullptr) = 0;
+    virtual void launch(const ksgpu::Array<void> &in, ksgpu::Array<void> &out, long itime, long ibeam, cudaStream_t stream=nullptr) = 0;
 
 protected:
     // Don't call constructor directly -- call GpuDedispersionKernel::make() instead!
     GpuDedispersionKernel(const Params &params);
 
     // Shape (total_beams, state_nelts_per_beam).
-    UntypedArray persistent_state;
+    ksgpu::Array<void> persistent_state;
 
     // Enables a debug check.
     long expected_itime = 0;

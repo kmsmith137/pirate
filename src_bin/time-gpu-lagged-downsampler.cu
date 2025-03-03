@@ -18,9 +18,7 @@ static void time_gpu_dedispersion_kernel(const GpuLaggedDownsamplingKernel::Para
     long nbeams = 4;
     long niter = 20;
     
-    bool is_float32 = params.is_float32();
-    long ST = is_float32 ? 4 : 2;  // sizeof(T)
-
+    long ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
     shared_ptr<GpuLaggedDownsamplingKernel> kernel = GpuLaggedDownsamplingKernel::make(params);
 
     long ninner = 0;
@@ -47,9 +45,9 @@ static void time_gpu_dedispersion_kernel(const GpuLaggedDownsamplingKernel::Para
 		<< ", large_input_rank=" << params.large_input_rank
 		<< ", num_downsampling_levels=" << params.num_downsampling_levels
 		<< ", pstate_overhead = " << pstate_overhead_percentage << "%"
-		<< ")\n";
+		<< ")";
 
-    cout << kernel_name.str();
+    cout << "\n" << kernel_name.str();
     kernel->print(cout, 4);  // indent=4
 
     cout << "    nstreams = " << nstreams << endl
@@ -58,28 +56,24 @@ static void time_gpu_dedispersion_kernel(const GpuLaggedDownsamplingKernel::Para
 	 << "    niter = " << niter << endl
 	 << "    gpu memory footprint = " << ksgpu::nbytes_to_str(footprint_nbytes) << endl;
 
-    UntypedArray in;
-    UntypedArray pstate;
-    UntypedArray out_flattened;
-
-    in.allocate({ nstreams, nbeams, pow2(params.large_input_rank), nt_chunk }, af_gpu | af_zero, is_float32);
-    pstate.allocate({ nstreams, nbeams, kernel->state_nelts_per_beam }, af_gpu | af_zero, is_float32);
-    out_flattened.allocate({ nstreams, nbeams, ninner }, af_gpu | af_zero, is_float32);
+    Array<void> in(params.dtype, { nstreams, nbeams, pow2(params.large_input_rank), nt_chunk }, af_gpu | af_zero);
+    Array<void> pstate(params.dtype, { nstreams, nbeams, kernel->state_nelts_per_beam }, af_gpu | af_zero);
+    Array<void> out_flattened(params.dtype, { nstreams, nbeams, ninner }, af_gpu | af_zero);
 
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
         {
-	    UntypedArray in_s = in.slice(0, istream);
-	    UntypedArray pstate_s = pstate.slice(0, istream);
-	    UntypedArray outf_s = out_flattened.slice(0, istream);
+	    Array<void> in_s = in.slice(0, istream);
+	    Array<void> pstate_s = pstate.slice(0, istream);
+	    Array<void> outf_s = out_flattened.slice(0, istream);
 
-	    vector<UntypedArray> out(params.num_downsampling_levels);
+	    vector<Array<void>> out(params.num_downsampling_levels);
 	    long nr = 1 << (params.large_input_rank-1);
 	    long nt_cumul = 0;
 	    
 	    for (int ids = 0; ids < params.num_downsampling_levels; ids++) {
 		long nt_ds = nt_chunk >> (ids+1);
-		UntypedArray a = outf_s.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
-		out[ids] = a.reshape({ nbeams, nr, nt_ds });
+		Array<void> a = outf_s.slice(1, nr * nt_cumul, nr * (nt_cumul + nt_ds));
+		out.at(ids) = a.reshape({ nbeams, nr, nt_ds });
 		nt_cumul += nt_ds;
 	    }
 
@@ -96,12 +90,14 @@ static void time_gpu_dedispersion_kernel(const GpuLaggedDownsamplingKernel::Para
 int main(int argc, char **argv)
 {
     for (int num_downsampling_levels: {1,3,5}) {
-	GpuLaggedDownsamplingKernel::Params params;
-	params.dtype = "float32";  // FIXME should time float16
-	params.small_input_rank = 8;
-	params.large_input_rank = 16;
-	params.num_downsampling_levels = num_downsampling_levels;
-	time_gpu_dedispersion_kernel(params);
+	for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
+	    GpuLaggedDownsamplingKernel::Params params;
+	    params.dtype = dtype;
+	    params.small_input_rank = 8;
+	    params.large_input_rank = 16;
+	    params.num_downsampling_levels = num_downsampling_levels;
+	    time_gpu_dedispersion_kernel(params);
+	}
     }
     
     return 0;

@@ -5,8 +5,8 @@
 #include <iostream>
 #include <cuda_fp16.h>  // __half, __half2
 
+#include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
-#include "UntypedArray.hpp"
 
 
 namespace pirate {
@@ -27,15 +27,11 @@ public:
 	//
 	// Then ld_nds = (dc_nds - 1)!
 
-	std::string dtype;      // either "float32" or "float16"
+	ksgpu::Dtype dtype;  // either float16 or float32
 	
 	long small_input_rank = 0;
 	long large_input_rank = 0;
 	long num_downsampling_levels = 0;
-
-	// Returns true if (dtype == "float32"), false if (dtype == "float16").
-	// Otherwise, throws an exception.
-	bool is_float32() const;
 
 	// Throws an exception if anything is wrong.
 	void validate() const;
@@ -61,9 +57,9 @@ public:
     //  - 'persistent_state': contiguous array of shape (nbeams, state_nelts_per_beam)
     //      Must be zeroed on first call to launch().
     
-    virtual void launch(const UntypedArray &in,
-			std::vector<UntypedArray> &out,
-			UntypedArray &persistent_state,
+    virtual void launch(const ksgpu::Array<void> &in,
+			std::vector<ksgpu::Array<void>> &out,
+			ksgpu::Array<void> &persistent_state,
 			long ntime_cumulative,
 			cudaStream_t stream=nullptr) = 0;
 

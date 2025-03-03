@@ -5,6 +5,8 @@
 #include <string>
 #include <iostream>
 
+#include <ksgpu/Dtype.hpp>
+
 namespace YAML { class Emitter; }      // #include <yaml-cpp/yaml.h>
 namespace pirate { struct YamlFile; }  // #include <pirate/internals/YamlFile.hpp>
 
@@ -22,11 +24,11 @@ struct DedispersionConfig
     ssize_t num_downsampling_levels = -1;
     ssize_t time_samples_per_chunk = 0;
 
-    // For now, there is only one dtype, which can be either "float32" or "float16".
+    // For now, there is only one dtype, which can be either float32 or float16.
     // Later, I might split this into "compute" and "ringbuf" dtypes, and allow compressed
     // dtypes (e.g. float8, int7).
-    
-    std::string dtype;  // "float32" or "float16"
+
+    ksgpu::Dtype dtype;
     
     struct EarlyTrigger
     {

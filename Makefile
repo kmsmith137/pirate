@@ -86,7 +86,6 @@ LIB_SRCFILES = \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
   src_lib/ReferenceTree.cu \
   src_lib/Socket.cu \
-  src_lib/UntypedArray.cu \
   src_lib/YamlFile.cu \
   src_lib/template_instantiations/dedisp_simple_float16.cu \
   src_lib/template_instantiations/dedisp_simple_float32.cu \
@@ -164,11 +163,10 @@ HFILES = \
   include/pirate/internals/ReferenceLaggedDownsamplingKernel.hpp \
   include/pirate/internals/ReferenceTree.hpp \
   include/pirate/internals/Socket.hpp \
-  include/pirate/internals/UntypedArray.hpp \
   include/pirate/internals/YamlFile.hpp
 
 # 'make clean' deletes {*~, *.o, *.d, *.so, *.pyc} from these dirs.
-CLEAN_DIRS := . lib src_bin src_lib src_lib/template_instantiations pirate_frb/__pycache__ include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
+CLEAN_DIRS := . lib src_bin src_lib src_lib/template_instantiations src_pybind11 pirate_frb pirate_frb/__pycache__ include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
 
 # Extra files to be deleted by 'make clean'.
 # Note that 'pirate_frb/include' and 'pirate_frb/lib' are symlinks, so we put them in CLEAN_FILES, not CLEAN_RMDIRS

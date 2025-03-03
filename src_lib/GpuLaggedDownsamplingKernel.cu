@@ -730,46 +730,16 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 // -------------------------------------------------------------------------------------------------
 
 
-bool GpuLaggedDownsamplingKernel::Params::is_float32() const
-{
-    // Currently only "float32" and "float16" are allowed.
-    if (dtype == "float32")
-	return true;
-    else if (dtype == "float16")
-	return false;
-    else if (dtype.empty())
-	throw runtime_error("GpuLaggedDownsamplingKernel::Params::dtype is uninitialized (or empty string)");
-    else
-	throw runtime_error("GpuLaggedDownsamplingKernel::Params: unrecognizd dtype '" + dtype + "' (expected 'float32' or 'float16')");
-}
-
-
-void GpuLaggedDownsamplingKernel::Params::validate() const
-{
-    assert(small_input_rank >= 2);  // currently required by GPU kernel
-    assert(small_input_rank <= 8);
-    assert(large_input_rank >= small_input_rank);
-    assert(large_input_rank <= constants::max_tree_rank);
-    assert(num_downsampling_levels >= 1);
-    assert(num_downsampling_levels <= constants::max_downsampling_level);
-    this->is_float32();  // checks dtype
-}
-
-
-// -------------------------------------------------------------------------------------------------
-
-
 GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) :
     params(params_)
 {
     params.validate();
-    bool is_float32 = params.is_float32();
 
     int D = params.num_downsampling_levels;
     int M = pow2(params.small_input_rank - 2);
     int A = pow2(params.large_input_rank - params.small_input_rank);
-    int ST = is_float32 ? 4 : 2;   // sizeof(T)
-    int S = (M*ST)/2 - 1;
+    int ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
+    int S = xdiv(M*ST,2) - 1;
     int shmem_nbytes_per_warp = D * (S+2) * 4;
     
     // Target warps per threadblock.
@@ -797,6 +767,21 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) 
     this->ntime_divisibility_requirement = pow2(D) * xdiv(128, ST);
     this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
+}
+
+
+void GpuLaggedDownsamplingKernel::Params::validate() const
+{
+    xassert(!dtype.is_empty());
+    xassert_ge(small_input_rank, 2);  // currently required by GPU kernel
+    xassert_le(small_input_rank, 8);
+    xassert_ge(large_input_rank, small_input_rank);
+    xassert_le(large_input_rank, constants::max_tree_rank);
+    xassert_ge(num_downsampling_levels, 1);
+    xassert_le(num_downsampling_levels, constants::max_downsampling_level);
+
+    if ((dtype.flags != df_float) || ((dtype.nbits != 16) && (dtype.nbits != 32)))
+	throw runtime_error("GpuLaggedDownsamplingKernel::Params::validate(): unsupported dtype: " + dtype.str());
 }
 
 
@@ -843,9 +828,9 @@ struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
 {
     DownsamplingKernelImpl(const Params &params);
 
-    virtual void launch(const UntypedArray &in,
-                        std::vector<UntypedArray> &out,
-                        UntypedArray &persistent_state,
+    virtual void launch(const Array<void> &in,
+                        std::vector<Array<void>> &out,
+                        Array<void> &persistent_state,
                         long ntime_cumulative,
                         cudaStream_t stream=nullptr) override;
 
@@ -873,55 +858,56 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const Params &params_) :
 // Virtual override
 template<typename T>
 void DownsamplingKernelImpl<T>::launch(
-    const UntypedArray &in_uarr,
-    vector<UntypedArray> &out_uarrs,
-    UntypedArray &persistent_state_uarr,
+    const Array<void> &in,
+    vector<Array<void>> &out,
+    Array<void> &persistent_state,
     long ntime_cumulative,
     cudaStream_t stream)
 {
-    int D = params.num_downsampling_levels;
-    assert(out_uarrs.size() == D);
+    // 'in': array of shape (nbeams, 2^(large_input_rank), ntime).
+    // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
 
-    Array<T> in = uarr_get<T> (in_uarr, "in");
-    Array<T> persistent_state = uarr_get<T> (persistent_state_uarr, "persistent_state");
-    
-    vector<Array<T>> out(D);
-    for (int d = 0; d < D; d++)
-	out.at(d) = uarr_get<T> (out_uarrs.at(d), "out");
-	 
-    assert(in.ndim == 3);
-    assert(in.shape[1] == pow2(params.large_input_rank));
-    assert(in.get_ncontig() >= 2);
+    xassert_eq(in.ndim, 3);
+    xassert_eq(in.shape[1], pow2(params.large_input_rank));
+    xassert_ge(in.get_ncontig(), 2);
+    xassert_eq(in.dtype, Dtype::native<T>());
 
     long nbeams = in.shape[0];
     long ntime_in = in.shape[2];
 
-    assert(nbeams > 0);
-    assert(ntime_in > 0);
-    assert(ntime_cumulative >= 0);
-    assert(ntime_in < 2L * 1024L * 1024L * 1024L);
-    assert((ntime_in % ntime_divisibility_requirement) == 0);
-    assert((ntime_cumulative % ntime_divisibility_requirement) == 0);
+    xassert(nbeams > 0);
+    xassert(ntime_in > 0);
+    xassert(ntime_cumulative >= 0);
+    xassert(ntime_in < 2L * 1024L * 1024L * 1024L);
+    xassert_divisible(ntime_in, ntime_divisibility_requirement);
+    xassert_divisible(ntime_cumulative, ntime_divisibility_requirement);
     
-    long nout = 0;
+    // 'persistent_state': contiguous array of shape (nbeams, state_nelts_per_beam)
 
-    for (int i = 0; i < (int)out.size(); i++) {
+    xassert_shape_eq(persistent_state, ({nbeams, state_nelts_per_beam}));
+    xassert_eq(persistent_state.dtype, Dtype::native<T>());
+    xassert(persistent_state.is_fully_contiguous());
+    
+    // 'out': vector of length (num_downsampling_levels).
+    //
+    // The i-th element should have shape (nbeams, 2^(large_input_rank-1), ntime/2^(i+1)).
+    // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
+    //
+    // There is also an "adjacency" requirement: out[i][0,:,:] and out[i+1][0,:,:] must
+    // be adjacent in memory. Relatedly, all 'out' arrays must have the same beam stride.
+    
+    xassert_eq(int(out.size()), params.num_downsampling_levels);
+
+    long nout = 0;
+    for (int i = 0; i < params.num_downsampling_levels; i++) {
 	int ntime_out = ntime_in >> (i+1);
 	int ntree_out = pow2(params.large_input_rank - 1);
 
-	if (!out[i].shape_equals({ nbeams, ntree_out, ntime_out })) {
-	    stringstream ss;
-	    ss << "GpuLaggedDownsamplingKernel::launch(): out[" << i
-	       << "]: expected shape (" << nbeams << "," << ntree_out << "," << ntime_out << ")"
-	       << ", got shape "
-	       << out[i].shape_str();
-	    throw runtime_error(ss.str());
-	}
+	xassert_shape_eq(out[i], ({nbeams, ntree_out, ntime_out}));
+	xassert_eq(out[i].dtype, Dtype::native<T>());
+	xassert(out[i].get_ncontig() >= 2);
 
-	if (out[i].get_ncontig() < 2)
-	    throw runtime_error("GpuLaggedDownsamplingKernel::launch(): output arrays must have contiguous freq/time axes");
-	
-	if (out[i].data != (out[0].data + nout)) {
+	if ((T*)out[i].data != ((T*)out[0].data + nout)) {
 	    throw runtime_error("GpuLaggedDownsamplingKernel::launch(): output arrays must be 'adjacent' "
 				"(see comment at beginning of pirate/src_lib/GpuLaggedDownsampler.cu)");
 	}
@@ -932,11 +918,8 @@ void DownsamplingKernelImpl<T>::launch(
 	nout += ntree_out * ntime_out;
     }
     
-    assert(persistent_state.shape_equals({ nbeams, state_nelts_per_beam }));
-    assert(persistent_state.is_fully_contiguous());
-
     // Required by CUDA (max alllowed value of gridDims.z)
-    assert(nbeams < 65536);
+    xassert_lt(nbeams, 65536);
 
     dim3 block_dims;
     block_dims.z = A_W;
@@ -965,10 +948,12 @@ void DownsamplingKernelImpl<T>::launch(
 // Static member function
 shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const Params &params)
 {
-    if (params.is_float32())
+    if (params.dtype == Dtype::native<float>())
 	return make_shared<DownsamplingKernelImpl<float>> (params);
-    else
+    if (params.dtype == Dtype::native<__half>())
 	return make_shared<DownsamplingKernelImpl<__half>> (params);
+    
+    throw runtime_error("GpuLaggedDownsamplingKernel::make(): unsupported dtype: " + params.dtype.str());
 }
 
 

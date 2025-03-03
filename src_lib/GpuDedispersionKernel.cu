@@ -209,20 +209,6 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 // -------------------------------------------------------------------------------------------------
 
 
-bool GpuDedispersionKernel::Params::is_float32() const
-{
-    // Currently only "float32" and "float16" are allowed.
-    if (dtype == "float32")
-	return true;
-    else if (dtype == "float16")
-	return false;
-    else if (dtype.empty())
-	throw runtime_error("GpuDedispersionKernel::Params::dtype is uninitialized (or empty string)");
-    else
-	throw runtime_error("GpuDedispersionKernel::Params: unrecognizd dtype '" + dtype + "' (expected 'float32' or 'float16')");
-}
-
-
 void GpuDedispersionKernel::Params::validate(bool on_gpu) const
 {
     assert(rank >= 0);
@@ -233,6 +219,8 @@ void GpuDedispersionKernel::Params::validate(bool on_gpu) const
     assert(beams_per_batch <= constants::cuda_max_y_blocks);
     assert(ntime > 0);
 
+    assert((dtype == Dtype::native<float>()) || (dtype == Dtype::native<__half>()));
+    
     // Not really necessary, but failure probably indicates an unintentional bug.
     assert(is_power_of_two(nambient));
     
@@ -240,7 +228,7 @@ void GpuDedispersionKernel::Params::validate(bool on_gpu) const
     assert((total_beams % beams_per_batch) == 0);
 
     // Currently assumed by the GPU kernels.
-    int nelts_per_cache_line = is_float32() ? 32 : 64;
+    int nelts_per_cache_line = xdiv(1024, dtype.nbits);
     assert(nelts_per_segment == nelts_per_cache_line);
 
     assert((ntime % nelts_per_segment) == 0);
@@ -276,7 +264,7 @@ void GpuDedispersionKernel::Params::validate(bool on_gpu) const
 
 
 template<typename T, bool Lagged>
-dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
+dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> &in_arr_, const GpuDedispersionKernel::Params &params)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -286,7 +274,7 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const UntypedArray
     constexpr int denom = 4 / sizeof(T);
     static_assert(denom * sizeof(T) == 4);
 
-    Array<T> in_arr = uarr_get<T> (in_uarr, "in");
+    Array<T> in_arr = in_arr_.template cast<T> ("dedispersion_simple_inbuf input array");
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime).
     assert(in_arr.ndim == 4);
@@ -318,7 +306,7 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const UntypedArray
 
 // FIXME reduce cut-and-paste between Inbuf::host_args and Outbuf::host_args constructors.
 template<typename T>
-dedispersion_simple_outbuf<T>::device_args::device_args(const UntypedArray &out_uarr, const GpuDedispersionKernel::Params &params)
+dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_arr_, const GpuDedispersionKernel::Params &params)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -328,7 +316,7 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const UntypedArray &out_
     constexpr int denom = 4 / sizeof(T);
     static_assert(denom * sizeof(T) == 4);
 
-    Array<T> out_arr = uarr_get<T> (out_uarr, "in");
+    Array<T> out_arr = out_arr_.template cast<T> ("dedispersion_simple_outbuf output array");
     
     // Expected shape is (nbeams, nambient, pow2(rank), ntime)
     assert(out_arr.ndim == 4);
@@ -361,7 +349,7 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const UntypedArray &out_
 
 
 template<typename T>
-dedispersion_ring_inbuf<T>::device_args::device_args(const UntypedArray &in_uarr, const GpuDedispersionKernel::Params &params)
+dedispersion_ring_inbuf<T>::device_args::device_args(const Array<void> &in_arr_, const GpuDedispersionKernel::Params &params)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -370,7 +358,7 @@ dedispersion_ring_inbuf<T>::device_args::device_args(const UntypedArray &in_uarr
     constexpr int denom = 4 / sizeof(T);
     static_assert(denom * sizeof(T) == 4);
 
-    Array<T> in_arr = uarr_get<T> (in_uarr, "in");
+    Array<T> in_arr = in_arr_.template cast<T> ("dedispersion_ring_inbuf input array");
     assert(in_arr.ndim == 1);
     assert(in_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
     assert(in_arr.get_ncontig() == 1);
@@ -390,7 +378,7 @@ dedispersion_ring_inbuf<T>::device_args::device_args(const UntypedArray &in_uarr
 
 
 template<typename T>
-dedispersion_ring_outbuf<T>::device_args::device_args(const UntypedArray &out_uarr, const GpuDedispersionKernel::Params &params)
+dedispersion_ring_outbuf<T>::device_args::device_args(const Array<void> &out_arr_, const GpuDedispersionKernel::Params &params)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -399,7 +387,7 @@ dedispersion_ring_outbuf<T>::device_args::device_args(const UntypedArray &out_ua
     constexpr int denom = 4 / sizeof(T);
     static_assert(denom * sizeof(T) == 4);
 
-    Array<T> out_arr = uarr_get<T> (out_uarr, "out");
+    Array<T> out_arr = out_arr_.template cast<T> ("dedispersion_ring_outbuf output array");
     assert(out_arr.ndim == 1);
     assert(out_arr.shape[0] == params.ringbuf_nseg * params.nelts_per_segment);
     assert(out_arr.get_ncontig() == 1);
@@ -429,7 +417,7 @@ struct GpuDedispersionKernelImpl : public GpuDedispersionKernel
 
     GpuDedispersionKernelImpl(const GpuDedispersionKernel::Params &params);
 
-    virtual void launch(const UntypedArray &in, UntypedArray &out, long itime, long ibeam, cudaStream_t stream) override;
+    virtual void launch(const Array<void> &in, Array<void> &out, long itime, long ibeam, cudaStream_t stream) override;
 
     // (inbuf, outbuf, rstate, ntime, integer_constants, rb_pos)
     void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, long, uint *, long) = nullptr;
@@ -473,7 +461,7 @@ GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Param
 
 // virtual override
 template<typename T, class Inbuf, class Outbuf>
-void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_arr, UntypedArray &out_arr, long itime, long ibeam, cudaStream_t stream)
+void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const Array<void> &in_arr, Array<void> &out_arr, long itime, long ibeam, cudaStream_t stream)
 {
     typename Inbuf::device_args in(in_arr, params);
     typename Outbuf::device_args out(out_arr, params);
@@ -491,8 +479,8 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 	expected_itime++;
     }
 
-    Array<T> rstate = uarr_get<T> (this->persistent_state, "rstate");
-    T *rp = rstate.data + (ibeam * this->state_nelts_per_beam);
+    Array<T> pstate = this->persistent_state.template cast<T> ("pstate");
+    T *pp = pstate.data + (ibeam * this->state_nelts_per_beam);
     long rb_pos = itime * params.total_beams + ibeam;
 
     // Note: the number of beams and 'ambient' tree channels are implicitly supplied
@@ -504,7 +492,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const UntypedArray &in_ar
 
     this->cuda_kernel
 	<<< grid_dims, 32 * warps_per_threadblock, shmem_nbytes, stream >>>
-	(in, out, (T32 *) rp, params.ntime, this->integer_constants.data, rb_pos);
+	(in, out, (T32 *) pp, params.ntime, this->integer_constants.data, rb_pos);
     
     CUDA_PEEK("dedispersion kernel");
 }
@@ -521,7 +509,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
 
-    bool is_float32 = params.is_float32();  // note: error-checks dtype
+    bool is_float32 = (params.dtype.nbits == 32);
     int nrs_per_thread;
     
     if (params.rank == 1) {
@@ -569,11 +557,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     if (gs_ncl > 0)
 	this->shmem_nbytes = 128 * (gs_ncl + pow2(params.rank));
 
-    if (is_float32)
-	this->persistent_state.data_float32 = Array<float> ({params.total_beams, state_nelts_per_beam}, af_zero | af_gpu);    
-    else
-	this->persistent_state.data_float16 = Array<__half> ({params.total_beams, state_nelts_per_beam}, af_zero | af_gpu);
-    
+    this->persistent_state = Array<void> (params.dtype, {params.total_beams, state_nelts_per_beam}, af_zero | af_gpu);
     this->integer_constants = make_integer_constants(params.rank, is_float32, true);   // on_gpu=true
 }
 
@@ -581,13 +565,16 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 // Static member function
 shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &params)
 {
+    params.validate(true);
+    
     bool rb_in = params.input_is_ringbuf;
     bool rb_out = params.output_is_ringbuf;
     bool rlag = params.apply_input_residual_lags;
-    bool is_float32 = params.is_float32();
+    bool is_float32 = (params.dtype.nbits == 32);
 
     // Select subclass template instantiation.
     // Note: templates are instantiated and compiled in src_lib/template_instatiations/.cu
+    // FIXME could reduce cut-and-paste here.
 
     if (!rb_in && !rb_out && !rlag && is_float32)
 	return make_shared<GpuDedispersionKernelImpl<float, dedispersion_simple_inbuf<float,false>, dedispersion_simple_outbuf<float>>> (params);

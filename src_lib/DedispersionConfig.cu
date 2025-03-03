@@ -2,6 +2,8 @@
 
 #include <cstring>                 // strlen()
 #include <algorithm>               // std::sort()
+
+#include <ksgpu/Dtype.hpp>
 #include <ksgpu/cuda_utils.hpp>    // CUDA_CALL()
 #include <ksgpu/rand_utils.hpp>    // ksgpu::rand_*()
 #include <ksgpu/string_utils.hpp>  // ksgpu::tuple_str()
@@ -60,19 +62,12 @@ ostream &operator<<(ostream &os, const DedispersionConfig::EarlyTrigger &et)
 // Also validates DedispersionConfig::dtype.
 int DedispersionConfig::get_nelts_per_segment() const
 {
-    if (is_empty_string(dtype))
-	throw runtime_error("DedispersionConfig::dtype is unintialized");
-
-    if (dtype == "float32")
+    if (dtype == ksgpu::Dtype::native<float>())
 	return xdiv(constants::bytes_per_gpu_cache_line, 4);
-    else if (dtype == "float16")
+    else if (dtype == ksgpu::Dtype::native<__half>())
 	return xdiv(constants::bytes_per_gpu_cache_line, 2);
 
-    stringstream ss;
-    ss << "DedispersionConfig: dtype='" << dtype << "' is invalid."
-       << " Valid values are 'float32' and 'float16'.";
-    
-    throw runtime_error(ss.str());
+    throw runtime_error("DedispersionConfig: invalid dtype: " + dtype.str());
 }
 
 void DedispersionConfig::add_early_trigger(ssize_t ds_level, ssize_t tree_rank)
@@ -151,7 +146,7 @@ void DedispersionConfig::print(ostream &os, int indent) const
     print_kv("tree_rank", tree_rank, os, indent);
     print_kv("num_downsampling_levels", num_downsampling_levels, os, indent);
     print_kv("time_samples_per_chunk", time_samples_per_chunk, os, indent);
-    print_kv("dtype", dtype, os, indent);
+    print_kv("dtype", dtype.str(), os, indent);
     print_kv("early_triggers", ksgpu::tuple_str(early_triggers, " "), os, indent);
     
     print_kv("beams_per_gpu", beams_per_gpu, os, indent);
@@ -170,7 +165,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
 	<< YAML::Key << "tree_rank" << YAML::Value << tree_rank
 	<< YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels
 	<< YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk
-	<< YAML::Key << "dtype" << YAML::Value << dtype
+	<< YAML::Key << "dtype" << YAML::Value << dtype.str()
 	<< YAML::Key << "early_triggers"
 	<< YAML::Value 
 	<< YAML::BeginSeq;
@@ -233,7 +228,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
     ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
-    ret.dtype = f.get_scalar<string> ("dtype");
+    ret.dtype = ksgpu::Dtype::from_str(f.get_scalar<string> ("dtype"));
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
     ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
@@ -261,7 +256,7 @@ DedispersionConfig DedispersionConfig::make_random()
 {
     DedispersionConfig ret;
     ret.num_downsampling_levels = ksgpu::rand_int(1, 5);
-    ret.dtype = (ksgpu::rand_uniform() < 0.5) ? "float32" : "float16";
+    ret.dtype = (ksgpu::rand_uniform() < 0.5) ? ksgpu::Dtype::native<float>() : ksgpu::Dtype::native<__half>();
     
     // Randomly choose a tree rank, but bias toward a high number.
     int max_rank = 10;
