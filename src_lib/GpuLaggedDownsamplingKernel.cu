@@ -948,6 +948,8 @@ void DownsamplingKernelImpl<T>::launch(
 // Static member function
 shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const Params &params)
 {
+    params.validate();
+    
     if (params.dtype == Dtype::native<float>())
 	return make_shared<DownsamplingKernelImpl<float>> (params);
     if (params.dtype == Dtype::native<__half>())

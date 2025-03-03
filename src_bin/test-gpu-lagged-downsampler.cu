@@ -175,9 +175,6 @@ struct TestInstance
 	OutputArrays<float> cpu_out = alloc_output<float> (Dtype::native<float>(), false, af_uhost | af_zero);  // use_bstride_out = false
 	Array<void> gpu_pstate(params.dtype, { nbeams, gpu_kernel->state_nelts_per_beam }, af_gpu | af_zero);   // af_zero is important here
 
-	// Temp buffer for copying cpu_in -> gpu_in. (Same dtype as gpu_in, but on host.)
-	Array<void> h2g = alloc_input<void> (params.dtype, false, af_rhost);    // use_bstride_in = false
-
 	for (int ichunk = 0; ichunk < nchunks; ichunk++) {
 #if 1
 	    // Random chunk gives strongest test.
@@ -195,8 +192,7 @@ struct TestInstance
 	    ref_kernel->apply(cpu_in, cpu_out.small_arrs);
 	    
 	    // Copy cpu_in -> gpu_in
-	    array_convert(h2g, cpu_in);
-	    array_fill(gpu_in, h2g);
+	    array_fill(gpu_in, cpu_in.convert(params.dtype));
 
 	    gpu_kernel->launch(gpu_in, gpu_out.small_arrs, gpu_pstate, ichunk * nt_chunk);
 	    CUDA_CALL(cudaDeviceSynchronize());

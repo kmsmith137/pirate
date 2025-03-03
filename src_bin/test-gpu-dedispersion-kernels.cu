@@ -239,12 +239,8 @@ static void run_test(const TestInstance &tp)
     Array<float> cpu_in, cpu_out;
     _setup_io_arrays(cpu_in, cpu_out, cpu_in_big, cpu_out_big, tp, false);  // on_gpu = false
 
-    Array<void> h2g(tp.params.dtype, tp.big_ishape, af_rhost);        // contiguous
-    Array<void> gpu_in_big(tp.params.dtype, tp.big_ishape, af_gpu);   // contiguous
+    Array<void> gpu_in_big = cpu_in_big.to_gpu(tp.params.dtype);
     Array<void> gpu_out_big(tp.params.dtype, tp.big_oshape, af_gpu);  // contiguous
-
-    array_convert(h2g, cpu_in_big);
-    array_fill(gpu_in_big, h2g);
 
     Array<void> gpu_in, gpu_out;
     _setup_io_arrays(gpu_in, gpu_out, gpu_in_big, gpu_out_big, tp, true);  // on_gpu = true
