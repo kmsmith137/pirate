@@ -14,7 +14,7 @@ using namespace pirate;
 
 static void test_reference_dedispersion(const DedispersionConfig &config, int nchunks)
 {
-    cout << "\n" << "test_reference_dedispersion2: nchunks=" << nchunks << endl;
+    cout << "\n" << "test_reference_dedispersion: nchunks=" << nchunks << endl;
     config.print(cout, 4);
     
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);

@@ -75,8 +75,7 @@ struct LaggedDownsamplingKernelOutbuf
 };
 
 
-// The reference kernel allocates persistent state internally.
-// (Note that the apply() method takes an 'ibatch' argument, so that the correct persistent state can be used.)
+// Note: the reference kernel allocates persistent state automatically.
 struct ReferenceLaggedDownsamplingKernel
 {
     const LaggedDownsamplingKernelParams params;
@@ -95,9 +94,7 @@ struct ReferenceLaggedDownsamplingKernel
 };
     
 
-// The GPU kernel does not allocate persistent state -- the caller is responsible.
-// (Note that the launch() method takes a 'persistent_state' argument, but not an 'ibatch' argument.)
-
+// Note: the gpu kernel allocates persistent state in GpuLaggedDownsamplingKernel::allocate().
 class GpuLaggedDownsamplingKernel
 {
     using Params = LaggedDownsamplingKernelParams;
@@ -105,19 +102,16 @@ class GpuLaggedDownsamplingKernel
 public:
     const Params params;
     
-    // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
-    static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const Params &params);
-    
-    // These parameters determine how the kernel is divided into threadblocks.
-    // See LaggedDownsamplingKernel.cu for more info.
-    int M_W = 0;
-    int M_B = 0;
-    int A_W = 0;
-    int A_B = 0;
-    
-    // More parameters computed in constructor.
+    // Some parameters computed in constructor.
+    int nbatches = 0;
     int shmem_nbytes_per_threadblock = 0;
     int state_nelts_per_beam = 0;
+    
+    // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
+    static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const Params &params);
+
+    void allocate();
+    bool is_allocated() const;
     
     // 'in': array of shape (nbeams_per_batch, 2^(large_input_rank), ntime).
     // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
@@ -134,16 +128,26 @@ public:
     virtual void launch(
         const ksgpu::Array<void> &in,
 	LaggedDownsamplingKernelOutbuf &out,
-	ksgpu::Array<void> &persistent_state,
-	long ntime_cumulative,
+	long ibatch,
+	long it_chunk,
 	cudaStream_t stream   // NULL stream is allowed, but is not the default
     ) = 0;
 
     void print(std::ostream &os=std::cout, int indent=0) const;
+    
+    // These parameters determine how the kernel is divided into threadblocks.
+    // See GpuLaggedDownsamplingKernel.cu for more info.
+    int M_W = 0;
+    int M_B = 0;
+    int A_W = 0;
+    int A_B = 0;
 
 protected:
     // Constructor is protected -- use GpuLaggedDownsamplingKernel::make() instead.
     GpuLaggedDownsamplingKernel(const Params &params);
+
+    // Shape (total_beams, state_nelts_per_beam).
+    ksgpu::Array<void> persistent_state;
 };
 
 

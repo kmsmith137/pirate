@@ -766,10 +766,28 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) 
     int B = M_B * A_B;  // threadblocks per beam
     xassert(W <= 32);
 
+    this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
 }
 
+
+void GpuLaggedDownsamplingKernel::allocate()
+{
+    if (is_allocated())
+	return;
+
+    // Note 'af_zero' flag here.
+    std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
+    this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
+}
+
+
+bool GpuLaggedDownsamplingKernel::is_allocated() const
+{
+    std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
+    return persistent_state.shape_equals(shape);
+}
 
 
 void GpuLaggedDownsamplingKernel::print(ostream &os, int indent) const
@@ -818,8 +836,8 @@ struct DownsamplingKernelImpl2 : public GpuLaggedDownsamplingKernel
     virtual void launch(
         const ksgpu::Array<void> &in,
         LaggedDownsamplingKernelOutbuf &out,
-        ksgpu::Array<void> &persistent_state,
-	long ntime_cumulative,
+	long ibatch,
+	long it_chunk,
         cudaStream_t stream
     ) override;
 
@@ -849,16 +867,15 @@ template<typename T>
 void DownsamplingKernelImpl2<T>::launch(
     const Array<void> &in,
     LaggedDownsamplingKernelOutbuf &out,
-    Array<void> &persistent_state,
-    long ntime_cumulative,
+    long ibatch,
+    long it_chunk,
     cudaStream_t stream)
 {
     // 'in': array of shape (beams_per_batch, 2^(large_input_rank), ntime).
     // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
-    //
-    // 'persistent_state': contiguous array of shape (beams_per_batch, state_nelts_per_beam)
-    // Must be zeroed on first call to launch().
 
+    xassert(this->is_allocated());
+    
     xassert_shape_eq(in, ({ params.beams_per_batch, pow2(params.large_input_rank), params.ntime }));
     xassert_eq(in.dtype, Dtype::native<T>());
     xassert_ge(in.get_ncontig(), 2);
@@ -868,17 +885,14 @@ void DownsamplingKernelImpl2<T>::launch(
     xassert(out.is_allocated());
     xassert(out.on_gpu());
 
-    xassert(ntime_cumulative >= 0);
-    xassert_divisible(ntime_cumulative, params.ntime);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(it_chunk >= 0);
 
     if (params.num_downsampling_levels == 0)
 	return;
 
-    xassert_shape_eq(persistent_state, ({ params.beams_per_batch, state_nelts_per_beam }));
-    xassert_eq(persistent_state.dtype, Dtype::native<T>());
-    xassert(persistent_state.is_fully_contiguous());
-    xassert(persistent_state.on_gpu());
-
+    T *pstate = (T*)persistent_state.data + (ibatch * params.beams_per_batch * state_nelts_per_beam);
+    
     // Some paranoid checks on 'out' that I'll probably remove some day.
     xassert_eq(long(out.small_arrs.size()), params.num_downsampling_levels);
     xassert_shape_eq(out.big_arr, ({ params.beams_per_batch, out.min_beam_stride }));
@@ -918,10 +932,10 @@ void DownsamplingKernelImpl2<T>::launch(
 	(reinterpret_cast<const T32 *> (in.data),
 	 reinterpret_cast<T32 *> (out.big_arr.data),
 	 params.ntime,
-	 ntime_cumulative,
-	 in.strides[0],           // bstride_in,
-	 out.big_arr.strides[0],  // bstride_out,
-	 reinterpret_cast<T32 *> (persistent_state.data));
+	 it_chunk * params.ntime,  // ntime_cumulative
+	 in.strides[0],            // bstride_in,
+	 out.big_arr.strides[0],   // bstride_out,
+	 reinterpret_cast<T32 *> (pstate));
 
     CUDA_PEEK("lagged downsampling kernel");
 }

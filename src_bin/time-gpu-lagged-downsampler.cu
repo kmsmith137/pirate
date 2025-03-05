@@ -23,9 +23,9 @@ static void time_gpu_dedispersion_kernel(const LaggedDownsamplingKernelParams &p
     
     long ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
     shared_ptr<GpuLaggedDownsamplingKernel> kernel = GpuLaggedDownsamplingKernel::make(params);
-
+    kernel->allocate();
+    
     Array<void> in(params.dtype, { nb_tot, pow2(params.large_input_rank), params.ntime }, af_gpu | af_zero);
-    Array<void> pstate(params.dtype, { nb_tot, kernel->state_nelts_per_beam }, af_gpu | af_zero);
     vector<Outbuf> outbufs;
     
     for (long s = 0; s < nstreams; s++)
@@ -64,11 +64,10 @@ static void time_gpu_dedispersion_kernel(const LaggedDownsamplingKernelParams &p
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
         {
 	    Array<void> in_s = in.slice(0, istream * nb_batch, (istream+1) * nb_batch);
-	    Array<void> pstate_s = pstate.slice(0, istream * nb_batch, (istream+1) * nb_batch);
 	    Outbuf &outbuf_s = outbufs.at(istream);
 
 	    for (int i = 0; i < niter; i++)
-		kernel->launch(in_s, outbuf_s, pstate_s, i * params.ntime, stream);
+		kernel->launch(in_s, outbuf_s, istream, i, stream);
 	};
     
     CudaStreamPool pool(callback, ncallbacks, nstreams, kernel_name.str());

@@ -75,15 +75,17 @@ void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
     using Outbuf = LaggedDownsamplingKernelOutbuf;
     
     ti.params.validate();
-
+    
     Params p = ti.params;
+    long nbatches = xdiv(p.total_beams, p.beams_per_batch);
+
     Params ref_params = p;
     ref_params.dtype = Dtype::native<float> ();
     
     auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
     auto gpu_kernel = GpuLaggedDownsamplingKernel::make(p);
-    long nbatches = xdiv(p.total_beams, p.beams_per_batch);
-
+    gpu_kernel->allocate();
+    
     // Input arrays have shape (beams_per_batch, 2^(large_input_rank), ntime).
     vector<long> in_shape = { p.beams_per_batch, pow2(p.large_input_rank), p.ntime };
     vector<long> in_strides = { in_shape[1]*in_shape[2] + ti.bstride_pad_in, in_shape[2], 1 };
@@ -96,9 +98,6 @@ void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
     gpu_out.allocate(gpu_out.min_beam_stride + ti.bstride_pad_out, af_gpu);
     cpu_out.allocate(af_uhost);  // default bstride
     
-    // Persistent state (for GPU kernel). The af_zero flag is important here.
-    Array<void> gpu_pstate(p.dtype, { p.total_beams, gpu_kernel->state_nelts_per_beam }, af_gpu | af_zero);
-    
     for (long ichunk = 0; ichunk < ti.nchunks; ichunk++) {
 	for (long ibatch = 0; ibatch < nbatches; ibatch++) {
 	    Array<float> cpu_in = Array<float> (in_shape, af_rhost | af_random);
@@ -107,8 +106,8 @@ void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
 	    // Copy cpu_in -> gpu_in
 	    array_fill(gpu_in, cpu_in.convert(p.dtype));
 
-	    Array<void> s = gpu_pstate.slice(0, ibatch * p.beams_per_batch, (ibatch+1) * p.beams_per_batch);
-	    gpu_kernel->launch(gpu_in, gpu_out, s, ichunk * p.ntime, nullptr);
+	    // Launch GPU kernel
+	    gpu_kernel->launch(gpu_in, gpu_out, ibatch, ichunk, nullptr);
 
 	    for (int ids = 0; ids < p.num_downsampling_levels; ids++) {
 		// Note: if the definition of the LaggedDownsampler changes to include factors of 0.5,
