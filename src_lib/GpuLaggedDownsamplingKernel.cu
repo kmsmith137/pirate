@@ -14,6 +14,10 @@ namespace pirate {
 #endif
 
 
+// NOTE!! The cuda kernels use a parameter "D" which is equal to (nds-1),
+// where nds = DedispersionConfig::num_downsampling_levels. Therefore, we
+// shift by (-1) when crossing the "C++/cuda boundary"!
+//
 // FIXME use "wide" loads/stores (including when loading/restoring state?)
 
 // LaggedDownsampler
@@ -730,7 +734,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 // -------------------------------------------------------------------------------------------------
 
 
-GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) :
+GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const DedispersionInbufParams &params_) :
     params(params_)
 {
     params.validate();
@@ -826,31 +830,30 @@ static cuda_kernel_t<T32> get_kernel(int D)
 
 
 template<typename T>
-struct DownsamplingKernelImpl2 : public GpuLaggedDownsamplingKernel
+struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
 {
-    using Params = LaggedDownsamplingKernelParams;
+    DownsamplingKernelImpl(const DedispersionInbufParams &params);
     
-    DownsamplingKernelImpl2(const Params &params);
-    
-    virtual void launch(
-        const ksgpu::Array<void> &in,
-        LaggedDownsamplingKernelOutbuf &out,
-	long ibatch,
-	long it_chunk,
-        cudaStream_t stream
-    ) override;
+    virtual void launch(DedispersionInbuf &buf, long ibatch, long it_chunk, cudaStream_t stream) override;
 
-    using T32 = typename simd32_type<T>::type;
-    
+    using T32 = typename simd32_type<T>::type;    
     cuda_kernel_t<T32> kernel;
 };
 
 
 template<typename T>
-DownsamplingKernelImpl2<T>::DownsamplingKernelImpl2(const Params &params_) :
-    GpuLaggedDownsamplingKernel(params_)
+DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const DedispersionInbufParams &params_) :
+    GpuLaggedDownsamplingKernel(params_)  // calls params.validate()
 {
-    this->kernel = get_kernel<T32, constants::max_downsampling_level> (params.num_downsampling_levels);
+    if (params.num_downsampling_levels <= 1)
+	return;
+
+    // NOTE!! The cuda kernels use a parameter "D" which is equal to (nds-1),
+    // where nds = DedispersionConfig::num_downsampling_levels. Therefore, we
+    // shift by (-1) when crossing the "C++/cuda boundary"!
+
+    int D = params.num_downsampling_levels - 1;
+    this->kernel = get_kernel<T32, constants::max_downsampling_level> (D);
 
     // FIXME rethink?
     CUDA_CALL(cudaFuncSetAttribute(
@@ -863,55 +866,19 @@ DownsamplingKernelImpl2<T>::DownsamplingKernelImpl2(const Params &params_) :
 
 // Overrides GpuLaggedDownsamplingKernel::launch()
 template<typename T>
-void DownsamplingKernelImpl2<T>::launch(
-    const Array<void> &in,
-    LaggedDownsamplingKernelOutbuf &out,
-    long ibatch,
-    long it_chunk,
-    cudaStream_t stream)
+void DownsamplingKernelImpl<T>::launch(DedispersionInbuf &buf, long ibatch, long it_chunk, cudaStream_t stream)
 {
-    // 'in': array of shape (beams_per_batch, 2^(large_input_rank), ntime).
-    // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
-
-    xassert(this->is_allocated());
+    xassert(buf.params == this->params);
+    xassert(buf.is_allocated());
+    xassert(buf.on_gpu());
     
-    xassert_shape_eq(in, ({ params.beams_per_batch, pow2(params.large_input_rank), params.ntime }));
-    xassert_eq(in.dtype, Dtype::native<T>());
-    xassert_ge(in.get_ncontig(), 2);
-    xassert(in.on_gpu());
-    
-    xassert(out.params == this->params);
-    xassert(out.is_allocated());
-    xassert(out.on_gpu());
-
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(it_chunk >= 0);
 
-    if (params.num_downsampling_levels == 0)
+    if (params.num_downsampling_levels <= 1)
 	return;
 
     T *pstate = (T*)persistent_state.data + (ibatch * params.beams_per_batch * state_nelts_per_beam);
-    
-    // Some paranoid checks on 'out' that I'll probably remove some day.
-    xassert_eq(long(out.small_arrs.size()), params.num_downsampling_levels);
-    xassert_shape_eq(out.big_arr, ({ params.beams_per_batch, out.min_beam_stride }));
-    xassert_eq(out.big_arr.dtype, Dtype::native<T>());
-    xassert(out.big_arr.get_ncontig() >= 1);
-
-    long nout = 0;
-    for (int i = 0; i < params.num_downsampling_levels; i++) {
-	int ntime_out = params.ntime >> (i+1);
-	int ntree_out = pow2(params.large_input_rank - 1);
-
-	const Array<void> &outi = out.small_arrs.at(i);
-	xassert_shape_eq(outi, ({ params.beams_per_batch, ntree_out, ntime_out }));
-	xassert_eq(outi.dtype, Dtype::native<T>());
-	xassert_eq((T*)outi.data, (T*)out.big_arr.data + nout);
-	xassert((params.beams_per_batch == 1) || (outi.strides[0] == out.big_arr.strides[0]));
-	xassert(outi.get_ncontig() >= 2);
-	
-	nout += ntree_out * ntime_out;
-    }
     
     // Required by CUDA (max alllowed value of gridDims.z)
     xassert_lt(params.beams_per_batch, 65536);
@@ -925,15 +892,22 @@ void DownsamplingKernelImpl2<T>::launch(
     grid_dims.z = params.beams_per_batch;
     grid_dims.y = A_B;
     grid_dims.x = M_B;
+
+    // Note that the cuda kernel has more generality than the C++ wrapper.
+    // FIXME reduce generality of the cuda kernel?
+    //
+    // (In the cuda kernel, there are 4 independent args 'in', 'out', 'bstride_in', 'bstride_out',
+    // whereas the DedispersionInbuf constrains things so that all of these args can be derived
+    // from 'in'.)
     
     this->kernel
 	<<< grid_dims, block_dims, shmem_nbytes_per_threadblock, stream >>>
-	(reinterpret_cast<const T32 *> (in.data),
-	 reinterpret_cast<T32 *> (out.big_arr.data),
+	(reinterpret_cast<const T32 *> (buf.bufs.at(0).data),
+	 reinterpret_cast<T32 *> (buf.bufs.at(1).data),
 	 params.ntime,
 	 it_chunk * params.ntime,  // ntime_cumulative
-	 in.strides[0],            // bstride_in,
-	 out.big_arr.strides[0],   // bstride_out,
+	 buf.ref.strides[0],       // bstride_in,
+	 buf.ref.strides[0],       // bstride_out,
 	 reinterpret_cast<T32 *> (pstate));
 
     CUDA_PEEK("lagged downsampling kernel");
@@ -941,14 +915,14 @@ void DownsamplingKernelImpl2<T>::launch(
 
 
 // Static member function
-shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const Params &params)
+shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const DedispersionInbufParams &params)
 {
     params.validate();
     
     if (params.dtype == Dtype::native<float>())
-	return make_shared<DownsamplingKernelImpl2<float>> (params);
+	return make_shared<DownsamplingKernelImpl<float>> (params);
     if (params.dtype == Dtype::native<__half>())
-	return make_shared<DownsamplingKernelImpl2<__half>> (params);
+	return make_shared<DownsamplingKernelImpl<__half>> (params);
     
     throw runtime_error("GpuLaggedDownsamplingKernel::make(): unsupported dtype: " + params.dtype.str());
 }

@@ -17,11 +17,8 @@ using namespace ksgpu;
 
 struct TestInstance
 {
-    LaggedDownsamplingKernelParams params;
-
+    DedispersionInbufParams params;
     long nchunks = 0;
-    long bstride_pad_in = 0;
-    long bstride_pad_out = 0;
 
     TestInstance() { }
     
@@ -29,8 +26,6 @@ struct TestInstance
     {
 	params.print(os, indent);
 	print_kv("nchunks", this->nchunks, os, indent);
-	print_kv("bstride_pad_in", this->bstride_pad_in, os, indent);
-	print_kv("bstride_pad_out", this->bstride_pad_out, os, indent);
     }
 
     void validate() const
@@ -59,10 +54,6 @@ struct TestInstance
 	auto w = ksgpu::random_integers_with_bounded_product(2,q);
 	ti.params.ntime = nt_divisor * w[0];
 	ti.nchunks = w[1];
-
-	long n = xdiv(1024, ti.params.dtype.nbits);
-	ti.bstride_pad_in = max(0L, rand_int(-2,4)) * n;
-	ti.bstride_pad_out = max(0L, rand_int(-2,4)) * n;
 	
 	return ti;
     }
@@ -71,54 +62,50 @@ struct TestInstance
 
 void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
 {
-    using Params = LaggedDownsamplingKernelParams;
-    using Outbuf = LaggedDownsamplingKernelOutbuf;
-    
     ti.params.validate();
     
-    Params p = ti.params;
+    DedispersionInbufParams p = ti.params;
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
-
-    Params ref_params = p;
+    long nb = p.beams_per_batch;
+    long rk = p.large_input_rank;
+    long nt = p.ntime;
+    
+    DedispersionInbufParams ref_params = p;
     ref_params.dtype = Dtype::native<float> ();
     
     auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
     auto gpu_kernel = GpuLaggedDownsamplingKernel::make(p);
-    gpu_kernel->allocate();
     
-    // Input arrays have shape (beams_per_batch, 2^(large_input_rank), ntime).
-    vector<long> in_shape = { p.beams_per_batch, pow2(p.large_input_rank), p.ntime };
-    vector<long> in_strides = { in_shape[1]*in_shape[2] + ti.bstride_pad_in, in_shape[2], 1 };
-    Array<void> gpu_in(p.dtype, in_shape, in_strides, af_gpu);
+    DedispersionInbuf gpu_buf(p);
+    DedispersionInbuf cpu_buf(ref_params);
 
-    // Output arrays.
-    Outbuf gpu_out(p);
-    Outbuf cpu_out(ref_params);
-
-    gpu_out.allocate(gpu_out.min_beam_stride + ti.bstride_pad_out, af_gpu);
-    cpu_out.allocate(af_uhost);  // default bstride
+    gpu_kernel->allocate();
+    gpu_buf.allocate(af_gpu);
+    cpu_buf.allocate(af_uhost);
     
     for (long ichunk = 0; ichunk < ti.nchunks; ichunk++) {
 	for (long ibatch = 0; ibatch < nbatches; ibatch++) {
-	    Array<float> cpu_in = Array<float> (in_shape, af_rhost | af_random);
-	    ref_kernel->apply(cpu_in, cpu_out, ibatch);
-	    
-	    // Copy cpu_in -> gpu_in
-	    array_fill(gpu_in, cpu_in.convert(p.dtype));
+	    // Copy (random chunk) -> (cpu_in) -> (gpu_in).
+	    Array<float> r({nb, pow2(rk), nt}, af_rhost | af_random);
+	    array_fill(cpu_buf.bufs[0], r);
+	    array_fill(gpu_buf.bufs[0], r.convert(p.dtype));
 
-	    // Launch GPU kernel
-	    gpu_kernel->launch(gpu_in, gpu_out, ibatch, ichunk, nullptr);
+	    // Run GPU and reference kernels.
+	    ref_kernel->apply(cpu_buf, ibatch);
+	    gpu_kernel->launch(gpu_buf, ibatch, ichunk, nullptr);
 
-	    for (int ids = 0; ids < p.num_downsampling_levels; ids++) {
-		// Note: if the definition of the LaggedDownsampler changes to include factors of 0.5,
-		// then the value of 'rms' may ned to change.
+	    // Compare results.
+	    for (int ids = 1; ids < p.num_downsampling_levels; ids++) {
+		// Note: if the definition of the LaggedDownsampler changes to include
+		// factors of 0.5, then the value of 'rms' may need to change.
 		
-		double rms = sqrt(4 << ids);    // rms of output array
-		double epsabs = 3 * p.dtype.precision() * rms * sqrt(ids+2);
+		double rms = sqrt(2 << ids);    // rms of output array
+		double epsabs = 3 * p.dtype.precision() * rms * sqrt(ids+1);
 		
-		// cout << "ichunk=" << ichunk << ", ids=" << ids << ", epsabs=" << epsabs << endl;
-		assert_arrays_equal(cpu_out.small_arrs.at(ids), gpu_out.small_arrs.at(ids),
-				    "ref", "gpu", {"beam","freq","time"}, epsabs, 0.0);  // epsrel=0
+		assert_arrays_equal(cpu_buf.bufs.at(ids),
+				    gpu_buf.bufs.at(ids),
+				    "ref", "gpu", {"beam","freq","time"},
+				    epsabs, 0.0);  // epsrel=0
 	    }
 	}
     }

@@ -4,6 +4,8 @@
 #include <vector>
 #include <memory>
 #include <iostream>
+
+#include "DedispersionBuffers.hpp"  // DedispersionInbuf, DedispersionInbufParams
 #include "ReferenceLagbuf.hpp"
 
 #include <ksgpu/Dtype.hpp>
@@ -18,72 +20,15 @@ namespace pirate {
 class DedispersionPlan;
 
 
-struct LaggedDownsamplingKernelParams
-{
-    // FIXME explain these parameters better.
-    //
-    // FIXME a potential source of confusion: denote
-    //
-    //    ld_nds = LaggedDownsamplingKernelParams::num_downsmapling_levels
-    //    dc_nds = DedispersionConfig::num_downsampling_levels
-    //
-    // Then ld_nds = (dc_nds - 1)!
-
-    ksgpu::Dtype dtype;                 // same as DedispersionConfig::dtype
-    long small_input_rank = -1;         // same as DedispersionPlan::stage0_trees[1].rank0 + 1
-    long large_input_rank = -1;         // same as DedispersionConfig::tree_rank;
-    long num_downsampling_levels = -1;  // same as (DedispersionConfig::num_downsampling_levels - 1)
-    long total_beams = 0;               // same as DedispersionConfig::beams_per_gpu
-    long beams_per_batch = 0;           // same as DedispersionConfig::beams_per_batch
-    long ntime = 0;                     // same as DedispersionConfig::time_samples_per_chunk
-
-    LaggedDownsamplingKernelParams() { }
-    LaggedDownsamplingKernelParams(const std::shared_ptr<DedispersionPlan> &plan);
-    LaggedDownsamplingKernelParams(const LaggedDownsamplingKernelParams &) = default;
-    
-    bool operator==(const LaggedDownsamplingKernelParams &) const;
-
-    void print(std::ostream &os=std::cout, int indent=0) const;
-    void validate() const;  // throws an exception if anything is wrong
-};
-
-
-// Output buffers for one "batch" of beams.
-struct LaggedDownsamplingKernelOutbuf
-{
-    const LaggedDownsamplingKernelParams params;
-    const long min_beam_stride = 0;
-
-    // big_arr has shape (beams_per_batch, min_beam_stride_out).
-    // The beam axis may have a non-contiguous stride.
-    ksgpu::Array<void> big_arr;
-
-    // small_args has length (params.num_downsampling_levels).
-    // small_arrs[ids] has shape (beams_per_batch, 2^(large_input_rank-1), nt_chunk/2^(ids+1)).
-    // The beam axis will usually have a non-contiguous stride.
-    std::vector<ksgpu::Array<void>> small_arrs;
-
-    LaggedDownsamplingKernelOutbuf(const LaggedDownsamplingKernelParams &params);
-    LaggedDownsamplingKernelOutbuf(const std::shared_ptr<DedispersionPlan> &plan);
-    
-    void allocate(long beam_stride, int aflags);
-    void allocate(int aflags);  // use min_beam_stride_out
-
-    bool is_allocated() const;
-    bool on_host() const;  // returns true if unallocated, or if (num_downsamping_levels == 0)
-    bool on_gpu() const;   // returns true if unallocated, or if (num_downsamping_levels == 0)
-};
-
-
-// Note: the reference kernel allocates persistent state automatically.
+// Note: the reference kernel allocates persistent state in the constructor.
 struct ReferenceLaggedDownsamplingKernel
 {
-    const LaggedDownsamplingKernelParams params;
+    const DedispersionInbufParams params;
     int nbatches = 0;  // same as (params.total_beams / params.beams_per_batch)
 
-    ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params);
+    ReferenceLaggedDownsamplingKernel(const DedispersionInbufParams &params);
 
-    void apply(const ksgpu::Array<void> &in, LaggedDownsamplingKernelOutbuf &out, long ibatch);
+    void apply(DedispersionInbuf &buf, long ibatch);
     
     std::vector<ReferenceLagbuf> lagbufs_small;  // length nbatches
     std::vector<ReferenceLagbuf> lagbufs_large;  // length nbatches
@@ -97,10 +42,8 @@ struct ReferenceLaggedDownsamplingKernel
 // Note: the gpu kernel allocates persistent state in GpuLaggedDownsamplingKernel::allocate().
 class GpuLaggedDownsamplingKernel
 {
-    using Params = LaggedDownsamplingKernelParams;
-    
 public:
-    const Params params;
+    const DedispersionInbufParams params;
     
     // Some parameters computed in constructor.
     int nbatches = 0;
@@ -108,31 +51,14 @@ public:
     int state_nelts_per_beam = 0;
     
     // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
-    static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const Params &params);
+    static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const DedispersionInbufParams &params);
 
     void allocate();
     bool is_allocated() const;
     
-    // 'in': array of shape (nbeams_per_batch, 2^(large_input_rank), ntime).
-    // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
-    //
-    // 'persistent_state': contiguous array of shape (nbeams_per_batch, state_nelts_per_beam)
-    // Must be zeroed on first call to launch().
-    //
-    // 'ntime_cumulative': total number of time samples processed by previous
-    // calls to launch(), **for this beam batch**.
-    //
-    // (FIXME could get rid of ntime_cumulative -- it's a crutch for the GPU kernel
-    // that isn't really necessary.)
+    // NULL stream is allowed, but is not the default.
+    virtual void launch(DedispersionInbuf &buf, long ibatch, long it_chunk, cudaStream_t stream) = 0;
     
-    virtual void launch(
-        const ksgpu::Array<void> &in,
-	LaggedDownsamplingKernelOutbuf &out,
-	long ibatch,
-	long it_chunk,
-	cudaStream_t stream   // NULL stream is allowed, but is not the default
-    ) = 0;
-
     void print(std::ostream &os=std::cout, int indent=0) const;
     
     // These parameters determine how the kernel is divided into threadblocks.
@@ -144,7 +70,7 @@ public:
 
 protected:
     // Constructor is protected -- use GpuLaggedDownsamplingKernel::make() instead.
-    GpuLaggedDownsamplingKernel(const Params &params);
+    GpuLaggedDownsamplingKernel(const DedispersionInbufParams &params);
 
     // Shape (total_beams, state_nelts_per_beam).
     ksgpu::Array<void> persistent_state;

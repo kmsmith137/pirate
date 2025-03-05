@@ -20,7 +20,7 @@ namespace pirate {
 // changes elsewhere though (e.g. currently reference_downsample_time() assumes a
 // 2-d array).
 
-ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params_) :
+ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const DedispersionInbufParams &params_) :
     params(params_)
 {
     params.validate();
@@ -36,7 +36,7 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
     int nds = params.num_downsampling_levels;
     int nt2 = xdiv(params.ntime, 2);
     
-    if (nds == 0)
+    if (nds <= 1)
 	return;
     
     xassert(params.small_input_rank > 0);
@@ -55,10 +55,10 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
 	this->lagbufs_large.push_back({ large_lags, nt2 });
     }
     
-    if (nds == 1)
+    if (nds == 2)
 	return;
     
-    LaggedDownsamplingKernelParams next_params = params;
+    DedispersionInbufParams next_params = params;
     next_params.num_downsampling_levels = nds-1;
     next_params.ntime = nt2;
     
@@ -66,38 +66,32 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
 }
 
 
-void ReferenceLaggedDownsamplingKernel::apply(const Array<void> &in_, LaggedDownsamplingKernelOutbuf &out, long ibatch)
+void ReferenceLaggedDownsamplingKernel::apply(DedispersionInbuf &buf, long ibatch)
 {
-    xassert(in_.on_host());
-    xassert_shape_eq(in_, ({ params.beams_per_batch, pow2(params.large_input_rank), params.ntime }));
-    Array<float> in = in_.template cast<float> ("ReferenceLaggedDownsamplingKernel::apply(): 'in' array");
-
-    xassert(out.params == this->params);
-    xassert(out.is_allocated());
-    xassert(out.on_host());
-
     xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(long(out.small_arrs.size()) == params.num_downsampling_levels);  // should never fail
+    xassert(buf.params == this->params);
+    xassert(buf.is_allocated());
+    xassert(buf.on_host());
+
+    // Should never fail
+    xassert(long(buf.bufs.size()) == params.num_downsampling_levels);
+
+    if (params.num_downsampling_levels <= 1)
+	return;
     
-    if (params.num_downsampling_levels > 0)
-	this->_apply(in, &out.small_arrs[0], ibatch);
+    Array<float> in = buf.bufs.at(0).template cast<float> ("ReferenceLaggedDownsamplingKernel::apply(): 'in' array");
+    this->_apply(in, &buf.bufs[1], ibatch);
 }
 
 	    
 void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<void> *outp, long ibatch)
 {
-    // Reminder: the input/output arrays have the following shapes:
-    //
-    //   in.shape = (nbeams, 2^large_input_rank, ntime)
-    //   out[i].shape = (nbeams, 2^(large_input_rank-1), ntime/2^(i+1))
-    //   out.size() = Params::num_downsampling_levels
-
     long r = params.large_input_rank;
     long nb = params.beams_per_batch;
     long nds = params.num_downsampling_levels;
     long ntime = params.ntime;
 
-    xassert(nds > 0);
+    xassert(nds >= 2);
     xassert_divisible(ntime, 2);
     xassert_shape_eq(in, ({ nb, pow2(r), ntime }));
 
@@ -125,7 +119,7 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
     out_tmp = out_tmp.reshape(outp[0].ndim, outp[0].shape);
     out.fill(out_tmp);
 
-    if (nds == 1)
+    if (nds == 2)
 	return;
     
     // Recurse to next downsampling level.

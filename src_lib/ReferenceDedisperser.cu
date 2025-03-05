@@ -29,6 +29,8 @@ struct Stage0Buffers
 {
     shared_ptr<DedispersionPlan> plan;
     
+    DedispersionInbuf dd_buf;
+    
     Array<float> ringbuf;   // either empty array, or 1-d shape (ringbuf_nseg * nelts_per_segment,)
     bool output_is_ringbuf;
     
@@ -41,17 +43,11 @@ struct Stage0Buffers
     long nt_chunk = 0;             // same as plan->config.time_samples_per_chunk
     long nbatches = 0;             // same as (total_beams / beams_per_batch)
 
-    // FIXME this awkwardness can go away when I define DedispersionInbuf
-    Array<float> input_buf;        // shape (beams_per_batch, pow2(st0.rank), ntime)
-    LaggedDownsamplingKernelOutbuf lds_outbuf;
-    vector<Array<float>> dd_bufs;  // length nds, inner shape is (beams_per_batch, pow2(st0.rank), nt_ds)
-    vector<Array<float>> ds_bufs;  // length (nds-1), same as dd_bufs[1:]
-    
     shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> dd_kernels;   // length (nds)
 
     Stage0Buffers(const shared_ptr<DedispersionPlan> &plan_, Array<float> ringbuf_)
-	: plan(plan_), ringbuf(ringbuf_), lds_outbuf(plan_)
+	: plan(plan_), dd_buf(plan_), ringbuf(ringbuf_)
     {
 	this->nds = plan->config.num_downsampling_levels;
 	this->nseg = plan->stage0_total_segments_per_beam;
@@ -61,9 +57,6 @@ struct Stage0Buffers
 	this->total_beams = plan->config.beams_per_gpu;
 	this->nt_chunk = plan->config.time_samples_per_chunk;
 	this->nbatches = xdiv(total_beams, beams_per_batch);
-	
-	this->dd_bufs.resize(nds);
-	this->ds_bufs.resize(nds-1);
 
 	if (ringbuf.size == 0)
 	    this->output_is_ringbuf = false;
@@ -72,26 +65,12 @@ struct Stage0Buffers
 	else
 	    throw runtime_error("Stage0Buffer constructor: bad ringbuf shape");
 	
-	// Allocate buffers and LaggedDownsampler kernels.
-
-	this->input_buf = Array<float> ({ beams_per_batch, pow2(plan->config.tree_rank), nt_chunk }, af_uhost);
-	this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (lds_outbuf.params);
-	this->lds_outbuf.allocate(af_uhost);
+	this->dd_buf.allocate(af_uhost);
+	this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (dd_buf.params);
 	
-	this->dd_bufs.resize(nds);
-	this->ds_bufs.resize(nds-1);
-	this->dd_bufs.at(0) = input_buf;
-
-	for (long ids = 0; ids < nds-1; ids++) {
-	    Array<float> a = this->lds_outbuf.small_arrs.at(ids).template cast<float> ();
-	    this->dd_bufs.at(ids+1) = this->ds_bufs.at(ids) = a;
-	}
-
-	// Dedispersion kernels.
-
 	this->dd_kernels.resize(nds);
 	long pos = 0;  // for ringbuf_locations
-	
+
 	for (long ids = 0; ids < nds; ids++) {
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
 	    long nseg = st0.segments_per_beam;
@@ -120,7 +99,7 @@ struct Stage0Buffers
 
     void apply_lagged_downsampler(long ibatch)
     {
-	lds_kernel->apply(input_buf, lds_outbuf, ibatch);
+	lds_kernel->apply(dd_buf, ibatch);
     }
     
     void apply_dedispersion_kernels(long ibatch, long it_chunk)
@@ -128,10 +107,10 @@ struct Stage0Buffers
 	for (long ids = 0; ids < nds; ids++) {
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
 	    
-	    Array<float> in = dd_bufs.at(ids);
+	    Array<void> in = dd_buf.bufs.at(ids);
 	    in = in.reshape({beams_per_batch, pow2(st0.rank1), pow2(st0.rank0), st0.nt_ds});  // shape (1, 2^rank1, 2^rank0, nt_ds)
 	    
-	    Array<float> out = output_is_ringbuf ? ringbuf : in;
+	    Array<void> out = output_is_ringbuf ? ringbuf : in;
 	    dd_kernels.at(ids)->apply(in, out, ibatch, it_chunk);
 	}
     }
@@ -371,7 +350,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
     // Reminder: 'input_array' and 'output_arrays' are members of ReferenceDedisperserBase,
     // but are initialized by the subclass constructor.
 
-    this->input_array = downsampled_inputs.at(0);   // alias
+    this->input_array = downsampled_inputs.at(0);
     this->check_iobuf_shapes();
 }
 
@@ -471,8 +450,8 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     // Reminder: 'input_array' and 'output_arrays' are members of ReferenceDedisperserBase,
     // but are initialized by the subclass constructor.
 
-    this->input_array = stage0_buffers.dd_bufs.at(0);  // alias
-    this->output_arrays = stage1_buffers.dd_bufs;      // alias
+    this->input_array = stage0_buffers.dd_buf.bufs.at(0).template cast<float> ();
+    this->output_arrays = stage1_buffers.dd_bufs;
     this->check_iobuf_shapes();
 
     this->stage1_lagbufs.resize(nbatches * nout);
@@ -519,8 +498,8 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
 
 	// Step 3: copy stage0 -> stage1
 	
-	Array<float> src = stage0_buffers.dd_bufs.at(st1.ds_level);  // shape (beams_per_batch, 2^rank_ambient, nt_ds)
-	src = src.slice(1, 0, pow2(rank0+rank1));                    // shape (beams_per_batch, 2^rank, nt_ds)
+	Array<void> src = stage0_buffers.dd_buf.bufs.at(st1.ds_level);  // shape (beams_per_batch, 2^rank_ambient, nt_ds)
+	src = src.slice(1, 0, pow2(rank0+rank1));                       // shape (beams_per_batch, 2^rank, nt_ds)
 
 	Array<float> dst = stage1_buffers.dd_bufs.at(iout);
 	dst.fill(src);
@@ -566,8 +545,8 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     // Reminder: 'input_array' and 'output_arrays' are members of ReferenceDedisperserBase,
     // but are initialized by the subclass constructor.
 
-    this->input_array = stage0_buffers.dd_bufs.at(0);   // alias
-    this->output_arrays = stage1_buffers.dd_bufs;       // alias
+    this->input_array = stage0_buffers.dd_buf.bufs.at(0).template cast<float> ();
+    this->output_arrays = stage1_buffers.dd_bufs;
     this->check_iobuf_shapes();
 }
 
