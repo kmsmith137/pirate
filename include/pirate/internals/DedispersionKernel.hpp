@@ -62,7 +62,7 @@ struct ReferenceDedispersionKernel
     ReferenceDedispersionKernel(const Params &params);
 
     const Params params;
-    const int nbatches;  // same as (params.total_beams / params.beams_per_batch)
+    int nbatches = 0;  // same as (params.total_beams / params.beams_per_batch)
     
     // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
@@ -95,11 +95,9 @@ public:
     static std::shared_ptr<GpuDedispersionKernel> make(const Params &params);
     
     Params params;
-    
-    // Used internally by GpuDedispersionKernel::launch().
-    int state_nelts_per_beam = 0;
-    int warps_per_threadblock = 0;
-    int shmem_nbytes = 0;
+
+    void allocate();
+    bool is_allocated() const;
     
     // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
     //
@@ -120,6 +118,12 @@ public:
 	long it_chunk,
 	cudaStream_t stream  // NULL stream is allowed, but is not the default
     ) = 0;
+    
+    // Used internally by GpuDedispersionKernel::launch().
+    int nbatches = 0;
+    int state_nelts_per_beam = 0;
+    int warps_per_threadblock = 0;
+    int shmem_nbytes = 0;
 
 protected:
     // Don't call constructor directly -- call GpuDedispersionKernel::make() instead!

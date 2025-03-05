@@ -228,6 +228,7 @@ static void run_test(const TestInstance &tp)
     
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
     shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(gp);
+    gpu_kernel->allocate();
 
     // Array allocation starts here.
     

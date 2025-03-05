@@ -79,7 +79,7 @@ struct LaggedDownsamplingKernelOutbuf
 struct ReferenceLaggedDownsamplingKernel
 {
     const LaggedDownsamplingKernelParams params;
-    const int nbatches;  // same as (params.total_beams / params.beams_per_batch)
+    int nbatches = 0;  // same as (params.total_beams / params.beams_per_batch)
 
     ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params);
 

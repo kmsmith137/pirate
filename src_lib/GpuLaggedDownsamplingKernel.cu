@@ -785,8 +785,7 @@ void GpuLaggedDownsamplingKernel::allocate()
 
 bool GpuLaggedDownsamplingKernel::is_allocated() const
 {
-    std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
-    return persistent_state.shape_equals(shape);
+    return (persistent_state.ndim > 0);
 }
 
 

@@ -13,30 +13,20 @@ namespace pirate {
 #endif
 
 
-// Helper for constructor. Equivalent to (but with verbose error checking):
-//  return(params.total_beams / params.beams_per_batch);
-inline long get_nbatches(const DedispersionKernelParams &params)
-{
-    xassert_gt(params.total_beams, 0);
-    xassert_gt(params.beams_per_batch, 0);
-    xassert_divisible(params.total_beams, params.beams_per_batch);
-    return (params.total_beams / params.beams_per_batch);
-}
-
-
 ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) :
-    params(params_),
-    nbatches(get_nbatches(params_))
+    params(params_)
 {
     params.validate(false);    // on_gpu=false
 
+    this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
+    
     long B = params.beams_per_batch;
     long A = params.nambient;
     long F = pow2(params.rank);
     long T = params.ntime;
     long Ar = integer_log2(A);
-
-    this->trees.resize(nbatches);
+    
+    this->trees.resize(nbatches);			  
     for (long n = 0; n < nbatches; n++)
 	trees[n] = ReferenceTree::make({B,A,F,T});
 

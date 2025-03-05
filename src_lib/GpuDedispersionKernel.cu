@@ -396,6 +396,10 @@ GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Param
 template<typename T, class Inbuf, class Outbuf>
 void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long it_chunk, cudaStream_t stream)
 {
+    xassert(this->is_allocated());
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(it_chunk >= 0);
+    
     // These constructors error-check their arguments.
     typename Inbuf::device_args in(in_arr, params);
     typename Outbuf::device_args out(out_arr, params);
@@ -473,13 +477,32 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     long rs_ncl = warps_per_threadblock * nrs_per_thread;
     long gs_ncl = get_gs_ncl(params.rank, is_float32);
     long nelts_per_small_tree = (rs_ncl + rp_ncl + gs_ncl) * (is_float32 ? 32 : 64);
+
+    this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     this->state_nelts_per_beam = params.nambient * nelts_per_small_tree;
     
     if (gs_ncl > 0)
 	this->shmem_nbytes = 128 * (gs_ncl + pow2(params.rank));
+}
 
-    this->persistent_state = Array<void> (params.dtype, {params.total_beams, state_nelts_per_beam}, af_zero | af_gpu);
+
+void GpuDedispersionKernel::allocate()
+{
+    if (is_allocated())
+	return;
+    
+    // Note 'af_zero' flag here.
+    std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
+    this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
+    
+    bool is_float32 = (params.dtype.nbits == 32);
     this->integer_constants = make_integer_constants(params.rank, is_float32, true);   // on_gpu=true
+}
+
+
+bool GpuDedispersionKernel::is_allocated() const
+{
+    return (persistent_state.ndim > 0);
 }
 
 

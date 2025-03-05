@@ -33,8 +33,10 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int rank, bool apply_input
     vector<shared_ptr<GpuDedispersionKernel>> kernels(nstreams);
     vector<int> itime(nstreams, 0);
 
-    for (int i = 0; i < nstreams; i++)
+    for (int i = 0; i < nstreams; i++) {
 	kernels[i] = GpuDedispersionKernel::make(params);
+	kernels[i]->allocate();
+    }
 
     Array<void> buf(dtype, { nstreams, nbeams, nambient, pow2(rank), ntime }, af_gpu | af_zero);
 
