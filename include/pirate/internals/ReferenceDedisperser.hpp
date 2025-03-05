@@ -9,11 +9,6 @@
 #include "../DedispersionConfig.hpp"
 #include "../DedispersionPlan.hpp"
 
-#include "ReferenceTree.hpp"
-#include "ReferenceLagbuf.hpp"
-#include "ReferenceDedispersionKernel.hpp"
-#include "ReferenceLaggedDownsamplingKernel.hpp"
-
 
 namespace pirate {
 #if 0

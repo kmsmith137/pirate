@@ -1,5 +1,10 @@
 #include "../include/pirate/internals/ReferenceDedisperser.hpp"
 
+#include "../include/pirate/internals/ReferenceTree.hpp"
+#include "../include/pirate/internals/ReferenceLagbuf.hpp"
+#include "../include/pirate/internals/ReferenceDedispersionKernel.hpp"
+#include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
+
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/internals/inlines.hpp"
 #include "../include/pirate/internals/utils.hpp"
@@ -33,17 +38,20 @@ struct Stage0Buffers
     long nelts_per_segment = 0;    // same as plan->nelts_per_segment
     long beams_per_batch = 0;      // same as plan->config.beams_per_batch
     long total_beams = 0;          // same as plan->config.beams_per_gpu
+    long nt_chunk = 0;             // same as plan->config.time_samples_per_chunk
     long nbatches = 0;             // same as (total_beams / beams_per_batch)
-    
-    Array<float> flat_buf;         // shape (beams_per_batch, nseg * nelts_per_segment)
+
+    // FIXME this awkwardness can go away when I define DedispersionInbuf
+    Array<float> input_buf;        // shape (beams_per_batch, pow2(st0.rank), ntime)
+    LaggedDownsamplingKernelOutbuf lds_outbuf;
     vector<Array<float>> dd_bufs;  // length nds, inner shape is (beams_per_batch, pow2(st0.rank), nt_ds)
     vector<Array<float>> ds_bufs;  // length (nds-1), same as dd_bufs[1:]
     
-    vector<shared_ptr<ReferenceLaggedDownsamplingKernel>> lds_kernels;   // length (nbatches)
+    shared_ptr<ReferenceLaggedDownsamplingKernel2> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> dd_kernels;   // length (nds)
 
-    Stage0Buffers(const shared_ptr<DedispersionPlan> &plan_, Array<float> ringbuf_) :
-	plan(plan_), ringbuf(ringbuf_)
+    Stage0Buffers(const shared_ptr<DedispersionPlan> &plan_, Array<float> ringbuf_)
+	: plan(plan_), ringbuf(ringbuf_), lds_outbuf(plan_)
     {
 	this->nds = plan->config.num_downsampling_levels;
 	this->nseg = plan->stage0_total_segments_per_beam;
@@ -51,12 +59,11 @@ struct Stage0Buffers
 	this->nelts_per_segment = plan->nelts_per_segment;
 	this->beams_per_batch = plan->config.beams_per_batch;
 	this->total_beams = plan->config.beams_per_gpu;
+	this->nt_chunk = plan->config.time_samples_per_chunk;
 	this->nbatches = xdiv(total_beams, beams_per_batch);
-
+	
 	this->dd_bufs.resize(nds);
 	this->ds_bufs.resize(nds-1);
-	this->lds_kernels.resize(nbatches);
-	this->dd_kernels.resize(nds);
 
 	if (ringbuf.size == 0)
 	    this->output_is_ringbuf = false;
@@ -65,48 +72,25 @@ struct Stage0Buffers
 	else
 	    throw runtime_error("Stage0Buffer constructor: bad ringbuf shape");
 	
-	// Allocate buffers.
+	// Allocate buffers and LaggedDownsampler kernels.
 
-	this->flat_buf = Array<float> ({beams_per_batch, nseg * nelts_per_segment}, af_uhost | af_zero);
-	long pos = 0;
+	this->input_buf = Array<float> ({ beams_per_batch, pow2(plan->config.tree_rank), nt_chunk }, af_uhost);
+	this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel2> (lds_outbuf.params);
+	this->lds_outbuf.allocate(af_uhost);
 	
-	for (long ids = 0; ids < nds; ids++) {
-	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
-	    xassert(pos == st0.base_segment * nelts_per_segment);
-	    
-	    long nelts = st0.segments_per_beam * nelts_per_segment;
-	    long rank = st0.rank0 + st0.rank1;
-	    long nt_ds = st0.nt_ds;
+	this->dd_bufs.resize(nds);
+	this->ds_bufs.resize(nds-1);
+	this->dd_bufs.at(0) = input_buf;
 
-	    xassert(nelts == pow2(rank) * nt_ds);
-	    Array<float> view = flat_buf.slice(1, pos, pos+nelts);
-	    view = view.reshape({ beams_per_batch, pow2(rank), nt_ds });
-
-	    dd_bufs.at(ids) = view;
-	    
-	    if (ids > 0)
-		ds_bufs.at(ids-1) = view;
-	    
-	    pos += nelts;
-	}
-	
-	// LaggedDownsampler kernels.
-
-	if (nds > 1) {
-	    ReferenceLaggedDownsamplingKernel::Params ld_params;
-	    ld_params.small_input_rank = plan->stage0_trees.at(1).rank0 + 1;
-	    ld_params.large_input_rank = plan->config.tree_rank;
-	    ld_params.num_downsampling_levels = nds - 1;   // note (-1) here!
-	    ld_params.nbeams = beams_per_batch;
-	    ld_params.ntime = plan->config.time_samples_per_chunk;
-
-	    for (long b = 0; b < nbatches; b++)
-		this->lds_kernels.at(b) = make_shared<ReferenceLaggedDownsamplingKernel> (ld_params);
+	for (long ids = 0; ids < nds-1; ids++) {
+	    Array<float> a = this->lds_outbuf.small_arrs.at(ids).template cast<float> ();
+	    this->dd_bufs.at(ids+1) = this->ds_bufs.at(ids) = a;
 	}
 
 	// Dedispersion kernels.
 
-	pos = 0;  // for ringbuf_locations
+	this->dd_kernels.resize(nds);
+	long pos = 0;  // for ringbuf_locations
 	
 	for (long ids = 0; ids < nds; ids++) {
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
@@ -136,10 +120,8 @@ struct Stage0Buffers
 
     void apply_lagged_downsampler(long ibeam)
     {
-	if (nds > 1) {
-	    long b = xdiv(ibeam, beams_per_batch);
-	    lds_kernels.at(b)->apply(dd_bufs.at(0), ds_bufs);
-	}
+	long ibatch = xdiv(ibeam, beams_per_batch);
+	lds_kernel->apply(input_buf, lds_outbuf, ibatch);
     }
     
     void apply_dedispersion_kernels(long itime, long ibeam)
@@ -311,7 +293,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
 void ReferenceDedisperserBase::check_iobuf_shapes()
 {
     xassert_shape_eq(input_array, ({ beams_per_batch, pow2(config_rank), config_ntime }));
-    xassert_eq(output_arrays.size(), nout);
+    xassert_eq(long(output_arrays.size()), nout);
 
     for (long iout = 0; iout < nout; iout++) {
 	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(iout);

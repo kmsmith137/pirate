@@ -72,6 +72,9 @@ struct DedispersionPlan
 
     // All vector<Ringbuf> objects have length (max_clag + 1).
     // T = total beams, A = active beams, B = beams per batch.
+    //
+    // Note: in current version of code, only 'gmem_ringbufs' are used!
+    // The 'g2h_ringbufs, 'h2g_ringbufs', and 'h2h_ringbufs' are placeholders.
     
     std::vector<Ringbuf> gmem_ringbufs;    // rb_size = (clag*T + A), on GPU
     std::vector<Ringbuf> g2h_ringbufs;     // rb_size = min(A+B, T), on GPU

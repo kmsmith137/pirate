@@ -80,6 +80,8 @@ LIB_SRCFILES = \
   src_lib/File.cu \
   src_lib/GpuDedispersionKernel.cu \
   src_lib/GpuLaggedDownsamplingKernel.cu \
+  src_lib/LaggedDownsamplingKernelOutbuf.cu \
+  src_lib/LaggedDownsamplingKernelParams.cu \
   src_lib/ReferenceDedisperser.cu \
   src_lib/ReferenceDedispersionKernel.cu \
   src_lib/ReferenceLagbuf.cu \
@@ -156,11 +158,10 @@ HFILES = \
   include/pirate/internals/FakeServer.hpp \
   include/pirate/internals/File.hpp \
   include/pirate/internals/GpuDedispersionKernel.hpp \
-  include/pirate/internals/GpuLaggedDownsamplingKernel.hpp \
+  include/pirate/internals/LaggedDownsamplingKernel.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp \
   include/pirate/internals/ReferenceDedispersionKernel.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
-  include/pirate/internals/ReferenceLaggedDownsamplingKernel.hpp \
   include/pirate/internals/ReferenceTree.hpp \
   include/pirate/internals/Socket.hpp \
   include/pirate/internals/YamlFile.hpp
@@ -205,9 +206,9 @@ build_sdist: sdist_files.txt
 
 # Symlink {include,lib} into python directory 'pirate_frb'.
 pirate_frb/include:
-	ln -s ../include $@
+	ln -sf ../include $@
 pirate_frb/lib:
-	ln -s ../lib $@
+	ln -sf ../lib $@
 
 # Build object files in src_lib/, src_bin/, and src_lib/template_instantiations/ with default flags.
 %.o: %.cu %.d

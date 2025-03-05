@@ -113,7 +113,7 @@ static void test_reference_lagbuf(const Array<int> &lags, const vector<long> dat
 	 << ", nt_chunk=" << nt_chunk
 	 << ", nchunks=" << nchunks << endl;
 
-    xassert(data_strides.size() == lags.ndim+1);
+    xassert(long(data_strides.size()) == lags.ndim+1);
     xassert(data_strides[lags.ndim] == 1);
     
     int d = lags.ndim;

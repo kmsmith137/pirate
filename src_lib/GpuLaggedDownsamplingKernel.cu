@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/GpuLaggedDownsamplingKernel.hpp"
+#include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/internals/inlines.hpp"   // pow2(), simd32_type
 #include "../include/pirate/constants.hpp"
 
@@ -730,7 +730,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 // -------------------------------------------------------------------------------------------------
 
 
-GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) :
+GpuLaggedDownsamplingKernel2::GpuLaggedDownsamplingKernel2(const Params &params_) :
     params(params_)
 {
     params.validate();
@@ -741,6 +741,8 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) 
     int ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
     int S = xdiv(M*ST,2) - 1;
     int shmem_nbytes_per_warp = D * (S+2) * 4;
+
+    xassert_divisible(params.ntime, pow2(D) * xdiv(128, ST));
     
     // Target warps per threadblock.
     int W_target = (98*1024) / shmem_nbytes_per_warp;
@@ -764,35 +766,18 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) 
     int B = M_B * A_B;  // threadblocks per beam
     xassert(W <= 32);
 
-    this->ntime_divisibility_requirement = pow2(D) * xdiv(128, ST);
     this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
 }
 
 
-void GpuLaggedDownsamplingKernel::Params::validate() const
-{
-    xassert(!dtype.is_empty());
-    xassert_ge(small_input_rank, 2);  // currently required by GPU kernel
-    xassert_le(small_input_rank, 8);
-    xassert_ge(large_input_rank, small_input_rank);
-    xassert_le(large_input_rank, constants::max_tree_rank);
-    xassert_ge(num_downsampling_levels, 1);
-    xassert_le(num_downsampling_levels, constants::max_downsampling_level);
 
-    if ((dtype.flags != df_float) || ((dtype.nbits != 16) && (dtype.nbits != 32)))
-	throw runtime_error("GpuLaggedDownsamplingKernel::Params::validate(): unsupported dtype: " + dtype.str());
-}
-
-
-void GpuLaggedDownsamplingKernel::print(ostream &os, int indent) const
+void GpuLaggedDownsamplingKernel2::print(ostream &os, int indent) const
 {
     // Usage reminder: print_kv(key, val, os, indent, units=nullptr)
-    print_kv("dtype", params.dtype, os, indent);
-    print_kv("small_input_rank", params.small_input_rank, os, indent);
-    print_kv("large_input_rank", params.large_input_rank, os, indent);
-    print_kv("num_downsampling_levels", params.num_downsampling_levels, os, indent);
-    print_kv("ntime_divisibility_requirement", ntime_divisibility_requirement, os, indent);
+
+    this->params.print(os, indent);
+
     print_kv("shmem_nbytes_per_threadblock", shmem_nbytes_per_threadblock, os, indent);
     print_kv("state_nelts_per_beam", state_nelts_per_beam, os, indent);
 
@@ -817,22 +802,26 @@ template<typename T32, int Dmax>
 static cuda_kernel_t<T32> get_kernel(int D)
 {
     if constexpr (Dmax == 0)
-	throw runtime_error("GpuLaggedDownsamplingKernel: precompiled kernel not found");
+	throw runtime_error("GpuLaggedDownsamplingKernel2: precompiled kernel not found");
     else
 	return (D == Dmax) ? lagged_downsample<T32,Dmax> : get_kernel<T32,Dmax-1> (D);
 }
 
 
 template<typename T>
-struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
+struct DownsamplingKernelImpl2 : public GpuLaggedDownsamplingKernel2
 {
-    DownsamplingKernelImpl(const Params &params);
-
-    virtual void launch(const Array<void> &in,
-                        std::vector<Array<void>> &out,
-                        Array<void> &persistent_state,
-                        long ntime_cumulative,
-                        cudaStream_t stream=nullptr) override;
+    using Params = LaggedDownsamplingKernelParams;
+    
+    DownsamplingKernelImpl2(const Params &params);
+    
+    virtual void launch(
+        const ksgpu::Array<void> &in,
+        LaggedDownsamplingKernelOutbuf &out,
+        ksgpu::Array<void> &persistent_state,
+	long ntime_cumulative,
+        cudaStream_t stream
+    ) override;
 
     using T32 = typename simd32_type<T>::type;
     
@@ -841,8 +830,8 @@ struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
 
 
 template<typename T>
-DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const Params &params_) :
-    GpuLaggedDownsamplingKernel(params_)
+DownsamplingKernelImpl2<T>::DownsamplingKernelImpl2(const Params &params_) :
+    GpuLaggedDownsamplingKernel2(params_)
 {
     this->kernel = get_kernel<T32, constants::max_downsampling_level> (params.num_downsampling_levels);
 
@@ -855,71 +844,64 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const Params &params_) :
 }
 
 
-// Virtual override
+// Overrides GpuLaggedDownsamplingKernel2::launch()
 template<typename T>
-void DownsamplingKernelImpl<T>::launch(
+void DownsamplingKernelImpl2<T>::launch(
     const Array<void> &in,
-    vector<Array<void>> &out,
+    LaggedDownsamplingKernelOutbuf &out,
     Array<void> &persistent_state,
     long ntime_cumulative,
     cudaStream_t stream)
 {
-    // 'in': array of shape (nbeams, 2^(large_input_rank), ntime).
+    // 'in': array of shape (beams_per_batch, 2^(large_input_rank), ntime).
     // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
+    //
+    // 'persistent_state': contiguous array of shape (beams_per_batch, state_nelts_per_beam)
+    // Must be zeroed on first call to launch().
 
-    xassert_eq(in.ndim, 3);
-    xassert_eq(in.shape[1], pow2(params.large_input_rank));
-    xassert_ge(in.get_ncontig(), 2);
+    xassert_shape_eq(in, ({ params.beams_per_batch, pow2(params.large_input_rank), params.ntime }));
     xassert_eq(in.dtype, Dtype::native<T>());
-
-    long nbeams = in.shape[0];
-    long ntime_in = in.shape[2];
-
-    xassert(nbeams > 0);
-    xassert(ntime_in > 0);
-    xassert(ntime_cumulative >= 0);
-    xassert(ntime_in < 2L * 1024L * 1024L * 1024L);
-    xassert_divisible(ntime_in, ntime_divisibility_requirement);
-    xassert_divisible(ntime_cumulative, ntime_divisibility_requirement);
+    xassert_ge(in.get_ncontig(), 2);
+    xassert(in.on_gpu());
     
-    // 'persistent_state': contiguous array of shape (nbeams, state_nelts_per_beam)
+    xassert(out.params == this->params);
+    xassert(out.is_allocated());
+    xassert(out.on_gpu());
 
-    xassert_shape_eq(persistent_state, ({nbeams, state_nelts_per_beam}));
+    xassert(ntime_cumulative >= 0);
+    xassert_divisible(ntime_cumulative, params.ntime);
+
+    if (params.num_downsampling_levels == 0)
+	return;
+
+    xassert_shape_eq(persistent_state, ({ params.beams_per_batch, state_nelts_per_beam }));
     xassert_eq(persistent_state.dtype, Dtype::native<T>());
     xassert(persistent_state.is_fully_contiguous());
-    
-    // 'out': vector of length (num_downsampling_levels).
-    //
-    // The i-th element should have shape (nbeams, 2^(large_input_rank-1), ntime/2^(i+1)).
-    // Must have contiguous freq/time axes, but beam axis can have arbitrary stride.
-    //
-    // There is also an "adjacency" requirement: out[i][0,:,:] and out[i+1][0,:,:] must
-    // be adjacent in memory. Relatedly, all 'out' arrays must have the same beam stride.
-    
-    xassert_eq(int(out.size()), params.num_downsampling_levels);
+    xassert(persistent_state.on_gpu());
+
+    // Some paranoid checks on 'out' that I'll probably remove some day.
+    xassert_eq(long(out.small_arrs.size()), params.num_downsampling_levels);
+    xassert_shape_eq(out.big_arr, ({ params.beams_per_batch, out.min_beam_stride }));
+    xassert_eq(out.big_arr.dtype, Dtype::native<T>());
+    xassert(out.big_arr.get_ncontig() >= 1);
 
     long nout = 0;
     for (int i = 0; i < params.num_downsampling_levels; i++) {
-	int ntime_out = ntime_in >> (i+1);
+	int ntime_out = params.ntime >> (i+1);
 	int ntree_out = pow2(params.large_input_rank - 1);
 
-	xassert_shape_eq(out[i], ({nbeams, ntree_out, ntime_out}));
-	xassert_eq(out[i].dtype, Dtype::native<T>());
-	xassert(out[i].get_ncontig() >= 2);
-
-	if ((T*)out[i].data != ((T*)out[0].data + nout)) {
-	    throw runtime_error("GpuLaggedDownsamplingKernel::launch(): output arrays must be 'adjacent' "
-				"(see comment at beginning of pirate/src_lib/GpuLaggedDownsampler.cu)");
-	}
-
-	if (out[i].strides[0] != out[0].strides[0])
-	    throw runtime_error("GpuLaggedDownsamplingKernel::launch(): all output arrays must have same beam_stride");
-
+	const Array<void> &outi = out.small_arrs.at(i);
+	xassert_shape_eq(outi, ({ params.beams_per_batch, ntree_out, ntime_out }));
+	xassert_eq(outi.dtype, Dtype::native<T>());
+	xassert_eq((T*)outi.data, (T*)out.big_arr.data + nout);
+	xassert((params.beams_per_batch == 1) || (outi.strides[0] == out.big_arr.strides[0]));
+	xassert(outi.get_ncontig() >= 2);
+	
 	nout += ntree_out * ntime_out;
     }
     
     // Required by CUDA (max alllowed value of gridDims.z)
-    xassert_lt(nbeams, 65536);
+    xassert_lt(params.beams_per_batch, 65536);
 
     dim3 block_dims;
     block_dims.z = A_W;
@@ -927,18 +909,18 @@ void DownsamplingKernelImpl<T>::launch(
     block_dims.x = 32;
 
     dim3 grid_dims;
-    grid_dims.z = nbeams;
+    grid_dims.z = params.beams_per_batch;
     grid_dims.y = A_B;
     grid_dims.x = M_B;
     
     this->kernel
 	<<< grid_dims, block_dims, shmem_nbytes_per_threadblock, stream >>>
 	(reinterpret_cast<const T32 *> (in.data),
-	 reinterpret_cast<T32 *> (out[0].data),
-	 ntime_in,
+	 reinterpret_cast<T32 *> (out.big_arr.data),
+	 params.ntime,
 	 ntime_cumulative,
-	 in.strides[0],      // bstride_in,
-	 out[0].strides[0],  // bstride_out,
+	 in.strides[0],           // bstride_in,
+	 out.big_arr.strides[0],  // bstride_out,
 	 reinterpret_cast<T32 *> (persistent_state.data));
 
     CUDA_PEEK("lagged downsampling kernel");
@@ -946,16 +928,16 @@ void DownsamplingKernelImpl<T>::launch(
 
 
 // Static member function
-shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const Params &params)
+shared_ptr<GpuLaggedDownsamplingKernel2> GpuLaggedDownsamplingKernel2::make(const Params &params)
 {
     params.validate();
     
     if (params.dtype == Dtype::native<float>())
-	return make_shared<DownsamplingKernelImpl<float>> (params);
+	return make_shared<DownsamplingKernelImpl2<float>> (params);
     if (params.dtype == Dtype::native<__half>())
-	return make_shared<DownsamplingKernelImpl<__half>> (params);
+	return make_shared<DownsamplingKernelImpl2<__half>> (params);
     
-    throw runtime_error("GpuLaggedDownsamplingKernel::make(): unsupported dtype: " + params.dtype.str());
+    throw runtime_error("GpuLaggedDownsamplingKernel2::make(): unsupported dtype: " + params.dtype.str());
 }
 
 
