@@ -730,7 +730,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 // -------------------------------------------------------------------------------------------------
 
 
-GpuLaggedDownsamplingKernel2::GpuLaggedDownsamplingKernel2(const Params &params_) :
+GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const Params &params_) :
     params(params_)
 {
     params.validate();
@@ -772,7 +772,7 @@ GpuLaggedDownsamplingKernel2::GpuLaggedDownsamplingKernel2(const Params &params_
 
 
 
-void GpuLaggedDownsamplingKernel2::print(ostream &os, int indent) const
+void GpuLaggedDownsamplingKernel::print(ostream &os, int indent) const
 {
     // Usage reminder: print_kv(key, val, os, indent, units=nullptr)
 
@@ -802,14 +802,14 @@ template<typename T32, int Dmax>
 static cuda_kernel_t<T32> get_kernel(int D)
 {
     if constexpr (Dmax == 0)
-	throw runtime_error("GpuLaggedDownsamplingKernel2: precompiled kernel not found");
+	throw runtime_error("GpuLaggedDownsamplingKernel: precompiled kernel not found");
     else
 	return (D == Dmax) ? lagged_downsample<T32,Dmax> : get_kernel<T32,Dmax-1> (D);
 }
 
 
 template<typename T>
-struct DownsamplingKernelImpl2 : public GpuLaggedDownsamplingKernel2
+struct DownsamplingKernelImpl2 : public GpuLaggedDownsamplingKernel
 {
     using Params = LaggedDownsamplingKernelParams;
     
@@ -831,7 +831,7 @@ struct DownsamplingKernelImpl2 : public GpuLaggedDownsamplingKernel2
 
 template<typename T>
 DownsamplingKernelImpl2<T>::DownsamplingKernelImpl2(const Params &params_) :
-    GpuLaggedDownsamplingKernel2(params_)
+    GpuLaggedDownsamplingKernel(params_)
 {
     this->kernel = get_kernel<T32, constants::max_downsampling_level> (params.num_downsampling_levels);
 
@@ -844,7 +844,7 @@ DownsamplingKernelImpl2<T>::DownsamplingKernelImpl2(const Params &params_) :
 }
 
 
-// Overrides GpuLaggedDownsamplingKernel2::launch()
+// Overrides GpuLaggedDownsamplingKernel::launch()
 template<typename T>
 void DownsamplingKernelImpl2<T>::launch(
     const Array<void> &in,
@@ -928,7 +928,7 @@ void DownsamplingKernelImpl2<T>::launch(
 
 
 // Static member function
-shared_ptr<GpuLaggedDownsamplingKernel2> GpuLaggedDownsamplingKernel2::make(const Params &params)
+shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const Params &params)
 {
     params.validate();
     
@@ -937,7 +937,7 @@ shared_ptr<GpuLaggedDownsamplingKernel2> GpuLaggedDownsamplingKernel2::make(cons
     if (params.dtype == Dtype::native<__half>())
 	return make_shared<DownsamplingKernelImpl2<__half>> (params);
     
-    throw runtime_error("GpuLaggedDownsamplingKernel2::make(): unsupported dtype: " + params.dtype.str());
+    throw runtime_error("GpuLaggedDownsamplingKernel::make(): unsupported dtype: " + params.dtype.str());
 }
 
 

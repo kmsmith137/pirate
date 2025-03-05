@@ -22,7 +22,7 @@ static void time_gpu_dedispersion_kernel(const LaggedDownsamplingKernelParams &p
     long niter = 20;
     
     long ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
-    shared_ptr<GpuLaggedDownsamplingKernel2> kernel = GpuLaggedDownsamplingKernel2::make(params);
+    shared_ptr<GpuLaggedDownsamplingKernel> kernel = GpuLaggedDownsamplingKernel::make(params);
 
     Array<void> in(params.dtype, { nb_tot, pow2(params.large_input_rank), params.ntime }, af_gpu | af_zero);
     Array<void> pstate(params.dtype, { nb_tot, kernel->state_nelts_per_beam }, af_gpu | af_zero);

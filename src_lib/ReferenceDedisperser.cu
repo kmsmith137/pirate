@@ -2,7 +2,7 @@
 
 #include "../include/pirate/internals/ReferenceTree.hpp"
 #include "../include/pirate/internals/ReferenceLagbuf.hpp"
-#include "../include/pirate/internals/ReferenceDedispersionKernel.hpp"
+#include "../include/pirate/internals/DedispersionKernel.hpp"
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
 
 #include "../include/pirate/constants.hpp"
@@ -47,7 +47,7 @@ struct Stage0Buffers
     vector<Array<float>> dd_bufs;  // length nds, inner shape is (beams_per_batch, pow2(st0.rank), nt_ds)
     vector<Array<float>> ds_bufs;  // length (nds-1), same as dd_bufs[1:]
     
-    shared_ptr<ReferenceLaggedDownsamplingKernel2> lds_kernel;
+    shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> dd_kernels;   // length (nds)
 
     Stage0Buffers(const shared_ptr<DedispersionPlan> &plan_, Array<float> ringbuf_)
@@ -75,7 +75,7 @@ struct Stage0Buffers
 	// Allocate buffers and LaggedDownsampler kernels.
 
 	this->input_buf = Array<float> ({ beams_per_batch, pow2(plan->config.tree_rank), nt_chunk }, af_uhost);
-	this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel2> (lds_outbuf.params);
+	this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (lds_outbuf.params);
 	this->lds_outbuf.allocate(af_uhost);
 	
 	this->dd_bufs.resize(nds);
@@ -96,7 +96,7 @@ struct Stage0Buffers
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
 	    long nseg = st0.segments_per_beam;
 	    
-	    ReferenceDedispersionKernel::Params params;
+	    DedispersionKernelParams params;
 	    params.dtype = plan->config.dtype;
 	    params.rank = st0.rank0;
 	    params.nambient = pow2(st0.rank1);
@@ -215,7 +215,7 @@ struct Stage1Buffers
 	    const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(iout);
 	    long nseg = st1.segments_per_beam;
 	    
-	    ReferenceDedispersionKernel::Params params;		
+	    DedispersionKernelParams params;		
 	    params.dtype = plan->config.dtype;
 	    params.rank = st1.rank1_trigger;
 	    params.nambient = pow2(st1.rank0);

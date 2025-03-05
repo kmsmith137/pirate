@@ -3,7 +3,7 @@
 #include <ksgpu/CudaStreamPool.hpp>
 
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
-#include "../include/pirate/internals/GpuDedispersionKernel.hpp"
+#include "../include/pirate/internals/DedispersionKernel.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -19,7 +19,7 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int rank, bool apply_input
     long ntime = 2048;
     long niter = 5;
 
-    GpuDedispersionKernel::Params params;
+    DedispersionKernelParams params;
     params.dtype = dtype;
     params.rank = rank;
     params.nambient = nambient;

@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/ReferenceDedispersionKernel.hpp"
+#include "../include/pirate/internals/DedispersionKernel.hpp"
 #include "../include/pirate/internals/ReferenceLagbuf.hpp"
 #include "../include/pirate/internals/ReferenceTree.hpp"
 #include "../include/pirate/internals/inlines.hpp"     // pow2()

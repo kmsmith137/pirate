@@ -80,8 +80,8 @@ void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
     Params ref_params = p;
     ref_params.dtype = Dtype::native<float> ();
     
-    auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel2> (ref_params);
-    auto gpu_kernel = GpuLaggedDownsamplingKernel2::make(p);
+    auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
+    auto gpu_kernel = GpuLaggedDownsamplingKernel::make(p);
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
 
     // Input arrays have shape (beams_per_batch, 2^(large_input_rank), ntime).

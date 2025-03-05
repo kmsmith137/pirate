@@ -77,18 +77,18 @@ struct LaggedDownsamplingKernelOutbuf
 
 // The reference kernel allocates persistent state internally.
 // (Note that the apply() method takes an 'ibatch' argument, so that the correct persistent state can be used.)
-struct ReferenceLaggedDownsamplingKernel2
+struct ReferenceLaggedDownsamplingKernel
 {
     const LaggedDownsamplingKernelParams params;
     const int nbatches;  // same as (params.total_beams / params.beams_per_batch)
 
-    ReferenceLaggedDownsamplingKernel2(const LaggedDownsamplingKernelParams &params);
+    ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params);
     
     void apply(const ksgpu::Array<void> &in, LaggedDownsamplingKernelOutbuf &out, long ibatch);
     
     std::vector<ReferenceLagbuf> lagbufs_small;  // length nbatches
     std::vector<ReferenceLagbuf> lagbufs_large;  // length nbatches
-    std::shared_ptr<ReferenceLaggedDownsamplingKernel2> next;
+    std::shared_ptr<ReferenceLaggedDownsamplingKernel> next;
 
     // Helper for apply().
     void _apply(const ksgpu::Array<float> &in, ksgpu::Array<void> *outp, long ibatch);
@@ -98,7 +98,7 @@ struct ReferenceLaggedDownsamplingKernel2
 // The GPU kernel does not allocate persistent state -- the caller is responsible.
 // (Note that the launch() method takes a 'persistent_state' argument, but not an 'ibatch' argument.)
 
-class GpuLaggedDownsamplingKernel2
+class GpuLaggedDownsamplingKernel
 {
     using Params = LaggedDownsamplingKernelParams;
     
@@ -106,7 +106,7 @@ public:
     const Params params;
     
     // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
-    static std::shared_ptr<GpuLaggedDownsamplingKernel2> make(const Params &params);
+    static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const Params &params);
     
     // These parameters determine how the kernel is divided into threadblocks.
     // See LaggedDownsamplingKernel.cu for more info.
@@ -142,8 +142,8 @@ public:
     void print(std::ostream &os=std::cout, int indent=0) const;
 
 protected:
-    // Constructor is protected -- use GpuLaggedDownsamplingKernel2::make() instead.
-    GpuLaggedDownsamplingKernel2(const Params &params);
+    // Constructor is protected -- use GpuLaggedDownsamplingKernel::make() instead.
+    GpuLaggedDownsamplingKernel(const Params &params);
 };
 
 

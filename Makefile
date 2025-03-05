@@ -72,6 +72,7 @@ LIB_SRCFILES = \
   src_lib/system_utils.cu \
   src_lib/utils.cu \
   src_lib/DedispersionConfig.cu \
+  src_lib/DedispersionKernelParams.cu \
   src_lib/DedispersionPlan.cu \
   src_lib/Directory.cu \
   src_lib/Epoll.cu \
@@ -152,15 +153,14 @@ HFILES = \
   include/pirate/internals/inlines.hpp \
   include/pirate/internals/system_utils.hpp \
   include/pirate/internals/utils.hpp \
+  include/pirate/internals/DedispersionKernel.hpp \
   include/pirate/internals/Directory.hpp \
   include/pirate/internals/Epoll.hpp \
   include/pirate/internals/FakeCorrelator.hpp \
   include/pirate/internals/FakeServer.hpp \
   include/pirate/internals/File.hpp \
-  include/pirate/internals/GpuDedispersionKernel.hpp \
   include/pirate/internals/LaggedDownsamplingKernel.hpp \
   include/pirate/internals/ReferenceDedisperser.hpp \
-  include/pirate/internals/ReferenceDedispersionKernel.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
   include/pirate/internals/ReferenceTree.hpp \
   include/pirate/internals/Socket.hpp \

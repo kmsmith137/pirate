@@ -1,5 +1,4 @@
-#include "../include/pirate/internals/GpuDedispersionKernel.hpp"
-#include "../include/pirate/internals/ReferenceDedispersionKernel.hpp"
+#include "../include/pirate/internals/DedispersionKernel.hpp"
 #include "../include/pirate/internals/inlines.hpp"    // pow2()
 #include "../include/pirate/internals/utils.hpp"      // integer_log2()
 #include "../include/pirate/constants.hpp"            // constants::bytes_per_gpu_cache_line
@@ -17,7 +16,7 @@ using namespace ksgpu;
 struct TestInstance
 {
     // Reminder: includes 'dtype', 'input_is_ringbuf', 'output_is_ringbuf'.
-    GpuDedispersionKernel::Params params;
+    DedispersionKernelParams params;
 
     long nchunks = 0;
 
@@ -199,7 +198,7 @@ void _setup_io_arrays(Array<void> &in, Array<void> &out, const Array<void> &in_b
 
 static void run_test(const TestInstance &tp)
 {
-    const GpuDedispersionKernel::Params &p = tp.params;
+    const DedispersionKernelParams &p = tp.params;
     
     cout << "Test GpuDedispersionKernel\n"
 	 << "    dtype = " << p.dtype << "\n"
@@ -221,7 +220,7 @@ static void run_test(const TestInstance &tp)
 	 << "    cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides)
 	 << endl;
 
-    GpuDedispersionKernel::Params gp = p;
+    DedispersionKernelParams gp = p;
     if (p.input_is_ringbuf || p.output_is_ringbuf)
 	gp.ringbuf_locations = gp.ringbuf_locations.to_gpu();
     

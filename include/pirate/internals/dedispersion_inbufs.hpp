@@ -3,8 +3,8 @@
 
 #include <ksgpu/Array.hpp>
 
-#include "inlines.hpp"                // simd32_type
-#include "GpuDedispersionKernel.hpp"  // GpuDedispersionKernel::Params
+#include "inlines.hpp"             // simd32_type
+#include "DedispersionKernel.hpp"  // DedispersionKernelParams
 
 namespace pirate {
 #if 0
@@ -33,7 +33,7 @@ struct dedispersion_simple_inbuf
 	__device__ __forceinline__ bool _is_downsampled() { return is_downsampled; }
 
 	// Defined in GpuDedispersionKernel.cu
-	__host__ device_args(const ksgpu::Array<void> &uarr, const GpuDedispersionKernel::Params &params);
+	__host__ device_args(const ksgpu::Array<void> &uarr, const DedispersionKernelParams &params);
     };
 
     struct device_state
@@ -89,7 +89,7 @@ struct dedispersion_ring_inbuf
 	__device__ __forceinline__ bool _is_downsampled() { return is_downsampled; }
 
 	// Defined in GpuDedispersionKernel.cu
-	__host__ device_args(const ksgpu::Array<void> &uarr, const GpuDedispersionKernel::Params &params);
+	__host__ device_args(const ksgpu::Array<void> &uarr, const DedispersionKernelParams &params);
     };
 
     struct device_state

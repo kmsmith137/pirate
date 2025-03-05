@@ -3,8 +3,8 @@
 
 #include <ksgpu/Array.hpp>
 
-#include "inlines.hpp"                // simd32_type
-#include "GpuDedispersionKernel.hpp"  // GpuDedispersionKernel::Params
+#include "inlines.hpp"             // simd32_type
+#include "DedispersionKernel.hpp"  // DedispersionKernelParams
 
 namespace pirate {
 #if 0
@@ -28,7 +28,7 @@ struct dedispersion_simple_outbuf
 	long dm_stride32;       // 32-bit stride
 	
 	// Defined in GpuDedispersionKernel.cu
-	__host__ device_args(const ksgpu::Array<void> &uarr, const GpuDedispersionKernel::Params &params);
+	__host__ device_args(const ksgpu::Array<void> &uarr, const DedispersionKernelParams &params);
     };
 
     struct device_state
@@ -77,7 +77,7 @@ struct dedispersion_ring_outbuf
 	const uint4 *rb_loc;  // indexed by (seg, ambient, dm)
 	
 	// Defined in GpuDedispersionKernel.cu
-	__host__ device_args(const ksgpu::Array<void> &uarr, const GpuDedispersionKernel::Params &params);
+	__host__ device_args(const ksgpu::Array<void> &uarr, const DedispersionKernelParams &params);
     };
 
     struct device_state

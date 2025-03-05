@@ -21,14 +21,14 @@ namespace pirate {
 // 2-d array).
 
 
-ReferenceLaggedDownsamplingKernel2::ReferenceLaggedDownsamplingKernel2(const LaggedDownsamplingKernelParams &params_) :
+ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params_) :
     params(params_),
     nbatches(xdiv(params_.total_beams, params_.beams_per_batch))
 {
     params.validate();
     
     if (params.dtype != Dtype::native<float>())
-	throw runtime_error("ReferenceLaggedDownsamplingKernel2 is only implemented for dtype==float32");
+	throw runtime_error("ReferenceLaggedDownsamplingKernel is only implemented for dtype==float32");
     
     int nb = params.beams_per_batch;
     int r = params.large_input_rank;
@@ -62,14 +62,14 @@ ReferenceLaggedDownsamplingKernel2::ReferenceLaggedDownsamplingKernel2(const Lag
     next_params.num_downsampling_levels = nds-1;
     next_params.ntime = nt2;
     
-    this->next = make_shared<ReferenceLaggedDownsamplingKernel2> (next_params);
+    this->next = make_shared<ReferenceLaggedDownsamplingKernel> (next_params);
 }
 
-void ReferenceLaggedDownsamplingKernel2::apply(const Array<void> &in_, LaggedDownsamplingKernelOutbuf &out, long ibatch)
+void ReferenceLaggedDownsamplingKernel::apply(const Array<void> &in_, LaggedDownsamplingKernelOutbuf &out, long ibatch)
 {
     xassert(in_.on_host());
     xassert_shape_eq(in_, ({ params.beams_per_batch, pow2(params.large_input_rank), params.ntime }));
-    Array<float> in = in_.template cast<float> ("ReferenceLaggedDownsamplingKernel2::apply(): 'in' array");
+    Array<float> in = in_.template cast<float> ("ReferenceLaggedDownsamplingKernel::apply(): 'in' array");
 
     xassert(out.params == this->params);
     xassert(out.is_allocated());
@@ -83,7 +83,7 @@ void ReferenceLaggedDownsamplingKernel2::apply(const Array<void> &in_, LaggedDow
 }
 
 	    
-void ReferenceLaggedDownsamplingKernel2::_apply(const Array<float> &in, Array<void> *outp, long ibatch)
+void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<void> *outp, long ibatch)
 {
     // Reminder: the input/output arrays have the following shapes:
     //
@@ -100,7 +100,7 @@ void ReferenceLaggedDownsamplingKernel2::_apply(const Array<float> &in, Array<vo
     xassert_divisible(ntime, 2);
     xassert_shape_eq(in, ({ nb, pow2(r), ntime }));
 
-    Array<float> out = outp[0].template cast<float> ("ReferenceLaggedDownsamplingKernel2::apply(): 'out' array");
+    Array<float> out = outp[0].template cast<float> ("ReferenceLaggedDownsamplingKernel::apply(): 'out' array");
     xassert_shape_eq(out, ({ nb, pow2(r-1), ntime/2 }));
 
     // Reshape input array to 2-d, since reference_downsample_time() assumes a 2-d array.
