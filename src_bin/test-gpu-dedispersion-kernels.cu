@@ -220,6 +220,8 @@ static void run_test(const TestInstance &tp)
 	 << "    cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides)
 	 << endl;
 
+    long nbatches = xdiv(p.total_beams, p.beams_per_batch);
+			 
     DedispersionKernelParams gp = p;
     if (p.input_is_ringbuf || p.output_is_ringbuf)
 	gp.ringbuf_locations = gp.ringbuf_locations.to_gpu();
@@ -245,22 +247,22 @@ static void run_test(const TestInstance &tp)
     _setup_io_arrays(gpu_in, gpu_out, gpu_in_big, gpu_out_big, tp, true);  // on_gpu = true
     
     for (long ichunk = 0; ichunk < tp.nchunks; ichunk++) {
-	for (int b = 0; b < p.total_beams; b += p.beams_per_batch) {
+	for (long ibatch = 0; ibatch < nbatches; ibatch++) {
 	    Array<float> s;
 	    Array<void> t;
 
 	    // Reference dedispersion.
 
 	    if (!p.input_is_ringbuf) {
-		s = cpu_in_big.slice(0, b, b + p.beams_per_batch);
+		s = cpu_in_big.slice(0, ibatch * p.beams_per_batch, (ibatch+1) * p.beams_per_batch);
 		s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		cpu_in.fill(s);
 	    }
 
-	    ref_kernel->apply(cpu_in, cpu_out, ichunk, b);
+	    ref_kernel->apply(cpu_in, cpu_out, ibatch, ichunk);
 
 	    if (!p.output_is_ringbuf) {
-		s = cpu_out_big.slice(0, b, b + p.beams_per_batch);
+		s = cpu_out_big.slice(0, ibatch * p.beams_per_batch, (ibatch+1) * p.beams_per_batch);
 		s = s.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		s.fill(cpu_out);
 	    }
@@ -268,15 +270,15 @@ static void run_test(const TestInstance &tp)
 	    // GPU dedipersion.
 
 	    if (!p.input_is_ringbuf) {
-		t = gpu_in_big.slice(0, b, b + p.beams_per_batch);
+		t = gpu_in_big.slice(0, ibatch * p.beams_per_batch, (ibatch+1) * p.beams_per_batch);
 		t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		gpu_in.fill(t);
 	    }
 
-	    gpu_kernel->launch(gpu_in, gpu_out, ichunk, b);
+	    gpu_kernel->launch(gpu_in, gpu_out, ibatch, ichunk, nullptr);  // stream=nullptr
 
 	    if (!p.output_is_ringbuf) {
-		t = gpu_out_big.slice(0, b, b + p.beams_per_batch);
+		t = gpu_out_big.slice(0, ibatch * p.beams_per_batch, (ibatch+1) * p.beams_per_batch);
 		t = t.slice(3, ichunk * p.ntime, (ichunk+1) * p.ntime);
 		t.fill(gpu_out);
 	    }

@@ -47,7 +47,7 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int rank, bool apply_input
         {
 	    Array<void> x = buf.slice(0, istream);
 	    for (int i = 0; i < niter; i++) {
-		kernels[istream]->launch(x, x, itime[istream], 0, stream);
+		kernels[istream]->launch(x, x, 0, itime[istream], stream);
 		itime[istream]++;
 	    }
 	};

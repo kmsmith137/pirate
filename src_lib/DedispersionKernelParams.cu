@@ -25,6 +25,8 @@ void DedispersionKernelParams::validate(bool on_gpu) const
     xassert_ge(ntime, 0);
 
     xassert((dtype == Dtype::native<float>()) || (dtype == Dtype::native<__half>()));
+
+    // (ringbuf -> ringbuf) doesn't make sense.
     xassert(!input_is_ringbuf || !output_is_ringbuf);
     
     // Not really necessary, but failure probably indicates an unintentional bug.

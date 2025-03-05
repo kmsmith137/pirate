@@ -13,8 +13,20 @@ namespace pirate {
 #endif
 
 
+// Helper for constructor. Equivalent to (but with verbose error checking):
+//  return(params.total_beams / params.beams_per_batch);
+inline long get_nbatches(const DedispersionKernelParams &params)
+{
+    xassert_gt(params.total_beams, 0);
+    xassert_gt(params.beams_per_batch, 0);
+    xassert_divisible(params.total_beams, params.beams_per_batch);
+    return (params.total_beams / params.beams_per_batch);
+}
+
+
 ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) :
-    params(params_)
+    params(params_),
+    nbatches(get_nbatches(params_))
 {
     params.validate(false);    // on_gpu=false
 
@@ -23,10 +35,9 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
     long F = pow2(params.rank);
     long T = params.ntime;
     long Ar = integer_log2(A);
-    long N = xdiv(params.total_beams, B);
 
-    this->trees.resize(N);
-    for (long n = 0; n < N; n++)
+    this->trees.resize(nbatches);
+    for (long n = 0; n < nbatches; n++)
 	trees[n] = ReferenceTree::make({B,A,F,T});
 
     if (!params.apply_input_residual_lags)
@@ -52,13 +63,13 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 	}
     }
     
-    this->rlag_bufs.resize(N);
-    for (long n = 0; n < N; n++)
+    this->rlag_bufs.resize(nbatches);
+    for (long n = 0; n < nbatches; n++)
 	rlag_bufs[n] = make_shared<ReferenceLagbuf> (rlags, T);
 }
 
 
-void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, long itime, long ibeam)
+void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, long ibatch, long it_chunk)
 {
     long B = params.beams_per_batch;
     long A = params.nambient;
@@ -70,26 +81,17 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
     std::initializer_list<long> dd_shape = {B,A,N,T};
     std::initializer_list<long> rb_shape = {R*S};
 
-    xassert(!params.input_is_ringbuf || !params.output_is_ringbuf);
+    Array<float> in = in_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'in' array");
+    Array<float> out = out_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'out' array");
+    
+    xassert(in.on_host());
+    xassert(out.on_host());
     xassert(in.shape_equals(params.input_is_ringbuf ? rb_shape : dd_shape));
     xassert(out.shape_equals(params.output_is_ringbuf ? rb_shape : dd_shape));
-
-    // Compare (itime, ibeam) with expected values.
-    xassert_eq(itime, expected_itime);
-    xassert_eq(ibeam, expected_ibeam);
-
-    // Update expected (itime, ibeam).
-    expected_ibeam += B;
-    xassert_le(expected_ibeam, params.total_beams);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(it_chunk >= 0);
     
-    if (expected_ibeam == params.total_beams) {
-	expected_ibeam = 0;
-	expected_itime++;
-    }
-    
-    int batch = xdiv(ibeam, B);
-    long rb_pos = itime * params.total_beams + ibeam;
-
+    long rb_pos = it_chunk * params.total_beams + (ibatch * params.beams_per_batch);
     Array<float> dd = params.output_is_ringbuf ? in : out;
 
     if (params.input_is_ringbuf)
@@ -98,9 +100,9 @@ void ReferenceDedispersionKernel::apply(Array<float> &in, Array<float> &out, lon
 	dd.fill(in);
 	
     if (params.apply_input_residual_lags)
-	rlag_bufs.at(batch)->apply_lags(dd);
+	rlag_bufs.at(ibatch)->apply_lags(dd);
 
-    trees.at(batch)->dedisperse(dd);
+    trees.at(ibatch)->dedisperse(dd);
 
     if (params.output_is_ringbuf)
 	_copy_to_ringbuf(dd, out, rb_pos);

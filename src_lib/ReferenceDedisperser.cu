@@ -118,13 +118,12 @@ struct Stage0Buffers
 	}
     }
 
-    void apply_lagged_downsampler(long ibeam)
+    void apply_lagged_downsampler(long ibatch)
     {
-	long ibatch = xdiv(ibeam, beams_per_batch);
 	lds_kernel->apply(input_buf, lds_outbuf, ibatch);
     }
     
-    void apply_dedispersion_kernels(long itime, long ibeam)
+    void apply_dedispersion_kernels(long ibatch, long it_chunk)
     {
 	for (long ids = 0; ids < nds; ids++) {
 	    const DedispersionPlan::Stage0Tree &st0 = plan->stage0_trees.at(ids);
@@ -133,7 +132,7 @@ struct Stage0Buffers
 	    in = in.reshape({beams_per_batch, pow2(st0.rank1), pow2(st0.rank0), st0.nt_ds});  // shape (1, 2^rank1, 2^rank0, nt_ds)
 	    
 	    Array<float> out = output_is_ringbuf ? ringbuf : in;
-	    dd_kernels.at(ids)->apply(in, out, itime, ibeam);
+	    dd_kernels.at(ids)->apply(in, out, ibatch, it_chunk);
 	}
     }
 };
@@ -237,7 +236,7 @@ struct Stage1Buffers
 	}
     }
 
-    void apply_dedispersion_kernels(long itime, long ibeam)
+    void apply_dedispersion_kernels(long ibatch, long it_chunk)
     {
 	for (int iout = 0; iout < nout; iout++) {
 	    const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(iout);
@@ -249,7 +248,7 @@ struct Stage1Buffers
 	    out = out.transpose({0,2,1,3});       // shape (beams_per_batch, 2^rank0, 2^rank1, nt_ds)
 
 	    Array<float> in = input_is_ringbuf ? ringbuf : out;
-	    dd_kernels.at(iout)->apply(in, out, itime, ibeam);
+	    dd_kernels.at(iout)->apply(in, out, ibatch, it_chunk);
 	}
     }
 };
@@ -302,24 +301,6 @@ void ReferenceDedisperserBase::check_iobuf_shapes()
     }
 }
 
-void ReferenceDedisperserBase::dedisperse(long itime, long ibeam)
-{
-    xassert_eq(itime, expected_itime);
-    xassert_eq(ibeam, expected_ibeam);
-    
-    this->_dedisperse(itime, ibeam);
-
-    expected_ibeam += beams_per_batch;
-
-    if (expected_ibeam >= total_beams) {
-	expected_itime++;
-	expected_ibeam = 0;
-    }
-}
-
-
-// Note: ReferenceDedisperserBase::make() is defined at the end of the file.
-
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -334,7 +315,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 {
     ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan);
 
-    virtual void _dedisperse(long itime, long ibeam) override;
+    virtual void dedisperse(long itime, long ibeam) override;
 
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
     // Outer length is nds, inner shape is (beams_per_batch, 2^config_rank, input_nt / pow2(ids)).
@@ -396,7 +377,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 
 
 // virtual override
-void ReferenceDedisperser0::_dedisperse(long itime, long ibeam)
+void ReferenceDedisperser0::dedisperse(long ibatch, long it_chunk)
 {
     for (int ids = 1; ids < nds; ids++) {
 	
@@ -431,8 +412,7 @@ void ReferenceDedisperser0::_dedisperse(long itime, long ibeam)
 	// Step 3: apply tree dedispersion (one-stage, not two-stage).
 	// Vector length is (nbatches * nout).
 	
-	long batch = xdiv(ibeam, beams_per_batch);
-	auto tree = trees.at(batch*nout + iout);
+	auto tree = trees.at(ibatch*nout + iout);
 	tree->dedisperse(dd);
 	
 	// Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
@@ -477,7 +457,7 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
     // Step 5: run stage1 dedispersion kernels.
     vector<shared_ptr<ReferenceLagbuf>> stage1_lagbufs;  // length (nbatches * nout)
     
-    virtual void _dedisperse(long itime, long ibeam) override;
+    virtual void dedisperse(long ibatch, long it_chunk) override;
 };
 
 
@@ -524,12 +504,13 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
 
 
 // virtual override
-void ReferenceDedisperser1::_dedisperse(long itime, long ibeam)
+void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
 {
     // Step 1: run LaggedDownsampler.
     // Step 2: run stage0 dedispersion kernels.
-    this->stage0_buffers.apply_lagged_downsampler(ibeam);    
-    this->stage0_buffers.apply_dedispersion_kernels(itime, ibeam);
+    
+    this->stage0_buffers.apply_lagged_downsampler(ibatch);
+    this->stage0_buffers.apply_dedispersion_kernels(ibatch, it_chunk);
 
     for (int iout = 0; iout < nout; iout++) {
 	const DedispersionPlan::Stage1Tree &st1 = plan->stage1_trees.at(iout);
@@ -546,13 +527,12 @@ void ReferenceDedisperser1::_dedisperse(long itime, long ibeam)
 
 	// Step 4: apply lags
 	
-	long b = xdiv(ibeam, beams_per_batch);
-	auto lagbuf = stage1_lagbufs.at(b*nout + iout);
+	auto lagbuf = stage1_lagbufs.at(ibatch*nout + iout);
 	lagbuf->apply_lags(dst);
     }
 
     // Step 5: run stage1 dedispersion kernels
-    this->stage1_buffers.apply_dedispersion_kernels(itime, ibeam);
+    this->stage1_buffers.apply_dedispersion_kernels(ibatch, it_chunk);
 }
 
 
@@ -573,7 +553,7 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     Stage0Buffers stage0_buffers;
     Stage1Buffers stage1_buffers;
     
-    virtual void _dedisperse(long itime, long ibeam) override;
+    virtual void dedisperse(long ibatch, long it_chunk) override;
 };
 
 
@@ -592,11 +572,11 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
 }
 
 
-void ReferenceDedisperser2::_dedisperse(long itime, long ibeam)
+void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 {
-    this->stage0_buffers.apply_lagged_downsampler(ibeam);    
-    this->stage0_buffers.apply_dedispersion_kernels(itime, ibeam);
-    this->stage1_buffers.apply_dedispersion_kernels(itime, ibeam);    
+    this->stage0_buffers.apply_lagged_downsampler(ibatch);    
+    this->stage0_buffers.apply_dedispersion_kernels(ibatch, it_chunk);
+    this->stage1_buffers.apply_dedispersion_kernels(ibatch, it_chunk);
 }
 
 

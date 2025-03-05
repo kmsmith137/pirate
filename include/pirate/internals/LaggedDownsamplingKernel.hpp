@@ -83,7 +83,7 @@ struct ReferenceLaggedDownsamplingKernel
     const int nbatches;  // same as (params.total_beams / params.beams_per_batch)
 
     ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params);
-    
+
     void apply(const ksgpu::Array<void> &in, LaggedDownsamplingKernelOutbuf &out, long ibatch);
     
     std::vector<ReferenceLagbuf> lagbufs_small;  // length nbatches

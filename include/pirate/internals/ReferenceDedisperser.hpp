@@ -54,12 +54,9 @@ struct ReferenceDedisperserBase
     int nds = 0;                 // same as plan->stage0_trees.size(), i.e. number of downsampling (ids) values
     int nout = 0;                // same as plan->stage1_trees.size(), i.e. number of (ids, early_trigger) pairs
     int nelts_per_segment = 0;   // same as plan->nelts_per_segment
-
-    long expected_itime = 0;
-    long expected_ibeam = 0;
     
     // To process multiple chunks, call the dedisperse() method in a loop.
-    void dedisperse(long itime, long ibeam);
+    virtual void dedisperse(long ibatch, long it_chunk) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
     // Shape is (beams_per_batch, 2^config_rank, config_ntime).
@@ -77,9 +74,6 @@ struct ReferenceDedisperserBase
 
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
-    
-    // Dedispersion implementation supplied by subclass.
-    virtual void _dedisperse(long itime, long ibeam) = 0;
 
     // Helper function called by subclass
     void check_iobuf_shapes();

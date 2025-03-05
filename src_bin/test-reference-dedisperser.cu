@@ -41,13 +41,13 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int nc
 	    // arr.at({0,0}) = 1.0;
 
 	    rdd0->input_array.fill(arr);
-	    rdd0->dedisperse(c, b*beams_per_batch);
+	    rdd0->dedisperse(b, c);
 
 	    rdd1->input_array.fill(arr);
-	    rdd1->dedisperse(c, b*beams_per_batch);
+	    rdd1->dedisperse(b, c);
 
 	    rdd2->input_array.fill(arr);
-	    rdd2->dedisperse(c, b*beams_per_batch);
+	    rdd2->dedisperse(b, c);
 	    
 	    for (int iout = 0; iout < nout; iout++) {
 		const Array<float> &arr0 = rdd0->output_arrays.at(iout);

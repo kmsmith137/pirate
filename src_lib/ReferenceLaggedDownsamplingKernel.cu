@@ -15,15 +15,25 @@ namespace pirate {
 #endif
 
 
+// Helper for constructor. Equivalent to (but with verbose error checking):
+//  return(params.total_beams / params.beams_per_batch);
+inline long get_nbatches(const LaggedDownsamplingKernelParams &params)
+{
+    xassert_gt(params.total_beams, 0);
+    xassert_gt(params.beams_per_batch, 0);
+    xassert_divisible(params.total_beams, params.beams_per_batch);
+    return (params.total_beams / params.beams_per_batch);
+}
+
+
 // FIXME there is a lot of reshaping/flattening/unflattening happening in this code,
 // and the code would be clearer if this were removed. I think this needs some minor
 // changes elsewhere though (e.g. currently reference_downsample_time() assumes a
 // 2-d array).
 
-
 ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params_) :
     params(params_),
-    nbatches(xdiv(params_.total_beams, params_.beams_per_batch))
+    nbatches(get_nbatches(params_))
 {
     params.validate();
     
@@ -64,6 +74,7 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
     
     this->next = make_shared<ReferenceLaggedDownsamplingKernel> (next_params);
 }
+
 
 void ReferenceLaggedDownsamplingKernel::apply(const Array<void> &in_, LaggedDownsamplingKernelOutbuf &out, long ibatch)
 {

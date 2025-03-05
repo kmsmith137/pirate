@@ -11,18 +11,6 @@ namespace pirate {
 #endif
 
 
-// The meaning of Params::apply_residual_lags needs some explanation!
-//
-// This is used in the second dedisperser stage, where each tree channel is labelled
-// by two indices:
-//
-//   - a bit-reversed DM 0 <= d < 2^(total_rank-active_rank)
-//   - a coarse frequency 0 <= f < 2^(active_rank).
-//
-// Before dedispersing the data, the following residual lag is applied:
-//
-//   int lag = rb_lag(f, d, total_rank-active_rank, active_rank, params.input_is_downsampled_tree);
-//   int residual_lag = lag % nelts_per_segment;
 
 struct DedispersionKernelParams
 {
@@ -38,6 +26,19 @@ struct DedispersionKernelParams
     bool output_is_ringbuf = false;
     
     // Residual lags (see comment above).
+    // The meaning of Params::apply_residual_lags needs some explanation!
+    //
+    // This is used in the second dedisperser stage, where each tree channel is labelled
+    // by two indices:
+    //
+    //   - a bit-reversed DM 0 <= d < 2^(total_rank-active_rank)
+    //   - a coarse frequency 0 <= f < 2^(active_rank).
+    //
+    // Before dedispersing the data, the following residual lag is applied:
+    //
+    //   int lag = rb_lag(f, d, total_rank-active_rank, active_rank, params.input_is_downsampled_tree);
+    //   int residual_lag = lag % nelts_per_segment;
+    
     bool apply_input_residual_lags = false;
     bool input_is_downsampled_tree = false;   // only matters if apply_input_residual_lags=true
     int nelts_per_segment = 0;                // only matters if apply_input_residual_lags=true
@@ -51,6 +52,9 @@ struct DedispersionKernelParams
 };
 
 
+// The reference kernel allocates persistent state internally.
+// (Note that the apply() method takes an 'ibatch' argument, so that the correct persistent state can be used.)
+
 struct ReferenceDedispersionKernel
 {
     using Params = DedispersionKernelParams;
@@ -58,25 +62,20 @@ struct ReferenceDedispersionKernel
     ReferenceDedispersionKernel(const Params &params);
 
     const Params params;
-
+    const int nbatches;  // same as (params.total_beams / params.beams_per_batch)
+    
     // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
     //
     //   - dedispersion buffer has shape (params.beams_per_batch, nambient, pow2(rank), ntime).
     //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
     //
-    // The 'itime' and 'ibeam' arguments are not logically necessary, but enable a debug check.
     // Warning: if 'in' is not a ringbuf, then apply() may modify 'in'!
-    
-    void apply(ksgpu::Array<float> &in, ksgpu::Array<float> &out, long itime, long ibeam);
 
-    // A bit awkward -- number of trees is (total_beams / beams_per_batch).
-    std::vector<std::shared_ptr<ReferenceTree>> trees;
-    std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;   // only used if params.apply_input_residual_lags == true.
+    void apply(ksgpu::Array<void> &in, ksgpu::Array<void> &out, long ibatch, long it_chunk);
 
-    // Enables a debug check.
-    long expected_itime = 0;
-    long expected_ibeam = 0;
+    std::vector<std::shared_ptr<ReferenceTree>> trees;        // length (nbatches)
+    std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;  // length (params.apply_input_residual_lags ? nbatches : 0)
 
     // Used internally
     void _copy_to_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
@@ -112,9 +111,15 @@ public:
     //   - If (!output_is_ringbuf): shape is (nbeams, nambient, pow2(rank), ntime).
     //   - If (output_is_ringbuf): shape is (ntime/nelts_per_segment, nambient, pow2(rank), 4).
     //
-    // The 'itime' and 'ibeam' arguments are not logically necessary, but enable a debug check.
-
-    virtual void launch(const ksgpu::Array<void> &in, ksgpu::Array<void> &out, long itime, long ibeam, cudaStream_t stream=nullptr) = 0;
+    // Warning: if 'in' is not a ringbuf, then apply() may modify 'in'!
+    
+    virtual void launch(
+        ksgpu::Array<void> &in,
+	ksgpu::Array<void> &out,
+	long ibatch,
+	long it_chunk,
+	cudaStream_t stream  // NULL stream is allowed, but is not the default
+    ) = 0;
 
 protected:
     // Don't call constructor directly -- call GpuDedispersionKernel::make() instead!
@@ -122,10 +127,6 @@ protected:
 
     // Shape (total_beams, state_nelts_per_beam).
     ksgpu::Array<void> persistent_state;
-
-    // Enables a debug check.
-    long expected_itime = 0;
-    long expected_ibeam = 0;
 
     // FIXME only on current cuda device (at time of construction).
     // FIXME should either add run-time check, or switch to using constant memory.

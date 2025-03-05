@@ -350,7 +350,7 @@ struct GpuDedispersionKernelImpl : public GpuDedispersionKernel
 
     GpuDedispersionKernelImpl(const DedispersionKernelParams &params);
 
-    virtual void launch(const Array<void> &in, Array<void> &out, long itime, long ibeam, cudaStream_t stream) override;
+    virtual void launch(Array<void> &in, Array<void> &out, long ibatch, long it_chunk, cudaStream_t stream) override;
 
     // (inbuf, outbuf, rstate, ntime, integer_constants, rb_pos)
     void (*cuda_kernel)(typename Inbuf::device_args, typename Outbuf::device_args, T32 *, long, uint *, long) = nullptr;
@@ -394,27 +394,15 @@ GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Param
 
 // virtual override
 template<typename T, class Inbuf, class Outbuf>
-void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(const Array<void> &in_arr, Array<void> &out_arr, long itime, long ibeam, cudaStream_t stream)
+void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long it_chunk, cudaStream_t stream)
 {
+    // These constructors error-check their arguments.
     typename Inbuf::device_args in(in_arr, params);
     typename Outbuf::device_args out(out_arr, params);
 
-    // Compare (itime, ibeam) with expected values.
-    xassert_eq(itime, expected_itime);
-    xassert_eq(ibeam, expected_ibeam);
-
-    // Update expected (itime, ibeam).
-    expected_ibeam += params.beams_per_batch;
-    xassert_le(expected_ibeam, params.total_beams);
-    
-    if (expected_ibeam == params.total_beams) {
-	expected_ibeam = 0;
-	expected_itime++;
-    }
-
     Array<T> pstate = this->persistent_state.template cast<T> ("pstate");
-    T *pp = pstate.data + (ibeam * this->state_nelts_per_beam);
-    long rb_pos = itime * params.total_beams + ibeam;
+    T *pp = pstate.data + (ibatch * params.beams_per_batch * this->state_nelts_per_beam);
+    long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
 
     // Note: the number of beams and 'ambient' tree channels are implicitly supplied
     // to the kernel via gridDim.y, gridDim.x.
