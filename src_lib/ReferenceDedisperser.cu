@@ -77,8 +77,8 @@ struct Stage0Buffers
 	    
 	    DedispersionKernelParams params;
 	    params.dtype = plan->config.dtype;
-	    params.rank = st0.rank0;
-	    params.nambient = pow2(st0.rank1);
+	    params.dd_rank = st0.rank0;
+	    params.amb_rank = st0.rank1;
 	    params.total_beams = plan->config.beams_per_gpu;
 	    params.beams_per_batch = plan->config.beams_per_batch;
 	    params.ntime = st0.nt_ds;
@@ -195,8 +195,8 @@ struct Stage1Buffers
 	    
 	    DedispersionKernelParams params;		
 	    params.dtype = plan->config.dtype;
-	    params.rank = st1.rank1_trigger;
-	    params.nambient = pow2(st1.rank0);
+	    params.dd_rank = st1.rank1_trigger;
+	    params.amb_rank = st1.rank0;
 	    params.total_beams = total_beams;
 	    params.beams_per_batch = beams_per_batch;
 	    params.ntime = st1.nt_ds;

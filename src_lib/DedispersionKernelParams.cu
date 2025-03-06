@@ -16,9 +16,10 @@ namespace pirate {
 
 void DedispersionKernelParams::validate(bool on_gpu) const
 {
-    xassert_ge(rank, 0);
-    xassert_le(rank, 8);
-    xassert_gt(nambient, 0);
+    xassert_ge(dd_rank, 0);
+    xassert_le(dd_rank, 8);
+    xassert_ge(amb_rank, 0);
+    xassert_le(amb_rank, 8);
     xassert_gt(total_beams, 0);
     xassert_gt(beams_per_batch, 0);
     xassert_le(beams_per_batch, constants::cuda_max_y_blocks);
@@ -29,9 +30,6 @@ void DedispersionKernelParams::validate(bool on_gpu) const
     // (ringbuf -> ringbuf) doesn't make sense.
     xassert(!input_is_ringbuf || !output_is_ringbuf);
     
-    // Not really necessary, but failure probably indicates an unintentional bug.
-    xassert(is_power_of_two(nambient));
-    
     // Currently assumed throughout the pirate code.
     xassert_divisible(total_beams, beams_per_batch);
 
@@ -41,8 +39,8 @@ void DedispersionKernelParams::validate(bool on_gpu) const
     xassert_divisible(ntime, nelts_per_segment);
     
     if (input_is_ringbuf || output_is_ringbuf) {
-	long nseg = xdiv(ntime,nelts_per_segment) * nambient * pow2(rank);
-	xassert_shape_eq(ringbuf_locations, ({ nseg, 4 }));
+	long nsegments_per_tree = pow2(dd_rank+amb_rank) * xdiv(ntime,nelts_per_segment);
+	xassert_shape_eq(ringbuf_locations, ({ nsegments_per_tree, 4 }));
 	xassert(ringbuf_locations.is_fully_contiguous());
 	xassert(ringbuf_nseg > 0);
 	xassert(ringbuf_nseg <= UINT_MAX);
@@ -54,7 +52,7 @@ void DedispersionKernelParams::validate(bool on_gpu) const
 
 	xassert(ringbuf_locations.on_host());
 	
-	for (long iseg = 0; iseg < nseg; iseg++) {
+	for (long iseg = 0; iseg < nsegments_per_tree; iseg++) {
 	    const uint *rb_locs = ringbuf_locations.data + (4*iseg);
 	    long rb_offset = rb_locs[0];  // in segments, not bytes
 	    // long rb_phase = rb_locs[1];   // index of (time chunk, beam) pair, relative to current pair

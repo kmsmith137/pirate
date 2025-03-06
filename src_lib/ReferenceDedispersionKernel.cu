@@ -21,10 +21,9 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
     long B = params.beams_per_batch;
-    long A = params.nambient;
-    long F = pow2(params.rank);
+    long A = pow2(params.amb_rank);
+    long F = pow2(params.dd_rank);
     long T = params.ntime;
-    long Ar = integer_log2(A);
     
     this->trees.resize(nbatches);			  
     for (long n = 0; n < nbatches; n++)
@@ -47,7 +46,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 	    // Ambient index 'a' represents a bit-reversed coarse DM.
 	    // Index 'f' represents a fine frequency.
 	    for (long f = 0; f < F; f++) {
-		long lag = rb_lag(f, a, Ar, params.rank, params.input_is_downsampled_tree);
+		long lag = rb_lag(f, a, params.amb_rank, params.dd_rank, params.input_is_downsampled_tree);
 		rlags.data[b*A*F + a*F + f] = lag % params.nelts_per_segment;  // residual lag
 	    }
 	}
@@ -62,8 +61,8 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, long ibatch, long it_chunk)
 {
     long B = params.beams_per_batch;
-    long A = params.nambient;
-    long N = pow2(params.rank);
+    long A = pow2(params.amb_rank);
+    long N = pow2(params.dd_rank);
     long T = params.ntime;
     long R = params.ringbuf_nseg;
     long S = params.nelts_per_segment;
@@ -104,8 +103,8 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
 void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
     long B = params.beams_per_batch;
-    long A = params.nambient;
-    long N = pow2(params.rank);
+    long A = pow2(params.amb_rank);
+    long N = pow2(params.dd_rank);
     long T = params.ntime;
     long R = params.ringbuf_nseg;
     long S = params.nelts_per_segment;
@@ -151,8 +150,8 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
 void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
     long B = params.beams_per_batch;
-    long A = params.nambient;
-    long N = pow2(params.rank);
+    long A = pow2(params.amb_rank);
+    long N = pow2(params.dd_rank);
     long T = params.ntime;
     long R = params.ringbuf_nseg;
     long S = params.nelts_per_segment;

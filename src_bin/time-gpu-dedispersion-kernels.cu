@@ -10,19 +10,19 @@ using namespace ksgpu;
 using namespace pirate;
 
 
-static void time_gpu_dedispersion_kernel(Dtype dtype, int rank, bool apply_input_residual_lags)
+static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_input_residual_lags)
 {
     long nstreams = 1;
     long ncallbacks = 10;
-    long nambient = 256;
-    long nbeams = pow2(10-rank);
+    long amb_rank = 8;
+    long nbeams = pow2(10-dd_rank);
     long ntime = 2048;
     long niter = 5;
 
     DedispersionKernelParams params;
     params.dtype = dtype;
-    params.rank = rank;
-    params.nambient = nambient;
+    params.dd_rank = dd_rank;
+    params.amb_rank = amb_rank;
     params.total_beams = nbeams;
     params.beams_per_batch = nbeams;
     params.ntime = ntime;
@@ -38,10 +38,10 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int rank, bool apply_input
 	kernels[i]->allocate();
     }
 
-    Array<void> buf(dtype, { nstreams, nbeams, nambient, pow2(rank), ntime }, af_gpu | af_zero);
+    Array<void> buf(dtype, { nstreams, nbeams, pow2(amb_rank), pow2(dd_rank), ntime }, af_gpu | af_zero);
 
     long elt_size = xdiv(dtype.nbits, 8);
-    long iobuf_bytes_per_stream = nbeams * nambient * pow2(rank) * ntime * elt_size;
+    long iobuf_bytes_per_stream = nbeams * pow2(amb_rank + dd_rank) * ntime * elt_size;
     long rstate_bytes_per_stream = nbeams * kernels[0]->state_nelts_per_beam * elt_size;
     double gmem_gb = 2.0e-9 * niter * (iobuf_bytes_per_stream + rstate_bytes_per_stream);  // factor 2 from read+write
     
@@ -55,7 +55,7 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int rank, bool apply_input
 	};
     
     stringstream kernel_name;
-    kernel_name << "dedisperse(dtype=" << dtype << ", rank=" << rank
+    kernel_name << "dedisperse(dtype=" << dtype << ", dd_rank=" << dd_rank
 		<< ", apply_input_residual_lags=" << (apply_input_residual_lags ? "true" : "false");
     
     CudaStreamPool pool(callback, ncallbacks, nstreams, kernel_name.str());
@@ -66,10 +66,10 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int rank, bool apply_input
 
 int main(int argc, char **argv)
 {
-    for (int rank = 1; rank <= 8; rank++)
+    for (int dd_rank = 1; dd_rank <= 8; dd_rank++)
 	for (bool apply_input_residual_lags: { false, true })
 	    for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() })
-		time_gpu_dedispersion_kernel(dtype, rank, apply_input_residual_lags);
+		time_gpu_dedispersion_kernel(dtype, dd_rank, apply_input_residual_lags);
     
     return 0;
 }

@@ -223,8 +223,8 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> 
 
     Array<T> in_arr = in_arr_.template cast<T> ("dedispersion_simple_inbuf input array");
     
-    // Expected shape is (nbeams, nambient, pow2(rank), ntime).
-    xassert_shape_eq(in_arr, ({params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime}));
+    // Expected shape is (nbeams, pow2(amb_rank), pow2(dd_rank), ntime).
+    xassert_shape_eq(in_arr, ({params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime}));
     xassert(in_arr.get_ncontig() >= 1);
     xassert(in_arr.on_gpu());
 
@@ -261,8 +261,8 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_a
 
     Array<T> out_arr = out_arr_.template cast<T> ("dedispersion_simple_outbuf output array");
     
-    // Expected shape is (nbeams, nambient, pow2(rank), ntime)
-    xassert_shape_eq(out_arr, ({ params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime }));
+    // Expected shape is (nbeams, pow2(amb_rank), pow2(dd_rank), ntime)
+    xassert_shape_eq(out_arr, ({ params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime }));
     xassert(out_arr.get_ncontig() >= 1);
     xassert(out_arr.on_gpu());
 
@@ -303,7 +303,7 @@ dedispersion_ring_inbuf<T>::device_args::device_args(const Array<void> &in_arr_,
     xassert(in_arr.on_gpu());
 
     Array<uint> rb_loc = params.ringbuf_locations;
-    xassert_shape_eq(rb_loc, ({ params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
+    xassert_shape_eq(rb_loc, ({ pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
     xassert(rb_loc.is_fully_contiguous());
     xassert(rb_loc.on_gpu());
 
@@ -329,7 +329,7 @@ dedispersion_ring_outbuf<T>::device_args::device_args(const Array<void> &out_arr
     xassert(out_arr.on_gpu());
 
     Array<uint> rb_loc = params.ringbuf_locations;
-    xassert_shape_eq(rb_loc, ({ params.nambient * pow2(params.rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
+    xassert_shape_eq(rb_loc, ({ pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
     xassert(rb_loc.is_fully_contiguous());
     xassert(rb_loc.on_gpu());
 
@@ -361,24 +361,24 @@ template<typename T, class Inbuf, class Outbuf>
 GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Params &params_) :
     GpuDedispersionKernel(params_)   // calls params_.validate()
 {
-    if (params.rank == 1)
+    if (params.dd_rank == 1)
 	this->cuda_kernel = dedisperse_r1<T32, Inbuf, Outbuf>;
-    else if (params.rank == 2)
+    else if (params.dd_rank == 2)
 	this->cuda_kernel = dedisperse_r2<T32, Inbuf, Outbuf>;
-    else if (params.rank == 3)
+    else if (params.dd_rank == 3)
 	this->cuda_kernel = dedisperse_r3<T32, Inbuf, Outbuf>;
-    else if (params.rank == 4)
+    else if (params.dd_rank == 4)
 	this->cuda_kernel = dedisperse_r4<T32, Inbuf, Outbuf>;
-    else if (params.rank == 5)
+    else if (params.dd_rank == 5)
 	this->cuda_kernel = dedisperse_r5<T32, Inbuf, Outbuf>;
-    else if (params.rank == 6)
+    else if (params.dd_rank == 6)
 	this->cuda_kernel = dedisperse_r6<T32, Inbuf, Outbuf>;
-    else if (params.rank == 7)
+    else if (params.dd_rank == 7)
 	this->cuda_kernel = dedisperse_r7<T32, Inbuf, Outbuf>;
-    else if (params.rank == 8)
+    else if (params.dd_rank == 8)
 	this->cuda_kernel = dedisperse_r8<T32, Inbuf, Outbuf>;
     else
-	throw runtime_error("expected 1 <= DedispersionKernelParams::active_rank <= 8");
+	throw runtime_error("expected 1 <= DedispersionKernelParams::dd_rank <= 8");
 
     // Note: this->shmem_bytes is initialized by the base class constructor.
     
@@ -400,7 +400,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(Array<void> &in_arr, Arra
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(it_chunk >= 0);
     
-    // These constructors error-check their arguments.
+    // These constructors error-check their arguments (including array shapes).
     typename Inbuf::device_args in(in_arr, params);
     typename Outbuf::device_args out(out_arr, params);
 
@@ -411,7 +411,7 @@ void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(Array<void> &in_arr, Arra
     // Note: the number of beams and 'ambient' tree channels are implicitly supplied
     // to the kernel via gridDim.y, gridDim.x.
     dim3 grid_dims;
-    grid_dims.x = params.nambient;
+    grid_dims.x = pow2(params.amb_rank);
     grid_dims.y = params.beams_per_batch;
     grid_dims.z = 1;
 
@@ -430,42 +430,42 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
     params.validate(true);    // on_gpu=true
-    xassert(params.rank > 0);  // FIXME define _r0 for testing
+    xassert(params.dd_rank > 0);  // FIXME define _r0 for testing
 	
     // FIXME remaining code is cut-and-paste from previous API -- could use a rethink.
 
     bool is_float32 = (params.dtype.nbits == 32);
     int nrs_per_thread;
     
-    if (params.rank == 1) {
+    if (params.dd_rank == 1) {
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
-    else if (params.rank == 2) {
+    else if (params.dd_rank == 2) {
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
-    else if (params.rank == 3) {
+    else if (params.dd_rank == 3) {
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = 1;
     }
-    else if (params.rank == 4) {
+    else if (params.dd_rank == 4) {
 	this->warps_per_threadblock = 1;
 	nrs_per_thread = is_float32 ? 3 : 2;
     }
-    else if (params.rank == 5) {
+    else if (params.dd_rank == 5) {
 	this->warps_per_threadblock = 4;
 	nrs_per_thread = 1;
     }
-    else if (params.rank == 6) {
+    else if (params.dd_rank == 6) {
 	this->warps_per_threadblock = 8;
 	nrs_per_thread = is_float32 ? 2 : 1;
     }
-    else if (params.rank == 7) {
+    else if (params.dd_rank == 7) {
 	this->warps_per_threadblock = 8;
 	nrs_per_thread = is_float32 ? 4 : 3;
     }
-    else if (params.rank == 8) {
+    else if (params.dd_rank == 8) {
 	this->warps_per_threadblock = 16;
 	nrs_per_thread = is_float32 ? 5 : 4;
     }
@@ -473,16 +473,16 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 	throw runtime_error("GpuDedispersionKernel constructor: should never get here");
     
     long swflag = (warps_per_threadblock == 1);
-    long rp_ncl = params.apply_input_residual_lags ? (pow2(params.rank) - swflag) : 0;
+    long rp_ncl = params.apply_input_residual_lags ? (pow2(params.dd_rank) - swflag) : 0;
     long rs_ncl = warps_per_threadblock * nrs_per_thread;
-    long gs_ncl = get_gs_ncl(params.rank, is_float32);
+    long gs_ncl = get_gs_ncl(params.dd_rank, is_float32);
     long nelts_per_small_tree = (rs_ncl + rp_ncl + gs_ncl) * (is_float32 ? 32 : 64);
 
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
-    this->state_nelts_per_beam = params.nambient * nelts_per_small_tree;
+    this->state_nelts_per_beam = pow2(params.amb_rank) * nelts_per_small_tree;
     
     if (gs_ncl > 0)
-	this->shmem_nbytes = 128 * (gs_ncl + pow2(params.rank));
+	this->shmem_nbytes = 128 * (gs_ncl + pow2(params.dd_rank));
 }
 
 
@@ -496,7 +496,7 @@ void GpuDedispersionKernel::allocate()
     this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
     
     bool is_float32 = (params.dtype.nbits == 32);
-    this->integer_constants = make_integer_constants(params.rank, is_float32, true);   // on_gpu=true
+    this->integer_constants = make_integer_constants(params.dd_rank, is_float32, true);   // on_gpu=true
 }
 
 

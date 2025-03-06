@@ -36,7 +36,7 @@ struct TestInstance
     vector<long> small_shape;
     
     // Strides for input/output arrays.
-    // Reminder: arrays have shape (params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime).
+    // Reminder: arrays have shape (params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime).
     vector<long> gpu_istrides;
     vector<long> gpu_ostrides;
     vector<long> cpu_istrides;
@@ -75,9 +75,9 @@ struct TestInstance
 	//   params.dtype
 	//   params.input_is_downsampled_tree
 	//   params.nelts_per_segment
-	//   params.rank
+	//   params.dd_rank
+	//   params.amb_rank
 	//   params.ntime
-	//   params.nambient
 	//   params.total_beams
 	//   params.beams_per_batch
 	//   this->nchunks
@@ -87,22 +87,22 @@ struct TestInstance
 	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
 
 	params.nelts_per_segment = is_float32 ? 32 : 64;
-	params.rank = rand_int(1, 9);
+	params.dd_rank = rand_int(1, 9);
 
-	long nchan = pow2(params.rank);
+	long nchan = pow2(params.dd_rank);
 	params.ntime = rand_int(1, 2*nchan + 2*params.nelts_per_segment);
 	params.ntime = align_up(params.ntime, params.nelts_per_segment);
 
 	long cmax = (10*nchan + 10*params.ntime) / params.ntime;
 	nchunks = rand_int(1, cmax+1);
 	
-	// nambient, (total_beams/beams_per_batch), beams_per_batch
-	long pmax = max_nelts / (pow2(params.rank) * params.ntime * nchunks);
+	// pow2(amb_rank), (total_beams/beams_per_batch), beams_per_batch
+	long pmax = max_nelts / (pow2(params.dd_rank) * params.ntime * nchunks);
 	pmax = max(pmax, 4L);
 	pmax = min(pmax, 42L);
 
 	auto v = ksgpu::random_integers_with_bounded_product(4, pmax);
-	params.nambient = round_up_to_power_of_two(v[0]);
+	params.amb_rank = int(log2(v[0]) + 0.99999);  // round up
 	params.total_beams = v[1] * v[2];
 	params.beams_per_batch = v[2];
 	
@@ -126,7 +126,7 @@ struct TestInstance
 	    rb_zone_len[z] = rand_int(lmin, lmax+1);
 	}
 
-	long nseg = nchan * params.nambient * xdiv(params.ntime, params.nelts_per_segment);
+	long nseg = nchan * pow2(params.amb_rank) * xdiv(params.ntime, params.nelts_per_segment);
 	vector<pair<long,long>> pairs(nseg);   // map segment -> (rb_zone, rb_seg)
 	
 	for (long iseg = 0; iseg < nseg; iseg++) {
@@ -161,10 +161,10 @@ struct TestInstance
 	// Shape, strides.
 
 	vector<long> rb_shape = { params.ringbuf_nseg * params.nelts_per_segment };
-	vector<long> dd_shape = { params.total_beams, params.nambient, pow2(params.rank), nchunks * params.ntime };
+	vector<long> dd_shape = { params.total_beams, pow2(params.amb_rank), pow2(params.dd_rank), nchunks * params.ntime };
 	this->big_ishape = params.input_is_ringbuf ? rb_shape : dd_shape;
 	this->big_oshape = params.output_is_ringbuf ? rb_shape : dd_shape;
-	this->small_shape = { params.beams_per_batch, params.nambient, pow2(params.rank), params.ntime };
+	this->small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime };
 	
 	// Dedispersion buffer strides (note that ringbufs are always contiguous).
 	this->cpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
@@ -202,8 +202,8 @@ static void run_test(const TestInstance &tp)
     
     cout << "Test GpuDedispersionKernel\n"
 	 << "    dtype = " << p.dtype << "\n"
-	 << "    rank = " << p.rank << "\n"
-	 << "    nambient = " << p.nambient << "\n"
+	 << "    dd_rank = " << p.dd_rank << "\n"
+	 << "    amb_rank = " << p.amb_rank << "\n"
 	 << "    total_beams = " << p.total_beams << "\n"
 	 << "    beams_per_batch = " << p.beams_per_batch << "\n"
 	 << "    ntime = " << p.ntime << "\n"
@@ -288,7 +288,7 @@ static void run_test(const TestInstance &tp)
     
     // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
     double epsrel = 3 * tp.params.dtype.precision();
-    double epsabs = 3 * tp.params.dtype.precision() * pow(1.414, p.rank);
+    double epsabs = 3 * tp.params.dtype.precision() * pow(1.414, p.dd_rank);
 
     if (p.output_is_ringbuf)
 	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big, "cpu", "gpu", {"i"}, epsabs, epsrel);
