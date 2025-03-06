@@ -24,12 +24,12 @@ class DedispersionPlan;
 struct ReferenceLaggedDownsamplingKernel
 {
     const DedispersionInbufParams params;
-    int nbatches = 0;  // same as (params.total_beams / params.beams_per_batch)
 
     ReferenceLaggedDownsamplingKernel(const DedispersionInbufParams &params);
 
     void apply(DedispersionInbuf &buf, long ibatch);
     
+    int nbatches = 0;  // same as (params.total_beams / params.beams_per_batch)
     std::vector<ReferenceLagbuf> lagbufs_small;  // length nbatches
     std::vector<ReferenceLagbuf> lagbufs_large;  // length nbatches
     std::shared_ptr<ReferenceLaggedDownsamplingKernel> next;
@@ -45,11 +45,6 @@ class GpuLaggedDownsamplingKernel
 public:
     const DedispersionInbufParams params;
     
-    // Some parameters computed in constructor.
-    int nbatches = 0;
-    int shmem_nbytes_per_threadblock = 0;
-    int state_nelts_per_beam = 0;
-    
     // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
     static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const DedispersionInbufParams &params);
 
@@ -61,8 +56,13 @@ public:
     
     void print(std::ostream &os=std::cout, int indent=0) const;
     
-    // These parameters determine how the kernel is divided into threadblocks.
-    // See GpuLaggedDownsamplingKernel.cu for more info.
+    // Parameters computed in constructor.
+    int nbatches = 0;
+    int shmem_nbytes_per_threadblock = 0;
+    int state_nelts_per_beam = 0;
+    
+    // These parameters (also computed in constructor) determine how the kernel is divided
+    // into threadblocks. See GpuLaggedDownsamplingKernel.cu for more info.
     int M_W = 0;
     int M_B = 0;
     int A_W = 0;

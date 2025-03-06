@@ -44,6 +44,8 @@ struct DedispersionKernelParams
     int nelts_per_segment = 0;                // only matters if apply_input_residual_lags=true
 
     // Only used if (input_is_ringbuf || output_is_ringbuf)
+    // Reminder: ringbuf_locations has shape (nsegments_per_tree, 4), where:
+    //   nsegments_per_tree = xdiv(ntime,nelts_per_segment) * nambient * pow2(rank)
     ksgpu::Array<uint> ringbuf_locations;
     long ringbuf_nseg = 0;
     
@@ -61,19 +63,17 @@ struct ReferenceDedispersionKernel
 
     ReferenceDedispersionKernel(const Params &params);
 
-    const Params params;
-    int nbatches = 0;  // same as (params.total_beams / params.beams_per_batch)
+    const Params params;  // reminder: contains 'ringbuf_locations' array.
     
     // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
     //
     //   - dedispersion buffer has shape (params.beams_per_batch, nambient, pow2(rank), ntime).
     //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
-    //
-    // Warning: if 'in' is not a ringbuf, then apply() may modify 'in'!
 
     void apply(ksgpu::Array<void> &in, ksgpu::Array<void> &out, long ibatch, long it_chunk);
 
+    int nbatches = 0;     // same as (params.total_beams / params.beams_per_batch)
     std::vector<std::shared_ptr<ReferenceTree>> trees;        // length (nbatches)
     std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;  // length (params.apply_input_residual_lags ? nbatches : 0)
 
@@ -94,22 +94,18 @@ public:
     // To construct GpuDedispersionKernel instances, call this function.
     static std::shared_ptr<GpuDedispersionKernel> make(const Params &params);
     
-    Params params;
+    Params params;   // reminder: contains 'ringbuf_locations' array
 
     void allocate();
     bool is_allocated() const;
     
     // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
     //
-    // The 'in' array has different meanings, depending on Params::input_is_ringbuf:
-    //   - If (!input_is_ringbuf): shape is (nbeams, nambient, pow2(rank), ntime).
-    //   - If (input_is_ringbuf): shape is (ntime/nelts_per_segment, nambient, pow2(rank), 4).
+    // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
+    // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
     //
-    // Similarly, the 'out' array has different meanings, depending on Params::output_is_ringbuf:
-    //   - If (!output_is_ringbuf): shape is (nbeams, nambient, pow2(rank), ntime).
-    //   - If (output_is_ringbuf): shape is (ntime/nelts_per_segment, nambient, pow2(rank), 4).
-    //
-    // Warning: if 'in' is not a ringbuf, then apply() may modify 'in'!
+    //   - dedispersion buffer has shape (params.beams_per_batch, nambient, pow2(rank), ntime).
+    //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
     
     virtual void launch(
         ksgpu::Array<void> &in,
