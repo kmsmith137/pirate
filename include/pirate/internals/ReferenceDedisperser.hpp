@@ -76,8 +76,9 @@ struct ReferenceDedisperserBase
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
 
-    // Helper function called by subclass
-    void check_iobuf_shapes();
+    // Helper methods called by subclass constructors.
+    void _init_iobufs(ksgpu::Array<float> &in, std::vector<ksgpu::Array<float>> &out);
+    void _init_iobufs(ksgpu::Array<void> &in, std::vector<ksgpu::Array<void>> &out);
 };
 
 
