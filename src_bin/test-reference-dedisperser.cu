@@ -24,7 +24,7 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int nc
     int nt_chunk = config.time_samples_per_chunk;
     int beams_per_batch = config.beams_per_batch;
     int nbatches = xdiv(config.beams_per_gpu, beams_per_batch);
-    int nout = plan->stage1_trees.size();
+    int nout = plan->stage2_trees.size();
     
     shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, 0);
     shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);

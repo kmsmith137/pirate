@@ -18,7 +18,7 @@ namespace pirate {
 // represents an arbitrary number of spectator axes. The time axis must be last, and be
 // contiguous (i.e. stride=1). The number of frequencies must be a power of two.
 //
-// The RefrerenceTree is unaware of the larger dedispersion plan (stage0/stage1 split,
+// The RefrerenceTree is unaware of the larger dedispersion plan (stage1/stage2 split,
 // early triggers, downsampling, etc.) but can be used as a "building block" to implement
 // these features.
 

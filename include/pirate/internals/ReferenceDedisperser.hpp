@@ -52,8 +52,8 @@ struct ReferenceDedisperserBase
     int beams_per_batch = 0;     // same as config.beams_per_batch
     int nbatches = 0;            // = (total_beams / beams_per_batch)
     
-    int nds = 0;                 // same as plan->stage0_trees.size(), i.e. number of downsampling (ids) values
-    int nout = 0;                // same as plan->stage1_trees.size(), i.e. number of (ids, early_trigger) pairs
+    int nds = 0;                 // same as plan->stage1_trees.size(), i.e. number of downsampling (ids) values
+    int nout = 0;                // same as plan->stage2_trees.size(), i.e. number of (ids, early_trigger) pairs
     int nelts_per_segment = 0;   // same as plan->nelts_per_segment
     
     // To process multiple chunks, call the dedisperse() method in a loop.
@@ -65,8 +65,8 @@ struct ReferenceDedisperserBase
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
     // output_arrays[iout] has shape (beams_per_batch, 2^output_rank, config_ntime / pow2(ids)), where:
     //
-    //   ids = downsampling factor of tree 'iout' (same as DedispersionPlan::Stage0Tree::ds_level)
-    //   output_rank = rank of tree 'iout' (same as Stage1Tree::rank0 + Stage1Tree::rank1_trigger)
+    //   ids = downsampling factor of tree 'iout' (same as DedispersionPlan::Stage1Tree::ds_level)
+    //   output_rank = rank of tree 'iout' (same as Stage2Tree::rank0 + Stage2Tree::rank1_trigger)
     //
     // Warning: dedisperse() may modify 'input_array'!
     

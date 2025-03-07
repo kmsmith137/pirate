@@ -24,8 +24,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     this->nbytes_per_segment = constants::bytes_per_gpu_cache_line;
 
     // Part 1:
-    //   - Initialize stage0_trees, stage1_trees.
-    //   - Initialize max_n1 (max number of Stage1Trees, per Stage0Tree).
+    //   - Initialize stage1_trees, stage2_trees.
+    //   - Initialize max_n1 (max number of Stage2Trees, per Stage1Tree).
 
     int max_n1 = 0;
     
@@ -42,13 +42,13 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	trigger_ranks.push_back(st0_rank);
 	xassert(is_sorted(trigger_ranks));
 
-	Stage0Tree st0;
+	Stage1Tree st0;
 	st0.ds_level = ids;
 	st0.rank0 = st0_rank0;
 	st0.rank1 = st0_rank - st0.rank0;
 	st0.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
 	st0.segments_per_beam = pow2(st0_rank) * xdiv(st0.nt_ds, nelts_per_segment);
-	st0.base_segment = this->stage0_total_segments_per_beam;
+	st0.base_segment = this->stage1_total_segments_per_beam;
 
 	// FIXME should replace hardcoded 7,8 by something more descriptive
 	// (GpuDedispersionKernel::max_rank?)
@@ -56,24 +56,24 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	xassert((st0.rank0 >= 0) && (st0.rank0 <= max_rank));
 	xassert(st0.nt_ds > 0);
 	
-	this->stage0_trees.push_back(st0);
-	this->stage0_total_segments_per_beam += st0.segments_per_beam;
+	this->stage1_trees.push_back(st0);
+	this->stage1_total_segments_per_beam += st0.segments_per_beam;
 
 	for (int trigger_rank: trigger_ranks) {
-	    Stage1Tree st1;
+	    Stage2Tree st1;
 	    st1.ds_level = ids;
 	    st1.rank0 = st0.rank0;
 	    st1.rank1_ambient = st0.rank1;
 	    st1.rank1_trigger = trigger_rank - st1.rank0;
 	    st1.nt_ds = st0.nt_ds;
 	    st1.segments_per_beam = pow2(trigger_rank) * xdiv(st1.nt_ds, nelts_per_segment);
-	    st1.base_segment = this->stage1_total_segments_per_beam;
+	    st1.base_segment = this->stage2_total_segments_per_beam;
 
 	    xassert((st1.rank1_trigger >= 0) && (st1.rank1_trigger <= 8));
 	    xassert(st1.rank1_trigger <= st1.rank1_ambient);
 		     
-	    this->stage1_trees.push_back(st1);
-	    this->stage1_total_segments_per_beam += st1.segments_per_beam;
+	    this->stage2_trees.push_back(st1);
+	    this->stage2_total_segments_per_beam += st1.segments_per_beam;
 	}
 
 	max_n1 = max(max_n1, int(trigger_ranks.size()));
@@ -84,8 +84,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //  - Allocate 'segmap', which maps iseg0 -> (list of (clag,iseg1) pairs).
     //    (This is a temporary object that will be used "locally" in this function.)
     
-    int nseg0 = this->stage0_total_segments_per_beam;
-    int nseg1 = this->stage1_total_segments_per_beam;
+    int nseg0 = this->stage1_total_segments_per_beam;
+    int nseg1 = this->stage2_total_segments_per_beam;
 
     Array<uint> segmap_n1({nseg0}, af_uhost | af_zero);
     Array<uint> segmap_clag({nseg0,max_n1}, af_uhost | af_zero);
@@ -93,8 +93,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     
     this->max_clag = 0;
     
-    for (const Stage1Tree &st1: this->stage1_trees) {
-	const Stage0Tree &st0 = this->stage0_trees.at(st1.ds_level);
+    for (const Stage2Tree &st1: this->stage2_trees) {
+	const Stage1Tree &st0 = this->stage1_trees.at(st1.ds_level);
 
 	// Some truly paranoid asserts.
 	xassert(st0.nt_ds == st1.nt_ds);
@@ -157,8 +157,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     // Part 4:
     //  - initialize Ringbuf::nseg_per_beam
-    //  - pseudo-initialize stage0_rb_locs (*)
     //  - pseudo-initialize stage1_rb_locs (*)
+    //  - pseudo-initialize stage2_rb_locs (*)
     //
     // (*) "Pseudo-initialize" means that we use the following temporary rb_loc layout:
     //
@@ -167,8 +167,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //   uint rb_clag;
     //     (fourth 'uint' is unused)
 
-    this->stage0_rb_locs = Array<uint> ({nseg0,4}, af_rhost);
-    this->stage1_rb_locs = Array<uint> ({nseg1,4}, af_rhost);
+    this->stage1_rb_locs = Array<uint> ({nseg0,4}, af_rhost);
+    this->stage2_rb_locs = Array<uint> ({nseg1,4}, af_rhost);
 
     // Not logically necessary, but enables a real-time consistency check.
     vector<bool> coverage(nseg1, false);
@@ -183,7 +183,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	Ringbuf &rb = gmem_ringbufs.at(rb_clag);
 	int rb_seg = rb.nseg_per_beam++;
 
-	uint *rb_loc0 = stage0_rb_locs.data + (4*iseg0);
+	uint *rb_loc0 = stage1_rb_locs.data + (4*iseg0);
 	rb_loc0[0] = rb_seg;
 	rb_loc0[1] = 0;  // rb_phase
 	rb_loc0[2] = rb_clag;
@@ -200,7 +200,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	    int rb_phase = rb.rb_len - (clag1 * BT);
 	    xassert(rb_phase > 0);
 	    
-	    uint *rb_loc1 = stage1_rb_locs.data + (4*iseg1);
+	    uint *rb_loc1 = stage2_rb_locs.data + (4*iseg1);
 	    rb_loc1[0] = rb_seg;
 	    rb_loc1[1] = rb_phase;
 	    rb_loc1[2] = rb_clag;   // not clag1
@@ -213,8 +213,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // Part 5:
     //  - initialize this->gmem_ringbuf_nbytes
     //  - initialize Ringbuf::base_segment
-    //  - fully initialize stage0_rb_locs (**)
     //  - fully initialize stage1_rb_locs (**)
+    //  - fully initialize stage2_rb_locs (**)
     //
     // (**) "Fully initialize" means that we convert from the temporary rb_loc layout (*) to:
     //
@@ -232,7 +232,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     }
 
     for (int iseg0 = 0; iseg0 < nseg0; iseg0++) {
-	uint *p = stage0_rb_locs.data + (4*iseg0);
+	uint *p = stage1_rb_locs.data + (4*iseg0);
 	Ringbuf &rb = gmem_ringbufs.at(p[2]);  // p[2] = clag
 
 	p[0] += rb.base_segment;
@@ -241,7 +241,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     }
     
     for (int iseg1 = 0; iseg1 < nseg1; iseg1++) {
-	uint *p = stage1_rb_locs.data + (4*iseg1);
+	uint *p = stage2_rb_locs.data + (4*iseg1);
 	Ringbuf &rb = gmem_ringbufs.at(p[2]);  // p[2] = clag
 
 	p[0] += rb.base_segment;
@@ -255,14 +255,14 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //   DedispersionBufferParams second_dd_buf_params;
     //   LaggedDownsamplingKernelParams lds_params;
     //
-    //   // Member of Stage0Tree and Stage1Tree
+    //   // Member of Stage1Tree and Stage2Tree
     //   DedispersionKernelParams kernel_params;
 
     first_dd_buf_params.dtype = config.dtype;
     first_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    first_dd_buf_params.nbuf = stage0_trees.size();
+    first_dd_buf_params.nbuf = stage1_trees.size();
 
-    for (Stage0Tree &st0: stage0_trees) {
+    for (Stage1Tree &st0: stage1_trees) {
 	long pos = st0.base_segment;
 	long nseg = st0.segments_per_beam;
 
@@ -278,7 +278,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	kparams.apply_input_residual_lags = false;
 	kparams.input_is_downsampled_tree = (st0.ds_level > 0);
 	kparams.nelts_per_segment = this->nelts_per_segment;
-	kparams.ringbuf_locations = this->stage0_rb_locs.slice(0, pos, pos + nseg);
+	kparams.ringbuf_locations = this->stage1_rb_locs.slice(0, pos, pos + nseg);
 	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
 	kparams.validate(false);  // on_gpu=false
 	
@@ -289,9 +289,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     second_dd_buf_params.dtype = config.dtype;
     second_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    second_dd_buf_params.nbuf = stage1_trees.size();
+    second_dd_buf_params.nbuf = stage2_trees.size();
 
-    for (Stage1Tree &st1: stage1_trees) {
+    for (Stage2Tree &st1: stage2_trees) {
 	long pos = st1.base_segment;
 	long nseg = st1.segments_per_beam;
 
@@ -307,7 +307,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	kparams.apply_input_residual_lags = true;
 	kparams.input_is_downsampled_tree = (st1.ds_level > 0);
 	kparams.nelts_per_segment = this->nelts_per_segment;
-	kparams.ringbuf_locations = this->stage1_rb_locs.slice(0, pos, pos + nseg);
+	kparams.ringbuf_locations = this->stage2_rb_locs.slice(0, pos, pos + nseg);
 	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
 	kparams.validate(false);  // on_gpu=false
 
@@ -317,7 +317,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     }
     
     lds_params.dtype = config.dtype;
-    lds_params.small_input_rank = (stage0_trees.size() > 1) ? (stage0_trees.at(1).rank0 + 1) : 0;
+    lds_params.small_input_rank = (stage1_trees.size() > 1) ? (stage1_trees.at(1).rank0 + 1) : 0;
     lds_params.large_input_rank = config.tree_rank;
     lds_params.num_downsampling_levels = config.num_downsampling_levels;
     lds_params.total_beams = config.beams_per_gpu;
@@ -341,10 +341,10 @@ void DedispersionPlan::print(ostream &os, int indent) const
     print_kv("nelts_per_segment", nelts_per_segment, os, indent);
     print_kv("nbytes_per_segment", nbytes_per_segment, os, indent);
 
-    os << Indent(indent) << "Stage0Trees" << endl;
+    os << Indent(indent) << "Stage1Trees" << endl;
 
-    for (unsigned int i = 0; i < stage0_trees.size(); i++) {
-	const Stage0Tree &st0 = stage0_trees.at(i);
+    for (unsigned int i = 0; i < stage1_trees.size(); i++) {
+	const Stage1Tree &st0 = stage1_trees.at(i);
 	
 	os << Indent(indent+4) << i
 	   << ": ds_level=" << st0.ds_level
@@ -354,10 +354,10 @@ void DedispersionPlan::print(ostream &os, int indent) const
 	   << endl;
     }
     
-    os << Indent(indent) << "Stage1Trees" << endl;
+    os << Indent(indent) << "Stage2Trees" << endl;
 
-    for (unsigned int i = 0; i < stage1_trees.size(); i++) {
-	const Stage1Tree &st1 = stage1_trees.at(i);;
+    for (unsigned int i = 0; i < stage2_trees.size(); i++) {
+	const Stage2Tree &st1 = stage2_trees.at(i);;
 	
 	os << Indent(indent+4) << i
 	   << ": ds_level=" << st1.ds_level

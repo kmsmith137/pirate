@@ -25,7 +25,7 @@ struct LaggedDownsamplingKernelParams
 {
     // FIXME rename and explain the *_input_rank params.
     ksgpu::Dtype dtype;                 // same as DedispersionConfig::dtype
-    long small_input_rank = -1;         // same as DedispersionPlan::stage0_trees[1].rank0 + 1
+    long small_input_rank = -1;         // same as DedispersionPlan::stage1_trees[1].rank0 + 1
     long large_input_rank = -1;         // same as DedispersionConfig::tree_rank;
     long num_downsampling_levels = -1;  // same as DedispersionConfig::num_downsampling_levels
     long total_beams = 0;               // same as DedispersionConfig::beams_per_gpu
