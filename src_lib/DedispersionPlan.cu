@@ -251,16 +251,16 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     // Part 6: initialize all "params" members:
     //
-    //   DedispersionBufferParams first_dd_buf_params;
-    //   DedispersionBufferParams second_dd_buf_params;
+    //   DedispersionBufferParams stage1_dd_buf_params;
+    //   DedispersionBufferParams stage2_dd_buf_params;
     //   LaggedDownsamplingKernelParams lds_params;
     //
     //   // Member of Stage1Tree and Stage2Tree
     //   DedispersionKernelParams kernel_params;
 
-    first_dd_buf_params.dtype = config.dtype;
-    first_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    first_dd_buf_params.nbuf = stage1_trees.size();
+    stage1_dd_buf_params.dtype = config.dtype;
+    stage1_dd_buf_params.beams_per_batch = config.beams_per_batch;
+    stage1_dd_buf_params.nbuf = stage1_trees.size();
 
     for (Stage1Tree &st1: stage1_trees) {
 	long pos = st1.base_segment;
@@ -282,14 +282,14 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
 	kparams.validate(false);  // on_gpu=false
 	
-	first_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1);
-	first_dd_buf_params.buf_ntime.push_back(st1.nt_ds);
-	first_dd_kernel_params.push_back(kparams);
+	stage1_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1);
+	stage1_dd_buf_params.buf_ntime.push_back(st1.nt_ds);
+	stage1_dd_kernel_params.push_back(kparams);
     }
 
-    second_dd_buf_params.dtype = config.dtype;
-    second_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    second_dd_buf_params.nbuf = stage2_trees.size();
+    stage2_dd_buf_params.dtype = config.dtype;
+    stage2_dd_buf_params.beams_per_batch = config.beams_per_batch;
+    stage2_dd_buf_params.nbuf = stage2_trees.size();
 
     for (Stage2Tree &st2: stage2_trees) {
 	long pos = st2.base_segment;
@@ -311,9 +311,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
 	kparams.validate(false);  // on_gpu=false
 
-	second_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);
-	second_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
-	second_dd_kernel_params.push_back(kparams);
+	stage2_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);
+	stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
+	stage2_dd_kernel_params.push_back(kparams);
     }
     
     lds_params.dtype = config.dtype;
@@ -324,8 +324,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     lds_params.beams_per_batch = config.beams_per_batch;
     lds_params.ntime = config.time_samples_per_chunk;
 
-    first_dd_buf_params.validate();
-    second_dd_buf_params.validate();
+    stage1_dd_buf_params.validate();
+    stage2_dd_buf_params.validate();
     lds_params.validate();
 }
 

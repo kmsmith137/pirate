@@ -23,11 +23,11 @@ struct DedispersionPlan
     
     const DedispersionConfig config;
 
-    DedispersionBufferParams first_dd_buf_params;
-    DedispersionBufferParams second_dd_buf_params;
+    DedispersionBufferParams stage1_dd_buf_params;
+    DedispersionBufferParams stage2_dd_buf_params;
     
-    std::vector<DedispersionKernelParams> first_dd_kernel_params;
-    std::vector<DedispersionKernelParams> second_dd_kernel_params;
+    std::vector<DedispersionKernelParams> stage1_dd_kernel_params;
+    std::vector<DedispersionKernelParams> stage2_dd_kernel_params;
     
     LaggedDownsamplingKernelParams lds_params;
 
