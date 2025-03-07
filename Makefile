@@ -94,10 +94,10 @@ LIB_SRCFILES = \
   src_lib/template_instantiations/dedisp_simple_float32.cu \
   src_lib/template_instantiations/dedisp_simple_nolag_float16.cu \
   src_lib/template_instantiations/dedisp_simple_nolag_float32.cu \
-  src_lib/template_instantiations/dedisp_stage0_float16.cu \
-  src_lib/template_instantiations/dedisp_stage0_float32.cu \
   src_lib/template_instantiations/dedisp_stage1_float16.cu \
-  src_lib/template_instantiations/dedisp_stage1_float32.cu
+  src_lib/template_instantiations/dedisp_stage1_float32.cu \
+  src_lib/template_instantiations/dedisp_stage2_float16.cu \
+  src_lib/template_instantiations/dedisp_stage2_float32.cu
 
 # These get compiled into pirate_frb/pirate_pybind11....so.
 PYEXT_SRCFILES = \
