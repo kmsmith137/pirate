@@ -117,12 +117,12 @@ BIN_SRCFILES = \
   src_bin/show_dedispersion_plan.cu \
   src_bin/test-avx256-m64-outbuf.cu \
   src_bin/test-cpu-downsampler.cu \
+  src_bin/test-dedisperser.cu \
   src_bin/test-gpu-dedispersion-kernels.cu \
   src_bin/test-gpu-downsample.cu \
   src_bin/test-gpu-lagged-downsampler.cu \
   src_bin/test-gpu-reduce2.cu \
   src_bin/test-gpu-transpose.cu \
-  src_bin/test-reference-dedisperser.cu \
   src_bin/test-reference-tree.cu \
   src_bin/time-cpu-downsample.cu \
   src_bin/time-gpu-dedispersion-kernels.cu \
