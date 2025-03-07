@@ -154,8 +154,8 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     config(deref(plan_)->config),
     sophistication(sophistication_)
 {
-    this->config_rank = config.tree_rank;
-    this->config_ntime = config.time_samples_per_chunk;
+    this->input_rank = config.tree_rank;
+    this->input_ntime = config.time_samples_per_chunk;
     this->total_beams = config.beams_per_gpu;
     this->beams_per_batch = config.beams_per_batch;
     this->nbatches = xdiv(total_beams, beams_per_batch);
@@ -174,7 +174,7 @@ void ReferenceDedisperserBase::_init_iobufs(Array<float> &in, vector<Array<float
     this->input_array = in;
     this->output_arrays = out;
     
-    xassert_shape_eq(input_array, ({ beams_per_batch, pow2(config_rank), config_ntime }));
+    xassert_shape_eq(input_array, ({ beams_per_batch, pow2(input_rank), input_ntime }));
     xassert_eq(long(output_arrays.size()), nout);
 
     for (long iout = 0; iout < nout; iout++) {
@@ -213,7 +213,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     virtual void dedisperse(long itime, long ibeam) override;
 
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
-    // Outer length is nds, inner shape is (beams_per_batch, 2^config_rank, input_nt / pow2(ids)).
+    // Outer length is nds, inner shape is (beams_per_batch, 2^input_rank, input_nt / pow2(ids)).
     
     vector<Array<float>> downsampled_inputs;
 
@@ -246,8 +246,8 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
     this->output_arrays.resize(nout);
 
     for (int ids = 0; ids < nds; ids++) {
-	long nt_ds = xdiv(config_ntime, pow2(ids));
-	downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(config_rank), nt_ds}, af_uhost | af_zero);
+	long nt_ds = xdiv(input_ntime, pow2(ids));
+	downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(input_rank), nt_ds}, af_uhost | af_zero);
     }
     
     for (int iout = 0; iout < nout; iout++) {
@@ -275,7 +275,7 @@ void ReferenceDedisperser0::dedisperse(long ibatch, long it_chunk)
     for (int ids = 1; ids < nds; ids++) {
 	
 	// Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
-	// Outer length is nds, inner shape is (beams_per_batch, 2^config_rank, input_nt / pow2(ids)).
+	// Outer length is nds, inner shape is (beams_per_batch, 2^input_rank, input_nt / pow2(ids)).
 	// Reminder: 'input_array' is an alias for downsampled_inputs[0].
 
 	Array<float> src = downsampled_inputs.at(ids-1);

@@ -44,10 +44,10 @@ struct ReferenceDedisperserBase
     std::shared_ptr<DedispersionPlan> plan;
     
     const DedispersionConfig config;   // same as plan->config
-    const int sophistication;
-        
-    int config_rank = 0;         // same as config.tree_rank
-    int config_ntime = 0;        // same as config.time_samples_per_chunk
+    const int sophistication;          // see above
+    
+    int input_rank = 0;          // same as config.tree_rank
+    int input_ntime = 0;         // same as config.time_samples_per_chunk
     int total_beams = 0;         // same as config.beams_per_gpu
     int beams_per_batch = 0;     // same as config.beams_per_batch
     int nbatches = 0;            // = (total_beams / beams_per_batch)
@@ -60,10 +60,10 @@ struct ReferenceDedisperserBase
     virtual void dedisperse(long ibatch, long it_chunk) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
-    // Shape is (beams_per_batch, 2^config_rank, config_ntime).
+    // Shape is (beams_per_batch, 2^input_rank, input_ntime).
     // 
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
-    // output_arrays[iout] has shape (beams_per_batch, 2^output_rank, config_ntime / pow2(ids)), where:
+    // output_arrays[iout] has shape (beams_per_batch, 2^output_rank, input_ntime / pow2(ids)), where:
     //
     //   ids = downsampling factor of tree 'iout' (same as DedispersionPlan::Stage1Tree::ds_level)
     //   output_rank = rank of tree 'iout' (same as Stage2Tree::rank0 + Stage2Tree::rank1_trigger)
