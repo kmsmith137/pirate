@@ -50,12 +50,12 @@ struct ReferenceDedisperserBase
     long input_ntime = 0;         // same as config.time_samples_per_chunk
     long total_beams = 0;         // same as config.beams_per_gpu
     long beams_per_batch = 0;     // same as config.beams_per_batch
+    long gpu_ringbuf_nelts = 0;   // = (plan->gmem_ringbuf_nseg * plan->nelts_per_segment)
     long nbatches = 0;            // = (total_beams / beams_per_batch)
-    int nelts_per_segment = 0;    // same as plan->nelts_per_segment
 
     long output_ntrees = 0;
     std::vector<long> output_rank;      // length output_ntrees
-    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level))
+    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level[:]))
     std::vector<long> output_ds_level;  // length output_ntrees
     
     // To process multiple chunks, call the dedisperse() method in a loop.
@@ -65,15 +65,12 @@ struct ReferenceDedisperserBase
     // Shape is (beams_per_batch, 2^input_rank, input_ntime).
     // 
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
-    // output_arrays[iout] has shape (beams_per_batch, 2^output_rank, input_ntime / pow2(ids)), where:
-    //
-    //   ids = downsampling factor of tree 'iout' (same as DedispersionPlan::Stage1Tree::ds_level)
-    //   output_rank = rank of tree 'iout' (same as Stage2Tree::rank0 + Stage2Tree::rank1_trigger)
+    // output_arrays[i] has shape (beams_per_batch, 2^output_rank[i], output_ntime[i])
     //
     // Warning: dedisperse() may modify 'input_array'!
     
     ksgpu::Array<float> input_array;
-    std::vector<ksgpu::Array<float>> output_arrays;
+    std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
 
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);

@@ -42,8 +42,8 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     this->input_ntime = config.time_samples_per_chunk;
     this->total_beams = config.beams_per_gpu;
     this->beams_per_batch = config.beams_per_batch;
+    this->gpu_ringbuf_nelts = plan->gmem_ringbuf_nseg * plan->nelts_per_segment;
     this->nbatches = xdiv(total_beams, beams_per_batch);
-    this->nelts_per_segment = plan->nelts_per_segment;
 
     const DedispersionBufferParams &out_params = plan->stage2_dd_buf_params;
     this->output_ntrees = out_params.nbuf;
@@ -285,7 +285,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     // Initalize stage2_lagbufs.
     // (Note that these lagbufs are used in ReferenceDedisperser1, but not ReferenceDedisperser2.)
     
-    long S = nelts_per_segment;
+    long S = plan->nelts_per_segment;
     this->stage2_lagbufs.resize(nbatches * output_ntrees);
 
     for (long iout = 0; iout < output_ntrees; iout++) {
@@ -398,7 +398,7 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan_) :
     ReferenceDedisperserBase(plan_, 2)
 {
-    this->gpu_ringbuf = Array<float>({ plan->gmem_ringbuf_nseg * plan->nelts_per_segment }, af_uhost | af_zero),
+    this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero),
     this->stage1_dd_buf = DedispersionBuffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = DedispersionBuffer(plan->stage2_dd_buf_params);
     this->stage1_dd_buf.allocate(af_uhost);
