@@ -26,6 +26,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // Part 1:
     //   - Initialize stage1_trees, stage2_trees.
     //   - Initialize max_n1 (max number of Stage2Trees, per Stage1Tree).
+    //   - Initialize stage1_ntrees, stage2_ntrees.
 
     int max_n1 = 0;
     
@@ -78,6 +79,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
 	max_n1 = max(max_n1, int(trigger_ranks.size()));
     }
+
+    this->stage1_ntrees = stage1_trees.size();
+    this->stage2_ntrees = stage2_trees.size();
+    xassert(stage1_ntrees == config.num_downsampling_levels);
     
     // Part 2:
     //  - Initialize this->max_clag
@@ -260,7 +265,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     stage1_dd_buf_params.dtype = config.dtype;
     stage1_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    stage1_dd_buf_params.nbuf = stage1_trees.size();
+    stage1_dd_buf_params.nbuf = stage1_ntrees;
 
     for (Stage1Tree &st1: stage1_trees) {
 	long pos = st1.base_segment;
@@ -289,7 +294,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     stage2_dd_buf_params.dtype = config.dtype;
     stage2_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    stage2_dd_buf_params.nbuf = stage2_trees.size();
+    stage2_dd_buf_params.nbuf = stage2_ntrees;
 
     for (Stage2Tree &st2: stage2_trees) {
 	long pos = st2.base_segment;
@@ -317,7 +322,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     }
     
     lds_params.dtype = config.dtype;
-    lds_params.small_input_rank = (stage1_trees.size() > 1) ? (stage1_trees.at(1).rank0 + 1) : 0;
+    lds_params.small_input_rank = (stage1_ntrees > 1) ? (stage1_trees.at(1).rank0 + 1) : 0;
     lds_params.large_input_rank = config.tree_rank;
     lds_params.num_downsampling_levels = config.num_downsampling_levels;
     lds_params.total_beams = config.beams_per_gpu;
@@ -335,6 +340,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
 void DedispersionPlan::print(ostream &os, int indent) const
 {
+    xassert(long(stage1_trees.size()) == stage1_ntrees);
+    xassert(long(stage2_trees.size()) == stage2_ntrees);
+    
     os << Indent(indent) << "DedispersionConfig" << endl;
     this->config.print(os, indent+4);
     
@@ -343,7 +351,7 @@ void DedispersionPlan::print(ostream &os, int indent) const
 
     os << Indent(indent) << "Stage1Trees" << endl;
 
-    for (unsigned int i = 0; i < stage1_trees.size(); i++) {
+    for (long i = 0; i < stage1_ntrees; i++) {
 	const Stage1Tree &st1 = stage1_trees.at(i);
 	
 	os << Indent(indent+4) << i
@@ -356,8 +364,8 @@ void DedispersionPlan::print(ostream &os, int indent) const
     
     os << Indent(indent) << "Stage2Trees" << endl;
 
-    for (unsigned int i = 0; i < stage2_trees.size(); i++) {
-	const Stage2Tree &st2 = stage2_trees.at(i);;
+    for (long i = 0; i < stage2_ntrees; i++) {
+	const Stage2Tree &st2 = stage2_trees.at(i);
 	
 	os << Indent(indent+4) << i
 	   << ": ds_level=" << st2.ds_level

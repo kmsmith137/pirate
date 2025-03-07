@@ -23,11 +23,14 @@ struct DedispersionPlan
     
     const DedispersionConfig config;
 
-    DedispersionBufferParams stage1_dd_buf_params;
-    DedispersionBufferParams stage2_dd_buf_params;
+    long stage1_ntrees = 0;  // same as config.num_downsampling_levels
+    long stage2_ntrees = 0;
     
-    std::vector<DedispersionKernelParams> stage1_dd_kernel_params;
-    std::vector<DedispersionKernelParams> stage2_dd_kernel_params;
+    DedispersionBufferParams stage1_dd_buf_params;  // (number of buffers) = stage1_ntrees
+    DedispersionBufferParams stage2_dd_buf_params;  // (number of buffers) = stage2_ntrees
+    
+    std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length stage1_ntrees
+    std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
     
     LaggedDownsamplingKernelParams lds_params;
 
@@ -75,8 +78,8 @@ struct DedispersionPlan
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
     int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
     
-    std::vector<Stage1Tree> stage1_trees;
-    std::vector<Stage2Tree> stage2_trees;
+    std::vector<Stage1Tree> stage1_trees;  // length stage1_ntrees
+    std::vector<Stage2Tree> stage2_trees;  // length stage2_ntrees
 
     long stage1_total_segments_per_beam = 0;
     long stage2_total_segments_per_beam = 0;
