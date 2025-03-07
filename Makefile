@@ -153,6 +153,7 @@ HFILES = \
   include/pirate/internals/inlines.hpp \
   include/pirate/internals/system_utils.hpp \
   include/pirate/internals/utils.hpp \
+  include/pirate/internals/Dedisperser.hpp \
   include/pirate/internals/DedispersionBuffer.hpp \
   include/pirate/internals/DedispersionKernel.hpp \
   include/pirate/internals/Directory.hpp \
@@ -161,7 +162,6 @@ HFILES = \
   include/pirate/internals/FakeServer.hpp \
   include/pirate/internals/File.hpp \
   include/pirate/internals/LaggedDownsamplingKernel.hpp \
-  include/pirate/internals/ReferenceDedisperser.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
   include/pirate/internals/ReferenceTree.hpp \
   include/pirate/internals/Socket.hpp \

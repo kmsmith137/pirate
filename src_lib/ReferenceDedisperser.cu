@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/ReferenceDedisperser.hpp"
+#include "../include/pirate/internals/Dedisperser.hpp"
 
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
