@@ -21,7 +21,20 @@ struct DedispersionPlan
 {
     DedispersionPlan(const DedispersionConfig &config);
     
+    const DedispersionConfig config;
+
+    DedispersionBufferParams first_dd_buf_params;
+    DedispersionBufferParams second_dd_buf_params;
+    
+    std::vector<DedispersionKernelParams> first_dd_kernel_params;
+    std::vector<DedispersionKernelParams> second_dd_kernel_params;
+    
+    LaggedDownsamplingKernelParams lds_params;
+
     void print(std::ostream &os=std::cout, int indent=0) const;
+
+    // Members after this should not be needed "from the outside".
+    // FIXME: reorganize code to reflect this?
     
     // --------------------  Helper classes  --------------------
     
@@ -36,8 +49,6 @@ struct DedispersionPlan
 	
 	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * (nt_ds / nelts_per_segment)
         int base_segment = 0;        // cumulative (over all Stage0Trees) segment count
-
-	DedispersionKernelParams kernel_params;
     };
 
     struct Stage1Tree
@@ -50,8 +61,6 @@ struct DedispersionPlan
 		
 	int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * (nt_ds / nelts_per_segment)
         int base_segment = 0;        // cumulative (over all Stage1Trees) segment count
-	
-	DedispersionKernelParams kernel_params;
     };
 
     struct Ringbuf
@@ -62,18 +71,12 @@ struct DedispersionPlan
     };
     
     // --------------------  Members  --------------------
-    
-    const DedispersionConfig config;
 
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
     int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
     
     std::vector<Stage0Tree> stage0_trees;
     std::vector<Stage1Tree> stage1_trees;
-
-    DedispersionBufferParams first_dd_buf_params;
-    DedispersionBufferParams second_dd_buf_params;
-    LaggedDownsamplingKernelParams lds_params;
 
     long stage0_total_segments_per_beam = 0;
     long stage1_total_segments_per_beam = 0;

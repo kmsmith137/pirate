@@ -265,24 +265,26 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     for (Stage0Tree &st0: stage0_trees) {
 	long pos = st0.base_segment;
 	long nseg = st0.segments_per_beam;
+
+	DedispersionKernelParams kparams;
+	kparams.dtype = config.dtype;
+	kparams.dd_rank = st0.rank0;
+	kparams.amb_rank = st0.rank1;
+	kparams.total_beams = config.beams_per_gpu;
+	kparams.beams_per_batch = config.beams_per_batch;
+	kparams.ntime = st0.nt_ds;
+	kparams.input_is_ringbuf = false;
+	kparams.output_is_ringbuf = true;   // note output_is_ringbuf = true
+	kparams.apply_input_residual_lags = false;
+	kparams.input_is_downsampled_tree = (st0.ds_level > 0);
+	kparams.nelts_per_segment = this->nelts_per_segment;
+	kparams.ringbuf_locations = this->stage0_rb_locs.slice(0, pos, pos + nseg);
+	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
+	kparams.validate(false);  // on_gpu=false
 	
 	first_dd_buf_params.buf_rank.push_back(st0.rank0 + st0.rank1);
 	first_dd_buf_params.buf_ntime.push_back(st0.nt_ds);
-	
-	st0.kernel_params.dtype = config.dtype;
-	st0.kernel_params.dd_rank = st0.rank0;
-	st0.kernel_params.amb_rank = st0.rank1;
-	st0.kernel_params.total_beams = config.beams_per_gpu;
-	st0.kernel_params.beams_per_batch = config.beams_per_batch;
-	st0.kernel_params.ntime = st0.nt_ds;
-	st0.kernel_params.input_is_ringbuf = false;
-	st0.kernel_params.output_is_ringbuf = true;   // note output_is_ringbuf = true
-	st0.kernel_params.apply_input_residual_lags = false;
-	st0.kernel_params.input_is_downsampled_tree = (st0.ds_level > 0);
-	st0.kernel_params.nelts_per_segment = this->nelts_per_segment;
-	st0.kernel_params.ringbuf_locations = this->stage0_rb_locs.slice(0, pos, pos + nseg);
-	st0.kernel_params.ringbuf_nseg = this->gmem_ringbuf_nseg;
-	st0.kernel_params.validate(false);  // on_gpu=false
+	first_dd_kernel_params.push_back(kparams);
     }
 
     second_dd_buf_params.dtype = config.dtype;
@@ -293,23 +295,25 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	long pos = st1.base_segment;
 	long nseg = st1.segments_per_beam;
 
+	DedispersionKernelParams kparams;
+	kparams.dtype = config.dtype;
+	kparams.dd_rank = st1.rank1_trigger;
+	kparams.amb_rank = st1.rank0;
+	kparams.total_beams = config.beams_per_gpu;
+	kparams.beams_per_batch = config.beams_per_batch;
+	kparams.ntime = st1.nt_ds;
+	kparams.input_is_ringbuf = true;   // note input_is_ringbuf = true
+	kparams.output_is_ringbuf = false;
+	kparams.apply_input_residual_lags = true;
+	kparams.input_is_downsampled_tree = (st1.ds_level > 0);
+	kparams.nelts_per_segment = this->nelts_per_segment;
+	kparams.ringbuf_locations = this->stage1_rb_locs.slice(0, pos, pos + nseg);
+	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
+	kparams.validate(false);  // on_gpu=false
+
 	second_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1_trigger);
 	second_dd_buf_params.buf_ntime.push_back(st1.nt_ds);
-	    
-	st1.kernel_params.dtype = config.dtype;
-	st1.kernel_params.dd_rank = st1.rank1_trigger;
-	st1.kernel_params.amb_rank = st1.rank0;
-	st1.kernel_params.total_beams = config.beams_per_gpu;
-	st1.kernel_params.beams_per_batch = config.beams_per_batch;
-	st1.kernel_params.ntime = st1.nt_ds;
-	st1.kernel_params.input_is_ringbuf = true;   // note input_is_ringbuf = true
-	st1.kernel_params.output_is_ringbuf = false;
-	st1.kernel_params.apply_input_residual_lags = true;
-	st1.kernel_params.input_is_downsampled_tree = (st1.ds_level > 0);
-	st1.kernel_params.nelts_per_segment = this->nelts_per_segment;
-	st1.kernel_params.ringbuf_locations = this->stage1_rb_locs.slice(0, pos, pos + nseg);
-	st1.kernel_params.ringbuf_nseg = this->gmem_ringbuf_nseg;
-	st1.kernel_params.validate(false);  // on_gpu=false
+	second_dd_kernel_params.push_back(kparams);
     }
     
     lds_params.dtype = config.dtype;

@@ -1,19 +1,20 @@
 #ifndef _PIRATE_INTERNALS_REFERENCE_DEDISPERSER_HPP
 #define _PIRATE_INTERNALS_REFERENCE_DEDISPERSER_HPP
 
+#include "../DedispersionConfig.hpp"
+
 #include <vector>
 #include <memory>  // shared_ptr
 #include <iostream>
 #include <ksgpu/Array.hpp>
 
-#include "../DedispersionConfig.hpp"
-#include "../DedispersionPlan.hpp"
-
-
 namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+// Defined in DedispersionPlan.hpp
+struct DedispersionPlan;
 
 
 // -------------------------------------------------------------------------------------------------

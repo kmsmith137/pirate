@@ -1,14 +1,12 @@
 #include "../include/pirate/internals/ReferenceDedisperser.hpp"
 
+#include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/internals/ReferenceTree.hpp"
 #include "../include/pirate/internals/ReferenceLagbuf.hpp"
-#include "../include/pirate/internals/DedispersionBuffer.hpp"
-#include "../include/pirate/internals/DedispersionKernel.hpp"
-#include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
-
-#include "../include/pirate/constants.hpp"
 #include "../include/pirate/internals/inlines.hpp"
 #include "../include/pirate/internals/utils.hpp"
+#include "../include/pirate/constants.hpp"
 
 
 using namespace std;
