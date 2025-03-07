@@ -80,6 +80,7 @@ LIB_SRCFILES = \
   src_lib/FakeCorrelator.cu \
   src_lib/FakeServer.cu \
   src_lib/File.cu \
+  src_lib/GpuDedisperser.cu \
   src_lib/GpuDedispersionKernel.cu \
   src_lib/GpuLaggedDownsamplingKernel.cu \
   src_lib/LaggedDownsamplingKernelParams.cu \

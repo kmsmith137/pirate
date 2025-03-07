@@ -20,6 +20,42 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
+// XXX this hackery needs comments!
+
+
+static DedispersionBuffer _make_dd_buffer(const DedispersionBufferParams &params_)
+{
+    DedispersionBufferParams params = params_;
+    params.dtype = Dtype::native<float> ();
+    
+    DedispersionBuffer buf(params);
+    buf.allocate(af_uhost);
+    return buf;
+}
+
+
+static shared_ptr<ReferenceDedispersionKernel> _make_dd_kernel(const DedispersionKernelParams &params_, bool disable_ringbuf)
+{
+    DedispersionKernelParams params = params_;
+    params.dtype = Dtype::native<float> ();
+    
+    if (disable_ringbuf)
+	params.input_is_ringbuf = params.output_is_ringbuf = false;
+
+    return make_shared<ReferenceDedispersionKernel> (params);
+}
+
+
+static shared_ptr<ReferenceLaggedDownsamplingKernel> _make_lds_kernel(const LaggedDownsamplingKernelParams &params_)
+{
+    LaggedDownsamplingKernelParams params = params_;
+    params.dtype = Dtype::native<float> ();
+    return make_shared<ReferenceLaggedDownsamplingKernel> (params);
+}
+    
+
+// -------------------------------------------------------------------------------------------------
+//
 // ReferenceDedisperserBase
 
 
@@ -250,9 +286,9 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
     DedispersionBuffer stage2_dd_buf;
     vector<shared_ptr<ReferenceLagbuf>> stage2_lagbufs;  // length (nbatches * output_ntrees)
 
+    shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
-    shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     
     virtual void dedisperse(long ibatch, long it_chunk) override;
 };
@@ -261,26 +297,15 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
 ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_) :
     ReferenceDedisperserBase(plan_, 1)
 {
-    this->stage1_dd_buf = DedispersionBuffer(plan->stage1_dd_buf_params);
-    this->stage2_dd_buf = DedispersionBuffer(plan->stage2_dd_buf_params);
-    this->stage1_dd_buf.allocate(af_uhost);
-    this->stage2_dd_buf.allocate(af_uhost);
+    this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
+    this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
+    this->lds_kernel = _make_lds_kernel(plan->lds_params);
 
-    for (const DedispersionKernelParams &kparams_: plan->stage1_dd_kernel_params) {
-	DedispersionKernelParams kparams = kparams_;
-	kparams.output_is_ringbuf = false;  // "patch" the kernel params to disable the ringbuf
-	auto kernel = make_shared<ReferenceDedispersionKernel> (kparams);
-	this->stage1_dd_kernels.push_back(kernel);
-    }
+    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
+	this->stage1_dd_kernels.push_back(_make_dd_kernel(kparams, true));  // disable_ringbuf = true
 
-    for (const DedispersionKernelParams &kparams_: plan->stage2_dd_kernel_params) {
-	DedispersionKernelParams kparams = kparams_;
-	kparams.input_is_ringbuf = false;  // "patch" the kernel params to disable the ringbuf
-	auto kernel = make_shared<ReferenceDedispersionKernel> (kparams);
-	this->stage2_dd_kernels.push_back(kernel);
-    }
-
-    this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
+    for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params)
+	this->stage2_dd_kernels.push_back(_make_dd_kernel(kparams, true));  // disable_ringbuf = true
     
     // Initalize stage2_lagbufs.
     // (Note that these lagbufs are used in ReferenceDedisperser1, but not ReferenceDedisperser2.)
@@ -383,13 +408,13 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
     // Step 3: run stage2 dedispersion kernels (input from ringbuf)
 
-    Array<float> gpu_ringbuf;
     DedispersionBuffer stage1_dd_buf;
     DedispersionBuffer stage2_dd_buf;
+    Array<float> gpu_ringbuf;
 
+    shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
-    shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     
     virtual void dedisperse(long ibatch, long it_chunk) override;
 };
@@ -398,23 +423,16 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan_) :
     ReferenceDedisperserBase(plan_, 2)
 {
-    this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero),
-    this->stage1_dd_buf = DedispersionBuffer(plan->stage1_dd_buf_params);
-    this->stage2_dd_buf = DedispersionBuffer(plan->stage2_dd_buf_params);
-    this->stage1_dd_buf.allocate(af_uhost);
-    this->stage2_dd_buf.allocate(af_uhost);
+    this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
+    this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
+    this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero);
+    this->lds_kernel = _make_lds_kernel(plan->lds_params);
+					
+    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
+	this->stage1_dd_kernels.push_back(_make_dd_kernel(kparams, false));  // disable_ringbuf = false
 
-    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
-	auto kernel = make_shared<ReferenceDedispersionKernel> (kparams);
-	this->stage1_dd_kernels.push_back(kernel);
-    }
-
-    for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params) {
-	auto kernel = make_shared<ReferenceDedispersionKernel> (kparams);
-	this->stage2_dd_kernels.push_back(kernel);
-    }
-
-    this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
+    for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params)
+	this->stage2_dd_kernels.push_back(_make_dd_kernel(kparams, false));  // disable_ringbuf = false
     
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
     // 'input_arrays' and 'output_arrays' in the case class.

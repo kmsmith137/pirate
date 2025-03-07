@@ -12,11 +12,26 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+// GPU dedispersion kernels assumes (nelts_per_segment == nelts_per_cache_line), but
+// reference kernels allow (nelts_per_segment) to be a multiple of (nelts_per_cache_line),
+// where:
+//
+//   nelts_per_cache_line = (8 * constants::bytes_per_gpu_cache_line) / dtype.nbits.
+//
+// This is in order to enable a unit test where we check agreement between a float16
+// GPU kernel, and a float32 reference kernel derived from the same DedispersionPlan.
+// In this case, we want the reference kernel to have dtype float32, but use a value
+// of 'nelts_per_segment' which matched to the float16 GPU kernel.
+//
+// Enabling this feature is straightforward: we just compute residual lags and ring
+// buffer offsets using the value of (params.nelts_per_segment), rather than assuming
+// nelts_per_segment == 32.
+
 
 ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    params.validate(false);    // on_gpu=false
+    params.validate(false);    // gpu_kernel=false
 
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     

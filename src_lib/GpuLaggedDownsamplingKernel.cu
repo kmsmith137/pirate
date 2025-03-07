@@ -779,18 +779,13 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
 
 void GpuLaggedDownsamplingKernel::allocate()
 {
-    if (is_allocated())
-	return;
+    if (is_allocated)
+	throw runtime_error("GpuLaggedDownsamplingKernel: double call to allocate()");
 
     // Note 'af_zero' flag here.
     std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
     this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
-}
-
-
-bool GpuLaggedDownsamplingKernel::is_allocated() const
-{
-    return (persistent_state.ndim > 0);
+    this->is_allocated = true;
 }
 
 
@@ -869,14 +864,15 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernel
 template<typename T>
 void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream)
 {
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(it_chunk >= 0);
+    xassert(is_allocated);
+    
     buf.params.validate();
     xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
     xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);	    
-    xassert(buf.is_allocated());
+    xassert(buf.is_allocated);
     xassert(buf.on_gpu());
-
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(it_chunk >= 0);
 
     for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
 	long nb = params.beams_per_batch;

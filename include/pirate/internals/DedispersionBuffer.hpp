@@ -51,10 +51,9 @@ struct DedispersionBuffer
     // The beam axes of these arrays will have non-contiguous strides (unless params.nbuf==1).
     
     std::vector<ksgpu::Array<void>> bufs;
+    bool is_allocated = false;
     
     void allocate(int aflags);
-
-    bool is_allocated() const;
     bool on_host() const;  // throws exception if unallocated
     bool on_gpu() const;   // throws exception if unallocated
 

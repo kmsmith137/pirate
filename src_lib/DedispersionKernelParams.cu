@@ -14,7 +14,7 @@ namespace pirate {
 #endif
 
 
-void DedispersionKernelParams::validate(bool on_gpu) const
+void DedispersionKernelParams::validate(bool gpu_kernel) const
 {
     xassert_ge(dd_rank, 0);
     xassert_le(dd_rank, 8);
@@ -33,9 +33,17 @@ void DedispersionKernelParams::validate(bool on_gpu) const
     // Currently assumed throughout the pirate code.
     xassert_divisible(total_beams, beams_per_batch);
 
-    // Currently assumed by the GPU kernels.
+    // The GPU kernel assumes (nelts_per_segment == nelts_per_cache_line), but the reference
+    // kernel allows (nelts_per_segment) to be a multiple of (nelts_per_cache_line). See
+    // discussion in DedispersionKernel.hpp.
+    
     int nelts_per_cache_line = xdiv(8 * constants::bytes_per_gpu_cache_line, dtype.nbits);
-    xassert_eq(nelts_per_segment, nelts_per_cache_line);
+    
+    if (gpu_kernel)
+	xassert_eq(nelts_per_segment, nelts_per_cache_line);
+    else
+	xassert_divisible(nelts_per_segment, nelts_per_cache_line);
+
     xassert_divisible(ntime, nelts_per_segment);
     
     if (input_is_ringbuf || output_is_ringbuf) {
@@ -44,12 +52,6 @@ void DedispersionKernelParams::validate(bool on_gpu) const
 	xassert(ringbuf_locations.is_fully_contiguous());
 	xassert(ringbuf_nseg > 0);
 	xassert(ringbuf_nseg <= UINT_MAX);
-
-	if (on_gpu) {
-	    xassert(ringbuf_locations.on_gpu());
-	    return;
-	}
-
 	xassert(ringbuf_locations.on_host());
 	
 	for (long iseg = 0; iseg < nsegments_per_tree; iseg++) {

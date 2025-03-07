@@ -61,7 +61,7 @@ void DedispersionBuffer::allocate(int aflags)
 {
     params.validate(); // paranoid
     
-    if (is_allocated())
+    if (is_allocated)
 	throw runtime_error("double call to DedispersionBuffer::allocate()");
 
     long nb = params.beams_per_batch;
@@ -84,25 +84,20 @@ void DedispersionBuffer::allocate(int aflags)
     }
 
     xassert(bstride == j);
-}
-
-
-bool DedispersionBuffer::is_allocated() const
-{
-    return (bufs.size() > 0);
+    this->is_allocated = true;
 }
 
 
 bool DedispersionBuffer::on_host() const
 {
-    xassert(is_allocated());
+    xassert(is_allocated);
     return ref.on_host();
 }
 
 
 bool DedispersionBuffer::on_gpu() const
 {
-    xassert(is_allocated());
+    xassert(is_allocated);
     return ref.on_gpu();
 }
 

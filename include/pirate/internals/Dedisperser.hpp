@@ -2,6 +2,7 @@
 #define _PIRATE_INTERNALS_REFERENCE_DEDISPERSER_HPP
 
 #include "../DedispersionConfig.hpp"
+#include "DedispersionBuffer.hpp"
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -13,11 +14,71 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-// Defined in DedispersionPlan.hpp
-struct DedispersionPlan;
+struct DedispersionPlan;              // defined in DedispersionPlan.hpp
+struct GpuDedispersionKernel;         // defined in DedispersionKernel.hpp
+struct GpuLaggedDownsamplingKernel;   // defined in LaggedDownsamplingKernel.hpp
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// GpuDedisperser (defined in src_lib/GpuDedisperser.cu)
+//
+// Warning: not thread-safe!
+
+
+struct GpuDedisperser
+{
+    GpuDedisperser(const std::shared_ptr<DedispersionPlan> &plan);
+    
+    std::shared_ptr<DedispersionPlan> plan;
+    
+    const DedispersionConfig config;   // same as plan->config
+
+    ksgpu::Dtype dtype;           // = (config.dtype)
+    long input_rank = 0;          // = (config.tree_rank)
+    long input_ntime = 0;         // = (config.time_samples_per_chunk)
+    long total_beams = 0;         // = (config.beams_per_gpu)
+    long beams_per_batch = 0;     // = (config.beams_per_batch)
+    long nstreams = 0;            // = (config.num_active_batches)
+    long nbatches = 0;            // = (total_beams / beams_per_batch)
+    long gpu_ringbuf_nelts = 0;   // = (plan->gmem_ringbuf_nseg * plan->nelts_per_segment)
+
+    long output_ntrees = 0;
+    std::vector<long> output_rank;      // length output_ntrees
+    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level[:]))
+    std::vector<long> output_ds_level;  // length output_ntrees
+
+    std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
+    std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
+    ksgpu::Array<void> gpu_ringbuf;
+
+    std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
+    std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
+    std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
+    bool is_allocated = false;
+
+    void allocate();
+
+    // launch_dedispersion() interface needs some explanation:
+    //
+    //  - Caller is responsible for creating/managing (nstreams) cuda streams,
+    //    and ensuring that the (istream, stream) arguments are always consistent.
+    //
+    //  - Before calling launch_dedispersion, caller must queue kernels to 'stream'
+    //    which populate the input buffer (stage1_dd_kernels[istream].bufs[0]).
+    //
+    //  - launch_dedispersion() returns asynchronously. When 'stream' is synchronized,
+    //    the output buffers (stage2_dd_kernels[istream].bufs[:]) will be populated.
+    //
+    // FIXME interface will evolve over time (e.g. cudaEvents).
+    
+    void launch_dedispersion(long ibatch, long it_chunk, long istream, cudaStream_t stream);
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// ReferenceDedisperser (defined in src_lib/ReferenceDedisperser.cu)
 //
 // Sophistication == 0:
 //
@@ -39,7 +100,7 @@ struct DedispersionPlan;
 struct ReferenceDedisperserBase
 {
     // Constructor not intended to be called directly -- use make() below.
-    ReferenceDedisperserBase(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication_);
+    ReferenceDedisperserBase(const std::shared_ptr<DedispersionPlan> &plan, int sophistication_);
     
     std::shared_ptr<DedispersionPlan> plan;
     

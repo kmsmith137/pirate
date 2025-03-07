@@ -91,16 +91,35 @@ struct DedispersionKernelParams
     
     bool apply_input_residual_lags = false;
     bool input_is_downsampled_tree = false;   // only matters if apply_input_residual_lags=true
-    int nelts_per_segment = 0;                // only matters if apply_input_residual_lags=true
 
-    // Only used if (input_is_ringbuf || output_is_ringbuf)
-    // Reminder: ringbuf_locations has shape (nsegments_per_tree, 4), where:
+    // The value of 'nelts_per_segment' matters if:
+    //   (apply_input_residual_lags || input_is_ringbuf || output_is_ringbuf).
+    //
+    // The GPU kernel assumes (nelts_per_segment == nelts_per_cache_line), but the reference
+    // kernel allows (nelts_per_segment) to be a multiple of (nelts_per_cache_line), where:
+    //   nelts_per_cache_line = (8 * constants::bytes_per_gpu_cache_line) / dtype.nbits.
+    //
+    // This is in order to enable a unit test where we check agreement between a float16
+    // GPU kernel, and a float32 reference kernel derived from the same DedispersionPlan.
+    // In this case, we want the reference kernel to have dtype float32, but use a value
+    // of 'nelts_per_segment' which matched to the float16 GPU kernel.
+    
+    int nelts_per_segment = 0;
+
+    // The 'ringbuf_locations' array has shape (nsegments_per_tree, 4), where:
     //   nsegments_per_tree = pow2(dd_rank + amb_rank) * xdiv(ntime,nelts_per_segment)
+    //
+    // The DedispersionKernelParams::ringbuf_locations array is always on the host (even for a
+    // GPU kernel). The copy from host to GPU happens in GpuDedispersionKernel::allocate()).
+    //
+    // The 'ringbuf_locations' array only gets used if (input_is_ringbuf || output_is_ringbuf).
+    
+    // Only used if (input_is_ringbuf || output_is_ringbuf)
     ksgpu::Array<uint> ringbuf_locations;
     long ringbuf_nseg = 0;
     
     // Throws an exception if anything is wrong.
-    void validate(bool on_gpu) const;
+    void validate(bool gpu_kernel) const;
 };
 
 
@@ -113,7 +132,7 @@ struct ReferenceDedispersionKernel
 
     ReferenceDedispersionKernel(const Params &params);
 
-    const Params params;  // reminder: contains 'ringbuf_locations' array.
+    const Params params;  // reminder: contains 'ringbuf_locations' array
     
     // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
@@ -134,7 +153,7 @@ struct ReferenceDedispersionKernel
 
 
 // The GpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
-// but internally allocates and manages its persistent state ("rstate").
+// but internally allocates and manages its persistent state.
 
 class GpuDedispersionKernel
 {
@@ -144,10 +163,10 @@ public:
     // To construct GpuDedispersionKernel instances, call this function.
     static std::shared_ptr<GpuDedispersionKernel> make(const Params &params);
     
-    Params params;   // reminder: contains 'ringbuf_locations' array
-
+    Params params;   // reminder: contains 'ringbuf_locations' array on host (not GPU!)
+    bool is_allocated = false;
+    
     void allocate();
-    bool is_allocated() const;
     
     // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
     //
@@ -171,16 +190,19 @@ public:
     long warps_per_threadblock = 0;
     long shmem_nbytes = 0;
 
-protected:
-    // Don't call constructor directly -- call GpuDedispersionKernel::make() instead!
-    GpuDedispersionKernel(const Params &params);
-
+    // The 'persistent_state', 'integer_constants', and 'gpu_ringbuf_locations' arrays
+    // are allocated in GpuDedipsersionKernel::allocate(), not the constructor.
+    
     // Shape (total_beams, state_nelts_per_beam).
     ksgpu::Array<void> persistent_state;
 
-    // FIXME only on current cuda device (at time of construction).
-    // FIXME should either add run-time check, or switch to using constant memory.
+    // FIXME should add run-time check that current cuda device is consistent.
     ksgpu::Array<uint> integer_constants;
+    ksgpu::Array<uint> gpu_ringbuf_locations;
+
+protected:
+    // Don't call constructor directly -- call GpuDedispersionKernel::make() instead!
+    GpuDedispersionKernel(const Params &params);
 };
 
 

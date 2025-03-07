@@ -43,7 +43,7 @@ struct LaggedDownsamplingKernelParams
 // Note: the reference kernel allocates persistent state in the constructor.
 struct ReferenceLaggedDownsamplingKernel
 {
-    const LaggedDownsamplingKernelParams params;
+    LaggedDownsamplingKernelParams params;
 
     ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params);
 
@@ -63,13 +63,13 @@ struct ReferenceLaggedDownsamplingKernel
 class GpuLaggedDownsamplingKernel
 {
 public:
-    const LaggedDownsamplingKernelParams params;
+    LaggedDownsamplingKernelParams params;
+    bool is_allocated = false;
     
     // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
     static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const LaggedDownsamplingKernelParams &params);
 
     void allocate();
-    bool is_allocated() const;
     
     // NULL stream is allowed, but is not the default.
     virtual void launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream) = 0;
@@ -88,12 +88,12 @@ public:
     int A_W = 0;
     int A_B = 0;
 
+    // Shape (total_beams, state_nelts_per_beam).
+    ksgpu::Array<void> persistent_state;
+
 protected:
     // Constructor is protected -- use GpuLaggedDownsamplingKernel::make() instead.
     GpuLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params);
-
-    // Shape (total_beams, state_nelts_per_beam).
-    ksgpu::Array<void> persistent_state;
 };
 
 

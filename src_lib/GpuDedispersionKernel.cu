@@ -211,7 +211,7 @@ static __host__ Array<uint> make_integer_constants(int rank, bool is_float32, bo
 
 
 template<typename T, bool Lagged>
-dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> &in_arr_, const DedispersionKernelParams &params)
+dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> &in_arr_, const GpuDedispersionKernel &kernel)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -222,6 +222,7 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> 
     static_assert(denom * sizeof(T) == 4);
 
     Array<T> in_arr = in_arr_.template cast<T> ("dedispersion_simple_inbuf input array");
+    const DedispersionKernelParams &params = kernel.params;
     
     // Expected shape is (nbeams, pow2(amb_rank), pow2(dd_rank), ntime).
     xassert_shape_eq(in_arr, ({params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime}));
@@ -249,7 +250,7 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> 
 
 // FIXME reduce cut-and-paste between Inbuf::host_args and Outbuf::host_args constructors.
 template<typename T>
-dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_arr_, const DedispersionKernelParams &params)
+dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_arr_, const GpuDedispersionKernel &kernel)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -260,6 +261,7 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_a
     static_assert(denom * sizeof(T) == 4);
 
     Array<T> out_arr = out_arr_.template cast<T> ("dedispersion_simple_outbuf output array");
+    const DedispersionKernelParams &params = kernel.params;
     
     // Expected shape is (nbeams, pow2(amb_rank), pow2(dd_rank), ntime)
     xassert_shape_eq(out_arr, ({ params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime }));
@@ -288,7 +290,7 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_a
 
 
 template<typename T>
-dedispersion_ring_inbuf<T>::device_args::device_args(const Array<void> &in_arr_, const DedispersionKernelParams &params)
+dedispersion_ring_inbuf<T>::device_args::device_args(const Array<void> &in_arr_, const GpuDedispersionKernel &kernel)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -298,11 +300,13 @@ dedispersion_ring_inbuf<T>::device_args::device_args(const Array<void> &in_arr_,
     static_assert(denom * sizeof(T) == 4);
 
     Array<T> in_arr = in_arr_.template cast<T> ("dedispersion_ring_inbuf input array");
+    const DedispersionKernelParams &params = kernel.params;
+	
     xassert_shape_eq(in_arr, ({ params.ringbuf_nseg * params.nelts_per_segment }));
     xassert(in_arr.get_ncontig() == 1);
     xassert(in_arr.on_gpu());
 
-    Array<uint> rb_loc = params.ringbuf_locations;
+    const Array<uint> &rb_loc = kernel.gpu_ringbuf_locations;  // not params.ringbuf_locations, which is on the host!
     xassert_shape_eq(rb_loc, ({ pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
     xassert(rb_loc.is_fully_contiguous());
     xassert(rb_loc.on_gpu());
@@ -314,7 +318,7 @@ dedispersion_ring_inbuf<T>::device_args::device_args(const Array<void> &in_arr_,
 
 
 template<typename T>
-dedispersion_ring_outbuf<T>::device_args::device_args(const Array<void> &out_arr_, const DedispersionKernelParams &params)
+dedispersion_ring_outbuf<T>::device_args::device_args(const Array<void> &out_arr_, const GpuDedispersionKernel &kernel)
 {
     // If T==float, then T32 is also 'float'.
     // If T==__half, then T32 is '__half2'.
@@ -324,11 +328,13 @@ dedispersion_ring_outbuf<T>::device_args::device_args(const Array<void> &out_arr
     static_assert(denom * sizeof(T) == 4);
 
     Array<T> out_arr = out_arr_.template cast<T> ("dedispersion_ring_outbuf output array");
+    const DedispersionKernelParams &params = kernel.params;
+	
     xassert_shape_eq(out_arr, ({ params.ringbuf_nseg * params.nelts_per_segment }));
     xassert(out_arr.get_ncontig() == 1);
     xassert(out_arr.on_gpu());
 
-    Array<uint> rb_loc = params.ringbuf_locations;
+    const Array<uint> &rb_loc = kernel.gpu_ringbuf_locations;  // not params.ringbuf_locations, which is on the host!
     xassert_shape_eq(rb_loc, ({ pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nelts_per_segment), 4 }));
     xassert(rb_loc.is_fully_contiguous());
     xassert(rb_loc.on_gpu());
@@ -396,13 +402,13 @@ GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Param
 template<typename T, class Inbuf, class Outbuf>
 void GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long it_chunk, cudaStream_t stream)
 {
-    xassert(this->is_allocated());
+    xassert(this->is_allocated);
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(it_chunk >= 0);
     
     // These constructors error-check their arguments (including array shapes).
-    typename Inbuf::device_args in(in_arr, params);
-    typename Outbuf::device_args out(out_arr, params);
+    typename Inbuf::device_args in(in_arr, *this);
+    typename Outbuf::device_args out(out_arr, *this);
 
     Array<T> pstate = this->persistent_state.template cast<T> ("pstate");
     T *pp = pstate.data + (ibatch * params.beams_per_batch * this->state_nelts_per_beam);
@@ -488,8 +494,8 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 
 void GpuDedispersionKernel::allocate()
 {
-    if (is_allocated())
-	return;
+    if (is_allocated)
+	throw runtime_error("double call to GpuDedispersionKernel::allocate()");
     
     // Note 'af_zero' flag here.
     std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
@@ -497,12 +503,12 @@ void GpuDedispersionKernel::allocate()
     
     bool is_float32 = (params.dtype.nbits == 32);
     this->integer_constants = make_integer_constants(params.dd_rank, is_float32, true);   // on_gpu=true
-}
 
+    // Copy host -> GPU.
+    if (params.input_is_ringbuf || params.output_is_ringbuf)
+	this->gpu_ringbuf_locations = params.ringbuf_locations.to_gpu();
 
-bool GpuDedispersionKernel::is_allocated() const
-{
-    return (persistent_state.ndim > 0);
+    this->is_allocated = true;
 }
 
 

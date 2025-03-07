@@ -72,7 +72,6 @@ static void run_random_small_configs(int niter)
 	cout << "\n    *** Running random small config " << iter << "/" << niter << " ***\n" << endl;
 	
 	auto config = DedispersionConfig::make_random();
-	config.dtype = Dtype::native<float>();
 	config.validate();
 
 	int max_nt = 8192;

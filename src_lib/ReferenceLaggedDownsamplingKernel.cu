@@ -74,7 +74,7 @@ void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibat
     buf.params.validate();
     xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
     xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);	    
-    xassert(buf.is_allocated());
+    xassert(buf.is_allocated);
     xassert(buf.on_host());
 
     xassert((ibatch >= 0) && (ibatch < nbatches));
