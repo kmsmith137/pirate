@@ -1,4 +1,5 @@
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
+#include "../include/pirate/internals/DedispersionBuffers.hpp"
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 #include "../include/pirate/constants.hpp"
 
@@ -17,7 +18,7 @@ using namespace ksgpu;
 
 struct TestInstance
 {
-    DedispersionInbufParams params;
+    LaggedDownsamplingKernelParams params;
     long nchunks = 0;
 
     TestInstance() { }
@@ -60,28 +61,47 @@ struct TestInstance
 };
 
 
+static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_params, int aflags)
+{
+    DedispersionBufferParams dd_params;
+    dd_params.dtype = lds_params.dtype;
+    dd_params.beams_per_batch = lds_params.beams_per_batch;
+    dd_params.nbuf = lds_params.num_downsampling_levels;
+
+    for (long ids = 0; ids < lds_params.num_downsampling_levels; ids++) {
+	long rk = lds_params.large_input_rank - (ids ? 1 : 0);
+	long nt = xdiv(lds_params.ntime, pow2(ids));
+	dd_params.buf_rank.push_back(rk);
+	dd_params.buf_ntime.push_back(nt);
+    }
+
+    dd_params.validate();
+    
+    DedispersionBuffer buf(dd_params);
+    buf.allocate(aflags);
+    return buf;
+}
+
+
 void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
 {
     ti.params.validate();
     
-    DedispersionInbufParams p = ti.params;
+    LaggedDownsamplingKernelParams p = ti.params;
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
     long nb = p.beams_per_batch;
     long rk = p.large_input_rank;
     long nt = p.ntime;
     
-    DedispersionInbufParams ref_params = p;
+    LaggedDownsamplingKernelParams ref_params = p;
     ref_params.dtype = Dtype::native<float> ();
     
     auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
     auto gpu_kernel = GpuLaggedDownsamplingKernel::make(p);
-    
-    DedispersionInbuf gpu_buf(p);
-    DedispersionInbuf cpu_buf(ref_params);
-
     gpu_kernel->allocate();
-    gpu_buf.allocate(af_gpu);
-    cpu_buf.allocate(af_uhost);
+    
+    DedispersionBuffer gpu_buf = make_buffer(p, af_gpu);
+    DedispersionBuffer cpu_buf = make_buffer(ref_params, af_uhost);
     
     for (long ichunk = 0; ichunk < ti.nchunks; ichunk++) {
 	for (long ibatch = 0; ibatch < nbatches; ibatch++) {

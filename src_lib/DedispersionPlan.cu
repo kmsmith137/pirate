@@ -248,6 +248,81 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	p[2] = rb.rb_len;
 	p[3] = rb.nseg_per_beam;
     }
+
+    // Part 6: initialize all "params" members:
+    //
+    //   DedispersionBufferParams first_dd_buf_params;
+    //   DedispersionBufferParams second_dd_buf_params;
+    //   LaggedDownsamplingKernelParams lds_params;
+    //
+    //   // Member of Stage0Tree and Stage1Tree
+    //   DedispersionKernelParams kernel_params;
+
+    first_dd_buf_params.dtype = config.dtype;
+    first_dd_buf_params.beams_per_batch = config.beams_per_batch;
+    first_dd_buf_params.nbuf = stage0_trees.size();
+
+    for (Stage0Tree &st0: stage0_trees) {
+	long pos = st0.base_segment;
+	long nseg = st0.segments_per_beam;
+	
+	first_dd_buf_params.buf_rank.push_back(st0.rank0 + st0.rank1);
+	first_dd_buf_params.buf_ntime.push_back(st0.nt_ds);
+	
+	st0.kernel_params.dtype = config.dtype;
+	st0.kernel_params.dd_rank = st0.rank0;
+	st0.kernel_params.amb_rank = st0.rank1;
+	st0.kernel_params.total_beams = config.beams_per_gpu;
+	st0.kernel_params.beams_per_batch = config.beams_per_batch;
+	st0.kernel_params.ntime = st0.nt_ds;
+	st0.kernel_params.input_is_ringbuf = false;
+	st0.kernel_params.output_is_ringbuf = true;   // note output_is_ringbuf = true
+	st0.kernel_params.apply_input_residual_lags = false;
+	st0.kernel_params.input_is_downsampled_tree = (st0.ds_level > 0);
+	st0.kernel_params.nelts_per_segment = this->nelts_per_segment;
+	st0.kernel_params.ringbuf_locations = this->stage0_rb_locs.slice(0, pos, pos + nseg);
+	st0.kernel_params.ringbuf_nseg = this->gmem_ringbuf_nseg;
+	st0.kernel_params.validate(false);  // on_gpu=false
+    }
+
+    second_dd_buf_params.dtype = config.dtype;
+    second_dd_buf_params.beams_per_batch = config.beams_per_batch;
+    second_dd_buf_params.nbuf = stage1_trees.size();
+
+    for (Stage1Tree &st1: stage1_trees) {
+	long pos = st1.base_segment;
+	long nseg = st1.segments_per_beam;
+
+	second_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1_trigger);
+	second_dd_buf_params.buf_ntime.push_back(st1.nt_ds);
+	    
+	st1.kernel_params.dtype = config.dtype;
+	st1.kernel_params.dd_rank = st1.rank1_trigger;
+	st1.kernel_params.amb_rank = st1.rank0;
+	st1.kernel_params.total_beams = config.beams_per_gpu;
+	st1.kernel_params.beams_per_batch = config.beams_per_batch;
+	st1.kernel_params.ntime = st1.nt_ds;
+	st1.kernel_params.input_is_ringbuf = true;   // note input_is_ringbuf = true
+	st1.kernel_params.output_is_ringbuf = false;
+	st1.kernel_params.apply_input_residual_lags = true;
+	st1.kernel_params.input_is_downsampled_tree = (st1.ds_level > 0);
+	st1.kernel_params.nelts_per_segment = this->nelts_per_segment;
+	st1.kernel_params.ringbuf_locations = this->stage1_rb_locs.slice(0, pos, pos + nseg);
+	st1.kernel_params.ringbuf_nseg = this->gmem_ringbuf_nseg;
+	st1.kernel_params.validate(false);  // on_gpu=false
+    }
+    
+    lds_params.dtype = config.dtype;
+    lds_params.small_input_rank = (stage0_trees.size() > 1) ? (stage0_trees.at(1).rank0 + 1) : 0;
+    lds_params.large_input_rank = config.tree_rank;
+    lds_params.num_downsampling_levels = config.num_downsampling_levels;
+    lds_params.total_beams = config.beams_per_gpu;
+    lds_params.beams_per_batch = config.beams_per_batch;
+    lds_params.ntime = config.time_samples_per_chunk;
+
+    first_dd_buf_params.validate();
+    second_dd_buf_params.validate();
+    lds_params.validate();
 }
 
 

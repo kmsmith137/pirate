@@ -1,10 +1,9 @@
-#ifndef _PIRATE_INTERNALS_DEDISPERSION_BUFFERS_HPP
-#define _PIRATE_INTERNALS_DEDISPERSION_BUFFERS_HPP
+#ifndef _PIRATE_INTERNALS_DEDISPERSION_BUFFER_HPP
+#define _PIRATE_INTERNALS_DEDISPERSION_BUFFER_HPP
 
 #include <vector>
 #include <memory>
 #include <iostream>
-#include "ReferenceLagbuf.hpp"
 
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
@@ -15,25 +14,20 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-class DedispersionPlan;
 
-
-struct DedispersionInbufParams
+// Represents a sequence of buffers, with shape (beams_per_batch, 2^rank, ntime).
+struct DedispersionBufferParams
 {
-    // FIXME rename and explain the *_input_rank params.
-    ksgpu::Dtype dtype;                 // same as DedispersionConfig::dtype
-    long small_input_rank = -1;         // same as DedispersionPlan::stage0_trees[1].rank0 + 1
-    long large_input_rank = -1;         // same as DedispersionConfig::tree_rank;
-    long num_downsampling_levels = -1;  // same as DedispersionConfig::num_downsampling_levels
-    long total_beams = 0;               // same as DedispersionConfig::beams_per_gpu
-    long beams_per_batch = 0;           // same as DedispersionConfig::beams_per_batch
-    long ntime = 0;                     // same as DedispersionConfig::time_samples_per_chunk
+    ksgpu::Dtype dtype;
 
-    DedispersionInbufParams() { }
-    DedispersionInbufParams(const std::shared_ptr<DedispersionPlan> &plan);
-    DedispersionInbufParams(const DedispersionInbufParams &) = default;
-    
-    bool operator==(const DedispersionInbufParams &) const;
+    long beams_per_batch = 0;
+    long nbuf = -1;
+
+    std::vector<long> buf_rank;   // length nbuf
+    std::vector<long> buf_ntime;  // length nbuf
+
+    DedispersionBufferParams() { }
+    DedispersionBufferParams(const DedispersionBufferParams &) = default;
 
     void print(std::ostream &os=std::cout, int indent=0) const;
     void validate() const;  // throws an exception if anything is wrong
@@ -41,24 +35,22 @@ struct DedispersionInbufParams
 
 
 // Input buffers for one "batch" of beams.
-struct DedispersionInbuf
+struct DedispersionBuffer
 {
-    const DedispersionInbufParams params;
+    DedispersionBuffer() { }
+    DedispersionBuffer(const DedispersionBufferParams &params);
+    
+    DedispersionBufferParams params;
 
     // If allocate() has not been called, then 'bufs' is an empty vector.
     //
     // If allocate() has been called, then:
-    //   - The 'bufs' vector has length (num_downsampling_levels).
-    //   - bufs[0] has shape (beams_per_batch, 2^(large_input_rank), ntime).
-    //   - bufs[i] has shape (beams_per_batch, 2^(large_input_rank-1), ntime/2^i), for i >= 1.
+    //   - The 'bufs' vector has length (params.nbuf).
+    //   - bufs[i] has shape (params.beams_per_batch, pow2(params.buf_rank[i]), params.buf_ntime[i]).
     //
-    // The beam axes of these arrays will have a non-contiguous stride (unless
-    // num_downsampling_levels == 0).
+    // The beam axes of these arrays will have non-contiguous strides (unless params.nbuf==1).
     
     std::vector<ksgpu::Array<void>> bufs;
-
-    DedispersionInbuf(const DedispersionInbufParams &params);
-    DedispersionInbuf(const std::shared_ptr<DedispersionPlan> &plan);
     
     void allocate(int aflags);
 
@@ -73,4 +65,4 @@ struct DedispersionInbuf
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_DEDISPERSION_BUFFERS_HPP
+#endif // _PIRATE_INTERNALS_DEDISPERSION_BUFFER_HPP

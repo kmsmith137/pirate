@@ -82,6 +82,7 @@ LIB_SRCFILES = \
   src_lib/File.cu \
   src_lib/GpuDedispersionKernel.cu \
   src_lib/GpuLaggedDownsamplingKernel.cu \
+  src_lib/LaggedDownsamplingKernelParams.cu \
   src_lib/ReferenceDedisperser.cu \
   src_lib/ReferenceDedispersionKernel.cu \
   src_lib/ReferenceLagbuf.cu \

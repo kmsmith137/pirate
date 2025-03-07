@@ -1,4 +1,5 @@
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
+#include "../include/pirate/internals/DedispersionBuffers.hpp"
 #include "../include/pirate/internals/inlines.hpp"   // pow2(), simd32_type
 #include "../include/pirate/constants.hpp"
 
@@ -734,7 +735,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 // -------------------------------------------------------------------------------------------------
 
 
-GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const DedispersionInbufParams &params_) :
+GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params_) :
     params(params_)
 {
     params.validate();
@@ -832,9 +833,9 @@ static cuda_kernel_t<T32> get_kernel(int D)
 template<typename T>
 struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
 {
-    DownsamplingKernelImpl(const DedispersionInbufParams &params);
+    DownsamplingKernelImpl(const LaggedDownsamplingKernelParams &params);
     
-    virtual void launch(DedispersionInbuf &buf, long ibatch, long it_chunk, cudaStream_t stream) override;
+    virtual void launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream) override;
 
     using T32 = typename simd32_type<T>::type;    
     cuda_kernel_t<T32> kernel;
@@ -842,7 +843,7 @@ struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
 
 
 template<typename T>
-DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const DedispersionInbufParams &params_) :
+DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernelParams &params_) :
     GpuLaggedDownsamplingKernel(params_)  // calls params.validate()
 {
     if (params.num_downsampling_levels <= 1)
@@ -866,14 +867,23 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const DedispersionInbufParams 
 
 // Overrides GpuLaggedDownsamplingKernel::launch()
 template<typename T>
-void DownsamplingKernelImpl<T>::launch(DedispersionInbuf &buf, long ibatch, long it_chunk, cudaStream_t stream)
+void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream)
 {
-    xassert(buf.params == this->params);
+    buf.params.validate();
+    xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
+    xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);	    
     xassert(buf.is_allocated());
     xassert(buf.on_gpu());
-    
+
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(it_chunk >= 0);
+
+    for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
+	long nb = params.beams_per_batch;
+	long rk = params.large_input_rank - (ids ? 1 : 0);
+	long nt = xdiv(params.ntime, pow2(ids));
+	xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
+    }
 
     if (params.num_downsampling_levels <= 1)
 	return;
@@ -897,7 +907,7 @@ void DownsamplingKernelImpl<T>::launch(DedispersionInbuf &buf, long ibatch, long
     // FIXME reduce generality of the cuda kernel?
     //
     // (In the cuda kernel, there are 4 independent args 'in', 'out', 'bstride_in', 'bstride_out',
-    // whereas the DedispersionInbuf constrains things so that all of these args can be derived
+    // whereas the DedispersionBuffer constrains things so that all of these args can be derived
     // from 'in'.)
     
     this->kernel
@@ -915,7 +925,7 @@ void DownsamplingKernelImpl<T>::launch(DedispersionInbuf &buf, long ibatch, long
 
 
 // Static member function
-shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const DedispersionInbufParams &params)
+shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const LaggedDownsamplingKernelParams &params)
 {
     params.validate();
     

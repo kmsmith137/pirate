@@ -3,6 +3,7 @@
 #include <ksgpu/CudaStreamPool.hpp>
 
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
+#include "../include/pirate/internals/DedispersionBuffers.hpp"
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
 
 using namespace std;
@@ -10,7 +11,31 @@ using namespace ksgpu;
 using namespace pirate;
 
 
-static void time_gpu_dedispersion_kernel(const DedispersionInbufParams &params)
+// FIXME this function is cut-and-paste from test-gpu-lagged-downsampler.cu.
+// Move to src_lib/ somewhere?
+static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_params, int aflags)
+{
+    DedispersionBufferParams dd_params;
+    dd_params.dtype = lds_params.dtype;
+    dd_params.beams_per_batch = lds_params.beams_per_batch;
+    dd_params.nbuf = lds_params.num_downsampling_levels;
+
+    for (long ids = 0; ids < lds_params.num_downsampling_levels; ids++) {
+	long rk = lds_params.large_input_rank - (ids ? 1 : 0);
+	long nt = xdiv(lds_params.ntime, pow2(ids));
+	dd_params.buf_rank.push_back(rk);
+	dd_params.buf_ntime.push_back(nt);
+    }
+
+    dd_params.validate();
+    
+    DedispersionBuffer buf(dd_params);
+    buf.allocate(aflags);
+    return buf;
+}
+
+
+static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &params)
 {
     // Use one cuda stream per batch of beams.
     long nb_tot = params.total_beams;
@@ -23,12 +48,9 @@ static void time_gpu_dedispersion_kernel(const DedispersionInbufParams &params)
     shared_ptr<GpuLaggedDownsamplingKernel> kernel = GpuLaggedDownsamplingKernel::make(params);
     kernel->allocate();
     
-    vector<DedispersionInbuf> bufs;
-    
-    for (long s = 0; s < nstreams; s++) {
-	bufs.push_back(DedispersionInbuf(params));
-	bufs[s].allocate(af_gpu);
-    }
+    vector<DedispersionBuffer> bufs;
+    for (long s = 0; s < nstreams; s++)
+	bufs.push_back(make_buffer(params, af_zero | af_gpu));
     
     long buf_nelts_per_stream = bufs[0].ref.size;
     long pstate_nelts_per_stream = nb_batch * kernel->state_nelts_per_beam;
@@ -58,7 +80,7 @@ static void time_gpu_dedispersion_kernel(const DedispersionInbufParams &params)
 
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
         {
-	    DedispersionInbuf &buf = bufs.at(istream);
+	    DedispersionBuffer &buf = bufs.at(istream);
 	    for (int i = 0; i < niter; i++)
 		kernel->launch(buf, istream, i, stream);
 	};
@@ -73,7 +95,7 @@ int main(int argc, char **argv)
 {
     for (int num_downsampling_levels: {1,3,5}) {
 	for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
-	    DedispersionInbufParams params;
+	    LaggedDownsamplingKernelParams params;
 	    params.dtype = dtype;
 	    params.small_input_rank = 8;
 	    params.large_input_rank = 16;
@@ -82,7 +104,7 @@ int main(int argc, char **argv)
 	    params.beams_per_batch = 4;
 	    params.ntime = 2048;
     
-	    time_gpu_dedispersion_kernel(params);
+	    time_gpu_lagged_downsampling_kernel(params);
 	}
     }
     

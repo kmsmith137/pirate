@@ -2,6 +2,9 @@
 #define _PIRATE_DEDISPERSION_PLAN_HPP
 
 #include "DedispersionConfig.hpp"
+#include "internals/DedispersionBuffers.hpp"  // struct DedispersionBufferParams
+#include "internals/DedispersionKernel.hpp"  // struct DedispersionKernelParams
+#include "internals/LaggedDownsamplingKernel.hpp"  // struct LaggedDownsamplingKernelParams
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -33,6 +36,8 @@ struct DedispersionPlan
 	
 	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * (nt_ds / nelts_per_segment)
         int base_segment = 0;        // cumulative (over all Stage0Trees) segment count
+
+	DedispersionKernelParams kernel_params;
     };
 
     struct Stage1Tree
@@ -45,6 +50,8 @@ struct DedispersionPlan
 		
 	int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * (nt_ds / nelts_per_segment)
         int base_segment = 0;        // cumulative (over all Stage1Trees) segment count
+	
+	DedispersionKernelParams kernel_params;
     };
 
     struct Ringbuf
@@ -63,6 +70,10 @@ struct DedispersionPlan
     
     std::vector<Stage0Tree> stage0_trees;
     std::vector<Stage1Tree> stage1_trees;
+
+    DedispersionBufferParams first_dd_buf_params;
+    DedispersionBufferParams second_dd_buf_params;
+    LaggedDownsamplingKernelParams lds_params;
 
     long stage0_total_segments_per_beam = 0;
     long stage1_total_segments_per_beam = 0;

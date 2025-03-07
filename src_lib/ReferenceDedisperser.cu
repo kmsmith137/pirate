@@ -2,6 +2,7 @@
 
 #include "../include/pirate/internals/ReferenceTree.hpp"
 #include "../include/pirate/internals/ReferenceLagbuf.hpp"
+#include "../include/pirate/internals/DedispersionBuffers.hpp"
 #include "../include/pirate/internals/DedispersionKernel.hpp"
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
 
@@ -29,8 +30,6 @@ struct Stage0Buffers
 {
     shared_ptr<DedispersionPlan> plan;
     
-    DedispersionInbuf dd_buf;
-    
     Array<float> ringbuf;   // either empty array, or 1-d shape (ringbuf_nseg * nelts_per_segment,)
     bool output_is_ringbuf;
     
@@ -43,11 +42,12 @@ struct Stage0Buffers
     long nt_chunk = 0;             // same as plan->config.time_samples_per_chunk
     long nbatches = 0;             // same as (total_beams / beams_per_batch)
 
+    DedispersionBuffer dd_buf;
     shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> dd_kernels;   // length (nds)
 
     Stage0Buffers(const shared_ptr<DedispersionPlan> &plan_, Array<float> ringbuf_)
-	: plan(plan_), dd_buf(plan_), ringbuf(ringbuf_)
+	: plan(plan_), ringbuf(ringbuf_)
     {
 	this->nds = plan->config.num_downsampling_levels;
 	this->nseg = plan->stage0_total_segments_per_beam;
@@ -64,10 +64,11 @@ struct Stage0Buffers
 	    this->output_is_ringbuf = true;
 	else
 	    throw runtime_error("Stage0Buffer constructor: bad ringbuf shape");
-	
+
+	this->dd_buf = DedispersionBuffer(plan->first_dd_buf_params);
 	this->dd_buf.allocate(af_uhost);
-	this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (dd_buf.params);
 	
+	this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
 	this->dd_kernels.resize(nds);
 	long pos = 0;  // for ringbuf_locations
 

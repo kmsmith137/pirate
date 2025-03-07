@@ -1,8 +1,8 @@
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
-
-#include "../include/pirate/constants.hpp"
+#include "../include/pirate/internals/DedispersionBuffers.hpp"
 #include "../include/pirate/internals/inlines.hpp"  // pow2()
 #include "../include/pirate/internals/utils.hpp"    // reference_downsample_{freq,time}()
+#include "../include/pirate/constants.hpp"
 
 #include <ksgpu/xassert.hpp>
 
@@ -19,8 +19,11 @@ namespace pirate {
 // and the code would be clearer if this were removed. I think this needs some minor
 // changes elsewhere though (e.g. currently reference_downsample_time() assumes a
 // 2-d array).
+//
+// FIXME in hindsight, I think a non-recursive implementation of apply() would be clearer.
 
-ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const DedispersionInbufParams &params_) :
+
+ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params_) :
     params(params_)
 {
     params.validate();
@@ -58,7 +61,7 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Dedis
     if (nds == 2)
 	return;
     
-    DedispersionInbufParams next_params = params;
+    LaggedDownsamplingKernelParams next_params = params;
     next_params.num_downsampling_levels = nds-1;
     next_params.ntime = nt2;
     
@@ -66,15 +69,22 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Dedis
 }
 
 
-void ReferenceLaggedDownsamplingKernel::apply(DedispersionInbuf &buf, long ibatch)
+void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibatch)
 {
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(buf.params == this->params);
+    buf.params.validate();
+    xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
+    xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);	    
     xassert(buf.is_allocated());
     xassert(buf.on_host());
 
-    // Should never fail
-    xassert(long(buf.bufs.size()) == params.num_downsampling_levels);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    
+    for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
+	long nb = params.beams_per_batch;
+	long rk = params.large_input_rank - (ids ? 1 : 0);
+	long nt = xdiv(params.ntime, pow2(ids));
+	xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
+    }
 
     if (params.num_downsampling_levels <= 1)
 	return;
