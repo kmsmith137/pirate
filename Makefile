@@ -71,7 +71,7 @@ LIB_SRCFILES = \
   src_lib/gpu_transpose.cu \
   src_lib/system_utils.cu \
   src_lib/utils.cu \
-  src_lib/DedispersionBuffers.cu \
+  src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
   src_lib/DedispersionKernelParams.cu \
   src_lib/DedispersionPlan.cu \
@@ -153,7 +153,7 @@ HFILES = \
   include/pirate/internals/inlines.hpp \
   include/pirate/internals/system_utils.hpp \
   include/pirate/internals/utils.hpp \
-  include/pirate/internals/DedispersionBuffers.hpp \
+  include/pirate/internals/DedispersionBuffer.hpp \
   include/pirate/internals/DedispersionKernel.hpp \
   include/pirate/internals/Directory.hpp \
   include/pirate/internals/Epoll.hpp \

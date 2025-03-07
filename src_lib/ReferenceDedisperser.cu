@@ -2,7 +2,7 @@
 
 #include "../include/pirate/internals/ReferenceTree.hpp"
 #include "../include/pirate/internals/ReferenceLagbuf.hpp"
-#include "../include/pirate/internals/DedispersionBuffers.hpp"
+#include "../include/pirate/internals/DedispersionBuffer.hpp"
 #include "../include/pirate/internals/DedispersionKernel.hpp"
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
 

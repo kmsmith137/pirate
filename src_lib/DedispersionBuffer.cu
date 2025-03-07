@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/DedispersionBuffers.hpp"
+#include "../include/pirate/internals/DedispersionBuffer.hpp"
 
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/internals/inlines.hpp"  // pow2(), xdiv()

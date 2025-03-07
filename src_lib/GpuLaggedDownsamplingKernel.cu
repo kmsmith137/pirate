@@ -1,5 +1,5 @@
 #include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
-#include "../include/pirate/internals/DedispersionBuffers.hpp"
+#include "../include/pirate/internals/DedispersionBuffer.hpp"
 #include "../include/pirate/internals/inlines.hpp"   // pow2(), simd32_type
 #include "../include/pirate/constants.hpp"
 

@@ -2,7 +2,7 @@
 #define _PIRATE_DEDISPERSION_PLAN_HPP
 
 #include "DedispersionConfig.hpp"
-#include "internals/DedispersionBuffers.hpp"  // struct DedispersionBufferParams
+#include "internals/DedispersionBuffer.hpp"  // struct DedispersionBufferParams
 #include "internals/DedispersionKernel.hpp"  // struct DedispersionKernelParams
 #include "internals/LaggedDownsamplingKernel.hpp"  // struct LaggedDownsamplingKernelParams
 
