@@ -55,7 +55,7 @@ struct ReferenceDedisperserBase
 
     long output_ntrees = 0;
     std::vector<long> output_rank;      // length output_ntrees
-    std::vector<long> output_ntime;     // length output_ntrees
+    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level))
     std::vector<long> output_ds_level;  // length output_ntrees
     
     // To process multiple chunks, call the dedisperse() method in a loop.

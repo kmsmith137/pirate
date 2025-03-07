@@ -289,27 +289,31 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     this->stage2_lagbufs.resize(nbatches * output_ntrees);
 
     for (long iout = 0; iout < output_ntrees; iout++) {
+	long rank = output_rank.at(iout);
+	long ntime = output_ntime.at(iout);
+	bool is_downsampled = (output_ds_level.at(iout) > 0);
+	
+	// Hmm, getting rank0/rank1 split from current data structures is awkward.
 	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	int rank0 = st2.rank0;
-	int rank1 = st2.rank1_trigger;
-	int nchan = pow2(rank0+rank1);
-	bool is_downsampled = (st2.ds_level > 0);
+	long rank0 = st2.rank0;
+	long rank1 = st2.rank1_trigger;
+	xassert(rank == rank0+rank1);
 
-	Array<int> lags({beams_per_batch, nchan}, af_uhost);
+	Array<int> lags({ beams_per_batch, pow2(rank) }, af_uhost);
 
 	for (long i1 = 0; i1 < pow2(rank1); i1++) {
 	    for (long i0 = 0; i0 < pow2(rank0); i0++) {
-		int row = i1 * pow2(rank0) + i0;
-		int lag = rb_lag(i1, i0, rank0, rank1, is_downsampled);
-		int segment_lag = lag / S;   // round down
+		long row = i1 * pow2(rank0) + i0;
+		long lag = rb_lag(i1, i0, rank0, rank1, is_downsampled);
+		long segment_lag = lag / S;   // round down
 
 		for (long b = 0; b < beams_per_batch; b++)
-		    lags.data[b*nchan + row] = segment_lag * S;
+		    lags.data[b*pow2(rank) + row] = segment_lag * S;
 	    }
 	}
 
 	for (long b = 0; b < nbatches; b++)
-	    stage2_lagbufs.at(b*output_ntrees + iout) = make_shared<ReferenceLagbuf> (lags, st2.nt_ds);
+	    stage2_lagbufs.at(b*output_ntrees + iout) = make_shared<ReferenceLagbuf> (lags, ntime);
     }
     
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
@@ -338,12 +342,11 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
     // Step 3: copy stage1 -> stage2
     // Step 4: apply lags
     for (int iout = 0; iout < output_ntrees; iout++) {
-	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	long rank0 = st2.rank0;
-	long rank1 = st2.rank1_trigger;
+	long rank = output_rank.at(iout);
+	long ds_level = output_ds_level.at(iout);
 	
-	Array<void> src = stage1_dd_buf.bufs.at(st2.ds_level);  // shape (beams_per_batch, 2^rank_ambient, nt_ds)
-	src = src.slice(1, 0, pow2(rank0+rank1));               // shape (beams_per_batch, 2^rank, nt_ds)
+	Array<void> src = stage1_dd_buf.bufs.at(ds_level);  // shape (beams_per_batch, 2^rank_ambient, ntime)
+	src = src.slice(1, 0, pow2(rank));                  // shape (beams_per_batch, 2^rank, ntime)
 
 	Array<void> dst_ = stage2_dd_buf.bufs.at(iout);
 	Array<float> dst = dst_.template cast<float> ();
