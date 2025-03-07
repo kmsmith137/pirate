@@ -31,6 +31,7 @@ struct DedispersionPlan
     
     std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length stage1_ntrees
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
+    std::vector<long> stage2_ds_level;  // length stage2_ntrees
     
     LaggedDownsamplingKernelParams lds_params;
 

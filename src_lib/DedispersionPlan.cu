@@ -258,10 +258,12 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //
     //   DedispersionBufferParams stage1_dd_buf_params;
     //   DedispersionBufferParams stage2_dd_buf_params;
-    //   LaggedDownsamplingKernelParams lds_params;
     //
-    //   // Member of Stage1Tree and Stage2Tree
-    //   DedispersionKernelParams kernel_params;
+    //   std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length stage1_ntrees
+    //   std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
+    //   std::vector<long> stage2_ds_level;                              // length stage2_ntrees
+    //
+    //   LaggedDownsamplingKernelParams lds_params;
 
     stage1_dd_buf_params.dtype = config.dtype;
     stage1_dd_buf_params.beams_per_batch = config.beams_per_batch;
@@ -299,6 +301,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     for (Stage2Tree &st2: stage2_trees) {
 	long pos = st2.base_segment;
 	long nseg = st2.segments_per_beam;
+	long ds_level = st2.ds_level;
+
+	xassert(st2.nt_ds == xdiv(config.time_samples_per_chunk, pow2(ds_level)));
 
 	DedispersionKernelParams kparams;
 	kparams.dtype = config.dtype;
@@ -310,7 +315,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	kparams.input_is_ringbuf = true;   // note input_is_ringbuf = true
 	kparams.output_is_ringbuf = false;
 	kparams.apply_input_residual_lags = true;
-	kparams.input_is_downsampled_tree = (st2.ds_level > 0);
+	kparams.input_is_downsampled_tree = (ds_level > 0);
 	kparams.nelts_per_segment = this->nelts_per_segment;
 	kparams.ringbuf_locations = this->stage2_rb_locs.slice(0, pos, pos + nseg);
 	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
@@ -319,6 +324,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	stage2_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);
 	stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
 	stage2_dd_kernel_params.push_back(kparams);
+	stage2_ds_level.push_back(ds_level);
     }
     
     lds_params.dtype = config.dtype;

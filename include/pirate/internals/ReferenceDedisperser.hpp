@@ -46,15 +46,17 @@ struct ReferenceDedisperserBase
     const DedispersionConfig config;   // same as plan->config
     const int sophistication;          // see above
     
-    int input_rank = 0;          // same as config.tree_rank
-    int input_ntime = 0;         // same as config.time_samples_per_chunk
-    int total_beams = 0;         // same as config.beams_per_gpu
-    int beams_per_batch = 0;     // same as config.beams_per_batch
-    int nbatches = 0;            // = (total_beams / beams_per_batch)
-    
-    int nds = 0;                 // same as plan->stage1_trees.size(), i.e. number of downsampling (ids) values
-    int nout = 0;                // same as plan->stage2_trees.size(), i.e. number of (ids, early_trigger) pairs
-    int nelts_per_segment = 0;   // same as plan->nelts_per_segment
+    long input_rank = 0;          // same as config.tree_rank
+    long input_ntime = 0;         // same as config.time_samples_per_chunk
+    long total_beams = 0;         // same as config.beams_per_gpu
+    long beams_per_batch = 0;     // same as config.beams_per_batch
+    long nbatches = 0;            // = (total_beams / beams_per_batch)
+    int nelts_per_segment = 0;    // same as plan->nelts_per_segment
+
+    long output_ntrees = 0;
+    std::vector<long> output_rank;      // length output_ntrees
+    std::vector<long> output_ntime;     // length output_ntrees
+    std::vector<long> output_ds_level;  // length output_ntrees
     
     // To process multiple chunks, call the dedisperse() method in a loop.
     virtual void dedisperse(long ibatch, long it_chunk) = 0;

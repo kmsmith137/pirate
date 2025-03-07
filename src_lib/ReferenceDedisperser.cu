@@ -43,11 +43,25 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     this->total_beams = config.beams_per_gpu;
     this->beams_per_batch = config.beams_per_batch;
     this->nbatches = xdiv(total_beams, beams_per_batch);
-
-    this->nds = plan->stage1_trees.size();
-    this->nout = plan->stage2_trees.size();
     this->nelts_per_segment = plan->nelts_per_segment;
 
+    const DedispersionBufferParams &out_params = plan->stage2_dd_buf_params;
+    this->output_ntrees = out_params.nbuf;
+    this->output_rank = out_params.buf_rank;
+    this->output_ntime = out_params.buf_ntime;
+    this->output_ds_level = plan->stage2_ds_level;
+
+    // Some paranoid asserts follow.
+    
+    xassert(long(output_rank.size()) == output_ntrees);
+    xassert(long(output_ntime.size()) == output_ntrees);
+    xassert(long(output_ds_level.size()) == output_ntrees);
+
+    for (long i = 0; i < output_ntrees; i++) {
+	xassert((output_ds_level[i] >= 0) && (output_ds_level[i] < config.num_downsampling_levels));
+	xassert(output_ntime[i] == xdiv(input_ntime, pow2(output_ds_level[i])));
+    }
+    
     // Note: 'input_array' and 'output_arrays' are members of ReferenceDedisperserBase,
     // but are initialized by the subclass constructor.
 }
@@ -59,13 +73,10 @@ void ReferenceDedisperserBase::_init_iobufs(Array<float> &in, vector<Array<float
     this->output_arrays = out;
     
     xassert_shape_eq(input_array, ({ beams_per_batch, pow2(input_rank), input_ntime }));
-    xassert_eq(long(output_arrays.size()), nout);
+    xassert_eq(long(output_arrays.size()), output_ntrees);
 
-    for (long iout = 0; iout < nout; iout++) {
-	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	int rank = st2.rank0 + st2.rank1_trigger;
-	xassert_shape_eq(output_arrays.at(iout), ({ beams_per_batch, pow2(rank), st2.nt_ds }));
-    }
+    for (long i = 0; i < output_ntrees; i++)
+	xassert_shape_eq(output_arrays.at(i), ({ beams_per_batch, pow2(output_rank.at(i)), output_ntime.at(i) }));
 }
 
 
@@ -123,28 +134,30 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 
 ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan_) :
     ReferenceDedisperserBase(plan_, 0)
-{    
+{
+    long nds = config.num_downsampling_levels;
+    
     this->downsampled_inputs.resize(nds);
-    this->dedispersion_buffers.resize(nout);
-    this->trees.resize(nbatches * nout);    
-    this->output_arrays.resize(nout);
+    this->dedispersion_buffers.resize(output_ntrees);
+    this->trees.resize(nbatches * output_ntrees);    
+    this->output_arrays.resize(output_ntrees);
 
-    for (int ids = 0; ids < nds; ids++) {
+    for (long ids = 0; ids < nds; ids++) {
 	long nt_ds = xdiv(input_ntime, pow2(ids));
 	downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(input_rank), nt_ds}, af_uhost | af_zero);
     }
     
-    for (int iout = 0; iout < nout; iout++) {
-	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	long ids = st2.ds_level;
-	long out_rank = st2.rank0 + st2.rank1_trigger;
-	long weird_rank = out_rank + (ids ? 1 : 0);
+    for (long iout = 0; iout < output_ntrees; iout++) {
+	long out_rank = output_rank.at(iout);
+	long out_ntime = output_ntime.at(iout);
+	bool is_downsampled = (output_ds_level[iout] > 0);
+	long dd_rank = out_rank + (is_downsampled ? 1 : 0);
 	
-	this->dedispersion_buffers.at(iout) = Array<float> ({beams_per_batch, pow2(weird_rank), st2.nt_ds}, af_uhost | af_zero);
-	this->output_arrays.at(iout) = Array<float>({beams_per_batch, pow2(out_rank), st2.nt_ds}, af_uhost | af_zero);
+	this->dedispersion_buffers.at(iout) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
+	this->output_arrays.at(iout) = Array<float>({ beams_per_batch, pow2(out_rank), out_ntime }, af_uhost | af_zero);
 
 	for (int batch = 0; batch < nbatches; batch++)
-	    this->trees.at(batch*nout + iout) = ReferenceTree::make({ beams_per_batch, pow2(weird_rank), st2.nt_ds });
+	    this->trees.at(batch*output_ntrees + iout) = ReferenceTree::make({ beams_per_batch, pow2(dd_rank), out_ntime });
     }
 
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
@@ -156,6 +169,8 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 // virtual override
 void ReferenceDedisperser0::dedisperse(long ibatch, long it_chunk)
 {
+    long nds = config.num_downsampling_levels;
+    
     for (int ids = 1; ids < nds; ids++) {
 	
 	// Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
@@ -173,12 +188,14 @@ void ReferenceDedisperser0::dedisperse(long ibatch, long it_chunk)
 	}
     }
 
-    for (int iout = 0; iout < nout; iout++) {
-	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	long ids = st2.ds_level;
-	long weird_rank = st2.rank0 + st2.rank1_trigger + (ids ? 1 : 0);
+    for (int iout = 0; iout < output_ntrees; iout++) {
+	long out_rank = output_rank.at(iout);
+	long out_ntime = output_ntime.at(iout);
+	long ids = output_ds_level.at(iout);
+	bool is_downsampled = (ids > 0);
+	long dd_rank = out_rank + (is_downsampled ? 1 : 0);
 	
-	Array<float> in = downsampled_inputs.at(ids).slice(1, 0, pow2(weird_rank));
+	Array<float> in = downsampled_inputs.at(ids).slice(1, 0, pow2(dd_rank));
 	Array<float> dd = dedispersion_buffers.at(iout);
 	Array<float> out = output_arrays.at(iout);
 	
@@ -187,15 +204,15 @@ void ReferenceDedisperser0::dedisperse(long ibatch, long it_chunk)
 	dd.fill(in);
 
 	// Step 3: apply tree dedispersion (one-stage, not two-stage).
-	// Vector length is (nbatches * nout).
+	// Vector length is (nbatches * output_ntrees).
 	
-	auto tree = trees.at(ibatch*nout + iout);
+	auto tree = trees.at(ibatch*output_ntrees + iout);
 	tree->dedisperse(dd);
 	
 	// Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
 	// In downsampled trees, we compute twice as many DMs as necessary, then copy the bottom half.
 	
-	if (ids == 0)
+	if (!is_downsampled)
 	    out.fill(dd);
 	else {
 	    // FIXME refence_extract_odd_channels() should operate on N-dimensional array.
@@ -231,7 +248,7 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
     
     DedispersionBuffer stage1_dd_buf;
     DedispersionBuffer stage2_dd_buf;
-    vector<shared_ptr<ReferenceLagbuf>> stage2_lagbufs;  // length (nbatches * nout)
+    vector<shared_ptr<ReferenceLagbuf>> stage2_lagbufs;  // length (nbatches * output_ntrees)
 
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
@@ -269,9 +286,9 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     // (Note that these lagbufs are used in ReferenceDedisperser1, but not ReferenceDedisperser2.)
     
     long S = nelts_per_segment;
-    this->stage2_lagbufs.resize(nbatches * nout);
+    this->stage2_lagbufs.resize(nbatches * output_ntrees);
 
-    for (long iout = 0; iout < nout; iout++) {
+    for (long iout = 0; iout < output_ntrees; iout++) {
 	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
 	int rank0 = st2.rank0;
 	int rank1 = st2.rank1_trigger;
@@ -292,7 +309,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
 	}
 
 	for (long b = 0; b < nbatches; b++)
-	    stage2_lagbufs.at(b*nout + iout) = make_shared<ReferenceLagbuf> (lags, st2.nt_ds);
+	    stage2_lagbufs.at(b*output_ntrees + iout) = make_shared<ReferenceLagbuf> (lags, st2.nt_ds);
     }
     
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
@@ -320,7 +337,7 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
 
     // Step 3: copy stage1 -> stage2
     // Step 4: apply lags
-    for (int iout = 0; iout < nout; iout++) {
+    for (int iout = 0; iout < output_ntrees; iout++) {
 	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
 	long rank0 = st2.rank0;
 	long rank1 = st2.rank1_trigger;
@@ -332,7 +349,7 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
 	Array<float> dst = dst_.template cast<float> ();
 	dst.fill(src);
 
-	auto lagbuf = stage2_lagbufs.at(ibatch*nout + iout);
+	auto lagbuf = stage2_lagbufs.at(ibatch*output_ntrees + iout);
 	lagbuf->apply_lags(dst);
     }
 
