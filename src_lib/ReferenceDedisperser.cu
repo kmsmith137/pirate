@@ -20,122 +20,6 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
-// Stage2Buffers
-
-
-// Helper class used in ReferenceDedisperser1, ReferenceDedisperser2.
-struct Stage2Buffers
-{
-    shared_ptr<DedispersionPlan> plan;
-    
-    Array<float> ringbuf;   // either empty array, or 1-d shape (ringbuf_nseg * nelts_per_segment,)
-    bool input_is_ringbuf;
-
-    long nout = 0;                // same as plan->stage2_trees.size()
-    long nseg = 0;                // same as plan->stage2_total_segments_per_beam
-    long ringbuf_nseg = 0;        // same as plan->gmem_ringbuf_nseg
-    long nelts_per_segment = 0;   // same as plan->nelts_per_segment
-    long beams_per_batch = 0;     // same as plan->config.beams_per_batch
-    long total_beams = 0;         // same as plan->config.beams_per_gpu
-    long nbatches = 0;            // same as (total_beams / beams_per_batch)
-
-    Array<float> flat_buf;         // shape (beams_per_batch, nseg * nelts_per_segment)
-    vector<Array<float>> dd_bufs;  // length nout, inner shape is (beams_per_batch, pow2(st2.rank), nt_ds)
-    vector<shared_ptr<ReferenceDedispersionKernel>> dd_kernels;   // length (nout)
-
-    
-    Stage2Buffers(const shared_ptr<DedispersionPlan> &plan_, Array<float> ringbuf_) :
-	plan(plan_), ringbuf(ringbuf_)
-    {
-	this->nout = plan->stage2_trees.size();
-	this->nseg = plan->stage2_total_segments_per_beam;
-	this->ringbuf_nseg = plan->gmem_ringbuf_nseg;
-	this->nelts_per_segment = plan->nelts_per_segment;
-	this->beams_per_batch = plan->config.beams_per_batch;
-	this->total_beams = plan->config.beams_per_gpu;
-	this->nbatches = xdiv(total_beams, beams_per_batch);
-
-	this->dd_bufs.resize(nout);
-	this->dd_kernels.resize(nout);
-
-	if (ringbuf.size == 0)
-	    this->input_is_ringbuf = false;
-	else if (ringbuf.shape_equals({ ringbuf_nseg * nelts_per_segment }))
-	    this->input_is_ringbuf = true;
-	else
-	    throw runtime_error("Stage2Buffer constructor: bad ringbuf shape");
-	
-	// Allocate buffers.
-
-	this->flat_buf = Array<float> ({beams_per_batch, nseg * nelts_per_segment}, af_uhost | af_zero);
-	long pos = 0;
-
-	for (long iout = 0; iout < nout; iout++) {
-	    const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	    xassert(pos == st2.base_segment * nelts_per_segment);
-	    
-	    long nelts = st2.segments_per_beam * nelts_per_segment;
-	    long rank = st2.rank0 + st2.rank1_trigger;
-	    long nt_ds = st2.nt_ds;
-
-	    xassert(nelts == pow2(rank) * nt_ds);
-	    Array<float> view = flat_buf.slice(1, pos, pos+nelts);
-	    view = view.reshape({ beams_per_batch, pow2(rank), nt_ds });
-
-	    dd_bufs.at(iout) = view;
-	    pos += nelts;
-	}
-
-	// Dedispersion kernels.
-
-	pos = 0;   // for ringbuf_locations
-	
-	for (long iout = 0; iout < nout; iout++) {
-	    const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	    long nseg = st2.segments_per_beam;
-	    
-	    DedispersionKernelParams params;		
-	    params.dtype = plan->config.dtype;
-	    params.dd_rank = st2.rank1_trigger;
-	    params.amb_rank = st2.rank0;
-	    params.total_beams = total_beams;
-	    params.beams_per_batch = beams_per_batch;
-	    params.ntime = st2.nt_ds;
-	    params.input_is_ringbuf = input_is_ringbuf;
-	    params.output_is_ringbuf = false;
-	    params.apply_input_residual_lags = true;
-	    params.input_is_downsampled_tree = (st2.ds_level > 0);
-	    params.nelts_per_segment = plan->nelts_per_segment;
-	    params.ringbuf_locations = plan->stage2_rb_locs.slice(0, pos, pos + nseg);
-	    params.ringbuf_nseg = ringbuf_nseg;
-	    
-	    dd_kernels.at(iout) = make_shared<ReferenceDedispersionKernel> (params);
-	    
-	    xassert(pos == st2.base_segment);
-	    pos += nseg;
-	}
-    }
-
-    void apply_dedispersion_kernels(long ibatch, long it_chunk)
-    {
-	for (int iout = 0; iout < nout; iout++) {
-	    const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-	    long rank0 = st2.rank0;
-	    long rank1 = st2.rank1_trigger;
-
-	    Array<float> out = dd_bufs.at(iout);  // shape (beams_per_batch, 2^(rank0+rank1), nt_ds)
-	    out = out.reshape({beams_per_batch, pow2(rank1), pow2(rank0), st2.nt_ds});
-	    out = out.transpose({0,2,1,3});       // shape (beams_per_batch, 2^rank0, 2^rank1, nt_ds)
-
-	    Array<float> in = input_is_ringbuf ? ringbuf : out;
-	    dd_kernels.at(iout)->apply(in, out, ibatch, it_chunk);
-	}
-    }
-};
-
-
-// -------------------------------------------------------------------------------------------------
-//
 // ReferenceDedisperserBase
 
 
@@ -345,23 +229,25 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
     // Step 4: apply lags
     // Step 5: run stage2 dedispersion kernels.
     
-    DedispersionBuffer stage1_dd_buf;    
-    vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
-    shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
-    
-    Stage2Buffers stage2_buffers;    
+    DedispersionBuffer stage1_dd_buf;
+    DedispersionBuffer stage2_dd_buf;
     vector<shared_ptr<ReferenceLagbuf>> stage2_lagbufs;  // length (nbatches * nout)
+
+    vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
+    vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
+    shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     
     virtual void dedisperse(long ibatch, long it_chunk) override;
 };
 
 
 ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_) :
-    ReferenceDedisperserBase(plan_, 1),
-    stage2_buffers(plan_, Array<float>())    // no ringbuf
+    ReferenceDedisperserBase(plan_, 1)
 {
     this->stage1_dd_buf = DedispersionBuffer(plan->stage1_dd_buf_params);
+    this->stage2_dd_buf = DedispersionBuffer(plan->stage2_dd_buf_params);
     this->stage1_dd_buf.allocate(af_uhost);
+    this->stage2_dd_buf.allocate(af_uhost);
 
     for (const DedispersionKernelParams &kparams_: plan->stage1_dd_kernel_params) {
 	DedispersionKernelParams kparams = kparams_;
@@ -370,10 +256,17 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
 	this->stage1_dd_kernels.push_back(kernel);
     }
 
+    for (const DedispersionKernelParams &kparams_: plan->stage2_dd_kernel_params) {
+	DedispersionKernelParams kparams = kparams_;
+	kparams.input_is_ringbuf = false;  // "patch" the kernel params to disable the ringbuf
+	auto kernel = make_shared<ReferenceDedispersionKernel> (kparams);
+	this->stage2_dd_kernels.push_back(kernel);
+    }
+
     this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
     
     // Initalize stage2_lagbufs.
-    // (Note that these lagbufs are in ReferenceDedisperser1, but not ReferenceDedisperser2.)
+    // (Note that these lagbufs are used in ReferenceDedisperser1, but not ReferenceDedisperser2.)
     
     long S = nelts_per_segment;
     this->stage2_lagbufs.resize(nbatches * nout);
@@ -404,8 +297,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
     // 'input_arrays' and 'output_arrays' in the case class.
-    Array<float> tmp = stage1_dd_buf.bufs.at(0).template cast<float> ("tmp");  // will go away in next commit
-    this->_init_iobufs(tmp, stage2_buffers.dd_bufs);
+    this->_init_iobufs(stage1_dd_buf.bufs.at(0), stage2_dd_buf.bufs);
 }
 
 
@@ -432,20 +324,29 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
 	const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
 	long rank0 = st2.rank0;
 	long rank1 = st2.rank1_trigger;
-
 	
 	Array<void> src = stage1_dd_buf.bufs.at(st2.ds_level);  // shape (beams_per_batch, 2^rank_ambient, nt_ds)
-	src = src.slice(1, 0, pow2(rank0+rank1));                       // shape (beams_per_batch, 2^rank, nt_ds)
+	src = src.slice(1, 0, pow2(rank0+rank1));               // shape (beams_per_batch, 2^rank, nt_ds)
 
-	Array<float> dst = stage2_buffers.dd_bufs.at(iout);
+	Array<void> dst_ = stage2_dd_buf.bufs.at(iout);
+	Array<float> dst = dst_.template cast<float> ();
 	dst.fill(src);
 
 	auto lagbuf = stage2_lagbufs.at(ibatch*nout + iout);
 	lagbuf->apply_lags(dst);
     }
 
-    // Step 5: run stage2 dedispersion kernels
-    this->stage2_buffers.apply_dedispersion_kernels(ibatch, it_chunk);
+    // Step 5: run stage2 dedispersion kernels (in-place).
+    for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
+	shared_ptr<ReferenceDedispersionKernel> kernel = stage2_dd_kernels.at(i);
+	const DedispersionKernelParams &kp = kernel->params;
+	Array<void> dd_buf = stage2_dd_buf.bufs.at(i);
+
+	// See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
+	dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
+	dd_buf = dd_buf.transpose({0,2,1,3});
+	kernel->apply(dd_buf, dd_buf, ibatch, it_chunk);
+    }
 }
 
 
