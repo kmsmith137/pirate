@@ -1,0 +1,132 @@
+#include "../include/pirate/internals/Dedisperser.hpp"
+#include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/internals/inlines.hpp"  // xdiv(), pow2()
+
+using namespace std;
+using namespace ksgpu;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
+
+
+// Helper for GpuDedisperser constructor.
+// Prevents constructor from segfaulting, if invoked with empty shared_ptr.
+static DedispersionPlan *deref(const shared_ptr<DedispersionPlan> &p)
+{
+    if (!p)
+	throw runtime_error("GpuDedisperser constructor called with empty shared_ptr");
+    return p.get();
+}
+
+
+GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
+    plan(plan_),
+    config(deref(plan_)->config)
+{
+    // There's some cut-and-paste between this constructor and the ReferenceDedisperser
+    // constructor, but not enough to bother defining a common base class.
+    
+    this->dtype = config.dtype;
+    this->input_rank = config.tree_rank;
+    this->input_ntime = config.time_samples_per_chunk;
+    this->total_beams = config.beams_per_gpu;
+    this->beams_per_batch = config.beams_per_batch;
+    this->gpu_ringbuf_nelts = plan->gmem_ringbuf_nseg * plan->nelts_per_segment;
+    this->nbatches = xdiv(total_beams, beams_per_batch);
+    this->nstreams = config.num_active_batches;
+
+    const DedispersionBufferParams &out_params = plan->stage2_dd_buf_params;
+    this->output_ntrees = out_params.nbuf;
+    this->output_rank = out_params.buf_rank;
+    this->output_ntime = out_params.buf_ntime;
+    this->output_ds_level = plan->stage2_ds_level;
+
+    // Construct, but do not allocate, the following members:
+    //
+    //   std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
+    //   std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
+    //   std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
+    //   std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
+    //   std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
+    
+    for (long i = 0; i < nstreams; i++) {
+	stage1_dd_bufs.push_back(DedispersionBuffer(plan->stage1_dd_buf_params));
+	stage2_dd_bufs.push_back(DedispersionBuffer(plan->stage2_dd_buf_params));
+    }
+
+    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
+	auto kernel = GpuDedispersionKernel::make(kparams);
+	this->stage1_dd_kernels.push_back(kernel);
+    }
+
+    for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params) {
+	auto kernel = GpuDedispersionKernel::make(kparams);
+	this->stage2_dd_kernels.push_back(kernel);
+    }
+
+    this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);
+}
+
+
+void GpuDedisperser::allocate()
+{
+    if (!this->is_allocated)
+	throw runtime_error("double call to GpuDedisperser::allocate()");
+
+    for (auto &buf: stage1_dd_bufs)
+	buf.allocate(af_zero | af_gpu);
+    
+    for (auto &buf: stage2_dd_bufs)
+	buf.allocate(af_zero | af_gpu);
+
+    for (auto &kernel: this->stage1_dd_kernels)
+	kernel->allocate();
+    
+    for (auto &kernel: this->stage2_dd_kernels)
+	kernel->allocate();
+
+    this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero),
+    this->lds_kernel->allocate();
+    
+    this->is_allocated = true;
+}
+
+
+void GpuDedisperser::launch_dedispersion(long ibatch, long it_chunk, long istream, cudaStream_t stream)
+{
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert((istream >= 0) && (istream < nstreams));
+    xassert(it_chunk >= 0);
+    xassert(is_allocated);
+    
+    // Step 1: run LaggedDownsampler.
+    lds_kernel->launch(stage1_dd_bufs.at(istream), ibatch, it_chunk, stream);
+
+    // Step 2: run stage1 dedispersion kernels (output to ringbuf)
+    for (uint i = 0; i < stage1_dd_kernels.size(); i++) {
+	shared_ptr<GpuDedispersionKernel> kernel = stage1_dd_kernels.at(i);
+	const DedispersionKernelParams &kp = kernel->params;
+	Array<void> dd_buf = stage1_dd_bufs.at(istream).bufs.at(i);
+
+	// See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
+	dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime });
+	kernel->launch(dd_buf, this->gpu_ringbuf, ibatch, it_chunk, stream);
+    }
+
+    // Step 3: run stage2 dedispersion kernels (input from ringbuf)
+    for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
+	shared_ptr<GpuDedispersionKernel> kernel = stage2_dd_kernels.at(i);
+	const DedispersionKernelParams &kp = kernel->params;
+	Array<void> dd_buf = stage2_dd_bufs.at(istream).bufs.at(i);
+
+	// See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
+	dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
+	dd_buf = dd_buf.transpose({0,2,1,3});
+	kernel->launch(this->gpu_ringbuf, dd_buf, ibatch, it_chunk, stream);
+    }
+}
+
+
+}  // namespace pirate
