@@ -69,13 +69,13 @@ LIB_SRCFILES = \
   src_lib/file_utils.cu \
   src_lib/gpu_downsample.cu \
   src_lib/gpu_transpose.cu \
+  src_lib/network_utils.cu \
   src_lib/system_utils.cu \
   src_lib/utils.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
   src_lib/DedispersionKernelParams.cu \
   src_lib/DedispersionPlan.cu \
-  src_lib/Epoll.cu \
   src_lib/FakeCorrelator.cu \
   src_lib/FakeServer.cu \
   src_lib/GpuDedisperser.cu \
@@ -87,7 +87,6 @@ LIB_SRCFILES = \
   src_lib/ReferenceLagbuf.cu \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
   src_lib/ReferenceTree.cu \
-  src_lib/Socket.cu \
   src_lib/YamlFile.cu \
   src_lib/template_instantiations/dedisp_simple_float16.cu \
   src_lib/template_instantiations/dedisp_simple_float32.cu \
@@ -151,18 +150,17 @@ HFILES = \
   include/pirate/internals/gpu_transpose.hpp \
   include/pirate/internals/file_utils.hpp \
   include/pirate/internals/inlines.hpp \
+  include/pirate/internals/network_utils.hpp \
   include/pirate/internals/system_utils.hpp \
   include/pirate/internals/utils.hpp \
   include/pirate/internals/Dedisperser.hpp \
   include/pirate/internals/DedispersionBuffer.hpp \
   include/pirate/internals/DedispersionKernel.hpp \
-  include/pirate/internals/Epoll.hpp \
   include/pirate/internals/FakeCorrelator.hpp \
   include/pirate/internals/FakeServer.hpp \
   include/pirate/internals/LaggedDownsamplingKernel.hpp \
   include/pirate/internals/ReferenceLagbuf.hpp \
   include/pirate/internals/ReferenceTree.hpp \
-  include/pirate/internals/Socket.hpp \
   include/pirate/internals/YamlFile.hpp
 
 # 'make clean' deletes {*~, *.o, *.d, *.so, *.pyc} from these dirs.

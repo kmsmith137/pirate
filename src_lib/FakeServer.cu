@@ -13,11 +13,10 @@
 #include <ksgpu/memcpy_kernels.hpp>
 #include <ksgpu/xassert.hpp>
 
-#include "../include/pirate/internals/Epoll.hpp"
-#include "../include/pirate/internals/Socket.hpp"
 #include "../include/pirate/internals/inlines.hpp"
 #include "../include/pirate/internals/file_utils.hpp"
 #include "../include/pirate/internals/system_utils.hpp"
+#include "../include/pirate/internals/network_utils.hpp"  // Socket, Epoll
 #include "../include/pirate/internals/cpu_downsample.hpp"
 
 
