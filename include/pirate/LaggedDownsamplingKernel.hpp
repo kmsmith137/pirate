@@ -5,8 +5,6 @@
 #include <memory>
 #include <iostream>
 
-#include "ReferenceLagbuf.hpp"
-
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
 
@@ -16,9 +14,8 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-
-// Defined in DedispersionBuffer.hpp
-struct DedispersionBuffer;
+struct DedispersionBuffer;  // defined in DedispersionBuffer.hpp
+struct ReferenceLagbuf;     // defined in ReferenceLagbuf.hpp
 
 
 struct LaggedDownsamplingKernelParams
@@ -56,8 +53,8 @@ struct ReferenceLaggedDownsamplingKernel
     void apply(DedispersionBuffer &buf, long ibatch);
     
     int nbatches = 0;  // same as (params.total_beams / params.beams_per_batch)
-    std::vector<ReferenceLagbuf> lagbufs_small;  // length nbatches
-    std::vector<ReferenceLagbuf> lagbufs_large;  // length nbatches
+    std::vector<std::shared_ptr<ReferenceLagbuf>> lagbufs_small;  // length nbatches
+    std::vector<std::shared_ptr<ReferenceLagbuf>> lagbufs_large;  // length nbatches
     std::shared_ptr<ReferenceLaggedDownsamplingKernel> next;
 
     // Helper for apply().

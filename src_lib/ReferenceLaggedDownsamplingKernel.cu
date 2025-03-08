@@ -1,5 +1,6 @@
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/DedispersionBuffer.hpp"
+#include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2()
 #include "../include/pirate/utils.hpp"    // reference_downsample_{freq,time}()
@@ -53,8 +54,8 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
 	    large_lags.data[i*pow2(s-1)+j] = pow2(s-1)-j-1;
 
     for (int i = 0; i < nbatches; i++) {
-	this->lagbufs_small.push_back({ small_lags, nt2 });
-	this->lagbufs_large.push_back({ large_lags, nt2 });
+	this->lagbufs_small.push_back(make_shared<ReferenceLagbuf> (small_lags, nt2));
+	this->lagbufs_large.push_back(make_shared<ReferenceLagbuf> (large_lags, nt2));
     }
     
     if (nds == 2)
@@ -119,12 +120,12 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
     
     // Apply "small" lags (one-sample lags in even channels), before frequency downsampling.
     Array<float> in_ds2 = in_ds.clone();   // copy since we'll need 'in_ds' later.
-    lagbufs_small.at(ibatch).apply_lags(in_ds2);
+    lagbufs_small.at(ibatch)->apply_lags(in_ds2);
 
     // Downsample in frequency, and apply "large" lags.
     Array<float> out_tmp({ nb * pow2(r-1), ntime/2 }, af_uhost | af_zero);
     reference_downsample_freq(in_ds2, out_tmp, false);   // normalize=false, i.e. sum with no factor 0.5
-    lagbufs_large.at(ibatch).apply_lags(out_tmp);
+    lagbufs_large.at(ibatch)->apply_lags(out_tmp);
     
     // Reshape output_tmp array from 2-d to target shape, and copy to caller-specified array.
     out_tmp = out_tmp.reshape(outp[0].ndim, outp[0].shape);

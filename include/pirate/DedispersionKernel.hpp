@@ -2,13 +2,14 @@
 #define _PIRATE_DEDISPERSION_KERNEL_HPP
 
 #include <ksgpu/Array.hpp>
-#include "ReferenceTree.hpp"
-#include "ReferenceLagbuf.hpp"
 
 namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+struct ReferenceTree;    // defined in ReferenceTree.hpp
+struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
 
 
 // Dedispersion kernels have two ranks:
