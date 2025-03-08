@@ -31,6 +31,7 @@ namespace pirate {
 ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) :
     params(params_)
 {
+    params.dtype = Dtype::native<float>();
     params.validate(false);    // gpu_kernel=false
 
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
@@ -85,6 +86,7 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
     std::initializer_list<long> dd_shape = {B,A,N,T};
     std::initializer_list<long> rb_shape = {R*S};
 
+    // The reference kernel uses float32, regardless of what dtype is specified.
     Array<float> in = in_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'in' array");
     Array<float> out = out_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'out' array");
     

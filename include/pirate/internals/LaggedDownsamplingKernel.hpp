@@ -40,7 +40,13 @@ struct LaggedDownsamplingKernelParams
 };
 
 
-// Note: the reference kernel allocates persistent state in the constructor.
+// Notes:
+//
+//   - The reference kernel allocates persistent state in its constructor, and does
+//     not define an allocate() method.
+//
+//   - The reference kernel uses float32, regardless of the dtype specified in 'params'.
+
 struct ReferenceLaggedDownsamplingKernel
 {
     LaggedDownsamplingKernelParams params;

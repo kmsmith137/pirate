@@ -88,20 +88,17 @@ void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
     ti.params.validate();
     
     LaggedDownsamplingKernelParams p = ti.params;
+    auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (p);
+    auto gpu_kernel = GpuLaggedDownsamplingKernel::make(p);
+    gpu_kernel->allocate();
+    
+    DedispersionBuffer cpu_buf = make_buffer(ref_kernel->params, af_uhost);
+    DedispersionBuffer gpu_buf = make_buffer(gpu_kernel->params, af_gpu);
+    
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
     long nb = p.beams_per_batch;
     long rk = p.large_input_rank;
     long nt = p.ntime;
-    
-    LaggedDownsamplingKernelParams ref_params = p;
-    ref_params.dtype = Dtype::native<float> ();
-    
-    auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (ref_params);
-    auto gpu_kernel = GpuLaggedDownsamplingKernel::make(p);
-    gpu_kernel->allocate();
-    
-    DedispersionBuffer gpu_buf = make_buffer(p, af_gpu);
-    DedispersionBuffer cpu_buf = make_buffer(ref_params, af_uhost);
     
     for (long ichunk = 0; ichunk < ti.nchunks; ichunk++) {
 	for (long ibatch = 0; ibatch < nbatches; ibatch++) {

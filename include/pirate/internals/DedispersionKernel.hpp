@@ -123,16 +123,19 @@ struct DedispersionKernelParams
 };
 
 
-// The reference kernel allocates persistent state internally.
-// (Note that the apply() method takes an 'ibatch' argument, so that the correct persistent state can be used.)
+// Notes:
+//
+//  - The reference kernel allocates persistent state in its constructor
+//    (i.e. no allocate() method is defined).
+//
+//  - The reference kernel uses float32, regardless of what dtype is specified.
 
 struct ReferenceDedispersionKernel
 {
     using Params = DedispersionKernelParams;
+    Params params;  // reminder: contains 'ringbuf_locations' array
 
     ReferenceDedispersionKernel(const Params &params);
-
-    const Params params;  // reminder: contains 'ringbuf_locations' array
     
     // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:

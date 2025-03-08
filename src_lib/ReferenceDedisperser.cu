@@ -18,10 +18,9 @@ namespace pirate {
 #endif
 
 
-// -------------------------------------------------------------------------------------------------
-//
-// XXX this hackery needs comments!
-
+// Morally equivalent to calling the DedisperionBuffer constructor, with two differences:
+//  - Uses dtype float32, regardless of what dtype is specified in 'params'.
+//  - Returns an allocated DedispersionBuffer (constructor does not allocate by default).
 
 static DedispersionBuffer _make_dd_buffer(const DedispersionBufferParams &params_)
 {
@@ -33,26 +32,6 @@ static DedispersionBuffer _make_dd_buffer(const DedispersionBufferParams &params
     return buf;
 }
 
-
-static shared_ptr<ReferenceDedispersionKernel> _make_dd_kernel(const DedispersionKernelParams &params_, bool disable_ringbuf)
-{
-    DedispersionKernelParams params = params_;
-    params.dtype = Dtype::native<float> ();
-    
-    if (disable_ringbuf)
-	params.input_is_ringbuf = params.output_is_ringbuf = false;
-
-    return make_shared<ReferenceDedispersionKernel> (params);
-}
-
-
-static shared_ptr<ReferenceLaggedDownsamplingKernel> _make_lds_kernel(const LaggedDownsamplingKernelParams &params_)
-{
-    LaggedDownsamplingKernelParams params = params_;
-    params.dtype = Dtype::native<float> ();
-    return make_shared<ReferenceLaggedDownsamplingKernel> (params);
-}
-    
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -299,13 +278,19 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
 {
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
-    this->lds_kernel = _make_lds_kernel(plan->lds_params);
+    this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
 
-    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
-	this->stage1_dd_kernels.push_back(_make_dd_kernel(kparams, true));  // disable_ringbuf = true
+    for (const DedispersionKernelParams &kparams_: plan->stage1_dd_kernel_params) {
+	DedispersionKernelParams kparams = kparams_;
+	kparams.output_is_ringbuf = false;  // in ReferenceDedisperer1, ringbufs are disabled.
+	this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
+    }
 
-    for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params)
-	this->stage2_dd_kernels.push_back(_make_dd_kernel(kparams, true));  // disable_ringbuf = true
+    for (const DedispersionKernelParams &kparams_: plan->stage2_dd_kernel_params) {
+	DedispersionKernelParams kparams = kparams_;
+	kparams.input_is_ringbuf = false;   // in ReferenceDeidsperser1, ringbufs are disabled.
+	this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
+    }
     
     // Initalize stage2_lagbufs.
     // (Note that these lagbufs are used in ReferenceDedisperser1, but not ReferenceDedisperser2.)
@@ -426,13 +411,13 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
     this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero);
-    this->lds_kernel = _make_lds_kernel(plan->lds_params);
+    this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
 					
     for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
-	this->stage1_dd_kernels.push_back(_make_dd_kernel(kparams, false));  // disable_ringbuf = false
+	this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
 
     for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params)
-	this->stage2_dd_kernels.push_back(_make_dd_kernel(kparams, false));  // disable_ringbuf = false
+	this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
     
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
     // 'input_arrays' and 'output_arrays' in the case class.

@@ -26,10 +26,9 @@ namespace pirate {
 ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params_) :
     params(params_)
 {
+    // The reference kernel uses float32, regardless of the dtype specified in 'params'.
+    params.dtype = Dtype::native<float>();
     params.validate();
-    
-    if (params.dtype != Dtype::native<float>())
-	throw runtime_error("ReferenceLaggedDownsamplingKernel is only implemented for dtype==float32");
     
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
@@ -88,7 +87,8 @@ void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibat
 
     if (params.num_downsampling_levels <= 1)
 	return;
-    
+
+    // The reference kernel uses float32, regardless of the dtype specified in 'params'.
     Array<float> in = buf.bufs.at(0).template cast<float> ("ReferenceLaggedDownsamplingKernel::apply(): 'in' array");
     this->_apply(in, &buf.bufs[1], ibatch);
 }
@@ -105,6 +105,7 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
     xassert_divisible(ntime, 2);
     xassert_shape_eq(in, ({ nb, pow2(r), ntime }));
 
+    // The reference kernel uses float32, regardless of the dtype specified in 'params'.
     Array<float> out = outp[0].template cast<float> ("ReferenceLaggedDownsamplingKernel::apply(): 'out' array");
     xassert_shape_eq(out, ({ nb, pow2(r-1), ntime/2 }));
 
