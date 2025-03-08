@@ -39,8 +39,8 @@ struct TestInstance
     {
 	TestInstance ti;
 	ti.params.dtype = (rand_uniform() < 0.5) ? Dtype::native<float>() : Dtype::native<__half>();
-	ti.params.small_input_rank = rand_int(2,9);  // GpuLaggedDownsamplingKernel needs small_input_rank >= 2
-	ti.params.large_input_rank = ti.params.small_input_rank + rand_int(0,4);
+	ti.params.output_dd_rank = rand_int(1,8);  // GpuLaggedDownsamplingKernel needs 1 <= output_dd_rank <= 7
+	ti.params.input_total_rank = ti.params.output_dd_rank + rand_int(1,5);
 	ti.params.num_downsampling_levels = rand_int(1, constants::max_downsampling_level);  // no +1 here
 
 	auto v = ksgpu::random_integers_with_bounded_product(2,10);
@@ -48,7 +48,7 @@ struct TestInstance
 	ti.params.beams_per_batch = v[1];
 	
 	long nt_divisor = xdiv(1024, ti.params.dtype.nbits) * pow2(ti.params.num_downsampling_levels+1);
-	long p = ti.params.total_beams * pow2(ti.params.large_input_rank) * nt_divisor;
+	long p = ti.params.total_beams * pow2(ti.params.input_total_rank) * nt_divisor;
 	long q = (10*1000*1000) / p;
 	q = max(q, 4L);
 
@@ -69,7 +69,7 @@ static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_
     dd_params.nbuf = lds_params.num_downsampling_levels;
 
     for (long ids = 0; ids < lds_params.num_downsampling_levels; ids++) {
-	long rk = lds_params.large_input_rank - (ids ? 1 : 0);
+	long rk = lds_params.input_total_rank - (ids ? 1 : 0);
 	long nt = xdiv(lds_params.ntime, pow2(ids));
 	dd_params.buf_rank.push_back(rk);
 	dd_params.buf_ntime.push_back(nt);
@@ -97,7 +97,7 @@ void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
     
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
     long nb = p.beams_per_batch;
-    long rk = p.large_input_rank;
+    long rk = p.input_total_rank;
     long nt = p.ntime;
     
     for (long ichunk = 0; ichunk < ti.nchunks; ichunk++) {

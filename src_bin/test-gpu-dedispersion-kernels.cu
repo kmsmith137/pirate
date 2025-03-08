@@ -12,6 +12,8 @@ using namespace std;
 using namespace pirate;
 using namespace ksgpu;
 
+// FIXME buffer managment (in particular the _setup_io_arrays() function) in this
+// code looks dubious -- revisit at some point.
 
 struct TestInstance
 {

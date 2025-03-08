@@ -746,8 +746,8 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
 	return;
     
     int D = params.num_downsampling_levels - 1;
-    int M = pow2(params.small_input_rank - 2);
-    int A = pow2(params.large_input_rank - params.small_input_rank);
+    int M = pow2(params.output_dd_rank - 1);
+    int A = pow2(params.input_total_rank - params.output_dd_rank - 1);
     int ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
     int S = xdiv(M*ST,2) - 1;
     int shmem_nbytes_per_warp = D * (S+2) * 4;
@@ -880,7 +880,7 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, lon
 
     for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
 	long nb = params.beams_per_batch;
-	long rk = params.large_input_rank - (ids ? 1 : 0);
+	long rk = params.input_total_rank - (ids ? 1 : 0);
 	long nt = xdiv(params.ntime, pow2(ids));
 	xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
     }
@@ -906,6 +906,10 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, lon
     // Note that the DedispersionBuffer arrays are laid out in a way (see DedispersionBuffer::allocate())
     // which is consistent with the "adjacency" requirements of the cuda kernel (see comments earlier
     // in this source file).
+    //
+    // Note that the value of 'output_dd_rank' is communicated implicitly to the kernel, via the
+    // number of warps/threadblocks (M = M_B * M_W = pow2(output_dd_rank-1)). Similarly, the value of
+    // 'input_total_rank' is communicated via A = A_B * A_W = pow2(input_total_rank - output_dd_rank - 1).
     
     this->kernel
 	<<< grid_dims, block_dims, shmem_nbytes_per_threadblock, stream >>>

@@ -34,15 +34,14 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
     int nb = params.beams_per_batch;
-    int r = params.large_input_rank;
-    int s = params.small_input_rank;
+    int r = params.input_total_rank;
+    int s = params.output_dd_rank + 1;
     int nds = params.num_downsampling_levels;
     int nt2 = xdiv(params.ntime, 2);
     
     if (nds <= 1)
 	return;
     
-    xassert(params.small_input_rank > 0);
     Array<int> small_lags({nb * pow2(r)}, af_uhost | af_zero);
     Array<int> large_lags({nb * pow2(r-1)}, af_uhost | af_zero);
 
@@ -81,7 +80,7 @@ void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibat
     
     for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
 	long nb = params.beams_per_batch;
-	long rk = params.large_input_rank - (ids ? 1 : 0);
+	long rk = params.input_total_rank - (ids ? 1 : 0);
 	long nt = xdiv(params.ntime, pow2(ids));
 	xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
     }
@@ -97,7 +96,7 @@ void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibat
 	    
 void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<void> *outp, long ibatch)
 {
-    long r = params.large_input_rank;
+    long r = params.input_total_rank;
     long nb = params.beams_per_batch;
     long nds = params.num_downsampling_levels;
     long ntime = params.ntime;

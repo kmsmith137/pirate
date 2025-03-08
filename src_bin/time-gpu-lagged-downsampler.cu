@@ -21,7 +21,7 @@ static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_
     dd_params.nbuf = lds_params.num_downsampling_levels;
 
     for (long ids = 0; ids < lds_params.num_downsampling_levels; ids++) {
-	long rk = lds_params.large_input_rank - (ids ? 1 : 0);
+	long rk = lds_params.input_total_rank - (ids ? 1 : 0);
 	long nt = xdiv(lds_params.ntime, pow2(ids));
 	dd_params.buf_rank.push_back(rk);
 	dd_params.buf_ntime.push_back(nt);
@@ -66,13 +66,13 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
     stringstream kernel_name;
     kernel_name << "lagged_downsample("
 		<< "dtype=" << params.dtype
-		<< ", small_input_rank=" << params.small_input_rank
-		<< ", large_input_rank=" << params.large_input_rank
+		<< ", input_total_rank=" << params.input_total_rank
+		<< ", output_dd_rank=" << params.output_dd_rank
 		<< ", num_downsampling_levels=" << params.num_downsampling_levels
 		<< ", pstate_overhead = " << pstate_overhead_percentage << "%"
 		<< ")";
 
-    cout << "\n" << kernel_name.str();
+    cout << "\n" << kernel_name.str() << "\n";
     kernel->print(cout, 4);  // indent=4
 
     cout << "    niter = " << niter << endl
@@ -93,12 +93,12 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
 
 int main(int argc, char **argv)
 {
-    for (int num_downsampling_levels: {1,3,5}) {
+    for (int num_downsampling_levels: {2,6}) {
 	for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
 	    LaggedDownsamplingKernelParams params;
 	    params.dtype = dtype;
-	    params.small_input_rank = 8;
-	    params.large_input_rank = 16;
+	    params.input_total_rank = 16;
+	    params.output_dd_rank = 7;
 	    params.num_downsampling_levels = num_downsampling_levels;
 	    params.total_beams = 4;
 	    params.beams_per_batch = 4;

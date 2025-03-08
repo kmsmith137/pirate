@@ -17,8 +17,8 @@ namespace pirate {
 void LaggedDownsamplingKernelParams::print(std::ostream &os, int indent) const
 {
     print_kv("dtype", this->dtype, os, indent);
-    print_kv("small_input_rank", this->small_input_rank, os, indent);
-    print_kv("large_input_rank", this->large_input_rank, os, indent);
+    print_kv("input_total_rank", this->input_total_rank, os, indent);
+    print_kv("output_dd_rank", this->output_dd_rank, os, indent);
     print_kv("num_downsampling_levels", this->num_downsampling_levels, os, indent);
     print_kv("total_beams", this->total_beams, os, indent);
     print_kv("beams_per_batch", this->beams_per_batch, os, indent);
@@ -29,10 +29,10 @@ void LaggedDownsamplingKernelParams::print(std::ostream &os, int indent) const
 void LaggedDownsamplingKernelParams::validate() const
 {
     xassert(!dtype.is_empty());
-    xassert(small_input_rank >= 0);
-    xassert(small_input_rank <= 8);
-    xassert(large_input_rank >= small_input_rank);
-    xassert(large_input_rank <= constants::max_tree_rank);
+    xassert(output_dd_rank >= 0);
+    xassert(output_dd_rank <= 7);
+    xassert(input_total_rank >= output_dd_rank+1);
+    xassert(input_total_rank <= constants::max_tree_rank);
     xassert(num_downsampling_levels > 0);
     xassert(num_downsampling_levels <= constants::max_downsampling_level);
     xassert(total_beams > 0);

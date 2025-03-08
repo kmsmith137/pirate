@@ -31,6 +31,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     int max_n1 = 0;
     
     for (int ids = 0; ids < config.num_downsampling_levels; ids++) {
+	// Note that Stage1Tree::rank0 can be different for downsampled trees vs the
+	// non-downsampled tree, but is the same for different downsampled trees.
+	// This property is necessary in order for the LaggedDownsampler to work later.
+	
 	int st1_rank = ids ? (config.tree_rank - 1) : config.tree_rank;
 	int st1_rank0 = st1_rank/2;
 	vector<int> trigger_ranks;
@@ -326,10 +330,11 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	stage2_dd_kernel_params.push_back(kparams);
 	stage2_ds_level.push_back(ds_level);
     }
-    
+
+    // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.
     lds_params.dtype = config.dtype;
-    lds_params.small_input_rank = (stage1_ntrees > 1) ? (stage1_trees.at(1).rank0 + 1) : 0;
-    lds_params.large_input_rank = config.tree_rank;
+    lds_params.input_total_rank = config.tree_rank;
+    lds_params.output_dd_rank = (stage1_ntrees > 1) ? stage1_trees.at(1).rank0 : 0;
     lds_params.num_downsampling_levels = config.num_downsampling_levels;
     lds_params.total_beams = config.beams_per_gpu;
     lds_params.beams_per_batch = config.beams_per_batch;
