@@ -13,7 +13,6 @@
 #include <ksgpu/memcpy_kernels.hpp>
 #include <ksgpu/xassert.hpp>
 
-#include "../include/pirate/internals/File.hpp"
 #include "../include/pirate/internals/Epoll.hpp"
 #include "../include/pirate/internals/Socket.hpp"
 #include "../include/pirate/internals/inlines.hpp"

@@ -10,9 +10,9 @@
 #include <ksgpu/string_utils.hpp>  // ksgpu::tuple_str()
 
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/internals/File.hpp"
-#include "../include/pirate/internals/utils.hpp"    // check_rank(), is_empty_string()
-#include "../include/pirate/internals/inlines.hpp"  // xdiv(), pow2(), print_kv()
+#include "../include/pirate/internals/utils.hpp"       // check_rank(), is_empty_string()
+#include "../include/pirate/internals/inlines.hpp"     // xdiv(), pow2(), print_kv()
+#include "../include/pirate/internals/file_utils.hpp"  // File
 #include "../include/pirate/internals/YamlFile.hpp"
 
 #include <yaml-cpp/emitter.h>

@@ -1,8 +1,11 @@
 #include "../include/pirate/internals/file_utils.hpp"
-#include "../include/pirate/internals/Directory.hpp"
+#include <ksgpu/xassert.hpp>
 
 #include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <fts.h>
 
 using namespace std;
@@ -99,7 +102,7 @@ vector<string> listdir(const string &dirname)
 }
 
 
-size_t disk_space_used(const string &dirname)
+long disk_space_used(const string &dirname)
 {
     FTS* hierarchy;
     char** paths;
@@ -122,12 +125,106 @@ size_t disk_space_used(const string &dirname)
             // The entry is a file.
             struct stat *st = entry->fts_statp;
             totalsize += st->st_size;
-            cout << "path " << entry->fts_path << " size " << st->st_size << endl;
+            // cout << "path " << entry->fts_path << " size " << st->st_size << endl;
         }
         
     }
     fts_close(hierarchy);
     return totalsize;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+    
+File::File(const string &filename_, int oflags, int mode)
+    : filename(filename_)
+{
+    fd = open(filename.c_str(), oflags, mode);
+    
+    if (fd < 0) {
+	// FIXME exception text should show 'oflags' and 'mode'.
+	stringstream ss;
+	ss << filename << ": open() failed: " << strerror(errno);
+	throw runtime_error(ss.str());
+    }
+}
+
+File::~File()
+{
+    if (fd >= 0) {
+	close(fd);
+	fd = -1;
+    }
+}
+
+
+void File::write(const void *p, long nbytes)
+{
+    if (nbytes == 0)
+	return;
+    
+    xassert(p != nullptr);
+    xassert(nbytes > 0);
+    xassert(fd >= 0);
+
+    // C++ doesn't alllow '+=' on a (const void *).
+    const char *pc = reinterpret_cast<const char *> (p);
+	
+    while (nbytes > 0) {
+	long n = ::write(fd, pc, nbytes);
+	
+	if (n < 0) {
+	    stringstream ss;
+	    ss << filename << ": write() failed: " << strerror(errno);
+	    throw runtime_error(ss.str());
+	}
+	
+	if (n == 0) {
+	    // Just being paranoid -- I don't think this can actually happen.
+	    stringstream ss;
+	    ss << filename << ": write() returned zero?!";
+	    throw runtime_error(ss.str());
+	}
+	
+	pc += n;
+	nbytes -= n;
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+Directory::Directory(const string &dirname_) :
+    dirname(dirname_)
+{
+    this->dirp = opendir(dirname.c_str());
+    
+    if (!dirp)
+	throw runtime_error(dirname + ": opendir() failed: " + strerror(errno));
+}
+
+
+Directory::~Directory()
+{
+    if (dirp) {
+	closedir(dirp);
+	dirp = nullptr;
+    }
+}
+
+
+dirent *Directory::read_next()
+{
+    xassert(dirp != nullptr);
+
+    dirent *entry = readdir(dirp);
+
+    if (!entry && errno)
+	throw runtime_error(dirname + ": readdir() failed: " + strerror(errno));
+    
+    return entry;
 }
 
 
