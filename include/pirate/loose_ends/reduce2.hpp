@@ -1,5 +1,5 @@
-#ifndef _PIRATE_GPU_REDUCE2
-#define _PIRATE_GPU_REDUCE2
+#ifndef _PIRATE_LOOSE_ENDS_GPU_REDUCE2_HPP
+#define _PIRATE_LOOSE_ENDS_GPU_REDUCE2_HPP
 
 namespace pirate {
 #if 0
@@ -61,4 +61,4 @@ __device__ double reduce2(float num, float den, float *scratch)
 
 }  // namespace pirate
 
-#endif // _PIRATE_GPU_REDUCE2
+#endif // _PIRATE_LOOSE_ENDS_GPU_REDUCE2_HPP

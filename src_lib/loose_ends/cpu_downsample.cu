@@ -1,5 +1,5 @@
-#include "../include/pirate/internals/cpu_downsample.hpp"
-#include "../include/pirate/avx256/downsample.hpp"
+#include "../../include/pirate/loose_ends/cpu_downsample.hpp"
+#include "../../include/pirate/loose_ends/avx256_downsample.hpp"
 
 #include <sstream>
 #include <stdexcept>

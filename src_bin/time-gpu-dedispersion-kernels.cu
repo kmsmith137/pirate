@@ -2,8 +2,8 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/CudaStreamPool.hpp>
 
-#include "../include/pirate/internals/inlines.hpp"  // pow2()
-#include "../include/pirate/internals/DedispersionKernel.hpp"
+#include "../include/pirate/inlines.hpp"  // pow2()
+#include "../include/pirate/DedispersionKernel.hpp"
 
 using namespace std;
 using namespace ksgpu;

@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_DEDISPERSION_KERNEL_HPP
-#define _PIRATE_INTERNALS_DEDISPERSION_KERNEL_HPP
+#ifndef _PIRATE_DEDISPERSION_KERNEL_HPP
+#define _PIRATE_DEDISPERSION_KERNEL_HPP
 
 #include <ksgpu/Array.hpp>
 #include "ReferenceTree.hpp"
@@ -212,4 +212,4 @@ protected:
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_DEDISPERSION_KERNEL_HPP
+#endif // _PIRATE_DEDISPERSION_KERNEL_HPP

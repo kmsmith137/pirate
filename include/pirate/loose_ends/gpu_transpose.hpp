@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_GPU_TRANSPOSE_HPP
-#define _PIRATE_INTERNALS_GPU_TRANSPOSE_HPP
+#ifndef _PIRATE_LOOSE_ENDS_GPU_TRANSPOSE_HPP
+#define _PIRATE_LOOSE_ENDS_GPU_TRANSPOSE_HPP
 
 #include <ksgpu/Array.hpp>
 
@@ -14,4 +14,4 @@ extern void launch_transpose(ksgpu::Array<float> &dst, const ksgpu::Array<float>
 
 } // namespace pirate
 
-#endif //  _PIRATE_INTERNALS_GPU_TRANSPOSE_HPP
+#endif //  _PIRATE_LOOSE_ENDS_GPU_TRANSPOSE_HPP

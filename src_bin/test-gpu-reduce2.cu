@@ -1,7 +1,7 @@
 #include <iostream>
 #include <ksgpu.hpp>
 
-#include "../include/pirate/gpu/reduce2.hpp"
+#include "../include/pirate/loose_ends/reduce2.hpp"
 
 using namespace std;
 using namespace ksgpu;

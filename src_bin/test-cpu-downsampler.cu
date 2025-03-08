@@ -1,8 +1,8 @@
 #include <iostream>
 #include <ksgpu/Array.hpp>
 
-#include "../include/pirate/internals/bitvec.hpp"
-#include "../include/pirate/internals/cpu_downsample.hpp"
+#include "../include/pirate/loose_ends/bitvec.hpp"
+#include "../include/pirate/loose_ends/cpu_downsample.hpp"
 
 using namespace std;
 using namespace ksgpu;

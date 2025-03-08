@@ -1,7 +1,7 @@
-#include "../include/pirate/internals/FakeServer.hpp"
-#include "../include/pirate/internals/utils.hpp"     // make_chord_dedispersion_config()
-#include "../include/pirate/internals/system_utils.hpp"
+#include "../include/pirate/FakeServer.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/system_utils.hpp"
+#include "../include/pirate/utils.hpp"     // make_chord_dedispersion_config()
 
 using namespace std;
 using namespace pirate;

@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_REFERENCE_TREE_HPP
-#define _PIRATE_INTERNALS_REFERENCE_TREE_HPP
+#ifndef _PIRATE_REFERENCE_TREE_HPP
+#define _PIRATE_REFERENCE_TREE_HPP
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -60,4 +60,4 @@ protected:
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_REFERENCE_TREE_HPP
+#endif // _PIRATE_REFERENCE_TREE_HPP

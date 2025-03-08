@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/system_utils.hpp"
+#include "../include/pirate/system_utils.hpp"
 
 #include <thread>
 #include <string>

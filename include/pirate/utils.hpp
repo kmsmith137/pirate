@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_UTILS_HPP
-#define _PIRATE_INTERNALS_UTILS_HPP
+#ifndef _PIRATE_UTILS_HPP
+#define _PIRATE_UTILS_HPP
 
 #include <ksgpu/Array.hpp>
 
@@ -74,5 +74,5 @@ extern int mean_bytes_per_unaligned_chunk(int nbytes);
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_UTILS_HPP
+#endif // _PIRATE_UTILS_HPP
 

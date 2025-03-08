@@ -1,10 +1,9 @@
-#include <stdexcept>
+#include "../../include/pirate/loose_ends/gpu_downsample.hpp"
+#include "../../include/pirate/loose_ends/DownsampleKernel.hpp"
 
+#include <stdexcept>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/xassert.hpp>
-
-#include "../include/pirate/internals/gpu_downsample.hpp"
-#include "../include/pirate/gpu/DownsampleKernel.hpp"
 
 using namespace std;
 using namespace ksgpu;

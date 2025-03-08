@@ -1,7 +1,7 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
-#include "../include/pirate/internals/Dedisperser.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // xdiv()
+#include "../include/pirate/Dedisperser.hpp"
+#include "../include/pirate/inlines.hpp"  // xdiv()
 
 #include <ksgpu/cuda_utils.hpp>  // CudaStreamWrapper, CUDA_CALL()
 #include <ksgpu/time_utils.hpp>  // get_time(), time_diff()

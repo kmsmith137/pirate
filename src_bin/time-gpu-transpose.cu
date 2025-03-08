@@ -2,7 +2,7 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/CudaStreamPool.hpp>
 
-#include "../include/pirate/internals/gpu_transpose.hpp"
+#include "../include/pirate/loose_ends/gpu_transpose.hpp"
 
 using namespace std;
 using namespace ksgpu;

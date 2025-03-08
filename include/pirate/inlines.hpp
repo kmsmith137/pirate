@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_INLINES_HPP
-#define _PIRATE_INTERNALS_INLINES_HPP
+#ifndef _PIRATE_INLINES_HPP
+#define _PIRATE_INLINES_HPP
 
 #include <ksgpu/string_utils.hpp>  // ksgpu::nbytes_to_str()
 
@@ -159,5 +159,5 @@ struct simd32_type<__half>
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_INLINES_HPP
+#endif // _PIRATE_INLINES_HPP
 

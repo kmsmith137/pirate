@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/ReferenceLagbuf.hpp"
+#include "../include/pirate/ReferenceLagbuf.hpp"
 #include <cstring>
 
 using namespace std;

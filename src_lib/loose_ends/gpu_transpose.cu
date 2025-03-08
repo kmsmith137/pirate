@@ -1,5 +1,5 @@
-#include "../include/pirate/internals/gpu_transpose.hpp"
-#include "../include/pirate/gpu/TransposeKernel.hpp"
+#include "../../include/pirate/loose_ends/gpu_transpose.hpp"
+#include "../../include/pirate/loose_ends/TransposeKernel.hpp"
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/xassert.hpp>

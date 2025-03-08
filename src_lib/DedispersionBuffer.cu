@@ -1,7 +1,6 @@
-#include "../include/pirate/internals/DedispersionBuffer.hpp"
-
+#include "../include/pirate/DedispersionBuffer.hpp"
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2(), xdiv()
+#include "../include/pirate/inlines.hpp"  // pow2(), xdiv()
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/string_utils.hpp>  // tuple_str()

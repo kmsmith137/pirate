@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_NETWORK_UTILS_HPP
-#define _PIRATE_INTERNALS_NETWORK_UTILS_HPP
+#ifndef _PIRATE_NETWORK_UTILS_HPP
+#define _PIRATE_NETWORK_UTILS_HPP
 
 #include <string>
 #include <vector>
@@ -149,5 +149,5 @@ struct Epoll
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_NETWORK_UTILS_HPP
+#endif // _PIRATE_NETWORK_UTILS_HPP
 

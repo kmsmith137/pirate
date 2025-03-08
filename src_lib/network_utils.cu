@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/network_utils.hpp"
+#include "../include/pirate/network_utils.hpp"
 
 #include <fcntl.h>
 #include <unistd.h>

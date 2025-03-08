@@ -1,7 +1,7 @@
-#ifndef _PIRATE_INTERNALS_REFERENCE_DEDISPERSER_HPP
-#define _PIRATE_INTERNALS_REFERENCE_DEDISPERSER_HPP
+#ifndef _PIRATE_DEDISPERSER_HPP
+#define _PIRATE_DEDISPERSER_HPP
 
-#include "../DedispersionConfig.hpp"
+#include "DedispersionConfig.hpp"
 #include "DedispersionBuffer.hpp"
 
 #include <vector>
@@ -145,4 +145,4 @@ struct ReferenceDedisperserBase
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_REFERENCE_DEDISPERSER_HPP
+#endif // _PIRATE_DEDISPERSER_HPP

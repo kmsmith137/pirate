@@ -1,7 +1,7 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/internals/utils.hpp"    // bit_reverse_slow(), rb_lag(), rstate_len(), mean_bytes_per_unaligned_chunk()
-#include "../include/pirate/internals/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
+#include "../include/pirate/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
+#include "../include/pirate/utils.hpp"    // bit_reverse_slow(), rb_lag(), rstate_len(), mean_bytes_per_unaligned_chunk()
 
 #include <ksgpu/xassert.hpp>
 

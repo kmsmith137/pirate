@@ -1,7 +1,7 @@
-#include "../include/pirate/internals/DedispersionKernel.hpp"
-#include "../include/pirate/internals/inlines.hpp"    // pow2()
-#include "../include/pirate/internals/utils.hpp"      // integer_log2()
-#include "../include/pirate/constants.hpp"            // constants::bytes_per_gpu_cache_line
+#include "../include/pirate/DedispersionKernel.hpp"
+#include "../include/pirate/constants.hpp"  // constants::bytes_per_gpu_cache_line
+#include "../include/pirate/inlines.hpp"    // pow2()
+#include "../include/pirate/utils.hpp"      // integer_log2()
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>

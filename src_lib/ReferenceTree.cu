@@ -1,8 +1,7 @@
-#include "../include/pirate/internals/ReferenceTree.hpp"
-
+#include "../include/pirate/ReferenceTree.hpp"
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2(), bit_reverse_slow()
-#include "../include/pirate/internals/utils.hpp"    // check_rank()
+#include "../include/pirate/inlines.hpp"  // pow2(), bit_reverse_slow()
+#include "../include/pirate/utils.hpp"    // check_rank()
 
 #include <ksgpu/xassert.hpp>
 

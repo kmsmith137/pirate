@@ -1,6 +1,6 @@
-#include "../include/pirate/internals/utils.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2()
-#include "../include/pirate/constants.hpp"          // constants::max_tree_rank
+#include "../include/pirate/utils.hpp"
+#include "../include/pirate/inlines.hpp"    // pow2()
+#include "../include/pirate/constants.hpp"  // constants::max_tree_rank
 
 #include <sstream>
 #include <stdexcept>

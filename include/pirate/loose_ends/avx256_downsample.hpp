@@ -1,5 +1,5 @@
-#ifndef _PIRATE_AVX256_DOWNSAMPLE_HPP
-#define _PIRATE_AVX256_DOWNSAMPLE_HPP
+#ifndef _PIRATE_LOOSE_ENDS_AVX256_DOWNSAMPLE_HPP
+#define _PIRATE_LOOSE_ENDS_AVX256_DOWNSAMPLE_HPP
 
 #include <cstdint>
 #include <immintrin.h>
@@ -568,4 +568,4 @@ struct avx256_7bit_downsampler
 
 }  // namespace pirate
 
-#endif // _PIRATE_AVX256_DOWNSAMPLE_HPP
+#endif // _PIRATE_LOOSE_ENDS_AVX256_DOWNSAMPLE_HPP

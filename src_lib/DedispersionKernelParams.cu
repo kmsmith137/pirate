@@ -1,6 +1,6 @@
-#include "../include/pirate/internals/DedispersionKernel.hpp"
-#include "../include/pirate/internals/inlines.hpp"   // pow2()
+#include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/constants.hpp"
+#include "../include/pirate/inlines.hpp"   // pow2()
 
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/xassert.hpp>

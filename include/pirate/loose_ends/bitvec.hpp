@@ -1,8 +1,8 @@
 // Functions for manipulating sequences of bits as std::vector<bool>.
 // Slow, intended for testing!
 
-#ifndef _PIRATE_INTERNALS_BITVEC_HPP
-#define _PIRATE_INTERNALS_BITVEC_HPP
+#ifndef _PIRATE_LOOSE_ENDS_BITVEC_HPP
+#define _PIRATE_LOOSE_ENDS_BITVEC_HPP
 
 #include <vector>
 #include <cstdint>
@@ -101,5 +101,5 @@ inline uint64_t bitvec_to_uint64(const std::vector<bool> &v)
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_BITVEC_HPP
+#endif // _PIRATE_LOOSE_ENDS_BITVEC_HPP
 

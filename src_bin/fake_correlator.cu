@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/FakeCorrelator.hpp"
+#include "../include/pirate/FakeCorrelator.hpp"
 
 using namespace pirate;
 

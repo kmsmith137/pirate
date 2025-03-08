@@ -1,5 +1,5 @@
-#include "../include/pirate/internals/YamlFile.hpp"
-#include "../include/pirate/internals/file_utils.hpp"  // file_exists()
+#include "../include/pirate/YamlFile.hpp"
+#include "../include/pirate/file_utils.hpp"  // file_exists()
 
 #include <ksgpu/xassert.hpp>
 

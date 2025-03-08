@@ -1,8 +1,8 @@
-#include "../include/pirate/internals/DedispersionKernel.hpp"
-#include "../include/pirate/internals/ReferenceLagbuf.hpp"
-#include "../include/pirate/internals/ReferenceTree.hpp"
-#include "../include/pirate/internals/inlines.hpp"     // pow2()
-#include "../include/pirate/internals/utils.hpp"       // bit_reverse_slow()
+#include "../include/pirate/DedispersionKernel.hpp"
+#include "../include/pirate/ReferenceLagbuf.hpp"
+#include "../include/pirate/ReferenceTree.hpp"
+#include "../include/pirate/inlines.hpp"     // pow2()
+#include "../include/pirate/utils.hpp"       // bit_reverse_slow()
 
 using namespace std;
 using namespace ksgpu;

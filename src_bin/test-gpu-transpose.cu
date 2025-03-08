@@ -3,7 +3,7 @@
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/test_utils.hpp>
 
-#include "../include/pirate/internals/gpu_transpose.hpp"
+#include "../include/pirate/loose_ends/gpu_transpose.hpp"
 
 using namespace std;
 using namespace ksgpu;

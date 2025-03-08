@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_CPU_DOWNSAMPLE_HPP
-#define _PIRATE_INTERNALS_CPU_DOWNSAMPLE_HPP
+#ifndef _PIRATE_LOOSE_ENDS_CPU_DOWNSAMPLE_HPP
+#define _PIRATE_LOOSE_ENDS_CPU_DOWNSAMPLE_HPP
 
 #include <cstdint>
 
@@ -17,4 +17,4 @@ extern long cpu_downsample_src_bytes_per_chunk(int src_bit_depth);
 
 } // namespace pirate
 
-#endif // _PIRATE_INTERNALS_CPU_DOWNSAMPLE_HPP
+#endif // _PIRATE_LOOSE_ENDS_CPU_DOWNSAMPLE_HPP

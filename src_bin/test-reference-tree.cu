@@ -1,7 +1,7 @@
-#include "../include/pirate/internals/ReferenceTree.hpp"
-#include "../include/pirate/internals/ReferenceLagbuf.hpp"
-#include "../include/pirate/internals/inlines.hpp"
-#include "../include/pirate/internals/utils.hpp"  // dedisperse_non_incremental(), lag_non_incremental()
+#include "../include/pirate/ReferenceTree.hpp"
+#include "../include/pirate/ReferenceLagbuf.hpp"
+#include "../include/pirate/inlines.hpp"
+#include "../include/pirate/utils.hpp"  // dedisperse_non_incremental(), lag_non_incremental()
 
 #include <ksgpu/rand_utils.hpp>    // rand_int()
 #include <ksgpu/string_utils.hpp>  // tuple_str()

@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_DEDISPERSION_BUFFER_HPP
-#define _PIRATE_INTERNALS_DEDISPERSION_BUFFER_HPP
+#ifndef _PIRATE_DEDISPERSION_BUFFER_HPP
+#define _PIRATE_DEDISPERSION_BUFFER_HPP
 
 #include <vector>
 #include <memory>
@@ -93,4 +93,4 @@ struct DedispersionBuffer
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_DEDISPERSION_BUFFER_HPP
+#endif // _PIRATE_DEDISPERSION_BUFFER_HPP

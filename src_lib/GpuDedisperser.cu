@@ -1,6 +1,6 @@
-#include "../include/pirate/internals/Dedisperser.hpp"
+#include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // xdiv(), pow2()
+#include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
 
 using namespace std;
 using namespace ksgpu;

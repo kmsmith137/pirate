@@ -1,5 +1,5 @@
-#ifndef _PIRATE_AVX256_M64_OUTBUF_HPP
-#define _PIRATE_AVX256_M64_OUTBUF_HPP
+#ifndef _PIRATE_LOOSE_ENDS_AVX256_M64_OUTBUF_HPP
+#define _PIRATE_LOOSE_ENDS_AVX256_M64_OUTBUF_HPP
 
 #include <immintrin.h>
 #include <ksgpu/xassert.hpp>
@@ -101,4 +101,4 @@ struct avx256_m64_outbuf
 
 }  // namespace pirate
 
-#endif  // _PIRATE_AVX256_M64_OUTBUF_HPP
+#endif  // _PIRATE_LOOSE_ENDS_AVX256_M64_OUTBUF_HPP

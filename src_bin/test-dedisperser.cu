@@ -1,7 +1,7 @@
+#include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
-#include "../include/pirate/internals/Dedisperser.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2()
+#include "../include/pirate/inlines.hpp"  // pow2()
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/xassert.hpp>

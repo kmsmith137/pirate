@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_REFERENCE_LAGBUF_HPP
-#define _PIRATE_INTERNALS_REFERENCE_LAGBUF_HPP
+#ifndef _PIRATE_REFERENCE_LAGBUF_HPP
+#define _PIRATE_REFERENCE_LAGBUF_HPP
 
 #include <vector>
 #include <ksgpu/Array.hpp>
@@ -34,4 +34,4 @@ protected:
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_REFERENCE_LAGBUF_HPP
+#endif // _PIRATE_REFERENCE_LAGBUF_HPP

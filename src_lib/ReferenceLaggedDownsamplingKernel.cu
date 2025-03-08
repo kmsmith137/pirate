@@ -1,8 +1,8 @@
-#include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
-#include "../include/pirate/internals/DedispersionBuffer.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2()
-#include "../include/pirate/internals/utils.hpp"    // reference_downsample_{freq,time}()
+#include "../include/pirate/LaggedDownsamplingKernel.hpp"
+#include "../include/pirate/DedispersionBuffer.hpp"
 #include "../include/pirate/constants.hpp"
+#include "../include/pirate/inlines.hpp"  // pow2()
+#include "../include/pirate/utils.hpp"    // reference_downsample_{freq,time}()
 
 #include <ksgpu/xassert.hpp>
 

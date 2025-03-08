@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_GPU_DOWNSAMPLE_HPP
-#define _PIRATE_INTERNALS_GPU_DOWNSAMPLE_HPP
+#ifndef _PIRATE_INTERNALS_LOOSE_ENDS_DOWNSAMPLE_HPP
+#define _PIRATE_INTERNALS_LOOSE_ENDS_DOWNSAMPLE_HPP
 
 #include <ksgpu/Array.hpp>
 
@@ -16,4 +16,4 @@ extern void launch_downsample(ksgpu::Array<float> &dst_i, ksgpu::Array<float> &d
 
 } // namespace pirate
 
-#endif //  _PIRATE_INTERNALS_GPU_DOWNSAMPLE_HPP
+#endif //  _PIRATE_INTERNALS_LOOSE_ENDS_DOWNSAMPLE_HPP

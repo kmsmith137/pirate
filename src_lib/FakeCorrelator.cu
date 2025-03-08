@@ -1,5 +1,5 @@
-#include "../include/pirate/internals/FakeCorrelator.hpp"
-#include "../include/pirate/internals/network_utils.hpp"  // Socket
+#include "../include/pirate/FakeCorrelator.hpp"
+#include "../include/pirate/network_utils.hpp"  // Socket
 
 #include <thread>
 #include <sstream>

@@ -1,5 +1,5 @@
-#ifndef _PIRATE_GPU_TRANSPOSE_KERNEL
-#define _PIRATE_GPU_TRANSPOSE_KERNEL
+#ifndef _PIRATE_LOOSE_ENDS_GPU_TRANSPOSE_KERNEL_HPP
+#define _PIRATE_LOOSE_ENDS_GPU_TRANSPOSE_KERNEL_HPP
 
 namespace pirate {
 #if 0
@@ -61,4 +61,4 @@ transpose_kernel(float *dst, const float *src, int src_ystride, int src_zstride,
 
 } // namespace pirate
 
-#endif // _PIRATE_GPU_TRANSPOSE_KERNEL
+#endif // _PIRATE_LOOSE_ENDS_GPU_TRANSPOSE_KERNEL_HPP

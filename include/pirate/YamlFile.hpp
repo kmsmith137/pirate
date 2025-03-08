@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_YAML_FILE_HPP
-#define _PIRATE_INTERNALS_YAML_FILE_HPP
+#ifndef _PIRATE_YAML_FILE_HPP
+#define _PIRATE_YAML_FILE_HPP
 
 #include <string>
 #include <iostream>
@@ -195,4 +195,4 @@ inline std::vector<T> YamlFile::get_vector(const std::string &k, const std::vect
 
 }  // namespace pirate
 
-#endif //  _PIRATE_INTERNALS_YAML_FILE_HPP
+#endif //  _PIRATE_YAML_FILE_HPP

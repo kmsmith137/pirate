@@ -1,8 +1,7 @@
-#include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
+#include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
-
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/internals/inlines.hpp"  // pow2()
+#include "../include/pirate/inlines.hpp"  // pow2()
 
 #include <ksgpu/xassert.hpp>
 

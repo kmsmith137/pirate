@@ -1,5 +1,5 @@
-#include "../../include/pirate/internals/dedispersion_iobufs.hpp"
-#include "../../include/pirate/internals/dedispersion_kernel_implementation.hpp"
+#include "../../include/pirate/cuda_kernels/dedispersion.hpp"
+#include "../../include/pirate/cuda_kernels/dedispersion_iobufs.hpp"
     
 namespace pirate
 {

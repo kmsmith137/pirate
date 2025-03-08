@@ -1,7 +1,7 @@
-#include "../include/pirate/internals/LaggedDownsamplingKernel.hpp"
-#include "../include/pirate/internals/DedispersionBuffer.hpp"
-#include "../include/pirate/internals/inlines.hpp"   // pow2(), simd32_type
+#include "../include/pirate/LaggedDownsamplingKernel.hpp"
+#include "../include/pirate/DedispersionBuffer.hpp"
 #include "../include/pirate/constants.hpp"
+#include "../include/pirate/inlines.hpp"   // pow2(), simd32_type
 
 #include <sstream>
 #include <ksgpu/cuda_utils.hpp>    // CUDA_CALL()

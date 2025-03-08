@@ -1,8 +1,8 @@
-#ifndef _PIRATE_INTERNALS_DEDISPERSION_IOBUFS_HPP
-#define _PIRATE_INTERNALS_DEDISPERSION_IOBUFS_HPP
+#ifndef _PIRATE_CUDA_KERNELS_DEDISPERSION_IOBUFS_HPP
+#define _PIRATE_CUDA_KERNELS_DEDISPERSION_IOBUFS_HPP
 
 #include <ksgpu/Array.hpp>
-#include "inlines.hpp"  // simd32_type
+#include "../inlines.hpp"  // simd32_type
 
 namespace pirate {
 #if 0
@@ -268,4 +268,5 @@ struct dedispersion_ring_outbuf
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_DEDISPERSION_IOBUFS_HPP
+#endif // _PIRATE_CUDA_KERNELS_DEDISPERSION_IOBUFS_HPP
+

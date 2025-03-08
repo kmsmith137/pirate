@@ -1,5 +1,5 @@
-#ifndef _PIRATE_GPU_DOWNSAMPLE_KERNEL
-#define _PIRATE_GPU_DOWNSAMPLE_KERNEL
+#ifndef _PIRATE_LOOSE_ENDS_DOWNSAMPLE_KERNEL_HPP
+#define _PIRATE_LOOSE_ENDS_DOWNSAMPLE_KERNEL_HPP
 
 namespace pirate {
 #if 0
@@ -154,4 +154,4 @@ downsample_kernel(float *dst_i, float *dst_w, const float *src_i, const float *s
 
 } // namespace pirate
 
-#endif // _PIRATE_GPU_DOWNSAMPLE_KERNEL
+#endif // _PIRATE_LOOSE_ENDS_DOWNSAMPLE_KERNEL_HPP

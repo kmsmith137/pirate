@@ -1,7 +1,7 @@
 // A placeholder file (already integrated into Makefile) for debugging
 
 // #include <ksgpu.hpp>
-#include "../include/pirate/internals/ReferenceLagbuf.hpp"
+#include "../include/pirate/ReferenceLagbuf.hpp"
 
 using namespace std;
 using namespace ksgpu;

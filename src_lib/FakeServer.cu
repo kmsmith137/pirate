@@ -1,4 +1,4 @@
-#include "../include/pirate/internals/FakeServer.hpp"
+#include "../include/pirate/FakeServer.hpp"
 
 #include <thread>
 #include <sstream>
@@ -13,11 +13,11 @@
 #include <ksgpu/memcpy_kernels.hpp>
 #include <ksgpu/xassert.hpp>
 
-#include "../include/pirate/internals/inlines.hpp"
-#include "../include/pirate/internals/file_utils.hpp"
-#include "../include/pirate/internals/system_utils.hpp"
-#include "../include/pirate/internals/network_utils.hpp"  // Socket, Epoll
-#include "../include/pirate/internals/cpu_downsample.hpp"
+#include "../include/pirate/inlines.hpp"
+#include "../include/pirate/file_utils.hpp"
+#include "../include/pirate/system_utils.hpp"
+#include "../include/pirate/network_utils.hpp"  // Socket, Epoll
+#include "../include/pirate/loose_ends/cpu_downsample.hpp"
 
 
 using namespace std;

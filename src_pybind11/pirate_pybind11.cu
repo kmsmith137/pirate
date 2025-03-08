@@ -5,7 +5,7 @@
 
 #include <iostream>
 #include <ksgpu/pybind11.hpp>
-#include "../include/pirate/internals/utils.hpp"  // dedisperse_non_incremental()
+#include "../include/pirate/utils.hpp"  // dedisperse_non_incremental()
 
 using namespace std;
 using namespace ksgpu;

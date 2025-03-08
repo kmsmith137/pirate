@@ -4,7 +4,7 @@
 #include <ksgpu/string_utils.hpp>
 #include <ksgpu/xassert.hpp>
 
-#include "../include/pirate/internals/gpu_downsample.hpp"
+#include "../include/pirate/loose_ends/gpu_downsample.hpp"
 
 using namespace std;
 using namespace ksgpu;

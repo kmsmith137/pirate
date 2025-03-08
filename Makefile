@@ -65,13 +65,6 @@ PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 
 # These get compiled into lib/libpirate.so.
 LIB_SRCFILES = \
-  src_lib/cpu_downsample.cu \
-  src_lib/file_utils.cu \
-  src_lib/gpu_downsample.cu \
-  src_lib/gpu_transpose.cu \
-  src_lib/network_utils.cu \
-  src_lib/system_utils.cu \
-  src_lib/utils.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
   src_lib/DedispersionKernelParams.cu \
@@ -88,6 +81,13 @@ LIB_SRCFILES = \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
   src_lib/ReferenceTree.cu \
   src_lib/YamlFile.cu \
+  src_lib/file_utils.cu \
+  src_lib/network_utils.cu \
+  src_lib/system_utils.cu \
+  src_lib/utils.cu \
+  src_lib/loose_ends/cpu_downsample.cu \
+  src_lib/loose_ends/gpu_downsample.cu \
+  src_lib/loose_ends/gpu_transpose.cu \
   src_lib/template_instantiations/dedisp_simple_float16.cu \
   src_lib/template_instantiations/dedisp_simple_float32.cu \
   src_lib/template_instantiations/dedisp_simple_nolag_float16.cu \
@@ -132,38 +132,38 @@ BIN_SRCFILES = \
 # Must list all header files here.
 # (Otherwise they won't show up in 'pip install' or pypi.)
 HFILES = \
-  include/pirate/constants.hpp \
+  include/pirate/Dedisperser.hpp \
+  include/pirate/DedispersionBuffer.hpp \
   include/pirate/DedispersionConfig.hpp \
+  include/pirate/DedispersionKernel.hpp \
   include/pirate/DedispersionPlan.hpp \
-  include/pirate/avx256/downsample.hpp \
-  include/pirate/avx256/m64_outbuf.hpp \
-  include/pirate/avx256/m128_outbuf.hpp \
-  include/pirate/gpu/reduce2.hpp \
-  include/pirate/gpu/DownsampleKernel.hpp \
-  include/pirate/gpu/TransposeKernel.hpp \
-  include/pirate/internals/bitvec.hpp \
-  include/pirate/internals/cpu_downsample.hpp \
-  include/pirate/internals/dedispersion_kernel_implementation.hpp \
-  include/pirate/internals/dedispersion_iobufs.hpp \
-  include/pirate/internals/gpu_downsample.hpp \
-  include/pirate/internals/gpu_transpose.hpp \
-  include/pirate/internals/file_utils.hpp \
-  include/pirate/internals/inlines.hpp \
-  include/pirate/internals/network_utils.hpp \
-  include/pirate/internals/system_utils.hpp \
-  include/pirate/internals/utils.hpp \
-  include/pirate/internals/Dedisperser.hpp \
-  include/pirate/internals/DedispersionBuffer.hpp \
-  include/pirate/internals/DedispersionKernel.hpp \
-  include/pirate/internals/FakeCorrelator.hpp \
-  include/pirate/internals/FakeServer.hpp \
-  include/pirate/internals/LaggedDownsamplingKernel.hpp \
-  include/pirate/internals/ReferenceLagbuf.hpp \
-  include/pirate/internals/ReferenceTree.hpp \
-  include/pirate/internals/YamlFile.hpp
+  include/pirate/FakeCorrelator.hpp \
+  include/pirate/FakeServer.hpp \
+  include/pirate/LaggedDownsamplingKernel.hpp \
+  include/pirate/ReferenceLagbuf.hpp \
+  include/pirate/ReferenceTree.hpp \
+  include/pirate/YamlFile.hpp \
+  include/pirate/constants.hpp \
+  include/pirate/file_utils.hpp \
+  include/pirate/inlines.hpp \
+  include/pirate/network_utils.hpp \
+  include/pirate/system_utils.hpp \
+  include/pirate/utils.hpp \
+  include/pirate/loose_ends/avx256_downsample.hpp \
+  include/pirate/loose_ends/bitvec.hpp \
+  include/pirate/loose_ends/cpu_downsample.hpp \
+  include/pirate/loose_ends/DownsampleKernel.hpp \
+  include/pirate/loose_ends/gpu_downsample.hpp \
+  include/pirate/loose_ends/gpu_transpose.hpp \
+  include/pirate/loose_ends/m128_outbuf.hpp \
+  include/pirate/loose_ends/m64_outbuf.hpp \
+  include/pirate/loose_ends/reduce2.hpp \
+  include/pirate/loose_ends/TransposeKernel.hpp \
+  include/pirate/cuda_kernels/dedispersion.hpp \
+  include/pirate/cuda_kernels/dedispersion_iobufs.hpp
 
 # 'make clean' deletes {*~, *.o, *.d, *.so, *.pyc} from these dirs.
-CLEAN_DIRS := . lib src_bin src_lib src_lib/template_instantiations src_pybind11 pirate_frb pirate_frb/__pycache__ include include/pirate include/pirate/avx256 include/pirate/gpu include/pirate/internals
+CLEAN_DIRS := . lib src_bin src_lib src_lib/loose_ends src_lib/template_instantiations src_pybind11 pirate_frb pirate_frb/__pycache__ include include/pirate include/pirate/loose_ends include/pirate/cuda_kernels
 
 # Extra files to be deleted by 'make clean'.
 # Note that 'pirate_frb/include' and 'pirate_frb/lib' are symlinks, so we put them in CLEAN_FILES, not CLEAN_RMDIRS
