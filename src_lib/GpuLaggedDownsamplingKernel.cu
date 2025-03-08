@@ -739,8 +739,13 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     params(params_)
 {
     params.validate();
+    
+    this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
 
-    int D = params.num_downsampling_levels;
+    if (params.num_downsampling_levels <= 1)
+	return;
+    
+    int D = params.num_downsampling_levels - 1;
     int M = pow2(params.small_input_rank - 2);
     int A = pow2(params.large_input_rank - params.small_input_rank);
     int ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
@@ -771,7 +776,6 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     int B = M_B * A_B;  // threadblocks per beam
     xassert(W <= 32);
 
-    this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
 }
@@ -833,7 +837,7 @@ struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
     virtual void launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream) override;
 
     using T32 = typename simd32_type<T>::type;    
-    cuda_kernel_t<T32> kernel;
+    cuda_kernel_t<T32> kernel = nullptr;
 };
 
 

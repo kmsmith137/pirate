@@ -59,20 +59,20 @@ struct GpuDedisperser
 
     void allocate();
 
-    // launch_dedispersion() interface needs some explanation:
+    // launch() interface needs some explanation:
     //
     //  - Caller is responsible for creating/managing (nstreams) cuda streams,
     //    and ensuring that the (istream, stream) arguments are always consistent.
     //
-    //  - Before calling launch_dedispersion, caller must queue kernels to 'stream'
-    //    which populate the input buffer (stage1_dd_kernels[istream].bufs[0]).
+    //  - Before calling launch(), caller must queue kernels to 'stream' which
+    //    populate the input buffer (stage1_dd_kernels[istream].bufs[0]).
     //
-    //  - launch_dedispersion() returns asynchronously. When 'stream' is synchronized,
+    //  - launch() returns asynchronously. When 'stream' is synchronized,
     //    the output buffers (stage2_dd_kernels[istream].bufs[:]) will be populated.
     //
     // FIXME interface will evolve over time (e.g. cudaEvents).
     
-    void launch_dedispersion(long ibatch, long it_chunk, long istream, cudaStream_t stream);
+    void launch(long ibatch, long it_chunk, long istream, cudaStream_t stream);
 };
 
 

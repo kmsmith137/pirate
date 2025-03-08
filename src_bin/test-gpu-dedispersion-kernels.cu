@@ -221,13 +221,9 @@ static void run_test(const TestInstance &tp)
 	 << endl;
 
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
-			 
-    DedispersionKernelParams gp = p;
-    if (p.input_is_ringbuf || p.output_is_ringbuf)
-	gp.ringbuf_locations = gp.ringbuf_locations.to_gpu();
     
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
-    shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(gp);
+    shared_ptr<GpuDedispersionKernel> gpu_kernel = GpuDedispersionKernel::make(p);
     gpu_kernel->allocate();
 
     // Array allocation starts here.

@@ -271,8 +271,10 @@ DedispersionConfig DedispersionConfig::make_random()
     // Early triggers
     
     for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
-	int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;;
-	int min_et_rank = rank/2;
+	// FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
+	// as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
+	int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
+	int min_et_rank = (rank/2) + 1;
 	int max_et_rank = rank-1;
 	
 	// Use at most 4 early triggers per downsampling level (arbitrary cutoff)

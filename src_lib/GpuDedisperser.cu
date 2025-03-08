@@ -72,7 +72,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
 
 void GpuDedisperser::allocate()
 {
-    if (!this->is_allocated)
+    if (this->is_allocated)
 	throw runtime_error("double call to GpuDedisperser::allocate()");
 
     for (auto &buf: stage1_dd_bufs)
@@ -87,14 +87,14 @@ void GpuDedisperser::allocate()
     for (auto &kernel: this->stage2_dd_kernels)
 	kernel->allocate();
 
-    this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero),
+    this->gpu_ringbuf = Array<void>(dtype, { gpu_ringbuf_nelts }, af_gpu | af_zero),
     this->lds_kernel->allocate();
     
     this->is_allocated = true;
 }
 
 
-void GpuDedisperser::launch_dedispersion(long ibatch, long it_chunk, long istream, cudaStream_t stream)
+void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream_t stream)
 {
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert((istream >= 0) && (istream < nstreams));

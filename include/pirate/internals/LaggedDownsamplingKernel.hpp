@@ -65,6 +65,7 @@ class GpuLaggedDownsamplingKernel
 public:
     LaggedDownsamplingKernelParams params;
     bool is_allocated = false;
+    int nbatches = 0;
     
     // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
     static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const LaggedDownsamplingKernelParams &params);
@@ -77,7 +78,6 @@ public:
     void print(std::ostream &os=std::cout, int indent=0) const;
     
     // Parameters computed in constructor.
-    int nbatches = 0;
     int shmem_nbytes_per_threadblock = 0;
     int state_nelts_per_beam = 0;
     

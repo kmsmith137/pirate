@@ -12,9 +12,9 @@ using namespace ksgpu;
 using namespace pirate;
 
 
-static void test_reference_dedispersion(const DedispersionConfig &config, int nchunks)
+static void test_dedisperser(const DedispersionConfig &config, int nchunks)
 {
-    cout << "\n" << "test_reference_dedispersion: nchunks=" << nchunks << endl;
+    cout << "\n" << "test_dedisperser: nchunks=" << nchunks << endl;
     config.print(cout, 4);
     
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
@@ -24,18 +24,23 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int nc
     int nt_chunk = config.time_samples_per_chunk;
     int beams_per_batch = config.beams_per_batch;
     int nbatches = xdiv(config.beams_per_gpu, beams_per_batch);
+    int nstreams = config.num_active_batches;
     int nout = plan->stage2_trees.size();
+
+    // FIXME test multi-stream logic in the future.
+    // For now, we use the default cuda stream, which simplifies things since we can
+    // freely mix operations such as Array::to_gpu() which use the default stream.
+    xassert(nstreams == 1);
     
     shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, 0);
     shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);
     shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, 2);
+    
+    shared_ptr<GpuDedisperser> gdd = make_shared<GpuDedisperser> (plan);
+    gdd->allocate();
 
     for (int c = 0; c < nchunks; c++) {
 	for (int b = 0; b < nbatches; b++) {
-	    //cout << "chunk " << c << "/" << nchunks
-	    //<< ", batch " << b << "/" << nbatches
-	    //<< endl;
-	
 	    Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost | af_random);
 	    // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
 	    // arr.at({0,0}) = 1.0;
@@ -48,13 +53,20 @@ static void test_reference_dedispersion(const DedispersionConfig &config, int nc
 
 	    rdd2->input_array.fill(arr);
 	    rdd2->dedisperse(b, c);
+
+	    Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
+	    gdd_inbuf.fill(arr.convert(config.dtype));
+	    gdd->launch(b, c, 0, nullptr);  // (ibatch, it_chunk, istream, stream)
 	    
 	    for (int iout = 0; iout < nout; iout++) {
-		const Array<float> &arr0 = rdd0->output_arrays.at(iout);
-		const Array<float> &arr1 = rdd1->output_arrays.at(iout);
-		const Array<float> &arr2 = rdd2->output_arrays.at(iout);
-		assert_arrays_equal(arr0, arr1, "soph0", "soph1", {"beam","dm_brev","t"});
-		assert_arrays_equal(arr0, arr2, "soph0", "soph2", {"beam","dm_brev","t"});
+		const Array<float> &rdd0_out = rdd0->output_arrays.at(iout);
+		const Array<float> &rdd1_out = rdd1->output_arrays.at(iout);
+		const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
+		const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
+		
+		assert_arrays_equal(rdd0_out, rdd1_out, "soph0", "soph1", {"beam","dm_brev","t"});
+		assert_arrays_equal(rdd0_out, rdd2_out, "soph0", "soph2", {"beam","dm_brev","t"});
+		assert_arrays_equal(rdd0_out, gdd_out, "soph0", "gpu", {"beam","dm_brev","t"});
 	    }
 	}
     }
@@ -72,6 +84,7 @@ static void run_random_small_configs(int niter)
 	cout << "\n    *** Running random small config " << iter << "/" << niter << " ***\n" << endl;
 	
 	auto config = DedispersionConfig::make_random();
+	config.num_active_batches = 1;   // FIXME currently we only support nstreams==1
 	config.validate();
 
 	int max_nt = 8192;
@@ -80,7 +93,7 @@ static void run_random_small_configs(int niter)
 	int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
 	int nchunks = ksgpu::rand_int(1, max_nchunks+1);
 	
-	test_reference_dedispersion(config, nchunks);
+	test_dedisperser(config, nchunks);
     }
 }
 
@@ -105,7 +118,7 @@ int main(int argc, char **argv)
     
 	int nt_tot = 1024 * 1024;  // FIXME promote to command-line arg?
 	int nchunks = xdiv(nt_tot, config.time_samples_per_chunk);
-	test_reference_dedispersion(config, nchunks);
+	test_dedisperser(config, nchunks);
     }
     
     cout << "\ntest-reference-dedisperser: pass" << endl;

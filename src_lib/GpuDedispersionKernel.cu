@@ -364,8 +364,8 @@ struct GpuDedispersionKernelImpl : public GpuDedispersionKernel
 
 
 template<typename T, class Inbuf, class Outbuf>
-GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Params &params_) :
-    GpuDedispersionKernel(params_)   // calls params_.validate()
+GpuDedispersionKernelImpl<T,Inbuf,Outbuf>::GpuDedispersionKernelImpl(const Params &params_)
+    : GpuDedispersionKernel(params_)   // calls params_.validate()
 {
     if (params.dd_rank == 1)
 	this->cuda_kernel = dedisperse_r1<T32, Inbuf, Outbuf>;
