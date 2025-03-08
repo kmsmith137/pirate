@@ -1,6 +1,5 @@
 #include "../include/pirate/internals/DedispersionKernel.hpp"
-#include "../include/pirate/internals/dedispersion_inbufs.hpp"
-#include "../include/pirate/internals/dedispersion_outbufs.hpp"
+#include "../include/pirate/internals/dedispersion_iobufs.hpp"  // struct dedispersion_{simple,ring}_{inbuf,output}
 #include "../include/pirate/internals/inlines.hpp"   // pow2(), is_aligned(), simd_type
 #include "../include/pirate/internals/utils.hpp"     // bit_reverse_slow()
 #include "../include/pirate/constants.hpp"

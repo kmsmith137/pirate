@@ -1,5 +1,4 @@
-#include "../../include/pirate/internals/dedispersion_inbufs.hpp"
-#include "../../include/pirate/internals/dedispersion_outbufs.hpp"
+#include "../../include/pirate/internals/dedispersion_iobufs.hpp"
 #include "../../include/pirate/internals/dedispersion_kernel_implementation.hpp"
     
 namespace pirate

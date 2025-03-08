@@ -144,8 +144,7 @@ HFILES = \
   include/pirate/internals/bitvec.hpp \
   include/pirate/internals/cpu_downsample.hpp \
   include/pirate/internals/dedispersion_kernel_implementation.hpp \
-  include/pirate/internals/dedispersion_inbufs.hpp \
-  include/pirate/internals/dedispersion_outbufs.hpp \
+  include/pirate/internals/dedispersion_iobufs.hpp \
   include/pirate/internals/gpu_downsample.hpp \
   include/pirate/internals/gpu_transpose.hpp \
   include/pirate/internals/file_utils.hpp \
