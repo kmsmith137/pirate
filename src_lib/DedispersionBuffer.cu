@@ -79,6 +79,11 @@ void DedispersionBuffer::allocate(int aflags)
 
     long nb = params.beams_per_batch;
     long nbuf = params.nbuf;
+    
+    // We use a specific memory layout for the arrays, where the beam axis is
+    // non-contiguous but the inner two axes are contiguous. This layout (or
+    // something similar) is currently required by GpuLaggedDownsamplingKernel.
+    // See comments in GpuLaggedDownsamplingKernel.cu for details.
 
     long bstride = 0;
     for (long i = 0; i < nbuf; i++)

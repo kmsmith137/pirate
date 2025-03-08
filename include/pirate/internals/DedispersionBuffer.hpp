@@ -15,7 +15,29 @@ namespace pirate {
 #endif
 
 
-// Represents a sequence of buffers, with shape (beams_per_batch, 2^rank, ntime).
+// class DedispersionBuffer: represents a sequence of arrays with shape
+// (beams_per_batch, 2^rank, ntime). The values of 'rank' and 'ntime' can
+// be different for each array in the sequence, but the value of
+// 'beams_per_batch' is the same.
+//
+// E.g. in 'class GpuDedispersionBuffer', we use two DedispersionBuffer
+// instances. In the first ("stage1") instance, arrays are indexed by
+// downsampling level 0 <= ids < config.num_downsampling_levels, with:
+//
+//   rank = config.tree_rank - (ids ? 1 : 0)
+//   ntime = config.time_samples_per_chunk / 2^ids.
+//
+// In the second ("stage2") instance, arrays are indexed by a "stage2 tree index"
+// 0 <= i < DedispersionPlan::stage2_ntrees, and the values of (rank, ntime) are
+// determined by the DedispersionPlan.
+//
+// In DedispersionBuffer::allocate(), we use a specific memory layout for
+// the arrays, where the beam axis is non-contiguous but the inner two axes
+// are contiguous. This layout (or something similar) is currently required
+// by GpuLaggedDownsamplingKernel -- see comments there for details.
+
+
+// Represents a sequence of buffers, with shape (beams_per_batch, 2^rank, ntime),
 struct DedispersionBufferParams
 {
     ksgpu::Dtype dtype;
@@ -55,8 +77,8 @@ struct DedispersionBuffer
     
     std::vector<ksgpu::Array<void>> bufs;
     bool is_allocated = false;
-    
-    void allocate(int aflags);
+
+    void allocate(int aflags);    
     bool on_host() const;  // throws exception if unallocated
     bool on_gpu() const;   // throws exception if unallocated
 

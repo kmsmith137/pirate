@@ -902,13 +902,10 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, lon
     grid_dims.z = params.beams_per_batch;
     grid_dims.y = A_B;
     grid_dims.x = M_B;
-
-    // Note that the cuda kernel has more generality than the C++ wrapper.
-    // FIXME reduce generality of the cuda kernel?
-    //
-    // (In the cuda kernel, there are 4 independent args 'in', 'out', 'bstride_in', 'bstride_out',
-    // whereas the DedispersionBuffer constrains things so that all of these args can be derived
-    // from 'in'.)
+    
+    // Note that the DedispersionBuffer arrays are laid out in a way (see DedispersionBuffer::allocate())
+    // which is consistent with the "adjacency" requirements of the cuda kernel (see comments earlier
+    // in this source file).
     
     this->kernel
 	<<< grid_dims, block_dims, shmem_nbytes_per_threadblock, stream >>>
