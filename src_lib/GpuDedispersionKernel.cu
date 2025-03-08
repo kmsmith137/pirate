@@ -242,9 +242,9 @@ dedispersion_simple_inbuf<T,Lagged>::device_args::device_args(const Array<void> 
     xassert_divisible(freq_stride32, elts_per_cache_line);
     
     // FIXME could improve these checks, by verifying that strides are non-overlapping.
-    xassert(beam_stride32 != 0);
-    xassert(ambient_stride32 != 0);
-    xassert(freq_stride32 != 0);
+    xassert((params.beams_per_batch == 1) || (beam_stride32 != 0));
+    xassert((params.amb_rank == 0) || (ambient_stride32 != 0));
+    xassert((params.dd_rank == 0) || (freq_stride32 != 0));
 }
 
 
@@ -280,9 +280,9 @@ dedispersion_simple_outbuf<T>::device_args::device_args(const Array<void> &out_a
     xassert_divisible(dm_stride32, elts_per_cache_line);
     
     // FIXME could improve these checks, by verifying that strides are non-overlapping.
-    xassert(beam_stride32 != 0);
-    xassert(ambient_stride32 != 0);
-    xassert(dm_stride32 != 0);
+    xassert((params.beams_per_batch == 1) || (beam_stride32 != 0));
+    xassert((params.amb_rank == 0) || (ambient_stride32 != 0));
+    xassert((params.dd_rank == 0) || (dm_stride32 != 0));
 }
 
 

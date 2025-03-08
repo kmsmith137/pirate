@@ -257,8 +257,10 @@ DedispersionConfig DedispersionConfig::make_random()
     ret.dtype = (ksgpu::rand_uniform() < 0.5) ? ksgpu::Dtype::native<float>() : ksgpu::Dtype::native<__half>();
     
     // Randomly choose a tree rank, but bias toward a high number.
+    // FIXME min_rank should be (ret.num_downsampling_levels > 1) ? 3 : 2
+    // I'm using a larger value as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
     int max_rank = 10;
-    int min_rank = (ret.num_downsampling_levels > 1) ? 1 : 0;
+    int min_rank = (ret.num_downsampling_levels > 1) ? 3 : 2;
     double x = ksgpu::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
     ret.tree_rank = int(sqrt(x));
 
