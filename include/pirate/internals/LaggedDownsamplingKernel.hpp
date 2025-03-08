@@ -70,6 +70,7 @@ public:
     // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
     static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const LaggedDownsamplingKernelParams &params);
 
+    // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate();
     
     // NULL stream is allowed, but is not the default.

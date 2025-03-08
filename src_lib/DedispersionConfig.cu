@@ -107,7 +107,6 @@ void DedispersionConfig::validate() const
     xassert(beams_per_gpu > 0);
     xassert(beams_per_batch > 0);
     xassert(num_active_batches > 0);
-    xassert(gmem_nbytes_per_gpu > 0);
 
     int min_rank = (num_downsampling_levels > 1) ? 1 : 0;
     check_rank(tree_rank, "DedispersionConfig", min_rank);
@@ -150,7 +149,6 @@ void DedispersionConfig::print(ostream &os, int indent) const
     print_kv("beams_per_gpu", beams_per_gpu, os, indent);
     print_kv("beams_per_batch", beams_per_batch, os, indent);
     print_kv("num_active_batches", num_active_batches, os, indent);
-    print_kv_nbytes("gmem_nbytes_per_gpu", gmem_nbytes_per_gpu, os, indent);
 }
 
 
@@ -182,8 +180,6 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
 	<< YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu
 	<< YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch
 	<< YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
-	<< YAML::Key << "gmem_nbytes_per_gpu" << YAML::Value << gmem_nbytes_per_gpu
-	<< YAML::Comment(ksgpu::nbytes_to_str(gmem_nbytes_per_gpu))
 	<< YAML::EndMap;
 }
 
@@ -230,7 +226,6 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
     ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
-    ret.gmem_nbytes_per_gpu = f.get_scalar<long> ("gmem_nbytes_per_gpu");
 
     YamlFile ets = f["early_triggers"];
 
@@ -307,7 +302,6 @@ DedispersionConfig DedispersionConfig::make_random()
     ret.beams_per_batch = ksgpu::rand_int(1,4);
     ret.beams_per_gpu = ret.beams_per_batch * nbatches;
     ret.num_active_batches = ksgpu::rand_int(1,nbatches+1);
-    ret.gmem_nbytes_per_gpu = 10L * 1000L * 1000L * 1000L;
 
     ret.validate();
     return ret;

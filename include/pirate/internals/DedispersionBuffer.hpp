@@ -30,7 +30,10 @@ struct DedispersionBufferParams
     DedispersionBufferParams(const DedispersionBufferParams &) = default;
 
     void print(std::ostream &os=std::cout, int indent=0) const;
-    void validate() const;  // throws an exception if anything is wrong
+    void validate() const;    // throws an exception if anything is wrong
+
+    // Total number of array elements (not bytes), for one batch of beams.
+    long get_nelts() const;
 };
 
 
@@ -56,6 +59,10 @@ struct DedispersionBuffer
     void allocate(int aflags);
     bool on_host() const;  // throws exception if unallocated
     bool on_gpu() const;   // throws exception if unallocated
+
+    // Total number of array elements (not bytes), for one batch of beams.
+    // Does not require array to be allocated.
+    long get_nelts() const { return params.get_nelts(); }
 
     // Reference to "ambient" array (each element of 'bufs' is a non-contiguous subarray).
     ksgpu::Array<void> ref;

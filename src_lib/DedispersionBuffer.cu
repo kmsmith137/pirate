@@ -25,6 +25,19 @@ void DedispersionBufferParams::print(std::ostream &os, int indent) const
 }
 
 
+long DedispersionBufferParams::get_nelts() const
+{
+    xassert_eq((long)buf_rank.size(), nbuf);
+    xassert_eq((long)buf_ntime.size(), nbuf);
+    
+    long ret = 0;
+    for (long i = 0; i < nbuf; i++)
+	ret += beams_per_batch * pow2(buf_rank[i]) * buf_ntime[i];
+    
+    return ret;
+}
+
+
 void DedispersionBufferParams::validate() const
 {
     xassert(!dtype.is_empty());

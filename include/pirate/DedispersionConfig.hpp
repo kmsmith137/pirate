@@ -43,7 +43,6 @@ struct DedispersionConfig
     long beams_per_gpu = 0;
     long beams_per_batch = 0;
     long num_active_batches = 0;
-    long gmem_nbytes_per_gpu = 0;
     
     void validate() const;
 

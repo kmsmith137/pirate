@@ -57,6 +57,7 @@ struct GpuDedisperser
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
     bool is_allocated = false;
 
+    // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate();
 
     // launch() interface needs some explanation:

@@ -119,6 +119,7 @@ BIN_SRCFILES = \
   src_bin/test-avx256-m64-outbuf.cu \
   src_bin/test-cpu-downsampler.cu \
   src_bin/test-dedisperser.cu \
+  src_bin/time-dedisperser.cu \
   src_bin/test-gpu-dedispersion-kernels.cu \
   src_bin/test-gpu-downsample.cu \
   src_bin/test-gpu-lagged-downsampler.cu \

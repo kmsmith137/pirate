@@ -166,6 +166,7 @@ public:
     Params params;   // reminder: contains 'ringbuf_locations' array on host (not GPU!)
     bool is_allocated = false;
     
+    // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate();
     
     // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.

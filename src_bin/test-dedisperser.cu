@@ -117,7 +117,7 @@ int main(int argc, char **argv)
 	
 	cout << "\nThis concludes our test of " << niter << " randomly generated 'small' configs.\n"
 	     << "To run a long test, specify a config on the command line, e.g.\n"
-	     << "   ./bin/test-reference-dedisperser configs/dedispersion/chord_zen3/chord_zen3_int8_float16.yml\n";
+	     << "   ./bin/test-dedisperser configs/dedispersion/chord_zen3/chord_zen3_int8_float16.yml\n";
     }
 
     for (int iarg = 1; iarg < argc; iarg++) {
@@ -128,7 +128,7 @@ int main(int argc, char **argv)
 	test_dedisperser(config, nchunks);
     }
     
-    cout << "\ntest-reference-dedisperser: pass" << endl;
+    cout << "\ntest-dedisperser: pass" << endl;
     return 0;
 }
 
