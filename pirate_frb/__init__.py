@@ -4,3 +4,5 @@
 import ksgpu
 
 from .pirate_pybind11 import *
+
+from .Hardware import Hardware
