@@ -3,6 +3,8 @@
 # using the "ctypes trick" to make their symbols globally visible.)
 import ksgpu
 
-from .pirate_pybind11 import *
+from . import pirate_pybind11
 
+from .FakeCorrelator import FakeCorrelator
+from .FakeServer import FakeServer
 from .Hardware import Hardware

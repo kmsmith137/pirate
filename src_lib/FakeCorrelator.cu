@@ -1,5 +1,6 @@
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket
+#include "../include/pirate/system_utils.hpp"   // pin_thread_to_vcpus()
 
 #include <thread>
 #include <sstream>
@@ -19,15 +20,62 @@ namespace pirate {
 #endif
 
 
-FakeCorrelator::FakeCorrelator(const Params &params_)
-    : params(params_)
+FakeCorrelator::FakeCorrelator(long send_bufsize_, bool use_zerocopy_, bool use_mmap_, bool use_hugepages_)
 {
-    xassert(params.nconn_per_ipaddr > 0);
-    xassert(params.ipaddr_list.size() > 0);
-    xassert(params.send_bufsize > 0);
-}
-	
+    this->send_bufsize = send_bufsize_;
+    this->use_zerocopy = use_zerocopy_;
+    this->use_mmap = use_mmap_;
+    this->use_hugepages = use_hugepages_;
     
+    xassert(send_bufsize > 0);
+}
+
+
+void FakeCorrelator::add_endpoint(const string &ip_addr, long num_tcp_connections, double total_gbps, const vector<int> &vcpu_list)
+{
+    Endpoint e;
+    e.ip_addr = ip_addr;
+    e.num_tcp_connections = num_tcp_connections;
+    e.total_gbps = total_gbps;
+    e.vcpu_list = vcpu_list;
+
+    this->endpoints.push_back(e);
+}
+
+
+static void sender_thread_main(FakeCorrelator *correlator, long endpoint_index)
+{
+    try {
+	correlator->sender_main(endpoint_index);
+    } catch (const exception &exc) {
+	correlator->abort(exc.what());
+    }
+}
+
+
+void FakeCorrelator::run()
+{
+    long num_endpoints = this->endpoints.size();
+    xassert(num_endpoints >= 0);
+
+    long nthreads = 0;
+    for (long i = 0; i < num_endpoints; i++)
+	nthreads += endpoints[i].num_tcp_connections;
+    
+    vector<std::thread> threads(nthreads);
+    long ithread = 0;
+
+    for (long i = 0; i < num_endpoints; i++)
+	for (long j = 0; j < endpoints[i].num_tcp_connections; j++)
+	    threads.at(ithread++) = std::thread(sender_thread_main, this, i);
+
+    xassert(ithread == nthreads);
+    
+    for (int ithread = 0; ithread < nthreads; ithread++)
+	threads[ithread].join();
+}
+
+
 void FakeCorrelator::abort(const string &msg)
 {
     std::unique_lock<mutex> lk(lock);
@@ -49,63 +97,39 @@ void FakeCorrelator::throw_exception_if_aborted()
 }
 
     
-void FakeCorrelator::sender_main(const string &ipaddr)
+void FakeCorrelator::sender_main(long endpoint_index)
 {
-    long nbytes_total = 0;
+    xassert(endpoint_index >= 0);
+    xassert(endpoint_index < long(endpoints.size()));
+
+    Endpoint e = endpoints.at(endpoint_index);
+    pin_thread_to_vcpus(e.vcpu_list);
     
     int aflags = ksgpu::af_uhost;
-    if (params.use_mmap)
-	aflags |= (params.use_hugepages ? ksgpu::af_mmap_huge : ksgpu::af_mmap_small);
+    if (use_mmap)
+	aflags |= (use_hugepages ? ksgpu::af_mmap_huge : ksgpu::af_mmap_small);
     
-    shared_ptr<char> buf = ksgpu::af_alloc<char> (params.send_bufsize, aflags);
+    shared_ptr<char> buf = ksgpu::af_alloc<char> (send_bufsize, aflags);
     
     Socket socket(PF_INET, SOCK_STREAM);
     // later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)
-    socket.connect(ipaddr, 8787);  // TCP port 8787
+    socket.connect(e.ip_addr, 8787);  // TCP port 8787
     
-    if (params.gbps_per_ipaddr > 0.0) {
-	double nbytes_per_sec = params.gbps_per_ipaddr / params.nconn_per_ipaddr / 8.0e-9;
+    if (e.total_gbps > 0.0) {
+	double nbytes_per_sec = e.total_gbps / e.num_tcp_connections / 8.0e-9;
 	socket.set_pacing_rate(nbytes_per_sec);
     }
     
-    if (params.use_zerocopy)
+    if (use_zerocopy)
 	socket.set_zerocopy();
     
+    long nbytes_total = 0;
+    
     do {
-	long nbytes_sent = socket.send(buf.get(), params.send_bufsize);
+	long nbytes_sent = socket.send(buf.get(), send_bufsize);
 	nbytes_total += nbytes_sent;
 	throw_exception_if_aborted();
     } while (!socket.connreset);
-}
-
-
-static void sender_thread_main(shared_ptr<FakeCorrelator> correlator, string ipaddr)
-{
-    try {
-	correlator->sender_main(ipaddr);
-    } catch (const exception &exc) {
-	correlator->abort(exc.what());
-    }
-}
-
-
-// Static member function
-void FakeCorrelator::run(const Params &params)
-{
-    shared_ptr<FakeCorrelator> correlator = make_shared<FakeCorrelator> (params);
-    
-    int naddr = params.ipaddr_list.size();
-    int nconn = params.nconn_per_ipaddr;
-    int nthreads = naddr * nconn;
-    
-    vector<std::thread> threads(nthreads);
-
-    for (int iaddr = 0; iaddr < naddr; iaddr++)
-	for (int iconn = 0; iconn < nconn; iconn++)
-	    threads[iaddr*nconn + iconn] = std::thread(sender_thread_main, correlator, params.ipaddr_list[iaddr]);
-
-    for (int ithread = 0; ithread < nthreads; ithread++)
-	threads[ithread].join();
 }
 
 

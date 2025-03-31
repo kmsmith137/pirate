@@ -35,81 +35,61 @@ struct DedispersionPlan;
 
 struct FakeServer
 {
-    struct Params
-    {
-	std::string server_name = "Server";
-	long num_iterations = 20;
-	bool use_hugepages = true;
-	
-	long nbytes_h2h = 0;  // memcpy host->host
-	long nbytes_h2g = 0;  // memcpy host->gpu (per GPU)
-	long nbytes_g2h = 0;  // memcpy host->gpu (per GPU)
-	long memcpy_blocksize = 0;
-	
-	long nbytes_gmem_kernel = 0;  // use memory bandwidth on GPU, using a GPU kernel (not cudaMemcpyDeviceToDevice())
-	long gmem_kernel_blocksize = 0;
-	
-	long nbytes_per_ssd = 0;
-	long nthreads_per_ssd = 0;
-	long nwrites_per_file = 0;
-	long nbytes_per_file = 16L * 1024L * 1024L;
-	std::vector<std::string> ssd_list;
-	
-	// We use one downsampling thread for each value of 'src_bit_depth'.
-	long nbytes_downsample = 0;
-	
-	// Network parameters.
-	long nconn_per_ipaddr = 0;    // tcp connections per ip address
-	std::vector<std::string> ipaddr_list;      // e.g { "10.1.1.2", "10.1.2.2" }
-	
-	// If specified, include a SleepyWorker which sleeps for the specified number of seconds.
-	// This is useful either if there are no workers (e.g. test_03_receive_data()), or if you want to rate-limit workers.
-	long sleep_usec = 0;
-	
-	// Networking options. I'll probably add more later (e.g. zero-copy TCP)
-	long recv_bufsize = 512 * 1024;
-	bool use_epoll = true;
-	
-	// This parameter just determines how often the receiver threads synchronize counters.
-	long network_sync_cadence = 16 * 1024 * 1024;  // bytes per ip address
-	
-	// If negative, all GPUs will be used.
-	int ngpu = -1;
-    };
-
+    FakeServer(const std::string &server_name, bool use_hugepages=true);
     
-    // High-level interface for running FakeServer.
+    // The "network_sync_cadence" arg determines how often the receiver threads synchronize counters.
+    void add_receiver(
+        const std::string &ip_addr,      // e.g. "10.1.1.2"
+	long num_tcp_connections,        // for this IP address
+	long recv_bufsize,               // bytes (512 KiB is a good default)
+	bool use_epoll,                  // recommend 'true'
+	long network_sync_cadence,       // 16 MiB is a good default
+	const std::vector<int> &vcpu_list
+    );
+
+    // The 'src_device' and 'dst_device' args can be (-1) for "host".
+    // For a host->host copy, the memory bandwidth is (2 * nbytes_per_iteration).
+    // Important note: it turns out that cudaMemcpy() runs slow for sizes >4GB (!!)
+    // Empirically, any blocksize between 1MB and 4GB works pretty well.
+    void add_memcpy_worker(int src_device, int dst_device, long nbytes_per_iteration, long blocksize, const std::vector<int> &vcpu_list);
+
+    // Uses memory bandwidth on GPU, but from a kernel instead of cudaMemcpyDeviceToDevice().
+    // Note: the 'nbytes_per_iteration' argument is the memory bandwidth, not (memory_bw / 2)!
+    void add_gmem_worker(int device, long nbytes_per_iteration, long blocksize, const std::vector<int> &vcpu_list);
+    
+    // To get multiple threads per SSD, use multiple workers with different 'root_dir' args.
+    void add_ssd_worker(const std::string &root_dir, long nfiles_per_iteration, long nbytes_per_file, long nbytes_per_write, const std::vector<int> &vcpu_list);
+
+    void add_downsampling_worker(int src_bit_depth, long src_nelts, const std::vector<int> &vcpu_list);
+
+    // This is useful either for a network-only test with no workers, or if you want to rate-limit workers.
+    void add_sleepy_worker(long sleep_usec);
+
+    // After adding workers, this method runs the server.
+    void run(long num_iterations);
+
+
+    // -------------------------------------------------------------------------------------------------
     //
-    //   - creates FakeServer (via shared_ptr)
-    //   - creates announcer thread
-    //   - creates receiver threads to receive TCP data
-    //   - creates worker threads to perform tasks specified in Params
-    //   - joins all threads
-    //   - destroys FakeServer.
-    
-    static void run(const Params &params);
-
-    
     // Lower-level interface follows.
 
-    
-    FakeServer(const Params &params);
+    // Defined in src_lib/FakeServer.cu
+    struct Receiver;
+    struct Worker;
+
+    void _add_worker(const std::shared_ptr<Worker> &worker, const std::string &caller);
     
     void increment_counter(int ix, int expected_value);
     int wait_for_counters(int threshold);
     int peek_at_counter();
     void abort(const std::string &msg);
-    void receiver_main(int irecv);
-    void worker_main(int iworker);
-    void _show_all(bool show_stats=true);
-    void announcer_main();
+    void receiver_main(int irecv, long num_iterations);
+    void worker_main(int iworker, long num_iterations);
+    void announcer_main(long num_iterations);
+    void _show_all(bool show_vcpus, bool show_stats);
 
-    
-    Params params;
-
-    // Defined in src_lib/FakeServer.cu
-    struct Receiver;
-    struct Worker;
+    std::string server_name;
+    bool use_hugepages = false;
     
     std::vector<std::shared_ptr<Receiver>> receivers;
     std::vector<std::shared_ptr<Worker>> workers;
@@ -125,6 +105,7 @@ struct FakeServer
     std::vector<int> counters;  // length num_workers
     int min_counter = 0;        // invariant: always equal to min(counters)
 
+    bool running = false;
     bool aborted = false;
     std::string abort_msg;
 

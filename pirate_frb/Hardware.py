@@ -9,33 +9,41 @@ import subprocess
 
 class Hardware:
     def __init__(self):
-        self.num_gpus = ksgpu.get_cuda_num_devices()
+        pass
 
-        # Note: self.ip_addrs is a cached property which returns a list of IPv4 addresses.
-        # Note: self.disks is a cached property which returns a list of all block devices of type 'disk'.
+    @functools.cached_property
+    def num_cpus(self):
+        return len(self._vcpu_list_per_cpu())
+        
+    @functools.cached_property
+    def num_gpus(self):
+        return ksgpu.get_cuda_num_devices()
 
-    
     @functools.cache
-    def vcpu_list_of_gpu(self, gpu):
-        bus_id = self._pcie_bus_id_of_gpu(gpu)
+    def vcpu_list_from_cpu(self, cpu):
+        assert 0 <= cpu < self.num_cpus
+        return self._vcpu_list_per_cpu()[cpu]
+        
+    @functools.cache
+    def vcpu_list_from_gpu(self, gpu):
+        bus_id = self._pcie_bus_id_from_gpu(gpu)
         return self._vcpu_list_from_pcie_bus_id(bus_id)
 
     @functools.cache
-    def vcpu_list_of_ip_addr(self, ip_addr):
+    def vcpu_list_from_ip_addr(self, ip_addr):
         nic = self._ip_addr_show_output[ip_addr]
-        bus_id = self._pcie_bus_id_of_nic(nic)   # can be None, for loopback interface 
+        bus_id = self._pcie_bus_id_from_nic(nic)   # can be None, for loopback interface 
         return self._vcpu_list_from_pcie_bus_id(bus_id, allow_none=True)
 
     @functools.cache
-    def vcpu_list_of_disk(self, disk):
-        bus_id = self._pcie_bus_id_of_block_device(disk)
+    def vcpu_list_from_disk(self, disk):
+        bus_id = self._pcie_bus_id_from_block_device(disk)
         return self._vcpu_list_from_pcie_bus_id(bus_id)
 
 
     @functools.cached_property
     def ip_addrs(self):
         return sorted(self._ip_addr_show_output.keys())
-
     
     @functools.cached_property
     def disks(self):
@@ -59,34 +67,60 @@ class Hardware:
     
         
     def show(self):
+        for cpu in range(self.num_cpus):
+            print(f'CPU {cpu}: vcpu_list = {self.vcpu_list_from_cpu(cpu)}')
+        print()
+        
         for gpu in range(self.num_gpus):
-            bus_id = self._pcie_bus_id_of_gpu(gpu)
+            bus_id = self._pcie_bus_id_from_gpu(gpu)
             description = self._description_from_pcie_bus_id(bus_id)
-            vcpu_list = self.vcpu_list_of_gpu(gpu)
+            vcpu_list = self.vcpu_list_from_gpu(gpu)
             print(f'GPU {gpu}')
             print(f'   pcie = {bus_id}  ({description})')
             print(f'   {vcpu_list = }\n')
 
         for ip_addr in self.ip_addrs:
             nic = self._ip_addr_show_output[ip_addr]
-            bus_id = self._pcie_bus_id_of_nic(nic)
+            bus_id = self._pcie_bus_id_from_nic(nic)
             description = self._description_from_pcie_bus_id(bus_id)
-            vcpu_list = self.vcpu_list_of_ip_addr(ip_addr)
+            vcpu_list = self.vcpu_list_from_ip_addr(ip_addr)
             print(f'IP addr {ip_addr}')
             print(f'   nic = {nic}, pcie = {bus_id}  ({description})')
             print(f'   {vcpu_list = }\n')
 
         for disk in self.disks:
-            bus_id = self._pcie_bus_id_of_block_device(disk)
+            bus_id = self._pcie_bus_id_from_block_device(disk)
             description = self._description_from_pcie_bus_id(bus_id)
-            vcpu_list = self.vcpu_list_of_disk(disk)
+            vcpu_list = self.vcpu_list_from_disk(disk)
             print(f'Disk {disk}')
             print(f'   pcie = {bus_id}  ({description})')
             print(f'   {vcpu_list = }\n')
 
 
     ################################################################################################
+
+
+    @functools.cache
+    def _vcpu_list_per_cpu(self):
+        """Returns list of lists, containing vcpu list for each physical cpu."""
+        
+        ret = [ ]
     
+        for d in os.listdir("/sys/devices/system/cpu/"):
+            if (not d.startswith("cpu")) or (not d[3:].isdigit()):
+                continue
+
+            with open(f"/sys/devices/system/cpu/{d}/topology/physical_package_id") as f:
+                cpu_id = int(f.read().strip())
+                vcpu_id = int(d[3:])
+                while len(ret) <= cpu_id:
+                    ret.append(list())
+                ret[cpu_id].append(vcpu_id)
+
+        assert len(ret) > 0
+        assert all((len(x) > 0) for x in ret)
+        return [ sorted(x) for x in ret ]
+
     
     @functools.cache
     def _vcpu_list_from_pcie_bus_id(self, bus_id, allow_none=False):
@@ -100,7 +134,7 @@ class Hardware:
 
     
     @functools.cache
-    def _pcie_bus_id_of_gpu(self, gpu):
+    def _pcie_bus_id_from_gpu(self, gpu):
         return ksgpu.get_cuda_pcie_bus_id(gpu).lower()
 
 
@@ -121,7 +155,7 @@ class Hardware:
     
     
     @functools.cache
-    def _pcie_bus_id_of_nic(self, nic):
+    def _pcie_bus_id_from_nic(self, nic):
         """
         The 'nic' argument should be e.g. 'eth0'. Returns a PCIe bus id (e.g. '0000:03:00.0'),
         or None if not a PCIe device (e.g. loopback, docker).
@@ -130,7 +164,7 @@ class Hardware:
 
 
     @functools.cache
-    def _pcie_bus_id_of_block_device(self, device_name):
+    def _pcie_bus_id_from_block_device(self, device_name):
         """
         Given a block device (e.g., '/dev/nvme0n1' or '/dev/nvme0n1p1'),
         returns the PCIe bus id (e.g. '0000:03:00.0').

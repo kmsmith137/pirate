@@ -106,6 +106,8 @@ PYEXT_SRCFILES = \
 PYFILES = \
   pirate_frb/__init__.py \
   pirate_frb/__main__.py \
+  pirate_frb/FakeCorrelator.py \
+  pirate_frb/FakeServer.py \
   pirate_frb/Hardware.py \
 
 # These are in 1-1 corresponding with executables in bin/
