@@ -8,6 +8,7 @@
 #include <memory>  // shared_ptr
 #include <iostream>
 #include <ksgpu/Array.hpp>
+#include <ksgpu/cuda_utils.hpp>  // CudaStreamWrapper
 
 namespace pirate {
 #if 0
@@ -164,7 +165,7 @@ struct ChimeDedisperser
     void initialize();
     
     // Dedisperses a data "cube" with shape (nchunks, config.beams_per_gpu, nfreq, config.time_samples_per_chunk)
-    void run(int nchunks);
+    void run(long nchunks);
     
     bool use_copy_engine = false;
     int nfreq = 16384;

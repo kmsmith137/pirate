@@ -1,3 +1,4 @@
+#include <ksgpu/memcpy_kernels.hpp>
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
@@ -35,7 +36,7 @@ ChimeDedisperser::ChimeDedisperser(int beams_per_gpu_, int num_active_batches_, 
 void ChimeDedisperser::initialize()
 {
     if (plan)
-	raise runtime_error("Double call to ChimeDedisperser::initialize()");
+	throw runtime_error("Double call to ChimeDedisperser::initialize()");
 
     long nstreams = config.num_active_batches;
 
@@ -58,15 +59,15 @@ void ChimeDedisperser::initialize()
     long extra_nbytes = align_up((extra_nelts * config.dtype.nbits) / (2*8), 256);
     
     // Length-2 axis is {dst,src}
-    this->extra_bufffers = Array<char> extra_buffers({ nstreams, 2, extra_nbytes }, af_zero | af_gpu);
+    this->extra_buffers = Array<char> ({ nstreams, 2, extra_nbytes }, af_zero | af_gpu);
 }
 
 
 void ChimeDedisperser::run(long nchunks)
 {
     if (!plan)
-	raise runtime_error("Must call ChimeDedisperser::initialize() before ChimeDedisperser::run()");
-    
+	throw runtime_error("Must call ChimeDedisperser::initialize() before ChimeDedisperser::run()");
+
     long nstreams = config.num_active_batches;
     long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
     long extra_nbytes = extra_buffers.shape[2];    
@@ -90,7 +91,7 @@ void ChimeDedisperser::run(long nchunks)
 	    else
 		ksgpu::launch_memcpy_kernel(xdst, xsrc, extra_nbytes, s);
 	    
-	    dedisperser.launch(ibatch, it_chunk, istream, s);
+	    dedisperser->launch(ibatch, it_chunk, istream, s);
 	    istream = (istream + 1) % nstreams;
 	}
     }
