@@ -59,14 +59,17 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
 	auto kernel = GpuDedispersionKernel::make(kparams);
 	this->stage1_dd_kernels.push_back(kernel);
+	this->bw_per_launch += kernel->bw_per_launch;
     }
 
     for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params) {
 	auto kernel = GpuDedispersionKernel::make(kparams);
 	this->stage2_dd_kernels.push_back(kernel);
+	this->bw_per_launch += kernel->bw_per_launch;
     }
 
     this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);
+    this->bw_per_launch += lds_kernel->bw_per_launch;
 }
 
 

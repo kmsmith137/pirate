@@ -25,6 +25,8 @@ extern void makedir(const std::string &filename,
 // Note: includes '.' and '..'
 extern std::vector<std::string> listdir(const std::string &dirname);
 
+extern void delete_file(const std::string &filename);
+
 extern long disk_space_used(const std::string &dirname);
 
 

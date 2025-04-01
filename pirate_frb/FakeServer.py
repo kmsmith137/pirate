@@ -16,45 +16,61 @@ class FakeServer:
         self.hardware = Hardware()
 
 
-    def add_receiver(self, ip_addr, num_tcp_connections, recv_bufsize = 512*1024, use_epoll=True, network_sync_cadence=16*1024**2):
+    def add_tcp_receiver(self, ip_addr, num_tcp_connections, recv_bufsize=512*1024, use_epoll=True):
         vcpu_list = self.hardware.vcpu_list_from_ip_addr(ip_addr)
-        self.cpp_server.add_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, network_sync_cadence, vcpu_list)
+        self.cpp_server.add_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list)
+
+
+    def add_chime_dedipserser(self, gpu, use_copy_engine=False, num_active_batches=3, beams_per_batch=1, beams_per_gpu=None):
+        if beams_per_gpu is None:
+            beams_per_gpu = num_active_batches * beams_per_batch
+
+        vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)
+        self.cpp_server.add_chime_dedisperser(gpu, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine, vcpu_list)
                                   
     
-    def add_memcpy_worker(self, src_device, dst_device, nbytes_per_iteration, cpu=None, blocksize=1024**3):
+    def add_memcpy_thread(self, src_device, dst_device, blocksize=1024**3, cpu=None, use_copy_engine=False):
         """
         Represents either a host->host, host->GPU, or GPU->host copy.
         The 'src_device' and 'dst_device' args are GPU indices, or (-1) for "host".
-        For a host->host copy, the memory bandwidth is (2 * nbytes_per_iteration).
 
-        We use a default blocksize of 2 GiB, since (surprisingly) cudaMemcpy() runs slow
+        We use a default blocksize of 1 GiB, since (surprisingly) cudaMemcpy() runs slow
         for sizes >4 GiB. (Empirically, any blocksize between 1MiB and 4GiB works pretty well.)
+
+        The 'cpu' argument is required for host->host copies, in order to pin threads to a CPU.
+
+        The 'use_copy_engine' argument is only meaningful for GPU->GPU copies. If use_copy_engine=False,
+        then the copy is done with a GPU kernel, rather than cudaMemcpyAsync(). This is useful in a situation
+        where both GPU "compute engines" are being used for GPU->host and host->GPU transfers.
         """
 
-        m = max(src_device, dst_device)
-        
-        if m < 0:  # host->host
-            assert cpu is not None
+        host_to_host = ((src_device < 0) and (dst_device < 0))
+
+        if host_to_host:
+            if cpu is None:
+                raise RuntimeError("FakeServer.add_memcpy() thread: for a host->host copy, the 'cpu' arg must be specified")
             vcpu_list = self.hardware.vcpu_list_from_cpu(cpu)
-        else:      # host->gpu or gpu->host
-            assert cpu is None
-            vcpu_list = self.hardware.vcpu_list_from_gpu(m)
-        
-        self.cpp_server.add_memcpy_worker(src_device, dst_device, nbytes_per_iteration, blocksize, vcpu_list)
 
+        else:
+            if cpu is not None:
+                raise RuntimeError("FakeServer.add_memcpy_thread(): for a copy involving the GPU, the 'cpu' arg must not be specified")
+            if (src_device >= 0) and (dst_device >= 0) and (src_device != dst_device):
+                raise RuntimeError("FakeServer.add_memcpy_thread(): GPU->GPU copies between different GPUs are not currently supported")
 
-    def add_gpu_copy_kernel(self, gpu, nbytes=128*1024**3, blocksize=1024**3):
-        vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)
-        self.cpp_server.add_gpu_copy_kernel(gpu, nbytes, blocksize, vcpu_list)
+            gpu = max(src_device, dst_device)
+            vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)
+        
+        self.cpp_server.add_memcpy_worker(src_device, dst_device, blocksize, use_copy_engine, vcpu_list)
         
         
-    def add_ssd_worker(self, root_dir, nfiles_per_iteration, nbytes_per_file, nbytes_per_write):
+    def add_ssd_writer(self, root_dir, nbytes_per_file = 64 * 1024**2)
         os.makedirs(root_dir, exist_ok=True)
         vcpu_list = self.hardware.vcpu_list_from_dirname(root_dir)
-        self.cpp_server.add_ssd_worker(root_dir, nfiles_per_iteration, nbytes_per_file, nbytes_per_write, vcpu_list)
+        self.cpp_server.add_ssd_worker(root_dir, nbytes_per_file, vcpu_list)
     
 
-    def add_downsampling_worker(self, src_bit_depth, src_nelts, cpu):
+    def add_downsampling_thread(self, src_bit_depth, src_nelts, cpu):
+        """Runs the AVX2 downsampling kernel."""
         vcpu_list = self.hardware.vcpu_list_from_cpu(cpu)
         self.cpp_server.add_downsampling_worker(src_bit_depth, src_nelts, vcpu_list)
         

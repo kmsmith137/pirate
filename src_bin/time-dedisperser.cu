@@ -26,7 +26,7 @@ int main(int argc, char **argv)
     timestamps[0] = ksgpu::get_time();
     
     for (long it_chunk = 0; it_chunk < nchunks; it_chunk++) {
-	dd.run(1);
+	dd.run();
 	
 	long ihi = it_chunk+1;
 	long ilo = (ihi/2);

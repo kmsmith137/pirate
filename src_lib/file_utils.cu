@@ -102,6 +102,15 @@ vector<string> listdir(const string &dirname)
 }
 
 
+void delete_file(const string &filename)
+{
+    // FIXME placeholder
+    stringstream ss;
+    ss << "XXX delete_file(" << filename << ")\n";
+    cout << ss.str() << flush;
+}
+
+
 long disk_space_used(const string &dirname)
 {
     FTS* hierarchy;

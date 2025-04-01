@@ -82,15 +82,16 @@ class GpuLaggedDownsamplingKernel
 public:
     LaggedDownsamplingKernelParams params;
     bool is_allocated = false;
-    int nbatches = 0;
+    int nbatches = 0;   // (total_beams / beams_per_batch)
     
     // Factory function used to construct new GpuLaggedDownsamplingKernel objects.
     static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const LaggedDownsamplingKernelParams &params);
 
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate();
-    
-    // NULL stream is allowed, but is not the default.
+
+    // One call to launch() processes an array of shape (beams_per_batch, pow2(input_total_rank), ntime).
+    // The NULL stream is allowed, but is not the default.
     virtual void launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream) = 0;
     
     void print(std::ostream &os=std::cout, int indent=0) const;
@@ -98,6 +99,10 @@ public:
     // Parameters computed in constructor.
     int shmem_nbytes_per_threadblock = 0;
     int state_nelts_per_beam = 0;
+
+    // Bandwidth per call to GpuLaggedDownsamplingKernel::launch().
+    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    BandwidthTracker bw_per_launch;
     
     // These parameters (also computed in constructor) determine how the kernel is divided
     // into threadblocks. See GpuLaggedDownsamplingKernel.cu for more info.

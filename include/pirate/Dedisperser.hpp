@@ -58,6 +58,10 @@ struct GpuDedisperser
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
     bool is_allocated = false;
 
+    // Bandwidth per call to GpuDedisperser::launch().
+    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    BandwidthTracker bw_per_launch;
+
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate();
 
@@ -146,7 +150,9 @@ struct ReferenceDedisperserBase
 
 // -------------------------------------------------------------------------------------------------
 //
-// ChimeDedisperser: a temporary hack for timing!
+// ChimeDedisperser: a temporary hack for timing.
+//
+// Warning: not thread-safe!
 
 
 struct ChimeDedisperser
@@ -159,16 +165,18 @@ struct ChimeDedisperser
     // This may change when RFI removal is incorporated (we may want to increase
     // beams_per_batch, in order to reduce the number of kernel launches).
 
-    ChimeDedisperser(int beams_per_gpu=12, int num_active_batches=3, int beams_per_batch=3, bool use_copy_engine=false);
+    ChimeDedisperser(int beams_per_gpu=12, int num_active_batches=3, int beams_per_batch=1, bool use_copy_engine=false);
     
     // Call with current GPU appropriately set.
     void initialize();
     
-    // Dedisperses a data "cube" with shape (nchunks, config.beams_per_gpu, nfreq, config.time_samples_per_chunk)
-    void run(long nchunks);
+    // Dedisperses a data "cube" with shape (config.beams_per_gpu, nfreq, config.time_samples_per_chunk)
+    // Note 'beams_per_gpu' here, not 'beams_per_batch'!
+    void run();
     
     bool use_copy_engine = false;
     int nfreq = 16384;
+    int istream = 0;
     
     DedispersionConfig config;
     std::shared_ptr<DedispersionPlan> plan;
@@ -177,7 +185,13 @@ struct ChimeDedisperser
 
     // FIXME currently, gridding and peak-finding are not implemented.
     // As a kludge, we put in some extra GPU->GPU memcopies with the same bandwidth.
-    ksgpu::Array<char> extra_buffers;
+    ksgpu::Array<char> extra_buffers;  // shape (num_active_batches, 2, extra_nbytes_per_batch)
+    long extra_nbytes_per_batch = 0;
+
+    // Bandwidth per call to ChimeDedisperser::run().
+    // This corresponds to 'beams_per_gpu' beams, not 'beams_per_batch' beams.
+    // FIXME: doesn't currently get initialized until initialize() is called.
+    BandwidthTracker bw_per_run_call;
 };
 
 

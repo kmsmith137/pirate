@@ -21,32 +21,27 @@ struct DedispersionPlan;
 struct FakeServer
 {
     FakeServer(const std::string &server_name="FakeServer", bool use_hugepages=true);
-    
-    // The "network_sync_cadence" arg determines how often the receiver threads synchronize counters.
-    void add_receiver(
-        const std::string &ip_addr,      // e.g. "10.1.1.2"
-	long num_tcp_connections,        // for this IP address
-	long recv_bufsize,               // bytes (512 KiB is a good default)
-	bool use_epoll,                  // recommend 'true'
-	long network_sync_cadence,       // 16 MiB is a good default
-	const std::vector<int> &vcpu_list
-    );
 
+    // I've been using 512KB as a default 'recv_bufsize', but I haven't explored this systematically.
+    void add_tcp_receiver(const std::string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const std::vector<int> &vcpu_list);
+
+    // Dedispersion on one GPU, using simplified CHIME parameters.
+    void add_chime_dedisperser(int device, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine, const std::vector<int> &vcpu_list);
+    
     // The 'src_device' and 'dst_device' args can be (-1) for "host".
-    // For a host->host copy, the memory bandwidth is (2 * nbytes_per_iteration).
     // Important note: it turns out that cudaMemcpy() runs slow for sizes >4GB (!!)
     // Empirically, any blocksize between 1MB and 4GB works pretty well.
-    void add_memcpy_worker(int src_device, int dst_device, long nbytes_per_iteration, long blocksize, const std::vector<int> &vcpu_list);
-
-    // GPU copy kernel: consumes memory bandwidth on GPU, with a kernel instead of cudaMemcpyDeviceToDevice().
-    // This is sometimes useful if both "copy engines" are being used for PCIe transfers.
-    // Suggest nbytes=100GB and blocksize=2GB.
-    void add_gpu_copy_kernel(int device, long nbytes, long blocksize, const std::vector<int> &vcpu_list);
+    //
+    // The 'use_copy_engine' argument is only meaningful for GPU->GPU copies.
+    // If use_copy_engine=False, then we copy memory using a GPU kernel, rather than cudaMemcpyAsync().
+    // This is useful in a situation where both GPU "compute engines" are being used for GPU->host and host->GPU transfers.
+    void add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const std::vector<int> &vcpu_list);
     
     // To get multiple threads per SSD, use multiple workers with different 'root_dir' args.
-    void add_ssd_worker(const std::string &root_dir, long nfiles_per_iteration, long nbytes_per_file, long nbytes_per_write, const std::vector<int> &vcpu_list);
+    void add_ssd_writer(const std::string &root_dir, long nbytes_per_file, const std::vector<int> &vcpu_list);
 
-    void add_downsampling_worker(int src_bit_depth, long src_nelts, const std::vector<int> &vcpu_list);
+    // Runs the AVX2 downsampling kernel
+    void add_downsampling_thread(int src_bit_depth, long src_nelts, const std::vector<int> &vcpu_list);
 
     // Called by python code, to control server.
     double show_stats();  // returns elapsed time in seconds

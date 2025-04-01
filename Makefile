@@ -65,6 +65,7 @@ PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 
 # These get compiled into lib/libpirate.so.
 LIB_SRCFILES = \
+  src_lib/BandwidthTracker.cu \
   src_lib/ChimeDedisperser.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
@@ -153,6 +154,7 @@ HFILES = \
   include/pirate/inlines.hpp \
   include/pirate/network_utils.hpp \
   include/pirate/system_utils.hpp \
+  include/pirate/trackers.hpp \
   include/pirate/utils.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \
   include/pirate/loose_ends/bitvec.hpp \

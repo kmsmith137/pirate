@@ -14,10 +14,11 @@
 #include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/inlines.hpp"
-#include "../include/pirate/file_utils.hpp"
+#include "../include/pirate/file_utils.hpp"     // File, listdir()
 #include "../include/pirate/system_utils.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket, Epoll
 #include "../include/pirate/loose_ends/cpu_downsample.hpp"
+#include "../include/pirate/Dedipserser.hpp"
 
 
 using namespace std;
@@ -60,6 +61,7 @@ struct FakeServer::Stats
 
     // FRB-specific.
     long nsamp_downsampled = 0;
+    double chime_beam_seconds = 0.0;
 
     Stats &operator+=(const Stats &s);
 };
@@ -78,6 +80,7 @@ FakeServer::Stats &FakeServer::Stats::operator+=(const Stats &s)
     num_epoll_calls += s.num_epoll_calls;
 
     nsamp_downsampled += s.nsamp_downsampled;
+    chime_beam_seconds += s.chime_beam_seconds;
 
     return *this;
 }
@@ -87,6 +90,7 @@ static double _show_stats(const vector<FakeServer::Stats> &stats, const vector<d
 {
     xassert_eq(stats.size(), dt.size());
 
+    double dt_max = 0.0;
     double hmem_bw = 0.0;
     double gmem_bw = 0.0;
     double h2g_bw = 0.0;
@@ -96,7 +100,7 @@ static double _show_stats(const vector<FakeServer::Stats> &stats, const vector<d
     double read_call_rate = 0.0;
     double epoll_call_rate = 0.0;
     double ds_rate = 0.0;
-    double dt_max = 0.0;
+    double chime_beams = 0.0;
 
     for (ulong i = 0; i < stats.size(); i++) {
 	dt_max = std::max(dt_max, dt[i]);
@@ -114,28 +118,31 @@ static double _show_stats(const vector<FakeServer::Stats> &stats, const vector<d
 	read_call_rate += (stats[i].num_read_calls / dt[i]);
 	epoll_call_rate += (stats[i].num_epoll_calls / dt[i]);
 	ds_rate += (stats[i].nsamp_downsampled / dt[i]);
+	chime_beams += (stats[i].chime_beam_seconds / dt[i]);
     }
 
     stringstream ss;
     
     if (hmem_bw > 0.0)
-	ss << "   Host memory bandwidth: " << (1.0e-9 * hmem_bw) << " GB/s\n";
+	ss << "  Host memory bandwidth: " << (1.0e-9 * hmem_bw) << " GB/s\n";
     if (gmem_bw > 0.0)
-	ss << "   GPU global memory bandwidth: " << (1.0e-9 * gmem_bw) << " GB/s\n";
+	ss << "  GPU global memory bandwidth: " << (1.0e-9 * gmem_bw) << " GB/s\n";
     if (h2g_bw > 0.0)
-	ss << "   Host->GPU bandwidth: " << (1.0e-9 * h2g_bw) << " GB/s\n";
+	ss << "  Host->GPU bandwidth: " << (1.0e-9 * h2g_bw) << " GB/s\n";
     if (g2h_bw > 0.0)
-	ss << "   GPU->Host bandwidth: " << (1.0e-9 * g2h_bw) << " GB/s\n";
+	ss << "  GPU->Host bandwidth: " << (1.0e-9 * g2h_bw) << " GB/s\n";
     if (ssd_bw > 0.0)
-	ss << "   SSD bandwidth: " << (1.0e-9 * ssd_bw) << " GB/s\n";
+	ss << "  SSD bandwidth: " << (1.0e-9 * ssd_bw) << " GB/s\n";
     if (network_bw > 0.0)
-	ss << "   Network bandwidth: " << (8.0e-9 * network_bw) << " Gbps (not GB/s)\n";
+	ss << "  Network bandwidth: " << (8.0e-9 * network_bw) << " Gbps (not GB/s)\n";
     if (read_call_rate > 0.0)
-	ss << "   read() calls/sec: " << (read_call_rate) << "\n";
+	ss << "  read() calls/sec: " << (read_call_rate) << "\n";
     if (epoll_call_rate > 0.0)
-	ss << "   epoll() calls/sec: " << (epoll_call_rate) << "\n";
+	ss << "  epoll() calls/sec: " << (epoll_call_rate) << "\n";
     if (ds_rate > 0.0)
-	ss << "   Downsampling throughput: " << (1.0e-9 * ds_rate) << " Gsamp/s\n";
+	ss << "  AVX2 downsampling throughput: " << (1.0e-9 * ds_rate) << " Gsamp/s\n";
+    if (chime_beams > 0.0)
+	ss << "  Real-time CHIME beams: " << (chime_beams) << "\n";
 
     string s = ss.str();
     
@@ -368,7 +375,7 @@ void FakeServer::start()
 	for (long i = 0; i < num_workers; i++) {
 	    auto wp = workers[i];
 	    stringstream ss;
-	    ss << wp->worker_name << ": vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
+	    ss << "  [Thread " << i << "] " << wp->worker_name << ": vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
 	    cout << ss.str() << flush;
 	    threads[i] = std::thread(worker_thread_main, wp);
 	}
@@ -462,7 +469,7 @@ struct Receiver : FakeServer::Worker
     long num_tcp_connections = 0;
     long recv_bufsize = 0;
     bool use_epoll = true;
-    long network_sync_cadence = 0;
+    long nbytes_per_iteration = 300 * 1024 * 1024;
 
     // Initialized in worker_initialize().
     shared_ptr<char> recv_buf;
@@ -473,23 +480,21 @@ struct Receiver : FakeServer::Worker
     vector<Socket> data_sockets;
 
     
-    Receiver(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_, long network_sync_cadence_) :
+    Receiver(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
 	Worker(state_, vcpu_list_),
 	ip_addr(ip_addr_),
 	num_tcp_connections(num_tcp_connections_),
 	recv_bufsize(recv_bufsize_),
 	use_epoll(use_epoll_),
-	network_sync_cadence(network_sync_cadence_),
 	epoll(false)  // 'epoll' is constructed in an uninitialized state, and gets initialized in worker_initialize()
     {
 	xassert(ip_addr.size() > 0);
 	xassert(num_tcp_connections > 0);
         xassert(use_epoll || (num_tcp_connections == 1));
         xassert(recv_bufsize > 0);
-        xassert(network_sync_cadence > 0);
 
 	stringstream ss;
-	ss << "TCP receive thread(" << ip_addr << ", " << num_tcp_connections << " connections)";
+	ss << "TcpReceiver(" << ip_addr << ", " << num_tcp_connections << " connections, use_epoll=" << use_epoll << ")";
 	this->worker_name = ss.str();
     }
 	
@@ -539,7 +544,6 @@ struct Receiver : FakeServer::Worker
     }
 
 
-    // Receives (network_sync_cadence) bytes of data, and updates this->cumulative_stats.
     virtual Stats worker_body() override
     {
 	return use_epoll ? _receive_epoll() : _receive_no_epoll();
@@ -552,14 +556,13 @@ struct Receiver : FakeServer::Worker
 	xassert(data_sockets.size() == 1);
 	Stats stats;
 	
-	while (stats.nbytes_received < network_sync_cadence) {
+	while (stats.nbytes_received < nbytes_per_iteration) {
 	    // Blocking read()
-	    // FIXME in hindsight, not a fan of how max_read is computed.
-	    long max_read = std::min(recv_bufsize, network_sync_cadence - stats.nbytes_received);
-	    long nbytes_read = data_sockets[0].read(recv_buf.get(), max_read);
+	    long nbytes_read = data_sockets[0].read(recv_buf.get(), recv_bufsize);
 	    xassert(nbytes_read >= 0);
 	    
 	    stats.nbytes_received += nbytes_read;
+	    stats.nbytes_hmem += 3 * nbytes_read;  // note factor 3 from "non-zerocopy" TCP
 	    stats.num_read_calls++;
 	    
 	    if (nbytes_read <= 0)
@@ -575,7 +578,7 @@ struct Receiver : FakeServer::Worker
     {
 	Stats stats;
 	
-	while (stats.nbytes_received < network_sync_cadence) {
+	while (stats.nbytes_received < nbytes_per_iteration) {
 	    long nbytes_prev = stats.nbytes_received;
 	    
 	    int num_events = epoll.wait();  // blocking
@@ -591,12 +594,11 @@ struct Receiver : FakeServer::Worker
 		xassert(ids < data_sockets.size());
 		
 		// Non-blocking read()
-		// FIXME in hindsight, not a fan of how max_read is computed.
-		long max_read = std::min(recv_bufsize, network_sync_cadence - stats.nbytes_received);
-		long nbytes_read = data_sockets[ids].read(recv_buf.get(), max_read);
+		long nbytes_read = data_sockets[ids].read(recv_buf.get(), recv_bufsize);
 		xassert(nbytes_read >= 0);
 	    
 		stats.nbytes_received += nbytes_read;
+		stats.nbytes_hmem += 3 * nbytes_read;  // note factor 3 from "non-zerocopy" TCP
 		stats.num_read_calls++;
 
 		// FIXME read() can return zero, even with EPOLLIN set?!
@@ -606,9 +608,6 @@ struct Receiver : FakeServer::Worker
 		
 		if (nbytes_read == 0)
 		    continue;
-		
-		if (stats.nbytes_received >= network_sync_cadence)
-		    return stats;
 	    }
 
 	    if ((stats.nbytes_received == nbytes_prev) && (num_events == int(data_sockets.size())))
@@ -622,6 +621,54 @@ struct Receiver : FakeServer::Worker
 
 // -------------------------------------------------------------------------------------------------
 //
+// ChimeWorker
+
+
+struct ChimeWorker : public FakeServer::Worker
+{
+    ChimeDedisperser dedisperser;
+    long niter = 0;
+    int device = -1;
+
+    
+    ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
+	Worker(state_, vcpu_list_),
+	dedisperser(beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine),
+	device(device_),
+    {
+	xassert(device >= 0);
+	xassert(device < get_cuda_device_count());
+
+	xassert(beams_per_gpu > 0);  // paranoid -- also checked in ChimeDedisperser constructor
+	this->niter = (beams_per_gpu + 99) / beams_per_gpu;
+	
+	stringstream ss;
+	ss << "ChimeDedisperser(" << devstr(device) << ", use_copy_engine=" << use_copy_engine << ")";
+	this->worker_name = ss.str();
+    }
+
+    virtual void worker_initialize() override
+    {
+	// Must precede ChimeDedisperser::initialize().
+	CUDA_CALL(cudaSetDevice(this->device));
+	dedisperser.initialize();
+    }
+
+    virtual Stats worker_body() override
+    {
+	for (long i = 0; i < niter; i++)
+	    dedisperser.run();
+	
+	Stats stats;
+	stats.chime_beam_seconds = niter * dedisperser.config.beams_per_gpu * (1.0e-3 * dedisperser.config.time_samples_per_chunk);
+	stats.nbytes_gmem += niter * dedisperser.bw_per_run_call.nbytes_gmem;
+	return stats;
+    }
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // MemcpyWorker (either host->host, host->device, or device->host)
 //
 //  - Currently use host->host MemcpyWorker as crude placeholder for packet assembler.
@@ -630,14 +677,14 @@ struct Receiver : FakeServer::Worker
 
 struct MemcpyWorker : public FakeServer::Worker
 {
-    // string worker_name;    // inherited from 'Worker' base class
-
     // Initialized in constructor.
     int src_device = -1;   // -1 for host
     int dst_device = -1;   // -1 for host
-    long nbytes = 0;
-    long blocksize = 0;
-    
+    long blocksize = 0;    
+    long nbytes_per_iteration = 0;
+    bool use_copy_engine = false;
+
+    // Initialized in worker_initialize().
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
 
@@ -645,14 +692,13 @@ struct MemcpyWorker : public FakeServer::Worker
     shared_ptr<CUstream_st> stream;
 
     
-    MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int src_device_, int dst_device_, long nbytes_, long blocksize_):
-	Worker(state_, vcpu_list_)
+    MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_):
+	Worker(state_, vcpu_list_),
+	src_device(src_device_),
+	dst_device(dst_device_),
+	blocksize(blocksize_),
+	use_copy_engine(use_copy_engine_)
     {
-	this->src_device = src_device_;
-	this->dst_device = dst_device_;
-	this->nbytes = nbytes_;
-	this->blocksize = (blocksize_ > 0) ? blocksize_ : nbytes;
-
 	int num_gpus_in_machine = get_cuda_device_count();
 
 	if (src_device >= 0)
@@ -660,12 +706,21 @@ struct MemcpyWorker : public FakeServer::Worker
 	if (dst_device >= 0)
 	    xassert_lt(dst_device, num_gpus_in_machine);
 	if ((src_device >= 0) && (dst_device >= 0) && (src_device != dst_device))
-	    throw runtime_error("MemcpyWorker: copy between different GPUs is currently unsupported");				  
+	    throw runtime_error("MemcpyWorker: copy between different GPUs is currently unsupported");
+
+	xassert(blocksize > 0);
+	xassert((blocksize % 128) == 0);
+
+	if ((src_device < 0) && (dst_device < 0))
+	    this->nbytes_per_iteration = 1024L * 1024L * 1024L;        // host->host
+	else if ((src_device >= 0) && (dst_device >= 0))
+	    this->nbytes_per_iteration = 100L * 1024L * 1024L * 1024L;  // device->device
+	else
+	    this->nbytes_per_iteration = 4L * 1024L * 1024L * 1024L;
 
 	stringstream ss;
-	ss << "Memcpy thread (src=" << devstr(src_device)
+	ss << "MemcpyThread(src=" << devstr(src_device)
 	   << ", dst=" << devstr(dst_device)
-	   << ", nbytes=" << ksgpu::nbytes_to_str(nbytes)
 	   << ", blocksize=" << ksgpu::nbytes_to_str(blocksize)
 	   << ")";
 	    
@@ -675,11 +730,13 @@ struct MemcpyWorker : public FakeServer::Worker
 
     virtual void worker_initialize() override
     {
-	int dev = max(src_device, dst_device);
-	int cuda_stream_priority = -1;  // lower numerical value = higher priority
+	bool uses_gpu = (src_device >= 0) || (dst_device >= 0);
+	bool uses_host = (src_device < 0) || (dst_device < 0);
 	
-	if (dev >= 0) {
-	    CUDA_CALL(cudaSetDevice(dev));  // initialize CUDA device in worker thread
+	if (uses_gpu) {
+	    int gpu = max(src_device, dst_device);
+	    int cuda_stream_priority = uses_host ? -1 : 0;  // lower numerical value = higher priority
+	    CUDA_CALL(cudaSetDevice(gpu));                  // initialize CUDA device in worker thread
 	    this->stream = ksgpu::CudaStreamWrapper(cuda_stream_priority).p;  // RAII stream
 	}
 
@@ -692,32 +749,34 @@ struct MemcpyWorker : public FakeServer::Worker
     {
 	long pos = 0;
 	
-	while (pos < nbytes) {
-	    long n = min(nbytes-pos, blocksize);
+	while (pos < nbytes_per_iteration) {
+	    long n = min(nbytes_per_iteration - pos, blocksize);
 	    pos += n;
 
-	    if (stream)
+	    if (!stream)
+		memcpy(pdst.get(), psrc.get(), n);
+	    else if (use_copy_engine || (src_device < 0) || (dst_device < 0))
 		CUDA_CALL(cudaMemcpyAsync(pdst.get(), psrc.get(), n, cudaMemcpyDefault, stream.get()));
 	    else
-		memcpy(pdst.get(), psrc.get(), n);
+		ksgpu::launch_memcpy_kernel(pdst.get(), psrc.get(), n, stream.get());
 	}
 
 	Stats stats;
 
 	if (src_device < 0)
-	    stats.nbytes_hmem += nbytes;
+	    stats.nbytes_hmem += nbytes_per_iteration;
 	if (dst_device < 0)
-	    stats.nbytes_hmem += nbytes;
+	    stats.nbytes_hmem += nbytes_per_iteration;
 	
 	if (src_device >= 0)
-	    stats.nbytes_gmem += nbytes;
+	    stats.nbytes_gmem += nbytes_per_iteration;
 	if (dst_device >= 0)
-	    stats.nbytes_gmem += nbytes;
+	    stats.nbytes_gmem += nbytes_per_iteration;
 
 	if ((src_device < 0) && (dst_device >= 0))
-	    stats.nbytes_h2g += nbytes;
+	    stats.nbytes_h2g += nbytes_per_iteration;
 	if ((src_device >= 0) && (dst_device < 0))
-	    stats.nbytes_g2h += nbytes;
+	    stats.nbytes_g2h += nbytes_per_iteration;
 
 	if (stream)
 	    CUDA_CALL(cudaStreamSynchronize(stream.get()));
@@ -731,77 +790,6 @@ struct MemcpyWorker : public FakeServer::Worker
 
 // -------------------------------------------------------------------------------------------------
 //
-// GpuCopyKernel
-
-
-struct GpuCopyKernel : public FakeServer::Worker
-{
-    // string worker_name;    // inherited from 'Worker' base class
-
-    int device = -1;
-    long nbytes = 0;
-    long blocksize = 0;
-    
-    shared_ptr<char> psrc;
-    shared_ptr<char> pdst;
-
-    // Reminder: cudaStream_t is a typedef for (CUstream_st *)
-    shared_ptr<CUstream_st> stream;
-
-    GpuCopyKernel(const shared_ptr<FakeServer::State> &state_,  const vector<int> &vcpu_list_, int device_, long nbytes_, long blocksize_):
-	Worker(state_, vcpu_list_),
-	device(device_),
-	nbytes(nbytes_),
-	blocksize(blocksize_)
-    {
-	xassert(nbytes > 0);
-	xassert(blocksize > 0);
-	xassert((nbytes % 128) == 0);
-	xassert((blocksize % 128) == 0);
-	
-	stringstream ss;
-	ss << "GpuCopyKernel(device= " << devstr(device)
-	   << ", nbytes=" << ksgpu::nbytes_to_str(nbytes)
-	   << ", blocksize=" << ksgpu::nbytes_to_str(blocksize)
-	   << ")";
-
-	this->worker_name = ss.str();
-    }
-
-
-    virtual void worker_initialize() override
-    {
-	CUDA_CALL(cudaSetDevice(this->device));  // initialize CUDA device in worker thread
-	this->stream = ksgpu::CudaStreamWrapper().p;  // RAII stream
-
-	this->psrc = worker_alloc(blocksize, true);  // on_gpu=true
-	this->pdst = worker_alloc(blocksize, true);  // on_gpu=true
-    }
-    
-
-    virtual Stats worker_body() override
-    {
-	long pos = 0;
-
-	while (pos < nbytes) {
-	    long n = min(nbytes - pos, blocksize);
-	    ksgpu::launch_memcpy_kernel(pdst.get(), psrc.get(), n, stream.get());
-	    pos += n;
-	}
-
-	CUDA_CALL(cudaStreamSynchronize(stream.get()));
-	
-	Stats stats;
-	stats.nbytes_gmem = 2 * nbytes;
-	return stats;
-    }
-    
-    virtual ~GpuCopyKernel() { }
-};
-
-
-// -------------------------------------------------------------------------------------------------
-//
 // SsdWorker
 
 
@@ -810,65 +798,93 @@ struct SsdWorker : public FakeServer::Worker
     // string worker_name;    // inherited from 'Worker' base class
 
     string root_dir;
-    long nfiles_per_iteration = 0;
     long nbytes_per_file = 0;
-    long nbytes_per_write = 0;
-    long ifile = 0;
+    long nfiles_per_iteration = 0;
+    long curr_file = 0;
     
     shared_ptr<char> data;
 
-    SsdWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, const string &root_dir_, long nfiles_per_iteration_, long nbytes_per_file_, long nbytes_per_write_) :
+    SsdWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, const string &root_dir_, long nbytes_per_file_) :
 	Worker(state_, vcpu_list_),
 	root_dir(root_dir_),
-	nfiles_per_iteration(nfiles_per_iteration_),
 	nbytes_per_file(nbytes_per_file_),
-	nbytes_per_write(nbytes_per_write_)
     {
 	xassert(root_dir.size() > 0);
-	xassert(nfiles_per_iteration > 0);
 	xassert(nbytes_per_file > 0);
-	xassert(nbytes_per_write > 0);
+
+	this->nfiles_per_iteration = (nbytes_per_file + 256L*1024L*1024L*1024L - 1) / nbytes_per_file;
 	
 	stringstream ss;
-	ss << "Ssd(dir=" << root_dir
-	   << ", nfiles=" << nfiles_per_iteration
+	ss << "SsdWriter(dir=" << root_dir
 	   << ", nbytes_per_file=" << ksgpu::nbytes_to_str(nbytes_per_file)
-	   << ", nbytes_per_write=" << ksgpu::nbytes_to_str(nbytes_per_write)
 	   << ")";
 	
 	this->worker_name = ss.str();
-	
-	pirate::makedir(root_dir, false);  // throw_exception_if_directory_exists = false
     }
 
     virtual void worker_initialize() override
     {
 	// FIXME should be random data, to avoid confusion from compressed filesystems
 	data = worker_alloc(nbytes_per_file);
+
+	// listdir() is defined in pirate/file_utils.cu
+	vector<string> all_files = listdir(root_dir);
+	vector<string> files_to_delete;
+
+	for (const string &filename: files) {
+	    if (is_dummy_file(filename))
+		files_to_delete.push_back(filename);
+	}
+
+	if (files_to_delete.size() == 0)
+	    return;
+
+	stringstream ss;
+	ss << "SsdWriter(" << root_dir << "): deleting " << files_to_delete.size() << " from previous run\n";
+	cout << ss.str() << flush;
+
+	for (const string &filename: files_to_delete) {
+	    // delete_file() is defined in pirate/file_utils.cu
+	    stringstream ss2;
+	    ss2 << root_dir << "/" << filename;
+	    delete_file(ss2.str());
+	}
     }
-    
+
+
+    // Helper for worker_initialize().
+    // Returns 'true' if filename is of the form 'file_NNN'
+    bool is_data_file(const string &filename)
+    {
+	const char *s = filename.c_str();
+	int len = strlen(s);
+
+	if (len < 6)
+	    return false;
+	
+	if (memcmp(s, "file_", 5))
+	    return false;
+	
+	for (int i = 5; i < len; i++)
+	    if (!isdigit(s[i]))
+		return false;
+
+	return true;
+    }
+	
+	
     virtual Stats worker_body() override
     {
 	// FIXME try writev(), if (nwrites_per_file > 1).
 	// For now, I'm just calling write() in a loop, since this seems to give decent performance.
 
-	long jfile = ifile + nfiles_per_iteration;
-	
-	while (ifile < jfile) {
+	for (int i = 0; i < nfiles_per_iteration; i++) {
 	    stringstream ss;
-	    ss << root_dir << "/file_" << ifile << "_" << ifile;
+	    ss << root_dir << "/file_" << (curr_file++);
 	    string filename = ss.str();
 
 	    File f(filename, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT | O_SYNC);
-	    long pos = 0;
-
-	    while (pos < nbytes_per_file) {
-		long n = min(nbytes_per_write, nbytes_per_file - pos);
-		f.write(data.get() + pos, n);
-		pos += n;
-	    }
-
-	    ifile++;
+	    f.write(data.get(), nbytes_per_file);
 	}
 
 	Stats stats;
@@ -913,7 +929,7 @@ struct DownsamplingWorker : public FakeServer::Worker
 	xassert((src_nbytes % nbytes_per_chunk) == 0);
 
 	stringstream ss;
-	ss << "Downsampling thread (bit depth " << src_bit_depth
+	ss << "Avx2Downsampler(bit_depth=" << src_bit_depth
 	   << ", src=" << nbytes_to_str(src_nbytes)
 	   << ", dst=" << nbytes_to_str(dst_nbytes)
 	   << ")";
@@ -947,36 +963,34 @@ struct DownsamplingWorker : public FakeServer::Worker
 // Add workers.
 
 
-void FakeServer::add_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, long network_sync_cadence, const vector<int> &vcpu_list)
+void FakeServer::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list)
 {
-    auto wp = make_shared<Receiver> (state, vcpu_list, ip_addr, num_tcp_connections, recv_bufsize, use_epoll, network_sync_cadence);
-    this->_add_worker(wp, "add_receiver");
+    auto wp = make_shared<Receiver> (state, vcpu_list, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
+    this->_add_worker(wp, "add_tcp_receiver");
 }
 
-
-void FakeServer::add_memcpy_worker(int src_device, int dst_device, long nbytes_per_iteration, long blocksize, const vector<int> &vcpu_list)
+void FakeServer::add_chime_dedisperser(int device, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine, const vector<int> &vcpu_list)
 {
-    auto wp = make_shared<MemcpyWorker> (state, vcpu_list, src_device, dst_device, nbytes_per_iteration, blocksize);
-    this->_add_worker(wp, "add_memcpy_worker");
+    auto wp = make_shared<ChimeWorker> (state, vcpu_list, device, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine);
+    this->_add_worker(wp, "add_chime_dedisperser");
 }
 
-void FakeServer::add_gpu_copy_kernel(int device, long nbytes, long blocksize, const vector<int> &vcpu_list)
+void FakeServer::add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const vector<int> &vcpu_list)
 {
-    auto wp = make_shared<GpuCopyKernel> (state, vcpu_list, device, nbytes, blocksize);
-    this->_add_worker(wp, "add_gpu_copy_kernel");
+    auto wp = make_shared<MemcpyWorker> (state, vcpu_list, src_device, dst_device, blocksize, use_copy_engine);
+    this->_add_worker(wp, "add_memcpy_thread");
 }
 
-void FakeServer::add_ssd_worker(const string &root_dir, long nfiles_per_iteration, long nbytes_per_file, long nbytes_per_write, const vector<int> &vcpu_list)
+void FakeServer::add_ssd_writer(const string &root_dir, long nbytes_per_file, const vector<int> &vcpu_list)
 {
-    auto wp = make_shared<SsdWorker> (state, vcpu_list, root_dir, nfiles_per_iteration, nbytes_per_file, nbytes_per_write);
-    this->_add_worker(wp, "add_ssd_worker");
+    auto wp = make_shared<SsdWorker> (state, vcpu_list, root_dir, nbytes_per_file);
+    this->_add_worker(wp, "add_ssd_writer");
 }
 
-
-void FakeServer::add_downsampling_worker(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list)
+void FakeServer::add_downsampling_thread(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list)
 {
     auto wp = make_shared<DownsamplingWorker> (state, vcpu_list, src_bit_depth, src_nelts);
-    this->_add_worker(wp, "add_downsampling_worker");
+    this->_add_worker(wp, "add_downsampling_thread");
 }
 
 

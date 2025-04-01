@@ -190,11 +190,15 @@ public:
     ) = 0;
     
     // Used internally by GpuDedispersionKernel::launch().
-    long nbatches = 0;
+    long nbatches = 0;   //  = (total_beams / beams_per_batch)
     long state_nelts_per_beam = 0;
     long warps_per_threadblock = 0;
     long shmem_nbytes = 0;
 
+    // Bandwidth per call to GpuDedispersionKernel::launch().
+    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    BandwidthTracker bw_per_launch;
+    
     // The 'persistent_state', 'integer_constants', and 'gpu_ringbuf_locations' arrays
     // are allocated in GpuDedipsersionKernel::allocate(), not the constructor.
     

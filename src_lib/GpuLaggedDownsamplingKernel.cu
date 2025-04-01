@@ -741,7 +741,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     params.validate();
     
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
-
+    
     if (params.num_downsampling_levels <= 1)
 	return;
     
@@ -778,6 +778,14 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
 
     this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
+
+    this->bw_per_launch.kernel_launches = 1;
+    this->bw_per_launch.nbytes_gmem = 2 * beams_per_batch * state_nelts_per_beam * ST;
+
+    for (int ids = 0; ids < num_downsampling_levels; ids++) {
+	int r = params.input_total_rank - (ids ? 1 : 0);
+	this->bw_per_launch.nbytes_gmem += beams_per_batch * pow2(r) * xdiv(ntime,pow2(ids)) * ST;
+    }
 }
 
 

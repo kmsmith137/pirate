@@ -489,6 +489,13 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     
     if (gs_ncl > 0)
 	this->shmem_nbytes = 128 * (gs_ncl + pow2(params.dd_rank));
+
+    int ST = xdiv(params.dtype.nbits, 8);
+    
+    this->bw_per_launch.kernel_launches = 1;
+    this->bw_per_launch.nbytes_gmem += params.total_beams * pow2(params.dd_rank+params.amb_rank) * params.ntime * ST;
+    this->bw_per_launch.nbytes_gmem += 2 * params.total_beams * state_nelts_per_beam * ST;
+    // FIXME(?) not currently including ringbuf_locations.
 }
 
 

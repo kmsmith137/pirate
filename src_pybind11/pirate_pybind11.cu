@@ -47,22 +47,22 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	.def(py::init<const std::string &, bool>(),
 	     py::arg("server_name"), py::arg("use_hugepages"))
 
-	.def("add_receiver", &FakeServer::add_receiver,
+	.def("add_tcp_receiver", &FakeServer::add_tcp_receiver,
 	     py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("recv_bufsize"),
-	     py::arg("use_epoll"), py::arg("network_sync_cadence"), py::arg("vcpu_list"))
-	
-	.def("add_memcpy_worker", &FakeServer::add_memcpy_worker,
-	     py::arg("src_device"), py::arg("dst_device"), py::arg("nbytes_per_iteration"),
-	     py::arg("blocksize"), py::arg("vcpu_list"))
+	     py::arg("use_epoll"), py::arg("vcpu_list"))
 
-	.def("add_gpu_copy_kernel", &FakeServer::add_gpu_copy_kernel,
-	     py::arg("device"), py::arg("nbytes"), py::arg("blocksize"), py::arg("vcpu_list"))
+	.def("add_chime_dedisperser", &FakeServer::add_chime_dedisperser,
+	     py::arg("device"), py::arg("beams_per_gpu"), py::arg("num_active_batches"),
+	     py::arg("beams_per_batch"), py::arg("use_copy_engine"), py::arg("vcpu_list"))
 	
-	.def("add_ssd_worker", &FakeServer::add_ssd_worker,
-	     py::arg("root_dir"), py::arg("nfiles_per_iteration"), py::arg("nbytes_per_file"),
-	     py::arg("nbytes_per_write"), py::arg("vcpu_list"))
+	.def("add_memcpy_thread", &FakeServer::add_memcpy_thread,
+	     py::arg("src_device"), py::arg("dst_device"), py::arg("blocksize"),
+	     py::arg("use_copy_engine"), py::arg("vcpu_list"))
+	
+	.def("add_ssd_writer", &FakeServer::add_ssd_writer,
+	     py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"))
 
-	.def("add_downsampling_worker", &FakeServer::add_downsampling_worker,
+	.def("add_downsampling_thread", &FakeServer::add_downsampling_thread,
 	     py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"))
 
 	 // Called by python code, to control server.
