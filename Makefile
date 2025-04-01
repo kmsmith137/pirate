@@ -65,6 +65,7 @@ PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 
 # These get compiled into lib/libpirate.so.
 LIB_SRCFILES = \
+  src_lib/ChimeDedisperser.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
   src_lib/DedispersionKernelParams.cu \

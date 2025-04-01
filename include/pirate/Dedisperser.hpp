@@ -143,6 +143,43 @@ struct ReferenceDedisperserBase
 };
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// ChimeDedisperser: a temporary hack for timing!
+
+
+struct ChimeDedisperser
+{
+    // I did some performance tuning, and found that the following values worked well:
+    //
+    //   config.beams_per_batch = 1
+    //   config.num_active_batches = 3
+    //
+    // This may change when RFI removal is incorporated (we may want to increase
+    // beams_per_batch, in order to reduce the number of kernel launches).
+
+    ChimeDedisperser(int beams_per_gpu=12, int num_active_batches=3, int beams_per_batch=3, bool use_copy_engine=false);
+    
+    // Call with current GPU appropriately set.
+    void initialize();
+    
+    // Dedisperses a data "cube" with shape (nchunks, config.beams_per_gpu, nfreq, config.time_samples_per_chunk)
+    void run(int nchunks);
+    
+    bool use_copy_engine = false;
+    int nfreq = 16384;
+    
+    DedispersionConfig config;
+    std::shared_ptr<DedispersionPlan> plan;
+    std::shared_ptr<GpuDedisperser> dedisperser;
+    std::vector<ksgpu::CudaStreamWrapper> streams;
+
+    // FIXME currently, gridding and peak-finding are not implemented.
+    // As a kludge, we put in some extra GPU->GPU memcopies with the same bandwidth.
+    ksgpu::Array<char> extra_buffers;
+};
+
+
 }  // namespace pirate
 
 #endif // _PIRATE_DEDISPERSER_HPP
