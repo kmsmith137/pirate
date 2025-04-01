@@ -34,12 +34,16 @@ class Hardware:
         nic = self._ip_addr_show_output[ip_addr]
         bus_id = self._pcie_bus_id_from_nic(nic)   # can be None, for loopback interface 
         return self._vcpu_list_from_pcie_bus_id(bus_id, allow_none=True)
-
+        
     @functools.cache
     def vcpu_list_from_disk(self, disk):
         bus_id = self._pcie_bus_id_from_block_device(disk)
         return self._vcpu_list_from_pcie_bus_id(bus_id)
 
+    def vcpu_list_from_dirname(self, dirname):
+        dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
+        disk = self._dev_id_to_disk_dict[dev_id]
+        return self.vcpu_list_from_disk(disk)
 
     @functools.cached_property
     def ip_addrs(self):
@@ -169,7 +173,7 @@ class Hardware:
         Given a block device (e.g., '/dev/nvme0n1' or '/dev/nvme0n1p1'),
         returns the PCIe bus id (e.g. '0000:03:00.0').
         """
-        return self._pcie_bus_id_from_sys_subdir(f'/sys/class/block/{device_name}')
+        return self._pcie_bus_id_from_sys_subdir(f'/sys/class/block/{os.path.basename(device_name)}')
 
 
     @functools.cache
@@ -253,7 +257,21 @@ class Hardware:
 
         return pairs
     
-    
+
+    @functools.cached_property
+    def _dev_id_to_disk_dict(self):
+        ret = { }
+        with open("/proc/mounts") as f:
+            for line in f:
+                device, mountpoint, *_ = line.split()
+                try:
+                    dev_id = os.stat(mountpoint).st_dev  # Device ID (major:minor)
+                    ret[dev_id] = device
+                except:
+                    pass
+        return ret
+
+
 if __name__ == '__main__':
     h = Hardware()
     h.show()

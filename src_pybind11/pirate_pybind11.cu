@@ -55,11 +55,21 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	     py::arg("src_device"), py::arg("dst_device"), py::arg("nbytes_per_iteration"),
 	     py::arg("blocksize"), py::arg("vcpu_list"))
 
+	.def("add_gpu_copy_kernel", &FakeServer::add_gpu_copy_kernel,
+	     py::arg("device"), py::arg("nbytes"), py::arg("blocksize"), py::arg("vcpu_list"))
+	
+	.def("add_ssd_worker", &FakeServer::add_ssd_worker,
+	     py::arg("root_dir"), py::arg("nfiles_per_iteration"), py::arg("nbytes_per_file"),
+	     py::arg("nbytes_per_write"), py::arg("vcpu_list"))
+
 	.def("add_downsampling_worker", &FakeServer::add_downsampling_worker,
 	     py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"))
 
-	.def("add_sleepy_worker", &FakeServer::add_sleepy_worker, py::arg("sleep_usec"))
-
-	.def("run", &FakeServer::run, py::arg("num_iterations"))
+	 // Called by python code, to control server.
+	.def("abort", &FakeServer::abort, py::arg("abort_msg"))
+	.def("join_threads", &FakeServer::join_threads)
+	.def("show_stats", &FakeServer::show_stats)
+	.def("start", &FakeServer::start)
+	.def("stop", &FakeServer::stop)
     ;
 }

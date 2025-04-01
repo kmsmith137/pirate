@@ -142,6 +142,6 @@ int main(int argc, char **argv)
 	fs.add_memcpy_worker(igpu, -1, 8L*1024L*1024L*1024L, 1024L*1024L*1024L, {});  // g2h
     }
     
-    fs.run(100);
+    // fs.run(100);
     return 0;
 }

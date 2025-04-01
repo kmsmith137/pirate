@@ -4,9 +4,8 @@
 #include <mutex>
 #include <vector>
 #include <string>
+#include <thread>
 #include <memory> // shared_ptr
-#include <condition_variable>
-#include <ksgpu/Barrier.hpp>
 
 
 namespace pirate {
@@ -19,23 +18,9 @@ namespace pirate {
 struct DedispersionPlan;
 
 
-// Currently, we only expose the top-level FakeServer class in the .hpp file.
-//
-// In src_lib/FakeServer.cu, more helper classes are defined:
-//
-//    - Receiver
-//    - Worker
-//       - SleepyWorker
-//       - DownsamplingWorker
-//       - MemcpyWorker
-//       - SsdWorker
-//
-// If needed, these helper classes could also be exposed in the .hpp file.
-
-
 struct FakeServer
 {
-    FakeServer(const std::string &server_name, bool use_hugepages=true);
+    FakeServer(const std::string &server_name="FakeServer", bool use_hugepages=true);
     
     // The "network_sync_cadence" arg determines how often the receiver threads synchronize counters.
     void add_receiver(
@@ -53,65 +38,39 @@ struct FakeServer
     // Empirically, any blocksize between 1MB and 4GB works pretty well.
     void add_memcpy_worker(int src_device, int dst_device, long nbytes_per_iteration, long blocksize, const std::vector<int> &vcpu_list);
 
-    // Uses memory bandwidth on GPU, but from a kernel instead of cudaMemcpyDeviceToDevice().
-    // Note: the 'nbytes_per_iteration' argument is the memory bandwidth, not (memory_bw / 2)!
-    void add_gmem_worker(int device, long nbytes_per_iteration, long blocksize, const std::vector<int> &vcpu_list);
+    // GPU copy kernel: consumes memory bandwidth on GPU, with a kernel instead of cudaMemcpyDeviceToDevice().
+    // This is sometimes useful if both "copy engines" are being used for PCIe transfers.
+    // Suggest nbytes=100GB and blocksize=2GB.
+    void add_gpu_copy_kernel(int device, long nbytes, long blocksize, const std::vector<int> &vcpu_list);
     
     // To get multiple threads per SSD, use multiple workers with different 'root_dir' args.
     void add_ssd_worker(const std::string &root_dir, long nfiles_per_iteration, long nbytes_per_file, long nbytes_per_write, const std::vector<int> &vcpu_list);
 
     void add_downsampling_worker(int src_bit_depth, long src_nelts, const std::vector<int> &vcpu_list);
 
-    // This is useful either for a network-only test with no workers, or if you want to rate-limit workers.
-    void add_sleepy_worker(long sleep_usec);
-
-    // After adding workers, this method runs the server.
-    void run(long num_iterations);
-
-
-    // -------------------------------------------------------------------------------------------------
-    //
-    // Lower-level interface follows.
+    // Called by python code, to control server.
+    double show_stats();  // returns elapsed time in seconds
+    void abort(const std::string &abort_msg);
+    void join_threads();
+    void start();
+    void stop();
 
     // Defined in src_lib/FakeServer.cu
-    struct Receiver;
+    struct State;    
+    struct Stats;
     struct Worker;
 
-    void _add_worker(const std::shared_ptr<Worker> &worker, const std::string &caller);
-    
-    void increment_counter(int ix, int expected_value);
-    int wait_for_counters(int threshold);
-    int peek_at_counter();
-    void abort(const std::string &msg);
-    void receiver_main(int irecv, long num_iterations);
-    void worker_main(int iworker, long num_iterations);
-    void announcer_main(long num_iterations);
-    void _show_all(bool show_vcpus, bool show_stats);
-
     std::string server_name;
-    bool use_hugepages = false;
-    
-    std::vector<std::shared_ptr<Receiver>> receivers;
+    std::shared_ptr<State> state;
+
+    // After server is started, 'workers' is immutable after server is started.
+    // Before server is started, 'workers' is protected by state->lock (kinda awkward but turns out to be simplest).
     std::vector<std::shared_ptr<Worker>> workers;
 
-    // All threads (receivers + workers + announcer) wait at the barrier three times:
-    //   - after initialization (e.g. allocating memory)
-    //   - after all TCP connections have been accepted
-    //   - after all iterations have finished.
-    ksgpu::Barrier barrier;
+    std::vector<std::thread> threads;
+    std::mutex thread_lock;  // protects 'threads'
     
-    std::mutex lock;
-    std::condition_variable cv;
-    std::vector<int> counters;  // length num_workers
-    int min_counter = 0;        // invariant: always equal to min(counters)
-
-    bool running = false;
-    bool aborted = false;
-    std::string abort_msg;
-
-    // Set in announcer thread
-    double total_time = 0.0;
-    double total_gbps = 0.0;
+    void _add_worker(const std::shared_ptr<Worker> &worker, const std::string &caller);
 };
 
 
