@@ -16,7 +16,7 @@ class FakeServer:
         self.hardware = Hardware()
 
         
-    def cpu_from_vcpu_list(vcpu_list):
+    def cpu_from_vcpu_list(self, vcpu_list):
         # Some threads may be "floating", i.e. can run on multiple CPUs.
         # In python, we represent a "floating" CPU by cpu=None, whereas in C++ it's more
         # convenient to use (-1). This wrapper method just does the conversion.
@@ -27,10 +27,10 @@ class FakeServer:
     def add_tcp_receiver(self, ip_addr, num_tcp_connections, recv_bufsize=512*1024, use_epoll=True):
         vcpu_list = self.hardware.vcpu_list_from_ip_addr(ip_addr)
         cpu = self.cpu_from_vcpu_list(vcpu_list)
-        self.cpp_server.add_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list, cpu)
+        self.cpp_server.add_tcp_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list, cpu)
 
 
-    def add_chime_dedipserser(self, gpu, use_copy_engine=False, num_active_batches=3, beams_per_batch=1, beams_per_gpu=None):
+    def add_chime_dedisperser(self, gpu, use_copy_engine=False, num_active_batches=3, beams_per_batch=1, beams_per_gpu=None):
         if beams_per_gpu is None:
             beams_per_gpu = num_active_batches * beams_per_batch
 
@@ -71,30 +71,30 @@ class FakeServer:
             vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)
 
         cpu = self.cpu_from_vcpu_list(vcpu_list)
-        self.cpp_server.add_memcpy_worker(src_device, dst_device, blocksize, use_copy_engine, vcpu_list, cpu)
+        self.cpp_server.add_memcpy_thread(src_device, dst_device, blocksize, use_copy_engine, vcpu_list, cpu)
         
         
-    def add_ssd_writer(self, root_dir, nbytes_per_file = 64 * 1024**2)
+    def add_ssd_writer(self, root_dir, nbytes_per_file = 64 * 1024**2):
         os.makedirs(root_dir, exist_ok=True)
         vcpu_list = self.hardware.vcpu_list_from_dirname(root_dir)
         cpu = self.cpu_from_vcpu_list(vcpu_list)
-        self.cpp_server.add_ssd_worker(root_dir, nbytes_per_file, vcpu_lis, cpu)
+        self.cpp_server.add_ssd_writer(root_dir, nbytes_per_file, vcpu_list, cpu)
     
 
-    def add_downsampling_thread(self, src_bit_depth, src_nelts, cpu):
+    def add_downsampling_thread(self, cpu, src_bit_depth=5, src_nelts=1024**3):
         """Runs the AVX2 downsampling kernel."""
         
         vcpu_list = self.hardware.vcpu_list_from_cpu(cpu)
-        self.cpp_server.add_downsampling_worker(src_bit_depth, src_nelts, vcpu_list, cpu)
+        self.cpp_server.add_downsampling_thread(src_bit_depth, src_nelts, vcpu_list, cpu)
         
 
-    def run(self):
+    def run(self, seconds=20):
         self.cpp_server.start()
 
         while True:
             time.sleep(1)
-            if self.cpp_server.show_stats() > 20:
-                break   # server has been running longer than 30 sec
+            if self.cpp_server.show_stats() > seconds:
+                break
 
         self.cpp_server.stop()
         self.cpp_server.join_threads()

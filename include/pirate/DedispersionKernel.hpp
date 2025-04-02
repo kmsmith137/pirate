@@ -2,6 +2,7 @@
 #define _PIRATE_DEDISPERSION_KERNEL_HPP
 
 #include <ksgpu/Array.hpp>
+#include "trackers.hpp"  // BandwidthTracker
 
 namespace pirate {
 #if 0

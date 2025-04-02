@@ -8,6 +8,8 @@
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
 
+#include "trackers.hpp"  // BandwidthTracker
+
 
 namespace pirate {
 #if 0

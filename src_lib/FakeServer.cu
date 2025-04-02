@@ -14,11 +14,12 @@
 #include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/inlines.hpp"
+#include "../include/pirate/trackers.hpp"       // BandwidthTracker
 #include "../include/pirate/file_utils.hpp"     // File, listdir()
 #include "../include/pirate/system_utils.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket, Epoll
 #include "../include/pirate/loose_ends/cpu_downsample.hpp"
-#include "../include/pirate/Dedipserser.hpp"
+#include "../include/pirate/Dedisperser.hpp"
 
 
 using namespace std;
@@ -51,10 +52,10 @@ struct FakeServer::Stats
     static constexpr int max_gpu = 8;
     
     // Bandwidth.
-    long nbytes_hmem[max_cpu] = 0;    // total host memory bandwidth (for memcpy, include factor 2)
-    long nbytes_gmem[max_gpu] = 0;    // total GPU memory bandwidth
-    long nbytes_h2g[max_gpu] = 0;     // host -> GPU
-    long nbytes_g2h[max_gpu] = 0;     // GPU -> host
+    long nbytes_hmem[max_cpu];    // total host memory bandwidth (for memcpy, include factor 2)
+    long nbytes_gmem[max_gpu];    // total GPU memory bandwidth
+    long nbytes_h2g[max_gpu];     // host -> GPU
+    long nbytes_g2h[max_gpu];     // GPU -> host
     long nbytes_hmem_floating = 0;    // host memory bandwidth for "floating" threads (not pinned to a specific CPU)
     long nbytes_ssd = 0;
     long nbytes_net = 0;
@@ -63,8 +64,22 @@ struct FakeServer::Stats
     long nsamp_downsampled = 0;
     double chime_beam_seconds = 0.0;
 
+    Stats();
     Stats &operator+=(const Stats &s);
+
+    // Accumulates nbytes_hmem[cpu] if (cpu >= 0), or nbytes_hmem_floating if (cpu < 0).
+    void add_hmem(int cpu, long nbytes);
 };
+
+
+FakeServer::Stats::Stats()
+{
+    for (int cpu = 0; cpu < max_cpu; cpu++)
+	nbytes_hmem[cpu] = 0;
+
+    for (int gpu = 0; gpu < max_gpu; gpu++)
+	nbytes_gmem[gpu] = nbytes_h2g[gpu] = nbytes_g2h[gpu] = 0;
+}
 
 
 FakeServer::Stats &FakeServer::Stats::operator+=(const Stats &s)
@@ -103,8 +118,8 @@ void FakeServer::Stats::add_hmem(int cpu, long nbytes)
 // FIXME in hindsight, this should have been a member function of FakeServer::Stats
 static double _show_stats(const vector<FakeServer::Stats> &stats, const vector<double> &dt)
 {
-    using max_cpu = FakeServer::Stats::max_cpu;
-    using max_gpu = FakeServer::Stats::max_gpu;
+    static constexpr int max_cpu = FakeServer::Stats::max_cpu;
+    static constexpr int max_gpu = FakeServer::Stats::max_gpu;
     
     xassert_eq(stats.size(), dt.size());
 
@@ -151,7 +166,7 @@ static double _show_stats(const vector<FakeServer::Stats> &stats, const vector<d
 
     for (int cpu = 0; cpu < max_cpu; cpu++)
 	if (hmem_bw[cpu] > 0.0)
-	    ss << "  Host memory bandwidth (CPU " << cpu << "): " << (1.0e-9 * hmem_bw[cpu]) << " GB/s\n";
+	    ss << "  Host memory bandwidth (CPU " << cpu << ", estimated): " << (1.0e-9 * hmem_bw[cpu]) << " GB/s\n";
 
     if (hmem_bw_floating > 0.0)
 	ss << "  Host memory bandwidth (floating): " << (1.0e-9 * hmem_bw_floating) << " GB/s\n";
@@ -173,7 +188,7 @@ static double _show_stats(const vector<FakeServer::Stats> &stats, const vector<d
     if (network_bw > 0.0)
 	ss << "  Network bandwidth: " << (8.0e-9 * network_bw) << " Gbps (not GB/s)\n";
     if (ds_rate > 0.0)
-	ss << "  AVX2 downsampling throughput: " << (1.0e-9 * ds_rate) << " Gsamp/s\n";
+	ss << "  AVX2 kernel throughput: " << (1.0e-9 * ds_rate) << " Gsamp/s\n";
     if (chime_beams > 0.0)
 	ss << "  Real-time CHIME beams: " << (chime_beams) << "\n";
 
@@ -335,7 +350,7 @@ static void worker_thread_main(shared_ptr<FakeServer::Worker> worker)
 {
     using State = FakeServer::State;
     using Stats = FakeServer::Stats;
-    
+
     shared_ptr<State> state = worker->state;
     
     try {
@@ -413,7 +428,12 @@ void FakeServer::start()
 	for (long i = 0; i < num_workers; i++) {
 	    auto wp = workers[i];
 	    stringstream ss;
-	    ss << "  [Thread " << i << "] " << wp->worker_name << ": vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
+	    ss << "  [Thread " << i << "] " << wp->worker_name << ": ";
+	    if (wp->cpu >= 0)
+		ss << "cpu=" << wp->cpu;
+	    else
+		ss << "cpu=None";
+	    ss << ", vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
 	    cout << ss.str() << flush;
 	    threads[i] = std::thread(worker_thread_main, wp);
 	}
@@ -664,13 +684,14 @@ struct ChimeWorker : public FakeServer::Worker
 {
     ChimeDedisperser dedisperser;
     long niter = 0;
+    long ichunk = 0;
     int device = -1;
 
     
     ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
 	Worker(state_, vcpu_list_, cpu_),
 	dedisperser(beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine),
-	device(device_),
+	device(device_)
     {
 	xassert(device >= 0);
 	xassert(device < FakeServer::Stats::max_gpu);
@@ -694,7 +715,7 @@ struct ChimeWorker : public FakeServer::Worker
     virtual Stats worker_body() override
     {
 	for (long i = 0; i < niter; i++)
-	    dedisperser.run();
+	    dedisperser.run(ichunk++);
 	
 	Stats stats;
 	stats.chime_beam_seconds = niter * dedisperser.config.beams_per_gpu * (1.0e-3 * dedisperser.config.time_samples_per_chunk);
@@ -729,12 +750,12 @@ struct MemcpyWorker : public FakeServer::Worker
     shared_ptr<CUstream_st> stream;
 
     
-    MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_, int cpu_):
-	Worker(state_, vcpu_list_),
+    MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_) :
+	Worker(state_, vcpu_list_, cpu_),
 	src_device(src_device_),
 	dst_device(dst_device_),
 	blocksize(blocksize_),
-	use_copy_engine(use_copy_engine_),
+	use_copy_engine(use_copy_engine_)
     {
 	int num_gpus_in_machine = get_cuda_device_count();
 	xassert(num_gpus_in_machine < FakeServer::Stats::max_gpu);
@@ -759,9 +780,12 @@ struct MemcpyWorker : public FakeServer::Worker
 	stringstream ss;
 	ss << "MemcpyThread(src=" << devstr(src_device)
 	   << ", dst=" << devstr(dst_device)
-	   << ", blocksize=" << ksgpu::nbytes_to_str(blocksize)
-	   << ")";
-	    
+	   << ", blocksize=" << ksgpu::nbytes_to_str(blocksize);
+
+	if ((src_device >= 0) && (dst_device >= 0))
+	    ss << ", use_copy_engine=" << use_copy_engine;
+	
+	ss << ")";
 	this->worker_name = ss.str();
     }
 
@@ -842,19 +866,20 @@ struct SsdWorker : public FakeServer::Worker
     
     shared_ptr<char> data;
 
-    SsdWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, const string &root_dir_, long nbytes_per_file_, int cpu_) :
+    SsdWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, const string &root_dir_, long nbytes_per_file_) :
 	Worker(state_, vcpu_list_, cpu_),
 	root_dir(root_dir_),
-	nbytes_per_file(nbytes_per_file_),
+	nbytes_per_file(nbytes_per_file_)
     {
 	xassert(root_dir.size() > 0);
 	xassert(nbytes_per_file > 0);
 
-	this->nfiles_per_iteration = (nbytes_per_file + 256L*1024L*1024L*1024L - 1) / nbytes_per_file;
+	this->nfiles_per_iteration = (nbytes_per_file + 256L*1024L*1024L - 1) / nbytes_per_file;
 	
 	stringstream ss;
 	ss << "SsdWriter(dir=" << root_dir
 	   << ", nbytes_per_file=" << ksgpu::nbytes_to_str(nbytes_per_file)
+	   << ", nfiles_per_iteration=" << nfiles_per_iteration
 	   << ")";
 	
 	this->worker_name = ss.str();
@@ -869,8 +894,8 @@ struct SsdWorker : public FakeServer::Worker
 	vector<string> all_files = listdir(root_dir);
 	vector<string> files_to_delete;
 
-	for (const string &filename: files) {
-	    if (is_dummy_file(filename))
+	for (const string &filename: all_files) {
+	    if (is_stale_file(filename))
 		files_to_delete.push_back(filename);
 	}
 
@@ -878,7 +903,7 @@ struct SsdWorker : public FakeServer::Worker
 	    return;
 
 	stringstream ss;
-	ss << "SsdWriter(" << root_dir << "): deleting " << files_to_delete.size() << " from previous run\n";
+	ss << "SsdWriter(" << root_dir << "): deleting " << files_to_delete.size() << " stale files from previous run\n";
 	cout << ss.str() << flush;
 
 	for (const string &filename: files_to_delete) {
@@ -892,7 +917,7 @@ struct SsdWorker : public FakeServer::Worker
 
     // Helper for worker_initialize().
     // Returns 'true' if filename is of the form 'file_NNN'
-    bool is_data_file(const string &filename)
+    bool is_stale_file(const string &filename)
     {
 	const char *s = filename.c_str();
 	int len = strlen(s);
@@ -950,7 +975,7 @@ struct DownsamplingWorker : public FakeServer::Worker
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
     
-    DownsamplingWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_bit_depth_, long src_nelts_, int cpu_) :
+    DownsamplingWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_bit_depth_, long src_nelts_) :
 	Worker(state_, vcpu_list_, cpu_),
 	src_bit_depth(src_bit_depth_),
 	src_nelts(src_nelts_)
@@ -967,7 +992,6 @@ struct DownsamplingWorker : public FakeServer::Worker
 	stringstream ss;
 	ss << "Avx2Downsampler(bit_depth=" << src_bit_depth
 	   << ", src=" << nbytes_to_str(src_nbytes)
-	   << ", dst=" << nbytes_to_str(dst_nbytes)
 	   << ")";
 
 	this->worker_name = ss.str();
@@ -1001,7 +1025,7 @@ struct DownsamplingWorker : public FakeServer::Worker
 
 void FakeServer::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<Receiver> (state, vcpu_list, cpu, ip_addr, num_tcp_connections, recv_bufsize, use_epoll, cpu);
+    auto wp = make_shared<Receiver> (state, vcpu_list, cpu, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
     this->_add_worker(wp, "add_tcp_receiver");
 }
 

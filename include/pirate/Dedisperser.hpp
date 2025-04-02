@@ -3,6 +3,7 @@
 
 #include "DedispersionConfig.hpp"
 #include "DedispersionBuffer.hpp"
+#include "trackers.hpp"  // BandwidthTracker
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -172,7 +173,7 @@ struct ChimeDedisperser
     
     // Dedisperses a data "cube" with shape (config.beams_per_gpu, nfreq, config.time_samples_per_chunk)
     // Note 'beams_per_gpu' here, not 'beams_per_batch'!
-    void run();
+    void run(long ichunk);
     
     bool use_copy_engine = false;
     int nfreq = 16384;
@@ -186,7 +187,7 @@ struct ChimeDedisperser
     // FIXME currently, gridding and peak-finding are not implemented.
     // As a kludge, we put in some extra GPU->GPU memcopies with the same bandwidth.
     ksgpu::Array<char> extra_buffers;  // shape (num_active_batches, 2, extra_nbytes_per_batch)
-    long extra_nbytes_per_batch = 0;
+    long extra_nbytes_per_batch = 0;   // FIXME doesn't get initialized until initialize() is called.
 
     // Bandwidth per call to ChimeDedisperser::run().
     // This corresponds to 'beams_per_gpu' beams, not 'beams_per_batch' beams.

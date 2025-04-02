@@ -24,7 +24,7 @@ struct BandwidthTracker
 
 
 extern BandwidthTracker operator+(const BandwidthTracker &, const BandwidthTracker &);
-extern BandwdithTracker operator*(long, const BandwidthTracker &);
+extern BandwidthTracker operator*(long, const BandwidthTracker &);
 
 
 }  // namespace pirate

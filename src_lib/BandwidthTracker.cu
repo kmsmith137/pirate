@@ -44,7 +44,7 @@ BandwidthTracker operator+(const BandwidthTracker &x, const BandwidthTracker &y)
 }
 
 
-BandwdithTracker operator*(long x, const BandwidthTracker &y)
+BandwidthTracker operator*(long x, const BandwidthTracker &y)
 {
     BandwidthTracker ret = y;
     ret *= x;

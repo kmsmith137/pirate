@@ -104,10 +104,10 @@ vector<string> listdir(const string &dirname)
 
 void delete_file(const string &filename)
 {
-    // FIXME placeholder
-    stringstream ss;
-    ss << "XXX delete_file(" << filename << ")\n";
-    cout << ss.str() << flush;
+    int err = unlink(filename.c_str());
+    
+    if (err != 0)
+	throw runtime_error(filename + ": unlink() failed: " + strerror(errno));
 }
 
 
@@ -228,11 +228,16 @@ dirent *Directory::read_next()
 {
     xassert(dirp != nullptr);
 
+    // Ugh
+    int save_errno = errno;
+    errno = 0;
+    
     dirent *entry = readdir(dirp);
 
     if (!entry && errno)
 	throw runtime_error(dirname + ": readdir() failed: " + strerror(errno));
-    
+
+    errno = errno ? errno : save_errno;
     return entry;
 }
 

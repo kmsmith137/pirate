@@ -138,8 +138,8 @@ int main(int argc, char **argv)
     FakeServer fs("New Server");
 
     for (int igpu = 0; igpu < 2; igpu++) {
-	fs.add_memcpy_worker(-1, igpu, 8L*1024L*1024L*1024L, 1024L*1024L*1024L, {});  // h2g
-	fs.add_memcpy_worker(igpu, -1, 8L*1024L*1024L*1024L, 1024L*1024L*1024L, {});  // g2h
+	fs.add_memcpy_thread(-1, igpu, 1024L*1024L*1024L, false, {}, -1);  // h2g
+	fs.add_memcpy_thread(igpu, -1, 1024L*1024L*1024L, false, {}, -1);  // g2h
     }
     
     // fs.run(100);

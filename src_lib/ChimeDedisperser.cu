@@ -29,7 +29,24 @@ ChimeDedisperser::ChimeDedisperser(int beams_per_gpu_, int num_active_batches_, 
     config.num_active_batches = num_active_batches_;
     // No early triggers
     config.validate();
+}
 
+
+void ChimeDedisperser::initialize()
+{
+    if (plan)
+	throw runtime_error("Double call to ChimeDedisperser::initialize()");
+
+    long nstreams = config.num_active_batches;
+    long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
+
+    this->plan = make_shared<DedispersionPlan> (config);
+    this->dedisperser = make_shared<GpuDedisperser> (plan);
+    this->dedisperser->allocate();  // note: all buffers are zeroed or initialized
+    
+    for (long i = 0; i < nstreams; i++)
+	this->streams.push_back(ksgpu::CudaStreamWrapper());
+    
     // FIXME currently, gridding and peak-finding are not implemented.
     // As a kludge, we put in some extra GPU->GPU memcopies with the same bandwidth.
 
@@ -40,29 +57,13 @@ ChimeDedisperser::ChimeDedisperser(int beams_per_gpu_, int num_active_batches_, 
 
     // "One-sided" (i.e. src or dst only) extra bytes (not elements) per batch
     this->extra_nbytes_per_batch = align_up((extra_nelts * config.dtype.nbits) / (2*8), 256);
-}
-
-
-void ChimeDedisperser::initialize()
-{
-    if (plan)
-	throw runtime_error("Double call to ChimeDedisperser::initialize()");
-
-    long nstreams = config.num_active_batches;
-
-    this->plan = make_shared<DedispersionPlan> (config);
-    this->dedisperser = make_shared<GpuDedisperser> (plan);
-    this->dedisperser->allocate();  // note: all buffers are zeroed or initialized
-    
-    for (long i = 0; i < nstreams; i++)
-	this->streams.push_back(ksgpu::CudaStreamWrapper());
     
     // Length-2 axis is {dst,src}
     this->extra_buffers = Array<char> ({ nstreams, 2, extra_nbytes_per_batch }, af_zero | af_gpu);
 
-    long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
+    // BandwidthTracker
     this->bw_per_run_call = nbatches * dedisperser->bw_per_launch;
-    this->bw_per_run_call.nbytes_gmem += 2 * nbatches * extra_nbytes_per_batch;
+    this->bw_per_run_call.nbytes_gmem += 2 * nbatches * extra_nbytes_per_batch;  // factor 2 is from {dst,src}.
 
     if (use_copy_engine)
 	this->bw_per_run_call.memcpy_g2g_calls += nbatches;
@@ -71,7 +72,7 @@ void ChimeDedisperser::initialize()
 }
 
 
-void ChimeDedisperser::run()
+void ChimeDedisperser::run(long ichunk)
 {
     if (!plan)
 	throw runtime_error("Must call ChimeDedisperser::initialize() before ChimeDedisperser::run()");
@@ -93,8 +94,8 @@ void ChimeDedisperser::run()
 	    CUDA_CALL(cudaMemcpyAsync(xdst, xsrc, extra_nbytes_per_batch, cudaMemcpyDeviceToDevice, s));
 	else
 	    ksgpu::launch_memcpy_kernel(xdst, xsrc, extra_nbytes_per_batch, s);
-	    
-	dedisperser->launch(ibatch, it_chunk, istream, s);
+	
+	dedisperser->launch(ibatch, ichunk, istream, s);
 	istream = (istream + 1) % nstreams;
     }
 }
