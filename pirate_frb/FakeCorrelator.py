@@ -13,10 +13,9 @@ class FakeCorrelator:
         self.hardware = Hardware()
 
 
-    def add_endpoint(self, src_ip_addr, dst_ip_addr, num_tcp_connections, total_gbps):
-        # FIXME 'src_ip_addr' should not be necessary!
-        vcpu_list = self.hardware.vcpu_list_from_ip_addr(src_ip_addr)
-        self.cpp_correlator.add_endpoint(dst_ip_addr, num_tcp_connections, total_gbps, vcpu_list)
+    def add_endpoint(self, ip_addr, num_tcp_connections, total_gbps):
+        vcpu_list = self.hardware.vcpu_list_from_ip_addr(ip_addr, is_dst_addr=True)
+        self.cpp_correlator.add_endpoint(ip_addr, num_tcp_connections, total_gbps, vcpu_list)
                                   
         
     def run(self):

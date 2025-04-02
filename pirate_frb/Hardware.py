@@ -1,6 +1,7 @@
 import os
 import re
 import ksgpu
+import socket
 import itertools
 import functools
 import subprocess
@@ -35,8 +36,8 @@ class Hardware:
         return self._vcpu_list_from_pcie_bus_id(bus_id)
 
     @functools.cache
-    def vcpu_list_from_ip_addr(self, ip_addr):
-        nic = self._ip_addr_show_output[ip_addr]
+    def vcpu_list_from_ip_addr(self, ip_addr, is_dst_addr=False):
+        nic = self._nic_from_ip_addr(ip_addr, is_dst_addr)
         bus_id = self._pcie_bus_id_from_nic(nic)   # can be None, for loopback interface 
         return self._vcpu_list_from_pcie_bus_id(bus_id, allow_none=True)
         
@@ -168,7 +169,26 @@ class Hardware:
                 return x
 
         return None
-    
+
+
+    @functools.cache
+    def _nic_from_ip_addr(self, ip_addr, is_dst_addr=False):
+        # Dict (ip_addr) -> (nic)
+        h = self._ip_addr_show_output
+
+        if ip_addr in h:
+            return h[ip_addr]
+
+        if is_dst_addr:
+            # To associate (dst_addr) -> (src_addr), use a UDP socket.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect((ip_addr, 80))             # Doesn't actually send data
+                source_ip_addr = s.getsockname()[0]   # Get the source IP used for routing
+            if source_ip_addr in h:
+                return h[source_ip_addr]
+            
+        raise RuntimeError(f"Couldn't get NIC for IP address {ip_addr}")
+
     
     @functools.cache
     def _pcie_bus_id_from_nic(self, nic):
