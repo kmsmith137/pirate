@@ -1,8 +1,7 @@
-#!/usr/bin/env python
-
 import os
 import re
 import ksgpu
+import itertools
 import functools
 import subprocess
 
@@ -13,7 +12,11 @@ class Hardware:
 
     @functools.cached_property
     def num_cpus(self):
-        return len(self._vcpu_list_per_cpu())
+        return max(self._parse_cpu_topology) + 1
+
+    @functools.cached_property
+    def num_vcpus(self):
+        return len(self._parse_cpu_topology)
         
     @functools.cached_property
     def num_gpus(self):
@@ -22,7 +25,9 @@ class Hardware:
     @functools.cache
     def vcpu_list_from_cpu(self, cpu):
         assert 0 <= cpu < self.num_cpus
-        return self._vcpu_list_per_cpu()[cpu]
+        ret = [ v for v,c in enumerate(self._parse_cpu_topology) if c == cpu ]
+        assert len(ret) > 0
+        return ret
         
     @functools.cache
     def vcpu_list_from_gpu(self, gpu):
@@ -44,6 +49,18 @@ class Hardware:
         dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
         disk = self._dev_id_to_disk_dict[dev_id]
         return self.vcpu_list_from_disk(disk)
+
+    def cpu_from_vcpu_list(self, vcpu_list):
+        """Returns None if the vcpu_list is either empty, or spans multiple CPUs."""
+        
+        ret = None
+        for v in vcpu_list:
+            assert 0 <= v < self.num_vcpus
+            c = self._parse_cpu_topology[v]
+            if (ret is not None) and (ret != c):
+                return None
+            ret = c
+        return ret
 
     @functools.cached_property
     def ip_addrs(self):
@@ -104,26 +121,21 @@ class Hardware:
     ################################################################################################
 
 
-    @functools.cache
-    def _vcpu_list_per_cpu(self):
-        """Returns list of lists, containing vcpu list for each physical cpu."""
-        
+    @functools.cached_property
+    def _parse_cpu_topology(self):
+        """List of length (num_vcpus), containing physical CPU associated with each vCPU."""
+
         ret = [ ]
-    
-        for d in os.listdir("/sys/devices/system/cpu/"):
-            if (not d.startswith("cpu")) or (not d[3:].isdigit()):
-                continue
+        
+        for n in itertools.count():
+            dirname = f'/sys/devices/system/cpu/cpu{n}'
+            if not os.path.exists(dirname):
+                assert n > 0
+                return ret
 
-            with open(f"/sys/devices/system/cpu/{d}/topology/physical_package_id") as f:
+            with open(f'{dirname}/topology/physical_package_id') as f:
                 cpu_id = int(f.read().strip())
-                vcpu_id = int(d[3:])
-                while len(ret) <= cpu_id:
-                    ret.append(list())
-                ret[cpu_id].append(vcpu_id)
-
-        assert len(ret) > 0
-        assert all((len(x) > 0) for x in ret)
-        return [ sorted(x) for x in ret ]
+                ret.append(cpu_id)
 
     
     @functools.cache

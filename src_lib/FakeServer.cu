@@ -47,17 +47,17 @@ static int get_cuda_device_count()
 // Note: if new members are added, update _show_stats() and Stats::operator+=() below.
 struct FakeServer::Stats
 {
+    static constexpr int max_cpu = 2;
+    static constexpr int max_gpu = 8;
+    
     // Bandwidth.
-    long nbytes_hmem = 0;    // total host memory bandwidth (for memcpy, include factor 2)
-    long nbytes_gmem = 0;    // total GPU memory bandwidth
-    long nbytes_h2g = 0;     // host -> GPU
-    long nbytes_g2h = 0;     // GPU -> host
+    long nbytes_hmem[max_cpu] = 0;    // total host memory bandwidth (for memcpy, include factor 2)
+    long nbytes_gmem[max_gpu] = 0;    // total GPU memory bandwidth
+    long nbytes_h2g[max_gpu] = 0;     // host -> GPU
+    long nbytes_g2h[max_gpu] = 0;     // GPU -> host
+    long nbytes_hmem_floating = 0;    // host memory bandwidth for "floating" threads (not pinned to a specific CPU)
     long nbytes_ssd = 0;
-
-    // Network.
-    long nbytes_received = 0;
-    long num_read_calls = 0;
-    long num_epoll_calls = 0;
+    long nbytes_net = 0;
 
     // FRB-specific.
     long nsamp_downsampled = 0;
@@ -69,16 +69,19 @@ struct FakeServer::Stats
 
 FakeServer::Stats &FakeServer::Stats::operator+=(const Stats &s)
 {
-    nbytes_hmem += s.nbytes_hmem;
-    nbytes_gmem += s.nbytes_gmem;
-    nbytes_h2g += s.nbytes_h2g;
-    nbytes_g2h += s.nbytes_g2h;
+    for (int i = 0; i < max_cpu; i++)
+	nbytes_hmem[i] += s.nbytes_hmem[i];
+
+    for (int i = 0; i < max_gpu; i++) {
+	nbytes_gmem[i] += s.nbytes_gmem[i];
+	nbytes_h2g[i] += s.nbytes_h2g[i];
+	nbytes_g2h[i] += s.nbytes_g2h[i];
+    }
+
+    nbytes_hmem_floating += s.nbytes_hmem_floating;
     nbytes_ssd += s.nbytes_ssd;
-
-    nbytes_received += s.nbytes_received;
-    num_read_calls += s.num_read_calls;
-    num_epoll_calls += s.num_epoll_calls;
-
+    nbytes_net += s.nbytes_net;
+    
     nsamp_downsampled += s.nsamp_downsampled;
     chime_beam_seconds += s.chime_beam_seconds;
 
@@ -86,59 +89,89 @@ FakeServer::Stats &FakeServer::Stats::operator+=(const Stats &s)
 }
 
 
+void FakeServer::Stats::add_hmem(int cpu, long nbytes)
+{
+    xassert(cpu < max_cpu);
+    
+    if (cpu < 0)
+	nbytes_hmem_floating += nbytes;
+    else
+	nbytes_hmem[cpu] += nbytes;
+}
+	
+
+// FIXME in hindsight, this should have been a member function of FakeServer::Stats
 static double _show_stats(const vector<FakeServer::Stats> &stats, const vector<double> &dt)
 {
+    using max_cpu = FakeServer::Stats::max_cpu;
+    using max_gpu = FakeServer::Stats::max_gpu;
+    
     xassert_eq(stats.size(), dt.size());
 
     double dt_max = 0.0;
-    double hmem_bw = 0.0;
-    double gmem_bw = 0.0;
-    double h2g_bw = 0.0;
-    double g2h_bw = 0.0;
+    double hmem_bw[max_cpu];
+    double gmem_bw[max_gpu];
+    double h2g_bw[max_gpu];
+    double g2h_bw[max_gpu];
+    double hmem_bw_floating = 0.0;
     double ssd_bw = 0.0;
     double network_bw = 0.0;
-    double read_call_rate = 0.0;
-    double epoll_call_rate = 0.0;
     double ds_rate = 0.0;
     double chime_beams = 0.0;
 
+    for (int cpu = 0; cpu < max_cpu; cpu++)
+	hmem_bw[cpu] = 0.0;
+    for (int gpu = 0; gpu < max_gpu; gpu++)
+	gmem_bw[gpu] = h2g_bw[gpu] = g2h_bw[gpu] = 0.0;
+	
     for (ulong i = 0; i < stats.size(); i++) {
 	dt_max = std::max(dt_max, dt[i]);
 	
 	// Don't trust rate estimates below 0.5 sec.
 	if (dt[i] < 0.5)
 	    continue;
-	
-	hmem_bw += (stats[i].nbytes_hmem / dt[i]);
-	gmem_bw += (stats[i].nbytes_gmem / dt[i]);
-	h2g_bw += (stats[i].nbytes_h2g / dt[i]);
-	g2h_bw += (stats[i].nbytes_g2h / dt[i]);
+
+	for (int cpu = 0; cpu < max_cpu; cpu++)
+	    hmem_bw[cpu] += (stats[i].nbytes_hmem[cpu] / dt[i]);
+
+	for (int gpu = 0; gpu < max_gpu; gpu++) {
+	    gmem_bw[gpu] += (stats[i].nbytes_gmem[gpu] / dt[i]);
+	    h2g_bw[gpu] += (stats[i].nbytes_h2g[gpu] / dt[i]);
+	    g2h_bw[gpu] += (stats[i].nbytes_g2h[gpu] / dt[i]);
+	}
+
+	hmem_bw_floating += (stats[i].nbytes_hmem_floating / dt[i]);
 	ssd_bw += (stats[i].nbytes_ssd / dt[i]);
-	network_bw += (stats[i].nbytes_received / dt[i]);
-	read_call_rate += (stats[i].num_read_calls / dt[i]);
-	epoll_call_rate += (stats[i].num_epoll_calls / dt[i]);
+	network_bw += (stats[i].nbytes_net / dt[i]);
 	ds_rate += (stats[i].nsamp_downsampled / dt[i]);
 	chime_beams += (stats[i].chime_beam_seconds / dt[i]);
     }
 
     stringstream ss;
+
+    for (int cpu = 0; cpu < max_cpu; cpu++)
+	if (hmem_bw[cpu] > 0.0)
+	    ss << "  Host memory bandwidth (CPU " << cpu << "): " << (1.0e-9 * hmem_bw[cpu]) << " GB/s\n";
+
+    if (hmem_bw_floating > 0.0)
+	ss << "  Host memory bandwidth (floating): " << (1.0e-9 * hmem_bw_floating) << " GB/s\n";
+	
+    for (int gpu = 0; gpu < max_gpu; gpu++)
+	if (gmem_bw[gpu] > 0.0)
+	    ss << "  GPU global memory bandwidth (GPU " << gpu << "): " << (1.0e-9 * gmem_bw[gpu]) << " GB/s\n";
+
+    for (int gpu = 0; gpu < max_gpu; gpu++)
+	if (h2g_bw[gpu] > 0.0)
+	    ss << "  Host->GPU bandwidth (GPU " << gpu << "): " << (1.0e-9 * h2g_bw[gpu]) << " GB/s\n";
+
+    for (int gpu = 0; gpu < max_gpu; gpu++)
+	if (g2h_bw[gpu] > 0.0)
+	    ss << "  GPU->Host bandwidth (GPU " << gpu << "): " << (1.0e-9 * g2h_bw[gpu]) << " GB/s\n";
     
-    if (hmem_bw > 0.0)
-	ss << "  Host memory bandwidth: " << (1.0e-9 * hmem_bw) << " GB/s\n";
-    if (gmem_bw > 0.0)
-	ss << "  GPU global memory bandwidth: " << (1.0e-9 * gmem_bw) << " GB/s\n";
-    if (h2g_bw > 0.0)
-	ss << "  Host->GPU bandwidth: " << (1.0e-9 * h2g_bw) << " GB/s\n";
-    if (g2h_bw > 0.0)
-	ss << "  GPU->Host bandwidth: " << (1.0e-9 * g2h_bw) << " GB/s\n";
     if (ssd_bw > 0.0)
 	ss << "  SSD bandwidth: " << (1.0e-9 * ssd_bw) << " GB/s\n";
     if (network_bw > 0.0)
 	ss << "  Network bandwidth: " << (8.0e-9 * network_bw) << " Gbps (not GB/s)\n";
-    if (read_call_rate > 0.0)
-	ss << "  read() calls/sec: " << (read_call_rate) << "\n";
-    if (epoll_call_rate > 0.0)
-	ss << "  epoll() calls/sec: " << (epoll_call_rate) << "\n";
     if (ds_rate > 0.0)
 	ss << "  AVX2 downsampling throughput: " << (1.0e-9 * ds_rate) << " Gsamp/s\n";
     if (chime_beams > 0.0)
@@ -218,13 +251,17 @@ struct FakeServer::Worker
     string worker_name = "Anonymous thread";
     vector<int> vcpu_list;
 
+    // Only used for updating Stats::nbytes_hmem[].
+    // A negative value indicates a "floating" worker thread, which can run on multiple CPUs.
+    int cpu = -1;
+
     std::mutex lock;
     struct timeval tv0;
     struct timeval tv1;
     bool tv_initialized = false;
     Stats cumulative_stats;
 
-    Worker(const shared_ptr<FakeServer::State> &state_, const vector<int> vcpu_list_);
+    Worker(const shared_ptr<FakeServer::State> &state_, const vector<int> vcpu_list_, int cpu_);
     virtual ~Worker() { }
     
     // Called by worker thread.
@@ -237,10 +274,11 @@ struct FakeServer::Worker
 };
 
 
-FakeServer::Worker::Worker(const shared_ptr<FakeServer::State> &state_, const vector<int> vcpu_list_) :
-    state(state_), vcpu_list(vcpu_list_)
+FakeServer::Worker::Worker(const shared_ptr<FakeServer::State> &state_, const vector<int> vcpu_list_, int cpu_) :
+    state(state_), vcpu_list(vcpu_list_), cpu(cpu_)
 {
     xassert(state);
+    xassert(cpu < FakeServer::Stats::max_cpu);  // negative value is allowed (see above)
 }
 
 
@@ -469,8 +507,9 @@ struct Receiver : FakeServer::Worker
     long num_tcp_connections = 0;
     long recv_bufsize = 0;
     bool use_epoll = true;
+    
     long nbytes_per_iteration = 300 * 1024 * 1024;
-
+    
     // Initialized in worker_initialize().
     shared_ptr<char> recv_buf;
     Socket listening_socket;
@@ -480,8 +519,8 @@ struct Receiver : FakeServer::Worker
     vector<Socket> data_sockets;
 
     
-    Receiver(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
-	Worker(state_, vcpu_list_),
+    Receiver(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
+	Worker(state_, vcpu_list_, cpu_),
 	ip_addr(ip_addr_),
 	num_tcp_connections(num_tcp_connections_),
 	recv_bufsize(recv_bufsize_),
@@ -556,14 +595,13 @@ struct Receiver : FakeServer::Worker
 	xassert(data_sockets.size() == 1);
 	Stats stats;
 	
-	while (stats.nbytes_received < nbytes_per_iteration) {
+	while (stats.nbytes_net < nbytes_per_iteration) {
 	    // Blocking read()
 	    long nbytes_read = data_sockets[0].read(recv_buf.get(), recv_bufsize);
 	    xassert(nbytes_read >= 0);
 	    
-	    stats.nbytes_received += nbytes_read;
-	    stats.nbytes_hmem += 3 * nbytes_read;  // note factor 3 from "non-zerocopy" TCP
-	    stats.num_read_calls++;
+	    stats.nbytes_net += nbytes_read;
+	    stats.add_hmem(cpu, 3 * nbytes_read);  // note factor 3 from "non-zerocopy" TCP
 	    
 	    if (nbytes_read <= 0)
 		throw runtime_error("TCP connection ended prematurely");
@@ -578,11 +616,10 @@ struct Receiver : FakeServer::Worker
     {
 	Stats stats;
 	
-	while (stats.nbytes_received < nbytes_per_iteration) {
-	    long nbytes_prev = stats.nbytes_received;
+	while (stats.nbytes_net < nbytes_per_iteration) {
+	    long nbytes_prev = stats.nbytes_net;
 	    
 	    int num_events = epoll.wait();  // blocking
-	    stats.num_epoll_calls++;
 
 	    for (int iev = 0; iev < num_events; iev++) {
 		uint32_t ev_flags = epoll.events[iev].events;
@@ -597,9 +634,8 @@ struct Receiver : FakeServer::Worker
 		long nbytes_read = data_sockets[ids].read(recv_buf.get(), recv_bufsize);
 		xassert(nbytes_read >= 0);
 	    
-		stats.nbytes_received += nbytes_read;
-		stats.nbytes_hmem += 3 * nbytes_read;  // note factor 3 from "non-zerocopy" TCP
-		stats.num_read_calls++;
+		stats.nbytes_net += nbytes_read;
+		stats.add_hmem(cpu, 3 * nbytes_read);  // note factor 3 from "non-zerocopy" TCP
 
 		// FIXME read() can return zero, even with EPOLLIN set?!
 		// I'd like to revisit this, just for the sake of general understanding.
@@ -610,7 +646,7 @@ struct Receiver : FakeServer::Worker
 		    continue;
 	    }
 
-	    if ((stats.nbytes_received == nbytes_prev) && (num_events == int(data_sockets.size())))
+	    if ((stats.nbytes_net == nbytes_prev) && (num_events == int(data_sockets.size())))
 		throw runtime_error("TCP connection(s) ended premaurely");
 	}
 
@@ -631,12 +667,13 @@ struct ChimeWorker : public FakeServer::Worker
     int device = -1;
 
     
-    ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
-	Worker(state_, vcpu_list_),
+    ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
+	Worker(state_, vcpu_list_, cpu_),
 	dedisperser(beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine),
 	device(device_),
     {
 	xassert(device >= 0);
+	xassert(device < FakeServer::Stats::max_gpu);
 	xassert(device < get_cuda_device_count());
 
 	xassert(beams_per_gpu > 0);  // paranoid -- also checked in ChimeDedisperser constructor
@@ -661,7 +698,7 @@ struct ChimeWorker : public FakeServer::Worker
 	
 	Stats stats;
 	stats.chime_beam_seconds = niter * dedisperser.config.beams_per_gpu * (1.0e-3 * dedisperser.config.time_samples_per_chunk);
-	stats.nbytes_gmem += niter * dedisperser.bw_per_run_call.nbytes_gmem;
+	stats.nbytes_gmem[device] += niter * dedisperser.bw_per_run_call.nbytes_gmem;
 	return stats;
     }
 };
@@ -692,14 +729,15 @@ struct MemcpyWorker : public FakeServer::Worker
     shared_ptr<CUstream_st> stream;
 
     
-    MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_):
+    MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_, int cpu_):
 	Worker(state_, vcpu_list_),
 	src_device(src_device_),
 	dst_device(dst_device_),
 	blocksize(blocksize_),
-	use_copy_engine(use_copy_engine_)
+	use_copy_engine(use_copy_engine_),
     {
 	int num_gpus_in_machine = get_cuda_device_count();
+	xassert(num_gpus_in_machine < FakeServer::Stats::max_gpu);
 
 	if (src_device >= 0)
 	    xassert_lt(src_device, num_gpus_in_machine);
@@ -764,19 +802,19 @@ struct MemcpyWorker : public FakeServer::Worker
 	Stats stats;
 
 	if (src_device < 0)
-	    stats.nbytes_hmem += nbytes_per_iteration;
+	    stats.add_hmem(cpu, nbytes_per_iteration);
 	if (dst_device < 0)
-	    stats.nbytes_hmem += nbytes_per_iteration;
+	    stats.add_hmem(cpu, nbytes_per_iteration);
 	
 	if (src_device >= 0)
-	    stats.nbytes_gmem += nbytes_per_iteration;
+	    stats.nbytes_gmem[src_device] += nbytes_per_iteration;
 	if (dst_device >= 0)
-	    stats.nbytes_gmem += nbytes_per_iteration;
+	    stats.nbytes_gmem[dst_device] += nbytes_per_iteration;
 
 	if ((src_device < 0) && (dst_device >= 0))
-	    stats.nbytes_h2g += nbytes_per_iteration;
+	    stats.nbytes_h2g[dst_device] += nbytes_per_iteration;
 	if ((src_device >= 0) && (dst_device < 0))
-	    stats.nbytes_g2h += nbytes_per_iteration;
+	    stats.nbytes_g2h[src_device] += nbytes_per_iteration;
 
 	if (stream)
 	    CUDA_CALL(cudaStreamSynchronize(stream.get()));
@@ -804,8 +842,8 @@ struct SsdWorker : public FakeServer::Worker
     
     shared_ptr<char> data;
 
-    SsdWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, const string &root_dir_, long nbytes_per_file_) :
-	Worker(state_, vcpu_list_),
+    SsdWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, const string &root_dir_, long nbytes_per_file_, int cpu_) :
+	Worker(state_, vcpu_list_, cpu_),
 	root_dir(root_dir_),
 	nbytes_per_file(nbytes_per_file_),
     {
@@ -888,7 +926,7 @@ struct SsdWorker : public FakeServer::Worker
 	}
 
 	Stats stats;
-	stats.nbytes_hmem = nfiles_per_iteration * nbytes_per_file;
+	stats.add_hmem(cpu, nfiles_per_iteration * nbytes_per_file);
 	stats.nbytes_ssd = nfiles_per_iteration * nbytes_per_file;
 	return stats;
     }
@@ -904,8 +942,6 @@ struct SsdWorker : public FakeServer::Worker
 
 struct DownsamplingWorker : public FakeServer::Worker
 {
-    // string worker_name;    // inherited from 'Worker' base class
-
     int src_bit_depth = 0;
     long src_nelts = 0;
     long src_nbytes = 0;
@@ -914,8 +950,8 @@ struct DownsamplingWorker : public FakeServer::Worker
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
     
-    DownsamplingWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int src_bit_depth_, long src_nelts_) :
-	Worker(state_, vcpu_list_),
+    DownsamplingWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_bit_depth_, long src_nelts_, int cpu_) :
+	Worker(state_, vcpu_list_, cpu_),
 	src_bit_depth(src_bit_depth_),
 	src_nelts(src_nelts_)
     {
@@ -949,7 +985,7 @@ struct DownsamplingWorker : public FakeServer::Worker
 	cpu_downsample(src_bit_depth, reinterpret_cast<const uint8_t *> (psrc.get()), reinterpret_cast<uint8_t *> (pdst.get()), src_nbytes, dst_nbytes);
 
 	Stats stats;
-	stats.nbytes_hmem = src_nbytes + dst_nbytes;
+	stats.add_hmem(cpu, src_nbytes + dst_nbytes);
 	stats.nsamp_downsampled = src_nelts;
 	return stats;
     }
@@ -963,33 +999,33 @@ struct DownsamplingWorker : public FakeServer::Worker
 // Add workers.
 
 
-void FakeServer::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list)
+void FakeServer::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<Receiver> (state, vcpu_list, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
+    auto wp = make_shared<Receiver> (state, vcpu_list, cpu, ip_addr, num_tcp_connections, recv_bufsize, use_epoll, cpu);
     this->_add_worker(wp, "add_tcp_receiver");
 }
 
-void FakeServer::add_chime_dedisperser(int device, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine, const vector<int> &vcpu_list)
+void FakeServer::add_chime_dedisperser(int device, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<ChimeWorker> (state, vcpu_list, device, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine);
+    auto wp = make_shared<ChimeWorker> (state, vcpu_list, cpu, device, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine);
     this->_add_worker(wp, "add_chime_dedisperser");
 }
 
-void FakeServer::add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const vector<int> &vcpu_list)
+void FakeServer::add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<MemcpyWorker> (state, vcpu_list, src_device, dst_device, blocksize, use_copy_engine);
+    auto wp = make_shared<MemcpyWorker> (state, vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
     this->_add_worker(wp, "add_memcpy_thread");
 }
 
-void FakeServer::add_ssd_writer(const string &root_dir, long nbytes_per_file, const vector<int> &vcpu_list)
+void FakeServer::add_ssd_writer(const string &root_dir, long nbytes_per_file, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<SsdWorker> (state, vcpu_list, root_dir, nbytes_per_file);
+    auto wp = make_shared<SsdWorker> (state, vcpu_list, cpu, root_dir, nbytes_per_file);
     this->_add_worker(wp, "add_ssd_writer");
 }
 
-void FakeServer::add_downsampling_thread(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list)
+void FakeServer::add_downsampling_thread(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<DownsamplingWorker> (state, vcpu_list, src_bit_depth, src_nelts);
+    auto wp = make_shared<DownsamplingWorker> (state, vcpu_list, cpu, src_bit_depth, src_nelts);
     this->_add_worker(wp, "add_downsampling_thread");
 }
 

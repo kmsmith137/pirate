@@ -15,10 +15,19 @@ class FakeServer:
         # for determining which cores are associated with PCIe devices (GPUs, NICs).
         self.hardware = Hardware()
 
+        
+    def cpu_from_vcpu_list(vcpu_list):
+        # Some threads may be "floating", i.e. can run on multiple CPUs.
+        # In python, we represent a "floating" CPU by cpu=None, whereas in C++ it's more
+        # convenient to use (-1). This wrapper method just does the conversion.
+        cpu = self.hardware.cpu_from_vcpu_list(vcpu_list)
+        return cpu if (cpu is not None) else -1
+        
 
     def add_tcp_receiver(self, ip_addr, num_tcp_connections, recv_bufsize=512*1024, use_epoll=True):
         vcpu_list = self.hardware.vcpu_list_from_ip_addr(ip_addr)
-        self.cpp_server.add_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list)
+        cpu = self.cpu_from_vcpu_list(vcpu_list)
+        self.cpp_server.add_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list, cpu)
 
 
     def add_chime_dedipserser(self, gpu, use_copy_engine=False, num_active_batches=3, beams_per_batch=1, beams_per_gpu=None):
@@ -26,7 +35,8 @@ class FakeServer:
             beams_per_gpu = num_active_batches * beams_per_batch
 
         vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)
-        self.cpp_server.add_chime_dedisperser(gpu, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine, vcpu_list)
+        cpu = self.cpu_from_vcpu_list(vcpu_list)
+        self.cpp_server.add_chime_dedisperser(gpu, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine, vcpu_list, cpu)
                                   
     
     def add_memcpy_thread(self, src_device, dst_device, blocksize=1024**3, cpu=None, use_copy_engine=False):
@@ -59,20 +69,23 @@ class FakeServer:
 
             gpu = max(src_device, dst_device)
             vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)
-        
-        self.cpp_server.add_memcpy_worker(src_device, dst_device, blocksize, use_copy_engine, vcpu_list)
+
+        cpu = self.cpu_from_vcpu_list(vcpu_list)
+        self.cpp_server.add_memcpy_worker(src_device, dst_device, blocksize, use_copy_engine, vcpu_list, cpu)
         
         
     def add_ssd_writer(self, root_dir, nbytes_per_file = 64 * 1024**2)
         os.makedirs(root_dir, exist_ok=True)
         vcpu_list = self.hardware.vcpu_list_from_dirname(root_dir)
-        self.cpp_server.add_ssd_worker(root_dir, nbytes_per_file, vcpu_list)
+        cpu = self.cpu_from_vcpu_list(vcpu_list)
+        self.cpp_server.add_ssd_worker(root_dir, nbytes_per_file, vcpu_lis, cpu)
     
 
     def add_downsampling_thread(self, src_bit_depth, src_nelts, cpu):
         """Runs the AVX2 downsampling kernel."""
+        
         vcpu_list = self.hardware.vcpu_list_from_cpu(cpu)
-        self.cpp_server.add_downsampling_worker(src_bit_depth, src_nelts, vcpu_list)
+        self.cpp_server.add_downsampling_worker(src_bit_depth, src_nelts, vcpu_list, cpu)
         
 
     def run(self):
