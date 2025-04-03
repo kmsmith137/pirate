@@ -667,7 +667,7 @@ struct Receiver : FakeServer::Worker
 	    }
 
 	    if ((stats.nbytes_net == nbytes_prev) && (num_events == int(data_sockets.size())))
-		throw runtime_error("TCP connection(s) ended premaurely");
+		throw runtime_error("TCP connection(s) ended prematurely");
 	}
 
 	return stats;

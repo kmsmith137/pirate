@@ -56,7 +56,8 @@ def parse_test_node(subparsers):
     parser.add_argument('-H', '--hmem', dest='H', action='store_true', help='Host memory bandwidth test')
     parser.add_argument('--h2g', dest='h2g', action='store_true', help='Copy host->GPU')
     parser.add_argument('--g2h', dest='g2h', action='store_true', help='Copy GPU->host')
-
+    parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
+    
 
 def test_node(args):
     # FIXME currently hardcoded
@@ -106,26 +107,26 @@ def test_node(args):
         for ip_addr in ip_addrs:
             server.add_tcp_receiver(ip_addr, tcp_connections_per_ip_address)
 
-    server.run()
+    server.run(args.time)
 
 
 #########################################   send command  ##########################################
 
 
 def parse_send(subparsers):
-    subparsers.add_parser("send", help='Send data to test server (his is the "other half" of "python -m pirate_frb test_node")')
+    parser = subparsers.add_parser("send", help='Send data to test server (his is the "other half" of "python -m pirate_frb test_node")')
+    parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
 
 
 def send(args):
     # FIXME currently hardcoded
     ip_addrs = [ '10.1.1.2', '10.1.2.2', '10.1.3.2', '10.1.4.2' ]
     tcp_connections_per_ip_address = 1
-    gbps_per_ip_address = 20.0
 
     correlator = FakeCorrelator()
 
     for ip_addr in ip_addrs:
-        correlator.add_endpoint(ip_addr, tcp_connections_per_ip_address, gbps_per_ip_address)
+        correlator.add_endpoint(ip_addr, tcp_connections_per_ip_address, args.rate)
 
     correlator.run()
 

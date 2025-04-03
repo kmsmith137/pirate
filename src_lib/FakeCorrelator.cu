@@ -57,21 +57,13 @@ void FakeCorrelator::run()
 {
     long num_endpoints = this->endpoints.size();
     xassert(num_endpoints >= 0);
-
-    long nthreads = 0;
-    for (long i = 0; i < num_endpoints; i++)
-	nthreads += endpoints[i].num_tcp_connections;
     
-    vector<std::thread> threads(nthreads);
-    long ithread = 0;
+    vector<std::thread> threads(num_endpoints);
 
     for (long i = 0; i < num_endpoints; i++)
-	for (long j = 0; j < endpoints[i].num_tcp_connections; j++)
-	    threads.at(ithread++) = std::thread(sender_thread_main, this, i);
-
-    xassert(ithread == nthreads);
+	threads.at(i) = std::thread(sender_thread_main, this, i);
     
-    for (int ithread = 0; ithread < nthreads; ithread++)
+    for (int ithread = 0; ithread < num_endpoints; ithread++)
 	threads[ithread].join();
 }
 
@@ -103,6 +95,7 @@ void FakeCorrelator::sender_main(long endpoint_index)
     xassert(endpoint_index < long(endpoints.size()));
 
     Endpoint e = endpoints.at(endpoint_index);
+    long nconn = e.num_tcp_connections;
     pin_thread_to_vcpus(e.vcpu_list);
     
     int aflags = ksgpu::af_uhost;
@@ -110,26 +103,43 @@ void FakeCorrelator::sender_main(long endpoint_index)
 	aflags |= (use_hugepages ? ksgpu::af_mmap_huge : ksgpu::af_mmap_small);
     
     shared_ptr<char> buf = ksgpu::af_alloc<char> (send_bufsize, aflags);
+    vector<Socket> sockets;
+
+    for (long i = 0; i < nconn; i++) {
+	sockets.push_back(Socket(PF_INET, SOCK_STREAM));
+	Socket &socket = sockets[i];
+	
+	// later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)
+	socket.connect(e.ip_addr, 8787);  // TCP port 8787
+
+	if (e.total_gbps > 0.0) {
+	    double nbytes_per_sec = e.total_gbps / nconn / 8.0e-9;
+	    socket.set_pacing_rate(nbytes_per_sec);
+	}
     
-    Socket socket(PF_INET, SOCK_STREAM);
-    // later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)
-    socket.connect(e.ip_addr, 8787);  // TCP port 8787
-    
-    if (e.total_gbps > 0.0) {
-	double nbytes_per_sec = e.total_gbps / e.num_tcp_connections / 8.0e-9;
-	socket.set_pacing_rate(nbytes_per_sec);
+	if (use_zerocopy)
+	    socket.set_zerocopy();
     }
     
-    if (use_zerocopy)
-	socket.set_zerocopy();
-    
     long nbytes_total = 0;
-    
-    do {
-	long nbytes_sent = socket.send(buf.get(), send_bufsize);
-	nbytes_total += nbytes_sent;
-	throw_exception_if_aborted();
-    } while (!socket.connreset);
+
+    for (;;) {
+	for (long i = 0; i < nconn; i++) {
+	    Socket &socket = sockets[i];
+
+	    // FIXME should have a flag in socket.send() to enable this loop automatically
+	    long pos = 0;
+	    while (pos < send_bufsize) {
+		long nbytes_sent = socket.send(buf.get() + pos, send_bufsize - pos);
+		throw_exception_if_aborted();
+		if (socket.connreset)
+		    return;
+		pos += nbytes_sent;
+	    }
+	    
+	    nbytes_total += send_bufsize;
+	}
+    }
 }
 
 

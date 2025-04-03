@@ -5,6 +5,8 @@
 #include <vector>
 #include <string>
 
+#include <ksgpu/Barrier.hpp>
+
 namespace pirate {
 #if 0
 }  // editor auto-indent
@@ -34,6 +36,8 @@ struct FakeCorrelator
 	std::vector<int> vcpu_list;
     };
 
+    ksgpu::Barrier barrier;
+    
     std::vector<Endpoint> endpoints;
     long send_bufsize;
     bool use_zerocopy;
