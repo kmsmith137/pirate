@@ -113,16 +113,13 @@ PYFILES = \
   pirate_frb/Hardware.py
 
 # These are in 1-1 corresponding with executables in bin/
-# For example, 'src_bin/fake_correlator.cu' gets compiled to 'bin/fake_correlator'.
+# For example, 'src_bin/scratch.cu' gets compiled to 'bin/scratch'.
 BIN_SRCFILES = \
-  src_bin/fake_correlator.cu \
-  src_bin/fake_server.cu \
   src_bin/scratch.cu \
   src_bin/show_dedispersion_plan.cu \
   src_bin/test-avx256-m64-outbuf.cu \
   src_bin/test-cpu-downsampler.cu \
   src_bin/test-dedisperser.cu \
-  src_bin/time-dedisperser.cu \
   src_bin/test-gpu-dedispersion-kernels.cu \
   src_bin/test-gpu-downsample.cu \
   src_bin/test-gpu-lagged-downsampler.cu \
