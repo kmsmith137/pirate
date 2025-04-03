@@ -41,14 +41,14 @@ def parse_show_hardware(subparsers):
     
 def show_hardware(args):
     h = Hardware()
-    Hardware.show()
+    h.show()
 
 
 #######################################   test_node command  #######################################
 
 
 def parse_test_node(subparsers):
-    parser = subparsers.add_parser("test_node", help="Run test server (if no flags are specified, then all tasks execept hmem will be run by default)")
+    parser = subparsers.add_parser("test_node", help="Run test server (if no flags are specified, then all tasks execept hmem will be run)")
     parser.add_argument('-d', '--dedisperse', dest='d', action='store_true', help='Run GPU dedispersion')
     parser.add_argument('-c', '--cpu', dest='c', action='store_true', help='Run AVX2 downsampling kernels on CPU')
     parser.add_argument('-s', '--ssd', dest='s', action='store_true', help='Write files to SSDs')
@@ -57,11 +57,13 @@ def parse_test_node(subparsers):
     parser.add_argument('--h2g', dest='h2g', action='store_true', help='Copy host->GPU')
     parser.add_argument('--g2h', dest='g2h', action='store_true', help='Copy GPU->host')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
+    parser.add_argument('--ip', type=str, help='Comma-separated list of IP addresses')
+    parser.add_argument('--nic', type=str, help='Comma-separated list of NICs')
+    parser.add_argument('--toronto', action='store_true', help='Equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1')
     
 
 def test_node(args):
     # FIXME currently hardcoded
-    ip_addrs = [ '10.1.1.2', '10.1.2.2', '10.1.3.2', '10.1.4.2' ]
     ssd_dirs = [ '/scratch' ]
     
     tcp_connections_per_ip_address = 1
@@ -70,19 +72,49 @@ def test_node(args):
 
     no_flags = not (args.d or args.c or args.s or args.n or args.H or args.h2g or args.g2h)
     server = FakeServer('Node test')
-    hardware = server.hardware
+    hw = server.hardware
 
+    # IP address parsing starts here.
+    
+    ip_flag = 0
+    ip_addrs = [ ]
+    ip_needed = (no_flags or args.n)
+    
+    if args.toronto:
+        ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in [ 'enp55s0f0np0', 'enp55s0f1np1', 'enp181s0f0np0', 'enp181s0f1np1' ] ]
+        ip_flag += 1
+    elif args.ip is not None:
+        ip_addrs = args.ip.split(',')
+        for ip in ip_addrs:
+            hw.nic_from_ip_addr(ip)  # a way of checking whether the IP address is valid.
+        ip_flag += 1
+    elif args.nic is not None:
+        ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in args.nic.split(',') ]
+        ip_flag += 1
+
+    print(f'XXX {ip_addrs=}')
+    
+    if (ip_flag >= 2) or (ip_needed and (ip_flag == 0)):
+        s = 'precisely' if ip_needed else 'at most'
+        print(f"pirate 'test_node' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
+        print(f"  --ip=[IPADDRS]     for example --ip=10.1.1.2,10.1.2.2,10.1.3.2,10.1.4.2", file=sys.stderr)
+        print(f'  --nic=[NICS]       for example --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
+        print(f'  --toronto          equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
+        sys.exit(2)
+
+    # Add threads to server.
+    
     if no_flags:
         print("No flags passed to test_node.run() -- by default, all tasks except hmem will be run")
 
     if args.H:
         # FIXME -- currently submit one thread per vcpu (should do something better)
-        for icpu in range(hardware.num_cpus):
-            for v in hardware.vcpu_list_from_cpu(icpu):
+        for icpu in range(hw.num_cpus):
+            for v in hw.vcpu_list_from_cpu(icpu):
                 server.add_memcpy_thread(-1, -1, cpu=icpu)
                 
     if no_flags or args.c:
-        for icpu in range(hardware.num_cpus):
+        for icpu in range(hw.num_cpus):
             for _ in range(downsampling_threads_per_cpu):
                 server.add_downsampling_thread(icpu)
 
@@ -92,15 +124,15 @@ def test_node(args):
                 server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd)
 
     if no_flags or args.h2g:
-        for gpu in range(hardware.num_gpus):
+        for gpu in range(hw.num_gpus):
             server.add_memcpy_thread(-1, gpu)  # h2g
     
     if no_flags or args.g2h:
-        for gpu in range(hardware.num_gpus):
+        for gpu in range(hw.num_gpus):
             server.add_memcpy_thread(gpu, -1)  # g2h
     
     if no_flags or args.d:
-        for gpu in range(hardware.num_gpus):
+        for gpu in range(hw.num_gpus):
             server.add_chime_dedisperser(gpu)
 
     if no_flags or args.n:
@@ -141,8 +173,6 @@ def send(args):
         print(f"  - The flag '--toronto X', which is equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
         sys.exit(2)
 
-    print(f'XXX {ip_addrs=}')
-    
     correlator = FakeCorrelator(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True)
 
     for ip_addr in ip_addrs:

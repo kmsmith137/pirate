@@ -23,33 +23,13 @@ class Hardware:
     def num_gpus(self):
         return ksgpu.get_cuda_num_devices()
 
+    
     @functools.cache
     def vcpu_list_from_cpu(self, cpu):
         assert 0 <= cpu < self.num_cpus
         ret = [ v for v,c in enumerate(self._parse_cpu_topology) if c == cpu ]
         assert len(ret) > 0
         return ret
-        
-    @functools.cache
-    def vcpu_list_from_gpu(self, gpu):
-        bus_id = self._pcie_bus_id_from_gpu(gpu)
-        return self._vcpu_list_from_pcie_bus_id(bus_id)
-
-    @functools.cache
-    def vcpu_list_from_ip_addr(self, ip_addr, is_dst_addr=False):
-        nic = self._nic_from_ip_addr(ip_addr, is_dst_addr)
-        bus_id = self._pcie_bus_id_from_nic(nic)   # can be None, for loopback interface 
-        return self._vcpu_list_from_pcie_bus_id(bus_id, allow_none=True)
-        
-    @functools.cache
-    def vcpu_list_from_disk(self, disk):
-        bus_id = self._pcie_bus_id_from_block_device(disk)
-        return self._vcpu_list_from_pcie_bus_id(bus_id)
-
-    def vcpu_list_from_dirname(self, dirname):
-        dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
-        disk = self._dev_id_to_disk_dict[dev_id]
-        return self.vcpu_list_from_disk(disk)
 
     def cpu_from_vcpu_list(self, vcpu_list):
         """Returns None if the vcpu_list is either empty, or spans multiple CPUs."""
@@ -63,9 +43,66 @@ class Hardware:
             ret = c
         return ret
 
+    
+    @functools.cache
+    def vcpu_list_from_gpu(self, gpu):
+        bus_id = self._pcie_bus_id_from_gpu(gpu)
+        return self._vcpu_list_from_pcie_bus_id(bus_id)
+
+    
+    @functools.cached_property
+    def nics(self):
+        # FIXME only returns NICs which have been assigned an IP address
+        return [ nic for nic,ip in self._parse_ip_addr_show ]
+
     @functools.cached_property
     def ip_addrs(self):
-        return sorted(self._ip_addr_show_output.keys())
+        return [ ip for nic,ip in self._parse_ip_addr_show ]
+
+    @functools.cache
+    def ip_addr_from_nic(self, nic):
+        for n,ip in self._parse_ip_addr_show:
+            if n == nic:
+                return ip
+        raise RuntimeError(f"Couldn't associate NIC {ip_addr} with a NIC")
+
+    @functools.cache
+    def nic_from_ip_addr(self, ip_addr, is_dst_addr=False):
+        for nic,ip in self._parse_ip_addr_show:
+            if ip == ip_addr:
+                return nic
+
+        if is_dst_addr:
+            # To associate (dst_addr) -> (src_addr), use a UDP socket.
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect((ip_addr, 80))             # Doesn't actually send data
+                source_ip_addr = s.getsockname()[0]   # Get the source IP used for routing
+            for nic,ip in self._parse_ip_addr_show:
+                if ip == source_ip_addr:
+                    return nic
+
+        raise RuntimeError(f"Couldn't associate IP address {ip_addr} with a NIC")
+
+    @functools.cache
+    def vcpu_list_from_nic(self, nic):
+        bus_id = self._pcie_bus_id_from_nic(nic)   # can be None, for loopback interface 
+        return self._vcpu_list_from_pcie_bus_id(bus_id, allow_none=True)
+    
+    @functools.cache
+    def vcpu_list_from_ip_addr(self, ip_addr, is_dst_addr=False):
+        nic = self.nic_from_ip_addr(ip_addr, is_dst_addr)
+        return self.vcpu_list_from_nic(nic)
+
+    
+    @functools.cache
+    def vcpu_list_from_disk(self, disk):
+        bus_id = self._pcie_bus_id_from_block_device(disk)
+        return self._vcpu_list_from_pcie_bus_id(bus_id)
+
+    def vcpu_list_from_dirname(self, dirname):
+        dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
+        disk = self._dev_id_to_disk_dict[dev_id]
+        return self.vcpu_list_from_disk(disk)
     
     @functools.cached_property
     def disks(self):
@@ -101,8 +138,7 @@ class Hardware:
             print(f'   pcie = {bus_id}  ({description})')
             print(f'   {vcpu_list = }\n')
 
-        for ip_addr in self.ip_addrs:
-            nic = self._ip_addr_show_output[ip_addr]
+        for nic, ip_addr in self._parse_ip_addr_show:
             bus_id = self._pcie_bus_id_from_nic(nic)
             description = self._description_from_pcie_bus_id(bus_id)
             vcpu_list = self.vcpu_list_from_ip_addr(ip_addr)
@@ -169,26 +205,6 @@ class Hardware:
                 return x
 
         return None
-
-
-    @functools.cache
-    def _nic_from_ip_addr(self, ip_addr, is_dst_addr=False):
-        # Dict (ip_addr) -> (nic)
-        h = self._ip_addr_show_output
-
-        if ip_addr in h:
-            return h[ip_addr]
-
-        if is_dst_addr:
-            # To associate (dst_addr) -> (src_addr), use a UDP socket.
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect((ip_addr, 80))             # Doesn't actually send data
-                source_ip_addr = s.getsockname()[0]   # Get the source IP used for routing
-            if source_ip_addr in h:
-                return h[source_ip_addr]
-            
-        raise RuntimeError(f"Couldn't get NIC for IP address {ip_addr}")
-
     
     @functools.cache
     def _pcie_bus_id_from_nic(self, nic):
@@ -239,15 +255,10 @@ class Hardware:
 
     
     @functools.cached_property
-    def _ip_addr_show_output(self):
-        """
-        Parses the output of 'ip -o addr show' and returns a dictionary mapping
-        IPv4 addresses to their associated network interfaces.
-   
-        Example return value: { '192.168.1.100': 'eth0', '10.0.0.5': 'ens3', ... }
-        """
+    def _parse_ip_addr_show(self):
+        """Parses the output of 'ip -o addr show' and returns a list of (nic, ip) pairs."""
         
-        ip_to_interface = {}
+        ret = []
 
         # Run the command to get all network interfaces and IPs
         result = subprocess.run(
@@ -270,9 +281,9 @@ class Hardware:
                 match = ipv4_pattern.match(part)
                 if match:
                     ip_address = match.group(1)  # Extract the actual IP address
-                    ip_to_interface[ip_address] = interface  # Map IP to interface
+                    ret.append((interface, ip_address))
 
-        return ip_to_interface
+        return ret
 
 
     @functools.cached_property
