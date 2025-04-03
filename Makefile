@@ -110,7 +110,7 @@ PYFILES = \
   pirate_frb/__main__.py \
   pirate_frb/FakeCorrelator.py \
   pirate_frb/FakeServer.py \
-  pirate_frb/Hardware.py \
+  pirate_frb/Hardware.py
 
 # These are in 1-1 corresponding with executables in bin/
 # For example, 'src_bin/fake_correlator.cu' gets compiled to 'bin/fake_correlator'.
