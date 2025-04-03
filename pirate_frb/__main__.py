@@ -59,7 +59,9 @@ def parse_test_node(subparsers):
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
     parser.add_argument('--ip', type=str, help='Comma-separated list of IP addresses')
     parser.add_argument('--nic', type=str, help='Comma-separated list of NICs')
-    parser.add_argument('--toronto', action='store_true', help='Equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1')
+    parser.add_argument('--ssd-dirs', type=str, help='Comma-separated list of directory names (one per SSD)')
+    parser.add_argument('--ssd-devs', type=str, help='Comma-separated list of SSD device names (e.g. /dev/nvme0n1p2 or just nvme0n1p2)')
+    parser.add_argument('--toronto', action='store_true', help='Equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1 --ssd-dirs=/scratch')
     
 
 def test_node(args):
@@ -85,15 +87,15 @@ def test_node(args):
         ip_flag += 1
     elif args.ip is not None:
         ip_addrs = args.ip.split(',')
-        for ip in ip_addrs:
-            hw.nic_from_ip_addr(ip)  # a way of checking whether the IP address is valid.
         ip_flag += 1
     elif args.nic is not None:
         ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in args.nic.split(',') ]
         ip_flag += 1
 
-    print(f'XXX {ip_addrs=}')
-    
+    # An indirect way of checking that all IP addresses are valid.
+    for ip in ip_addrs:
+        hw.vcpu_list_from_ip_addr(ip)
+
     if (ip_flag >= 2) or (ip_needed and (ip_flag == 0)):
         s = 'precisely' if ip_needed else 'at most'
         print(f"pirate 'test_node' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
@@ -102,6 +104,34 @@ def test_node(args):
         print(f'  --toronto          equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
         sys.exit(2)
 
+    # SSD parsing starts here.
+
+    ssd_flag = 0
+    ssd_dirs = [ ]
+    ssd_needed = (no_flags or args.s)
+
+    if args.toronto:
+        ssd_dirs = [ '/scratch' ]
+        ssd_flag += 1
+    elif args.ssd_dirs is not None:
+        ssd_dirs = args.ssd_dirs.split(',')
+        ssd_flag += 1
+    elif args.ssd_devs is not None:
+        ssd_dirs = [ hw.mount_point_from_device(dev) for dev in args.ssd_devs.split(',') ]
+        ssd_flag += 1
+
+    # An indirect way of checking that all SSD dirnames are valid.
+    for ssd_dir in ssd_dirs:
+        hw.vcpu_list_from_dirname(ssd_dir)
+
+    if (ssd_flag >= 2) or (ssd_needed and (ssd_flag == 0)):
+        s = 'precisely' if ssd_needed else 'at most'
+        print(f"pirate 'test_node' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
+        print(f"  --ssd-dirs=[DIRS]     for example --ssd-dirs=/scratch1,/scratch2", file=sys.stderr)
+        print(f'  --ssd-devs=[DEVS]     for example --ssd-devs=nvme0n1p1,nvme0n2p1', file=sys.stderr)
+        print(f'  --toronto             equivalent to --ssd-dirs=/scratch', file=sys.stderr)
+        sys.exit(2)
+        
     # Add threads to server.
     
     if no_flags:

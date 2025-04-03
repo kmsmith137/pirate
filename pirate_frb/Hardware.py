@@ -99,10 +99,24 @@ class Hardware:
         bus_id = self._pcie_bus_id_from_block_device(disk)
         return self._vcpu_list_from_pcie_bus_id(bus_id)
 
+    @functools.cache
+    def mount_point_from_device(self, device_name):
+        """The 'device_name' is e.g. /dev/nvme0n1p2 or just 'nvme0n1p2'."""
+
+        for d_name, d_mountpoint, d_id in self._parse_proc_mounts:
+            if os.path.basename(device_name) == os.path.basename(d_name):
+                return d_mountpoint
+
+        raise RuntimeError(f"Couldn't find mount point for device {device_name}")
+    
     def vcpu_list_from_dirname(self, dirname):
         dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
-        disk = self._dev_id_to_disk_dict[dev_id]
-        return self.vcpu_list_from_disk(disk)
+
+        for d_name, d_mountpoint, d_id in self._parse_proc_mounts:
+            if dev_id == d_id:
+                return self.vcpu_list_from_disk(d_name)
+
+        raise RuntimeError(f"Couldn't find mount point for dirname {dirname}")
     
     @functools.cached_property
     def disks(self):
@@ -228,7 +242,7 @@ class Hardware:
     def _description_from_pcie_bus_id(self, bus_id):
         if bus_id is None:
             return 'Not a PCIe device'
-        for abbreviated_bus_id, description in self._lspci_output:
+        for abbreviated_bus_id, description in self._parse_lspci:
             if bus_id.endswith(abbreviated_bus_id):
                 return description
         return "Not found in 'lspci'"
@@ -287,7 +301,7 @@ class Hardware:
 
 
     @functools.cached_property
-    def _lspci_output(self):
+    def _parse_lspci(self):
         """Parses the output of 'lspci' and returns a list of pairs (abbreviated_bus_id, description)."""
 
         pairs = [ ]
@@ -302,16 +316,26 @@ class Hardware:
     
 
     @functools.cached_property
-    def _dev_id_to_disk_dict(self):
-        ret = { }
+    def _parse_proc_mounts(self):
+        """Parses /proc/mounts and returns a list of triples (device_name, mount_point, device_id).
+        
+        Here, the 'device_name' is e.g. '/dev/nvme0n1p2', and the device_id is the numerical ID
+        returned by os.stat(dirname).st_dev."""
+        
+        ret = [ ]
+
+        # FIXME figure out how remove entries that don't correspond to real block devices.
+        # (/proc/mounts contains a bunch of weird stuff like /sys/kernel/tracing.)
+        
         with open("/proc/mounts") as f:
             for line in f:
                 device, mountpoint, *_ = line.split()
                 try:
                     dev_id = os.stat(mountpoint).st_dev  # Device ID (major:minor)
-                    ret[dev_id] = device
+                    ret.append((device, mountpoint, dev_id))
                 except:
                     pass
+        
         return ret
 
 
