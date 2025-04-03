@@ -15,6 +15,9 @@ class FakeServer:
         # for determining which cores are associated with PCIe devices (GPUs, NICs).
         self.hardware = Hardware()
 
+        # Used in add_tcp_receiver()
+        self.nic_counter = 0
+        
         
     def cpu_from_vcpu_list(self, vcpu_list):
         # Some threads may be "floating", i.e. can run on multiple CPUs.
@@ -27,7 +30,8 @@ class FakeServer:
     def add_tcp_receiver(self, ip_addr, num_tcp_connections, recv_bufsize=512*1024, use_epoll=True):
         vcpu_list = self.hardware.vcpu_list_from_ip_addr(ip_addr)
         cpu = self.cpu_from_vcpu_list(vcpu_list)
-        self.cpp_server.add_tcp_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list, cpu)
+        self.cpp_server.add_tcp_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list, cpu, self.nic_counter)
+        self.nic_counter += 1
 
 
     def add_chime_dedisperser(self, gpu, use_copy_engine=False, num_active_batches=3, beams_per_batch=1, beams_per_gpu=None):
@@ -74,11 +78,12 @@ class FakeServer:
         self.cpp_server.add_memcpy_thread(src_device, dst_device, blocksize, use_copy_engine, vcpu_list, cpu)
         
         
-    def add_ssd_writer(self, root_dir, nbytes_per_file = 64 * 1024**2):
+    def add_ssd_writer(self, root_dir, issd, nbytes_per_file = 64 * 1024**2):
+        # FIXME caller must keep track of 'issd' argument -- it would be better to auto-determine this.
         os.makedirs(root_dir, exist_ok=True)
         vcpu_list = self.hardware.vcpu_list_from_dirname(root_dir)
         cpu = self.cpu_from_vcpu_list(vcpu_list)
-        self.cpp_server.add_ssd_writer(root_dir, nbytes_per_file, vcpu_list, cpu)
+        self.cpp_server.add_ssd_writer(root_dir, nbytes_per_file, vcpu_list, cpu, issd)
     
 
     def add_downsampling_thread(self, cpu, src_bit_depth=5, src_nelts=1024**3):

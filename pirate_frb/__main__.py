@@ -87,9 +87,9 @@ def test_node(args):
                 server.add_downsampling_thread(icpu)
 
     if no_flags or args.s:
-        for ssd_dir in ssd_dirs:
+        for issd,ssd_dir in enumerate(ssd_dirs):
             for thread in range(write_threads_per_ssd):
-                server.add_ssd_writer(f'{ssd_dir}/thread{thread}')
+                server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd)
 
     if no_flags or args.h2g:
         for gpu in range(hardware.num_gpus):
@@ -116,7 +116,7 @@ def test_node(args):
 def parse_send(subparsers):
     parser = subparsers.add_parser("send", help='Send data to test server (his is the "other half" of "python -m pirate_frb test_node")')
     parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
-    parser.add_argument('-b', '--bufsize', type=int, default=8192, help="Send bufsize (default 8192)")
+    parser.add_argument('-b', '--bufsize', type=int, default=65536, help="Send bufsize (default 65536)")
 
 
 def send(args):

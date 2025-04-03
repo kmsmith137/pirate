@@ -50,7 +50,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
 	.def("add_tcp_receiver", &FakeServer::add_tcp_receiver,
 	     py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("recv_bufsize"),
-	     py::arg("use_epoll"), py::arg("vcpu_list"), py::arg("cpu"))
+	     py::arg("use_epoll"), py::arg("vcpu_list"), py::arg("cpu"), py::arg("inic"))
 
 	.def("add_chime_dedisperser", &FakeServer::add_chime_dedisperser,
 	     py::arg("device"), py::arg("beams_per_gpu"), py::arg("num_active_batches"),
@@ -62,10 +62,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	     py::arg("use_copy_engine"), py::arg("vcpu_list"), py::arg("cpu"))
 	
 	.def("add_ssd_writer", &FakeServer::add_ssd_writer,
-	     py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"), py::arg("cpu"))
+	     py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"),
+	     py::arg("cpu"), py::arg("issd"))
 
 	.def("add_downsampling_thread", &FakeServer::add_downsampling_thread,
-	     py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"), py::arg("cpu"))
+	     py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"),
+	     py::arg("cpu"))
 
 	 // Called by python code, to control server.
 	.def("abort", &FakeServer::abort, py::arg("abort_msg"))
