@@ -116,6 +116,7 @@ def test_node(args):
 def parse_send(subparsers):
     parser = subparsers.add_parser("send", help='Send data to test server (his is the "other half" of "python -m pirate_frb test_node")')
     parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
+    parser.add_argument('-b', '--bufsize', type=int, default=8192, help="Send bufsize (default 8192)")
 
 
 def send(args):
@@ -123,7 +124,7 @@ def send(args):
     ip_addrs = [ '10.1.1.2', '10.1.2.2', '10.1.3.2', '10.1.4.2' ]
     tcp_connections_per_ip_address = 1
 
-    correlator = FakeCorrelator()
+    correlator = FakeCorrelator(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True)
 
     for ip_addr in ip_addrs:
         correlator.add_endpoint(ip_addr, tcp_connections_per_ip_address, args.rate)

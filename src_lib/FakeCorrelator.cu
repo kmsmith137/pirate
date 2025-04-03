@@ -20,7 +20,8 @@ namespace pirate {
 #endif
 
 
-FakeCorrelator::FakeCorrelator(long send_bufsize_, bool use_zerocopy_, bool use_mmap_, bool use_hugepages_)
+FakeCorrelator::FakeCorrelator(long send_bufsize_, bool use_zerocopy_, bool use_mmap_, bool use_hugepages_) :
+    barrier(0)  // Barrier will be initialized in run()
 {
     this->send_bufsize = send_bufsize_;
     this->use_zerocopy = use_zerocopy_;
@@ -57,11 +58,21 @@ void FakeCorrelator::run()
 {
     long num_endpoints = this->endpoints.size();
     xassert(num_endpoints >= 0);
-    
+
+    barrier.initialize(num_endpoints+1);
     vector<std::thread> threads(num_endpoints);
 
     for (long i = 0; i < num_endpoints; i++)
 	threads.at(i) = std::thread(sender_thread_main, this, i);
+
+    barrier.wait();
+    
+    stringstream ss;
+    ss << "All TCP connections active, sending data.\n"
+       << "Data will be sent until the receiver closes the connections.\n";
+    cout << ss.str() << flush;
+
+    barrier.wait();
     
     for (int ithread = 0; ithread < num_endpoints; ithread++)
 	threads[ithread].join();
@@ -93,10 +104,14 @@ void FakeCorrelator::sender_main(long endpoint_index)
 {
     xassert(endpoint_index >= 0);
     xassert(endpoint_index < long(endpoints.size()));
+    Endpoint &e = endpoints.at(endpoint_index);
 
-    Endpoint e = endpoints.at(endpoint_index);
     long nconn = e.num_tcp_connections;
     pin_thread_to_vcpus(e.vcpu_list);
+    
+    stringstream ss;
+    ss << e.ip_addr << ": creating " << nconn << " TCP connections\n";
+    cout << ss.str() << flush;
     
     int aflags = ksgpu::af_uhost;
     if (use_mmap)
@@ -120,6 +135,9 @@ void FakeCorrelator::sender_main(long endpoint_index)
 	if (use_zerocopy)
 	    socket.set_zerocopy();
     }
+
+    this->barrier.wait();    
+    this->barrier.wait();
     
     long nbytes_total = 0;
 

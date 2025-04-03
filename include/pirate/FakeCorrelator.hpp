@@ -16,7 +16,7 @@ namespace pirate {
 struct FakeCorrelator
 {
     FakeCorrelator(
-        long send_bufsize = 512 * 1024,
+	long send_bufsize = 8192,
 	bool use_zerocopy = true,
 	bool use_mmap = false,
 	bool use_hugepages = true

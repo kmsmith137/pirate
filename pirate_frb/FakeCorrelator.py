@@ -4,7 +4,7 @@ from .Hardware import Hardware
 
 
 class FakeCorrelator:
-    def __init__(self, send_bufsize=512*1024, use_zerocopy=True, use_mmap=False, use_hugepages=True):
+    def __init__(self, send_bufsize=8192, use_zerocopy=True, use_mmap=False, use_hugepages=True):
         # Low-level C++ correlator, exported to python via pybind11.
         self.cpp_correlator = pirate_pybind11.FakeCorrelator(send_bufsize, use_zerocopy, use_mmap, use_hugepages)
         
