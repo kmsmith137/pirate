@@ -117,13 +117,32 @@ def parse_send(subparsers):
     parser = subparsers.add_parser("send", help='Send data to test server (his is the "other half" of "python -m pirate_frb test_node")')
     parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
     parser.add_argument('-b', '--bufsize', type=int, default=65536, help="Send bufsize (default 65536)")
+    parser.add_argument('ip_addrs', nargs='*', help="list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2")
+    parser.add_argument('--toronto', type=int, help="'--toronto X' is equivalent to arguments: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X")
 
 
 def send(args):
     # FIXME currently hardcoded
-    ip_addrs = [ '10.1.1.2', '10.1.2.2', '10.1.3.2', '10.1.4.2' ]
     tcp_connections_per_ip_address = 1
 
+    # Init 'ip_addrs' (list of strings)
+    flag = 0
+    if len(args.ip_addrs) > 0:
+        ip_addrs = args.ip_addrs
+        flag += 1
+    elif args.toronto is not None:
+        n = args.toronto
+        ip_addrs = [ f'10.1.1.{n}', f'10.1.2.{n}', f'10.1.3.{n}', f'10.1.4.{n}' ]
+        flag += 1
+
+    if flag != 1:
+        print(f"pirate 'send' command: precisely one of the following must be specified on the command line:", file=sys.stderr)
+        print(f"  - A list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2", file=sys.stderr)
+        print(f"  - The flag '--toronto X', which is equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
+        sys.exit(2)
+
+    print(f'XXX {ip_addrs=}')
+    
     correlator = FakeCorrelator(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True)
 
     for ip_addr in ip_addrs:
