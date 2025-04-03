@@ -8,8 +8,12 @@
 #include <ksgpu/test_utils.hpp>    // make_random_strides()
 
 using namespace std;
-using namespace pirate;
 using namespace ksgpu;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 // -------------------------------------------------------------------------------------------------
@@ -35,12 +39,10 @@ static int dedispersion_delay(int rank, int freq, int dm_brev)
 }
 
 
-static void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, int t0, bool noisy=false)
+void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, int t0)
 {
-    if (noisy) {
-	cout << "test_non_incremental_dedispersion(rank=" << rank << ", ntime=" << ntime
-	     << ", dm_brev=" << dm_brev << ", t0=" << t0 << ")" << endl;
-    }
+    cout << "test_non_incremental_dedispersion(rank=" << rank << ", ntime=" << ntime
+	 << ", dm_brev=" << dm_brev << ", t0=" << t0 << ")" << endl;
 	
     check_rank(rank, "test_non_incremental_dedispersion");
     xassert((dm_brev >= 0) && (dm_brev < pow2(rank)));
@@ -64,14 +66,14 @@ static void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, 
 }
 
 
-static void test_non_incremental_dedispersion(bool noisy=false)
+void test_non_incremental_dedispersion()
 {
     int rank = rand_int(0, 9);
     int ntime = rand_int(1, 500);
     int dm_prev = rand_int(0, pow2(rank));
     int t0 = rand_int(0, ntime);
     
-    test_non_incremental_dedispersion(rank, ntime, dm_prev, t0, noisy);
+    test_non_incremental_dedispersion(rank, ntime, dm_prev, t0);
 }
 
 
@@ -161,7 +163,7 @@ static void test_reference_lagbuf(const Array<int> &lags, const vector<long> dat
 }
 
 
-static void test_reference_lagbuf()
+void test_reference_lagbuf()
 {
     // Number of dimensions in 'lags' array
     int nd = rand_int(1, 4);
@@ -274,7 +276,7 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
 }
 
 
-static void test_reference_tree()
+void test_reference_tree()
 {
     int rank = rand_int(1, 9);
     int ndim = rand_int(2, 6);
@@ -293,7 +295,7 @@ static void test_reference_tree()
 // -------------------------------------------------------------------------------------------------
 
 
-static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
+void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
 {
     cout << "test_reference_tree_recursion: rank0=" << rank0 << ", rank1=" << rank1
 	 << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks << endl;
@@ -339,7 +341,7 @@ static void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
 }
 
 
-static void test_tree_recursion()
+void test_tree_recursion()
 {
     int rank = rand_int(0, 9);
     int rank0 = rand_int(0, rank+1);
@@ -352,20 +354,4 @@ static void test_tree_recursion()
 }
 
 
-// -------------------------------------------------------------------------------------------------
-
-
-int main(int argc, char **argv)
-{
-    bool noisy = true;
-
-    for (int n = 0; n < 400; n++) {
-	test_non_incremental_dedispersion(noisy);
-	test_reference_lagbuf();
-	test_reference_tree();
-	test_tree_recursion();
-    }
-
-    cout << "test-reference-tree: pass" << endl;
-    return 0;
-}
+}  // namespace pirate

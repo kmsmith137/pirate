@@ -9,19 +9,23 @@
 #include <ksgpu/xassert.hpp>
 
 using namespace std;
-using namespace pirate;
 using namespace ksgpu;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 // -------------------------------------------------------------------------------------------------
 
 
-struct TestInstance
+struct TestInstanceLDS
 {
     LaggedDownsamplingKernelParams params;
     long nchunks = 0;
 
-    TestInstance() { }
+    TestInstanceLDS() { }
     
     void print(ostream &os=cout, int indent=0) const
     {
@@ -35,9 +39,9 @@ struct TestInstance
 	xassert(nchunks > 0);
     }
     
-    static TestInstance make_random()
+    static TestInstanceLDS make_random()
     {
-	TestInstance ti;
+	TestInstanceLDS ti;
 	ti.params.dtype = (rand_uniform() < 0.5) ? Dtype::native<float>() : Dtype::native<__half>();
 	ti.params.output_dd_rank = rand_int(1,8);  // GpuLaggedDownsamplingKernel needs 1 <= output_dd_rank <= 7
 	ti.params.input_total_rank = ti.params.output_dd_rank + rand_int(1,5);
@@ -83,7 +87,7 @@ static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_
 }
 
 
-void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
+static void test_gpu_lagged_downsampling_kernel(const TestInstanceLDS &ti)
 {
     ti.params.validate();
     
@@ -129,21 +133,12 @@ void test_gpu_lagged_downsampling_kernel(const TestInstance &ti)
 }
 
 
-// -------------------------------------------------------------------------------------------------
-
-
-int main(int argc, char **argv)
+void test_gpu_lagged_downsampling_kernel()
 {
-    const int ntests = 50;
-    
-    for (int i = 0; i < ntests; i++) {
-	cout << "\ntest_gpu_lagged_downsampling_kernel " << i << "/" << ntests << "\n";
-	TestInstance ti = TestInstance::make_random();
-	ti.print(cout, 4);
-	test_gpu_lagged_downsampling_kernel(ti);
-    }
-
-    cout << "\ntest_gpu_lagged_downsampling_kernel: pass\n";
-    return 0;
+    TestInstanceLDS ti = TestInstanceLDS::make_random();
+    ti.print(cout, 4);
+    test_gpu_lagged_downsampling_kernel(ti);
 }
 
+
+}  // namespace pirate

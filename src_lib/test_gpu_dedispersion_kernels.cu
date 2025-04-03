@@ -9,13 +9,18 @@
 #include <ksgpu/test_utils.hpp>    // make_random_strides()
 
 using namespace std;
-using namespace pirate;
 using namespace ksgpu;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
+
 
 // FIXME buffer managment (in particular the _setup_io_arrays() function) in this
 // code looks dubious -- revisit at some point.
 
-struct TestInstance
+struct TestInstanceDK
 {
     // Reminder: includes 'dtype', 'input_is_ringbuf', 'output_is_ringbuf'.
     DedispersionKernelParams params;
@@ -178,7 +183,7 @@ struct TestInstance
 
 
 // Helper for run_test()
-void _setup_io_arrays(Array<void> &in, Array<void> &out, const Array<void> &in_big, const Array<void> &out_big, const TestInstance &tp, bool on_gpu)
+static void _setup_io_arrays(Array<void> &in, Array<void> &out, const Array<void> &in_big, const Array<void> &out_big, const TestInstanceDK &tp, bool on_gpu)
 {
     int aflags = (on_gpu ? af_gpu : af_uhost) | af_zero;
     vector<long> istrides = on_gpu ? tp.gpu_istrides : tp.cpu_istrides;
@@ -198,7 +203,7 @@ void _setup_io_arrays(Array<void> &in, Array<void> &out, const Array<void> &in_b
 }
 
 
-static void run_test(const TestInstance &tp)
+static void run_test(const TestInstanceDK &tp)
 {
     const DedispersionKernelParams &p = tp.params;
     
@@ -297,21 +302,12 @@ static void run_test(const TestInstance &tp)
 }
 
 
-// -------------------------------------------------------------------------------------------------
-
-
-int main(int argc, char **argv)
+void test_gpu_dedispersion_kernels()
 {
-    const int niter = 200;
-    
-    for (int i = 0; i < niter; i++) {
-	cout << "Iteration " << i << "/" << niter << "\n\n";
-	TestInstance ti;
-	ti.randomize();
-	run_test(ti);
-    }
-
-    cout << "test-gpu-dedispersion-kernels: pass" << endl;
-    return 0;
+    TestInstanceDK ti;
+    ti.randomize();
+    run_test(ti);
 }
 
+
+}  // namespace pirate

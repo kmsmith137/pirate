@@ -1,9 +1,36 @@
 import sys
 import argparse
 
+import ksgpu
+
+from . import pirate_pybind11
+
 from .Hardware import Hardware
 from .FakeServer import FakeServer
 from .FakeCorrelator import FakeCorrelator
+
+
+#########################################   test command  ##########################################
+
+
+def parse_test(subparsers):
+    parser = subparsers.add_parser("test", help="Run unit tests")
+    parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
+    parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
+
+    
+def test(args):
+    ksgpu.set_cuda_device(args.gpu)
+    
+    for i in range(args.niter):
+        print(f'Iteration {i+1}/{args.niter}')
+        pirate_pybind11.test_non_incremental_dedispersion()
+        pirate_pybind11.test_reference_lagbuf()
+        pirate_pybind11.test_reference_tree()
+        pirate_pybind11.test_tree_recursion()
+        pirate_pybind11.test_gpu_lagged_downsampling_kernel()
+        pirate_pybind11.test_gpu_dedispersion_kernels()
+        pirate_pybind11.test_dedisperser()
 
 
 #####################################   show_hardware command  #####################################
@@ -21,11 +48,12 @@ def show_hardware(args):
 
 
 def parse_test_node(subparsers):
-    parser = subparsers.add_parser("test_node", help="Run test server (if no flags are specified, then all tasks will be run by default)")
+    parser = subparsers.add_parser("test_node", help="Run test server (if no flags are specified, then all tasks execept hmem will be run by default)")
     parser.add_argument('-d', '--dedisperse', dest='d', action='store_true', help='Run GPU dedispersion')
     parser.add_argument('-c', '--cpu', dest='c', action='store_true', help='Run AVX2 downsampling kernels on CPU')
     parser.add_argument('-s', '--ssd', dest='s', action='store_true', help='Write files to SSDs')
     parser.add_argument('-n', '--net', dest='n', action='store_true', help='Receive data over the network')
+    parser.add_argument('-H', '--hmem', dest='H', action='store_true', help='Host memory bandwidth test')
     parser.add_argument('--h2g', dest='h2g', action='store_true', help='Copy host->GPU')
     parser.add_argument('--g2h', dest='g2h', action='store_true', help='Copy GPU->host')
 
@@ -39,13 +67,19 @@ def test_node(args):
     downsampling_threads_per_cpu = 8
     write_threads_per_ssd = 4
 
-    no_flags = not (args.d or args.c or args.s or args.n or args.h2g or args.g2h)
+    no_flags = not (args.d or args.c or args.s or args.n or args.H or args.h2g or args.g2h)
     server = FakeServer('Node test')
     hardware = server.hardware
 
     if no_flags:
-        print("No flags passed to test_node.run() -- by default, all tasks will be run")
+        print("No flags passed to test_node.run() -- by default, all tasks except hmem will be run")
 
+    if args.H:
+        # FIXME -- currently submit one thread per vcpu (should do something better)
+        for icpu in range(hardware.num_cpus):
+            for v in hardware.vcpu_list_from_cpu(icpu):
+                server.add_memcpy_thread(-1, -1, cpu=icpu)
+                
     if no_flags or args.c:
         for icpu in range(hardware.num_cpus):
             for _ in range(downsampling_threads_per_cpu):
@@ -103,13 +137,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="pirate_frb command-line driver (use --help for more info)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    parse_test(subparsers)
     parse_show_hardware(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
 
     args = parser.parse_args()
 
-    if args.command == "show_hardware":
+    if args.command == "test":
+        test(args)
+    elif args.command == "show_hardware":
         show_hardware(args)
     elif args.command == "test_node":
         test_node(args)

@@ -9,10 +9,14 @@
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
-static void test_dedisperser(const DedispersionConfig &config, int nchunks)
+void test_dedisperser(const DedispersionConfig &config, int nchunks)
 {
     cout << "\n" << "test_dedisperser: nchunks=" << nchunks << endl;
     config.print(cout, 4);
@@ -82,53 +86,20 @@ static void test_dedisperser(const DedispersionConfig &config, int nchunks)
 }
 
 
-// -------------------------------------------------------------------------------------------------
-
-
-static void run_random_small_configs(int niter)
+void test_dedisperser()
 {
-    for (int iter = 0; iter < niter; iter++) {
-	cout << "\n    *** Running random small config " << iter << "/" << niter << " ***\n" << endl;
-	
-	auto config = DedispersionConfig::make_random();
-	config.num_active_batches = 1;   // FIXME currently we only support nstreams==1
-	config.validate();
-
-	int max_nt = 8192;
-	xassert(config.time_samples_per_chunk <= max_nt);
-	
-	int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
-	int nchunks = ksgpu::rand_int(1, max_nchunks+1);
-	
-	test_dedisperser(config, nchunks);
-    }
+    auto config = DedispersionConfig::make_random();
+    config.num_active_batches = 1;   // FIXME currently we only support nstreams==1
+    config.validate();
+    
+    int max_nt = 8192;
+    xassert(config.time_samples_per_chunk <= max_nt);
+    
+    int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
+    int nchunks = ksgpu::rand_int(1, max_nchunks+1);
+    
+    test_dedisperser(config, nchunks);
 }
 
 
-int main(int argc, char **argv)
-{
-    if (argc == 1) {
-	const int niter = 100;
-	
-	cout << "No command-line arguments were specified; running "
-	     << niter << " randomly generated 'small' configs" << endl;
-	
-	run_random_small_configs(niter);
-	
-	cout << "\nThis concludes our test of " << niter << " randomly generated 'small' configs.\n"
-	     << "To run a long test, specify a config on the command line, e.g.\n"
-	     << "   ./bin/test-dedisperser configs/dedispersion/chord_zen3/chord_zen3_int8_float16.yml\n";
-    }
-
-    for (int iarg = 1; iarg < argc; iarg++) {
-	auto config = DedispersionConfig::from_yaml(argv[iarg]);
-    
-	int nt_tot = 1024 * 1024;  // FIXME promote to command-line arg?
-	int nchunks = xdiv(nt_tot, config.time_samples_per_chunk);
-	test_dedisperser(config, nchunks);
-    }
-    
-    cout << "\ntest-dedisperser: pass" << endl;
-    return 0;
-}
-
+}  // namespace pirate
