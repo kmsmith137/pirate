@@ -59,6 +59,14 @@ void FakeCorrelator::run()
     long num_endpoints = this->endpoints.size();
     xassert(num_endpoints >= 0);
 
+    cout << "\n"
+	 << "Warning: this half-finished program will \"hang\" unless you wait to\n"
+	 << "start it until after the receiver is fully initialized. The receiver is\n"
+	 << "fully initialized when every TcpReceiver thread prints a line like this:\n"
+	 << "\n"
+	 << "  TcpReceiver(10.1.1.2, 1 connections, use_epoll=1): listening for TCP connections\n"
+	 << endl;
+    
     barrier.initialize(num_endpoints+1);
     vector<std::thread> threads(num_endpoints);
 

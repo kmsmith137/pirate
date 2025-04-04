@@ -101,7 +101,7 @@ def test_node(args):
         print(f"pirate 'test_node' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
         print(f"  --ip=[IPADDRS]     for example --ip=10.1.1.2,10.1.2.2,10.1.3.2,10.1.4.2", file=sys.stderr)
         print(f'  --nic=[NICS]       for example --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
-        print(f'  --toronto          equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
+        print(f'  --toronto          equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1 --ssd-dirs=/scratch', file=sys.stderr)
         sys.exit(2)
 
     # SSD parsing starts here.
@@ -129,7 +129,7 @@ def test_node(args):
         print(f"pirate 'test_node' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
         print(f"  --ssd-dirs=[DIRS]     for example --ssd-dirs=/scratch1,/scratch2", file=sys.stderr)
         print(f'  --ssd-devs=[DEVS]     for example --ssd-devs=nvme0n1p1,nvme0n2p1', file=sys.stderr)
-        print(f'  --toronto             equivalent to --ssd-dirs=/scratch', file=sys.stderr)
+        print(f'  --toronto             equivalent to --ssd-dirs=/scratch --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
         sys.exit(2)
         
     # Add threads to server.

@@ -338,6 +338,7 @@ void FakeServer::start()
 	// Reminder: after server is started, 'workers' is immutable, so we don't need to hold state->lock here.
 	for (long i = 0; i < num_workers; i++) {
 	    auto wp = workers[i];
+	    
 	    stringstream ss;
 	    ss << "  [Thread " << i << "] " << wp->worker_name << ": ";
 	    if (wp->cpu >= 0)
@@ -346,6 +347,7 @@ void FakeServer::start()
 		ss << "cpu=None";
 	    ss << ", vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
 	    cout << ss.str() << flush;
+	    
 	    threads[i] = std::thread(worker_thread_main, wp);
 	}
     }
