@@ -62,6 +62,7 @@ def parse_test_node(subparsers):
     parser.add_argument('--ssd-dirs', type=str, help='Comma-separated list of directory names (one per SSD)')
     parser.add_argument('--ssd-devs', type=str, help='Comma-separated list of SSD device names (e.g. /dev/nvme0n1p2 or just nvme0n1p2)')
     parser.add_argument('--toronto', action='store_true', help='Equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1 --ssd-dirs=/scratch')
+    parser.add_argument('--chord', action='store_true', help='Equivalent to --nic=enp13s0f0np0,enp13s0f1np1,enp160s0f0np0,enp160s0f1np1 --ssd-dirs=/scratch,/disk2/scratch')
     
 
 def test_node(args):
@@ -80,10 +81,13 @@ def test_node(args):
     
     ip_flag = 0
     ip_addrs = [ ]
-    ip_needed = (no_flags or args.n)
-    
+    ip_needed = (no_flags or args.n) 
+   
     if args.toronto:
         ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in [ 'enp55s0f0np0', 'enp55s0f1np1', 'enp181s0f0np0', 'enp181s0f1np1' ] ]
+        ip_flag += 1   
+    elif args.chord:
+        ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in [ 'enp13s0f0np0', 'enp13s0f1np1', 'enp160s0f0np0', 'enp160s0f1np1' ] ]
         ip_flag += 1
     elif args.ip is not None:
         ip_addrs = args.ip.split(',')
@@ -102,6 +106,7 @@ def test_node(args):
         print(f"  --ip=[IPADDRS]     for example --ip=10.1.1.2,10.1.2.2,10.1.3.2,10.1.4.2", file=sys.stderr)
         print(f'  --nic=[NICS]       for example --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
         print(f'  --toronto          equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1 --ssd-dirs=/scratch', file=sys.stderr)
+        print(f'  --chord            equivalent to --nic=enp13s0f0np0,enp13s0f1np1,enp160s0f0np0,enp160s0f1np1 --ssd-dirs=/scratch,/disk2/scratch', file=sys.stderr)
         sys.exit(2)
 
     # SSD parsing starts here.
@@ -112,6 +117,9 @@ def test_node(args):
 
     if args.toronto:
         ssd_dirs = [ '/scratch' ]
+        ssd_flag += 1
+    elif args.chord:
+        ssd_dirs = [ '/scratch', '/disk2/scratch' ]
         ssd_flag += 1
     elif args.ssd_dirs is not None:
         ssd_dirs = args.ssd_dirs.split(',')
@@ -130,6 +138,7 @@ def test_node(args):
         print(f"  --ssd-dirs=[DIRS]     for example --ssd-dirs=/scratch1,/scratch2", file=sys.stderr)
         print(f'  --ssd-devs=[DEVS]     for example --ssd-devs=nvme0n1p1,nvme0n2p1', file=sys.stderr)
         print(f'  --toronto             equivalent to --ssd-dirs=/scratch --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
+        print(f'  --chord               equivalent to --ssd-dirs=/scratch,/disk2/scratch --nic=enp13s0f0np0,enp13s0f1np1,enp160s0f0np0,enp160s0f1np1', file=sys.stderr)
         sys.exit(2)
         
     # Add threads to server.
@@ -181,6 +190,7 @@ def parse_send(subparsers):
     parser.add_argument('-b', '--bufsize', type=int, default=65536, help="Send bufsize (default 65536)")
     parser.add_argument('ip_addrs', nargs='*', help="list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2")
     parser.add_argument('--toronto', type=int, help="'--toronto X' is equivalent to arguments: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X")
+    parser.add_argument('--chord', type=int, help="'--chord X' is also equivalent to arguments: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X")
 
 
 def send(args):
@@ -196,11 +206,16 @@ def send(args):
         n = args.toronto
         ip_addrs = [ f'10.1.1.{n}', f'10.1.2.{n}', f'10.1.3.{n}', f'10.1.4.{n}' ]
         flag += 1
+    elif args.chord is not None:
+        n = args.chord
+        ip_addrs = [ f'10.1.1.{n}', f'10.1.2.{n}', f'10.1.3.{n}', f'10.1.4.{n}' ]
+        flag += 1
 
     if flag != 1:
         print(f"pirate 'send' command: precisely one of the following must be specified on the command line:", file=sys.stderr)
         print(f"  - A list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2", file=sys.stderr)
         print(f"  - The flag '--toronto X', which is equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
+        print(f"  - The flag '--chord X', which is also equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
         sys.exit(2)
 
     correlator = FakeCorrelator(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True)

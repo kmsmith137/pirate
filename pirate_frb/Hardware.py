@@ -101,7 +101,7 @@ class Hardware:
     
     def vcpu_list_from_dirname(self, dirname):
         disk = self.disk_from_dirname(dirname)
-        return vcpu_list_from_disk(disk)
+        return self.vcpu_list_from_disk(disk)
 
     def disk_from_dirname(self, dirname):
         dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
