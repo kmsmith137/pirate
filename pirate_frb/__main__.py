@@ -48,12 +48,13 @@ def show_hardware(args):
 
 
 def parse_test_node(subparsers):
-    parser = subparsers.add_parser("test_node", help="Run test server (if no flags are specified, then all tasks execept hmem will be run)")
+    parser = subparsers.add_parser("test_node", help="Run test server (if no flags are specified, then -dcsdn --h2g --g2h is the default)")
     parser.add_argument('-d', '--dedisperse', dest='d', action='store_true', help='Run GPU dedispersion')
     parser.add_argument('-c', '--cpu', dest='c', action='store_true', help='Run AVX2 downsampling kernels on CPU')
     parser.add_argument('-s', '--ssd', dest='s', action='store_true', help='Write files to SSDs')
     parser.add_argument('-n', '--net', dest='n', action='store_true', help='Receive data over the network')
     parser.add_argument('-H', '--hmem', dest='H', action='store_true', help='Host memory bandwidth test')
+    parser.add_argument('-G', '--gmem', dest='G', action='store_true', help='GPU memory bandwidth test')
     parser.add_argument('--h2g', dest='h2g', action='store_true', help='Copy host->GPU')
     parser.add_argument('--g2h', dest='g2h', action='store_true', help='Copy GPU->host')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
@@ -73,7 +74,7 @@ def test_node(args):
     downsampling_threads_per_cpu = 8
     write_threads_per_ssd = 4
 
-    no_flags = not (args.d or args.c or args.s or args.n or args.H or args.h2g or args.g2h)
+    no_flags = not (args.d or args.c or args.s or args.n or args.H or args.G or args.h2g or args.g2h)
     server = FakeServer('Node test')
     hw = server.hardware
 
@@ -151,6 +152,9 @@ def test_node(args):
         for icpu in range(hw.num_cpus):
             for v in hw.vcpu_list_from_cpu(icpu):
                 server.add_memcpy_thread(-1, -1, cpu=icpu)
+    if args.G:
+        for gpu in range(hw.num_gpus):
+            server.add_memcpy_thread(gpu, gpu, use_copy_engine=False)
                 
     if no_flags or args.c:
         for icpu in range(hw.num_cpus):
