@@ -98,7 +98,20 @@ class Hardware:
     def vcpu_list_from_disk(self, disk):
         bus_id = self._pcie_bus_id_from_block_device(disk)
         return self._vcpu_list_from_pcie_bus_id(bus_id)
+    
+    def vcpu_list_from_dirname(self, dirname):
+        disk = self.disk_from_dirname(dirname)
+        return vcpu_list_from_disk(disk)
 
+    def disk_from_dirname(self, dirname):
+        dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
+
+        for d_name, d_mountpoint, d_id in self._parse_proc_mounts:
+            if dev_id == d_id:
+                return d_name
+
+        raise RuntimeError(f"Couldn't find disk for dirname {dirname} (by searching /proc/mounts for st_dev={dev_id})")
+        
     @functools.cache
     def mount_point_from_device(self, device_name):
         """The 'device_name' is e.g. /dev/nvme0n1p2 or just 'nvme0n1p2'."""
@@ -108,15 +121,6 @@ class Hardware:
                 return d_mountpoint
 
         raise RuntimeError(f"Couldn't find mount point for device {device_name}")
-    
-    def vcpu_list_from_dirname(self, dirname):
-        dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
-
-        for d_name, d_mountpoint, d_id in self._parse_proc_mounts:
-            if dev_id == d_id:
-                return self.vcpu_list_from_disk(d_name)
-
-        raise RuntimeError(f"Couldn't find mount point for dirname {dirname}")
     
     @functools.cached_property
     def disks(self):
@@ -207,16 +211,31 @@ class Hardware:
 
     @functools.cache
     def _pcie_bus_id_from_sys_subdir(self, pathname):
-        """The 'pathname' arg is e.g. '/sys/class/net/eno8303' or '/sys/class/block/nvme0n1p1'."""
-        
-        pathname = os.path.realpath(pathname)
-        if not pathname.startswith('/sys/devices/pci'):
-            return None
+        """
+        The 'pathname' arg is e.g. '/sys/class/net/eno8303' or '/sys/class/block/nvme0n1p1'.
+        Note that this function can return None -- caller should check return value.
+        """
 
-        pcie_regex = r'^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$'  # thanks chatgpt
-        for x in pathname.split('/')[::-1]:
-            if re.match(pcie_regex, x):
-                return x
+        pathname = os.path.realpath(pathname)
+
+        # FIXME hack around NVMe namespace madness on the the CHORD FRB nodes.
+        # Revisit this in the future and try to find a sane approach.
+        
+        while pathname.startswith('/sys/devices/'):
+            if os.path.exists(pathname):
+                rp = os.path.realpath(pathname)
+
+                if rp.startswith('/sys/devices/pci'):
+                    # regex to match PCIe bus IDs (e.g. '0000:03:00.0'), courtesy of chatgpt
+                    pcie_regex = r'^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$'
+                    for x in rp.split('/')[::-1]:
+                        if re.match(pcie_regex, x):
+                            return x
+
+                    raise RuntimeError(f"Couldn't get PCIe bus id from sysfs path {rp} (maybe regex failure?)")
+
+            # remove one character from the pathname and try again
+            pathname = pathname[:-1]
 
         return None
     
@@ -232,10 +251,18 @@ class Hardware:
     @functools.cache
     def _pcie_bus_id_from_block_device(self, device_name):
         """
-        Given a block device (e.g., '/dev/nvme0n1' or '/dev/nvme0n1p1'),
-        returns the PCIe bus id (e.g. '0000:03:00.0').
+        Given a block device (e.g., '/dev/nvme0n1' or '/dev/nvme0n1p1'), returns
+        the PCIe bus id (e.g. '0000:03:00.0'). Raises exception on failure.
         """
-        return self._pcie_bus_id_from_sys_subdir(f'/sys/class/block/{os.path.basename(device_name)}')
+
+        sys_subdir = f'/sys/class/block/{os.path.basename(device_name)}'
+        ret = self._pcie_bus_id_from_sys_subdir(sys_subdir)
+
+        if ret is not None:
+            return ret
+
+        rp = os.path.realpath(sys_subdir)
+        raise RuntimeError(f"Couldn't get PCIe bus ID for block device {device_name} ({sys_subdir=}, realpath={rp}")
 
 
     @functools.cache
