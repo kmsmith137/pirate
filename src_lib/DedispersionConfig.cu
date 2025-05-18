@@ -252,18 +252,20 @@ DedispersionConfig DedispersionConfig::make_random()
     ret.dtype = (ksgpu::rand_uniform() < 0.5) ? ksgpu::Dtype::native<float>() : ksgpu::Dtype::native<__half>();
     
     // Randomly choose a tree rank, but bias toward a high number.
-    // FIXME min_rank should be (ret.num_downsampling_levels > 1) ? 3 : 2
+    // FIXME min_rank should be (ret.num_downsampling_levels > 1) ? 1 : 0
     // I'm using a larger value as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
     int max_rank = 10;
     int min_rank = (ret.num_downsampling_levels > 1) ? 3 : 2;
     double x = ksgpu::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
     ret.tree_rank = int(sqrt(x));
 
+    // Randomly choose nt_chunk, but bias toward a low number.
     // Note: call ret.get_nelts_per_segment() after setting ret.dtype
-    int max_nt_chunk = 2048;
-    int min_nt_chunk = ret.get_nelts_per_segment() * pow2(ret.num_downsampling_levels-1);
-    int nchunks = ksgpu::rand_int(1, xdiv(max_nt_chunk,min_nt_chunk)+1);
-    ret.time_samples_per_chunk = min_nt_chunk * nchunks;
+    long min_nt_chunk = ret.get_nelts_per_segment() * pow2(ret.num_downsampling_levels-1);
+    long max_nt_chunk = max(2 * pow2(ret.tree_rank), 2 * min_nt_chunk);
+    long rmax = xdiv(max_nt_chunk, min_nt_chunk);  // r = nt_chunk / min_nt_chunk
+    double rlog = ksgpu::rand_uniform(0, log(rmax+1));
+    ret.time_samples_per_chunk = min_nt_chunk * int(exp(rlog));
 
     // Early triggers
     

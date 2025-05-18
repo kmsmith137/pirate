@@ -101,7 +101,7 @@ struct DedispersionPlan
 
     // stage1_output_rb_locs, stage2_input_rb_locs.
     //
-    // These arrays contain GPU ringbuf locations, represented as 4 uint32s:
+    // These arrays contain GPU ringbuf locations, represented as four uint32s:
     //  uint rb_offset;  // in segments, not bytes
     //  uint rb_phase;   // index of (time chunk, beam) pair, relative to current pair
     //  uint rb_len;     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)

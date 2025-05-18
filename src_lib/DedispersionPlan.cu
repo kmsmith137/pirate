@@ -354,11 +354,12 @@ void DedispersionPlan::print(ostream &os, int indent) const
     xassert(long(stage1_trees.size()) == stage1_ntrees);
     xassert(long(stage2_trees.size()) == stage2_ntrees);
     
-    os << Indent(indent) << "DedispersionConfig" << endl;
+    os << Indent(indent) << "DedispersionPlan" << endl;
     this->config.print(os, indent+4);
     
     print_kv("nelts_per_segment", nelts_per_segment, os, indent);
     print_kv("nbytes_per_segment", nbytes_per_segment, os, indent);
+    print_kv("max_clag", max_clag, os, indent);
 
     os << Indent(indent) << "Stage1Trees" << endl;
 

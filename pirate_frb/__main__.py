@@ -14,24 +14,42 @@ from .FakeCorrelator import FakeCorrelator
 
 
 def parse_test(subparsers):
-    parser = subparsers.add_parser("test", help="Run unit tests")
+    parser = subparsers.add_parser("test", help="Run unit tests (by default, all tests are run)")
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
+    parser.add_argument('--nid', action='store_true', help='Runs test_non_incremental_dedispersion()')
+    parser.add_argument('--rl', action='store_true', help='Runs test_reference_lagbuf()')
+    parser.add_argument('--rt', action='store_true', help='Runs test_reference_tree()')
+    parser.add_argument('--tr', action='store_true', help='Runs test_tree_recursion()')
+    parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel)')
+    parser.add_argument('--gddk', action='store_true', help='Runs test_gpu_dedispersion_lernels()')
+    parser.add_argument('--dd', action='store_true', help='Runs test_dedisperser()')
 
     
 def test(args):
-    ksgpu.set_cuda_device(args.gpu)
+    test_flags = [ 'nid', 'rl', 'rt', 'tr', 'gldk', 'gddk', 'dd' ]
+    run_all_tests = not any(getattr(args,x) for x in test_flags)
     
+    ksgpu.set_cuda_device(args.gpu)
+
     for i in range(args.niter):
         print(f'Iteration {i+1}/{args.niter}')
-        pirate_pybind11.test_non_incremental_dedispersion()
-        pirate_pybind11.test_reference_lagbuf()
-        pirate_pybind11.test_reference_tree()
-        pirate_pybind11.test_tree_recursion()
-        pirate_pybind11.test_gpu_lagged_downsampling_kernel()
-        pirate_pybind11.test_gpu_dedispersion_kernels()
-        pirate_pybind11.test_dedisperser()
-
+        
+        if run_all_tests or args.nid:
+            pirate_pybind11.test_non_incremental_dedispersion()
+        if run_all_tests or args.rl:
+            pirate_pybind11.test_reference_lagbuf()
+        if run_all_tests or args.rt:
+            pirate_pybind11.test_reference_tree()
+        if run_all_tests or args.tr:
+            pirate_pybind11.test_tree_recursion()
+        if run_all_tests or args.gldk:
+            pirate_pybind11.test_gpu_lagged_downsampling_kernel()
+        if run_all_tests or args.gddk:
+            pirate_pybind11.test_gpu_dedispersion_kernels()
+        if run_all_tests or args.dd:
+            pirate_pybind11.test_dedisperser()
+            
 
 #####################################   show_hardware command  #####################################
 

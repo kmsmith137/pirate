@@ -18,11 +18,12 @@ namespace pirate {
 
 void test_dedisperser(const DedispersionConfig &config, int nchunks)
 {
-    cout << "\n" << "test_dedisperser: nchunks=" << nchunks << endl;
-    config.print(cout, 4);
-    
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    // plan->print(cout, 8);
+    
+    cout << "\n" << "test_dedisperser" << endl;
+    config.print(cout, 4);
+    print_kv("nchunks", nchunks, cout, 4);
+    print_kv("max_clag", plan->max_clag, cout, 4);
     
     int nfreq = pow2(config.tree_rank);
     int nt_chunk = config.time_samples_per_chunk;
