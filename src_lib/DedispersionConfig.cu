@@ -149,6 +149,9 @@ void DedispersionConfig::print(ostream &os, int indent) const
     print_kv("beams_per_gpu", beams_per_gpu, os, indent);
     print_kv("beams_per_batch", beams_per_batch, os, indent);
     print_kv("num_active_batches", num_active_batches, os, indent);
+
+    if (gpu_clag_maxfrac < 1.0)
+	print_kv("gpu_clag_maxfrac", gpu_clag_maxfrac, os, indent);
 }
 
 
@@ -299,12 +302,14 @@ DedispersionConfig DedispersionConfig::make_random()
 	    ret.add_early_trigger(ds_level, et_rank);
     }
 
-    // FIXME support these members
-    int nbatches = ksgpu::rand_int(1,4);
+    int nbatches = ksgpu::rand_int(1,6);
     ret.beams_per_batch = ksgpu::rand_int(1,4);
     ret.beams_per_gpu = ret.beams_per_batch * nbatches;
     ret.num_active_batches = ksgpu::rand_int(1,nbatches+1);
 
+    ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
+    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
+	
     ret.validate();
     return ret;
 }

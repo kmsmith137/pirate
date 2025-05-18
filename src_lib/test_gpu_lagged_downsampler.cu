@@ -89,6 +89,8 @@ static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_
 
 static void test_gpu_lagged_downsampling_kernel(const TestInstanceLDS &ti)
 {
+    cout << "\ntest_gpu_lagged_downsampling_kernel\n";
+    ti.print(cout, 4);
     ti.params.validate();
     
     LaggedDownsamplingKernelParams p = ti.params;
@@ -136,7 +138,6 @@ static void test_gpu_lagged_downsampling_kernel(const TestInstanceLDS &ti)
 void test_gpu_lagged_downsampling_kernel()
 {
     TestInstanceLDS ti = TestInstanceLDS::make_random();
-    ti.print(cout, 4);
     test_gpu_lagged_downsampling_kernel(ti);
 }
 

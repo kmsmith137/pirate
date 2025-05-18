@@ -207,7 +207,7 @@ static void run_test(const TestInstanceDK &tp)
 {
     const DedispersionKernelParams &p = tp.params;
     
-    cout << "Test GpuDedispersionKernel\n"
+    cout << "\nTest GpuDedispersionKernel\n"
 	 << "    dtype = " << p.dtype << "\n"
 	 << "    dd_rank = " << p.dd_rank << "\n"
 	 << "    amb_rank = " << p.amb_rank << "\n"
@@ -297,8 +297,6 @@ static void run_test(const TestInstanceDK &tp)
 	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big, "cpu", "gpu", {"i"}, epsabs, epsrel);
     else
 	ksgpu::assert_arrays_equal(cpu_out_big, gpu_out_big, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
-    
-    cout << endl;
 }
 
 
