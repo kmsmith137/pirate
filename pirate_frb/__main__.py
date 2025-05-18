@@ -75,6 +75,7 @@ def parse_test_node(subparsers):
     parser.add_argument('-G', '--gmem', dest='G', action='store_true', help='GPU memory bandwidth test')
     parser.add_argument('--h2g', dest='h2g', action='store_true', help='Copy host->GPU')
     parser.add_argument('--g2h', dest='g2h', action='store_true', help='Copy GPU->host')
+    parser.add_argument('-x', '--cross-numa', dest='cross_numa', action='store_true', help='Split SSD disk writer threads between numa domains')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
     parser.add_argument('--ip', type=str, help='Comma-separated list of IP addresses')
     parser.add_argument('--nic', type=str, help='Comma-separated list of NICs')
@@ -182,7 +183,8 @@ def test_node(args):
     if no_flags or args.s:
         for issd,ssd_dir in enumerate(ssd_dirs):
             for thread in range(write_threads_per_ssd):
-                server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd)
+                cpu = (thread % hw.num_cpus) if args.cross_numa else None
+                server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd, cpu=cpu)
 
     if no_flags or args.h2g:
         for gpu in range(hw.num_gpus):
