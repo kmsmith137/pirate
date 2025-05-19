@@ -18,12 +18,11 @@ namespace pirate {
 
 void test_dedisperser(const DedispersionConfig &config, int nchunks)
 {
-    shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    
     cout << "\n" << "test_dedisperser" << endl;
     config.print(cout, 4);
-    
     print_kv("nchunks", nchunks, cout, 4);
+    
+    shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
     print_kv("max_clag", plan->max_clag, cout, 4);
     print_kv("max_gpu_clag", plan->max_gpu_clag, cout, 4);
     

@@ -445,8 +445,7 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
     const int BB = this->config.beams_per_batch;          // beams per batch
     const int BA = this->config.num_active_batches * BB;  // active beams
     const int S = plan->nelts_per_segment;
-    
-    xassert_divisible(BT, BB);
+
     long iframe = (it_chunk * BT) + (ibatch * BB);
 
     // Step 1: run LaggedDownsampler.
@@ -487,6 +486,7 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 	   
     xassert(plan->host_ringbufs.size() == uint(plan->max_clag+1));
     xassert(plan->xfer_ringbufs.size() == uint(plan->max_clag+1));
+    xassert_divisible(BT, BB);   // assert that length-BB copies don't "wrap"
     
     for (int clag = 0; clag <= plan->max_clag; clag++) {
 	DedispersionPlan::Ringbuf &rb_host = plan->host_ringbufs.at(clag);

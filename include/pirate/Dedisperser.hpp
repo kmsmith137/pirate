@@ -47,6 +47,7 @@ struct GpuDedisperser
     long nstreams = 0;            // = (config.num_active_batches)
     long nbatches = 0;            // = (total_beams / beams_per_batch)
     long gpu_ringbuf_nelts = 0;   // = (plan->gmem_ringbuf_nseg * plan->nelts_per_segment)
+    long host_ringbuf_nelts = 0;  // = (plan->host_ringbuf_nseg * plan->nelts_per_segment)
 
     long output_ntrees = 0;
     std::vector<long> output_rank;      // length output_ntrees
@@ -55,7 +56,9 @@ struct GpuDedisperser
 
     std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
     std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
+    
     ksgpu::Array<void> gpu_ringbuf;
+    ksgpu::Array<void> host_ringbuf;
 
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
