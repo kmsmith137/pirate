@@ -404,6 +404,8 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
+    shared_ptr<CpuRingbufCopyKernel> g2g_copy_kernel;
+    shared_ptr<CpuRingbufCopyKernel> h2h_copy_kernel;
     
     virtual void dedisperse(long ibatch, long it_chunk) override;
 };
@@ -412,10 +414,6 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan_) :
     ReferenceDedisperserBase(plan_, 2)
 {
-    // Some features are not implemented yet.
-    xassert(plan->g2g_rb_locs.size == 0);
-    xassert(plan->h2h_rb_locs.size == 0);
-    
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
 
@@ -426,7 +424,9 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->host_ringbuf = Array<float>({ host_ringbuf_nelts }, af_uhost | af_zero);
     
     this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
-					
+    this->g2g_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
+    this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
+    
     for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
 	this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
 
@@ -441,6 +441,14 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
 
 void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 {
+    const int BT = this->config.beams_per_gpu;            // total beams
+    const int BB = this->config.beams_per_batch;          // beams per batch
+    const int BA = this->config.num_active_batches * BB;  // active beams
+    const int S = plan->nelts_per_segment;
+    
+    xassert_divisible(BT, BB);
+    long iframe = (it_chunk * BT) + (ibatch * BB);
+
     // Step 1: run LaggedDownsampler.
     lds_kernel->apply(stage1_dd_buf, ibatch);
 
@@ -455,17 +463,28 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 	kernel->apply(dd_buf, this->gpu_ringbuf, ibatch, it_chunk);
     }
 
-    //
-    // Step 3: copy host <-> xfer
-    //
+    // Step 3: extra copying steps needed for early triggers.
 
-    const int BT = this->config.beams_per_gpu;            // total beams
-    const int BB = this->config.beams_per_batch;          // beams per batch
-    const int BA = this->config.num_active_batches * BB;  // active beams
+    DedispersionPlan::Ringbuf &rb_eth = plan->et_host_ringbuf;
+    DedispersionPlan::Ringbuf &rb_etg = plan->et_gpu_ringbuf;
     
-    long iframe = (it_chunk * BT) + (ibatch * BB);
+    xassert(rb_eth.nseg_per_beam == rb_etg.nseg_per_beam);
+    xassert(rb_eth.rb_len == BA);
+    xassert(rb_etg.rb_len == BA);
 
-    xassert_divisible(BT, BB);
+    long et_off = (iframe % rb_eth.rb_len) * rb_eth.nseg_per_beam;
+    float *et_src = this->host_ringbuf.data + (rb_eth.base_segment * S) + et_off;
+    float *et_dst = this->gpu_ringbuf.data + (rb_etg.base_segment * S) + et_off;
+    long et_nbytes = BB * rb_eth.nseg_per_beam * S * sizeof(float);
+    
+    this->g2g_copy_kernel->apply(this->gpu_ringbuf, ibatch, it_chunk);     // gpu -> xfer
+    this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, it_chunk);    // host -> et_host
+    memcpy(et_dst, et_src, et_nbytes);  // et_host -> et_gpu (must come after h2h_copy_kernel)
+    
+    //
+    // Step 4: copy host <-> xfer
+    //
+	   
     xassert(plan->host_ringbufs.size() == uint(plan->max_clag+1));
     xassert(plan->xfer_ringbufs.size() == uint(plan->max_clag+1));
     
@@ -480,23 +499,23 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 	if (rb_host.nseg_per_beam == 0)
 	    continue;
 	
-	float *hp = this->host_ringbuf.data + (rb_host.base_segment * plan->nelts_per_segment);
-	float *xp = this->gpu_ringbuf.data + (rb_xfer.base_segment * plan->nelts_per_segment);
+	float *hp = this->host_ringbuf.data + (rb_host.base_segment * S);
+	float *xp = this->gpu_ringbuf.data + (rb_xfer.base_segment * S);
 	    
 	long hsrc = (iframe + BA) % rb_host.rb_len;  // host src phase
 	long hdst = (iframe) % rb_host.rb_len;       // host dst phase
 	long xsrc = (iframe) % rb_xfer.rb_len;       // xfer src phase
 	long xdst = (iframe + BA) % rb_xfer.rb_len;  // xfer dst phase
 	
-	long m = rb_host.nseg_per_beam * plan->nelts_per_segment;   // nelts per beam/frame
-	long n = BB * m * sizeof(float);                            // nbytes to copy
+	long m = rb_host.nseg_per_beam * S;   // nelts per beam (=frame)
+	long n = BB * m * sizeof(float);      // nbytes to copy
 
 	// Ordering of memcopies is arbitrary. (On the GPU they happen in parallel.)
 	memcpy(xp + xdst*m, hp + hsrc*m, n);
 	memcpy(hp + hdst*m, xp + xsrc*m, n);
     }
-
-    // Step 4: run stage2 dedispersion kernels (input from ringbuf)
+    
+    // Step 5: run stage2 dedispersion kernels (input from ringbuf).    
     for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
 	shared_ptr<ReferenceDedispersionKernel> kernel = stage2_dd_kernels.at(i);
 	const DedispersionKernelParams &kp = kernel->params;

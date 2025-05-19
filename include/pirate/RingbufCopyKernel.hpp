@@ -15,6 +15,7 @@ struct RingbufCopyKernelParams
 {
     long total_beams = 0;
     long beams_per_batch = 0;
+    long nelts_per_segment = 0;
 
     // Locations array can either be size-zero, or shape-(2N,4) contiguous.
     ksgpu::Array<uint> locations;

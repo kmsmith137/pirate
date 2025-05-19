@@ -104,8 +104,8 @@ struct DedispersionPlan
     std::vector<Ringbuf> xfer_ringbufs;   // rb_len = (2*BA), on GPU
 
     // If early triggers are used, need one more pair of buffers.
-    Ringbuf et_host_ringbuf;  // rb_len = 2*BA, on host (send buffer)
-    Ringbuf et_gpu_ringbuf;   // rb_len = 2*BA, on GPU (recv buffer)
+    Ringbuf et_host_ringbuf;  // rb_len = BA, on host (send buffer)
+    Ringbuf et_gpu_ringbuf;   // rb_len = BA, on GPU (recv buffer)
 
     // stage1_output_rb_locs, stage2_input_rb_locs: used in dedispersion kernels.
     //

@@ -258,8 +258,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	this->xfer_ringbufs.at(clag).rb_len = 2*BA;
     }
 
-    this->et_host_ringbuf.rb_len = 2*BA;
-    this->et_gpu_ringbuf.rb_len = 2*BA;
+    this->et_host_ringbuf.rb_len = BA;
+    this->et_gpu_ringbuf.rb_len = BA;
 
     // Part 4:
     //
@@ -340,7 +340,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	    else {
 		// early trigger: get segment from et ringbuf
 		long et_iseg = this->et_host_ringbuf.nseg_per_beam++;
-		stage2_entries[iseg1] = RingbufEntry(&et_gpu_ringbuf, BA, et_iseg);
+		stage2_entries[iseg1] = RingbufEntry(&et_gpu_ringbuf, 0, et_iseg);
 		RingbufEntry h2h_src(host_rb, (clag-gpu_clag) * BT, host_iseg);
 		RingbufEntry h2h_dst(&et_host_ringbuf, 0, et_iseg);
 		h2h_entries.push_back(h2h_src);
@@ -476,10 +476,12 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     g2g_copy_kernel_params.total_beams = config.beams_per_gpu;
     g2g_copy_kernel_params.beams_per_batch = config.beams_per_batch;
+    g2g_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
     g2g_copy_kernel_params.locations = g2g_rb_locs;
     
     h2h_copy_kernel_params.total_beams = config.beams_per_gpu;
     h2h_copy_kernel_params.beams_per_batch = config.beams_per_batch;
+    h2h_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
     h2h_copy_kernel_params.locations = h2h_rb_locs;
     
     lds_params.validate();

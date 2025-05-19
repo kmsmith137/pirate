@@ -16,9 +16,12 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+
 struct DedispersionPlan;              // defined in DedispersionPlan.hpp
 struct GpuDedispersionKernel;         // defined in DedispersionKernel.hpp
 struct GpuLaggedDownsamplingKernel;   // defined in LaggedDownsamplingKernel.hpp
+struct CpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
+struct GpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
 
 
 // -------------------------------------------------------------------------------------------------
