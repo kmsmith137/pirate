@@ -57,7 +57,6 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     this->input_ntime = config.time_samples_per_chunk;
     this->total_beams = config.beams_per_gpu;
     this->beams_per_batch = config.beams_per_batch;
-    this->gpu_ringbuf_nelts = plan->gmem_ringbuf_nseg * plan->nelts_per_segment;
     this->nbatches = xdiv(total_beams, beams_per_batch);
 
     const DedispersionBufferParams &out_params = plan->stage2_dd_buf_params;
@@ -395,7 +394,12 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 
     DedispersionBuffer stage1_dd_buf;
     DedispersionBuffer stage2_dd_buf;
+
+    long gpu_ringbuf_nelts = 0;    // = (plan->gmem_ringbuf_nseg * plan->nelts_per_segment)
+    long host_ringbuf_nelts = 0;   // = (plan->hmem_ringbuf_nseg * plan->nelts_per_segment)
+    
     Array<float> gpu_ringbuf;
+    Array<float> host_ringbuf;
 
     shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
@@ -409,13 +413,18 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     ReferenceDedisperserBase(plan_, 2)
 {
     // Some features are not implemented yet.
-    xassert(plan->hmem_ringbuf_nseg == 0);
     xassert(plan->g2g_rb_locs.size == 0);
     xassert(plan->h2h_rb_locs.size == 0);
     
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
+
+    this->gpu_ringbuf_nelts = plan->gmem_ringbuf_nseg * plan->nelts_per_segment;
+    this->host_ringbuf_nelts = plan->hmem_ringbuf_nseg * plan->nelts_per_segment;
+	
     this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero);
+    this->host_ringbuf = Array<float>({ host_ringbuf_nelts }, af_uhost | af_zero);
+    
     this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
 					
     for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
@@ -446,7 +455,48 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 	kernel->apply(dd_buf, this->gpu_ringbuf, ibatch, it_chunk);
     }
 
-    // Step 3: run stage2 dedispersion kernels (input from ringbuf)
+    //
+    // Step 3: copy host <-> xfer
+    //
+
+    const int BT = this->config.beams_per_gpu;            // total beams
+    const int BB = this->config.beams_per_batch;          // beams per batch
+    const int BA = this->config.num_active_batches * BB;  // active beams
+    
+    long iframe = (it_chunk * BT) + (ibatch * BB);
+
+    xassert_divisible(BT, BB);
+    xassert(plan->host_ringbufs.size() == uint(plan->max_clag+1));
+    xassert(plan->xfer_ringbufs.size() == uint(plan->max_clag+1));
+    
+    for (int clag = 0; clag <= plan->max_clag; clag++) {
+	DedispersionPlan::Ringbuf &rb_host = plan->host_ringbufs.at(clag);
+	DedispersionPlan::Ringbuf &rb_xfer = plan->xfer_ringbufs.at(clag);
+
+	xassert(rb_host.nseg_per_beam == rb_xfer.nseg_per_beam);
+	xassert(rb_host.rb_len == clag*BT + BA);
+	xassert(rb_xfer.rb_len == 2*BA);
+
+	if (rb_host.nseg_per_beam == 0)
+	    continue;
+	
+	float *hp = this->host_ringbuf.data + (rb_host.base_segment * plan->nelts_per_segment);
+	float *xp = this->gpu_ringbuf.data + (rb_xfer.base_segment * plan->nelts_per_segment);
+	    
+	long hsrc = (iframe + BA) % rb_host.rb_len;  // host src phase
+	long hdst = (iframe) % rb_host.rb_len;       // host dst phase
+	long xsrc = (iframe) % rb_xfer.rb_len;       // xfer src phase
+	long xdst = (iframe + BA) % rb_xfer.rb_len;  // xfer dst phase
+	
+	long m = rb_host.nseg_per_beam * plan->nelts_per_segment;   // nelts per beam/frame
+	long n = BB * m * sizeof(float);                            // nbytes to copy
+
+	// Ordering of memcopies is arbitrary. (On the GPU they happen in parallel.)
+	memcpy(xp + xdst*m, hp + hsrc*m, n);
+	memcpy(hp + hdst*m, xp + xsrc*m, n);
+    }
+
+    // Step 4: run stage2 dedispersion kernels (input from ringbuf)
     for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
 	shared_ptr<ReferenceDedispersionKernel> kernel = stage2_dd_kernels.at(i);
 	const DedispersionKernelParams &kp = kernel->params;

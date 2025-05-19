@@ -118,7 +118,6 @@ struct ReferenceDedisperserBase
     long input_ntime = 0;         // same as config.time_samples_per_chunk
     long total_beams = 0;         // same as config.beams_per_gpu
     long beams_per_batch = 0;     // same as config.beams_per_batch
-    long gpu_ringbuf_nelts = 0;   // = (plan->gmem_ringbuf_nseg * plan->nelts_per_segment)
     long nbatches = 0;            // = (total_beams / beams_per_batch)
 
     long output_ntrees = 0;
