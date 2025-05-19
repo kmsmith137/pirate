@@ -5,6 +5,7 @@
 #include "DedispersionBuffer.hpp"        // struct DedispersionBufferParams
 #include "DedispersionKernel.hpp"        // struct DedispersionKernelParams
 #include "LaggedDownsamplingKernel.hpp"  // struct LaggedDownsamplingKernelParams
+#include "RingbufCopyKernel.hpp"         // struct RingbufCopyKernelParams
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -34,6 +35,10 @@ struct DedispersionPlan
     std::vector<long> stage2_ds_level;  // length stage2_ntrees
     
     LaggedDownsamplingKernelParams lds_params;
+
+    // Only needed if early triggers are used.
+    RingbufCopyKernelParams g2g_copy_kernel_params;
+    RingbufCopyKernelParams h2h_copy_kernel_params;
 
     void print(std::ostream &os=std::cout, int indent=0) const;
 
@@ -69,9 +74,9 @@ struct DedispersionPlan
 
     struct Ringbuf
     {
-	long rb_len = 0;           // number of (time chunk, beam) pairs
-	long nseg_per_beam = 0;
-	long base_segment = 0;
+	long rb_len = 0;           // number of (time chunk, beam) pairs, see below
+	long nseg_per_beam = 0;    // size (in segments) per (time chunk, beam) pair
+	long base_segment = -1;    // offset (in segments) relative to base memory address on either GPU or CPU
     };
     
     // --------------------  Members  --------------------
@@ -86,20 +91,23 @@ struct DedispersionPlan
     long stage2_total_segments_per_beam = 0;
 
     int max_clag = 0;
-    long gmem_ringbuf_nseg = 0;    // includes gmem + g2h + h2g
+    int max_gpu_clag = 0;
+    
+    long gmem_ringbuf_nseg = 0;    // total size (gpu_ringbufs + xfer_ringbufs + et_gpu_ringbuf)
+    long hmem_ringbuf_nseg = 0;    // total size (host_ringbufs + et_host_ringbuf)
 
     // All vector<Ringbuf> objects have length (max_clag + 1).
-    // T = total beams, A = active beams, B = beams per batch.
-    //
-    // Note: in current version of code, only 'gmem_ringbufs' are used!
-    // The 'g2h_ringbufs, 'h2g_ringbufs', and 'h2h_ringbufs' are placeholders.
+    // BT = total beams, BA = active beams, BB = beams per batch.
     
-    std::vector<Ringbuf> gmem_ringbufs;    // rb_size = (clag*T + A), on GPU
-    std::vector<Ringbuf> g2h_ringbufs;     // rb_size = min(A+B, T), on GPU
-    std::vector<Ringbuf> h2g_ringbufs;     // rb_size = min(A+B, T), on GPU
-    std::vector<Ringbuf> h2h_ringbufs;     // rb_size = (clag*T + B), on host
+    std::vector<Ringbuf> gpu_ringbufs;    // rb_len = (clag*BT + BA), on GPU
+    std::vector<Ringbuf> host_ringbufs;   // rb_len = (clag*BT + BA), on host
+    std::vector<Ringbuf> xfer_ringbufs;   // rb_len = (2*BA), on GPU
 
-    // stage1_output_rb_locs, stage2_input_rb_locs.
+    // If early triggers are used, need one more pair of buffers.
+    Ringbuf et_host_ringbuf;  // rb_len = 2*BA, on host (send buffer)
+    Ringbuf et_gpu_ringbuf;   // rb_len = 2*BA, on GPU (recv buffer)
+
+    // stage1_output_rb_locs, stage2_input_rb_locs: used in dedispersion kernels.
     //
     // These arrays contain GPU ringbuf locations, represented as four uint32s:
     //  uint rb_offset;  // in segments, not bytes
@@ -113,6 +121,10 @@ struct DedispersionPlan
 
     ksgpu::Array<uint> stage1_rb_locs;   // shape (stage1_total_segments_per_beam, 4)
     ksgpu::Array<uint> stage2_rb_locs;   // shape (stage2_total_segments_per_beam, 4)
+
+    // Only needed if early triggers are used.    
+    ksgpu::Array<uint> g2g_rb_locs;      // copy from gpu_ringbufs to xfer_ringbufs
+    ksgpu::Array<uint> h2h_rb_locs;      // copy from host_ringbufs to et_host_ringbuf
 };
 
 

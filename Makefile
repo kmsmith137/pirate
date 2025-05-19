@@ -82,6 +82,7 @@ LIB_SRCFILES = \
   src_lib/ReferenceLagbuf.cu \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
   src_lib/ReferenceTree.cu \
+  src_lib/RingbufCopyKernel.cu \
   src_lib/YamlFile.cu \
   src_lib/file_utils.cu \
   src_lib/network_utils.cu \
@@ -145,6 +146,7 @@ HFILES = \
   include/pirate/LaggedDownsamplingKernel.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
+  include/pirate/RingbufCopyKernel.hpp \
   include/pirate/YamlFile.hpp \
   include/pirate/constants.hpp \
   include/pirate/file_utils.hpp \

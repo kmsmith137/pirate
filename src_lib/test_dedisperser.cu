@@ -22,8 +22,10 @@ void test_dedisperser(const DedispersionConfig &config, int nchunks)
     
     cout << "\n" << "test_dedisperser" << endl;
     config.print(cout, 4);
+    
     print_kv("nchunks", nchunks, cout, 4);
     print_kv("max_clag", plan->max_clag, cout, 4);
+    print_kv("max_gpu_clag", plan->max_gpu_clag, cout, 4);
     
     int nfreq = pow2(config.tree_rank);
     int nt_chunk = config.time_samples_per_chunk;

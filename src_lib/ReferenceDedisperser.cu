@@ -408,6 +408,11 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan_) :
     ReferenceDedisperserBase(plan_, 2)
 {
+    // Some features are not implemented yet.
+    xassert(plan->hmem_ringbuf_nseg == 0);
+    xassert(plan->g2g_rb_locs.size == 0);
+    xassert(plan->h2h_rb_locs.size == 0);
+    
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
     this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero);

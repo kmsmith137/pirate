@@ -126,6 +126,8 @@ void DedispersionConfig::validate() const
     // GPU configuration.
     xassert_divisible(beams_per_gpu, beams_per_batch);  // assumed for convenience
     xassert_le(num_active_batches * beams_per_batch, beams_per_gpu);
+    xassert_ge(gpu_clag_maxfrac, 0.0);
+    xassert_le(gpu_clag_maxfrac, 1.0);
 
     // Check validity of early triggers.
     for (const EarlyTrigger &et: early_triggers) {
@@ -307,8 +309,8 @@ DedispersionConfig DedispersionConfig::make_random()
     ret.beams_per_gpu = ret.beams_per_batch * nbatches;
     ret.num_active_batches = ksgpu::rand_int(1,nbatches+1);
 
-    ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
-    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
+    // ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
+    // ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
 	
     ret.validate();
     return ret;

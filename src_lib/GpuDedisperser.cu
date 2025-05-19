@@ -25,6 +25,11 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     plan(plan_),
     config(deref(plan_)->config)
 {
+    // Some features are not implemented yet.
+    xassert(plan->hmem_ringbuf_nseg == 0);
+    xassert(plan->g2g_rb_locs.size == 0);
+    xassert(plan->h2h_rb_locs.size == 0);
+
     // There's some cut-and-paste between this constructor and the ReferenceDedisperser
     // constructor, but not enough to bother defining a common base class.
     

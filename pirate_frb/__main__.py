@@ -22,7 +22,7 @@ def parse_test(subparsers):
     parser.add_argument('--rt', action='store_true', help='Runs test_reference_tree()')
     parser.add_argument('--tr', action='store_true', help='Runs test_tree_recursion()')
     parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel)')
-    parser.add_argument('--gddk', action='store_true', help='Runs test_gpu_dedispersion_lernels()')
+    parser.add_argument('--gddk', action='store_true', help='Runs test_gpu_dedispersion_kernels()')
     parser.add_argument('--dd', action='store_true', help='Runs test_dedisperser()')
 
     

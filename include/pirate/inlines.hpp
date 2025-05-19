@@ -56,6 +56,13 @@ inline long xdiv(long m, long n)
     return m/n;
 }
 
+inline long xmod(long m, long n)
+{
+    xassert(m >= 0);
+    xassert(n > 0);
+    return m % n;
+}
+
 inline bool is_empty_string(const std::string &s)
 {
     return s.size() == 0;

@@ -1,0 +1,65 @@
+#ifndef _PIRATE_RINGBUF_COPY_KERNEL_HPP
+#define _PIRATE_RINGBUF_COPY_KERNEL_HPP
+
+#include <ksgpu/Array.hpp>
+#include "trackers.hpp"  // BandwidthTracker
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
+
+
+// Defined in RingbufCopyKernel.cu
+struct RingbufCopyKernelParams
+{
+    long total_beams = 0;
+    long beams_per_batch = 0;
+
+    // Locations array can either be size-zero, or shape-(2N,4) contiguous.
+    ksgpu::Array<uint> locations;
+
+    // Validates params, and returns reference to 'this'.
+    const RingbufCopyKernelParams &validate() const;
+};
+
+
+// Defined in RingbufCopyKernel.cu
+struct CpuRingbufCopyKernel
+{
+    CpuRingbufCopyKernel(const RingbufCopyKernelParams &params);
+    
+    void apply(ksgpu::Array<void> &ringbuf, long ibatch, long it_chunk);
+
+    const RingbufCopyKernelParams params;
+    const int nlocations;   // = (locations.size / 8)
+    
+    // Bandwidth per call to GpuDedispersionKernel::launch().
+    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    BandwidthTracker bw_per_launch;
+};
+
+
+// Defined in RingbufCopyKernel.cu
+struct GpuRingbufCopyKernel
+{
+    GpuRingbufCopyKernel(const RingbufCopyKernelParams &params);
+
+    void allocate();
+    void apply(ksgpu::Array<void> &ringbuf, long ibatch, long it_chunk);
+
+    const RingbufCopyKernelParams params;
+    const int nlocations;     // = (locations.size / 8)
+
+    bool is_allocated = false;
+    ksgpu::Array<uint> gpu_locations;
+    
+    // Bandwidth per call to GpuDedispersionKernel::launch().
+    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    BandwidthTracker bw_per_launch;
+};
+
+
+}  // namespace pirate
+
+#endif // _PIRATE_RINGBUF_COPY_KERNEL_HPP
