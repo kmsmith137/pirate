@@ -64,7 +64,7 @@ void ReferenceTreeGriddingKernel::apply(Array<float> &out, const Array<float> &i
 	float *outp = out.data + b * out.strides[0];
 	const float *inp = in.data + b * in.strides[0];
 
-	memset(outp, 0, F * T * sizeof(float));
+	memset(outp, 0, N * T * sizeof(float));
 	       
 	for (long n = 0; n < N; n++) {
 	    float f0 = params.channel_map.data[n];
@@ -79,7 +79,7 @@ void ReferenceTreeGriddingKernel::apply(Array<float> &out, const Array<float> &i
 		float w = max(fhi-flo, 0.0f);
 		
 		for (long t = 0; t < T; t++)
-		    outp[n*N + t] += w * inp[f*F + t];
+		    outp[n*T + t] += w * inp[f*T + t];
 	    }
 	}
     }
