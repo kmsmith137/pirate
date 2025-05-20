@@ -272,6 +272,8 @@ DedispersionConfig DedispersionConfig::make_random()
     double rlog = ksgpu::rand_uniform(0, log(rmax+1));
     ret.time_samples_per_chunk = min_nt_chunk * int(exp(rlog));
 
+    cout << "XXX early triggers temporarily disabled in DedispersionConfig::make_random() XXX" << endl;
+#if 0
     // Early triggers
     for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
 	// FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
@@ -302,6 +304,7 @@ DedispersionConfig DedispersionConfig::make_random()
 	for (int et_rank: et_ranks)
 	    ret.add_early_trigger(ds_level, et_rank);
     }
+#endif
 
     int nbatches = ksgpu::rand_int(1,6);
     ret.beams_per_batch = ksgpu::rand_int(1,4);
