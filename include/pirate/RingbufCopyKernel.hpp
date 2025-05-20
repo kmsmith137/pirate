@@ -35,8 +35,8 @@ struct CpuRingbufCopyKernel
     const RingbufCopyKernelParams params;
     const int nlocations;   // = (locations.size / 8)
     
-    // Bandwidth per call to GpuDedispersionKernel::launch().
-    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    // Bandwidth per call to CpuRingbufCopyKernel::launch().
+    // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
     BandwidthTracker bw_per_launch;
 };
 
@@ -58,8 +58,8 @@ struct GpuRingbufCopyKernel
     bool is_allocated = false;
     ksgpu::Array<uint> gpu_locations;
     
-    // Bandwidth per call to GpuDedispersionKernel::launch().
-    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    // Bandwidth per call to GpuRingbufCopyKernel::launch().
+    // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
     BandwidthTracker bw_per_launch;
 };
 

@@ -83,6 +83,7 @@ LIB_SRCFILES = \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
   src_lib/ReferenceTree.cu \
   src_lib/RingbufCopyKernel.cu \
+  src_lib/TreeGriddingKernel.cu \
   src_lib/YamlFile.cu \
   src_lib/file_utils.cu \
   src_lib/network_utils.cu \
@@ -91,6 +92,7 @@ LIB_SRCFILES = \
   src_lib/test_gpu_dedispersion_kernels.cu \
   src_lib/test_gpu_lagged_downsampler.cu \
   src_lib/test_gpu_ringbuf_copy_kernel.cu \
+  src_lib/test_gpu_tree_gridding_kernel.cu \
   src_lib/test_reference_tree.cu \
   src_lib/utils.cu \
   src_lib/loose_ends/cpu_downsample.cu \
@@ -148,6 +150,7 @@ HFILES = \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
   include/pirate/RingbufCopyKernel.hpp \
+  include/pirate/TreeGriddingKernel.hpp \
   include/pirate/YamlFile.hpp \
   include/pirate/constants.hpp \
   include/pirate/file_utils.hpp \

@@ -27,6 +27,9 @@ extern void test_gpu_dedispersion_kernels();
 // test_gpu_ringbuf_copy_kernel.cu
 extern void test_gpu_ringbuf_copy_kernel();
 
+// test_gpu_tree_gridding_kernel.cu
+extern void test_gpu_tree_gridding_kernel();
+
 // test_dedisperser.cu
 extern void test_dedisperser(const DedispersionConfig &config, int nchunks);
 extern void test_dedisperser();
