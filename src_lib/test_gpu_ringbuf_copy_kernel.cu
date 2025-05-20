@@ -83,23 +83,22 @@ static Array<uint> make_location_array(const vector<TestLocationPair> &v, bool p
 void test_gpu_ringbuf_copy_kernel()
 {
     cout << "test_gpu_ringbuf_copy_kernel()" << endl;
-    
+
     long nbatches = rand_int(1,5);
     long beams_per_batch = rand_int(1,5);
-    long total_beams = nbatches * beams_per_batch;  // only used to convert (it_chunk, ibatch) -> iframe
     long ibatch = rand_int(0, nbatches);
     long it_chunk = rand_int(0, 1000);
-	
     long nbits = (rand_uniform() < 0.5) ? 16 : 32;       // this test will use either uint16 or uint32
-    int nelts_per_segment = 1024 / nbits;
-
     int nbuf_src = rand_int(1, 5);
     int nbuf_dst = rand_int(1, 5);
-    long nseg_tot = 0;
+    
+    long total_beams = nbatches * beams_per_batch;  // only used to convert (it_chunk, ibatch) -> iframe
+    int nelts_per_segment = 1024 / nbits;
 
     vector<TestRingbuf> src_ringbufs = make_ringbufs(nbuf_src, beams_per_batch);
     vector<TestRingbuf> dst_ringbufs = make_ringbufs(nbuf_dst, beams_per_batch);
 
+    long nseg_tot = 0;
     vector<TestRingbuf *> all_ringbufs(nbuf_src + nbuf_dst);
     for (int i = 0; i < nbuf_src; i++)
 	all_ringbufs[i] = &src_ringbufs[i];
@@ -141,6 +140,7 @@ void test_gpu_ringbuf_copy_kernel()
 		lpair.dst_segments_per_frame = rb_dst.segments_per_frame;
 		
 		lpairs.push_back(lpair);
+		fdst += beams_per_batch;
 	    }
 	}
     }
@@ -156,18 +156,18 @@ void test_gpu_ringbuf_copy_kernel()
     gparams.beams_per_batch = beams_per_batch;
     gparams.nelts_per_segment = nelts_per_segment;
     gparams.locations = make_location_array(lpairs, true);   // permute=true
-    
+
     Dtype dtype(df_uint, nbits);
     long nelts_tot = nseg_tot * nelts_per_segment;
     
     Array<void> hbuf(dtype, {nelts_tot}, af_rhost);
-
+    
     // Randomize hbuf
     uint *p = reinterpret_cast<uint *> (hbuf.data);
     long nuint_tot = nseg_tot * (128 / sizeof(uint));
     for (long i = 0; i < nuint_tot; i++)
 	p[i] = default_rng();
-
+    
     // Copy to GPU before running copy kernel
     Array<void> gbuf = hbuf.to_gpu();
 

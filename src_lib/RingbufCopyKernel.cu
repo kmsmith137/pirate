@@ -152,7 +152,7 @@ __global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *locations, long nloc
     long tid = long(blockIdx.x) * long(blockDim.x) + threadIdx.x;
 
     // "Regulated" thread ID (avoids out-of-range)
-    long treg = (nlocations << 3) + (threadIdx.x & 0x8);
+    long treg = ((nlocations-1) << 3) + (threadIdx.x & 0x7);
     treg = min(tid, treg);
 
     // Each warp reads 4 locations (i.e. 4 src+dst pairs).
@@ -163,6 +163,7 @@ __global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *locations, long nloc
     uint loc_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x1c) + 2);
     uint loc_phase = (ulong(loc_data) + iframe) % ulong(loc_len);
 
+    // "Allgather" src/dst offsets in groups of 8.
     uint src_offset = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18));
     uint src_phase = __shfl_sync(FULL_MASK, loc_phase, (threadIdx.x & 0x18) + 1);   // Note loc_phase here
     uint src_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 2);
@@ -176,10 +177,10 @@ __global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *locations, long nloc
     for (int b = 0; b < nbeams; b++) {
 	ulong s = ulong(src_offset + src_phase * src_nseg) << 3;   // int4 offset
 	ulong d = ulong(dst_offset + dst_phase * dst_nseg) << 3;   // int4 offset
-	uint4 rb_data = ringbuf[s + (threadIdx.x & 0x18)];
+	uint4 rb_data = ringbuf[s + (threadIdx.x & 0x7)];
 	
 	if (tid == treg)
-	    ringbuf[d + (threadIdx.x & 0x18)] = rb_data;
+	    ringbuf[d + (threadIdx.x & 0x7)] = rb_data;
 
 	// Equivalent to (phase = (phase+1) % len), but avoids cost of %-operator.
 	src_phase = (src_phase == src_len-1) ? 0 : (src_phase+1);
@@ -209,7 +210,7 @@ void GpuRingbufCopyKernel::launch(ksgpu::Array<void> &ringbuf, long ibatch, long
     int B = (nlocations + 4*W - 1) / (4*W);  // each block does 4*W locations
     ulong iframe = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
     
-    gpu_copy_kernel<<< B, W, 0, stream >>> (
+    gpu_copy_kernel<<< B, 32*W, 0, stream >>> (
 	reinterpret_cast<uint4 *> (ringbuf.data),   // uint4 *ringbuf
 	gpu_locations.data,                         // const uint *locations
 	nlocations,                                 // long nlocations
