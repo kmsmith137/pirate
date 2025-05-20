@@ -47,7 +47,10 @@ struct GpuRingbufCopyKernel
     GpuRingbufCopyKernel(const RingbufCopyKernelParams &params);
 
     void allocate();
-    void apply(ksgpu::Array<void> &ringbuf, long ibatch, long it_chunk);
+
+    // launch(): asynchronously launch copy kernel, and return without synchronizing streams.
+    // Note: stream=NULL is allowed, but is not the default.
+    void launch(ksgpu::Array<void> &ringbuf, long ibatch, long it_chunk, cudaStream_t stream);
 
     const RingbufCopyKernelParams params;
     const int nlocations;     // = (locations.size / 8)

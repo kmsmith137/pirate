@@ -21,13 +21,14 @@ def parse_test(subparsers):
     parser.add_argument('--rl', action='store_true', help='Runs test_reference_lagbuf()')
     parser.add_argument('--rt', action='store_true', help='Runs test_reference_tree()')
     parser.add_argument('--tr', action='store_true', help='Runs test_tree_recursion()')
-    parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel)')
+    parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel()')
     parser.add_argument('--gddk', action='store_true', help='Runs test_gpu_dedispersion_kernels()')
+    parser.add_argument('--grck', action='store_true', help='Runs test_gpu_ringbuf_copy_kernel()')
     parser.add_argument('--dd', action='store_true', help='Runs test_dedisperser()')
 
     
 def test(args):
-    test_flags = [ 'nid', 'rl', 'rt', 'tr', 'gldk', 'gddk', 'dd' ]
+    test_flags = [ 'nid', 'rl', 'rt', 'tr', 'gldk', 'gddk', 'grck', 'dd' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -47,6 +48,8 @@ def test(args):
             pirate_pybind11.test_gpu_lagged_downsampling_kernel()
         if run_all_tests or args.gddk:
             pirate_pybind11.test_gpu_dedispersion_kernels()
+        if run_all_tests or args.grck:
+            pirate_pybind11.test_gpu_ringbuf_copy_kernel()
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()
             

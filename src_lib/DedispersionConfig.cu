@@ -273,7 +273,6 @@ DedispersionConfig DedispersionConfig::make_random()
     ret.time_samples_per_chunk = min_nt_chunk * int(exp(rlog));
 
     // Early triggers
-    
     for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
 	// FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
 	// as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
@@ -309,8 +308,8 @@ DedispersionConfig DedispersionConfig::make_random()
     ret.beams_per_gpu = ret.beams_per_batch * nbatches;
     ret.num_active_batches = ksgpu::rand_int(1,nbatches+1);
 
-    // ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
-    // ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
+    ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
+    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
 	
     ret.validate();
     return ret;

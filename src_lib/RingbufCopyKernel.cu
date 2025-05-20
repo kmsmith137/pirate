@@ -3,6 +3,7 @@
 #include "../include/pirate/inlines.hpp"    // xdiv()
 
 #include <ksgpu/xassert.hpp>
+#include <ksgpu/cuda_utils.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -116,6 +117,107 @@ void CpuRingbufCopyKernel::apply(ksgpu::Array<void> &ringbuf, long ibatch, long 
 	   << ", dtype=" << ringbuf.dtype << ")";
 	throw runtime_error(ss.str());
     }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+GpuRingbufCopyKernel::GpuRingbufCopyKernel(const RingbufCopyKernelParams &params_) :
+    params(params_.validate()),
+    nlocations(xdiv(params_.locations.size, 8))
+{
+    long nbytes_per_location = (2 * params.beams_per_batch * constants::bytes_per_gpu_cache_line) + 8;
+    bw_per_launch.nbytes_gmem = nlocations * nbytes_per_location;
+}
+
+
+void GpuRingbufCopyKernel::allocate()
+{
+    if (is_allocated)
+	throw runtime_error("double call to GpuRingbufCopyKernel::allocate()");
+
+    // Copy host -> GPU.
+    this->gpu_locations = params.locations.to_gpu();    
+    this->is_allocated = true;
+}
+
+
+// Thread grid: { 32*W, 1, 1 }.
+// Block grid: { B, 1, 1 }.
+
+__global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *locations, long nlocations, int nbeams, ulong iframe)
+{
+    // Global thread ID
+    long tid = long(blockIdx.x) * long(blockDim.x) + threadIdx.x;
+
+    // "Regulated" thread ID (avoids out-of-range)
+    long treg = (nlocations << 3) + (threadIdx.x & 0x8);
+    treg = min(tid, treg);
+
+    // Each warp reads 4 locations (i.e. 4 src+dst pairs).
+    uint loc_data = locations[treg];
+
+    // Absorb iframe into phases (only valid on laneId=1 mod 4).
+    // Note: currently using 9 __shfl_syncs in this function, optimal number is 7.
+    uint loc_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x1c) + 2);
+    uint loc_phase = (ulong(loc_data) + iframe) % ulong(loc_len);
+
+    uint src_offset = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18));
+    uint src_phase = __shfl_sync(FULL_MASK, loc_phase, (threadIdx.x & 0x18) + 1);   // Note loc_phase here
+    uint src_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 2);
+    uint src_nseg = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 3);
+
+    uint dst_offset = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 4);
+    uint dst_phase = __shfl_sync(FULL_MASK, loc_phase, (threadIdx.x & 0x18) + 5);   // Note loc_phase here
+    uint dst_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 6);
+    uint dst_nseg = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 7);
+    
+    for (int b = 0; b < nbeams; b++) {
+	ulong s = ulong(src_offset + src_phase * src_nseg) << 3;   // int4 offset
+	ulong d = ulong(dst_offset + dst_phase * dst_nseg) << 3;   // int4 offset
+	uint4 rb_data = ringbuf[s + (threadIdx.x & 0x18)];
+	
+	if (tid == treg)
+	    ringbuf[d + (threadIdx.x & 0x18)] = rb_data;
+
+	// Equivalent to (phase = (phase+1) % len), but avoids cost of %-operator.
+	src_phase = (src_phase == src_len-1) ? 0 : (src_phase+1);
+	dst_phase = (dst_phase == dst_len-1) ? 0 : (dst_phase+1);
+    }
+}
+
+
+void GpuRingbufCopyKernel::launch(ksgpu::Array<void> &ringbuf, long ibatch, long it_chunk, cudaStream_t stream)
+{
+    xassert(ringbuf.on_gpu());
+    xassert(ringbuf.ndim == 1);
+    xassert(ringbuf.is_fully_contiguous());
+
+    xassert(ibatch >= 0);
+    xassert(ibatch * params.beams_per_batch < params.total_beams);
+    xassert(it_chunk >= 0);
+    
+    long nbits_per_segment = params.nelts_per_segment * ringbuf.dtype.nbits;
+    xassert_eq(nbits_per_segment, 1024);  // currently assuemd in gpu kernel
+    xassert(this->is_allocated);
+
+    if (nlocations == 0)
+	return;
+    
+    int W = 4;
+    int B = (nlocations + 4*W - 1) / (4*W);  // each block does 4*W locations
+    ulong iframe = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
+    
+    gpu_copy_kernel<<< B, W, 0, stream >>> (
+	reinterpret_cast<uint4 *> (ringbuf.data),   // uint4 *ringbuf
+	gpu_locations.data,                         // const uint *locations
+	nlocations,                                 // long nlocations
+	params.beams_per_batch,                     // int nbeams
+	iframe                                      // ulong iframe
+    );
+
+    CUDA_PEEK("gpu_copy_kernel");
 }
 
 

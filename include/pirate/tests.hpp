@@ -24,10 +24,12 @@ extern void test_gpu_lagged_downsampling_kernel();
 // test_gpu_dedispersion_kernels.cu
 extern void test_gpu_dedispersion_kernels();
 
+// test_gpu_ringbuf_copy_kernel.cu
+extern void test_gpu_ringbuf_copy_kernel();
+
 // test_dedisperser.cu
 extern void test_dedisperser(const DedispersionConfig &config, int nchunks);
 extern void test_dedisperser();
-
 
 }  // namespace pirate
 
