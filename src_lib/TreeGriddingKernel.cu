@@ -4,6 +4,7 @@
 #include <cuda_fp16.h>
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>
+#include <ksgpu/device_transposes.hpp>   // FULL_MASK
 
 using namespace std;
 using namespace ksgpu;
