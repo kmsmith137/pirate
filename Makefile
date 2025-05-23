@@ -91,6 +91,7 @@ LIB_SRCFILES = \
   src_lib/test_dedisperser.cu \
   src_lib/test_gpu_dedispersion_kernels.cu \
   src_lib/test_gpu_lagged_downsampler.cu \
+  src_lib/test_gpu_peak_finding_kernel.cu \
   src_lib/test_gpu_ringbuf_copy_kernel.cu \
   src_lib/test_gpu_tree_gridding_kernel.cu \
   src_lib/test_reference_tree.cu \
@@ -171,7 +172,8 @@ HFILES = \
   include/pirate/loose_ends/reduce2.hpp \
   include/pirate/loose_ends/TransposeKernel.hpp \
   include/pirate/cuda_kernels/dedispersion.hpp \
-  include/pirate/cuda_kernels/dedispersion_iobufs.hpp
+  include/pirate/cuda_kernels/dedispersion_iobufs.hpp \
+  include/pirate/cuda_kernels/peak_finding.hpp
 
 # 'make clean' deletes {*~, *.o, *.d, *.so, *.pyc} from these dirs.
 CLEAN_DIRS := . lib src_bin src_lib src_lib/loose_ends src_lib/template_instantiations src_pybind11 pirate_frb pirate_frb/__pycache__ include include/pirate include/pirate/loose_ends include/pirate/cuda_kernels
