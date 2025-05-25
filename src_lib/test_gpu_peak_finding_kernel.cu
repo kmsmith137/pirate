@@ -3,6 +3,7 @@
 #include "../include/pirate/utils.hpp"
 
 #include <ksgpu/Array.hpp>
+#include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
 
 using namespace std;
@@ -200,7 +201,7 @@ __global__ void pf_core_kernel(void *in_, void *out_, void *ssq_, void *pstate_,
     T32 *out_th = out + sth;
     T32 *ssq_th = ssq + sth;
     
-    for (int t = 0; t < nt; t += Core::Tout) {
+    for (int t = 0; t < nt_out; t += Core::Tout) {
 	pf_core_step(core, in_th, out_th, ssq_th, out_pstride32);
 	in_th += Core::Dt * Souter * ST;
 	out_th += Souter * ST;
@@ -223,7 +224,7 @@ using pf_core_kernel_t = void (*)(void *, void *, void *, void *, int, int, int)
 template<typename T32, int Dt, int E>
 static pf_core_kernel_t get_pf_core_kernel3(int S)
 {
-    constexpr int W = ksgpu::dtype_ops::simd_width<T32> ();
+    constexpr int W = ksgpu::dtype_ops<T32>::simd_width;
     
     if (S == Dt*W)
 	return pf_core_kernel<T32, Dt, E, Dt*W>;
@@ -469,7 +470,8 @@ void test_gpu_pf_core()
 	char *outp = reinterpret_cast<char *> (gout.data) + k * Tk_out * (dtype.nbits / 8);
 	char *ssqp = reinterpret_cast<char *> (gssq.data) + k * Tk_out * (dtype.nbits / 8);
 	
-	kernel(inp, outp, ssqp, pstate, nt_out, out_pstride32, pstate_nbytes);
+	kernel<<<32,1>>> (inp, outp, ssqp, pstate.data, Tk_out, out_pstride32, pstate_nbytes);
+	CUDA_PEEK("pf_core_test_kernel");
     }
 
     assert_arrays_equal(out, gout, "hout", "gout", {"p","t","s"});
