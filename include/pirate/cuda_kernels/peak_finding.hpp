@@ -5,6 +5,7 @@
 #include <ksgpu/constexpr_functions.hpp>
 #include <ksgpu/device_transposes.hpp>
 
+#include "../constants.hpp"   // constants::pf_a, constants::pfb
 
 namespace pirate {
 #if 0
@@ -91,7 +92,7 @@ struct pf_ringbuf
     // not per-thread offsets. The total number of elements (not bytes)
     // written is (pf_ringbuf::nelts_per_warp).
     
-    __device__ inline void store(T32 *p_warp)
+    __device__ inline void save(T32 *p_warp)
     {
 	#pragma unroll
 	for (int r = 0; r < R; r++) {
@@ -103,7 +104,249 @@ struct pf_ringbuf
 };
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// class pf_core
+//
+//  - Lowest-level part of the code, where peak-finding kernels are applied,
+//    and pf_out, pf_ssq are computed. This is the only part of the code which
+//    is "aware" of the kernel profiles.
+//
+//  - Coarse-grains in time but not DM.
+//    Therefore, the output of pf_core::advance() is a lot of registers:
+//
+//       T32 pf_out[P];
+//       T32 pf_ssq[P];
+//
+//  - Does not apply weights, or write outputs to global memory.
+//
+//  - Treats trial DMs as abstract spectator indices.
+//    (Later, these abstract spectator indices may contain additional data,
+//    such as sub-bands, spectral indices, etc.)
+//
+//  - Number of spectator indices, and register layout, is prescribed by
+//    the pf_core. Caller is responsible for transposes and outer loops.
+//
+//  - The pf_core always uses Dt registers per thread, so that time
+//    coarse-graining is a "thread-local" operation (except for "neighbors",
+//    which are exchanged with __shfl_sync()).
+//
+//  - We almost always use the following register layout (where W is
+//    the "simd_width": 1 for float32, or 2 for float16):
+//
+//      - Dt registers per thread (corresponding to consecutive times)
+//      - ((32*W)/Dt "outer" thread indices) <-> (coarse-grained times)
+//      - ((Dt/W) "inner" thread indices) <-> (spectators)
+//      - (W simd lanes) <-> (spectators)
+//
+//  - Nuisance issue: this doesn't work in the special case (float16, Dt=1).
+//    In this case we use the following register layout:
+//
+//      - 1 register per thread
+//      - (32 thread indices) <-> (time samples)
+//      - (2 simd lanes) <-> (spectator)
+
+
+#if 0
+
+// FIXME delete this, once flaoat16 is working
+template<typename T> struct is_float32 { static constexpr value = false; };
+template<> struct is_float32<float> { static constexpr value = true; };
+
+
+template<typename T32, int Dt, int E, int S>
+struct pf_core
+{
+    static_assert(sizeof(T32) == 4);
+    static_assert(ksgpu::constexpr_is_pow2(Dt));
+    static_assert(ksgpu::constexpr_is_pow2(E));
+    static_assert(Dt <= 16);
+    static_assert(E <= Dt);
+
+    // Simd width (1 for float32), or (2 for float16).
+    static_assert(is_float32<T>::value);
+    static constexpr int W = 1;  // FIXME
+
+    // Tin = number of input time samples processed by one call to pf_core::advance().
+    // Tout = number of output time samples, after dividing by Dt.
+    static constexpr int Tin = (Dt > 1) ? (32*W) : 32;   // see above
+    static constexpr int Tout = Tin / Dt;
+
+    // SS = number of spectator indices assigned to simd lanes, per call to pf_core::advance().
+    // ST = number of spectator indices assigned to threads, per call to pf_core::advance().
+    // Souter = number of calls to pf_core::advance() needed to process all S spectator indices.
+    
+    static constexpr int SS = W;
+    static constexpr int ST = (32/Tout);
+    static constexpr int Souter = S / (SS*ST);
+
+    static_assert(Tout * ST == 32);
+    static_assert(SS * ST * Souter == S);
+
+    // P = number of peak-finding kernels.
+    //
+    //   - If E=1: P=1 (single sample)
+    //   - If E=2: P=4 (+ length-2 boxcar + length-3 Gaussian + length-4 Gaussian)
+    //   - If E=4: P=7 (+ length-4 boxcar + length-6 Gaussian + length-12 Gaussian)
+    //   - If E=8: P=10 (+ length-8 boxcar + length-12 Gaussian + length-16 Gaussian)
+    //   - If E=16: P=13 (+ length-16 boxcar + length-24 Gaussian + length-32 Gaussian)
+
+    static constexpr int P = 3*ksgpu::constexpr_ilog2(E) + 1;
+    
+    // NL, NR = number of left/right neighbors
+    static constexpr int NL = ksgpu::constexpr_ilog2(E);
+    static constexpr int NR = (E > 1) ? (NL+1) : 0;
+
+    // Now we can declare the ring buffer.
+    using Ringbuf = pf_ringbuf<T32, ST, Souter*(D+NL)>;
+    Ringbuf ringbuf;
+
+    // Ring buffer persistent state (per S spectator indices).
+    static constexpr int pstate_n32 = Ringbuf::nelts_per_warp;
+    static constexpr int pstate_nbytes = 4 * pstate_n32;
+
+    // These registers are set by pf_core::advance().
+    T32 pf_out[P];
+    T32 pf_ssq[P];  // "sum of squares", i.e. variance before dividing by nsamples.
+
+    const T32 a = constants::pf_a;
+    const T32 b = constants::pf_b;
+
+
+    void load_pstate(const T32 *p_warp)
+    {
+	ringbuf.load(p_warp);
+    }
+
+    void save_pstate(T32 *p_warp)
+    {
+	ringbuf.save(p_warp);
+    }
+    
+    // Helper for advance().
+    template<int N, bool Reverse>
+    __device__ inline void _compute_neighbors(T32 x[Dt], T32 y[N])
+    {
+	constexpr int A = Reverse ? (Dt-1) : 0;  // index of initial register
+	constexpr int B = Reverse ? -1 : 1;      // associated step
+	
+	static_assert(N <= 5);
+	
+	if constexpr (N >= 1)
+	    y[0] = x[A];
+	if constexpr (N >= 2)
+	    y[1] = x[A+B];
+	if constexpr (N >= 3)
+	    y[2] = x[A+2*B] + x[A+3*B];
+	if constexpr (N >= 4)
+	    y[3] = x[A+4*B] + x[A+5*B] + x[A+6*B] + x[A+7*B];
+	if constexpr (N >= 5)
+	    y[4] = x[A+8*B] + x[A+9*B] + x[A+10*B] + x[A+11*B] + x[A+12*B] + x[A+13*B] + x[A+14*B] + x[A+15*B];
+    }
+
+
+    // Helper for _eval_all_kernels() and _eval_kernels_Emin().
+    __device__ inline void _update_pf(T32 x, int d, T32 &out, T32 &ssq)
+    {
+	out = d ? max(out,x) : x;
+	ssq = d ? (out+x*x) : (x*x);
+    }
+	
+    // Helper for advance().
+    // Fills pf_out[0] and pf_ssq[0] (single sample).
+    
+    __device__ inline void _eval_all_kernels(T32 x[Dt], T32 yl[NL], T32 yr[NR])
+    {
+	#pragma unroll
+	for (int d = 0; d < Dt; d++)
+	    _update_pf(x[d], d, pf_out[0], pf_ssq[0]);
+
+	if constexpr (E >= 2) {
+	    T32 xpad[Dt+3];
+
+	    #pragma unroll
+	    for (int d = 0; d < Dt; d++)
+		xpad[d+1] = x[d];
+
+	    xpad[0] = yl[0];
+	    xpad[Dt+1] = yr[0];
+	    xpad[Dt+2] = yr[1];
+	    
+	    this->_eval_kernels_Emin<2,Dt+3> (xpad, yl, yr);
+	}
+    }
+
+    // Helper for advance().
+    // Fills pf_out[] and pf_ssq[].
+    // The template parameter Emin means "process all peak-finders >= Emin".
+    
+    template<int Emin, int D>
+    __device__ inline void _eval_kernels_Emin(T32 x[D], T32 yl[NL], T32 yr[NR])
+    {
+	static_assert(Emin >= 2);
+	static_assert(E >= Emin);
+	static_assert(ksgpu::constexpr_is_pow2(Emin));
+
+	constexpr int I = ksgpu::constexpr_ilog2(Emin);
+	constexpr int D0 = (2*D)/Emin;
+	static_assert(D == D0+3);
+
+	#pragma unroll
+	for (int d = 0; d < D0; d++) {
+	    T32 b2 = (x[d+1] + x[d+2]);
+	    T32 g3 = (x[d+1]) + a * (x[d] + x[d+1]);
+	    T32 g4 = (x[d+1] + x[d+2]) + b * (x[d] + x[d+3]);
+
+	    _update_pf(b2, d, pf_out[3*I-2], pf_ssq[3*I-2]);
+	    _update_pf(g3, d, pf_out[3*I-1], pf_ssq[3*I-1]);
+	    _update_pf(g4, d, pf_out[3*I], pf_ssq[3*I]);
+	}
+	
+	// Call recursively with Emin -> (2 * Emin).
+	
+	if constexpr (E > Emin) {
+	    constexpr int D1 = D0 >> 2;
+	    
+	    T32 xnext[D1+3];
+
+	    #pragma unroll
+	    for (int d = 0; d < D1+1; d++)
+		xnext[d+1] = x[2*d+1] + x[2*d+2];
+	    
+	    xnext[0] = x[0] + yl[I];
+	    xnext[D1+2] = yr[I+1];
+
+	    this->_eval_kernels_Emin<2*Emin, D1+3> (xnext, yl, yr);
+	}
+    }
+
+    // Call sequentially with J = 0, ..., Souter, before moving on to
+    // the next time chunk.
+    
+    template<int J>
+    __device__ inline void advance(T32 x[Dt])
+    {
+	// Compute right neighbors, before applying lag.
+	T32 yr[NR];
+	template _compute_neighbors<Nr,false> (x,yr);   // reverse=false
+
+	// Apply lag.
+	if constexpr (E > 0)
+	    ringbuf.template multi_advance<J*(Dt+NL), Dt> (x);
+
+	// Compute left neighbors, after applying lag.
+	// Note call to Ringbuf::multi_advance() here.
+	T32 yl[NL];
+	template _compute_neighbors<Nl,true> (x,yl);   // reverse=true
+	ringbuf.template multi_advance<J*(Dt+NL) + Dt, NL> (yl);
+
+	this->_eval_all_kernels(x, yl, yr);
+    }
+};
+
+#endif
+
+
 }  // namespace pirate
 
 #endif // _PIRATE_CUDA_KERNELS_PEAK_FINDING_HPP
-

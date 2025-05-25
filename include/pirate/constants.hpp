@@ -22,6 +22,10 @@ struct constants
     
     static constexpr int max_downsampling_level = 6;
 
+    // Constants in peak-finding kernels
+    static constexpr float pf_a = 0.5;
+    static constexpr float pf_b = 0.5;
+    
     // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
     static constexpr int cuda_max_y_blocks = 65535;
     static constexpr int cuda_max_z_blocks = 65535;
