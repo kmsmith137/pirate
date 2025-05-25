@@ -148,9 +148,13 @@ struct pf_ringbuf
 //      - (2 simd lanes) <-> (spectator)
 
 
-template<typename T32, int Dt, int E, int S>
+template<typename T32, int Dt_, int E_, int S_>
 struct pf_core
 {
+    static constexpr int Dt = Dt_;
+    static constexpr int E = E_;
+    static constexpr int S = S_;
+    
     static_assert(sizeof(T32) == 4);
     static_assert(ksgpu::constexpr_is_pow2(Dt));
     static_assert(ksgpu::constexpr_is_pow2(E));
@@ -320,7 +324,7 @@ struct pf_core
     {
 	// Compute right neighbors, before applying lag.
 	T32 yr[NR];
-	template _compute_neighbors<NR,false> (x,yr);   // reverse=false
+	this->template _compute_neighbors<NR,false> (x,yr);   // reverse=false
 
 	// Apply lag.
 	ringbuf.template multi_advance<J*(Dt+NL), Dt> (x);
@@ -328,7 +332,7 @@ struct pf_core
 	// Compute left neighbors, after applying lag.
 	// Note call to Ringbuf::multi_advance() here.
 	T32 yl[NL];
-	template _compute_neighbors<NL,true> (x,yl);   // reverse=true
+	this->template _compute_neighbors<NL,true> (x,yl);   // reverse=true
 	ringbuf.template multi_advance<J*(Dt+NL) + Dt, NL> (yl);
 
 	this->_eval_all_kernels(x, yl, yr);
