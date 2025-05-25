@@ -4,6 +4,7 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/constexpr_functions.hpp>
 #include <ksgpu/device_transposes.hpp>
+#include <ksgpu/device_dtype_ops.hpp>
 
 #include "../constants.hpp"   // constants::pf_a, constants::pfb
 
@@ -147,13 +148,6 @@ struct pf_ringbuf
 //      - (2 simd lanes) <-> (spectator)
 
 
-#if 0
-
-// FIXME delete this, once flaoat16 is working
-template<typename T> struct is_float32 { static constexpr value = false; };
-template<> struct is_float32<float> { static constexpr value = true; };
-
-
 template<typename T32, int Dt, int E, int S>
 struct pf_core
 {
@@ -163,12 +157,10 @@ struct pf_core
     static_assert(Dt <= 16);
     static_assert(E <= Dt);
 
-    // Simd width (1 for float32), or (2 for float16).
-    static_assert(is_float32<T>::value);
-    static constexpr int W = 1;  // FIXME
-
     // Tin = number of input time samples processed by one call to pf_core::advance().
     // Tout = number of output time samples, after dividing by Dt.
+    
+    static constexpr int W = ksgpu::dtype_ops<T32>::simd_width;
     static constexpr int Tin = (Dt > 1) ? (32*W) : 32;   // see above
     static constexpr int Tout = Tin / Dt;
 
@@ -198,12 +190,12 @@ struct pf_core
     static constexpr int NR = (E > 1) ? (NL+1) : 0;
 
     // Now we can declare the ring buffer.
-    using Ringbuf = pf_ringbuf<T32, ST, Souter*(D+NL)>;
+    using Ringbuf = pf_ringbuf<T32, ST, Souter*(Dt+NL)>;
     Ringbuf ringbuf;
 
     // Ring buffer persistent state (per S spectator indices).
-    static constexpr int pstate_n32 = Ringbuf::nelts_per_warp;
-    static constexpr int pstate_nbytes = 4 * pstate_n32;
+    static constexpr int pstate_n32_per_warp = Ringbuf::nelts_per_warp;
+    static constexpr int pstate_nbytes_per_warp = 4 * pstate_n32_per_warp;
 
     // These registers are set by pf_core::advance().
     T32 pf_out[P];
@@ -288,7 +280,7 @@ struct pf_core
 	static_assert(ksgpu::constexpr_is_pow2(Emin));
 
 	constexpr int I = ksgpu::constexpr_ilog2(Emin);
-	constexpr int D0 = (2*D)/Emin;
+	constexpr int D0 = (2*Dt)/Emin;
 	static_assert(D == D0+3);
 
 	#pragma unroll
@@ -328,23 +320,20 @@ struct pf_core
     {
 	// Compute right neighbors, before applying lag.
 	T32 yr[NR];
-	template _compute_neighbors<Nr,false> (x,yr);   // reverse=false
+	template _compute_neighbors<NR,false> (x,yr);   // reverse=false
 
 	// Apply lag.
-	if constexpr (E > 0)
-	    ringbuf.template multi_advance<J*(Dt+NL), Dt> (x);
+	ringbuf.template multi_advance<J*(Dt+NL), Dt> (x);
 
 	// Compute left neighbors, after applying lag.
 	// Note call to Ringbuf::multi_advance() here.
 	T32 yl[NL];
-	template _compute_neighbors<Nl,true> (x,yl);   // reverse=true
+	template _compute_neighbors<NL,true> (x,yl);   // reverse=true
 	ringbuf.template multi_advance<J*(Dt+NL) + Dt, NL> (yl);
 
 	this->_eval_all_kernels(x, yl, yr);
     }
 };
-
-#endif
 
 
 }  // namespace pirate

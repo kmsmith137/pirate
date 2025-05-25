@@ -131,7 +131,6 @@ void test_gpu_pf_ringbuf()
 //
 // Test 'struct pf_core'.
 
-#if 0
 
 // Helper for pf_core_kernel().
 //
@@ -146,7 +145,7 @@ void test_gpu_pf_ringbuf()
 // The J0 argument is the initial "outer" block 0 <= J0 < Souter.
 
 
-template<class Core, int J0=0>
+template<class Core, typename T32, int J0=0>
 __device__ inline void pf_core_step(Core &core, const T32 *in_th, T32 *out_th, T32 *ssq_th, int out_pstride32)
 {
     if constexpr (J0 < Core::Souter) {
@@ -175,32 +174,31 @@ __device__ inline void pf_core_step(Core &core, const T32 *in_th, T32 *out_th, T
 }
 
 
-// input array shape = (T,S)
-// output array shape = (P,Tc,S)   [ for both out and ssq ]
-// pstate[S*(D)];
+// input array shape = (Tin,S)
+// output array shape = (P,Tout,S)   [ for both out and ssq ]
 // Launch with one warp
 
 template<typename T32, int Dt, int E, int S>
 __global__ void pf_core_kernel(void *in_, void *out_, void *ssq_, void *pstate_, int nt_out, int out_pstride32, int pstate_nbytes)
 {
     using Core = pf_core<T32, Dt, E, S>;
+    Core core;
+    
     constexpr int Souter = Core::Souter;
     constexpr int ST = Core::ST;
-    
-    Core core;
 	
     T32 *in = reinterpret_cast<T32 *> (in_);
     T32 *out = reinterpret_cast<T32 *> (out_);
     T32 *ssq = reinterpret_cast<T32 *> (ssq_);
     T32 *pstate = reinterpret_cast<T32 *> (pstate_);
     
-    assert(pstate_nbytes >= 4 * Core::pstate_n32);
+    assert(pstate_nbytes >= Core::pstate_nbytes_per_warp);
     core.load_pstate(pstate);
 
     int sth = (threadIdx.x / ST) * (Souter * ST) + (threadIdx.x % ST);
     T32 *in_th = in + sth;
     T32 *out_th = out + sth;
-    T32 *ssq_th = out + sth;
+    T32 *ssq_th = ssq + sth;
     
     for (int t = 0; t < nt; t += Core::Tout) {
 	pf_core_step(core, in_th, out_th, ssq_th, out_pstride32);
@@ -222,13 +220,14 @@ using pf_core_kernel_t = void (*)(void *, void *, void *, void *, int, int, int)
 //   1 <= E <= Dt <= 16
 //   Dt*W <= S <= min(4*Dt,16) * W
 
-
-template<typename T32, int Dt, int E, int W>
+template<typename T32, int Dt, int E>
 static pf_core_kernel_t get_pf_core_kernel3(int S)
 {
+    constexpr int W = ksgpu::dtype_ops::simd_width<T32> ();
+    
     if (S == Dt*W)
 	return pf_core_kernel<T32, Dt, E, Dt*W>;
-
+#if 0
     if constexpr (Dt <= 8)
 	if (S == 2*Dt*W)
 	    return pf_core_kernel<T32, Dt, E, 2*Dt*W>;
@@ -236,69 +235,66 @@ static pf_core_kernel_t get_pf_core_kernel3(int S)
     if constexpr (Dt <= 4)
 	if (S == 4*Dt*W)
 	    return pf_core_kernel<T32, Dt, E, 4*Dt*W>;
-
+#endif
     throw runtime_error("get_pf_core_kernel(): invalid (Dt,S)");
 }
 
-
-template<typename T32, int Dt, int W>
+template<typename T32, int Dt>
 static pf_core_kernel_t get_pf_core_kernel2(int E, int S)
 {
     if (E == 1)
-	return get_pf_core_kernel3<T32,Dt,1,W> (S);
-
+	return get_pf_core_kernel3<T32,Dt,1> (S);
+#if 0
     if constexpr (Dt >= 2)
 	if (E == 2)
-	  return get_pf_core_kernel3<T32,Dt,2,W> (S);
+	  return get_pf_core_kernel3<T32,Dt,2> (S);
 
     if constexpr (Dt >= 4)
 	if (E == 4)
-	    return get_pf_core_kernel3<T32,Dt,4,W> (S);
+	    return get_pf_core_kernel3<T32,Dt,4> (S);
 
     if constexpr (Dt >= 8)
 	if (E == 8)
-	    return get_pf_core_kernel3<T32,Dt,8,W> (S);
+	    return get_pf_core_kernel3<T32,Dt,8> (S);
 
     if constexpr (Dt >= 16)
 	if (E == 16)
-	    return get_pf_core_kernel3<T32,Dt,16,W> (S);
-
+	    return get_pf_core_kernel3<T32,Dt,16> (S);
+#endif
     throw runtime_error("get_pf_core_kernel(): invalid (Dt,E)");
 }
 
-
-template<typename T32, int W>
+template<typename T32>
 static pf_core_kernel_t get_pf_core_kernel1(int Dt, int E, int S)
 {
     static_assert(sizeof(T32) == 4);
 
     if (Dt == 1)
-	return get_pf_core_kernel2<T32,1,W> (E,S);
+	return get_pf_core_kernel2<T32,1> (E,S);
+#if 0
     if (Dt == 2)
-	return get_pf_core_kernel2<T32,2,W> (E,S);
+	return get_pf_core_kernel2<T32,2> (E,S);
     if (Dt == 4)
-	return get_pf_core_kernel2<T32,4,W> (E,S);
+	return get_pf_core_kernel2<T32,4> (E,S);
     if (Dt == 8)
-	return get_pf_core_kernel2<T32,8,W> (E,S);
+	return get_pf_core_kernel2<T32,8> (E,S);
     if (Dt == 16)
-	return get_pf_core_kernel2<T32,16,W> (E,S);
-
+	return get_pf_core_kernel2<T32,16> (E,S);
+#endif
     throw runtime_error("get_pf_core_kernel(): invalid Dt");
 }
 				  
-
 static pf_core_kernel_t get_pf_core_kernel(const Dtype &dtype, int Dt, int E, int S)
 {
     if (dtype == Dtype::native<float>())
-	return get_pf_core_kernel1<float,1> (Dt, E, S);
+	return get_pf_core_kernel1<float> (Dt, E, S);
 #if 0
     if (dtype == Dtype::native<__half>())
-	return get_pf_core_kernel1<__half2,2> (Dt, E, S);
+	return get_pf_core_kernel1<__half2> (Dt, E, S);
 #endif
     throw runtime_error("get_pf_core_kernel(): invalue dtype");
 }
 
-#endif  // 0
  
 // reference pf_core code starts here.
 
@@ -433,9 +429,9 @@ void test_gpu_pf_core()
     Dtype dtype = Dtype::native<float>();  // FIXME generalize
     long W = 32 / dtype.nbits;             // simd width
     
-    long lgE = rand_int(0,5);
-    long lgD = rand_int(lgE,5);
-    long lgSW = rand_int(lgD, min(lgD+3,5L));   // log2(S/W)
+    long lgE = 0; // rand_int(0,5);
+    long lgD = 0; // rand_int(lgE,5);
+    long lgSW = 0; // rand_int(lgD, min(lgD+3,5L));   // log2(S/W)
     
     long Dt = 1 << lgD;
     long E = 1 << lgE;
@@ -465,7 +461,6 @@ void test_gpu_pf_core()
     long pstate_nbytes = (Dt+5) * S * (dtype.nbits/8);  // upper bound
     Array<char> pstate({pstate_nbytes}, af_zero | af_gpu);
 
-#if 0
     pf_core_kernel_t kernel = get_pf_core_kernel(dtype, Dt, E, S);
     
     for (long k = 0; k < Nk; k++) {
@@ -476,7 +471,6 @@ void test_gpu_pf_core()
 	
 	kernel(inp, outp, ssqp, pstate, nt_out, out_pstride32, pstate_nbytes);
     }
-#endif
 
     assert_arrays_equal(out, gout, "hout", "gout", {"p","t","s"});
     assert_arrays_equal(ssq, gssq, "hssq", "gssq", {"p","t","s"});
