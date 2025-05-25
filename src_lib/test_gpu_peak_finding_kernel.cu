@@ -336,7 +336,7 @@ static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> 
     Array<float> xpad({Tin+Dt+1,S}, af_zero | af_rhost);
     xpad.slice(0,Dt+1,Dt+1+S).fill(x);
 
-    for (long tout = 0; tout = Tout; tout++) {
+    for (long tout = 0; tout < Tout; tout++) {
 	// xp = array of shape (Dt+3,S).
 	// outp = array of shape (3,S), stride Tout*S
 	// ssqp = array of shape (3,S), stride Tout*S
@@ -358,7 +358,7 @@ static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> 
 		
 		_update_pf(b2, d, outp[(p0)*Tout*S + s], ssqp[(p0)*Tout*S + s]);
 		_update_pf(g3, d, outp[(p0+1)*Tout*S + s], ssqp[(p0+1)*Tout*S + s]);
-		_update_pf(g4, d, outp[(p0_2)*Tout*S + s], ssqp[(p0+2)*Tout*S + s]);
+		_update_pf(g4, d, outp[(p0+2)*Tout*S + s], ssqp[(p0+2)*Tout*S + s]);
 	    }
 	}
     }
@@ -399,7 +399,7 @@ static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &
 	
 	for (long d = 0; d < Dt; d++)
 	    for (long s = 0; s < S; s++)
-		_update_pf(xp[d*S+s], d, out.data[s], ssq.data[s]);
+		_update_pf(xp[d*S+s], d, outp[s], ssqp[s]);
     }
 
     if (E == 1)
@@ -407,14 +407,17 @@ static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &
 
     Array<float> x_ds = x;
     long p0 = 1;
-    
-    while (E >= 2) {
-	_reference_pf_core(x_ds, out3, ssq3, Tout, Dt, S, P, p0);
+
+    for (;;) {
+	_reference_pf_core(x_ds, out, ssq, Tout, Dt, S, P, p0);
+
+	if (E == 2)
+	    return;
 	
 	// Downsample by 2 in time. The function name "reference_downsample_freq()"
 	// is a misnomer here, but it does the right thing!
 
-	Array<float> xnew = Array<float> ({x_ds.shape[0]/2, S});
+	Array<float> xnew = Array<float> ({x_ds.shape[0]/2, S}, af_uhost | af_zero);
 	reference_downsample_freq(x_ds, xnew, false);  // normalize=false
 	x_ds = xnew;
 	
