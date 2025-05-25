@@ -208,12 +208,12 @@ struct pf_core
     const T32 b = constants::pf_b;
 
 
-    void load_pstate(const T32 *p_warp)
+    __device__ inline void load_pstate(const T32 *p_warp)
     {
 	ringbuf.load(p_warp);
     }
 
-    void save_pstate(T32 *p_warp)
+    __device__ inline void save_pstate(T32 *p_warp)
     {
 	ringbuf.save(p_warp);
     }

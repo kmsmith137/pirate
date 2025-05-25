@@ -149,6 +149,8 @@ void test_gpu_pf_ringbuf()
 template<class Core, typename T32, int J0=0>
 __device__ inline void pf_core_step(Core &core, const T32 *in_th, T32 *out_th, T32 *ssq_th, int out_pstride32)
 {
+    static_assert(sizeof(T32) == 4);
+    
     if constexpr (J0 < Core::Souter) {
 	constexpr int P = Core::P;
 	constexpr int Dt = Core::Dt;
@@ -170,7 +172,7 @@ __device__ inline void pf_core_step(Core &core, const T32 *in_th, T32 *out_th, T
 	}
 
 	// Advance to next J0
-	pf_core_step<Core,J0+1> (core, in_th + ST, out_th + ST, ssq_th + ST);
+	pf_core_step<Core,T32,J0+1> (core, in_th + ST, out_th + ST, ssq_th + ST, out_pstride32);
     }
 }
 
