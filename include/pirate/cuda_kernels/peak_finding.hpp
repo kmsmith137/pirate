@@ -336,6 +336,89 @@ struct pf_core
 };
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// class pf_tile: slightly higher level than pf_core
+//
+//  - Input is an array x[M], where indices 0 <= m < M represent trial
+//    DMs, and threads/simd-lanes represent time. The pf_tile supplies
+//    the transposes and outer loops needed by pf_core.
+//
+//  - Fully coarse-grains, applies weights, and writes results to GPU
+//    global memory. Therefore, pf_tile::advance() returns void.
+//
+//  - Works with trial DMs, whereas 'pf_core' works with abstract spectator
+//    indices. When we implement subbands, pf_core should stay the same,
+//    whereas pf_tile may change.
+//
+//  - The value of M (number of trial DMs per warp) is supplied by the
+//    caller, but there is a technical constraint that (M % Core::S) == 0.
+//    (If this constraint is violated, then a static_assert will fail.)
+//
+//  - Designed for either "standalone" use in pf_kernel, or coalescing
+//    with the dedispersion kernels.
+
+
+#if 0
+
+template<typename T32, int Dd, int Dt, int E, int M>
+struct pf_tile
+{
+    static_assert((Dd==1) || (Dd==Dt));
+
+    using Core = pf_core<T32,Dt,E,M>;
+    Core core;
+
+
+    __device__ inline void transpose(T32 x[M])
+    {	
+	// Case 1: float32
+	// Transpose t0 <-> r0, t1 <-> r1, ..., t(L-1) <-> r(L-1), where L = log2(Dt)
+	// Call Core::advance() in contiguous blocks of (M/Dt) registers
+
+	// Case 2: float16, Dt > 1
+	// Transpose b0 <-> r0, t0 <-> r1, ..., t(L-2) <-> r(L-1)
+	// Call Core::advance() in contiguous blocks of (M/Dt) registers
+
+	// Case 3: float16, Dt==1 (which implies Dd==1)
+	// Group x's into consecutive pairs (representing consecutive trial DMs).
+	// Do a special-case transpose
+	// Call Core::advance() on even m's, then odd m's.
+    }
+
+    
+    template<int J0=0>
+    __device__ inline void _advance(T32 x[M])
+    {
+	if constexpr (J0 < Core::Souter) {
+	    T32 x0[Dt];
+
+	    #pragma unroll
+	    for (int d = 0; d < Dt; d++)
+		x0[d] = x[J0*Dt + d];
+
+	    core.template advance(x0);
+
+	    xxx;
+	    // Apply weights
+	    // Coarse-grain? Write?
+
+	    this->template _advance<J0+1> (x);
+	}
+    }
+    
+    __device__ inline void advance(T32 x[M])
+    {
+	this->_transpose(x);
+
+	// Two calls to _advance() in (float16 Dt=1) case.
+	this->template _advance(x);
+    }
+};
+
+#endif
+
+
 }  // namespace pirate
 
 #endif // _PIRATE_CUDA_KERNELS_PEAK_FINDING_HPP
