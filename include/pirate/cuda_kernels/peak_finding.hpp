@@ -249,7 +249,7 @@ struct pf_core
     __device__ inline void _update_pf(T32 x, int d, T32 &out, T32 &ssq)
     {
 	out = d ? max(out,x) : x;
-	ssq = d ? (out+x*x) : (x*x);
+	ssq = d ? (ssq+x*x) : (x*x);
     }
 	
     // Helper for advance().

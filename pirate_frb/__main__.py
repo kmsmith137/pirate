@@ -52,6 +52,7 @@ def test(args):
             pirate_pybind11.test_gpu_dedispersion_kernels()
         if run_all_tests or args.gpfk:
             pirate_pybind11.test_gpu_pf_ringbuf()
+            pirate_pybind11.test_gpu_pf_core()
         if run_all_tests or args.grck:
             pirate_pybind11.test_gpu_ringbuf_copy_kernel()
         if run_all_tests or args.gtgk:
