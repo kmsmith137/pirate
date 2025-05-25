@@ -29,6 +29,7 @@ extern void test_gpu_ringbuf_copy_kernel();
 
 // test_gpu_peak_finding_kernel.cu
 extern void test_gpu_pf_ringbuf();
+extern void test_gpu_pf_core();
 
 // test_gpu_tree_gridding_kernel.cu
 extern void test_gpu_tree_gridding_kernel();

@@ -1,4 +1,6 @@
 #include "../include/pirate/cuda_kernels/peak_finding.hpp"
+#include "../include/pirate/inlines.hpp"
+#include "../include/pirate/utils.hpp"
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/rand_utils.hpp>
@@ -296,7 +298,7 @@ static pf_core_kernel_t get_pf_core_kernel(const Dtype &dtype, int Dt, int E, in
     throw runtime_error("get_pf_core_kernel(): invalue dtype");
 }
 
-
+#endif  // 0
  
 // reference pf_core code starts here.
 
@@ -313,7 +315,7 @@ inline void _update_pf(float pf, int d, float &out, float &ssq)
 //   out.shape = (3,Tout,S)
 //   ssq.shape = (3,Tout,S)
 
-static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &ssq, long Tout, long Dt, long S)
+static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &ssq, long Tout, long Dt, long S, long P, long p0)
 {
     const float a = constants::pf_a;
     const float b = constants::pf_b;
@@ -321,9 +323,10 @@ static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> 
     xassert(Dt >= 2);
     
     long Tin = Tout * Dt;
-    xassert_shape_eq(x, {Tin,S});
-    xassert_shape_eq(out, {3,Tout,S});
-    xassert_shape_eq(ssq, {3,Tout,S});
+    xassert_shape_eq(x, ({Tin,S}));
+    xassert_shape_eq(out, ({P,Tout,S}));
+    xassert_shape_eq(ssq, ({P,Tout,S}));
+    xassert_le(p0+3, P);
     
     xassert(x.is_fully_contiguous());
     xassert(out.is_fully_contiguous());
@@ -353,9 +356,9 @@ static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> 
 		float g3 = a*x0 + x1 + a*x2;
 		float g4 = b*x0 + x1 + x2 + b*x3;
 		
-		_update_pf(b2, d, outp[s], ssqp[s]);
-		_update_pf(g3, d, outp[Tout*S + s], ssqp[Tout*S + s]);
-		_update_pf(g4, d, outp[2*Tout+S + s], ssqp[2*Tout*S + s]);
+		_update_pf(b2, d, outp[(p0)*Tout*S + s], ssqp[(p0)*Tout*S + s]);
+		_update_pf(g3, d, outp[(p0+1)*Tout*S + s], ssqp[(p0+1)*Tout*S + s]);
+		_update_pf(g4, d, outp[(p0_2)*Tout*S + s], ssqp[(p0+2)*Tout*S + s]);
 	    }
 	}
     }
@@ -366,7 +369,7 @@ static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> 
 //   out.shape = (P,Tout,S)
 //   ssq.shape = (P,Tout,S)
 
-static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &ssq, long Tout, long E, long Dt, long S)
+static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &ssq, long Tout, long Dt, long E, long S)
 {
     xassert(E >= 1);
     xassert(Dt >= E);
@@ -376,9 +379,9 @@ static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &
     long Tin = Tout * Dt;
     long P = 3*integer_log2(Dt) + 1;
     
-    xassert_shape_eq(x, {Tin,S});
-    xassert_shape_eq(out, {P,Tout,S});
-    xassert_shape_eq(ssq, {P,Tout,S});
+    xassert_shape_eq(x, ({Tin,S}));
+    xassert_shape_eq(out, ({P,Tout,S}));
+    xassert_shape_eq(ssq, ({P,Tout,S}));
     
     xassert(x.is_fully_contiguous());
     xassert(out.is_fully_contiguous());
@@ -387,60 +390,55 @@ static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &
     for (long s = 0; s < S; s++)
 	out.data[s] = ssq.data[s] = 0.0f;
     
-    for (long tout = 1; t < Tout; t++) {
+    for (long tout = 1; tout < Tout; tout++) {
 	// xp = array of shape (Dt,S).
 	// outp = ssqp = array of shape (S).
-	float *xp = xpad.data + (tout-1)*Dt*S;
+	float *xp = x.data + (tout-1)*Dt*S;
 	float *outp = out.data + tout*S;
 	float *ssqp = ssq.data + tout*S;
 	
 	for (long d = 0; d < Dt; d++)
 	    for (long s = 0; s < S; s++)
-		_update_pf(xp[d*S+s], out.data[s], ssq.data[s]);
+		_update_pf(xp[d*S+s], d, out.data[s], ssq.data[s]);
     }
 
     if (E == 1)
 	return;
 
-    _reference_pf_core(x, out.slice(0,1,4), ssq.slice(0,1,4), Tout, Dt, S);
-
-    if (E == 2)
-	return;
-
     Array<float> x_ds = x;
-    Array<float> out_ds = out.slice(0,1,P);
-    Array<float> ssq_ds = ssq.slice(0,1,P);
-
-    while (E > 2) {
+    long p0 = 1;
+    
+    while (E >= 2) {
+	_reference_pf_core(x_ds, out3, ssq3, Tout, Dt, S, P, p0);
+	
 	// Downsample by 2 in time. The function name "reference_downsample_freq()"
 	// is a misnomer here, but it does the right thing!
-	
+
 	Array<float> xnew = Array<float> ({x_ds.shape[0]/2, S});
 	reference_downsample_freq(x_ds, xnew, false);  // normalize=false
-
 	x_ds = xnew;
-	out_ds = out_ds.slice(0, 3, out_ds.shape[0]);
-	ssq_ds = out_ds.slice(0, 3, ssq_ds.shape[0]);
 	
-	_reference_pf_core(x_ds, out_ds.slice(0,0,3), ssq_ds.slice(0,0,3), Tout, Dt/2, S);
 	Dt /= 2;
 	E /= 2;
+	p0 += 3;
     }
 }
 
 
 void test_gpu_pf_core()
 {
-    Dtype dtype = dtype;:native<float>();  // FIXME generalize
+    Dtype dtype = Dtype::native<float>();  // FIXME generalize
     long W = 32 / dtype.nbits;             // simd width
     
     long lgE = rand_int(0,5);
     long lgD = rand_int(lgE,5);
-    long lgSW = rand_int(lgD, min(lgD+3,5));   // log2(S/W)
+    long lgSW = rand_int(lgD, min(lgD+3,5L));   // log2(S/W)
     
     long Dt = 1 << lgD;
     long E = 1 << lgE;
     long S = W << lgSW;
+    long P = 3*lgE + 1;
+    
     long Tk_in = 32*W * rand_int(1,10);  // input time samples per kernel
     long Tk_out = Tk_in / Dt;            // output time samples per kernel
     
@@ -455,7 +453,7 @@ void test_gpu_pf_core()
     Array<float> out({P,Tout,S}, af_random | af_rhost);
     Array<float> ssq({P,Tout,S}, af_random | af_rhost);
 
-    reference_pf_core(x, out, ssq, Tout, Dt, E);
+    reference_pf_core(x, out, ssq, Tout, Dt, E, S);
 
     Array<void> gx = x.convert(dtype).to_gpu();
     Array<void> gout(dtype, {P,Tout,S}, af_zero | af_gpu);
@@ -464,6 +462,7 @@ void test_gpu_pf_core()
     long pstate_nbytes = (Dt+5) * S * (dtype.nbits/8);  // upper bound
     Array<char> pstate({pstate_nbytes}, af_zero | af_gpu);
 
+#if 0
     pf_core_kernel_t kernel = get_pf_core_kernel(dtype, Dt, E, S);
     
     for (long k = 0; k < Nk; k++) {
@@ -474,11 +473,11 @@ void test_gpu_pf_core()
 	
 	kernel(inp, outp, ssqp, pstate, nt_out, out_pstride32, pstate_nbytes);
     }
+#endif
 
     assert_arrays_equal(out, gout, "hout", "gout", {"p","t","s"});
     assert_arrays_equal(ssq, gssq, "hssq", "gssq", {"p","t","s"});
 }
 
-#endif
 
 }  // namespace pirate
