@@ -3,8 +3,7 @@
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/constexpr_functions.hpp>
-#include <ksgpu/device_transposes.hpp>
-#include <ksgpu/device_dtype_ops.hpp>
+#include <ksgpu/device_basics.hpp>
 
 #include "../constants.hpp"   // constants::pf_a, constants::pfb
 
@@ -251,7 +250,7 @@ struct pf_core
     // Helper for advance().
     // Fills pf_out[0] and pf_ssq[0] (single sample).
     
-    __device__ inline void _eval_all_kernels(T32 x[Dt], T32 yl[NL], T32 yr[NR])
+    __device__ inline void _eval_all_kernels(T32 x[Dt], ksgpu::RegisterArray<T32,NL> &yl, ksgpu::RegisterArray<T32,NR> &yr)
     {
 	#pragma unroll
 	for (int d = 0; d < Dt; d++)
@@ -277,7 +276,7 @@ struct pf_core
     // The template parameter Emin means "process all peak-finders >= Emin".
     
     template<int Emin, int D>
-    __device__ inline void _eval_kernels_Emin(T32 x[D], T32 yl[NL], T32 yr[NR])
+    __device__ inline void _eval_kernels_Emin(T32 x[D], ksgpu::RegisterArray<T32,NL> &yl, ksgpu::RegisterArray<T32,NR> &yr)
     {
 	static_assert(Emin >= 2);
 	static_assert(E >= Emin);
@@ -323,17 +322,20 @@ struct pf_core
     __device__ inline void advance(T32 x[Dt])
     {
 	// Compute right neighbors, before applying lag.
-	T32 yr[NR];
-	this->template _compute_neighbors<NR,false> (x,yr);   // reverse=false
+	ksgpu::RegisterArray<T32,NR> yr;
+	if constexpr (NR > 0)
+	    this->template _compute_neighbors<NR,false> (x, yr.data);   // reverse=false
 
 	// Apply lag.
 	ringbuf.template multi_advance<J*(Dt+NL), Dt> (x);
 
 	// Compute left neighbors, after applying lag.
 	// Note call to Ringbuf::multi_advance() here.
-	T32 yl[NL];
-	this->template _compute_neighbors<NL,true> (x,yl);   // reverse=true
-	ringbuf.template multi_advance<J*(Dt+NL) + Dt, NL> (yl);
+	ksgpu::RegisterArray<T32,NL> yl;
+	if constexpr (NL > 0) {
+	    this->template _compute_neighbors<NL,true> (x, yl.data);   // reverse=true
+	    ringbuf.template multi_advance<J*(Dt+NL) + Dt, NL> (yl.data);
+	}
 
 	this->_eval_all_kernels(x, yl, yr);
     }
