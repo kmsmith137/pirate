@@ -256,7 +256,6 @@ static pf_core_kernel_t get_pf_core_kernel2(int E, int S)
 	if (E == 2)
 	  return get_pf_core_kernel3<T32,Dt,2> (S);
     
-#if 0
     if constexpr (Dt >= 4)
 	if (E == 4)
 	    return get_pf_core_kernel3<T32,Dt,4> (S);
@@ -268,7 +267,7 @@ static pf_core_kernel_t get_pf_core_kernel2(int E, int S)
     if constexpr (Dt >= 16)
 	if (E == 16)
 	    return get_pf_core_kernel3<T32,Dt,16> (S);
-#endif
+
     throw runtime_error("get_pf_core_kernel(): invalid (Dt,E)");
 }
 
@@ -435,7 +434,7 @@ void test_gpu_pf_core()
     Dtype dtype = Dtype::native<float>();  // FIXME generalize
     long L = 32 / dtype.nbits;             // simd lanes
     
-    long lgE = rand_int(0,2); // rand_int(0,5);
+    long lgE = rand_int(0,5);
     long lgD = rand_int(lgE,5);
     long lgSL = rand_int(lgD, min(lgD+3,5L));   // log2(S/L)
     

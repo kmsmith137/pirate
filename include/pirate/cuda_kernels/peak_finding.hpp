@@ -301,7 +301,7 @@ struct pf_core
 	// Call recursively with Emin -> (2 * Emin).
 	
 	if constexpr (E > Emin) {
-	    constexpr int D1 = D0 >> 2;
+	    constexpr int D1 = D0 >> 1;
 	    
 	    T32 xnext[D1+3];
 
