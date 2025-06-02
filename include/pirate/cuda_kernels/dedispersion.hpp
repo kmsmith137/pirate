@@ -1,7 +1,7 @@
 #ifndef _PIRATE_CUDA_KERNELS_DEDISPERSION_HPP
 #define _PIRATE_CUDA_KERNELS_DEDISPERSION_HPP
 
-#include <cuda_fp16.h>
+#include <ksgpu/device_transposes.hpp>   // f16_align(), f16_blend()
 
 using namespace std;
 
@@ -35,55 +35,6 @@ template<> struct _is_float32<__half2> { static constexpr bool value = false; };
 template<typename T> T* _shmem_base();
 template<> __device__ inline float* _shmem_base<float> () { extern __shared__ float shmem_f[]; return shmem_f; }
 template<> __device__ inline __half2* _shmem_base<__half2> () { extern __shared__ __half2 shmem_h2[]; return shmem_h2; }
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// float16 permutations.
-// FIXME move to its own .hpp file to expose for unit testing?
-//
-// Given __half2 variables a = [a0,a1] and b = [b0,b1]:
-//
-//    f16_align() returns [a1,b0]
-//    f16_blend() returns [a0,b1]
-//    __lows2half2() returns [a0,b0]
-//    __highs2half2() returns [a1,b1]
-
-
-__device__ __forceinline__
-__half2 f16_align(__half2 a, __half2 b)
-{
-    __half2 d;
-    
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-prmt
-    // Note: I chose to use prmt.b32.f4e(d,a,b,2) but I think prmt.b32(d,a,b,0x5432) is equivalent.
-    
-    asm("prmt.b32.f4e %0, %1, %2, %3;" :
-	"=r" (*(unsigned int *) &d) :
-	"r" (*(const unsigned int *) &a),
-	"r" (*(const unsigned int *) &b),
-	"n"(2)
-    );
-
-    return d;
-}
-
-
-__device__ __forceinline__
-__half2 f16_blend(__half2 a, __half2 b)
-{
-    __half2 d;
-        
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-prmt
-    asm("prmt.b32 %0, %1, %2, %3;" :
-	"=r" (*(unsigned int *) &d) :
-	"r" (*(const unsigned int *) &a),
-	"r" (*(const unsigned int *) &b),
-	"n"(0x7610)
-    );
-
-    return d;
-}
 
 
 // -------------------------------------------------------------------------------------------------
@@ -271,11 +222,11 @@ __device__ inline __half2 apply_rlag(__half2 x, __half2 &xprev, int rlag)
     __half2 y = (shifted_lane >= 32) ? xprev : x;
 
     if (rlag & 1) {
-	__half2 z = f16_blend(x, xprev);
+	__half2 z = ksgpu::f16_blend(x, xprev);
 	y = (shifted_lane == 31) ? z : y;
 
 	__half2 t = __shfl_sync(0xffffffff, y, threadIdx.x + 31);  // (y[-2], y[-1])
-	y = f16_align(t, y);  // (y[-1], y[0])
+	y = ksgpu::f16_align(t, y);  // (y[-1], y[0])
     }
     
     xprev = x;
@@ -292,7 +243,7 @@ template<int C>
 __device__ __forceinline__ void dd_r1(__half2 &x0, __half2 &x1, __half2 &rs)
 {
     __half2 t = lag_half2<1,C> (x0, rs);  // (x0[-2], x0[-1])
-    __half2 y = f16_align(t, x0);         // (x0[-1], x0[0])
+    __half2 y = ksgpu::f16_align(t, x0);  // (x0[-1], x0[0])
     
     dd_sum(x0, x1, y, x0);
 }
@@ -306,10 +257,10 @@ __device__ __forceinline__ void dd_r1(__half2 &x0, __half2 &x1, __half2 &rs)
 template<int C>
 __device__ inline void dd_r1_s2(__half2 &x00, __half2 &x10, __half2 &x01, __half2 &x11, __half2 &rs)
 {
-    __half2 t = __highs2half2(x00, x01);  // (x00[1], x01[1])
-    __half2 u = lag_half2<1,C> (t,rs);    // (x00[-1], x01[-1]) and maybe cycle rs by 1
-    __half2 y0 = __lows2half2(u, x00);    // (x00[-1], x00[0])
-    __half2 y1 = f16_align(u, x01);       // (x01[-1], x01[0])
+    __half2 t = __highs2half2(x00, x01);     // (x00[1], x01[1])
+    __half2 u = lag_half2<1,C> (t,rs);       // (x00[-1], x01[-1]) and maybe cycle rs by 1
+    __half2 y0 = __lows2half2(u, x00);       // (x00[-1], x00[0])
+    __half2 y1 = ksgpu::f16_align(u, x01);   // (x01[-1], x01[0])
 
     dd_sum(x00, x10, y0, x00);
     dd_sum(x01, x11, y1, x01);
@@ -328,7 +279,7 @@ __device__ inline void dd_r2_top(__half2 &x0, __half2 &x1, __half2 &x2, __half2 
     dd_r1_s2<CycleFwd> (x0, x1, x2, x3, rs);   // cycles rs by 1
 
     __half2 y1 = lag_half2<1,CycleFwd> (x1,rs);  // (x1[-2], x1[-1]) and cycles rs by 1
-    __half2 z1 = f16_align(y1, x1);              // (x1[-1], x1[0])
+    __half2 z1 = ksgpu::f16_align(y1, x1);       // (x1[-1], x1[0])
 
     dd_sum(x1, x3, y1, z1);
 }
@@ -390,13 +341,13 @@ __device__ inline void dd_r3_top(__half2 &x0, __half2 &x1, __half2 &x2, __half2 
     // First two tree iterations (applied independently to x0..x3 and x4..x7)
     dd_r2_s2<CycleFwd> (x0, x1, x2, x3, x4, x5, x6, x7, rs);   // cycles rs by 5
     
-    __half2 t = f16_align(x0, x3);       // (x0[1], x3[0])
-    t = lag_half2<1,CycleFwd> (t, rs);   // (x0[-1], x3[-2]) and cycles rs by 1
+    __half2 t = ksgpu::f16_align(x0, x3);  // (x0[1], x3[0])
+    t = lag_half2<1,CycleFwd> (t, rs);     // (x0[-1], x3[-2]) and cycles rs by 1
 
     __half2 y2 = lag_half2<1,CycleFwd> (x2,rs);   // (x2[-2], x2[-1]) and cycles rs by 1
     __half2 y3 = lag_half2<2,CycleFwd> (x3,rs);   // (x3[-4], x3[-3]) and cycles rs by 2
     __half2 y0 = __lows2half2(t, x0);             // (x0[-1], x0[0])
-    __half2 z2 = f16_align(y2, x2);               // (x2[-1], x2[0])
+    __half2 z2 = ksgpu::f16_align(y2, x2);        // (x2[-1], x2[0])
     __half2 z3 = __highs2half2(y3, t);            // (x3[-3], x3[-2])
 
     dd_sum(x0, x4, y0, x0);
@@ -419,7 +370,7 @@ __device__ inline void dd_r3(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
     
     __half2 t = lag_half2<2,CycleFwd> (x1,rs);     // (x1[-4], x1[-3]) and cycles rs by 2
     __half2 z1 = lag_half2<1,CycleNone> (x1,rs);   // (x1[-2], x1[-1]) and does not cycle rs by 1
-    __half2 y1 = f16_align(t, z1);                 // (x1[-3], x1[-2])
+    __half2 y1 = ksgpu::f16_align(t, z1);          // (x1[-3], x1[-2])
 
     dd_sum(x1, x5, y1, z1);
     
@@ -447,7 +398,7 @@ __device__ inline void dd_r3_s2(__half2 &x00, __half2 &x10, __half2 &x20, __half
     __half2 z10 = lag_half2<1,CycleFwd> (x10,rs);  // (x10[-2], x10[-1]) and cycle rs by 1
     __half2 z11 = lag_half2<1,CycleFwd> (x11,rs);  // (x11[-2], x11[-1]) and cycle rs by 1
     __half2 y10 = __lows2half2(u, z10);            // (x10[-3], x10[-2])
-    __half2 y11 = f16_align(u, z11);               // (x11[-3], x11[-2])
+    __half2 y11 = ksgpu::f16_align(u, z11);        // (x11[-3], x11[-2])
 
     dd_sum(x10, x50, y10, z10);
     dd_sum(x11, x51, y11, z11);
@@ -470,9 +421,9 @@ __device__ inline void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
 	     x8, x9, x10, x11, x12, x13, x14, x15,
 	     rs);  // cycle rs by 22
 
-    __half2 t06 = f16_align(x0, x6);  // (x0[1], x6[0])
-    __half2 t25 = f16_align(x2, x5);  // (x2[1], x5[0])
-    __half2 t17 = f16_align(x1, x7);  // (x1[1], x7[0])
+    __half2 t06 = ksgpu::f16_align(x0, x6);  // (x0[1], x6[0])
+    __half2 t25 = ksgpu::f16_align(x2, x5);  // (x2[1], x5[0])
+    __half2 t17 = ksgpu::f16_align(x1, x7);  // (x1[1], x7[0])
 
     __half2 u06 = lag_half2<1,CycleFwd> (t06,rs);  // (x0[-1], x6[-2]) and cycle rs by 1 (cumulative 23)
     __half2 u25 = lag_half2<2,CycleFwd> (t25,rs);  // (x2[-3], x5[-4]) and cycle rs by 2 (cumulative 25)
@@ -490,9 +441,9 @@ __device__ inline void dd_r4(__half2 &x0, __half2 &x1, __half2 &x2, __half2 &x3,
     __half2 y0 = __lows2half2(u06, x0);
     __half2 y2 = __lows2half2(u25, z2);
     __half2 y1 = __lows2half2(u17, z1);
-    __half2 y3 = f16_align(u3, z3);
+    __half2 y3 = ksgpu::f16_align(u3, z3);
 
-    __half2 z4 = f16_align(y4, x4);
+    __half2 z4 = ksgpu::f16_align(y4, x4);
     __half2 z6 = __highs2half2(y6, u06);
     __half2 z5 = __highs2half2(y5, u25);
     __half2 z7 = __highs2half2(y7, u17);
@@ -1354,8 +1305,8 @@ __device__ inline void align1_s2(__half2 &x, __half2 &y, __half2 &rs)
 {
     __half2 t = __highs2half2(x, y);     // (x[1], y[1])
     __half2 u = lag_half2<1,C> (t, rs);  // (x[-1], y[-1])
-    x = __lows2half2(u, x);  // (x[-1], x[0])
-    y = f16_align(u, y);     // (y[-1], y[0])
+    x = __lows2half2(u, x);      // (x[-1], x[0])
+    y = ksgpu::f16_align(u, y);  // (y[-1], y[0])
 }
 
 // align1_s4()

@@ -4,7 +4,9 @@
 #include "../include/pirate/inlines.hpp"   // pow2(), simd32_type
 
 #include <sstream>
-#include <ksgpu/cuda_utils.hpp>    // CUDA_CALL()
+#include <ksgpu/cuda_utils.hpp>          // CUDA_CALL()
+#include <ksgpu/device_transposes.hpp>   // f16_align()
+
 
 using namespace std;
 using namespace ksgpu;
@@ -129,34 +131,6 @@ namespace pirate {
 //
 // The 'ntime_cumulative' argument is the total number of time samples processed
 // by previous calls. (This is convenient when saving/restoring shmem state.)
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// FIXME should have an .hpp file with float16 cuda helpers.
-// FIXME add "wide" float16 loads/stores (awkward, since nvidia does not define __half4 or __half8)
-
-
-// Given __half2 variables a = [a0,a1] and b = [b0,b1]:
-// f16_align() returns [a1,b0]
-
-__device__ __forceinline__
-__half2 f16_align(__half2 a, __half2 b)
-{
-    __half2 d;
-    
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-prmt
-    // Note: I chose to use prmt.b32.f4e(d,a,b,2) but I think prmt.b32(d,a,b,0x5432) is equivalent.
-    
-    asm("prmt.b32.f4e %0, %1, %2, %3;" :
-	"=r" (*(unsigned int *) &d) :
-	"r" (*(const unsigned int *) &a),
-	"r" (*(const unsigned int *) &b),
-	"n"(2)
-    );
-
-    return d;
-}
 
 
 // -------------------------------------------------------------------------------------------------
@@ -341,8 +315,8 @@ __device__ void ld_lag_pair(__half2 &x, __half2 &y, __half2 &rs)
     __half2 t = __highs2half2(x, y);  // (x[1], y[1])
     t = lag_register(t, rs);          // (x[-1], y[-1])
 
-    x = __lows2half2(t, x);   // (x[-1], x[0])
-    y = f16_align(t, y);      // (y[-1], y[0])
+    x = __lows2half2(t, x);      // (x[-1], x[0])
+    y = ksgpu::f16_align(t, y);  // (y[-1], y[0])
 }
 
 
@@ -352,7 +326,7 @@ __device__ void ld_lag_switch(__half2 &x, __half2 &y, __half2 &rs, bool yflag)
 {
     __half2 t = yflag ? y : x;
     __half2 u = lag_register(t, rs);  // t[-2] t[-1]
-    u = f16_align(u, t);              // t[-1] t[0]
+    u = ksgpu::f16_align(u, t);       // t[-1] t[0]
     x = yflag ? x : u;
     y = yflag ? u : y;
 }

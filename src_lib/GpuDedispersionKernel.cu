@@ -18,7 +18,7 @@ namespace pirate {
 #endif
 
 
-// Defined in dedispersion_kernel_implementation.hpp
+// Defined in include/pirate/cuda_kernels/dedispersion_kernel.hpp
 // Instantiated in src_lib/template_instantiations/*.cu
 template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r1(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);
 template<typename T, class Inbuf, class Outbuf> extern void dedisperse_r2(typename Inbuf::device_args, typename Outbuf::device_args, T *rstate, long ntime, uint *integer_constants, long rb_pos);

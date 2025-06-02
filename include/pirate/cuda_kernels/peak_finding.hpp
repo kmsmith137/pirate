@@ -2,8 +2,9 @@
 #define _PIRATE_CUDA_KERNELS_PEAK_FINDING_HPP
 
 #include <ksgpu/Array.hpp>
-#include <ksgpu/constexpr_functions.hpp>
 #include <ksgpu/device_basics.hpp>
+#include <ksgpu/device_transposes.hpp>
+#include <ksgpu/constexpr_functions.hpp>
 
 #include "../constants.hpp"   // constants::pf_a, constants::pfb
 
@@ -131,13 +132,13 @@ struct pf_ringbuf
 //    coarse-graining is a "thread-local" operation (except for "neighbors",
 //    which are exchanged with __shfl_sync()).
 //
-//  - We almost always use the following register layout (where W is
-//    the "simd_width": 1 for float32, or 2 for float16):
+//  - We almost always use the following register layout
+//    (where L is the number of simd "lanes": 1 for float32, or 2 for float16)
 //
 //      - Dt registers per thread (corresponding to consecutive times)
-//      - ((32*W)/Dt "outer" thread indices) <-> (coarse-grained times)
-//      - ((Dt/W) "inner" thread indices) <-> (spectators)
-//      - (W simd lanes) <-> (spectators)
+//      - ((32*L)/Dt "outer" thread indices) <-> (coarse-grained times)
+//      - ((Dt/L) "inner" thread indices) <-> (spectators)
+//      - (L simd lanes) <-> (spectators)
 //
 //  - Nuisance issue: this doesn't work in the special case (float16, Dt=1).
 //    In this case we use the following register layout:
@@ -163,15 +164,15 @@ struct pf_core
     // Tin = number of input time samples processed by one call to pf_core::advance().
     // Tout = number of output time samples, after dividing by Dt.
     
-    static constexpr int W = ksgpu::dtype_ops<T32>::simd_width;
-    static constexpr int Tin = (Dt > 1) ? (32*W) : 32;   // see above
+    static constexpr int L = ksgpu::dtype_ops<T32>::simd_width;
+    static constexpr int Tin = (Dt > 1) ? (32*L) : 32;   // see above
     static constexpr int Tout = Tin / Dt;
 
     // SS = number of spectator indices assigned to simd lanes, per call to pf_core::advance().
     // ST = number of spectator indices assigned to threads, per call to pf_core::advance().
     // Souter = number of calls to pf_core::advance() needed to process all S spectator indices.
     
-    static constexpr int SS = W;
+    static constexpr int SS = L;
     static constexpr int ST = (32/Tout);
     static constexpr int Souter = S / (SS*ST);
 
@@ -365,62 +366,365 @@ struct pf_core
 //    with the dedispersion kernels.
 
 
-#if 0
-
 template<typename T32, int Dd, int Dt, int E, int M>
 struct pf_tile
 {
-    static_assert((Dd==1) || (Dd==Dt));
+    // For now!
+    static_assert(Dd == 1);
+    static_assert(M >= 2);
 
     using Core = pf_core<T32,Dt,E,M>;
+
+    static constexpr int P = Core::P;
+    static constexpr int L = ksgpu::dtype_ops<T32>::simd_width;
+    static constexpr int pstate_n32_per_warp = Core::pstate_n32_per_warp;
+    static constexpr int weights_n32_per_warp = M * P;
+    
     Core core;
 
+    T32 *out_th;
+    T32 *ssq_th;
+    T32 *weights_th;
 
-    __device__ inline void transpose(T32 x[M])
-    {	
-	// Case 1: float32
-	// Transpose t0 <-> r0, t1 <-> r1, ..., t(L-1) <-> r(L-1), where L = log2(Dt)
-	// Call Core::advance() in contiguous blocks of (M/Dt) registers
+    long out_mcore_stride;   // stride per call to pf_core::advance()
+    long out_pstride;
+    int wt_pstride;
 
-	// Case 2: float16, Dt > 1
-	// Transpose b0 <-> r0, t0 <-> r1, ..., t(L-2) <-> r(L-1)
-	// Call Core::advance() in contiguous blocks of (M/Dt) registers
+    // The 'out' and 'ssq' arrays have shape (P,M/Dd,Tout).
+    // The 'pstate' array is a 1-d array of length (pstate_n32_per_warp), and may be in shared memory.
+    // The 'weights' array has shape (P,M), and should be in shared memory (otherwise kernel will be slow).
+    
+    __device__ inline pf_tile(T32 *out_warp, T32 *ssq_warp, T32 *pstate_warp, T32 *weights_warp, long out_pstride_, long out_mstride_, int wt_pstride_)
+    {
+	constexpr int ST = Core::ST;
 
-	// Case 3: float16, Dt==1 (which implies Dd==1)
-	// Group x's into consecutive pairs (representing consecutive trial DMs).
-	// Do a special-case transpose
-	// Call Core::advance() on even m's, then odd m's.
+	// These per-thread pointer offsets must be kept in sync with _apply_weights_and_advance().
+	int st = threadIdx.x & (ST-1);
+	int mout = (st << 1) + (threadIdx.x & ST);
+	out_th = out_warp + (mout * out_mstride_);
+	ssq_th = ssq_warp + (mout * out_mstride_);
+	weights_th = weights_warp + st;
+	
+	out_mcore_stride = (Core::ST * Core::SS) * out_mstride_;   // stride per call to pf_core::advance().
+	out_pstride = out_pstride_;
+	wt_pstride = wt_pstride_;
+
+	core.load(pstate_warp);
+    }
+    
+    // _do_warp_transposes(): morally equivalent to the following (but written
+    // in a weird way, since "for constexpr" doesn't actually exist):
+    //
+    //   for constexpr (RS = RegisterStride0; RS < RegisterStride1; RS *= 2) {
+    //       ksgpu::multi_warp_transpose<RS> (x, thread_stride0);
+    //       thread_stride0 *= 2;
+    //   }
+
+    template<int RegisterStride0, int RegisterStride1>
+    __device__ inline void _do_warp_transposes(T32 x[M], int thread_stride0)
+    {
+	if constexpr (RegisterStride0 < RegisterStride1) {
+	    ksgpu::multi_warp_transpose<RegisterStride0> (x, thread_stride0);
+	    this->template _do_warp_transposes<2*RegisterStride0, RegisterStride1> (x, 2*thread_stride0);
+	}
     }
 
     
-    template<int J0=0>
+    // _apply_weights_and_write(): called after pf_core::advance().
+    //
+    // Setup: we've processed (Core::ST * Core::SS DMs) x (Core::Tin times)
+    // and have computed:
+    //
+    //   T32 core.pf_out[P];
+    //   T32 core.pf_ssq[P];
+    //
+    // We downsample in DM (if Dd > 1), apply weights, and write to
+    // GPU global memory.
+    
+    __device__ inline void _apply_weights_and_write(int souter)
+    {
+	// For now, assume no downsampling in DM.
+	static_assert(Dd == 1);
+
+	#pragma unroll
+	for (int p = 0; p < P; p++) {
+	    // Reminder: weights array has shape (P,M).
+	    // Note that per-thread pointer offset has already been applied in constructor.
+	    int wix = (souter * Core::ST) + (p * wt_pstride);
+	    T32 w = weights_th[wix];
+
+	    out_pf[p] *= w;
+	    out_ssq[p] *= (w*w);
+	    
+	    // Case 1: float32 (where "T" is a downsampled time)
+	    //   t0 t1 t2 t3 t4 <-> m0 ... m(K-1) T0 ... T(4-K)
+	    //
+	    // Case 2: float16
+	    //    b0 t1 t2 t3 t4 <-> m0 m1 ... m(K) T0 ... T(4-K)
+
+	    if constexpr (L > 1) {  // float16
+		// b0 t0 t1 t2 t3 t4 <-> m0 m1 ... mJ T0 ... TK
+		ksgpu::warp_and_half2_transpose(core.out_pf[p], core.out_ssq[p], Core::ST);
+	    }
+	    
+	    // Partial cache line writes -- slow!
+
+	    long ix = (souter * out_mcore_stride) + (p * out_pstride);
+	    out_th[ix] = out_pf[p];
+	    ssq_th[ix] = out_ssq[p];
+	}
+
+	out_th += Core::Tout;
+	out_ssq += Core::Tout;
+    }
+
+    
+    // _advance(): fully processes (M DMs) x (Core::Tin times), where
+    //
+    //     Core::Tin = (Dt > 1) ? (32*L) : 32
+    //
+    // The register assignment is awkward to write down! We split trial DMs into:
+    //   - (Dt) "inner" DMs, denoted m0 ... m(K-1) where K=log2(Dt)
+    //   - (M/Dt) "outer" DMs, denoted s0 ... 
+    //
+    // Then the register assignment is:
+    //
+    //  - Case 1: float32
+    //      r0 ... r(K-1) t0 ... t4 <-> T0 ... T(K-1) m0 ... m(K-1) T(K) ... T4
+    // 
+    //  - Case 2: float16 and Dt > 1
+    //      r0 ... r(K-1) b0 t0 ... t4 <-> T0 ... T(K-1) m0 m1 ... m(K-1) T(K) ... T5
+    //
+    //  - Case 3: float16 and Dt==1
+    //     r0 b0 t0 t1 t2 t3 t4 <-> UNUSED s0 T0 T1 T2 T3 T4
+    //
+    // where registers not shown map to "outer" spectator indices. 
+    //
+    // The (X0, XStride) template arguments select a subset of the length-M register
+    // array x[X0::XStride]. In cases 1+2, we take X0=0 and XStride=1, i.e. select the
+    // entire array. In case 3, we take XStride=2 and X0 = (either 0 or 1), to select
+    // half the array (corresponding to the UNUSED r0 bit above).
+    //
+    // The (X0, XStride) arguments are also used to implement "for constexpr" logic
+    // which calls pf_core::advance() multiple times (number of calls is Core::Souter).
+    
+    template<int X0, int XStride>
     __device__ inline void _advance(T32 x[M])
     {
-	if constexpr (J0 < Core::Souter) {
-	    T32 x0[Dt];
+	// Consistency check: if we make Core::Souter calls to pf_core::advance(),
+	// and each call advances the register array by (Core::Dt * XStride) indices,
+	// then we should precisely consume M registers.
+	
+	static_assert(Core::Dt * Core::Souter * XStride == M);
+
+	if constexpr (X0 < M) {
+	    static_assert(X0 + (Dt-1)*XStride < M);
+	    
+	    T32 xslice[Dt];
 
 	    #pragma unroll
 	    for (int d = 0; d < Dt; d++)
-		x0[d] = x[J0*Dt + d];
+		xslice[d] = x[d*XStride + X0];
 
-	    core.template advance(x0);
-
-	    xxx;
-	    // Apply weights
-	    // Coarse-grain? Write?
-
-	    this->template _advance<J0+1> (x);
+	    constexpr int souter = X0 / (Dt*XStride);
+	    core.template advance<souter> (xslice);
+	    
+	    this->_apply_weights_and_write(souter);
+	    
+	    this->template _advance<XStride, X0 + Dt*XStride> (x);
 	}
     }
+
+
+    // advance(): fully processes (M trial DMs) x (32L times), in the
+    // "natural" register assignmnent, where registers represent DMs,
+    // and threads/simd-lanes represent times.
     
     __device__ inline void advance(T32 x[M])
     {
-	this->_transpose(x);
+	// When denoting register assignments, we split the trial DMs into:
+	//   - (Dt) "inner" DMs, denoted m0 ... m(K-1) where K=log2(Dt)
+	//   - (M/Dt) "outer" DMs, denoted s0 ... 
+	//
+	// The initial register assignment is (where not all spectators are
+	// shown):
+	//
+	//  - Case 1: float32
+	//      r0 ... r(K-1) t0 ... t4 <-> m0 ... m(K-1) T0 ... T4
+	// 
+	//  - Case 2: float16 and (Dt > 1)
+	//      r0 ... r(K-1) b0 t0 ... t4 <-> m0 ... m(K-1) T0 T1 ... T5
+	//
+	//  - Case 3: float16 and (Dt == 1)	
+	//      r0 b0 t0 ... t4 <-> s0 T0 T1 ... T5
 
-	// Two calls to _advance() in (float16 Dt=1) case.
-	this->template _advance(x);
+	// If float16, exchange r0 and b0.
+	if constexpr (L > 1)
+	    ksgpu::multi_half2_transpose<1> (x);
+
+	// If float32, exchange (t0,...,t(K-1)) with (r0,...,r(K-1)).
+	// If float16, exchange (t0,...,t(K-2)) with (r1,...,r(K-1)).
+	this->_do_warp_transposes<L,Dt> (x, 1);
+       
+	if constexpr (Core::Tin == 32*L) {
+
+	    // Case 1: float32
+	    //    r0 ... r(K-1) t0 ... t4 <-> T0 ... T(K-1) m0 ... m(K-1) T(K) ... T4
+	    // 
+	    // Case 2: float16 and Dt > 1
+	    //    r0 ... r(K-1) b0 t0 ... t4 <-> T0 ... T(K-1) m0 m1 ... m(K-1) T(K) ... T5
+	    //
+	    // We have the correct register assignment for _advance().
+	    
+	    this->template _advance<0,1> (x);
+	}
+	else {
+
+	    // Case 3: float16 and Dt == 1
+	    //   r0 b0 t0 ... t4 <-> T0 s0 T1 ... T5
+	    
+	    static_assert(L == 2);
+	    static_assert(Dt == 1);
+	    static_assert(Core::Tin == 32);
+	    
+	    ksgpu::warp_transpose(x[2*d], x[2*d+1], 16);
+	    
+	    //  r0 b0 t0 t1 t2 t3 t4 <-> T5 s0 T1 T2 T3 T4 T0
+	    
+	    const int src_lane = ((threadIdx.x & 0x1f) >> 1) + (threadIdx.x << 4);
+	    
+	    #pragma unroll
+	    for (int d = 0; d < M; d++)
+		x[d] = __shfl_sync(ksgpu::FULL_MASK, x[d], src_lane);
+	    
+	    // r0 b0 t0 t1 t2 t3 t4 <-> T5 s0 T0 T1 T2 T3 T4
+	    // Now we have the correct register assignment for two calls to _advance().
+	    
+	    this->template _advance<0,2> (x);
+	    this->template _advance<1,2> (x);
+	}	    
+    }
+
+    __device__ inline finalize(T32 *pstate_warp)
+    {
+	static_assert(Dd == 1);
+	core.save(pstate_warp);
     }
 };
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// pf_kernel
+
+#if 0
+
+template<typename T32>
+struct pf_kernel
+{
+    // global_kernel(out_pf, out_ssq, pstate, in, wt)
+    using global_kernel_t = void (*)(T32 *, T32 *, T32 *, const T32 *, const T32 *);
+
+    long num_profiles = 0;
+    long ndm_per_block = 0;
+    long threads_per_block = 0;
+    long shmem_nbytes_per_block = 0;
+    long ntime_per_loop_iteration = 0;
+    
+    global_kernel_t kernel;
+};
+
+
+// Launch with {32*W,1,1} threads.
+template<typename Tile, int W, int B>
+__global__ void __launch_bounds__(32*W, B)
+pf_global_kernel(Tile::T32 *out_pf, Tile::T32 *out_ssq, Tile::T32 *pstate_glo, const Tile::T32 *in, const Tile::T32 *wt_glo, int nseg)
+{
+    constexpr int M = Tile::M;    // input DMs per warp
+    constexpr int P = Tile::P;
+
+    int w = threadIdx.x >> 5;  // warp ID (each warp corresponds to M trial DMs)
+    int mb = blockIdx.x;       // "outer" or block-based DM index (one index corresponds to W*M trial DMs)
+    int MB = gridDim.x;        // number of outer or block-based DM indices
+    int b = blockIdx.y;        // beam index
+    
+    // Apply per-warp offsets to 'out_pf' and 'out_ssq'.
+    // Shapes are (B, P, Mout, Nout) where Mout = (MB*L*M)/Dd, and Nout = (32*nseg)/Dt
+    int out_mstride = nseg * ksgpu::constexpr_idiv(32, Tile::Dt);
+    int out_pstride = out_mstride * MB * ksgpu::constexpr_idiv(W*M, Tile::Dd);
+    int out_woff = out_mstride * (W*mb+w) * ksgpu::constexpr_idiv(M, Tile::Dd);
+    out_pf += out_woff;    // per-warp offset
+    out_ssq += out_woff;   // per-warp offset
+    
+    // Apply per-block offset to 'pstate_glo'
+    // Shape is (B, MB, pstate_n32_per_block)
+    pstate_glo += (b*MB + mb) * Tile::pstate_n32_per_block;
+
+    // Apply per-thread offsets to 'in'.
+    // Shape is (B, Min, Nin) where Min = (MB*W*M) and Nin = (32*nseg)
+    int wglo = (b*MB + mb) * W + w;
+    in += (in_off * M * 32 * nseg) + (threadIdx.x & 0x1f);
+    
+    // Weights are stored in global memory with shape (B, P, MB*W*M).
+    wt_glo += (b*P + mb) * (W*M);    // per-block offset
+    
+    // Copy pstate from global memory to shared memory.
+    for (int i = threadIdx.x; i < pstate_n32_per_block; i += blockDim.x)
+	shmem[i] = pstate_glo[i];
+
+    // Copying weights from global memory to shared is nontrivial.
+    // We want to copy a subarray with shape (P, W*M).
+    // Weights are stored in global memory with shape (B, P, W*M*MB).
+    // The array is discontiguous in global memory, but contiguous in shared memory.
+
+    constexpr int WM = W*M;
+    static_assert(ksgpu::constexpr_is_pow2(WM));
+    static_assert(WM >= 32);
+
+    for (int i = threadIdx.x; i < P*WM; i += blockDim.x) {
+	// Separate i = p*WM + q, where 0 <= p < P, and 0 <= q < W*M
+	int q = i & xx;   // index 0 <= q < W*M
+	int pwm = i - q;  // index 0 <= 
+	wt_sh[p*(W*M) + ] = wt_glo[p * (W*M*MB) + q];
+    }
+
+    // Construct tile (reads pstate from shared memory)
+    T32 *pstate_warp = shmem + (threadIdx.x >> 5) * Tile::pstate_n32_per_warp;
+    Tile tile(out_warp, ssq_warp, pstate_warp, weights_warp, out_pstride, out_mstride, wt_pstride);
+
+    for (int iseg = 0; iseg < nseg; iseg++) {
+	T32 x[M];
+
+	#pragma unroll
+	for (int m = 0; m < M; m++)
+	    x[m] += in[(32*m) * nseg];
+
+	tile.advance(x);
+	in += 32;
+    }
+    
+    // Write pstate to shared memory.
+    tile.finalize();
+
+    __syncthreads();
+
+    // Copy pstate from shared memory to global memory.
+    for (int i = threadIdx.x; i < pstate_n32_per_block; i += blockDim.x)
+	pstate_glo[i] = shmem[i];
+}
+
+
+template<typename T32, int Dd, int Dt, int E, int M>
+pf_kernel get_pf_kernel()
+{
+    using Tile = pf_tile<T32, Dd, Dt, E, M>;
+
+    pf_kernel k;
+    k.num_profiles = xx;
+    k.ndm_per_block = xx;
+    k.shmem_nbytes_per_block = xx;
+    k.kernel = pf_global_kernel<Tile>;
+}
 
 #endif
 
