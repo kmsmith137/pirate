@@ -162,7 +162,7 @@ __device__ inline void pf_core_step(Core &core, const T32 *in_th, T32 *out_th, T
 	#pragma unroll
 	for (int d = 0; d < Dt; d++)
 	    x[d] = in_th[d * Sout*ST];
-
+	
 	core.template advance<J0> (x);
 
 	#pragma unroll
@@ -205,9 +205,9 @@ __global__ void pf_core_kernel(void *in_, void *out_, void *ssq_, void *pstate_,
     
     for (int t = 0; t < nt_out; t += Core::Tout) {
 	pf_core_step(core, in_th, out_th, ssq_th, out_pstride32);
-	in_th += Core::Dt * Souter * ST;
-	out_th += Souter * ST;
-	ssq_th += Souter * ST;
+	in_th += Core::Tin * Souter * ST;
+	out_th += Core::Tout * Souter * ST;
+	ssq_th += Core::Tout * Souter * ST;
     }
 
     core.save_pstate(pstate);
@@ -471,8 +471,8 @@ void test_gpu_pf_core()
 	char *inp = reinterpret_cast<char *> (gx.data) + k * Tk_in * (dtype.nbits / 8);
 	char *outp = reinterpret_cast<char *> (gout.data) + k * Tk_out * (dtype.nbits / 8);
 	char *ssqp = reinterpret_cast<char *> (gssq.data) + k * Tk_out * (dtype.nbits / 8);
-	
-	kernel<<<32,1>>> (inp, outp, ssqp, pstate.data, Tk_out, out_pstride32, pstate_nbytes);
+
+	kernel<<<1,32>>> (inp, outp, ssqp, pstate.data, Tk_out, out_pstride32, pstate_nbytes);
 	CUDA_PEEK("pf_core_test_kernel");
     }
 

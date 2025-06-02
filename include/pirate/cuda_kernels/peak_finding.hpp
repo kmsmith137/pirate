@@ -453,8 +453,8 @@ struct pf_tile
 	    int wix = (souter * Core::ST) + (p * wt_pstride);
 	    T32 w = weights_th[wix];
 
-	    out_pf[p] *= w;
-	    out_ssq[p] *= (w*w);
+	    core.out_pf[p] *= w;
+	    core.out_ssq[p] *= (w*w);
 	    
 	    // Case 1: float32 (where "T" is a downsampled time)
 	    //   t0 t1 t2 t3 t4 <-> m0 ... m(K-1) T0 ... T(4-K)
@@ -470,12 +470,12 @@ struct pf_tile
 	    // Partial cache line writes -- slow!
 
 	    long ix = (souter * out_mcore_stride) + (p * out_pstride);
-	    out_th[ix] = out_pf[p];
-	    ssq_th[ix] = out_ssq[p];
+	    out_th[ix] = core.out_pf[p];
+	    ssq_th[ix] = core.out_ssq[p];
 	}
 
 	out_th += Core::Tout;
-	out_ssq += Core::Tout;
+	ssq_th += Core::Tout;
     }
 
     
@@ -586,8 +586,10 @@ struct pf_tile
 	    static_assert(L == 2);
 	    static_assert(Dt == 1);
 	    static_assert(Core::Tin == 32);
-	    
-	    ksgpu::warp_transpose(x[2*d], x[2*d+1], 16);
+
+	    #pragma unroll
+	    for (int d = 0; d < M; d += 2)
+		ksgpu::warp_transpose(x[2*d], x[2*d+1], 16);
 	    
 	    //  r0 b0 t0 t1 t2 t3 t4 <-> T5 s0 T1 T2 T3 T4 T0
 	    
@@ -605,7 +607,7 @@ struct pf_tile
 	}	    
     }
 
-    __device__ inline finalize(T32 *pstate_warp)
+    __device__ inline void finalize(T32 *pstate_warp)
     {
 	static_assert(Dd == 1);
 	core.save(pstate_warp);
