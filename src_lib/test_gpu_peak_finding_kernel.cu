@@ -2,6 +2,7 @@
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
 
+#include <cassert>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
@@ -250,11 +251,12 @@ static pf_core_kernel_t get_pf_core_kernel2(int E, int S)
 {
     if (E == 1)
 	return get_pf_core_kernel3<T32,Dt,1> (S);
-#if 0
+
     if constexpr (Dt >= 2)
 	if (E == 2)
 	  return get_pf_core_kernel3<T32,Dt,2> (S);
-
+    
+#if 0
     if constexpr (Dt >= 4)
 	if (E == 4)
 	    return get_pf_core_kernel3<T32,Dt,4> (S);
@@ -334,7 +336,7 @@ static void _reference_pf_core(Array<float> &x, Array<float> &out, Array<float> 
 
     // prepad by (Dt+1).
     Array<float> xpad({Tin+Dt+1,S}, af_zero | af_rhost);
-    xpad.slice(0,Dt+1,Dt+1+S).fill(x);
+    xpad.slice(0,Dt+1,Tin+Dt+1).fill(x);
 
     for (long tout = 0; tout < Tout; tout++) {
 	// xp = array of shape (Dt+3,S).
@@ -433,7 +435,7 @@ void test_gpu_pf_core()
     Dtype dtype = Dtype::native<float>();  // FIXME generalize
     long L = 32 / dtype.nbits;             // simd lanes
     
-    long lgE = 0; // rand_int(0,5);
+    long lgE = rand_int(0,2); // rand_int(0,5);
     long lgD = rand_int(lgE,5);
     long lgSL = rand_int(lgD, min(lgD+3,5L));   // log2(S/L)
     

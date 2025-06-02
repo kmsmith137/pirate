@@ -251,7 +251,7 @@ struct pf_core
     // Helper for advance().
     // Fills pf_out[0] and pf_ssq[0] (single sample).
     
-    __device__ inline void _eval_all_kernels(T32 x[Dt], ksgpu::RegisterArray<T32,NL> &yl, ksgpu::RegisterArray<T32,NR> &yr)
+    __device__ inline void _eval_all_kernels(T32 x[Dt], ksgpu::device_array<T32,NL> &yl, ksgpu::device_array<T32,NR> &yr)
     {
 	#pragma unroll
 	for (int d = 0; d < Dt; d++)
@@ -277,7 +277,7 @@ struct pf_core
     // The template parameter Emin means "process all peak-finders >= Emin".
     
     template<int Emin, int D>
-    __device__ inline void _eval_kernels_Emin(T32 x[D], ksgpu::RegisterArray<T32,NL> &yl, ksgpu::RegisterArray<T32,NR> &yr)
+    __device__ inline void _eval_kernels_Emin(T32 x[D], ksgpu::device_array<T32,NL> &yl, ksgpu::device_array<T32,NR> &yr)
     {
 	static_assert(Emin >= 2);
 	static_assert(E >= Emin);
@@ -290,7 +290,7 @@ struct pf_core
 	#pragma unroll
 	for (int d = 0; d < D0; d++) {
 	    T32 b2 = (x[d+1] + x[d+2]);
-	    T32 g3 = (x[d+1]) + a * (x[d] + x[d+1]);
+	    T32 g3 = (x[d+1]) + a * (x[d] + x[d+2]);
 	    T32 g4 = (x[d+1] + x[d+2]) + b * (x[d] + x[d+3]);
 
 	    _update_pf(b2, d, pf_out[3*I-2], pf_ssq[3*I-2]);
@@ -323,7 +323,7 @@ struct pf_core
     __device__ inline void advance(T32 x[Dt])
     {
 	// Compute right neighbors, before applying lag.
-	ksgpu::RegisterArray<T32,NR> yr;
+	ksgpu::device_array<T32,NR> yr;
 	if constexpr (NR > 0)
 	    this->template _compute_neighbors<NR,false> (x, yr.data);   // reverse=false
 
@@ -332,12 +332,12 @@ struct pf_core
 
 	// Compute left neighbors, after applying lag.
 	// Note call to Ringbuf::multi_advance() here.
-	ksgpu::RegisterArray<T32,NL> yl;
+	ksgpu::device_array<T32,NL> yl;
 	if constexpr (NL > 0) {
 	    this->template _compute_neighbors<NL,true> (x, yl.data);   // reverse=true
 	    ringbuf.template multi_advance<J*(Dt+NL) + Dt, NL> (yl.data);
 	}
-
+	
 	this->_eval_all_kernels(x, yl, yr);
     }
 };
