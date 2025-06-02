@@ -164,7 +164,7 @@ struct pf_core
     // Tin = number of input time samples processed by one call to pf_core::advance().
     // Tout = number of output time samples, after dividing by Dt.
     
-    static constexpr int L = ksgpu::dtype_ops<T32>::simd_width;
+    static constexpr int L = ksgpu::dtype_ops<T32>::simd_lanes;
     static constexpr int Tin = (Dt > 1) ? (32*L) : 32;   // see above
     static constexpr int Tout = Tin / Dt;
 
@@ -376,7 +376,7 @@ struct pf_tile
     using Core = pf_core<T32,Dt,E,M>;
 
     static constexpr int P = Core::P;
-    static constexpr int L = ksgpu::dtype_ops<T32>::simd_width;
+    static constexpr int L = ksgpu::dtype_ops<T32>::simd_lanes;
     static constexpr int pstate_n32_per_warp = Core::pstate_n32_per_warp;
     static constexpr int weights_n32_per_warp = M * P;
     

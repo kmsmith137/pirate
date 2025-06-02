@@ -198,10 +198,13 @@ __global__ void pf_core_kernel(void *in_, void *out_, void *ssq_, void *pstate_,
     assert(pstate_nbytes >= Core::pstate_nbytes_per_warp);
     core.load_pstate(pstate);
 
-    int sth = (threadIdx.x / ST) * (Souter * ST) + (threadIdx.x % ST);
-    T32 *in_th = in + sth;
-    T32 *out_th = out + sth;
-    T32 *ssq_th = ssq + sth;
+    // Apply per-thread offsets to 'in', 'out', 'ssq'.
+    // Write laneId = t*ST + s, where 0 <= t < (32/ST) and 0 <= s < ST.
+    int s = (threadIdx.x & (ST-1));
+    int tST = (threadIdx.x - s);   // (t * ST)
+    T32 *in_th = in + (Dt * Souter * tST) + s;
+    T32 *out_th = out + (Souter * tST) + s;
+    T32 *ssq_th = ssq + (Souter * tST) + s;
     
     for (int t = 0; t < nt_out; t += Core::Tout) {
 	pf_core_step(core, in_th, out_th, ssq_th, out_pstride32);
@@ -221,24 +224,24 @@ using pf_core_kernel_t = void (*)(void *, void *, void *, void *, int, int, int)
 //
 // which supports values of (Dt,E,S) satisfiying the following constraints:
 //   1 <= E <= Dt <= 16
-//   Dt*W <= S <= min(4*Dt,16) * W
+//   Dt*L <= S <= min(4*Dt,16) * L
 
 template<typename T32, int Dt, int E>
 static pf_core_kernel_t get_pf_core_kernel3(int S)
 {
-    constexpr int W = ksgpu::dtype_ops<T32>::simd_width;
+    constexpr int L = ksgpu::dtype_ops<T32>::simd_lanes;
     
-    if (S == Dt*W)
-	return pf_core_kernel<T32, Dt, E, Dt*W>;
-#if 0
+    if (S == Dt*L)
+	return pf_core_kernel<T32, Dt, E, Dt*L>;
+    
     if constexpr (Dt <= 8)
-	if (S == 2*Dt*W)
-	    return pf_core_kernel<T32, Dt, E, 2*Dt*W>;
+	if (S == 2*Dt*L)
+	    return pf_core_kernel<T32, Dt, E, 2*Dt*L>;
 
     if constexpr (Dt <= 4)
-	if (S == 4*Dt*W)
-	    return pf_core_kernel<T32, Dt, E, 4*Dt*W>;
-#endif
+	if (S == 4*Dt*L)
+	    return pf_core_kernel<T32, Dt, E, 4*Dt*L>;
+
     throw runtime_error("get_pf_core_kernel(): invalid (Dt,S)");
 }
 
@@ -274,7 +277,6 @@ static pf_core_kernel_t get_pf_core_kernel1(int Dt, int E, int S)
 
     if (Dt == 1)
 	return get_pf_core_kernel2<T32,1> (E,S);
-#if 0
     if (Dt == 2)
 	return get_pf_core_kernel2<T32,2> (E,S);
     if (Dt == 4)
@@ -283,7 +285,6 @@ static pf_core_kernel_t get_pf_core_kernel1(int Dt, int E, int S)
 	return get_pf_core_kernel2<T32,8> (E,S);
     if (Dt == 16)
 	return get_pf_core_kernel2<T32,16> (E,S);
-#endif
     throw runtime_error("get_pf_core_kernel(): invalid Dt");
 }
 				  
@@ -374,9 +375,9 @@ static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &
     xassert(Dt >= E);
     xassert(is_power_of_two(E));
     xassert(is_power_of_two(Dt));
-
+    
     long Tin = Tout * Dt;
-    long P = 3*integer_log2(Dt) + 1;
+    long P = 3*integer_log2(E) + 1;
     
     xassert_shape_eq(x, ({Tin,S}));
     xassert_shape_eq(out, ({P,Tout,S}));
@@ -395,7 +396,7 @@ static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &
 	float *xp = x.data + (tout-1)*Dt*S;
 	float *outp = out.data + tout*S;
 	float *ssqp = ssq.data + tout*S;
-	
+	    
 	for (long d = 0; d < Dt; d++)
 	    for (long s = 0; s < S; s++)
 		_update_pf(xp[d*S+s], d, outp[s], ssqp[s]);
@@ -430,23 +431,23 @@ static void reference_pf_core(Array<float> &x, Array<float> &out, Array<float> &
 void test_gpu_pf_core()
 {
     Dtype dtype = Dtype::native<float>();  // FIXME generalize
-    long W = 32 / dtype.nbits;             // simd width
+    long L = 32 / dtype.nbits;             // simd lanes
     
     long lgE = 0; // rand_int(0,5);
-    long lgD = 0; // rand_int(lgE,5);
-    long lgSW = 0; // rand_int(lgD, min(lgD+3,5L));   // log2(S/W)
+    long lgD = rand_int(lgE,5);
+    long lgSL = rand_int(lgD, min(lgD+3,5L));   // log2(S/L)
     
     long Dt = 1 << lgD;
     long E = 1 << lgE;
-    long S = W << lgSW;
+    long S = L << lgSL;
     long P = 3*lgE + 1;
     
-    long Tk_in = 32*W * rand_int(1,10);  // input time samples per kernel
+    long Tk_in = 32*L * rand_int(1,10);  // input time samples per kernel
     long Tk_out = Tk_in / Dt;            // output time samples per kernel
     
     long Nk = rand_int(1,10);   // number of kernels    
     long Tin = Tk_in * Nk;      // total input time samples
-    long Tout = Tk_out * Nk;    // total input time samples
+    long Tout = Tk_out * Nk;    // total output time samples
 
     cout << "test_gpu_pf_core: dtype=" << dtype << ", Dt=" << Dt << ", E=" << E
 	 << ", S=" << S << ", Tk_in=" << Tk_in << ", Nk=" << Nk << endl;
@@ -468,9 +469,9 @@ void test_gpu_pf_core()
     
     for (long k = 0; k < Nk; k++) {
 	long out_pstride32 = (Tout * S * dtype.nbits) / 32;
-	char *inp = reinterpret_cast<char *> (gx.data) + k * Tk_in * (dtype.nbits / 8);
-	char *outp = reinterpret_cast<char *> (gout.data) + k * Tk_out * (dtype.nbits / 8);
-	char *ssqp = reinterpret_cast<char *> (gssq.data) + k * Tk_out * (dtype.nbits / 8);
+	char *inp = reinterpret_cast<char *> (gx.data) + k * Tk_in * S * (dtype.nbits / 8);
+	char *outp = reinterpret_cast<char *> (gout.data) + k * Tk_out * S * (dtype.nbits / 8);
+	char *ssqp = reinterpret_cast<char *> (gssq.data) + k * Tk_out * S * (dtype.nbits / 8);
 
 	kernel<<<1,32>>> (inp, outp, ssqp, pstate.data, Tk_out, out_pstride32, pstate_nbytes);
 	CUDA_PEEK("pf_core_test_kernel");
