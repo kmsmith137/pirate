@@ -63,6 +63,12 @@ inline long xmod(long m, long n)
     return m % n;
 }
 
+template<typename T>
+inline T square(T x)
+{
+    return x*x;
+}
+
 inline bool is_empty_string(const std::string &s)
 {
     return s.size() == 0;

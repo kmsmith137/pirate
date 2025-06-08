@@ -77,6 +77,7 @@ struct pf_kernel {
     
     cuda_kernel_t reduce_only_kernel = nullptr;
     pf_kernel *next = nullptr;   // used internally
+    bool debug = false;          // a "debug" kernel takes precedence over non-debug
     
     void register_kernel();
 

@@ -487,18 +487,85 @@ void test_gpu_pf_core()
 // -------------------------------------------------------------------------------------------------
 
 
+static void test_reduce_only_kernel(const pf_kernel &k, int B, int Mout, int Tout)
+{
+    int M = k.M;
+    int E = k.E;
+    int P = k.P;
+    int W = k.W;
+    int Dout = k.Dout;
+    int Dcore = k.Dcore;
+    int Dt = xdiv(Dout, Dcore);
+
+    cout << "test_reduce_only_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
+	 << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B << ", Mout=" << Mout
+	 << ", Tout=" << Tout << endl;
+    
+    xassert_divisible(32, Dcore);
+    xassert_divisible(Tout, 32/Dcore);
+
+    Array<float> out_max({B,P,Mout,Tout}, af_rhost | af_zero);
+    Array<float> out_ssq({B,P,Mout,Tout}, af_rhost | af_zero);
+    Array<float> in_max({B,P,Mout*M,Tout*Dt}, af_rhost | af_random);
+    Array<float> in_ssq({B,P,Mout*M,Tout*Dt}, af_rhost | af_random);
+    Array<float> wt({B,P,Mout*M}, af_rhost | af_random);
+
+    for (int b = 0; b < B; b++) {
+	for (int p = 0; p < P; p++) {
+	    for (int mout = 0; mout < Mout; mout++) {
+		for (int tout = 0; tout < Tout; tout++) {
+		    float rmax = -1.0e20;
+		    float rssq = 0.0;
+
+		    for (int m = mout*M; m < (mout+1)*M; m++) {
+			float w = wt.at({b,p,m});
+			for (int t = tout*Dt; t < (tout+1)*Dt; t++) {
+			    rmax = max(rmax, w * in_max.at({b,p,m,t}));
+			    rssq += w * w * in_ssq.at({b,p,m,t});
+			}
+		    }
+
+		    out_max.at({b,p,mout,tout}) = rmax;
+		    out_ssq.at({b,p,mout,tout}) = rssq;
+		}
+	    }
+	}
+    }
+
+    Array<float> gpu_out_max({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<float> gpu_out_ssq({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<float> gpu_in_max = in_max.to_gpu();
+    Array<float> gpu_in_ssq = in_ssq.to_gpu();
+    Array<float> gpu_wt = wt.to_gpu();
+
+    uint Bx = (Mout+W-1) / W;
+    dim3 nblocks = {Bx, uint(B), 1};
+    
+    k.reduce_only_kernel <<< nblocks, 32*W >>>
+	(gpu_out_max.data, gpu_out_ssq.data,
+	 gpu_in_max.data, gpu_in_ssq.data,
+	 gpu_wt.data, Mout, Tout);
+
+    CUDA_PEEK("pf reduce-only kernel launch");
+
+    assert_arrays_equal(out_max, gpu_out_max, "host_max", "gpu_max", {"b","p","mout","tout"});
+    assert_arrays_equal(out_ssq, gpu_out_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"});
+}
+
+
+
 void test_gpu_peak_finding_kernel()
 {
     vector<pf_kernel> all_kernels = pf_kernel::enumerate();
 
     for (const pf_kernel &k: all_kernels) {
-	cout << "pf_kernel: M=" << k.M
-	     << ", E=" << k.E
-	     << ", Dout=" << k.Dout
-	     << ", Dcore=" << k.Dcore
-	     << ", W=" << k.W
-	     << ", P=" << k.P
-	     << endl;
+	int B = rand_int(1,10);
+	int Tout = (32/k.Dcore) * rand_int(1,20);
+	int Mout = rand_int(1,40);
+	// int B = 1;
+	// int Mout = 5;
+	// int Tout = 64;
+	test_reduce_only_kernel(k, B, Mout, Tout);
     }
 }
 

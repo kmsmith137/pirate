@@ -109,6 +109,7 @@ class PeakFinder:
         if not self.reduce_only:
             k.emit(f'constexpr int {E = };      // max kernel width')
 
+        k.emit()
         k.emit("int b = blockIdx.y;  // beam index")
         k.emit("int mblock = blockIdx.x * W;              // base m-index of block")
         k.emit("int mout = mblock + (threadIdx.x >> 5);   // output m-index of warp")
@@ -143,7 +144,7 @@ class PeakFinder:
         k.emit('__syncthreads();')
         k.emit()
         k.emit('// Per-warp weights array in shared memory, with shape (P,M) and stride (W*M).')
-        k.emit('float *wt_sh = shmem + mout * M;')
+        k.emit('float *wt_sh = shmem + (mout - mblock) * M;')
         k.emit()
         
         k.emit("// Apply per-thread offset, to 'out_max' and 'out_ssq'.")

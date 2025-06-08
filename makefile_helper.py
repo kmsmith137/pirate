@@ -45,6 +45,7 @@ def generate_peak_finding_kernels():
 
     # Placeholder
     yield (1, 1, 1, 1, 4, 4)
+    yield (2, 1, 1, 1, 4, 4)
     return
     
     # Generate some kernels with M==Dout

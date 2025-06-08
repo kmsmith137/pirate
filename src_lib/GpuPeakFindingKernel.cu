@@ -34,22 +34,34 @@ void pf_kernel::register_kernel()
     // xassert((E == 0) || (RW > 0));
     xassert(reduce_only_kernel != nullptr);
     xassert(next == nullptr);
-
-    // Memory leak is okay for registry.
-    pf_kernel *pf_copy = new pf_kernel(*this);
     
     unique_lock<mutex> lk(pf_kernel_lock);
 
-    // Check that the same kernel is never registered twice.
+    // Check whether this (M,E,Dout) triple has been registered before.
     for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next) {
-	if ((k->M == M) && (k->E == E) && (k->Dout == Dout)) {
-	    stringstream ss;
-	    ss << "pf_kernel::register() called twice with (M,E,Dout)="
-	       << "(" << M << "," << E << "," << Dout << ")";
-	    throw runtime_error(ss.str());
+	if ((k->M != M) || (k->E != E) || (k->Dout != Dout))
+	    continue;
+
+	if (k->debug && !this->debug) {
+	    cout << "Note: debug and non-debug pf kernels were registered; debug kernel takes priority" << endl;
+	    return;
 	}
+
+	if (!k->debug && this->debug) {
+	    cout << "Note: debug and non-debug pf kernels were registered; debug kernel takes priority" << endl;
+	    pf_kernel *save = k->next;
+	    *k = *this;
+	    k->next = save;
+	    return;
+	}
+
+	stringstream ss;
+	ss << "pf_kernel::register() called twice with (M,E,Dout)=" << "(" << M << "," << E << "," << Dout << ")";
+	throw runtime_error(ss.str());
     }
     
+    // Memory leak is okay for registry.
+    pf_kernel *pf_copy = new pf_kernel(*this);
     pf_copy->next = pf_kernel_registry;  // assign with lock held
     pf_kernel_registry = pf_copy;
 }
