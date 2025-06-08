@@ -36,7 +36,7 @@ def test(args):
     ksgpu.set_cuda_device(args.gpu)
 
     for i in range(args.niter):
-        print(f'Iteration {i+1}/{args.niter}\n')
+        print(f'\nIteration {i+1}/{args.niter}\n')
         
         if run_all_tests or args.nid:
             pirate_pybind11.test_non_incremental_dedispersion()

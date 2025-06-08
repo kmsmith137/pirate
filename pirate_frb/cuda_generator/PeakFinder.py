@@ -136,7 +136,7 @@ class PeakFinder:
         k.emit()
         k.emit("for (int i = threadIdx.x; i < P*W*M; i += 32*W) {")
         k.emit("    int p = i / (W*M);")
-        k.emit("    int m = i - (W*M)*p + mblock;")
+        k.emit("    int m = i - (W*M)*p + (mblock*M);")
         k.emit("    m = min(m, Mout*M-1);")
         k.emit("    shmem[i] = wt[p*Mout*M + m];")
         k.emit("}")
@@ -580,8 +580,8 @@ class PfReducer:
         k.emit()
 
         for p in range(P):
-            k.emit(f'{self.omax_rnames[p]} = {btmp_rname} ? {self.omax_rnames[p]} : {self.imax_rnames[p]};')
-            k.emit(f'{self.ossq_rnames[p]} = {btmp_rname} ? {self.ossq_rnames[p]} : {self.issq_rnames[p]};')
+            k.emit(f'{self.omax_rnames[p]} = {btmp_rname} ? {self.imax_rnames[p]} : {self.omax_rnames[p]};')
+            k.emit(f'{self.ossq_rnames[p]} = {btmp_rname} ? {self.issq_rnames[p]} : {self.ossq_rnames[p]};')
         
         k.emit()
 

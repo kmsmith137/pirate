@@ -558,13 +558,16 @@ void test_gpu_peak_finding_kernel()
 {
     vector<pf_kernel> all_kernels = pf_kernel::enumerate();
 
-    for (const pf_kernel &k: all_kernels) {
-	int B = rand_int(1,10);
-	int Tout = (32/k.Dcore) * rand_int(1,20);
-	int Mout = rand_int(1,40);
-	// int B = 1;
-	// int Mout = 5;
-	// int Tout = 64;
+    for (int i = 0; i < 5; i++) {
+	pf_kernel k = ksgpu::rand_element(all_kernels);
+
+	long T = 32 / k.Dcore;
+	auto v = ksgpu::random_integers_with_bounded_product(5, 10000 / (k.M * T));
+	
+	int B = v[0];
+	int Tout = v[1] * v[2] * T;
+        int Mout = v[3] * v[4];
+	
 	test_reduce_only_kernel(k, B, Mout, Tout);
     }
 }
