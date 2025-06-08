@@ -1,40 +1,96 @@
-#include <ksgpu/constexpr_functions.hpp>
-#include <ksgpu/device_transposes.hpp>   // warp_transpose(), FULL_MASK
+#include "../include/pirate/PeakFindingKernel.hpp"
 
+#include <mutex>
+#include <ksgpu/Array.hpp>
 
-// Defined in include/pirate/cuda_kernels/peak_finding.hpp
-// Instantiated in src_lib/template_instantiations/*.cu
+using namespace std;
 
-template<typename T, int Dd, int Dt, >
-    
-// Defined in peak_finding_kernel.hpp
-template<typename T>
-extern 
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// Kernel registry
 
 
-template<typename T32, int D, int E, int M>
-__global__ void pf_kernel(...)
+static mutex pf_kernel_lock;
+pf_kernel *pf_kernel_registry = nullptr;
+
+
+void pf_kernel::register_kernel()
 {
-    using Tile = pf_tile<T32, D, E, M>;
-    Tile tile(...);
-
-    // Load shmem
-    // Hmm should we transpose the weights array?
+    // Just check that all members have been initialized.
+    // (In the future, I may add more argument checking here.)
     
-    for (...) {
-	T32 x[M] = load...;
-	
-	if constexpr (...) {
-	    tile.advance();
+    xassert(M > 0);
+    xassert(E > 0);
+    xassert(Dout > 0);
+    xassert(Dcore > 0);
+    xassert(W > 0);
+    xassert(P > 0);
+    // xassert((E == 0) || (RW > 0));
+    xassert(reduce_only_kernel != nullptr);
+    xassert(next == nullptr);
+
+    // Memory leak is okay for registry.
+    pf_kernel *pf_copy = new pf_kernel(*this);
+    
+    unique_lock<mutex> lk(pf_kernel_lock);
+
+    // Check that the same kernel is never registered twice.
+    for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next) {
+	if ((k->M == M) && (k->E == E) && (k->Dout == Dout)) {
+	    stringstream ss;
+	    ss << "pf_kernel::register() called twice with (M,E,Dout)="
+	       << "(" << M << "," << E << "," << Dout << ")";
+	    throw runtime_error(ss.str());
 	}
-	else {
-	    tile.advance();
-	    tile.advance();
+    }
+    
+    pf_copy->next = pf_kernel_registry;  // assign with lock held
+    pf_kernel_registry = pf_copy;
+}
+
+
+// Static member function
+pf_kernel pf_kernel::get(int M, int E, int Dout)
+{
+    unique_lock<mutex> lk(pf_kernel_lock);
+    
+    for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next) {
+	if ((k->M == M) && (k->E == E) && (k->Dout == Dout)) {
+	    pf_kernel ret = *k;
+	    ret.next = nullptr;
+	    return ret;
 	}
     }
 
-    // Save shmem
-};
+    stringstream ss;
+    ss << "pf_kernel::get(): no kernel found for (M,E,Dout)="
+       << "(" << M << "," << E << "," << Dout << ")";
+    throw runtime_error(ss.str());
+}
+
+
+// Static member function
+vector<pf_kernel> pf_kernel::enumerate()
+{
+    vector<pf_kernel> ret;
+    unique_lock<mutex> lk(pf_kernel_lock);
+
+    for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next)
+	ret.push_back(*k);
+
+    lk.unlock();
+
+    for (pf_kernel &k: ret)
+	k.next = nullptr;
+
+    return ret;
+}
+
+
+}  // namespace pirate

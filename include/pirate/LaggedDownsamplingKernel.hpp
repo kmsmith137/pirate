@@ -124,4 +124,4 @@ protected:
 
 }  // namespace pirate
 
-#endif // _PIRATE_AGGED_DOWNSAMPLING_KERNEL_HPP
+#endif // _PIRATE_LAGGED_DOWNSAMPLING_KERNEL_HPP

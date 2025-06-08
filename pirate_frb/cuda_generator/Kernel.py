@@ -1,6 +1,5 @@
 import io
 import sys
-import subprocess
 
 
 class Kernel:
@@ -25,19 +24,9 @@ class Kernel:
         return k
 
     
-    def write(self, f=sys.stdout, clang_format=False):
-        if clang_format:
-            cmd = ['clang-format', '-style={ColumnLimit: 0, IndentWidth: 4}']
-            proc = subprocess.Popen(cmd, stdin = subprocess.PIPE, stdout = f)
-            ff = io.TextIOWrapper(proc.stdin, encoding="utf-8", line_buffering=True)
-            
-            self.write(ff)
-            ff.flush()
-            ff.close()
-            proc.wait()
-            return
-            
-            
+    def write(self, f):
+        """Suggest taking 'f' to be the return value from utils.clang_formatter()."""
+        
         for s,k in self.splices:
             print(s.getvalue(), file=f)
             k.write(f)

@@ -4,6 +4,7 @@
 import ksgpu
 
 from . import pirate_pybind11
+from . import cuda_generator
 
 from .FakeCorrelator import FakeCorrelator
 from .FakeServer import FakeServer

@@ -1,3 +1,4 @@
+#include "../include/pirate/PeakFindingKernel.hpp"
 #include "../include/pirate/cuda_kernels/peak_finding.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
@@ -480,6 +481,25 @@ void test_gpu_pf_core()
 
     assert_arrays_equal(out, gout, "hout", "gout", {"p","t","s"});
     assert_arrays_equal(ssq, gssq, "hssq", "gssq", {"p","t","s"});
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+void test_gpu_peak_finding_kernel()
+{
+    vector<pf_kernel> all_kernels = pf_kernel::enumerate();
+
+    for (const pf_kernel &k: all_kernels) {
+	cout << "pf_kernel: M=" << k.M
+	     << ", E=" << k.E
+	     << ", Dout=" << k.Dout
+	     << ", Dcore=" << k.Dcore
+	     << ", W=" << k.W
+	     << ", P=" << k.P
+	     << endl;
+    }
 }
 
 

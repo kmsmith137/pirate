@@ -637,11 +637,27 @@ struct pf_kernel
 };
 
 
+// Each warp processes M DMs.
 // Launch with {32*W,1,1} threads.
-template<typename Tile, int W, int B>
-__global__ void __launch_bounds__(32*W, B)
+// Launch with {MB,B,1} blocks, where MB = (Total number of trial DMs) / (W*M).
+//
+// The 'out_pf' and 'out_ssq' args have shape (B, P, Mout, Nout),
+//   where Mout = (MB*W*M)/Dd, and Nout = (32*nseg)/Dt.
+//
+// The 'pstate_glo' arg has shape (B, MB, pstate_n32_per_block).
+//
+// The 'in' arg has shape (B, Min, Nin) where Min = (MB*W*M) and Nin = (32*nseg)
+
+
+template<typename Tile, int W, int BlocksPerSM>
+__global__ void __launch_bounds__(32*W, BlocksPerSM)
 pf_global_kernel(Tile::T32 *out_pf, Tile::T32 *out_ssq, Tile::T32 *pstate_glo, const Tile::T32 *in, const Tile::T32 *wt_glo, int nseg)
 {
+    // Must be kept in sync with 'struct pf_kernel' below.
+    constexpr int pstate_n32_per_block = ksgpu::constexpr_align(W * Tile::pstate_n32_per_warp, 32);
+    
+    constexpr int Dd = Tile::Dd;
+    constexpr int Dt = Tile::Dt;
     constexpr int M = Tile::M;    // input DMs per warp
     constexpr int P = Tile::P;
 
@@ -651,23 +667,33 @@ pf_global_kernel(Tile::T32 *out_pf, Tile::T32 *out_ssq, Tile::T32 *pstate_glo, c
     int b = blockIdx.y;        // beam index
     
     // Apply per-warp offsets to 'out_pf' and 'out_ssq'.
-    // Shapes are (B, P, Mout, Nout) where Mout = (MB*L*M)/Dd, and Nout = (32*nseg)/Dt
-    int out_mstride = nseg * ksgpu::constexpr_idiv(32, Tile::Dt);
-    int out_pstride = out_mstride * MB * ksgpu::constexpr_idiv(W*M, Tile::Dd);
-    int out_woff = out_mstride * (W*mb+w) * ksgpu::constexpr_idiv(M, Tile::Dd);
+    // Shapes are (B, P, Mout, Nout) where Mout = (MB*W*M)/Dd, and Nout = (32*nseg)/Dt
+
+    static_assert(constexpr_is_divisible(32,Dt));
+    static_assert(constexpr_is_divisible(M,Dd));
+    
+    int out_mstride = nseg * ksgpu::constexpr_idiv<32,Dt>::value;
+    int out_wstride = out_mstride * ksgpu::constexpr_idiv<M,Dd>::value;
+    int out_mbstride = out_wstride * W;
+    int out_bstride = out_mbstride * MB;
+    int out_woff = (b * out_bstride) + (mb * out_mbstride) + (w * out_wstride);
+    
     out_pf += out_woff;    // per-warp offset
     out_ssq += out_woff;   // per-warp offset
     
     // Apply per-block offset to 'pstate_glo'
     // Shape is (B, MB, pstate_n32_per_block)
-    pstate_glo += (b*MB + mb) * Tile::pstate_n32_per_block;
+    
+    pstate_glo += (b*MB + mb) * pstate_n32_per_block;
 
-    // Apply per-thread offsets to 'in'.
+    // Apply per-thread (not per-warp!) offsets to 'in'.
     // Shape is (B, Min, Nin) where Min = (MB*W*M) and Nin = (32*nseg)
+    
     int wglo = (b*MB + mb) * W + w;
     in += (in_off * M * 32 * nseg) + (threadIdx.x & 0x1f);
     
     // Weights are stored in global memory with shape (B, P, MB*W*M).
+    
     wt_glo += (b*P + mb) * (W*M);    // per-block offset
     
     // Copy pstate from global memory to shared memory.
