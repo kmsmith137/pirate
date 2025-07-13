@@ -19,6 +19,7 @@ class Ringbuf:
         irb = self._get_irb(nelts)
         rb_rname = self.rb_rnames[irb]
 
+        k.emit(f'// Ringbuf.advance(): {rname}, {nelts=}, {dst=}')
         self._cycle_register(k, rb_rname, self.rb_nelts[irb] - self.rb_pos[irb])
         self.rb_pos[irb] = self.rb_nelts[irb]
         self.rb_nelts[irb] += nelts
@@ -84,7 +85,7 @@ class Ringbuf:
             s = f'{pwarp_rname}[{laneId}{s}]'
 
             if lane0 != 0:
-                k.emit(f'if ({laneId} >= ({lane0})')
+                k.emit(f'if ({laneId} >= {lane0})')
 
             k.emit(f'{s} = {self.rb_rnames[i]};')
             pos0 += self.rb_nelts[i]

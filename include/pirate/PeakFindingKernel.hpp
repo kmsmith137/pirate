@@ -69,13 +69,15 @@ struct pf_kernel {
     int Dcore = 0;   // internal downsampling factor
     int W = 0;       // warps per threadblock
     int P = 0;       // number of peak-finding kernels (= 3*log2(E) + 1)
-    // int RW = 0;      // ring buffer elements per output (beam, mout)
+    int RW = 0;      // ring buffer elements per output (beam, mout)
 
     // The "full peak-finding" and "reduce-only" kernels have the same call signatures
     // (five pointers and two ints), but the meaning of the args is different, see above.
     using cuda_kernel_t = void (*) (float *, float *, float *, float *, float *, int, int);
     
+    cuda_kernel_t full_kernel = nullptr;
     cuda_kernel_t reduce_only_kernel = nullptr;
+    
     pf_kernel *next = nullptr;   // used internally
     bool debug = false;          // a "debug" kernel takes precedence over non-debug
     

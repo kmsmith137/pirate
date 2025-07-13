@@ -45,6 +45,10 @@ class Kernel:
             self.tmp_rnames[dtype] = d[dtype]
             
         return self.tmp_rnames[dtype]
+
+
+    def reset_tmp_vars(self):
+        self.tmp_rnames = dict()
         
 
     def warp_transpose(self, rname1, rname2, thread_stride, dtype):
@@ -53,7 +57,8 @@ class Kernel:
 
         tmp = self.get_tmp_rname(dtype)
         btmp = self.get_tmp_rname('bool')
-        
+
+        self.emit(f'// warp_transpose({rname1}, {rname2}, {thread_stride=})')
         self.emit(f'{btmp} = (threadIdx.x & {thread_stride});')
         self.emit(f'{tmp} = {btmp} ? {rname1} : {rname2};')
         self.emit(f'{tmp} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x ^ {thread_stride});')

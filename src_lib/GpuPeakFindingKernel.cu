@@ -31,7 +31,8 @@ void pf_kernel::register_kernel()
     xassert(Dcore > 0);
     xassert(W > 0);
     xassert(P > 0);
-    // xassert((E == 0) || (RW > 0));
+    xassert((E == 0) || (RW > 0));
+    xassert(full_kernel != nullptr);
     xassert(reduce_only_kernel != nullptr);
     xassert(next == nullptr);
     

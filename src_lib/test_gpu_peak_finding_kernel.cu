@@ -487,6 +487,98 @@ void test_gpu_pf_core()
 // -------------------------------------------------------------------------------------------------
 
 
+
+static void test_full_kernel(const pf_kernel &k, int B, int Mout, int Tk_out, int Nk)
+{
+    int M = k.M;
+    int E = k.E;
+    int P = k.P;
+    int W = k.W;
+    int RW = k.RW;
+    int Dout = k.Dout;
+    int Dcore = k.Dcore;
+    int Tout = Tk_out * Nk;
+    int Min = Mout * M;
+    int Tin = Tout * Dout;
+
+    cout << "test_reduce_only_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
+	 << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B << ", Mout=" << Mout
+	 << ", Tk_out=" << Tk_out << ", Nk=" << Nk << endl;
+    
+    xassert_divisible(32, Dcore);
+    xassert_divisible(Tout, 32/Dcore);
+
+    Array<float> out_max({B,P,Mout,Tout}, af_rhost | af_zero);
+    Array<float> out_ssq({B,P,Mout,Tout}, af_rhost | af_zero);
+    Array<float> in({B,Min,Tin}, af_rhost | af_random);
+    Array<float> wt({B,P,Min}, af_rhost | af_random);
+
+    // This loop just does p=0.
+    for (int b = 0; b < B; b++) {
+	for (int mout = 0; mout < Mout; mout++) {
+	    for (int tout = 0; tout < Tout; tout++) {
+		float rmax = -1.0e20;
+		float rssq = 0.0;
+
+		for (int m = mout*M; m < (mout+1)*M; m++) {
+		    float w = wt.at({b,p,m});
+		    for (int t = tout*Dt; t < (tout+1)*Dt; t++) {
+			float x = in.at({b,m,t});
+			rmax = max(rmax, w*x);
+			rssq += square(w*x);
+		    }
+
+		    out_max.at({b,0,mout,tout}) = rmax;
+		    out_ssq.at({b,0,mout,tout}) = rssq;
+		}
+	    }
+	}
+    }
+
+    int isamp = 0;
+    Array<float> in_ds = in;
+
+    for (int ids = 0; ids < integer_log2(E); ids++) {
+
+	// At top of loop, 'in_ds' is a downsampled version of 'in'.
+	// The downsampling level is 2**ids, and the sampling rate is 2**(isamp).
+	//
+	// To write this out precisely, 'in_ds' has shape (B, Min, Tin/2**isamp).
+	// Elements at time 0 <= tds < (Tin/2**isamp) are obtained by summing 'in' over
+	//   ((tds+1) * 2**isamp) - 2**ids <= t < (tds+1) * 2**isamp
+	//
+	// The value of 'ids' increases by 1 in every iteration of the loop,
+	// but the value of isamp "saturates" at log2(Dcore).
+	//
+	// The output arrays have been filled for 0 <= p < (3*ids+1).
+	// In this iteration of the loop, we'll fill (3*ids+1) <= p < (3*ids+4).
+
+	int Tds = xdiv(Tin, pow2(isamp));
+	xassert_shape_eq(in_ds, ({B,Min,Tds}));
+	xassert_eq(isamp, min(ids, integer_log2(Dcore)));
+
+	// Zero-pad by 3 samples.
+	Array<float> tmp({B,Min,Tds+3}, af_uhost | af_zero);
+	Array<float> tmp_slice = in2.slice(2, 3, Tds+3);
+	tmp_slice.fill(in_ds);
+
+	// Compute 3 profiles.
+	for (int b = 0; b < B; b++) {
+	    for (int mout = 0; mout < Mout; mout++) {
+		for (int tout = 0; tout < Tout; tout++) {
+		    xx;
+		}
+	    }
+	}
+
+	// Downsample, to go to next iteration of loop.
+	if (xx) {
+	}
+    }
+}
+
+
+
 static void test_reduce_only_kernel(const pf_kernel &k, int B, int Mout, int Tout)
 {
     int M = k.M;

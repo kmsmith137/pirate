@@ -83,6 +83,8 @@ class PeakFinder:
             in_args = ('in_max', 'in_ssq')
             in_line1 = "'in_max' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
             in_line2 = "'in_ssq' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
+
+        k.reset_tmp_vars()
         
         k.emit(f'// Kernel args are (out_max, out_ssq, {in_args[0]}, {in_args[1]}, wt, Mout, Tout).')
         k.emit(f'//')
@@ -99,15 +101,14 @@ class PeakFinder:
         k.emit(f'__global__ void __launch_bounds__({32*W}, {pars.BlocksPerSM})')
         k.emit(f'{self.kernel_name}(float *out_max, float *out_ssq, float *{in_args[0]}, float *{in_args[1]}, float *wt, int Mout, int Tout)')
         k.emit('{')
-        
+
+        s = '' if self.reduce_only else '// '
         k.emit(f'constexpr int {M = };      // number of "rows" (e.g. trial DMs) per warp')
-        k.emit(f'constexpr int {Dout = };   // output time downsampling factor')
-        k.emit(f'constexpr int {Dcore = };  // internal resolution parameter')
         k.emit(f'constexpr int {W = };      // warps per threadblock')
         k.emit(f'constexpr int {P = };      // number of peak-finding kernels')
-        
-        if not self.reduce_only:
-            k.emit(f'constexpr int {E = };      // max kernel width')
+        k.emit(f'constexpr int {Dout = };   // output time downsampling factor')
+        k.emit(f'{s}constexpr int {Dcore = };  // internal resolution parameter')
+        k.emit(f'// constexpr int {E = };      // max kernel width')
 
         k.emit()
         k.emit("int b = blockIdx.y;  // beam index")
@@ -164,6 +165,10 @@ class PeakFinder:
             k.emit("int in_mstride = Tout * Dout;")
             k.emit(f"in += (b*Mout + mout) * M * in_mstride + (threadIdx.x & 0x1f);")
             k.emit()
+
+            # Declares a variable needed for the ring-buffer loading code.
+            # (FIXME this is an artificial consequence of my stupid tmp variable initialization.)
+            k.get_tmp_rname('int')
 
             # Save splice, for code to load the ring buffer.
             # (This code must be emitted after the main lloop.)
@@ -228,6 +233,7 @@ class PeakFinder:
         if not self.reduce_only:
             k.emit()
             self.ringbuf.advance_outer(k)
+            self.RW = self.ringbuf.get_nelts_per_warp()
         
         k.emit("}  // end of t-loop")
         k.emit()
@@ -246,7 +252,7 @@ class PeakFinder:
         k.emit("// Shape is (B, Mout, RW).")
         k.emit()
         k.emit(f'constexpr int {RW = };    // ring buffer elements per warp')
-        k.emit("pstate += (b*Mout + mglo) * RW;")
+        k.emit("pstate += (b*Mout + mout) * RW;")
         k.emit()
 
         k.emit('// Read ring buffer directly from global memory.')
@@ -313,6 +319,7 @@ class PfTransposeLayer:
             znames = [ f'pf_mpad_{Din}_{i}' for i in range(Din) ]
 
             for r,zr in zip(rnames, znames):
+                k.emit(f'float {zr} = 0.0f;')
                 k.warp_transpose(r, zr, Din, 'float')
 
             self.next_layer.advance(k, rnames + znames, m)
@@ -340,6 +347,7 @@ class PfCore:
         assert 0 <= m < M
 
         tmp_rname = k.get_tmp_rname('float')
+        k.emit('// PfCore: p=0 starts here')
         
         for t in range(Din):
             self._update(k, rnames[t], m, 0, t, Din)
@@ -350,23 +358,28 @@ class PfCore:
         # Note: prepadding logic isn't perfectly optimized, but it's very
         # convenient, and I doubt it's a bottleneck.
 
+        k.emit('// PfCore: prepadding by 3, in prep for p=1,2,3')
         self._prepad(k, rnames, m, 1, 'pf_prepad_0')
         self._prepad(k, rnames, m, 1, 'pf_prepad_1')
         self._prepad(k, rnames, m, 1, 'pf_prepad_2')
+        k.emit()
 
         for ids in itertools.count(0):
             # Downsampling level 2**ids
             T = max(Din//2**ids, 1)
             assert len(rnames) == T+3
 
+            k.emit(f'// PfCore: p={3*ids+1} starts here')
             for t in range(T):
                 k.emit(f'{tmp_rname} = {rnames[t+1]} + {rnames[t+2]};')
                 self._update(k, tmp_rname, m, 3*ids+1, t, T)
 
+            k.emit(f'// PfCore: p={3*ids+2} starts here')
             for t in range(T):
                 k.emit(f'{tmp_rname} = {rnames[t+1]} + 0.5f * ({rnames[t]} + {rnames[t+2]});')
                 self._update(k, tmp_rname, m, 3*ids+2, t, T)
 
+            k.emit(f'// PfCore: p={3*ids+3} starts here')
             for t in range(T):
                 k.emit(f'{tmp_rname} = {rnames[t+1]} + {rnames[t+2]} + 0.5f * ({rnames[t]} + {rnames[t+3]});')
                 self._update(k, tmp_rname, m, 3*ids+3, t, T)
@@ -374,8 +387,10 @@ class PfCore:
             if 2**(ids+1) == E:
                 return
 
+            k.emit(f'// PfCore: downsampling {2**ids} -> {2**(ids+1)} and prepadding, in prep for p={3*ids+4},{3*ids+5},{3*ids+6}')
+            
             if T > 1:
-                self._prepad(k, rnames, m, 2**ids, f'pf_prepad_{2*ids+1}')   # (T+3) -> (T+4)
+                self._prepad(k, rnames, m, 2**ids, f'pf_prepad_{2*ids+3}')   # (T+3) -> (T+4)
                 
             # Downsample in pairs
             for j in range(len(rnames)//2):
@@ -383,11 +398,12 @@ class PfCore:
             rnames = rnames[::2]
             
             if T > 1:
-                self._prepad(k, rnames, m, 2**(ids+1), f'pf_prepad_{2*ids+2}')
+                self._prepad(k, rnames, m, 2**(ids+1), f'pf_prepad_{2*ids+4}')
             else:
-                self._prepad(k, rnames, m, 2**(ids+1), f'pf_prepad_{2*ids+1}')
-                self._prepad(k, rnames, m, 2**(ids+1), f'pf_prepad_{2*ids+2}')
-            
+                self._prepad(k, rnames, m, 2**(ids+1), f'pf_prepad_{2*ids+3}')
+                self._prepad(k, rnames, m, 2**(ids+1), f'pf_prepad_{2*ids+4}')
+
+            k.emit()
 
     def _update(self, k, rname, m, p, t, T):
         max_rname = f'pf_max_p{p}'
@@ -467,7 +483,7 @@ class PfReducer:
         pars = self.params
         M, P, W, Dout, wt_sh = pars.M, pars.P, pars.W, pars.Dout, pars.wt_sh_rname
 
-        k.emit(f"// PfReducer: load weights at {(p,m)=}")
+        k.emit(f"// PfReducer: processing {(m,p)=}")
         k.emit(f"// PfReducer: recall that '{wt_sh}' is a per-warp shared memory array with shape {(P,M)=} and stride {(W*M)=}")
         woff = p*W*M + m
         s = f'threadIdx.x & {(Din-1)}'
