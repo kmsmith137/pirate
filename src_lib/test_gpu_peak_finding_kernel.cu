@@ -487,8 +487,23 @@ void test_gpu_pf_core()
 // -------------------------------------------------------------------------------------------------
 
 
+// Tiny helper for test_full_pf_kernel()
+struct pf_accumulator
+{
+    float rmax = -1.0e20;
+    float rssq = 0.0;
 
-static void test_full_kernel(const pf_kernel &k, int B, int Mout, int Tk_out, int Nk)
+    inline void update(float w, float x)
+    {
+	rmax = max(rmax, w*x);
+	rssq += square(w*x);
+    }
+};
+
+
+// Nk = number of kernel launches
+// Tk_out = number of output times per kernel launch
+static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out, int Nk)
 {
     int M = k.M;
     int E = k.E;
@@ -501,7 +516,7 @@ static void test_full_kernel(const pf_kernel &k, int B, int Mout, int Tk_out, in
     int Min = Mout * M;
     int Tin = Tout * Dout;
 
-    cout << "test_reduce_only_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
+    cout << "test_full_pf_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
 	 << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B << ", Mout=" << Mout
 	 << ", Tk_out=" << Tk_out << ", Nk=" << Nk << endl;
     
@@ -517,26 +532,25 @@ static void test_full_kernel(const pf_kernel &k, int B, int Mout, int Tk_out, in
     for (int b = 0; b < B; b++) {
 	for (int mout = 0; mout < Mout; mout++) {
 	    for (int tout = 0; tout < Tout; tout++) {
-		float rmax = -1.0e20;
-		float rssq = 0.0;
+		pf_accumulator acc0;
 
 		for (int m = mout*M; m < (mout+1)*M; m++) {
-		    float w = wt.at({b,p,m});
+		    float w = wt.at({b,0,m});   // p=0
+		    
 		    for (int t = tout*Dt; t < (tout+1)*Dt; t++) {
 			float x = in.at({b,m,t});
-			rmax = max(rmax, w*x);
-			rssq += square(w*x);
+			acc0.update(w, x);
 		    }
 
-		    out_max.at({b,0,mout,tout}) = rmax;
-		    out_ssq.at({b,0,mout,tout}) = rssq;
+		    out_max.at({b,0,mout,tout}) = acc0.rmax;  // p=0
+		    out_ssq.at({b,0,mout,tout}) = acc0.rssq;  // p=0
 		}
 	    }
 	}
     }
 
     int isamp = 0;
-    Array<float> in_ds = in;
+    Array<float> in_ds = in.clone();
 
     for (int ids = 0; ids < integer_log2(E); ids++) {
 
@@ -553,30 +567,98 @@ static void test_full_kernel(const pf_kernel &k, int B, int Mout, int Tk_out, in
 	// The output arrays have been filled for 0 <= p < (3*ids+1).
 	// In this iteration of the loop, we'll fill (3*ids+1) <= p < (3*ids+4).
 
-	int Tds = xdiv(Tin, pow2(isamp));
+	long Tds = xdiv(Tin, pow2(isamp));
 	xassert_shape_eq(in_ds, ({B,Min,Tds}));
 	xassert_eq(isamp, min(ids, integer_log2(Dcore)));
+	xassert(in_ds.is_fully_contiguous());  // assumed in downsampling logic
 
-	// Zero-pad by 3 samples.
-	Array<float> tmp({B,Min,Tds+3}, af_uhost | af_zero);
-	Array<float> tmp_slice = in2.slice(2, 3, Tds+3);
-	tmp_slice.fill(in_ds);
-
+	// For computing profiles
+	long DD = xdiv(Tds, Tout);  // Downsampling factor between 'in_ds' and 'out_{max,ssq}' arrays.
+	int p0 = 3*ids+1;           // Base profile index
+	
 	// Compute 3 profiles.
 	for (int b = 0; b < B; b++) {
 	    for (int mout = 0; mout < Mout; mout++) {
 		for (int tout = 0; tout < Tout; tout++) {
-		    xx;
+		    pf_accumulator acc0;
+		    pf_accumulator acc1;
+		    pf_accumulator acc2;
+		    
+		    for (int m = mout*M; m < (mout+1)*M; m++) {
+			float w0 = wt.at({b,p0,m});
+			float w1 = wt.at({b,p0+1,m});
+			float w2 = wt.at({b,p0+2,m});
+			float *p = &in_ds.at({b,m,0});
+			
+			for (int t = tout*DD; t < (tout+1)*DD; t++) {
+			    float x0 = (t >= 3) ? p[t-3] : 0.0f;
+			    float x1 = (t >= 2) ? p[t-2] : 0.0f;
+			    float x2 = (t >= 1) ? p[t-1] : 0.0f;
+			    float x3 = p[t];
+
+			    acc0.update(w0, x2 + x3);
+			    acc1.update(w1, x1 + 0.5f*x2 + x3);
+			    acc2.update(w1, x0 + 0.5f*x1 + 0.5f*x2 + x3);
+			}
+		    }
+
+		    out_max.at({b,p0,mout,tout}) = acc0.rmax;
+		    out_max.at({b,p0+1,mout,tout}) = acc1.rmax;
+		    out_max.at({b,p0+2,mout,tout}) = acc2.rmax;
+		    
+		    out_ssq.at({b,p0,mout,tout}) = acc0.rssq;
+		    out_ssq.at({b,p0+1,mout,tout}) = acc1.rssq;
+		    out_ssq.at({b,p0+2,mout,tout}) = acc2.rssq;
 		}
 	    }
 	}
 
 	// Downsample, to go to next iteration of loop.
-	if (xx) {
+	
+	if (isamp < integer_log2(Dcore)) {
+	    // Case 1: straightforward downsampling (ids, isamp both increase by 1)
+	    long Tds2 = xdiv(Tds,2);
+	    
+	    Array<float> in_ds2({B,Min,Tds2});
+	    float *dst = in_ds2.data;	    
+	    float *src = in_ds.data;
+	    
+	    for (long i = 0; i < B*Min*Tds2; i++)
+		dst[i] = src[2*i] + src[2*i+1];
+	    
+	    in_ds = in_ds2;
+	    isamp++;
+	}
+	else {
+	    // Case 2: downsampling without decreasing array size
+	    long dt = pow2(ids-isamp);
+	    
+	    Array<float> in_ds2({B,Min,Tds});
+	    float *dst = in_ds2.data;
+	    float *src = in_ds.data;
+
+	    for (long i = 0; i < B*Min; i++) {
+		for (long t = 0; t < Tds; t++) {
+		    float x = (t >= dt) ? src[i*Tds+(t-dt)] : 0.0f;
+		    dst[i*Tds+t] = src[i*Tds+t] + x;
+		}
+	    }
+
+	    in_ds = in_ds2;	    
+	    // note that 'isamp' is not incremented here
 	}
     }
-}
 
+    // At this point in test_full_pf_kernl(), we have computed the host arrays out_{max,ssq}.
+    // Now let's work on the GPU arrays gout_{max,ssq}.
+
+    Array<float> gpu_out_max({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<float> gpu_out_ssq({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<float> gpu_in = in.to_gpu();
+    Array<float> gpu_wt = wt.to_gpu();
+
+    for (long 
+}
 
 
 static void test_reduce_only_kernel(const pf_kernel &k, int B, int Mout, int Tout)
