@@ -515,6 +515,7 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
     int Tout = Tk_out * Nk;
     int Min = Mout * M;
     int Tin = Tout * Dout;
+    int Tk_in = Tk_out * Dout;
 
     cout << "test_full_pf_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
 	 << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B << ", Mout=" << Mout
@@ -537,7 +538,7 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 		for (int m = mout*M; m < (mout+1)*M; m++) {
 		    float w = wt.at({b,0,m});   // p=0
 		    
-		    for (int t = tout*Dt; t < (tout+1)*Dt; t++) {
+		    for (int t = tout*Dout; t < (tout+1)*Dout; t++) {
 			float x = in.at({b,m,t});
 			acc0.update(w, x);
 		    }
@@ -553,7 +554,7 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
     Array<float> in_ds = in.clone();
 
     for (int ids = 0; ids < integer_log2(E); ids++) {
-
+	
 	// At top of loop, 'in_ds' is a downsampled version of 'in'.
 	// The downsampling level is 2**ids, and the sampling rate is 2**(isamp).
 	//
@@ -612,14 +613,14 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 		}
 	    }
 	}
-
+    
 	// Downsample, to go to next iteration of loop.
 	
 	if (isamp < integer_log2(Dcore)) {
 	    // Case 1: straightforward downsampling (ids, isamp both increase by 1)
 	    long Tds2 = xdiv(Tds,2);
 	    
-	    Array<float> in_ds2({B,Min,Tds2});
+	    Array<float> in_ds2({B,Min,Tds2}, af_uhost);
 	    float *dst = in_ds2.data;	    
 	    float *src = in_ds.data;
 	    
@@ -633,7 +634,7 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 	    // Case 2: downsampling without decreasing array size
 	    long dt = pow2(ids-isamp);
 	    
-	    Array<float> in_ds2({B,Min,Tds});
+	    Array<float> in_ds2({B,Min,Tds}, af_uhost);
 	    float *dst = in_ds2.data;
 	    float *src = in_ds.data;
 
@@ -648,16 +649,40 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 	    // note that 'isamp' is not incremented here
 	}
     }
+    
 
-    // At this point in test_full_pf_kernl(), we have computed the host arrays out_{max,ssq}.
+    // At this point, we have computed the host arrays out_{max,ssq}.
     // Now let's work on the GPU arrays gout_{max,ssq}.
 
-    Array<float> gpu_out_max({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
-    Array<float> gpu_out_ssq({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
-    Array<float> gpu_in = in.to_gpu();
-    Array<float> gpu_wt = wt.to_gpu();
+    Array<float> gpu_out_max({B,P,Mout,Tk_out}, af_gpu | af_zero | af_guard);
+    Array<float> gpu_out_ssq({B,P,Mout,Tk_out}, af_gpu | af_zero | af_guard);
+    Array<float> gpu_pstate({B,Mout,RW}, af_gpu | af_zero | af_guard);
+    Array<float> gpu_wt = wt.to_gpu();   // shape (B,P,Min)
+			    
+    for (int ik = 0; ik < Nk; ik++) {
+	cout << "    kernel " << ik << "/" << Nk << endl;
+	
+	// Slice (B,Min,Tin) -> (B,Min,Tk_in)
+	Array<float> gpu_in = in.slice(2, ik * Tk_in, (ik+1) * Tk_in);
+	gpu_in = gpu_in.to_gpu();
 
-    for (long 
+	uint Bx = (Mout+W-1) / W;
+	dim3 nblocks = {Bx, uint(B), 1};
+	
+	k.full_kernel <<< nblocks, 32*W >>>
+	    (gpu_out_max.data, gpu_out_ssq.data,
+	     gpu_pstate.data, gpu_in.data,
+	     gpu_wt.data, Mout, Tout);
+
+	CUDA_PEEK("pf kernel launch");
+
+	// Slice (B,P,Mout,Tout) -> (B,P,Mout,Tk_out)
+	Array<float> host_out_max = out_max.slice(3, ik * Tk_out, (ik+1) * Tk_out);
+	Array<float> host_out_ssq = out_ssq.slice(3, ik * Tk_out, (ik+1) * Tk_out);
+	
+	assert_arrays_equal(host_out_max, gpu_out_max, "host_max", "gpu_max", {"b","p","mout","tout"});
+	assert_arrays_equal(host_out_ssq, gpu_out_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"});
+    }
 }
 
 
@@ -714,7 +739,7 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Mout, int Tou
 
     uint Bx = (Mout+W-1) / W;
     dim3 nblocks = {Bx, uint(B), 1};
-    
+   
     k.reduce_only_kernel <<< nblocks, 32*W >>>
 	(gpu_out_max.data, gpu_out_ssq.data,
 	 gpu_in_max.data, gpu_in_ssq.data,
@@ -741,8 +766,10 @@ void test_gpu_peak_finding_kernel()
 	int B = v[0];
 	int Tout = v[1] * v[2] * T;
         int Mout = v[3] * v[4];
+	int Nk = 5;
 	
 	test_reduce_only_kernel(k, B, Mout, Tout);
+	test_full_pf_kernel(k, B, Mout, Tout, Nk);
     }
 }
 

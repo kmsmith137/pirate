@@ -24,6 +24,10 @@ void pf_kernel::register_kernel()
 {
     // Just check that all members have been initialized.
     // (In the future, I may add more argument checking here.)
+#if 0
+    cout << "register_pf_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
+	 << ", Dcore=" << Dcore << ", W=" << W << ", P=" << P << ", RW=" << RW << endl;
+#endif
     
     xassert(M > 0);
     xassert(E > 0);
@@ -31,7 +35,7 @@ void pf_kernel::register_kernel()
     xassert(Dcore > 0);
     xassert(W > 0);
     xassert(P > 0);
-    xassert((E == 0) || (RW > 0));
+    xassert((E == 1) || (RW > 0));
     xassert(full_kernel != nullptr);
     xassert(reduce_only_kernel != nullptr);
     xassert(next == nullptr);
