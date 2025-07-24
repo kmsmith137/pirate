@@ -116,7 +116,7 @@ class PeakFinder:
         k.emit("int mout = mblock + (threadIdx.x >> 5);   // output m-index of warp")
         k.emit()
         k.emit("bool warp_active = (mout < Mout);")
-        k.emit("mout = warp_active ? mout : (M-1);")
+        k.emit("mout = warp_active ? mout : (Mout-1);")
         k.emit()
         
         k.emit('// Shared memory layout: wt[P][W][M]')
@@ -208,6 +208,9 @@ class PeakFinder:
                 self.pf.advance(k, [rname], m)
                 k.emit()
 
+            k.emit("// Advance 'in' by 32 time samples")
+            k.emit("in += 32;")
+
         else:
             # Debug case: reduce-only kernel (with different kernel args).
             for m0 in range(0,M,Dcore):
@@ -247,6 +250,11 @@ class PeakFinder:
 
     def _load_ringbuf(self, k):
         RW = self.ringbuf.get_nelts_per_warp()
+
+        if RW == 0:
+            k.emit("// Note: 'pstate' is not needed in this kernel")
+            k.emit()
+            return
         
         k.emit("// Apply per-warp offset to pstate, in preparation for loading")
         k.emit("// Shape is (B, Mout, RW).")
@@ -263,6 +271,12 @@ class PeakFinder:
 
         
     def _save_ringbuf(self, k):
+        RW = self.ringbuf.get_nelts_per_warp()
+        
+        if RW == 0:
+            k.emit("// Reminder: 'pstate' is not needed in this kernel")
+            return
+        
         k.emit('// Write ring buffer to global memory.')
         k.emit('// FIXME: would it be better to go through shared memory?')
         k.emit()

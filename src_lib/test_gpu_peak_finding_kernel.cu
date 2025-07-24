@@ -599,7 +599,7 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 
 			    acc0.update(w0, x2 + x3);
 			    acc1.update(w1, x1 + 0.5f*x2 + x3);
-			    acc2.update(w1, x0 + 0.5f*x1 + 0.5f*x2 + x3);
+			    acc2.update(w2, x0 + 0.5f*x1 + 0.5f*x2 + x3);
 			}
 		    }
 
@@ -672,7 +672,7 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 	k.full_kernel <<< nblocks, 32*W >>>
 	    (gpu_out_max.data, gpu_out_ssq.data,
 	     gpu_pstate.data, gpu_in.data,
-	     gpu_wt.data, Mout, Tout);
+	     gpu_wt.data, Mout, Tk_out);
 
 	CUDA_PEEK("pf kernel launch");
 
