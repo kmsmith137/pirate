@@ -20,7 +20,7 @@ class Ringbuf:
         rb_rname = self.rb_rnames[irb]
 
         k.emit(f'// Ringbuf.advance(): {rname}, {nelts=}, {dst=}')
-        self._cycle_register(k, rb_rname, self.rb_nelts[irb] - self.rb_pos[irb])
+        self._cycle_register(k, rb_rname, 32 - self.rb_nelts[irb] + self.rb_pos[irb])
         self.rb_pos[irb] = self.rb_nelts[irb]
         self.rb_nelts[irb] += nelts
 
@@ -39,7 +39,7 @@ class Ringbuf:
         
         k.emit("// Ringbuf.advance_outer()")        
         for i in range(self.nreg):
-            self._cycle_register(k, self.rb_rnames[i], 32 - self.rb_pos[i])
+            self._cycle_register(k, self.rb_rnames[i], self.rb_pos[i])
 
         k.emit()
 

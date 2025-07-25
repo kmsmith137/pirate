@@ -374,9 +374,9 @@ class PfCore:
         # convenient, and I doubt it's a bottleneck.
 
         k.emit('// PfCore: prepadding by 3, in prep for p=1,2,3')
-        self._prepad(k, rnames, m, 1, 'pf_prepad_0')
-        self._prepad(k, rnames, m, 1, 'pf_prepad_1')
-        self._prepad(k, rnames, m, 1, 'pf_prepad_2')
+        self._prepad(k, rnames, m, 1, 'pf_prepad_0')   # prepends new register name to 'rnames'
+        self._prepad(k, rnames, m, 1, 'pf_prepad_1')   # prepends new register name to 'rnames'
+        self._prepad(k, rnames, m, 1, 'pf_prepad_2')   # prepends new register name to 'rnames'
         k.emit()
 
         for ids in itertools.count(0):
@@ -386,12 +386,12 @@ class PfCore:
 
             k.emit(f'// PfCore: p={3*ids+1} starts here')
             for t in range(T):
-                k.emit(f'{tmp_rname} = {rnames[t+1]} + {rnames[t+2]};')
+                k.emit(f'{tmp_rname} = {rnames[t+2]} + {rnames[t+3]};')
                 self._update(k, tmp_rname, m, 3*ids+1, t, T)
 
             k.emit(f'// PfCore: p={3*ids+2} starts here')
             for t in range(T):
-                k.emit(f'{tmp_rname} = {rnames[t+1]} + 0.5f * ({rnames[t]} + {rnames[t+2]});')
+                k.emit(f'{tmp_rname} = {rnames[t+2]} + 0.5f * ({rnames[t+1]} + {rnames[t+3]});')
                 self._update(k, tmp_rname, m, 3*ids+2, t, T)
 
             k.emit(f'// PfCore: p={3*ids+3} starts here')

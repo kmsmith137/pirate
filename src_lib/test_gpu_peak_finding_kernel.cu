@@ -602,8 +602,8 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 			    float x3 = p[t];
 
 			    acc0.update(w0, x2 + x3);
-			    acc1.update(w1, x1 + 0.5f*x2 + x3);
-			    acc2.update(w2, x0 + 0.5f*x1 + 0.5f*x2 + x3);
+			    acc1.update(w1, 0.5f*x1 + x2 + 0.5f*x3);
+			    acc2.update(w2, 0.5f*x0 + x1 + x2 + 0.5f*x3);
 			}
 		    }
 
