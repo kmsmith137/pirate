@@ -527,8 +527,12 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
     Array<float> out_max({B,P,Mout,Tout}, af_rhost | af_zero);
     Array<float> out_ssq({B,P,Mout,Tout}, af_rhost | af_zero);
     Array<float> in({B,Min,Tin}, af_rhost | af_random);
-    Array<float> wt({B,P,Min}, af_rhost | af_random);
+    Array<float> wt({B,P,Min}, af_rhost | af_zero);
 
+    // GPU kernel assumes weights are positive.
+    for (long i = 0; i < wt.size; i++)
+	wt.data[i] = rand_uniform(1.0, 2.0);
+    
     // This loop just does p=0.
     for (int b = 0; b < B; b++) {
 	for (int mout = 0; mout < Mout; mout++) {
@@ -767,6 +771,11 @@ void test_gpu_peak_finding_kernel()
 	int Tout = v[1] * v[2] * T;
         int Mout = v[3] * v[4];
 	int Nk = 5;
+
+	// Debug
+	// B = 1;
+	// Tout = 32;
+	// Mout = 1;
 	
 	test_reduce_only_kernel(k, B, Mout, Tout);
 	test_full_pf_kernel(k, B, Mout, Tout, Nk);

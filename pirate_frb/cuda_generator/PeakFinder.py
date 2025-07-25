@@ -7,7 +7,7 @@ from .Ringbuf import Ringbuf
 class PeakFindingParams:
     def __init__(self, M, E, Dout, W, BlocksPerSM):
         """
-        All kernel params except Din/Core.
+        All kernel params except Dcore.
 
            M = number of "rows" (e.g. trial DMs) per warp
            E = max kernel width
@@ -52,6 +52,7 @@ class PeakFinder:
 
         assert utils.is_power_of_two(Dcore)
         assert Dcore <= params.Dout
+        assert params.M >= Dcore   # not really necessary but assumed for convenience
         
         self.params = params
         self.Dcore = Dcore
@@ -489,6 +490,7 @@ class PfReducer:
            - m=0: p = 0, 1, ..., P-1
            - m=Din: p = 0, 1, ..., P-1
            - m=2*Din: p = 0, 1, ..., P-1
+              ...
 
         Calls to PfReducer.advance() should be embedded in a loop where tout increases by (32/Dout) in each iteration.
         """
