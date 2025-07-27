@@ -44,7 +44,7 @@ def generate_peak_finding_kernels():
     """Generates tuples (M, E, Dout, Dcore, W, BlocksPerSM)."""
 
     # Debug
-    # yield (1, 1, 1, 1, 4, 4)   # (M, E, Dout, Dcore, W, BlocksPerSM)
+    # yield (1, 4, 1, 1, 4, 4)   # (M, E, Dout, Dcore, W, BlocksPerSM)
     # return
 
     # Generate some kernels with M==Dout. I think these are representative

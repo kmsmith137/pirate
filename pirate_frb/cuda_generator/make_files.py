@@ -43,6 +43,7 @@ def make_pf_file(M, E, Dout, Dcore, W, BlocksPerSM):
     k.emit(f'k.RW = {pf_full_kernel.RW};')
     k.emit(f'k.full_kernel = {pf_full_kernel.kernel_name};')
     k.emit(f'k.reduce_only_kernel = {pf_reduce_only.kernel_name};')
+    k.emit(f'k.debug = false;')
     k.emit(f'k.register_kernel();')
     k.emit()
     

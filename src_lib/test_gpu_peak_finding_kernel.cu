@@ -577,9 +577,12 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 	xassert_eq(isamp, min(ids, integer_log2(Dcore)));
 	xassert(in_ds.is_fully_contiguous());  // assumed in downsampling logic
 
-	// For computing profiles
+	// For computing profiles.
 	long DD = xdiv(Tds, Tout);  // Downsampling factor between 'in_ds' and 'out_{max,ssq}' arrays.
 	int p0 = 3*ids+1;           // Base profile index
+
+	// Time offset in 'in_ds' array corresponding to 2**ids samples (used for "prepadding" below)
+	long dt = pow2(ids-isamp);
 	
 	// Compute 3 profiles.
 	for (int b = 0; b < B; b++) {
@@ -596,9 +599,10 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 			float *p = &in_ds.at({b,m,0});
 			
 			for (int t = tout*DD; t < (tout+1)*DD; t++) {
-			    float x0 = (t >= 3) ? p[t-3] : 0.0f;
-			    float x1 = (t >= 2) ? p[t-2] : 0.0f;
-			    float x2 = (t >= 1) ? p[t-1] : 0.0f;
+			    // "Prepadding"
+			    float x0 = (t >= 3*dt) ? p[t-3*dt] : 0.0f;
+			    float x1 = (t >= 2*dt) ? p[t-2*dt] : 0.0f;
+			    float x2 = (t >= dt) ? p[t-dt] : 0.0f;
 			    float x3 = p[t];
 
 			    acc0.update(w0, x2 + x3);
@@ -635,9 +639,7 @@ static void test_full_pf_kernel(const pf_kernel &k, int B, int Mout, int Tk_out,
 	    isamp++;
 	}
 	else {
-	    // Case 2: downsampling without decreasing array size
-	    long dt = pow2(ids-isamp);
-	    
+	    // Case 2: downsampling without decreasing array size	    
 	    Array<float> in_ds2({B,Min,Tds}, af_uhost);
 	    float *dst = in_ds2.data;
 	    float *src = in_ds.data;
