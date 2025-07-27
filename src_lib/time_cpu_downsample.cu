@@ -7,11 +7,17 @@
 #include <ksgpu/time_utils.hpp>
 #include <ksgpu/xassert.hpp>
 
+#include "../include/pirate/timing.hpp"
 #include "../include/pirate/loose_ends/cpu_downsample.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
+
 
 
 // -------------------------------------------------------------------------------------------------
@@ -97,6 +103,9 @@ struct TimingSetup
     {
 	this->src_bit_depth = src_bit_depth_;
 	this->nthreads = nthreads_;
+	
+	cout << "time_cpu_downsample(src_bit_depth=" << src_bit_depth
+	     << ", nthreads=" << nthreads << "): start" << endl;
 
 	long approximate_bytes_per_thread = 1L << 30;
 	int src_bytes_per_chunk = cpu_downsample_src_bytes_per_chunk(src_bit_depth);
@@ -158,15 +167,8 @@ struct TimingSetup
 };
 
 
-int main(int argc, char **argv)
+void time_cpu_downsample(int nthreads)
 {
-    if (argc != 2) {
-	cerr << "usage: time-cpu-downsample <nthreads>\n";
-	exit(1);
-    }
-
-    int nthreads = from_str<int> (argv[1]);
-
     for (int src_bit_depth = 4; src_bit_depth <= 7; src_bit_depth++) {
 	TimingSetup ts(src_bit_depth, nthreads);
 	ts.time_downsample();
@@ -174,6 +176,7 @@ int main(int argc, char **argv)
 	if (src_bit_depth == 5)
 	    ts.time_fake_downsample();
     }
-    
-    return 0;
 }
+
+
+}  // namespace pirate

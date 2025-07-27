@@ -4,22 +4,20 @@
 #include <ksgpu/string_utils.hpp>
 #include <ksgpu/xassert.hpp>
 
+#include "../include/pirate/timing.hpp"
 #include "../include/pirate/loose_ends/gpu_downsample.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
-int main(int argc, char **argv)
+static void time_one_gpu_downsample(int Df, int Dt)
 {
-    if (argc != 3) {
-	cerr << "usage: time-downsample <Df> <Dt>" << endl;
-	exit(1);
-    }
-
-    int Df = from_str<int> (argv[1]);
-    int Dt = from_str<int> (argv[2]);
     bool transpose_output = true;  // FIXME
     
     xassert((Df >= 1) && ((2048 % Df) == 0));
@@ -53,11 +51,20 @@ int main(int argc, char **argv)
 	};
 
     stringstream sp_name;
-    sp_name << "downsample(Df=" << Df << ",Dt=" << Dt << ",transpose_output=" << transpose_output << ")";
+    sp_name << "gpu_downsample(Df=" << Df << ",Dt=" << Dt << ",transpose_output=" << transpose_output << ")";
     
     CudaStreamPool pool(callback, num_callbacks, nstreams, sp_name.str());
     pool.monitor_throughput("global memory (GB/s)", gmem_gb);
     pool.run();
-    
-    return 0;
 }
+
+
+void time_gpu_downsample()
+{
+    for (int Df: {1,4,16})
+	for (int Dt: {1,4,16})
+	    time_one_gpu_downsample(Df,Dt);
+}
+
+
+}  // namespace pirate

@@ -1,3 +1,5 @@
+// FIXME split into multiple source files soon (single-core compile time is ~15 seconds).
+
 // For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cu.
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -11,6 +13,7 @@
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
 #include "../include/pirate/tests.hpp"
+#include "../include/pirate/timing.hpp"
 
 
 using namespace std;
@@ -87,4 +90,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     m.def("test_gpu_ringbuf_copy_kernel", &test_gpu_ringbuf_copy_kernel);
     m.def("test_gpu_tree_gridding_kernel", &test_gpu_tree_gridding_kernel);
     m.def("test_dedisperser", static_cast<void (*)()> (&test_dedisperser));
+
+    m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));
+    m.def("time_gpu_dedispersion_kernels", &time_gpu_dedispersion_kernels);
+    m.def("time_gpu_downsample", &time_gpu_downsample);
+    m.def("time_gpu_lagged_downsampling_kernels", &time_gpu_lagged_downsampling_kernels);
+    m.def("time_gpu_transpose", &time_gpu_transpose);
 }

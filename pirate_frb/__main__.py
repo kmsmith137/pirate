@@ -1,3 +1,4 @@
+import os
 import sys
 import argparse
 
@@ -59,6 +60,39 @@ def test(args):
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()
             
+
+#########################################   time command  ##########################################
+
+
+def parse_time(subparsers):
+    parser = subparsers.add_parser("time", help="Run unit times (by default, all timings are run)")
+    parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
+    parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (only for time_cpu_downsample)")
+    parser.add_argument('--cd', action='store_true', help='Runs time_cpu_downsample()')
+    parser.add_argument('--gd', action='store_true', help='Runs time_gpu_downsample()')
+    parser.add_argument('--gt', action='store_true', help='Runs time_gpu_transpose()')
+    parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
+    parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
+
+    
+def time(args):
+    timing_flags = [ 'cd', 'gd', 'gt', 'gldk', 'gddk' ]
+    run_all_timings = not any(getattr(args,x) for x in timing_flags)
+    
+    ksgpu.set_cuda_device(args.gpu)
+    nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
+        
+    if run_all_timings or args.cd:
+        pirate_pybind11.time_cpu_downsample(nthreads)
+    if run_all_timings or args.gd:
+        pirate_pybind11.time_gpu_downsample()
+    if run_all_timings or args.gt:
+        pirate_pybind11.time_gpu_transpose()
+    if run_all_timings or args.gldk:
+        pirate_pybind11.time_gpu_lagged_downsampling_kernels()
+    if run_all_timings or args.gddk:
+        pirate_pybind11.time_gpu_dedispersion_kernels()
+
 
 #####################################   show_hardware command  #####################################
 
@@ -267,6 +301,7 @@ if __name__ == '__main__':
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     parse_test(subparsers)
+    parse_time(subparsers)
     parse_show_hardware(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
@@ -275,6 +310,8 @@ if __name__ == '__main__':
 
     if args.command == "test":
         test(args)
+    elif args.command == "time":
+        time(args)
     elif args.command == "show_hardware":
         show_hardware(args)
     elif args.command == "test_node":

@@ -2,13 +2,18 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/CudaStreamPool.hpp>
 
+#include "../include/pirate/timing.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2()
 #include "../include/pirate/DedispersionBuffer.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 // FIXME this function is cut-and-paste from test-gpu-lagged-downsampler.cu.
@@ -64,7 +69,7 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
     double pstate_overhead_percentage = 100. * gmem_pstate / gmem_tot;
     
     stringstream kernel_name;
-    kernel_name << "lagged_downsample("
+    kernel_name << "gpu_lagged_downsample("
 		<< "dtype=" << params.dtype
 		<< ", input_total_rank=" << params.input_total_rank
 		<< ", output_dd_rank=" << params.output_dd_rank
@@ -91,7 +96,7 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
 }
 
 
-int main(int argc, char **argv)
+void time_gpu_lagged_downsampling_kernels()
 {
     for (int num_downsampling_levels: {2,6}) {
 	for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
@@ -107,6 +112,7 @@ int main(int argc, char **argv)
 	    time_gpu_lagged_downsampling_kernel(params);
 	}
     }
-    
-    return 0;
 }
+
+
+}  // namespace pirate

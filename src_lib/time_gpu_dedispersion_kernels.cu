@@ -2,12 +2,17 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/CudaStreamPool.hpp>
 
+#include "../include/pirate/timing.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2()
 #include "../include/pirate/DedispersionKernel.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_input_residual_lags)
@@ -55,7 +60,7 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
 	};
     
     stringstream kernel_name;
-    kernel_name << "dedisperse(dtype=" << dtype << ", dd_rank=" << dd_rank
+    kernel_name << "gpu_dedisperse(dtype=" << dtype << ", dd_rank=" << dd_rank
 		<< ", apply_input_residual_lags=" << (apply_input_residual_lags ? "true" : "false");
     
     CudaStreamPool pool(callback, ncallbacks, nstreams, kernel_name.str());
@@ -64,12 +69,13 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
 }
 
 
-int main(int argc, char **argv)
+void time_gpu_dedispersion_kernels()
 {
     for (int dd_rank = 1; dd_rank <= 8; dd_rank++)
 	for (bool apply_input_residual_lags: { false, true })
 	    for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() })
 		time_gpu_dedispersion_kernel(dtype, dd_rank, apply_input_residual_lags);
-    
-    return 0;
 }
+
+
+}  // namespace pirate

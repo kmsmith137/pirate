@@ -2,14 +2,19 @@
 #include <ksgpu/Array.hpp>
 #include <ksgpu/CudaStreamPool.hpp>
 
+#include "../include/pirate/timing.hpp"
 #include "../include/pirate/loose_ends/gpu_transpose.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
-int main(int argc, char **argv)
+void time_gpu_transpose()
 {
     int nx = 2048;
     int ny = 2048;
@@ -33,9 +38,10 @@ int main(int argc, char **argv)
 		launch_transpose(dst[istream], src[istream], stream);
 	};
 
-    CudaStreamPool pool(callback, num_callbacks, nstreams, "transpose");
+    CudaStreamPool pool(callback, num_callbacks, nstreams, "gpu_transpose");
     pool.monitor_throughput("global memory (GB/s)", 8. * nx*ny*nz * double(niter) / pow(2,30.));
     pool.run();
-    
-    return 0;
 }
+
+
+}  // namespace pirate

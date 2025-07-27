@@ -102,6 +102,11 @@ LIB_SRCFILES = \
   src_lib/test_gpu_ringbuf_copy_kernel.cu \
   src_lib/test_gpu_tree_gridding_kernel.cu \
   src_lib/test_reference_tree.cu \
+  src_lib/time_cpu_downsample.cu \
+  src_lib/time_gpu_dedispersion_kernels.cu \
+  src_lib/time_gpu_downsample.cu \
+  src_lib/time_gpu_lagged_downsampling_kernels.cu \
+  src_lib/time_gpu_transpose.cu \
   src_lib/utils.cu \
   src_lib/loose_ends/cpu_downsample.cu \
   src_lib/loose_ends/gpu_downsample.cu \
@@ -141,6 +146,11 @@ CUDAGEN_PYFILES = \
 
 # These are in 1-1 corresponding with executables in bin/
 # For example, 'src_bin/scratch.cu' gets compiled to 'bin/scratch'.
+#
+# My long-term plan is to make all of this code callable through the python interface,
+# implement "hooks" for calling it through 'python -m pirate_frb ...', and then remove
+# the C++ executables entirely.
+
 BIN_SRCFILES = \
   src_bin/scratch.cu \
   src_bin/show_dedispersion_plan.cu \
@@ -148,12 +158,7 @@ BIN_SRCFILES = \
   src_bin/test-cpu-downsampler.cu \
   src_bin/test-gpu-downsample.cu \
   src_bin/test-gpu-reduce2.cu \
-  src_bin/test-gpu-transpose.cu \
-  src_bin/time-cpu-downsample.cu \
-  src_bin/time-gpu-dedispersion-kernels.cu \
-  src_bin/time-gpu-downsample.cu \
-  src_bin/time-gpu-lagged-downsampler.cu \
-  src_bin/time-gpu-transpose.cu
+  src_bin/test-gpu-transpose.cu
 
 # Must list all header files here.
 # (Otherwise they won't show up in 'pip install' or pypi.)
@@ -177,6 +182,7 @@ HFILES = \
   include/pirate/network_utils.hpp \
   include/pirate/system_utils.hpp \
   include/pirate/tests.hpp \
+  include/pirate/timing.hpp \
   include/pirate/trackers.hpp \
   include/pirate/utils.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \
