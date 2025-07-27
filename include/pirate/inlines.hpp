@@ -1,6 +1,7 @@
 #ifndef _PIRATE_INLINES_HPP
 #define _PIRATE_INLINES_HPP
 
+#include <ksgpu/xassert.hpp>
 #include <ksgpu/string_utils.hpp>  // ksgpu::nbytes_to_str()
 
 #include <cmath>

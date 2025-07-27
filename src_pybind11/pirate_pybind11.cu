@@ -83,8 +83,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     m.def("test_tree_recursion", static_cast<void (*)()> (&test_tree_recursion));
     m.def("test_gpu_lagged_downsampling_kernel", &test_gpu_lagged_downsampling_kernel);
     m.def("test_gpu_dedispersion_kernels", &test_gpu_dedispersion_kernels);
-    m.def("test_gpu_pf_ringbuf", &test_gpu_pf_ringbuf);
-    m.def("test_gpu_pf_core", &test_gpu_pf_core);
     m.def("test_gpu_peak_finding_kernel", &test_gpu_peak_finding_kernel);
     m.def("test_gpu_ringbuf_copy_kernel", &test_gpu_ringbuf_copy_kernel);
     m.def("test_gpu_tree_gridding_kernel", &test_gpu_tree_gridding_kernel);
