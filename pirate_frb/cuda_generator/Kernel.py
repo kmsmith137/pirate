@@ -9,6 +9,7 @@ class Kernel:
         self.active_buffer = io.StringIO()
         self.splices = [ ]   # list of (StringIO, kernel) pairs.
         self.tmp_rnames = dict()
+        self.tmp_ix = 0
 
 
     def emit(self, s=''):
@@ -46,6 +47,13 @@ class Kernel:
             
         return self.tmp_rnames[dtype]
 
+    def get_tmp_rname2(self, n=None):
+        if n is not None:
+            return [ self.get_tmp_rname2() for _ in range(n) ]
+        
+        ret = f'tmp{self.tmp_ix}'
+        self.tmp_ix += 1
+        return ret
 
     def reset_tmp_vars(self):
         self.tmp_rnames = dict()

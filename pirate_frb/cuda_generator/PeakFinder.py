@@ -351,7 +351,41 @@ class PfTransposeLayer:
 
             self.next_layer.advance(k, rnames + znames, m)
 
+
+####################################################################################################
+
+
+class PfInitialTranspose16Layer:
+    def __init__(self, next_layer):
+        # FIXME optimize by adding Din==2 layer
+        assert next_layer.Din == 1
+        
+        self.Din = 1
+        self.M = next_layer.M
+        self.next_layer = next_layer
+        self.saved_rnames = [ ]
+
+        
+    def advance(self, k, rnames, m):
+        M, self.M
+        assert isinstance(rnames, list)
+        assert len(rnames) == 1
+        assert 0 <= m < M
+
+        src = rnames[0]
+        tmp0, tmp1 = k.get_tmp_rname2(2)
+
+        k.emit(f'\n// PfInitialTransposeLayer.advance({m=})')
+        
+        if m == 0:
+            k.emit("const uint itrans16_lane0 = (threadIdx.x >> 1) & 0xf;")
+            k.emit("const uint itrans16_lane1 = lane0 | 0x10;")
             
+        k.emit(f"__half2 {tmp0} = __shfl_sync(0xffffffff, x, itrans16_lane0);")
+        k.emit(f"__half2 {tmp1} = __shfl_sync(0xffffffff, x, itrans16_lane1);")
+        k.emit(f"return (threadIdx.x & 1) ? __highs2half2({tmp0},{tmp1}) : __lows2half2({tmp0},{tmp1});")
+        
+
 ####################################################################################################
 
 
@@ -640,19 +674,10 @@ class PfReducer:
         if Dout > 1:
             k.emit(f'int {tout}_next = tout + (32/Dout);   // value of tout in next iteration of loop')
             k.emit(f'if (({tout}_next == {Tout}) || (({tout}_next & 0x1f) == 0)) {{   // current **warp** writes max/ssq to global memory')
-            
-            k.emit(f'// PfReducer: transpose output time indices')
-            k.emit(f'// Before the transpose, {(32//Dout)=} "inner" time indices are assigned to "outer" threads')
-            k.emit(f'// and {Dout=} "outer" time indices are assigned to "inner" threads.')
 
-            itmp_rname = k.get_tmp_rname('int')
-            k.emit(f'{itmp_rname} = (threadIdx.x & 0x1f) * Dout;')
-            k.emit(f'{itmp_rname} = {itmp_rname} | ({itmp_rname} >> 5);')
-            
-            for r in (self.omax_rnames + self.ossq_rnames):
-                k.emit(f'{r} = __shfl_sync(0xffffffff, {r}, {itmp_rname});')
+        self._transpose_outputs(k, self.omax_rnames + self.ossq_rnames)
 
-            k.emit()
+        if Dout > 1:
             k.emit(f'{tout}_next = (tout & 0x1f) + (32/Dout);  // advance by (32/Dout)')
             k.emit(f'if ((threadIdx.x & 0x1f) < {tout}_next) {{   // current **thread** writes max/ssq to global memory')
 
@@ -676,3 +701,19 @@ class PfReducer:
             k.emit('}  // "if current **warp* writes max/ssq to global memory..."')
         
         k.emit()
+
+
+    def _transpose_outputs(self, k, rnames):
+        Dout = self.params.Dout
+        
+        if Dout > 1:
+            k.emit(f'// PfReducer: transpose output time indices')
+            k.emit(f'// Before the transpose, {(32//Dout)=} "inner" time indices are assigned to "outer" threads')
+            k.emit(f'// and {Dout=} "outer" time indices are assigned to "inner" threads.')
+
+            itmp_rname = k.get_tmp_rname('int')
+            k.emit(f'{itmp_rname} = (threadIdx.x & 0x1f) * Dout;')
+            k.emit(f'{itmp_rname} = {itmp_rname} | ({itmp_rname} >> 5);')
+            
+            for r in rnames:
+                k.emit(f'{r} = __shfl_sync(0xffffffff, {r}, {itmp_rname});')
