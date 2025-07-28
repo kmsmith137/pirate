@@ -3,9 +3,9 @@
 
 #include <vector>
 
-// #include <ksgpu/Dtype.hpp>
-// #include <ksgpu/Array.hpp>
-// #include "trackers.hpp"  // BandwidthTracker
+#include <ksgpu/Dtype.hpp>
+#include <ksgpu/Array.hpp>
+#include "trackers.hpp"  // BandwidthTracker
 
 
 namespace pirate {
@@ -14,26 +14,89 @@ namespace pirate {
 #endif
 
 
+// -------------------------------------------------------------------------------------------------
+
+
 struct PeakFindingKernelParams
 {
-    // dtype=float for now
+    ksgpu::Dtype dtype;
+    
     long dm_downsampling_factor = 0;
     long time_downsampling_factor = 0;
     long max_kernel_width = 0;
     long beams_per_batch = 0;
+    long total_beams = 0;
+    long ndm_in = 0;
     long nt_in = 0;
 
     void validate() const;  // throws an exception if anything is wrong
 };
 
 
-struct GpuPeakFindingKernel
+// Base class for ReferencePeakFindingKernel, GpuPeakFindingKernel.
+struct PeakFindingKernel
 {
-    // Placeholder.
+    const PeakFindingKernelParams params;
+
+    long Dcore = 0;
+    long nbatches = 0;   // = (total_beams / beams_per_batch)
+    long ndm_out = 0;    // = (params.ndm_in / params.dm_downsampling_factor)
+    long nt_out = 0;     // = (params.nt_in / params.time_downsampling_factor)
+    long nprofiles = 0;  // = (3 * log2(max_kernel_width) + 1)
+
+    PeakFindingKernel(const PeakFindingKernelParams &params, long Dcore);
+
+    void _check_args(const ksgpu::Array<void> &out_max,
+		     const ksgpu::Array<void> &out_ssq,
+		     const ksgpu::Array<void> &in,
+		     const ksgpu::Array<void> &wt);
 };
 
 
+
+// -------------------------------------------------------------------------------------------------
+//
+// ReferencePeakFindingKernel
+
+
+struct ReferencePeakFindingKernel : PeakFindingKernel
+{
+    // The 'Dcore' argument needs some discussion:
+    //
+    //   - In the GPU kernel, there is an internal parameter 'Dcore', which the GPU
+    //     kernel selects based on a nontrivial tradeoff (larger Dcore leads to less
+    //     computation but more register usage). The value of Dcore slightly affects
+    //     the output of the kernel.
+    //
+    //   - In the reference kernel, the caller can specify Dcore as an extra
+    //     argument. In a unit testing context, the caller can match a GPU kernel.
+    //
+    //   - Dcore must be a divisor of params.time_downsampling_factor. If Dcore
+    //     is unspecified, then it defaults to (params.time_downsampling_factor).
+    
+    ReferencePeakFindingKernel(const PeakFindingKernelParams &params, long Dcore=0);
+
+    // Inherits from PeakFindingKernel base class:
+    //  params, Dcore, nbatches, ndm_out, nt_out, nprofiles
+    
+    // Note: params.dtype is ignored in reference kernel (all Arrays must be float)
+    // All arrays must be fully contiguous (this could be changed if needed).
+    // FIXME non-incremental for now!!
+    
+    void apply(ksgpu::Array<void> &out_max,     // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
+	       ksgpu::Array<void> &out_ssq,     // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
+	       const ksgpu::Array<void> &in,    // shape (beams_per_batch, ndm_in, nt_in)
+	       const ksgpu::Array<void> &wt);   // shape (beams_per_batch, nprofiles, ndm_in)
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// GpuPeakFindingKernel
+
+
 // pf_kernel: represents a precompiled low-level cuda kernel.
+// (Must be declared before GpuPeakFindingKernel).
 //
 // Each .cu source file populates a 'struct pf_kernel' with function pointers,
 // then calls pf_kernel::register().
@@ -66,7 +129,7 @@ struct pf_kernel {
     int M = 0;       // same as PeakFindingKernelParams::dm_downsampling_factor
     int E = 0;       // same as PeakFindingKernelParams::max_kernel_width
     int Dout = 0;    // same as PeakFindingKernelParams::time_downsampling_factor
-    int Dcore = 0;   // internal downsampling factor
+    int Dcore = 0;   // internal downsampling factor (see discussion above)
     int W = 0;       // warps per threadblock
     int P = 0;       // number of peak-finding kernels (= 3*log2(E) + 1)
     int RW = 0;      // ring buffer elements per output (beam, mout)
@@ -83,11 +146,41 @@ struct pf_kernel {
     
     void register_kernel();
 
-    // Throw exception if no registered kernel can be found.
     static pf_kernel get(int M, int E, int Dout);
 
     // Returns all registered kernels.
     static std::vector<pf_kernel> enumerate();
+};
+
+
+struct GpuPeakFindingKernel : PeakFindingKernel
+{
+    GpuPeakFindingKernel(const PeakFindingKernelParams &params);
+    
+    // Inherits from PeakFindingKernel base class:
+    //  params, Dcore, nbatches, ndm_out, nt_out, nprofiles
+    
+    pf_kernel cuda_kernel;
+    bool is_allocated = false;
+        
+    // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
+    void allocate();
+
+    // Bandwidth per call to GpuDedispersionKernel::launch().
+    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    BandwidthTracker bw_per_launch;
+    
+    // Allocated in GpuPeakFindingKernel::allocate(), not the constructor.
+    ksgpu::Array<void> persistent_state;   // FIXME will become Array<void>
+
+    void launch(
+        ksgpu::Array<void> &out_max,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
+	ksgpu::Array<void> &out_ssq,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
+	const ksgpu::Array<void> &in,  // shape (beams_per_batch, ndm_in, nt_in)
+	const ksgpu::Array<void> &wt,  // shape (beams_per_batch, nprofiles, ndm_in)
+	long ibatch,                   // 0 <= ibatch < nbatches
+	cudaStream_t stream            // NULL stream is allowed, but is not the default
+    );
 };
 
 
