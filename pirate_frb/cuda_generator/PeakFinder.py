@@ -178,10 +178,6 @@ class PeakFinder:
             k.emit(f"in += (b*Mout + mout) * M * in_mstride + (threadIdx.x & 0x1f);")
             k.emit()
 
-            # Declares a variable needed for the ring-buffer loading code.
-            # (FIXME this is an artificial consequence of my stupid tmp variable initialization.)
-            k.get_tmp_rname('int')
-
             # Save splice, for code to load the ring buffer.
             # (This code must be emitted after the main lloop.)
             k_rb = k.splice()
@@ -373,7 +369,7 @@ class PfInitialTranspose16Layer:
         assert 0 <= m < M
 
         src = rnames[0]
-        tmp0, tmp1 = k.get_tmp_rname2(2)
+        tmp0, tmp1 = k.get_tmp_rname(2)
 
         k.emit(f'\n// PfInitialTransposeLayer.advance({m=})')
         
@@ -407,7 +403,6 @@ class PfCore:
         assert (m % Din) == 0
         assert 0 <= m < M
 
-        tmp_rname = k.get_tmp_rname('float')
         k.emit('// PfCore: p=0 starts here')
         
         for t in range(Din):
@@ -432,17 +427,20 @@ class PfCore:
 
             k.emit(f'// PfCore: p={3*ids+1} starts here')
             for t in range(T):
-                k.emit(f'{tmp_rname} = {rnames[t+2]} + {rnames[t+3]};')
+                tmp_rname = k.get_tmp_rname()
+                k.emit(f'float {tmp_rname} = {rnames[t+2]} + {rnames[t+3]};')
                 self._update(k, tmp_rname, m, 3*ids+1, t, T)
 
             k.emit(f'// PfCore: p={3*ids+2} starts here')
             for t in range(T):
-                k.emit(f'{tmp_rname} = {rnames[t+2]} + 0.5f * ({rnames[t+1]} + {rnames[t+3]});')
+                tmp_rname = k.get_tmp_rname()
+                k.emit(f'float {tmp_rname} = {rnames[t+2]} + 0.5f * ({rnames[t+1]} + {rnames[t+3]});')
                 self._update(k, tmp_rname, m, 3*ids+2, t, T)
 
             k.emit(f'// PfCore: p={3*ids+3} starts here')
             for t in range(T):
-                k.emit(f'{tmp_rname} = {rnames[t+1]} + {rnames[t+2]} + 0.5f * ({rnames[t]} + {rnames[t+3]});')
+                tmp_rname = k.get_tmp_rname()
+                k.emit(f'float {tmp_rname} = {rnames[t+1]} + {rnames[t+2]} + 0.5f * ({rnames[t]} + {rnames[t+3]});')
                 self._update(k, tmp_rname, m, 3*ids+3, t, T)
 
             if 2**(ids+1) == E:
@@ -556,11 +554,13 @@ class PfReducer:
         imax, issq = self.imax_rnames[p], self.issq_rnames[p]
         
         mpop = min(M-m, Din)   # number of populated m-indices
+        btmp = None            # boolean mask (may not be needed)
+        
         if mpop < Din:
             k.emit(f'// PfReducer: m-values are partially populated ({mpop=}, {Din=}).')
             k.emit(f'// This mask keeps track of which threads store valid values')
-            btmp = k.get_tmp_rname('bool')
-            k.emit(f'{btmp} = (threadIdx.x & {Din-1}) < {mpop};  // {(Din-1)=}, {mpop=}')
+            btmp = k.get_tmp_rname()
+            k.emit(f'bool {btmp} = (threadIdx.x & {Din-1}) < {mpop};  // {(Din-1)=}, {mpop=}')
 
         # Ugh, 4 cases here.
         if (m > 0) and (mpop >= Din):
@@ -608,8 +608,6 @@ class PfReducer:
         k.emit(f'// Number of time indices is {(Dout//Din)=}.')
         k.emit()
         
-        btmp_rname = k.get_tmp_rname('bool')
-        
         while d < Dout:
             if (d >= Din) or ((mpop & d) == 0):
                 k.emit(f'// "Cleanly" increase reduction level {d=} -> {(2*d)=}.')
@@ -636,25 +634,30 @@ class PfReducer:
             else:
                 k.emit(f'// Increase reduction level {d=} -> {(2*d)=}.')
                 k.emit(f'// Since {mpop=}, this reduction "mixes" populated/unpopulated indices')
-                k.emit(f'{btmp_rname} = (threadIdx.x & {Din-1}) < {mpop-d};   // {(mpop-d)=}')
+
+                btmp_rname = k.get_tmp_rname()
+                k.emit(f'bool {btmp_rname} = (threadIdx.x & {Din-1}) < {mpop-d};   // {(mpop-d)=}')
                 
                 for p in range(P):
-                    tmp_rname = k.get_tmp_rname('float')
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
-                    k.emit(f'{tmp_rname} = max({imax}, __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d}));')
-                    k.emit(f'{imax} = {btmp_rname} ? {tmp_rname} : {imax};')
-                    k.emit(f'{tmp_rname} = {issq} + __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d}));')
-                    k.emit(f'{issq} = {btmp_rname} ? {tmp_rname} : {issq};')
+                    tmp_max, tmp_ssq = k.get_tmp_rname(2)
+
+                    k.emit(f'float {tmp_max} = max({imax}, __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d}));')
+                    k.emit(f'{imax} = {btmp_rname} ? {tmp_max} : {imax};')
+                    k.emit(f'float {tmp_rname} = {issq} + __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d}));')
+                    k.emit(f'{issq} = {btmp_rname} ? {tmp_ssq} : {issq};')
                 
                 k.emit()
                 d *= 2
 
         k.emit('// PfReducer: "Absorb" result of Dout-way reduction into persistent registers (on a subset of threads).')
         k.emit()
+
+        btmp_rname = k.get_tmp_rname()
         
         k.emit(f'// Set {btmp_rname} on threads where (threadIdx.x * (32/Dout)) == tout (mod 32)')
         k.emit(f'// These are the threads where persistent max/ssq will be updated in this iteration of the t-loop')
-        k.emit(f'{btmp_rname} = (((threadIdx.x * (32/Dout)) ^ {tout}) & 0x1f) == 0;')
+        k.emit(f'bool {btmp_rname} = (((threadIdx.x * (32/Dout)) ^ {tout}) & 0x1f) == 0;')
         k.emit()
 
         for p in range(P):
@@ -711,8 +714,8 @@ class PfReducer:
             k.emit(f'// Before the transpose, {(32//Dout)=} "inner" time indices are assigned to "outer" threads')
             k.emit(f'// and {Dout=} "outer" time indices are assigned to "inner" threads.')
 
-            itmp_rname = k.get_tmp_rname('int')
-            k.emit(f'{itmp_rname} = (threadIdx.x & 0x1f) * Dout;')
+            itmp_rname = k.get_tmp_rname()
+            k.emit(f'int {itmp_rname} = (threadIdx.x & 0x1f) * Dout;')
             k.emit(f'{itmp_rname} = {itmp_rname} | ({itmp_rname} >> 5);')
             
             for r in rnames:

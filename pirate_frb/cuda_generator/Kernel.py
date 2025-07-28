@@ -35,40 +35,28 @@ class Kernel:
         print(self.active_buffer.getvalue(), file=f)
 
 
-    def get_tmp_rname(self, dtype):
-        if dtype not in self.tmp_rnames:
-            d = { 'float': 'ftmp', '__half2': 'h2tmp', 'bool': 'btmp', 'int': 'itmp' }
-            if dtype not in d:
-                raise RuntimeError(f'Kernel.get_tmp_rname(): unrecognized {dtype=}')
-
-            # Not really correct -- tmp_rname is declared in the splice where get_tmp_rname() is first called.
-            self.emit(f'{dtype} {d[dtype]};')
-            self.tmp_rnames[dtype] = d[dtype]
-            
-        return self.tmp_rnames[dtype]
-
-    def get_tmp_rname2(self, n=None):
+    def get_tmp_rname(self, n=None):
         if n is not None:
-            return [ self.get_tmp_rname2() for _ in range(n) ]
+            return [ self.get_tmp_rname() for _ in range(n) ]
         
         ret = f'tmp{self.tmp_ix}'
         self.tmp_ix += 1
         return ret
 
+    
     def reset_tmp_vars(self):
-        self.tmp_rnames = dict()
+        self.tmp_ix = 0
         
 
     def warp_transpose(self, rname1, rname2, thread_stride, dtype):
         if thread_stride not in [1,2,4,8,16]:
             raise RuntimeError(f'Invalid {thread_stride=}')
 
-        tmp = self.get_tmp_rname(dtype)
-        btmp = self.get_tmp_rname('bool')
+        tmp, btmp = self.get_tmp_rname(2)
 
         self.emit(f'// warp_transpose({rname1}, {rname2}, {thread_stride=})')
-        self.emit(f'{btmp} = (threadIdx.x & {thread_stride});')
-        self.emit(f'{tmp} = {btmp} ? {rname1} : {rname2};')
+        self.emit(f'bool {btmp} = (threadIdx.x & {thread_stride});')
+        self.emit(f'{dtype} {tmp} = {btmp} ? {rname1} : {rname2};')
         self.emit(f'{tmp} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x ^ {thread_stride});')
         self.emit(f'{rname1} = {btmp} ? {tmp} : {rname1};')
         self.emit(f'{rname2} = {btmp} ? {rname2} : {tmp};')

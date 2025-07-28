@@ -18,19 +18,23 @@ class Ringbuf:
         # Note that _get_irb() does not increment rb_nelts[irb].
         irb = self._get_irb(nelts)
         rb_rname = self.rb_rnames[irb]
+        tmp = dst if (dst is not None) else k.get_tmp_rname()
 
         k.emit(f'// Ringbuf.advance(): {rname}, {nelts=}, {dst=}')
+        
+        if dst is None:
+            k.emit(f'float {tmp};')
+
         self._cycle_register(k, rb_rname, 32 - self.rb_nelts[irb] + self.rb_pos[irb])
         self.rb_pos[irb] = self.rb_nelts[irb]
         self.rb_nelts[irb] += nelts
-
-        dst_rname = dst if (dst is not None) else k.get_tmp_rname('float')
-        self._blend(k, dst_rname, rname, rb_rname, nelts)
+            
+        self._blend(k, tmp, rname, rb_rname, nelts)
         self._blend(k, rb_rname, rb_rname, rname, nelts)
-        self._cycle_register(k, dst_rname, 32-nelts)
+        self._cycle_register(k, tmp, 32-nelts)
 
         if dst is None:
-            k.emit(f'{rname} = {dst_rname};')
+            k.emit(f'{rname} = {tmp};')
 
 
     def advance_outer(self, k):
@@ -54,8 +58,8 @@ class Ringbuf:
         
         assert self.advance_outer_called
         
-        laneId = k.get_tmp_rname('int')
-        k.emit(f'{laneId} = (threadIdx.x & 0x1f);  // laneId')
+        laneId = k.get_tmp_rname()
+        k.emit(f'const int {laneId} = (threadIdx.x & 0x1f);  // laneId')
 
         pos0 = 0    # current position relative to 'pwarp_rname'
         for i in range(self.nreg):
@@ -73,8 +77,8 @@ class Ringbuf:
     def finalize(self, k, pwarp_rname):
         assert self.advance_outer_called
         
-        laneId = k.get_tmp_rname('int')
-        k.emit(f'{laneId} = (threadIdx.x & 0x1f);  // laneId')
+        laneId = k.get_tmp_rname()
+        k.emit(f'const int {laneId} = (threadIdx.x & 0x1f);  // laneId')
 
         pos0 = 0    # current position relative to 'pwarp_rname'
         for i in range(self.nreg):
