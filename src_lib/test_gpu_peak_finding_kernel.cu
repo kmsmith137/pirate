@@ -193,23 +193,23 @@ void test_gpu_peak_finding_kernel()
 
     for (int i = 0; i < 5; i++) {
 	pf_kernel k = ksgpu::rand_element(all_kernels);
-	int Nk = 5;
-
-	long T = 32 / k.Dcore;
-	auto v = ksgpu::random_integers_with_bounded_product(5, 10000 / (k.M * T));
+	long T0 = xdiv(32 * k.Dout, k.Dcore);
 	
+	auto v = ksgpu::random_integers_with_bounded_product(7, 1000000 / (k.M * T0));
+	int niter_gpu = v[0];
+
 	PeakFindingKernelParams params;
 	params.dtype = Dtype::native<float> ();
-	params.dm_downsampling_factor = k.M;
 	params.time_downsampling_factor = k.Dout;
+	params.dm_downsampling_factor = k.M;
 	params.max_kernel_width = k.E;
-	params.beams_per_batch = v[0];
-	params.total_beams = v[0];
-	params.ndm_in = v[1] * v[2] * k.M;
-	params.nt_in = v[3] * v[4] * Nk * T * k.Dout;
+	params.beams_per_batch = v[1];
+	params.total_beams = v[1] * v[2];
+	params.ndm_in = v[3] * v[4] * k.M;
+	params.nt_in = v[5] * v[6] * niter_gpu * T0;
 	
 	test_reduce_only_kernel(k, params.beams_per_batch, params.ndm_in, params.nt_in);
-	test_pf_kernel(params, Nk);
+	test_pf_kernel(params, niter_gpu);
     }
 }
 
