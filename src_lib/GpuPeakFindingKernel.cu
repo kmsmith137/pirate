@@ -46,7 +46,7 @@ void PeakFindingKernelParams::validate() const
 }
 
 PeakFindingKernel::PeakFindingKernel(const PeakFindingKernelParams &params_, long Dcore_) :
-    params(params_)
+    params(params_), Dcore(Dcore_)
 {
     params.validate();
 
