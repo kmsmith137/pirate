@@ -90,6 +90,7 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
 static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu)
 {
     cout << "\ntest_pf_kernel: start\n"
+	 << "   dtype = " << params.dtype.str() << "\n"
 	 << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
 	 << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
 	 << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"

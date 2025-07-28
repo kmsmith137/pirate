@@ -73,10 +73,11 @@ def parse_time(subparsers):
     parser.add_argument('--gt', action='store_true', help='Runs time_gpu_transpose()')
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
+    parser.add_argument('--gpfk', action='store_true', help='Runs time_gpu_peak_finding_kernels()')
 
     
 def time(args):
-    timing_flags = [ 'cd', 'gd', 'gt', 'gldk', 'gddk' ]
+    timing_flags = [ 'cd', 'gd', 'gt', 'gldk', 'gddk', 'gpfk' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -92,6 +93,8 @@ def time(args):
         pirate_pybind11.time_gpu_lagged_downsampling_kernels()
     if run_all_timings or args.gddk:
         pirate_pybind11.time_gpu_dedispersion_kernels()
+    if run_all_timings or args.gpfk:
+        pirate_pybind11.time_gpu_peak_finding_kernels()
 
 
 #####################################   show_hardware command  #####################################

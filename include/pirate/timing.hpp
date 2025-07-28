@@ -19,6 +19,9 @@ extern void time_gpu_downsample();
 // time_gpu_lagged_downsampling_kernels.cu
 extern void time_gpu_lagged_downsampling_kernels();
 
+// time_gpu_peak_finding_kernels.cu
+extern void time_gpu_peak_finding_kernels();
+
 // time_gpu_transpose.cu
 extern void time_gpu_transpose();
 

@@ -61,14 +61,13 @@ def generate_peak_finding_kernels():
     # Generate some kernels with Dout=16 and large M. I think these will be
     # representative of a future implementation with subband triggers.
 
-    for lgE in range(0,6):
-        for E in [ 1, 2, 4, 8, 16, 32 ]:
-            for M in [ 48+lgE, 53+lgE ]:
-                Dout = 16
-                Dcore = 8
-                W = 4
-                BlocksPerSM = 4
-                yield (M, E, Dout, Dcore, W, BlocksPerSM)
+    for E in [ 1, 2, 4, 8, 16, 32 ]:
+        for M in range(48,53):
+            Dout = 16
+            Dcore = 8
+            W = 4
+            BlocksPerSM = 4
+            yield (M, E, Dout, Dcore, W, BlocksPerSM)
             
         
 def generate_kernel_filenames():

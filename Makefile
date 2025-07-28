@@ -106,6 +106,7 @@ LIB_SRCFILES = \
   src_lib/time_gpu_dedispersion_kernels.cu \
   src_lib/time_gpu_downsample.cu \
   src_lib/time_gpu_lagged_downsampling_kernels.cu \
+  src_lib/time_gpu_peak_finding_kernels.cu \
   src_lib/time_gpu_transpose.cu \
   src_lib/utils.cu \
   src_lib/loose_ends/cpu_downsample.cu \
