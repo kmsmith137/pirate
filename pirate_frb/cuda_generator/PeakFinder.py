@@ -100,7 +100,7 @@ class PeakFinder:
         k.emit('// Launch with {32*W,1} threads.')
         k.emit()
         k.emit(f'__global__ void __launch_bounds__({32*W}, {pars.BlocksPerSM})')
-        k.emit(f'{self.kernel_name}(float *out_max, float *out_ssq, float *{in_args[0]}, float *{in_args[1]}, float *wt, int Mout, int Tout)')
+        k.emit(f'{self.kernel_name}(void *out_max_, void *out_ssq_, void *{in_args[0]}_, void *{in_args[1]}_, void *wt_, int Mout, int Tout)')
         k.emit('{')
 
         s = '' if self.reduce_only else '// '
@@ -110,8 +110,19 @@ class PeakFinder:
         k.emit(f'constexpr int {Dout = };   // output time downsampling factor')
         k.emit(f'{s}constexpr int {Dcore = };  // internal resolution parameter')
         k.emit(f'// constexpr int {E = };      // max kernel width')
-
         k.emit()
+
+        # Note that in the non-reduce-only kernel, we postpone declaring "float *pstate"
+        # until the persistent state is used. This avoids a compiler warning about an
+        # unused variable.
+
+        k.emit(f"float *out_max = (float *) out_max_;")
+        k.emit(f"float *out_ssq = (float *) out_ssq_;")
+        k.emit(f"{s}float *{in_args[0]} = (float *) {in_args[0]}_;")  # see above
+        k.emit(f"float *{in_args[1]} = (float *) {in_args[1]}_;")
+        k.emit(f"float *wt = (float *) wt_;")            
+        k.emit()
+        
         k.emit("int b = blockIdx.y;  // beam index")
         k.emit("int mblock = blockIdx.x * W;              // base m-index of block")
         k.emit("int mout = mblock + (threadIdx.x >> 5);   // output m-index of warp")
@@ -261,6 +272,7 @@ class PeakFinder:
         k.emit("// Shape is (B, Mout, RW).")
         k.emit()
         k.emit(f'constexpr int {RW = };    // ring buffer elements per warp')
+        k.emit(f'float *pstate = (float *)pstate_;')
         k.emit("pstate += (b*Mout + mout) * RW;")
         k.emit()
 

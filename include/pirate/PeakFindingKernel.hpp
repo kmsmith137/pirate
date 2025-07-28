@@ -49,7 +49,8 @@ struct PeakFindingKernel
     void _check_args(const ksgpu::Array<void> &out_max,
 		     const ksgpu::Array<void> &out_ssq,
 		     const ksgpu::Array<void> &in,
-		     const ksgpu::Array<void> &wt);
+		     const ksgpu::Array<void> &wt,
+		     ksgpu::Dtype expected_dtype);
 };
 
 
@@ -136,7 +137,7 @@ struct pf_kernel {
 
     // The "full peak-finding" and "reduce-only" kernels have the same call signatures
     // (five pointers and two ints), but the meaning of the args is different, see above.
-    using cuda_kernel_t = void (*) (float *, float *, float *, float *, float *, int, int);
+    using cuda_kernel_t = void (*) (void *, void *, void *, void *, void *, int, int);
     
     cuda_kernel_t full_kernel = nullptr;
     cuda_kernel_t reduce_only_kernel = nullptr;

@@ -62,7 +62,7 @@ PeakFindingKernel::PeakFindingKernel(const PeakFindingKernelParams &params_, lon
 }
 
 
-void PeakFindingKernel::_check_args(const Array<void> &out_max, const Array<void> &out_ssq, const Array<void> &in, const Array<void> &wt)
+void PeakFindingKernel::_check_args(const Array<void> &out_max, const Array<void> &out_ssq, const Array<void> &in, const Array<void> &wt, Dtype expected_dtype)
 {
     int B = params.beams_per_batch;
     int Min = params.ndm_in;
@@ -80,6 +80,11 @@ void PeakFindingKernel::_check_args(const Array<void> &out_max, const Array<void
     xassert(out_ssq.is_fully_contiguous());
     xassert(in.is_fully_contiguous());
     xassert(wt.is_fully_contiguous());
+
+    xassert(out_max.dtype == expected_dtype);
+    xassert(out_ssq.dtype == expected_dtype);
+    xassert(in.dtype == expected_dtype);
+    xassert(wt.dtype == expected_dtype);
 }
 
 
@@ -123,7 +128,7 @@ void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_s
     Array<float> in = in_.template cast<float> ("ReferencePeakFindingKernel::apply(): 'in' array");
     Array<float> wt = wt_.template cast<float> ("ReferencePeakFindingKernel::apply(): 'wt' array");
 
-    _check_args(out_max, out_ssq, in, wt);
+    _check_args(out_max, out_ssq, in, wt, Dtype::native<float>());
     
     xassert(out_max.on_host());
     xassert(out_ssq.on_host());
@@ -294,18 +299,12 @@ void GpuPeakFindingKernel::allocate()
 }
 
 
-void GpuPeakFindingKernel::launch(Array<void> &out_max_, Array<void> &out_ssq_, const Array<void> &in_, const Array<void> &wt_, long ibatch, cudaStream_t stream)
+void GpuPeakFindingKernel::launch(Array<void> &out_max, Array<void> &out_ssq, const Array<void> &in, const Array<void> &wt, long ibatch, cudaStream_t stream)
 {
     xassert(this->is_allocated);
     xassert((ibatch >= 0) && (ibatch < nbatches));
     
-    // FIXME float16 coming soon
-    Array<float> out_max = out_max_.template cast<float> ("GpuPeakFindingKernel::apply(): 'out_max' array");
-    Array<float> out_ssq = out_ssq_.template cast<float> ("GpuPeakFindingKernel::apply(): 'out_ssq' array");
-    Array<float> in = in_.template cast<float> ("GpuPeakFindingKernel::apply(): 'in' array");
-    Array<float> wt = wt_.template cast<float> ("GpuPeakFindingKernel::apply(): 'wt' array");
-    
-    _check_args(out_max, out_ssq, in, wt);
+    _check_args(out_max, out_ssq, in, wt, params.dtype);
 
     xassert(out_max.on_gpu());
     xassert(out_ssq.on_gpu());
@@ -315,7 +314,9 @@ void GpuPeakFindingKernel::launch(Array<void> &out_max_, Array<void> &out_ssq_, 
     int W = cuda_kernel.W;
     uint Bx = (ndm_out + W - 1) / W;
     dim3 nblocks = {Bx, uint(params.beams_per_batch), 1};
-    float *pstate = (float *) persistent_state.data + (ibatch * params.beams_per_batch * ndm_out * cuda_kernel.RW);
+    
+    char *pstate = (char *) persistent_state.data;
+    pstate += ibatch * params.beams_per_batch * ndm_out * cuda_kernel.RW * xdiv(params.dtype.nbits,8);
     
     cuda_kernel.full_kernel <<< nblocks, 32*W, 0, stream >>>
 	(out_max.data, out_ssq.data, pstate, in.data, wt.data, ndm_out, nt_out);
