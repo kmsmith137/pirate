@@ -5,10 +5,11 @@ from .Ringbuf import Ringbuf
 
 
 class PeakFindingParams:
-    def __init__(self, M, E, Dout, W, BlocksPerSM):
+    def __init__(self, dtype, M, E, Dout, W, BlocksPerSM):
         """
         All kernel params except Dcore.
 
+           dtype = either 'float' or '__half'
            M = number of "rows" (e.g. trial DMs) per warp
            E = max kernel width
            Dout = output time downsampling factor
@@ -28,6 +29,16 @@ class PeakFindingParams:
         self.W = W
         self.Dout = Dout
         self.BlocksPerSM = BlocksPerSM
+        self.dtype = dtype
+
+        if dtype == 'float':
+            self.dt32 = 'float'
+            self.dtstr = 'fp32'
+        elif params.dtype == '__half':
+            self.dt32 = '__half2'
+            self.dtstr = 'fp16'
+        else:
+            raise RuntimeError(f"Unrecognized dtype '{dtype}")
 
         # Number of peak-finding profiles.
         self.P = 3 * utils.integer_log2(E) + 1
@@ -53,13 +64,13 @@ class PeakFinder:
         assert utils.is_power_of_two(Dcore)
         assert Dcore <= params.Dout
         assert params.M >= Dcore   # not really necessary but assumed for convenience
+
+        rostr = f'reduce_only_' if reduce_only else ''
         
         self.params = params
         self.Dcore = Dcore
         self.reduce_only = reduce_only
-
-        s = f'reduce_only_' if reduce_only else ''
-        self.kernel_name = f'pf_{s}kernel_M{params.M}_E{params.E}_Dcore{Dcore}_Dout{params.Dout}_W{params.W}_B{params.BlocksPerSM}'
+        self.kernel_name = f'pf_{params.dtstr}_{rostr}kernel_M{params.M}_E{params.E}_Dcore{Dcore}_Dout{params.Dout}_W{params.W}_B{params.BlocksPerSM}'
         self.reducer = PfReducer(params, Din=Dcore)
 
         if not reduce_only:
@@ -77,7 +88,7 @@ class PeakFinder:
         if not self.reduce_only:
             # Main case: full peak-finding kernel.
             in_args = ('pstate', 'in')
-            in_line1 = "'pstate' has shape (B, Mout, RW), where RW is defined below"
+            in_line1 = "'pstate' has shape (B, Mout, P32), where P32 is defined below"
             in_line2 = "'in' has shape (B, Mout*M, Tout*Dout)"
         else:
             # Debug case: reduce-only kernel (with different kernel args).
@@ -244,7 +255,7 @@ class PeakFinder:
         if not self.reduce_only:
             k.emit()
             self.ringbuf.advance_outer(k)
-            self.RW = self.ringbuf.get_nelts_per_warp()
+            self.P32 = self.ringbuf.get_n32_per_warp()
         
         k.emit("}  // end of t-loop")
         k.emit()
@@ -257,19 +268,19 @@ class PeakFinder:
 
 
     def _load_ringbuf(self, k):
-        RW = self.ringbuf.get_nelts_per_warp()
+        P32 = self.ringbuf.get_n32_per_warp()
 
-        if RW == 0:
+        if P32 == 0:
             k.emit("// Note: 'pstate' is not needed in this kernel")
             k.emit()
             return
         
         k.emit("// Apply per-warp offset to pstate, in preparation for loading")
-        k.emit("// Shape is (B, Mout, RW).")
+        k.emit("// Shape is (B, Mout, P32).")
         k.emit()
-        k.emit(f'constexpr int {RW = };    // ring buffer elements per warp')
+        k.emit(f'constexpr int {P32 = };    // ring buffer elements per warp')
         k.emit(f'float *pstate = (float *)pstate_;')
-        k.emit("pstate += (b*Mout + mout) * RW;")
+        k.emit("pstate += (b*Mout + mout) * P32;")
         k.emit()
 
         k.emit('// Read ring buffer directly from global memory.')
@@ -280,9 +291,9 @@ class PeakFinder:
 
         
     def _save_ringbuf(self, k):
-        RW = self.ringbuf.get_nelts_per_warp()
+        P32 = self.ringbuf.get_n32_per_warp()
         
-        if RW == 0:
+        if P32 == 0:
             k.emit("// Reminder: 'pstate' is not needed in this kernel")
             return
         

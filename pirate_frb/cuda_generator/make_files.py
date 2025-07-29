@@ -7,7 +7,7 @@ from .PeakFinder import PeakFinder, PeakFindingParams
 def make_pf_file(M, E, Dout, Dcore, W, BlocksPerSM):
     """Returns a Kernel object."""
 
-    pars = PeakFindingParams(M, E, Dout, W, BlocksPerSM)
+    pars = PeakFindingParams('float', M, E, Dout, W, BlocksPerSM)
 
     pf_full_kernel = PeakFinder(pars, Dcore, reduce_only=False)
     pf_reduce_only = PeakFinder(pars, Dcore, reduce_only=True)
@@ -41,7 +41,7 @@ def make_pf_file(M, E, Dout, Dcore, W, BlocksPerSM):
     k.emit(f'k.Dcore = {Dcore};')
     k.emit(f'k.W = {W};')
     k.emit(f'k.P = {pars.P};')
-    k.emit(f'k.RW = {pf_full_kernel.RW};')
+    k.emit(f'k.P32 = {pf_full_kernel.P32};')
     k.emit(f'k.full_kernel = {pf_full_kernel.kernel_name};')
     k.emit(f'k.reduce_only_kernel = {pf_reduce_only.kernel_name};')
     k.emit(f'k.debug = false;')

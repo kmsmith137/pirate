@@ -293,7 +293,8 @@ void GpuPeakFindingKernel::allocate()
 	throw runtime_error("GpuPeakFindingKernel: double call to allocate()");
 
     // Note 'af_zero' flag here.
-    std::initializer_list<long> shape = { params.total_beams, ndm_out, cuda_kernel.RW };
+    long ninner = cuda_kernel.P32 * xdiv(32, params.dtype.nbits);
+    std::initializer_list<long> shape = { params.total_beams, ndm_out, ninner };
     this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
     this->is_allocated = true;
 }
@@ -316,7 +317,7 @@ void GpuPeakFindingKernel::launch(Array<void> &out_max, Array<void> &out_ssq, co
     dim3 nblocks = {Bx, uint(params.beams_per_batch), 1};
     
     char *pstate = (char *) persistent_state.data;
-    pstate += ibatch * params.beams_per_batch * ndm_out * cuda_kernel.RW * xdiv(params.dtype.nbits,8);
+    pstate += ibatch * params.beams_per_batch * ndm_out * cuda_kernel.P32 * xdiv(params.dtype.nbits,8);
     
     cuda_kernel.full_kernel <<< nblocks, 32*W, 0, stream >>>
 	(out_max.data, out_ssq.data, pstate, in.data, wt.data, ndm_out, nt_out);
@@ -340,7 +341,7 @@ void pf_kernel::register_kernel()
     // (In the future, I may add more argument checking here.)
 #if 0
     cout << "register_pf_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
-	 << ", Dcore=" << Dcore << ", W=" << W << ", P=" << P << ", RW=" << RW << endl;
+	 << ", Dcore=" << Dcore << ", W=" << W << ", P=" << P << ", P32=" << P32 << endl;
 #endif
     
     xassert(M > 0);
@@ -349,7 +350,7 @@ void pf_kernel::register_kernel()
     xassert(Dcore > 0);
     xassert(W > 0);
     xassert(P > 0);
-    xassert((E == 1) || (RW > 0));
+    xassert((E == 1) || (P32 > 0));
     xassert(full_kernel != nullptr);
     xassert(reduce_only_kernel != nullptr);
     xassert(next == nullptr);

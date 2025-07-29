@@ -118,7 +118,7 @@ struct pf_kernel {
     //
     //  - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout).
     //  - 'in_max' and 'in_ssq' have shape (B, P, Mout*M, Tout*(Dout/Dcore))
-    //  - 'pstate' has shape (B, Mout, RW).
+    //  - 'pstate' has shape (B, Mout, P32).
     //  - 'in' has shape (B, Mout*M, Tout*Dout).
     //  - 'wt' has shape (B, P, Mout*M).
     //  - 'B' is the number of beams, and other params (P, M, ...) are defined below
@@ -134,7 +134,7 @@ struct pf_kernel {
     int Dcore = 0;   // internal downsampling factor (see discussion above)
     int W = 0;       // warps per threadblock
     int P = 0;       // number of peak-finding kernels (= 3*log2(E) + 1)
-    int RW = 0;      // ring buffer elements per output (beam, mout)
+    int P32 = 0;     // ring buffer 32-bit registers per output (beam, mout)
 
     // The "full peak-finding" and "reduce-only" kernels have the same call signatures
     // (five pointers and two ints), but the meaning of the args is different, see above.
@@ -173,7 +173,7 @@ struct GpuPeakFindingKernel : PeakFindingKernel
     BandwidthTracker bw_per_launch;
     
     // Allocated in GpuPeakFindingKernel::allocate(), not the constructor.
-    ksgpu::Array<void> persistent_state;   // FIXME will become Array<void>
+    ksgpu::Array<void> persistent_state;
 
     void launch(
         ksgpu::Array<void> &out_max,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
