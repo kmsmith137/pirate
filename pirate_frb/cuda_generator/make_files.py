@@ -34,6 +34,7 @@ def make_pf_file(M, E, Dout, Dcore, W, BlocksPerSM):
     k.emit()
     
     k.emit('pf_kernel k;')
+    k.emit(f'k.dtype = ksgpu::Dtype::native<float>();')
     k.emit(f'k.M = {M};')
     k.emit(f'k.E = {E};')
     k.emit(f'k.Dout = {Dout};')

@@ -28,12 +28,11 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
     int Mout = xdiv(Min, k.M);
     int Tout = xdiv(Tin, k.Dout);
 
-    cout << "test_reduce_only_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
-	 << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B << ", Mout=" << Mout
-	 << ", Tout=" << Tout << endl;
+    cout << "test_reduce_only_kernel: dtype=" << k.dtype << ", M=" << M << ", E=" << E
+	 << ", Dout=" << Dout << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B
+	 << ", Mout=" << Mout << ", Tout=" << Tout << endl;
     
     xassert_divisible(32, Dcore);
-    xassert_divisible(Tout, 32/Dcore);
 
     Array<float> out_max({B,P,Mout,Tout}, af_rhost | af_zero);
     Array<float> out_ssq({B,P,Mout,Tout}, af_rhost | af_zero);
@@ -63,11 +62,11 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
 	}
     }
 
-    Array<float> gpu_out_max({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
-    Array<float> gpu_out_ssq({B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
-    Array<float> gpu_in_max = in_max.to_gpu();
-    Array<float> gpu_in_ssq = in_ssq.to_gpu();
-    Array<float> gpu_wt = wt.to_gpu();
+    Array<void> gpu_out_max(k.dtype, {B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<void> gpu_out_ssq(k.dtype, {B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<void> gpu_in_max = in_max.convert(k.dtype).to_gpu();
+    Array<void> gpu_in_ssq = in_ssq.convert(k.dtype).to_gpu();
+    Array<void> gpu_wt = wt.convert(k.dtype).to_gpu();
 
     uint Bx = (Mout+W-1) / W;
     dim3 nblocks = {Bx, uint(B), 1};
@@ -124,8 +123,8 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
     Array<float> in({B,Min,Tin}, af_rhost | af_random);
     Array<float> host_max({B,P,Mout,Tout}, af_rhost | af_zero);
     Array<float> host_ssq({B,P,Mout,Tout}, af_rhost | af_zero);
-    Array<float> gpu_max({B,P,Mout,Tout}, af_rhost | af_zero);
-    Array<float> gpu_ssq({B,P,Mout,Tout}, af_rhost | af_zero);
+    Array<void> gpu_max(params.dtype, {B,P,Mout,Tout}, af_rhost | af_zero);
+    Array<void> gpu_ssq(params.dtype, {B,P,Mout,Tout}, af_rhost | af_zero);
 
     // Weights must be positive.
     for (long i = 0; i < wt.size; i++)
@@ -150,24 +149,28 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
     long Tin_g = gpu_kernel.params.nt_in;
     long Tout_g = gpu_kernel.nt_out;
     
-    Array<float> wt_g = wt.to_gpu();
-    Array<float> in_g({B,Min,Tin_g}, af_gpu);
-    Array<float> max_g({B,P,Mout,Tout_g}, af_gpu);
-    Array<float> ssq_g({B,P,Mout,Tout_g}, af_gpu);
+    Array<void> wt_g = wt.convert(params.dtype).to_gpu();
+    Array<void> in_g(params.dtype, {B,Min,Tin_g}, af_gpu);
+    Array<void> max_g(params.dtype, {B,P,Mout,Tout_g}, af_gpu);
+    Array<void> ssq_g(params.dtype, {B,P,Mout,Tout_g}, af_gpu);
     
     for (long i = 0; i < niter_gpu; i++) {
 	long it0 = (i) * Tin_g;
 	long it1 = (i+1) * Tin_g;
 
-	in_g.fill(in.slice(2,it0,it1));
-		  
+	Array<void> in_tmp = in.slice(2,it0,it1).convert(params.dtype);
+	in_g.fill(in_tmp);
+	
 	for (long b = 0; b < gpu_kernel.nbatches; b++) {
 	    long ib0 = (b) * params.beams_per_batch;
 	    long ib1 = (b+1) * params.beams_per_batch;
 
+	    Array<void> max_tmp = max_g.slice(0,ib0, ib1);
+	    Array<void> ssq_tmp = ssq_g.slice(0,ib0, ib1);
+	    
 	    gpu_kernel.launch(
-	        max_g.slice(0,ib0,ib1),
-	        ssq_g.slice(0,ib0,ib1),
+		max_tmp,
+		ssq_tmp,
 	        in_g.slice(0,ib0,ib1),
 	        wt_g.slice(0,ib0,ib1),
 		b, NULL
@@ -194,20 +197,19 @@ void test_gpu_peak_finding_kernel()
 
     for (int i = 0; i < 5; i++) {
 	pf_kernel k = ksgpu::rand_element(all_kernels);
-	long T0 = xdiv(32 * k.Dout, k.Dcore);
 	
-	auto v = ksgpu::random_integers_with_bounded_product(7, 1000000 / (k.M * T0));
+	auto v = ksgpu::random_integers_with_bounded_product(7, 50000 / k.M);
 	int niter_gpu = v[0];
 
 	PeakFindingKernelParams params;
-	params.dtype = Dtype::native<float> ();
+	params.dtype = Dtype::native<float> ();   // FIXME
 	params.time_downsampling_factor = k.Dout;
 	params.dm_downsampling_factor = k.M;
 	params.max_kernel_width = k.E;
 	params.beams_per_batch = v[1];
 	params.total_beams = v[1] * v[2];
 	params.ndm_in = v[3] * v[4] * k.M;
-	params.nt_in = v[5] * v[6] * niter_gpu * T0;
+	params.nt_in = v[5] * v[6] * niter_gpu * xdiv(1024,params.dtype.nbits);
 	
 	test_reduce_only_kernel(k, params.beams_per_batch, params.ndm_in, params.nt_in);
 	test_pf_kernel(params, niter_gpu);

@@ -126,6 +126,8 @@ struct pf_kernel {
     // Kernels are launched with {BM,B,1} blocks and {32*W,1} threads, where BM = ceil(Mout/W).
     // Shared memory is statically allocated.
 
+    ksgpu::Dtype dtype;   // either float16 or float32
+    
     int M = 0;       // same as PeakFindingKernelParams::dm_downsampling_factor
     int E = 0;       // same as PeakFindingKernelParams::max_kernel_width
     int Dout = 0;    // same as PeakFindingKernelParams::time_downsampling_factor
@@ -146,7 +148,7 @@ struct pf_kernel {
     
     void register_kernel();
 
-    static pf_kernel get(int M, int E, int Dout);
+    static pf_kernel get(ksgpu::Dtype dtype, int M, int E, int Dout);
 
     // Returns all registered kernels.
     static std::vector<pf_kernel> enumerate();

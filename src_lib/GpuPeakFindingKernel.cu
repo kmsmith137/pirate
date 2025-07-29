@@ -20,6 +20,9 @@ namespace pirate {
 
 void PeakFindingKernelParams::validate() const
 {
+    if ((dtype != Dtype::native<float>()) && (dtype != Dtype::native<__half>()))
+	throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());
+    
     // Check that everything is initialized.
     xassert(dm_downsampling_factor > 0);
     xassert(time_downsampling_factor > 0);
@@ -34,15 +37,12 @@ void PeakFindingKernelParams::validate() const
     xassert(is_power_of_two(max_kernel_width));
     xassert_divisible(total_beams, beams_per_batch);
     xassert_divisible(ndm_in, dm_downsampling_factor);
-    xassert_divisible(nt_in, time_downsampling_factor);
+    xassert_divisible(nt_in, xdiv(1024,dtype.nbits));
 
     // Currently assumed in GPU kernel.
     // FIXME incomplete -- I think there are more assumptions in the GPU kernel.
     xassert(max_kernel_width <= 32);
-    
-    // FIXME float16 coming soon
-    if (dtype != Dtype::native<float>())
-	throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());    
+    xassert(time_downsampling_factor <= 32);
 }
 
 PeakFindingKernel::PeakFindingKernel(const PeakFindingKernelParams &params_, long Dcore_) :
@@ -272,7 +272,7 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     long E = params.max_kernel_width;
     long Dout = params.time_downsampling_factor;
     
-    this->cuda_kernel = pf_kernel::get(M, E, Dout);
+    this->cuda_kernel = pf_kernel::get(params.dtype, M, E, Dout);
     this->Dcore = cuda_kernel.Dcore;
     
     xassert(cuda_kernel.P == nprofiles);
@@ -387,12 +387,12 @@ void pf_kernel::register_kernel()
 
 
 // Static member function
-pf_kernel pf_kernel::get(int M, int E, int Dout)
+pf_kernel pf_kernel::get(Dtype dtype, int M, int E, int Dout)
 {
     unique_lock<mutex> lk(pf_kernel_lock);
     
     for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next) {
-	if ((k->M == M) && (k->E == E) && (k->Dout == Dout)) {
+	if ((k->dtype == dtype) && (k->M == M) && (k->E == E) && (k->Dout == Dout)) {
 	    pf_kernel ret = *k;
 	    ret.next = nullptr;
 	    return ret;
@@ -400,8 +400,9 @@ pf_kernel pf_kernel::get(int M, int E, int Dout)
     }
 
     stringstream ss;
-    ss << "pf_kernel::get(): no kernel found for (M,E,Dout)="
-       << "(" << M << "," << E << "," << Dout << ")";
+    ss << "pf_kernel::get(): no kernel found for dtype=" << dtype
+       << "and (M,E,Dout)=(" << M << "," << E << "," << Dout << ")";
+    
     throw runtime_error(ss.str());
 }
 
