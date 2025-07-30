@@ -32,17 +32,23 @@ void PeakFindingKernelParams::validate() const
     xassert(ndm_in > 0);
     xassert(nt_in > 0);
 
-    // xassert(is_power_of_two(dm_downsampling_factor));
-    xassert(is_power_of_two(time_downsampling_factor));
     xassert(is_power_of_two(max_kernel_width));
+    xassert(is_power_of_two(time_downsampling_factor));
     xassert_divisible(total_beams, beams_per_batch);
     xassert_divisible(ndm_in, dm_downsampling_factor);
-    xassert_divisible(nt_in, xdiv(1024,dtype.nbits));
+    xassert_divisible(nt_in, time_downsampling_factor);
 
+    long ndm_out = xdiv(ndm_in, dm_downsampling_factor);
+    long nt_out = xdiv(nt_in, time_downsampling_factor);
+    long nbits = dtype.nbits;
+    
     // Currently assumed in GPU kernel.
-    // FIXME incomplete -- I think there are more assumptions in the GPU kernel.
+    // FIXME add these asserts to the code generator (+ an assert on DCore)
     xassert(max_kernel_width <= 32);
     xassert(time_downsampling_factor <= 32);
+    xassert_divisible(nt_in, xdiv(1024,nbits));
+    xassert_divisible(nt_out, xdiv(32,nbits));   // tout is fastest axis in out_{max,ssq}
+    xassert_divisible(ndm_in, xdiv(32,nbits));   // dm_in is fastest axis in 'wt'
 }
 
 PeakFindingKernel::PeakFindingKernel(const PeakFindingKernelParams &params_, long Dcore_) :

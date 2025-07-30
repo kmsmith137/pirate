@@ -34,9 +34,11 @@ class PeakFindingParams:
         if dtype == 'float':
             self.dt32 = 'float'
             self.dtstr = 'fp32'
+            self.nbits = 32
         elif params.dtype == '__half':
             self.dt32 = '__half2'
             self.dtstr = 'fp16'
+            self.nbits = 16
         else:
             raise RuntimeError(f"Unrecognized dtype '{dtype}")
 
@@ -82,7 +84,7 @@ class PeakFinder:
         
     def emit_global(self, k):
         pars = self.params
-        M, E, Dout, W, P = pars.M, pars.E, pars.Dout, pars.W, pars.P
+        dt32, nbits, M, E, Dout, W, P = pars.dt32, pars.nbits, pars.M, pars.E, pars.Dout, pars.W, pars.P
         Dcore = self.Dcore
 
         if not self.reduce_only:
@@ -127,55 +129,61 @@ class PeakFinder:
         # until the persistent state is used. This avoids a compiler warning about an
         # unused variable.
 
-        k.emit(f"float *out_max = (float *) out_max_;")
-        k.emit(f"float *out_ssq = (float *) out_ssq_;")
-        k.emit(f"{s}float *{in_args[0]} = (float *) {in_args[0]}_;")  # see above
-        k.emit(f"float *{in_args[1]} = (float *) {in_args[1]}_;")
-        k.emit(f"float *wt = (float *) wt_;")            
+        k.emit(f"{dt32} *out_max = ({dt32} *) out_max_;")
+        k.emit(f"{dt32} *out_ssq = ({dt32} *) out_ssq_;")
+        k.emit(f"{s}{dt32} *{in_args[0]} = ({dt32} *) {in_args[0]}_;")  # see above
+        k.emit(f"{dt32} *{in_args[1]} = ({dt32} *) {in_args[1]}_;")
+        k.emit(f"{dt32} *wt = ({dt32} *) wt_;")            
         k.emit()
         
-        k.emit("int b = blockIdx.y;  // beam index")
-        k.emit("int mblock = blockIdx.x * W;              // base m-index of block")
-        k.emit("int mout = mblock + (threadIdx.x >> 5);   // output m-index of warp")
+        divstr = f' / {32//nbits}' if (nbits < 32) else ''
+        k.emit(f"int b = blockIdx.y;  // beam index")
+        k.emit(f"int mout_block = blockIdx.x * W;                    // base input m-index of block")
+        k.emit(f"int mout_warp = mout_block + (threadIdx.x >> 5);    // output m-index of warp")
         k.emit()
-        k.emit("bool warp_active = (mout < Mout);")
-        k.emit("mout = warp_active ? mout : (Mout-1);")
+        k.emit(f"bool warp_active = (mout_warp < Mout);")
+        k.emit(f"mout_warp = warp_active ? mout_warp : (Mout-1);")
         k.emit()
-        
-        k.emit('// Shared memory layout: wt[P][W][M]')
-        k.emit(f'// nelts={(P*W*M)=}, nbytes={(4*P*W*M)=}')
-        k.emit(f'__shared__ float shmem[{P*W*M}];')
+
+        shmem_n32 = (P*W*M*nbits) // 32
+        k.emit('// Shared memory layout: wt[P][W*M]')
+        k.emit(f'// nelts={(P*W*M)=}, nelts32={shmem_n32} nbytes={4*shmem_n32}')
+        k.emit(f'__shared__ float shmem[{shmem_n32}];')
         k.emit()
 
         k.emit("// Apply per-beam offset to 'wt', in preparation for loading weights.")
         k.emit("// Shape is (B, P, Mout*M).")
         k.emit()
-        k.emit("wt += b * (P * Mout * M);")
+        k.emit(f"wt += b * (P * Mout * M){divstr};")
         k.emit()
         
         k.emit("// Copy weights from global memory to shared.")
         k.emit("// The destination array has shape (P, W*M), contiguously packed.")
-        k.emit("// The source array is a discontiguous subset of a shape (B, P, Mout*M) source array.")
+        k.emit("// The source array is a discontiguous subset of a shape (P, Mout*M) source array.")
         k.emit("// FIXME this loop could be optimized a little.")
         k.emit()
-        k.emit("for (int i = threadIdx.x; i < P*W*M; i += 32*W) {")
-        k.emit("    int p = i / (W*M);")
-        k.emit("    int m = i - (W*M)*p + (mblock*M);")
-        k.emit("    m = min(m, Mout*M-1);")
-        k.emit("    shmem[i] = wt[p*Mout*M + m];")
+        k.emit(f'constexpr int ndst = (W * M){divstr};     // dst array shape is (P, ndst)')
+        k.emit(f'const int nsrc = (Mout * M){divstr};      // src array shape is (P, nsrc)')
+        k.emit(f'const int j0 = (mout_block * M){divstr};  // base offset in source array')
+        k.emit('')
+        k.emit("for (int i = threadIdx.x; i < P * ndst; i += 32*W) {")
+        k.emit("    int p = i / ndst;")
+        k.emit("    int j = i - p*ndst + j0;")
+        k.emit("    j = min(j, nsrc-1);")
+        k.emit("    shmem[i] = wt[p*nsrc + j];")
         k.emit("}")
         k.emit()
         k.emit('__syncthreads();')
         k.emit()
         k.emit('// Per-warp weights array in shared memory, with shape (P,M) and stride (W*M).')
-        k.emit('float *wt_sh = shmem + (mout - mblock) * M;')
+        k.emit('float *wt_sh = shmem + (mout_warp - mout_block) * M;')
         k.emit()
         
         k.emit("// Apply per-thread offset, to 'out_max' and 'out_ssq'.")
         k.emit("// Shapes are (B, P, Mout, Tout), and pstride is Mout*Tout.")
         k.emit("// This leaves an offset 0 <= p < P to be applied later (with stride Mout*Tout).")
         k.emit()
-        k.emit("int out_offset = (b * P * Mout + mout) * Tout + (threadIdx.x & 0x1f);")
+        k.emit("int out_offset = (b * P * Mout + mout_warp) * Tout + (threadIdx.x & 0x1f);")
         k.emit("out_max += out_offset;")
         k.emit("out_ssq += out_offset;")
         k.emit()
@@ -186,7 +194,7 @@ class PeakFinder:
             k.emit("// Shape is (B, Mout*M, Tout*Dout)")
             k.emit()
             k.emit("int in_mstride = Tout * Dout;")
-            k.emit(f"in += (b*Mout + mout) * M * in_mstride + (threadIdx.x & 0x1f);")
+            k.emit(f"in += (b*Mout + mout_warp) * M * in_mstride + (threadIdx.x & 0x1f);")
             k.emit()
 
             # Save splice, for code to load the ring buffer.
@@ -203,7 +211,7 @@ class PeakFinder:
             k.emit()
             k.emit("int in_mstride = Tout * (Dout/Dcore);")
             k.emit("int in_pstride = Mout * M * in_mstride;")
-            k.emit("int in_offset = (b*P*in_pstride) + (mout * M * in_mstride);    // per-warp offset")
+            k.emit("int in_offset = (b*P*in_pstride) + (mout_warp * M * in_mstride);    // per-warp offset")
             k.emit(f"in_offset += ((threadIdx.x & 0x1f) / Dcore);          // per-thread time offset")
             k.emit(f"in_max += in_offset;")
             k.emit(f"in_ssq += in_offset;")
@@ -278,9 +286,9 @@ class PeakFinder:
         k.emit("// Apply per-warp offset to pstate, in preparation for loading")
         k.emit("// Shape is (B, Mout, P32).")
         k.emit()
-        k.emit(f'constexpr int {P32 = };    // ring buffer elements per warp')
+        k.emit(f'constexpr int {P32 = };    // ring buffer 32-bit elements per warp')
         k.emit(f'float *pstate = (float *)pstate_;')
-        k.emit("pstate += (b*Mout + mout) * P32;")
+        k.emit("pstate += (b*Mout + mout_warp) * P32;")
         k.emit()
 
         k.emit('// Read ring buffer directly from global memory.')
