@@ -33,10 +33,14 @@ class PeakFindingParams:
 
         if dtype == 'float':
             self.dt32 = 'float'
+            self.dt32_zero = '0.0f'
+            self.dt32_max = 'max'
             self.dtstr = 'fp32'
             self.nbits = 32
         elif params.dtype == '__half':
             self.dt32 = '__half2'
+            self.dt32_zero = '__float2half2_rn(0.0f)'
+            self.dt32_max = '__hmax2'
             self.dtstr = 'fp16'
             self.nbits = 16
         else:
@@ -538,7 +542,7 @@ class PfReducer:
         if self.params.Dout > 1:
             k.emit('// Persistent registers for PeakFinder')
             for r in (self.omax_rnames + self.ossq_rnames):
-                k.emit(f'float {r} = 0.0f;')
+                k.emit(f'{self.params.dt32} {r} = {self.params.dt32_zero};')
             k.emit()
 
     
@@ -564,10 +568,11 @@ class PfReducer:
 
         k.emit(f"// PfReducer: processing {(m,p)=}")
         k.emit(f"// PfReducer: recall that '{wt_sh}' is a per-warp shared memory array with shape {(P,M)=} and stride {(W*M)=}")
+        
         woff = p*W*M + m
         s = f'threadIdx.x & {(Din-1)}'
         s = f'({s}) + {woff}' if woff else s
-        decl = 'float ' if (m==p==0) else ''        
+        decl = f'{pars.dt32} ' if (m==p==0) else ''        
         k.emit(f'{decl}wt = {wt_sh}[{s}];   // {(p*W*M + m) = }')
         
         imax, issq = self.imax_rnames[p], self.issq_rnames[p]
@@ -584,20 +589,20 @@ class PfReducer:
         # Ugh, 4 cases here.
         if (m > 0) and (mpop >= Din):
             k.emit(f"// PfReducer: inner reduce over m-values, in single iteration of outer t-loop.")
-            k.emit(f'{imax} = max({imax}, wt*{max_rname});')
+            k.emit(f'{imax} = {pars.dt32_max}({imax}, wt*{max_rname});')
             k.emit(f'{issq} += wt*wt*{ssq_rname};')
         elif (m == 0) and (mpop >= Din):
             k.emit("// PfReducer: apply weights")
-            k.emit(f'float {imax} = wt*{max_rname};')
-            k.emit(f'float {issq} = wt*wt*{ssq_rname};')
+            k.emit(f'{pars.dt32} {imax} = wt*{max_rname};')
+            k.emit(f'{pars.dt32} {issq} = wt*wt*{ssq_rname};')
         elif (m > 0) and (mpop < Din):
             k.emit(f"// PfReducer: inner reduce over m-values, in single iteration of outer t-loop.")
-            k.emit(f'{imax} = {btmp} ? max({imax}, wt*{max_rname}) : {imax};')
+            k.emit(f'{imax} = {btmp} ? {pars.dt32_max}({imax}, wt*{max_rname}) : {imax};')
             k.emit(f'{issq} = {btmp} ? ({issq} + wt*wt*{ssq_rname}) : {issq};')
         else:
             k.emit("// PfReducer: apply weights")
-            k.emit(f'float {imax} = {btmp} ? wt*{max_rname}: 0.0f;')
-            k.emit(f'float {issq} = {btmp} ? wt*wt*{ssq_rname} : 0.0f;')
+            k.emit(f'{pars.dt32} {imax} = {btmp} ? wt*{max_rname}: {pars.dt32_zero};')
+            k.emit(f'{pars.dt32} {issq} = {btmp} ? wt*wt*{ssq_rname} : {pars.dt32_zero};')
         
         k.emit()
 
@@ -632,7 +637,7 @@ class PfReducer:
                 k.emit(f'// "Cleanly" increase reduction level {d=} -> {(2*d)=}.')
                 for p in range(P):
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
-                    k.emit(f'{imax} = max({imax}, __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d}));')
+                    k.emit(f'{imax} = {pars.dt32_max}({imax}, __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d}));')
                     k.emit(f'{issq} += __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d});')
                 
                 k.emit()
@@ -661,9 +666,9 @@ class PfReducer:
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
                     tmp_max, tmp_ssq = k.get_tmp_rname(2)
 
-                    k.emit(f'float {tmp_max} = max({imax}, __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d}));')
+                    k.emit(f'{pars.dt32} {tmp_max} = {pars.dt32_max}({imax}, __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d}));')
                     k.emit(f'{imax} = {btmp_rname} ? {tmp_max} : {imax};')
-                    k.emit(f'float {tmp_rname} = {issq} + __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d}));')
+                    k.emit(f'{pars.dt32} {tmp_rname} = {issq} + __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d}));')
                     k.emit(f'{issq} = {btmp_rname} ? {tmp_ssq} : {issq};')
                 
                 k.emit()
@@ -727,8 +732,11 @@ class PfReducer:
 
     def _transpose_outputs(self, k, rnames):
         Dout = self.params.Dout
-        
-        if Dout > 1:
+            
+        if self.params.dtype == 'float':
+            if Dout == 1:
+                return
+            
             k.emit(f'// PfReducer: transpose output time indices')
             k.emit(f'// Before the transpose, {(32//Dout)=} "inner" time indices are assigned to "outer" threads')
             k.emit(f'// and {Dout=} "outer" time indices are assigned to "inner" threads.')
@@ -739,3 +747,33 @@ class PfReducer:
             
             for r in rnames:
                 k.emit(f'{r} = __shfl_sync(0xffffffff, {r}, {itmp_rname});')
+
+        elif self.params.dtype == '__half':
+            if Dout == 32:
+                return
+            
+            L = utils.integer_log2(32//Dout)
+            assert 1 <= L <= 5
+            
+            k.emit(f'// PfReducer: transpose output time indices, before writing to global memory.')
+            k.emit(f'//')
+            k.emit(f'// Input (where L = log2(32/Dout) = {L})')
+            k.emit(f'// b <-> ti_L   th0 th1 th2 th3 th4 <->  ti_{{L+1}} ..ti_5 ti_0 .. ti_{{L-1}}')
+            k.emit(f'//')
+            k.emit(f'// Output:')
+            k.emit(f'// b <-> ti_0   th0 th1 th2 th3 th4 <-> ti_1 ti_2 ti_3 ti_4 ti_5')
+            k.emit()
+            k.emit(f'constexpr int L = {L};')
+            k.emit('uint pfr_lane0a = (threadIdx.x << (6-L));')
+            k.emit('uint pfr_lane0b = (threadIdx.x >> L) & ((1 << (5-L)) - 1);')
+            k.emit('uint pfr_lane0 = pfr_lane0a | pfr_lane0b;   // source for ti0=0')
+            k.emit('uint pfr_lane1 = lane0 ^ (1 << (5-L));      // source for ti0=1')
+
+            for r in rnames:
+                y0, y1 = k.get_tmp_rname(2)
+                k.emit(f'__half2 {y0} = __shfl_sync(0xffffffff, {r}, pfr_lane0);  // ti0=0')
+                k.emit(f'__half2 {y1} = __shfl_sync(0xffffffff, {r}, pfr_lane1);  // ti0=1')
+                k.emit(f'{r} = (threadIdx.x & (1 << (L-1))) ? __highs2half2(y0,y1) : __lows2half2(y0,y1);')
+
+        else:
+            raise RuntimeError(f'dtype={self.params.dtype} not recognized')

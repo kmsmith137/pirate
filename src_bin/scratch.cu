@@ -160,37 +160,33 @@ static void test_ift2()
 //
 // final_float16_transpose1
 //
-// Input (where 1 <= M <= 5)
-// b <-> ti_M   th0 th1 th2 th3 th4 <->  ti_{M+1} ..ti_5 ti_0 .. ti_{M-1}
+// Input (where 1 <= L <= 5)
+// b <-> ti_L   th0 th1 th2 th3 th4 <->  ti_{L+1} ..ti_5 ti_0 .. ti_{L-1}
 //
 // Output:
 // b <-> ti_0   th0 th1 th2 th3 th4 <-> ti_1 ti_2 ti_3 ti_4 ti_5
 
 
-__device__ __forceinline__ __half2 final_float16_transpose1(__half2 x, int M)
+__device__ __forceinline__ __half2 final_float16_transpose1(__half2 x, int L)
 {
-    // M=1
-    // b <-> ti1   threads <-> ti2 ... ti5 ti0
-    // b <-> ti0   threads <-> ti1 ... ti5
-
     // lane0 = (source for ti0=0)
-    uint lane0a = (threadIdx.x << (6-M));
-    uint lane0b = (threadIdx.x >> M) & ((1 << (5-M)) - 1);
+    uint lane0a = (threadIdx.x << (6-L));
+    uint lane0b = (threadIdx.x >> L) & ((1 << (5-L)) - 1);
     uint lane0 = lane0a | lane0b;
 
     // lane1 = (source for ti0=1)
-    uint lane1 = lane0 ^ (1 << (5-M));
+    uint lane1 = lane0 ^ (1 << (5-L));
 
     __half2 y0 = __shfl_sync(0xffffffff, x, lane0);  // ti0=0
     __half2 y1 = __shfl_sync(0xffffffff, x, lane1);  // ti0=1
 
-    return (threadIdx.x & (1 << (M-1))) ? __highs2half2(y0,y1) : __lows2half2(y0,y1);
+    return (threadIdx.x & (1 << (L-1))) ? __highs2half2(y0,y1) : __lows2half2(y0,y1);
 }
 
 
-__global__ void fft1_kernel(__half2 *p, int M)
+__global__ void fft1_kernel(__half2 *p, int L)
 {
-    p[threadIdx.x] = final_float16_transpose1(p[threadIdx.x], M);
+    p[threadIdx.x] = final_float16_transpose1(p[threadIdx.x], L);
 }
 
 
@@ -200,30 +196,30 @@ static void test_fft1()
     Array<float> src({32,2}, af_rhost | af_random);  // (register, thread, simd)
     Array<float> dst({32,2}, af_rhost | af_random);  // (register, thread, simd)
     
-    for (int M = 1; M <= 5; M++) {
-	cout << "test_fft1: M=" << M << endl;
+    for (int L = 1; L <= 5; L++) {
+	cout << "test_fft1: L=" << L << endl;
 	
 	for (int ti = 0; ti < 64; ti++) {
 	    int ti0 = ti & 1;
-	    int tiM = (ti >> M) & 1;
+	    int tiL = (ti >> L) & 1;
 	    
 	    int ti15 = ti >> 1;
-	    int ti_0_M1 = ti & ((1 << M) - 1);  // ti_0 ... ti_{M-1}
-	    int ti_M1_5 = ti >> (M+1);          // ti_{M+1} ... ti_5
+	    int ti_0_L1 = ti & ((1 << L) - 1);  // ti_0 ... ti_{L-1}
+	    int ti_L1_5 = ti >> (L+1);          // ti_{L+1} ... ti_5
 	    
 	    // Input:
-	    // b <-> ti_M   th0 th1 th2 th3 th4 <-> ti_{M+1} ... ti_5 ti_0 ... ti_{M-1}
+	    // b <-> ti_L   th0 th1 th2 th3 th4 <-> ti_{L+1} ... ti_5 ti_0 ... ti_{L-1}
 	    //
 	    // Output:
 	    // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5
 
-	    dst.at({ ti15, ti0 }) = src.at({ ti_M1_5 | (ti_0_M1 << (5-M)) , tiM });
+	    dst.at({ ti15, ti0 }) = src.at({ ti_L1_5 | (ti_0_L1 << (5-L)) , tiL });
 	}
 
 	Array<__half> garr = src.template convert<__half> ();
 	garr = garr.to_gpu();
 
-	fft1_kernel<<<1,32>>> ((half2 *) garr.data, M);
+	fft1_kernel<<<1,32>>> ((half2 *) garr.data, L);
 	CUDA_PEEK("ift2_kernel launch");
 
 	assert_arrays_equal(dst, garr, "host", "gpu", {"th","b"});
@@ -236,8 +232,8 @@ static void test_fft1()
 //
 // final_float16_transpose2
 // 
-// Input (where 1 <= M <= 5)
-// b <-> ti_M   th0 th1 th2 th3 th4 <->  ti_{M+1} ..ti_5 ti_0 .. ti_{M-1}    r <-> s
+// Input (where 1 <= L <= 5)
+// b <-> ti_L   th0 th1 th2 th3 th4 <->  ti_{L+1} ..ti_5 ti_0 .. ti_{L-1}    r <-> s
 //
 // Output:
 // b <-> ti_0   th0 th1 th2 th3 th4 <-> ti_1 ti_2 ti_3 ti_4 ti_5   r <-> s
@@ -245,26 +241,26 @@ static void test_fft1()
 
 #if 0
 
-__device__ __forceinline__ void final_float16_transpose2(__half2 &x0, __half2 &x1, int M)
+__device__ __forceinline__ void final_float16_transpose2(__half2 &x0, __half2 &x1, int L)
 {
     __half2 y0 = __lows2half2(x0, x1);
     __half2 y1 = __highs2half2(x0, x1);
     
-    // b <-> s   th0 th1 th2 th3 th4 <-> ti_{M+1} ..ti_5 ti_0 .. ti_{M-1}    r <-> ti_M
+    // b <-> s   th0 th1 th2 th3 th4 <-> ti_{L+1} ..ti_5 ti_0 .. ti_{L-1}    r <-> ti_L
 
-    __half2 z0 = (threadIdx.x & (1 << (M-1))) ? y1 : y0;
-    __half2 z1 = (threadIdx.x & (1 << (M-1))) ? y0 : y1;
+    __half2 z0 = (threadIdx.x & (1 << (L-1))) ? y1 : y0;
+    __half2 z1 = (threadIdx.x & (1 << (L-1))) ? y0 : y1;
 
-    // b <-> s   th0 th1 th2 th3 th4 <-> ti_{M+1} ..ti_5 ti_0 .. ti_{M-1}    r <-> (ti_M ^ ti0)
+    // b <-> s   th0 th1 th2 th3 th4 <-> ti_{L+1} ..ti_5 ti_0 .. ti_{L-1}    r <-> (ti_L ^ ti0)
 
-    uint lane00 = (threadIdx.x << (6-M));
-    uint lanexx = (threadIdx.x << (5-M)) & xx;
+    uint lane00 = (threadIdx.x << (6-L));
+    uint lanexx = (threadIdx.x << (5-L)) & xx;
     uint lane1 = ;
     
     z0 = __shfl_sync(0xffffffff, z0, lane0);
     z1 = __shfl_sync(0xffffffff, z1, lane1);
 
-    // b <-> s   th0 th1 th2 th3 th4 <-> ti_1 ti_2 ... ti_5    r <-> (ti_M ^ ti0)
+    // b <-> s   th0 th1 th2 th3 th4 <-> ti_1 ti_2 ... ti_5    r <-> (ti_L ^ ti0)
 
     y0 = ;  // conditional move
     y1 = ;  // conditional move
