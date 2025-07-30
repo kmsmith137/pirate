@@ -51,7 +51,6 @@ class PeakFindingParams:
 
         # Variables used internally by kernel.
         # To override these defaults, just assign new values after construction.
-        self.wt_sh_rname = 'wt_sh'      # shared memory pointer, shape (P, W*M)
         self.wt_glo_rname = 'wt'        # global memory pointer, shape (B, P, Mout*M)
         self.out_max_rname = 'out_max'  # global memory pointer, shape (B, P, Mout, Tout)
         self.out_ssq_rname = 'out_ssq'  # global memory pointer, shape (B, P, Mout, Tout)
@@ -178,9 +177,6 @@ class PeakFinder:
         k.emit("}")
         k.emit()
         k.emit('__syncthreads();')
-        k.emit()
-        k.emit('// Per-warp weights array in shared memory, with shape (P,M) and stride (W*M).')
-        k.emit('float *wt_sh = shmem + (mout_warp - mout_block) * M;')
         k.emit()
         
         k.emit("// Apply per-thread offset, to 'out_max' and 'out_ssq'.")
@@ -564,19 +560,14 @@ class PfReducer:
         
         Din = self.Din
         pars = self.params
-        M, P, W, Dout, wt_sh = pars.M, pars.P, pars.W, pars.Dout, pars.wt_sh_rname
+        M, P, W, Dout = pars.M, pars.P, pars.W, pars.Dout
 
         k.emit(f"// PfReducer: processing {(m,p)=}")
-        k.emit(f"// PfReducer: recall that '{wt_sh}' is a per-warp shared memory array with shape {(P,M)=} and stride {(W*M)=}")
+        k.emit(f"// PfReducer: recall that shmem[] has shape (P, W*M)")
+
+        self._load_wt(k, m, p)   # emits line of the form 'wt = shmem[...];'
         
-        woff = p*W*M + m
-        s = f'threadIdx.x & {(Din-1)}'
-        s = f'({s}) + {woff}' if woff else s
-        decl = f'{pars.dt32} ' if (m==p==0) else ''        
-        k.emit(f'{decl}wt = {wt_sh}[{s}];   // {(p*W*M + m) = }')
-        
-        imax, issq = self.imax_rnames[p], self.issq_rnames[p]
-        
+        imax, issq = self.imax_rnames[p], self.issq_rnames[p]        
         mpop = min(M-m, Din)   # number of populated m-indices
         btmp = None            # boolean mask (may not be needed)
         
@@ -612,17 +603,47 @@ class PfReducer:
         k.emit('// PfReducer: all (m,p) values have been processed, this should be near the bottom of the outer t-loop')
         k.emit()
 
-        if Dout > 1:
-            self._outer_reduce(k)
-
+        self._outer_reduce(k)
         self._write_to_global_memory(k)
 
 
+    def _load_wt(self, k, m, p):
+        pars = self.params
+        M, P, W, Dout = pars.M, pars.P, pars.W, pars.Dout
+        
+        if p == 0:
+            Din = self.Din
+            decl = f'uint ' if (m==0) else ''
+            k.emit(f'// pfr_m = value of m on this thread (used for reading wt[] array')
+            k.emit(f'{decl}pfr_m = {m} + (threadIdx.x & {Din-1});  // (Din-1)={Din-1}')
+            if m + Din > M:
+                k.emit(f'pfr_m = min(pfr_m, {M-1});   // (M-1)={M-1}')
+                
+            k.emit(f'// pfr_j = index into inner axis (length W*M) of shape-(P,W*M) shmem array')
+            k.emit(f'{decl}pfr_j = (threadIdx.x >> 5) * M + pfr_m;')
+            
+            if pars.dtype == '__half':
+                k.emit(f'// pfr_cw = control word for selecting __half from __half2')
+                k.emit(f'{decl}pfr_cw = (pfr_j & 1) ? 0x0101 : 0x0')
+                k.emit(f'pfr_j >>= 1')
+
+        poff = (p * W * M * 32) // pars.nbits
+        poff = f'+ {poff}' if (poff > 0) else ''
+        decl = f'{pars.dt32} ' if (m==p==0) else ''        
+        k.emit(f'{decl}wt = shmem[pfr_j{poff}];')
+
+        if pars.dtype == '__half':
+            k.emit(f'wt = ksgpu::f16_perm(wt, wt, pfr_cw);')
+            
+
+    
     def _outer_reduce(self, k):
         Din = self.Din
         pars = self.params
         M, P, Dout, tout = pars.M, pars.P, pars.Dout, pars.tout_rname
-        assert Dout > 1
+
+        if Dout == 1:
+            return
         
         mpop = min(M, Din)   # number of populated m-indices
         d = 1                # current reduction level
