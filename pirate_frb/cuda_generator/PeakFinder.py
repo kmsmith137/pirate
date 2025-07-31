@@ -1,7 +1,7 @@
 import itertools
 
 from . import utils
-from .Ringbuf import Ringbuf
+from .Ringbuf import Ringbuf, Ringbuf16
 
 
 class PeakFindingParams:
@@ -78,11 +78,14 @@ class PeakFinder:
         self.kernel_name = f'pf_{params.dtstr}_{rostr}kernel_M{params.M}_E{params.E}_Dcore{Dcore}_Dout{params.Dout}_W{params.W}_B{params.BlocksPerSM}'
         self.reducer = PfReducer(params, Din=Dcore)
 
-        if not reduce_only:
-            self.ringbuf = Ringbuf()
-            self.pf = PfCore(self.reducer, self.ringbuf)
-            while self.pf.Din > 1:
-                self.pf = PfTransposeLayer(self.pf)
+        if reduce_only:
+            return
+
+        self.ringbuf = Ringbuf16() if (params.dtype == '__half') else Ringbuf()
+        
+        self.pf = PfCore(self.reducer, self.ringbuf)
+        while self.pf.Din > 1:
+            self.pf = PfTransposeLayer(self.pf)
         
         
     def emit_global(self, k):
@@ -422,11 +425,21 @@ class PfInitialTranspose16Layer:
 
 class PfCore:
     def __init__(self, reducer, ringbuf):
+        self.dt32 = reducer.params.dt32
         self.M = reducer.params.M
         self.E = reducer.params.E
         self.Din = reducer.Din
         self.reducer = reducer
         self.ringbuf = ringbuf
+
+        if self.dt32 == 'float':
+            assert isinstance(ringbuf, Ringbuf)
+        elif self.dt32 == '__half2':
+            assert isinstance(ringbuf, Ringbuf16)
+        else:
+            raise RuntimeError()
+        cls = Ringbuf16 if (self.dt32 == '__half2') else Ringbuf
+        assert isinstance(ringbuf, cls)
 
     
     def advance(self, k, rnames, m):
@@ -437,6 +450,14 @@ class PfCore:
         assert len(rnames) == Din
         assert (m % Din) == 0
         assert 0 <= m < M
+
+        if (m == 0) and (self.E > 1):
+            if self.dt32 == 'float':
+                k.emit(f'const float pf_a = 0.5f;')
+            elif self.dt32 == '__half2':
+                k.emit('const __half2 pf_a = __float2half2_rn(0.5f);')
+            else:
+                raise RuntimeError(f'unrecognized dtype32: {self.dt32}')
 
         k.emit('// PfCore: p=0 starts here')
         
@@ -463,19 +484,19 @@ class PfCore:
             k.emit(f'// PfCore: p={3*ids+1} starts here')
             for t in range(T):
                 tmp_rname = k.get_tmp_rname()
-                k.emit(f'float {tmp_rname} = {rnames[t+2]} + {rnames[t+3]};')
+                k.emit(f'{self.dt32} {tmp_rname} = {rnames[t+2]} + {rnames[t+3]};')
                 self._update(k, tmp_rname, m, 3*ids+1, t, T)
 
             k.emit(f'// PfCore: p={3*ids+2} starts here')
             for t in range(T):
                 tmp_rname = k.get_tmp_rname()
-                k.emit(f'float {tmp_rname} = {rnames[t+2]} + 0.5f * ({rnames[t+1]} + {rnames[t+3]});')
+                k.emit(f'{self.dt32} {tmp_rname} = {rnames[t+2]} + pf_a * ({rnames[t+1]} + {rnames[t+3]});')
                 self._update(k, tmp_rname, m, 3*ids+2, t, T)
 
             k.emit(f'// PfCore: p={3*ids+3} starts here')
             for t in range(T):
                 tmp_rname = k.get_tmp_rname()
-                k.emit(f'float {tmp_rname} = {rnames[t+1]} + {rnames[t+2]} + 0.5f * ({rnames[t]} + {rnames[t+3]});')
+                k.emit(f'{self.dt32} {tmp_rname} = {rnames[t+1]} + {rnames[t+2]} + pf_a * ({rnames[t]} + {rnames[t+3]});')
                 self._update(k, tmp_rname, m, 3*ids+3, t, T)
 
             if 2**(ids+1) == E:
@@ -504,7 +525,7 @@ class PfCore:
         ssq_rname = f'pf_ssq_p{p}'
 
         if t == 0:
-            decl = 'float ' if (m == 0) else ''
+            decl = f'{self.dt32} ' if (m == 0) else ''
             k.emit(f'{decl}{max_rname} = {rname};')
             k.emit(f'{decl}{ssq_rname} = {rname} * {rname};')
         else:
@@ -519,7 +540,7 @@ class PfCore:
         """'tds' is the current downsampling level of elements of 'rnames'."""
 
         if m == 0:
-            k.emit(f'float {pp_rname};')
+            k.emit(f'{self.dt32} {pp_rname};')
 
         if tds < self.Din:
             self.ringbuf.advance(k, rnames[self.Din//tds - 1], self.Din, dst=pp_rname)
