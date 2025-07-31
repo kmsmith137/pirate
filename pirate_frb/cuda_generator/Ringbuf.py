@@ -191,10 +191,9 @@ class Ringbuf16:
         # Cycle ring buffer (if needed)
         dp = self.rb_nelts[r][b] - self.rb_pos[r][b]
         self._cycle_register(k, rb_rname, 32 - dp)   # no-op if dp=0 or dp=32
-        
-        self.rb_pos[r][0] += dp
-        self.rb_pos[r][1] += dp
-        self.rb_nelts[r][b] += nelts
+
+        self.rb_pos[r] = (self.rb_pos[r][0] + dp, self.rb_pos[r][1] + dp)
+        self.rb_nelts[r] = (self.rb_nelts[r][0] + (1-b)*nelts, self.rb_nelts[r][1] + b*nelts)
         assert self.rb_pos[r][1-b] <= self.rb_nelts[r][1-b]
 
         # Blend (data, ring buffer) -> (wrapped data)
@@ -252,9 +251,9 @@ class Ringbuf16:
 
             s = f'{pos1:+}' if (pos1 != 0) else ''
             s = f'{pwarp_rname}[{laneId}{s}]'
-            s = f'({laneId} >= {lane0}) ? {s} : 0.0f' if (lane0 != 0) else s
+            s = f'({laneId} >= {lane0}) ? {s} : __float2half2_rn(0.0f)' if (lane0 != 0) else s
 
-            k.emit(f'__half2 {self.rb_rnames[i]} = {s};')
+            k.emit(f'__half2 {self.rb_rnames[r]} = {s};')
             pos0 += n
 
         assert pos0 == self.get_n32_per_warp()
@@ -278,7 +277,7 @@ class Ringbuf16:
             if lane0 != 0:
                 k.emit(f'if ({laneId} >= {lane0})')
 
-            k.emit(f'{s} = {self.rb_rnames[i]};')
+            k.emit(f'{s} = {self.rb_rnames[r]};')
             pos0 += n
 
         assert pos0 == self.get_n32_per_warp()
@@ -351,7 +350,7 @@ class Ringbuf16:
         assert src_rname1 != src_rname2
 
         if nelts == 32:
-            self.kernel.emit(f'{dst_rname} = ksgpu::f16_perm({src_rname1}, {src_rname2}, {control_word});')
+            k.emit(f'{dst_rname} = ksgpu::f16_perm({src_rname1}, {src_rname2}, {control_word});')
             return
 
         if self.lflag_nelts != nelts:
@@ -359,4 +358,4 @@ class Ringbuf16:
             k.emit(f'{decl}rb_lflag = ((threadIdx.x & 0x1f) < {32-nelts});')
 
         self.lflag_nelts = nelts
-        self.kernel.emit(f'{dst_rname} = ksgpu::f16_perm({src_rname1}, {src_rname2}, rb_lflag ? 0x3210 : {control_word});')
+        k.emit(f'{dst_rname} = ksgpu::f16_perm({src_rname1}, {src_rname2}, rb_lflag ? 0x3210 : {control_word});')

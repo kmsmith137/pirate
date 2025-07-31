@@ -33,13 +33,13 @@ class PeakFindingParams:
 
         if dtype == 'float':
             self.dt32 = 'float'
-            self.dt32_zero = '0.0f'
+            self.dt32_scalar = ''
             self.dt32_max = 'max'
             self.dtstr = 'fp32'
             self.nbits = 32
-        elif params.dtype == '__half':
+        elif dtype == '__half':
             self.dt32 = '__half2'
-            self.dt32_zero = '__float2half2_rn(0.0f)'
+            self.dt32_scalar = '__float2half2_rn'
             self.dt32_max = '__hmax2'
             self.dtstr = 'fp16'
             self.nbits = 16
@@ -233,7 +233,9 @@ class PeakFinder:
             k.emit(f"in_max += (in_bm_offset + in_t_offset);")
             k.emit(f"in_ssq += (in_bm_offset + in_t_offset);")
             k.emit()
-
+            k.emit(f'const {pars.dt32} large = {pars.dt32_scalar}(1000.0f);')
+            k.emit()
+                
         self.reducer.initialize(k)
 
         k.emit(f'// PeakFinder: main outer loop')
@@ -270,9 +272,9 @@ class PeakFinder:
                     suff = f'_m{m0}_p{p}'
                     
                     for stem in [ 'max', 'ssq' ]:
-                        k.emit(f'{dt32} in_{stem}{suff} = (pf_m < M) ? in_{stem}[{addr}] : 1000.0f;')
+                        k.emit(f'{dt32} in_{stem}{suff} = (pf_m < M) ? in_{stem}[{addr}] : large;')
                         if pars.dtype == '__half':
-                            k.emit(f'{dt32} in2_{stem}{suff} = (pf_m < M) ? in_{stem}[{addr}] + (16/Dcore)] : 1000.0f;')
+                            k.emit(f'{dt32} in2_{stem}{suff} = (pf_m < M) ? in_{stem}[{addr} + (16/Dcore)] : large;')
                             k.emit(f'in_{stem}{suff} = ksgpu::f16_perm(in_{stem}{suff}, in2_{stem}{suff}, in_cw);')
                     
                     self.reducer.advance(k, f'in_max{suff}', f'in_ssq{suff}', m0, p)  # string args are (max_rname, ssq_rname)
@@ -383,7 +385,7 @@ class PfTransposeLayer:
             znames = [ f'pf_mpad_{Din}_{i}' for i in range(Din) ]
 
             for r,zr in zip(rnames, znames):
-                k.emit(f'{dt32} {zr} = {self.params.dt32_zero};')
+                k.emit(f'{dt32} {zr} = {self.params.dt32_scalar}(0.0f);')
                 k.warp_transpose(r, zr, Din, dt32)
 
             self.next_layer.advance(k, rnames + znames, m)
@@ -413,7 +415,7 @@ class PfInitialTranspose16Layer:
         
         if m == 0:
             k.emit("const uint itrans16_lane0 = (threadIdx.x >> 1) & 0xf;")
-            k.emit("const uint itrans16_lane1 = lane0 | 0x10;")
+            k.emit("const uint itrans16_lane1 = itrans16_lane0 | 0x10;")
             
         k.emit(f"__half2 {tmp0} = __shfl_sync(0xffffffff, x, itrans16_lane0);")
         k.emit(f"__half2 {tmp1} = __shfl_sync(0xffffffff, x, itrans16_lane1);")
@@ -451,12 +453,7 @@ class PfCore:
         assert 0 <= m < M
 
         if (m == 0) and (E > 1):
-            if dt32 == 'float':
-                k.emit(f'const float pf_a = 0.5f;')
-            elif dt32 == '__half2':
-                k.emit('const __half2 pf_a = __float2half2_rn(0.5f);')
-            else:
-                raise RuntimeError(f'unrecognized dtype32: {dt32}')
+            k.emit(f'const {dt32} pf_a = {self.params.dt32_scalar}(0.5f);')
 
         k.emit('// PfCore: p=0 starts here')
         
@@ -528,7 +525,7 @@ class PfCore:
             k.emit(f'{decl}{max_rname} = {rname};')
             k.emit(f'{decl}{ssq_rname} = {rname} * {rname};')
         else:
-            k.emit(f'{max_rname} = max({max_rname}, {rname});')
+            k.emit(f'{max_rname} = {self.params.dt32_max}({max_rname}, {rname});')
             k.emit(f'{ssq_rname} += {rname} * {rname};')
 
         if t == T-1:
@@ -574,7 +571,7 @@ class PfReducer:
         if self.params.Dout > 1:
             k.emit('// Persistent registers for PeakFinder')
             for r in (self.omax_rnames + self.ossq_rnames):
-                k.emit(f'{self.params.dt32} {r} = {self.params.dt32_zero};')
+                k.emit(f'{self.params.dt32} {r} = {self.params.dt32_scalar}(0.0f);')
             k.emit()
 
     
@@ -628,8 +625,8 @@ class PfReducer:
             k.emit(f'{issq} = {btmp} ? ({issq} + wt*wt*{ssq_rname}) : {issq};')
         else:
             k.emit("// PfReducer: apply weights")
-            k.emit(f'{pars.dt32} {imax} = {btmp} ? wt*{max_rname}: {pars.dt32_zero};')
-            k.emit(f'{pars.dt32} {issq} = {btmp} ? wt*wt*{ssq_rname} : {pars.dt32_zero};')
+            k.emit(f'{pars.dt32} {imax} = {btmp} ? wt*{max_rname}: {pars.dt32_scalar}(0.0f);')
+            k.emit(f'{pars.dt32} {issq} = {btmp} ? wt*wt*{ssq_rname} : {pars.dt32_scalar}(0.0f);')
         
         k.emit()
 
@@ -824,13 +821,13 @@ class PfReducer:
             k.emit('uint pfr_lane0a = (threadIdx.x << (6-L));')
             k.emit('uint pfr_lane0b = (threadIdx.x >> L) & ((1 << (5-L)) - 1);')
             k.emit('uint pfr_lane0 = pfr_lane0a | pfr_lane0b;   // source for ti0=0')
-            k.emit('uint pfr_lane1 = lane0 ^ (1 << (5-L));      // source for ti0=1')
+            k.emit('uint pfr_lane1 = pfr_lane0 ^ (1 << (5-L));  // source for ti0=1')
 
             for r in rnames:
                 y0, y1 = k.get_tmp_rname(2)
                 k.emit(f'__half2 {y0} = __shfl_sync(0xffffffff, {r}, pfr_lane0);  // ti0=0')
                 k.emit(f'__half2 {y1} = __shfl_sync(0xffffffff, {r}, pfr_lane1);  // ti0=1')
-                k.emit(f'{r} = (threadIdx.x & (1 << (L-1))) ? __highs2half2(y0,y1) : __lows2half2(y0,y1);')
+                k.emit(f'{r} = (threadIdx.x & (1 << (L-1))) ? __highs2half2({y0},{y1}) : __lows2half2({y0},{y1});')
 
         else:
             raise RuntimeError(f'dtype={self.params.dtype} not recognized')
