@@ -119,6 +119,8 @@ struct pf_accumulator
 
 void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_ssq_, const Array<void> &in_, const Array<void> &wt_)
 {
+    constexpr float one_over_sqrt2 = 0.7071067811865476f;
+    
     int B = params.beams_per_batch;
     int M = params.dm_downsampling_factor;
     int E = params.max_kernel_width;
@@ -241,7 +243,7 @@ void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_s
 	    float *src = in_ds.data;
 	    
 	    for (long i = 0; i < B*Min*Tds2; i++)
-		dst[i] = src[2*i] + src[2*i+1];
+		dst[i] = one_over_sqrt2 * (src[2*i] + src[2*i+1]);
 	    
 	    in_ds = in_ds2;
 	    isamp++;
@@ -255,7 +257,7 @@ void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_s
 	    for (long i = 0; i < B*Min; i++) {
 		for (long t = 0; t < Tds; t++) {
 		    float x = (t >= dt) ? src[i*Tds+(t-dt)] : 0.0f;
-		    dst[i*Tds+t] = src[i*Tds+t] + x;
+		    dst[i*Tds+t] = one_over_sqrt2 * (src[i*Tds+t] + x);
 		}
 	    }
 

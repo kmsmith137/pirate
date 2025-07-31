@@ -454,6 +454,8 @@ class PfCore:
 
         if (m == 0) and (E > 1):
             k.emit(f'const {dt32} pf_a = {self.params.dt32_scalar}(0.5f);')
+        if (m == 0) and (E > 2):
+            k.emit(f'const {dt32} one_over_sqrt2 = {self.params.dt32_scalar}(0.7071067811865476f);')
 
         k.emit('// PfCore: p=0 starts here')
         
@@ -505,7 +507,7 @@ class PfCore:
                 
             # Downsample in pairs
             for j in range(len(rnames)//2):
-                k.emit(f'{rnames[2*j]} += {rnames[2*j+1]};')
+                k.emit(f'{rnames[2*j]} = one_over_sqrt2 * ({rnames[2*j]} + {rnames[2*j+1]});')
             rnames = rnames[::2]
             
             if T > 1:
