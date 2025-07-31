@@ -44,7 +44,7 @@ def generate_peak_finding_kernels():
     """Generates tuples (dtype, M, E, Dout, Dcore, W, BlocksPerSM)."""
 
     # Debug
-    # yield ('fp32', 1, 4, 1, 1, 4, 4)   # (M, E, Dout, Dcore, W, BlocksPerSM)
+    # yield ('fp16', 16, 1, 8, 8, 4, 4)   # (M, E, Dout, Dcore, W, BlocksPerSM)
     # return
 
     # Generate some kernels with M==Dout. I think these are representative
@@ -52,22 +52,24 @@ def generate_peak_finding_kernels():
     
     for M in [ 1, 2, 4, 8, 16, 32 ]:
         for E in [ 1, 2, 4, 8, 16, 32 ]:
-            Dout = M
-            Dcore = min(Dout, 8)
-            W = 4
-            BlocksPerSM = 4
-            yield ('fp32', M, E, Dout, Dcore, W, BlocksPerSM)
+            for dtype in [ 'fp16', 'fp32' ]:
+                Dout = M
+                Dcore = min(Dout, 8)
+                W = 4
+                BlocksPerSM = 4
+                yield (dtype, M, E, Dout, Dcore, W, BlocksPerSM)
 
     # Generate some kernels with Dout=16 and large M. I think these will be
     # representative of a future implementation with subband triggers.
 
     for E in [ 1, 2, 4, 8, 16, 32 ]:
         for M in range(48,53):
-            Dout = 16
-            Dcore = 8
-            W = 4
-            BlocksPerSM = 4
-            yield ('fp32', M, E, Dout, Dcore, W, BlocksPerSM)
+            for dtype in [ 'fp16', 'fp32' ]:
+                Dout = 16
+                Dcore = 8
+                W = 4
+                BlocksPerSM = 4
+                yield (dtype, M, E, Dout, Dcore, W, BlocksPerSM)
             
         
 def generate_kernel_filenames():

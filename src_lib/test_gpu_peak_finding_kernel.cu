@@ -39,7 +39,11 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
     Array<float> out_ssq({B,P,Mout,Tout}, af_rhost | af_zero);
     Array<float> in_max({B,P,Mout*M,Tout*Dt}, af_rhost | af_random);
     Array<float> in_ssq({B,P,Mout*M,Tout*Dt}, af_rhost | af_random);
-    Array<float> wt({B,P,Mout*M}, af_rhost | af_random);
+    Array<float> wt({B,P,Mout*M}, af_rhost | af_zero);
+
+    // Weights must be positive.
+    for (long i = 0; i < wt.size; i++)
+	wt.data[i] = rand_uniform(0.5, 1.0);
 
     for (int b = 0; b < B; b++) {
 	for (int p = 0; p < P; p++) {
@@ -79,8 +83,11 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
 
     CUDA_PEEK("pf reduce-only kernel launch");
 
+    int nds = M * xdiv(Dout,Dcore);  // total amount of downsampling in reduce-only kernel
+    double epsabs = 5.0 * sqrt(nds) * k.dtype.precision();  // appropriate epsabs for ssq comparison
+    
     assert_arrays_equal(out_max, gpu_out_max, "host_max", "gpu_max", {"b","p","mout","tout"});
-    assert_arrays_equal(out_ssq, gpu_out_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"});
+    assert_arrays_equal(out_ssq, gpu_out_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"}, epsabs);
 }
 
 
@@ -129,7 +136,7 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 
     // Weights must be positive.
     for (long i = 0; i < wt.size; i++)
-	wt.data[i] = rand_uniform(1.0, 2.0);
+	wt.data[i] = rand_uniform(0.5, 1.0);
     
     // Reference kernel.
 
@@ -203,15 +210,22 @@ void test_gpu_peak_finding_kernel()
 	int niter_gpu = v[0];
 
 	PeakFindingKernelParams params;
-	params.dtype = Dtype::native<float> ();   // FIXME
+	params.dtype = k.dtype;
 	params.time_downsampling_factor = k.Dout;
 	params.dm_downsampling_factor = k.M;
 	params.max_kernel_width = k.E;
 	params.beams_per_batch = v[1];
 	params.total_beams = v[1] * v[2];
-	params.ndm_in = v[3] * v[4] * k.M;
+	params.ndm_in = v[3] * v[4] * k.M * xdiv(32,params.dtype.nbits);
 	params.nt_in = v[5] * v[6] * niter_gpu * xdiv(1024,params.dtype.nbits);
-	
+
+	// Debug
+	// params.beams_per_batch = params.total_beams = 1;
+	// params.ndm_in = 2 * k.M;
+	// params.nt_in = 64;
+	    
+	params.validate();
+
 	test_reduce_only_kernel(k, params.beams_per_batch, params.ndm_in, params.nt_in);
 	test_pf_kernel(params, niter_gpu);
     }
