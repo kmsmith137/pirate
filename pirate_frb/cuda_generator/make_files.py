@@ -4,11 +4,17 @@ from .Kernel import Kernel
 from .PeakFinder import PeakFinder, PeakFindingParams
 
 
-def make_pf_file(M, E, Dout, Dcore, W, BlocksPerSM):
+def make_pf_file(nbits, M, E, Dout, Dcore, W, BlocksPerSM):
     """Returns a Kernel object."""
 
-    pars = PeakFindingParams('float', M, E, Dout, W, BlocksPerSM)
+    if nbits == 32:
+        dtype = 'float'
+    elif nbits == 16:
+        dtype = '__half'
+    else:
+        raise RuntimeError(f'Unrecognized dtype {dtype}')
 
+    pars = PeakFindingParams(dtype, M, E, Dout, W, BlocksPerSM)
     pf_full_kernel = PeakFinder(pars, Dcore, reduce_only=False)
     pf_reduce_only = PeakFinder(pars, Dcore, reduce_only=True)
     
@@ -34,7 +40,7 @@ def make_pf_file(M, E, Dout, Dcore, W, BlocksPerSM):
     k.emit()
     
     k.emit('pf_kernel k;')
-    k.emit(f'k.dtype = ksgpu::Dtype::native<float>();')
+    k.emit(f'k.dtype = ksgpu::Dtype::native<{dtype}>();')
     k.emit(f'k.M = {M};')
     k.emit(f'k.E = {E};')
     k.emit(f'k.Dout = {Dout};')
@@ -71,9 +77,9 @@ def make_file(stem):
     """
 
     # Reminder: (?:...) defines a "non-capturing group".
-    m = re.match(r'^(?:.*/)?pf_M(\d+)_E(\d+)_Dout(\d+)_Dcore(\d+)_W(\d+)_B(\d+)(?:\.cu)?', stem)
+    m = re.match(r'^(?:.*/)?pf_fp(\d+)_M(\d+)_E(\d+)_Dout(\d+)_Dcore(\d+)_W(\d+)_B(\d+)(?:\.cu)?', stem)
     if m:
-        M, E, Dout, Dcore, W, BlocksPerSM = [ int(x) for x in m.groups() ]
-        return make_pf_file(M, E, Dout, Dcore, W, BlocksPerSM)
+        nbits, M, E, Dout, Dcore, W, BlocksPerSM = [ int(x) for x in m.groups() ]
+        return make_pf_file(nbits, M, E, Dout, Dcore, W, BlocksPerSM)
 
     raise RuntimeError(f"Couldn't match {stem=}")
