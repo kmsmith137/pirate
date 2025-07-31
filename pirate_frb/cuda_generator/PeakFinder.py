@@ -87,7 +87,7 @@ class PeakFinder:
         while self.pf.Din > 1:
             self.pf = PfTransposeLayer(self.pf)
 
-        if self.pf.params == '__half2':
+        if params.dtype == '__half':
             self.pf = PfInitialTranspose16Layer(self.pf)
         
         
@@ -417,9 +417,11 @@ class PfInitialTranspose16Layer:
             k.emit("const uint itrans16_lane0 = (threadIdx.x >> 1) & 0xf;")
             k.emit("const uint itrans16_lane1 = itrans16_lane0 | 0x10;")
             
-        k.emit(f"__half2 {tmp0} = __shfl_sync(0xffffffff, x, itrans16_lane0);")
-        k.emit(f"__half2 {tmp1} = __shfl_sync(0xffffffff, x, itrans16_lane1);")
-        k.emit(f"return (threadIdx.x & 1) ? __highs2half2({tmp0},{tmp1}) : __lows2half2({tmp0},{tmp1});")
+        k.emit(f"__half2 {tmp0} = __shfl_sync(0xffffffff, {src}, itrans16_lane0);")
+        k.emit(f"__half2 {tmp1} = __shfl_sync(0xffffffff, {src}, itrans16_lane1);")
+        k.emit(f"{src} = (threadIdx.x & 1) ? __highs2half2({tmp0},{tmp1}) : __lows2half2({tmp0},{tmp1});")
+        
+        self.next_layer.advance(k, rnames, m)
         
 
 ####################################################################################################

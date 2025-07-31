@@ -136,7 +136,7 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 
     // Weights must be positive.
     for (long i = 0; i < wt.size; i++)
-	wt.data[i] = rand_uniform(0.5, 1.0);
+    	wt.data[i] = rand_uniform(0.5, 1.0);
     
     // Reference kernel.
 
@@ -193,8 +193,11 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 
     // Compare results.
     
+    int nds = params.dm_downsampling_factor * params.time_downsampling_factor;
+    double epsabs = 5.0 * sqrt(nds) * params.dtype.precision();  // appropriate epsabs for ssq comparison
+	
     assert_arrays_equal(host_max, gpu_max, "host_max", "gpu_max", {"b","p","mout","tout"});
-    assert_arrays_equal(host_ssq, gpu_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"});
+    assert_arrays_equal(host_ssq, gpu_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"}, epsabs);
     cout << endl;
 }
 
@@ -220,9 +223,10 @@ void test_gpu_peak_finding_kernel()
 	params.nt_in = v[5] * v[6] * niter_gpu * xdiv(1024,params.dtype.nbits);
 
 	// Debug
+	// niter_gpu = 1;
 	// params.beams_per_batch = params.total_beams = 1;
 	// params.ndm_in = 2 * k.M;
-	// params.nt_in = 64;
+	// params.nt_in = 64 * niter_gpu;
 	    
 	params.validate();
 
