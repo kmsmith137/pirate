@@ -98,8 +98,8 @@ class PeakFinder:
         else:
             # Debug case: reduce-only kernel (with different kernel args).
             in_args = ('in_max', 'in_ssq')
-            in_line1 = "'in_max' has shape (B, P, Mout*M, Tout32*(Dout/Dcore))"
-            in_line2 = "'in_ssq' has shape (B, P, Mout*M, Tout32*(Dout/Dcore))"
+            in_line1 = "'in_max' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
+            in_line2 = "'in_ssq' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
 
         k.reset_tmp_vars()
         
@@ -151,7 +151,7 @@ class PeakFinder:
         shmem_n32 = (P*W*M*nbits) // 32
         k.emit('// Shared memory layout: wt[P][W*M]')
         k.emit(f'// nelts={(P*W*M)=}, nelts32={shmem_n32} nbytes={4*shmem_n32}')
-        k.emit(f'__shared__ float shmem[{shmem_n32}];')
+        k.emit(f'__shared__ {dt32} shmem[{shmem_n32}];')
         k.emit()
 
         k.emit("// Apply per-beam offset to 'wt', in preparation for loading weights.")
@@ -203,18 +203,29 @@ class PeakFinder:
 
         else:
             # Debug case: reduce-only kernel (with different kernel args).
+            k.emit("// The arrays 'in_max' and 'in_ssq' have shape (B, P, Mout*M, Tout*(Dout/Dcore)).")
+            k.emit("// These arrays will be read into the following register assignment")
+            k.emit("//   th0 th1 ... th4 <-> m_0 .. m_{K-1} ti_0 .. ti_{4-K}    where K = log2(Dcore)")
+            k.emit("//")
+            k.emit("// In float16, the simd bit is assigned as: b <-> ti_{5-K}")
+            k.emit()
             k.emit("// Apply per-warp offsets, and per-thread time offset, to 'in_max' and 'in_ssq'.")
             k.emit("// Shape in GPU global memory is (B, P, Mout*M, Tout32*(Dout/Dcore)).")
             k.emit("// This leaves a per-thread offset 0 <= m < M to be applied later (with stride 'in_mstride').")
             k.emit("// This leaves an offset 0 <= p < P to be applied later (with stride 'in_pstride').")
             k.emit("// In each iteration of the t-loop, these pointers advance by (32/Dcore), not (32/Dout).")
             k.emit()
-            k.emit("int in_mstride = Tout32 * (Dout/Dcore);")
-            k.emit("int in_pstride = Mout * M * in_mstride;")
-            k.emit("int in_offset = (b*P*in_pstride) + (mout_warp * M * in_mstride);    // per-warp offset")
-            k.emit(f"in_offset += ((threadIdx.x & 0x1f) / Dcore);          // per-thread time offset")
-            k.emit(f"in_max += in_offset;")
-            k.emit(f"in_ssq += in_offset;")
+            k.emit(f"int in_mstride = Tout32 * (Dout/Dcore);")
+            k.emit(f"int in_pstride = Mout * M * in_mstride;")
+            k.emit(f"int in_bm_offset = (b * P * in_pstride) + (mout_warp * M * in_mstride);    // per-warp (b,m) offset")
+            k.emit(f"int in_t_offset = ((threadIdx.x & 0x1f) / Dcore);")
+            
+            if pars.dtype == '__half':
+                k.emit('int in_cw = (in_t_offset & 1) ? 0x7632 : 0x5410;   // control word for selecting __half from __half2')
+                k.emit('in_t_offset >>= 1;')
+                
+            k.emit(f"in_max += (in_bm_offset + in_t_offset);")
+            k.emit(f"in_ssq += (in_bm_offset + in_t_offset);")
             k.emit()
 
         self.reducer.initialize(k)
@@ -231,7 +242,7 @@ class PeakFinder:
                 rname = f'x{m}'
                 s = f'{m} * in_mstride' if (m > 0) else '0'
                 k.emit(f'// PeakFinder: {m=}\n')
-                k.emit(f"float {rname} = in[{s}];")
+                k.emit(f"{dt32} {rname} = in[{s}];")
                 self.pf.advance(k, [rname], m)
                 k.emit()
 
@@ -246,16 +257,21 @@ class PeakFinder:
                 suffix = f' + {m0}' if (m0 > 0) else ''
                 k.emit(f'{prefix}pf_m = (threadIdx.x & (Dcore-1)){suffix};   // {m0=}')
                 k.emit()
-                                
+
                 for p in range(P):
                     k.emit(f'// PeakFinder: {m0=}, {p=}')
-                    max_rname = f'in_max_m{m0}_p{p}'
-                    ssq_rname = f'in_ssq_m{m0}_p{p}'
-                    k.emit(f'float {max_rname} = (pf_m < M) ? in_max[({p} * in_pstride) + (pf_m * in_mstride)] : 1000.0f;')
-                    k.emit(f'float {ssq_rname} = (pf_m < M) ? in_ssq[({p} * in_pstride) + (pf_m * in_mstride)] : 1000.0f;')
-                    self.reducer.advance(k, max_rname, ssq_rname, m0, p)
+                    addr = f'({p} * in_pstride) + (pf_m * in_mstride)'
+                    suff = f'_m{m0}_p{p}'
+                    
+                    for stem in [ 'max', 'ssq' ]:
+                        k.emit(f'{dt32} in_{stem}{suff} = (pf_m < M) ? in_{stem}[{addr}] : 1000.0f;')
+                        if pars.dtype == '__half':
+                            k.emit(f'{dt32} in2_{stem}{suff} = (pf_m < M) ? in_{stem}[{addr}] + (16/Dcore)] : 1000.0f;')
+                            k.emit(f'in_{stem}{suff} = ksgpu::f16_perm(in_{stem}{suff}, in2_{stem}{suff}, in_cw);')
+                    
+                    self.reducer.advance(k, f'in_max{suff}', f'in_ssq{suff}', m0, p)  # string args are (max_rname, ssq_rname)
                 
-            k.emit("// Advance 'in_max' and 'in_ssq' by (32/Dcore) time samples")
+            k.emit("// Advance 'in_max' and 'in_ssq' by (32/Dcore) 32-bit registers")
             k.emit("in_max += (32/Dcore);")
             k.emit("in_ssq += (32/Dcore);")
             
@@ -287,7 +303,7 @@ class PeakFinder:
         k.emit("// Shape is (B, Mout, P32).")
         k.emit()
         k.emit(f'constexpr int {P32 = };    // ring buffer 32-bit elements per warp')
-        k.emit(f'float *pstate = (float *)pstate_;')
+        k.emit(f'{self.params.dt32} *pstate = ({self.params.dt32} *)pstate_;')
         k.emit("pstate += (b*Mout + mout_warp) * P32;")
         k.emit()
 
@@ -624,8 +640,8 @@ class PfReducer:
             
             if pars.dtype == '__half':
                 k.emit(f'// pfr_cw = control word for selecting __half from __half2')
-                k.emit(f'{decl}pfr_cw = (pfr_j & 1) ? 0x0101 : 0x0')
-                k.emit(f'pfr_j >>= 1')
+                k.emit(f'{decl}pfr_cw = (pfr_j & 1) ? 0x3232 : 0x1010;')
+                k.emit(f'pfr_j >>= 1;')
 
         poff = (p * W * M * 32) // pars.nbits
         poff = f'+ {poff}' if (poff > 0) else ''
