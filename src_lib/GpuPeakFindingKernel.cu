@@ -367,7 +367,7 @@ void pf_kernel::register_kernel()
 
     // Check whether this (M,E,Dout) triple has been registered before.
     for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next) {
-	if ((k->M != M) || (k->E != E) || (k->Dout != Dout))
+	if ((k->dtype != dtype) || (k->M != M) || (k->E != E) || (k->Dout != Dout))
 	    continue;
 
 	if (k->debug && !this->debug) {

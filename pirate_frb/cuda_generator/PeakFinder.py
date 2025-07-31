@@ -660,7 +660,7 @@ class PfReducer:
                 k.emit(f'{decl}pfr_cw = (pfr_j & 1) ? 0x3232 : 0x1010;')
                 k.emit(f'pfr_j >>= 1;')
 
-        poff = (p * W * M * 32) // pars.nbits
+        poff = (p * W * M * pars.nbits) // 32
         poff = f'+ {poff}' if (poff > 0) else ''
         decl = f'{pars.dt32} ' if (m==p==0) else ''        
         k.emit(f'{decl}wt = shmem[pfr_j{poff}];')
