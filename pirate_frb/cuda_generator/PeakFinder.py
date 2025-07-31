@@ -52,10 +52,10 @@ class PeakFindingParams:
         # Variables used internally by kernel.
         # To override these defaults, just assign new values after construction.
         self.wt_glo_rname = 'wt'        # global memory pointer, shape (B, P, Mout*M)
-        self.out_max_rname = 'out_max'  # global memory pointer, shape (B, P, Mout, Tout)
-        self.out_ssq_rname = 'out_ssq'  # global memory pointer, shape (B, P, Mout, Tout)
-        self.tout_rname = 'tout'        # advances by (32/Dout) in each loop iteration
-        self.Tout_rname = 'Tout'
+        self.out_max_rname = 'out_max'  # global memory pointer, shape (B, P, Mout, Tout32)
+        self.out_ssq_rname = 'out_ssq'  # global memory pointer, shape (B, P, Mout, Tout32)
+        self.tout32_rname = 'tout32'        # advances by (32/Dout) in each loop iteration
+        self.Tout32_rname = 'Tout32'
         self.Mout_rname = 'Mout'
 
 
@@ -94,29 +94,29 @@ class PeakFinder:
             # Main case: full peak-finding kernel.
             in_args = ('pstate', 'in')
             in_line1 = "'pstate' has shape (B, Mout, P32), where P32 is defined below"
-            in_line2 = "'in' has shape (B, Mout*M, Tout*Dout)"
+            in_line2 = "'in' has shape (B, Mout*M, Tout32*Dout)"
         else:
             # Debug case: reduce-only kernel (with different kernel args).
             in_args = ('in_max', 'in_ssq')
-            in_line1 = "'in_max' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
-            in_line2 = "'in_ssq' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
+            in_line1 = "'in_max' has shape (B, P, Mout*M, Tout32*(Dout/Dcore))"
+            in_line2 = "'in_ssq' has shape (B, P, Mout*M, Tout32*(Dout/Dcore))"
 
         k.reset_tmp_vars()
         
-        k.emit(f'// Kernel args are (out_max, out_ssq, {in_args[0]}, {in_args[1]}, wt, Mout, Tout).')
+        k.emit(f'// Kernel args are (out_max, out_ssq, {in_args[0]}, {in_args[1]}, wt, Mout, Tout32).')
         k.emit(f'//')
-        k.emit(f"//    - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout).")
+        k.emit(f"//    - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout32).")
         k.emit(f"//    - {in_line1}.")
         k.emit(f"//    - {in_line2}.")
         k.emit(f"//    - 'wt' has shape (B, P, Mout*M).")
         k.emit("//")
-        k.emit('// Each warp processes one output 0 <= mout < Mout, and all times 0 <= tout < Tout.')
+        k.emit('// Each warp processes one output 0 <= mout < Mout, and all times 0 <= tout32 < Tout32.')
         k.emit('//')
         k.emit('// Launch with {BM,B,1} blocks, where BM = ceil(Mout/W), and B is number of beams.')
         k.emit('// Launch with {32*W,1} threads.')
         k.emit()
         k.emit(f'__global__ void __launch_bounds__({32*W}, {pars.BlocksPerSM})')
-        k.emit(f'{self.kernel_name}(void *out_max_, void *out_ssq_, void *{in_args[0]}_, void *{in_args[1]}_, void *wt_, int Mout, int Tout)')
+        k.emit(f'{self.kernel_name}(void *out_max_, void *out_ssq_, void *{in_args[0]}_, void *{in_args[1]}_, void *wt_, int Mout, int Tout32)')
         k.emit('{')
 
         s = '' if self.reduce_only else '// '
@@ -180,10 +180,10 @@ class PeakFinder:
         k.emit()
         
         k.emit("// Apply per-thread offset, to 'out_max' and 'out_ssq'.")
-        k.emit("// Shapes are (B, P, Mout, Tout), and pstride is Mout*Tout.")
-        k.emit("// This leaves an offset 0 <= p < P to be applied later (with stride Mout*Tout).")
+        k.emit("// Shapes are (B, P, Mout, Tout32), and pstride is Mout*Tout32.")
+        k.emit("// This leaves an offset 0 <= p < P to be applied later (with stride Mout*Tout32).")
         k.emit()
-        k.emit("int out_offset = (b * P * Mout + mout_warp) * Tout + (threadIdx.x & 0x1f);")
+        k.emit("int out_offset = (b * P * Mout + mout_warp) * Tout32 + (threadIdx.x & 0x1f);")
         k.emit("out_max += out_offset;")
         k.emit("out_ssq += out_offset;")
         k.emit()
@@ -191,9 +191,9 @@ class PeakFinder:
         if not self.reduce_only:
             # Main case: full peak-finding kernel.
             k.emit("// Apply per-thread offsets to 'in'.")
-            k.emit("// Shape is (B, Mout*M, Tout*Dout)")
+            k.emit("// Shape is (B, Mout*M, Tout32*Dout)")
             k.emit()
-            k.emit("int in_mstride = Tout * Dout;")
+            k.emit("int in_mstride = Tout32 * Dout;")
             k.emit(f"in += (b*Mout + mout_warp) * M * in_mstride + (threadIdx.x & 0x1f);")
             k.emit()
 
@@ -204,12 +204,12 @@ class PeakFinder:
         else:
             # Debug case: reduce-only kernel (with different kernel args).
             k.emit("// Apply per-warp offsets, and per-thread time offset, to 'in_max' and 'in_ssq'.")
-            k.emit("// Shape in GPU global memory is (B, P, Mout*M, Tout*(Dout/Dcore)).")
+            k.emit("// Shape in GPU global memory is (B, P, Mout*M, Tout32*(Dout/Dcore)).")
             k.emit("// This leaves a per-thread offset 0 <= m < M to be applied later (with stride 'in_mstride').")
             k.emit("// This leaves an offset 0 <= p < P to be applied later (with stride 'in_pstride').")
             k.emit("// In each iteration of the t-loop, these pointers advance by (32/Dcore), not (32/Dout).")
             k.emit()
-            k.emit("int in_mstride = Tout * (Dout/Dcore);")
+            k.emit("int in_mstride = Tout32 * (Dout/Dcore);")
             k.emit("int in_pstride = Mout * M * in_mstride;")
             k.emit("int in_offset = (b*P*in_pstride) + (mout_warp * M * in_mstride);    // per-warp offset")
             k.emit(f"in_offset += ((threadIdx.x & 0x1f) / Dcore);          // per-thread time offset")
@@ -220,7 +220,7 @@ class PeakFinder:
         self.reducer.initialize(k)
 
         k.emit(f'// PeakFinder: main outer loop')
-        k.emit(f"for (int tout = 0; tout < Tout; tout += (32/Dout)) {{")
+        k.emit(f"for (int tout32 = 0; tout32 < Tout32; tout32 += (32/Dout)) {{")
         k.emit("    if (!warp_active)")
         k.emit("        continue;")
         k.emit()
@@ -555,7 +555,7 @@ class PfReducer:
            - m=2*Din: p = 0, 1, ..., P-1
               ...
 
-        Calls to PfReducer.advance() should be embedded in a loop where tout increases by (32/Dout) in each iteration.
+        Calls to PfReducer.advance() should be embedded in a loop where tout32 increases by (32/Dout) in each iteration.
         """
         
         Din = self.Din
@@ -640,7 +640,7 @@ class PfReducer:
     def _outer_reduce(self, k):
         Din = self.Din
         pars = self.params
-        M, P, Dout, tout = pars.M, pars.P, pars.Dout, pars.tout_rname
+        M, P, Dout, tout32 = pars.M, pars.P, pars.Dout, pars.tout32_rname
 
         if Dout == 1:
             return
@@ -700,9 +700,9 @@ class PfReducer:
 
         btmp_rname = k.get_tmp_rname()
         
-        k.emit(f'// Set {btmp_rname} on threads where (threadIdx.x * (32/Dout)) == tout (mod 32)')
+        k.emit(f'// Set {btmp_rname} on threads where (threadIdx.x * (32/Dout)) == tout32 (mod 32)')
         k.emit(f'// These are the threads where persistent max/ssq will be updated in this iteration of the t-loop')
-        k.emit(f'bool {btmp_rname} = (((threadIdx.x * (32/Dout)) ^ {tout}) & 0x1f) == 0;')
+        k.emit(f'bool {btmp_rname} = (((threadIdx.x * (32/Dout)) ^ {tout32}) & 0x1f) == 0;')
         k.emit()
 
         for p in range(P):
@@ -714,26 +714,26 @@ class PfReducer:
     
     def _write_to_global_memory(self, k):
         pars = self.params
-        P, Dout, tout, Tout, Mout = pars.P, pars.Dout, pars.tout_rname, pars.Tout_rname, pars.Mout_rname
+        P, Dout, tout32, Tout32, Mout = pars.P, pars.Dout, pars.tout32_rname, pars.Tout32_rname, pars.Mout_rname
 
         k.emit('// PfReducer: write out/ssq to global memory')
         k.emit()
 
         if Dout > 1:
-            k.emit(f'int {tout}_next = tout + (32/Dout);   // value of tout in next iteration of loop')
-            k.emit(f'if (({tout}_next == {Tout}) || (({tout}_next & 0x1f) == 0)) {{   // current **warp** writes max/ssq to global memory')
+            k.emit(f'int {tout32}_next = tout32 + (32/Dout);   // value of tout32 in next iteration of loop')
+            k.emit(f'if (({tout32}_next == {Tout32}) || (({tout32}_next & 0x1f) == 0)) {{   // current **warp** writes max/ssq to global memory')
 
         self._transpose_outputs(k, self.omax_rnames + self.ossq_rnames)
 
         if Dout > 1:
-            k.emit(f'{tout}_next = (tout & 0x1f) + (32/Dout);  // advance by (32/Dout)')
-            k.emit(f'if ((threadIdx.x & 0x1f) < {tout}_next) {{   // current **thread** writes max/ssq to global memory')
+            k.emit(f'{tout32}_next = (tout32 & 0x1f) + (32/Dout);  // advance by (32/Dout)')
+            k.emit(f'if ((threadIdx.x & 0x1f) < {tout32}_next) {{   // current **thread** writes max/ssq to global memory')
 
         k.emit('// PfReducer: Write to global memory.')
-        k.emit('// Reminder: output max/ssq arrays have shape (P,Mout,Tout).')
+        k.emit('// Reminder: output max/ssq arrays have shape (P,Mout,Tout32).')
 
         for p in range(P):
-            s = f'{p}*{Tout}*{Mout}' if (p > 0) else '0'
+            s = f'{p}*{Tout32}*{Mout}' if (p > 0) else '0'
             k.emit(f'{pars.out_max_rname}[{s}] = {self.omax_rnames[p]};')
             k.emit(f'{pars.out_ssq_rname}[{s}] = {self.ossq_rnames[p]};')
         

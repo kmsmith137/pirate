@@ -27,6 +27,7 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
     int Dt = xdiv(Dout, Dcore);
     int Mout = xdiv(Min, k.M);
     int Tout = xdiv(Tin, k.Dout);
+    int Tout32 = xdiv(Tout * k.dtype.nbits, 32);
 
     cout << "test_reduce_only_kernel: dtype=" << k.dtype << ", M=" << M << ", E=" << E
 	 << ", Dout=" << Dout << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B
@@ -74,7 +75,7 @@ static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
     k.reduce_only_kernel <<< nblocks, 32*W >>>
 	(gpu_out_max.data, gpu_out_ssq.data,
 	 gpu_in_max.data, gpu_in_ssq.data,
-	 gpu_wt.data, Mout, Tout);
+	 gpu_wt.data, Mout, Tout32);
 
     CUDA_PEEK("pf reduce-only kernel launch");
 
