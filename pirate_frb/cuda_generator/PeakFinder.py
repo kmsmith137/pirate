@@ -3,31 +3,161 @@ import itertools
 from . import utils
 from .Ringbuf import Ringbuf, Ringbuf16
 
+# The peak-finding kernel is not in its "final form" but here's what I currently have!
+#
+# Input compile-time params:
+#
+#    M = DM coarse-graining factor (see "note on M" below)
+#    E = max kernel width (power of two)
+#    W = warps per threadblock (currently 4, may be different in future coalesced kernel)
+#    Dout = time coarse-graining factor (power of two)
+#    Dcore = internal time downsampling factor (power of two and <= Dout, see below)
+#
+# Note on M: currently we don't implement sub-band searches, so M is just the DM
+# coarse-graining factor. In the future, M will be the number of (sub-band, trial DM)
+# pairs per coarse-grained DM (which could be of order 50-100). In this case, M may
+# not be a power of two, so the low-level cuda kernel does not assume that.
+#
+# The Dcore param has the following meaning:
+#
+#   - Dcore can be any power of two which is <= Dout.
+#   - Slightly changes behavior of kernel: profiles at downsampling level 'ids' are
+#      computed at sampling rate min(2**ids, Dcore).
+#   - Tradeoff: larger Dcore means less compute but more register usage.
+#   - We usually use Dcore = min(Dout,8).
+#
+# Derived compile-time params:
+#
+#    P = number of peak-finding kernels = 3*log2(E) + 1
+#    P32 = number of 32-bit "persistent state" registers per (beam, coarse_grained_dm).
+#
+# CUDA kernel:
+#
+#    __global__ void pf_kernel(out_max, out_ssq, pstate, in, wt, Mout, Tout32);
+#
+#    - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout32).
+#    - 'pstate' has shape (B, Mout, P32), where P32 is defined below
+#    - 'in' has shape (B, Mout*M, Tout32*Dout).
+#    - 'wt' has shape (B, P, Mout*M).
+#    - Mout is number of output (coarse-grained) DMs.
+#    - Tout32 is number of output (coarse-grained) times (divided by two if float16).
+#
+# This API assumes:
+#
+#    - Weights are independent of time (at least on the timescale of one kernel launch)
+#    - Output arrays is coarse-grained over m, but not coarse-grained over profile 0 <= p < P.
+#    - Caller needs both the 'out_max' and 'out_ssq' arrays.
+#    - No "argmax" info.
+#
+# I may rethink these decisions! In particular, the decision to not coarse-grain over
+# 0 <= p < P means that the peak-finding kernel uses a ton of registers (probably
+# impractical for coalesced kernel).
+#
+# Warp/block assignment:
+#
+#  - Each warp processes one "mout" (coarse-grained DM).
+#  - 4 warps per threadblock (corresponding to different "mout"s in same beam).
+#  - Threadblock grid has shape ((Mout+3)//4, nbeams, 1).
+#  - Note that number of beams (per kernel launch) is implicitly supplied as gridDim.x.
+#
+# Kernel logic:
+#
+#   - Copy weights global memory -> shared
+#   - Apply per-thread pointer offsets to (out_max, out_ssq, in)
+#   - Load persistent state (ring buffers)
+#
+#   - Outer loop over 32 input times (or 64 input times, if float16)
+#
+#        - Input register assignment:
+#            if float32:  th0 th1 th2 th3 th4 <-> ti0 ti1 ti2 ti3 ti4   (registers <-> m0 m1 ...)
+#            if float16:  th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5   b <-> ti0   (registers <-> m0 m1 ...)
+#
+#        - First step is to transpose inputs to the following register assignment (where L = log2(Dcore)):
+#
+#            if float32:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
+#                         r0 ... r_{L-1} <-> ti_0 ... ti_{L-1}
+#
+#            if float16:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
+#                         r0 ... r_{L-1} <-> ti_0 ... ti_{L-1}
+#                         b <-> ti_5
+#
+#          For float16, this register assignment may not be the most efficient, but it allows
+#          the core peak-finding logic to be similar for float16 / float32. I may experiment with
+#          a different register assignment later.
+#
+#          This transposing is implemented "one bit at a time" in 'class PfTransposeLayer'.
+#          For float16 there is an additional step in 'class PfInitialTranspose16Layer'.
+#
+#        - Then we compute peak-finding kernels for 0 <= p < P locally on each thread (in 'class PfCore').
+#          Kernel outputs are reduced "locally" over fine-grained time. Weights are not applied in this stage.
+#
+#          We use an in-register ring buffer ('class Ringbuf' or 'class Ringbuf16') to handle overlaps.
+#          This is the only part of the peak-finding kernel that uses persistent state in GPU memory.
+#
+#          The output of 'class PfCore' is two registers 'max' and 'ssq' with the following register assignments:
+#
+#            if float32:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
+#            if float16:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4    b <-> ti5
+#
+#       - These registers are handed off to 'class PfReducer', which incrementally transposes and reduces,
+#         to end up with this "outer" register assignment for 'max' and 'ssq':
+#
+#            if float32:  th0 th1 th2 th3 th4 <-> ti_K ... ti_{K+4}    where K=log2(Dout)
+#            if float16:  th0 th1 th2 th3 th4 <-> ti_{K+1} ... ti_5    b <-> ti_K
+#
+#         Weights are applied in this stage.
+# 
+#         In the current implementation, there is one pair of "outer" registers for each 0 <= p < P.
+#         When these registers have been fully populated (with either 32 or 64 coarse-grained times
+#         for each p), then they are written to global memory.
+#
+# This chain of operations is implemented by the following code generation classes:
+#
+#    - PeakFinder: top level class
+#        - PfInitialTranspose16Layer         #  only if float16
+#        - PfTransposeLayer(Din=1)
+#        - PfTransposeLayer(Din=2)
+#        - PfTransposeLayer(Din=4)
+#              ...
+#        - PfTransposeLayer(Din=Dcore//2)    # total number of PfTransposeLayers is log2(Dcore)
+#        - PfCore
+#            - Ringbuf or Ringbuf16          # used to manage overlaps
+#        - PfReducer
+#
+# For a precise specification of what the peak-finding kernel computes, see the reference
+# implementation (class ReferencePeakFindingKernel).
+
 
 class PeakFindingParams:
-    def __init__(self, dtype, M, E, Dout, W, BlocksPerSM):
+    def __init__(self, dtype, M, E, Dout, Dcore, W, BlocksPerSM):
         """
-        All kernel params except Dcore.
-
-           dtype = either 'float' or '__half'
-           M = number of "rows" (e.g. trial DMs) per warp
-           E = max kernel width
-           Dout = output time downsampling factor
-           W = warps per threadblock
+        Input compile-time params:
+        
+            M = DM coarse-graining factor (see "note on M" below)
+            E = max kernel width (power of two)
+            W = warps per threadblock (currently 4, may be different in future coalesced kernel)
+            Dout = time coarse-graining factor (power of two)
+            Dcore = internal time downsampling factor (power of two and <= Dout, see below)
+            BlocksPerSM = only used for __launch_bounds__
         """
         
+        # FIXME incomplete
         assert M >= 1
         assert E <= 32
         assert Dout <= 32
         assert 1 <= (W * BlocksPerSM) <= 32
+        assert Dcore <= Dout
+        assert M >= Dcore   # not really necessary but assumed for convenience
         
         assert utils.is_power_of_two(E)
         assert utils.is_power_of_two(Dout)
+        assert utils.is_power_of_two(Dcore)
                 
         self.M = M
         self.E = E
         self.W = W
         self.Dout = Dout
+        self.Dcore = Dcore
         self.BlocksPerSM = BlocksPerSM
         self.dtype = dtype
 
@@ -60,23 +190,19 @@ class PeakFindingParams:
 
 
 class PeakFinder:
-    def __init__(self, params, Dcore, reduce_only=False):
+    def __init__(self, params, reduce_only=False):
         """
         The 'Dcore' argument is an internal downsampling factor.
         Large Dcore uses fewer instructions, but more registers.
         """
 
-        assert utils.is_power_of_two(Dcore)
-        assert Dcore <= params.Dout
-        assert params.M >= Dcore   # not really necessary but assumed for convenience
-
+        assert isinstance(params, PeakFindingParams)
         rostr = f'reduce_only_' if reduce_only else ''
         
         self.params = params
-        self.Dcore = Dcore
         self.reduce_only = reduce_only
-        self.kernel_name = f'pf_{params.dtstr}_{rostr}kernel_M{params.M}_E{params.E}_Dcore{Dcore}_Dout{params.Dout}_W{params.W}_B{params.BlocksPerSM}'
-        self.reducer = PfReducer(params, Din=Dcore)
+        self.kernel_name = f'pf_{params.dtstr}_{rostr}kernel_M{params.M}_E{params.E}_Dcore{params.Dcore}_Dout{params.Dout}_W{params.W}_B{params.BlocksPerSM}'
+        self.reducer = PfReducer(params)
 
         if reduce_only:
             return
@@ -92,9 +218,10 @@ class PeakFinder:
         
         
     def emit_global(self, k):
+        """Emits __global__ kernel."""
+        
         pars = self.params
-        dt32, nbits, M, E, Dout, W, P = pars.dt32, pars.nbits, pars.M, pars.E, pars.Dout, pars.W, pars.P
-        Dcore = self.Dcore
+        dt32, nbits, M, E, Dout, Dcore, W, P = pars.dt32, pars.nbits, pars.M, pars.E, pars.Dout, pars.Dcore, pars.W, pars.P
 
         if not self.reduce_only:
             # Main case: full peak-finding kernel.
@@ -238,7 +365,7 @@ class PeakFinder:
                 
         self.reducer.initialize(k)
 
-        k.emit(f'// PeakFinder: main outer loop')
+        k.emit(f'// PeakFinder: mouter t-loop')
         k.emit(f"for (int tout32 = 0; tout32 < Tout32; tout32 += (32/Dout)) {{")
         k.emit("    if (!warp_active)")
         k.emit("        continue;")
@@ -246,6 +373,13 @@ class PeakFinder:
 
         if not self.reduce_only:
             # Main case: full peak-finding kernel.
+            # To emit all code inside the outer t-loop, we call:
+            #
+            #   self.pf.advance(m=0)
+            #   self.pf.advance(m=1)
+            #     ...
+            #   self.pf.advance(m = M-1)
+            
             for m in range(M):
                 rname = f'x{m}'
                 s = f'{m} * in_mstride' if (m > 0) else '0'
@@ -259,6 +393,13 @@ class PeakFinder:
 
         else:
             # Debug case: reduce-only kernel (with different kernel args).
+            # To emit all code inside the outer t-loop, we do (schematically):
+            #
+            #   for m0 in range(0,M,Dcore):
+            #     for p in range(P):
+            #         # read in_max, in_ssq
+            #         self.reducer.advance(m0, p)
+
             for m0 in range(0,M,Dcore):
                 k.emit(f'// PeakFinder: {m0=}')
                 prefix = 'int ' if (m0 == 0) else ''
@@ -344,10 +485,40 @@ class PeakFinder:
 class PfTransposeLayer:
     def __init__(self, next_layer):
         """
-        PfTransposeLayer.advance() is called for m = 0, Din, (2*Din), ...
-        Each call consists of Din registers which represent consecutive times.
-        The innermost Din thread indices correspond to m, (m+1), ... (m+Din-1).
-        The outer thread indices correspond to (time/Din).
+        A PfTransposeLayer converts this register assignment (where L = log2(Din)):
+
+             th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4      r <-> ti_0 ... ti_{L-1} m_L
+
+        To this register assignment:
+
+             th0 th1 th2 th3 th4 <-> m0 ... m_L ti_{L+1} .. ti4      r <-> ti_0 ... ti_{L-1} ti_L
+
+        In the larger kernel, PfTransposeLayers are chained together as follows:
+        
+          - PfTransposeLayer(Din=1)
+          - PfTransposeLayer(Din=2)
+          - PfTransposeLayer(Din=4)
+              ...
+          - PfTransposeLayer(Din=Dcore//2)    # total number of PfTransposeLayers is log2(Dcore)
+          - PfCore
+
+        Each call to PfTransposeLayer.advance() processes (Din) registers, and two calls to advance()
+        perform the transpose above (with 2*Din registers). On every second call to advance(), the
+        PfTransposeLayer calls next_layer.advance().
+
+        If (params.M) is a multiple of (2*Din), then this can be done "cleanly" with (params.M // Din)
+        calls to advance(). If (params.M) is not a multiple of (2*Din), then the caller should call
+        advance() the following number of times:
+        
+            (params.M + Din - 1) // Din
+
+        with appropriate "zero-padding" on the last call. Then, next_layer.advance() will be called
+        on every second call to advance(), and the last call to advance(). Thus, the number of calls
+        to next_layer.advance() is:
+
+            (params.M + 2*Din - 1) // (2*Din)
+
+        providing the correct recursive number of calls for the PfTransposeLayer chain above.
         """
 
         assert (next_layer.Din % 2) == 0
@@ -378,6 +549,7 @@ class PfTransposeLayer:
             
             self.next_layer.advance(k, self.saved_rnames + rnames, m-Din)
             self.saved_rnames = [ ]
+        
         else:
             # Case 3: combine (rnames + zeros), call next emitter.
             # This is a "sentinel" case which arises if (M % (2*Din)) < Din.
@@ -396,6 +568,16 @@ class PfTransposeLayer:
 
 class PfInitialTranspose16Layer:
     def __init__(self, next_layer):
+        """
+        The PfInitialTranspose16Layer converts this float16 register assignment:
+
+           - Input:   th0 <-> t1 t2 t3 t4 t5     b <-> t0
+           - Output:  th0 <-> t0 t1 t2 t3 t4     b <-> t5
+
+        In a float16 kernel, the PfInitialTranspose16Layer is the topmost layer.
+        The 'next_layer' is either a PfTransposeLayer (if Dcore > 1) or a PfCore (if Dcore == 1).
+        """
+        
         # FIXME optimize by adding Din==2 layer
         assert next_layer.Din == 1
         assert next_layer.params.dt32 == '__half2'
@@ -429,10 +611,40 @@ class PfInitialTranspose16Layer:
 
 class PfCore:
     def __init__(self, reducer, ringbuf):
+        """
+        Convolves the input array with peak-finding kernels.
+        
+        Input: a list of (Dcore) registers (where L = log2(Dcore))
+
+            if float32:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
+                         r0 ... r_{L-1} <-> ti_0 ... ti_{L-1}
+
+            if float16:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
+                         r0 ... r_{L-1} <-> ti_0 ... ti_{L-1}
+                         b <-> ti_5
+        
+        For each 0 <= p < P, the PfCore convolves the input array with a peak-finding kernel,
+        and does a thread-local reduction over index bits (ti_0 ... ti_{L-1}), to obtain
+        'max' and 'ssq' registers in this ordering:
+        
+            if float32:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
+            if float16:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4    b <-> ti5
+
+        These are passed to PfReducer.advance(). Thus, the total number of advance() calls is:
+
+            (M + Dcore - 1) // Dcore          # number of calls to PfCore.advance()
+            ((M + Dcore - 1) // Dcore) * P    # number of calls to PfReducer.advance()
+        
+        Weights are applied in PfReducer.advance(), not here in PfCore.advance().
+        
+        The PfCore uses a Ringbuf (or Ringbuf16) to manage overlaps when convolving.
+        This is the only part of the peak-finding kernel which uses persistent state.
+        """
+        
         self.params = reducer.params
-        self.Din = reducer.Din
         self.reducer = reducer
         self.ringbuf = ringbuf
+        self.Din = reducer.params.Dcore   # expected by earlier layers (e.g. PfTransposeLayer)
 
         if self.params.dt32 == 'float':
             assert isinstance(ringbuf, Ringbuf)
@@ -448,10 +660,10 @@ class PfCore:
     def advance(self, k, rnames, m):
         k.emit(f'\n// PfCore.advance(): {m=} {rnames = }\n')
         
-        dt32, M, E, Din = self.params.dt32, self.params.M, self.params.E, self.Din
+        dt32, M, E, Dcore = self.params.dt32, self.params.M, self.params.E, self.params.Dcore
         assert isinstance(rnames, list)
-        assert len(rnames) == Din
-        assert (m % Din) == 0
+        assert len(rnames) == Dcore
+        assert (m % Dcore) == 0
         assert 0 <= m < M
 
         if (m == 0) and (E > 1):
@@ -461,8 +673,8 @@ class PfCore:
 
         k.emit('// PfCore: p=0 starts here')
         
-        for t in range(Din):
-            self._update(k, rnames[t], m, 0, t, Din)
+        for t in range(Dcore):
+            self._update(k, rnames[t], m, 0, t, Dcore)
 
         if E == 1:
             return
@@ -478,7 +690,7 @@ class PfCore:
 
         for ids in itertools.count(0):
             # Downsampling level 2**ids
-            T = max(Din//2**ids, 1)
+            T = max(Dcore//2**ids, 1)
             assert len(rnames) == T+3
 
             k.emit(f'// PfCore: p={3*ids+1} starts here')
@@ -539,11 +751,13 @@ class PfCore:
     def _prepad(self, k, rnames, m, tds, pp_rname):
         """'tds' is the current downsampling level of elements of 'rnames'."""
 
+        Dcore = self.params.Dcore
+        
         if m == 0:
             k.emit(f'{self.params.dt32} {pp_rname};')
 
-        if tds < self.Din:
-            self.ringbuf.advance(k, rnames[self.Din//tds - 1], self.Din, dst=pp_rname)
+        if tds < Dcore:
+            self.ringbuf.advance(k, rnames[Dcore//tds - 1], Dcore, dst=pp_rname)
         else:
             self.ringbuf.advance(k, rnames[0], tds, dst=pp_rname)
         
@@ -554,12 +768,15 @@ class PfCore:
 
 
 class PfReducer:
-    def __init__(self, params, Din):
-        assert utils.is_power_of_two(Din)
-        assert Din <= params.Dout
+    def __init__(self, params):
+        """
+        Input: a pair of registers (max, ssq) in this register assignment:
+        
+            if float32:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
+            if float16:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4    b <-> ti5
+        """
 
         self.params = params
-        self.Din = Din
         
         Dout, P = params.Dout, params.P
 
@@ -583,21 +800,20 @@ class PfReducer:
         """
         The max/ssq register assignment is as follows:
            - (32/Dout) outer time indices
-           - (Dout/Din) inner time indices (will be reduced)
-           - (Din) m-indices (will be reduced)
+           - (Dout/Dcore) inner time indices (will be reduced)
+           - (Dcore) m-indices (will be reduced)
 
         PfReducer.advance() should be called as follows:
            - m=0: p = 0, 1, ..., P-1
-           - m=Din: p = 0, 1, ..., P-1
-           - m=2*Din: p = 0, 1, ..., P-1
+           - m=Dcore: p = 0, 1, ..., P-1
+           - m=2*Dcore: p = 0, 1, ..., P-1
               ...
 
         Calls to PfReducer.advance() should be embedded in a loop where tout32 increases by (32/Dout) in each iteration.
         """
-        
-        Din = self.Din
+ 
         pars = self.params
-        M, P, W, Dout = pars.M, pars.P, pars.W, pars.Dout
+        M, P, W, Dout, Dcore = pars.M, pars.P, pars.W, pars.Dout, pars.Dcore
 
         k.emit(f"// PfReducer: processing {(m,p)=}")
         k.emit(f"// PfReducer: recall that shmem[] has shape (P, W*M)")
@@ -605,25 +821,25 @@ class PfReducer:
         self._load_wt(k, m, p)   # emits line of the form 'wt = shmem[...];'
         
         imax, issq = self.imax_rnames[p], self.issq_rnames[p]        
-        mpop = min(M-m, Din)   # number of populated m-indices
+        mpop = min(M-m, Dcore)   # number of populated m-indices
         btmp = None            # boolean mask (may not be needed)
         
-        if mpop < Din:
-            k.emit(f'// PfReducer: m-values are partially populated ({mpop=}, {Din=}).')
+        if mpop < Dcore:
+            k.emit(f'// PfReducer: m-values are partially populated ({mpop=}, {Dcore=}).')
             k.emit(f'// This mask keeps track of which threads store valid values')
             btmp = k.get_tmp_rname()
-            k.emit(f'bool {btmp} = (threadIdx.x & {Din-1}) < {mpop};  // {(Din-1)=}, {mpop=}')
+            k.emit(f'bool {btmp} = (threadIdx.x & {Dcore-1}) < {mpop};  // {(Dcore-1)=}, {mpop=}')
 
         # Ugh, 4 cases here.
-        if (m > 0) and (mpop >= Din):
+        if (m > 0) and (mpop >= Dcore):
             k.emit(f"// PfReducer: inner reduce over m-values, in single iteration of outer t-loop.")
             k.emit(f'{imax} = {pars.dt32_max}({imax}, wt*{max_rname});')
             k.emit(f'{issq} += wt*wt*{ssq_rname};')
-        elif (m == 0) and (mpop >= Din):
+        elif (m == 0) and (mpop >= Dcore):
             k.emit("// PfReducer: apply weights")
             k.emit(f'{pars.dt32} {imax} = wt*{max_rname};')
             k.emit(f'{pars.dt32} {issq} = wt*wt*{ssq_rname};')
-        elif (m > 0) and (mpop < Din):
+        elif (m > 0) and (mpop < Dcore):
             k.emit(f"// PfReducer: inner reduce over m-values, in single iteration of outer t-loop.")
             k.emit(f'{imax} = {btmp} ? {pars.dt32_max}({imax}, wt*{max_rname}) : {imax};')
             k.emit(f'{issq} = {btmp} ? ({issq} + wt*wt*{ssq_rname}) : {issq};')
@@ -634,7 +850,7 @@ class PfReducer:
         
         k.emit()
 
-        if (m + Din < M) or (p < P-1):
+        if (m + Dcore < M) or (p < P-1):
             return
 
         k.emit('// PfReducer: all (m,p) values have been processed, this should be near the bottom of the outer t-loop')
@@ -646,14 +862,13 @@ class PfReducer:
 
     def _load_wt(self, k, m, p):
         pars = self.params
-        M, P, W, Dout = pars.M, pars.P, pars.W, pars.Dout
+        M, P, W, Dout, Dcore = pars.M, pars.P, pars.W, pars.Dout, pars.Dcore
         
         if p == 0:
-            Din = self.Din
             decl = f'uint ' if (m==0) else ''
             k.emit(f'// pfr_m = value of m on this thread (used for reading wt[] array')
-            k.emit(f'{decl}pfr_m = {m} + (threadIdx.x & {Din-1});  // (Din-1)={Din-1}')
-            if m + Din > M:
+            k.emit(f'{decl}pfr_m = {m} + (threadIdx.x & {Dcore-1});  // (Dcore-1)={Dcore-1}')
+            if m + Dcore > M:
                 k.emit(f'pfr_m = min(pfr_m, {M-1});   // (M-1)={M-1}')
                 
             k.emit(f'// pfr_j = index into inner axis (length W*M) of shape-(P,W*M) shmem array')
@@ -675,23 +890,22 @@ class PfReducer:
 
     
     def _outer_reduce(self, k):
-        Din = self.Din
         pars = self.params
-        M, P, Dout, tout32 = pars.M, pars.P, pars.Dout, pars.tout32_rname
+        M, P, Dout, Dcore, tout32 = pars.M, pars.P, pars.Dout, pars.Dcore, pars.tout32_rname
 
         if Dout == 1:
             return
         
-        mpop = min(M, Din)   # number of populated m-indices
+        mpop = min(M, Dcore)   # number of populated m-indices
         d = 1                # current reduction level
         
         k.emit(f'// PfReducer: here is a big block of instructions to further reduce by a factor {Dout=}.')
-        k.emit(f'// Number of m-indices is {Din=}, and {mpop=} of these are populated.')
-        k.emit(f'// Number of time indices is {(Dout//Din)=}.')
+        k.emit(f'// Number of m-indices is {Dcore=}, and {mpop=} of these are populated.')
+        k.emit(f'// Number of time indices is {(Dout//Dcore)=}.')
         k.emit()
         
         while d < Dout:
-            if (d >= Din) or ((mpop & d) == 0):
+            if (d >= Dcore) or ((mpop & d) == 0):
                 k.emit(f'// "Cleanly" increase reduction level {d=} -> {(2*d)=}.')
                 for p in range(P):
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
@@ -702,23 +916,23 @@ class PfReducer:
                 d *= 2
 
             elif d >= mpop:
-                k.emit(f'// Increase reduction level {d=} -> {Din=}')
+                k.emit(f'// Increase reduction level {d=} -> {Dcore=}')
                 k.emit(f'// This can be done with just __shfl_sync() (no max/sum ops), since {d=} exceeds {mpop=}')
                 
                 for p in range(P):
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
-                    k.emit(f'{max_rname} = __shfl_sync(0xffffffff, {max_rname}, threadIdx.x & {32-Din});  // {(32-Din)=}')
-                    k.emit(f'{ssq_rname} = __shfl_sync(0xffffffff, {ssq_rname}, threadIdx.x & {32-Din});  // {(32-Din)=}')
+                    k.emit(f'{max_rname} = __shfl_sync(0xffffffff, {max_rname}, threadIdx.x & {32-Dcore});  // {(32-Dcore)=}')
+                    k.emit(f'{ssq_rname} = __shfl_sync(0xffffffff, {ssq_rname}, threadIdx.x & {32-Dcore});  // {(32-Dcore)=}')
                 
                 k.emit()
-                d = Din    # not (d *= 2)
+                d = Dcore    # not (d *= 2)
 
             else:
                 k.emit(f'// Increase reduction level {d=} -> {(2*d)=}.')
                 k.emit(f'// Since {mpop=}, this reduction "mixes" populated/unpopulated indices')
 
                 btmp_rname = k.get_tmp_rname()
-                k.emit(f'bool {btmp_rname} = (threadIdx.x & {Din-1}) < {mpop-d};   // {(mpop-d)=}')
+                k.emit(f'bool {btmp_rname} = (threadIdx.x & {Dcore-1}) < {mpop-d};   // {(mpop-d)=}')
                 
                 for p in range(P):
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
