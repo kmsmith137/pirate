@@ -122,7 +122,7 @@ from .Ringbuf import Ringbuf, Ringbuf16
 #        - PfTransposeLayer(Din=Dcore//2)    # total number of PfTransposeLayers is log2(Dcore)
 #        - PfCore
 #            - Ringbuf or Ringbuf16          # used to manage overlaps
-#        - PfReducer
+#        - PfReducer                         # writes to global memory
 #
 # For a precise specification of what the peak-finding kernel computes, see the reference
 # implementation (class ReferencePeakFindingKernel).
@@ -770,10 +770,35 @@ class PfCore:
 class PfReducer:
     def __init__(self, params):
         """
-        Input: a pair of registers (max, ssq) in this register assignment:
+        Input: a pair of registers (max, ssq) in this register assignment (where L=log2(Dcore)):
         
             if float32:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4
             if float16:  th0 th1 th2 th3 th4 <-> m0 ... m_{L-1} ti_L .. ti4    b <-> ti5
+
+        PfReducer.advance() is called in the following loops:
+
+           for (int tout32 = 0; tout32 < Tout32; tout32 += (32 / Dout)) {    // runtime cuda loop
+               for m in range(0,M,Dcore):                   # "unrolled" compile-time python loop
+                   for p in range(P):                       # "unrolled" compile-time python loop
+                       advance(m,p)
+
+        Applies weights, and absorbs (max, ssq) into an "inner" (imax[P], issq[P]) register array.
+        the same register assignment. When this step is repeated over 'm' (in the middle loop
+        above), an "inner" reduce over index bits m_L, m_{L+1}, ... is performed.
+
+        In the last call to advance(), i.e. when (m+Dcore >= M) and (p == P-1), we do
+        an "outer" reduction, into an "outer" (omax[P], ossq[P]) register array, with the following
+        register assignment (where K = log2(Dout)):
+
+            if float32:  th0 th1 th2 th3 th4 <-> ti_5 ... ti_{K+4} ti_K .. ti4
+            if float16:  th0 th1 th2 th3 th4 <-> ti_6 ... ti_{K+5} ti_K .. ti4     b <-> ti_5
+
+        After (Dout) iterations of the outermost 'tout32' loop, or in the last iteration of the
+        loop, we're ready to write to global memory. First, we do one more transpose, to get the
+        register assignment:
+
+            if float32:  th0 th1 th2 th3 th4 <-> ti_K ... ti_{K+4}
+            if float16:  th0 th1 th2 th3 th4 <-> ti_{K+1} .. ti_{K+5}     b <-> ti_K
         """
 
         self.params = params
@@ -797,21 +822,6 @@ class PfReducer:
 
     
     def advance(self, k, max_rname, ssq_rname, m, p):
-        """
-        The max/ssq register assignment is as follows:
-           - (32/Dout) outer time indices
-           - (Dout/Dcore) inner time indices (will be reduced)
-           - (Dcore) m-indices (will be reduced)
-
-        PfReducer.advance() should be called as follows:
-           - m=0: p = 0, 1, ..., P-1
-           - m=Dcore: p = 0, 1, ..., P-1
-           - m=2*Dcore: p = 0, 1, ..., P-1
-              ...
-
-        Calls to PfReducer.advance() should be embedded in a loop where tout32 increases by (32/Dout) in each iteration.
-        """
- 
         pars = self.params
         M, P, W, Dout, Dcore = pars.M, pars.P, pars.W, pars.Dout, pars.Dcore
 
@@ -830,7 +840,10 @@ class PfReducer:
             btmp = k.get_tmp_rname()
             k.emit(f'bool {btmp} = (threadIdx.x & {Dcore-1}) < {mpop};  // {(Dcore-1)=}, {mpop=}')
 
-        # Ugh, 4 cases here.
+        # Apply weights, and absorb into an "inner" register pair (imax, issq) with the same
+        # register assignment. There are 4 cases here, but they're not very different.
+        # This "inner" reduction is the simple one (the "outer" reduction below is more complicated).
+
         if (m > 0) and (mpop >= Dcore):
             k.emit(f"// PfReducer: inner reduce over m-values, in single iteration of outer t-loop.")
             k.emit(f'{imax} = {pars.dt32_max}({imax}, wt*{max_rname});')
@@ -897,14 +910,16 @@ class PfReducer:
             return
         
         mpop = min(M, Dcore)   # number of populated m-indices
-        d = 1                # current reduction level
+        d = 1                  # current reduction level (power of two)
         
-        k.emit(f'// PfReducer: here is a big block of instructions to further reduce by a factor {Dout=}.')
+        k.emit(f'// PfReducer: "inner" reduction into imax/issq registers')
         k.emit(f'// Number of m-indices is {Dcore=}, and {mpop=} of these are populated.')
         k.emit(f'// Number of time indices is {(Dout//Dcore)=}.')
         k.emit()
         
         while d < Dout:
+            assert min(d,Dcore) <= mpop <= Dcore
+            
             if (d >= Dcore) or ((mpop & d) == 0):
                 k.emit(f'// "Cleanly" increase reduction level {d=} -> {(2*d)=}.')
                 for p in range(P):
@@ -915,38 +930,46 @@ class PfReducer:
                 k.emit()
                 d *= 2
 
-            elif d >= mpop:
+            elif (d == mpop):
                 k.emit(f'// Increase reduction level {d=} -> {Dcore=}')
-                k.emit(f'// This can be done with just __shfl_sync() (no max/sum ops), since {d=} exceeds {mpop=}')
+                k.emit(f'// This can be done with just __shfl_sync() (no max/sum ops), since d==mpop')
                 
                 for p in range(P):
+                    mask = (32 - Dcore) + (d - 1)  # clear bits b such that d <= b < Dcore
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
-                    k.emit(f'{max_rname} = __shfl_sync(0xffffffff, {max_rname}, threadIdx.x & {32-Dcore});  // {(32-Dcore)=}')
-                    k.emit(f'{ssq_rname} = __shfl_sync(0xffffffff, {ssq_rname}, threadIdx.x & {32-Dcore});  // {(32-Dcore)=}')
+                    k.emit(f'{max_rname} = __shfl_sync(0xffffffff, {max_rname}, threadIdx.x & {mask});')
+                    k.emit(f'{ssq_rname} = __shfl_sync(0xffffffff, {ssq_rname}, threadIdx.x & {mask});')
                 
                 k.emit()
-                d = Dcore    # not (d *= 2)
+                mpop = d = Dcore    # not (d *= 2)
 
             else:
+                assert (mpop & (d-1)) == 0
                 k.emit(f'// Increase reduction level {d=} -> {(2*d)=}.')
                 k.emit(f'// Since {mpop=}, this reduction "mixes" populated/unpopulated indices')
 
-                btmp_rname = k.get_tmp_rname()
-                k.emit(f'bool {btmp_rname} = (threadIdx.x & {Dcore-1}) < {mpop-d};   // {(mpop-d)=}')
+                btmp1, btmp2 = k.get_tmp_rname(4)
+                k.emit(f'bool {btmp1} = (threadIdx.x & {Dcore-1}) < {mpop};           // is current thread populated?')
+                k.emit(f'bool {btmp2} = ((threadIdx.x & {Dcore-1}) ^ {d}) < {mpop};   // is "counterpart" thread populated?')
                 
                 for p in range(P):
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
-                    tmp_max, tmp_ssq = k.get_tmp_rname(2)
+                    tmp1, tmp2 = k.get_tmp_rname(2)
 
-                    k.emit(f'{pars.dt32} {tmp_max} = {pars.dt32_max}({imax}, __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d}));')
-                    k.emit(f'{imax} = {btmp_rname} ? {tmp_max} : {imax};')
-                    k.emit(f'{pars.dt32} {tmp_rname} = {issq} + __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d}));')
-                    k.emit(f'{issq} = {btmp_rname} ? {tmp_ssq} : {issq};')
+                    k.emit(f'{pars.dt32} {tmp1} =  __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d});')
+                    k.emit(f'tmp1 = {btmp1} ? {pars.d32_max}({tmp1}, {imax}) : {tmp1};')
+                    k.emit(f'{imax} = {btmp2} ? {tmp1} : {imax});')
+
+                    k.emit(f'{pars.dt32} {tmp2} =  __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d});')
+                    k.emit(f'tmp2 = {btmp1} ? ({tmp2} + {issq}) : {tmp2};')
+                    k.emit(f'{issq} = {btmp2} ? {tmp2} : {issq});')
                 
                 k.emit()
+                mpop += d
                 d *= 2
 
-        k.emit('// PfReducer: "Absorb" result of Dout-way reduction into persistent registers (on a subset of threads).')
+        assert mpop == Dcore
+        k.emit('// PfReducer: "Absorb" result of inner reduction into outer persistent registers (on a subset of threads).')
         k.emit()
 
         btmp_rname = k.get_tmp_rname()
