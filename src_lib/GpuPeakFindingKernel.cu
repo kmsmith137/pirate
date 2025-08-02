@@ -412,7 +412,7 @@ pf_kernel pf_kernel::get(Dtype dtype, int M, int E, int Dout)
 
     stringstream ss;
     ss << "pf_kernel::get(): no kernel found for dtype=" << dtype
-       << "and (M,E,Dout)=(" << M << "," << E << "," << Dout << ")";
+       << " and (M,E,Dout)=(" << M << "," << E << "," << Dout << ")";
     
     throw runtime_error(ss.str());
 }

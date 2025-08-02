@@ -37,10 +37,10 @@ static void time_gpu_peak_finding_kernel(const PeakFindingKernelParams &params, 
     long Tout = xdiv(Tin, params.time_downsampling_factor);
     double gb = 1.0e-9 * ninner * gpu_kernel.bw_per_launch.nbytes_gmem;
     
-    Array<float> wt({S,B,P,Min}, af_gpu | af_zero);
-    Array<float> in({S,B,Min,Tin}, af_gpu | af_zero);
-    Array<float> out_max({S,B,P,Mout,Tout}, af_gpu | af_zero);
-    Array<float> out_ssq({S,B,P,Mout,Tout}, af_gpu | af_zero);
+    Array<void> wt(params.dtype, {S,B,P,Min}, af_gpu | af_zero);
+    Array<void> in(params.dtype, {S,B,Min,Tin}, af_gpu | af_zero);
+    Array<void> out_max(params.dtype, {S,B,P,Mout,Tout}, af_gpu | af_zero);
+    Array<void> out_ssq(params.dtype, {S,B,P,Mout,Tout}, af_gpu | af_zero);
 
     xassert(nouter >= nstreams+1);
     vector<ksgpu::CudaStreamWrapper> streams(S);  // creates S new streams
@@ -51,10 +51,13 @@ static void time_gpu_peak_finding_kernel(const PeakFindingKernelParams &params, 
 	cudaStreamSynchronize(streams[s]);
 	tv[i] = get_time();
 
+	Array<void> max_slice = out_max.slice(0,s);
+	Array<void> ssq_slice = out_ssq.slice(0,s);
+	
 	for (int j = 0; j < ninner; j++) {
 	    gpu_kernel.launch(
-	        out_max.slice(0,s),
-		out_ssq.slice(0,s),
+		max_slice,
+		ssq_slice,	      
 		in.slice(0,s),
 		wt.slice(0,s),
 		0, streams[s]
@@ -68,14 +71,14 @@ static void time_gpu_peak_finding_kernel(const PeakFindingKernelParams &params, 
 }
 
 
-static void time_gpu_peak_finding_kernel(int E, int M, int Dout)
+static void time_gpu_peak_finding_kernel(Dtype dtype, int E, int M, int Dout)
 {
     long nstreams = 2;
     long nouter = 30;
     long ninner = 50;
     
     PeakFindingKernelParams p;
-    p.dtype = Dtype::native<float> ();
+    p.dtype = dtype;
     p.dm_downsampling_factor = M;
     p.time_downsampling_factor = Dout;
     p.max_kernel_width = E;
@@ -91,10 +94,14 @@ static void time_gpu_peak_finding_kernel(int E, int M, int Dout)
 void time_gpu_peak_finding_kernels()
 {
     // I may add more kernels later.
-    // FIXME Increasing M from 16 -> 50 makes the kernel run a little slower, I wonder why?
+    // FIXME float16 kernels are running slower than expected, I wonder why?
+    // FIXME Increasing M from 16 -> 50 makes the float32 kernel run a little slower, I wonder why?
+
+    time_gpu_peak_finding_kernel(Dtype::native<float>(), 32, 16, 16);
+    time_gpu_peak_finding_kernel(Dtype::native<__half>(), 32, 16, 16);
     
-    time_gpu_peak_finding_kernel(32, 16, 16);
-    time_gpu_peak_finding_kernel(32, 50, 16);
+    time_gpu_peak_finding_kernel(Dtype::native<float>(), 32, 50, 16);
+    time_gpu_peak_finding_kernel(Dtype::native<__half>(), 32, 50, 16);
 }    
 
 
