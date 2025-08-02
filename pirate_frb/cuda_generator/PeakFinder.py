@@ -147,7 +147,6 @@ class PeakFindingParams:
         assert Dout <= 32
         assert 1 <= (W * BlocksPerSM) <= 32
         assert Dcore <= Dout
-        assert M >= Dcore   # not really necessary but assumed for convenience
         
         assert utils.is_power_of_two(E)
         assert utils.is_power_of_two(Dout)
@@ -937,8 +936,8 @@ class PfReducer:
                 for p in range(P):
                     mask = (32 - Dcore) + (d - 1)  # clear bits b such that d <= b < Dcore
                     imax, issq = self.imax_rnames[p], self.issq_rnames[p]
-                    k.emit(f'{max_rname} = __shfl_sync(0xffffffff, {max_rname}, threadIdx.x & {mask});')
-                    k.emit(f'{ssq_rname} = __shfl_sync(0xffffffff, {ssq_rname}, threadIdx.x & {mask});')
+                    k.emit(f'{imax} = __shfl_sync(0xffffffff, {imax}, threadIdx.x & {mask});')
+                    k.emit(f'{issq} = __shfl_sync(0xffffffff, {issq}, threadIdx.x & {mask});')
                 
                 k.emit()
                 mpop = d = Dcore    # not (d *= 2)
@@ -948,7 +947,7 @@ class PfReducer:
                 k.emit(f'// Increase reduction level {d=} -> {(2*d)=}.')
                 k.emit(f'// Since {mpop=}, this reduction "mixes" populated/unpopulated indices')
 
-                btmp1, btmp2 = k.get_tmp_rname(4)
+                btmp1, btmp2 = k.get_tmp_rname(2)
                 k.emit(f'bool {btmp1} = (threadIdx.x & {Dcore-1}) < {mpop};           // is current thread populated?')
                 k.emit(f'bool {btmp2} = ((threadIdx.x & {Dcore-1}) ^ {d}) < {mpop};   // is "counterpart" thread populated?')
                 
@@ -957,12 +956,12 @@ class PfReducer:
                     tmp1, tmp2 = k.get_tmp_rname(2)
 
                     k.emit(f'{pars.dt32} {tmp1} =  __shfl_sync(0xffffffff, {imax}, threadIdx.x ^ {d});')
-                    k.emit(f'tmp1 = {btmp1} ? {pars.d32_max}({tmp1}, {imax}) : {tmp1};')
-                    k.emit(f'{imax} = {btmp2} ? {tmp1} : {imax});')
+                    k.emit(f'{tmp1} = {btmp1} ? {pars.dt32_max}({tmp1}, {imax}) : {tmp1};')
+                    k.emit(f'{imax} = {btmp2} ? {tmp1} : {imax};')
 
                     k.emit(f'{pars.dt32} {tmp2} =  __shfl_sync(0xffffffff, {issq}, threadIdx.x ^ {d});')
-                    k.emit(f'tmp2 = {btmp1} ? ({tmp2} + {issq}) : {tmp2};')
-                    k.emit(f'{issq} = {btmp2} ? {tmp2} : {issq});')
+                    k.emit(f'{tmp2} = {btmp1} ? ({tmp2} + {issq}) : {tmp2};')
+                    k.emit(f'{issq} = {btmp2} ? {tmp2} : {issq};')
                 
                 k.emit()
                 mpop += d
