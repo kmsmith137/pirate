@@ -197,11 +197,11 @@ class Ringbuf16:
         assert self.rb_pos[r][1-b] <= self.rb_nelts[r][1-b]
 
         # Blend (data, ring buffer) -> (wrapped data)
-        control_word = '0x7600' if b else '0x5400'
+        control_word = '0x1076' if b else '0x1054'
         self._blend(k, dst, rname, rb_rname, nelts, control_word)
 
         # Blend (ring buffer, data) -> (updated ring buffer)
-        control_word = '0x7600' if b else '0x3276'
+        control_word = '0x7610' if b else '0x3276'
         self._blend(k, rb_rname, rb_rname, rname, nelts, control_word)
         
         self._cycle_register(k, dst, 32-nelts)   # no-op if nelts=32
