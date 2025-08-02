@@ -325,7 +325,7 @@ void GpuPeakFindingKernel::launch(Array<void> &out_max, Array<void> &out_ssq, co
     dim3 nblocks = {Bx, uint(params.beams_per_batch), 1};
 	
     char *pstate = (char *) persistent_state.data;
-    pstate += ibatch * params.beams_per_batch * ndm_out * cuda_kernel.P32 * xdiv(params.dtype.nbits,8);
+    pstate += ibatch * params.beams_per_batch * ndm_out * cuda_kernel.P32 * 4;
 
     long Tout32 = xdiv(nt_out * params.dtype.nbits, 32);
 
