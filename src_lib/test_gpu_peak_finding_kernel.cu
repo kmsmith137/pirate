@@ -16,22 +16,32 @@ namespace pirate {
 #endif
 
 
-static void test_reduce_only_kernel(const pf_kernel &k, int B, int Min, int Tin)
+static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
 {
+    cout << "\ntest_reduce_only_kernel: start\n"
+	 << "   dtype = " << params.dtype.str() << "\n"
+	 << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
+	 << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
+	 << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"
+	 << "   beams_per_batch = " << params.beams_per_batch << "\n"
+	 << "   ndm_in = " << params.ndm_in << "\n"
+	 << "   nt_in = " << params.nt_in << "\n";
+
+    GpuPeakFindingKernel gpu_kernel(params);
+    pf_kernel k = gpu_kernel.cuda_kernel;
+    
     int M = k.M;
-    int E = k.E;
+    int W = k.W;    
     int P = k.P;
-    int W = k.W;
+    int B = params.beams_per_batch;  // note: params.total_beams is not used in this test
     int Dout = k.Dout;
     int Dcore = k.Dcore;
     int Dt = xdiv(Dout, Dcore);
+    int Min = params.ndm_in;
+    int Tin = params.nt_in;
     int Mout = xdiv(Min, k.M);
     int Tout = xdiv(Tin, k.Dout);
     int Tout32 = xdiv(Tout * k.dtype.nbits, 32);
-
-    cout << "test_reduce_only_kernel: dtype=" << k.dtype << ", M=" << M << ", E=" << E
-	 << ", Dout=" << Dout << ", Dcore=" << Dcore << ", W=" << k.W << ", B=" << B
-	 << ", Mout=" << Mout << ", Tout=" << Tout << endl;
     
     xassert_divisible(32, Dcore);
 
@@ -230,7 +240,7 @@ void test_gpu_peak_finding_kernel()
 	    
 	params.validate();
 
-	test_reduce_only_kernel(k, params.beams_per_batch, params.ndm_in, params.nt_in);
+	test_reduce_only_kernel(params);
 	test_pf_kernel(params, niter_gpu);
     }
 }
