@@ -58,6 +58,8 @@ def generate_peak_finding_kernels():
         for M in [1,32]:
             for E in [1,32]:
                 for Dout in [1,32]:
+                    if (M, E, Dout) == (32, 32, 1):
+                        continue  # This one is problematic -- huge compile time.
                     yield (dtype, M, E, Dout, None, W, BlocksPerSM)
 
         # Kernels that we're likely to use in CHIME/CHORD without subbanding

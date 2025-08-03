@@ -28,9 +28,7 @@ extern void test_gpu_dedispersion_kernels();
 extern void test_gpu_ringbuf_copy_kernel();
 
 // test_gpu_peak_finding_kernel.cu
-extern void test_gpu_pf_ringbuf();
-extern void test_gpu_pf_core();
-extern void test_gpu_peak_finding_kernel();
+extern void test_gpu_peak_finding_kernel(bool reduce_only);
 
 // test_gpu_tree_gridding_kernel.cu
 extern void test_gpu_tree_gridding_kernel();

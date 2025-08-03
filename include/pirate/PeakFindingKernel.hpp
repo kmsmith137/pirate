@@ -50,7 +50,8 @@ struct PeakFindingKernel
 		     const ksgpu::Array<void> &out_ssq,
 		     const ksgpu::Array<void> &in,
 		     const ksgpu::Array<void> &wt,
-		     ksgpu::Dtype expected_dtype);
+		     ksgpu::Dtype expected_dtype,
+		     long ibatch);
 };
 
 
@@ -78,15 +79,22 @@ struct ReferencePeakFindingKernel : PeakFindingKernel
 
     // Inherits from PeakFindingKernel base class:
     //  params, Dcore, nbatches, ndm_out, nt_out, nprofiles
-    
+
     // Note: params.dtype is ignored in reference kernel (all Arrays must be float)
     // All arrays must be fully contiguous (this could be changed if needed).
-    // FIXME non-incremental for now!!
     
     void apply(ksgpu::Array<void> &out_max,     // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
 	       ksgpu::Array<void> &out_ssq,     // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
 	       const ksgpu::Array<void> &in,    // shape (beams_per_batch, ndm_in, nt_in)
-	       const ksgpu::Array<void> &wt);   // shape (beams_per_batch, nprofiles, ndm_in)
+	       const ksgpu::Array<void> &wt,    // shape (beams_per_batch, nprofiles, ndm_in)
+	       long ibatch);
+
+    // The ReferenceKernel allocates persistent_state in the constructor (not a separate
+    // allocate() method). We currently use a simple but suboptimal approach: just save the
+    // last 'pstate_nt' time samples from the previous chunk of data.
+
+    long pstate_nt = 0;          // initialized in constructor
+    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_in, pstate_nt)
 };
 
 

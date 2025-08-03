@@ -556,6 +556,8 @@ class PfTransposeLayer:
             znames = [ f'pf_mpad_{Din}_{i}' for i in range(Din) ]
 
             for r,zr in zip(rnames, znames):
+                # We use zeros for sentinels, but actual value shouldn't matter.
+                # k.emit(f'{dt32} {zr} = {self.params.dt32_scalar}(100.0f);')
                 k.emit(f'{dt32} {zr} = {self.params.dt32_scalar}(0.0f);')
                 k.warp_transpose(r, zr, Din, dt32)
 
