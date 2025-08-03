@@ -141,7 +141,9 @@ class PeakFindingParams:
             BlocksPerSM = only used for __launch_bounds__
         """
         
-        # FIXME incomplete
+        # These checks are a subset of the checks in PeakFindingKernelParams::validate(),
+        # so changes here should be reflected there as well.
+        
         assert M >= 1
         assert E <= 32
         assert Dout <= 32

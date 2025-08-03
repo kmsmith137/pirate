@@ -185,6 +185,9 @@ struct GpuPeakFindingKernel : PeakFindingKernel
     // Allocated in GpuPeakFindingKernel::allocate(), not the constructor.
     ksgpu::Array<void> persistent_state;
 
+    // Warning: GPU kernel assumes all weights are positive, and behavior
+    // is undefined if there are negative weights.
+    
     void launch(
         ksgpu::Array<void> &out_max,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
 	ksgpu::Array<void> &out_ssq,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)

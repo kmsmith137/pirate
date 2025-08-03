@@ -22,6 +22,14 @@ void PeakFindingKernelParams::validate() const
 {
     if ((dtype != Dtype::native<float>()) && (dtype != Dtype::native<__half>()))
 	throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());
+
+    // The checks below (or a subset) arise in three other places:
+    //
+    //   - pirate_frb.cuda_generator.PeakFindingParams constructor
+    //   - test_gpu_peak_finding_kernel(), when random params are generated
+    //   - DedispersionConfig::make_random()
+    //
+    // so changes here should be reflected there as well.
     
     // Check that everything is initialized.
     xassert(dm_downsampling_factor > 0);
@@ -43,7 +51,6 @@ void PeakFindingKernelParams::validate() const
     long nbits = dtype.nbits;
     
     // Currently assumed in GPU kernel.
-    // FIXME add these asserts to the code generator (+ an assert on DCore)
     xassert(max_kernel_width <= 32);
     xassert(time_downsampling_factor <= 32);
     xassert_divisible(nt_in, xdiv(1024,nbits));
@@ -152,6 +159,11 @@ void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_s
     xassert(out_ssq.on_host());
     xassert(in.on_host());
     xassert(wt.on_host());
+
+    // Note: _check_args() asserts that 'wt' is fully contiguous.
+    for (long i = 0; i < wt.size; i++)
+	if (wt.data[i] < 0.0f)
+	    throw runtime_error("ReferencePeakFindingKernel::apply(): all weights must be positive");
     
     // This loop just does p=0.
     for (int b = 0; b < B; b++) {

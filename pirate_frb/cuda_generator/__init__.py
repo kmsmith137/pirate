@@ -11,5 +11,6 @@ from .PeakFinder import \
     PeakFindingParams, \
     PeakFinder, \
     PfTransposeLayer, \
+    PfInitialTranspose16Layer, \
     PfCore, \
     PfReducer

@@ -248,15 +248,23 @@ void test_gpu_peak_finding_kernel(bool reduce_only)
     for (int i = 0; i < 5; i++) {
 	// Choose a random precompiled kernel.
 	pf_kernel k = ksgpu::rand_element(all_kernels);
-
+	int nbits = k.dtype.nbits;
+	
 	// Note that by choosing 'niter_cpu' and 'niter_gpu' independently, this test
 	// checks the incremental logic in both the reference kernel and the GPU kernel.
 	
 	int niter_cpu = rand_int(1,4);
 	int niter_gpu = rand_int(1,4);
+
+	// Determine smallest values of 'ndm_in' and 'nt_in' which are compatible with
+	// divisibility constraints in PeakFindingParams::validate(). If these constraints
+	// are changed, then logic here should be updated as well.
+
+	int nn = std::lcm(niter_cpu, niter_gpu);
+	int ndm_in_divisor = std::lcm(k.M, xdiv(32,nbits));
+	int nt_in_divisor = nn * std::lcm(xdiv(1024,nbits), k.Dout * xdiv(32,nbits));
 	
-	int nn = std::lcm(niter_gpu, niter_cpu);
-	auto v = ksgpu::random_integers_with_bounded_product(6, 30000 / (k.M * nn));
+	auto v = ksgpu::random_integers_with_bounded_product(6, 1000000 / (ndm_in_divisor * nt_in_divisor));
 
 	PeakFindingKernelParams params;
 	params.dtype = k.dtype;
@@ -265,8 +273,8 @@ void test_gpu_peak_finding_kernel(bool reduce_only)
 	params.max_kernel_width = k.E;
 	params.beams_per_batch = v[0];
 	params.total_beams = v[0] * v[1];
-	params.ndm_in = v[2] * v[3] * k.M * xdiv(32,params.dtype.nbits);
-	params.nt_in = v[4] * v[5] * nn * xdiv(1024,params.dtype.nbits);
+	params.ndm_in = v[2] * v[3] * ndm_in_divisor;
+	params.nt_in = v[4] * v[5] * nt_in_divisor;
 
 	// Debug
 	// niter_gpu = niter_cpu = 1;

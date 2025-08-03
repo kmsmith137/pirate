@@ -1,7 +1,18 @@
 # FIXME it would be nice to have a systematic unit test for the Ringbuf classes.
+# FIXME this source file could use more comments.x
 
 class Ringbuf:
     def __init__(self):
+        """
+        Consider a situation where we are processing a timestream in 32-element chunks,
+        so that thread 0 <= th < 32 holds x[t] at time index t = (32*i + th).
+
+        Suppose we want to apply lags, so that thread 'th' also holds x[32*i + th - lag].
+        This can partly be accomplished with warp shuffles, but we need a per-warp data
+        structure ("class Ringbuf") to store the overlaps ('lag' registers per warp),
+        and store the overlaps in global GPU memory between kernel launches.
+        """
+        
         self.nreg = 0
         self.rb_pos = [ ]        # List of length self.nreg
         self.rb_nelts = [ ]      # List of length self.nreg 
@@ -11,6 +22,8 @@ class Ringbuf:
 
         
     def advance(self, k, rname, nelts, dst=None, comment=True):
+        """The 'nelts' arg is the lag."""
+        
         assert 0 <= nelts <= 32
         assert not self.advance_outer_called
         
@@ -159,6 +172,19 @@ class Ringbuf:
 
 class Ringbuf16:
     def __init__(self):
+        """
+        The Ringbuf16 is similar to the Ringbuf, but applies in a situation where:
+
+          - the timestream is float16
+          - the simd bit 'b' of each register is mapped to b <-> ti5
+
+        That is, we are processing a float16 timestream in 64-element chunks, where
+        thread 0 <= th < 32 holds a __half2 containing { x[64*i+th], x[64*i+32+th] }.
+
+        The Ringbuf16 applies lags, so that thread 'th' also holds a __half2 with
+        { x[64*i + th - lag], x[64*i + 32 + th - lag] }.
+        """
+        
         self.nreg = 0
         self.rb_pos = [ ]        # List of length self.nreg, consisting of pairs (pos0,pos1)
         self.rb_nelts = [ ]      # List of length self.nreg, consisting of pairs (pos0,pos1)
