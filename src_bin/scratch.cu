@@ -78,32 +78,30 @@ static void test_ift1()
 
 __device__ __forceinline__ void initial_float16_transpose2(__half2 &x, __half2 &y)
 {
-    // Input:
     // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5    r <-> s
-    //
-    // __shfl_sync()  s == ti5 (mod 2)
-    // __shfl_sync()  s != ti5 (mod 2)
-    //
-    // Intermediate:
-    // b <-> ti0   th0 th1 th2 th3 th4 <-> s ti1 ti2 ti3 ti4    r <-> ti5
     
     __half2 src0 = (threadIdx.x & 0x10) ? y : x;  // s == ti5 (mod 2)
     __half2 src1 = (threadIdx.x & 0x10) ? x : y;  // s != ti5 (mod 2)
 
+    // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5    r <-> (s ^ ti15)
+    
     const uint lane0 = ((threadIdx.x >> 1) & 0xf) | (threadIdx.x << 4);  // lop3
     const uint lane1 = lane0 ^ 0x10;
 
     src0 = __shfl_sync(0xffffffff, src0, lane0);
     src1 = __shfl_sync(0xffffffff, src1, lane1);
 
+    // b <-> ti0   th0 th1 th2 th3 th4 <-> ti5 ti1 ti2 ti3 ti4    r <-> (s ^ ti15)
+    
     __half2 z0 = (threadIdx.x & 0x1) ? src1 : src0;
     __half2 z1 = (threadIdx.x & 0x1) ? src0 : src1;
 
-    // Local transpose:
-    // b <-> ti5   th0 th1 th2 th3 th4 <-> s ti1 ti2 ti3 ti4    r <-> ti0
+    // b <-> ti0   th0 th1 th2 th3 th4 <-> s ti1 ti2 ti3 ti4    r <-> ti5
 
     x = __lows2half2(z0, z1);
     y = __highs2half2(z0, z1);
+    
+    // b <-> ti5   th0 th1 th2 th3 th4 <-> s ti1 ti2 ti3 ti4    r <-> ti0
 }
 
 
