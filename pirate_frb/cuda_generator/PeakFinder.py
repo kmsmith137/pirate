@@ -211,10 +211,14 @@ class PeakFinder:
         self.ringbuf = Ringbuf16() if (params.dtype == '__half') else Ringbuf()        
         self.pf = PfCore(self.reducer, self.ringbuf)
         
-        while self.pf.Din > 1:
+        while self.pf.Din > 2:
             self.pf = PfTransposeLayer(self.pf)
 
-        if params.dtype == '__half':
+        if (params.dtype == 'float') and (self.pf.Din == 2):
+            self.pf = PfTransposeLayer(self.pf)
+        elif (params.dtype == '__half') and (self.pf.Din == 2):
+            self.pf = PfInitialTranspose16Layer2(self.pf)
+        elif (params.dtype == '__half') and (self.pf.Din == 1):
             self.pf = PfInitialTranspose16Layer(self.pf)
         
         
@@ -581,7 +585,6 @@ class PfInitialTranspose16Layer:
         The 'next_layer' is either a PfTransposeLayer (if Dcore > 1) or a PfCore (if Dcore == 1).
         """
         
-        # FIXME optimize by adding Din==2 layer
         assert next_layer.Din == 1
         assert next_layer.params.dt32 == '__half2'
         self.params = next_layer.params
@@ -607,7 +610,78 @@ class PfInitialTranspose16Layer:
         k.emit(f"{src} = (threadIdx.x & 1) ? __highs2half2({tmp0},{tmp1}) : __lows2half2({tmp0},{tmp1});")
         
         self.next_layer.advance(k, rnames, m)
+
+
+class PfInitialTranspose16Layer2:
+    def __init__(self, next_layer):
+        """
+        The PfInitialTranspose16Layer2 is equivalent to the composition of layers:
+
+           PfInitialTranspose16Layer2 -> PfTransposeLayer(Din=1)
+
+        but is significantly faster. It implements the following transpose operation:
+
+           - Input:   th0 <-> t1 t2 t3 t4 t5     b <-> t0     r <-> m
+           - Output:  th0 <-> m t1 t2 t3 t4      b <-> t5     r <-> t0
+
+        The 'next_layer' (either a PfTransposeLayer or PfCore) must have Din==2.
+        """
         
+        assert next_layer.Din == 2
+        assert next_layer.params.dt32 == '__half2'
+        
+        self.params = next_layer.params
+        self.next_layer = next_layer
+        self.save_rname = None
+
+            
+    def advance(self, k, rnames, m):
+        assert isinstance(rnames, list)
+        assert len(rnames) == 1
+        assert 0 <= m < self.params.M
+
+        rname = rnames[0]
+        k.emit(f'\n// PfInitialTransposeLayer2.advance({m=}): {rname=}')
+        
+        if ((m % 2) == 0) and (m < self.params.M-1):
+            k.emit(f'// PfInitialTransposeLayer2: transpose deferred to next value of m')
+            self.save_rname = rname
+            return
+
+        if (m % 2) == 1:
+            x0, x1, mnext = self.save_rname, rname, m-1
+            self.save_rname = None
+        else:
+            x0, mnext = rname, m
+            x1 = k.get_tmp_rname()
+            k.emit(f'__half2 {x1} = __float2half2_rn(0.0f);  // dummy value for (m+1)')
+
+        k.emit(f'// PfInitialTransposeLayer2: applying two-register transpose operation to {x0} and {x1}')
+        y0, y1, z0, z1 = k.get_tmp_rname(4)
+        
+        k.emit('// b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5    r <-> m')
+        k.emit(f'__half2 {y0} = (threadIdx.x & 0x10) ? {x1} : {x0};')
+        k.emit(f'__half2 {y1} = (threadIdx.x & 0x10) ? {x0} : {x1};')
+        k.emit('// b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5    r <-> (m ^ ti15)')
+
+        if mnext == 0:
+            k.emit('const uint itrans2_lane0 = ((threadIdx.x >> 1) & 0xf) | (threadIdx.x << 4);  // lop3')
+            k.emit('const uint itrans2_lane1 = itrans2_lane0 ^ 0x10;')
+
+        k.emit(f'{y0} = __shfl_sync(0xffffffff, {y0}, itrans2_lane0);')
+        k.emit(f'{y1} = __shfl_sync(0xffffffff, {y1}, itrans2_lane1);')
+        k.emit('// b <-> ti0   th0 th1 th2 th3 th4 <-> ti5 ti1 ti2 ti3 ti4    r <-> (m ^ ti15)')
+    
+        k.emit(f'__half2 {z0} = (threadIdx.x & 0x1) ? {y1} : {y0};')
+        k.emit(f'__half2 {z1} = (threadIdx.x & 0x1) ? {y0} : {y1};')
+        k.emit('// b <-> ti0   th0 th1 th2 th3 th4 <-> m ti1 ti2 ti3 ti4    r <-> ti5')
+
+        k.emit(f'{x0} = __lows2half2({z0}, {z1});')
+        k.emit(f'{x1} = __highs2half2({z0}, {z1});')
+        k.emit('// b <-> ti5   th0 th1 th2 th3 th4 <-> m ti1 ti2 ti3 ti4    r <-> ti0')
+
+        self.next_layer.advance(k, [x0,x1], mnext)
+
 
 ####################################################################################################
 
@@ -1049,6 +1123,13 @@ class PfReducer:
         elif self.params.dtype == '__half':
             if Dout == 32:
                 return
+
+            # FIXME float16 transpose implementation could be done with fewer operations, by grouping
+            # registers in pairs, and using a trick similar to 'class PfInitialTranspose16Layer2'.
+            #
+            # I didn't implement this since it's nontrivial, and I doubt the speedup is significant,
+            # since the transpose operations are in 1:1 correspondence with global memory writes,
+            # which aren't frequent if the coarse-graining factor is large.
             
             L = utils.integer_log2(32//Dout)
             assert 1 <= L <= 5
