@@ -15,6 +15,8 @@ namespace pirate {
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// All classes below are defined in src_lib/PeakFindingKernel.cu.
 
 
 struct PeakFindingKernelParams
