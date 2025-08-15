@@ -1,5 +1,6 @@
 import time
 import numpy as np
+import scipy.linalg
 
 
 def is_integer(n):
@@ -7,6 +8,11 @@ def is_integer(n):
 
 def is_power_of_two(n):
     return is_integer(n) and (n > 0) and (n == (1 << int(np.log2(n)+0.5)))
+
+def integer_log2(n):
+    k = int(np.log2(n+0.5))
+    assert n == 2**k
+    return k
 
 
 def postpad_array(arr, new_nt):
@@ -36,12 +42,54 @@ def lag_array(arr, axis, ix, lag):
         t[..., lag:] = u[..., :(-lag)]
 
 
+def check_bits(bits):
+    """Checks that 'bits' is a sorted list of powers of two."""
+    
+    assert all(is_power_of_two(x) for x in bits)
+
+    if len(bits) >= 2:
+        assert all(bits[i] < bits[i+1] for i in range(len(bits)-1))
+        
+        
+def expand_bit_array(arr, old_bits, new_bits, has_spectator_axis):
+    """Returns a new array. The spectator axis (if present) must be last."""
+
+    check_bits(old_bits)
+    check_bits(new_bits)
+
+    nold = len(old_bits)
+    nnew = len(new_bits)
+    sflag = 1 if has_spectator_axis else 0
+        
+    assert arr.ndim == (nold + sflag)
+    assert all(i==2 for i in arr.shape[:nold])
+
+    if nnew == 0:
+        assert nold == 0
+        return np.copy(arr)
+        
+    shape1 = np.ones(nnew + sflag, dtype=int)
+    shape2 = np.full(nnew + sflag, 2, dtype=int)
+    
+    if has_spectator_axis:
+        shape1[-1] = shape2[-1] = arr.shape[-1]   # spectator axis
+
+    for b in old_bits:
+        shape1[new_bits.index(b)] = 2
+
+    arr = np.reshape(arr, shape1)
+    ret = np.empty(shape2, dtype=arr.dtype)
+    ret[:] = arr[:]
+    return ret
+
+
 ####################################################################################################
 
 
 class ReferenceDedisperser:
     def __init__(self, rank, nfreq, fmin, fmax):
-        # FIXME error-check arguments
+        # FIXME more error-checking
+        assert 1 <= rank <= 16
         
         self.rank = rank
         self.nfreq = nfreq
@@ -109,10 +157,10 @@ class ReferenceDedisperser:
 ####################################################################################################
 
 
-class TreeMatrix:
+class FreqMatrix:
     def __init__(self, tmin, tmax, itmin=None, itmax=None, wt=1.0, lags_only=False):
         """
-        The TreeMatrix encodes how one frequency channel (corresponding to
+        The FreqMatrix encodes how one frequency channel (corresponding to
         input tree index range [tmin,tmax]) gets "smeared" across multiple time
         samples in the dedispersion output, as a function of trial DM index.
         
@@ -154,8 +202,8 @@ class TreeMatrix:
         itmid = itmax & ~(bit-1)
         assert itmin < itmid <= itmax
 
-        m1 = TreeMatrix(tmin, itmid, itmin, itmid-1, wt * (itmid-tmin) / (tmax-tmin), lags_only)
-        m2 = TreeMatrix(itmid, tmax, itmid, itmax, wt * (tmax-itmid) / (tmax-tmin), lags_only)
+        m1 = FreqMatrix(tmin, itmid, itmin, itmid-1, wt * (itmid-tmin) / (tmax-tmin), lags_only)
+        m2 = FreqMatrix(itmid, tmax, itmid, itmax, wt * (tmax-itmid) / (tmax-tmin), lags_only)
         assert all((b < bit) for b in (m1.bits + m2.bits))
         
         bits = sorted(set(m1.bits + m2.bits + [bit]))        
@@ -178,8 +226,8 @@ class TreeMatrix:
         data1 = postpad_array(m1.data, self.nt)
         data2 = postpad_array(m2.data, self.nt)
         
-        data1 = self._expand_helper(data1, m1.bits, bits, has_time_axis=True)
-        data2 = self._expand_helper(data2, m2.bits, bits, has_time_axis=True)
+        data1 = expand_bit_array(data1, m1.bits, bits, has_spectator_axis=True)
+        data2 = expand_bit_array(data2, m2.bits, bits, has_spectator_axis=True)
 
         # Apply lags2 to data1
         for i,l in enumerate(lags2):
@@ -197,7 +245,7 @@ class TreeMatrix:
         
         for b,l in zip(self.bits, self.lags):
             a = np.array([0,l])
-            ret += self._expand_helper(a, [b], all_bits, has_time_axis=False)
+            ret += expand_bit_array(a, [b], all_bits, has_spectator_axis=False)
 
         if bit_reverse_dm:
             ret = np.transpose(ret, range(rank-1,-1,-1))
@@ -209,84 +257,144 @@ class TreeMatrix:
         """Convenient for unit testing. Returns a (2**rank, nt) array."""
 
         all_bits = [ 2**r for r in range(rank) ]
-        ret = self._expand_helper(self.data, self.bits, all_bits, has_time_axis=True)
+        ret = expand_bit_array(self.data, self.bits, all_bits, has_spectator_axis=True)
 
         if bit_reverse_dm:
             ret = np.transpose(ret, list(range(rank-1,-1,-1)) + [ rank ])
 
         return np.reshape(ret, (2**rank, self.nt))
-    
-
-    def _check_bits(self, bits):
-        assert all(is_power_of_two(x) for x in bits)
-
-        if len(bits) >= 2:
-            assert all(bits[i] < bits[i+1] for i in range(len(bits)-1))
-        
-        
-    def _expand_helper(self, arr, old_bits, new_bits, has_time_axis):
-        """Returns a new array."""
-
-        self._check_bits(old_bits)
-        self._check_bits(new_bits)
-
-        nold = len(old_bits)
-        nnew = len(new_bits)
-        tflag = 1 if has_time_axis else 0
-        
-        assert arr.ndim == (nold + tflag)
-        assert all(i==2 for i in arr.shape[:nold])
-
-        shape1 = np.ones(nnew + tflag, dtype=int)
-        shape2 = np.full(nnew + tflag, 2, dtype=int)
-
-        if has_time_axis:
-            shape1[-1] = shape2[-1] = arr.shape[-1]   # ntime
-
-        for b in old_bits:
-            shape1[new_bits.index(b)] = 2
-
-        arr = np.reshape(arr, shape1)
-        ret = np.empty(shape2, dtype=arr.dtype)
-        ret[:] = arr[:]
-        return ret
 
 
 ####################################################################################################
 
 
-def test_one_tree_matrix(rank, nfreq, ifreq):
+def test_one_freq_matrix(rank, nfreq, ifreq):
     src = np.zeros((nfreq,1))
     src[ifreq,0] = 1.0
 
     d = ReferenceDedisperser(rank, nfreq, fmin=400, fmax=800)    
     dst1 = d.dedisperse(src)
 
-    tm = TreeMatrix(d.tlo[ifreq], d.thi[ifreq])
-    dst2 = tm.expand_matrix(rank, bit_reverse_dm=True)
+    fm = FreqMatrix(d.tlo[ifreq], d.thi[ifreq])
+    dst2 = fm.expand_matrix(rank, bit_reverse_dm=True)
     dst2 = postpad_array(dst2, dst1.shape[1])
     
-    tm2 = TreeMatrix(d.thi[ifreq], 2**rank, itmin=tm.itmax, itmax=2**rank-1, lags_only=True)    
-    lags = tm2.expand_lags(rank, bit_reverse_dm=True)
+    fm2 = FreqMatrix(d.thi[ifreq], 2**rank, itmin=fm.itmax, itmax=2**rank-1, lags_only=True)    
+    lags = fm2.expand_lags(rank, bit_reverse_dm=True)
 
     for d in range(2**rank):
         lag_array(dst2, 0, d, lags[d])
 
-    eps = np.max(np.abs(dst1-dst2))
-    print(f'test_tree_matrix({rank=}, {nfreq=}, {ifreq=}): {eps=}')
+    eps = float(np.max(np.abs(dst1-dst2)))  # np.float -> float
+    print(f'test_freq_matrix({rank=}, {nfreq=}, {ifreq=}): {eps=}')
     assert eps < 1.0e-12
 
     
-def test_tree_matrix():
+def test_freq_matrix():
     for _ in range(100):
         rank = np.random.randint(1, 10)
         nfreq = np.random.randint(1, 2**rank)
         ifreq = np.random.randint(nfreq)
-        test_one_tree_matrix(rank, nfreq, ifreq)
+        test_one_freq_matrix(rank, nfreq, ifreq)
         
+
+####################################################################################################
+
+
+class TreeMatrix:
+    def __init__(self, rank, nfreq, fmin, fmax):
+        """
+        For each "group" 0 <= g < (rank+1), we have the following:
+        
+          - freqs: 1-d integer-valued array containing frequency indices
+          - bits: sorted list of bits (each bit is a power of two)
+          - vmat: array of shape (2, 2, ..., nfreq) with one "2" for each bit
+          - nt: integer (currently unused)
+        """
+
+        self.rank = rank
+        self.nfreq = nfreq
+        self.fmin = fmin
+        self.fmax = fmax
+        
+        self.ref_dd = ReferenceDedisperser(rank, nfreq, fmin, fmax)
+        self.freqs = [ [] for _ in range(rank+1) ]
+        self.bits = [ set() for _ in range(rank+1) ]
+        self.vmat = [ None for _ in range(rank+1) ]
+        self.nt = np.zeros(rank+1, dtype=int)
+        
+        # FIXME convenient but uses more memory than necessary.
+        fms = [ FreqMatrix(self.ref_dd.tlo[ifreq], self.ref_dd.thi[ifreq]) for ifreq in range(nfreq) ]
+
+        # Initialize freqs, bits, nt
+        for f,fm in enumerate(fms):
+            g = (integer_log2(fm.bits[-1]) + 1) if fm.bits else 0
+            self.freqs[g].append(f)
+            self.bits[g] = set.union(self.bits[g], fm.bits)
+            self.nt[g] = max(self.nt[g], fm.nt)
+            
+        for g in range(rank+1):
+            nfreq, nbits = len(self.freqs[g]), len(self.bits[g])
+            vshape = (2,)*nbits + (nfreq,)
+            
+            self.vmat[g] = np.zeros(vshape)
+            self.freqs[g] = np.array(self.freqs[g])   # list of integers -> array
+            self.bits[g] = sorted(self.bits[g])       # set -> sorted list
+            
+            for i,f in enumerate(self.freqs[g]):
+                a = np.sum(fms[f].data**2, axis=-1)
+                a = expand_bit_array(a, fms[f].bits, self.bits[g], has_spectator_axis=False)
+                self.vmat[g][...,i] = a
+
+
+    def show(self):
+        print(f'TreeMatrix(rank={self.rank}, nfreq={self.nfreq}, fmin={self.fmin}, fmax={self.fmax}')
+        for g in range(self.rank+1):
+            print(f'    Group {g}: bits={self.bits[g]}, nfreqs={len(self.freqs[g])}, nt={self.nt[g]}')
+
+    
+    def make_huge_vmat(self):
+        rank, nfreq = self.rank, self.nfreq
+        all_bits = [ 2**r for r in range(rank) ]
+        ret = np.zeros((2**rank, nfreq))
+        
+        for g in range(rank+1):
+            if len(self.freqs[g]) == 0: continue
+            a = expand_bit_array(self.vmat[g], self.bits[g], all_bits, has_spectator_axis=True)
+            a = np.reshape(a, (2**rank,len(self.freqs[g])))
+            ret[:,self.freqs[g]] += a[:,:]
+
+        return ret
+    
 
 ####################################################################################################
     
 
 if True:
-    test_tree_matrix()
+    test_freq_matrix()
+    # TreeMatrix(15, 2**14, 400., 800.)
+    t = TreeMatrix(10, 2**9, 400., 800.)
+    t.show()
+    
+    m = t.make_huge_vmat()
+    u, s, v = scipy.linalg.svd(m, full_matrices=False)
+    print(f'{m.shape=}')
+    print(f'{u.shape=}')
+    print(f'{s.shape=}')
+    print(f'{v.shape=}')
+
+    nev = 32
+    
+    for i in range(nev+10):
+        print(i, s[i]/s[0])
+
+    us = u[:,:nev] * np.reshape(s[:nev], (1,nev))
+    mapprox = np.dot(us, v[:nev,:])
+    eps = (mapprox-m) / m
+
+    print(f'{nev=}')
+    print(f'{np.min(m)=}')
+    print(f'{np.max(m)=}')
+    print(f'{np.max(eps)=}')
+    
+    
