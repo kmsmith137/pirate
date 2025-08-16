@@ -6,13 +6,16 @@ import scipy.linalg
 def is_integer(n):
     return isinstance(n,int) or isinstance(n,np.int64) or isinstance(n,np.int32)
 
+
 def is_power_of_two(n):
     return is_integer(n) and (n > 0) and (n == (1 << int(np.log2(n)+0.5)))
+
 
 def integer_log2(n):
     k = int(np.log2(n+0.5))
     assert n == 2**k
     return k
+
 
 def postpad_array(arr, new_nt):
     """Pads last index of array (nt -> new_nt), and returns a new array."""
@@ -111,7 +114,37 @@ def truncated_svd(m, eps=1.0e-12, return_nsvd=True):
     v = np.copy(v[:n,:])
     
     return (u,s,v,n) if return_nsvd else (u,s,v)
+
+
+def bit_reverse(i, nbits):
+    assert 0 <= i < 2**nbits
     
+    ret = 0
+    for b in range(nbits):
+        if (i & (1 << b)):
+            ret = ret | (1 << (nbits-1-b))
+            
+    return ret
+
+
+def tree_delay(tfreq, dm_brev, rank):
+    """Vectorized."""
+
+    tfreq = np.asarray(tfreq)
+    dm_brev = np.asarray(dm_brev)
+    ff = (~tfreq) & (2**rank-1)   # flip bits
+    
+    shape = np.broadcast_shapes(tfreq.shape, dm_brev.shape)
+    ret = np.zeros(shape, dtype=int)
+
+    for b in range(rank):
+        ff2 = ff >> 1
+        ret += (dm_brev & 1) * ((ff & 1) + ff2)
+        dm_brev >>= 1
+        ff = ff2
+
+    return ret
+
 
 ####################################################################################################
 
@@ -188,7 +221,7 @@ class ReferenceDedisperser:
 
 
 class FreqMatrix:
-    def __init__(self, tmin, tmax, itmin=None, itmax=None, wt=1.0, lags_only=False):
+    def __init__(self, tmin, tmax, itmin=None, itmax=None, wt=1.0):
         """
         The FreqMatrix encodes how one frequency channel (corresponding to
         input tree index range [tmin,tmax]) gets "smeared" across multiple time
@@ -222,7 +255,7 @@ class FreqMatrix:
         if itmin == itmax:
             self.bits = [ ]
             self.lags = np.zeros((0,), dtype=int)  # 1-d array of length 0
-            self.data = np.array([wt]) if (not lags_only) else None
+            self.data = np.array([wt])
             return
         
         # new_bit = highest bit that gets flipped, over range [itmin:itmax+1].
@@ -232,8 +265,8 @@ class FreqMatrix:
         itmid = itmax & ~(bit-1)
         assert itmin < itmid <= itmax
 
-        m1 = FreqMatrix(tmin, itmid, itmin, itmid-1, wt * (itmid-tmin) / (tmax-tmin), lags_only)
-        m2 = FreqMatrix(itmid, tmax, itmid, itmax, wt * (tmax-itmid) / (tmax-tmin), lags_only)
+        m1 = FreqMatrix(tmin, itmid, itmin, itmid-1, wt * (itmid-tmin) / (tmax-tmin))
+        m2 = FreqMatrix(itmid, tmax, itmid, itmax, wt * (tmax-itmid) / (tmax-tmin))
         assert all((b < bit) for b in (m1.bits + m2.bits))
         
         bits = sorted(set(m1.bits + m2.bits + [bit]))        
@@ -249,9 +282,6 @@ class FreqMatrix:
         self.bits = bits
         self.lags = lags1 + lags2
         self.data = None
-        
-        if lags_only:
-            return
 
         data1 = postpad_array(m1.data, self.nt)
         data2 = postpad_array(m2.data, self.nt)
@@ -267,7 +297,10 @@ class FreqMatrix:
 
 
     def expand_lags(self, rank, bit_reverse_dm):
-        """Convenient for unit testing. Returns a length (2**rank) array. The DM is not bit-reversed."""
+        """
+        Returns a length (2**rank) array.
+        Note: this function is no longer used, and could be removed.
+        """
 
         # Slow implementation!
         all_bits = [ 2**r for r in range(rank) ]
@@ -296,8 +329,8 @@ class FreqMatrix:
 
 
 ####################################################################################################
-
-
+        
+    
 def test_one_freq_matrix(rank, nfreq, ifreq):
     src = np.zeros((nfreq,1))
     src[ifreq,0] = 1.0
@@ -309,8 +342,7 @@ def test_one_freq_matrix(rank, nfreq, ifreq):
     dst2 = fm.expand_matrix(rank, bit_reverse_dm=True)
     dst2 = postpad_array(dst2, dst1.shape[1])
     
-    fm2 = FreqMatrix(d.thi[ifreq], 2**rank, itmin=fm.itmax, itmax=2**rank-1, lags_only=True)    
-    lags = fm2.expand_lags(rank, bit_reverse_dm=True)
+    lags = tree_delay(fm.itmax, np.arange(2**rank), rank)
 
     for d in range(2**rank):
         lag_array(dst2, 0, d, lags[d])
@@ -434,13 +466,6 @@ class TreeMatrix:
                 utmp[:, itmp:(itmp+N)] = a
                 vtmp[itmp:(itmp+N), self.freqs[g]] = self.svd1_v[g]
                 itmp += N
-
-        # XXX
-        #self.svd2_u = utmp
-        #self.svd2_s = np.ones(ntmp)
-        #self.svd2_v = vtmp
-        #self.nsvd2 = ntmp
-        #return
 
         # At this point in the code, the variance matrix is V = (utmp * vtmp)
         
