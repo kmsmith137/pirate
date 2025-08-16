@@ -14,7 +14,6 @@ def integer_log2(n):
     assert n == 2**k
     return k
 
-
 def postpad_array(arr, new_nt):
     """Pads last index of array (nt -> new_nt), and returns a new array."""
     
@@ -82,6 +81,37 @@ def expand_bit_array(arr, old_bits, new_bits, has_spectator_axis):
     ret[:] = arr[:]
     return ret
 
+
+def compute_cf(arr):
+    """Last axis of 'arr' is time. Returns an array with the same shape as 'arr'."""
+
+    nt = arr.shape[-1]
+    ret = np.zeros(arr.shape)
+
+    # FIXME brute-force algorithm, could be optimized.
+    for i in range(nt):
+        for j in range(i+1):
+            ret[..., i-j] += arr[..., j] * arr[..., i]
+
+    return ret
+
+
+def truncated_svd(m, eps=1.0e-12, return_nsvd=True):
+    """Returns (u, s, v, nsvd)."""
+
+    u, s, v = scipy.linalg.svd(m, full_matrices=False)
+    
+    t = eps * s[0]
+    n = np.sum(s >= t)
+    assert np.all(s[:n] >= t)
+    assert np.all(s[n:] <= t)
+
+    u = np.copy(u[:,:n])
+    s = np.copy(s[:n])
+    v = np.copy(v[:n,:])
+    
+    return (u,s,v,n) if return_nsvd else (u,s,v)
+    
 
 ####################################################################################################
 
@@ -302,27 +332,42 @@ def test_freq_matrix():
 
 
 class TreeMatrix:
-    def __init__(self, rank, nfreq, fmin, fmax):
+    def __init__(self, rank, nfreq, fmin, fmax, E, svd1=True, svd2=True):
         """
         For each "group" 0 <= g < (rank+1), we have the following:
         
-          - freqs: 1-d integer-valued array containing frequency indices
+          - nt: integer
           - bits: sorted list of bits (each bit is a power of two)
-          - vmat: array of shape (2, 2, ..., nfreq) with one "2" for each bit
-          - nt: integer (currently unused)
+          - freqs: 1-d integer-valued array containing frequency indices
+          - vmat: array of shape (2, ..., 2, nprof, nfreq) with one "2" for each bit
+          - svd1_u: array of shape (2**nbits * nprof, nsvd1)
+          - svd1_s: array of shape (nsvd1,)
+          - svd1_v: array of shape (nsvd1, nfreq)
+          - nsvd1: integer
         """
 
         self.rank = rank
         self.nfreq = nfreq
         self.fmin = fmin
         self.fmax = fmax
+        self.E = E
         
+        self.has_svd1 = svd1
+        self.has_svd2 = svd2
         self.ref_dd = ReferenceDedisperser(rank, nfreq, fmin, fmax)
         self.freqs = [ [] for _ in range(rank+1) ]
         self.bits = [ set() for _ in range(rank+1) ]
         self.vmat = [ None for _ in range(rank+1) ]
         self.nt = np.zeros(rank+1, dtype=int)
         
+        # shape (P,T)
+        prof_cf = self.get_profiles(E, normalize=True)
+        prof_cf = compute_cf(prof_cf)
+        prof_cf[:,1:] *= 2.0
+        
+        self.P = prof_cf.shape[0]
+        nt_p = prof_cf.shape[1]
+
         # FIXME convenient but uses more memory than necessary.
         fms = [ FreqMatrix(self.ref_dd.tlo[ifreq], self.ref_dd.thi[ifreq]) for ifreq in range(nfreq) ]
 
@@ -332,37 +377,153 @@ class TreeMatrix:
             self.freqs[g].append(f)
             self.bits[g] = set.union(self.bits[g], fm.bits)
             self.nt[g] = max(self.nt[g], fm.nt)
-            
+
+        # Initialize vmat
         for g in range(rank+1):
-            nfreq, nbits = len(self.freqs[g]), len(self.bits[g])
-            vshape = (2,)*nbits + (nfreq,)
-            
-            self.vmat[g] = np.zeros(vshape)
             self.freqs[g] = np.array(self.freqs[g])   # list of integers -> array
             self.bits[g] = sorted(self.bits[g])       # set -> sorted list
             
+            F, B, nt = len(self.freqs[g]), len(self.bits[g]), self.nt[g]
+            ashape = (2,)*B + (F,nt)
+            a = np.zeros(ashape)
+            
             for i,f in enumerate(self.freqs[g]):
-                a = np.sum(fms[f].data**2, axis=-1)
-                a = expand_bit_array(a, fms[f].bits, self.bits[g], has_spectator_axis=False)
-                self.vmat[g][...,i] = a
+                a[...,i,:fms[f].nt] = expand_bit_array(fms[f].data, fms[f].bits, self.bits[g], has_spectator_axis=True)
 
+            a = compute_cf(a)   # shape (2, ..., 2, F, nt)
+
+            T = min(nt, nt_p)
+            a = np.dot(a[...,:T], np.transpose(prof_cf[:,:T]))   # shape (2, ..., 2, F, nprof)
+
+            perm = tuple(range(B)) + (B+1, B)
+            self.vmat[g] = np.copy(np.transpose(a, perm))    # shape (2, ..., 2, nprof, F)
+
+        if not svd1:
+            return
+
+        self.nsvd1 = np.zeros(rank+1, dtype=int)
+        self.svd1_u = [ None for _ in range(rank+1) ]
+        self.svd1_s = [ None for _ in range(rank+1) ]
+        self.svd1_v = [ None for _ in range(rank+1) ]
+
+        for g in range(rank+1):
+            if len(self.freqs[g]) > 0:
+                B, F, P = len(self.bits[g]), len(self.freqs[g]), self.P
+                m = np.reshape(self.vmat[g], (2**B * P, F))
+                self.svd1_u[g], self.svd1_s[g], self.svd1_v[g], self.nsvd1[g] = truncated_svd(m)
+
+        if not svd2:
+            return
+
+        itmp = 0
+        ntmp = np.sum(self.nsvd1)
+        utmp = np.zeros((2**rank * P, ntmp))
+        vtmp = np.zeros((ntmp, nfreq))
+        all_bits = [ 2**r for r in range(rank) ]
+        
+        # Initialize utmp, vtmp (awkward)
+        for g in range(rank+1):
+            if self.nsvd1[g] > 0:
+                B, N, P = len(self.bits[g]), self.nsvd1[g], self.P
+                a = self.svd1_u[g] * np.reshape(self.svd1_s[g], (1,N))
+                a = np.reshape(a, (2**B, P, N))
+                a = np.reshape(a, (2,)*B + (P*N,))
+                a = expand_bit_array(a, self.bits[g], all_bits, has_spectator_axis=True)
+                a = np.reshape(a, (2**rank, P, N))
+                a = np.reshape(a, (2**rank * P, N))
+                utmp[:, itmp:(itmp+N)] = a
+                vtmp[itmp:(itmp+N), self.freqs[g]] = self.svd1_v[g]
+                itmp += N
+
+        # XXX
+        #self.svd2_u = utmp
+        #self.svd2_s = np.ones(ntmp)
+        #self.svd2_v = vtmp
+        #self.nsvd2 = ntmp
+        #return
+
+        # At this point in the code, the variance matrix is V = (utmp * vtmp)
+        
+        utmp, stmp2, vtmp2 = scipy.linalg.svd(utmp, full_matrices=False)
+        mtmp = np.reshape(stmp2,(ntmp,1)) * vtmp2
+
+        # At this point in the code, variance matrix is (utmp * mtmp * vtmp)
+        
+        utmp2, stmp2, vtmp2, nsvd2 = truncated_svd(mtmp)
+
+        # At this point in the code, variance matrix is (utmp * utmp2 * diag(stmp2) * vtmp2 * vtmp)
+        
+        self.svd2_u = np.dot(utmp, utmp2)
+        self.svd2_v = np.dot(vtmp2, vtmp)
+        self.svd2_s = stmp2
+        self.nsvd2 = nsvd2
+        
 
     def show(self):
-        print(f'TreeMatrix(rank={self.rank}, nfreq={self.nfreq}, fmin={self.fmin}, fmax={self.fmax}')
+        print(f'TreeMatrix(rank={self.rank}, nfreq={self.nfreq}, fmin={self.fmin}, fmax={self.fmax}, E={self.E}, P={self.P})')
+        
         for g in range(self.rank+1):
-            print(f'    Group {g}: bits={self.bits[g]}, nfreqs={len(self.freqs[g])}, nt={self.nt[g]}')
+            s = f', nsvd1={self.nsvd1[g]}' if self.has_svd1 else ''
+            print(f'    Group {g}: bits={self.bits[g]}, nfreqs={len(self.freqs[g])}, nt={self.nt[g]}{s}')
 
+        if self.has_svd1:
+            print(f'    Sum(nsvd1) = {np.sum(self.nsvd1)}')
+
+        if self.has_svd2:
+            print(f'    nsvd2 = {self.nsvd2}')
+    
     
     def make_huge_vmat(self):
-        rank, nfreq = self.rank, self.nfreq
+        """Returns an array of shape (2^rank * P, nfreq)."""
+        
+        rank, nfreq, P = self.rank, self.nfreq, self.P
         all_bits = [ 2**r for r in range(rank) ]
-        ret = np.zeros((2**rank, nfreq))
+        ret = np.zeros((2**rank * P, nfreq))
         
         for g in range(rank+1):
-            if len(self.freqs[g]) == 0: continue
-            a = expand_bit_array(self.vmat[g], self.bits[g], all_bits, has_spectator_axis=True)
-            a = np.reshape(a, (2**rank,len(self.freqs[g])))
-            ret[:,self.freqs[g]] += a[:,:]
+            if len(self.freqs[g]) > 0:
+                B, F = len(self.bits[g]), len(self.freqs[g])
+                s = (2,)*B + (P*F,)
+                a = np.reshape(self.vmat[g], s)
+                a = expand_bit_array(a, self.bits[g], all_bits, has_spectator_axis=True)
+                a = np.reshape(a, (2**rank, P*F))
+                a = np.reshape(a, (2**rank * P, F))
+                ret[:,self.freqs[g]] += a[:,:]
+
+        return ret
+
+
+    @classmethod
+    def get_profiles(cls, E, normalize):
+        """
+        Returns shape (P,T) array, where:
+           P = number of profiles = 3*log2(E) + 1
+           T = number of time samples = 2*E
+        """
+
+        assert is_power_of_two(E)
+        
+        P = 3*integer_log2(E) + 1
+        T = 2*E
+        
+        if normalize:
+            ret = cls.get_profiles(E, normalize=False)
+            t = np.sum(ret**2, axis=1)
+            ret *= np.reshape(t**(-0.5), (P,1))
+            return ret
+
+        ret = np.zeros((P,T))
+        ret[0,0] = 1.0
+
+        if E > 1:
+            ret[1,:2] = [1.0, 1.0]
+            ret[2,:3] = [0.5, 1.0, 0.5]
+            ret[3,:4] = [0.5, 1.0, 1.0, 0.5]
+
+        if E > 2:
+            ret2 = cls.get_profiles(E//2, normalize=False)
+            ret[4:,0::2] = ret2[1:,:]
+            ret[4:,1::2] = ret2[1:,:]
 
         return ret
     
@@ -372,29 +533,21 @@ class TreeMatrix:
 
 if True:
     test_freq_matrix()
-    # TreeMatrix(15, 2**14, 400., 800.)
-    t = TreeMatrix(10, 2**9, 400., 800.)
+    
+    t0 = time.time()
+    t = TreeMatrix(16, 2**15, 400., 800., E=16)
+    # t = TreeMatrix(11, 2**10, 400., 800., E=4)
+    print(f'TreeMatrix constructor: {time.time()-t0} sec')
+
     t.show()
+    fdfasd
     
+    # End-to-end test of svd2 (only for small instances)
     m = t.make_huge_vmat()
-    u, s, v = scipy.linalg.svd(m, full_matrices=False)
-    print(f'{m.shape=}')
-    print(f'{u.shape=}')
-    print(f'{s.shape=}')
-    print(f'{v.shape=}')
-
-    nev = 32
-    
-    for i in range(nev+10):
-        print(i, s[i]/s[0])
-
-    us = u[:,:nev] * np.reshape(s[:nev], (1,nev))
-    mapprox = np.dot(us, v[:nev,:])
-    eps = (mapprox-m) / m
-
-    print(f'{nev=}')
-    print(f'{np.min(m)=}')
-    print(f'{np.max(m)=}')
-    print(f'{np.max(eps)=}')
-    
-    
+    m2 = np.reshape(t.svd2_s, (t.nsvd2,1)) * t.svd2_v
+    print(f'XXX0 {t.svd2_v.shape=}')
+    print(f'XXX1 {m2.shape=}')
+    m2 = np.dot(t.svd2_u, m2)
+    print(f'XXX2 {m2.shape=}')
+    eps = np.max(np.abs(m-m2))
+    print(f'{eps=}')
