@@ -43,8 +43,8 @@ class Dedisperser:
         k.emit(f'// Launch with {{ Namb, Nbeams}} threadblocks')
         k.emit()
         k.emit(f'__global__ void __launch_bounds__({32*W},{B})')
-        k.emit(f'{self.kernel_name}(void *inbuf_, int act_istride32, int amb_istride32, long beam_istride32,')
-        k.emit(f'       void *outbuf_, int act_ostride32, int amb_ostride32, long beam_ostride32,')
+        k.emit(f'{self.kernel_name}(void *inbuf_, long beam_istride32, int amb_istride32, int act_istride32,')
+        k.emit(f'       void *outbuf_, long beam_ostride32, int amb_ostride32, int act_ostride32,')
         k.emit(f'       void *pstate_, int ntime, long rb_pos)')
         k.emit('{')
 
@@ -54,15 +54,15 @@ class Dedisperser:
 
         k.emit(f'// Apply per-thread offsets to inbuf (including laneId offset).')
         k.emit(f'{dt32} *inbuf = ({dt32} *) inbuf_;')
-        k.emit(f'inbuf += long(amb_istride32) * long(blockIdx.x);    // ambient = blockIdx.x')
         k.emit(f'inbuf += long(beam_istride32) * long(blockIdx.y);   // beam = blockIdx.y')
+        k.emit(f'inbuf += long(amb_istride32) * long(blockIdx.x);    // ambient = blockIdx.x')
         k.emit(f'inbuf += threadIdx.x;   // laneId')
         k.emit()
         
         k.emit(f'// Apply per-thread offsets to outbuf (including laneId offset).')
         k.emit(f'{dt32} *outbuf = ({dt32} *) outbuf_;')
-        k.emit(f'outbuf += long(amb_ostride32) * long(blockIdx.x);    // ambient = blockIdx.x')
         k.emit(f'outbuf += long(beam_ostride32) * long(blockIdx.y);   // beam = blockIdx.y')
+        k.emit(f'outbuf += long(amb_ostride32) * long(blockIdx.x);    // ambient = blockIdx.x')
         k.emit(f'outbuf += threadIdx.x;   // laneId')
         k.emit()
 

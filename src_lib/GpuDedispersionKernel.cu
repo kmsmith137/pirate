@@ -578,7 +578,7 @@ struct dd_iobuf
     void *buf = nullptr;
 
     // If (is_ringbuf == false), then these members are valid.
-    int beam_stride32 = 0;
+    long beam_stride32 = 0;
     int amb_stride32 = 0;
     int act_stride32 = 0;
     
@@ -591,6 +591,9 @@ struct dd_iobuf
 
 	// Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
 	xassert(is_aligned(buf, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
+
+	// FIXME constructor should include overflow checks on strides.
+	// (Check on act_stride is nontrivial, since it gets multiplied by a small integer in the kernel.)
 	
 	if (is_ringbuf) {
 	    // Case 1: ringbuf, with 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
