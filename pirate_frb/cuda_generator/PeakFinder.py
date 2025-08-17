@@ -336,7 +336,7 @@ class PeakFinder:
             k.emit()
 
             # Save splice, for code to load the ring buffer.
-            # (This code must be emitted after the main lloop.)
+            # (This code must be emitted after the main loop.)
             k_rb = k.splice()
 
         else:

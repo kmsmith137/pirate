@@ -5,9 +5,12 @@
 
 #include "../include/pirate/cuda_kernels/dedispersion_iobufs.hpp"  // struct dedispersion_{simple,ring}_{inbuf,output}
 
+#include <mutex>
 #include <sstream>
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>  // CUDA_CALL()
+#include <ksgpu/rand_utils.hpp>  // rand_int()
+#include <ksgpu/string_utils.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -551,6 +554,255 @@ shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &para
 	return make_shared<GpuDedispersionKernelImpl<__half, dedispersion_ring_inbuf<__half>, dedispersion_simple_outbuf<__half>>> (params);
     
     throw runtime_error("GpuDedispersionKernel::make(): no suitable precompiled kernel could be found");
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// NewGpuDedispersionKernel
+
+
+    
+// dd_iobuf: this helper class is used in NewGpuDedispersionKenrel::launch(), to process
+// and error-check the input/output arrays.
+//
+// Recall that the 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
+// values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
+//
+//   - simple buf has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
+//   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
+
+struct dd_iobuf
+{
+    bool is_ringbuf;
+    void *buf = nullptr;
+
+    // If (is_ringbuf == false), then these members are valid.
+    int beam_stride32 = 0;
+    int amb_stride32 = 0;
+    int act_stride32 = 0;
+    
+    dd_iobuf(const DedispersionKernelParams &params, const Array<void> &arr, bool is_ringbuf_)
+    {
+	this->is_ringbuf = is_ringbuf_;
+	this->buf = arr.data;
+
+	xassert_eq(arr.dtype, params.dtype);
+
+	// Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
+	xassert(is_aligned(buf, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
+	
+	if (is_ringbuf) {
+	    // Case 1: ringbuf, with 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
+	    xassert_shape_eq(arr, ({ params.ringbuf_nseg * params.nelts_per_segment }));
+	    xassert(arr.get_ncontig() == 1);
+	    xassert(arr.on_gpu());
+	}
+	else {
+	    // Case 2: simple buf, with shape  (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
+	    xassert_shape_eq(arr, ({params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime}));
+	    xassert(arr.get_ncontig() >= 1);
+	    xassert(arr.on_gpu());
+
+	    long denom = xdiv(32, arr.dtype.nbits);
+	    this->beam_stride32 = xdiv(arr.strides[0], denom);   // 32-bit stride
+	    this->amb_stride32 = xdiv(arr.strides[1], denom);    // 32-bit stride
+	    this->act_stride32 = xdiv(arr.strides[2], denom);    // 32-bit stride
+
+	    // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
+	    xassert_divisible(beam_stride32 * 4, constants::bytes_per_gpu_cache_line);
+	    xassert_divisible(amb_stride32 * 4, constants::bytes_per_gpu_cache_line);
+	    xassert_divisible(act_stride32 * 4, constants::bytes_per_gpu_cache_line);
+	    
+	    // FIXME could improve these checks, by verifying that strides are non-overlapping.
+	    xassert((params.beams_per_batch == 1) || (beam_stride32 != 0));
+	    xassert((params.amb_rank == 0) || (amb_stride32 != 0));
+	    xassert((params.dd_rank == 0) || (act_stride32 != 0));
+	}
+    }
+};
+
+
+NewGpuDedispersionKernel::NewGpuDedispersionKernel(const Params &params_) :
+    params(params_)
+{
+    params.validate(true);        // on_gpu=true
+    xassert(params.dd_rank > 0);  // FIXME define _r0 for testing
+
+    bool in_rb = params.input_is_ringbuf;
+    bool out_rb = params.output_is_ringbuf;
+    bool in_rlags = params.apply_input_residual_lags;
+    
+    this->cuda_kernel = dd_kernel::get(params.dtype, params.dd_rank, in_rb, out_rb, in_rlags);
+    this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
+
+    int ST = xdiv(params.dtype.nbits, 8);    
+    this->bw_per_launch.kernel_launches = 1;
+    this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * ST;
+    this->bw_per_launch.nbytes_gmem += 8 * params.beams_per_batch * pow2(params.amb_rank) * cuda_kernel.pstate32_per_small_tree;
+    // FIXME(?) not currently including ringbuf_locations.
+}
+
+
+void NewGpuDedispersionKernel::allocate()
+{
+    if (is_allocated)
+	throw runtime_error("double call to NewGpuDedispersionKernel::allocate()");
+    
+    // Note 'af_zero' flag here.
+    long ninner = cuda_kernel.pstate32_per_small_tree * xdiv(32, params.dtype.nbits);
+    std::initializer_list<long> shape = { params.total_beams, pow2(params.amb_rank), ninner };
+    this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
+    
+    bool is_float32 = (params.dtype.nbits == 32);
+    this->integer_constants = make_integer_constants(params.dd_rank, is_float32, true);   // on_gpu=true
+
+    // Copy host -> GPU.
+    if (params.input_is_ringbuf || params.output_is_ringbuf) {
+	this->gpu_ringbuf_locations = params.ringbuf_locations.to_gpu();
+
+	long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nelts_per_segment);
+	xassert_shape_eq(gpu_ringbuf_locations, ({nrb,4}));
+	xassert(gpu_ringbuf_locations.is_fully_contiguous());
+	xassert(gpu_ringbuf_locations.on_gpu());
+    }
+
+    this->is_allocated = true;
+}
+
+
+void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long it_chunk, cudaStream_t stream)
+{
+    xassert(this->is_allocated);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(it_chunk >= 0);
+
+    dd_iobuf in(params, in_arr, params.input_is_ringbuf);
+    dd_iobuf out(params, out_arr, params.output_is_ringbuf);
+
+    // The global persistent_state array has shape { total_beams, pow2(params.amb_rank), ninner }.
+    // We want to select a subset of beams corresponding to the current batch.
+    long b0 = (ibatch) * params.beams_per_batch;
+    long b1 = (ibatch+1) * params.beams_per_batch;
+    Array<void> pstate = this->persistent_state.slice(0, b0, b1);
+    
+    // XXX confused by rb_pos
+    long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
+
+    dim3 grid_dims = { uint(pow2(params.amb_rank)), uint(params.beams_per_batch), 1 };
+    dim3 block_dims = { 32, uint(cuda_kernel.warps_per_threadblock), 1 };
+
+    // dd_kernel does not yet support ringbufs
+    xassert(!params.input_is_ringbuf);
+    xassert(!params.output_is_ringbuf);
+
+    this->cuda_kernel.cuda_kernel <<< grid_dims, block_dims, cuda_kernel.shmem_nbytes, stream >>>
+	(in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
+	 out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
+	 pstate.data, params.ntime, rb_pos);
+    
+    CUDA_PEEK("dedispersion kernel");
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Kernel registry
+
+
+static mutex dd_kernel_lock;
+static std::vector<dd_kernel> dd_kernel_registry;
+
+
+// Call with lock held
+static dd_kernel *_get_dd_kernel(Dtype dtype, int rank, bool in_rb, bool out_rb, bool in_rlags)
+{
+    for (dd_kernel &d: dd_kernel_registry) {
+	if ((d.dtype == dtype) && (d.rank == rank) && (d.input_is_ringbuf == in_rb) &&
+	    (d.output_is_ringbuf == out_rb) && (d.apply_input_residual_lags == in_rlags))
+	    return &d;
+    }
+    
+    return nullptr;
+}
+
+
+void dd_kernel::register_kernel()
+{
+    // Just check that all members have been initialized.
+    // (In the future, I may add more argument checking here.)
+    
+    xassert((dtype == Dtype::native<float>()) || (dtype == Dtype::native<__half>()));
+    xassert(warps_per_threadblock > 0);
+    xassert(cuda_kernel != nullptr);
+    
+    if (this->shmem_nbytes > 48*1024) {
+        CUDA_CALL(cudaFuncSetAttribute(
+	    this->cuda_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            this->shmem_nbytes
+        ));
+    }
+
+    unique_lock<mutex> lk(dd_kernel_lock);
+    dd_kernel *d = _get_dd_kernel(dtype, rank, input_is_ringbuf, output_is_ringbuf, apply_input_residual_lags);
+
+    if (!d)
+	dd_kernel_registry.push_back(*this);
+    else if (!this->debug && d->debug)
+	cout << "Note: debug and non-debug dd kernels were registered; debug kernel takes priority" << endl;
+    else if (this->debug && !d->debug) {
+	cout << "Note: debug and non-debug dd kernels were registered; debug kernel takes priority" << endl;
+	*d = *this;
+    }
+    else
+	throw runtime_error("dd_kernel::register() called twice, perhaps you forgot to set the 'debug' flag?");
+}
+
+
+// Static member function
+dd_kernel dd_kernel::get(Dtype dtype, int rank, bool in_rb, bool out_rb, bool in_rlags)
+{
+    unique_lock<mutex> lk(dd_kernel_lock);
+    dd_kernel *d = _get_dd_kernel(dtype, rank, in_rb, out_rb, in_rlags);
+    
+    if (d != nullptr) {
+	// Not sure whether "return (*d)" drops lock before copying.
+	dd_kernel ret = *d;
+	return ret;
+    }
+
+    stringstream ss;
+    ss << "dd_kernel::get(): no kernel found for dtype=" << dtype
+       << ", rank=" << rank << ", input_is_ringbuf=" << in_rb
+       << ", output_is_ringbuf=" << out_rb
+       << ", apply_input_residual_lags=" << in_rlags;
+    
+    throw runtime_error(ss.str());
+}
+
+
+// Static member function
+dd_kernel dd_kernel::get_random()
+{
+    unique_lock<mutex> lk(dd_kernel_lock);
+    xassert(dd_kernel_registry.size() > 0);
+    long i = ksgpu::rand_int(0, dd_kernel_registry.size());
+
+    // Not sure whether "return dd_kernel_registry[i]" drops lock before copying.
+    dd_kernel ret = dd_kernel_registry[i];
+    return ret;
+}
+
+
+// Static member function
+vector<dd_kernel> dd_kernel::get_all()
+{
+    unique_lock<mutex> lk(dd_kernel_lock);
+
+    // Not sure whether "return dd_kernel_registry" drops lock before copying.
+    vector<dd_kernel> ret = dd_kernel_registry;
+    return ret;
 }
 
 

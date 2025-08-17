@@ -28,6 +28,8 @@ class Ringbuf:
         assert not self.advance_outer_called
         
         if nelts == 0:
+            if dst is not None:
+                k.emit(f'{dst} = {rname};')
             return
 
         if comment:
@@ -52,6 +54,39 @@ class Ringbuf:
         self._blend(k, dst, rname, rb_rname, nelts)
         self._blend(k, rb_rname, rb_rname, rname, nelts)
         self._cycle_register(k, dst, 32-nelts)
+
+
+    def advance2(self, k, rname, nelts):
+        """For use in dedispersion kernels."""
+
+        assert 0 <= nelts < 31
+        assert not self.advance_outer_called
+        
+        dst0, dst1 = k.get_tmp_rname(2)
+        k.emit(f'float {dst0}, {dst1};')
+
+        # FIXME
+        self.advance(k, rname, nelts, dst=dst1, comment=False)
+        self.advance(k, dst1, 1, dst=dst0, comment=False)
+        return dst0, dst1
+        
+        # Note that _get_r() does not increment rb_nelts[r].
+        r = self._get_r(nelts+1)   # note +1 here
+        rb_rname = self.rb_rnames[r]
+
+        # Cycle ring buffer (if needed)
+        self._cycle_register(k, rb_rname, 32 - self.rb_nelts[r] + self.rb_pos[r])
+        self.rb_pos[r] = self.rb_nelts[r]
+        self.rb_nelts[r] += (nelts + 1)    # note +1 here
+        
+        self._blend(k, dst1, rname, rb_rname, nelts)
+        self._cycle_register(k, dst1, 32-nelts)
+        
+        self._blend(k, dst0, rname, rb_rname, nelts+1)
+        self._cycle_register(k, dst0, 32-nelts-1)
+        
+        self._blend(k, rb_rname, rb_rname, rname, nelts+1)
+        return dst0, dst1
 
 
     def advance_outer(self, k):

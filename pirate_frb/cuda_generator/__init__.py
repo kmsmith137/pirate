@@ -7,6 +7,10 @@ from . import make_files
 from .Kernel import Kernel
 from .Ringbuf import Ringbuf, Ringbuf16
 
+from .Dedisperser import \
+    DedisperserParams, \
+    Dedisperser
+
 from .PeakFinder import \
     PeakFindingParams, \
     PeakFinder, \

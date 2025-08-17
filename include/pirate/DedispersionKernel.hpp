@@ -139,10 +139,10 @@ struct ReferenceDedispersionKernel
 
     ReferenceDedispersionKernel(const Params &params);
     
-    // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
+    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
     //
-    //   - dedispersion buffer has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
+    //   - simple buf has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
     //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
 
     void apply(ksgpu::Array<void> &in, ksgpu::Array<void> &out, long ibatch, long it_chunk);
@@ -155,6 +155,11 @@ struct ReferenceDedispersionKernel
     void _copy_to_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
     void _copy_from_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
 };
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// GpuDedispersionKernel
 
 
 // The GpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
@@ -176,10 +181,10 @@ public:
     
     // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
     //
-    // The 'in' and 'out' arrays are either dedispersion buffers or ringbufs, depending on
+    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
     // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
     //
-    //   - dedispersion buffer has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
+    //   - simple buf has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
     //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
     
     virtual void launch(
@@ -213,6 +218,121 @@ public:
 protected:
     // Don't call constructor directly -- call GpuDedispersionKernel::make() instead!
     GpuDedispersionKernel(const Params &params);
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// dd_kernel, NewGpuDedispersionKernel
+
+
+// dd_kernel: represents a precompiled low-level cuda kernel.
+// (Must be declared before NewGpuDedispersionKernel).
+//
+// Each .cu source file populates a 'struct dd_kernel' with function pointers,
+// then calls dd_kernel::register().
+
+struct dd_kernel
+{
+    ksgpu::Dtype dtype;   // either float16 or float32
+
+    int rank = -1;
+    bool input_is_ringbuf = false;
+    bool output_is_ringbuf = false;
+    bool apply_input_residual_lags = false;
+
+    // The low-level cuda kernel is called as:
+    //
+    // void dd_kernel(
+    //     void *inbuf, int act_istride32, int amb_istride32, long beam_istride32,
+    //     void *outbuf, int act_ostride32, int amb_ostride32, long beam_ostride32,
+    //     void *pstate, int ntime, long rb_pos
+    // );
+    //
+    // where:
+    //
+    //   - 'inbuf' is an array of shape (nbeams, namb, 2**rank, ntime)
+    //      with strides (beam_istride32, amb_istride32, act_istride32, 1).
+    //
+    //   - 'outbuf' is an array of shape (nbeams, namb, 2**rank, ntime)
+    //      with strides (beam_ostride32, amb_ostride32, act_ostride32, 1).
+    //
+    //   - Note that strides are in "32-bit" units (e.g. __half2 not __half).
+    //
+    //   - 'pstate' is an array of shape (nbeams, namb, pstate32_per_small_tree),
+    //     with 32-bit dtype (e.g. __half2 not __half).
+    //
+    //   - XXX explain 'rb_pos' arg here.
+    //
+    //   -  The kernel is launched with {32, warps_per_threadblock} warps
+    //      and {namb, nbeams} blocks.
+
+    void (*cuda_kernel)(void *, int, int, long, void *, int, int, long, void *, int, long) = nullptr;
+
+    int shmem_nbytes = 0;
+    int warps_per_threadblock = 0;
+    int pstate32_per_small_tree = 0;
+    bool debug = false;  // a "debug" kernel takes precedence over non-debug
+
+    // Note: if shmem_nbytes > 48KiB, then register_kernel() calls cudaFuncSetAttribute(...).
+    void register_kernel();
+
+    static dd_kernel get(ksgpu::Dtype dtype, int rank, bool in_rb, bool out_rb, bool in_rlags);
+    static dd_kernel get_random();
+    static std::vector<dd_kernel> get_all();
+};
+
+
+// The NewGpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
+// but internally allocates and manages its persistent state.
+
+class NewGpuDedispersionKernel
+{
+    using Params = DedispersionKernelParams;
+    
+public:
+    NewGpuDedispersionKernel(const Params &params);
+    
+    Params params;   // reminder: contains 'ringbuf_locations' array on host (not GPU!)
+    bool is_allocated = false;
+    
+    // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
+    void allocate();
+    
+    // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
+    //
+    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
+    // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
+    //
+    //   - simple buf has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
+    //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
+    
+    void launch(
+        ksgpu::Array<void> &in,
+	ksgpu::Array<void> &out,
+	long ibatch,
+	long it_chunk,
+	cudaStream_t stream  // NULL stream is allowed, but is not the default
+    );
+
+    // Bandwidth per call to NewGpuDedispersionKernel::launch().
+    // To get bandwidth per time chunk, multiply by 'nbatches'.
+    BandwidthTracker bw_per_launch;
+    
+    // Used internally.
+    dd_kernel cuda_kernel;
+    long nbatches = 0;   // = (total_beams / beams_per_batch)
+    
+    // The 'persistent_state', 'integer_constants', and 'gpu_ringbuf_locations' arrays
+    // are allocated in GpuDedipsersionKernel::allocate(), not the constructor.
+    
+    // Shape (total_beams, pow2(params.amb_rank), ninner)
+    // where ninner = cuda_kernel.pstate_32_per_small_tree * (32/nbits)
+    ksgpu::Array<void> persistent_state;
+
+    // FIXME should add run-time check that current cuda device is consistent.
+    ksgpu::Array<uint> integer_constants;
+    ksgpu::Array<uint> gpu_ringbuf_locations;
 };
 
 
