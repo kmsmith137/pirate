@@ -34,13 +34,15 @@ def make_dd_file(nbits):
 
     k_code = k.splice()
 
-    for rank in [6]:
+    for rank in range(1,9):
         pars = DedisperserParams(dtype, rank)
         dd = Dedisperser(pars)
         
         dd.emit_global(k_code)
         k_code.emit()
 
+        k_code.reset_tmp_vars()
+        
         k.emit(f'// Boilerplate to register the rank={rank} kernel when the library is loaded.')
         k.emit('namespace {')
         k.emit(f'struct register_hack{rank} {{')

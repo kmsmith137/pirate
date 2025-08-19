@@ -56,6 +56,10 @@ class Dedisperser:
         k.emit(f'// Launch with {{ 32, {W} }} threads/warp')
         k.emit(f'// Launch with {{ Namb, Nbeams}} threadblocks')
         k.emit()
+
+        if False:   # debug
+            self._show_shmem_layout_in_comment(k)
+            
         k.emit(f'__global__ void __launch_bounds__({32*W},{B})')
         k.emit(f'{self.kernel_name}(void *inbuf_, long beam_istride32, int amb_istride32, int act_istride32,')
         k.emit(f'       void *outbuf_, long beam_ostride32, int amb_ostride32, int act_ostride32,')
@@ -86,7 +90,7 @@ class Dedisperser:
         k.emit('\n//Store data from registers to global memory')
         for i,x in enumerate(xnames):
             # Correct for both single-stage and two-stage
-            r = self.rank0 if self.two_stage else 1
+            r = (2**self.rank0) if self.two_stage else 1
             s = f'{i*r} * act_ostride32' if (i > 0) else '0'
             k.emit(f'outbuf[{s}] = {x};')
 
@@ -345,8 +349,21 @@ class Dedisperser:
             return 'pstate'
         
         ps = k.get_tmp_rname()
-        k.emit(f'{self.dt32} *{ps} = pstate + SM32 + (threadIdx.y * PS32);  // per-warp ring buffer in global memory')
+        k.emit(f'{self.dt32} *{ps} = pstate + SM32 + (threadIdx.y * RB32);  // per-warp ring buffer in global memory')
         return ps
+
+
+    def _show_shmem_layout_in_comment(self, k):
+        if not self.two_stage:
+            return
+        
+        for dm in range(2**self.rank0):
+            for frev in range(2**self.rank1):
+                rb_lag = (frev * dm * self.nbits) // 32
+                rb_size = rb_lag + 32
+                rb_base = self.rb_base(dm, frev)
+                k.emit(f'//   {dm=} {frev=}: {rb_lag=} {rb_size=} {rb_base=}')
+        k.emit()
     
     
     def static_asserts(self):
@@ -356,7 +373,7 @@ class Dedisperser:
         for dm in range(2**self.rank0):
             for frev in range(2**self.rank1):
                 assert self.rb_base(dm,frev) == expected_pos
-                lag = (frev*dm) if (self.dtype == 'float') else (frev*dm)//2
+                lag = (frev * dm * self.nbits) // 32
                 expected_pos += (lag + 32)
 
         assert self.shmem_nbytes == (expected_pos * 4)

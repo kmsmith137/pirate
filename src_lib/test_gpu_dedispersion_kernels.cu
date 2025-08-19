@@ -120,13 +120,8 @@ struct TestInstanceDK
 
 	if (params.input_is_ringbuf || params.output_is_ringbuf)
 	    randomize_ringbuf();
-	
-	// Dedispersion buffer strides (note that ringbufs are always contiguous).
-	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime };
-	this->cpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->gpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->cpu_ostrides = in_place ? cpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->gpu_ostrides = in_place ? gpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+
+	randomize_strides();
     }
 
     
@@ -230,6 +225,30 @@ struct TestInstanceDK
 	    rb_loc[4*iseg+3] = s;                         // rb_nseg
 	}
     }
+
+    
+    void randomize_strides()
+    {
+	// Dedispersion buffer strides (note that ringbufs are always contiguous).
+	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime };
+	this->cpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->gpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->cpu_ostrides = in_place ? cpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	this->gpu_ostrides = in_place ? gpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+    }
+
+
+    void set_contiguous_strides()
+    {
+	// Dedispersion buffer strides (note that ringbufs are always contiguous).
+	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime };
+	vector<long> strides = ksgpu::make_contiguous_strides(small_shape);
+	
+	this->cpu_istrides = strides;
+	this->gpu_istrides = strides;
+	this->cpu_ostrides = strides;
+	this->gpu_ostrides = strides;
+    }
 };
 
 
@@ -260,33 +279,33 @@ static void run_test(const TestInstanceDK &tp)
     const DedispersionKernelParams &p = tp.params;
     
     cout << "\nTest GpuDedispersionKernel\n"
-	 << "    dtype = " << p.dtype << "\n"
-	 << "    dd_rank = " << p.dd_rank << "\n"
-	 << "    amb_rank = " << p.amb_rank << "\n"
-	 << "    total_beams = " << p.total_beams << "\n"
-	 << "    beams_per_batch = " << p.beams_per_batch << "\n"
-	 << "    ntime = " << p.ntime << "\n"
-	 << "    input_is_ringbuf = " << (p.input_is_ringbuf ? "true" : "false")  << "\n"
-	 << "    output_is_ringbuf = " << (p.output_is_ringbuf ? "true" : "false")  << "\n"
-	 << "    apply_input_residual_lags = " << (p.apply_input_residual_lags ? "true" : "false")  << "\n"
-	 << "    input_is_downsampled_tree = " << (p.input_is_downsampled_tree ? "true" : "false")  << "\n"
-	 << "    nelts_per_segment = " << p.nelts_per_segment << "\n"
-	 << "    nchunks = " << tp.nchunks << "\n"
-	 << "    in_place = " << (tp.in_place ? "true" : "false") << "\n"
-	 << "    gpu_istrides = " << ksgpu::tuple_str(tp.gpu_istrides) << "\n"
-	 << "    gpu_ostrides = " << ksgpu::tuple_str(tp.gpu_ostrides) << "\n"
-	 << "    cpu_istrides = " << ksgpu::tuple_str(tp.cpu_istrides) << "\n"
-	 << "    cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides) << "\n"
-	 << "    new_code = " << tp.new_code
+	 << "    ti.params.dtype = " << p.dtype << ";\n"
+	 << "    ti.params.dd_rank = " << p.dd_rank << ";\n"
+	 << "    ti.params.amb_rank = " << p.amb_rank << ";\n"
+	 << "    ti.params.total_beams = " << p.total_beams << ";\n"
+	 << "    ti.params.beams_per_batch = " << p.beams_per_batch << ";\n"
+	 << "    ti.params.ntime = " << p.ntime << ";\n"
+	 << "    ti.params.input_is_ringbuf = " << (p.input_is_ringbuf ? "true" : "false")  << ";\n"
+	 << "    ti.params.output_is_ringbuf = " << (p.output_is_ringbuf ? "true" : "false")  << ";\n"
+	 << "    ti.params.apply_input_residual_lags = " << (p.apply_input_residual_lags ? "true" : "false")  << ";\n"
+	 << "    ti.params.input_is_downsampled_tree = " << (p.input_is_downsampled_tree ? "true" : "false")  << ";\n"
+	 << "    ti.params.nelts_per_segment = " << p.nelts_per_segment << ";\n"
+	 << "    ti.nchunks = " << tp.nchunks << ";\n"
+	 << "    ti.in_place = " << (tp.in_place ? "true" : "false") << ";\n"
+	 << "    ti.gpu_istrides = " << ksgpu::tuple_str(tp.gpu_istrides) << ";\n"
+	 << "    ti.gpu_ostrides = " << ksgpu::tuple_str(tp.gpu_ostrides) << ";\n"
+	 << "    ti.cpu_istrides = " << ksgpu::tuple_str(tp.cpu_istrides) << ";\n"
+	 << "    ti.cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides) << ";\n"
+	 << "    ti.new_code = " << tp.new_code << ";"
 	 << endl;
 
     if (tp.one_hot) {
-	cout << "    one_hot = true\n"
-	     << "    one_hot_ichunk = " << tp.one_hot_ichunk << "\n"
-	     << "    one_hot_ibeam = " << tp.one_hot_ibeam << "\n"
-	     << "    one_hot_iamb = " << tp.one_hot_iamb << "\n"
-	     << "    one_hot_iact = " << tp.one_hot_iact << "\n"
-	     << "    one_hot_itime = " << tp.one_hot_itime
+	cout << "    ti.one_hot = true\n"
+	     << "    ti.one_hot_ichunk = " << tp.one_hot_ichunk << "\n"
+	     << "    ti.one_hot_ibeam = " << tp.one_hot_ibeam << "\n"
+	     << "    ti.one_hot_iamb = " << tp.one_hot_iamb << "\n"
+	     << "    ti.one_hot_iact = " << tp.one_hot_iact << "\n"
+	     << "    ti.one_hot_itime = " << tp.one_hot_itime
 	     << endl;
     }
     
@@ -400,30 +419,28 @@ void test_gpu_dedispersion_kernels()
 #if 0
     // Debug
     TestInstanceDK ti;
-    ti.params.dtype = Dtype::native<float> ();
-    ti.params.dd_rank = 1;
-    ti.params.amb_rank = 0;
-    ti.params.total_beams = 1;
-    ti.params.beams_per_batch = 1;
-    ti.params.ntime = 32;
+    ti.params.dtype = Dtype::native<float>();
+    ti.params.dd_rank = 6;
+    ti.params.amb_rank = 2;
+    ti.params.total_beams = 6;
+    ti.params.beams_per_batch = 3;
+    ti.params.ntime = 192;
     ti.params.input_is_ringbuf = false;
     ti.params.output_is_ringbuf = false;
     ti.params.apply_input_residual_lags = false;
-    ti.params.input_is_downsampled_tree = false;
+    ti.params.input_is_downsampled_tree = true;
     ti.params.nelts_per_segment = 32;
-    ti.nchunks = 1;
-    ti.in_place = true;
-    ti.gpu_istrides = {512,64,352,1};
-    ti.gpu_ostrides = {512,64,352,1};
-    ti.cpu_istrides = {640,128,64,1};
-    ti.cpu_ostrides = {640,128,64,1};
+    ti.nchunks = 5;
+    ti.in_place = false;
     ti.new_code = 1;
-    // ti.one_hot = true;
-
+    ti.one_hot = false;
+    ti.randomize_strides();
+    //ti.one_hot_iact = 54;   // rand_int(0, 64);
+    //ti.one_hot_itime = 20;  // rand_int(0, ti.params.ntime);
     run_test(ti);
-#endif
+#endif    
 
-#if 0
+#if 1
     TestInstanceDK ti_old;
     ti_old.randomize_old();
     run_test(ti_old);
