@@ -6,7 +6,7 @@ from .Ringbuf import Ringbuf
 
 class DedisperserParams:
     def __init__(self, dtype, rank):
-        assert dtype == 'float'   # for now
+        assert dtype in [ 'float', '__half' ]
         assert 1 <= rank <= 8
         
         self.dtype = dtype
@@ -27,7 +27,7 @@ class Dedisperser:
         self.params = params
         self.dtype = params.dtype
         self.rank = params.rank
-        self.ringbuf = Ringbuf()
+        self.ringbuf = Ringbuf(self.dt32)   # not self.dtype
         self.kernel_name = f'dd_fp{self.nbits}_r{params.rank}'
         self.two_stage = (params.rank >= 5)
 
@@ -161,9 +161,15 @@ class Dedisperser:
                 lag = utils.bit_reverse(j,i)
                 k.emit(f'// dedisperse {x0}, {x1} with lag {lag}')
 
-                tmp0, tmp1 = self.ringbuf.advance2(k, x0, lag)
+                tmp0, tmp1 = self.ringbuf.advance2(k, x0, (lag * self.nbits) // 32)
+
+                if self.dtype == '__half':
+                    tdst = tmp1 if (lag % 2) else tmp0
+                    k.emit(f'{tdst} = ksgpu::f16_align({tmp0}, {tmp1});')
+                    
                 k.emit(f'{x0} = {tmp1} + {x1};')
                 k.emit(f'{x1} += {tmp0};')
+                    
 
         k.emit(f'// dedispersion_pass: pass {i} ends here')
 

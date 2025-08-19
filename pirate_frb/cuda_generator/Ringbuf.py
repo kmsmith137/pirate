@@ -1,8 +1,8 @@
 # FIXME it would be nice to have a systematic unit test for the Ringbuf classes.
-# FIXME this source file could use more comments.x
+# FIXME this source file could use more comments.
 
 class Ringbuf:
-    def __init__(self):
+    def __init__(self, dtype):
         """
         Consider a situation where we are processing a timestream in 32-element chunks,
         so that thread 0 <= th < 32 holds x[t] at time index t = (32*i + th).
@@ -12,7 +12,15 @@ class Ringbuf:
         structure ("class Ringbuf") to store the overlaps ('lag' registers per warp),
         and store the overlaps in global GPU memory between kernel launches.
         """
+
+        # Check against accidentially specifying a non-32-bit dtype (such as __half).
+        # (Note: the current implementation should be correct for a non-32-bit dtype,
+        # but suboptimal. Specifying a non-32-bit dtype is probably unintentional, so
+        # we treat it as an error for now.)
         
+        assert dtype in [ 'float', '__half2' ]
+        
+        self.dtype = dtype
         self.nreg = 0
         self.rb_pos = [ ]        # List of length self.nreg
         self.rb_nelts = [ ]      # List of length self.nreg 
@@ -37,7 +45,7 @@ class Ringbuf:
         
         if dst is None:
             tmp = k.get_tmp_rname()
-            k.emit(f"float {tmp};")
+            k.emit(f"{self.dtype} {tmp};")
             self.advance(k, rname, nelts, dst=tmp, comment=False)
             k.emit(f"{rname} = {tmp};")
             return
@@ -63,7 +71,7 @@ class Ringbuf:
         assert not self.advance_outer_called
         
         dst0, dst1 = k.get_tmp_rname(2)
-        k.emit(f'float {dst0}, {dst1};')
+        k.emit(f'{self.dtype} {dst0}, {dst1};')
 
         # FIXME
         self.advance(k, rname, nelts, dst=dst1, comment=False)
@@ -122,7 +130,7 @@ class Ringbuf:
             s = f'{pwarp_rname}[{laneId}{s}]'
             s = f'({laneId} >= {lane0}) ? {s} : 0.0f' if (lane0 != 0) else s
 
-            k.emit(f'float {self.rb_rnames[r]} = {s};')
+            k.emit(f'{self.dtype} {self.rb_rnames[r]} = {s};')
             pos0 += self.rb_nelts[r]
 
         assert pos0 == self.get_n32_per_warp()

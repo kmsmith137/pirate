@@ -208,7 +208,7 @@ class PeakFinder:
         if reduce_only:
             return
 
-        self.ringbuf = Ringbuf16() if (params.dtype == '__half') else Ringbuf()        
+        self.ringbuf = Ringbuf16() if (params.dtype == '__half') else Ringbuf(params.dtype)
         self.pf = PfCore(self.reducer, self.ringbuf)
         
         while self.pf.Din > 2:
