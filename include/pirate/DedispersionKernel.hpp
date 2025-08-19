@@ -246,7 +246,7 @@ struct dd_kernel
     // void dd_kernel(
     //     void *inbuf, long beam_istride32, int amb_istride32, int act_istride32,
     //     void *outbuf, long beam_ostride32, int amb_ostride32, int act_ostride32,
-    //     void *pstate, int ntime, long rb_pos
+    //     void *pstate, int ntime, ulong nt_cumul
     // );
     //
     // where:
@@ -267,7 +267,7 @@ struct dd_kernel
     //   -  The kernel is launched with {32, warps_per_threadblock} warps
     //      and {namb, nbeams} blocks.
 
-    void (*cuda_kernel)(void *, long, int, int, void *, long, int, int, void *, int, long) = nullptr;
+    void (*cuda_kernel)(void *, long, int, int, void *, long, int, int, void *, int, ulong) = nullptr;
 
     int shmem_nbytes = 0;
     int warps_per_threadblock = 0;

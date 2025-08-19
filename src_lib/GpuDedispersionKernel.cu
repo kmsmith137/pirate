@@ -690,10 +690,11 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
     Array<void> pstate = this->persistent_state.slice(0, b0, b1);
     
     // XXX confused by rb_pos
-    long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
+    // long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
 
     dim3 grid_dims = { uint(pow2(params.amb_rank)), uint(params.beams_per_batch), 1 };
     dim3 block_dims = { 32, uint(cuda_kernel.warps_per_threadblock), 1 };
+    ulong nt_cumul = it_chunk * params.ntime;
 
     // dd_kernel does not yet support ringbufs
     xassert(!params.input_is_ringbuf);
@@ -702,7 +703,7 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
     this->cuda_kernel.cuda_kernel <<< grid_dims, block_dims, cuda_kernel.shmem_nbytes, stream >>>
 	(in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
 	 out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
-	 pstate.data, params.ntime, rb_pos);
+	 pstate.data, params.ntime, nt_cumul);
     
     CUDA_PEEK("dedispersion kernel");
 }

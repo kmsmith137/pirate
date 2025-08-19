@@ -8,8 +8,7 @@ class Kernel:
 
         self.active_buffer = io.StringIO()
         self.splices = [ ]   # list of (StringIO, kernel) pairs.
-        self.tmp_rnames = dict()
-        self.tmp_ix = 0
+        self.tmp_ix = [ 0 ]  # use a length-zero list so that splices can share the same tmp_ix
 
 
     def emit(self, s=''):
@@ -18,7 +17,7 @@ class Kernel:
     
     def splice(self):
         k = Kernel()
-        k.tmp_rnames = self.tmp_rnames  # all splices share the same tmp_rnames
+        k.tmp_ix = self.tmp_ix   # all splices share the same tmp_ix
         
         self.splices.append((self.active_buffer, k))
         self.active_buffer = io.StringIO()
@@ -39,13 +38,13 @@ class Kernel:
         if n is not None:
             return [ self.get_tmp_rname() for _ in range(n) ]
         
-        ret = f'tmp{self.tmp_ix}'
-        self.tmp_ix += 1
+        ret = f'tmp{self.tmp_ix[0]}'
+        self.tmp_ix[0] += 1
         return ret
 
     
     def reset_tmp_vars(self):
-        self.tmp_ix = 0
+        self.tmp_ix[0] = 0
         
 
     def warp_transpose(self, rname1, rname2, thread_stride, dtype):
