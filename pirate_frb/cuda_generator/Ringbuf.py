@@ -27,6 +27,9 @@ class Ringbuf:
         self.rb_rnames = [ ]     # List of length self.nreg ('rb0', 'rb1', etc.)
         self.lflag_nelts = None  # Value of 'nelts' in last call to _swap_upper()
         self.advance_outer_called = False
+        
+        zdict = { 'float': '0.0f', '__half2': '__float2half2_rn(0.0f)' }
+        self.zero = zdict[dtype]
 
         
     def advance(self, k, rname, nelts, dst=None, comment=True):
@@ -128,7 +131,7 @@ class Ringbuf:
 
             s = f'{pos1:+}' if (pos1 != 0) else ''
             s = f'{pwarp_rname}[{laneId}{s}]'
-            s = f'({laneId} >= {lane0}) ? {s} : 0.0f' if (lane0 != 0) else s
+            s = f'({laneId} >= {lane0}) ? {s} : {self.zero}' if (lane0 != 0) else s
 
             k.emit(f'{self.dtype} {self.rb_rnames[r]} = {s};')
             pos0 += self.rb_nelts[r]

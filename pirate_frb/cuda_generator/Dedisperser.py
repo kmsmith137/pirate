@@ -137,6 +137,10 @@ class Dedisperser:
         k.emit()
         k.emit('__syncthreads();')
         k.emit()
+
+        # One-sample lags are needed in the float16 case.
+        self._apply_one_sample_lags(k, xnames)
+            
         k.emit('// Read dd registers from shared memory')
         
         for i,x in enumerate(xnames):
@@ -173,6 +177,30 @@ class Dedisperser:
 
         k.emit(f'// dedispersion_pass: pass {i} ends here')
 
+
+    def _apply_one_sample_lags(self, k, xnames):
+        if (self.nbits != 16) or (self.rank0 == 1):
+            return
+
+        k.emit(f'// Apply one-sample lags (float16 only)')
+        k.emit(f'// A one-sample lag is needed if:')
+        k.emit(f'//    - register index is even (equivalent to odd frev)')
+        k.emit(f'//    - (warpId & {2**(self.rank0-1)}) is 1 (equivalent to odd dm)')
+        k.emit(f'//')
+        k.emit(f'// FIXME: suboptimal approach, should coalesce with dd1')
+        k.emit()
+        
+        sel = k.get_tmp_rname()
+        k.emit(f'uint {sel} = (threadIdx.y & {2**(self.rank0-1)}) ? 0x5432 : 0x7654;')
+
+        for x in xnames[::2]:  # even registers
+            xprev = k.get_tmp_rname()
+            k.emit(f'__half2 {xprev};   // will hold result of Ringbuf.advance({x},1)')
+            self.ringbuf.advance(k, x, 1, dst=xprev)
+            k.emit(f'{x} = ksgpu::f16_perm({xprev}, {x}, {sel});  // {x} has now been lagged by one sample, if needed')
+        
+        k.emit()
+        
 
     def _apply_inbuf_offsets(self, k):
         k.emit(f'// Apply per-thread offsets to inbuf (including laneId offset).')

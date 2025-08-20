@@ -26,7 +26,7 @@ def make_dd_file(nbits):
     k.emit()
     k.emit('#include <cstdio>')
     k.emit('#include <iostream>')
-    k.emit('#include <ksgpu/device_transposes.hpp>   // f16_perm()')    
+    k.emit('#include <ksgpu/device_transposes.hpp>   // f16_perm(), f16_align()')
     k.emit('#include "../../include/pirate/DedispersionKernel.hpp"')
     k.emit()
     k.emit('namespace pirate {')
@@ -34,7 +34,7 @@ def make_dd_file(nbits):
 
     k_code = k.splice()
 
-    for rank in range(1,9):
+    for rank in [6]:
         pars = DedisperserParams(dtype, rank)
         dd = Dedisperser(pars)
         
