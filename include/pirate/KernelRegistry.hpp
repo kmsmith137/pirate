@@ -21,8 +21,6 @@ namespace pirate {
 //
 //   bool operator==(const Key &k1, const Key &k2);
 //   ostream &operator<<(ostream &os, const Key &k);
-//
-// XXX explain initialize()
 
 template<class Key, class Val>
 struct KernelRegistry
@@ -31,16 +29,27 @@ struct KernelRegistry
     {
 	Key key;
 	Val val;
-	bool debug = false;
-	bool initialized = false;
+	bool debug = false;        // debug kernel "clobbers" non-debug kernel
+	bool initialized = false;  // has deferred_initialization() been called?
     };
     
     mutable std::mutex lock;
     std::vector<Entry> entries;
+    
+    // deferred_initialization(): this optional method performs initializations which
+    // are "deferred" from when the kernel is registered, to when the kernel is first
+    // used. For an example, see src_lib/GpuDedispersionKernel.cu.
+    //
+    // It's important to defer calls to the cuda runtime library (e.g. setting shared
+    // memory size for a kernel). Such calls may misbehave at library initialization
+    // time, but behave normally if "deferred". Warning: this can be hard to debug!
+    // Sometimes, the non-deferred call appears to succeed, but an unrelated kernel
+    // launch will fail later with error 400 ("invalid resource handle").
+    
+    virtual void deferred_initialization(Val &val) { }
 
+    
     KernelRegistry() { }
-
-    virtual void initialize(Val &val) { }
 
     // Call with lock held!
     // Returned pointer is only valid until lock is dropped.
@@ -95,7 +104,7 @@ struct KernelRegistry
 	}
 
 	if (!e->initialized) {
-	    this->initialize(e->val);
+	    this->deferred_initialization(e->val);
 	    e->initialized = true;
 	}
 	

@@ -240,54 +240,48 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 
 void test_gpu_peak_finding_kernel(bool reduce_only)
 {
-    // We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
-    // runs every kernel a few times. Currently there are 66 precompiled kernels, and
-    // test_gpu_peak_finding_kernel() gets called 100 times.
+    // Choose a random precompiled kernel.
+    auto k = GpuPeakFindingKernel::get_random_registry_key();
+    int nbits = k.dtype.nbits;
     
-    for (int i = 0; i < 5; i++) {
-	// Choose a random precompiled kernel.
-	auto k = GpuPeakFindingKernel::get_random_registry_key();
-	int nbits = k.dtype.nbits;
+    // Note that by choosing 'niter_cpu' and 'niter_gpu' independently, this test
+    // checks the incremental logic in both the reference kernel and the GPU kernel.
 	
-	// Note that by choosing 'niter_cpu' and 'niter_gpu' independently, this test
-	// checks the incremental logic in both the reference kernel and the GPU kernel.
-	
-	int niter_cpu = rand_int(1,4);
-	int niter_gpu = rand_int(1,4);
+    int niter_cpu = rand_int(1,4);
+    int niter_gpu = rand_int(1,4);
+    
+    // Determine smallest values of 'ndm_in' and 'nt_in' which are compatible with
+    // divisibility constraints in PeakFindingParams::validate(). If these constraints
+    // are changed, then logic here should be updated as well.
 
-	// Determine smallest values of 'ndm_in' and 'nt_in' which are compatible with
-	// divisibility constraints in PeakFindingParams::validate(). If these constraints
-	// are changed, then logic here should be updated as well.
+    int nn = std::lcm(niter_cpu, niter_gpu);
+    int ndm_in_divisor = std::lcm(k.M, xdiv(32,nbits));
+    int nt_in_divisor = nn * std::lcm(xdiv(1024,nbits), k.Dout * xdiv(32,nbits));
+    
+    auto v = ksgpu::random_integers_with_bounded_product(6, 1000000 / (ndm_in_divisor * nt_in_divisor));
 
-	int nn = std::lcm(niter_cpu, niter_gpu);
-	int ndm_in_divisor = std::lcm(k.M, xdiv(32,nbits));
-	int nt_in_divisor = nn * std::lcm(xdiv(1024,nbits), k.Dout * xdiv(32,nbits));
-	
-	auto v = ksgpu::random_integers_with_bounded_product(6, 1000000 / (ndm_in_divisor * nt_in_divisor));
-
-	PeakFindingKernelParams params;
-	params.dtype = k.dtype;
-	params.time_downsampling_factor = k.Dout;
-	params.dm_downsampling_factor = k.M;
-	params.max_kernel_width = k.E;
-	params.beams_per_batch = v[0];
-	params.total_beams = v[0] * v[1];
-	params.ndm_in = v[2] * v[3] * ndm_in_divisor;
-	params.nt_in = v[4] * v[5] * nt_in_divisor;
-
-	// Debug
-	// niter_gpu = niter_cpu = 1;
-	// params.beams_per_batch = params.total_beams = 1;
-	// params.ndm_in = 2 * k.M;
-	// params.nt_in = 64 * std::lcm(niter_gpu, niter_cpu);
-	    
-	params.validate();
-
-	if (reduce_only)
-	    test_reduce_only_kernel(params);
-	else
-	    test_pf_kernel(params, niter_gpu, niter_cpu);
-    }
+    PeakFindingKernelParams params;
+    params.dtype = k.dtype;
+    params.time_downsampling_factor = k.Dout;
+    params.dm_downsampling_factor = k.M;
+    params.max_kernel_width = k.E;
+    params.beams_per_batch = v[0];
+    params.total_beams = v[0] * v[1];
+    params.ndm_in = v[2] * v[3] * ndm_in_divisor;
+    params.nt_in = v[4] * v[5] * nt_in_divisor;
+    
+    // Debug
+    // niter_gpu = niter_cpu = 1;
+    // params.beams_per_batch = params.total_beams = 1;
+    // params.ndm_in = 2 * k.M;
+    // params.nt_in = 64 * std::lcm(niter_gpu, niter_cpu);
+    
+    params.validate();
+    
+    if (reduce_only)
+	test_reduce_only_kernel(params);
+    else
+	test_pf_kernel(params, niter_gpu, niter_cpu);
 }
 
 

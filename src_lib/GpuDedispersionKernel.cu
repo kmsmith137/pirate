@@ -716,8 +716,14 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
 
 
 struct DedispRegistry : public KernelRegistry<NewGpuDedispersionKernel::RegistryKey, NewGpuDedispersionKernel::RegistryValue>
-{    
-    virtual void initialize(NewGpuDedispersionKernel::RegistryValue &val) override
+{
+    // Setting shared memory size is "deferred" from when the kernel is registered, to when
+    // the kernel is first used. Deferring is important, since cudaFuncSetAttribute() creates
+    // hard-to-debug problems if called at library initialization time, but behaves normally
+    // if deferred. (Here, "hard-to-debug" means that the call appears to succeed, but an
+    // unrelated kernel launch will fail later with error 400 ("invalid resource handle").)
+
+    virtual void deferred_initialization(NewGpuDedispersionKernel::RegistryValue &val) override
     {
 	if (val.shmem_nbytes > 48*1024) {
 	    CUDA_CALL(cudaFuncSetAttribute(

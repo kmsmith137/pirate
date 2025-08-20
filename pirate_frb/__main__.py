@@ -41,22 +41,34 @@ def test(args):
         
         if run_all_tests or args.nid:
             pirate_pybind11.test_non_incremental_dedispersion()
+        
         if run_all_tests or args.rl:
             pirate_pybind11.test_reference_lagbuf()
+        
         if run_all_tests or args.rt:
             pirate_pybind11.test_reference_tree()
+        
         if run_all_tests or args.tr:
             pirate_pybind11.test_tree_recursion()
+        
         if run_all_tests or args.gldk:
             pirate_pybind11.test_gpu_lagged_downsampling_kernel()
+        
         if run_all_tests or args.gddk:
             pirate_pybind11.test_gpu_dedispersion_kernels()
+        
         if run_all_tests or args.gpfk:
-            pirate_pybind11.test_gpu_peak_finding_kernel(reduce_only=False)
+            # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
+            # runs every kernel a few times. Currently there are 66 precompiled kernels.
+            for _ in range(5):
+                pirate_pybind11.test_gpu_peak_finding_kernel(reduce_only=False)
+        
         if run_all_tests or args.grck:
             pirate_pybind11.test_gpu_ringbuf_copy_kernel()
+        
         if run_all_tests or args.gtgk:
             pirate_pybind11.test_gpu_tree_gridding_kernel()
+        
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()
             
