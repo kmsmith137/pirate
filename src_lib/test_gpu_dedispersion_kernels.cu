@@ -147,7 +147,7 @@ struct TestInstanceDK
 
 	long cmax = (10*nchan + 10*params.ntime) / params.ntime;
 	this->nchunks = rand_int(1, cmax+1);
-	
+
 	// pow2(amb_rank), (total_beams/beams_per_batch), beams_per_batch
 	long pmax = max_nelts / (pow2(params.dd_rank) * params.ntime * nchunks);
 	pmax = max(pmax, 4L);
@@ -419,24 +419,24 @@ void test_gpu_dedispersion_kernels()
 #if 0
     // Debug
     TestInstanceDK ti;
-    ti.params.dtype = Dtype::native<float>();
+    ti.params.dtype = Dtype::native<__half>();
     ti.params.dd_rank = 6;
-    ti.params.amb_rank = 2;
-    ti.params.total_beams = 6;
-    ti.params.beams_per_batch = 3;
-    ti.params.ntime = 192;
+    ti.params.amb_rank = 0;
+    ti.params.total_beams = 1;
+    ti.params.beams_per_batch = 1;
+    ti.params.ntime = 64;
     ti.params.input_is_ringbuf = false;
     ti.params.output_is_ringbuf = false;
     ti.params.apply_input_residual_lags = false;
     ti.params.input_is_downsampled_tree = true;
-    ti.params.nelts_per_segment = 32;
-    ti.nchunks = 5;
+    ti.params.nelts_per_segment = 64;
+    ti.nchunks = 2;
     ti.in_place = false;
+    ti.set_contiguous_strides();
     ti.new_code = 1;
-    ti.one_hot = false;
-    ti.randomize_strides();
-    //ti.one_hot_iact = 54;   // rand_int(0, 64);
-    //ti.one_hot_itime = 20;  // rand_int(0, ti.params.ntime);
+    // ti.one_hot = true;
+    // ti.one_hot_iact = 0;   // rand_int(0, pow2(ti.params.dd_rank));
+    // ti.one_hot_itime = 0;  // rand_int(0, ti.params.ntime);
     run_test(ti);
 #endif    
 

@@ -34,7 +34,7 @@ def make_dd_file(nbits):
 
     k_code = k.splice()
 
-    for rank in [6]:
+    for rank in range(1,9):
         pars = DedisperserParams(dtype, rank)
         dd = Dedisperser(pars)
         

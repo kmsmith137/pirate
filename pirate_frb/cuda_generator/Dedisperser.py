@@ -137,15 +137,15 @@ class Dedisperser:
         k.emit()
         k.emit('__syncthreads();')
         k.emit()
-
-        # One-sample lags are needed in the float16 case.
-        self._apply_one_sample_lags(k, xnames)
             
         k.emit('// Read dd registers from shared memory')
         
         for i,x in enumerate(xnames):
             s = self._rbloc(k, 16+i)
             k.emit(f'{x} = shmem[{s}];')
+
+        # One-sample lags are needed in the float16 case.
+        self._apply_one_sample_lags(k, xnames)
         
         for i in range(self.rank1):
             self._dedispersion_pass(k, xnames, i)
@@ -179,7 +179,7 @@ class Dedisperser:
 
 
     def _apply_one_sample_lags(self, k, xnames):
-        if (self.nbits != 16) or (self.rank0 == 1):
+        if (self.nbits != 16) or (self.rank0 == 0):
             return
 
         k.emit(f'// Apply one-sample lags (float16 only)')
@@ -302,8 +302,11 @@ class Dedisperser:
         k.emit(f'// Compute rb_pos, and assemble control word from (rb_lag, rb_base)')
 
         t, rb_pos = k.get_tmp_rname(2)
+        rs = 5 - utils.integer_log2(self.nbits)   # right shift needed for nt_cumul -> nt_cumul32
+        nt32_cumul = f'nt_cumul' if (rs==0) else f'(nt_cumul >> {rs})'
+        
         k.emit(f'uint {t} = {first_pass} ? 0 : 32;')
-        k.emit(f'uint {rb_pos} = (nt_cumul + {t}) % ({rb_lag} + 32U);   // rb_pos')
+        k.emit(f'uint {rb_pos} = ({nt32_cumul} + {t}) % ({rb_lag} + 32U);   // rb_pos')
         k.emit(f'uint control_word = {rb_base} | ({rb_pos} << 15) | ({rb_lag} << 24);')
         k.emit()
 
