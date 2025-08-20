@@ -21,7 +21,8 @@ namespace pirate {
 //
 //   bool operator==(const Key &k1, const Key &k2);
 //   ostream &operator<<(ostream &os, const Key &k);
-
+//
+// XXX explain initialize()
 
 template<class Key, class Val>
 struct KernelRegistry
@@ -31,12 +32,15 @@ struct KernelRegistry
 	Key key;
 	Val val;
 	bool debug = false;
+	bool initialized = false;
     };
     
     mutable std::mutex lock;
     std::vector<Entry> entries;
 
     KernelRegistry() { }
+
+    virtual void initialize(Val &val) { }
 
     // Call with lock held!
     // Returned pointer is only valid until lock is dropped.
@@ -85,15 +89,19 @@ struct KernelRegistry
 	std::unique_lock<std::mutex> lk(this->lock);
 	Entry *e = this->_get_locked(key);
 
-	if (e != nullptr) {
-	    // Not sure whether "return e->val" drops lock before copying.
-	    Val ret = e->val;
-	    return ret;
+	if (!e) {
+	    std::stringstream ss;
+	    ss << "Kernel not found in registry: " << key;
 	}
 
-	std::stringstream ss;
-	ss << "Kernel not found in registry: " << key;
-	throw std::runtime_error(ss.str());
+	if (!e->initialized) {
+	    this->initialize(e->val);
+	    e->initialized = true;
+	}
+	
+	// Not sure whether "return e->val" drops lock before copying.
+	Val ret = e->val;
+	return ret;
     }
 
 

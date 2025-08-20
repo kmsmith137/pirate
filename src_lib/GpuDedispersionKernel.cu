@@ -715,7 +715,19 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
 // Kernel registry.
 
 
-using DedispRegistry = typename pirate::KernelRegistry<NewGpuDedispersionKernel::RegistryKey, NewGpuDedispersionKernel::RegistryValue>;
+struct DedispRegistry : public KernelRegistry<NewGpuDedispersionKernel::RegistryKey, NewGpuDedispersionKernel::RegistryValue>
+{    
+    virtual void initialize(NewGpuDedispersionKernel::RegistryValue &val) override
+    {
+	if (val.shmem_nbytes > 48*1024) {
+	    CUDA_CALL(cudaFuncSetAttribute(
+	        val.cuda_kernel,
+		cudaFuncAttributeMaxDynamicSharedMemorySize,
+		val.shmem_nbytes
+	    ));
+	}
+    }
+};
 
 // Instead of declaring the registry as a static global variable, we declare it
 // as a static local variable in the function dd_registry(). The registry will
@@ -755,14 +767,6 @@ void NewGpuDedispersionKernel::register_kernel(const RegistryKey &key, const Reg
     xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
     xassert(val.warps_per_threadblock > 0);
     xassert(val.cuda_kernel != nullptr);
-    
-    if (val.shmem_nbytes > 48*1024) {
-        CUDA_CALL(cudaFuncSetAttribute(
-	    val.cuda_kernel,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            val.shmem_nbytes
-        ));
-    }
     
     return dd_registry().add(key, val, debug);
 }
