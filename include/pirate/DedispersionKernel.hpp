@@ -223,64 +223,7 @@ protected:
 
 // -------------------------------------------------------------------------------------------------
 //
-// dd_kernel, NewGpuDedispersionKernel
-
-
-// dd_kernel: represents a precompiled low-level cuda kernel.
-// (Must be declared before NewGpuDedispersionKernel).
-//
-// Each .cu source file populates a 'struct dd_kernel' with function pointers,
-// then calls dd_kernel::register().
-
-struct dd_kernel
-{
-    ksgpu::Dtype dtype;   // either float16 or float32
-
-    int rank = -1;
-    bool input_is_ringbuf = false;
-    bool output_is_ringbuf = false;
-    bool apply_input_residual_lags = false;
-
-    // The low-level cuda kernel is called as:
-    //
-    // void dd_kernel(
-    //     void *inbuf, long beam_istride32, int amb_istride32, int act_istride32,
-    //     void *outbuf, long beam_ostride32, int amb_ostride32, int act_ostride32,
-    //     void *pstate, int ntime, ulong nt_cumul
-    // );
-    //
-    // where:
-    //
-    //   - 'inbuf' is an array of shape (nbeams, namb, 2**rank, ntime)
-    //      with strides (beam_istride32, amb_istride32, act_istride32, 1).
-    //
-    //   - 'outbuf' is an array of shape (nbeams, namb, 2**rank, ntime)
-    //      with strides (beam_ostride32, amb_ostride32, act_ostride32, 1).
-    //
-    //   - Note that strides are in "32-bit" units (e.g. __half2 not __half).
-    //
-    //   - 'pstate' is an array of shape (nbeams, namb, pstate32_per_small_tree),
-    //     with 32-bit dtype (e.g. __half2 not __half).
-    //
-    //   - XXX explain 'rb_pos' arg here.
-    //
-    //   -  The kernel is launched with {32, warps_per_threadblock} warps
-    //      and {namb, nbeams} blocks.
-
-    void (*cuda_kernel)(void *, long, int, int, void *, long, int, int, void *, int, ulong) = nullptr;
-
-    int shmem_nbytes = 0;
-    int warps_per_threadblock = 0;
-    int pstate32_per_small_tree = 0;
-    bool debug = false;  // a "debug" kernel takes precedence over non-debug
-
-    // Note: if shmem_nbytes > 48KiB, then register_kernel() calls cudaFuncSetAttribute(...).
-    void register_kernel();
-
-    static dd_kernel get(ksgpu::Dtype dtype, int rank, bool in_rb, bool out_rb, bool in_rlags);
-    static dd_kernel get_random();
-    static std::vector<dd_kernel> get_all();
-};
+// NewGpuDedispersionKernel
 
 
 // The NewGpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
@@ -315,25 +258,84 @@ public:
 	cudaStream_t stream  // NULL stream is allowed, but is not the default
     );
 
+    long nbatches = 0;   // = (total_beams / beams_per_batch)
+    
     // Bandwidth per call to NewGpuDedispersionKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
     BandwidthTracker bw_per_launch;
-    
-    // Used internally.
-    dd_kernel cuda_kernel;
-    long nbatches = 0;   // = (total_beams / beams_per_batch)
-    
-    // The 'persistent_state', 'integer_constants', and 'gpu_ringbuf_locations' arrays
-    // are allocated in GpuDedipsersionKernel::allocate(), not the constructor.
+
+    // -------------------- Internals start here --------------------
+
+    // The 'persistent_state' and 'gpu_ringbuf_locations' arrays are
+    // allocated in GpuDedipsersionKernel::allocate(), not the constructor.
     
     // Shape (total_beams, pow2(params.amb_rank), ninner)
     // where ninner = cuda_kernel.pstate_32_per_small_tree * (32/nbits)
     ksgpu::Array<void> persistent_state;
 
     // FIXME should add run-time check that current cuda device is consistent.
-    ksgpu::Array<uint> integer_constants;
     ksgpu::Array<uint> gpu_ringbuf_locations;
+
+    struct RegistryKey
+    {
+	ksgpu::Dtype dtype;   // either float16 or float32
+	int rank = -1;
+	bool input_is_ringbuf = false;
+	bool output_is_ringbuf = false;
+	bool apply_input_residual_lags = false;
+    };
+
+    struct RegistryValue
+    {
+	// The low-level cuda kernel is called as:
+	//
+	// void cuda_kernel(
+	//     void *inbuf, long beam_istride32, int amb_istride32, int act_istride32,
+	//     void *outbuf, long beam_ostride32, int amb_ostride32, int act_ostride32,
+	//     void *pstate, int ntime, ulong nt_cumul
+	// );
+	//
+	// where:
+	//
+	//   - 'inbuf' is an array of shape (nbeams, namb, 2**rank, ntime)
+	//      with strides (beam_istride32, amb_istride32, act_istride32, 1).
+	//
+	//   - 'outbuf' is an array of shape (nbeams, namb, 2**rank, ntime)
+	//      with strides (beam_ostride32, amb_ostride32, act_ostride32, 1).
+	//
+	//   - Note that strides are in "32-bit" units (e.g. __half2 not __half).
+	//
+	//   - 'pstate' is an array of shape (nbeams, namb, pstate32_per_small_tree),
+	//     with 32-bit dtype (e.g. __half2 not __half).
+	//
+	//   - XXX explain 'rb_pos' arg here.
+	//
+	//   -  The kernel is launched with {32, warps_per_threadblock} warps
+	//      and {namb, nbeams} blocks.
+	
+	void (*cuda_kernel)(void *, long, int, int, void *, long, int, int, void *, int, ulong) = nullptr;
+
+	int shmem_nbytes = 0;
+	int warps_per_threadblock = 0;
+	int pstate32_per_small_tree = 0;
+    };
+
+    // Low-level cuda kernel and associated metadata.
+    RegistryValue registry_value;
+
+    // Static member functions for querying registry.
+    static RegistryValue query_registry(const RegistryKey &k);
+    static RegistryKey get_random_registry_key();
+
+    // Static member function for adding to the registry.
+    // Called during library initialization, from source files with gpu kernels.
+    static void register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug);    
 };
+
+
+// Defined in GpuDedispersionKernel.cu
+extern bool operator==(const NewGpuDedispersionKernel::RegistryKey &k1, const NewGpuDedispersionKernel::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const NewGpuDedispersionKernel::RegistryKey &k);
 
 
 }  // namespace pirate

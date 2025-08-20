@@ -1,4 +1,5 @@
 #include "../include/pirate/PeakFindingKernel.hpp"
+#include "../include/pirate/KernelRegistry.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
 
@@ -326,14 +327,16 @@ void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_s
 GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params_) :
     PeakFindingKernel(params_, 0)
 {
-    long M = params.dm_downsampling_factor;
-    long E = params.max_kernel_width;
-    long Dout = params.time_downsampling_factor;
+    RegistryKey key;
+    key.dtype = params.dtype;
+    key.M = params.dm_downsampling_factor;
+    key.E = params.max_kernel_width;
+    key.Dout = params.time_downsampling_factor;
     
-    this->cuda_kernel = pf_kernel::get(params.dtype, M, E, Dout);
-    this->Dcore = cuda_kernel.Dcore;
+    this->registry_value = query_registry(key);
+    this->Dcore = registry_value.Dcore;
     
-    xassert(cuda_kernel.P == nprofiles);
+    xassert(registry_value.P == nprofiles);
 
     // Number of elements (not bytes) per beam
     long n = 2 * nprofiles * ndm_out * nt_out;   // (out_max, out_ssq)
@@ -351,7 +354,7 @@ void GpuPeakFindingKernel::allocate()
 	throw runtime_error("GpuPeakFindingKernel: double call to allocate()");
 
     // Note 'af_zero' flag here.
-    long ninner = cuda_kernel.P32 * xdiv(32, params.dtype.nbits);
+    long ninner = registry_value.P32 * xdiv(32, params.dtype.nbits);
     std::initializer_list<long> shape = { params.total_beams, ndm_out, ninner };
     this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
     this->is_allocated = true;
@@ -368,16 +371,16 @@ void GpuPeakFindingKernel::launch(Array<void> &out_max, Array<void> &out_ssq, co
     xassert(in.on_gpu());
     xassert(wt.on_gpu());
 
-    int W = cuda_kernel.W;
+    int W = registry_value.W;
     uint Bx = (ndm_out + W - 1) / W;
     dim3 nblocks = {Bx, uint(params.beams_per_batch), 1};
 	
     char *pstate = (char *) persistent_state.data;
-    pstate += ibatch * params.beams_per_batch * ndm_out * cuda_kernel.P32 * 4;
+    pstate += ibatch * params.beams_per_batch * ndm_out * registry_value.P32 * 4;
 
     long Tout32 = xdiv(nt_out * params.dtype.nbits, 32);
 
-    cuda_kernel.full_kernel <<< nblocks, 32*W, 0, stream >>>
+    registry_value.full_kernel <<< nblocks, 32*W, 0, stream >>>
 	(out_max.data, out_ssq.data, pstate, in.data, wt.data, ndm_out, Tout32);
 
     CUDA_PEEK("pf kernel launch");    
@@ -386,101 +389,70 @@ void GpuPeakFindingKernel::launch(Array<void> &out_max, Array<void> &out_ssq, co
 
 // -------------------------------------------------------------------------------------------------
 //
-// Kernel registry
+// Kernel registry.
 
 
-static mutex pf_kernel_lock;
-pf_kernel *pf_kernel_registry = nullptr;
+using PfRegistry = typename pirate::KernelRegistry<GpuPeakFindingKernel::RegistryKey, GpuPeakFindingKernel::RegistryValue>;
+
+// Instead of declaring the registry as a static global variable, we declare it
+// as a static local variable in the function pf_registry(). The registry will
+// be initialized the first time that pf_registry() is called.
+//
+// This kludge is necessary because the registry is accessed at library initialization
+// time, by callers in other source files, and source files are executed in an
+// arbitrary order.
+
+static PfRegistry &pf_registry()
+{
+    static PfRegistry reg;
+    return reg;  // note: thread-safe (as of c++11)
+}
 
 
-void pf_kernel::register_kernel()
+// Static member function.
+GpuPeakFindingKernel::RegistryValue GpuPeakFindingKernel::query_registry(const RegistryKey &k)
+{
+    return pf_registry().query(k);
+}
+
+// Static member function.
+GpuPeakFindingKernel::RegistryKey GpuPeakFindingKernel::get_random_registry_key()
+{
+    return pf_registry().get_random_key();
+}
+
+
+// Static member function for adding to the registry.
+// Called during library initialization, from source files with gpu kernels.
+void GpuPeakFindingKernel::register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug)
 {
     // Just check that all members have been initialized.
     // (In the future, I may add more argument checking here.)
-#if 0
-    cout << "register_pf_kernel: M=" << M << ", E=" << E << ", Dout=" << Dout
-	 << ", Dcore=" << Dcore << ", W=" << W << ", P=" << P << ", P32=" << P32 << endl;
-#endif
     
-    xassert(M > 0);
-    xassert(E > 0);
-    xassert(Dout > 0);
-    xassert(Dcore > 0);
-    xassert(W > 0);
-    xassert(P > 0);
-    xassert((E == 1) || (P32 > 0));
-    xassert(full_kernel != nullptr);
-    xassert(reduce_only_kernel != nullptr);
-    xassert(next == nullptr);
+    xassert(key.M > 0);
+    xassert(key.E > 0);
+    xassert(key.Dout > 0);
+    xassert(val.Dcore > 0);
+    xassert(val.W > 0);
+    xassert(val.P > 0);
+    xassert((key.E == 1) || (val.P32 > 0));
+    xassert(val.full_kernel != nullptr);
+    xassert(val.reduce_only_kernel != nullptr);
     
-    unique_lock<mutex> lk(pf_kernel_lock);
-
-    // Check whether this (M,E,Dout) triple has been registered before.
-    for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next) {
-	if ((k->dtype != dtype) || (k->M != M) || (k->E != E) || (k->Dout != Dout))
-	    continue;
-
-	if (k->debug && !this->debug) {
-	    cout << "Note: debug and non-debug pf kernels were registered; debug kernel takes priority" << endl;
-	    return;
-	}
-
-	if (!k->debug && this->debug) {
-	    cout << "Note: debug and non-debug pf kernels were registered; debug kernel takes priority" << endl;
-	    pf_kernel *save = k->next;
-	    *k = *this;
-	    k->next = save;
-	    return;
-	}
-
-	stringstream ss;
-	ss << "pf_kernel::register() called twice with (M,E,Dout)=" << "(" << M << "," << E << "," << Dout << ")";
-	throw runtime_error(ss.str());
-    }
-    
-    // Memory leak is okay for registry.
-    pf_kernel *pf_copy = new pf_kernel(*this);
-    pf_copy->next = pf_kernel_registry;  // assign with lock held
-    pf_kernel_registry = pf_copy;
+    return pf_registry().add(key, val, debug);
 }
 
 
-// Static member function
-pf_kernel pf_kernel::get(Dtype dtype, int M, int E, int Dout)
+bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindingKernel::RegistryKey &k2)
 {
-    unique_lock<mutex> lk(pf_kernel_lock);
-    
-    for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next) {
-	if ((k->dtype == dtype) && (k->M == M) && (k->E == E) && (k->Dout == Dout)) {
-	    pf_kernel ret = *k;
-	    ret.next = nullptr;
-	    return ret;
-	}
-    }
-
-    stringstream ss;
-    ss << "pf_kernel::get(): no kernel found for dtype=" << dtype
-       << " and (M,E,Dout)=(" << M << "," << E << "," << Dout << ")";
-    
-    throw runtime_error(ss.str());
+    return (k1.dtype == k2.dtype) && (k1.M == k2.M) && (k1.E == k2.E) && (k1.Dout == k2.Dout);
 }
 
 
-// Static member function
-vector<pf_kernel> pf_kernel::enumerate()
+ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
 {
-    vector<pf_kernel> ret;
-    unique_lock<mutex> lk(pf_kernel_lock);
-
-    for (pf_kernel *k = pf_kernel_registry; k != nullptr; k = k->next)
-	ret.push_back(*k);
-
-    lk.unlock();
-
-    for (pf_kernel &k: ret)
-	k.next = nullptr;
-
-    return ret;
+    os << "GpuPeakFindingKernel(dtype=" << k.dtype << ", M=" << k.M << ", E=" << k.E << ", Dout=" << k.Dout << ")";
+    return os;
 }
 
 

@@ -28,20 +28,21 @@ static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
 	 << "   nt_in = " << params.nt_in << "\n";
 
     GpuPeakFindingKernel gpu_kernel(params);
-    pf_kernel k = gpu_kernel.cuda_kernel;
-    
-    int M = k.M;
-    int W = k.W;    
+    auto k = gpu_kernel.registry_value;
+
+    Dtype dtype = params.dtype;
+    int M = params.dm_downsampling_factor;
+    int W = k.W;
     int P = k.P;
     int B = params.beams_per_batch;  // note: params.total_beams is not used in this test
-    int Dout = k.Dout;
+    int Dout = params.time_downsampling_factor;
     int Dcore = k.Dcore;
     int Dt = xdiv(Dout, Dcore);
     int Min = params.ndm_in;
     int Tin = params.nt_in;
-    int Mout = xdiv(Min, k.M);
-    int Tout = xdiv(Tin, k.Dout);
-    int Tout32 = xdiv(Tout * k.dtype.nbits, 32);
+    int Mout = xdiv(Min, M);
+    int Tout = xdiv(Tin, Dout);
+    int Tout32 = xdiv(Tout * dtype.nbits, 32);
     
     xassert_divisible(32, Dcore);
 
@@ -77,11 +78,11 @@ static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
 	}
     }
 
-    Array<void> gpu_out_max(k.dtype, {B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
-    Array<void> gpu_out_ssq(k.dtype, {B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
-    Array<void> gpu_in_max = in_max.convert(k.dtype).to_gpu();
-    Array<void> gpu_in_ssq = in_ssq.convert(k.dtype).to_gpu();
-    Array<void> gpu_wt = wt.convert(k.dtype).to_gpu();
+    Array<void> gpu_out_max(dtype, {B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<void> gpu_out_ssq(dtype, {B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
+    Array<void> gpu_in_max = in_max.convert(dtype).to_gpu();
+    Array<void> gpu_in_ssq = in_ssq.convert(dtype).to_gpu();
+    Array<void> gpu_wt = wt.convert(dtype).to_gpu();
 
     uint Bx = (Mout+W-1) / W;
     dim3 nblocks = {Bx, uint(B), 1};
@@ -94,7 +95,7 @@ static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
     CUDA_PEEK("pf reduce-only kernel launch");
 
     int nds = M * xdiv(Dout,Dcore);  // total amount of downsampling in reduce-only kernel
-    double epsabs = 5.0 * sqrt(nds) * k.dtype.precision();  // appropriate epsabs for ssq comparison
+    double epsabs = 5.0 * sqrt(nds) * dtype.precision();  // appropriate epsabs for ssq comparison
     
     assert_arrays_equal(out_max, gpu_out_max, "host_max", "gpu_max", {"b","p","mout","tout"});
     assert_arrays_equal(out_ssq, gpu_out_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"}, epsabs);
@@ -239,15 +240,13 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 
 void test_gpu_peak_finding_kernel(bool reduce_only)
 {
-    vector<pf_kernel> all_kernels = pf_kernel::enumerate();
-
     // We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
     // runs every kernel a few times. Currently there are 66 precompiled kernels, and
     // test_gpu_peak_finding_kernel() gets called 100 times.
     
     for (int i = 0; i < 5; i++) {
 	// Choose a random precompiled kernel.
-	pf_kernel k = ksgpu::rand_element(all_kernels);
+	auto k = GpuPeakFindingKernel::get_random_registry_key();
 	int nbits = k.dtype.nbits;
 	
 	// Note that by choosing 'niter_cpu' and 'niter_gpu' independently, this test

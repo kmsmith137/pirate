@@ -128,7 +128,7 @@ struct TestInstanceDK
     void randomize_new()
     {
 	const long max_nelts = 100 * 1000 * 1000;
-	dd_kernel k = dd_kernel::get_random();
+	auto k = NewGpuDedispersionKernel::get_random_registry_key();
 	
 	params.dtype = k.dtype;
 	params.dd_rank = k.rank;
@@ -136,7 +136,7 @@ struct TestInstanceDK
 	params.output_is_ringbuf = k.output_is_ringbuf;
 	params.apply_input_residual_lags = k.apply_input_residual_lags;
 	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
-	params.nelts_per_segment = xdiv(8 * constants::bytes_per_gpu_cache_line, k.dtype.nbits);
+	params.nelts_per_segment = xdiv(8 * constants::bytes_per_gpu_cache_line, params.dtype.nbits);
 	
 	this->new_code = true;
 	this->in_place = !params.input_is_ringbuf && !params.output_is_ringbuf && (rand_uniform() < 0.5);

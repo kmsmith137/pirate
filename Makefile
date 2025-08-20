@@ -174,6 +174,7 @@ HFILES = \
   include/pirate/DedispersionPlan.hpp \
   include/pirate/FakeCorrelator.hpp \
   include/pirate/FakeServer.hpp \
+  include/pirate/KernelRegistry.hpp \
   include/pirate/LaggedDownsamplingKernel.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \

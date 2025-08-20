@@ -1,4 +1,5 @@
 #include "../include/pirate/DedispersionKernel.hpp"
+#include "../include/pirate/KernelRegistry.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"   // pow2(), is_aligned(), simd_type
 #include "../include/pirate/utils.hpp"     // bit_reverse_slow()
@@ -632,17 +633,20 @@ NewGpuDedispersionKernel::NewGpuDedispersionKernel(const Params &params_) :
     params.validate(true);        // on_gpu=true
     xassert(params.dd_rank > 0);  // FIXME define _r0 for testing
 
-    bool in_rb = params.input_is_ringbuf;
-    bool out_rb = params.output_is_ringbuf;
-    bool in_rlags = params.apply_input_residual_lags;
-    
-    this->cuda_kernel = dd_kernel::get(params.dtype, params.dd_rank, in_rb, out_rb, in_rlags);
+    RegistryKey key;
+    key.dtype = params.dtype;
+    key.rank = params.dd_rank;
+    key.input_is_ringbuf = params.input_is_ringbuf;
+    key.output_is_ringbuf = params.output_is_ringbuf;
+    key.apply_input_residual_lags = params.apply_input_residual_lags;
+
+    this->registry_value = query_registry(key);
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
 
     int ST = xdiv(params.dtype.nbits, 8);    
     this->bw_per_launch.kernel_launches = 1;
     this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * ST;
-    this->bw_per_launch.nbytes_gmem += 8 * params.beams_per_batch * pow2(params.amb_rank) * cuda_kernel.pstate32_per_small_tree;
+    this->bw_per_launch.nbytes_gmem += 8 * params.beams_per_batch * pow2(params.amb_rank) * registry_value.pstate32_per_small_tree;
     // FIXME(?) not currently including ringbuf_locations.
 }
 
@@ -653,12 +657,9 @@ void NewGpuDedispersionKernel::allocate()
 	throw runtime_error("double call to NewGpuDedispersionKernel::allocate()");
     
     // Note 'af_zero' flag here.
-    long ninner = cuda_kernel.pstate32_per_small_tree * xdiv(32, params.dtype.nbits);
+    long ninner = registry_value.pstate32_per_small_tree * xdiv(32, params.dtype.nbits);
     std::initializer_list<long> shape = { params.total_beams, pow2(params.amb_rank), ninner };
     this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
-    
-    bool is_float32 = (params.dtype.nbits == 32);
-    this->integer_constants = make_integer_constants(params.dd_rank, is_float32, true);   // on_gpu=true
 
     // Copy host -> GPU.
     if (params.input_is_ringbuf || params.output_is_ringbuf) {
@@ -693,14 +694,14 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
     // long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
 
     dim3 grid_dims = { uint(pow2(params.amb_rank)), uint(params.beams_per_batch), 1 };
-    dim3 block_dims = { 32, uint(cuda_kernel.warps_per_threadblock), 1 };
+    dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
     ulong nt_cumul = it_chunk * params.ntime;
 
-    // dd_kernel does not yet support ringbufs
+    // NewGpuDedispersionKernel does not yet support ringbufs
     xassert(!params.input_is_ringbuf);
     xassert(!params.output_is_ringbuf);
 
-    this->cuda_kernel.cuda_kernel <<< grid_dims, block_dims, cuda_kernel.shmem_nbytes, stream >>>
+    this->registry_value.cuda_kernel <<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
 	(in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
 	 out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
 	 pstate.data, params.ntime, nt_cumul);
@@ -711,102 +712,82 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
 
 // -------------------------------------------------------------------------------------------------
 //
-// Kernel registry
+// Kernel registry.
 
 
-static mutex dd_kernel_lock;
-static std::vector<dd_kernel> dd_kernel_registry;
+using DedispRegistry = typename pirate::KernelRegistry<NewGpuDedispersionKernel::RegistryKey, NewGpuDedispersionKernel::RegistryValue>;
 
+// Instead of declaring the registry as a static global variable, we declare it
+// as a static local variable in the function dd_registry(). The registry will
+// be initialized the first time that dd_registry() is called.
+//
+// This kludge is necessary because the registry is accessed at library initialization
+// time, by callers in other source files, and source files are executed in an
+// arbitrary order.
 
-// Call with lock held
-static dd_kernel *_get_dd_kernel(Dtype dtype, int rank, bool in_rb, bool out_rb, bool in_rlags)
+static DedispRegistry &dd_registry()
 {
-    for (dd_kernel &d: dd_kernel_registry) {
-	if ((d.dtype == dtype) && (d.rank == rank) && (d.input_is_ringbuf == in_rb) &&
-	    (d.output_is_ringbuf == out_rb) && (d.apply_input_residual_lags == in_rlags))
-	    return &d;
-    }
-    
-    return nullptr;
+    static DedispRegistry reg;
+    return reg;  // note: thread-safe (as of c++11)
 }
 
 
-void dd_kernel::register_kernel()
+// Static member function.
+NewGpuDedispersionKernel::RegistryValue NewGpuDedispersionKernel::query_registry(const RegistryKey &k)
+{
+    return dd_registry().query(k);
+}
+
+// Static member function.
+NewGpuDedispersionKernel::RegistryKey NewGpuDedispersionKernel::get_random_registry_key()
+{
+    return dd_registry().get_random_key();
+}
+
+
+// Static member function for adding to the registry.
+// Called during library initialization, from source files with gpu kernels.
+void NewGpuDedispersionKernel::register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug)
 {
     // Just check that all members have been initialized.
     // (In the future, I may add more argument checking here.)
     
-    xassert((dtype == Dtype::native<float>()) || (dtype == Dtype::native<__half>()));
-    xassert(warps_per_threadblock > 0);
-    xassert(cuda_kernel != nullptr);
+    xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+    xassert(val.warps_per_threadblock > 0);
+    xassert(val.cuda_kernel != nullptr);
     
-    if (this->shmem_nbytes > 48*1024) {
+    if (val.shmem_nbytes > 48*1024) {
         CUDA_CALL(cudaFuncSetAttribute(
-	    this->cuda_kernel,
+	    val.cuda_kernel,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
-            this->shmem_nbytes
+            val.shmem_nbytes
         ));
     }
-
-    unique_lock<mutex> lk(dd_kernel_lock);
-    dd_kernel *d = _get_dd_kernel(dtype, rank, input_is_ringbuf, output_is_ringbuf, apply_input_residual_lags);
-
-    if (!d)
-	dd_kernel_registry.push_back(*this);
-    else if (!this->debug && d->debug)
-	cout << "Note: debug and non-debug dd kernels were registered; debug kernel takes priority" << endl;
-    else if (this->debug && !d->debug) {
-	cout << "Note: debug and non-debug dd kernels were registered; debug kernel takes priority" << endl;
-	*d = *this;
-    }
-    else
-	throw runtime_error("dd_kernel::register() called twice, perhaps you forgot to set the 'debug' flag?");
-}
-
-
-// Static member function
-dd_kernel dd_kernel::get(Dtype dtype, int rank, bool in_rb, bool out_rb, bool in_rlags)
-{
-    unique_lock<mutex> lk(dd_kernel_lock);
-    dd_kernel *d = _get_dd_kernel(dtype, rank, in_rb, out_rb, in_rlags);
     
-    if (d != nullptr) {
-	// Not sure whether "return (*d)" drops lock before copying.
-	dd_kernel ret = *d;
-	return ret;
-    }
-
-    stringstream ss;
-    ss << "dd_kernel::get(): no kernel found for dtype=" << dtype
-       << ", rank=" << rank << ", input_is_ringbuf=" << in_rb
-       << ", output_is_ringbuf=" << out_rb
-       << ", apply_input_residual_lags=" << in_rlags;
-    
-    throw runtime_error(ss.str());
+    return dd_registry().add(key, val, debug);
 }
 
 
-// Static member function
-dd_kernel dd_kernel::get_random()
+bool operator==(const NewGpuDedispersionKernel::RegistryKey &k1, const NewGpuDedispersionKernel::RegistryKey &k2)
 {
-    unique_lock<mutex> lk(dd_kernel_lock);
-    xassert(dd_kernel_registry.size() > 0);
-    long i = ksgpu::rand_int(0, dd_kernel_registry.size());
-
-    // Not sure whether "return dd_kernel_registry[i]" drops lock before copying.
-    dd_kernel ret = dd_kernel_registry[i];
-    return ret;
+    return (k1.dtype == k2.dtype) &&
+	(k1.rank == k2.rank) &&
+	(k1.input_is_ringbuf == k2.input_is_ringbuf) &&
+	(k1.output_is_ringbuf == k2.output_is_ringbuf) &&
+	(k1.apply_input_residual_lags == k2.apply_input_residual_lags);
 }
 
 
-// Static member function
-vector<dd_kernel> dd_kernel::get_all()
+ostream &operator<<(ostream &os, const NewGpuDedispersionKernel::RegistryKey &k)
 {
-    unique_lock<mutex> lk(dd_kernel_lock);
+    os << "GpuDedispersionKernel(dtype=" << k.dtype
+       << ", rank=" << k.rank
+       << ", input_is_ringbuf=" << k.input_is_ringbuf
+       << ", output_is_ringbuf=" << k.output_is_ringbuf
+       << ", apply_input_residual_lags=" << k.apply_input_residual_lags
+       << ")";
 
-    // Not sure whether "return dd_kernel_registry" drops lock before copying.
-    vector<dd_kernel> ret = dd_kernel_registry;
-    return ret;
+    return os;
 }
 
 

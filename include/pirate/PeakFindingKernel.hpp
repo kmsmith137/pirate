@@ -105,66 +105,6 @@ struct ReferencePeakFindingKernel : PeakFindingKernel
 // GpuPeakFindingKernel
 
 
-// pf_kernel: represents a precompiled low-level cuda kernel.
-// (Must be declared before GpuPeakFindingKernel).
-//
-// Each .cu source file populates a 'struct pf_kernel' with function pointers,
-// then calls pf_kernel::register().
-
-struct pf_kernel {
-    
-    // We define two low-level cuda kernels: a "full peak-finding kernel" which is externally
-    // useful, and a "reduce-only" kernel which serves an internal debugging purpose.
-    //
-    // The full peak-finding kernel is called as:
-    //
-    //   void pf_full(out_max, out_ssq, pstate, in, wt, Mout, Tout);
-    //
-    // and the reduce-only kernel is called as:
-    //
-    //   void pf_reduce(out_max, out_ssq, in_max, in_ssq, wt, Mout, Tout);
-    //
-    // where:
-    //
-    //  - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout).
-    //  - 'in_max' and 'in_ssq' have shape (B, P, Mout*M, Tout*(Dout/Dcore))
-    //  - 'pstate' has shape (B, Mout, P32).
-    //  - 'in' has shape (B, Mout*M, Tout*Dout).
-    //  - 'wt' has shape (B, P, Mout*M).
-    //  - 'B' is the number of beams, and other params (P, M, ...) are defined below
-    //
-    // Kernels are launched with {BM,B,1} blocks and {32*W,1} threads, where BM = ceil(Mout/W).
-    // Shared memory is statically allocated.
-
-    ksgpu::Dtype dtype;   // either float16 or float32
-    
-    int M = 0;       // same as PeakFindingKernelParams::dm_downsampling_factor
-    int E = 0;       // same as PeakFindingKernelParams::max_kernel_width
-    int Dout = 0;    // same as PeakFindingKernelParams::time_downsampling_factor
-    int Dcore = 0;   // internal downsampling factor (see discussion above)
-    int W = 0;       // warps per threadblock
-    int P = 0;       // number of peak-finding kernels (= 3*log2(E) + 1)
-    int P32 = 0;     // ring buffer 32-bit registers per output (beam, mout)
-
-    // The "full peak-finding" and "reduce-only" kernels have the same call signatures
-    // (five pointers and two ints), but the meaning of the args is different, see above.
-    using cuda_kernel_t = void (*) (void *, void *, void *, void *, void *, int, int);
-    
-    cuda_kernel_t full_kernel = nullptr;
-    cuda_kernel_t reduce_only_kernel = nullptr;
-    
-    pf_kernel *next = nullptr;   // used internally
-    bool debug = false;          // a "debug" kernel takes precedence over non-debug
-    
-    void register_kernel();
-
-    static pf_kernel get(ksgpu::Dtype dtype, int M, int E, int Dout);
-
-    // Returns all registered kernels.
-    static std::vector<pf_kernel> enumerate();
-};
-
-
 struct GpuPeakFindingKernel : PeakFindingKernel
 {
     GpuPeakFindingKernel(const PeakFindingKernelParams &params);
@@ -172,7 +112,6 @@ struct GpuPeakFindingKernel : PeakFindingKernel
     // Inherits from PeakFindingKernel base class:
     //  params, Dcore, nbatches, ndm_out, nt_out, nprofiles
     
-    pf_kernel cuda_kernel;
     bool is_allocated = false;
         
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
@@ -181,9 +120,6 @@ struct GpuPeakFindingKernel : PeakFindingKernel
     // Bandwidth per call to GpuDedispersionKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
     BandwidthTracker bw_per_launch;
-    
-    // Allocated in GpuPeakFindingKernel::allocate(), not the constructor.
-    ksgpu::Array<void> persistent_state;
 
     // Warning: GPU kernel assumes all weights are positive, and behavior
     // is undefined if there are negative weights.
@@ -196,9 +132,76 @@ struct GpuPeakFindingKernel : PeakFindingKernel
 	long ibatch,                   // 0 <= ibatch < nbatches
 	cudaStream_t stream            // NULL stream is allowed, but is not the default
     );
+
+    // -------------------- Internals start here --------------------
+
+    // Allocated in GpuPeakFindingKernel::allocate(), not the constructor.
+    ksgpu::Array<void> persistent_state;
+
+    struct RegistryKey
+    {
+	ksgpu::Dtype dtype;   // either float16 or float32
+	int M = 0;            // same as PeakFindingKernelParams::dm_downsampling_factor
+	int E = 0;            // same as PeakFindingKernelParams::max_kernel_width
+	int Dout = 0;         // same as PeakFindingKernelParams::time_downsampling_factor
+    };
+
+    struct RegistryValue
+    {
+	// We define two low-level cuda kernels: a "full peak-finding kernel" which is externally
+	// useful, and a "reduce-only" kernel which serves an internal debugging purpose.
+	//
+	// The full peak-finding kernel is called as:
+	//
+	//   void pf_full(out_max, out_ssq, pstate, in, wt, Mout, Tout);
+	//
+	// and the reduce-only kernel is called as:
+	//
+	//   void pf_reduce(out_max, out_ssq, in_max, in_ssq, wt, Mout, Tout);
+	//
+	// where:
+	//
+	//  - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout).
+	//  - 'in_max' and 'in_ssq' have shape (B, P, Mout*M, Tout*(Dout/Dcore))
+	//  - 'pstate' has shape (B, Mout, P32).
+	//  - 'in' has shape (B, Mout*M, Tout*Dout).
+	//  - 'wt' has shape (B, P, Mout*M).
+	//  - 'B' is the number of beams, and other params (P, M, ...) are defined below
+	//
+	// Kernels are launched with {BM,B,1} blocks and {32*W,1} threads, where BM = ceil(Mout/W).
+	// Shared memory is statically allocated.
+	
+	int Dcore = 0;   // internal downsampling factor (see discussion above)
+	int W = 0;       // warps per threadblock
+	int P = 0;       // number of peak-finding kernels (= 3*log2(E) + 1)
+	int P32 = 0;     // ring buffer 32-bit registers per output (beam, mout)
+
+	// The "full peak-finding" and "reduce-only" kernels have the same call signatures
+	// (five pointers and two ints), but the meaning of the args is different, see above.
+	using cuda_kernel_t = void (*) (void *, void *, void *, void *, void *, int, int);
+	
+	cuda_kernel_t full_kernel = nullptr;
+	cuda_kernel_t reduce_only_kernel = nullptr;
+    };
+
+    // Low-level cuda kernel and associated metadata.
+    RegistryValue registry_value;
+
+    // Static member functions for querying registry.
+    static RegistryValue query_registry(const RegistryKey &k);
+    static RegistryKey get_random_registry_key();
+
+    // Static member function for adding to the registry.
+    // Called during library initialization, from source files with gpu kernels.
+    static void register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug);
 };
+
+
+// Defined in GpuPeakFindingKernel.cu
+extern bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindingKernel::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::RegistryKey &k);
 
 
 }  // namespace pirate
 
-#endif // _PIRATE_AGGED_DOWNSAMPLING_KERNEL_HPP
+#endif // _PIRATE_PEAK_FINDING_KERNEL_HPP
