@@ -70,7 +70,7 @@ struct TestInstanceDK
 	     params.apply_input_residual_lags = true;
 	     this->in_place = false;
 	}
-	else if (rand_uniform() < 0.5) {
+	else if (rand_uniform() < 0.67) {
 	    params.input_is_ringbuf = false;
 	    params.output_is_ringbuf = true;
 	    params.apply_input_residual_lags = false;
@@ -135,7 +135,7 @@ struct TestInstanceDK
 	params.input_is_ringbuf = k.input_is_ringbuf;
 	params.output_is_ringbuf = k.output_is_ringbuf;
 	params.apply_input_residual_lags = k.apply_input_residual_lags;
-	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
+	params.input_is_downsampled_tree = false;  // XXX (rand_uniform() < 0.5);
 	params.nelts_per_segment = xdiv(8 * constants::bytes_per_gpu_cache_line, params.dtype.nbits);
 	
 	this->new_code = true;

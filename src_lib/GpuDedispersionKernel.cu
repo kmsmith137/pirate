@@ -704,7 +704,7 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
     this->registry_value.cuda_kernel <<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
 	(in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
 	 out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
-	 pstate.data, params.ntime, nt_cumul);
+	 pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     
     CUDA_PEEK("dedispersion kernel");
 }

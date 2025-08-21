@@ -5,12 +5,19 @@ from .Ringbuf import Ringbuf
 
 
 class DedisperserParams:
-    def __init__(self, dtype, rank):
+    def __init__(self, dtype, rank, apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf, nspec):
         assert dtype in [ 'float', '__half' ]
         assert 1 <= rank <= 8
+        assert not input_is_ringbuf   # not implemented yet
+        assert not output_is_ringbuf  # not implemented yet
+        assert nspec == 1             # not implemented yet
         
         self.dtype = dtype
         self.rank = rank
+        self.apply_input_residual_lags = apply_input_residual_lags
+        self.input_is_ringbuf = input_is_ringbuf
+        self.output_is_ringbuf = output_is_ringbuf
+        self.nspec = nspec
 
 
 class Dedisperser:
@@ -27,8 +34,19 @@ class Dedisperser:
         self.params = params
         self.dtype = params.dtype
         self.rank = params.rank
+        self.apply_input_residual_lags = params.apply_input_residual_lags
+        self.input_is_ringbuf = params.input_is_ringbuf
+        self.output_is_ringbuf = params.output_is_ringbuf
+        self.nspec = params.nspec
+        
+        self.kernel_name = f'dd_fp{self.nbits}'
+        self.kernel_name += f'_r{params.rank}'
+        self.kernel_name += f'_ilag{int(params.apply_input_residual_lags)}'
+        self.kernel_name += f'_irb{int(params.input_is_ringbuf)}'
+        self.kernel_name += f'_orb{int(params.output_is_ringbuf)}'
+        self.kernel_name += f'_s{params.nspec}'
+        
         self.ringbuf = Ringbuf(self.dt32)   # not self.dtype
-        self.kernel_name = f'dd_fp{self.nbits}_r{params.rank}'
         self.two_stage = (params.rank >= 5)
 
         if self.two_stage:
@@ -63,7 +81,7 @@ class Dedisperser:
         k.emit(f'__global__ void __launch_bounds__({32*W},{B})')
         k.emit(f'{self.kernel_name}(void *inbuf_, long beam_istride32, int amb_istride32, int act_istride32,')
         k.emit(f'       void *outbuf_, long beam_ostride32, int amb_ostride32, int act_ostride32,')
-        k.emit(f'       void *pstate_, int ntime, ulong nt_cumul)')
+        k.emit(f'       void *pstate_, int ntime, ulong nt_cumul, bool is_downsampled_tree)')
         k.emit('{')
 
         self._apply_inbuf_offsets(k)    # apply per-thread offsets to 'inbuf' (including laneId offset)
@@ -82,6 +100,8 @@ class Dedisperser:
             s = f'{i} * act_istride32' if (i > 0) else '0'
             k.emit(f'{self.dt32} {x} = inbuf[{s}];')
 
+        self._apply_input_residual_lags(k, xnames)    # no-ops if (self.apply_input_residual_lags) is False
+
         if self.two_stage:
             self._two_stage_dedispersion_core(k, xnames)
         else:
@@ -97,8 +117,7 @@ class Dedisperser:
         k.emit('\n// Advance ring buffer for next iteration of loop')
         self.ringbuf.advance_outer(k)
 
-        # No-ops if (self.two-stage) is False
-        self._advance_control_words(k)
+        self._advance_control_words(k)      # no-ops if (self.two_stage) is False
         
         k.emit('\n// Advance input/output pointers')
         k.emit('inbuf += 32;')
@@ -106,10 +125,8 @@ class Dedisperser:
         
         k.emit('}   // outer time loop')
 
-        # Now that the ring buffer layout is finalized, we can emit the pstate code.
-        self.rb32_per_warp = self.ringbuf.get_n32_per_warp()
-        self.pstate32_per_small_tree = utils.xdiv(self.shmem_nbytes,4) + (self.rb32_per_warp * self.warps_per_threadblock)
-        
+        # Now that the Ringbuf has been finalized, we can sort out the pstate.
+        self._lay_out_pstate(k_pstate)    # initializes some members, including self.pstate32_per_small_tree
         self._load_pstate(k_pstate)
         self._save_pstate(k)
         
@@ -178,6 +195,44 @@ class Dedisperser:
         k.emit(f'// dedispersion_pass: pass {i} ends here')
 
 
+    def _apply_input_residual_lags(self, k, xnames):
+        if not self.apply_input_residual_lags:
+            return
+
+        k.emit(f'// Apply input "residual" lags.')
+        k.emit(f'//')
+        k.emit(f'// Context: consider the second stage in a two-stage dedisperser.')
+        k.emit(f'// The ambient index corresponds to a bit-reversed DM 0 <= dm_brev < 2^(ambient_rank).')
+        k.emit(f'// Each input register corresponds to a coarse frequency 0 <= f < 2^(dd_rank).')
+        k.emit(f'//')
+        k.emit(f'// Between the two stages of the tree, we want to apply the following lag:')
+        k.emit(f'//    lag = dm * frev      where dm=bit_reverse(dm_brev) and frev = 2^dd_rank - 1 - f')
+        k.emit(f'//')
+        k.emit(f'// However, due to cache-alignment constraints, we are only able to apply (lag % N),')
+        k.emit(f'// where N = 128 / (sizeof(T) * nspec) is the number of time samples per GPU cache line.')
+        k.emit(f'// To address this, the dedispersion kernel is responsible for applying the "residual" lag:')
+        k.emit(f'//    rlag = lag % N')
+        k.emit()
+
+        # XXX
+        assert self.dtype == 'float'
+        k.emit(f'assert(!is_downsampled_tree);')
+        k.emit()
+        
+        ndd = len(xnames)
+        N = utils.xdiv(1024, self.nspec * self.nbits)   # number of time samples per GPU cache line, see above
+        
+        k.emit(f'uint rlag_dm = __brev(blockIdx.x) >> (33U - __ffs(gridDim.x));   // 0 <= rlag_dm < 2^(ambient rank)')
+        k.emit(f'uint rlag_f0 = threadIdx.y << {utils.integer_log2(ndd)};         // 0 <= rlag_f0 < 2^(dd_rank)')
+
+        for i,x in enumerate(xnames):
+            rlag, tmp = k.get_tmp_rname(2)
+            k.emit(f'uint {rlag} = (rlag_dm * ({2**self.rank-1-i} - rlag_f0)) & {N-1};   // rlag to be applied to dd{i}')
+            k.emit(f'float {tmp} = ((threadIdx.x + {rlag}) >= 32) ? dd_rlag{i} : {x};')
+            k.emit(f'dd_rlag{i} = {x};')
+            k.emit(f'{x} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag});   // rlag has now been applied to dd{i}')
+            
+        
     def _apply_one_sample_lags(self, k, xnames):
         if (self.nbits != 16) or (self.rank0 == 0):
             return
@@ -336,17 +391,37 @@ class Dedisperser:
         k.emit(f'control_word = (control_word & 0xff007fff) | ({pos15} - {dpos15});')
         k.emit()
 
-    
-    def _load_pstate(self, k):
-        k.emit("// Apply per-warp offset to pstate, in preparation for loading")
-        k.emit(f'constexpr int RB32 = {self.rb32_per_warp};    // 32-bit elements per **warp**, in **register** ring buffer')
-        k.emit(f'constexpr int SM32 = {utils.xdiv(self.shmem_nbytes,4)};  // 32-bit elements per **threadblock**, in **shmem** ring buffer')
-        k.emit(f'constexpr int PS32 = SM32 + {self.warps_per_threadblock} * RB32;   // total persistent state per **threadblock**')
+
+    def _lay_out_pstate(self, k):
+        ndd = (2**self.rank1) if self.two_stage else (2**self.rank)   # dd registers per thread
+        RL32 = (32*ndd) if self.apply_input_residual_lags else 0      # registers for apply_input_residual_lags, per warp
+        RB32 = self.ringbuf.get_n32_per_warp()                        # registers for in-register ringbuf, per warp
+        SM32 = utils.xdiv(self.shmem_nbytes,4)                        # shared memory 32-bit words, per threadblock
+        W = self.warps_per_threadblock
+        
+        k.emit(f'// Per-threadblock persistent state layout is {self.dt32}[PS32], broken down as follows:')
+        k.emit(f'//    {self.dt32} rb_shmem[SM32];')
+        k.emit(f'//    {self.dt32} rb_registers[{W}][RL32+RB32];  // outer index is warp id')
+        k.emit(f'//')
+        k.emit(f'// where definitions of PS32, SM32, RL32, RB32 follow.')
         k.emit()
+        k.emit(f'constexpr int {RL32 = };    // 32-bit elements per **warp** needed for apply_input_residual_lags')
+        k.emit(f'constexpr int {RB32 = };    // 32-bit elements per **warp**, in **register** ring buffer')
+        k.emit(f'constexpr int {SM32 = };  // 32-bit elements per **threadblock**, in **shmem** ring buffer')
+        k.emit(f'constexpr int PS32 = SM32 + {W}*(RL32+RB32);   // total persistent state per **threadblock**')
+        k.emit()
+        
+        self.pstate32_per_small_tree = SM32 + W*(RL32+RB32)
+
+        k.emit("// Apply per-block offset to pstate")
         k.emit(f'int blockId = (gridDim.x * blockIdx.y) + blockIdx.x;')
         k.emit(f'{self.dt32} *pstate = ({self.dt32} *)pstate_;')
         k.emit(f"pstate += blockId * PS32;")
         k.emit()
+
+        
+    def _load_pstate(self, k):
+        ndd = (2**self.rank1) if self.two_stage else (2**self.rank)   # dd registers per thread
 
         if self.two_stage:
             k.emit(f'extern __shared__ {self.dt32} shmem[];')
@@ -357,37 +432,73 @@ class Dedisperser:
             k.emit(f'    shmem[s] = pstate[s];')
             k.emit('__syncwarp();')
             k.emit()
+
+        wp = self._warp_pstate1(k)
+        
+        if self.apply_input_residual_lags:
+            k.emit('// Load persistent state for apply_input_residual_lags')
+            for i in range(ndd):
+                i32 = f' + {32*i}' if (i > 0) else ''
+                k.emit(f'{self.dt32} dd_rlag{i} = {wp}[threadIdx.x{i32}];')
             
+            k.emit()
+            wp = self._warp_pstate2(k, wp)
+        
         k.emit('// Read register ring buffer directly from global memory.')
         k.emit('// FIXME: would it be better to go through shared memory?')
-        
-        self.ringbuf.initialize(k, self._warp_pstate(k))
+
+        self.ringbuf.initialize(k, wp)
         k.emit()
         
 
     def _save_pstate(self, k):
+        ndd = (2**self.rank1) if self.two_stage else (2**self.rank)   # dd registers per thread
+        
         if self.two_stage:
             k.emit(f'// Write shmem ring buffer to global memory')
             k.emit(f'for (int s = 32*threadIdx.y + threadIdx.x; s < SM32; s += {32*self.warps_per_threadblock})')
             k.emit(f'    pstate[s] = shmem[s];')
             k.emit(f'__syncwarp();')
             k.emit()
+        
+        wp = self._warp_pstate1(k)
+        
+        if self.apply_input_residual_lags:
+            k.emit('// Save persistent state for apply_input_residual_lags')
+            for i in range(ndd):
+                i32 = f' + {32*i}' if (i > 0) else ''
+                k.emit(f'{wp}[threadIdx.x{i32}] = dd_rlag{i};')
+
+            k.emit()
+            wp = self._warp_pstate2(k, wp)
             
         k.emit('// Write register ring buffer to global memory.')
         k.emit('// FIXME: would it be better to go through shared memory?')
         k.emit()
         
-        self.ringbuf.finalize(k, self._warp_pstate(k))
+        self.ringbuf.finalize(k, wp)
         k.emit()
 
 
-    def _warp_pstate(self, k):
+    def _warp_pstate1(self, k):
         if (self.shmem_nbytes == 0) and (self.warps_per_threadblock == 1):
             return 'pstate'
         
-        ps = k.get_tmp_rname()
-        k.emit(f'{self.dt32} *{ps} = pstate + SM32 + (threadIdx.y * RB32);  // per-warp ring buffer in global memory')
-        return ps
+        wp = k.get_tmp_rname()
+        k.emit(f'// Per-warp ring buffer in global memory (length RL32+RB32)')
+        k.emit(f'{self.dt32} *{wp} = pstate + SM32 + (threadIdx.y * (RL32+RB32));')
+        k.emit()
+        
+        return wp
+
+    
+    def _warp_pstate2(self, k, wp):
+        wp2 = k.get_tmp_rname()
+        k.emit(f'// Per-warp ring buffer in global memory, second part (length RB32)')
+        k.emit(f'{self.dt32} *{wp2} = {wp} + RL32;')
+        k.emit()
+        
+        return wp2
 
 
     def _show_shmem_layout_in_comment(self, k):

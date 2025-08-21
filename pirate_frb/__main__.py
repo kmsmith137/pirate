@@ -55,7 +55,10 @@ def test(args):
             pirate_pybind11.test_gpu_lagged_downsampling_kernel()
         
         if run_all_tests or args.gddk:
-            pirate_pybind11.test_gpu_dedispersion_kernels()
+            # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
+            # runs every kernel a few times. Currently there are 80 precompiled kernels.
+            for _ in range(5):
+                pirate_pybind11.test_gpu_dedispersion_kernels()
         
         if run_all_tests or args.gpfk:
             # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
