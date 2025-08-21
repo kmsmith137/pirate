@@ -690,7 +690,7 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
     long b1 = (ibatch+1) * params.beams_per_batch;
     Array<void> pstate = this->persistent_state.slice(0, b0, b1);
     
-    // XXX confused by rb_pos
+    // TODO: remind myself how rb_pos works
     // long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
 
     dim3 grid_dims = { uint(pow2(params.amb_rank)), uint(params.beams_per_batch), 1 };

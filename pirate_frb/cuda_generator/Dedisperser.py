@@ -206,7 +206,11 @@ class Dedisperser:
         k.emit(f'// Each input register corresponds to a coarse frequency 0 <= f < 2^(dd_rank).')
         k.emit(f'//')
         k.emit(f'// Between the two stages of the tree, we want to apply the following lag:')
-        k.emit(f'//    lag = dm * frev      where dm=bit_reverse(dm_brev) and frev = 2^dd_rank - 1 - f')
+        k.emit(f'//    lag = dm * frev')
+        k.emit(f'//')
+        k.emit(f'// where:')
+        k.emit(f'//    dm = bit_reverse(dm_brev) + (is_downsampled_tree ? 2^ambient_rank : 0)')
+        k.emit(f'//    frev = 2^dd_rank - 1 - f')
         k.emit(f'//')
         k.emit(f'// However, due to cache-alignment constraints, we are only able to apply (lag % N),')
         k.emit(f'// where N = 128 / (sizeof(T) * nspec) is the number of time samples per GPU cache line.')
@@ -216,15 +220,14 @@ class Dedisperser:
 
         # XXX
         assert self.dtype == 'float'
-        k.emit(f'assert(!is_downsampled_tree);')
-        k.emit()
         
         ndd = len(xnames)
         N = utils.xdiv(1024, self.nspec * self.nbits)   # number of time samples per GPU cache line, see above
         
-        k.emit(f'uint rlag_dm = __brev(blockIdx.x) >> (33U - __ffs(gridDim.x));   // 0 <= rlag_dm < 2^(ambient rank)')
         k.emit(f'uint rlag_f0 = threadIdx.y << {utils.integer_log2(ndd)};         // 0 <= rlag_f0 < 2^(dd_rank)')
-
+        k.emit(f'uint rlag_dm = __brev(blockIdx.x) >> (33U - __ffs(gridDim.x));   // 0 <= rlag_dm < 2^(ambient rank)')
+        k.emit(f'rlag_dm += (is_downsampled_tree ? gridDim.x : 0);')
+        
         for i,x in enumerate(xnames):
             rlag, tmp = k.get_tmp_rname(2)
             k.emit(f'uint {rlag} = (rlag_dm * ({2**self.rank-1-i} - rlag_f0)) & {N-1};   // rlag to be applied to dd{i}')
