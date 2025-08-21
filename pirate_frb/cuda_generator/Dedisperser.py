@@ -54,11 +54,13 @@ class Dedisperser:
             self.rank1 = params.rank - self.rank0
             self.warps_per_threadblock = 2**self.rank0
             self.shmem_nbytes = 4 * self.rb_base(2**self.rank0, 0)
+            self.ndd = 2**(self.rank1)   # dedispersion "data" registers per thread
             self.static_asserts()
         else:
             # FIXME single-stage kernel should use 4 warps/threadblock
             self.warps_per_threadblock = 1
             self.shmem_nbytes = 0
+            self.ndd = 2**(self.rank)    # dedispersion "data" registers per thread
 
     
     def emit_global(self, k):
@@ -66,10 +68,6 @@ class Dedisperser:
         
         W = self.warps_per_threadblock
         B = utils.xdiv(16, W)   # threadblocks per SM (FIXME rethink?)
-
-        # Number of data registers (x0, x1, ...)
-        nx = (2**self.rank1) if self.two_stage else (2**self.rank) 
-        xnames = [ f'x{i}' for i in range(nx) ]
 
         k.emit(f'// Launch with {{ 32, {W} }} threads/warp')
         k.emit(f'// Launch with {{ Namb, Nbeams}} threadblocks')
@@ -96,23 +94,23 @@ class Dedisperser:
         k.emit(f'for (int itime = 0; itime < ntime; itime += {dt}) {{')
 
         k.emit('// Load data from global memory into registers')
-        for i,x in enumerate(xnames):
+        for i in range(self.ndd):
             s = f'{i} * act_istride32' if (i > 0) else '0'
-            k.emit(f'{self.dt32} {x} = inbuf[{s}];')
+            k.emit(f'{self.dt32} dd{i} = inbuf[{s}];')
 
-        self._apply_input_residual_lags(k, xnames)    # no-ops if (self.apply_input_residual_lags) is False
+        self._apply_input_residual_lags(k)    # no-ops if (self.apply_input_residual_lags) is False
 
         if self.two_stage:
-            self._two_stage_dedispersion_core(k, xnames)
+            self._two_stage_dedispersion_core(k)
         else:
-            self._single_stage_dedispersion_core(k, xnames)
+            self._single_stage_dedispersion_core(k)
 
         k.emit('\n//Store data from registers to global memory')
-        for i,x in enumerate(xnames):
+        for i in range(self.ndd):
             # Correct for both single-stage and two-stage
             r = (2**self.rank0) if self.two_stage else 1
             s = f'{i*r} * act_ostride32' if (i > 0) else '0'
-            k.emit(f'outbuf[{s}] = {x};')
+            k.emit(f'outbuf[{s}] = dd{i};')
 
         k.emit('\n// Advance ring buffer for next iteration of loop')
         self.ringbuf.advance_outer(k)
@@ -133,52 +131,52 @@ class Dedisperser:
         k.emit('}   // kernel')
         
     
-    def _single_stage_dedispersion_core(self, k, xnames):
+    def _single_stage_dedispersion_core(self, k):
         for i in range(self.rank):
-            self._dedispersion_pass(k, xnames, i)
+            self._dedispersion_pass(k, i)
 
         
-    def _two_stage_dedispersion_core(self, k, xnames):
+    def _two_stage_dedispersion_core(self, k):
         for i in range(self.rank0):
-            self._dedispersion_pass(k, xnames, i)
+            self._dedispersion_pass(k, i)
 
         k.emit()
         k.emit('__syncthreads();')
         k.emit()
         k.emit('// Write dd registers to shared memory')
 
-        for i,x in enumerate(xnames):
+        for i in range(self.ndd):
             s = self._rbloc(k, i)
-            k.emit(f'shmem[{s}] = {x};')
+            k.emit(f'shmem[{s}] = dd{i};')
 
         k.emit()
         k.emit('__syncthreads();')
         k.emit()
             
         k.emit('// Read dd registers from shared memory')
-        
-        for i,x in enumerate(xnames):
+
+        for i in range(self.ndd):
             s = self._rbloc(k, 16+i)
-            k.emit(f'{x} = shmem[{s}];')
+            k.emit(f'dd{i} = shmem[{s}];')
 
         # One-sample lags are needed in the float16 case.
-        self._apply_one_sample_lags(k, xnames)
+        self._apply_one_sample_lags(k)
         
         for i in range(self.rank1):
-            self._dedispersion_pass(k, xnames, i)
+            self._dedispersion_pass(k, i)
 
     
-    def _dedispersion_pass(self, k, xnames, i):
-        assert (len(xnames) % 2**(i+1)) == 0
+    def _dedispersion_pass(self, k, i):
+        assert 0 <= i < utils.integer_log2(self.ndd)
 
         k.emit()
         k.emit(f'// dedispersion_pass: pass {i} starts here')
         
         # Outer loop is a spectator index.
-        for s in range(0, len(xnames), 2**(i+1)):
+        for s in range(0, self.ndd, 2**(i+1)):
             for j in range(2**i):
-                x0 = xnames[s+j]
-                x1 = xnames[s+j+2**i]
+                x0 = f'dd{s+j}'
+                x1 = f'dd{s+j+2**i}'
                 lag = utils.bit_reverse(j,i)
                 k.emit(f'// dedisperse {x0}, {x1} with lag {lag}')
 
@@ -195,7 +193,7 @@ class Dedisperser:
         k.emit(f'// dedispersion_pass: pass {i} ends here')
 
 
-    def _apply_input_residual_lags(self, k, xnames):
+    def _apply_input_residual_lags(self, k):
         if not self.apply_input_residual_lags:
             return
 
@@ -220,44 +218,43 @@ class Dedisperser:
         k.emit(f'// FIXME: poorly optimized, especially in float16 case')
         k.emit()
         
-        ndd = len(xnames)
         N = utils.xdiv(1024, self.nspec * self.nbits)   # number of time samples per GPU cache line, see above
         
-        k.emit(f'uint rlag_f0 = threadIdx.y << {utils.integer_log2(ndd)};         // 0 <= rlag_f0 < 2^(dd_rank)')
+        k.emit(f'uint rlag_f0 = threadIdx.y << {utils.integer_log2(self.ndd)};         // 0 <= rlag_f0 < 2^(dd_rank)')
         k.emit(f'uint rlag_dm = __brev(blockIdx.x) >> (33U - __ffs(gridDim.x));   // 0 <= rlag_dm < 2^(ambient rank)')
         k.emit(f'rlag_dm += (is_downsampled_tree ? gridDim.x : 0);')
-        
-        for i,x in enumerate(xnames):
+
+        for i in range(self.ndd):
             rlag = k.get_tmp_rname()
             k.emit(f'uint {rlag} = (rlag_dm * ({2**self.rank-1-i} - rlag_f0)) & {N-1};   // rlag to be applied to dd{i}')
 
             if self.nbits == 32:
                 tmp = k.get_tmp_rname()
-                k.emit(f'{self.dt32} {tmp} = ((threadIdx.x + {rlag}) >= 32) ? dd_rlag{i} : {x};')
-                k.emit(f'dd_rlag{i} = {x};')
-                k.emit(f'{x} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag});   // rlag has now been applied to dd{i}')
+                k.emit(f'{self.dt32} {tmp} = ((threadIdx.x + {rlag}) >= 32) ? dd_rlag{i} : dd{i};')
+                k.emit(f'dd_rlag{i} = dd{i};')
+                k.emit(f'dd{i} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag});   // rlag has now been applied to dd{i}')
 
             elif self.nbits == 16:
                 rlag2, tmp, tmp2 = k.get_tmp_rname(3)
                 k.emit(f'uint {rlag2} = {rlag} >> 1;   // (rlag // 2)')
 
                 k.emit(f'if ({rlag} & 1) {{')
-                k.emit(f'    {self.dt32} {tmp} = ((threadIdx.x + {rlag2} + 1) >= 32) ? dd_rlag{i} : {x};')
-                k.emit(f'    {self.dt32} {tmp2} = ((threadIdx.x + {rlag2}) >= 32) ? dd_rlag{i} : {x};')
-                k.emit(f'    dd_rlag{i} = {x};')
+                k.emit(f'    {self.dt32} {tmp} = ((threadIdx.x + {rlag2} + 1) >= 32) ? dd_rlag{i} : dd{i};')
+                k.emit(f'    {self.dt32} {tmp2} = ((threadIdx.x + {rlag2}) >= 32) ? dd_rlag{i} : dd{i};')
+                k.emit(f'    dd_rlag{i} = dd{i};')
                 k.emit(f'    {tmp} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag2} - 1);')
                 k.emit(f'    {tmp2} = __shfl_sync(0xffffffff, {tmp2}, threadIdx.x - {rlag2});')
-                k.emit(f'    {x} = ksgpu::f16_align({tmp}, {tmp2});')
+                k.emit(f'    dd{i} = ksgpu::f16_align({tmp}, {tmp2});')
                 k.emit(f'}}')
                 k.emit(f'else {{')
-                k.emit(f'    {self.dt32} {tmp} = ((threadIdx.x + {rlag2}) >= 32) ? dd_rlag{i} : {x};')
-                k.emit(f'    dd_rlag{i} = {x};')
-                k.emit(f'    {x} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag2});')
+                k.emit(f'    {self.dt32} {tmp} = ((threadIdx.x + {rlag2}) >= 32) ? dd_rlag{i} : dd{i};')
+                k.emit(f'    dd_rlag{i} = dd{i};')
+                k.emit(f'    dd{i} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag2});')
                 k.emit(f'}}     // rlag has now been applied to dd{i}')                
                 
             
         
-    def _apply_one_sample_lags(self, k, xnames):
+    def _apply_one_sample_lags(self, k):
         if (self.nbits != 16) or (self.rank0 == 0):
             return
 
@@ -272,11 +269,11 @@ class Dedisperser:
         sel = k.get_tmp_rname()
         k.emit(f'uint {sel} = (threadIdx.y & {2**(self.rank0-1)}) ? 0x5432 : 0x7654;')
 
-        for x in xnames[::2]:  # even registers
+        for i in range(0, self.ndd, 2):  # even registers
             xprev = k.get_tmp_rname()
-            k.emit(f'__half2 {xprev};   // will hold result of Ringbuf.advance({x},1)')
-            self.ringbuf.advance(k, x, 1, dst=xprev)
-            k.emit(f'{x} = ksgpu::f16_perm({xprev}, {x}, {sel});  // {x} has now been lagged by one sample, if needed')
+            k.emit(f'__half2 {xprev};   // will hold result of Ringbuf.advance(dd{i},1)')
+            self.ringbuf.advance(k, f'dd{i}', 1, dst=xprev)
+            k.emit(f'dd{i} = ksgpu::f16_perm({xprev}, dd{i}, {sel});  // dd{i} has now been lagged by one sample, if needed')
         
         k.emit()
         
@@ -417,10 +414,9 @@ class Dedisperser:
 
 
     def _lay_out_pstate(self, k):
-        ndd = (2**self.rank1) if self.two_stage else (2**self.rank)   # dd registers per thread
-        RL32 = (32*ndd) if self.apply_input_residual_lags else 0      # registers for apply_input_residual_lags, per warp
-        RB32 = self.ringbuf.get_n32_per_warp()                        # registers for in-register ringbuf, per warp
-        SM32 = utils.xdiv(self.shmem_nbytes,4)                        # shared memory 32-bit words, per threadblock
+        RL32 = (32*self.ndd) if self.apply_input_residual_lags else 0    # registers for apply_input_residual_lags, per warp
+        RB32 = self.ringbuf.get_n32_per_warp()                           # registers for in-register ringbuf, per warp
+        SM32 = utils.xdiv(self.shmem_nbytes,4)                           # shared memory 32-bit words, per threadblock
         W = self.warps_per_threadblock
         
         k.emit(f'// Per-threadblock persistent state layout is {self.dt32}[PS32], broken down as follows:')
@@ -445,8 +441,6 @@ class Dedisperser:
 
         
     def _load_pstate(self, k):
-        ndd = (2**self.rank1) if self.two_stage else (2**self.rank)   # dd registers per thread
-
         if self.two_stage:
             k.emit(f'extern __shared__ {self.dt32} shmem[];')
             k.emit()
@@ -461,7 +455,7 @@ class Dedisperser:
         
         if self.apply_input_residual_lags:
             k.emit('// Load persistent state for apply_input_residual_lags')
-            for i in range(ndd):
+            for i in range(self.ndd):
                 i32 = f' + {32*i}' if (i > 0) else ''
                 k.emit(f'{self.dt32} dd_rlag{i} = {wp}[threadIdx.x{i32}];')
             
@@ -476,8 +470,6 @@ class Dedisperser:
         
 
     def _save_pstate(self, k):
-        ndd = (2**self.rank1) if self.two_stage else (2**self.rank)   # dd registers per thread
-        
         if self.two_stage:
             k.emit(f'// Write shmem ring buffer to global memory')
             k.emit(f'for (int s = 32*threadIdx.y + threadIdx.x; s < SM32; s += {32*self.warps_per_threadblock})')
@@ -489,7 +481,7 @@ class Dedisperser:
         
         if self.apply_input_residual_lags:
             k.emit('// Save persistent state for apply_input_residual_lags')
-            for i in range(ndd):
+            for i in range(self.ndd):
                 i32 = f' + {32*i}' if (i > 0) else ''
                 k.emit(f'{wp}[threadIdx.x{i32}] = dd_rlag{i};')
 

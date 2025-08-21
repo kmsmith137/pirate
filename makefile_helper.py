@@ -56,7 +56,15 @@ def generate_kernel_filenames():
 
 
 def generate_dedispersion_kernels():
-    """Generates tuples (dtype, ilag, irb, orb, nspec)."""
+    """
+    Generates tuples (dtype, ilag, irb, orb, nspec), where:
+
+       - dtype is 'fp16' or 'fp32'
+       - ilag = apply_input_residual_lags
+       - irb = input_is_ringbuf
+       - orb = output_is_ringbuf
+       - nspec = number of spectator indices
+    """
     
     # Debug
     # yield ('fp16', True, False, False, 1)
