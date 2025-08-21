@@ -56,11 +56,11 @@ def generate_kernel_filenames():
 
 
 def generate_dedispersion_kernels():
-    # XXX
-    yield ('fp32', False, False, False, 1)
-    yield ('fp16', False, False, False, 1)
-    yield ('fp32', True, False, False, 1)
-    return
+    """Generates tuples (dtype, ilag, irb, orb, nspec)."""
+    
+    # Debug
+    # yield ('fp16', True, False, False, 1)
+    # return
 
     for dtype in [ 'fp32', 'fp16' ]:
         for ilag in [ False, True ]:    # apply_input_residual_lags

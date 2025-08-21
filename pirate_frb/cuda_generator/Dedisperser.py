@@ -216,10 +216,9 @@ class Dedisperser:
         k.emit(f'// where N = 128 / (sizeof(T) * nspec) is the number of time samples per GPU cache line.')
         k.emit(f'// To address this, the dedispersion kernel is responsible for applying the "residual" lag:')
         k.emit(f'//    rlag = lag % N')
+        k.emit(f'//')
+        k.emit(f'// FIXME: poorly optimized, especially in float16 case')
         k.emit()
-
-        # XXX
-        assert self.dtype == 'float'
         
         ndd = len(xnames)
         N = utils.xdiv(1024, self.nspec * self.nbits)   # number of time samples per GPU cache line, see above
@@ -229,11 +228,33 @@ class Dedisperser:
         k.emit(f'rlag_dm += (is_downsampled_tree ? gridDim.x : 0);')
         
         for i,x in enumerate(xnames):
-            rlag, tmp = k.get_tmp_rname(2)
+            rlag = k.get_tmp_rname()
             k.emit(f'uint {rlag} = (rlag_dm * ({2**self.rank-1-i} - rlag_f0)) & {N-1};   // rlag to be applied to dd{i}')
-            k.emit(f'float {tmp} = ((threadIdx.x + {rlag}) >= 32) ? dd_rlag{i} : {x};')
-            k.emit(f'dd_rlag{i} = {x};')
-            k.emit(f'{x} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag});   // rlag has now been applied to dd{i}')
+
+            if self.nbits == 32:
+                tmp = k.get_tmp_rname()
+                k.emit(f'{self.dt32} {tmp} = ((threadIdx.x + {rlag}) >= 32) ? dd_rlag{i} : {x};')
+                k.emit(f'dd_rlag{i} = {x};')
+                k.emit(f'{x} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag});   // rlag has now been applied to dd{i}')
+
+            elif self.nbits == 16:
+                rlag2, tmp, tmp2 = k.get_tmp_rname(3)
+                k.emit(f'uint {rlag2} = {rlag} >> 1;   // (rlag // 2)')
+
+                k.emit(f'if ({rlag} & 1) {{')
+                k.emit(f'    {self.dt32} {tmp} = ((threadIdx.x + {rlag2} + 1) >= 32) ? dd_rlag{i} : {x};')
+                k.emit(f'    {self.dt32} {tmp2} = ((threadIdx.x + {rlag2}) >= 32) ? dd_rlag{i} : {x};')
+                k.emit(f'    dd_rlag{i} = {x};')
+                k.emit(f'    {tmp} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag2} - 1);')
+                k.emit(f'    {tmp2} = __shfl_sync(0xffffffff, {tmp2}, threadIdx.x - {rlag2});')
+                k.emit(f'    {x} = ksgpu::f16_align({tmp}, {tmp2});')
+                k.emit(f'}}')
+                k.emit(f'else {{')
+                k.emit(f'    {self.dt32} {tmp} = ((threadIdx.x + {rlag2}) >= 32) ? dd_rlag{i} : {x};')
+                k.emit(f'    dd_rlag{i} = {x};')
+                k.emit(f'    {x} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag2});')
+                k.emit(f'}}     // rlag has now been applied to dd{i}')                
+                
             
         
     def _apply_one_sample_lags(self, k, xnames):
