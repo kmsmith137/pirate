@@ -289,11 +289,20 @@ public:
     {
 	// The low-level cuda kernel is called as:
 	//
-	// void cuda_kernel(
+	// void cuda_kernel_no_rb(
 	//     void *inbuf, long beam_istride32, int amb_istride32, int act_istride32,
 	//     void *outbuf, long beam_ostride32, int amb_ostride32, int act_ostride32,
-	//     void *pstate, int ntime, ulong nt_cumul, bool input_is_downsampled_tree
-	// );
+	//     void *pstate, int ntime, ulong nt_cumul, bool input_is_downsampled_tree);
+	//
+	// void cuda_kernel_in_rb(
+	//     void *rb_base, uint *rb_loc, long rb_pos,
+	//     void *outbuf, long beam_ostride32, int amb_ostride32, int act_ostride32,
+	//     void *pstate, int ntime, ulong nt_cumul, bool input_is_downsampled_tree);
+	//
+	// void cuda_kernel_out_rb(
+	//     void *inbuf, long beam_istride32, int amb_istride32, int act_istride32,
+	//     void *rb_base, uint *rb_loc, long rb_pos,
+	//     void *pstate, int ntime, ulong nt_cumul, bool input_is_downsampled_tree);
 	//
 	// where:
 	//
@@ -308,7 +317,7 @@ public:
 	//   - 'pstate' is an array of shape (nbeams, namb, pstate32_per_small_tree),
 	//     with 32-bit dtype (e.g. __half2 not __half).
 	//
-	//   - TODO explain 'rb_pos' and other args here.
+	//   - TODO explain 'rb_base', 'rb_loc', 'rb_pos' and other args here.
 	//
 	//   - 'input_is_downsampled_tree' has the same meaning as
 	//     DedispersionKernelParams::input_is_downsampled_tree.
@@ -316,8 +325,10 @@ public:
 	//   -  The kernel is launched with {32, warps_per_threadblock} warps
 	//      and {namb, nbeams} blocks.
 	
-	void (*cuda_kernel)(void *, long, int, int, void *, long, int, int, void *, int, ulong, bool) = nullptr;
-
+	void (*cuda_kernel_no_rb)(void *, long, int, int, void *, long, int, int, void *, int, ulong, bool) = nullptr;
+	void (*cuda_kernel_in_rb)(void *, uint *, long, void *, long, int, int, void *, int, ulong, bool) = nullptr;
+	void (*cuda_kernel_out_rb)(void *, long, int, int, void *, uint *, long, void *, int, ulong, bool) = nullptr;
+	
 	int shmem_nbytes = 0;
 	int warps_per_threadblock = 0;
 	int pstate32_per_small_tree = 0;

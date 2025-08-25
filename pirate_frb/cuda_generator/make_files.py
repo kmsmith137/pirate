@@ -63,7 +63,7 @@ def make_dd_file(nbits, apply_input_residual_lags, input_is_ringbuf, output_is_r
         k.emit()
         
         k.emit('NewGpuDedispersionKernel::RegistryValue v;')
-        k.emit(f'v.cuda_kernel = {dd.kernel_name};')
+        k.emit(f'v.cuda_kernel_no_rb = {dd.kernel_name};')
         k.emit(f'v.shmem_nbytes = {dd.shmem_nbytes};')
         k.emit(f'v.warps_per_threadblock = {dd.warps_per_threadblock};')
         k.emit(f'v.pstate32_per_small_tree = {dd.pstate32_per_small_tree};')

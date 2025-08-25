@@ -690,21 +690,45 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
     long b1 = (ibatch+1) * params.beams_per_batch;
     Array<void> pstate = this->persistent_state.slice(0, b0, b1);
     
-    // TODO: remind myself how rb_pos works
-    // long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
+    // Only used if (params.input_is_ringbuf || params.output_is_ringbuf)
+    long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
 
     dim3 grid_dims = { uint(pow2(params.amb_rank)), uint(params.beams_per_batch), 1 };
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
     ulong nt_cumul = it_chunk * params.ntime;
 
-    // NewGpuDedispersionKernel does not yet support ringbufs
-    xassert(!params.input_is_ringbuf);
-    xassert(!params.output_is_ringbuf);
-
-    this->registry_value.cuda_kernel <<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-	(in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
-	 out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
-	 pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
+    if (!params.input_is_ringbuf && !params.output_is_ringbuf) {
+	// Case 1: neither input nor output are ringbufs.
+	auto cuda_kernel = this->registry_value.cuda_kernel_no_rb;
+	xassert(cuda_kernel != nullptr);
+	    
+	cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
+	    (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
+	     out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
+	     pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
+    }
+    else if (params.input_is_ringbuf && !params.output_is_ringbuf) {
+	// Case 2: input is ringbuf.
+	auto cuda_kernel = this->registry_value.cuda_kernel_in_rb;
+	xassert(cuda_kernel != nullptr);
+	
+	cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
+	    (in.buf, gpu_ringbuf_locations.data, rb_pos,
+	     out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
+	     pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
+    }	
+    else if (!params.input_is_ringbuf && params.output_is_ringbuf) {
+	// Case 3: output is ringbuf.
+	auto cuda_kernel = this->registry_value.cuda_kernel_out_rb;
+	xassert(cuda_kernel != nullptr);
+	    
+	cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
+	    (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
+	     out.buf, gpu_ringbuf_locations.data, rb_pos,
+	     pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
+    }
+    else
+	throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
     
     CUDA_PEEK("dedispersion kernel");
 }
@@ -713,6 +737,19 @@ void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr,
 // -------------------------------------------------------------------------------------------------
 //
 // Kernel registry.
+
+
+template<typename F>
+inline void _set_shmem(F kernel, uint nbytes)
+{
+    if ((kernel != nullptr) && (nbytes > 48*1024)) {
+	CUDA_CALL(cudaFuncSetAttribute(
+	    kernel,
+	    cudaFuncAttributeMaxDynamicSharedMemorySize,
+	    nbytes
+	));
+    }
+}
 
 
 struct DedispRegistry : public KernelRegistry<NewGpuDedispersionKernel::RegistryKey, NewGpuDedispersionKernel::RegistryValue>
@@ -725,13 +762,9 @@ struct DedispRegistry : public KernelRegistry<NewGpuDedispersionKernel::Registry
 
     virtual void deferred_initialization(NewGpuDedispersionKernel::RegistryValue &val) override
     {
-	if (val.shmem_nbytes > 48*1024) {
-	    CUDA_CALL(cudaFuncSetAttribute(
-	        val.cuda_kernel,
-		cudaFuncAttributeMaxDynamicSharedMemorySize,
-		val.shmem_nbytes
-	    ));
-	}
+	_set_shmem(val.cuda_kernel_no_rb, val.shmem_nbytes);
+	_set_shmem(val.cuda_kernel_in_rb, val.shmem_nbytes);
+	_set_shmem(val.cuda_kernel_out_rb, val.shmem_nbytes);
     }
 };
 
@@ -772,7 +805,19 @@ void NewGpuDedispersionKernel::register_kernel(const RegistryKey &key, const Reg
     
     xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
     xassert(val.warps_per_threadblock > 0);
-    xassert(val.cuda_kernel != nullptr);
+
+    auto k1 = val.cuda_kernel_no_rb;
+    auto k2 = val.cuda_kernel_in_rb;
+    auto k3 = val.cuda_kernel_out_rb;
+
+    if (!key.input_is_ringbuf && !key.output_is_ringbuf)
+	xassert(k1 && !k2 && !k3);
+    else if (key.input_is_ringbuf && !key.output_is_ringbuf)
+	xassert(!k1 && k2 && !k3);
+    else if (!key.input_is_ringbuf && key.output_is_ringbuf)
+	xassert(!k1 && !k2 && k3);
+    else
+	throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
     
     return dd_registry().add(key, val, debug);
 }
