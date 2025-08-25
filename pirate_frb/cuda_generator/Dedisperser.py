@@ -22,6 +22,13 @@ class DedisperserParams:
 
 class Dedisperser:
     def __init__(self, params):
+        """
+        We distinguish notationally between three ring buffers:
+           - grb: global ring buffer, used if params.{input,output}_is_ringbuf == True
+           - srb: shared memory ring buffer, used if self.two_stage == True
+           - rrb: per-warp register ring buffer (always used).
+        """
+        
         assert isinstance(params, DedisperserParams)
 
         if params.dtype == 'float':
@@ -46,14 +53,14 @@ class Dedisperser:
         self.kernel_name += f'_orb{int(params.output_is_ringbuf)}'
         self.kernel_name += f'_s{params.nspec}'
         
-        self.ringbuf = Ringbuf(self.dt32)   # not self.dtype
+        self.rrb = Ringbuf(self.dt32)   # not self.dtype
         self.two_stage = (params.rank >= 5)
 
         if self.two_stage:
             self.rank0 = (params.rank // 2)
             self.rank1 = params.rank - self.rank0
             self.warps_per_threadblock = 2**self.rank0
-            self.shmem_nbytes = 4 * self.rb_base(2**self.rank0, 0)
+            self.shmem_nbytes = 4 * self.srb_base(2**self.rank0, 0)
             self.ndd = 2**(self.rank1)   # dedispersion "data" registers per thread
             self.static_asserts()
         else:
@@ -113,7 +120,7 @@ class Dedisperser:
             k.emit(f'outbuf[{s}] = dd{i};')
 
         k.emit('\n// Advance ring buffer for next iteration of loop')
-        self.ringbuf.advance_outer(k)
+        self.rrb.advance_outer(k)
 
         self._advance_control_words(k)      # no-ops if (self.two_stage) is False
         
@@ -123,7 +130,7 @@ class Dedisperser:
         
         k.emit('}   // outer time loop')
 
-        # Now that the Ringbuf has been finalized, we can sort out the pstate.
+        # Now that 'self.rrb' has been finalized, we can sort out the pstate.
         self._lay_out_pstate(k_pstate)    # initializes some members, including self.pstate32_per_small_tree
         self._load_pstate(k_pstate)
         self._save_pstate(k)
@@ -146,7 +153,7 @@ class Dedisperser:
         k.emit('// Write dd registers to shared memory')
 
         for i in range(self.ndd):
-            s = self._rbloc(k, i)
+            s = self._srb_loc(k, i)
             k.emit(f'shmem[{s}] = dd{i};')
 
         k.emit()
@@ -156,7 +163,7 @@ class Dedisperser:
         k.emit('// Read dd registers from shared memory')
 
         for i in range(self.ndd):
-            s = self._rbloc(k, 16+i)
+            s = self._srb_loc(k, 16+i)
             k.emit(f'dd{i} = shmem[{s}];')
 
         # One-sample lags are needed in the float16 case.
@@ -180,7 +187,7 @@ class Dedisperser:
                 lag = utils.bit_reverse(j,i)
                 k.emit(f'// dedisperse {x0}, {x1} with lag {lag}')
 
-                tmp0, tmp1 = self.ringbuf.advance2(k, x0, (lag * self.nbits) // 32)
+                tmp0, tmp1 = self.rrb.advance2(k, x0, (lag * self.nbits) // 32)
 
                 if self.dtype == '__half':
                     tdst = tmp1 if (lag % 2) else tmp0
@@ -272,7 +279,7 @@ class Dedisperser:
         for i in range(0, self.ndd, 2):  # even registers
             xprev = k.get_tmp_rname()
             k.emit(f'__half2 {xprev};   // will hold result of Ringbuf.advance(dd{i},1)')
-            self.ringbuf.advance(k, f'dd{i}', 1, dst=xprev)
+            self.rrb.advance(k, f'dd{i}', 1, dst=xprev)
             k.emit(f'dd{i} = ksgpu::f16_perm({xprev}, dd{i}, {sel});  // dd{i} has now been lagged by one sample, if needed')
         
         k.emit()
@@ -314,11 +321,11 @@ class Dedisperser:
         k.emit('// Init control words for two-stage kernel.')
         k.emit('// A ring buffer "control word" consists of:')
         k.emit('//')
-        k.emit('//   uint15 rb_base;   // base shared memory location of ring buffer (in 32-bit registers)')
-        k.emit('//   uint9  rb_pos;    // current position, satisfying 0 <= rb_pos < (rb_lag + 32)')
-        k.emit('//   uint8  rb_lag;    // ring buffer lag (in 32-bit registers), note that capacity = lag + 32.')
+        k.emit('//   uint15 srb_base;   // base shared memory location of ring buffer (in 32-bit registers)')
+        k.emit('//   uint9  srb_pos;    // current position, satisfying 0 <= srb_pos < (srb_lag + 32)')
+        k.emit('//   uint8  srb_lag;    // ring buffer lag (in 32-bit registers), note that capacity = lag + 32.')
         k.emit('//')
-        k.emit('// Depending on context, rb_pos may point to either the end of the buffer')
+        k.emit('// Depending on context, srb_pos may point to either the end of the buffer')
         k.emit('// (writer thread context), or be appropriately lagged (reader thread context).')
         k.emit('//')
         k.emit(f'// Lanes [0:{2**rank1}] hold control words for registers in the first pass:')
@@ -348,53 +355,53 @@ class Dedisperser:
         k.emit(f'uint {frev} = {2**rank1-1} - {f};   // frev')
         k.emit()
 
-        k.emit(f'// Compute (rb_lag, rb_base) from (frev, dm).')
-        k.emit(f'// This part uses some cryptic, highly optimized code from Dedisperser.rb_base()')
+        k.emit(f'// Compute (srb_lag, srb_base) from (frev, dm).')
+        k.emit(f'// This part uses some cryptic, highly optimized code from Dedisperser.srb_base()')
 
         if self.dtype == 'float':
             a = 2**(rank1-1) * (2**rank1-1)
             b = 2**(rank1+6) - a
             
-            t, rb_base, rb_lag = k.get_tmp_rname(3)
+            t, srb_base, srb_lag = k.get_tmp_rname(3)
             k.emit(f'uint {t} = {a}*{dm} + {frev}*({frev}-1) + {b};')
-            k.emit(f'uint {rb_base} = (({dm}*{t}) >> 1) + ({frev} << 5);  // rb_base')
-            k.emit(f'uint {rb_lag} = {dm}*{frev};  // rb_lag')
+            k.emit(f'uint {srb_base} = (({dm}*{t}) >> 1) + ({frev} << 5);  // srb_base')
+            k.emit(f'uint {srb_lag} = {dm}*{frev};  // srb_lag')
 
         elif self.dtype == '__half':
             a = (2**rank1 - 1) * 2**(rank1-1)
             b = (256 - 2**rank1) * 2**(rank1-1)
             c = 2**(rank1-1) + 1
 
-            u, t, rb_base, rb_lag = k.get_tmp_rname(4)
+            u, t, srb_base, srb_lag = k.get_tmp_rname(4)
             k.emit(f'uint {u} = {a}*{dm} + {frev}*({frev}-1) + {b};')
             k.emit(f'uint {t} = ({dm}*{u}) + ({dm} & 1) * ({c}-{frev});')
-            k.emit(f'uint {rb_base} = ({t} >> 2) + ({frev} << 5);  // rb_base')
-            k.emit(f'uint {rb_lag} = ({dm}*{frev}) >> 1;  // rb_lag')
+            k.emit(f'uint {srb_base} = ({t} >> 2) + ({frev} << 5);  // srb_base')
+            k.emit(f'uint {srb_lag} = ({dm}*{frev}) >> 1;  // srb_lag')
 
         else:
             raise RuntimeError('bad dtype')
 
         k.emit()
-        k.emit(f'// Compute rb_pos, and assemble control word from (rb_lag, rb_base)')
+        k.emit(f'// Compute srb_pos, and assemble control word from (srb_lag, srb_base)')
 
-        t, rb_pos = k.get_tmp_rname(2)
+        t, srb_pos = k.get_tmp_rname(2)
         rs = 5 - utils.integer_log2(self.nbits)   # right shift needed for nt_cumul -> nt_cumul32
         nt32_cumul = f'nt_cumul' if (rs==0) else f'(nt_cumul >> {rs})'
         
         k.emit(f'uint {t} = {first_pass} ? 0 : 32;')
-        k.emit(f'uint {rb_pos} = ({nt32_cumul} + {t}) % ({rb_lag} + 32U);   // rb_pos')
-        k.emit(f'uint control_word = {rb_base} | ({rb_pos} << 15) | ({rb_lag} << 24);')
+        k.emit(f'uint {srb_pos} = ({nt32_cumul} + {t}) % ({srb_lag} + 32U);   // srb_pos')
+        k.emit(f'uint control_word = {srb_base} | ({srb_pos} << 15) | ({srb_lag} << 24);')
         k.emit()
 
 
-    def _rbloc(self, k, control_lane):
-        w, rb_base, rb_pos, rb_size, wraparound, ret = k.get_tmp_rname(6)
-        k.emit(f'uint {w} = __shfl_sync(0xffffffff, control_word, {control_lane});  // rbloc({control_lane=}) starts here')
-        k.emit(f'uint {rb_base} = ({w} & 0x7fff);        // rb_base, 15 bits')
-        k.emit(f'uint {rb_pos} = (({w} >> 15) & 0x1ff) + threadIdx.x;   // rb_pos, 9 bits (note laneId at end)')
-        k.emit(f'uint {rb_size} = ({w} >> 24) + 32;      // rb_size, 8 bits (note +32 here to convert rb_lag -> rb_size')
-        k.emit(f'uint {wraparound} = ({rb_pos} >= {rb_size}) ? {rb_size} : 0;  // wraparound')
-        k.emit(f'uint {ret} = {rb_base} + {rb_pos} - {wraparound};  // rbloc({control_lane=}) return value')
+    def _srb_loc(self, k, control_lane):
+        w, srb_base, srb_pos, srb_size, wraparound, ret = k.get_tmp_rname(6)
+        k.emit(f'uint {w} = __shfl_sync(0xffffffff, control_word, {control_lane});  // srb_loc({control_lane=}) starts here')
+        k.emit(f'uint {srb_base} = ({w} & 0x7fff);        // srb_base, 15 bits')
+        k.emit(f'uint {srb_pos} = (({w} >> 15) & 0x1ff) + threadIdx.x;   // srb_pos, 9 bits (note laneId at end)')
+        k.emit(f'uint {srb_size} = ({w} >> 24) + 32;      // srb_size, 8 bits (note +32 here to convert srb_lag -> srb_size')
+        k.emit(f'uint {wraparound} = ({srb_pos} >= {srb_size}) ? {srb_size} : 0;  // wraparound')
+        k.emit(f'uint {ret} = {srb_base} + {srb_pos} - {wraparound};  // srb_loc({control_lane=}) return value')
         return ret
 
 
@@ -415,13 +422,13 @@ class Dedisperser:
 
     def _lay_out_pstate(self, k):
         RL32 = (32*self.ndd) if self.apply_input_residual_lags else 0    # registers for apply_input_residual_lags, per warp
-        RB32 = self.ringbuf.get_n32_per_warp()                           # registers for in-register ringbuf, per warp
+        RB32 = self.rrb.get_n32_per_warp()                               # registers for in-register ringbuf, per warp
         SM32 = utils.xdiv(self.shmem_nbytes,4)                           # shared memory 32-bit words, per threadblock
         W = self.warps_per_threadblock
         
         k.emit(f'// Per-threadblock persistent state layout is {self.dt32}[PS32], broken down as follows:')
-        k.emit(f'//    {self.dt32} rb_shmem[SM32];')
-        k.emit(f'//    {self.dt32} rb_registers[{W}][RL32+RB32];  // outer index is warp id')
+        k.emit(f'//    {self.dt32} srb[SM32];')
+        k.emit(f'//    {self.dt32} rrb[{W}][RL32+RB32];  // outer index is warp id')
         k.emit(f'//')
         k.emit(f'// where definitions of PS32, SM32, RL32, RB32 follow.')
         k.emit()
@@ -465,7 +472,7 @@ class Dedisperser:
         k.emit('// Read register ring buffer directly from global memory.')
         k.emit('// FIXME: would it be better to go through shared memory?')
 
-        self.ringbuf.initialize(k, wp)
+        self.rrb.initialize(k, wp)
         k.emit()
         
 
@@ -492,7 +499,7 @@ class Dedisperser:
         k.emit('// FIXME: would it be better to go through shared memory?')
         k.emit()
         
-        self.ringbuf.finalize(k, wp)
+        self.rrb.finalize(k, wp)
         k.emit()
 
 
@@ -523,10 +530,10 @@ class Dedisperser:
         
         for dm in range(2**self.rank0):
             for frev in range(2**self.rank1):
-                rb_lag = (frev * dm * self.nbits) // 32
-                rb_size = rb_lag + 32
-                rb_base = self.rb_base(dm, frev)
-                k.emit(f'//   {dm=} {frev=}: {rb_lag=} {rb_size=} {rb_base=}')
+                srb_lag = (frev * dm * self.nbits) // 32
+                srb_size = srb_lag + 32
+                srb_base = self.srb_base(dm, frev)
+                k.emit(f'//   {dm=} {frev=}: {srb_lag=} {srb_size=} {srb_base=}')
         k.emit()
     
     
@@ -536,7 +543,7 @@ class Dedisperser:
         
         for dm in range(2**self.rank0):
             for frev in range(2**self.rank1):
-                assert self.rb_base(dm,frev) == expected_pos
+                assert self.srb_base(dm,frev) == expected_pos
                 lag = (frev * dm * self.nbits) // 32
                 expected_pos += (lag + 32)
 
@@ -544,7 +551,7 @@ class Dedisperser:
         # print(f'static_asserts(rank0={self.rank0}, rank1={self.rank1}): pass')
         
 
-    def rb_base(self, dm, frev):
+    def srb_base(self, dm, frev):
         """Called by static_asserts(). Also called directly in constructor for shmem_nbytes."""
 
         assert self.two_stage
