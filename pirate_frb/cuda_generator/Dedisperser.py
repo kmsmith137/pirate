@@ -151,10 +151,10 @@ class Dedisperser:
                 k.emit(f'uint {rb_phase} = {q}.y;   // rb_phase: index of (time chunk, beam) pair, relative to current pair')
                 k.emit(f'uint {rb_len} = {q}.z;     // rb_len: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)')
                 k.emit(f'uint {rb_nseg} = {q}.w;    // rb_nseg: number of segments per (time chunk, beam)')
-                k.emit(f'{rb_phase} = ({rb_pos} + {rb_phase}) % {rb_len};   // updated rb_phase')
+                k.emit(f'{rb_phase} = (grb_pos + {rb_phase}) % {rb_len};   // updated rb_phase')
                 k.emit(f'{rb_offset} += ({rb_phase} * {rb_nseg});      // updated rb_offset')
                 k.emit(f'long {ix} = (long({rb_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
-                k.emit(f'dd{i} = rb_base[{ix}];')
+                k.emit(f'dd{i} = grb_base[{ix}];')
 
         else:
             k.emit('\n//Store data from registers to global memory')
@@ -337,6 +337,7 @@ class Dedisperser:
         if self.output_is_ringbuf:
             k.emit(f'// Apply per-thread offsets to grb_loc (output ring buffer)')
             k.emit(f'// Note: grb_loc is indexed by (tseg, f, dmbr)')
+            k.emit(f'{self.dt32} *grb_base = ({self.dt32} *) grb_base_;')
             k.emit(f'uint4 *grb_loc = (uint4 *) (grb_loc_);')
             k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // f = ambient = blockIdx.x')
             k.emit(f'grb_loc += threadIdx.y;   // warpId')
