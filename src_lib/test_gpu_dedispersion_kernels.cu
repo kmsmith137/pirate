@@ -419,19 +419,20 @@ void test_gpu_dedispersion_kernels()
 #if 0
     // Debug
     TestInstanceDK ti;
-    ti.params.dtype = Dtype::native<__half>();
-    ti.params.dd_rank = 6;
-    ti.params.amb_rank = 0;
-    ti.params.total_beams = 1;
-    ti.params.beams_per_batch = 1;
-    ti.params.ntime = 64;
+    ti.params.dtype = Dtype::native<float>();
+    ti.params.dd_rank = 3;
+    ti.params.amb_rank = 1;
+    ti.params.total_beams = 2;
+    ti.params.beams_per_batch = 2; 
+    ti.params.ntime = 128;
     ti.params.input_is_ringbuf = false;
-    ti.params.output_is_ringbuf = false;
+    ti.params.output_is_ringbuf = true;
     ti.params.apply_input_residual_lags = false;
     ti.params.input_is_downsampled_tree = true;
-    ti.params.nelts_per_segment = 64;
-    ti.nchunks = 2;
+    ti.params.nelts_per_segment = 32;
+    ti.nchunks = 1;
     ti.in_place = false;
+    ti.randomize_ringbuf();
     ti.set_contiguous_strides();
     ti.new_code = 1;
     // ti.one_hot = true;

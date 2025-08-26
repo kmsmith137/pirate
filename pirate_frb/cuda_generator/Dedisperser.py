@@ -154,7 +154,7 @@ class Dedisperser:
                 k.emit(f'{rb_phase} = (grb_pos + {rb_phase}) % {rb_len};   // updated rb_phase')
                 k.emit(f'{rb_offset} += ({rb_phase} * {rb_nseg});      // updated rb_offset')
                 k.emit(f'long {ix} = (long({rb_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
-                k.emit(f'dd{i} = grb_base[{ix}];')
+                k.emit(f'grb_base[{ix}] = dd{i};')
 
         else:
             k.emit('\n//Store data from registers to global memory')
@@ -335,12 +335,13 @@ class Dedisperser:
 
     def _apply_outbuf_offsets(self, k):
         if self.output_is_ringbuf:
-            k.emit(f'// Apply per-thread offsets to grb_loc (output ring buffer)')
+            k.emit(f'// Apply per-thread offsets to global memory ring buffer')
             k.emit(f'// Note: grb_loc is indexed by (tseg, f, dmbr)')
             k.emit(f'{self.dt32} *grb_base = ({self.dt32} *) grb_base_;')
             k.emit(f'uint4 *grb_loc = (uint4 *) (grb_loc_);')
             k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // f = ambient = blockIdx.x')
             k.emit(f'grb_loc += threadIdx.y;   // warpId')
+            k.emit(f'grb_pos += blockIdx.y;    // beam = blockIdx.y')
             k.emit()
             return
 
@@ -490,7 +491,7 @@ class Dedisperser:
     
     def _advance_grb(self, k):
         k.emit('// Advance global memory ring buffer')
-        k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // ambient = blockIdx.x')
+        k.emit(f'grb_loc += (gridDim.x << {self.rank});   // nambient = gridDim.x')
         k.emit()
         
 
