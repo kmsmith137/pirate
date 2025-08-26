@@ -8,8 +8,7 @@ class DedisperserParams:
     def __init__(self, dtype, rank, apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf, nspec):
         assert dtype in [ 'float', '__half' ]
         assert 1 <= rank <= 8
-        assert not input_is_ringbuf   # not implemented yet
-        assert not output_is_ringbuf  # not implemented yet
+        assert not (input_is_ringbuf and output_is_ringbuf)
         assert nspec == 1             # not implemented yet
         
         self.dtype = dtype
@@ -82,16 +81,21 @@ class Dedisperser:
 
         if False:   # debug
             self._show_shmem_layout_in_comment(k)
-            
+
+        # Kernel args depend on whether input/output is a ring buffer.
+        rb_args = 'void *grb_base_, uint *grb_loc_, long grb_pos'
+        in_args = rb_args if self.input_is_ringbuf else 'void *inbuf_, long beam_istride32, int amb_istride32, int act_istride32'
+        out_args = rb_args if self.output_is_ringbuf else 'void *outbuf_, long beam_ostride32, int amb_ostride32, int act_ostride32'
+        
         k.emit(f'__global__ void __launch_bounds__({32*W},{B})')
-        k.emit(f'{self.kernel_name}(void *inbuf_, long beam_istride32, int amb_istride32, int act_istride32,')
-        k.emit(f'       void *outbuf_, long beam_ostride32, int amb_ostride32, int act_ostride32,')
+        k.emit(f'{self.kernel_name}({in_args},')
+        k.emit(f'       {out_args},')
         k.emit(f'       void *pstate_, int ntime, ulong nt_cumul, bool is_downsampled_tree)')
         k.emit('{')
 
         self._apply_inbuf_offsets(k)    # apply per-thread offsets to 'inbuf' (including laneId offset)
         self._apply_outbuf_offsets(k)   # apply per-thread offsets to 'outbuf' (including laneId offset)
-        self._init_control_words(k)     # no-ops if (self.two_stage) is False
+        self._init_srb(k)               # no-ops if (self.two_stage) is False
 
         # Save splice, for code to load pstate.
         # This code must be emitted near the end, after the ring buffer layout is finalized.
@@ -100,33 +104,15 @@ class Dedisperser:
         dt = (1024 // self.nbits)
         k.emit(f'for (int itime = 0; itime < ntime; itime += {dt}) {{')
 
-        k.emit('// Load data from global memory into registers')
-        for i in range(self.ndd):
-            s = f'{i} * act_istride32' if (i > 0) else '0'
-            k.emit(f'{self.dt32} dd{i} = inbuf[{s}];')
-
+        self._load_input_data(k)              # behaves differently, depending on self.input_is_ringbuf
         self._apply_input_residual_lags(k)    # no-ops if (self.apply_input_residual_lags) is False
+        self._dedispersion_core(k)            # behaves differently, depending on self.two_stage
+        self._save_output_data(k)             # behaves differently, depending on self.output_is_ringbuf
 
-        if self.two_stage:
-            self._two_stage_dedispersion_core(k)
-        else:
-            self._single_stage_dedispersion_core(k)
-
-        k.emit('\n//Store data from registers to global memory')
-        for i in range(self.ndd):
-            # Correct for both single-stage and two-stage
-            r = (2**self.rank0) if self.two_stage else 1
-            s = f'{i*r} * act_ostride32' if (i > 0) else '0'
-            k.emit(f'outbuf[{s}] = dd{i};')
-
-        k.emit('\n// Advance ring buffer for next iteration of loop')
-        self.rrb.advance_outer(k)
-
-        self._advance_control_words(k)      # no-ops if (self.two_stage) is False
-        
-        k.emit('\n// Advance input/output pointers')
-        k.emit('inbuf += 32;')
-        k.emit('outbuf += 32;')
+        self._advance_rrb(k)
+        self._advance_srb(k)      # no-ops if (self.two_stage) is False
+        self._advance_inbuf(k)    # behaves differently, depending on self.input_is_ringbuf
+        self._advance_outbuf(k)   # behaves differently, depending on self.output_is_ringbuf
         
         k.emit('}   // outer time loop')
 
@@ -136,7 +122,55 @@ class Dedisperser:
         self._save_pstate(k)
         
         k.emit('}   // kernel')
+
         
+    def _load_input_data(self, k):
+        assert not self.input_is_ringbuf
+        k.emit('// Load data from global memory into registers')
+        for i in range(self.ndd):
+            s = f'{i} * act_istride32' if (i > 0) else '0'
+            k.emit(f'{self.dt32} dd{i} = inbuf[{s}];')
+        k.emit()
+        
+
+    def _save_output_data(self, k):
+        # "Stride" in dmbr associated with registers in same warp.
+        # This line is correct for both single-stage and two-stage kernels.
+        dstride = (2**self.rank0) if self.two_stage else 1
+
+        if self.output_is_ringbuf:
+            k.emit('\n//Store data from registers to output ringbuf')
+            k.emit('// Reminder: grb_loc is indexed by (tseg, f, dmbr)')
+            k.emit('// FIXME: terrible parallelization in this step')
+
+            for i in range(self.ndd):
+                q, rb_offset, rb_phase, rb_len, rb_nseg, ix = k.get_tmp_rname(6)
+                
+                k.emit(f'uint4 {q} = grb_loc[{i}*{dstride}];')
+                k.emit(f'uint {rb_offset} = {q}.x;  // rb_offset, in segments not bytes')
+                k.emit(f'uint {rb_phase} = {q}.y;   // rb_phase: index of (time chunk, beam) pair, relative to current pair')
+                k.emit(f'uint {rb_len} = {q}.z;     // rb_len: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)')
+                k.emit(f'uint {rb_nseg} = {q}.w;    // rb_nseg: number of segments per (time chunk, beam)')
+                k.emit(f'{rb_phase} = ({rb_pos} + {rb_phase}) % {rb_len};   // updated rb_phase')
+                k.emit(f'{rb_offset} += ({rb_phase} * {rb_nseg});      // updated rb_offset')
+                k.emit(f'long {ix} = (long({rb_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
+                k.emit(f'dd{i} = rb_base[{ix}];')
+
+        else:
+            k.emit('\n//Store data from registers to global memory')
+            for i in range(self.ndd):
+                s = f'{i*dstride} * act_ostride32' if (i > 0) else '0'
+                k.emit(f'outbuf[{s}] = dd{i};')
+        
+        k.emit()
+    
+    
+    def _dedispersion_core(self, k):
+        if self.two_stage:
+            self._two_stage_dedispersion_core(k)
+        else:
+            self._single_stage_dedispersion_core(k)
+
     
     def _single_stage_dedispersion_core(self, k):
         for i in range(self.rank):
@@ -286,6 +320,7 @@ class Dedisperser:
         
 
     def _apply_inbuf_offsets(self, k):
+        assert not self.input_is_ringbuf   # not implemented yet
         k.emit(f'// Apply per-thread offsets to inbuf (including laneId offset).')
         k.emit(f'{self.dt32} *inbuf = ({self.dt32} *) inbuf_;')
         k.emit(f'inbuf += long(beam_istride32) * long(blockIdx.y);   // beam = blockIdx.y')
@@ -299,6 +334,16 @@ class Dedisperser:
 
 
     def _apply_outbuf_offsets(self, k):
+        if self.output_is_ringbuf:
+            k.emit(f'// Apply per-thread offsets to grb_loc (output ring buffer)')
+            k.emit(f'// Note: grb_loc is indexed by (tseg, f, dmbr)')
+            k.emit(f'uint4 *grb_loc = (uint4 *) (grb_loc_);')
+            k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // f = ambient = blockIdx.x')
+            k.emit(f'grb_loc += threadIdx.y;   // warpId')
+            k.emit()
+            return
+
+        # Non-ringbuf case follows.
         k.emit(f'// Apply per-thread offsets to outbuf (including laneId offset).')
         k.emit(f'{self.dt32} *outbuf = ({self.dt32} *) outbuf_;')
         k.emit(f'outbuf += long(beam_ostride32) * long(blockIdx.y);   // beam = blockIdx.y')
@@ -311,9 +356,8 @@ class Dedisperser:
         k.emit()
 
     
-    def _init_control_words(self, k):
+    def _init_srb(self, k):
         if not self.two_stage:
-            k.emit('// Note: no control words, this is a single-stage kernel')
             return
         
         rank0, rank1 = self.rank0, self.rank1
@@ -405,20 +449,49 @@ class Dedisperser:
         return ret
 
 
-    def _advance_control_words(self, k):
+    def _advance_rrb(self, k):
+        k.emit('// Advance in-register ring buffer for next iteration of loop')
+        self.rrb.advance_outer(k)
+        k.emit()
+
+    
+    def _advance_srb(self, k):
         if not self.two_stage:
-            k.emit('// Note: no control words, this is a single-stage kernel')
             return
 
         pos15, lag15, dpos15 = k.get_tmp_rname(3)
         
-        k.emit(f'// Advance control words')
+        k.emit(f'// Advance control words (for shared memory ring buffer)')
         k.emit(f'int {pos15} = (control_word & 0xff8000);  // pos15')
         k.emit(f'int {lag15} = ((control_word >> 9) & 0xff8000);  // lag15')
         k.emit(f'int {dpos15} = ({pos15} >= {lag15}) ? {lag15} : (-(32 << 15));  // dpos15')
         k.emit(f'control_word = (control_word & 0xff007fff) | ({pos15} - {dpos15});')
         k.emit()
 
+    
+    def _advance_inbuf(self, k):
+        if self.input_is_ringbuf:
+            self._advance_grb(k)
+        else:
+            k.emit('// Advance inbuf pointer')
+            k.emit('inbuf += 32;')
+            k.emit()
+    
+
+    def _advance_outbuf(self, k):
+        if self.output_is_ringbuf:
+            self._advance_grb(k)
+        else:
+            k.emit('// Advance outbuf pointer')
+            k.emit('outbuf += 32;')
+            k.emit()
+
+    
+    def _advance_grb(self, k):
+        k.emit('// Advance global memory ring buffer')
+        k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // ambient = blockIdx.x')
+        k.emit()
+        
 
     def _lay_out_pstate(self, k):
         RL32 = (32*self.ndd) if self.apply_input_residual_lags else 0    # registers for apply_input_residual_lags, per warp

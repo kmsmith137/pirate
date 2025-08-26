@@ -562,7 +562,6 @@ shared_ptr<GpuDedispersionKernel> GpuDedispersionKernel::make(const Params &para
 //
 // NewGpuDedispersionKernel
 
-
     
 // dd_iobuf: this helper class is used in NewGpuDedispersionKenrel::launch(), to process
 // and error-check the input/output arrays.
