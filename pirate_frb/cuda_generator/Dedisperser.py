@@ -341,15 +341,8 @@ class Dedisperser:
     def _apply_inbuf_offsets(self, k):
         # FIXME cut-and-paste with _apply_outbuf_offsets()
         if self.input_is_ringbuf:
-            warp_rank = self.rank1 if self.two_stage else self.rank
-            k.emit(f'// Apply per-thread offsets to global memory ring buffer')
-            k.emit(f'// Note: grb_loc is indexed by (tseg, dm_amb, f)')
-            k.emit(f'{self.dt32} *grb_base = ({self.dt32} *) grb_base_;')
-            k.emit(f'uint4 *grb_loc = (uint4 *) (grb_loc_);')
-            k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // dm_amb = blockIdx.x')
-            k.emit(f'grb_loc += threadIdx.y << {warp_rank};   // warpId')
-            k.emit(f'grb_pos += blockIdx.y;    // beam = blockIdx.y')
-            k.emit()
+            wshift = self.rank1 if self.two_stage else self.rank
+            self._apply_ringbuf_offsets(k, wshift)
             return
         
         # Non-ringbuf case follows.
@@ -367,14 +360,7 @@ class Dedisperser:
 
     def _apply_outbuf_offsets(self, k):
         if self.output_is_ringbuf:
-            k.emit(f'// Apply per-thread offsets to global memory ring buffer')
-            k.emit(f'// Note: grb_loc is indexed by (tseg, famb, dmbr)')
-            k.emit(f'{self.dt32} *grb_base = ({self.dt32} *) grb_base_;')
-            k.emit(f'uint4 *grb_loc = (uint4 *) (grb_loc_);')
-            k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // f_amb = blockIdx.x')
-            k.emit(f'grb_loc += threadIdx.y;   // warpId')
-            k.emit(f'grb_pos += blockIdx.y;    // beam = blockIdx.y')
-            k.emit()
+            self._apply_ringbuf_offsets(k, 0)
             return
 
         # Non-ringbuf case follows.
@@ -387,6 +373,21 @@ class Dedisperser:
             k.emit(f'outbuf += long(act_ostride32) * long(threadIdx.y);   // warpId = threadIdx.y')
             
         k.emit(f'outbuf += threadIdx.x;   // laneId')
+        k.emit()
+
+
+    def _apply_ringbuf_offsets(self, k, wshift):
+        wshift = f' << {wshift}' if (wshift > 0) else ''
+        
+        k.emit(f'// Apply per-thread offsets to global memory ring buffer')
+        k.emit(f'// Note: grb_loc is indexed by (tseg, amb, active_ix)')
+        k.emit(f'// where active_ix = (freq for input ringbuf, or dmbr for output ringbuf)')
+
+        k.emit(f'{self.dt32} *grb_base = ({self.dt32} *) grb_base_;')
+        k.emit(f'uint4 *grb_loc = (uint4 *) (grb_loc_);')
+        k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // dm_amb = blockIdx.x')
+        k.emit(f'grb_loc += threadIdx.y{wshift};   // warpId')
+        k.emit(f'grb_pos += blockIdx.y;    // beam = blockIdx.y')
         k.emit()
 
     
