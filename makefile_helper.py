@@ -71,8 +71,8 @@ def generate_dedispersion_kernels():
     # return
 
     for dtype in [ 'fp32', 'fp16' ]:
-        for (ilag,orb) in [ (False,False), (True,False), (False,True) ]:    # apply_input_residual_lags, output_is_ringbuf
-            irb = False                 # input_is_ringbuf (not supported yet)
+        # apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf
+        for (ilag,irb,orb) in [ (False,False,False), (True,False,False), (False,False,True), (True,True,False) ]:
             nspec = 1                   # number of spectator indices (not supported yet)
             yield dtype, ilag, irb, orb, nspec
 
