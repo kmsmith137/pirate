@@ -128,60 +128,56 @@ class Dedisperser:
         if self.input_is_ringbuf:
             k.emit('// Load data from input ringbuf into registers.')
             k.emit('// Reminder: grb_loc is indexed by (tseg, dm_amb, f)')
-            k.emit('// FIXME: terrible parallelization in this step')
+            k.emit('// FIXME: terrible parallelization in this step (all threads do same computation!)')
 
             for i in range(self.ndd):
-                q, rb_offset, rb_phase, rb_len, rb_nseg, ix = k.get_tmp_rname(6)
-                
-                k.emit(f'uint4 {q} = grb_loc[{i}];')
-                k.emit(f'uint {rb_offset} = {q}.x;  // rb_offset, in segments not bytes')
-                k.emit(f'uint {rb_phase} = {q}.y;   // rb_phase: index of (time chunk, beam) pair, relative to current pair')
-                k.emit(f'uint {rb_len} = {q}.z;     // rb_len: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)')
-                k.emit(f'uint {rb_nseg} = {q}.w;    // rb_nseg: number of segments per (time chunk, beam)')
-                k.emit(f'{rb_phase} = (grb_pos + {rb_phase}) % {rb_len};   // updated rb_phase')
-                k.emit(f'{rb_offset} += ({rb_phase} * {rb_nseg});      // updated rb_offset')
-                k.emit(f'long {ix} = (long({rb_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
+                ix = self._grb_ix(k, i, 0)
                 k.emit(f'{self.dt32} dd{i} = grb_base[{ix}];')
 
         else:
-                k.emit('// Load data from global memory into registers')
-                for i in range(self.ndd):
-                    s = f'{i} * act_istride32' if (i > 0) else '0'
-                    k.emit(f'{self.dt32} dd{i} = inbuf[{s}];')
+            k.emit('// Load data from global memory into registers')
+            for i in range(self.ndd):
+                s = f'{i} * act_istride32' if (i > 0) else '0'
+                k.emit(f'{self.dt32} dd{i} = inbuf[{s}];')
         
         k.emit()
         
 
     def _save_output_data(self, k):
-        # "Stride" in dmbr associated with registers in same warp.
-        # This line is correct for both single-stage and two-stage kernels.
-        dstride = (2**self.rank0) if self.two_stage else 1
+        # To convert a register index to a dmbr index, apply this shift.
+        dshift = self.rank0 if self.two_stage else 0
 
         if self.output_is_ringbuf:
             k.emit('\n//Store data from registers to output ringbuf')
             k.emit('// Reminder: grb_loc is indexed by (tseg, f, dmbr)')
-            k.emit('// FIXME: terrible parallelization in this step')
+            k.emit('// FIXME: terrible parallelization in this step (all threads do same computation!)')
 
             for i in range(self.ndd):
-                q, rb_offset, rb_phase, rb_len, rb_nseg, ix = k.get_tmp_rname(6)
-                
-                k.emit(f'uint4 {q} = grb_loc[{i}*{dstride}];')
-                k.emit(f'uint {rb_offset} = {q}.x;  // rb_offset, in segments not bytes')
-                k.emit(f'uint {rb_phase} = {q}.y;   // rb_phase: index of (time chunk, beam) pair, relative to current pair')
-                k.emit(f'uint {rb_len} = {q}.z;     // rb_len: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)')
-                k.emit(f'uint {rb_nseg} = {q}.w;    // rb_nseg: number of segments per (time chunk, beam)')
-                k.emit(f'{rb_phase} = (grb_pos + {rb_phase}) % {rb_len};   // updated rb_phase')
-                k.emit(f'{rb_offset} += ({rb_phase} * {rb_nseg});      // updated rb_offset')
-                k.emit(f'long {ix} = (long({rb_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
+                ix = self._grb_ix(k, i, dshift)
                 k.emit(f'grb_base[{ix}] = dd{i};')
 
         else:
             k.emit('\n//Store data from registers to global memory')
             for i in range(self.ndd):
-                s = f'{i*dstride} * act_ostride32' if (i > 0) else '0'
-                k.emit(f'outbuf[{s}] = dd{i};')
+                k.emit(f'outbuf[({i} * act_ostride32) << {dshift}] = dd{i};')
         
         k.emit()
+
+
+    def _grb_ix(self, k, i, dshift):
+        """Helper, called by _load_input_data() and _save_output_data()."""
+        
+        q, rb_offset, rb_phase, rb_len, rb_nseg, ix = k.get_tmp_rname(6)
+                
+        k.emit(f'uint4 {q} = grb_loc[{i} << {dshift}];')
+        k.emit(f'uint {rb_offset} = {q}.x;  // rb_offset, in segments not bytes')
+        k.emit(f'uint {rb_phase} = {q}.y;   // rb_phase: index of (time chunk, beam) pair, relative to current pair')
+        k.emit(f'uint {rb_len} = {q}.z;     // rb_len: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)')
+        k.emit(f'uint {rb_nseg} = {q}.w;    // rb_nseg: number of segments per (time chunk, beam)')
+        k.emit(f'{rb_phase} = (grb_pos + {rb_phase}) % {rb_len};   // updated rb_phase')
+        k.emit(f'{rb_offset} += ({rb_phase} * {rb_nseg});      // updated rb_offset')
+        k.emit(f'long {ix} = (long({rb_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
+        return ix
     
     
     def _dedispersion_core(self, k):
