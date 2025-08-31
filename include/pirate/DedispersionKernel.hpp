@@ -111,21 +111,27 @@ struct DedispersionKernelParams
     
     int nt_per_segment = 0;
 
-    // The 'ringbuf_locations' array has shape (nsegments_per_tree, 4), where:
-    //   nsegments_per_tree = pow2(dd_rank + amb_rank) * xdiv(ntime,nt_per_segment)
+    // Notes on the DedispersionKernelParams::ringbuf_locations array:
     //
-    // The DedispersionKernelParams::ringbuf_locations array is always on the host (even for a
-    // GPU kernel). The copy from host to GPU happens in GpuDedispersionKernel::allocate()).
+    //    - Only used if (input_is_ringbuf || output_is_ringbuf).
     //
-    // The 'ringbuf_locations' array only gets used if (input_is_ringbuf || output_is_ringbuf).
+    //    - Always on the host (even for a GPU kernel). The copy from host to GPU
+    //      happens in GpuDedispersionKernel::allocate().
+    //
+    //    - Shape is (nsegments_per_tree, 4), where:
+    //       nsegments_per_tree = pow2(dd_rank + amb_rank) * xdiv(ntime,nt_per_segment)
+    //
+    //    - See DedispersionPlan.hpp for more info on array contents.
     
-    // Only used if (input_is_ringbuf || output_is_ringbuf)
     ksgpu::Array<uint> ringbuf_locations;
     long ringbuf_nseg = 0;
     
     // Throws an exception if anything is wrong.
     // Warning: validate() can be a "heavyweight" operation, since it error-checks the ringbuf_locations.
     void validate() const;
+
+    // Intended for test/timing programs.
+    void print(const char *prefix = "  ") const;
 };
 
 

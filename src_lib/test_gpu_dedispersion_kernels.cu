@@ -249,23 +249,12 @@ struct TestArrays
 static void run_test(const DedispTestInstance &tp)
 {
     const DedispersionKernelParams &p = tp.params;
-    
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
 
-    cout << "\nTest GpuDedispersionKernel\n"
-	 << "    ti.params.dtype = " << p.dtype << ";\n"
-	 << "    ti.params.dd_rank = " << p.dd_rank << ";\n"
-	 << "    ti.params.amb_rank = " << p.amb_rank << ";\n"
-	 << "    ti.params.total_beams = " << p.total_beams << ";\n"
-	 << "    ti.params.beams_per_batch = " << p.beams_per_batch << ";\n"
-	 << "    ti.params.ntime = " << p.ntime << ";\n"
-	 << "    ti.params.nspec = " << p.nspec << ";\n"
-	 << "    ti.params.input_is_ringbuf = " << (p.input_is_ringbuf ? "true" : "false")  << ";\n"
-	 << "    ti.params.output_is_ringbuf = " << (p.output_is_ringbuf ? "true" : "false")  << ";\n"
-	 << "    ti.params.apply_input_residual_lags = " << (p.apply_input_residual_lags ? "true" : "false")  << ";\n"
-	 << "    ti.params.input_is_downsampled_tree = " << (p.input_is_downsampled_tree ? "true" : "false")  << ";\n"
-	 << "    ti.params.nt_per_segment = " << p.nt_per_segment << ";\n"
-	 << "    ti.nchunks = " << tp.nchunks << ";\n"
+    cout << "\nTest GpuDedispersionKernel\n";
+    tp.params.print("    ti.params.");
+    
+    cout << "    ti.nchunks = " << tp.nchunks << ";\n"
 	 << "    ti.in_place = " << (tp.in_place ? "true" : "false") << ";\n"
 	 << "    ti.gpu_istrides = " << ksgpu::tuple_str(tp.gpu_istrides) << ";\n"
 	 << "    ti.gpu_ostrides = " << ksgpu::tuple_str(tp.gpu_ostrides) << ";\n"

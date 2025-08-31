@@ -56,6 +56,29 @@ void DedispersionKernelParams::validate() const
 }
 
 
+void DedispersionKernelParams::print(const char *prefix) const
+{
+    if (!prefix)
+	prefix = "";
+    
+    cout << prefix << "dtype = " << this->dtype << ";\n"
+	 << prefix << "dd_rank = " << this->dd_rank << ";\n"
+	 << prefix << "amb_rank = " << this->amb_rank << ";\n"
+	 << prefix << "total_beams = " << this->total_beams << ";\n"
+	 << prefix << "beams_per_batch = " << this->beams_per_batch << ";\n"
+	 << prefix << "ntime = " << this->ntime << ";\n"
+	 << prefix << "nspec = " << this->nspec << ";\n"
+	 << prefix << "input_is_ringbuf = " << (this->input_is_ringbuf ? "true" : "false")  << ";\n"
+	 << prefix << "output_is_ringbuf = " << (this->output_is_ringbuf ? "true" : "false")  << ";\n"
+	 << prefix << "apply_input_residual_lags = " << (this->apply_input_residual_lags ? "true" : "false")  << ";\n"
+	 << prefix << "input_is_downsampled_tree = " << (this->input_is_downsampled_tree ? "true" : "false")  << ";\n"
+	 << prefix << "nt_per_segment = " << this->nt_per_segment << ";\n";
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
 DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams &params, const Array<void> &arr, bool is_ringbuf_, bool on_gpu_)
 {
     this->buf = arr.data;
@@ -96,12 +119,20 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
     long T = params.ntime;
     long S = params.nspec;
 
-    bool valid1 = arr.shape_equals({B,A,N,T,S});
-    bool valid2 = (S==1) && arr.shape_equals({B,A,N,T});
+    std::initializer_list<long> shape1 = {B,A,N,T,S};
+    std::initializer_list<long> shape2 = {B,A,N,T};  // also allowed if S==1
+    
+    bool valid1 = arr.shape_equals(shape1);
+    bool valid2 = (S==1) && arr.shape_equals(shape2);
 
-    // FIXME should compose helpful error message if this assert fails.
-    xassert(valid1 || valid2);
-
+    if (!valid1 && !valid2) {
+	stringstream ss;
+	ss << "DedispersionKernelIobuf: got shape " << arr.shape_str() << ", expected shape " << ksgpu::tuple_str(shape1);
+	if (S == 1)
+	    ss << " or " << ksgpu::tuple_str(shape2);
+	throw runtime_error(ss.str());
+    }
+ 
     // Valid for both shapes.
     xassert(arr.get_ncontig() >= arr.ndim-3);
 

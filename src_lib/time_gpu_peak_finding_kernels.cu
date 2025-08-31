@@ -48,7 +48,7 @@ static void time_gpu_peak_finding_kernel(const PeakFindingKernelParams &params, 
 
     for (int i = 0; i < nouter; i++) {
 	int s = i % S;
-	cudaStreamSynchronize(streams[s]);
+	CUDA_CALL(cudaStreamSynchronize(streams[s]));
 	tv[i] = get_time();
 
 	Array<void> max_slice = out_max.slice(0,s);
