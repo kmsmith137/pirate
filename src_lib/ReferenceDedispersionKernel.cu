@@ -89,9 +89,12 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
     Array<float> in = in_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'in' array");
     Array<float> out = out_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'out' array");
 
+    // Reshape "simple" bufs to 4-d.
+    in = params.input_is_ringbuf ? in : in.reshape({B,A,N,T*S});
+    out = params.output_is_ringbuf ? out : out.reshape({B,A,N,T*S});
+
     long rb_pos = it_chunk * params.total_beams + (ibatch * params.beams_per_batch);
     Array<float> dd = params.output_is_ringbuf ? in : out;
-    dd = dd.reshape({B,A,N,T*S});   // reshape to 4-d
 
     if (params.input_is_ringbuf)
 	_copy_from_ringbuf(in, dd, rb_pos);

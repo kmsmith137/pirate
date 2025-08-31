@@ -47,6 +47,7 @@ struct DedispTestInstance
     long one_hot_iamb = 0;      // 0 <= iamb < pow2(params.amb_rank)
     long one_hot_iact = 0;      // 0 <= iact < pow2(params.dd_rank)
     long one_hot_itime = 0;     // 0 <= itime < params.ntime
+    long one_hot_ispec = 0;     // 0 <= ispec < params.nspec
 
     
     void randomize()
@@ -74,7 +75,7 @@ struct DedispTestInstance
 	this->nchunks = rand_int(1, cmax+1);
 
 	// pow2(amb_rank), (total_beams/beams_per_batch), beams_per_batch
-	long pmax = max_nelts / (pow2(params.dd_rank) * params.ntime * nchunks);
+	long pmax = max_nelts / (nchunks * pow2(params.dd_rank) * params.ntime * params.nspec);
 	pmax = max(pmax, 4L);
 	pmax = min(pmax, 42L);
 	
@@ -149,23 +150,21 @@ struct DedispTestInstance
 
     void randomize_strides()
     {
-	xassert(params.nspec == 1);  // FIXME for now
-	
 	// Dedispersion buffer strides (note that ringbufs are always contiguous).
-	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime };
-	this->cpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nt_per_segment);
-	this->gpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nt_per_segment);
-	this->cpu_ostrides = in_place ? cpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nt_per_segment);
-	this->gpu_ostrides = in_place ? gpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nt_per_segment);
+	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime, params.nspec };
+	long nalign = params.nt_per_segment * params.nspec;
+	
+	this->cpu_istrides = ksgpu::make_random_strides(small_shape, 2, nalign);
+	this->gpu_istrides = ksgpu::make_random_strides(small_shape, 2, nalign);
+	this->cpu_ostrides = in_place ? cpu_istrides : ksgpu::make_random_strides(small_shape, 2, nalign);
+	this->gpu_ostrides = in_place ? gpu_istrides : ksgpu::make_random_strides(small_shape, 2, nalign);
     }
 
 
     void set_contiguous_strides()
     {
-	xassert(params.nspec == 1);  // FIXME for now
-	
 	// Dedispersion buffer strides (note that ringbufs are always contiguous).
-	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime };
+	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime, params.nspec };
 	vector<long> strides = ksgpu::make_contiguous_strides(small_shape);
 	
 	this->cpu_istrides = strides;
@@ -193,13 +192,12 @@ struct TestArrays
     {
 	const DedispersionKernelParams &p = tp.params;
 	int aflags = (on_gpu ? af_gpu : af_rhost) | af_zero;
-	xassert(p.nspec == 1);   // FIXME for now
 	
 	vector<long> rb_shape = { p.ringbuf_nseg * p.nt_per_segment * p.nspec };
-	vector<long> big_dshape = { p.total_beams, pow2(p.amb_rank), pow2(p.dd_rank), tp.nchunks * p.ntime };
+	vector<long> big_dshape = { p.total_beams, pow2(p.amb_rank), pow2(p.dd_rank), tp.nchunks * p.ntime, p.nspec };
 	vector<long> big_ishape = p.input_is_ringbuf ? rb_shape : big_dshape;
 	vector<long> big_oshape = p.output_is_ringbuf ? rb_shape : big_dshape;
-	vector<long> chunk_dshape = { p.beams_per_batch, pow2(p.amb_rank), pow2(p.dd_rank), p.ntime };
+	vector<long> chunk_dshape = { p.beams_per_batch, pow2(p.amb_rank), pow2(p.dd_rank), p.ntime, p.nspec };
 	vector<long> chunk_istrides = on_gpu ? tp.gpu_istrides : tp.cpu_istrides;
 	vector<long> chunk_ostrides = on_gpu ? tp.gpu_ostrides : tp.cpu_ostrides;
 
@@ -253,7 +251,6 @@ static void run_test(const DedispTestInstance &tp)
     const DedispersionKernelParams &p = tp.params;
     
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
-    xassert(p.nspec == 1);  // FIXME for now
 
     cout << "\nTest GpuDedispersionKernel\n"
 	 << "    ti.params.dtype = " << p.dtype << ";\n"
@@ -273,8 +270,7 @@ static void run_test(const DedispTestInstance &tp)
 	 << "    ti.gpu_istrides = " << ksgpu::tuple_str(tp.gpu_istrides) << ";\n"
 	 << "    ti.gpu_ostrides = " << ksgpu::tuple_str(tp.gpu_ostrides) << ";\n"
 	 << "    ti.cpu_istrides = " << ksgpu::tuple_str(tp.cpu_istrides) << ";\n"
-	 << "    ti.cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides) << ";\n"
-	 << endl;
+	 << "    ti.cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides) << ";\n";
 
     if (tp.one_hot) {
 	cout << "    ti.one_hot = true\n"
@@ -282,10 +278,9 @@ static void run_test(const DedispTestInstance &tp)
 	     << "    ti.one_hot_ibeam = " << tp.one_hot_ibeam << "\n"
 	     << "    ti.one_hot_iamb = " << tp.one_hot_iamb << "\n"
 	     << "    ti.one_hot_iact = " << tp.one_hot_iact << "\n"
-	     << "    ti.one_hot_itime = " << tp.one_hot_itime
-	     << endl;
+	     << "    ti.one_hot_itime = " << tp.one_hot_itime << "\n"
+	     << "    ti.one_hot_ispec = " << tp.one_hot_ispec << "\n";
     }
-
     
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
     shared_ptr<GpuDedispersionKernel> gpu_kernel;
@@ -310,14 +305,16 @@ static void run_test(const DedispTestInstance &tp)
 	xassert((tp.one_hot_iamb >= 0) && (tp.one_hot_iamb < pow2(p.amb_rank)));
 	xassert((tp.one_hot_iact >= 0) && (tp.one_hot_iact < pow2(p.dd_rank)));
 	xassert((tp.one_hot_itime >= 0) && (tp.one_hot_itime < p.ntime));
+	xassert((tp.one_hot_ispec >= 0) && (tp.one_hot_ispec < p.nspec));
 
 	long b = tp.one_hot_ibeam;
 	long a = tp.one_hot_iamb;
 	long d = tp.one_hot_iact;
 	long t = tp.one_hot_ichunk * p.ntime + tp.one_hot_itime;
+	long s = tp.one_hot_ispec;
 
 	Array<float> dst = cpu_arrs.big_inbuf.cast<float>();
-	dst.at({b,a,d,t}) = 1.0f;
+	dst.at({b,a,d,t,s}) = 1.0f;
     }
 
     // Copy (cpu_arrs.big_inbuf) -> (gpu_arrs.big_inbuf), converting dtype if necessary.
@@ -349,7 +346,7 @@ static void run_test(const DedispTestInstance &tp)
     if (p.output_is_ringbuf)
 	ksgpu::assert_arrays_equal(cpu_arrs.big_outbuf, gpu_arrs.big_outbuf, "cpu", "gpu", {"i"}, epsabs, epsrel);
     else
-	ksgpu::assert_arrays_equal(cpu_arrs.big_outbuf, gpu_arrs.big_outbuf, "cpu", "gpu", {"beam","amb","dmbr","time"}, epsabs, epsrel);
+	ksgpu::assert_arrays_equal(cpu_arrs.big_outbuf, gpu_arrs.big_outbuf, "cpu", "gpu", {"beam","amb","dmbr","time","spec"}, epsabs, epsrel);
 }
 
 
