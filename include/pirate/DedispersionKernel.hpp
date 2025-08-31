@@ -159,18 +159,18 @@ struct ReferenceDedispersionKernel
 
 // -------------------------------------------------------------------------------------------------
 //
-// NewGpuDedispersionKernel
+// GpuDedispersionKernel
 
 
-// The NewGpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
+// The GpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
 // but internally allocates and manages its persistent state.
 
-class NewGpuDedispersionKernel
+class GpuDedispersionKernel
 {
     using Params = DedispersionKernelParams;
     
 public:
-    NewGpuDedispersionKernel(const Params &params);
+    GpuDedispersionKernel(const Params &params);
     
     Params params;   // reminder: contains 'ringbuf_locations' array on host (not GPU!)
     bool is_allocated = false;
@@ -196,7 +196,7 @@ public:
 
     long nbatches = 0;   // = (total_beams / beams_per_batch)
     
-    // Bandwidth per call to NewGpuDedispersionKernel::launch().
+    // Bandwidth per call to GpuDedispersionKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
     BandwidthTracker bw_per_launch;
 
@@ -284,8 +284,8 @@ public:
 
 
 // Defined in GpuDedispersionKernel.cu
-extern bool operator==(const NewGpuDedispersionKernel::RegistryKey &k1, const NewGpuDedispersionKernel::RegistryKey &k2);
-extern std::ostream &operator<<(std::ostream &os, const NewGpuDedispersionKernel::RegistryKey &k);
+extern bool operator==(const GpuDedispersionKernel::RegistryKey &k1, const GpuDedispersionKernel::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const GpuDedispersionKernel::RegistryKey &k);
 
 
 }  // namespace pirate

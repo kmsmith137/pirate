@@ -20,7 +20,7 @@ namespace pirate {
 #endif
 
     
-// dd_iobuf: this helper class is used in NewGpuDedispersionKenrel::launch(), to process
+// dd_iobuf: this helper class is used in GpuDedispersionKenrel::launch(), to process
 // and error-check the input/output arrays.
 //
 // Recall that the 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
@@ -83,7 +83,7 @@ struct dd_iobuf
 };
 
 
-NewGpuDedispersionKernel::NewGpuDedispersionKernel(const Params &params_) :
+GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
     params.validate(true);        // on_gpu=true
@@ -107,10 +107,10 @@ NewGpuDedispersionKernel::NewGpuDedispersionKernel(const Params &params_) :
 }
 
 
-void NewGpuDedispersionKernel::allocate()
+void GpuDedispersionKernel::allocate()
 {
     if (is_allocated)
-	throw runtime_error("double call to NewGpuDedispersionKernel::allocate()");
+	throw runtime_error("double call to GpuDedispersionKernel::allocate()");
     
     // Note 'af_zero' flag here.
     long ninner = registry_value.pstate32_per_small_tree * xdiv(32, params.dtype.nbits);
@@ -131,7 +131,7 @@ void NewGpuDedispersionKernel::allocate()
 }
 
 
-void NewGpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long it_chunk, cudaStream_t stream)
+void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long it_chunk, cudaStream_t stream)
 {
     xassert(this->is_allocated);
     xassert((ibatch >= 0) && (ibatch < nbatches));
@@ -208,7 +208,7 @@ inline void _set_shmem(F kernel, uint nbytes)
 }
 
 
-struct DedispRegistry : public KernelRegistry<NewGpuDedispersionKernel::RegistryKey, NewGpuDedispersionKernel::RegistryValue>
+struct DedispRegistry : public KernelRegistry<GpuDedispersionKernel::RegistryKey, GpuDedispersionKernel::RegistryValue>
 {
     // Setting shared memory size is "deferred" from when the kernel is registered, to when
     // the kernel is first used. Deferring is important, since cudaFuncSetAttribute() creates
@@ -216,7 +216,7 @@ struct DedispRegistry : public KernelRegistry<NewGpuDedispersionKernel::Registry
     // if deferred. (Here, "hard-to-debug" means that the call appears to succeed, but an
     // unrelated kernel launch will fail later with error 400 ("invalid resource handle").)
 
-    virtual void deferred_initialization(NewGpuDedispersionKernel::RegistryValue &val) override
+    virtual void deferred_initialization(GpuDedispersionKernel::RegistryValue &val) override
     {
 	_set_shmem(val.cuda_kernel_no_rb, val.shmem_nbytes);
 	_set_shmem(val.cuda_kernel_in_rb, val.shmem_nbytes);
@@ -240,13 +240,13 @@ static DedispRegistry &dd_registry()
 
 
 // Static member function.
-NewGpuDedispersionKernel::RegistryValue NewGpuDedispersionKernel::query_registry(const RegistryKey &k)
+GpuDedispersionKernel::RegistryValue GpuDedispersionKernel::query_registry(const RegistryKey &k)
 {
     return dd_registry().query(k);
 }
 
 // Static member function.
-NewGpuDedispersionKernel::RegistryKey NewGpuDedispersionKernel::get_random_registry_key()
+GpuDedispersionKernel::RegistryKey GpuDedispersionKernel::get_random_registry_key()
 {
     return dd_registry().get_random_key();
 }
@@ -254,7 +254,7 @@ NewGpuDedispersionKernel::RegistryKey NewGpuDedispersionKernel::get_random_regis
 
 // Static member function for adding to the registry.
 // Called during library initialization, from source files with gpu kernels.
-void NewGpuDedispersionKernel::register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug)
+void GpuDedispersionKernel::register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug)
 {
     // Just check that all members have been initialized.
     // (In the future, I may add more argument checking here.)
@@ -279,7 +279,7 @@ void NewGpuDedispersionKernel::register_kernel(const RegistryKey &key, const Reg
 }
 
 
-bool operator==(const NewGpuDedispersionKernel::RegistryKey &k1, const NewGpuDedispersionKernel::RegistryKey &k2)
+bool operator==(const GpuDedispersionKernel::RegistryKey &k1, const GpuDedispersionKernel::RegistryKey &k2)
 {
     return (k1.dtype == k2.dtype) &&
 	(k1.rank == k2.rank) &&
@@ -289,7 +289,7 @@ bool operator==(const NewGpuDedispersionKernel::RegistryKey &k1, const NewGpuDed
 }
 
 
-ostream &operator<<(ostream &os, const NewGpuDedispersionKernel::RegistryKey &k)
+ostream &operator<<(ostream &os, const GpuDedispersionKernel::RegistryKey &k)
 {
     os << "GpuDedispersionKernel(dtype=" << k.dtype
        << ", rank=" << k.rank

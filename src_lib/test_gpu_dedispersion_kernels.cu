@@ -55,7 +55,7 @@ struct TestInstanceDK
     void randomize()
     {
 	const long max_nelts = 100 * 1000 * 1000;
-	auto k = NewGpuDedispersionKernel::get_random_registry_key();
+	auto k = GpuDedispersionKernel::get_random_registry_key();
 	
 	params.dtype = k.dtype;
 	params.dd_rank = k.rank;
@@ -230,9 +230,9 @@ static void run_test(const TestInstanceDK &tp)
     }
     
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
-    shared_ptr<NewGpuDedispersionKernel> gpu_kernel;
+    shared_ptr<GpuDedispersionKernel> gpu_kernel;
 
-    gpu_kernel = make_shared<NewGpuDedispersionKernel> (p);
+    gpu_kernel = make_shared<GpuDedispersionKernel> (p);
     gpu_kernel->allocate();
 
     // Array allocation starts here.

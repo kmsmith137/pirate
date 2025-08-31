@@ -54,7 +54,7 @@ def make_dd_file(nbits, apply_input_residual_lags, input_is_ringbuf, output_is_r
         k.emit(f'register_hack{rank}() {{')
         k.emit()
     
-        k.emit('NewGpuDedispersionKernel::RegistryKey k;')
+        k.emit('GpuDedispersionKernel::RegistryKey k;')
         k.emit(f'k.dtype = ksgpu::Dtype::native<{dtype}>();')
         k.emit(f'k.rank = {rank};')
         k.emit(f'k.input_is_ringbuf = {tf(input_is_ringbuf)};')
@@ -62,7 +62,7 @@ def make_dd_file(nbits, apply_input_residual_lags, input_is_ringbuf, output_is_r
         k.emit(f'k.apply_input_residual_lags = {tf(apply_input_residual_lags)};')
         k.emit()
         
-        k.emit('NewGpuDedispersionKernel::RegistryValue v;')
+        k.emit('GpuDedispersionKernel::RegistryValue v;')
         k.emit(f'v.shmem_nbytes = {dd.shmem_nbytes};')
         k.emit(f'v.warps_per_threadblock = {dd.warps_per_threadblock};')
         k.emit(f'v.pstate32_per_small_tree = {dd.pstate32_per_small_tree};')
@@ -79,7 +79,7 @@ def make_dd_file(nbits, apply_input_residual_lags, input_is_ringbuf, output_is_r
         k.emit()
         
         k.emit(f'bool debug = false;')
-        k.emit(f'NewGpuDedispersionKernel::register_kernel(k,v,debug);')
+        k.emit(f'GpuDedispersionKernel::register_kernel(k,v,debug);')
         k.emit()
     
         k.emit(f'}}   // register_hack{rank} constructor')

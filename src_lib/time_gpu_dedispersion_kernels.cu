@@ -35,11 +35,11 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
     params.input_is_downsampled_tree = false;  // shouldn't affect timing
     params.nelts_per_segment = xdiv(1024, dtype.nbits);
 
-    vector<shared_ptr<NewGpuDedispersionKernel>> kernels(nstreams);
+    vector<shared_ptr<GpuDedispersionKernel>> kernels(nstreams);
     vector<int> itime(nstreams, 0);
 
     for (int i = 0; i < nstreams; i++) {
-	kernels[i] = make_shared<NewGpuDedispersionKernel> (params);
+	kernels[i] = make_shared<GpuDedispersionKernel> (params);
 	kernels[i]->allocate();
     }
 

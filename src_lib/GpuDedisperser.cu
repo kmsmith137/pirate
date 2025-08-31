@@ -66,13 +66,13 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     }
 
     for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
-	auto kernel = make_shared<NewGpuDedispersionKernel> (kparams);
+	auto kernel = make_shared<GpuDedispersionKernel> (kparams);
 	this->stage1_dd_kernels.push_back(kernel);
 	this->bw_per_launch += kernel->bw_per_launch;
     }
 
     for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params) {
-	auto kernel = make_shared<NewGpuDedispersionKernel> (kparams);
+	auto kernel = make_shared<GpuDedispersionKernel> (kparams);
 	this->stage2_dd_kernels.push_back(kernel);
 	this->bw_per_launch += kernel->bw_per_launch;
     }
@@ -126,7 +126,7 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
 
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
     for (uint i = 0; i < stage1_dd_kernels.size(); i++) {
-	shared_ptr<NewGpuDedispersionKernel> kernel = stage1_dd_kernels.at(i);
+	shared_ptr<GpuDedispersionKernel> kernel = stage1_dd_kernels.at(i);
 	const DedispersionKernelParams &kp = kernel->params;
 	Array<void> dd_buf = stage1_dd_bufs.at(istream).bufs.at(i);
 
@@ -175,7 +175,7 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
     
     // Step 5: run stage2 dedispersion kernels (input from ringbuf)
     for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
-	shared_ptr<NewGpuDedispersionKernel> kernel = stage2_dd_kernels.at(i);
+	shared_ptr<GpuDedispersionKernel> kernel = stage2_dd_kernels.at(i);
 	const DedispersionKernelParams &kp = kernel->params;
 	Array<void> dd_buf = stage2_dd_bufs.at(istream).bufs.at(i);
 
