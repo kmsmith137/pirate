@@ -35,11 +35,11 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
     params.input_is_downsampled_tree = false;  // shouldn't affect timing
     params.nelts_per_segment = xdiv(1024, dtype.nbits);
 
-    vector<shared_ptr<GpuDedispersionKernel>> kernels(nstreams);
+    vector<shared_ptr<NewGpuDedispersionKernel>> kernels(nstreams);
     vector<int> itime(nstreams, 0);
 
     for (int i = 0; i < nstreams; i++) {
-	kernels[i] = GpuDedispersionKernel::make(params);
+	kernels[i] = make_shared<NewGpuDedispersionKernel> (params);
 	kernels[i]->allocate();
     }
 
@@ -47,7 +47,7 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
 
     long elt_size = xdiv(dtype.nbits, 8);
     long iobuf_bytes_per_stream = nbeams * pow2(amb_rank + dd_rank) * ntime * elt_size;
-    long rstate_bytes_per_stream = nbeams * kernels[0]->state_nelts_per_beam * elt_size;
+    long rstate_bytes_per_stream = nbeams * pow2(amb_rank) * kernels[0]->registry_value.pstate32_per_small_tree * 4;
     double gmem_gb = 2.0e-9 * niter * (iobuf_bytes_per_stream + rstate_bytes_per_stream);  // factor 2 from read+write
     
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)

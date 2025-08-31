@@ -18,7 +18,7 @@ namespace pirate {
 
 
 struct DedispersionPlan;              // defined in DedispersionPlan.hpp
-struct GpuDedispersionKernel;         // defined in DedispersionKernel.hpp
+struct NewGpuDedispersionKernel;         // defined in DedispersionKernel.hpp
 struct GpuLaggedDownsamplingKernel;   // defined in LaggedDownsamplingKernel.hpp
 struct CpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
 struct GpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
@@ -60,8 +60,8 @@ struct GpuDedisperser
     ksgpu::Array<void> gpu_ringbuf;
     ksgpu::Array<void> host_ringbuf;
 
-    std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
-    std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
+    std::vector<std::shared_ptr<NewGpuDedispersionKernel>> stage1_dd_kernels;
+    std::vector<std::shared_ptr<NewGpuDedispersionKernel>> stage2_dd_kernels;
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
     bool is_allocated = false;
 

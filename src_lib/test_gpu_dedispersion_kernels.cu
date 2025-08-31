@@ -24,7 +24,6 @@ struct TestInstanceDK
 {
     // Reminder: includes 'dtype', 'input_is_ringbuf', 'output_is_ringbuf'.
     DedispersionKernelParams params;
-    bool new_code = false;
 
     long nchunks = 0;
 
@@ -53,79 +52,7 @@ struct TestInstanceDK
     long one_hot_itime = 0;     // 0 <= itime < params.ntime
 
     
-    void randomize_old()
-    {
-	const long max_nelts = 100 * 1000 * 1000;
-	this->new_code = false;
-
-	// Initialize:
-	//  params.input_is_ringbuf
-	//  params.output_is_ringbuf
-	//  params.apply_input_residual_lags
-	//  this->in_place
-
-	if (rand_uniform() < 0.33) {
-	     params.input_is_ringbuf = true;
-	     params.output_is_ringbuf = false;
-	     params.apply_input_residual_lags = true;
-	     this->in_place = false;
-	}
-	else if (rand_uniform() < 0.67) {
-	    params.input_is_ringbuf = false;
-	    params.output_is_ringbuf = true;
-	    params.apply_input_residual_lags = false;
-	    this->in_place = false;
-	}
-	else {
-	    params.input_is_ringbuf = false;
-	    params.output_is_ringbuf = false;
-	    params.apply_input_residual_lags = (rand_uniform() < 0.5);
-	    this->in_place = (rand_uniform() < 0.5);
-	}
-	
-	// Initialize:
-	//   params.dtype
-	//   params.input_is_downsampled_tree
-	//   params.nelts_per_segment
-	//   params.dd_rank
-	//   params.amb_rank
-	//   params.ntime
-	//   params.total_beams
-	//   params.beams_per_batch
-	//   this->nchunks
-	
-	bool is_float32 = (rand_uniform() < 0.5);
-	params.dtype = is_float32 ? Dtype::native<float>() : Dtype::native<__half>();
-	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
-
-	params.nelts_per_segment = is_float32 ? 32 : 64;
-	params.dd_rank = rand_int(1, 9);
-
-	long nchan = pow2(params.dd_rank);
-	params.ntime = rand_int(1, 2*nchan + 2*params.nelts_per_segment);
-	params.ntime = align_up(params.ntime, params.nelts_per_segment);
-
-	long cmax = (10*nchan + 10*params.ntime) / params.ntime;
-	nchunks = rand_int(1, cmax+1);
-	
-	// pow2(amb_rank), (total_beams/beams_per_batch), beams_per_batch
-	long pmax = max_nelts / (pow2(params.dd_rank) * params.ntime * nchunks);
-	pmax = max(pmax, 4L);
-	pmax = min(pmax, 42L);
-
-	auto v = ksgpu::random_integers_with_bounded_product(4, pmax);
-	params.amb_rank = int(log2(v[0]) + 0.99999);  // round up
-	params.total_beams = v[1] * v[2];
-	params.beams_per_batch = v[2];
-
-	if (params.input_is_ringbuf || params.output_is_ringbuf)
-	    randomize_ringbuf();
-
-	randomize_strides();
-    }
-
-    
-    void randomize_new()
+    void randomize()
     {
 	const long max_nelts = 100 * 1000 * 1000;
 	auto k = NewGpuDedispersionKernel::get_random_registry_key();
@@ -138,7 +65,6 @@ struct TestInstanceDK
 	params.input_is_downsampled_tree = (rand_uniform() < 0.5);
 	params.nelts_per_segment = xdiv(8 * constants::bytes_per_gpu_cache_line, params.dtype.nbits);
 	
-	this->new_code = true;
 	this->in_place = !params.input_is_ringbuf && !params.output_is_ringbuf && (rand_uniform() < 0.5);
 
 	long nchan = pow2(params.dd_rank);
@@ -161,12 +87,7 @@ struct TestInstanceDK
 	if (params.input_is_ringbuf || params.output_is_ringbuf)
 	    randomize_ringbuf();
 
-	// Dedispersion buffer strides (note that ringbufs are always contiguous).
-	vector<long> small_shape = { params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime };
-	this->cpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->gpu_istrides = ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->cpu_ostrides = in_place ? cpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
-	this->gpu_ostrides = in_place ? gpu_istrides : ksgpu::make_random_strides(small_shape, 1, params.nelts_per_segment);
+	randomize_strides();
     }
 
 
@@ -296,7 +217,6 @@ static void run_test(const TestInstanceDK &tp)
 	 << "    ti.gpu_ostrides = " << ksgpu::tuple_str(tp.gpu_ostrides) << ";\n"
 	 << "    ti.cpu_istrides = " << ksgpu::tuple_str(tp.cpu_istrides) << ";\n"
 	 << "    ti.cpu_ostrides = " << ksgpu::tuple_str(tp.cpu_ostrides) << ";\n"
-	 << "    ti.new_code = " << tp.new_code << ";"
 	 << endl;
 
     if (tp.one_hot) {
@@ -310,17 +230,10 @@ static void run_test(const TestInstanceDK &tp)
     }
     
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (p);
-    shared_ptr<GpuDedispersionKernel> old_gpu_kernel;
-    shared_ptr<NewGpuDedispersionKernel> new_gpu_kernel;
+    shared_ptr<NewGpuDedispersionKernel> gpu_kernel;
 
-    if (tp.new_code) {
-	new_gpu_kernel = make_shared<NewGpuDedispersionKernel> (p);
-	new_gpu_kernel->allocate();
-    }
-    else {
-	old_gpu_kernel = GpuDedispersionKernel::make(p);
-	old_gpu_kernel->allocate();
-    }
+    gpu_kernel = make_shared<NewGpuDedispersionKernel> (p);
+    gpu_kernel->allocate();
 
     // Array allocation starts here.
     // "Big" arrays can be either ringbufs, or "big" dedispersion bufs.
@@ -390,10 +303,7 @@ static void run_test(const TestInstanceDK &tp)
 		gpu_in.fill(t);
 	    }
 
-	    if (tp.new_code)
-		new_gpu_kernel->launch(gpu_in, gpu_out, ibatch, ichunk, nullptr);  // stream=nullptr
-	    else
-		old_gpu_kernel->launch(gpu_in, gpu_out, ibatch, ichunk, nullptr);  // stream=nullptr
+	    gpu_kernel->launch(gpu_in, gpu_out, ibatch, ichunk, nullptr);  // stream=nullptr
 
 	    if (!p.output_is_ringbuf) {
 		t = gpu_out_big.slice(0, ibatch * p.beams_per_batch, (ibatch+1) * p.beams_per_batch);
@@ -434,7 +344,6 @@ void test_gpu_dedispersion_kernels()
     ti.in_place = false;
     ti.randomize_ringbuf();
     ti.set_contiguous_strides();
-    ti.new_code = 1;
     // ti.one_hot = true;
     // ti.one_hot_iact = 0;   // rand_int(0, pow2(ti.params.dd_rank));
     // ti.one_hot_itime = 0;  // rand_int(0, ti.params.ntime);
@@ -442,15 +351,9 @@ void test_gpu_dedispersion_kernels()
 #endif    
 
 #if 1
-    TestInstanceDK ti_old;
-    ti_old.randomize_old();
-    run_test(ti_old);
-#endif
-
-#if 1
-    TestInstanceDK ti_new;
-    ti_new.randomize_new();
-    run_test(ti_new);
+    TestInstanceDK ti;
+    ti.randomize();
+    run_test(ti);
 #endif
 }
 
