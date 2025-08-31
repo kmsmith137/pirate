@@ -32,8 +32,9 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
     params(params_)
 {
     params.dtype = Dtype::native<float>();
-    params.validate(false);    // gpu_kernel=false
+    params.validate();
 
+    xassert(params.nspec == 1);   // for now!
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
     long B = params.beams_per_batch;
@@ -49,11 +50,6 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 	return;
 
     // Remaining code initializes this->rlag_bufs (only if params.apply_input_residual_lags == false).
-
-    if (params.nelts_per_segment <= 0) {
-	throw runtime_error("ReferenceDedispersionKernel: if params.apply_input_residual_lags==true,"
-			    " then params.nelts_per_segment must be initialized and > 0" );
-    }
     
     Array<int> rlags({B,A,F}, af_uhost);
     
@@ -63,7 +59,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 	    // Index 'f' represents a fine frequency.
 	    for (long f = 0; f < F; f++) {
 		long lag = rb_lag(f, a, params.amb_rank, params.dd_rank, params.input_is_downsampled_tree);
-		rlags.data[b*A*F + a*F + f] = lag % params.nelts_per_segment;  // residual lag
+		rlags.data[b*A*F + a*F + f] = (lag % params.nt_per_segment) * params.nspec;  // residual lag
 	    }
 	}
     }
@@ -80,25 +76,22 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
     long A = pow2(params.amb_rank);
     long N = pow2(params.dd_rank);
     long T = params.ntime;
-    long R = params.ringbuf_nseg;
-    long S = params.nelts_per_segment;
-
-    std::initializer_list<long> dd_shape = {B,A,N,T};
-    std::initializer_list<long> rb_shape = {R*S};
+    long S = params.nspec;
+    
+    // Error checking, shape checking.
+    DedispersionKernelIobuf inbuf(params, in_, params.input_is_ringbuf, false);     // on_gpu=false
+    DedispersionKernelIobuf outbuf(params, out_, params.output_is_ringbuf, false);  // on_gpu=false
+    
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(it_chunk >= 0);
 
     // The reference kernel uses float32, regardless of what dtype is specified.
     Array<float> in = in_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'in' array");
     Array<float> out = out_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'out' array");
-    
-    xassert(in.on_host());
-    xassert(out.on_host());
-    xassert(in.shape_equals(params.input_is_ringbuf ? rb_shape : dd_shape));
-    xassert(out.shape_equals(params.output_is_ringbuf ? rb_shape : dd_shape));
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(it_chunk >= 0);
-    
+
     long rb_pos = it_chunk * params.total_beams + (ibatch * params.beams_per_batch);
     Array<float> dd = params.output_is_ringbuf ? in : out;
+    dd = dd.reshape({B,A,N,T*S});   // reshape to 4-d
 
     if (params.input_is_ringbuf)
 	_copy_from_ringbuf(in, dd, rb_pos);
@@ -113,7 +106,7 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
     if (params.output_is_ringbuf)
 	_copy_to_ringbuf(dd, out, rb_pos);
     else
-	xassert(out.data == dd.data);
+	xassert(out.data == dd.data);   // FIXME in-place assumed
 }
 
 
@@ -123,19 +116,21 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
     long A = pow2(params.amb_rank);
     long N = pow2(params.dd_rank);
     long T = params.ntime;
+    long S = params.nspec;
     long R = params.ringbuf_nseg;
-    long S = params.nelts_per_segment;
-    long ns = xdiv(T,S);
+    long RS = params.nt_per_segment * params.nspec;
+    long ns = xdiv(T, params.nt_per_segment);
 
-    xassert_shape_eq(in, ({B,A,N,T}));  // dedispersion buffer
-    xassert_shape_eq(out, ({R*S}));     // ringbuf
+    xassert_shape_eq(in, ({B,A,N,T*S}));  // dedispersion buffer (4-d assumed)
+    xassert_shape_eq(out, ({R*RS}));      // ringbuf
     xassert_shape_eq(params.ringbuf_locations, ({ns*A*N,4}));
+
+    xassert(in.get_ncontig() >= 1);
     xassert(out.is_fully_contiguous());
 
     long dd_bstride = in.strides[0];
     long dd_astride = in.strides[1];
     long dd_nstride = in.strides[2];
-    xassert(in.strides[3] == 1);
 
     const uint *rb_loc = params.ringbuf_locations.data;
     const float *dd = in.data;
@@ -146,7 +141,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
 	for (long a = 0; a < A; a++) {
 	    for (long n = 0; n < N; n++) {
 		long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
-		const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*S;  // address in dedispersion buf (at beam 0)
+		const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*RS;  // address in dedispersion buf (at beam 0)
 
 		uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
 		uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
@@ -156,7 +151,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
 		for (long b = 0; b < B; b++) {
 		    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
 		    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
-		    memcpy(ringbuf + s*S, dd0 + b*dd_bstride, S * sizeof(float));
+		    memcpy(ringbuf + s*RS, dd0 + b*dd_bstride, RS * sizeof(float));
 		}
 	    }
 	}
@@ -170,14 +165,17 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
     long A = pow2(params.amb_rank);
     long N = pow2(params.dd_rank);
     long T = params.ntime;
+    long S = params.nspec;
     long R = params.ringbuf_nseg;
-    long S = params.nelts_per_segment;
-    long ns = xdiv(T,S);
+    long RS = params.nt_per_segment * params.nspec;
+    long ns = xdiv(T, params.nt_per_segment);
 
-    xassert_shape_eq(in, ({R*S}));  // ringbuf
-    xassert_shape_eq(out, ({B,A,N,T}));  // dedispersion buffer
+    xassert_shape_eq(in, ({R*RS}));        // ringbuf
+    xassert_shape_eq(out, ({B,A,N,T*S}));  // dedispersion buffer (4-d assumed)
     xassert_shape_eq(params.ringbuf_locations, ({ns*A*N,4}));
+    
     xassert(in.is_fully_contiguous());
+    xassert(out.get_ncontig() >= 1);
 
     const uint *rb_loc = params.ringbuf_locations.data;
     const float *ringbuf = in.data;
@@ -193,7 +191,7 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
 	for (long a = 0; a < A; a++) {
 	    for (long n = 0; n < N; n++) {
 		long iseg = s*A*N + a*N + n;         // index in rb_loc array (same for all beams)
-		float *dd0 = dd + n*dd_nstride + a*dd_astride + s*S; // address in dedispersion buf (at beam 0)
+		float *dd0 = dd + n*dd_nstride + a*dd_astride + s*RS; // address in dedispersion buf (at beam 0)
 		
 		uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
 		uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
@@ -203,7 +201,7 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
 		for (long b = 0; b < B; b++) {
 		    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
 		    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
-		    memcpy(dd0 + b*dd_bstride, ringbuf + s*S, S * sizeof(float));
+		    memcpy(dd0 + b*dd_bstride, ringbuf + s*RS, RS * sizeof(float));
 		}
 	    }
 	}

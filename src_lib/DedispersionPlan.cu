@@ -418,14 +418,15 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	kparams.total_beams = config.beams_per_gpu;
 	kparams.beams_per_batch = config.beams_per_batch;
 	kparams.ntime = st1.nt_ds;
+	kparams.nspec = 1;
 	kparams.input_is_ringbuf = false;
 	kparams.output_is_ringbuf = true;   // note output_is_ringbuf = true
 	kparams.apply_input_residual_lags = false;
 	kparams.input_is_downsampled_tree = (st1.ds_level > 0);
-	kparams.nelts_per_segment = this->nelts_per_segment;
+	kparams.nt_per_segment = this->nelts_per_segment;
 	kparams.ringbuf_locations = this->stage1_rb_locs.slice(0, pos, pos + nseg);
 	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
-	kparams.validate(false);  // on_gpu=false
+	kparams.validate();
 	
 	stage1_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1);
 	stage1_dd_buf_params.buf_ntime.push_back(st1.nt_ds);
@@ -450,14 +451,15 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 	kparams.total_beams = config.beams_per_gpu;
 	kparams.beams_per_batch = config.beams_per_batch;
 	kparams.ntime = st2.nt_ds;
+	kparams.nspec = 1;
 	kparams.input_is_ringbuf = true;   // note input_is_ringbuf = true
 	kparams.output_is_ringbuf = false;
 	kparams.apply_input_residual_lags = true;
 	kparams.input_is_downsampled_tree = (ds_level > 0);
-	kparams.nelts_per_segment = this->nelts_per_segment;
+	kparams.nt_per_segment = this->nelts_per_segment;
 	kparams.ringbuf_locations = this->stage2_rb_locs.slice(0, pos, pos + nseg);
 	kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
-	kparams.validate(false);  // on_gpu=false
+	kparams.validate();
 
 	stage2_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);
 	stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);

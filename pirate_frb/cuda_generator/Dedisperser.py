@@ -43,6 +43,7 @@ class Dedisperser:
         self.apply_input_residual_lags = params.apply_input_residual_lags
         self.input_is_ringbuf = params.input_is_ringbuf
         self.output_is_ringbuf = params.output_is_ringbuf
+        self.nt_per_segment = utils.xdiv(1024, self.nbits * params.nspec)
         self.nspec = params.nspec
         
         self.kernel_name = f'dd_fp{self.nbits}'
@@ -267,14 +268,14 @@ class Dedisperser:
         k.emit(f'//    frev = 2^dd_rank - 1 - f')
         k.emit(f'//')
         k.emit(f'// However, due to cache-alignment constraints, we are only able to apply (lag % N),')
-        k.emit(f'// where N = 128 / (sizeof(T) * nspec) is the number of time samples per GPU cache line.')
-        k.emit(f'// To address this, the dedispersion kernel is responsible for applying the "residual" lag:')
+        k.emit(f'// where N = self.nt_per_segment.  To address this, the dedispersion kernel is')
+        k.emit(f'// responsible for applying the "residual" lag:')
         k.emit(f'//    rlag = lag % N')
         k.emit(f'//')
         k.emit(f'// FIXME: poorly optimized, especially in float16 case')
         k.emit()
         
-        N = utils.xdiv(1024, self.nspec * self.nbits)   # number of time samples per GPU cache line, see above
+        N = self.nt_per_segment
         
         k.emit(f'uint rlag_f0 = threadIdx.y << {utils.integer_log2(self.ndd)};         // 0 <= rlag_f0 < 2^(dd_rank)')
         k.emit(f'uint rlag_dm = __brev(blockIdx.x) >> (33U - __ffs(gridDim.x));   // 0 <= rlag_dm < 2^(ambient rank)')

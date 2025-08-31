@@ -19,75 +19,13 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-    
-// dd_iobuf: this helper class is used in GpuDedispersionKenrel::launch(), to process
-// and error-check the input/output arrays.
-//
-// Recall that the 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
-// values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
-//
-//   - simple buf has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
-//   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
-
-struct dd_iobuf
-{
-    bool is_ringbuf;
-    void *buf = nullptr;
-
-    // If (is_ringbuf == false), then these members are valid.
-    long beam_stride32 = 0;
-    int amb_stride32 = 0;
-    int act_stride32 = 0;
-    
-    dd_iobuf(const DedispersionKernelParams &params, const Array<void> &arr, bool is_ringbuf_)
-    {
-	this->is_ringbuf = is_ringbuf_;
-	this->buf = arr.data;
-
-	xassert_eq(arr.dtype, params.dtype);
-
-	// Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
-	xassert(is_aligned(buf, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
-
-	// FIXME constructor should include overflow checks on strides.
-	// (Check on act_stride is nontrivial, since it gets multiplied by a small integer in the kernel.)
-	
-	if (is_ringbuf) {
-	    // Case 1: ringbuf, with 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
-	    xassert_shape_eq(arr, ({ params.ringbuf_nseg * params.nelts_per_segment }));
-	    xassert(arr.get_ncontig() == 1);
-	    xassert(arr.on_gpu());
-	}
-	else {
-	    // Case 2: simple buf, with shape  (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
-	    xassert_shape_eq(arr, ({params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime}));
-	    xassert(arr.get_ncontig() >= 1);
-	    xassert(arr.on_gpu());
-
-	    long denom = xdiv(32, arr.dtype.nbits);
-	    this->beam_stride32 = xdiv(arr.strides[0], denom);   // 32-bit stride
-	    this->amb_stride32 = xdiv(arr.strides[1], denom);    // 32-bit stride
-	    this->act_stride32 = xdiv(arr.strides[2], denom);    // 32-bit stride
-
-	    // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
-	    xassert_divisible(beam_stride32 * 4, constants::bytes_per_gpu_cache_line);
-	    xassert_divisible(amb_stride32 * 4, constants::bytes_per_gpu_cache_line);
-	    xassert_divisible(act_stride32 * 4, constants::bytes_per_gpu_cache_line);
-	    
-	    // FIXME could improve these checks, by verifying that strides are non-overlapping.
-	    xassert((params.beams_per_batch == 1) || (beam_stride32 != 0));
-	    xassert((params.amb_rank == 0) || (amb_stride32 != 0));
-	    xassert((params.dd_rank == 0) || (act_stride32 != 0));
-	}
-    }
-};
-
 
 GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {
-    params.validate(true);        // on_gpu=true
+    params.validate();
     xassert(params.dd_rank > 0);  // FIXME define _r0 for testing
+    xassert(params.nspec == 1);   // FIXME for now
 
     RegistryKey key;
     key.dtype = params.dtype;
@@ -95,15 +33,19 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     key.input_is_ringbuf = params.input_is_ringbuf;
     key.output_is_ringbuf = params.output_is_ringbuf;
     key.apply_input_residual_lags = params.apply_input_residual_lags;
+    key.nspec = params.nspec;
 
     this->registry_value = query_registry(key);
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
 
     int ST = xdiv(params.dtype.nbits, 8);    
     this->bw_per_launch.kernel_launches = 1;
-    this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * ST;
+    this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
     this->bw_per_launch.nbytes_gmem += 8 * params.beams_per_batch * pow2(params.amb_rank) * registry_value.pstate32_per_small_tree;
     // FIXME(?) not currently including ringbuf_locations.
+
+    // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
+    xassert_eq(params.nt_per_segment, registry_value.nt_per_segment);
 }
 
 
@@ -121,7 +63,7 @@ void GpuDedispersionKernel::allocate()
     if (params.input_is_ringbuf || params.output_is_ringbuf) {
 	this->gpu_ringbuf_locations = params.ringbuf_locations.to_gpu();
 
-	long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nelts_per_segment);
+	long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment);
 	xassert_shape_eq(gpu_ringbuf_locations, ({nrb,4}));
 	xassert(gpu_ringbuf_locations.is_fully_contiguous());
 	xassert(gpu_ringbuf_locations.on_gpu());
@@ -137,8 +79,8 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(it_chunk >= 0);
 
-    dd_iobuf in(params, in_arr, params.input_is_ringbuf);
-    dd_iobuf out(params, out_arr, params.output_is_ringbuf);
+    DedispersionKernelIobuf in(params, in_arr, params.input_is_ringbuf, true);     // on_gpu=true
+    DedispersionKernelIobuf out(params, out_arr, params.output_is_ringbuf, true);  // on_gpu=true
 
     // The global persistent_state array has shape { total_beams, pow2(params.amb_rank), ninner }.
     // We want to select a subset of beams corresponding to the current batch.
@@ -260,7 +202,10 @@ void GpuDedispersionKernel::register_kernel(const RegistryKey &key, const Regist
     // (In the future, I may add more argument checking here.)
     
     xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+    xassert(key.nspec > 0);
+    
     xassert(val.warps_per_threadblock > 0);
+    xassert(val.nt_per_segment > 0);
 
     auto k1 = val.cuda_kernel_no_rb;
     auto k2 = val.cuda_kernel_in_rb;
@@ -283,6 +228,7 @@ bool operator==(const GpuDedispersionKernel::RegistryKey &k1, const GpuDedispers
 {
     return (k1.dtype == k2.dtype) &&
 	(k1.rank == k2.rank) &&
+	(k1.nspec == k2.nspec) &&
 	(k1.input_is_ringbuf == k2.input_is_ringbuf) &&
 	(k1.output_is_ringbuf == k2.output_is_ringbuf) &&
 	(k1.apply_input_residual_lags == k2.apply_input_residual_lags);
@@ -293,6 +239,7 @@ ostream &operator<<(ostream &os, const GpuDedispersionKernel::RegistryKey &k)
 {
     os << "GpuDedispersionKernel(dtype=" << k.dtype
        << ", rank=" << k.rank
+       << ", nspec=" << k.nspec
        << ", input_is_ringbuf=" << k.input_is_ringbuf
        << ", output_is_ringbuf=" << k.output_is_ringbuf
        << ", apply_input_residual_lags=" << k.apply_input_residual_lags

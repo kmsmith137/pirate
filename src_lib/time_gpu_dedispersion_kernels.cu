@@ -22,6 +22,7 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
     long amb_rank = 8;
     long nbeams = pow2(10-dd_rank);
     long ntime = 2048;
+    long nspec = 1;
     long niter = 5;
 
     DedispersionKernelParams params;
@@ -31,9 +32,10 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
     params.total_beams = nbeams;
     params.beams_per_batch = nbeams;
     params.ntime = ntime;
+    params.nspec = nspec;
     params.apply_input_residual_lags = apply_input_residual_lags;
     params.input_is_downsampled_tree = false;  // shouldn't affect timing
-    params.nelts_per_segment = xdiv(1024, dtype.nbits);
+    params.nt_per_segment = xdiv(1024, dtype.nbits * nspec);
 
     vector<shared_ptr<GpuDedispersionKernel>> kernels(nstreams);
     vector<int> itime(nstreams, 0);
@@ -43,6 +45,7 @@ static void time_gpu_dedispersion_kernel(Dtype dtype, int dd_rank, bool apply_in
 	kernels[i]->allocate();
     }
 
+    xassert(nspec == 1);  // FIXME for now
     Array<void> buf(dtype, { nstreams, nbeams, pow2(amb_rank), pow2(dd_rank), ntime }, af_gpu | af_zero);
 
     long elt_size = xdiv(dtype.nbits, 8);

@@ -22,7 +22,8 @@ struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
 //            = log2(number of "spectator" tree channels)
 //
 // The dedispersion kernel operates on a buffer of logical shape
-//   (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
+//
+//   (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec).
 //
 // The buffer is not assumed contiguous -- this detail is important, since the
 // amb/dd axes may be swapped (relative to contiguous ordering). To explain this in
@@ -30,26 +31,26 @@ struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
 //
 //  - Let's "reshape" the dedispersion buffer to a 4-d array
 //
-//      (nbeams, pow2(rank2), pow2(rank1), ntime)
+//      (nbeams, pow2(rank2), pow2(rank1), ntime * nspec)
 //
 //    This 4-d shape will be preserved throughout the two-stage dedispersion, but
 //    the meaning of the axes will be different at different stages.
 //
 //  - In the input array, the meaning of the axes is:
 //
-//        (beam, coarse freq, fine freq, time).
+//        (beam, coarse freq, fine freq, time+spec).
 //
 //  - When we apply the first dedispersion kernel, we map these axes to:
 //
-//        (beam, amb, dd, time)       (*)
+//        (beam, amb, dd, time+spec)       (*)
 //
 //  - After the first dedispersion kernel, the meaning of the axes is:
 //
-//        (beam, coarse freq, bit-reversed coarse dm, time)
+//        (beam, coarse freq, bit-reversed coarse dm, time+spec)
 //
 //  - When we apply the second dedispersion kernel, we map these axes to:
 //
-//        (beam, dd, amb, time)      (**)
+//        (beam, dd, amb, time+spec)      (**)
 //
 //    Note the transpose in (**) relative to (*), which implies that
 //    dedispersion kernels will sometimes need non-contiguous strides.
@@ -57,11 +58,11 @@ struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
 //  - In the output array (after the second dedispersion kernel), the
 //    meaning of the axes is:
 //
-//        (beam, bit-reversed fine dm, bit-reversed coarse dm, time)
+//        (beam, bit-reversed fine dm, bit-reversed coarse dm, time+spec)
 //
 //   Note that this cleanly "reshapes" to a 3-d array:
 //
-//        (beam, bit-reversed total dm, time)
+//        (beam, bit-reversed total dm, time+spec)
     
 
 struct DedispersionKernelParams
@@ -72,6 +73,7 @@ struct DedispersionKernelParams
     long total_beams = 0;
     long beams_per_batch = 0;
     long ntime = 0;       // includes downsampling factor, if any
+    long nspec = 0;       // "inner" spectator index
     
     // Input/output buffer types.
     bool input_is_ringbuf = false;
@@ -94,22 +96,23 @@ struct DedispersionKernelParams
     bool apply_input_residual_lags = false;
     bool input_is_downsampled_tree = false;   // only matters if apply_input_residual_lags=true
 
-    // The value of 'nelts_per_segment' matters if:
+    // The value of 'nt_per_segment' affects behavior of the kernel if one of the flags is set:
+    //
     //   (apply_input_residual_lags || input_is_ringbuf || output_is_ringbuf).
     //
-    // The GPU kernel assumes (nelts_per_segment == nelts_per_cache_line), but the reference
-    // kernel allows (nelts_per_segment) to be a multiple of (nelts_per_cache_line), where:
-    //   nelts_per_cache_line = (8 * constants::bytes_per_gpu_cache_line) / dtype.nbits.
+    // For the GPU kernel, the caller must set 'nt_per_segment', and the GpuDedispersionKernel
+    // constructor will throw an exception if there is a mismatch. Currently, the GPU kernel uses:
     //
-    // This is in order to enable a unit test where we check agreement between a float16
-    // GPU kernel, and a float32 reference kernel derived from the same DedispersionPlan.
-    // In this case, we want the reference kernel to have dtype float32, but use a value
-    // of 'nelts_per_segment' which matched to the float16 GPU kernel.
+    //   nt_per_segment = 1024 / (nspec * dtype.nbits)
+    //
+    // The ReferenceDedispersionKernel accepts any value of 'nt_per_segment'. This is convenient
+    // for testing, since the ReferenceDedispersionKernel can always use the same value as the
+    // corresponding GpuDedispersionKernel.
     
-    int nelts_per_segment = 0;
+    int nt_per_segment = 0;
 
     // The 'ringbuf_locations' array has shape (nsegments_per_tree, 4), where:
-    //   nsegments_per_tree = pow2(dd_rank + amb_rank) * xdiv(ntime,nelts_per_segment)
+    //   nsegments_per_tree = pow2(dd_rank + amb_rank) * xdiv(ntime,nt_per_segment)
     //
     // The DedispersionKernelParams::ringbuf_locations array is always on the host (even for a
     // GPU kernel). The copy from host to GPU happens in GpuDedispersionKernel::allocate()).
@@ -121,16 +124,53 @@ struct DedispersionKernelParams
     long ringbuf_nseg = 0;
     
     // Throws an exception if anything is wrong.
-    void validate(bool gpu_kernel) const;
+    // Warning: validate() can be a "heavyweight" operation, since it error-checks the ringbuf_locations.
+    void validate() const;
 };
 
 
-// Notes:
+// -------------------------------------------------------------------------------------------------
+//
+// DedispersionKernelIobuf: helper class for ReferenceDedispersionKernel and GpuDedispersionKernel,
+// to process and error-check the input/output arrays.
+//
+// Represents an input/output buffer for a dedispersion kernel, which could be either a
+// "simple" buffer, or a ring buffer. Shapes are (where all variables beams_per_batch,
+// amb_rank, ... are members of 'struct DedispersionKernelParams'):
+//
+//   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
+//                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
+//
+//   Ring: 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
+
+
+// Currently defined in DedispersionKernelParams.cu (FIXME reorganize)
+struct DedispersionKernelIobuf
+{
+    DedispersionKernelIobuf(const DedispersionKernelParams &params,
+			    const ksgpu::Array<void> &arr,
+			    bool is_ringbuf_, bool on_gpu_);
+
+    void *buf = nullptr;
+    bool is_ringbuf;
+    bool on_gpu;
+
+    // Convenient for GPU kernel. Only initialized if (is_ringbuf == false).
+    long beam_stride32 = 0;
+    int amb_stride32 = 0;
+    int act_stride32 = 0;
+}; 
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// ReferenceDedispersionKernel
 //
 //  - The reference kernel allocates persistent state in its constructor
 //    (i.e. no allocate() method is defined).
 //
 //  - The reference kernel uses float32, regardless of what dtype is specified.
+
 
 struct ReferenceDedispersionKernel
 {
@@ -139,11 +179,14 @@ struct ReferenceDedispersionKernel
 
     ReferenceDedispersionKernel(const Params &params);
     
-    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
-    // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
+    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on values
+    // of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are (where variables
+    // beams_per_batch, amb_rank, ... are members of Params):
     //
-    //   - simple buf has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
-    //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
+    //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
+    //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
+    //
+    //   Ring: 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
 
     void apply(ksgpu::Array<void> &in, ksgpu::Array<void> &out, long ibatch, long it_chunk);
 
@@ -180,11 +223,14 @@ public:
     
     // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
     //
-    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on
-    // values of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are:
+    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on values
+    // of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are (where variables
+    // beams_per_batch, amb_rank, ... are members of Params):
     //
-    //   - simple buf has shape (params.beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime).
-    //   - ringbuf has 1-d shape (params.ringbuf_nseg * params.nelts_per_segment,)
+    //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
+    //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
+    //
+    //   Ring: 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
     
     void launch(
         ksgpu::Array<void> &in,
@@ -216,6 +262,8 @@ public:
     {
 	ksgpu::Dtype dtype;   // either float16 or float32
 	int rank = -1;
+	int nspec = 0;
+	
 	bool input_is_ringbuf = false;
 	bool output_is_ringbuf = false;
 	bool apply_input_residual_lags = false;
@@ -268,6 +316,7 @@ public:
 	int shmem_nbytes = 0;
 	int warps_per_threadblock = 0;
 	int pstate32_per_small_tree = 0;
+	int nt_per_segment = 0;
     };
 
     // Low-level cuda kernel and associated metadata.

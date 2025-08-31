@@ -57,6 +57,7 @@ def make_dd_file(nbits, apply_input_residual_lags, input_is_ringbuf, output_is_r
         k.emit('GpuDedispersionKernel::RegistryKey k;')
         k.emit(f'k.dtype = ksgpu::Dtype::native<{dtype}>();')
         k.emit(f'k.rank = {rank};')
+        k.emit(f'k.nspec = {nspec};')
         k.emit(f'k.input_is_ringbuf = {tf(input_is_ringbuf)};')
         k.emit(f'k.output_is_ringbuf = {tf(output_is_ringbuf)};')
         k.emit(f'k.apply_input_residual_lags = {tf(apply_input_residual_lags)};')
@@ -66,6 +67,7 @@ def make_dd_file(nbits, apply_input_residual_lags, input_is_ringbuf, output_is_r
         k.emit(f'v.shmem_nbytes = {dd.shmem_nbytes};')
         k.emit(f'v.warps_per_threadblock = {dd.warps_per_threadblock};')
         k.emit(f'v.pstate32_per_small_tree = {dd.pstate32_per_small_tree};')
+        k.emit(f'v.nt_per_segment = {dd.nt_per_segment};')
 
         if (not input_is_ringbuf) and (not output_is_ringbuf):
             k.emit(f'v.cuda_kernel_no_rb = {dd.kernel_name};')
