@@ -99,8 +99,10 @@ struct KernelRegistry
 	Entry *e = this->_get_locked(key);
 
 	if (!e) {
+	    lk.unlock();
 	    std::stringstream ss;
 	    ss << "Kernel not found in registry: " << key;
+	    throw std::runtime_error(ss.str());
 	}
 
 	if (!e->initialized) {
