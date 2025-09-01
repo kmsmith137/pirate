@@ -17,6 +17,7 @@ extern void test_reference_lagbuf();
 extern void test_reference_tree();
 extern void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks);
 extern void test_tree_recursion();
+extern void test_dedispersion_basics();
     
 // test_gpu_lagged_downsampler.cu
 extern void test_gpu_lagged_downsampling_kernel();

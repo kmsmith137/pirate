@@ -80,10 +80,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	.def("stop", &FakeServer::stop)
     ;
 
-    m.def("test_non_incremental_dedispersion", static_cast<void (*)()> (&test_non_incremental_dedispersion));
-    m.def("test_reference_lagbuf", &test_reference_lagbuf);
-    m.def("test_reference_tree", &test_reference_tree);
-    m.def("test_tree_recursion", static_cast<void (*)()> (&test_tree_recursion));
+    m.def("test_dedispersion_basics", &test_dedispersion_basics);
     m.def("test_gpu_lagged_downsampling_kernel", &test_gpu_lagged_downsampling_kernel);
     m.def("test_gpu_dedispersion_kernels", &test_gpu_dedispersion_kernels);
     m.def("test_gpu_peak_finding_kernel", &test_gpu_peak_finding_kernel, py::arg("reduce_only"));

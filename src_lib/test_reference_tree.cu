@@ -358,4 +358,16 @@ void test_tree_recursion()
 }
 
 
+// -------------------------------------------------------------------------------------------------
+
+
+void test_dedispersion_basics()
+{
+    test_non_incremental_dedispersion();
+    test_reference_lagbuf();
+    test_reference_tree();
+    test_tree_recursion();
+}
+
+
 }  // namespace pirate
