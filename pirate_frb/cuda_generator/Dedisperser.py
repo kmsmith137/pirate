@@ -229,7 +229,10 @@ class Dedisperser:
         self.kernel_name += f'_s{params.nspec}'
         
         self.rrb = Ringbuf(self.dt32)   # not self.dtype
-        self.two_stage = (params.rank >= 5)
+
+        # This simple rule works and gives good performance, for a reasonable
+        # range of 'nspec' values.
+        self.two_stage = (params.rank >= 3)
 
         if self.two_stage:
             self.rank0 = (params.rank // 2)
