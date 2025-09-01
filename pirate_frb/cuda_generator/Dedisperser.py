@@ -280,8 +280,7 @@ class Dedisperser:
         # This code must be emitted near the end, after the ring buffer layout is finalized.
         k_pstate = k.splice()
         
-        dt = (1024 // self.nbits)
-        k.emit(f'for (int itime = 0; itime < ntime; itime += {dt}) {{')
+        k.emit(f'for (int itime = 0; itime < ntime; itime += {self.nt_per_segment}) {{')
 
         self._load_input_data(k)              # behaves differently, depending on self.input_is_ringbuf
         self._apply_input_residual_lags(k)    # no-ops if (self.apply_input_residual_lags) is False
@@ -506,10 +505,9 @@ class Dedisperser:
                 k.emit(f'    {self.dt32} {tmp} = ((threadIdx.x + {rlag2}) >= 32) ? dd_rlag{i} : dd{i};')
                 k.emit(f'    dd_rlag{i} = dd{i};')
                 k.emit(f'    dd{i} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag2});')
-                k.emit(f'}}     // rlag has now been applied to dd{i}')                
-                
-            
-        
+                k.emit(f'}}     // rlag has now been applied to dd{i}')
+
+    
     def _apply_one_sample_lags(self, k):
         if (self.nbits != 16) or (self.nspec != 1) or (self.rank0 == 0):
             return
@@ -535,7 +533,6 @@ class Dedisperser:
         
 
     def _apply_inbuf_offsets(self, k):
-        # FIXME cut-and-paste with _apply_outbuf_offsets()
         if self.input_is_ringbuf:
             wshift = self.rank1 if self.two_stage else self.rank
             self._apply_grb_offsets(k, wshift)
@@ -636,17 +633,21 @@ class Dedisperser:
 
         if (B % 32) == 0:
             # Case 1: one time sample corresponds to an integer number of 32-bit registers.
-            a = 2**(rank1-1) * (2**rank1-1)
+            a = (B//32) * 2**(rank1-1) * (2**rank1-1)
             b = 2**(rank1+6) - a
             
             t, srb_base, srb_lag = k.get_tmp_rname(3)
-            k.emit(f'uint {t} = {a}*{dm} + {frev}*({frev}-1) + {b};')
-            k.emit(f'uint {srb_base} = (({dm}*{t}) >> 1) + ({frev} << 5);  // srb_base')
-            k.emit(f'uint {srb_lag} = {dm}*{frev};  // srb_lag')
-
+            
+            k.emit(f'uint {t} = {frev}*({frev}-1);')
             if B > 32:
-                k.emit(f'{srb_base} <<= {utils.integer_log2(B//32)};  // convert srb_base (time samples) -> (32-bit registers)')
-                k.emit(f'{srb_lag} <<= {utils.integer_log2(B//32)};   // convert srb_lag (time samples) -> (32-bit registers)')
+                k.emit(f'{t} <<= {utils.integer_log2(B//32)};')
+
+            k.emit(f'{t} += {a}*{dm} + {b};')
+            k.emit(f'uint {srb_base} = (({dm}*{t}) >> 1) + ({frev} << 5);  // srb_base (32-bit registers, not time samples)')
+
+            k.emit(f'uint {srb_lag} = {dm}*{frev};  // srb_lag')
+            if B > 32:
+                k.emit(f'{srb_lag} <<= {utils.integer_log2(B//32)};  // convert srb_lag (time samples) -> (32-bit registers)')
                 
         else:
             # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
@@ -880,15 +881,15 @@ class Dedisperser:
             # n1 = 2**rank1
             # term1 = ((dm*(dm-1))//2) * ((n1*(n1-1))//2)   # d < dm, all f
             # term2 = dm * ((frev*(frev-1)) // 2)           # d == dm, f < frev
-            # term3 = 32 * (dm*n1 + frev)
-            # return (term1 + term2 + term3) * (B//32)
+            # term3 = 32 * (dm*n1 + frev)                   # 32-bit padding from previous (dm,f)
+            # return (term1 + term2) * (B//32) + term3
             
             # "Fast form" with slightly fewer ops (assumes rank1 >= 1)
-            a = 2**(rank1-1) * (2**rank1-1)  # known at compile time
-            b = 2**(rank1+6) - a             # known at compile time
-            t = a*dm + frev*(frev-1) + b
-            ret = ((dm*t) >> 1) + (frev << 5)
-            return ret << utils.integer_log2(B//32)
+            a = (B//32) * 2**(rank1-1) * (2**rank1-1)  # known at compile time
+            b = 2**(rank1+6) - a                       # known at compile time
+            t = (frev*(frev-1)) << utils.integer_log2(B//32)
+            t += a*dm + b
+            return ((dm*t) >> 1) + (frev << 5)
 
         else:
             # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.

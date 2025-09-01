@@ -65,14 +65,15 @@ def generate_dedispersion_kernels():
     for dtype in [ 'float', '__half' ]:
         for (irb,orb) in [ (False,False), (True,False), (False,True) ]:  # see below
             for rlag in [ False, True ]:                                 # see below
-                yield cuda_generator.DedisperserParams(
-                    dtype = dtype,
-                    rank = 1,  # dummy value
-                    apply_input_residual_lags = rlag,
-                    input_is_ringbuf = irb,
-                    output_is_ringbuf = orb,
-                    nspec = 1   # FIXME not implemented yet
-                )
+                for nspec in [ 1 ]:
+                    yield cuda_generator.DedisperserParams(
+                        dtype = dtype,
+                        rank = 1,  # dummy value
+                        apply_input_residual_lags = rlag,
+                        input_is_ringbuf = irb,
+                        output_is_ringbuf = orb,
+                        nspec = nspec
+                    )
 
         
 def generate_peak_finding_kernels():
