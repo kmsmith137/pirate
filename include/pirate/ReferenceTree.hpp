@@ -14,9 +14,9 @@ namespace pirate {
 
 // ReferenceTree: simple, self-contained reference implementation of tree dedispersion.
 //
-// Processes input incrementally in chunks of shape (..., nfreq, ..., ntime), where "..."
-// represents an arbitrary number of spectator axes. The time axis must be last, and be
-// contiguous (i.e. stride=1). The number of frequencies must be a power of two.
+// Processes input incrementally in chunks of shape (..., nfreq, ntime), where "..."
+// represents an arbitrary number of spectator axes. The time axis must be contiguous.
+// The number of frequencies must be a power of two.
 //
 // The RefrerenceTree is unaware of the larger dedispersion plan (stage1/stage2 split,
 // early triggers, downsampling, etc.) but can be used as a "building block" to implement
@@ -26,10 +26,10 @@ namespace pirate {
 class ReferenceTree
 {
 public:
-    // By default, the frequency axis is second-to-last.
-    ReferenceTree(std::initializer_list<long> shape);
-    ReferenceTree(std::initializer_list<long> shape, int freq_axis);
-    ReferenceTree(int ndim, const long *shape, int freq_axis);
+    // Frequency axis is second-to-last, time axis is last.
+    // All other indices are spectators.
+    ReferenceTree(const std::vector<long> &shape);
+    ReferenceTree(int ndim, const long *shape);
     
     // Dedispersion is done in-place, on an array of shape 'shape'.
     void dedisperse(ksgpu::Array<float> &arr);
@@ -37,11 +37,9 @@ public:
     // Morally equivalent to make_shared<ReferenceTree> (...).
     // (Necessary since make_shared doesn't seem to work with initializer lists.)
     static std::shared_ptr<ReferenceTree> make(std::initializer_list<long> shape);
-    static std::shared_ptr<ReferenceTree> make(std::initializer_list<long> shape, int freq_axis);
     
-protected:
+protected:    
     std::vector<long> shape;
-    int freq_axis = -1;
 
     int ndim = -1;
     int nfreq = -1;
@@ -51,10 +49,6 @@ protected:
     
     ksgpu::Array<float> rstate;          // can be large
     ksgpu::Array<float> scratch;         // always small (length ntime+1)
-
-    // Used temporarily in dedisperse().
-    std::vector<long> tmp_shape;
-    std::vector<long> tmp_strides;
 };
 
 

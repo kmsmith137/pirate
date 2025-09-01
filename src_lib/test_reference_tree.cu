@@ -206,15 +206,16 @@ void test_reference_lagbuf()
 // Test 'class ReferenceTree', by comparing its incremental dedispersion to dedisperse_non_incremental().
 
 
-static void test_reference_tree(const vector<long> &shape, const vector<long> &strides, int freq_axis, int nchunks)
+static void test_reference_tree(const vector<long> &shape, const vector<long> &strides, int nchunks)
 {
     cout << "test_reference_tree: shape=" << tuple_str(shape)
 	 << ", strides=" << tuple_str(strides)
-	 << ", freq_axis=" << freq_axis
 	 << ", nchunks=" << nchunks << endl;
 
     int ndim = shape.size();
-    int nfreq = shape.at(freq_axis);
+    xassert(ndim >= 2);
+    
+    int nfreq = shape.at(ndim-2);
     int nt_chunk = shape.at(ndim-1);
     int nt_tot = nt_chunk * nchunks;
     
@@ -223,45 +224,30 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
     big_shape[ndim-1] *= nchunks;
     Array<float> arr0(big_shape, af_uhost | af_random);
 
-    // Let's apply non-incremental dedispersion to arr0.
-    // Step 1. transpose to axis ordering (spectators, freq, time).
-    
-    vector<int> ax_swap(ndim);
-    for (int d = 0; d < ndim; d++)
-	ax_swap[d] = d;
-    ax_swap[freq_axis] = ndim-2;
-    ax_swap[ndim-2] = freq_axis;
-
-    Array<float> arr1 = arr0.transpose(ax_swap);
-
-    // Step 2. reshape to (nouter, nfreq, nt_tot), with precisely one spectator axis.
+    // Step 1. reshape to (nouter, nfreq, nt_tot), with precisely one spectator axis.
 
     int nouter = 1;
     for (int d = 0; d < ndim-2; d++)
-	nouter *= arr1.shape[d];
+	nouter *= shape[d];
     
-    arr1 = arr1.clone();  // note deep copy here
+    Array<float> arr1 = arr0.clone();  // note deep copy here
     arr1 = arr1.reshape({nouter, nfreq, nt_tot});
 
-    // Step 3. loop over outer spectator axis, and call dedisperse_non_incremental().
+    // Step 2. loop over outer spectator axis, and call dedisperse_non_incremental().
     
     for (int i = 0; i < nouter; i++) {
 	Array<float> view_2d = arr1.slice(0, i);  // shape (nfreq, nt_tot)
 	dedisperse_non_incremental(view_2d, 1);   // nspec=1
     }
 
-    // Step 4. transpose back to original axis ordering.
+    // Step 3. reshape back to original shape.
     // (This concludes the non-incremental dedispersion.)
-
-    vector<long> transposed_shape = big_shape;
-    std::swap(transposed_shape[freq_axis], transposed_shape[ndim-2]);
     
-    arr1 = arr1.reshape(transposed_shape);
-    arr1 = arr1.transpose(ax_swap);
+    arr1 = arr1.reshape(big_shape);
 
     // Now apply incremental dedispersion in chunks, and compare.
     
-    ReferenceTree rtree(shape.size(), &shape[0], freq_axis);
+    ReferenceTree rtree(shape);
     Array<float> chunk(shape, strides, af_uhost | af_zero);
 
     // Apply incremental dedispersion to arr0 (in place)
@@ -278,7 +264,6 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
 	axis_names[d] = "ispec" + to_string(d);
     axis_names[ndim-2] = "dm_brev";
     axis_names[ndim-1] = "t";
-    std::swap(axis_names[freq_axis], axis_names[ndim-2]);
 
     ksgpu::assert_arrays_equal(arr1, arr0, "non-incremental", "incremental", axis_names);
 }
@@ -288,15 +273,13 @@ void test_reference_tree()
 {
     int rank = rand_int(1, 9);
     int ndim = rand_int(2, 6);
-    int freq_axis = rand_int(0, ndim-1);
 
     vector<long> shape = ksgpu::random_integers_with_bounded_product(ndim, 30000 / pow2(rank));
-    int nchunks = shape[freq_axis];
-    shape[freq_axis] = pow2(rank);
+    int nchunks = shape[ndim-2];
+    shape[ndim-2] = pow2(rank);
 
     vector<long> strides = ksgpu::make_random_strides(shape, 1);  // ncontig=1
-
-    test_reference_tree(shape, strides, freq_axis, nchunks);
+    test_reference_tree(shape, strides, nchunks);
 }
 
 
@@ -305,7 +288,7 @@ void test_reference_tree()
 
 void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
 {
-    cout << "test_reference_tree_recursion: rank0=" << rank0 << ", rank1=" << rank1
+    cout << "test_tree_recursion: rank0=" << rank0 << ", rank1=" << rank1
 	 << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks << endl;
 
     int rank_tot = rank0 + rank1;
@@ -324,8 +307,8 @@ void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
 	    lags.at({i,j}) = rb_lag(i, j, rank0, rank1, false);  // uflag=false
 
     ReferenceTree big_tree({nfreq_tot, nt_chunk});
-    ReferenceTree tree0({nfreq1, nfreq0, nt_chunk}, 1);
-    ReferenceTree tree1({nfreq1, nfreq0, nt_chunk}, 0);
+    ReferenceTree tree0({nfreq1, nfreq0, nt_chunk});
+    ReferenceTree tree1({nfreq0, nfreq1, nt_chunk});
     ReferenceLagbuf lagbuf(lags, nt_chunk);
 
     for (int c = 0; c < nchunks; c++) {
@@ -336,7 +319,9 @@ void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
 	chunk1 = chunk1.reshape({nfreq1, nfreq0, nt_chunk});
 	tree0.dedisperse(chunk1);
 	lagbuf.apply_lags(chunk1);
+	chunk1 = chunk1.transpose({1,0,2});
 	tree1.dedisperse(chunk1);
+	chunk1 = chunk1.transpose({1,0,2});
 	chunk1 = chunk1.reshape({nfreq_tot, nt_chunk});
 
 	// "One-step" dedispersion.

@@ -78,23 +78,16 @@ static float *_dedisperse(float *arr, int ndim, const long *shape, const long *s
     return rp;
 }
 
-	
-ReferenceTree::ReferenceTree(std::initializer_list<long> shape_) :
-    ReferenceTree(shape_, shape_.size()-2)   // By default, the frequency axis is second-to-last.
+
+ReferenceTree::ReferenceTree(const std::vector<long> &shape_) :
+    ReferenceTree(shape_.size(), &shape_[0])
 { }
 
 
-ReferenceTree::ReferenceTree(std::initializer_list<long> shape_, int freq_axis_) :
-    ReferenceTree(shape_.size(), shape_.begin(), freq_axis_)
-{ }
-
-
-ReferenceTree::ReferenceTree(int ndim_, const long *shape_, int freq_axis_) :
-    freq_axis(freq_axis_), ndim(ndim_)
+ReferenceTree::ReferenceTree(int ndim_, const long *shape_) :
+    ndim(ndim_)
 {
     xassert(ndim >= 2);
-    xassert(freq_axis >= 0);
-    xassert(freq_axis < ndim-1);
     
     this->shape.resize(ndim);
     this->nrstate = 1;
@@ -102,20 +95,18 @@ ReferenceTree::ReferenceTree(int ndim_, const long *shape_, int freq_axis_) :
     for (int d = 0; d < ndim; d++) {
 	shape[d] = shape_[d];
 	xassert(shape[d] > 0);
-	
-	if ((d < ndim-1) && (d != freq_axis))
-	    nrstate *= shape[d];
     }
     
-    this->nfreq = shape[freq_axis];
+    this->nfreq = shape[ndim-2];
     this->ntime = shape[ndim-1];
     
     xassert(is_power_of_two(nfreq));
     this->rank = integer_log2(nfreq);
-    this->nrstate *= rstate_len(rank);   // rstate_len() is declared in utils.hpp
+
+    this->nrstate = rstate_len(rank);   // rstate_len() is declared in utils.hpp
+    for (int d = 0; d < ndim-2; d++)
+	nrstate *= shape[d];
     
-    this->tmp_shape.resize(ndim);
-    this->tmp_strides.resize(ndim);
     this->rstate = Array<float> ({nrstate}, af_uhost | af_zero);
     this->scratch = Array<float> ({ntime+1}, af_uhost | af_zero);
 }
@@ -127,34 +118,17 @@ void ReferenceTree::dedisperse(ksgpu::Array<float> &arr)
     xassert(arr.shape_equals(this->shape));
     xassert((ntime == 1) || (arr.strides[ndim-1] == 1));
 	
-    if (rank == 0)
-	return;
-
-    for (int d = 0; d < ndim; d++) {
-	tmp_shape[d] = arr.shape[d];
-	tmp_strides[d] = arr.strides[d];
+    if (rank > 0) {
+	float *rp_end = _dedisperse(arr.data, ndim, arr.shape, arr.strides, rank, ntime, rstate.data, scratch.data);
+	xassert(rp_end == rstate.data + nrstate);
     }
-
-    if (freq_axis != ndim-2) {
-	std::swap(tmp_shape[freq_axis], tmp_shape[ndim-2]);
-	std::swap(tmp_strides[freq_axis], tmp_strides[ndim-2]);
-    }
-    
-    float *rp_end = _dedisperse(arr.data, ndim, &tmp_shape[0], &tmp_strides[0], rank, ntime, rstate.data, scratch.data);
-    xassert(rp_end == rstate.data + nrstate);
 }    
 
 
 // static member function
 shared_ptr<ReferenceTree> ReferenceTree::make(std::initializer_list<long> shape)
 {
-    return make_shared<ReferenceTree> (shape);
-}
-
-// static member function
-shared_ptr<ReferenceTree> ReferenceTree::make(std::initializer_list<long> shape, int freq_axis)
-{
-    return make_shared<ReferenceTree> (shape, freq_axis);
+    return make_shared<ReferenceTree> (shape.size(), shape.begin());
 }
 
 	
