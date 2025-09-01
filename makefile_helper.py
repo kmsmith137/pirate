@@ -65,7 +65,7 @@ def generate_dedispersion_kernels():
     for dtype in [ 'float', '__half' ]:
         for (irb,orb) in [ (False,False), (True,False), (False,True) ]:  # see below
             for rlag in [ False, True ]:                                 # see below
-                for nspec in [ 1 ]:
+                for nspec in [ 1, 8 ]:
                     yield cuda_generator.DedisperserParams(
                         dtype = dtype,
                         rank = 1,  # dummy value

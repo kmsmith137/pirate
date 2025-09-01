@@ -664,13 +664,21 @@ class Dedisperser:
 
         k.emit()
         k.emit(f'// Compute srb_pos, and assemble control word from (srb_lag, srb_base)')
-
-        t, srb_pos = k.get_tmp_rname(2)
-        rs = 5 - utils.integer_log2(self.nbits)   # right shift needed for nt_cumul -> nt_cumul32
-        nt32_cumul = f'nt_cumul' if (rs==0) else f'(nt_cumul >> {rs})'
+        k.emit(f'// Note: srb_pos = 32 * (nt_cumul / nt_per_segment), where nt_per_segment = {self.nt_per_segment}')
         
-        k.emit(f'uint {t} = {first_pass} ? 0 : 32;')
-        k.emit(f'uint {srb_pos} = ({nt32_cumul} + {t}) % ({srb_lag} + 32U);   // srb_pos')
+        # Left shift needed for (nt_cumul) -> (nt_per_segment), can be negative.
+        ls = 5 - utils.integer_log2(self.nt_per_segment)
+
+        srb_pos = k.get_tmp_rname()
+        if ls > 0:
+            k.emit(f'uint {srb_pos} = nt_cumul << {ls};   // srb_pos')
+        elif ls < 0:
+            k.emit(f'uint {srb_pos} = nt_cumul >> {-ls};  // srb_pos')
+        else:
+            k.emit(f'uint {srb_pos} = nt_cumul;  // srb_pos')
+
+        k.emit(f'{srb_pos} += ({first_pass} ? 0 : 32);   // srb_pos: add reader/writer offset')
+        k.emit(f'{srb_pos} %= ({srb_lag} + 32U);         // srb_pos: mod (srb_lag + 32)')
         k.emit(f'uint control_word = {srb_base} | ({srb_pos} << 15) | ({srb_lag} << 24);')
         k.emit()
 

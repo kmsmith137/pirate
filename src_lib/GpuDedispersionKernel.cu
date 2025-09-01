@@ -25,7 +25,6 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 {
     params.validate();
     xassert(params.dd_rank > 0);  // FIXME define _r0 for testing
-    xassert(params.nspec == 1);   // FIXME for now
 
     RegistryKey key;
     key.dtype = params.dtype;

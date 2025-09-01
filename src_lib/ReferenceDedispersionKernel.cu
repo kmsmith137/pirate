@@ -34,39 +34,20 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
     params.dtype = Dtype::native<float>();
     params.validate();
 
-    xassert(params.nspec == 1);   // for now!
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
     long B = params.beams_per_batch;
     long A = pow2(params.amb_rank);
     long F = pow2(params.dd_rank);
     long T = params.ntime;
+    long S = params.nspec;
     
     this->trees.resize(nbatches);			  
     for (long n = 0; n < nbatches; n++)
-	trees[n] = ReferenceTree::make({B,A,F,T}, 1);  // nspec=1
+	trees[n] = ReferenceTree::make({B,A,F,T*S}, S);   // (shape, nspec)
 
-    if (!params.apply_input_residual_lags)
-	return;
-
-    // Remaining code initializes this->rlag_bufs (only if params.apply_input_residual_lags == false).
-    
-    Array<int> rlags({B,A,F}, af_uhost);
-    
-    for (long b = 0; b < B; b++) {
-	for (long a = 0; a < A; a++) {
-	    // Ambient index 'a' represents a bit-reversed coarse DM.
-	    // Index 'f' represents a fine frequency.
-	    for (long f = 0; f < F; f++) {
-		long lag = rb_lag(f, a, params.amb_rank, params.dd_rank, params.input_is_downsampled_tree);
-		rlags.data[b*A*F + a*F + f] = (lag % params.nt_per_segment) * params.nspec;  // residual lag
-	    }
-	}
-    }
-    
-    this->rlag_bufs.resize(nbatches);
-    for (long n = 0; n < nbatches; n++)
-	rlag_bufs[n] = make_shared<ReferenceLagbuf> (rlags, T);
+    if (params.apply_input_residual_lags)
+	this->_init_rlags();
 }
 
 
@@ -113,6 +94,35 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
 }
 
 
+// Helper function called by constructor.
+void ReferenceDedispersionKernel::_init_rlags()
+{
+    long B = params.beams_per_batch;
+    long A = pow2(params.amb_rank);
+    long F = pow2(params.dd_rank);
+    long N = params.nt_per_segment;
+    long T = params.ntime;
+    long S = params.nspec;
+    
+    Array<int> rlags({B,A,F}, af_uhost);
+    
+    for (long b = 0; b < B; b++) {
+	for (long a = 0; a < A; a++) {
+	    // Ambient index 'a' represents a bit-reversed coarse DM.
+	    // Index 'f' represents a fine frequency.
+	    for (long f = 0; f < F; f++) {
+		long lag = rb_lag(f, a, params.amb_rank, params.dd_rank, params.input_is_downsampled_tree);
+		rlags.data[b*A*F + a*F + f] = (lag % N) * S;  // residual lag (including factor nspec)
+	    }
+	}
+    }
+    
+    this->rlag_bufs.resize(nbatches);
+    for (long n = 0; n < nbatches; n++)
+	rlag_bufs[n] = make_shared<ReferenceLagbuf> (rlags, T*S);
+}
+
+// Helper function called by apply().
 void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
     long B = params.beams_per_batch;
@@ -162,6 +172,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
 }
 
 
+// Helper function called by apply().
 void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
     long B = params.beams_per_batch;
