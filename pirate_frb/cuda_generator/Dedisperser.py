@@ -101,7 +101,7 @@ class DedisperserParams:
 
         # We generate all kernels up to the max rank.
         max_rank = cls.max_rank(nbits, nspec)
-        rank_list = list(range(1, max_rank))
+        rank_list = list(range(1, max_rank+1))
         
         return cls(
             dtype = dtype,
