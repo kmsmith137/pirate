@@ -67,20 +67,23 @@ class Ringbuf:
         self._cycle_register(k, dst, 32-nelts)
 
 
-    def advance2(self, k, rname, nelts):
+    def advance2(self, k, rname, nelts1, nelts2):
         """For use in dedispersion kernels."""
 
-        assert 0 <= nelts < 31
+        assert nelts1 >= 0
+        assert nelts2 >= 0
+        assert (nelts1 + nelts2) <= 32
         assert not self.advance_outer_called
-        
-        dst0, dst1 = k.get_tmp_rname(2)
-        k.emit(f'{self.dtype} {dst0}, {dst1};')
 
-        # FIXME
-        self.advance(k, rname, nelts, dst=dst1, comment=False)
-        self.advance(k, dst1, 1, dst=dst0, comment=False)
-        return dst0, dst1
-        
+        if True:
+            # FIXME temporary kludge
+            dst0, dst1 = k.get_tmp_rname(2)
+            k.emit(f'{self.dtype} {dst0}, {dst1};')
+            self.advance(k, rname, nelts1, dst=dst1, comment=False)
+            self.advance(k, dst1, nelts2, dst=dst0, comment=False)
+            return dst0, dst1
+
+        # FIXME code below is currently incorrect.
         # Note that _get_r() does not increment rb_nelts[r].
         r = self._get_r(nelts+1)   # note +1 here
         rb_rname = self.rb_rnames[r]

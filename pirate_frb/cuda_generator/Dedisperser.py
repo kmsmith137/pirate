@@ -16,10 +16,7 @@ class DedisperserParams:
         The 'rank' arg can either be an integer (representing a single kernel),
         or a list of integers (representing a file containing multiple kernels).
         """
-        
-        assert not (input_is_ringbuf and output_is_ringbuf)
-        assert nspec == 1             # FIXME not implemented yet
-        
+                
         if dtype == 'float':
             self.dt32 = 'float'
             self.nbits = 32
@@ -29,12 +26,19 @@ class DedisperserParams:
         else:
             raise RuntimeError(f"Unrecognized dtype: {dtype}")
         
+        assert nspec >= 1
+        assert nspec <= (512 // self.nbits)
+        assert utils.is_power_of_two(nspec)
+        assert not (input_is_ringbuf and output_is_ringbuf)
+        
+        max_rank = self.max_rank(self.nbits, nspec)
+
         if isinstance(rank, int):
-            assert 1 <= rank <= 8
+            assert 1 <= rank <= max_rank
         elif isinstance(rank, list):
             assert len(rank) > 0
             assert all(isinstance(r,int) for r in rank)
-            assert all(1 <= r <= 8 for r in rank)
+            assert all(1 <= r <= max_rank for r in rank)
         else:
             raise RuntimeError("Expected 'rank' to be an integer, or list of integers")            
         
@@ -46,6 +50,14 @@ class DedisperserParams:
         self.nspec = nspec
 
 
+    @classmethod
+    def max_rank(cls, nbits, nspec):
+        # This expression for the max rank derives from the requirement that shared
+        # memory lags must be at most 255 32-bit registers.
+        max_rank = 13 - utils.integer_log2(nbits * nspec)
+        return min(max_rank, 8)
+
+    
     @property
     def filename(self):
         """Note: the rank is ignored (see from_filename() below)."""
@@ -72,23 +84,28 @@ class DedisperserParams:
         For example, /path/to/dd_fp16_inrb_rlag_s8.cu matches.
         """
 
-        dt_dict = { 'fp32': 'float', 'fp16': '__half' }
+        dt_dict = { 32: 'float', 16: '__half' }
         rb_dict = { 'norb': (False,False), 'inrb': (True,False), 'outrb': (False,True) }   # (in_rb, out_rb)
         lag_dict = { 'nolag': False, 'rlag': True}   # rlag
 
         try:
             # Reminder: (?:...) defines a "non-capturing group".
-            m = re.match(r'^(?:.*/)?dd_(fp\d+)_([a-z]+rb)_([a-z]+lag)_s(\d+)(?:\.cu)?', filename)
-            dtype = dt_dict[m.group(1)]
+            m = re.match(r'^(?:.*/)?dd_fp(\d+)_([a-z]+rb)_([a-z]+lag)_s(\d+)(?:\.cu)?', filename)
+            nbits = int(m.group(1))
+            dtype = dt_dict[nbits]
             irb, orb = rb_dict[m.group(2)]
             rlag = lag_dict[m.group(3)]
             nspec = int(m.group(4))
         except:
             raise RuntimeError(f"cuda_generator.DedisperserParams: couldn't parse {filename=}")
 
+        # We generate all kernels up to the max rank.
+        max_rank = cls.max_rank(nbits, nspec)
+        rank_list = list(range(1, max_rank))
+        
         return cls(
             dtype = dtype,
-            rank = list(range(1,9)),    # Note: this is where ranks are specified
+            rank = rank_list,
             apply_input_residual_lags = rlag,
             input_is_ringbuf = irb,
             output_is_ringbuf = orb,
@@ -235,7 +252,7 @@ class Dedisperser:
         B = utils.xdiv(16, W)   # threadblocks per SM (FIXME rethink?)
 
         k.emit(f'// Launch with {{ 32, {W} }} threads/warp')
-        k.emit(f'// Launch with {{ Namb, Nbeams}} threadblocks')
+        k.emit(f'// Launch with {{ Namb, Nbeams }} threadblocks')
         k.emit()
 
         if False:   # debug
@@ -393,20 +410,33 @@ class Dedisperser:
                 x0 = f'dd{s+j}'
                 x1 = f'dd{s+j+2**i}'
                 lag = utils.bit_reverse(j,i)
-                k.emit(f'// dedisperse {x0}, {x1} with lag {lag}')
-
-                tmp0, tmp1 = self.rrb.advance2(k, x0, (lag * self.nbits) // 32)
-
-                if self.dtype == '__half':
-                    tdst = tmp1 if (lag % 2) else tmp0
-                    k.emit(f'{tdst} = ksgpu::f16_align({tmp0}, {tmp1});')
-                    
+                
+                k.emit(f'// dedisperse {x0}, {x1} with time lag {lag} (not accounting for nbits, nspec)')
+                tmp0, tmp1 = self._advance2(k, x0, lag)
                 k.emit(f'{x0} = {tmp1} + {x1};')
                 k.emit(f'{x1} += {tmp0};')
-                    
 
         k.emit(f'// dedispersion_pass: pass {i} ends here')
 
+
+    def _advance2(self, k, x0, lag):
+        """Lag is in time samples, and does not account for nbits, nspec."""
+        
+        lag32a = (lag * self.nbits * self.nspec) // 32
+        lag32b = (self.nbits * self.nspec) // 32
+
+        if lag32b > 0:
+            # Case 1: one time sample corresponds to an integer number of 32-bit registers.
+            tmp0, tmp1 = self.rrb.advance2(k, x0, lag32a, lag32b)
+        else:
+            # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
+            assert (self.dtype == '__half') and (self.nspec == 1)
+            tmp0, tmp1 = self.rrb.advance2(k, x0, lag32a, 1)
+            tdst = tmp1 if (lag % 2) else tmp0
+            k.emit(f'{tdst} = ksgpu::f16_align({tmp0}, {tmp1});')
+        
+        return tmp0, tmp1
+        
 
     def _apply_input_residual_lags(self, k):
         if not self.apply_input_residual_lags:
@@ -425,15 +455,17 @@ class Dedisperser:
         k.emit(f'//    dm = bit_reverse(dm_brev) + (is_downsampled_tree ? 2^ambient_rank : 0)')
         k.emit(f'//    frev = 2^dd_rank - 1 - f')
         k.emit(f'//')
-        k.emit(f'// However, due to cache-alignment constraints, we are only able to apply (lag % N),')
-        k.emit(f'// where N = self.nt_per_segment.  To address this, the dedispersion kernel is')
+        k.emit(f'// However, due to cache-alignment constraints, we are only able to apply (lag % T),')
+        k.emit(f'// where T = self.nt_per_segment.  To address this, the dedispersion kernel is')
         k.emit(f'// responsible for applying the "residual" lag:')
-        k.emit(f'//    rlag = lag % N')
+        k.emit(f'//    rlag = lag % T')
         k.emit(f'//')
         k.emit(f'// FIXME: poorly optimized, especially in float16 case')
         k.emit()
         
-        N = self.nt_per_segment
+        T = self.nt_per_segment
+        B = self.nspec * self.nbits
+        assert T*B == 1024
         
         k.emit(f'uint rlag_f0 = threadIdx.y << {utils.integer_log2(self.ndd)};         // 0 <= rlag_f0 < 2^(dd_rank)')
         k.emit(f'uint rlag_dm = __brev(blockIdx.x) >> (33U - __ffs(gridDim.x));   // 0 <= rlag_dm < 2^(ambient rank)')
@@ -441,15 +473,21 @@ class Dedisperser:
 
         for i in range(self.ndd):
             rlag = k.get_tmp_rname()
-            k.emit(f'uint {rlag} = (rlag_dm * ({2**self.rank-1-i} - rlag_f0)) & {N-1};   // rlag to be applied to dd{i}')
+            k.emit(f'uint {rlag} = (rlag_dm * ({2**self.rank-1-i} - rlag_f0)) & {T-1};   // rlag to be applied to dd{i}')
 
-            if self.nbits == 32:
+            if (B % 32) == 0:
+                # Case 1: one time sample corresponds to an integer number of 32-bit registers.
+                if B > 32:
+                    k.emit(f'{rlag} <<= {utils.integer_log2(B//32)};   // convert rlag (time samples) -> (32-bit registers)')
+                
                 tmp = k.get_tmp_rname()
                 k.emit(f'{self.dt32} {tmp} = ((threadIdx.x + {rlag}) >= 32) ? dd_rlag{i} : dd{i};')
                 k.emit(f'dd_rlag{i} = dd{i};')
                 k.emit(f'dd{i} = __shfl_sync(0xffffffff, {tmp}, threadIdx.x - {rlag});   // rlag has now been applied to dd{i}')
 
-            elif self.nbits == 16:
+            else:
+                # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
+                assert (self.dtype == '__half') and (self.nspec == 1)
                 rlag2, tmp, tmp2 = k.get_tmp_rname(3)
                 k.emit(f'uint {rlag2} = {rlag} >> 1;   // (rlag // 2)')
 
@@ -470,10 +508,10 @@ class Dedisperser:
             
         
     def _apply_one_sample_lags(self, k):
-        if (self.nbits != 16) or (self.rank0 == 0):
+        if (self.nbits != 16) or (self.nspec != 1) or (self.rank0 == 0):
             return
 
-        k.emit(f'// Apply one-sample lags (float16 only)')
+        k.emit(f'// Apply one-sample lags (float16 nspec=1 only)')
         k.emit(f'// A one-sample lag is needed if:')
         k.emit(f'//    - register index is even (equivalent to odd frev)')
         k.emit(f'//    - (warpId & {2**(self.rank0-1)}) is 1 (equivalent to odd dm)')
@@ -497,7 +535,7 @@ class Dedisperser:
         # FIXME cut-and-paste with _apply_outbuf_offsets()
         if self.input_is_ringbuf:
             wshift = self.rank1 if self.two_stage else self.rank
-            self._apply_ringbuf_offsets(k, wshift)
+            self._apply_grb_offsets(k, wshift)
             return
         
         # Non-ringbuf case follows.
@@ -515,7 +553,7 @@ class Dedisperser:
 
     def _apply_outbuf_offsets(self, k):
         if self.output_is_ringbuf:
-            self._apply_ringbuf_offsets(k, 0)
+            self._apply_grb_offsets(k, 0)
             return
 
         # Non-ringbuf case follows.
@@ -531,7 +569,7 @@ class Dedisperser:
         k.emit()
 
 
-    def _apply_ringbuf_offsets(self, k, wshift):
+    def _apply_grb_offsets(self, k, wshift):
         wshift = f' << {wshift}' if (wshift > 0) else ''
         
         k.emit(f'// Apply per-thread offsets to global memory ring buffer')
@@ -551,6 +589,7 @@ class Dedisperser:
             return
         
         rank0, rank1 = self.rank0, self.rank1
+        B = self.nspec * self.nbits
         
         k.emit('// Init control words for two-stage kernel.')
         k.emit('// A ring buffer "control word" consists of:')
@@ -592,7 +631,8 @@ class Dedisperser:
         k.emit(f'// Compute (srb_lag, srb_base) from (frev, dm).')
         k.emit(f'// This part uses some cryptic, highly optimized code from Dedisperser.srb_base()')
 
-        if self.dtype == 'float':
+        if (B % 32) == 0:
+            # Case 1: one time sample corresponds to an integer number of 32-bit registers.
             a = 2**(rank1-1) * (2**rank1-1)
             b = 2**(rank1+6) - a
             
@@ -601,7 +641,13 @@ class Dedisperser:
             k.emit(f'uint {srb_base} = (({dm}*{t}) >> 1) + ({frev} << 5);  // srb_base')
             k.emit(f'uint {srb_lag} = {dm}*{frev};  // srb_lag')
 
-        elif self.dtype == '__half':
+            if B > 32:
+                k.emit(f'{srb_base} <<= {utils.integer_log2(B//32)};  // convert srb_base (time samples) -> (32-bit registers)')
+                k.emit(f'{srb_lag} <<= {utils.integer_log2(B//32)};   // convert srb_lag (time samples) -> (32-bit registers)')
+                
+        else:
+            # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
+            assert (self.dtype == '__half') and (self.nspec == 1)
             a = (2**rank1 - 1) * 2**(rank1-1)
             b = (256 - 2**rank1) * 2**(rank1-1)
             c = 2**(rank1-1) + 1
@@ -611,9 +657,6 @@ class Dedisperser:
             k.emit(f'uint {t} = ({dm}*{u}) + ({dm} & 1) * ({c}-{frev});')
             k.emit(f'uint {srb_base} = ({t} >> 2) + ({frev} << 5);  // srb_base')
             k.emit(f'uint {srb_lag} = ({dm}*{frev}) >> 1;  // srb_lag')
-
-        else:
-            raise RuntimeError('bad dtype')
 
         k.emit()
         k.emit(f'// Compute srb_pos, and assemble control word from (srb_lag, srb_base)')
@@ -807,8 +850,10 @@ class Dedisperser:
         for dm in range(2**self.rank0):
             for frev in range(2**self.rank1):
                 assert self.srb_base(dm,frev) == expected_pos
-                lag = (frev * dm * self.nbits) // 32
-                expected_pos += (lag + 32)
+                lag32 = (frev * dm * self.nspec * self.nbits) // 32
+                
+                assert lag32 <= 255   # assumed in srb "control word" layout above
+                expected_pos += (lag32 + 32)
 
         assert self.shmem_nbytes == (expected_pos * 4)
         # print(f'static_asserts(rank0={self.rank0}, rank1={self.rank1}): pass')
@@ -823,21 +868,29 @@ class Dedisperser:
         assert 0 <= frev < 2**rank1  # note <
         assert rank1 >= 2            # assumed below as noted
 
-        if self.dtype == 'float':
+        B = self.nspec * self.nbits
+
+        if (B % 32) == 0:
+            # Case 1: one time sample corresponds to an integer number of 32-bit registers.
+            
             # "Intuitive form"
             # n1 = 2**rank1
             # term1 = ((dm*(dm-1))//2) * ((n1*(n1-1))//2)   # d < dm, all f
             # term2 = dm * ((frev*(frev-1)) // 2)           # d == dm, f < frev
             # term3 = 32 * (dm*n1 + frev)
-            # return term1 + term2 + term3
+            # return (term1 + term2 + term3) * (B//32)
             
             # "Fast form" with slightly fewer ops (assumes rank1 >= 1)
             a = 2**(rank1-1) * (2**rank1-1)  # known at compile time
             b = 2**(rank1+6) - a             # known at compile time
             t = a*dm + frev*(frev-1) + b
-            return ((dm*t) >> 1) + (frev << 5)
+            ret = ((dm*t) >> 1) + (frev << 5)
+            return ret << utils.integer_log2(B//32)
 
-        elif self.dtype == '__half':
+        else:
+            # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
+            assert (self.dtype == '__half') and (self.nspec == 1)
+
             # "Intuitive form" (assumes rank1 >= 2)
             # n1 = 2**rank1
             # term1 = ((dm*(dm-1))//2) * ((n1*(n1-1)) // 4)    # d < dm, all f
@@ -845,7 +898,7 @@ class Dedisperser:
             # term2 = (dm * frev * (frev-1)) // 4              # d == dm, f < frev
             # term2 -= (dm & 1) * (frev // 4)                  # correction if dm is odd
             # term3 = 32 * (dm*n1 + frev)
-            # return term1 + term2 + term3
+            # return (term1 + term2 + term3) * (B//32)
 
             # "Fast form" with slightly fewer ops (assumes rank1 >= 2)
             a = (2**rank1 - 1) * 2**(rank1-1)     # known at compile time
@@ -854,6 +907,4 @@ class Dedisperser:
             u = a*dm + frev*(frev-1) + b
             t = (dm*u) + (dm & 1) * (c-frev)
             return (t >> 2) + (frev << 5)
-            
-        else:
-            raise RuntimeError('bad dtype')
+
