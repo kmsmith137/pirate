@@ -62,13 +62,35 @@ static void time_gpu_dedispersion_kernel(const DedispersionKernelParams &params,
 		cout << "    " << ((k-j) * gb / ksgpu::time_diff(tv[j],tv[k])) << " GB/s\n";
 	}
     }
+
+    CUDA_CALL(cudaDeviceSynchronize());
 }
 
 
 void time_gpu_dedispersion_kernels()
 {
+#if 0
+    // Time specific kernel.
+    DedispersionKernelParams p;
+    p.dtype = Dtype::native<float> ();
+    p.dd_rank = 8;
+    p.amb_rank = 1;
+    p.total_beams = 1;
+    p.beams_per_batch = 1;
+    p.ntime = 32;
+    p.nspec = 1;
+    p.input_is_ringbuf = false;
+    p.output_is_ringbuf = false;
+    p.apply_input_residual_lags = false;
+    p.input_is_downsampled_tree = false;
+    p.nt_per_segment = 32;
+    time_gpu_dedispersion_kernel(p, 1);  // nchunks=1
+#endif
+
+#if 1
+    // Time a few representative kernels.
     long nstreams = 2;
-    
+
     for (int dd_rank: {4,8}) {
 	for (int stage: {0,1,2}) {
 	    for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
@@ -114,6 +136,7 @@ void time_gpu_dedispersion_kernels()
 	    }
 	}
     }
+#endif
 }
 
 
