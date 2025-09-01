@@ -10,7 +10,7 @@ namespace pirate {
 // Defined in DedispersionConfig.hpp
 struct DedispersionConfig;
 
-// test_reference_tree.cu
+// test_dedispersion_basics.cu
 extern void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, int t0);
 extern void test_non_incremental_dedispersion();
 extern void test_reference_lagbuf();
