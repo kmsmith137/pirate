@@ -206,38 +206,40 @@ void test_reference_lagbuf()
 // Test 'class ReferenceTree', by comparing its incremental dedispersion to dedisperse_non_incremental().
 
 
-static void test_reference_tree(const vector<long> &shape, const vector<long> &strides, int nchunks)
+static void test_reference_tree(const vector<long> &shape, const vector<long> &strides, long nchunks, long nspec)
 {
     cout << "test_reference_tree: shape=" << tuple_str(shape)
 	 << ", strides=" << tuple_str(strides)
-	 << ", nchunks=" << nchunks << endl;
+	 << ", nchunks=" << nchunks
+	 << ", nspec=" << nspec
+	 << endl;
 
     int ndim = shape.size();
     xassert(ndim >= 2);
     
-    int nfreq = shape.at(ndim-2);
-    int nt_chunk = shape.at(ndim-1);
-    int nt_tot = nt_chunk * nchunks;
+    long nfreq = shape.at(ndim-2);
+    long ninner_chunk = shape.at(ndim-1);
+    long ninner_tot = ninner_chunk * nchunks;
     
     // Input data (multiple chunks)
     vector<long> big_shape = shape;
     big_shape[ndim-1] *= nchunks;
     Array<float> arr0(big_shape, af_uhost | af_random);
 
-    // Step 1. reshape to (nouter, nfreq, nt_tot), with precisely one spectator axis.
+    // Step 1. reshape to (nouter, nfreq, ninner_tot), with precisely one spectator axis.
 
-    int nouter = 1;
+    long nouter = 1;
     for (int d = 0; d < ndim-2; d++)
 	nouter *= shape[d];
     
     Array<float> arr1 = arr0.clone();  // note deep copy here
-    arr1 = arr1.reshape({nouter, nfreq, nt_tot});
+    arr1 = arr1.reshape({nouter, nfreq, ninner_tot});
 
     // Step 2. loop over outer spectator axis, and call dedisperse_non_incremental().
     
-    for (int i = 0; i < nouter; i++) {
-	Array<float> view_2d = arr1.slice(0, i);  // shape (nfreq, nt_tot)
-	dedisperse_non_incremental(view_2d, 1);   // nspec=1
+    for (long i = 0; i < nouter; i++) {
+	Array<float> view_2d = arr1.slice(0, i);  // shape (nfreq, ninner_tot)
+	dedisperse_non_incremental(view_2d, nspec);
     }
 
     // Step 3. reshape back to original shape.
@@ -247,12 +249,12 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
 
     // Now apply incremental dedispersion in chunks, and compare.
     
-    ReferenceTree rtree(shape);
+    ReferenceTree rtree(shape, nspec);
     Array<float> chunk(shape, strides, af_uhost | af_zero);
 
     // Apply incremental dedispersion to arr0 (in place)
-    for (int c = 0; c < nchunks; c++) {
-	Array<float> slice = arr0.slice(ndim-1, c*nt_chunk, (c+1)*nt_chunk);
+    for (long c = 0; c < nchunks; c++) {
+	Array<float> slice = arr0.slice(ndim-1, c*ninner_chunk, (c+1)*ninner_chunk);
 	chunk.fill(slice);
 	rtree.dedisperse(chunk);
 	slice.fill(chunk);
@@ -261,10 +263,10 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
     // Need axis names for assert_arrays_equal().
     vector<string> axis_names(ndim);
     for (int d = 0; d < ndim-2; d++)
-	axis_names[d] = "ispec" + to_string(d);
+	axis_names[d] = "spec" + to_string(d);
     axis_names[ndim-2] = "dm_brev";
-    axis_names[ndim-1] = "t";
-
+    axis_names[ndim-1] = "inner";
+    
     ksgpu::assert_arrays_equal(arr1, arr0, "non-incremental", "incremental", axis_names);
 }
 
@@ -274,19 +276,28 @@ void test_reference_tree()
     int rank = rand_int(1, 9);
     int ndim = rand_int(2, 6);
 
-    vector<long> shape = ksgpu::random_integers_with_bounded_product(ndim, 30000 / pow2(rank));
-    int nchunks = shape[ndim-2];
+    // v = (spectators) + (ntime,nspec,nchunks)
+    vector<long> v = ksgpu::random_integers_with_bounded_product(ndim+1, 100000 / pow2(rank));
+    long ntime = v[ndim-2];
+    long nspec = v[ndim-1];
+    long nchunks = v[ndim];
+
+    // shape = (spectators) + (2^rank, nspec*nchunks)
+    vector<long> shape(ndim);
+    for (long d = 0; d < ndim-2; d++)
+	shape[d] = v[d];
     shape[ndim-2] = pow2(rank);
+    shape[ndim-1] = nspec * nchunks;
 
     vector<long> strides = ksgpu::make_random_strides(shape, 1);  // ncontig=1
-    test_reference_tree(shape, strides, nchunks);
+    test_reference_tree(shape, strides, nchunks, nspec);
 }
 
 
 // -------------------------------------------------------------------------------------------------
 
 
-void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
+void test_tree_recursion(int rank0, int rank1, long nt_chunk, long nchunks)
 {
     cout << "test_tree_recursion: rank0=" << rank0 << ", rank1=" << rank1
 	 << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks << endl;
@@ -297,21 +308,21 @@ void test_tree_recursion(int rank0, int rank1, int nt_chunk, int nchunks)
     check_rank(rank1, "test_tree_recursion [rank1]");
     check_rank(rank_tot, "test_tree_recursion [rank_tot]");
 	       
-    int nfreq_tot = pow2(rank_tot);
-    int nfreq0 = pow2(rank0);
-    int nfreq1 = pow2(rank1);
+    long nfreq_tot = pow2(rank_tot);
+    long nfreq0 = pow2(rank0);
+    long nfreq1 = pow2(rank1);
 
     Array<int> lags({nfreq1,nfreq0}, af_uhost | af_zero);
-    for (int i = 0; i < nfreq1; i++)
-	for (int j = 0; j < nfreq0; j++)
+    for (long i = 0; i < nfreq1; i++)
+	for (long j = 0; j < nfreq0; j++)
 	    lags.at({i,j}) = rb_lag(i, j, rank0, rank1, false);  // uflag=false
 
-    ReferenceTree big_tree({nfreq_tot, nt_chunk});
-    ReferenceTree tree0({nfreq1, nfreq0, nt_chunk});
-    ReferenceTree tree1({nfreq0, nfreq1, nt_chunk});
+    ReferenceTree big_tree({nfreq_tot, nt_chunk}, 1);    // nspec=1
+    ReferenceTree tree0({nfreq1, nfreq0, nt_chunk}, 1);  // nspec=1
+    ReferenceTree tree1({nfreq0, nfreq1, nt_chunk}, 1);  // nspec=1
     ReferenceLagbuf lagbuf(lags, nt_chunk);
 
-    for (int c = 0; c < nchunks; c++) {
+    for (long c = 0; c < nchunks; c++) {
 	Array<float> chunk0({nfreq_tot, nt_chunk}, af_uhost | af_random);
 
 	// "Two-step" dedispersion.
@@ -339,9 +350,9 @@ void test_tree_recursion()
     int rank = rand_int(0, 9);
     int rank0 = rand_int(0, rank+1);
     int rank1 = rank - rank0;
-    int nt_chunk = rand_int(1, pow2(std::max(rank0,rank1)+1));
-    int maxchunks = std::max(3L, 10000 / (pow2(rank) * nt_chunk));
-    int nchunks = rand_int(1, maxchunks+1);
+    long nt_chunk = rand_int(1, pow2(std::max(rank0,rank1)+1));
+    long maxchunks = std::max(3L, 10000 / (pow2(rank) * nt_chunk));
+    long nchunks = rand_int(1, maxchunks+1);
     
     test_tree_recursion(rank0, rank1, nt_chunk, nchunks);
 }

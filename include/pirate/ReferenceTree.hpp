@@ -26,29 +26,33 @@ namespace pirate {
 class ReferenceTree
 {
 public:
-    // Frequency axis is second-to-last, time axis is last.
+    // Frequency axis is second-to-last, inner (ntime*nspec) axis is last.
     // All other indices are spectators.
-    ReferenceTree(const std::vector<long> &shape);
-    ReferenceTree(int ndim, const long *shape);
+    ReferenceTree(const std::vector<long> &shape, long nspec);
+    ReferenceTree(int ndim, const long *shape, long nspec);
     
-    // Dedispersion is done in-place, on an array of shape 'shape'.
+    // Dedispersion is done in-place.
+    // Array shape is (Spectator indices) + (nfreq, ntime*nspec).
     void dedisperse(ksgpu::Array<float> &arr);
 
     // Morally equivalent to make_shared<ReferenceTree> (...).
     // (Necessary since make_shared doesn't seem to work with initializer lists.)
-    static std::shared_ptr<ReferenceTree> make(std::initializer_list<long> shape);
+    static std::shared_ptr<ReferenceTree> make(std::initializer_list<long> shape, long nspec);
     
-protected:    
+protected:
+    // (Spectator indices) + (nfreq, ntime*nspec)
     std::vector<long> shape;
 
     int ndim = -1;
-    int nfreq = -1;
-    int ntime = -1;
     int rank = -1;
-    long nrstate = 0;
+    long nfreq = -1;
+    long ntime = -1;
+    long nspec = -1;
+    long ninner = -1;   // = ntime*nspec
+    long npstate = 0;
     
-    ksgpu::Array<float> rstate;          // can be large
-    ksgpu::Array<float> scratch;         // always small (length ntime+1)
+    ksgpu::Array<float> pstate;          // can be large
+    ksgpu::Array<float> scratch;         // always small (length (ntime+1)*nspec)
 };
 
 

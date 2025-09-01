@@ -44,7 +44,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
     
     this->trees.resize(nbatches);			  
     for (long n = 0; n < nbatches; n++)
-	trees[n] = ReferenceTree::make({B,A,F,T});
+	trees[n] = ReferenceTree::make({B,A,F,T}, 1);  // nspec=1
 
     if (!params.apply_input_residual_lags)
 	return;

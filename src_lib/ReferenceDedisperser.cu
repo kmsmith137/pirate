@@ -171,7 +171,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 	this->output_arrays.at(iout) = Array<float>({ beams_per_batch, pow2(out_rank), out_ntime }, af_uhost | af_zero);
 
 	for (int batch = 0; batch < nbatches; batch++)
-	    this->trees.at(batch*output_ntrees + iout) = ReferenceTree::make({ beams_per_batch, pow2(dd_rank), out_ntime });
+	    this->trees.at(batch*output_ntrees + iout) = ReferenceTree::make({beams_per_batch, pow2(dd_rank), out_ntime}, 1);  // nspec=1
     }
 
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
