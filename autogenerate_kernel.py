@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import os
 import sys
 import contextlib
 
@@ -26,8 +27,13 @@ sys.path.insert(0, 'pirate_frb')
 import cuda_generator
 
 filename = sys.argv[1]
-k = cuda_generator.make_files.make_file(filename)
+basename = os.path.basename(filename)
 
-f = open(sys.argv[1], 'w')
-with cuda_generator.utils.clang_formatter(f) as ff:
-    k.write(ff)
+if basename.startswith('dd_'):
+    k = cuda_generator.make_dd_file(basename)
+elif basename.startswith('pf_'):
+    k = cuda_generator.make_pf_file(basename)
+
+with open(filename,'w') as f:
+    with cuda_generator.utils.clang_formatter(f) as ff:
+        k.write(ff)

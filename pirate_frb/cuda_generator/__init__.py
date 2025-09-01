@@ -2,14 +2,14 @@
 # don't forget to add them to 'CUDAGEN_PYFILES' in the Makefile.
 
 from . import utils
-from . import make_files
 
 from .Kernel import Kernel
 from .Ringbuf import Ringbuf, Ringbuf16
 
 from .Dedisperser import \
     DedisperserParams, \
-    Dedisperser
+    Dedisperser, \
+    make_dd_file
 
 from .PeakFinder import \
     PeakFindingParams, \
@@ -17,4 +17,5 @@ from .PeakFinder import \
     PfTransposeLayer, \
     PfInitialTranspose16Layer, \
     PfCore, \
-    PfReducer
+    PfReducer, \
+    make_pf_file

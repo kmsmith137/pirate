@@ -33,6 +33,11 @@ def bit_reverse(i, nbits):
     return ret
 
 
+def tf(x):
+    """Needed since C++ uses lower-case true/false, and python uses upper-case True/False."""
+    return "true" if x else "false"
+
+
 def clang_formatter(f = sys.stdout):
     cmd = ['clang-format', '-style={ColumnLimit: 0, IndentWidth: 4}']
     proc = subprocess.Popen(cmd, stdin = subprocess.PIPE, stdout = f)
