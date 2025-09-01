@@ -19,16 +19,19 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 //
 // Test dedisperse_non_incremental(), by comparing it to a brute force non-recursive algorithm.
+//
+// Reminder: dedisperse_non_incremental() is defiend in utils.{hpp,cu}, and is lower-level
+// than the ReferenceTree.
 
 
 // This utility function currently isn't used anywhere except test_non_incremental_dedispersion().
-static int dedispersion_delay(int rank, int freq, int dm_brev)
+static long dedispersion_delay(int rank, long freq, long dm_brev)
 {
-    int delay = 0;
-    int delay0 = 0;
+    long delay = 0;
+    long delay0 = 0;
 
     for (int r = 0; r < rank; r++) {
-	int d = (dm_brev & 1) ? (delay0+1) : delay0;
+	long d = (dm_brev & 1) ? (delay0+1) : delay0;
 	delay += ((freq & 1) ? 0 : d);
 	delay0 += d;
 	dm_brev >>= 1;
@@ -39,27 +42,30 @@ static int dedispersion_delay(int rank, int freq, int dm_brev)
 }
 
 
-void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, int t0)
+void test_non_incremental_dedispersion(int rank, long ntime, long nspec, long dm_brev, long t0, long s0)
 {
     cout << "test_non_incremental_dedispersion(rank=" << rank << ", ntime=" << ntime
-	 << ", dm_brev=" << dm_brev << ", t0=" << t0 << ")" << endl;
-	
+	 << ", nspec=" << nspec << ", dm_brev=" << dm_brev << ", t0=" << t0
+	 << ", s0=" << s0 << ")" << endl;
+    
     check_rank(rank, "test_non_incremental_dedispersion");
     xassert((dm_brev >= 0) && (dm_brev < pow2(rank)));
     xassert((t0 >= 0) && (t0 < ntime));
+    xassert((s0 >= 0) && (s0 < nspec));
 
-    int nchan = pow2(rank);
-    Array<float> arr({nchan, ntime}, af_uhost | af_random);
+    // dedisperse_non_incremental() expects a 2-d array.
+    long nchan = pow2(rank);
+    Array<float> arr({nchan, ntime*nspec}, af_uhost | af_random);
 
     float x = 0.0;
     for (int ifreq = 0; ifreq < nchan; ifreq++) {
-	int t = t0 - dedispersion_delay(rank, ifreq, dm_brev);
+	long t = t0 - dedispersion_delay(rank, ifreq, dm_brev);
 	if (t >= 0)
-	    x += arr.at({ifreq,t});
+	    x += arr.at({ifreq, t*nspec + s0 });
     }
 
-    dedisperse_non_incremental(arr);
-    float y = arr.at({dm_brev,t0});
+    dedisperse_non_incremental(arr, nspec);
+    float y = arr.at({dm_brev, t0*nspec + s0});
 
     float eps = fabs(x-y) / sqrt(nchan);
     xassert(eps < 1.0e-5);
@@ -69,11 +75,13 @@ void test_non_incremental_dedispersion(int rank, int ntime, int dm_brev, int t0)
 void test_non_incremental_dedispersion()
 {
     int rank = rand_int(0, 9);
-    int ntime = rand_int(1, 500);
-    int dm_prev = rand_int(0, pow2(rank));
-    int t0 = rand_int(0, ntime);
+    long ntime = rand_int(1, 100);
+    long nspec = rand_int(1, 10);
+    long dm_brev = rand_int(0, pow2(rank));
+    long t0 = rand_int(0, ntime);
+    long s0 = rand_int(0, nspec);
     
-    test_non_incremental_dedispersion(rank, ntime, dm_prev, t0);
+    test_non_incremental_dedispersion(rank, ntime, nspec, dm_brev, t0, s0);
 }
 
 
@@ -239,7 +247,7 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
     
     for (int i = 0; i < nouter; i++) {
 	Array<float> view_2d = arr1.slice(0, i);  // shape (nfreq, nt_tot)
-	dedisperse_non_incremental(view_2d);
+	dedisperse_non_incremental(view_2d, 1);   // nspec=1
     }
 
     // Step 4. transpose back to original axis ordering.

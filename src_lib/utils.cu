@@ -1,5 +1,5 @@
 #include "../include/pirate/utils.hpp"
-#include "../include/pirate/inlines.hpp"    // pow2()
+#include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
 
 #include <sstream>
@@ -230,17 +230,21 @@ void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
 }
 
 
-void dedisperse_non_incremental(Array<float> &arr)
+void dedisperse_non_incremental(Array<float> &arr, long nspec)
 {
     xassert(arr.ndim == 2);
-
-    int nfreq = arr.shape[0];
-    int ntime = arr.shape[1];
+    long nfreq = arr.shape[0];
+    long ninner = arr.shape[1];
+    
+    xassert(nspec > 0);
     xassert(nfreq > 0);
-    xassert(ntime > 0);
-    xassert((ntime ==1) || (arr.strides[1] == 1));
+    xassert(ninner > 0);
+    xassert((ninner == 1) || (arr.strides[1] == 1));
+    xassert(is_power_of_two(nfreq));
+    xassert_divisible(ninner, nspec);
     
     int rank = integer_log2(nfreq);
+    // long ntime = xdiv(ninner, nspec);   // not actually needed
 
     for (int r = 0; r < rank; r++) {
 	int pr = pow2(r);
@@ -250,16 +254,16 @@ void dedisperse_non_incremental(Array<float> &arr)
 		float *row0 = arr.data + (i+j)*arr.strides[0];
 		float *row1 = row0 + pr*arr.strides[0];
 		
-		int lag = bit_reverse_slow(j,r) + 1;
-		float x0 = (ntime >= lag) ? row0[ntime-lag] : 0.0;
-		
-		for (int t = ntime-1; t >= 0; t--) {
-		    float y = row1[t];
-		    float x1 = x0;
-		    x0 = (t >= lag) ? row0[t-lag] : 0.0;
+		long lag1 = bit_reverse_slow(j,r) * nspec;
+		long lag0 = lag1 + nspec;
 
-		    row0[t] = x1 + y;
-		    row1[t] = x0 + y;
+		for (int k = ninner-1; k >= 0; k--) {
+		    float x0 = (k >= lag0) ? row0[k-lag0] : 0.0f;
+		    float x1 = (k >= lag1) ? row0[k-lag1] : 0.0f;
+		    float y = row1[k];
+
+		    row0[k] = x1 + y;
+		    row1[k] = x0 + y;
 		}
 	    }
 	}

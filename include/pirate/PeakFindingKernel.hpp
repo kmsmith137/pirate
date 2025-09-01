@@ -117,7 +117,7 @@ struct GpuPeakFindingKernel : PeakFindingKernel
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate();
 
-    // Bandwidth per call to GpuDedispersionKernel::launch().
+    // Bandwidth per call to GpuPeakFindingKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
     BandwidthTracker bw_per_launch;
 

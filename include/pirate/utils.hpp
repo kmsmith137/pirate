@@ -34,11 +34,6 @@ extern long rstate_ds_len(int output_rank);
 extern int rb_lag(int i, int j, int rank0, int rank1, bool uflag=false);
 
 
-// dedisperse_non_incremental(): currently only used for testing the ReferenceTree,
-// but I could imagine this being useful elsewhere some day. Dedispersion is done in
-// place -- output index is a bit-reversed delay.
-extern void dedisperse_non_incremental(ksgpu::Array<float> &arr);
-
 // Downsamples (freq,time) array by a factor 2 along either frequency or time axis.
 // Each pair of elements will be averaged/summed, depending on whether the 'normalize' flag is true/false.
 extern void reference_downsample_freq(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, bool normalize);
@@ -51,6 +46,15 @@ extern void reference_extract_odd_channels(const ksgpu::Array<float> &in, ksgpu:
 // lag_non_incremental() is only used for testing the ReferenceLagbuf.
 // Lagging is done in place.
 extern void lag_non_incremental(ksgpu::Array<float> &arr, const std::vector<int> &lags);
+
+
+// dedisperse_non_incremental(): currently only used for testing the ReferenceTree,
+// but I could imagine this being useful elsewhere some day. Dedispersion is done in
+// place -- output index is a bit-reversed delay.
+//
+// Note: Input is a 2-d array with shape (nfreq, ntime*nspec).
+
+extern void dedisperse_non_incremental(ksgpu::Array<float> &arr, long nspec);
 
 
 // Setup for mean_bytes_per_unaligned_chunk():
