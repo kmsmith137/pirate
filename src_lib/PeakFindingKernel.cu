@@ -1,5 +1,4 @@
 #include "../include/pirate/PeakFindingKernel.hpp"
-#include "../include/pirate/KernelRegistry.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
 
@@ -332,8 +331,9 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     key.M = params.dm_downsampling_factor;
     key.E = params.max_kernel_width;
     key.Dout = params.time_downsampling_factor;
-    
-    this->registry_value = query_registry(key);
+
+    // Call static member function GpuPeakFindingKernel::registry().
+    this->registry_value = registry().get(key);
     this->Dcore = registry_value.Dcore;
     
     xassert(registry_value.P == nprofiles);
@@ -392,55 +392,48 @@ void GpuPeakFindingKernel::launch(Array<void> &out_max, Array<void> &out_ssq, co
 // Kernel registry.
 
 
-using PfRegistry = typename pirate::KernelRegistry<GpuPeakFindingKernel::RegistryKey, GpuPeakFindingKernel::RegistryValue>;
+struct PfRegistry : public GpuPeakFindingKernel::Registry
+{
+    using Key = GpuPeakFindingKernel::RegistryKey;
+    using Val = GpuPeakFindingKernel::RegistryValue;
 
-// Instead of declaring the registry as a static global variable, we declare it
-// as a static local variable in the function pf_registry(). The registry will
-// be initialized the first time that pf_registry() is called.
+    virtual void add(const Key &key, const Val &val, bool debug) override
+    {
+	// Just check that all members have been initialized.
+	// (In the future, I may add more argument checking here.)
+	
+	xassert(key.M > 0);
+	xassert(key.E > 0);
+	xassert(key.Dout > 0);
+	xassert(val.Dcore > 0);
+	xassert(val.W > 0);
+	xassert(val.P > 0);
+	xassert((key.E == 1) || (val.P32 > 0));
+	xassert(val.full_kernel != nullptr);
+	xassert(val.reduce_only_kernel != nullptr);
+
+	// Call add() in base class.
+	GpuPeakFindingKernel::Registry::add(key, val, debug);
+    }
+};
+
+
+// Instead of declaring the registry as a static global variable, we declare it as a
+// static local variable in the static member function GpuPeakFindingKernel::registry().
+// The registry will be initialized the first time that GpuPeakFindingKernel::registry()
+// is called.
 //
 // This kludge is necessary because the registry is accessed at library initialization
 // time, by callers in other source files, and source files are executed in an
 // arbitrary order.
 
-static PfRegistry &pf_registry()
+// Static member function
+GpuPeakFindingKernel::Registry &GpuPeakFindingKernel::registry()
 {
     static PfRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
 
-
-// Static member function.
-GpuPeakFindingKernel::RegistryValue GpuPeakFindingKernel::query_registry(const RegistryKey &k)
-{
-    return pf_registry().query(k);
-}
-
-// Static member function.
-GpuPeakFindingKernel::RegistryKey GpuPeakFindingKernel::get_random_registry_key()
-{
-    return pf_registry().get_random_key();
-}
-
-
-// Static member function for adding to the registry.
-// Called during library initialization, from source files with gpu kernels.
-void GpuPeakFindingKernel::register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug)
-{
-    // Just check that all members have been initialized.
-    // (In the future, I may add more argument checking here.)
-    
-    xassert(key.M > 0);
-    xassert(key.E > 0);
-    xassert(key.Dout > 0);
-    xassert(val.Dcore > 0);
-    xassert(val.W > 0);
-    xassert(val.P > 0);
-    xassert((key.E == 1) || (val.P32 > 0));
-    xassert(val.full_kernel != nullptr);
-    xassert(val.reduce_only_kernel != nullptr);
-    
-    return pf_registry().add(key, val, debug);
-}
 
 
 bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindingKernel::RegistryKey &k2)
@@ -448,10 +441,15 @@ bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindin
     return (k1.dtype == k2.dtype) && (k1.M == k2.M) && (k1.E == k2.E) && (k1.Dout == k2.Dout);
 }
 
-
 ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
 {
     os << "GpuPeakFindingKernel(dtype=" << k.dtype << ", M=" << k.M << ", E=" << k.E << ", Dout=" << k.Dout << ")";
+    return os;
+}
+
+ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryValue &v)
+{
+    os << "warps_per_threadblock=" << v.W << ", Dcore=" << v.Dcore;
     return os;
 }
 

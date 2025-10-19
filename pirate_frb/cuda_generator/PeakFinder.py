@@ -283,7 +283,7 @@ def make_pf_file(filename):
     k.emit()
     
     k.emit(f'bool debug = false;')
-    k.emit(f'GpuPeakFindingKernel::register_kernel(k,v,debug);')
+    k.emit(f'GpuPeakFindingKernel::registry().add(k,v,debug);')
     k.emit()
     
     k.emit('}   // register_hack constructor')

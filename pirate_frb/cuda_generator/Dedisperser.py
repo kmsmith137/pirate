@@ -182,7 +182,7 @@ def make_dd_file(filename):
         k.emit()
         
         k.emit(f'bool debug = false;')
-        k.emit(f'GpuDedispersionKernel::register_kernel(k,v,debug);')
+        k.emit(f'GpuDedispersionKernel::registry().add(k,v,debug);')
         k.emit()
     
         k.emit(f'}}   // register_hack{rank} constructor')

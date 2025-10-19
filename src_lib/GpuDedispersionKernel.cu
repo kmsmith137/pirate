@@ -1,5 +1,4 @@
 #include "../include/pirate/DedispersionKernel.hpp"
-#include "../include/pirate/KernelRegistry.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"   // pow2(), is_aligned(), simd_type
 #include "../include/pirate/utils.hpp"     // bit_reverse_slow()
@@ -34,7 +33,9 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     key.apply_input_residual_lags = params.apply_input_residual_lags;
     key.nspec = params.nspec;
 
-    this->registry_value = query_registry(key);
+    // Call static member function GpuDedispersionKernel::registry().
+    this->registry_value = registry().get(key);
+    
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
 
     int ST = xdiv(params.dtype.nbits, 8);    
@@ -136,6 +137,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
 // Kernel registry.
 
 
+// Helper for DedispRegistry::deferred_initialization().
 template<typename F>
 inline void _set_shmem(F kernel, uint nbytes)
 {
@@ -149,15 +151,46 @@ inline void _set_shmem(F kernel, uint nbytes)
 }
 
 
-struct DedispRegistry : public KernelRegistry<GpuDedispersionKernel::RegistryKey, GpuDedispersionKernel::RegistryValue>
+struct DedispRegistry : public GpuDedispersionKernel::Registry
 {
+    using Key = GpuDedispersionKernel::RegistryKey;
+    using Val = GpuDedispersionKernel::RegistryValue;
+    
+    virtual void add(const Key &key, const Val &val, bool debug) override
+    {
+	// Just check that all members have been initialized.
+	// (In the future, I may add more argument checking here.)
+    
+	xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+	xassert(key.nspec > 0);
+	
+	xassert(val.warps_per_threadblock > 0);
+	xassert(val.nt_per_segment > 0);
+	
+	auto k1 = val.cuda_kernel_no_rb;
+	auto k2 = val.cuda_kernel_in_rb;
+	auto k3 = val.cuda_kernel_out_rb;
+	
+	if (!key.input_is_ringbuf && !key.output_is_ringbuf)
+	    xassert(k1 && !k2 && !k3);
+	else if (key.input_is_ringbuf && !key.output_is_ringbuf)
+	    xassert(!k1 && k2 && !k3);
+	else if (!key.input_is_ringbuf && key.output_is_ringbuf)
+	    xassert(!k1 && !k2 && k3);
+	else
+	    throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
+
+	// Call add() in base class.
+	GpuDedispersionKernel::Registry::add(key, val, debug);
+    }
+    
     // Setting shared memory size is "deferred" from when the kernel is registered, to when
     // the kernel is first used. Deferring is important, since cudaFuncSetAttribute() creates
     // hard-to-debug problems if called at library initialization time, but behaves normally
     // if deferred. (Here, "hard-to-debug" means that the call appears to succeed, but an
     // unrelated kernel launch will fail later with error 400 ("invalid resource handle").)
 
-    virtual void deferred_initialization(GpuDedispersionKernel::RegistryValue &val) override
+    virtual void deferred_initialization(Val &val) override
     {
 	_set_shmem(val.cuda_kernel_no_rb, val.shmem_nbytes);
 	_set_shmem(val.cuda_kernel_in_rb, val.shmem_nbytes);
@@ -165,61 +198,21 @@ struct DedispRegistry : public KernelRegistry<GpuDedispersionKernel::RegistryKey
     }
 };
 
-// Instead of declaring the registry as a static global variable, we declare it
-// as a static local variable in the function dd_registry(). The registry will
-// be initialized the first time that dd_registry() is called.
+
+// Instead of declaring the registry as a static global variable, we declare it as a
+// static local variable in the static member function GpuDedispersionKernel::registry().
+// The registry will be initialized the first time that GpuDedispersionKernel::registry()
+// is called.
 //
 // This kludge is necessary because the registry is accessed at library initialization
 // time, by callers in other source files, and source files are executed in an
 // arbitrary order.
 
-static DedispRegistry &dd_registry()
+// Static member function
+GpuDedispersionKernel::Registry &GpuDedispersionKernel::registry()
 {
     static DedispRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
-}
-
-
-// Static member function.
-GpuDedispersionKernel::RegistryValue GpuDedispersionKernel::query_registry(const RegistryKey &k)
-{
-    return dd_registry().query(k);
-}
-
-// Static member function.
-GpuDedispersionKernel::RegistryKey GpuDedispersionKernel::get_random_registry_key()
-{
-    return dd_registry().get_random_key();
-}
-
-
-// Static member function for adding to the registry.
-// Called during library initialization, from source files with gpu kernels.
-void GpuDedispersionKernel::register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug)
-{
-    // Just check that all members have been initialized.
-    // (In the future, I may add more argument checking here.)
-    
-    xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
-    xassert(key.nspec > 0);
-    
-    xassert(val.warps_per_threadblock > 0);
-    xassert(val.nt_per_segment > 0);
-
-    auto k1 = val.cuda_kernel_no_rb;
-    auto k2 = val.cuda_kernel_in_rb;
-    auto k3 = val.cuda_kernel_out_rb;
-
-    if (!key.input_is_ringbuf && !key.output_is_ringbuf)
-	xassert(k1 && !k2 && !k3);
-    else if (key.input_is_ringbuf && !key.output_is_ringbuf)
-	xassert(!k1 && k2 && !k3);
-    else if (!key.input_is_ringbuf && key.output_is_ringbuf)
-	xassert(!k1 && !k2 && k3);
-    else
-	throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
-    
-    return dd_registry().add(key, val, debug);
 }
 
 
@@ -244,6 +237,13 @@ ostream &operator<<(ostream &os, const GpuDedispersionKernel::RegistryKey &k)
        << ", apply_input_residual_lags=" << k.apply_input_residual_lags
        << ")";
 
+    return os;
+}
+
+
+ostream &operator<<(ostream &os, const GpuDedispersionKernel::RegistryValue &v)
+{
+    os << "warps_per_threadblock=" << v.warps_per_threadblock << ", shmem_nbytes=" << v.shmem_nbytes;
     return os;
 }
 

@@ -53,8 +53,8 @@ struct DedispTestInstance
     void randomize()
     {
 	const long max_nelts = 100 * 1000 * 1000;
-	auto k = GpuDedispersionKernel::get_random_registry_key();
-	auto v = GpuDedispersionKernel::query_registry(k);
+	auto k = GpuDedispersionKernel::registry().get_random_key();
+	auto v = GpuDedispersionKernel::registry().get(k);
 	
 	params.dtype = k.dtype;
 	params.nspec = k.nspec;

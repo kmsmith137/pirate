@@ -241,7 +241,7 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 void test_gpu_peak_finding_kernel(bool reduce_only)
 {
     // Choose a random precompiled kernel.
-    auto k = GpuPeakFindingKernel::get_random_registry_key();
+    auto k = GpuPeakFindingKernel::registry().get_random_key();
     int nbits = k.dtype.nbits;
     
     // Note that by choosing 'niter_cpu' and 'niter_gpu' independently, this test

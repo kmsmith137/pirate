@@ -2,9 +2,10 @@
 #define _PIRATE_PEAK_FINDING_KERNEL_HPP
 
 #include <vector>
-
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
+
+#include "KernelRegistry.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 
@@ -184,22 +185,20 @@ struct GpuPeakFindingKernel : PeakFindingKernel
 	cuda_kernel_t reduce_only_kernel = nullptr;
     };
 
-    // Low-level cuda kernel and associated metadata.
+    using Registry = KernelRegistry<RegistryKey, RegistryValue>;
+    
+    // Low-level cuda kernel and associated metadata (non-static).
     RegistryValue registry_value;
 
-    // Static member functions for querying registry.
-    static RegistryValue query_registry(const RegistryKey &k);
-    static RegistryKey get_random_registry_key();
-
-    // Static member function for adding to the registry.
-    // Called during library initialization, from source files with gpu kernels.
-    static void register_kernel(const RegistryKey &key, const RegistryValue &val, bool debug);
+    // Static member function to access registry.
+    static Registry &registry();
 };
 
 
 // Defined in GpuPeakFindingKernel.cu
 extern bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindingKernel::RegistryKey &k2);
 extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::RegistryKey &k);
+extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::RegistryValue &v);
 
 
 }  // namespace pirate

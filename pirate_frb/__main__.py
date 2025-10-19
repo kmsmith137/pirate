@@ -111,6 +111,16 @@ def show_hardware(args):
     h.show()
 
 
+######################################   show_kernels command  #####################################
+
+
+def parse_show_kernels(subparsers):
+    subparsers.add_parser("show_kernels", help="Show all registered cuda kernels")
+    
+def show_kernels(args):
+    pirate_pybind11.show_kernels()
+
+
 #######################################   test_node command  #######################################
 
 
@@ -309,6 +319,7 @@ if __name__ == '__main__':
     parse_test(subparsers)
     parse_time(subparsers)
     parse_show_hardware(subparsers)
+    parse_show_kernels(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
 
@@ -320,6 +331,8 @@ if __name__ == '__main__':
         time(args)
     elif args.command == "show_hardware":
         show_hardware(args)
+    elif args.command == "show_kernels":
+        show_kernels(args)
     elif args.command == "test_node":
         test_node(args)
     elif args.command == "send":
