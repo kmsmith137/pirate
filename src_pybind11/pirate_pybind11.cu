@@ -15,6 +15,7 @@
 #include "../include/pirate/tests.hpp"
 #include "../include/pirate/timing.hpp"
 #include "../include/pirate/utils.hpp"  // show_kernels()
+#include "../include/pirate/casm.hpp"   // test_casm()
 
 using namespace std;
 using namespace ksgpu;
@@ -80,6 +81,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	.def("stop", &FakeServer::stop)
     ;
 
+    m.def("test_casm", &test_casm);
     m.def("test_dedispersion_basics", &test_dedispersion_basics);
     m.def("test_gpu_lagged_downsampling_kernel", &test_gpu_lagged_downsampling_kernel);
     m.def("test_gpu_dedispersion_kernels", &test_gpu_dedispersion_kernels);

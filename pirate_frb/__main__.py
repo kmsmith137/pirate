@@ -24,11 +24,12 @@ def parse_test(subparsers):
     parser.add_argument('--gpfk', action='store_true', help='Runs test_gpu_peak_finding_kernel()')
     parser.add_argument('--grck', action='store_true', help='Runs test_gpu_ringbuf_copy_kernel()')
     parser.add_argument('--gtgk', action='store_true', help='Runs test_gpu_tree_gridding_kernel()')
+    parser.add_argument('--casm', action='store_true', help='Runs test_casm()')
     parser.add_argument('--dd', action='store_true', help='Runs test_dedisperser()')
 
     
 def test(args):
-    test_flags = [ 'ddb', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'dd' ]
+    test_flags = [ 'ddb', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'dd' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -59,6 +60,9 @@ def test(args):
         
         if run_all_tests or args.gtgk:
             pirate_pybind11.test_gpu_tree_gridding_kernel()
+        
+        if run_all_tests or args.casm:
+            pirate_pybind11.test_casm()
         
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()

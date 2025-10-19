@@ -76,7 +76,7 @@ __device__ void compute_abc(int j, float &pf, float &a, float &b, float &c)
     static constexpr float one_half = 1.0f / 2.0f;
 
     pf = ((j==0) || (j==3)) ? one_sixth : one_half;
-    pf = (j & 2) ? pf : (-pf);
+    pf = (j & 1) ? pf : (-pf);
 	
     a = (j > 0) ? 1.0f : 0.0f;
     b = (j > 1) ? 0.0f : -1.0f;
@@ -94,8 +94,8 @@ __device__ float interpolate_fast(const float *sp, float x, float y)
     grid_interpolation_site(x, 24, ix_g, dx_g);
     grid_interpolation_site(y, 128, iy_g, dy_g);
     
-    int jx = (threadIdx.x & 3);
-    int jy = (threadIdx.x >> 2) & 3;
+    int jx = (threadIdx.x >> 2) & 3;
+    int jy = (threadIdx.x & 3);
     int ds = 133*(jx-1) + (jy-1);
     int sg = 133*ix_g + iy_g;
 
@@ -172,6 +172,7 @@ static void test_casm_interpolation()
     CUDA_PEEK("casm_interpolation_test_kernel");
     
     assert_arrays_equal(out_slow, out_fast, "slow", "fast", {"i"});
+    cout << "test_casm_interpolation: pass" << endl;
 }
 
 
