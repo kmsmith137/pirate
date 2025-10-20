@@ -42,6 +42,8 @@ __device__ void warp_shuffle(float &x, float &y, uint bit)
 // -------------------------------------------------------------------------------------------------
 //
 // fft_c2c (helper for "FFT1" kernel)
+//
+// FIXME implementing fft_c2c_state<2> could save two persistent registers and a few FMAs
 
 
 __device__ void fft0(float &xre, float &xim)
@@ -149,7 +151,7 @@ void test_casm_fft_c2c()
     constexpr int S = (1 << (6-R));
     
     Array<float> in({S,N,2}, af_random | af_rhost);
-    Array<float> out({S,N,2}, af_zero | af_rhost);
+    Array<float> out_cpu({S,N,2}, af_zero | af_rhost);
     Array<float> out_gpu({S,N,2}, af_random | af_gpu);
     
     for (int j = 0; j < N; j++) {
@@ -162,8 +164,8 @@ void test_casm_fft_c2c()
 		float xre = in.at({s,k,0});
 		float xim = in.at({s,k,1});
 		
-		out.at({s,j,0}) += (cth*xre - sth*xim);
-		out.at({s,j,1}) += (sth*xre + cth*xim);
+		out_cpu.at({s,j,0}) += (cth*xre - sth*xim);
+		out_cpu.at({s,j,1}) += (sth*xre + cth*xim);
 	    }
 	}
     }
@@ -172,7 +174,7 @@ void test_casm_fft_c2c()
     fft_c2c_test_kernel<R> <<<1,32>>> (in.data, out_gpu.data);
     CUDA_PEEK("fft_c2c_test_kernel");
 
-    assert_arrays_equal(out, out_gpu, "cpu", "gpu", {"s","i","reim"}, 1.0e-3);
+    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"s","i","reim"}, 1.0e-3);
     cout << "test_casm_fft_c2c: pass" << endl;
 }
 
@@ -180,49 +182,60 @@ void test_casm_fft_c2c()
 // -------------------------------------------------------------------------------------------------
 //
 // FFT1
+//
+// Implements a zero-padded c2c FFT with 64 inputs and 128 outputs
+//
+// Input register assignment:
+//   r1 r0 <-> x5 ReIm
+//   t4 t3 t2 t1 t0 <-> x4 x3 x2 x1 x0
+//
+// Outputs are written to shared memory:
+//   float G[W][2][128]   strides (257,128,1)   W=warps per threadblock
+//
+// NOTE: assumes that threads are a {32,W,1} grid (not a {32*W,1,1} grid).
 
 
-#if 0
 template<bool Debug>
 struct fft1_state
 {
-    // Implements a zero-padded c2c FFT with 64 inputs and 128 outputs
-    //
-    // Input register assignment:
-    //   r1 r0 <-> x5 ReIm
-    //   t4 t3 t2 t1 t0 <-> x4 x3 x2 x1 x0
-    //
-    // Outputs are written to shared memory:
-    //   float G[W][2][128]   strides (257,128,1)   W=warps per threadblock
-    //
-    // Kernel assumes that threads are a {W,32} grid (not a {1,32*W} grid).
-
     fft_c2c_state<6> next_fft;
     float cre, cim;   // "twiddle" factor exp(2*pi*i t / 128)
-    int sbase;
+    int sbase;        // shared memory offset
 
-    fft1_state()
+    __device__ fft1_state()
     {
 	float x = 0.04908738521234052f * threadIdx.x;   // constant is (2pi)/128
 	sincosf(x, &cim, &cre);                         // note ordering (im,re)
+
+	// Shared memory writes will use register assignment (see below):
+	//   t4 t3 t2 t1 t0 <-> y1 y2 y3 y4 y0
+	//
+	// The 'sbase' offset assumes y5=y6=ReIm=0
 	
 	sbase = (threadIdx.y) * 257;              // warp id
 	sbase += (threadIdx.x & 1);               // t0 <-> y0
 	sbase += __brev(threadIdx.x >> 1) >> 27;  // t4 t3 t2 t1 <-> y1 y2 y3 y4
 
-	// Check bank conflict free
-	xxx;
+	if constexpr (Debug) {
+	    assert(blockDim.x == 32);
+	    assert(blockDim.z == 1);
+	    
+	    // Check bank conflict free
+	    uint m = __match_any_sync(0xffffffff, sbase & 31);
+	    assert(m == (1 << threadIdx.x));
+	}
     }
     
-    __device__ void fft1(float x0_re, float x0_im, float x1_re, float x1_im, float *sp)
+    __device__ void apply(float x0_re, float x0_im, float x1_re, float x1_im, float *sp)
     {
-	// y0 = x0 * exp(2*pi*i t / 128)   where t = 0, ..., 31
-	// y1 = x1 * exp(2*pi*i (t+32) / 128)
+	// y0 = x0 * exp(2*pi*i t / 128) = c*x0
+	// y1 = x1 * exp(2*pi*i (t+32) / 128) = i*c*x0
+	//   where t = 0, ..., 31
 	
 	float y0_re = cre*x0_re - cim*x0_im;
 	float y0_im = cim*x0_re + cre*x0_im;
 
-	float y0_re = -cre*x0_re + cre*x0_im;
+	float y1_re = -cim*x1_re - cre*x1_im;
 	float y1_im = cre*x1_re - cim*x1_im;
 
 	// xy r1 r0 <-> y0 x5 ReIm
@@ -253,8 +266,65 @@ struct fft1_state
 	sp[sbase+192] = x1_im;	
 	sp[sbase+224] = y1_im;	
     }
-};  // fft1_state
-#endif
+};
+
+
+// Call with {W,32} threads.
+// Input array has shape (W,64,2).
+// Output array has shape (W,128,2).
+
+template<int W>
+__global__ void fft1_test_kernel(const float *in, float *out)
+{
+    __shared__ float shmem[W*257];
+
+    // Input register assignment:
+    //   r1 r0 <-> x5 ReIm
+    //   t4 t3 t2 t1 t0 <-> x4 x3 x2 x1 x0
+
+    int w = threadIdx.y;  // warp id
+    float x0_re = in[128*w + 2*threadIdx.x];
+    float x0_im = in[128*w + 2*threadIdx.x + 1];
+    float x1_re = in[128*w + 2*threadIdx.x + 64];
+    float x1_im = in[128*w + 2*threadIdx.x + 65];
+
+    fft1_state<true> fft1;  // Debug=true
+    fft1.apply(x0_re, x0_im, x1_re, x1_im, shmem);
+
+    for (int reim = 0; reim < 2; reim++)
+	for (int y = threadIdx.x; y < 128; y += 32)
+	    out[256*w + 2*y + reim] = shmem[257*w + 128*reim + y];
+}
+
+
+void test_casm_fft1()
+{
+    static constexpr int W = 24;
+
+    Array<float> in({W,64,2}, af_random | af_rhost);
+    Array<float> out_cpu({W,128,2}, af_zero | af_rhost);
+    Array<float> out_gpu({W,128,2}, af_random | af_gpu);
+
+    for (int j = 0; j < 128; j++) {
+	for (int k = 0; k < 64; k++) {
+	    float theta = (2*M_PI/128) * ((j*k) % 128);
+	    float cth = cosf(theta);
+	    float sth = sinf(theta);
+	    
+	    for (int w = 0; w < W; w++) {
+		out_cpu.at({w,j,0}) += (cth * in.at({w,k,0})) - (sth * in.at({w,k,1}));
+		out_cpu.at({w,j,1}) += (sth * in.at({w,k,0})) + (cth * in.at({w,k,1}));
+	    }
+	}
+    }
+
+    in = in.to_gpu();
+    fft1_test_kernel<W> <<<1,{32,W,1}>>> (in.data, out_gpu.data);
+    CUDA_PEEK("fft1_test_kernel");
+    
+    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"w","i","reim"}, 1.0e-3);
+    cout << "test_casm_fft1: pass" << endl;
+}
 
 
 // -------------------------------------------------------------------------------------------------
@@ -640,6 +710,7 @@ static void test_casm_interpolation()
 void test_casm()
 {
     test_casm_fft_c2c();
+    test_casm_fft1();
     test_casm_interpolation();
 }
 
