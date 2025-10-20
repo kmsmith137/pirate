@@ -25,7 +25,7 @@ __device__ void zma(float &out_re, float &out_im, float xre, float xim, float yr
 __device__ void zma_expi(float &out_re, float &out_im, float theta, float yre, float yim)
 {
     float xre, xim;
-    sincosf(theta, &xre, &xim);
+    sincosf(theta, &xim, &xre);   // note ordering (im,re)
     zma(out_re, out_im, xre, xim, yre, yim);
 }
 
@@ -41,10 +41,10 @@ __device__ void warp_shuffle(float &x, float &y, uint bit)
 
 // -------------------------------------------------------------------------------------------------
 //
-// FFT1
+// fft_c2c (helper for "FFT1" kernel)
 
 
-__device__ void fft_pm(float &xre, float &xim)
+__device__ void fft0(float &xre, float &xim)
 {
     float t = xre - xim;
     xre += xim;
@@ -64,38 +64,122 @@ struct fft_c2c_state
     // Output register assignment:
     //   r1 r0 <-> y_{r-1} ReIm
     //   t4 t3 t2 t1 t0 <-> s_{5-r} ... s0 y_0 ... y_{r-2}
+
+    fft_c2c_state<R-1> next_fft;
+    float cre, cim;
     
-    __device__ void apply(float &x0_re, float &x0_im, float &x1_re, float &x1_im)
+    __device__ fft_c2c_state()
     {
-	constexpr float t = 6.283185307179586f / (1<<R);
-	constexpr float N2 = 1 << (R-1);
+	constexpr float a = 6.283185307f / (1<<R);   // 2*pi/2^r
+	uint t = threadIdx.x & ((1 << (R-1)) - 1);   // 0 <= t < 2^{r-1}
+	sincosf(a*t, &cim, &cre);                    // phase is exp(2*pi*t / 2^r)
+    }
+
+    __device__ void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
+    {
+	// (x0,x1) = (x0+x1,x0-x1)
+	fft0(x0_re, x1_re);
+	fft0(x0_im, x1_im);
+
+	// x1 *= phase
+	float yre = cre * x1_re - cim * x1_im;
+	float yim = cim * x1_re + cre * x1_im;
+	x1_re = yre;
+	x1_im = yim;
+
+	// swap "01" register bit with thread bit (R-2)
+	warp_shuffle(x0_re, x1_re, (1 << (R-2)));
+	warp_shuffle(x0_im, x1_im, (1 << (R-2)));
 	
-	float y0_re = 0.0f;
-	float y0_im = 0.0f;
-	float y1_re = 0.0f;
-	float y1_im = 0.0f;
-	
-	int ylo = __brev(threadIdx.x) >> (33-R);
-	int s = (threadIdx.x >> (R-1)) << (R-1);  // spectator bits only
-
-	for (int xlo = 0; xlo < N2; xlo++) {
-	    float z0_re = __shfl_sync(0xffffffff, x0_re, s | xlo);
-	    float z0_im = __shfl_sync(0xffffffff, x0_im, s | xlo);
-	    float z1_re = __shfl_sync(0xffffffff, x1_re, s | xlo);
-	    float z1_im = __shfl_sync(0xffffffff, x1_im, s | xlo);
-
-	    zma_expi(y0_re, y0_im, t * (xlo)    * (ylo),    z0_re, z0_im);
-	    zma_expi(y0_re, y0_im, t * (xlo+N2) * (ylo),    z1_re, z1_im);
-	    zma_expi(y1_re, y1_im, t * (xlo)    * (ylo+N2), z0_re, z0_im);
-	    zma_expi(y1_re, y1_im, t * (xlo+N2) * (ylo+N2), z1_re, z1_im);
-	}
-
-	x0_re = y0_re;
-	x0_im = y0_im;
-	x1_re = y1_re;
-	x1_im = y1_im;
+	next_fft.apply(x0_re, x0_im, x1_re, x1_im);
     }
 };
+
+
+template<>
+struct fft_c2c_state<1>
+{
+    __device__ void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
+    {
+	fft0(x0_re, x1_re);
+	fft0(x0_im, x1_im);
+    }
+};
+
+
+// Call with {1,32} threads.
+// Input and output arrays have shape (2^(6-R), 2^R, 2)
+template<int R>
+__global__ void fft_c2c_test_kernel(const float *in, float *out)
+{
+    // Input register assignment:
+    //   r1 r0 <-> x_{r-1} ReIm
+    //   t4 t3 t2 t1 t0 <-> s_{5-r} ... s0 x_{r-2} ... x_0
+    
+    int ss = threadIdx.x >> (R-1);            // spectator index
+    int sx = threadIdx.x & ((1<<(R-1)) - 1);  // x-index
+    int sin = (ss << (R+1)) | (sx << 1);
+    
+    float x0_re = in[sin];
+    float x0_im = in[sin + 1];
+    float x1_re = in[sin + (1<<R)];
+    float x1_im = in[sin + (1<<R) + 1];
+
+    fft_c2c_state<R> fft;
+    fft.apply(x0_re, x0_im, x1_re, x1_im);
+
+    // Output register assignment:
+    //   r1 r0 <-> y_{r-1} ReIm
+    //   t4 t3 t2 t1 t0 <-> s_{5-r} ... s0 y_0 ... y_{r-2}
+
+    int sy = __brev(threadIdx.x << (33-R));
+    int sout = (ss << (R+1)) | (sy << 1);
+
+    out[sout] = x0_re;
+    out[sout + 1] = x0_im;
+    out[sout + (1<<R)] = x1_re;
+    out[sout + (1<<R) + 1] = x1_im;
+}
+
+
+void test_casm_fft_c2c()
+{
+    constexpr int R = 6;
+    constexpr int N = (1 << R);
+    constexpr int S = (1 << (6-R));
+    
+    Array<float> in({S,N,2}, af_random | af_rhost);
+    Array<float> out({S,N,2}, af_zero | af_rhost);
+    Array<float> out_gpu({S,N,2}, af_random | af_gpu);
+    
+    for (int j = 0; j < N; j++) {
+	for (int k = 0; k < N; k++) {
+	    float theta = (2*M_PI/N) * ((j*k) % N);
+	    float cth = cosf(theta);
+	    float sth = sinf(theta);
+	    
+	    for (int s = 0; s < S; s++) {
+		float xre = in.at({s,k,0});
+		float xim = in.at({s,k,1});
+		
+		out.at({s,j,0}) += (cth*xre - sth*xim);
+		out.at({s,j,1}) += (sth*xre + cth*xim);
+	    }
+	}
+    }
+
+    in = in.to_gpu();
+    fft_c2c_test_kernel<R> <<<1,32>>> (in.data, out_gpu.data);
+    CUDA_PEEK("fft_c2c_test_kernel");
+
+    assert_arrays_equal(out, out_gpu, "cpu", "gpu", {"s","i","reim"}, 1.0e-3);
+    cout << "test_casm_fft_c2c: pass" << endl;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// FFT1
 
 
 #if 0
@@ -120,7 +204,7 @@ struct fft1_state
     fft1_state()
     {
 	float x = 0.04908738521234052f * threadIdx.x;   // constant is (2pi)/128
-	sincosf(x, &cre, &cim);
+	sincosf(x, &cim, &cre);                         // note ordering (im,re)
 	
 	sbase = (threadIdx.y) * 257;              // warp id
 	sbase += (threadIdx.x & 1);               // t0 <-> y0
@@ -172,80 +256,6 @@ struct fft1_state
 };  // fft1_state
 #endif
 
-
-// Call with {1,32} threads.
-// Input and output arrays have shape (2^(6-R), 2^R, 2)
-template<int R>
-__global__ void fft_c2c_test_kernel(const float *in, float *out)
-{
-    // Input register assignment:
-    //   r1 r0 <-> x_{r-1} ReIm
-    //   t4 t3 t2 t1 t0 <-> s_{5-r} ... s0 x_{r-2} ... x_0
-    
-    int ss = threadIdx.x >> (R-1);            // spectator index
-    int sx = threadIdx.x & ((1<<(R-1)) - 1);  // x-index
-    int sin = (ss << (R+1)) | (sx << 1);
-    
-    float x0_re = in[sin];
-    float x0_im = in[sin + 1];
-    float x1_re = in[sin + (1<<R)];
-    float x1_im = in[sin + (1<<R) + 1];
-
-    fft_c2c_state<R> fft;
-    fft.apply(x0_re, x0_im, x1_re, x1_im);
-
-    // Output register assignment:
-    //   r1 r0 <-> y_{r-1} ReIm
-    //   t4 t3 t2 t1 t0 <-> s_{5-r} ... s0 y_0 ... y_{r-2}
-
-    int sy = __brev(threadIdx.x << (33-R));
-    int sout = (ss << (R+1)) | (sy << 1);
-
-    out[sout] = x0_re;
-    out[sout + 1] = x0_im;
-    out[sout + (1<<R)] = x1_re;
-    out[sout + (1<<R) + 1] = x1_im;
-}
-
-
-void test_casm_fft_c2c()
-{
-    constexpr int R = 2;
-    constexpr int N = (1 << R);
-    constexpr int S = (1 << (6-R));
-    
-    // Array<float> in({S,N,2}, af_random | af_rhost);
-    Array<float> in({S,N,2}, af_zero | af_rhost);
-    in.at({0,0,0}) = 1.0f;
-    Array<float> out({S,N,2}, af_zero | af_rhost);
-    Array<float> out_gpu({S,N,2}, af_random | af_gpu);
-    
-    for (int j = 0; j < N; j++) {
-	for (int k = 0; k < N; k++) {
-	    float theta = (2*M_PI/N) * ((j*k) % N);
-	    float cth = cosf(theta);
-	    float sth = sinf(theta);
-	    
-	    for (int s = 0; s < S; s++) {
-		float xre = in.at({s,k,0});
-		float xim = in.at({s,k,1});
-		
-		out.at({s,j,0}) += (cth*xre - sth*xim);
-		out.at({s,j,1}) += (sth*xre + cth*xim);
-	    }
-	}
-    }
-
-    in = in.to_gpu();
-    fft_c2c_test_kernel<R> <<<1,32>>> (in.data, out_gpu.data);
-    CUDA_PEEK("fft_c2c_test_kernel");
-
-    assert_arrays_equal(out, out_gpu, "cpu", "gpu", {"s","i","reim"}, 1.0e-4);
-    cout << "test_casm_fft_c2c: pass" << endl;
-}
-
-
-#if 0
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -310,6 +320,8 @@ void test_casm_fft_c2c()
 // an odd change in b, the b-stride is odd (133), and the (ns4, ns3, ns2)
 // strides are (16, 8, 4).
 
+
+#if 0
 
 template<bool Debug>
 struct fft2_state
