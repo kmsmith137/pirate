@@ -583,8 +583,8 @@ __global__ void fft2_test_kernel(const float *gp, float *ip, int TP, const float
     __syncthreads();
 	
     // Set up I-array copy (shared) -> (global)
-    int goff = 133*threadIdx.y + threadIdx.x;  // array offset in ip[] global array
-    int soff = 128*threadIdx.y + threadIdx.x;  // array offset in shmem_i[] shared array
+    int goff = 128*threadIdx.y + threadIdx.x;  // array offset in ip[] global array
+    int soff = 133*threadIdx.y + threadIdx.x;  // array offset in shmem_i[] shared array
     
     for (int j = 0; j < 4; j++)
 	ip[goff + 32*j] = shmem_i[soff + 32*j];
@@ -613,18 +613,24 @@ void fft2_reference_kernel(const float *gp, float *ip, int TP, const float *alph
     for (int ns = 0; ns < 128; ns++) {
 	for (int b = 0; b < 24; b++) {
 	    float I = 0.0f;
+	    
+	    for (int tp = 0; tp < TP; tp++) {
+		float zre = 0.0f;
+		float zim = 0.0f;
 
-	    for (int f = 0; f < 6; f++) {
-		float xre = cosf(bloc[b] * floc[f]);
-		float xim = sinf(bloc[b] * floc[f]);
-		float yre = gp[256*f + 2*ns];
-		float yim = gp[256*f + 2*ns + 1];
-		float zre = xre*yre - xim*yim;
-		float zim = xre*yim + xim*yre;
+		for (int f = 0; f < 6; f++) {
+		    float xre = cosf(bloc[b] * floc[f]);
+		    float xim = sinf(bloc[b] * floc[f]);
+		    float yre = gp[6*256*tp + 256*f + 2*ns];
+		    float yim = gp[6*256*tp + 256*f + 2*ns + 1];
+		    
+		    zre += xre*yre - xim*yim;
+		    zim += xre*yim + xim*yre;
+		}
 
 		I += (zre*zre + zim*zim);
 	    }
-
+	    
 	    ip[128*b + ns] = I;
 	}
     }
