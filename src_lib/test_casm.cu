@@ -74,11 +74,11 @@ __device__ void check_bank_conflict_free(int offset, int max_conflicts=1)
 //   j1 j0 <-> t0 pol
 //   ... j3 j2 <-> ... t4 t3
 //
-// load_global_e(): Delta(t)=24
-// write_shared_e(): Delta(t)=24
+// load_ungridded_e(): Delta(t)=24
+// write_ungridded_e(): Delta(t)=24
 // grid_shared_e(): Delta(t)=48
 // load_gridded_e(): Delta(t)=8
-// extract_e(): Delta(t)=2
+// unpack_e(): Delta(t)=2
 //
 // Shared memory layout:
 //
@@ -96,7 +96,7 @@ __device__ void double_byte_perm(uint &x, uint &y, uint s1, uint s2)
     y = __byte_perm(xx, y, s2);
 }
 
-__device__ void unpack_int4(uint x, uint s)
+__device__ float unpack_int4(uint x, uint s)
 {
     x = ((x >> s) ^ 0x88888888) & 0xf;
     return float(x) - 8.0f;
@@ -106,100 +106,115 @@ __device__ void unpack_int4(uint x, uint s)
 template<bool Debug>
 struct casm_shuffle_state
 {
-    // Used in load_global_e() -> write_shared_e()
+    // Managed by setup_global_to_shared().
     const uint4 *ep4;
-    uint soff;
+    uint soff_gs;
     uint4 e4;
 
-    // Used in grid_shared_e()
+    // Managed by setup_gridding(), grid_shared_e().
     uint grid_dst;
 
-    // Used in load_gridded_e() -> extract_e()
+    // Managed by setup_unpacking(), load_gridded_e(), unpack_e().
+    uint soff_ge;
     uint e0, e1;
-    uint soff2;
 
     // 'global_e' points to (T,F,2,256)
     // 'global_gridding' points to length-256, elements are (43*ew+ns).
     
-    __device__ casm_shuffle_state(const uchar *global_e, const uint *global_gridding)
+    __device__ casm_shuffle_state(const uint8_t *global_e, const uint *global_gridding)
     {
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
 	    assert(blockDim.y == 24);
 	    assert(blockDim.z == 1);
 	}
-	
+
+	setup_global_to_shared(global_e);
+	setup_gridding(global_gridding);
+	setup_unpacking();
+    }
+
+    // These member functions manage copying the ungridded E-array from global
+    // memory to shared memory, with Delta(t)=24.
+    //
+    //   setup_global_to_shared()
+    //   load_ungridded_e()
+    //   write_ungridded_e()
+    //
+    // Data is read from global memory with (T=24, I=4, J=48, D=128):
+    //
+    //   b1 b0 <-> d1 d0
+    //   r1 r0 <-> d3 d2
+    //   l4 l3 l2 l1 l0 <-> i1 i0 d6 d5 d4   (= t2 t1 d6 d5 d4)
+    //   w1* w0 <-> j0* d7                   (= ... t3* t0 pol d7)
+    //
+    // Then some shuffling operations are performed, to obtain:
+    //
+    //   b1 b0 <-> i1 i0
+    //   r1 r0 <-> d6 d5
+    //   l4 l3 l2 l1 l0 <-> d3 d2 d1 d0 d4
+    //   w1* w0 <-> j0* d7
+    //
+    // before writing to shared memory.
+    
+    __device__ void setup_global_to_shared(const uint8_t *global_e)
+    {
 	uint l = threadIdx.x;  // lane id
 	uint w = threadIdx.y;  // warp id
+	uint f = blockIdx.x;   // frequency channel for this threadblock
+	uint F = gridDim.x;    // total frequency channels
 
-	// load_global_e() uses E-array register assignment (int4+4):
+	// Initialize the 'ep4' global memory pointer.
 	//
 	//   b1 b0 <-> d1 d0
 	//   r1 r0 <-> d3 d2
-	//   t4 t3 t2 t1 t0 <-> i1 i0 d6 d5 d4   (= t2 t1 d6 d5 d4)
+	//   l4 l3 l2 l1 l0 <-> i1 i0 d6 d5 d4   (= t2 t1 d6 d5 d4)
 	//   w1* w0 <-> j0* d7                   (= ... t3* t0 pol d7)
 
-	// (warpId, laneId) -> (i, j, d74)
+	// (warpId, laneId) -> (i, j, d16)
 	uint i = (l >> 3);
 	uint j = (w >> 1);
-	uint d74 = (l & 0x7) | ((w & 0x1) << 3);
+	uint d16 = (l & 0x7) | ((w & 1) << 3);
 
 	// (i, j) -> (pol, t)
+	//   i1 i0 <-> t2 t1
+	//   j2* j1 j0 <-> t3* t0 pol
+	
 	uint pol = (j & 1);
-	uint t = (i << 1) | ((j >> 1) & 1) | ((j << 1) & 0x18);
-
-	uint f = blockIdx.x;   // frequency channel for this threadblock
-	uint F = gridDim.x;    // total frequency channels
+	uint t = (i << 1) | ((j & 2) >> 1) | ((j >> 2) << 3);
 	
+	// uint8 E[T][F][2][256];
+	// uint128 E[T][F][2][16];
 	ep4 = (const uint4 *) global_e;
-	ep4 += 32*(t*F+f) + 16*pol + d74;
+	ep4 += 32*(t*F+f) + 16*pol + d16;
 
-	// write_shared_e() uses E-array register assignment (int4+4):
-	//
-	//   b1 b0 <-> i1 i0                     (= t2 t1)
+	// Initialize the 'goff_gs' shared memory offset.
+	//   b1 b0 <-> i1 i0
 	//   r1 r0 <-> d6 d5
-	//   t4 t3 t2 t1 t0 <-> d3 d2 d1 d0 d4   (note bit reversal)
-	//   w1+ w0 <-> j0* d7                   (= ... t3+ t0 pol d7)
+	//   l4 l3 l2 l1 l0 <-> d3 d2 d1 d0 d4   (note permutation)
+	//   w1* w0 <-> j0* d7
 
-	// (warpId, laneId) <-> (j, d)
-	uint d = (l >> 1) | ((l << 4) & 0x10) | ((w << 7) & 0x80);
-	soff = 259*j + d;
-
-	check_bank_conflict_free<Debug>(soff);
-
-	// Initialize grid_dst.
-	// FIXME loading directly from global memory -- rethink?
+	uint d = (l >> 1) | ((l & 0x1) << 4) | ((w & 0x1) << 7);
+	soff_gs = 259*j + d;   // note that j was previously initialized above
 	
-	uint nd = (w < 16) ? 11 : 10;
-	uint d0 = (w < 16) ? (11*w) : (10*w+16);
-	grid_dst = (l < nd) ? global_gridding[d0+l] : 100000;
-
-	// soff2
-	//
-	// r <-> ns5 
-	// t4 t3 t2 t1 t0 <-> ns4 ns3 ns2 ns1 ns0
-	// w2* w1 w0 <-> ew j1 j0
-	//
-	// FIXME needs more comments
-	
-	uint ew = (w >> 2);
-	uint j = (w & 3);
-	uint soff2 = 259*j + 43*ew + l;
+	check_bank_conflict_free<Debug>(soff_gs);
+    }
+    
+    __device__ void load_ungridded_e()
+    {
+	e4 = *ep4;
     }
 
-    __device__ void load_global_e()
+    __device__ void write_ungridded_e(uint *sp)
     {
-	e4 = *e4p;
-    }
+	// At top, 'e4' has register assignment:
+	//
+	//   b1 b0 <-> d1 d0
+	//   r1 r0 <-> d3 d2
+	//   l4 l3 l2 l1 l0 <-> i1 i0 d6 d5 d4
+	//   w1* w0 <-> j0* d7
 
-    __device__ void write_shared_e(uint *sp)
-    {
-	// b1 b0 <-> d1 d0
-	// r1 r0 <-> d3 d2
-	// t4 t3 t2 t1 t0 <-> i1 i0 d6 d5 d4
-	// w1* w0 <-> j0* d7
-
-	// swap (r1,r0) <-> (t4,t3)
+	// swap (r1,r0) <-> (l4,l3)
 	warp_shuffle(e4.x, e4.y, 8);
 	warp_shuffle(e4.z, e4.w, 8);
 	warp_shuffle(e4.x, e4.z, 16);
@@ -207,7 +222,7 @@ struct casm_shuffle_state
 
 	// b1 b0 <-> d1 d0
 	// r1 r0 <-> i1 10
-	// t4 t3 t2 t1 t0 <-> d3 d2 d6 d5 d4
+	// l4 l3 l2 l1 l0 <-> d3 d2 d6 d5 d4
 	// w1* w0 <-> j0* d7
 
 	// swap (b1,b0) <-> (r1,r0)
@@ -218,36 +233,55 @@ struct casm_shuffle_state
 	
 	// b1 b0 <-> i1 i0
 	// r1 r0 <-> d1 d0
-	// t4 t3 t2 t1 t0 <-> d3 d2 d6 d5 d4
+	// l4 l3 l2 l1 l0 <-> d3 d2 d6 d5 d4
 	// w1* w0 <-> j0* d7
 
-	// swap (r1,r0) <-> (t2,t1)
+	// swap (r1,r0) <-> (l2,l1)
 	warp_shuffle(e4.x, e4.y, 2);
 	warp_shuffle(e4.z, e4.w, 2);
 	warp_shuffle(e4.x, e4.z, 4);
 	warp_shuffle(e4.y, e4.w, 4);
-	
-	// b1 b0 <-> i1 i0
-	// r1 r0 <-> d6 d5
-	// t4 t3 t2 t1 t0 <-> d3 d2 d1 d0 d4
-	// w1* w0 <-> j0* d7
 
-	sp[soff] = e4.x;
-	sp[soff + 32] = e4.y;
-	sp[soff + 64] = e4.z;
-	sp[soff + 96] = e4.w;
+	// At bottom, we have the register assignment that was assumed
+	// when computing 'goff_gs' above:
+	//
+	//   b1 b0 <-> i1 i0
+	//   r1 r0 <-> d6 d5
+	//   l4 l3 l2 l1 l0 <-> d3 d2 d1 d0 d4   (note permutation)
+	//   w1* w0 <-> j0* d7
 
-	// Global E-array pointer advanced here.
+	sp[soff_gs] = e4.x;
+	sp[soff_gs + 32] = e4.y;
+	sp[soff_gs + 64] = e4.z;
+	sp[soff_gs + 96] = e4.w;
+
+	// Advance global E-array pointer 'ep4'.
+
 	uint F = gridDim.x;    // total frequency channels
 	ep4 += 24*32*F;        // advance by 24 time samples
     }
 
+    // These member functions are responsible for "gridding" the E-array
+    // in shared memory.
+    //
+    //   setup_gridding()
+    //   grid_shared_e()
+    //
+    // A little awkward, since we want to loop over 256 dishes with 24 warps.
+    // Note that 256 = 10*240 + 16.
+
+    __device__ void setup_gridding(const uint *global_gridding)
+    {
+	// FIXME loading directly from global memory -- rethink?
+	uint l = threadIdx.x;
+	uint w = threadIdx.y;
+	uint nd = (w < 16) ? 11 : 10;
+	uint d0 = (w < 16) ? (11*w) : (10*w+16);
+	grid_dst = (l < nd) ? global_gridding[d0+l] : 100000;
+    }
     
     __device__ void grid_shared_e(uint *sp)
     {
-	// A little awkward, since we want to loop over 256 dishes with 24 warps.
-	// Note that 256 = 10*240 + 16.
-	
 	uint e[11];
 	uint j = threadIdx.x;  // lane
 	uint w = threadIdx.y;  // warp
@@ -263,7 +297,7 @@ struct casm_shuffle_state
 	__syncthreads();
 
 	// FIXME temporary convenience in testing!
-	for (int i = 32*w + l; i < 24*259; i += 24*32)
+	for (int i = 32*w + j; i < 24*259; i += 24*32)
 	    sp[i] = 0;
 	__syncthreads();
 	
@@ -281,23 +315,50 @@ struct casm_shuffle_state
 	}
     }
 
-    
-    __device__ void load_gridded_e(const uint *sp)
+    // The member functions
+    //
+    //   setup_unpacking()
+    //   load_gridded_e()
+    //   unpack_e()
+    //
+    // manage reading the int4+4 gridded E-array from shared memory with
+    // Delta(t)=8, and "unpacking" to float registers with Delta(t)=2.
+    //
+    // The int4+4 E-array uses register assignment (T=8, P=2, EW=6, NS=64):
+    //
+    //   b2 b1 b0 <-> t2 t1 ReIm     (= i1 i0 ReIm)
+    //   r0 <-> ns5
+    //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
+    //   w2* w1 w0 <-> ew t0 pol  (= j1 j0)
+    //
+    // and is "unpacked" to floats with assignment (T=2, P=2, EW=6, NS=64):
+    //
+    //   r1 r0 <-> ns5 ReIm
+    //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
+    //   w2* w1 w0 <-> ew t0 pol  (= j1 j0)
+
+    __device__ void setup_unpacking()
     {
-	e0 = sp[soff2];
-	e1 = (threadIdx.x < 11) ? sp[soff2+32] : 0;
+	uint j = (threadIdx.y & 3);
+	uint ew = (threadIdx.y >> 2);
+	soff_ge = 259*j + 43*ew + threadIdx.x;
     }
 
-    
-    __device__ void extract_e(int i, float &e0_re, float &e0_im, float &e1_re, float &e1_im)
+    __device__ void load_gridded_e(const uint *sp)
     {
-	// i is the length-4 index (i1 i0 <-> t2 t1)
-	// FIXME save a few cycles by offset encoding earlier
+	e0 = sp[soff_ge];
+	e1 = (threadIdx.x < 11) ? sp[soff_ge+32] : 0;
+    }
+    
+    __device__ void unpack_e(int i, float &e0_re, float &e0_im, float &e1_re, float &e1_im)
+    {
+	// i is the length-4 index (t2 t1).
+	// FIXME save a few cycles by offset encoding earlier?
 
 	e0_re = unpack_int4(e0, 8*i);
-	e0_re = unpack_int4(e0, 8*i+4);
+	e0_im = unpack_int4(e0, 8*i+4);
 	e1_re = unpack_int4(e1, 8*i);
-	e1_re = unpack_int4(e1, 8*i+4);
+	e1_im = unpack_int4(e1, 8*i+4);
     }
 };
 
@@ -309,9 +370,9 @@ struct casm_shuffle_state
 //   uint gridding[256];
 //   float out[T][F][2][6][64][2];  // (time,freq,pol,ew,ns,reim)
 
-__global__ void casm_shuffle_test_kernel(const uchar *e_in, const uint *gridding, float *out, int T)
+__global__ void casm_shuffle_test_kernel(const uint8_t *e_in, const uint *gridding, float *out, int T)
 {
-    __shared__ float shmem[24*259];
+    __shared__ uint shmem[24*259];  // Delta(t)=48
 
     assert(blockDim.x == 32);
     assert(blockDim.y == 24);
@@ -320,23 +381,23 @@ __global__ void casm_shuffle_test_kernel(const uchar *e_in, const uint *gridding
     assert(gridDim.z == 1);
     assert((T % 48) == 0);
     
-    casm_shuffle_state<true> shuffle(ep, gridding);  // Debug=true
+    casm_shuffle_state<true> shuffle(e_in, gridding);  // Debug=true
 
-    // Set up writing to the 'out' array.
+    // Set up writing to the 'out' array, with Delta(t)=2.
+    // Output from casm_shuffle_state::unpack_e() has register assignment:
     //
-    // float out[T][F][2][6][64][2];   // time,freq,pol,ew,ns,reim
-    //
-    // r1, r0 <-> ns5, ReIm
-    // t4 t3 t2 t1 t0 <-> ns4 ns3 ns2 ns1 ns0
-    // w2* w1 w0 <-> ew j1 j0    (where j1=t0 and j0=pol)
+    //   r1 r0 <-> ns5 ReIm
+    //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
+    //   w2* w1 w0 <-> ew t0 pol
 
     uint f = blockIdx.x;   // frequency channel of threadblock
     uint F = gridDim.x;    // total frequency channels
     uint pol = (threadIdx.y & 1);
-    uint t0 = (threadIdx.y >> 1) & 1;
+    uint t0 = (threadIdx.y & 2) >> 1;
     uint ew = (threadIdx.y >> 2);
     uint ns = threadIdx.x;
 
+    // float out[T][F][2][6][64][2];   // time,freq,pol,ew,ns,reim
     out += 2 * ns;
     out += 64*2 * ew;
     out += 6*64*2 * pol;
@@ -345,8 +406,9 @@ __global__ void casm_shuffle_test_kernel(const uchar *e_in, const uint *gridding
     
     for (int touter = 0; touter < T; touter += 48) {
 	for (int s = 0; s < 2; s++) {
-	    shuffle.load_global_e();
-	    shuffle.write_shared_e(shmem + 12*259*s);
+	    // Delta(t)=24, Delta(j)=12
+	    shuffle.load_ungridded_e();
+	    shuffle.write_ungridded_e(shmem + 12*259*s);
 	}
 
 	__syncthreads();
@@ -356,18 +418,26 @@ __global__ void casm_shuffle_test_kernel(const uchar *e_in, const uint *gridding
 	__syncthreads();
 
 	for (int s = 0; s < 6; s++) {
+	    // Delta(t)=8, Delta(j)=4
 	    shuffle.load_gridded_e(shmem + 4*259*s);
 	    
 	    for (int i = 0; i < 4; i++) {
+		// Delta(t)=2
 		float e0_re, e0_im, e1_re, e1_im;
-		shuffle.extract_e(i, e0_re, e0_im, e1_re, e1_im);
+		shuffle.unpack_e(i, e0_re, e0_im, e1_re, e1_im);
+		
+		// r1 r0 <-> ns5 ReIm
+		// l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
+		// w2* w1 w0 <-> ew t0 pol
 
+		// float out[T][F][2][6][64][2]
 		out[0] = e0_re;
 		out[1] = e0_im;
 		out[64] = e1_re;
 		out[65] = e1_im;
-		
-		out += (2*F*2*6*64*2);   // Delta(t)=2
+
+		// Delta(t)=2
+		out += (2*F*2*6*64*2);
 	    }
 	}
 
@@ -379,7 +449,7 @@ __global__ void casm_shuffle_test_kernel(const uchar *e_in, const uint *gridding
 // float out[T][F][2][6][64][2];  // (time,freq,pol,ew,ns,reim)
 // uint gridding[256];
 
-void casm_shuffle_reference_kernel(const uchar *e_in, const uint *gridding, float *out, int T, int F)
+void casm_shuffle_reference_kernel(const uint8_t *e_in, const uint *gridding, float *out, int T, int F)
 {
     int TFP = 2*T*F;
     memset(out, 0, TFP * 6*64*2 * sizeof(float));
@@ -389,17 +459,19 @@ void casm_shuffle_reference_kernel(const uchar *e_in, const uint *gridding, floa
     // Convert 'gridding' indices (43*ew+ns) to 'regridding' indices (64*ew+ns)
     for (int d = 0; d < 256; d++) {
 	uint g = gridding[d];
+	assert(g < 6*43);
+	
 	uint ew = g / 43;
 	uint ns = g - (43*ew);
 	regridding[d] = 64*ew + ns;
     }
     
     for (int tfp = 0; tfp < TFP; tfp++) {
-	const uchar *e2 = e_in + 256*tfp;  // points to shape (256,)
+	const uint8_t *e2 = e_in + 256*tfp;  // points to shape (256,)
 	float *out2 = out + 6*64*2*tfp;    // points to shape (6,64,2)
 
 	for (int d = 0; d < 256; d++) {
-	    uchar e = e2[d] ^ 0x88888888;
+	    uint8_t e = e2[d] ^ 0x88888888;
 	    float e_re = float(e & 0xf) - 8.0f;
 	    float e_im = float(e >> 4) - 8.0f;
 		
@@ -412,12 +484,12 @@ void casm_shuffle_reference_kernel(const uchar *e_in, const uint *gridding, floa
 
 
 // Helper for test_casm_shuffle()
-static Array<uchar> make_random_e_array(int T, int F)
+static Array<uint8_t> make_random_e_array(int T, int F)
 {
-    Array<uchar> ret({T,F,2,256});
+    Array<uint8_t> ret({T,F,2,256}, af_rhost);
     
     uint *p = (uint *) (ret.data);
-    int n = ret.size >> 2;
+    int n = (ret.size >> 2);
 
     for (int i = 0; i < n; i++) {
 	uint t1 = ksgpu::default_rng();
@@ -440,14 +512,14 @@ static Array<uint> make_random_gridding()
 
     Array<uint> ret({256}, af_rhost);
     for (int d = 0; d < 256; d++)
-	ret.data[i] = -1;
+	ret.data[d] = 6*43;
     
     for (int i = 0; i < 6*43; i++)
 	if (v[i] >= 0)
-	    ret.data[v[i]] = i;
+	    ret.at({v[i]}) = i;
     
     for (int d = 0; d < 256; d++)
-	assert(ret.data[d] >= 0);
+	assert(ret.data[d] < 6*43);
 
     return ret;
 }
@@ -458,11 +530,11 @@ void test_casm_shuffle()
     int T = 4*48;  // must be multiple of 48
     int F = 3;
     
-    Array<uchar> e = make_random_e_array(T,F);
+    Array<uint8_t> e = make_random_e_array(T,F);
     Array<uint> gridding = make_random_gridding();
     Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
     Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
-
+    
     casm_shuffle_reference_kernel(e.data, gridding.data, out_cpu.data, T, F);
 
     e = e.to_gpu();
