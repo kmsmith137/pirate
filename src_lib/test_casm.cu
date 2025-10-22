@@ -45,10 +45,10 @@ __device__ void zma_expi(float &out_re, float &out_im, float theta, float yre, f
 template<typename T>
 __device__ void warp_shuffle(T &x, T &y, uint bit)
 {
-    static_assert(sizeof(T)==4);
-    
-    bool flag = threadIdx.x & bit;
-    float z = __shfl_sync(0xffffffff, (flag ? x : y), threadIdx.x ^ bit);
+    static_assert(sizeof(T) == 4);
+
+    bool flag = (threadIdx.x & bit) != 0;
+    T z = __shfl_sync(0xffffffff, (flag ? x : y), threadIdx.x ^ bit);
     x = flag ? z : x;  // compiles to conditional (predicated) move, not branch
     y = flag ? y : z;  // compiles to conditional (predicated) move, not branch
 }
@@ -71,8 +71,7 @@ __device__ void check_bank_conflict_free(int offset, int max_conflicts=1)
 //
 // Reindex (time,pol) as (i,j) where
 //   i1 i0 <-> t2 t1
-//   j1 j0 <-> t0 pol
-//   ... j3 j2 <-> ... t4 t3
+//   j2* j1 j0 <-> t3* t0 pol
 //
 // load_ungridded_e(): Delta(t)=24
 // write_ungridded_e(): Delta(t)=24
@@ -226,8 +225,8 @@ struct casm_shuffle_state
 	// w1* w0 <-> j0* d7
 
 	// swap (b1,b0) <-> (r1,r0)
-	double_byte_perm(e4.x, e4.y, 0x6420, 0x7531);
-	double_byte_perm(e4.z, e4.w, 0x6420, 0x7531);
+	double_byte_perm(e4.x, e4.y, 0x6240, 0x7351);
+	double_byte_perm(e4.z, e4.w, 0x6240, 0x7351);
 	double_byte_perm(e4.x, e4.z, 0x5410, 0x7632);
 	double_byte_perm(e4.y, e4.w, 0x5410, 0x7632);
 	
@@ -241,7 +240,7 @@ struct casm_shuffle_state
 	warp_shuffle(e4.z, e4.w, 2);
 	warp_shuffle(e4.x, e4.z, 4);
 	warp_shuffle(e4.y, e4.w, 4);
-
+	
 	// At bottom, we have the register assignment that was assumed
 	// when computing 'goff_gs' above:
 	//
@@ -249,7 +248,7 @@ struct casm_shuffle_state
 	//   r1 r0 <-> d6 d5
 	//   l4 l3 l2 l1 l0 <-> d3 d2 d1 d0 d4   (note permutation)
 	//   w1* w0 <-> j0* d7
-
+	
 	sp[soff_gs] = e4.x;
 	sp[soff_gs + 32] = e4.y;
 	sp[soff_gs + 64] = e4.z;
@@ -459,10 +458,10 @@ void casm_shuffle_reference_kernel(const uint8_t *e_in, const uint *gridding, fl
     // Convert 'gridding' indices (43*ew+ns) to 'regridding' indices (64*ew+ns)
     for (int d = 0; d < 256; d++) {
 	uint g = gridding[d];
-	assert(g < 6*43);
-	
 	uint ew = g / 43;
 	uint ns = g - (43*ew);
+
+	assert((ew < 6) && (ns < 43));
 	regridding[d] = 64*ew + ns;
     }
     
@@ -486,8 +485,8 @@ void casm_shuffle_reference_kernel(const uint8_t *e_in, const uint *gridding, fl
 // Helper for test_casm_shuffle()
 static Array<uint8_t> make_random_e_array(int T, int F)
 {
-    Array<uint8_t> ret({T,F,2,256}, af_rhost);
-    
+    Array<uint8_t> ret({T,F,2,256}, af_rhost | af_zero);
+
     uint *p = (uint *) (ret.data);
     int n = (ret.size >> 2);
 
@@ -527,14 +526,15 @@ static Array<uint> make_random_gridding()
 
 void test_casm_shuffle()
 {
-    int T = 4*48;  // must be multiple of 48
-    int F = 3;
+    auto v = random_integers_with_bounded_product(2, 100);
+    int T = v[0] * 48;  // T must be a multiple of 48
+    int F = v[1];
     
     Array<uint8_t> e = make_random_e_array(T,F);
     Array<uint> gridding = make_random_gridding();
     Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
     Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
-    
+	     
     casm_shuffle_reference_kernel(e.data, gridding.data, out_cpu.data, T, F);
 
     e = e.to_gpu();
@@ -543,7 +543,7 @@ void test_casm_shuffle()
     CUDA_PEEK("casm_shuffle_test_kernel");
 
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
-    cout << "test_casm_shuffle: pass" << endl;
+    cout << "test_casm_shuffle(T=" << T << ",F=" << F << "): pass" << endl;
 }
 
 
