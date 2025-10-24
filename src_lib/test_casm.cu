@@ -790,8 +790,6 @@ __global__ void casm_shuffle_test_kernel(
     float *out,                         // (T,F,2,6,64,2) = (time,freq,pol,ew,ns,reim)
     int T)
 {
-    extern __shared__ float shmem[];
-
     assert(blockDim.x == 32);
     assert(blockDim.y == 24);
     assert(blockDim.z == 1);
@@ -824,9 +822,6 @@ __global__ void casm_shuffle_test_kernel(
     out += F*2*6*64*2 * t0;
     
     for (int touter = 0; touter < T; touter += 48) {
-	constexpr int S0 = shmem_layout::E_base;
-	constexpr int S1 = shmem_layout::E_jstride;
-	
 	for (int s = 0; s < 2; s++) {
 	    // Delta(t)=24, Delta(j)=12
 	    shuffle.load_ungridded_e();
