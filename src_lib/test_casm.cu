@@ -753,14 +753,18 @@ struct casm_shuffle_state
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
     //   w2* w1 w0 <-> ew t0 pol  (= j1 j0)
 
-    __device__ void load_gridded_e(const uint *sp)
+    // "phase" should satisfy 0 <= phase < 6.
+    __device__ void load_gridded_e(int phase)
     {
+	extern __shared__ uint shmem_u[];
+	
 	uint j = (threadIdx.y & 3);
 	uint ew = (threadIdx.y >> 2);
-	uint soff_ge = 259*j + 43*ew + threadIdx.x;
+	uint ns = threadIdx.x;
+	uint s = shmem_layout::E_base + (4*phase+j)*shmem_layout::E_jstride + 43*ew + ns;
 	
-	e0 = sp[soff_ge];
-	e1 = (threadIdx.x < 11) ? sp[soff_ge+32] : 0;
+	e0 = shmem_u[s];
+	e1 = (threadIdx.x < 11) ? shmem_u[s+32] : 0;
     }
     
     __device__ void unpack_e(int i, float &e0_re, float &e0_im, float &e1_re, float &e1_im)
@@ -837,7 +841,7 @@ __global__ void casm_shuffle_test_kernel(
 
 	for (int s = 0; s < 6; s++) {
 	    // Delta(t)=8, Delta(j)=4
-	    shuffle.load_gridded_e((uint *)shmem + S0 + 4*S1*s);   // FIXME temporary hack
+	    shuffle.load_gridded_e(s);
 	    
 	    for (int i = 0; i < 4; i++) {
 		// Delta(t)=2
