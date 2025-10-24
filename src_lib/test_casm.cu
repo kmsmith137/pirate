@@ -422,9 +422,8 @@ __device__ float unpack_int4(uint x, uint s)
 template<bool Debug>
 struct casm_shuffle_state
 {
-    // Managed by setup_e_pointers().
+    // Managed by setup_e_pointer(), load_ungridded_e(), write_ungridded_e()
     const uint4 *ep4;
-    uint soff_gs;
     uint4 e4;
 
     // Managed by setup_unpacking(), load_gridded_e(), unpack_e().
@@ -449,7 +448,7 @@ struct casm_shuffle_state
 	copy_global_to_shared_memory(gpu_persistent_data, feed_weights, nbeams);
 	__syncthreads();
 
-	setup_e_pointers(global_e);
+	setup_e_pointer(global_e);
 	setup_unpacking();
     }
 
@@ -545,7 +544,7 @@ struct casm_shuffle_state
     // These member functions manage copying the ungridded E-array from global
     // memory to shared memory, with Delta(t)=24.
     //
-    //   setup_e_pointers()
+    //   setup_e_pointer()
     //   load_ungridded_e()
     //   write_ungridded_e()
     //
@@ -565,7 +564,7 @@ struct casm_shuffle_state
     //
     // before writing to shared memory.
     
-    __device__ void setup_e_pointers(const uint8_t *global_e)
+    __device__ void setup_e_pointer(const uint8_t *global_e)
     {
 	uint l = threadIdx.x;  // lane id
 	uint w = threadIdx.y;  // warp id
@@ -595,17 +594,6 @@ struct casm_shuffle_state
 	// uint128 E[T][F][2][16];
 	ep4 = (const uint4 *) global_e;
 	ep4 += 32*(t*F+f) + 16*pol + d16;
-
-	// Initialize the 'goff_gs' shared memory offset.
-	//   b1 b0 <-> i1 i0
-	//   r1 r0 <-> d6 d5
-	//   l4 l3 l2 l1 l0 <-> d3 d2 d1 d0 d4   (note permutation)
-	//   w1* w0 <-> j0* d7
-
-	uint d = (l >> 1) | ((l & 0x1) << 4) | ((w & 0x1) << 7);
-	soff_gs = shmem_layout::E_base + 259*j + d;   // note that j was previously initialized above
-	
-	check_bank_conflict_free<Debug>(soff_gs);
     }
     
     __device__ void load_ungridded_e()
@@ -653,15 +641,24 @@ struct casm_shuffle_state
 	warp_transpose(e4.x, e4.z, 4);
 	warp_transpose(e4.y, e4.w, 4);
 	
-	// At bottom, we have the register assignment that was assumed
-	// when computing 'goff_gs' above:
+	// At bottom, we have the register assignment:
 	//
 	//   b1 b0 <-> i1 i0
 	//   r1 r0 <-> d6 d5
 	//   l4 l3 l2 l1 l0 <-> d3 d2 d1 d0 d4   (note permutation)
 	//   w1* w0 <-> j0* d7
-
-	uint s = soff_gs + (phase * 12 * shmem_layout::E_jstride);
+	//
+	// Compute the shared memory offset 's' (see shared memory layout above).
+	
+	constexpr int SE = shmem_layout::E_base;
+	constexpr int SJ = shmem_layout::E_jstride;
+	
+	uint l = threadIdx.x;  // lane id
+	uint w = threadIdx.y;  // warp id
+	uint j = (w >> 1);
+	uint d = (l >> 1) | ((l & 0x1) << 4) | ((w & 0x1) << 7);
+	uint s = SE + ((12*phase+j) * SJ) + d;
+	check_bank_conflict_free<Debug>(s);
 	
 	shmem_u[s] = e4.x;
 	shmem_u[s + 32] = e4.y;
