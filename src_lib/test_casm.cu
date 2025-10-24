@@ -426,8 +426,7 @@ struct casm_shuffle_state
     const uint4 *ep4;
     uint4 e4;
 
-    // Managed by setup_unpacking(), load_gridded_e(), unpack_e().
-    uint soff_ge;
+    // Managed by load_gridded_e(), unpack_e().
     uint e0, e1;
 
     // Gains in persistent registers.
@@ -449,7 +448,6 @@ struct casm_shuffle_state
 	__syncthreads();
 
 	setup_e_pointer(global_e);
-	setup_unpacking();
     }
 
     // copy_global_to_shared_memory() performs the following copies
@@ -736,7 +734,6 @@ struct casm_shuffle_state
 
     // The member functions
     //
-    //   setup_unpacking()
     //   load_gridded_e()
     //   unpack_e()
     //
@@ -756,15 +753,12 @@ struct casm_shuffle_state
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
     //   w2* w1 w0 <-> ew t0 pol  (= j1 j0)
 
-    __device__ void setup_unpacking()
+    __device__ void load_gridded_e(const uint *sp)
     {
 	uint j = (threadIdx.y & 3);
 	uint ew = (threadIdx.y >> 2);
-	soff_ge = 259*j + 43*ew + threadIdx.x;
-    }
-
-    __device__ void load_gridded_e(const uint *sp)
-    {
+	uint soff_ge = 259*j + 43*ew + threadIdx.x;
+	
 	e0 = sp[soff_ge];
 	e1 = (threadIdx.x < 11) ? sp[soff_ge+32] : 0;
     }
