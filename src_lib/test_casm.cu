@@ -407,9 +407,9 @@ CasmBeamformer CasmBeamformer::make_random()
 
 __device__ void double_byte_perm(uint &x, uint &y, uint s1, uint s2)
 {
-    uint xx = x;
-    x = __byte_perm(xx, y, s1);
-    y = __byte_perm(xx, y, s2);
+    uint x0 = x;
+    x = __byte_perm(x0, y, s1);
+    y = __byte_perm(x0, y, s2);
 }
 
 __device__ float unpack_int4(uint x, uint s)
@@ -426,9 +426,6 @@ struct casm_shuffle_state
     const uint4 *ep4;
     uint soff_gs;
     uint4 e4;
-
-    // Managed by setup_gridding(), grid_shared_e().
-    uint grid_dst;
 
     // Managed by setup_unpacking(), load_gridded_e(), unpack_e().
     uint soff_ge;
@@ -453,7 +450,6 @@ struct casm_shuffle_state
 	__syncthreads();
 
 	setup_global_to_shared(global_e);
-	setup_gridding((const uint *) gpu_persistent_data);    // FIXME temporary hack
 	setup_unpacking();
     }
 
@@ -673,27 +669,15 @@ struct casm_shuffle_state
 	ep4 += 24*32*F;        // advance by 24 time samples
     }
 
-    // These member functions are responsible for "gridding" the E-array
-    // in shared memory.
-    //
-    //   setup_gridding()
-    //   grid_shared_e()
+    // grid_shared_e(): "gridding" the E-array in shared memory.
     //
     // A little awkward, since we want to loop over 256 dishes with 24 warps.
     // Note that 256 = 10*240 + 16.
-
-    __device__ void setup_gridding(const uint *global_gridding)
-    {
-	// FIXME loading directly from global memory -- rethink?
-	uint l = threadIdx.x;
-	uint w = threadIdx.y;
-	uint nd = (w < 16) ? 11 : 10;
-	uint d0 = (w < 16) ? (11*w) : (10*w+16);
-	grid_dst = (l < nd) ? global_gridding[d0+l] : 100000;
-    }
     
     __device__ void grid_shared_e(uint *sp)
     {
+	extern __shared__ uint shmem_u[];
+	
 	uint e[11];
 	uint j = threadIdx.x;  // lane
 	uint w = threadIdx.y;  // warp
@@ -715,13 +699,13 @@ struct casm_shuffle_state
 	
 	#pragma unroll
 	for (int i = 0; i < 10; i++) {
-	    uint dst = __shfl_sync(0xffffffff, grid_dst, i);
+	    uint dst = shmem_u[d0+i];  // 'gridding' (see shared memory layout above)
 	    if (j < 24)
 		sp[259*j + dst] = e[i];
 	}
 
 	if (w < 16) {
-	    uint dst = __shfl_sync(0xffffffff, grid_dst, 10);
+	    uint dst = shmem_u[d0+10];  // 'gridding' (see shared memory layout above)
 	    if (j < 24)
 		sp[259*j + dst] = e[10];
 	}
