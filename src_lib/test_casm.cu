@@ -14,15 +14,6 @@ namespace pirate {
 #endif
 
 
-// Shared memory layout:
-//
-//  uint E[24][259];
-//  float G[4][2][6][2][128];   // (time,pol,ew,reim,ns), ew-stride = 257
-//  float I[24][128];           // (ew,ns), ew-stride = 133
-//
-// Total bytes = 4 * (6216 + 12336 + 3192) = 86976.
-
-
 // -------------------------------------------------------------------------------------------------
 
 
@@ -41,9 +32,9 @@ __device__ void zma_expi(float &out_re, float &out_im, float theta, float yre, f
     zma(out_re, out_im, xre, xim, yre, yim);
 }
 
-// FIXME by calling warp_shuffle() in pairs, am I being suboptimal?
+// FIXME by calling warp_transpose() in pairs, am I being suboptimal?
 template<typename T>
-__device__ void warp_shuffle(T &x, T &y, uint bit)
+__device__ void warp_transpose(T &x, T &y, uint bit)
 {
     static_assert(sizeof(T) == 4);
 
@@ -62,6 +53,168 @@ __device__ void check_bank_conflict_free(int offset, int max_conflicts=1)
 	assert(__popc(m) <= max_conflicts);
 	assert(offset >= 0);
     }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Host-side CasmBeamformer object
+//
+// FIXME make this a class, with some members protected.
+// FIXME switch to an API which doesn't use ksgpu::Array or xassert()
+// FIXME constructor should save current cuda device, and check equality in beamform()
+
+
+struct CasmBeamformer
+{
+    // speed of light in weird units meters-MHz
+    static constexpr float speed_of_light = 299.79;
+
+    inline static const float default_ew_feed_spacings[5]
+	= { 0.38f, 0.445f, 0.38f, 0.445f, 0.38f };  // meters
+    
+    CasmBeamformer(
+        Array<float> &frequencies,     // shape (F,)
+	Array<int> &feed_indices,      // shape (256,2)
+	Array<float> &beam_locations,  // shape (B,2)
+	int downsampling_factor,
+	float ns_feed_spacing = 0.50,  // meters
+	const float *ew_feed_spacing = default_ew_feed_spacings
+    );
+
+    int F = 0;  // number of frequency channels (on one GPU)
+    int B = 0;  // number of output beams
+
+    float ew_feed_positions[6];   // meters
+    float ew_beam_locations[24];  // sin(ZA)
+    
+    // gpu_persistent_data is laid out as follows:
+    //
+    //   uint gridding[256];                  contains (43*ew+ns), derived from 'feed_indices'
+    //   float ns_phases[32];                 contains cos(2pi * t / 128) for 0 <= t < 32
+    //   float per_frequency_data[F][3][32];  middle index is 0 <= ew_feed < 3, see (*) below
+    //   float beam_locations[B][2];          contains sin(za), same as 'beam_locations'
+    //
+    // (*) The 32-element per_frequency_data "inner" index is laid out as follows:
+    //
+    //   float ew_phases[12][2];              (ew_beam, cos/sin) for fixed 0 <= ew_feed < 3
+    //   float freq;                          array element 25
+    
+    Array<float> gpu_persistent_data;
+};
+
+
+CasmBeamformer::CasmBeamformer(
+    Array<float> &frequencies,     // shape (F,)
+    Array<int> &feed_indices,      // shape (256,2)
+    Array<float> &beam_locations,  // shape (B,2)
+    int downsampling_factor,
+    float ns_feed_spacing,
+    const float *ew_feed_spacing)
+{
+    // Argument checking
+    xassert_eq(frequencies.ndim, 1);
+    xassert_eq(beam_locations.ndim, 2);
+    xassert_eq(beam_locations.shape[1], 2);
+    xassert_shape_eq(feed_indices, ({256,2}));
+    
+    this->F = frequencies.shape[0];
+    this->B = beam_locations.shape[0];
+
+    xassert_gt(F, 0);
+    xassert_gt(B, 0);
+    xassert_divisible(B, 32);  // currently required by GPU kernel, but not python reference code
+    xassert_gt(downsampling_factor, 0);	       
+    xassert_ge(ns_feed_spacing, 0.3);
+    xassert_lt(ns_feed_spacing, 0.6);
+    
+    for (int i = 0; i < 5; i++) {
+	xassert_ge(ew_feed_spacing[i], 0.3);
+	xassert_le(ew_feed_spacing[i], 0.6);
+	xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // flip-symmetric
+    }
+
+    ew_feed_positions[3] = ew_feed_spacing[2] / 2.;
+    ew_feed_positions[4] = ew_feed_positions[3] + (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
+    ew_feed_positions[5] = ew_feed_positions[4] + (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
+
+    for (int i = 0; i < 24; i++)
+	ew_beam_locations[i] = (23-2*i) / 21.;
+    
+    // The rest of this function fills 'gpu_persistent_data' and copies to the GPU.
+    gpu_persistent_data = Array<float> ({256 + 32 + 96*F + 2*B}, af_rhost | af_zero);
+    
+    // Compute 'gridding' part of 'gpu_persistent_data' (with error-checking).
+    uint *gp = (uint *) (gpu_persistent_data.data);
+    vector<int> duplicate_checker({6*43}, -1);
+    
+    for (int d = 0; d < 256; d++) {
+	int ns = feed_indices.at({d,0});  // 0 <= ns < 43
+	int ew = feed_indices.at({d,1});  // 0 <= ew < 6
+
+	if ((ns < 0) || (ns >= 43) || (ew < 0) || (ew >= 43)) {
+	    stringstream ss;
+	    ss << "CasmBeamformer constructor: got feed_indices[" << d << "]=("
+	       << ns << "," << ew << "). Expected pair (j,k) where 0 <= j < 43"
+	       << " and 0 <= k < 6";
+	    throw runtime_error(ss.str());
+	}
+
+	int g = 43*ew + ns;
+	
+	if (duplicate_checker[g] >= 0) {
+	    stringstream ss;
+	    ss << "CasmBeamformer constructor: duplicate feed_indices["
+	       << duplicate_checker[g] << "] = feed_indices[" << d << "] = ("
+	       << ns << "," << ew << ")";
+	    throw runtime_error(ss.str());
+	}
+
+	duplicate_checker[g] = d;
+	gp[d] = g;
+    }
+
+    // Compute 'ns_phases' part of 'gpu_persistent_data'.
+    for (int t = 0; t < 32; t++)
+	gpu_persistent_data.at({256+t}) = cosf((2 * M_PI / 128.0) * t);
+
+    // Compute 'per_frequency_data' part of 'gpu_persistent_data'.    
+    for (int f = 0; f < F; f++) {
+	float freq = frequencies.at({f});
+	
+	// Beamformer has only been validated for frequencies in [400,500] MHz.
+        // This assert also guards against using the wrong units (should be MHz).
+	xassert_ge(freq, 399.0);
+	xassert_lt(freq, 501.0);
+
+	for (int ew_feed = 0; ew_feed < 3; ew_feed++) {
+	    float feed_pos = ew_feed_positions[ew_feed+3];
+	    
+	    float *pf32 = gpu_persistent_data.data + 256 + 32 + 96*f + 32*ew_feed;
+	    pf32[25] = freq;
+	    
+	    for (int ew_beam = 0; ew_beam < 12; ew_beam++) {
+		float beam_loc = ew_beam_locations[ew_beam + 12];
+		float theta = (2*M_PI / speed_of_light) * freq * feed_pos * beam_loc;
+		sincosf(theta, &pf32[2*ew_beam+1], &pf32[2*ew_beam]);
+	    }
+	}
+    }
+
+    // Compute 'beam_locations' part of gpu_persistent_data
+    float *blp = gpu_persistent_data.data + 256 + 32 + 96*F;
+	
+    for (int b = 0; b < B; b++) {
+	for (int j = 0; j < 2; j++) {
+	    float beam_location = beam_locations.at({b,j});
+	    xassert_ge(beam_location, -1.0);
+	    xassert_le(beam_location, 1.0);
+	    blp[2*b+j] = beam_location;
+	}
+    }
+
+    // All done! Copy to GPU.
+    gpu_persistent_data = gpu_persistent_data.to_gpu();
 }
 
 
@@ -117,9 +270,12 @@ struct casm_shuffle_state
     uint soff_ge;
     uint e0, e1;
 
+    // Gains in persistent registers.
+    // float g0_re, g0_im, g1_re, g1_im;
+    
     // 'global_e' points to (T,F,2,256)
     // 'global_gridding' points to length-256, elements are (43*ew+ns).
-    
+
     __device__ casm_shuffle_state(const uint8_t *global_e, const uint *global_gridding)
     {
 	if constexpr (Debug) {
@@ -128,11 +284,115 @@ struct casm_shuffle_state
 	    assert(blockDim.z == 1);
 	}
 
+	// copy_global_to_shared_memory(global_gridding, global_gains, sp);
+	// __syncthreads();
+
 	setup_global_to_shared(global_e);
-	setup_gridding(global_gridding);
+	setup_gridding(global_gridding);				      
 	setup_unpacking();
     }
+    
+    // - Global memory layout for 'gpu_persistent_data':
+    //
+    //     uint gridding[256];                  contains (43*ew+ns), derived from 'feed_indices'
+    //     float ns_phases[32];                 contains cos(2pi * t / 128) for 0 <= t < 32
+    //     float per_frequency_data[F][3][32];  middle index is 0 <= ew_feed < 3, see (*) below
+    //     float beam_locations[B][2];          contains sin(za), same as 'beam_locations'
+    //
+    //   (*) The 32-element per_frequency_data "inner" index is laid out as follows:
+    //
+    //     float ew_phases[12][2];              (ew_beam, cos/sin) for fixed 0 <= ew_feed < 3
+    //     float freq;                          array element 25
+    //
+    // - Global memory layout for 'feed_weights':
+    //
+    //     float feed_weights[F][2][256][2];    freq,pol,dish,reim
+    //
+    // - Shared memory layout (columns are [32-bit offset], physical layout, logical layout).
+    //   Currently using BMAX=4704, which gives exactly 99 KB.
+    //
+    //     [0]      uint gridding[256];                                       // contains (43*ew+ns), derived from 'feed_indices'
+    //     [256]    float ns_phases[32];                                      // contains cos(2pi * t / 128) for 0 <= t < 32
+    //     [288]    float per_frequency_data[3][32];                          // outer index is 0 <= ew_feed < 3, see (*) below
+    //     [384]    uint E[24][259]      union { E[24][256], E[24][6][43] }   // (j,dish) or (j,ew,ns), outer stride 259
+    //     [6600]   float I[24][132]     float I[24][128];                    // (ew,ns), ew-stride 132
+    //     [9768]   float G[24][257]     float G[2][2][6][2][128];            // (time,pol,ew,reim,ns), ew-stride 257
+    //     [15936]  float beam_locs[2][BMAX];                                 // contains sin(za), same as 'beam_locations'
+    //
+    // - During initialization, the E[], I[], and G[] arrays aren't needed yet,
+    //   so we overwrite their contents with feed_weights:
+    //
+    //     [0]      uint gridding[256];                                 // contains (43*ew+ns), derived from 'feed_indices'
+    //     [256]    float ns_phases[32];                                // contains cos(2pi * t / 128) for 0 <= t < 32
+    //     [288]    float per_frequency_data[3][32];                    // outer index is 0 <= ew_feed < 3, see (*) below
+    //     [384]    float ungridded_wts[8][257];   uwt[2][2][2][256]    // (duplicator, reim, pol, dish)
+    //     [2440]   float gridded_wts[4][259];     gwt[2][2][6][43]     // (reim, pol, ew, ns)
+    //     [3476]   unused (12460 registers, 49840 bytes)
+    //     [15936]  float beam_locs[2][BMAX];                           // contains sin(za), same as 'beam_locations'
+    //
+    // Note: caller is responsible for calling __syncthreads() afterwards!
 
+    __device__ void copy_global_to_shared_memory(const float *persistent_global, const float *feed_weights, int nbeams)
+    {
+	extern __shared__ float shmem[];
+	
+	// Sources:
+	//
+	//   - 288 contiguous elts (gridding + ns_phases)
+	//   - 96 discontiguous elts (per_frequency_data)
+	//   - 2*256*2 feed_weights (pol, dish, reim)
+	//   - B*2 beam_locations
+
+	uint w = threadIdx.y;          // warp id
+	uint l = threadIdx.x;          // lane id
+	uint f = blockIdx.x;           // frequency channel
+	uint F = gridDim.x;            // number of frequency channels
+	uint B32 = nbeams >> 5;
+
+	if (w < 12) {
+	    // 288=32*9 contiguous elts (gridding + ns_phases)
+	    // 96=32*3 discontiguous elts (per_frequency_data)
+	    // Easiest to read these as float (not float2)
+	    uint dst = 32*w + l;
+	    uint src = (w < 9) ? dst : (dst + 96*f);
+	    float x = persistent_global[src];
+	    shmem[dst] = x;
+	    w += 32;
+	}
+	    
+	if (w < 28) {
+	    // 2*256*2 = 16*32*2 feed_weights (pol, dish, reim)
+	    // Easiest to read these as float2.
+	    const float2 *fw2 = (const float2 *) (feed_weights);
+	    uint e = 32*(w-12) + l;                  // (pol, dish)
+	    uint s = (e < 256) ? (e+384) : (e+385);  // shared memory offset
+	    float2 fw = fw2[e];
+	    shmem[s] = fw.x;         // real part
+	    shmem[s+2*257] = fw.y;   // imag part
+	    shmem[s+4*257] = fw.x;   // duplicated real part
+	    shmem[s+6*257] = fw.y;   // duplicated imag part
+	    w += 32;
+	}
+
+	while (w < B32+28) {
+	    // B*2 beam_locations. Easiest to read these as float2.
+	    const float2 *bl2 = (const float2 *) (persistent_global + 288 + 96*F);
+	    uint b = 32*(w-28) + l;   // beam id
+	    uint s = 15936 + b;
+	    float2 bl = bl2[b];
+	    shmem[s] = bl.x;
+	    shmem[s+4704] = bl.y;
+	    w += 32;
+	}
+	
+	// Important: zero 'gridded_wts' in shared memory, in order to capture the two
+	// "missing" feeds. (It's easy to miss this, since it only matters if the number
+	// of threadblocks is larger than the number of SMs.)
+
+	for (uint t = 32*threadIdx.y + threadIdx.x; t < 4*259; t += 24*32)
+	    shmem[t + 2440] = 0.0f;
+    }
+    
     // These member functions manage copying the ungridded E-array from global
     // memory to shared memory, with Delta(t)=24.
     //
@@ -214,10 +474,10 @@ struct casm_shuffle_state
 	//   w1* w0 <-> j0* d7
 
 	// swap (r1,r0) <-> (l4,l3)
-	warp_shuffle(e4.x, e4.y, 8);
-	warp_shuffle(e4.z, e4.w, 8);
-	warp_shuffle(e4.x, e4.z, 16);
-	warp_shuffle(e4.y, e4.w, 16);
+	warp_transpose(e4.x, e4.y, 8);
+	warp_transpose(e4.z, e4.w, 8);
+	warp_transpose(e4.x, e4.z, 16);
+	warp_transpose(e4.y, e4.w, 16);
 
 	// b1 b0 <-> d1 d0
 	// r1 r0 <-> i1 10
@@ -236,10 +496,10 @@ struct casm_shuffle_state
 	// w1* w0 <-> j0* d7
 
 	// swap (r1,r0) <-> (l2,l1)
-	warp_shuffle(e4.x, e4.y, 2);
-	warp_shuffle(e4.z, e4.w, 2);
-	warp_shuffle(e4.x, e4.z, 4);
-	warp_shuffle(e4.y, e4.w, 4);
+	warp_transpose(e4.x, e4.y, 2);
+	warp_transpose(e4.z, e4.w, 2);
+	warp_transpose(e4.x, e4.z, 4);
+	warp_transpose(e4.y, e4.w, 4);
 	
 	// At bottom, we have the register assignment that was assumed
 	// when computing 'goff_gs' above:
@@ -313,6 +573,26 @@ struct casm_shuffle_state
 		sp[259*j + dst] = e[10];
 	}
     }
+
+
+#if 0
+    __device__ void setup_gains()
+    {
+	// Shared memory workspace (~22 KB!)
+	//
+	//   uint gridding[256];
+	//   float ungridded_gains[2][2][2][256];  // (dummy,reim,pol,dish) with strides (
+	//   float gridded_gains[2][2][6*43];      // (reim,pol,dish) with reim-stride = (2*6*43+1)
+
+	// Step 1: grid the gains.
+	// Each dish is processed by a group of 4 warps.
+	uint d0 = (32*threadIdx.y + threadIdx.x) >> 2;
+
+	for (uint d = d0; d < 256; d += 24*8) {
+	    
+	}
+    }
+#endif
 
     // The member functions
     //
@@ -598,8 +878,8 @@ struct fft_c2c_state
 	x1_im = yim;
 
 	// swap "01" register bit with thread bit (R-2)
-	warp_shuffle(x0_re, x1_re, (1 << (R-2)));
-	warp_shuffle(x0_im, x1_im, (1 << (R-2)));
+	warp_transpose(x0_re, x1_re, (1 << (R-2)));
+	warp_transpose(x0_im, x1_im, (1 << (R-2)));
 	
 	next_fft.apply(x0_re, x0_im, x1_re, x1_im);
     }
@@ -754,10 +1034,10 @@ struct fft1_state
 	// t4 t3 t2 t1 t0 <-> y1 y2 y3 y4 y5
 
 	// Exchange "xy" and "thread 0" bits
-	warp_shuffle(x0_re, y0_re, 1);
-	warp_shuffle(x0_im, y0_im, 1);
-	warp_shuffle(x1_re, y1_re, 1);
-	warp_shuffle(x1_im, y1_im, 1);
+	warp_transpose(x0_re, y0_re, 1);
+	warp_transpose(x0_im, y0_im, 1);
+	warp_transpose(x1_re, y1_re, 1);
+	warp_transpose(x1_im, y1_im, 1);
 	
 	// xy r1 r0 <-> y5 y6 ReIm
 	// t4 t3 t2 t1 t0 <-> y1 y2 y3 y4 y0
