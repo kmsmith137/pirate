@@ -422,7 +422,7 @@ __device__ float unpack_int4(uint x, uint s)
 template<bool Debug>
 struct casm_shuffle_state
 {
-    // Managed by setup_global_to_shared().
+    // Managed by setup_e_pointers().
     const uint4 *ep4;
     uint soff_gs;
     uint4 e4;
@@ -449,7 +449,7 @@ struct casm_shuffle_state
 	copy_global_to_shared_memory(gpu_persistent_data, feed_weights, nbeams);
 	__syncthreads();
 
-	setup_global_to_shared(global_e);
+	setup_e_pointers(global_e);
 	setup_unpacking();
     }
 
@@ -545,7 +545,7 @@ struct casm_shuffle_state
     // These member functions manage copying the ungridded E-array from global
     // memory to shared memory, with Delta(t)=24.
     //
-    //   setup_global_to_shared()
+    //   setup_e_pointers()
     //   load_ungridded_e()
     //   write_ungridded_e()
     //
@@ -565,7 +565,7 @@ struct casm_shuffle_state
     //
     // before writing to shared memory.
     
-    __device__ void setup_global_to_shared(const uint8_t *global_e)
+    __device__ void setup_e_pointers(const uint8_t *global_e)
     {
 	uint l = threadIdx.x;  // lane id
 	uint w = threadIdx.y;  // warp id
@@ -603,7 +603,7 @@ struct casm_shuffle_state
 	//   w1* w0 <-> j0* d7
 
 	uint d = (l >> 1) | ((l & 0x1) << 4) | ((w & 0x1) << 7);
-	soff_gs = 259*j + d;   // note that j was previously initialized above
+	soff_gs = shmem_layout::E_base + 259*j + d;   // note that j was previously initialized above
 	
 	check_bank_conflict_free<Debug>(soff_gs);
     }
@@ -613,8 +613,11 @@ struct casm_shuffle_state
 	e4 = *ep4;
     }
 
-    __device__ void write_ungridded_e(uint *sp)
+    // "phase" is either 0 or 1
+    __device__ void write_ungridded_e(int phase)
     {
+	extern __shared__ uint shmem_u[];
+	
 	// At top, 'e4' has register assignment:
 	//
 	//   b1 b0 <-> d1 d0
@@ -657,11 +660,13 @@ struct casm_shuffle_state
 	//   r1 r0 <-> d6 d5
 	//   l4 l3 l2 l1 l0 <-> d3 d2 d1 d0 d4   (note permutation)
 	//   w1* w0 <-> j0* d7
+
+	uint s = soff_gs + (phase * 12 * shmem_layout::E_jstride);
 	
-	sp[soff_gs] = e4.x;
-	sp[soff_gs + 32] = e4.y;
-	sp[soff_gs + 64] = e4.z;
-	sp[soff_gs + 96] = e4.w;
+	shmem_u[s] = e4.x;
+	shmem_u[s + 32] = e4.y;
+	shmem_u[s + 64] = e4.z;
+	shmem_u[s + 96] = e4.w;
 
 	// Advance global E-array pointer 'ep4'.
 
@@ -827,10 +832,9 @@ __global__ void casm_shuffle_test_kernel(
 	constexpr int S1 = shmem_layout::E_jstride;
 	
 	for (int s = 0; s < 2; s++) {
-	    
 	    // Delta(t)=24, Delta(j)=12
 	    shuffle.load_ungridded_e();
-	    shuffle.write_ungridded_e((uint *)shmem + S0 + 12*S1*s);  // FIXME temporary hack
+	    shuffle.write_ungridded_e(s);
 	}
 
 	__syncthreads();
