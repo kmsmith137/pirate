@@ -678,19 +678,21 @@ struct casm_shuffle_state
     
     __device__ void grid_shared_e(uint *sp)
     {
+	// sp = shmem_u + shmem_layout::E_base;
 	extern __shared__ uint shmem_u[];
 	
 	uint e[11];
 	uint j = threadIdx.x;  // lane
 	uint w = threadIdx.y;  // warp
 	uint d0 = (w < 16) ? (11*w) : (10*w+16);
+	uint s = shmem_layout::E_base + 259*j;
 
 	#pragma unroll
 	for (int i = 0; i < 10; i++)
-	    e[i] = (j < 24) ? sp[259*j + d0+i] : 0;
+	    e[i] = (j < 24) ? shmem_u[s+d0+i] : 0;
 	
 	if (w < 16)
-	    e[10] = (j < 24) ? sp[259*j + d0+10] : 0;
+	    e[10] = (j < 24) ? shmem_u[s+d0+10] : 0;
 	
 	__syncthreads();
 
@@ -703,13 +705,13 @@ struct casm_shuffle_state
 	for (int i = 0; i < 10; i++) {
 	    uint dst = shmem_u[d0+i];  // 'gridding' (see shared memory layout above)
 	    if (j < 24)
-		sp[259*j + dst] = e[i];
+		shmem_u[dst] = e[i];
 	}
 
 	if (w < 16) {
 	    uint dst = shmem_u[d0+10];  // 'gridding' (see shared memory layout above)
 	    if (j < 24)
-		sp[259*j + dst] = e[10];
+		shmem_u[dst] = e[10];
 	}
     }
 
