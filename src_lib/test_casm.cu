@@ -81,9 +81,8 @@ struct gmem_layout
     // All _*base quantities are 32-bit offsets, not byte offsets.
     static constexpr int gridding_base = 0;
     static constexpr int ns_phases_base = 256;
-    static constexpr int per_frequency_data_base(int f=0)  { return ns_phases_base + 32 + 96*f; }
-    static constexpr int beam_locs_base(int F, int b=0)    { return ns_phases_base + 32 + 96*F + 2*b; }
-    static constexpr int nbytes(int F, int B)              { return 4 * beam_locs_base(F,B); }
+    static __host__ __device__ constexpr int per_frequency_data_base(int f=0)  { return ns_phases_base + 32 + 96*f; }
+    static __host__ __device__ constexpr int beam_locs_base(int F, int b=0)    { return ns_phases_base + 32 + 96*F + 2*b; }
 };
 
 
@@ -157,24 +156,28 @@ struct CasmBeamformer
     
     int F = 0;  // number of frequency channels (on one GPU)
     int B = 0;  // number of output beams
+    int downsampling_factor = 0;
     
     ksgpu::Array<float> &frequencies;     // shape (F,)
     ksgpu::Array<int> feed_indices;       // shape (256,2)
     ksgpu::Array<float> &beam_locations;  // shape (B,2)
-    int downsampling_factor = 0;
     float ns_feed_spacing = 0.0;
 
     float ew_feed_spacing[5];     // meters
     float ew_feed_positions[6];   // meters
     float ew_beam_locations[24];  // sin(ZA)
+
+    static int get_max_beams();
     
     // This is a ~200KB region of global GPU memory, which is initialized by the
     // CasmBeamformer constructor, and passed to the beamformer on every kernel launch.
     // See "global memory layout" in CasmBeamformer.cu for more info.
     Array<float> gpu_persistent_data;
-
+    
+    // For unit tests
+    int nominal_Tin_for_unit_tests = 0;
+    static CasmBeamformer make_random();
     static void show_shared_memory_layout();
-    static int get_max_beams();
 };
 
 
@@ -301,6 +304,7 @@ CasmBeamformer::CasmBeamformer(
 }
 
 
+// Static member function.
 void CasmBeamformer::show_shared_memory_layout()
 {
     using SL = shmem_layout;
@@ -317,10 +321,64 @@ void CasmBeamformer::show_shared_memory_layout()
 }
 
 
+// Static member function.
 int CasmBeamformer::get_max_beams()
 {
     // Maximum number of beams is currently determined by shared memory constraints.
     return shmem_layout::max_beams;
+}
+
+
+// Static member function.
+CasmBeamformer CasmBeamformer::make_random()
+{
+    auto w = ksgpu::random_integers_with_bounded_product(3, 100);
+    int B = 32 * ksgpu::rand_int(1,6);  // FIXME increase
+    int T = w[0] * w[1];
+    int ds = w[1];
+    int F = w[2];
+
+    // FIXME currently we have a requirement that (T % 48) == 0,
+    // in addition to the requirement that (T % ds) == 0.
+    int d = std::lcm(ds, 48);
+    T = ((T+d-1) / d) * d;  // round up to nearest multiple of d
+
+    Array<float> frequencies({F}, af_uhost);
+    Array<int> feed_indices({256,2}, af_uhost);
+    Array<float> beam_locations({B,2}, af_uhost);
+    float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
+    float ew_feed_spacing[5];
+
+    // Make random 'frequencies' array.
+    for (int f = 0; f < F; f++)
+	frequencies.at({f}) = rand_uniform(400.0, 500.0);
+    
+    // Make random 'beam_locations' array.
+    for (int b = 0; b < B; b++)
+	for (int j = 0; j < 2; j++)
+	    beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
+
+    // Make random 'ew_feed_spacing' array.
+    for (int i = 0; i < 3; i++)
+	ew_feed_spacing[i] = ew_feed_spacing[4-i] = rand_uniform(0.3, 0.6);
+    
+    // Make random 'feed_indices' array.
+    vector<uint> v(43*6);
+    for (uint ns = 0; ns < 43; ns++)
+	for (uint ew = 0; ew < 6; ew++)
+	    v.at(6*ns+ew) = (ew << 16) | ns;
+
+    ksgpu::randomly_permute(v);
+
+    for (uint d = 0; d < 256; d++) {
+	feed_indices.at({d,0}) = v[d] & 0xffff;  // ns
+	feed_indices.at({d,1}) = v[d] >> 16;     // ew
+    }
+
+    CasmBeamformer ret(frequencies, feed_indices, beam_locations, ds, ns_feed_spacing, ew_feed_spacing);
+    ret.nominal_Tin_for_unit_tests = T;
+    
+    return ret;
 }
 
 
@@ -379,10 +437,11 @@ struct casm_shuffle_state
     // Gains in persistent registers.
     // float g0_re, g0_im, g1_re, g1_im;
     
-    // 'global_e' points to (T,F,2,256)
-    // 'global_gridding' points to length-256, elements are (43*ew+ns).
+    // 'global_e' argument: points to (T,F,2,256)
+    // 'feed_weights' argument: points to (F,2,256,2)
+    // 'gpu_persistent_data' argument: see "global memory layout" earlier in source file.
 
-    __device__ casm_shuffle_state(const uint8_t *global_e, const uint *global_gridding)
+    __device__ casm_shuffle_state(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
     {
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
@@ -390,25 +449,28 @@ struct casm_shuffle_state
 	    assert(blockDim.z == 1);
 	}
 
-	// copy_global_to_shared_memory(global_gridding, global_gains, sp);
-	// __syncthreads();
+	copy_global_to_shared_memory(gpu_persistent_data, feed_weights, nbeams);
+	__syncthreads();
 
 	setup_global_to_shared(global_e);
-	setup_gridding(global_gridding);				      
+	setup_gridding((const uint *) gpu_persistent_data);    // FIXME temporary hack
 	setup_unpacking();
     }
 
-    // copy_global_to_shared_memory(): performs the following copies
+    // copy_global_to_shared_memory() performs the following copies
     //
-    //    gridding (256 elts): persistent_global -> shmem
-    //    ns_phases (32 elts): persistent_global -> shmem (32 elts)
-    //    per_frequency_data (96 elts, not 96*F elts): persistent_global -> shmem
+    //    gridding (256 elts): gpu_persistent_data -> shmem
+    //    ns_phases (32 elts): gpu_persistent_data -> shmem (32 elts)
+    //    per_frequency_data (96 elts, not 96*F elts): gpu_persistent_data -> shmem
     //    feed_weights (1024 elts, not 1024*F elts): feed_weights_global -> shmem
-    //    beam_locations (2*B elts): persistent_global -> shmem
+    //    beam_locations (2*B elts): gpu_persistent_data -> shmem
+    //
+    // 'feed_weights' argument: points to (F,2,256,2)
+    // 'gpu_persistent_data' argument: see "global memory layout" earlier in source file.
     //
     // Note: caller is responsible for calling __syncthreads() afterwards!
 
-    __device__ void copy_global_to_shared_memory(const float *persistent_global, const float *feed_weights, int nbeams)
+    __device__ void copy_global_to_shared_memory(const float *gpu_persistent_data, const float *feed_weights, int nbeams)
     {
 	extern __shared__ float shmem[];
 
@@ -421,7 +483,7 @@ struct casm_shuffle_state
 	if (w < 9) {
 	    // gridding + ns_phases (256+32 elts)
 	    uint s = 32*w + l;
-	    shmem[s] = persistent_global[s];
+	    shmem[s] = gpu_persistent_data[s];
 	    w += 32;
 	}
 
@@ -430,7 +492,7 @@ struct casm_shuffle_state
 	    uint s = 32*(w-9) + l;
 	    uint dst = shmem_layout::per_frequency_data_base + s;
 	    uint src = gmem_layout::per_frequency_data_base(f) + s;
-	    shmem[dst] = persistent_global[src];
+	    shmem[dst] = gpu_persistent_data[src];
 	    w += 32;
 	}
 	    
@@ -459,7 +521,7 @@ struct casm_shuffle_state
 	    // beam_locations (B*2 floats).
 	    // It's easiest to read these as float2.
 	    
-	    const float2 *bl2 = (const float2 *) (persistent_global + gmem_layout::beam_locs_base(F));
+	    const float2 *bl2 = (const float2 *) (gpu_persistent_data + gmem_layout::beam_locs_base(F));
 	    constexpr uint S = shmem_layout::beam_stride;
 			  
 	    uint b = 32*(w-28) + l;   // beam id
@@ -735,14 +797,15 @@ struct casm_shuffle_state
 
 // Launch with {32,24,1} threads and {F,1,1} blocks.
 // T must be a multiple of 48.
-//
-//   uint8 e_in[T][F][2][128];
-//   uint gridding[256];
-//   float out[T][F][2][6][64][2];  // (time,freq,pol,ew,ns,reim)
 
-__global__ void casm_shuffle_test_kernel(const uint8_t *e_in, const uint *gridding, float *out, int T)
+__global__ void casm_shuffle_test_kernel(
+    const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
+    const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
+    const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
+    float *out,                         // (T,F,2,6,64,2) = (time,freq,pol,ew,ns,reim)
+    int T)
 {
-    __shared__ uint shmem[24*259];  // Delta(t)=48
+    extern __shared__ float shmem[];
 
     assert(blockDim.x == 32);
     assert(blockDim.y == 24);
@@ -750,8 +813,9 @@ __global__ void casm_shuffle_test_kernel(const uint8_t *e_in, const uint *griddi
     assert(gridDim.y == 1);
     assert(gridDim.z == 1);
     assert((T % 48) == 0);
-    
-    casm_shuffle_state<true> shuffle(e_in, gridding);  // Debug=true
+
+    // Debug=true, nbeams=0
+    casm_shuffle_state<true> shuffle(e_in, feed_weights, gpu_persistent_data, 0);
 
     // Set up writing to the 'out' array, with Delta(t)=2.
     // Output from casm_shuffle_state::unpack_e() has register assignment:
@@ -775,21 +839,25 @@ __global__ void casm_shuffle_test_kernel(const uint8_t *e_in, const uint *griddi
     out += F*2*6*64*2 * t0;
     
     for (int touter = 0; touter < T; touter += 48) {
+	constexpr int S0 = shmem_layout::E_base;
+	constexpr int S1 = shmem_layout::E_jstride;
+	
 	for (int s = 0; s < 2; s++) {
+	    
 	    // Delta(t)=24, Delta(j)=12
 	    shuffle.load_ungridded_e();
-	    shuffle.write_ungridded_e(shmem + 12*259*s);
+	    shuffle.write_ungridded_e((uint *)shmem + S0 + 12*S1*s);  // FIXME temporary hack
 	}
 
 	__syncthreads();
 	
-	shuffle.grid_shared_e(shmem);
+	shuffle.grid_shared_e((uint *)shmem + S0);  // FIXME temporary hack
 	
 	__syncthreads();
 
 	for (int s = 0; s < 6; s++) {
 	    // Delta(t)=8, Delta(j)=4
-	    shuffle.load_gridded_e(shmem + 4*259*s);
+	    shuffle.load_gridded_e((uint *)shmem + S0 + 4*S1*s);   // FIXME temporary hack
 	    
 	    for (int i = 0; i < 4; i++) {
 		// Delta(t)=2
@@ -815,26 +883,19 @@ __global__ void casm_shuffle_test_kernel(const uint8_t *e_in, const uint *griddi
     }
 }
 
-// uint8 e_in[T][F][2][256];
-// float out[T][F][2][6][64][2];  // (time,freq,pol,ew,ns,reim)
-// uint gridding[256];
 
-void casm_shuffle_reference_kernel(const uint8_t *e_in, const uint *gridding, float *out, int T, int F)
+void casm_shuffle_reference_kernel(
+    const CasmBeamformer &bf,
+    const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
+    const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
+    float *out,                         // (T,F,2,6,64,2) = (time,freq,pol,ew,ns,reim)
+    int T)
 {
-    int TFP = 2*T*F;
+    int TFP = 2 * T * bf.F;
     memset(out, 0, TFP * 6*64*2 * sizeof(float));
 
-    vector<uint> regridding(256);
-    
-    // Convert 'gridding' indices (43*ew+ns) to 'regridding' indices (64*ew+ns)
-    for (int d = 0; d < 256; d++) {
-	uint g = gridding[d];
-	uint ew = g / 43;
-	uint ns = g - (43*ew);
-
-	assert((ew < 6) && (ns < 43));
-	regridding[d] = 64*ew + ns;
-    }
+    xassert(bf.feed_indices.is_fully_contiguous());
+    const int *feed_indices = bf.feed_indices.data;
     
     for (int tfp = 0; tfp < TFP; tfp++) {
 	const uint8_t *e2 = e_in + 256*tfp;  // points to shape (256,)
@@ -844,16 +905,19 @@ void casm_shuffle_reference_kernel(const uint8_t *e_in, const uint *gridding, fl
 	    uint8_t e = e2[d] ^ 0x88888888;
 	    float e_re = float(e & 0xf) - 8.0f;
 	    float e_im = float(e >> 4) - 8.0f;
-		
-	    uint rg = regridding[d];
-	    out2[2*rg] = e_re;
-	    out2[2*rg+1] = e_im;
+
+	    int ns = feed_indices[2*d];
+	    int ew = feed_indices[2*d+1];
+	    int g = 64*ew + ns;
+
+	    out2[2*g] = e_re;
+	    out2[2*g+1] = e_im;
 	}
     }
 }
 
 
-// Helper for test_casm_shuffle()
+// FIXME should this be a CasmBeamformer member function?
 static Array<uint8_t> make_random_e_array(int T, int F)
 {
     Array<uint8_t> ret({T,F,2,256}, af_rhost | af_zero);
@@ -871,46 +935,40 @@ static Array<uint8_t> make_random_e_array(int T, int F)
 }
 
 
-// Helper for test_casm_shuffle()
-static Array<uint> make_random_gridding()
+// FIXME should this be a CasmBeamformer member function?
+static Array<float> make_random_feed_weights(int F)
 {
-    vector<int> v(6*43);
-    for (int i = 0; i < 6*43; i++)
-	v[i] = (i < 256) ? i : -1;
-
-    ksgpu::randomly_permute(v);
-
-    Array<uint> ret({256}, af_rhost);
-    for (int d = 0; d < 256; d++)
-	ret.data[d] = 6*43;
-    
-    for (int i = 0; i < 6*43; i++)
-	if (v[i] >= 0)
-	    ret.at({v[i]}) = i;
-    
-    for (int d = 0; d < 256; d++)
-	assert(ret.data[d] < 6*43);
-
-    return ret;
+    return Array<float> ({F,2,256,2}, af_rhost | af_random);
 }
 
 
-void test_casm_shuffle()
-{
-    auto v = random_integers_with_bounded_product(2, 100);
-    int T = v[0] * 48;  // T must be a multiple of 48
-    int F = v[1];
+void test_casm_shuffle(const CasmBeamformer &bf)
+{    
+    static bool flag = false;
+
+    if (!flag) {
+        CUDA_CALL(cudaFuncSetAttribute(
+	    casm_shuffle_test_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            99 * 1024
+        ));
+	flag = true;
+    }
+    
+    int F = bf.F;
+    int T = bf.nominal_Tin_for_unit_tests;
+    xassert(T > 0);
     
     Array<uint8_t> e = make_random_e_array(T,F);
-    Array<uint> gridding = make_random_gridding();
+    Array<float> feed_weights = make_random_feed_weights(F);
     Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
     Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
-	     
-    casm_shuffle_reference_kernel(e.data, gridding.data, out_cpu.data, T, F);
+    
+    casm_shuffle_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
 
     e = e.to_gpu();
-    gridding = gridding.to_gpu();
-    casm_shuffle_test_kernel<<<F, {32,24,1}>>> (e.data, gridding.data, out_gpu.data, T);
+    feed_weights = feed_weights.to_gpu();
+    casm_shuffle_test_kernel<<< F, {32,24,1}, 99*1024, 0 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
     CUDA_PEEK("casm_shuffle_test_kernel");
 
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
@@ -1695,7 +1753,9 @@ static void test_casm_interpolation()
 
 void test_casm()
 {
-    test_casm_shuffle();
+    CasmBeamformer bf = CasmBeamformer::make_random();
+    
+    test_casm_shuffle(bf);
     test_casm_fft_c2c();
     test_casm_fft1();
     test_casm_fft2();
