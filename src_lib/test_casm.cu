@@ -58,6 +58,79 @@ __device__ void check_bank_conflict_free(int offset, int max_conflicts=1)
 
 // -------------------------------------------------------------------------------------------------
 //
+// Memory layouts
+
+
+// Global memory layout for 'gpu_persistent_data'.
+//
+// This is a ~200KB region of global GPU memory, which is initialized by the
+// CasmBeamformer constructor, and passed to the beamformer on every kernel launch.
+//
+//   uint gridding[256];                  contains (43*ew+ns) for each dish
+//   float ns_phases[32];                 contains cos(2pi * t / 128) for 0 <= t < 32
+//   float per_frequency_data[F][3][32];  middle index is 0 <= ew_feed < 3, see (*) below
+//   float beam_locs[B][2];               contains sin(za), ordering is {ns,ew}.
+//
+// (*) The 32-element per_frequency_data "inner" index is laid out as follows:
+//
+//   float ew_phases[12][2];              (ew_beam, cos/sin) for fixed 0 <= ew_feed < 3
+//   float freq;                          array element 25
+
+struct gmem_layout
+{
+    // All _*base quantities are 32-bit offsets, not byte offsets.
+    static constexpr int gridding_base = 0;
+    static constexpr int ns_phases_base = 256;
+    static constexpr int per_frequency_data_base(int f=0)  { return ns_phases_base + 32 + 96*f; }
+    static constexpr int beam_locs_base(int F, int b=0)    { return ns_phases_base + 32 + 96*F + 2*b; }
+    static constexpr int nbytes(int F, int B)              { return 4 * beam_locs_base(F,B); }
+};
+
+
+// Shared memory layout (columns are [32-bit offset], physical layout, logical layout).
+// Currently using MAX_BEAMS=4704, which gives exactly 99 KB.
+//
+// [0]      uint gridding[256];                                       // contains (43*ew+ns), derived from 'feed_indices'
+// [256]    float ns_phases[32];                                      // contains cos(2pi * t / 128) for 0 <= t < 32
+// [288]    float per_frequency_data[3][32];                          // outer index is 0 <= ew_feed < 3, see (*) below
+// [384]    uint E[24][259]      union { E[24][256], E[24][6][43] }   // (j,dish) or (j,ew,ns), outer stride 259
+// [6600]   float I[24][132]     float I[24][128];                    // (ew,ns), ew-stride 132
+// [9768]   float G[24][257]     float G[2][2][6][2][128];            // (time,pol,ew,reim,ns), ew-stride 257
+// [15936]  float beam_locs[2][MAX_BEAMS];                            // contains sin(za), ordering is {ns,ew}
+
+struct shmem_layout
+{
+    // All _*stride and _*base quantities are 32-bit offsets, not byte offsets.
+    static constexpr int E_jstride = 259;
+    static constexpr int I_ew_stride = 132;
+    static constexpr int G_ew_stride = 257;
+    
+    static constexpr int gridding_base = 0;
+    static constexpr int ns_phases_base = 256;
+    static constexpr int per_frequency_data_base = ns_phases_base + 32;
+    static constexpr int E_base = per_frequency_data_base + 96;
+    static constexpr int I_base = E_base + 24 * E_jstride;
+    static constexpr int G_base = I_base + 24 * I_ew_stride;
+    static constexpr int beam_locs_base = G_base + 24 * G_ew_stride;
+
+    static constexpr int max_beams = ((99*1024 - 4*beam_locs_base) / 8) & ~31;
+    static constexpr int beam_stride = max_beams;
+    static constexpr int nbytes = (beam_locs_base + 2*max_beams) * 4;
+    
+    // During initialization, the E[], I[], and G[] arrays aren't needed yet,
+    // so we temporarily use their shared memory to store feed_weights:
+    //
+    // [384]    float ungridded_wts[8][259];   uwt[2][2][2][256]    // (duplicator, reim, pol, dish)
+    // [2440]   float gridded_wts[4][259];     gwt[2][2][6][43]     // (reim, pol, ew, ns)
+
+    static constexpr int wt_pol_stride = 259;
+    static constexpr int ungridded_wts_base = E_base;
+    static constexpr int gridded_wts_base = E_base + 8 * wt_pol_stride;
+};
+
+    
+// -------------------------------------------------------------------------------------------------
+//
 // Host-side CasmBeamformer object
 //
 // FIXME make this a class, with some members protected.
@@ -81,37 +154,46 @@ struct CasmBeamformer
 	float ns_feed_spacing = 0.50,  // meters
 	const float *ew_feed_spacing = default_ew_feed_spacings
     );
-
+    
     int F = 0;  // number of frequency channels (on one GPU)
     int B = 0;  // number of output beams
+    
+    ksgpu::Array<float> &frequencies;     // shape (F,)
+    ksgpu::Array<int> feed_indices;       // shape (256,2)
+    ksgpu::Array<float> &beam_locations;  // shape (B,2)
+    int downsampling_factor = 0;
+    float ns_feed_spacing = 0.0;
 
+    float ew_feed_spacing[5];     // meters
     float ew_feed_positions[6];   // meters
     float ew_beam_locations[24];  // sin(ZA)
     
-    // gpu_persistent_data is laid out as follows:
-    //
-    //   uint gridding[256];                  contains (43*ew+ns), derived from 'feed_indices'
-    //   float ns_phases[32];                 contains cos(2pi * t / 128) for 0 <= t < 32
-    //   float per_frequency_data[F][3][32];  middle index is 0 <= ew_feed < 3, see (*) below
-    //   float beam_locations[B][2];          contains sin(za), same as 'beam_locations'
-    //
-    // (*) The 32-element per_frequency_data "inner" index is laid out as follows:
-    //
-    //   float ew_phases[12][2];              (ew_beam, cos/sin) for fixed 0 <= ew_feed < 3
-    //   float freq;                          array element 25
-    
+    // This is a ~200KB region of global GPU memory, which is initialized by the
+    // CasmBeamformer constructor, and passed to the beamformer on every kernel launch.
+    // See "global memory layout" in CasmBeamformer.cu for more info.
     Array<float> gpu_persistent_data;
+
+    static void show_shared_memory_layout();
+    static int get_max_beams();
 };
 
 
 CasmBeamformer::CasmBeamformer(
-    Array<float> &frequencies,     // shape (F,)
-    Array<int> &feed_indices,      // shape (256,2)
-    Array<float> &beam_locations,  // shape (B,2)
-    int downsampling_factor,
-    float ns_feed_spacing,
-    const float *ew_feed_spacing)
+    Array<float> &frequencies_,     // shape (F,)
+    Array<int> &feed_indices_,      // shape (256,2)
+    Array<float> &beam_locations_,  // shape (B,2)
+    int downsampling_factor_,
+    float ns_feed_spacing_,
+    const float *ew_feed_spacing_)
+    : frequencies(frequencies_),
+      feed_indices(feed_indices_),
+      beam_locations(beam_locations_),
+      downsampling_factor(downsampling_factor_),
+      ns_feed_spacing(ns_feed_spacing_)
 {
+    for (int i = 0; i < 5; i++)
+	ew_feed_spacing[i] = ew_feed_spacing_[i];
+    
     // Argument checking
     xassert_eq(frequencies.ndim, 1);
     xassert_eq(beam_locations.ndim, 2);
@@ -175,8 +257,9 @@ CasmBeamformer::CasmBeamformer(
     }
 
     // Compute 'ns_phases' part of 'gpu_persistent_data'.
-    for (int t = 0; t < 32; t++)
-	gpu_persistent_data.at({256+t}) = cosf((2 * M_PI / 128.0) * t);
+    float *nsp = gpu_persistent_data.data + shmem_layout::ns_phases_base;
+    for (int i = 0; i < 32; i++)
+	nsp[i] = cosf(2 * M_PI * i / 128.0);
 
     // Compute 'per_frequency_data' part of 'gpu_persistent_data'.    
     for (int f = 0; f < F; f++) {
@@ -188,22 +271,22 @@ CasmBeamformer::CasmBeamformer(
 	xassert_lt(freq, 501.0);
 
 	for (int ew_feed = 0; ew_feed < 3; ew_feed++) {
-	    float feed_pos = ew_feed_positions[ew_feed+3];
-	    
-	    float *pf32 = gpu_persistent_data.data + 256 + 32 + 96*f + 32*ew_feed;
+	    // Points to 32-element "inner" region (see (*) above).
+	    float *pf32 = gpu_persistent_data.data + gmem_layout::per_frequency_data_base(f) + 32*ew_feed;
 	    pf32[25] = freq;
 	    
 	    for (int ew_beam = 0; ew_beam < 12; ew_beam++) {
+		float feed_pos = ew_feed_positions[ew_feed + 3];
 		float beam_loc = ew_beam_locations[ew_beam + 12];
 		float theta = (2*M_PI / speed_of_light) * freq * feed_pos * beam_loc;
-		sincosf(theta, &pf32[2*ew_beam+1], &pf32[2*ew_beam]);
+		sincosf(theta, &pf32[2*ew_beam+1], &pf32[2*ew_beam]);  // note (sin, cos) ordering
 	    }
 	}
     }
 
     // Compute 'beam_locations' part of gpu_persistent_data
-    float *blp = gpu_persistent_data.data + 256 + 32 + 96*F;
-	
+    float *blp = gpu_persistent_data.data + gmem_layout::beam_locs_base(F);
+    
     for (int b = 0; b < B; b++) {
 	for (int j = 0; j < 2; j++) {
 	    float beam_location = beam_locations.at({b,j});
@@ -215,6 +298,29 @@ CasmBeamformer::CasmBeamformer(
 
     // All done! Copy to GPU.
     gpu_persistent_data = gpu_persistent_data.to_gpu();
+}
+
+
+void CasmBeamformer::show_shared_memory_layout()
+{
+    using SL = shmem_layout;
+
+    cout << "[" << SL::gridding_base << "]      uint gridding[256];\n"
+	 << "[" << SL::ns_phases_base << "]    float ns_phases[32];\n"
+	 << "[" << SL::per_frequency_data_base << "]    float per_frequency_data[3][32];\n"
+	 << "[" << SL::E_base << "]    uint E[24][" << SL::E_jstride << "];\n"
+	 << "[" << SL::I_base << "]   float I[24][" << SL::I_ew_stride << "];\n"
+	 << "[" << SL::G_base << "]   float G[24][" << SL::G_ew_stride << "];\n"
+	 << "[" << SL::beam_locs_base << "]  float beam_locs[2][" << SL::max_beams << "];\n"
+	 << "  Total size = " << SL::nbytes << " bytes = " << (SL::nbytes/1024.0) << " KB"
+	 << endl;
+}
+
+
+int CasmBeamformer::get_max_beams()
+{
+    // Maximum number of beams is currently determined by shared memory constraints.
+    return shmem_layout::max_beams;
 }
 
 
@@ -291,57 +397,20 @@ struct casm_shuffle_state
 	setup_gridding(global_gridding);				      
 	setup_unpacking();
     }
-    
-    // - Global memory layout for 'gpu_persistent_data':
+
+    // copy_global_to_shared_memory(): performs the following copies
     //
-    //     uint gridding[256];                  contains (43*ew+ns), derived from 'feed_indices'
-    //     float ns_phases[32];                 contains cos(2pi * t / 128) for 0 <= t < 32
-    //     float per_frequency_data[F][3][32];  middle index is 0 <= ew_feed < 3, see (*) below
-    //     float beam_locations[B][2];          contains sin(za), same as 'beam_locations'
-    //
-    //   (*) The 32-element per_frequency_data "inner" index is laid out as follows:
-    //
-    //     float ew_phases[12][2];              (ew_beam, cos/sin) for fixed 0 <= ew_feed < 3
-    //     float freq;                          array element 25
-    //
-    // - Global memory layout for 'feed_weights':
-    //
-    //     float feed_weights[F][2][256][2];    freq,pol,dish,reim
-    //
-    // - Shared memory layout (columns are [32-bit offset], physical layout, logical layout).
-    //   Currently using BMAX=4704, which gives exactly 99 KB.
-    //
-    //     [0]      uint gridding[256];                                       // contains (43*ew+ns), derived from 'feed_indices'
-    //     [256]    float ns_phases[32];                                      // contains cos(2pi * t / 128) for 0 <= t < 32
-    //     [288]    float per_frequency_data[3][32];                          // outer index is 0 <= ew_feed < 3, see (*) below
-    //     [384]    uint E[24][259]      union { E[24][256], E[24][6][43] }   // (j,dish) or (j,ew,ns), outer stride 259
-    //     [6600]   float I[24][132]     float I[24][128];                    // (ew,ns), ew-stride 132
-    //     [9768]   float G[24][257]     float G[2][2][6][2][128];            // (time,pol,ew,reim,ns), ew-stride 257
-    //     [15936]  float beam_locs[2][BMAX];                                 // contains sin(za), same as 'beam_locations'
-    //
-    // - During initialization, the E[], I[], and G[] arrays aren't needed yet,
-    //   so we overwrite their contents with feed_weights:
-    //
-    //     [0]      uint gridding[256];                                 // contains (43*ew+ns), derived from 'feed_indices'
-    //     [256]    float ns_phases[32];                                // contains cos(2pi * t / 128) for 0 <= t < 32
-    //     [288]    float per_frequency_data[3][32];                    // outer index is 0 <= ew_feed < 3, see (*) below
-    //     [384]    float ungridded_wts[8][257];   uwt[2][2][2][256]    // (duplicator, reim, pol, dish)
-    //     [2440]   float gridded_wts[4][259];     gwt[2][2][6][43]     // (reim, pol, ew, ns)
-    //     [3476]   unused (12460 registers, 49840 bytes)
-    //     [15936]  float beam_locs[2][BMAX];                           // contains sin(za), same as 'beam_locations'
+    //    gridding (256 elts): persistent_global -> shmem
+    //    ns_phases (32 elts): persistent_global -> shmem (32 elts)
+    //    per_frequency_data (96 elts, not 96*F elts): persistent_global -> shmem
+    //    feed_weights (1024 elts, not 1024*F elts): feed_weights_global -> shmem
+    //    beam_locations (2*B elts): persistent_global -> shmem
     //
     // Note: caller is responsible for calling __syncthreads() afterwards!
 
     __device__ void copy_global_to_shared_memory(const float *persistent_global, const float *feed_weights, int nbeams)
     {
 	extern __shared__ float shmem[];
-	
-	// Sources:
-	//
-	//   - 288 contiguous elts (gridding + ns_phases)
-	//   - 96 discontiguous elts (per_frequency_data)
-	//   - 2*256*2 feed_weights (pol, dish, reim)
-	//   - B*2 beam_locations
 
 	uint w = threadIdx.y;          // warp id
 	uint l = threadIdx.x;          // lane id
@@ -349,39 +418,56 @@ struct casm_shuffle_state
 	uint F = gridDim.x;            // number of frequency channels
 	uint B32 = nbeams >> 5;
 
+	if (w < 9) {
+	    // gridding + ns_phases (256+32 elts)
+	    uint s = 32*w + l;
+	    shmem[s] = persistent_global[s];
+	    w += 32;
+	}
+
 	if (w < 12) {
-	    // 288=32*9 contiguous elts (gridding + ns_phases)
-	    // 96=32*3 discontiguous elts (per_frequency_data)
-	    // Easiest to read these as float (not float2)
-	    uint dst = 32*w + l;
-	    uint src = (w < 9) ? dst : (dst + 96*f);
-	    float x = persistent_global[src];
-	    shmem[dst] = x;
+	    // per_frequency_data (96 elts)
+	    uint s = 32*(w-9) + l;
+	    uint dst = shmem_layout::per_frequency_data_base + s;
+	    uint src = gmem_layout::per_frequency_data_base(f) + s;
+	    shmem[dst] = persistent_global[src];
 	    w += 32;
 	}
 	    
 	if (w < 28) {
-	    // 2*256*2 = 16*32*2 feed_weights (pol, dish, reim)
-	    // Easiest to read these as float2.
-	    const float2 *fw2 = (const float2 *) (feed_weights);
-	    uint e = 32*(w-12) + l;                  // (pol, dish)
-	    uint s = (e < 256) ? (e+384) : (e+385);  // shared memory offset
+	    // feed_weights (512 complex elements, where each "element" is a pol+dish).
+	    // Note that the 'feed_weights' array ordering is feed_weights[F][512][2];
+	    // It's easiest to read these as float2.
+	    
+	    const float2 *fw2 = (const float2 *) (feed_weights + 1024*f);  // length-512 float2
+	    constexpr uint S = shmem_layout::wt_pol_stride;
+	    
+	    uint e = 32*(w-12) + l;  // "element" (pol+dish)
+	    uint d = e & 0xff;       // dish
+	    uint pol = e >> 8;       // pol
+	    uint dst = shmem_layout::ungridded_wts_base + pol*S + d;
+
 	    float2 fw = fw2[e];
-	    shmem[s] = fw.x;         // real part
-	    shmem[s+2*257] = fw.y;   // imag part
-	    shmem[s+4*257] = fw.x;   // duplicated real part
-	    shmem[s+6*257] = fw.y;   // duplicated imag part
+	    shmem[dst] = fw.x;         // real part
+	    shmem[dst + 2*S] = fw.y;   // imag part
+	    shmem[dst + 4*S] = fw.x;   // duplicated real part
+	    shmem[dst + 6*S] = fw.y;   // duplicated imag part
 	    w += 32;
 	}
 
 	while (w < B32+28) {
-	    // B*2 beam_locations. Easiest to read these as float2.
-	    const float2 *bl2 = (const float2 *) (persistent_global + 288 + 96*F);
+	    // beam_locations (B*2 floats).
+	    // It's easiest to read these as float2.
+	    
+	    const float2 *bl2 = (const float2 *) (persistent_global + gmem_layout::beam_locs_base(F));
+	    constexpr uint S = shmem_layout::beam_stride;
+			  
 	    uint b = 32*(w-28) + l;   // beam id
-	    uint s = 15936 + b;
+	    uint dst = shmem_layout::beam_locs_base + b;
+
 	    float2 bl = bl2[b];
-	    shmem[s] = bl.x;
-	    shmem[s+4704] = bl.y;
+	    shmem[dst] = bl.x;      // north-south beam location
+	    shmem[dst + S] = bl.y;  // east-west beam location
 	    w += 32;
 	}
 	
@@ -389,8 +475,13 @@ struct casm_shuffle_state
 	// "missing" feeds. (It's easy to miss this, since it only matters if the number
 	// of threadblocks is larger than the number of SMs.)
 
-	for (uint t = 32*threadIdx.y + threadIdx.x; t < 4*259; t += 24*32)
-	    shmem[t + 2440] = 0.0f;
+	constexpr int zstart = shmem_layout::gridded_wts_base;
+	constexpr int zsize = 4 * shmem_layout::wt_pol_stride;
+	
+	for (uint i = 32*threadIdx.y + threadIdx.x; i < zsize; i += 24*32)
+	    shmem[zstart + i] = 0.0f;
+
+	// Note: no __syncthreads() here, caller is responsible for calling __syncthreads().
     }
     
     // These member functions manage copying the ungridded E-array from global
