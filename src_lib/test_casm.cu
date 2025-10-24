@@ -666,7 +666,7 @@ struct casm_shuffle_state
 	shmem_u[s + 96] = e4.w;
 
 	// Advance global E-array pointer 'ep4'.
-
+	
 	uint F = gridDim.x;    // total frequency channels
 	ep4 += 24*32*F;        // advance by 24 time samples
     }
@@ -676,9 +676,8 @@ struct casm_shuffle_state
     // A little awkward, since we want to loop over 256 dishes with 24 warps.
     // Note that 256 = 10*240 + 16.
     
-    __device__ void grid_shared_e(uint *sp)
+    __device__ void grid_shared_e()
     {
-	// sp = shmem_u + shmem_layout::E_base;
 	extern __shared__ uint shmem_u[];
 	
 	uint e[11];
@@ -698,18 +697,18 @@ struct casm_shuffle_state
 
 	// FIXME temporary convenience in testing!
 	for (int i = 32*w + j; i < 24*259; i += 24*32)
-	    sp[i] = 0;
+	    shmem_u[i + shmem_layout::E_base] = 0;
 	__syncthreads();
 	
 	#pragma unroll
 	for (int i = 0; i < 10; i++) {
-	    uint dst = shmem_u[d0+i];  // 'gridding' (see shared memory layout above)
+	    uint dst = s + shmem_u[d0+i];  // 'gridding' (see shared memory layout above)
 	    if (j < 24)
 		shmem_u[dst] = e[i];
 	}
 
 	if (w < 16) {
-	    uint dst = shmem_u[d0+10];  // 'gridding' (see shared memory layout above)
+	    uint dst = s + shmem_u[d0+10];  // 'gridding' (see shared memory layout above)
 	    if (j < 24)
 		shmem_u[dst] = e[10];
 	}
@@ -838,7 +837,7 @@ __global__ void casm_shuffle_test_kernel(
 
 	__syncthreads();
 	
-	shuffle.grid_shared_e((uint *)shmem + S0);  // FIXME temporary hack
+	shuffle.grid_shared_e();
 	
 	__syncthreads();
 
