@@ -462,6 +462,7 @@ struct casm_shuffle_state
     // 'feed_weights' argument: points to (F,2,256,2)
     // 'gpu_persistent_data' argument: see "global memory layout" earlier in source file.
 
+    // Warning: caller must call __syncthreads() after calling constructor, and before calling load_ungridded_e().
     __device__ casm_shuffle_state(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
     {
 	if constexpr (Debug) {
@@ -475,8 +476,6 @@ struct casm_shuffle_state
 
 	// FIXME normalize_ns_beam_locations()  [ call before setup_feed_weights ]
 	setup_feed_weights();
-	__syncthreads();
-
 	setup_e_pointer(global_e);
     }
 
@@ -702,6 +701,11 @@ struct casm_shuffle_state
     //
     // A little awkward, since we want to loop over 256 dishes with 24 warps.
     // Note that 256 = 10*240 + 16.
+    //
+    // Note that the two "missing" grid locations will end up with uninitialized values
+    // in shared memory! This sounds like a bug, but is actually okay since unpack_e()
+    // multiplies by the gridded feed_weights, which are always zero at missing grid
+    // locations.
     
     __device__ void grid_shared_e()
     {
@@ -720,11 +724,6 @@ struct casm_shuffle_state
 	if (w < 16)
 	    e[10] = (j < 24) ? shmem_u[s+d0+10] : 0;
 	
-	__syncthreads();
-
-	// FIXME temporary convenience in testing!
-	for (int i = 32*w + j; i < 24*259; i += 24*32)
-	    shmem_u[i + shmem_layout::E_base] = 0;
 	__syncthreads();
 	
 	#pragma unroll
@@ -834,10 +833,17 @@ struct casm_shuffle_state
 	// i is the length-4 index (t2 t1).
 	// FIXME save a few cycles by offset encoding earlier?
 
-	e0_re = unpack_int4(e0, 8*i);
-	e0_im = unpack_int4(e0, 8*i+4);
-	e1_re = unpack_int4(e1, 8*i);
-	e1_im = unpack_int4(e1, 8*i+4);
+	// Unweighted E-array values, before multiplying by feed weights.
+	float u0_re = unpack_int4(e0, 8*i);
+	float u0_im = unpack_int4(e0, 8*i+4);
+	float u1_re = unpack_int4(e1, 8*i);
+	float u1_im = unpack_int4(e1, 8*i+4);
+
+	// Multiply by feed wweights.
+	e0_re = (fw0_re * u0_re) - (fw0_im * u0_im);
+	e0_im = (fw0_re * u0_im) + (fw0_im * u0_re);
+	e1_re = (fw1_re * u1_re) - (fw1_im * u1_im);
+	e1_im = (fw1_re * u1_im) + (fw1_im * u1_re);
     }
 };
 
@@ -861,6 +867,7 @@ __global__ void casm_shuffle_test_kernel(
 
     // Debug=true, nbeams=0
     casm_shuffle_state<true> shuffle(e_in, feed_weights, gpu_persistent_data, 0);
+    __syncthreads();  // must call __syncthreads() after calling constructor, and before calling load_ungridded_e()
 
     // Set up writing to the 'out' array, with Delta(t)=2.
     // Output from casm_shuffle_state::unpack_e() has register assignment:
@@ -910,10 +917,10 @@ __global__ void casm_shuffle_test_kernel(
 		// w2* w1 w0 <-> ew t0 pol
 
 		// float out[T][F][2][6][64][2]
-		out[0] = (shuffle.fw0_re * e0_re) - (shuffle.fw0_im * e0_im);
-		out[1] = (shuffle.fw0_re * e0_im) + (shuffle.fw0_im * e0_re);
-		out[64] = (shuffle.fw1_re * e1_re) - (shuffle.fw1_im * e1_im);
-		out[65] = (shuffle.fw1_re * e1_im) + (shuffle.fw1_im * e1_re);
+		out[0] = e0_re;
+		out[1] = e0_im;
+		out[64] = e1_re;
+		out[65] = e1_im;
 
 		// Delta(t)=2
 		out += (2*F*2*6*64*2);
