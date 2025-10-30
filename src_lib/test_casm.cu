@@ -882,10 +882,10 @@ __global__ void casm_shuffle_test_kernel(
 		// w2* w1 w0 <-> ew t0 pol
 
 		// float out[T][F][2][6][64][2]
-		out[0] = e0_re;
-		out[1] = e0_im;
-		out[64] = e1_re;
-		out[65] = e1_im;
+		out[0] = (shuffle.fw0_re * e0_re) - (shuffle.fw0_im * e0_im);
+		out[1] = (shuffle.fw0_re * e0_im) + (shuffle.fw0_im * e0_re);
+		out[64] = (shuffle.fw1_re * e1_re) - (shuffle.fw1_im * e1_im);
+		out[65] = (shuffle.fw1_re * e1_im) + (shuffle.fw1_im * e1_re);
 
 		// Delta(t)=2
 		out += (2*F*2*6*64*2);
@@ -904,27 +904,34 @@ void casm_shuffle_reference_kernel(
     float *out,                         // (T,F,2,6,64,2) = (time,freq,pol,ew,ns,reim)
     int T)
 {
-    int TFP = 2 * T * bf.F;
-    memset(out, 0, TFP * 6*64*2 * sizeof(float));
+    int FP = 2 * bf.F;
+    memset(out, 0, T * FP * 6*64*2 * sizeof(float));
 
     xassert(bf.feed_indices.is_fully_contiguous());
     const int *feed_indices = bf.feed_indices.data;
-    
-    for (int tfp = 0; tfp < TFP; tfp++) {
-	const uint8_t *e2 = e_in + 256*tfp;  // points to shape (256,)
-	float *out2 = out + 6*64*2*tfp;    // points to shape (6,64,2)
 
-	for (int d = 0; d < 256; d++) {
-	    uint8_t e = e2[d] ^ 0x88888888;
-	    float e_re = float(e & 0xf) - 8.0f;
-	    float e_im = float(e >> 4) - 8.0f;
+    for (int t = 0; t < T; t++) {
+	for (int fp = 0; fp < FP; fp++) {
+	    int tfp = t*FP + fp;
+	    
+	    const uint8_t *e2 = e_in + 256*tfp;        // points to shape (256,)
+	    const float *fw2 = feed_weights + 512*fp;  // points to shape (256,2)
+	    float *out2 = out + 6*64*2*tfp;            // points to shape (6,64,2)
 
-	    int ns = feed_indices[2*d];
-	    int ew = feed_indices[2*d+1];
-	    int g = 64*ew + ns;
-
-	    out2[2*g] = e_re;
-	    out2[2*g+1] = e_im;
+	    for (int d = 0; d < 256; d++) {
+		uint8_t e = e2[d] ^ 0x88888888;
+		float e_re = float(e & 0xf) - 8.0f;
+		float e_im = float(e >> 4) - 8.0f;
+		float fw_re = fw2[2*d];
+		float fw_im = fw2[2*d+1];
+		
+		int ns = feed_indices[2*d];
+		int ew = feed_indices[2*d+1];
+		int g = 64*ew + ns;
+		
+		out2[2*g] = (fw_re * e_re) - (fw_im * e_im);
+		out2[2*g+1] = (fw_re * e_im) + (fw_im * e_re);
+	    }
 	}
     }
 }
