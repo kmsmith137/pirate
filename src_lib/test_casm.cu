@@ -119,12 +119,12 @@ struct shmem_layout
     // During initialization, the E[], I[], and G[] arrays aren't needed yet,
     // so we temporarily use their shared memory to store feed_weights:
     //
-    // [384]    float ungridded_wts[8][259];   uwt[2][2][2][256]    // (duplicator, reim, pol, dish)
-    // [2440]   float gridded_wts[4][259];     gwt[2][2][6][43]     // (reim, pol, ew, ns)
+    // [384]    float ungridded_wts[4][259];   uwt[2][2][256]       // (reim, pol, dish)
+    // [1420]   float gridded_wts[4][259];     gwt[2][2][6][43]     // (reim, pol, ew, ns)
 
     static constexpr int wt_pol_stride = 259;
     static constexpr int ungridded_wts_base = E_base;
-    static constexpr int gridded_wts_base = E_base + 8 * wt_pol_stride;
+    static constexpr int gridded_wts_base = E_base + 4 * wt_pol_stride;
 };
 
     
@@ -426,7 +426,8 @@ struct casm_shuffle_state
     const uint4 *ep4;
     uint4 e4;
 
-    // Managed by load_gridded_e(), unpack_e().
+    // Managed by setup_feed_weights(), load_gridded_e(), unpack_e().
+    float fw0_re, fw0_im, fw1_re, fw1_im;
     uint e0, e1;
 
     // Gains in persistent registers.
@@ -447,6 +448,9 @@ struct casm_shuffle_state
 	copy_global_to_shared_memory(gpu_persistent_data, feed_weights, nbeams);
 	__syncthreads();
 
+	// FIXME normalize_ns_beam_locations()  [ call before setup_feed_weights ]
+	setup_feed_weights();
+
 	setup_e_pointer(global_e);
     }
 
@@ -465,7 +469,7 @@ struct casm_shuffle_state
 
     __device__ void copy_global_to_shared_memory(const float *gpu_persistent_data, const float *feed_weights, int nbeams)
     {
-	extern __shared__ float shmem[];
+	extern __shared__ float shmem_f[];
 
 	uint w = threadIdx.y;          // warp id
 	uint l = threadIdx.x;          // lane id
@@ -476,7 +480,7 @@ struct casm_shuffle_state
 	if (w < 9) {
 	    // gridding + ns_phases (256+32 elts)
 	    uint s = 32*w + l;
-	    shmem[s] = gpu_persistent_data[s];
+	    shmem_f[s] = gpu_persistent_data[s];
 	    w += 32;
 	}
 
@@ -485,7 +489,7 @@ struct casm_shuffle_state
 	    uint s = 32*(w-9) + l;
 	    uint dst = shmem_layout::per_frequency_data_base + s;
 	    uint src = gmem_layout::per_frequency_data_base(f) + s;
-	    shmem[dst] = gpu_persistent_data[src];
+	    shmem_f[dst] = gpu_persistent_data[src];
 	    w += 32;
 	}
 	    
@@ -503,10 +507,8 @@ struct casm_shuffle_state
 	    uint dst = shmem_layout::ungridded_wts_base + pol*S + d;
 
 	    float2 fw = fw2[e];
-	    shmem[dst] = fw.x;         // real part
-	    shmem[dst + 2*S] = fw.y;   // imag part
-	    shmem[dst + 4*S] = fw.x;   // duplicated real part
-	    shmem[dst + 6*S] = fw.y;   // duplicated imag part
+	    shmem_f[dst] = fw.x;         // real part
+	    shmem_f[dst + 2*S] = fw.y;   // imag part
 	    w += 32;
 	}
 
@@ -521,8 +523,8 @@ struct casm_shuffle_state
 	    uint dst = shmem_layout::beam_locs_base + b;
 
 	    float2 bl = bl2[b];
-	    shmem[dst] = bl.x;      // north-south beam location
-	    shmem[dst + S] = bl.y;  // east-west beam location
+	    shmem_f[dst] = bl.x;      // north-south beam location
+	    shmem_f[dst + S] = bl.y;  // east-west beam location
 	    w += 32;
 	}
 	
@@ -534,11 +536,11 @@ struct casm_shuffle_state
 	constexpr int zsize = 4 * shmem_layout::wt_pol_stride;
 	
 	for (uint i = 32*threadIdx.y + threadIdx.x; i < zsize; i += 24*32)
-	    shmem[zstart + i] = 0.0f;
+	    shmem_f[zstart + i] = 0.0f;
 
 	// Note: no __syncthreads() here, caller is responsible for calling __syncthreads().
     }
-    
+
     // These member functions manage copying the ungridded E-array from global
     // memory to shared memory, with Delta(t)=24.
     //
@@ -713,27 +715,9 @@ struct casm_shuffle_state
     }
 
 
-#if 0
-    __device__ void setup_gains()
-    {
-	// Shared memory workspace (~22 KB!)
-	//
-	//   uint gridding[256];
-	//   float ungridded_gains[2][2][2][256];  // (dummy,reim,pol,dish) with strides (
-	//   float gridded_gains[2][2][6*43];      // (reim,pol,dish) with reim-stride = (2*6*43+1)
-
-	// Step 1: grid the gains.
-	// Each dish is processed by a group of 4 warps.
-	uint d0 = (32*threadIdx.y + threadIdx.x) >> 2;
-
-	for (uint d = d0; d < 256; d += 24*8) {
-	    
-	}
-    }
-#endif
-
     // The member functions
     //
+    //   setup_feed_weights()
     //   load_gridded_e()
     //   unpack_e()
     //
@@ -752,6 +736,56 @@ struct casm_shuffle_state
     //   r1 r0 <-> ns5 ReIm
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
     //   w2* w1 w0 <-> ew t0 pol  (= j1 j0)
+
+    __device__ void setup_feed_weights()
+    {
+	extern __shared__ float shmem_f[];
+	
+	constexpr int WS = shmem_layout::wt_pol_stride;
+	
+	// Recall the shared memory layout:
+	//
+	// [384]    float ungridded_wts[4][259];   uwt[2][2][256]    // (reim, pol, dish)
+	// [1420]   float gridded_wts[4][259];     gwt[2][2][6][43]  // (reim, pol, ew, ns)
+	//
+	// When this function is called, the weights are ungridded.
+	// The first step is gridding the weights.
+
+	int w = threadIdx.y;  // warp id
+	int l = threadIdx.x;  // lane id
+	int d = 32*w + l;
+
+	if (d < 256) {
+	    // Only 8 active warps! But that should enough, since shared memory IO is low latency.
+	    uint g = shmem_f[d];  // destination (gridded) address.
+	    uint src = shmem_layout::ungridded_wts_base + d;
+	    uint dst = shmem_layout::gridded_wts_base + g;
+
+	    // FIXME bank conflict disaster.
+	    #pragma unroll
+	    for (int j = 0; j < 4; j++)
+		shmem_f[dst + j*WS] = shmem_f[src + j*WS];
+	}
+
+	__syncthreads();
+	
+	// Second step is reading gridded weights into registers.
+	
+	// l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
+	// w2* w1 w0 <-> ew t0 pol  (= j1 j0)
+	int pol = w & 1;
+	int ew = w >> 2;
+	int ns = l;
+
+	// float gridded_wts[4][259];  gwt[2][2][6][43]  (reim, pol, ew, ns)
+	int s = shmem_layout::gridded_wts_base + (pol*WS) + 43*ew + ns;
+
+	// r1 r0 <-> ns5 ReIm
+	fw0_re = shmem_f[s];
+	fw0_im = shmem_f[s + 2*WS];
+	fw1_re = (l < 21) ? shmem_f[s + 32] : 0.0f;          // If (ns > 43), assign zero weight
+	fw1_im = (l < 21) ? shmem_f[s + 2*WS + 32] : 0.0f;   // If (ns > 43), assign zero weight
+    }
 
     // "phase" should satisfy 0 <= phase < 6.
     __device__ void load_gridded_e(int phase)
