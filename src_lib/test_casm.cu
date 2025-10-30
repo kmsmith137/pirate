@@ -176,7 +176,9 @@ struct CasmBeamformer
     
     // For unit tests
     int nominal_Tin_for_unit_tests = 0;
-    static CasmBeamformer make_random();
+    static CasmBeamformer make_random(bool randomize_feed_indices=true);
+    static Array<int> make_random_feed_indices();   // helper for make_random()
+    static Array<int> make_regular_feed_indices();  // helper for make_random()
     static void show_shared_memory_layout();
 };
 
@@ -330,7 +332,42 @@ int CasmBeamformer::get_max_beams()
 
 
 // Static member function.
-CasmBeamformer CasmBeamformer::make_random()
+Array<int> CasmBeamformer::make_random_feed_indices()
+{
+    Array<int> feed_indices({256,2}, af_uhost);
+    
+    vector<uint> v(43*6);
+    for (uint ns = 0; ns < 43; ns++)
+	for (uint ew = 0; ew < 6; ew++)
+	    v.at(6*ns+ew) = (ew << 16) | ns;
+
+    ksgpu::randomly_permute(v);
+
+    for (uint d = 0; d < 256; d++) {
+	feed_indices.at({d,0}) = v[d] & 0xffff;  // ns
+	feed_indices.at({d,1}) = v[d] >> 16;     // ew
+    }
+
+    return feed_indices;
+}
+
+
+// Static member function.
+Array<int> CasmBeamformer::make_regular_feed_indices()
+{
+    Array<int> feed_indices({256,2}, af_uhost);
+    
+    for (uint d = 0; d < 256; d++) {
+	feed_indices.at({d,0}) = d % 43;  // ns
+	feed_indices.at({d,1}) = d / 43;  // ew
+    }
+
+    return feed_indices;
+}
+
+
+// Static member function.
+CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 {
     auto w = ksgpu::random_integers_with_bounded_product(3, 100);
     int B = 32 * ksgpu::rand_int(1,6);  // FIXME increase
@@ -344,7 +381,6 @@ CasmBeamformer CasmBeamformer::make_random()
     T = ((T+d-1) / d) * d;  // round up to nearest multiple of d
 
     Array<float> frequencies({F}, af_uhost);
-    Array<int> feed_indices({256,2}, af_uhost);
     Array<float> beam_locations({B,2}, af_uhost);
     float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
     float ew_feed_spacing[5];
@@ -362,18 +398,7 @@ CasmBeamformer CasmBeamformer::make_random()
     for (int i = 0; i < 3; i++)
 	ew_feed_spacing[i] = ew_feed_spacing[4-i] = rand_uniform(0.3, 0.6);
     
-    // Make random 'feed_indices' array.
-    vector<uint> v(43*6);
-    for (uint ns = 0; ns < 43; ns++)
-	for (uint ew = 0; ew < 6; ew++)
-	    v.at(6*ns+ew) = (ew << 16) | ns;
-
-    ksgpu::randomly_permute(v);
-
-    for (uint d = 0; d < 256; d++) {
-	feed_indices.at({d,0}) = v[d] & 0xffff;  // ns
-	feed_indices.at({d,1}) = v[d] >> 16;     // ew
-    }
+    Array<int> feed_indices = randomize_feed_indices ? make_random_feed_indices() : make_regular_feed_indices();
 
     CasmBeamformer ret(frequencies, feed_indices, beam_locations, ds, ns_feed_spacing, ew_feed_spacing);
     ret.nominal_Tin_for_unit_tests = T;
@@ -450,6 +475,7 @@ struct casm_shuffle_state
 
 	// FIXME normalize_ns_beam_locations()  [ call before setup_feed_weights ]
 	setup_feed_weights();
+	__syncthreads();
 
 	setup_e_pointer(global_e);
     }
@@ -481,7 +507,7 @@ struct casm_shuffle_state
 	    // gridding + ns_phases (256+32 elts)
 	    uint s = 32*w + l;
 	    shmem_f[s] = gpu_persistent_data[s];
-	    w += 32;
+	    w += 24;
 	}
 
 	if (w < 12) {
@@ -490,7 +516,7 @@ struct casm_shuffle_state
 	    uint dst = shmem_layout::per_frequency_data_base + s;
 	    uint src = gmem_layout::per_frequency_data_base(f) + s;
 	    shmem_f[dst] = gpu_persistent_data[src];
-	    w += 32;
+	    w += 24;
 	}
 	    
 	if (w < 28) {
@@ -509,7 +535,8 @@ struct casm_shuffle_state
 	    float2 fw = fw2[e];
 	    shmem_f[dst] = fw.x;         // real part
 	    shmem_f[dst + 2*S] = fw.y;   // imag part
-	    w += 32;
+		
+	    w += 24;
 	}
 
 	while (w < B32+28) {
@@ -525,7 +552,7 @@ struct casm_shuffle_state
 	    float2 bl = bl2[b];
 	    shmem_f[dst] = bl.x;      // north-south beam location
 	    shmem_f[dst + S] = bl.y;  // east-west beam location
-	    w += 32;
+	    w += 24;
 	}
 	
 	// Important: zero 'gridded_wts' in shared memory, in order to capture the two
@@ -740,6 +767,7 @@ struct casm_shuffle_state
     __device__ void setup_feed_weights()
     {
 	extern __shared__ float shmem_f[];
+	extern __shared__ uint shmem_u[];
 	
 	constexpr int WS = shmem_layout::wt_pol_stride;
 	
@@ -757,7 +785,7 @@ struct casm_shuffle_state
 
 	if (d < 256) {
 	    // Only 8 active warps! But that should enough, since shared memory IO is low latency.
-	    uint g = shmem_f[d];  // destination (gridded) address.
+	    uint g = shmem_u[d];  // destination (gridded) address.
 	    uint src = shmem_layout::ungridded_wts_base + d;
 	    uint dst = shmem_layout::gridded_wts_base + g;
 
@@ -768,7 +796,7 @@ struct casm_shuffle_state
 	}
 
 	__syncthreads();
-	
+	    
 	// Second step is reading gridded weights into registers.
 	
 	// l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
@@ -783,8 +811,8 @@ struct casm_shuffle_state
 	// r1 r0 <-> ns5 ReIm
 	fw0_re = shmem_f[s];
 	fw0_im = shmem_f[s + 2*WS];
-	fw1_re = (l < 21) ? shmem_f[s + 32] : 0.0f;          // If (ns > 43), assign zero weight
-	fw1_im = (l < 21) ? shmem_f[s + 2*WS + 32] : 0.0f;   // If (ns > 43), assign zero weight
+	fw1_re = (l < 11) ? shmem_f[s + 32] : 0.0f;          // If (ns > 43), assign zero weight
+	fw1_im = (l < 11) ? shmem_f[s + 2*WS + 32] : 0.0f;   // If (ns > 43), assign zero weight
     }
 
     // "phase" should satisfy 0 <= phase < 6.
