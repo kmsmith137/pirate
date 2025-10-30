@@ -998,7 +998,7 @@ static Array<float> make_random_feed_weights(int F)
 
 
 void test_casm_shuffle(const CasmBeamformer &bf)
-{    
+{
     static bool flag = false;
 
     if (!flag) {
@@ -1023,7 +1023,7 @@ void test_casm_shuffle(const CasmBeamformer &bf)
 
     e = e.to_gpu();
     feed_weights = feed_weights.to_gpu();
-    casm_shuffle_test_kernel<<< F, {32,24,1}, 99*1024, 0 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
+    casm_shuffle_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
     CUDA_PEEK("casm_shuffle_test_kernel");
 
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
@@ -1175,16 +1175,17 @@ void test_casm_fft_c2c()
 //
 // FFT1
 //
-// Implements a zero-padded c2c FFT with 64 inputs and 128 outputs
+// Implements a zero-padded c2c FFT with 64 inputs and 128 outputs.
 //
-// Input register assignment:
-//   r1 r0 <-> x5 ReIm
-//   t4 t3 t2 t1 t0 <-> x4 x3 x2 x1 x0
+// Input array should be in registers, with the same register assignment as
+// casm_shuffler::load_gridded_e():
 //
-// Outputs are written to shared memory:
-//   float G[W][2][128]   strides (257,128,1)   W=warps per threadblock
+//   r1 r0 <-> ns5 ReIm
+//   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
+//   w2* w1 w0 <-> ew t0 pol
 //
-// NOTE: assumes that threads are a {32,W,1} grid (not a {32*W,1,1} grid).
+// Output array is written to shared memory:
+//   [9768]   float G[24][257];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 257
 
 
 template<bool Debug>
@@ -1198,29 +1199,42 @@ struct fft1_state
     {
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
+	    assert(blockDim.y == 24);
 	    assert(blockDim.z == 1);
 	}
 	
 	float x = 0.04908738521234052f * threadIdx.x;   // constant is (2pi)/128
 	sincosf(x, &cim, &cre);                         // note ordering (im,re)
-
-	// Shared memory writes will use register assignment (see below):
-	//   t4 t3 t2 t1 t0 <-> y1 y2 y3 y4 y0
-	//
-	// The 'sbase' offset assumes y5=y6=ReIm=0
 	
-	sbase = (threadIdx.y) * 257;              // warp id
-	sbase += (threadIdx.x & 1);               // t0 <-> y0
-	sbase += __brev(threadIdx.x >> 1) >> 27;  // t4 t3 t2 t1 <-> y1 y2 y3 y4
+	// Just before writing to shared memory (see below), the FFT-ed array will have
+	// register assignment:
+	//
+	//   rxy r1 r0 <-> ns5 ns6 ReIm
+	//   l4 l3 l2 l1 l0 <-> ns1 ns2 ns3 ns4 ns0
+	//   w2* w1 w0 <-> ew t0 pol
+
+	int w = threadIdx.y;  // warp id
+	int l = threadIdx.x;  // lane id
+	int ns = (l & 1) | (__brev(threadIdx.x >> 1) >> 27);
+	int pol = w & 1;
+	int t0 = (w >> 1) & 1;
+	int ew = w >> 2;
+
+	// [9768]  float G[24][257];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 257
+	constexpr uint GB = shmem_layout::G_base;
+	constexpr uint GS = shmem_layout::G_ew_stride;
+	sbase = GB + (12*t0 + 6*pol + ew) * GS + ns;
 	
 	check_bank_conflict_free<Debug> (sbase);
     }
     
-    __device__ void apply(float x0_re, float x0_im, float x1_re, float x1_im, float *sp)
+    __device__ void apply(float x0_re, float x0_im, float x1_re, float x1_im)
     {
-	// y0 = x0 * exp(2*pi*i t / 128) = c*x0
-	// y1 = x1 * exp(2*pi*i (t+32) / 128) = i*c*x0
-	//   where t = 0, ..., 31
+	extern __shared__ float shmem_f[];
+	    
+	// y0 = x0 * exp(2*pi*i l / 128) = c*x0
+	// y1 = x1 * exp(2*pi*i (l+32) / 128) = i*c*x0
+	//   where l = 0, ..., 31
 	
 	float y0_re = cre*x0_re - cim*x0_im;
 	float y0_im = cim*x0_re + cre*x0_im;
@@ -1229,13 +1243,13 @@ struct fft1_state
 	float y1_im = cre*x1_re - cim*x1_im;
 
 	// xy r1 r0 <-> y0 x5 ReIm
-	// t4 t3 t2 t1 t0 <-> x4 x3 x2 x1 x0
+	// l4 l3 l2 l1 l0 <-> x4 x3 x2 x1 x0
 
 	next_fft.apply(x0_re, x0_im, x1_re, x1_im);
 	next_fft.apply(y0_re, y0_im, y1_re, y1_im);
 	
 	// xy r1 r0 <-> y0 y6 ReIm
-	// t4 t3 t2 t1 t0 <-> y1 y2 y3 y4 y5
+	// l4 l3 l2 l1 l0 <-> y1 y2 y3 y4 y5
 
 	// Exchange "xy" and "thread 0" bits
 	warp_transpose(x0_re, y0_re, 1);
@@ -1244,75 +1258,109 @@ struct fft1_state
 	warp_transpose(x1_im, y1_im, 1);
 	
 	// xy r1 r0 <-> y5 y6 ReIm
-	// t4 t3 t2 t1 t0 <-> y1 y2 y3 y4 y0
+	// l4 l3 l2 l1 l0 <-> y1 y2 y3 y4 y0
 
 	// Strides: xy=32, 01=64, ReIm=128
-	sp[sbase] = x0_re;
-	sp[sbase+32] = y0_re;
-	sp[sbase+64] = x1_re;
-	sp[sbase+96] = y1_re;
-	sp[sbase+128] = x0_im;
-	sp[sbase+160] = y0_im;
-	sp[sbase+192] = x1_im;	
-	sp[sbase+224] = y1_im;	
+	shmem_f[sbase] = x0_re;
+	shmem_f[sbase+32] = y0_re;
+	shmem_f[sbase+64] = x1_re;
+	shmem_f[sbase+96] = y1_re;
+	shmem_f[sbase+128] = x0_im;
+	shmem_f[sbase+160] = y0_im;
+	shmem_f[sbase+192] = x1_im;	
+	shmem_f[sbase+224] = y1_im;	
     }
 };
 
 
-// Call with {W,32} threads.
-// Input array has shape (W,64,2).
-// Output array has shape (W,128,2).
+// Call with {32,24} threads.
+// Input array has shape (2,2,6,64,2) where axes are (time,pol,ew,ns,reim)
+// Output array has shape (2,2,6,128,2) where axes have same meaning
 
-template<int W>
 __global__ void fft1_test_kernel(const float *in, float *out)
 {
-    __shared__ float shmem[W*257];
+    extern __shared__ float shmem_f[];
 
-    // Input register assignment:
-    //   r1 r0 <-> x5 ReIm
-    //   t4 t3 t2 t1 t0 <-> x4 x3 x2 x1 x0
+    // Input register assignment for fft1_state::apply() is:
+    //
+    //   r1 r0 <-> ns5 ReIm
+    //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
+    //   w2* w1 w0 <-> ew t0 pol
 
     int w = threadIdx.y;  // warp id
-    float x0_re = in[128*w + 2*threadIdx.x];
-    float x0_im = in[128*w + 2*threadIdx.x + 1];
-    float x1_re = in[128*w + 2*threadIdx.x + 64];
-    float x1_im = in[128*w + 2*threadIdx.x + 65];
+    int l = threadIdx.x;  // lane id
+    int pol = (w & 1);
+    int t0 = (w >> 1) & 1;
+    int ew = (w >> 2);
+    int ns = l;
+
+    // This "flattened" index combination is convenient in 3 places below.
+    int tpe = 12*t0 + 6*pol + ew;  // (time, pol, ew)
+    
+    // Input array has shape (2,2,6,64,2) where axes are (time,pol,ew,ns,reim).
+    float x0_re = in[128*tpe + 2*ns];
+    float x0_im = in[128*tpe + 2*ns + 1];
+    float x1_re = in[128*tpe + 2*(ns+32)];
+    float x1_im = in[128*tpe + 2*(ns+32) + 1];
 
     fft1_state<true> fft1;  // Debug=true
-    fft1.apply(x0_re, x0_im, x1_re, x1_im, shmem);
+    fft1.apply(x0_re, x0_im, x1_re, x1_im);
 
+    // Shared memory output array has layout:
+    // [9768] float G[24][257];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 257
+    //
+    // Output array has shape (2,2,6,128,2) where axes are (time,pol,ew,ns,reim)
+
+    constexpr uint GB = shmem_layout::G_base;
+    constexpr uint GS = shmem_layout::G_ew_stride;
+    
     for (int reim = 0; reim < 2; reim++)
-	for (int y = threadIdx.x; y < 128; y += 32)
-	    out[256*w + 2*y + reim] = shmem[257*w + 128*reim + y];
+	for (int ns2 = ns; ns2 < 128; ns2 += 32)
+	    out[256*tpe + 2*ns2 + reim] = shmem_f[GB + tpe*GS + 128*reim + ns2];
 }
 
 
 void test_casm_fft1()
 {
-    static constexpr int W = 24;
+    static bool flag = false;
 
-    Array<float> in({W,64,2}, af_random | af_rhost);
-    Array<float> out_cpu({W,128,2}, af_zero | af_rhost);
-    Array<float> out_gpu({W,128,2}, af_random | af_gpu);
+    if (!flag) {
+        CUDA_CALL(cudaFuncSetAttribute(
+	    fft1_test_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            99 * 1024
+        ));
+	flag = true;
+    }
+    
+    // Axis ordering (time,pol,ew,ns,reim).
+    // It's convenient to "flatten" the outer 3 indices into 0 <= tpe < 24.
+    Array<float> in({24,64,2}, af_random | af_rhost);
+    Array<float> out_cpu({24,128,2}, af_zero | af_rhost);
+    Array<float> out_gpu({24,128,2}, af_random | af_gpu);
 
     for (int j = 0; j < 128; j++) {
 	for (int k = 0; k < 64; k++) {
 	    float theta = (2*M_PI/128) * ((j*k) % 128);
 	    float cth = cosf(theta);
 	    float sth = sinf(theta);
-	    
-	    for (int w = 0; w < W; w++) {
-		out_cpu.at({w,j,0}) += (cth * in.at({w,k,0})) - (sth * in.at({w,k,1}));
-		out_cpu.at({w,j,1}) += (sth * in.at({w,k,0})) + (cth * in.at({w,k,1}));
+
+	    for (int tpe = 0; tpe < 24; tpe++) {
+		out_cpu.at({tpe,j,0}) += (cth * in.at({tpe,k,0})) - (sth * in.at({tpe,k,1}));
+		out_cpu.at({tpe,j,1}) += (sth * in.at({tpe,k,0})) + (cth * in.at({tpe,k,1}));
 	    }
 	}
     }
 
     in = in.to_gpu();
-    fft1_test_kernel<W> <<<1,{32,W,1}>>> (in.data, out_gpu.data);
+    fft1_test_kernel <<< 1, {32,24,1}, 99*1024 >>> (in.data, out_gpu.data);
     CUDA_PEEK("fft1_test_kernel");
+
+    // Reshape from (tpe,ns,reim) -> (time,pol,ew,ns,reim).
+    out_cpu = out_cpu.reshape({2,2,6,128,2});
+    out_gpu = out_gpu.reshape({2,2,6,128,2});
     
-    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"w","i","reim"}, 1.0e-3);
+    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","pol","ew","i","reim"}, 1.0e-3);
     cout << "test_casm_fft1: pass" << endl;
 }
 
