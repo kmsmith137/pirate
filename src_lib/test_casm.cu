@@ -1034,8 +1034,6 @@ void test_casm_shuffle(const CasmBeamformer &bf)
 // -------------------------------------------------------------------------------------------------
 //
 // fft_c2c (helper for "FFT1" kernel)
-//
-// FIXME implementing fft_c2c_state<2> could save two persistent registers and a few FMAs
 
 
 __device__ void fft0(float &xre, float &xim)
@@ -1093,8 +1091,36 @@ struct fft_c2c_state
 template<>
 struct fft_c2c_state<1>
 {
+    __device__ void apply(float &x0_re, float &x0_im, float &x1_re, float &x1_im)
+    {
+	fft0(x0_re, x1_re);
+	fft0(x0_im, x1_im);
+    }
+};
+
+
+// Specializing fft_c2c_state<R> for R=2 saves two persistent registers (per thread).
+template<>
+struct fft_c2c_state<2>
+{
     __device__ void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
     {
+	// (x0,x1) = (x0+x1,x0-x1)
+	fft0(x0_re, x1_re);
+	fft0(x0_im, x1_im);
+
+	// x1 *= (either i or 1)
+	uint t = threadIdx.x & 1;
+	float yre = t ? (-x1_im) : x1_re;
+	float yim = t ? (x1_re) : x1_im;
+	x1_re = yre;
+	x1_im = yim;
+
+	// swap "01" register bit with thread bit 0
+	warp_transpose(x0_re, x1_re, 1);
+	warp_transpose(x0_im, x1_im, 1);
+
+	// (x0,x1) = (x0+x1,x0-x1)
 	fft0(x0_re, x1_re);
 	fft0(x0_im, x1_im);
     }
