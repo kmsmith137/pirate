@@ -1223,14 +1223,25 @@ struct fft1_state
 
     __device__ fft1_state()
     {
+	extern __shared__ float shmem_f[];
+	
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
 	    assert(blockDim.y == 24);
 	    assert(blockDim.z == 1);
 	}
 	
-	float x = 0.04908738521234052f * threadIdx.x;   // constant is (2pi)/128
-	sincosf(x, &cim, &cre);                         // note ordering (im,re)
+	int w = threadIdx.y;  // warp id
+	int l = threadIdx.x;  // lane id
+	
+	// float x = 0.04908738521234052f * threadIdx.x;   // constant is (2pi)/128
+	// sincosf(x, &cim, &cre);                         // note ordering (im,re)
+
+	// phase cos(2*pi*l/128), where 0 <= l < 32 is laneId.
+	float ph128 = shmem_f[shmem_layout::ns_phases_base + l];
+	cre = ph128;
+	cim = __shfl_sync(0xffffffff, cre, 32-l);
+	cim = l ? cim : 0.0f;
 	
 	// Just before writing to shared memory (see below), the FFT-ed array will have
 	// register assignment:
@@ -1239,8 +1250,6 @@ struct fft1_state
 	//   l4 l3 l2 l1 l0 <-> ns1 ns2 ns3 ns4 ns0
 	//   w2* w1 w0 <-> ew t0 pol
 
-	int w = threadIdx.y;  // warp id
-	int l = threadIdx.x;  // lane id
 	int ns = (l & 1) | (__brev(threadIdx.x >> 1) >> 27);
 	int pol = w & 1;
 	int t0 = (w >> 1) & 1;
@@ -1306,15 +1315,32 @@ struct fft1_state
 __global__ void fft1_test_kernel(const float *in, float *out)
 {
     extern __shared__ float shmem_f[];
+    
+    assert(blockDim.x == 32);
+    assert(blockDim.y == 24);
+    assert(blockDim.z == 1);
+    
+    int w = threadIdx.y;  // warp id
+    int l = threadIdx.x;  // lane id
 
+    // We initialize the 'ns_phases' part of shared memory (see "shared memory
+    // layout" above). Note that there are other parts of this shared memory
+    // layout that are not initialized, for example 'gridding', since they
+    // aren't needed by the fft1_test_kernel.
+
+    if (w == 0) {
+	constexpr float a = 6.283185307f / 128.0;   // 2*pi / 128
+	shmem_f[shmem_layout::ns_phases_base + l] = cosf(a*l);
+    }
+
+    __syncthreads();
+    
     // Input register assignment for fft1_state::apply() is:
     //
     //   r1 r0 <-> ns5 ReIm
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
     //   w2* w1 w0 <-> ew t0 pol
 
-    int w = threadIdx.y;  // warp id
-    int l = threadIdx.x;  // lane id
     int pol = (w & 1);
     int t0 = (w >> 1) & 1;
     int ew = (w >> 2);
