@@ -24,14 +24,6 @@ __device__ void zma(float &out_re, float &out_im, float xre, float xim, float yr
     out_im += (xre*yim + xim*yre);
 }
 
-// Complex out += e^(i*theta)*y
-__device__ void zma_expi(float &out_re, float &out_im, float theta, float yre, float yim)
-{
-    float xre, xim;
-    sincosf(theta, &xim, &xre);   // note ordering (im,re)
-    zma(out_re, out_im, xre, xim, yre, yim);
-}
-
 // FIXME by calling warp_transpose() in pairs, am I being suboptimal?
 template<typename T>
 __device__ void warp_transpose(T &x, T &y, uint bit)
@@ -125,6 +117,28 @@ struct shmem_layout
     static constexpr int wt_pol_stride = 259;
     static constexpr int ungridded_wts_base = E_base;
     static constexpr int gridded_wts_base = E_base + 4 * wt_pol_stride;
+};
+
+
+template<typename F>
+struct shmem_size_set_once
+{
+    bool flag = false;
+    F *func = nullptr;
+    
+    shmem_size_set_once(const F &func_) : func(func_) { }
+    
+    void set()
+    {
+	if (!flag) {
+	    CUDA_CALL(cudaFuncSetAttribute(
+	        func,
+		cudaFuncAttributeMaxDynamicSharedMemorySize,
+		99 * 1024
+	    ));
+	    flag = true;
+	}
+    }
 };
 
     
@@ -999,16 +1013,8 @@ static Array<float> make_random_feed_weights(int F)
 
 void test_casm_shuffle(const CasmBeamformer &bf)
 {
-    static bool flag = false;
-
-    if (!flag) {
-        CUDA_CALL(cudaFuncSetAttribute(
-	    casm_shuffle_test_kernel,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            99 * 1024
-        ));
-	flag = true;
-    }
+    static shmem_size_set_once s(casm_shuffle_test_kernel);
+    s.set();
     
     int F = bf.F;
     int T = bf.nominal_Tin_for_unit_tests;
@@ -1059,14 +1065,24 @@ struct fft_c2c_state
 
     fft_c2c_state<R-1> next_fft;
     float cre, cim;
-    
-    __device__ fft_c2c_state()
-    {
-	constexpr float a = 6.283185307f / (1<<R);   // 2*pi/2^r
-	uint t = threadIdx.x & ((1 << (R-1)) - 1);   // 0 <= t < 2^{r-1}
-	sincosf(a*t, &cim, &cre);                    // phase is exp(2*pi*t / 2^r)
-    }
 
+    // phase128 = cos(2*pi*l/128), where 0 <= l < 32 is laneId.
+    __device__ void init(float phase128)
+    {
+	// We want to compute the phase:
+	//    exp(2*pi*i * t / 2^r)  where t = threadIdx.x mod 2^{r-1}
+	//  = exp(2*pi*i * u / 128)  where u = t * (128/2^r)
+	
+	uint u = (threadIdx.x << (7-R)) & 63;
+	cre = __shfl_sync(0xffffffff, phase128, (u < 32) ? u : (64-u));
+	cim = __shfl_sync(0xffffffff, phase128, (u < 32) ? (32-u) : (u-32));
+	cre = (u < 32) ? cre : (-cre);
+	cre = (u != 32) ? cre : 0.0f;
+	cim = (u != 0) ? cim : 0.0f;
+	
+	next_fft.init(phase128);
+    }
+    
     __device__ void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
     {
 	// (x0,x1) = (x0+x1,x0-x1)
@@ -1088,21 +1104,12 @@ struct fft_c2c_state
 };
 
 
-template<>
-struct fft_c2c_state<1>
-{
-    __device__ void apply(float &x0_re, float &x0_im, float &x1_re, float &x1_im)
-    {
-	fft0(x0_re, x1_re);
-	fft0(x0_im, x1_im);
-    }
-};
-
-
 // Specializing fft_c2c_state<R> for R=2 saves two persistent registers (per thread).
 template<>
 struct fft_c2c_state<2>
 {
+    __device__ void init(float phase128) { }
+    
     __device__ void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
     {
 	// (x0,x1) = (x0+x1,x0-x1)
@@ -1132,6 +1139,13 @@ struct fft_c2c_state<2>
 template<int R>
 __global__ void fft_c2c_test_kernel(const float *in, float *out)
 {
+    assert(blockDim.x == 32);
+    assert(blockDim.y == 1);
+    assert(blockDim.z == 1);
+
+    constexpr float a = 6.283185307f / 128.0;   // 2*pi / 128
+    float phase128 = cosf(a * threadIdx.x);
+    
     // Input register assignment:
     //   r1 r0 <-> x_{r-1} ReIm
     //   t4 t3 t2 t1 t0 <-> s_{5-r} ... s0 x_{r-2} ... x_0
@@ -1144,8 +1158,9 @@ __global__ void fft_c2c_test_kernel(const float *in, float *out)
     float x0_im = in[sin + 1];
     float x1_re = in[sin + (1<<R)];
     float x1_im = in[sin + (1<<R) + 1];
-
+    
     fft_c2c_state<R> fft;
+    fft.init(phase128);
     fft.apply(x0_re, x0_im, x1_re, x1_im);
 
     // Output register assignment:
@@ -1233,14 +1248,13 @@ struct fft1_state
 	
 	int w = threadIdx.y;  // warp id
 	int l = threadIdx.x;  // lane id
-	
-	// float x = 0.04908738521234052f * threadIdx.x;   // constant is (2pi)/128
-	// sincosf(x, &cim, &cre);                         // note ordering (im,re)
 
 	// phase cos(2*pi*l/128), where 0 <= l < 32 is laneId.
-	float ph128 = shmem_f[shmem_layout::ns_phases_base + l];
-	cre = ph128;
-	cim = __shfl_sync(0xffffffff, cre, 32-l);
+	float phase128 = shmem_f[shmem_layout::ns_phases_base + l];
+	next_fft.init(phase128);
+	
+	cre = phase128;
+	cim = __shfl_sync(0xffffffff, phase128, 32-l);
 	cim = l ? cim : 0.0f;
 	
 	// Just before writing to shared memory (see below), the FFT-ed array will have
@@ -1374,16 +1388,8 @@ __global__ void fft1_test_kernel(const float *in, float *out)
 
 void test_casm_fft1()
 {
-    static bool flag = false;
-
-    if (!flag) {
-        CUDA_CALL(cudaFuncSetAttribute(
-	    fft1_test_kernel,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            99 * 1024
-        ));
-	flag = true;
-    }
+    static shmem_size_set_once s(fft1_test_kernel);
+    s.set();
     
     // Axis ordering (time,pol,ew,ns,reim).
     // It's convenient to "flatten" the outer 3 indices into 0 <= tpe < 24.
