@@ -1457,8 +1457,8 @@ void test_casm_fft1()
 // The I-array is distributed as follows:
 //
 //   r1 r0 <-> (bouter) (b1)
-//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns2) (ns1) (b0)
-//   24 warps <-> (b2) (ns6) (ns5) (ns0)
+//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns1) (ns0) (b0)
+//   24 warps <-> (b2) (ns6) (ns5) (ns2)
 //
 // The G-array shared memory layout is (where "f" is an EW feed):
 //
@@ -1466,18 +1466,18 @@ void test_casm_fft1()
 //
 // We read from the G-array in register assignment:
 //
-//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns2) (ns1) (fouter)
+//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns1) (ns0) (fouter)
 //
 // This is bank conflict free, since flipping 'fouter' always produces
-// an odd change in f, and the f-stride is odd (257).
+// an odd change in f, and the f-stride is 260, which is =4 mod 8.
 //
 // The I-array shared memory layout is (where "b" indexes an EW beam):
 //
-//   float I[24][128];   // (b,ns), strides (133,1)
+//   float I[24][128];   // (b,ns), strides (132,1)
 //
 // We write to the I-array in the bank conflict free register assignment:
 //
-//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns2) (ns1) (b0)
+//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns1) (ns0) (b0)
 
 
 template<bool Debug>
@@ -1508,54 +1508,54 @@ struct fft2_state
 	
 	I[0][0] = I[0][1] = I[1][0] = I[1][1] = 0.0f;
 
-	// Each warp maps to an (b2, ns56, ns0) triple.
-	uint ns0 = (threadIdx.y & 1);        // 0 <= ns0 < 2
-	uint ns56 = (threadIdx.y >> 1) & 3;  // 0 <= ns56 < 4
-	uint b2 = (threadIdx.y >> 3);        // 0 <= b2 < 3
+	// Unpack warp and thread indices:
+	//
+	//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns1) (ns0) (b0)
+	//   w3* w2 w1 w0 <-> (b2) (ns6) (ns5) (ns2)
+	//
+	// into 7-bit (ns), and partial binner (b02) = (b2) (0) (b0)
 
-	// Each thread maps to a (ns14, b0) pair.
-	uint b0 = (threadIdx.x & 1);
-	uint ns14 = (threadIdx.x >> 1);
-
+	uint w = threadIdx.y;  // warp id
+	uint l = threadIdx.x;  // lane id
+	uint ns = ((w & 0x6) << 4) | (l & 0x18) | ((w & 0x1) << 2) | ((l & 0x6) >> 1);
+	uint b02 = ((w & 0x18) >> 1) | (l & 0x1);
+	
 	// Initialize beamforming phases pcos/psin.
 	#pragma unroll
 	for (uint finner = 0; finner < 3; finner++) {
 	    // ew_phases[12][2] indexed by (binner, cos/sin)
-	    float ew_phases = shmem_f[shmem_layout::per_frequency_data_base + 32*finner + threadIdx.x];
-	    uint b = (b2 << 2) | b0;
-	    pcos[0][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b);    // b1=0, cos
-	    psin[0][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b+1);  // b1=0, sin
-	    pcos[1][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b+4);  // b1=1, cos
-	    psin[1][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b+5);  // b1=1, sin
+	    float ew_phases = shmem_f[shmem_layout::per_frequency_data_base + 32*finner + l];
+	    pcos[0][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b02);    // b1=0, cos
+	    psin[0][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b02+1);  // b1=0, sin
+	    pcos[1][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b02+4);  // b1=1, cos
+	    psin[1][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b02+5);  // b1=1, sin
 	}
 
 	// Shared memory offset for reading G-array:
 	//   float G[24][257];  float G[2][2][6][2][128];  (time,pol,f,reim,ns), ew-stride 257
 	//
 	// When we read from the G-array, we read it as:
-	//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns2) (ns1) (fouter)
+	//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns1) (ns0) (fouter)
 	//
 	// 'soff_g' is the offset assuming time = pol = finner = reim = 0.
 	
 	uint fouter = threadIdx.x & 1;
 	uint f = fouter ? 2 : 3;
-	uint ns = (ns56 << 5) | (ns14 << 1) | ns0;
 	soff_g = shmem_layout::G_base + (f * shmem_layout::G_ew_stride) + ns;
 
 	// Shared memory offset for writing I-array:
 	//   float I[24][132];  float I[24][128];   (b,ns), b-stride 132
 	//
 	// When we write to the I-array, we write as
-	//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns2) (ns1) (b0)
+	//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns1) (ns0) (b0)
 	//
 	// 'soff_i{0,1}' is the offset with bouter={0,1} and b1=0.
 
-	uint binner = (b2 << 2) | b0;
-	soff_i0 = shmem_layout::I_base + (12+binner) * shmem_layout::I_ew_stride + ns;  // offset for bouter=0
-	soff_i1 = shmem_layout::I_base + (11-binner) * shmem_layout::I_ew_stride + ns;  // offset for bouter=1
+	soff_i0 = shmem_layout::I_base + (12+b02) * shmem_layout::I_ew_stride + ns;  // offset for bouter=0
+	soff_i1 = shmem_layout::I_base + (11-b02) * shmem_layout::I_ew_stride + ns;  // offset for bouter=1
 
-	// check_bank_conflict_free<Debug> (soff_i0);  // XXX restore!!!
-	// check_bank_conflict_free<Debug> (soff_i1);  // XXX restore!!!
+	check_bank_conflict_free<Debug> (soff_i0);
+	check_bank_conflict_free<Debug> (soff_i1);
     }
 
     
@@ -1581,7 +1581,7 @@ struct fft2_state
         #pragma unroll
 	for (int finner = 0; finner < 3; finner++) {
 	    int s = soff_g + (tpol * 6 * FS) + (finner * ds);
-	    // check_bank_conflict_free<Debug> (s);  // XXX restore!!!
+	    check_bank_conflict_free<Debug> (s);
 	    
 	    float tre = shmem_f[s];
 	    float tim = shmem_f[s + 128];
