@@ -1770,7 +1770,10 @@ void test_casm_fft2(const CasmBeamformer &bf)
     int TP = 2 * bf.nominal_Tin_for_unit_tests;
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
     
-    Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
+    // Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
+    Array<float> g({TP,F,6,128,2}, af_rhost | af_zero);
+    g.at({0,0,0,0,0}) = 1.0f;
+    g.at({0,0,1,0,0}) = 1.0f;
     Array<float> i_gpu({F,24,128}, af_gpu | af_random);
     Array<float> i_cpu = fft2_reference_kernel(bf, g);
     
