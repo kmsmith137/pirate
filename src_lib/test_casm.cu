@@ -1734,7 +1734,7 @@ Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 
 	    for (int tpol = 0; tpol < TP; tpol++) {
 		float *G2 = &G.at({tpol,ifreq,0,0,0});  // shape (6,128,2)
-		float *I2 = &I.at({ifreq,0,0});         // shape (128,)
+		float *I2 = &I.at({ifreq,ew_beam,0});   // shape (128,)
 
 		for (int ns = 0; ns < 128; ns++) {
 		    // Beamformed electric field.
