@@ -172,9 +172,9 @@ struct CasmBeamformer
     int B = 0;  // number of output beams
     int downsampling_factor = 0;
     
-    ksgpu::Array<float> &frequencies;     // shape (F,)
-    ksgpu::Array<int> feed_indices;       // shape (256,2)
-    ksgpu::Array<float> &beam_locations;  // shape (B,2)
+    ksgpu::Array<float> frequencies;     // shape (F,)
+    ksgpu::Array<int> feed_indices;      // shape (256,2)
+    ksgpu::Array<float> beam_locations;  // shape (B,2)
     float ns_feed_spacing = 0.0;
 
     float ew_feed_spacing[5];     // meters
@@ -253,7 +253,7 @@ CasmBeamformer::CasmBeamformer(
 	int ns = feed_indices.at({d,0});  // 0 <= ns < 43
 	int ew = feed_indices.at({d,1});  // 0 <= ew < 6
 
-	if ((ns < 0) || (ns >= 43) || (ew < 0) || (ew >= 43)) {
+	if ((ns < 0) || (ns >= 43) || (ew < 0) || (ew >= 6)) {
 	    stringstream ss;
 	    ss << "CasmBeamformer constructor: got feed_indices[" << d << "]=("
 	       << ns << "," << ew << "). Expected pair (j,k) where 0 <= j < 43"
@@ -274,7 +274,7 @@ CasmBeamformer::CasmBeamformer(
 	duplicate_checker[g] = d;
 	gp[d] = g;
     }
-
+    
     // Compute 'ns_phases' part of 'gpu_persistent_data'.
     float *nsp = gpu_persistent_data.data + shmem_layout::ns_phases_base;
     for (int i = 0; i < 32; i++)
@@ -1019,28 +1019,21 @@ void test_casm_shuffle(CasmBeamformer &bf)
     int F = bf.F;
     int T = bf.nominal_Tin_for_unit_tests;
     xassert(T > 0);
-    cout << "BBB0 " << bf.frequencies.ndim << endl;
     
     Array<uint8_t> e = make_random_e_array(T,F);
     Array<float> feed_weights = make_random_feed_weights(F);
     Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
     Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
     
-    cout << "BBB1 " << bf.frequencies.ndim << endl;
-    // casm_shuffle_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
-    cout << "BBB2 " << bf.frequencies.ndim << endl;
+    casm_shuffle_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
     
     e = e.to_gpu();
-    cout << "BBB3a " << bf.frequencies.ndim << endl;
     feed_weights = feed_weights.to_gpu();
-    cout << "BBB3b " << bf.frequencies.ndim << endl;
     casm_shuffle_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
     CUDA_PEEK("casm_shuffle_test_kernel");
 
-    cout << "BBB4 " << bf.frequencies.ndim << endl;
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
     cout << "test_casm_shuffle(T=" << T << ",F=" << F << "): pass" << endl;
-    cout << "BBB5 " << bf.frequencies.ndim << endl;
 }
 
 
@@ -1713,7 +1706,6 @@ __global__ void fft2_test_kernel(
 
 Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 {
-    cout << "XXX1 " << bf.frequencies.ndim << endl;
     int F = bf.F;
     int TP = (G.ndim > 0) ? G.shape[0] : 0;
     
@@ -1731,9 +1723,7 @@ Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 
 	    for (int ew_feed = 0; ew_feed < 6; ew_feed++) {
 		float c = bf.speed_of_light;
-		cout << "XXX2a " << bf.frequencies.ndim << endl;
 		float freq = bf.frequencies.at({ifreq});
-		cout << "XXX2b" << endl;
 		float ew_bpos = bf.ew_beam_locations[ew_beam];
 		float ew_fpos = bf.ew_feed_positions[ew_feed];
 		float theta = 2*M_PI * freq * ew_bpos * ew_fpos / c;
@@ -1743,11 +1733,8 @@ Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 	    }
 
 	    for (int tpol = 0; tpol < TP; tpol++) {
-		cout << "XXX3a " << G.ndim << endl;
 		float *G2 = &G.at({tpol,ifreq,0,0,0});  // shape (6,128,2)
-		cout << "XXX3b" << endl;
 		float *I2 = &I.at({ifreq,0,0});         // shape (128,)
-		cout << "XXX3c" << endl;
 
 		for (int ns = 0; ns < 128; ns++) {
 		    // Beamformed electric field.
@@ -1770,7 +1757,6 @@ Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 	}		
     }
 
-    cout << "XXX end" << endl;
     return I;
 }
 
@@ -1966,14 +1952,10 @@ static void test_casm_interpolation()
 void test_casm()
 {
     CasmBeamformer bf = CasmBeamformer::make_random();
-    cout << "AAA1 " << bf.frequencies.ndim << endl;
-    
+
     test_casm_shuffle(bf);
-    cout << "AAA2 " << bf.frequencies.ndim << endl;
     test_casm_fft_c2c();
-    cout << "AAA3 " << bf.frequencies.ndim << endl;
     test_casm_fft1();
-    cout << "AAA4 " << bf.frequencies.ndim << endl;
     test_casm_fft2(bf);
     test_casm_interpolation();
 }
