@@ -239,6 +239,9 @@ CasmBeamformer::CasmBeamformer(
     ew_feed_positions[4] = ew_feed_positions[3] + (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
     ew_feed_positions[5] = ew_feed_positions[4] + (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
 
+    for (int i = 0; i < 3; i++)
+	ew_feed_positions[i] = -ew_feed_positions[5-i];
+	    
     for (int i = 0; i < 24; i++)
 	ew_beam_locations[i] = (23-2*i) / 21.;
     
@@ -1731,7 +1734,7 @@ Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 		bre[ew_feed] = cosf(theta);
 		bim[ew_feed] = sinf(theta);
 	    }
-
+	    
 	    for (int tpol = 0; tpol < TP; tpol++) {
 		float *G2 = &G.at({tpol,ifreq,0,0,0});  // shape (6,128,2)
 		float *I2 = &I.at({ifreq,ew_beam,0});   // shape (128,)
@@ -1770,10 +1773,7 @@ void test_casm_fft2(const CasmBeamformer &bf)
     int TP = 2 * bf.nominal_Tin_for_unit_tests;
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
     
-    // Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
-    Array<float> g({TP,F,6,128,2}, af_rhost | af_zero);
-    g.at({0,0,0,0,0}) = 1.0f;
-    g.at({0,0,1,0,0}) = 1.0f;
+    Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
     Array<float> i_gpu({F,24,128}, af_gpu | af_random);
     Array<float> i_cpu = fft2_reference_kernel(bf, g);
     
