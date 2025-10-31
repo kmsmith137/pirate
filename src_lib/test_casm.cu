@@ -93,7 +93,7 @@ struct shmem_layout
 {
     // All _*stride and _*base quantities are 32-bit offsets, not byte offsets.
     static constexpr int E_jstride = 259;
-    static constexpr int I_ew_stride = 132;
+    static constexpr int I_ew_stride = 133;  // XXX
     static constexpr int G_ew_stride = 257;
     
     static constexpr int gridding_base = 0;
@@ -1011,7 +1011,7 @@ static Array<float> make_random_feed_weights(int F)
 }
 
 
-void test_casm_shuffle(const CasmBeamformer &bf)
+void test_casm_shuffle(CasmBeamformer &bf)
 {
     static shmem_size_set_once s(casm_shuffle_test_kernel);
     s.set();
@@ -1019,21 +1019,28 @@ void test_casm_shuffle(const CasmBeamformer &bf)
     int F = bf.F;
     int T = bf.nominal_Tin_for_unit_tests;
     xassert(T > 0);
+    cout << "BBB0 " << bf.frequencies.ndim << endl;
     
     Array<uint8_t> e = make_random_e_array(T,F);
     Array<float> feed_weights = make_random_feed_weights(F);
     Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
     Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
     
-    casm_shuffle_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
-
+    cout << "BBB1 " << bf.frequencies.ndim << endl;
+    // casm_shuffle_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
+    cout << "BBB2 " << bf.frequencies.ndim << endl;
+    
     e = e.to_gpu();
+    cout << "BBB3a " << bf.frequencies.ndim << endl;
     feed_weights = feed_weights.to_gpu();
+    cout << "BBB3b " << bf.frequencies.ndim << endl;
     casm_shuffle_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
     CUDA_PEEK("casm_shuffle_test_kernel");
 
+    cout << "BBB4 " << bf.frequencies.ndim << endl;
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
     cout << "test_casm_shuffle(T=" << T << ",F=" << F << "): pass" << endl;
+    cout << "BBB5 " << bf.frequencies.ndim << endl;
 }
 
 
@@ -1493,9 +1500,10 @@ struct fft2_state
     int soff_i1;    // base shared memory offset in I-array, bouter=1
 
 
-    // FIXME is alpha[3] the best interface here?
-    __device__ fft2_state(float alpha[3])
+    __device__ fft2_state()
     {
+	extern __shared__ float shmem_f[];
+	
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
 	    assert(blockDim.y == 24);
@@ -1513,53 +1521,56 @@ struct fft2_state
 	uint b0 = (threadIdx.x & 1);
 	uint ns14 = (threadIdx.x >> 1);
 
-	// Beamforming phases are indexed by (b1, finner)
+	// Initialize beamforming phases pcos/psin.
 	#pragma unroll
-	for (uint b1 = 0; b1 < 2; b1++) {
-	    // Beamforming phase is exp(i*t*alpha[finner]) where t = 1+2*binner
-	    float t = (b2 << 3) | (b1 << 2) | (b0 << 1) | 1;
-	    
-	    #pragma unroll
-	    for (uint finner = 0; finner < 3; finner++)
-		sincosf(t * alpha[finner], &psin[b1][finner], &pcos[b1][finner]);
+	for (uint finner = 0; finner < 3; finner++) {
+	    // ew_phases[12][2] indexed by (binner, cos/sin)
+	    float ew_phases = shmem_f[shmem_layout::per_frequency_data_base + 32*finner + threadIdx.x];
+	    uint b = (b2 << 2) | b0;
+	    pcos[0][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b);    // b1=0, cos
+	    psin[0][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b+1);  // b1=0, sin
+	    pcos[1][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b+4);  // b1=1, cos
+	    psin[1][finner] = __shfl_sync(0xffffffff, ew_phases, 2*b+5);  // b1=1, sin
 	}
 
 	// Shared memory offset for reading G-array:
-	//
-	//   float G[6][2][128];  // (f,reim,ns), strides (257,128,1)
+	//   float G[24][257];  float G[2][2][6][2][128];  (time,pol,f,reim,ns), ew-stride 257
 	//
 	// When we read from the G-array, we read it as:
-	//
 	//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns2) (ns1) (fouter)
 	//
-	// 'soff_g' is the offset assuming finner=reim=0.
+	// 'soff_g' is the offset assuming time = pol = finner = reim = 0.
 	
 	uint fouter = threadIdx.x & 1;
+	uint f = fouter ? 2 : 3;
 	uint ns = (ns56 << 5) | (ns14 << 1) | ns0;
-	soff_g = (fouter ? (2*257) : (3*257)) + ns;
+	soff_g = shmem_layout::G_base + (f * shmem_layout::G_ew_stride) + ns;
 
 	// Shared memory offset for writing I-array:
-	//
-	//   float I[24][128];   // (b,ns), strides (133,1)
+	//   float I[24][132];  float I[24][128];   (b,ns), b-stride 132
 	//
 	// When we write to the I-array, we write as
-	//
 	//   t4 t3 t2 t1 t0 <-> (ns4) (ns3) (ns2) (ns1) (b0)
 	//
 	// 'soff_i{0,1}' is the offset with bouter={0,1} and b1=0.
 
 	uint binner = (b2 << 2) | b0;
-	soff_i0 = 133*(12+binner) + ns;  // offset for bouter=0
-	soff_i1 = 133*(11-binner) + ns;  // offset for binner=1
+	soff_i0 = shmem_layout::I_base + (12+binner) * shmem_layout::I_ew_stride + ns;  // offset for bouter=0
+	soff_i1 = shmem_layout::I_base + (11-binner) * shmem_layout::I_ew_stride + ns;  // offset for bouter=1
 
 	check_bank_conflict_free<Debug> (soff_i0);
 	check_bank_conflict_free<Debug> (soff_i1);
     }
 
     
-    // Accumulates one (time,pol) into I-registers.
-    __device__ void apply(const float *sp)
+    // Accumulates one (time,pol) into I-registers, where 0 <= tpol < 4.
+    __device__ void apply(uint tpol)
     {
+	extern __shared__ float shmem_f[];
+	
+	// feed-stride in shared memory G[] array.
+	constexpr int FS = shmem_layout::G_ew_stride;
+	
 	// Beamformed electric fields are accumulated here.
 	float Fre[2][2];   // (bouter, b1)
 	float Fim[2][2];   // (bouter, b1)
@@ -1569,15 +1580,15 @@ struct fft2_state
 
 	// finner-stride in the G-array
 	int fouter = threadIdx.x & 1;
-	int ds = fouter ? (-257) : 257;
+	int ds = fouter ? (-FS) : (FS);
 	
         #pragma unroll
 	for (int finner = 0; finner < 3; finner++) {
-	    int s = soff_g + finner*ds;
+	    int s = soff_g + (tpol * 6 * FS) + (finner * ds);
 	    check_bank_conflict_free<Debug> (s);
 	    
-	    float tre = sp[s];
-	    float tim = sp[s + 128];
+	    float tre = shmem_f[s];
+	    float tim = shmem_f[s + 128];
 
 	    // FIXME can be improved.
 	    // u{0,1} index is fouter.
@@ -1612,137 +1623,177 @@ struct fft2_state
     }
 
     // Writes I[] register to shared memory and zeroes the registers.
-    __device__ void write_and_reset(float *sp)
+    __device__ void write_and_reset()
     {
+	extern __shared__ float shmem_f[];
+
+	// Beam-stride in shared memory I[] array.
+	constexpr int IS = shmem_layout::I_ew_stride;
+	
 	// Beams are indexed by (bouter, b1).
 	//   float I[24][128];   // (b,ns), strides (133,1)
-
-	sp[soff_i0] = I[0][0];
-	sp[soff_i1] = I[1][0];
 	
-	sp[soff_i0 + 2*133] = I[0][1];
-	sp[soff_i1 - 2*133] = I[1][1];
+	shmem_f[soff_i0] = I[0][0];
+	shmem_f[soff_i1] = I[1][0];
+	
+	shmem_f[soff_i0 + 2*IS] = I[0][1];
+	shmem_f[soff_i1 - 2*IS] = I[1][1];
 
 	I[0][0] = I[0][1] = I[1][0] = I[1][1] = 0.0f;
     }
 };
 
 
-// float G[TP][6][128][2];
-// float I[24][128];
-// Launch with {32,24,1} threads.
-
-__global__ void fft2_test_kernel(const float *gp, float *ip, int TP, const float *alpha)
+// Launch with {32,24,1} threads and {F,1,1} blocks.
+__global__ void fft2_test_kernel(
+    const float *g_in,                  // (TP,F,6,128,2) = (tpol,freq,ewfeed,ns,reim)
+    const float *feed_weights,          // (F,2,256,2), not used
+    const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
+    float *i_out,                       // (F,24,128) = (freq,ewbeam,ns)
+    int TP)
 {
-    __shared__ float shmem_g[6*257];   // size (6,2,128), strides (257,128,1)
-    __shared__ float shmem_i[24*133];  // size (24,128), strides (133,1)
+    extern __shared__ float shmem_f[];
 
     assert(blockDim.x == 32);
     assert(blockDim.y == 24);
     assert(blockDim.z == 1);
+	
+    casm_shuffle_state<true> shuffle(nullptr, feed_weights, gpu_persistent_data, 0);
+    __syncthreads(); // I dont think I actually need this
+    
+    fft2_state<true> fft2;  // Debug=true
 
-    float a[3];
-    a[0] = alpha[0];
-    a[1] = alpha[1];
-    a[2] = alpha[2];
-    
-    fft2_state<true> fft2(a);  // Debug=true
-    
-    // Set up G-array copy (global) -> (shared)
+    // Divide (F,6,128) array between threads.
+    int f = blockIdx.x;
+    int F = gridDim.x;
     int gns = ((threadIdx.y & 3) << 5) + threadIdx.x;
     int gew = (threadIdx.y >> 2);
-    int gsh = (257*gew) + gns;   // array offset in shmem_g[] array
-    float2 *gp2 = (float2 *)(gp) + 128*gew + gns;  // per-(warp+thread) offsets applied
-    
-    for (int tp = 0; tp < TP; tp++) {
-	// G-array copy (global) -> (shared)
+
+    // G-array source global memory pointer. For each tpol, each thread copies one complex32+32.
+    float2 *gp2 = (float2 *)(g_in) + f*6*128 + 128*gew + gns;
+
+    // G-array destination shared memory index (offset 0 <= tp_sh < 4 remains to be applied)
+    // float G[24][257];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 257
+    constexpr int GB = shmem_layout::G_base;
+    constexpr int GS = shmem_layout::G_ew_stride;
+    uint gsh = GB + (gew * GS) + gns;
+
+    for (int tp_glo = 0; tp_glo < TP; tp_glo++) {
+	int tp_sh = tp_glo & 3;
+	
+	// Copy G[6][128][2] from (global) -> (shared).
 	float2 g = *gp2;
-	shmem_g[gsh] = g.x;      // real part
-	shmem_g[gsh+128] = g.y;  // imag part
-	gp2 += 6*128;
+	shmem_f[gsh + tp_sh*6*GS] = g.x;        // real part
+	shmem_f[gsh + tp_sh*6*GS + 128] = g.y;  // imag part
+	gp2 += F*6*128;
 
 	__syncthreads();
 
-	fft2.apply(shmem_g);
+	fft2.apply(tp_sh);
 
 	__syncthreads();
     }
 
-    fft2.write_and_reset(shmem_i);
+    fft2.write_and_reset();
     __syncthreads();
 	
     // Set up I-array copy (shared) -> (global)
-    int goff = 128*threadIdx.y + threadIdx.x;  // array offset in ip[] global array
-    int soff = 133*threadIdx.y + threadIdx.x;  // array offset in shmem_i[] shared array
+    constexpr int IB = shmem_layout::I_base;
+    constexpr int IS = shmem_layout::I_ew_stride;
+    int goff = 24*128*f + 128*threadIdx.y + threadIdx.x;  // array offset in ip[] global array
+    int soff = IB + IS*threadIdx.y + threadIdx.x;         // array offset in shmem_i[] shared array
     
     for (int j = 0; j < 4; j++)
-	ip[goff + 32*j] = shmem_i[soff + 32*j];
+	i_out[goff + 32*j] = shmem_f[soff + 32*j];
 }
 
 
-// float G[TP][6][128][2];
-// float I[24][128];
+// G.shape = {TP,F,6,128,2}
+// I.shape = {F,24,128}
 
-void fft2_reference_kernel(const float *gp, float *ip, int TP, const float *alpha)
+Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 {
-    // beamforming phase is exp(i * bloc[b] * floc[f])
-    float bloc[24];
-    float floc[6];
-
-    for (int binner = 0; binner < 12; binner++) {
-	bloc[12+binner] = 1 + 2*binner;
-	bloc[11-binner] = -(1 + 2*binner);
-    }
-
-    for (int finner = 0; finner < 3; finner++) {
-	floc[3+finner] = alpha[finner];
-	floc[2-finner] = -alpha[finner];
-    }
+    cout << "XXX1 " << bf.frequencies.ndim << endl;
+    int F = bf.F;
+    int TP = (G.ndim > 0) ? G.shape[0] : 0;
     
-    for (int ns = 0; ns < 128; ns++) {
-	for (int b = 0; b < 24; b++) {
-	    float I = 0.0f;
-	    
-	    for (int tp = 0; tp < TP; tp++) {
-		float zre = 0.0f;
-		float zim = 0.0f;
+    xassert(G.ndim > 0);
+    xassert_shape_eq(G, ({TP,F,6,128,2}));
+    xassert(G.get_ncontig() >= 3);
 
-		for (int f = 0; f < 6; f++) {
-		    float xre = cosf(bloc[b] * floc[f]);
-		    float xim = sinf(bloc[b] * floc[f]);
-		    float yre = gp[6*256*tp + 256*f + 2*ns];
-		    float yim = gp[6*256*tp + 256*f + 2*ns + 1];
-		    
-		    zre += xre*yre - xim*yim;
-		    zim += xre*yim + xim*yre;
-		}
+    Array<float> I({F,24,128}, af_uhost | af_zero);    // output array
 
-		I += (zre*zre + zim*zim);
+    for (int ifreq = 0; ifreq < F; ifreq++) {
+	for (int ew_beam = 0; ew_beam < 24; ew_beam++) {
+	    // Beamforming phase is exp(2*pi*i * freq * beam * feed / c)
+	    float bre[6];
+	    float bim[6];
+
+	    for (int ew_feed = 0; ew_feed < 6; ew_feed++) {
+		float c = bf.speed_of_light;
+		cout << "XXX2a " << bf.frequencies.ndim << endl;
+		float freq = bf.frequencies.at({ifreq});
+		cout << "XXX2b" << endl;
+		float ew_bpos = bf.ew_beam_locations[ew_beam];
+		float ew_fpos = bf.ew_feed_positions[ew_feed];
+		float theta = 2*M_PI * freq * ew_bpos * ew_fpos / c;
+
+		bre[ew_feed] = cosf(theta);
+		bim[ew_feed] = sinf(theta);
 	    }
-	    
-	    ip[128*b + ns] = I;
-	}
+
+	    for (int tpol = 0; tpol < TP; tpol++) {
+		cout << "XXX3a " << G.ndim << endl;
+		float *G2 = &G.at({tpol,ifreq,0,0,0});  // shape (6,128,2)
+		cout << "XXX3b" << endl;
+		float *I2 = &I.at({ifreq,0,0});         // shape (128,)
+		cout << "XXX3c" << endl;
+
+		for (int ns = 0; ns < 128; ns++) {
+		    // Beamformed electric field.
+		    float Fre = 0.0f;
+		    float Fim = 0.0f;
+		
+		    for (int ew_feed = 0; ew_feed < 6; ew_feed++) {
+			float Bre = bre[ew_feed];
+			float Bim = bim[ew_feed];
+			float Gre = G2[256*ew_feed + 2*ns];
+			float Gim = G2[256*ew_feed + 2*ns + 1];
+			
+			Fre += (Bre*Gre) - (Bim*Gim);
+			Fim += (Bre*Gim) + (Bim*Gre);
+		    }
+
+		    I2[ns] += (Fre*Fre) + (Fim*Fim);
+		}
+	    }
+	}		
     }
+
+    cout << "XXX end" << endl;
+    return I;
 }
 
 
-void test_casm_fft2()
+void test_casm_fft2(const CasmBeamformer &bf)
 {
-    int TP = 4;
-    Array<float> g({TP,6,128,2}, af_rhost | af_random);
-    Array<float> i_cpu({24,128}, af_rhost | af_random);
-    Array<float> i_gpu({24,128}, af_gpu | af_random);
-    Array<float> alpha({3}, af_rhost | af_random);
+    static shmem_size_set_once s(fft2_test_kernel);
+    s.set();
+
+    int F = bf.F;
+    int TP = 2 * bf.nominal_Tin_for_unit_tests;
+    Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
     
-    fft2_reference_kernel(g.data, i_cpu.data, TP, alpha.data);
+    Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
+    Array<float> i_gpu({F,24,128}, af_gpu | af_random);
+    Array<float> i_cpu = fft2_reference_kernel(bf, g);
     
     g = g.to_gpu();
-    alpha = alpha.to_gpu();
     
-    fft2_test_kernel<<< 1, {32,24,1} >>> (g.data, i_gpu.data, TP, alpha.data);
+    fft2_test_kernel<<< F, {32,24,1}, 99*1024 >>> (g.data, feed_weights.data, bf.gpu_persistent_data.data, i_gpu.data, TP);
     CUDA_PEEK("fft2_test_kernel");
 
-    assert_arrays_equal(i_cpu, i_gpu, "cpu", "gpu", {"b","ns"}, 1.0e-4);
+    assert_arrays_equal(i_cpu, i_gpu, "cpu", "gpu", {"f","b","ns"});
     cout << "test_casm_fft2: pass" << endl;
 }
 
@@ -1915,11 +1966,15 @@ static void test_casm_interpolation()
 void test_casm()
 {
     CasmBeamformer bf = CasmBeamformer::make_random();
+    cout << "AAA1 " << bf.frequencies.ndim << endl;
     
     test_casm_shuffle(bf);
+    cout << "AAA2 " << bf.frequencies.ndim << endl;
     test_casm_fft_c2c();
+    cout << "AAA3 " << bf.frequencies.ndim << endl;
     test_casm_fft1();
-    test_casm_fft2();
+    cout << "AAA4 " << bf.frequencies.ndim << endl;
+    test_casm_fft2(bf);
     test_casm_interpolation();
 }
 
