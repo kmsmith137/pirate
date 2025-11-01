@@ -1,7 +1,6 @@
 #include "../include/pirate/casm.hpp"
 
 #include <cassert>
-#include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
 
@@ -141,304 +140,6 @@ struct shmem_99kb
 	}
     }
 };
-
-    
-// -------------------------------------------------------------------------------------------------
-//
-// Host-side CasmBeamformer object
-//
-// FIXME make this a class, with some members protected.
-// FIXME switch to an API which doesn't use ksgpu::Array or xassert()
-// FIXME constructor should save current cuda device, and check equality in beamform()
-
-
-struct CasmBeamformer
-{
-    // speed of light in weird units meters-MHz
-    static constexpr float speed_of_light = 299.79;
-
-    inline static const float default_ew_feed_spacings[5]
-	= { 0.38f, 0.445f, 0.38f, 0.445f, 0.38f };  // meters
-    
-    CasmBeamformer(
-        Array<float> &frequencies,     // shape (F,)
-	Array<int> &feed_indices,      // shape (256,2)
-	Array<float> &beam_locations,  // shape (B,2)
-	int downsampling_factor,
-	float ns_feed_spacing = 0.50,  // meters
-	const float *ew_feed_spacing = default_ew_feed_spacings
-    );
-
-    // Beamforming kernel is launched asychronously, caller is responsible for synchronization.
-    void launch_beamformer(
-        const Array<uint8_t> &e_in,         // shape (T,F,2,256), axes (time,freq,pol,dish)
-	const Array<float> &feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
-	Array<float> &i_out,                // shape (Tout,F,B)
-	cudaStream_t stream = nullptr
-    ) const;
-
-    // ---------------------------------------------------------------------------------------------
-    
-    int F = 0;  // number of frequency channels (on one GPU)
-    int B = 0;  // number of output beams
-    int downsampling_factor = 0;
-    
-    ksgpu::Array<float> frequencies;     // shape (F,)
-    ksgpu::Array<int> feed_indices;      // shape (256,2)
-    ksgpu::Array<float> beam_locations;  // shape (B,2)
-    float ns_feed_spacing = 0.0;
-
-    float ew_feed_spacing[5];     // meters
-    float ew_feed_positions[6];   // meters
-    float ew_beam_locations[24];  // sin(ZA)
-
-    static int get_max_beams();
-    
-    // This is a ~200KB region of global GPU memory, which is initialized by the
-    // CasmBeamformer constructor, and passed to the beamformer on every kernel launch.
-    // See "global memory layout" in CasmBeamformer.cu for more info.
-    Array<float> gpu_persistent_data;
-    
-    // For unit tests
-    int nominal_Tin_for_unit_tests = 0;
-    static CasmBeamformer make_random(bool randomize_feed_indices=true);
-    static Array<int> make_random_feed_indices();   // helper for make_random()
-    static Array<int> make_regular_feed_indices();  // helper for make_random()
-    static void show_shared_memory_layout();
-};
-
-
-CasmBeamformer::CasmBeamformer(
-    Array<float> &frequencies_,     // shape (F,)
-    Array<int> &feed_indices_,      // shape (256,2)
-    Array<float> &beam_locations_,  // shape (B,2)
-    int downsampling_factor_,
-    float ns_feed_spacing_,
-    const float *ew_feed_spacing_)
-    : frequencies(frequencies_),
-      feed_indices(feed_indices_),
-      beam_locations(beam_locations_),
-      downsampling_factor(downsampling_factor_),
-      ns_feed_spacing(ns_feed_spacing_)
-{
-    for (int i = 0; i < 5; i++)
-	ew_feed_spacing[i] = ew_feed_spacing_[i];
-    
-    // Argument checking
-    xassert_eq(frequencies.ndim, 1);
-    xassert_eq(beam_locations.ndim, 2);
-    xassert_eq(beam_locations.shape[1], 2);
-    xassert_shape_eq(feed_indices, ({256,2}));
-    
-    this->F = frequencies.shape[0];
-    this->B = beam_locations.shape[0];
-
-    xassert_gt(F, 0);
-    xassert_gt(B, 0);
-    xassert_divisible(B, 32);  // currently required by GPU kernel, but not python reference code
-    xassert_gt(downsampling_factor, 0);	       
-    xassert_ge(ns_feed_spacing, 0.3);
-    xassert_lt(ns_feed_spacing, 0.6);
-    
-    for (int i = 0; i < 5; i++) {
-	xassert_ge(ew_feed_spacing[i], 0.3);
-	xassert_le(ew_feed_spacing[i], 0.6);
-	xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // flip-symmetric
-    }
-
-    float s0 = (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
-    float s1 = (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
-    float s2 = (ew_feed_spacing[2]);
-
-    ew_feed_positions[0] = -s0 - s1 - s2/2.;
-    ew_feed_positions[1] =     - s1 - s2/2.;
-    ew_feed_positions[2] =          - s2/2.;
-    ew_feed_positions[3] =            s2/2.;
-    ew_feed_positions[4] =       s1 + s2/2.;
-    ew_feed_positions[5] =  s0 + s1 + s2/2.;
-	    
-    for (int i = 0; i < 24; i++)
-	ew_beam_locations[i] = (23-2*i) / 21.;
-    
-    // The rest of this function fills 'gpu_persistent_data' and copies to the GPU.
-    gpu_persistent_data = Array<float> ({256 + 32 + 96*F + 2*B}, af_rhost | af_zero);
-    
-    // Compute 'gridding' part of 'gpu_persistent_data' (with error-checking).
-    uint *gp = (uint *) (gpu_persistent_data.data);
-    vector<int> duplicate_checker({6*43}, -1);
-    
-    for (int d = 0; d < 256; d++) {
-	int ns = feed_indices.at({d,0});  // 0 <= ns < 43
-	int ew = feed_indices.at({d,1});  // 0 <= ew < 6
-
-	if ((ns < 0) || (ns >= 43) || (ew < 0) || (ew >= 6)) {
-	    stringstream ss;
-	    ss << "CasmBeamformer constructor: got feed_indices[" << d << "]=("
-	       << ns << "," << ew << "). Expected pair (j,k) where 0 <= j < 43"
-	       << " and 0 <= k < 6";
-	    throw runtime_error(ss.str());
-	}
-
-	int g = 43*ew + ns;
-	
-	if (duplicate_checker[g] >= 0) {
-	    stringstream ss;
-	    ss << "CasmBeamformer constructor: duplicate feed_indices["
-	       << duplicate_checker[g] << "] = feed_indices[" << d << "] = ("
-	       << ns << "," << ew << ")";
-	    throw runtime_error(ss.str());
-	}
-
-	duplicate_checker[g] = d;
-	gp[d] = g;
-    }
-    
-    // Compute 'ns_phases' part of 'gpu_persistent_data'.
-    float *nsp = gpu_persistent_data.data + shmem_layout::ns_phases_base;
-    for (int i = 0; i < 32; i++)
-	nsp[i] = cosf(2 * M_PI * i / 128.0);
-
-    // Compute 'per_frequency_data' part of 'gpu_persistent_data'.    
-    for (int f = 0; f < F; f++) {
-	float freq = frequencies.at({f});
-	
-	// Beamformer has only been validated for frequencies in [400,500] MHz.
-        // This assert also guards against using the wrong units (should be MHz).
-	xassert_ge(freq, 399.0);
-	xassert_lt(freq, 501.0);
-
-	for (int ew_feed = 0; ew_feed < 3; ew_feed++) {
-	    // Points to 32-element "inner" region (see (*) above).
-	    float *pf32 = gpu_persistent_data.data + gmem_layout::per_frequency_data_base(f) + 32*ew_feed;
-	    pf32[25] = freq;
-	    
-	    for (int ew_beam = 0; ew_beam < 12; ew_beam++) {
-		float feed_pos = ew_feed_positions[ew_feed + 3];
-		float beam_loc = ew_beam_locations[ew_beam + 12];
-		float theta = (2*M_PI / speed_of_light) * freq * feed_pos * beam_loc;
-		sincosf(theta, &pf32[2*ew_beam+1], &pf32[2*ew_beam]);  // note (sin, cos) ordering
-	    }
-	}
-    }
-
-    // Compute 'beam_locations' part of gpu_persistent_data
-    float *blp = gpu_persistent_data.data + gmem_layout::beam_locs_base(F);
-    
-    for (int b = 0; b < B; b++) {
-	for (int j = 0; j < 2; j++) {
-	    // We store {ns_feed_spacing * sin(za_ns), sin(za_ew)} in GPU memory.
-	    float prefactor = j ? 1.0 : ns_feed_spacing;
-	    float beam_location = beam_locations.at({b,j});
-	    xassert_ge(beam_location, -1.0);
-	    xassert_le(beam_location, 1.0);
-	    blp[2*b+j] = prefactor * beam_location;
-	}
-    }
-
-    // All done! Copy to GPU.
-    gpu_persistent_data = gpu_persistent_data.to_gpu();
-}
-
-
-// Static member function.
-void CasmBeamformer::show_shared_memory_layout()
-{
-    using SL = shmem_layout;
-
-    cout << "[" << SL::gridding_base << "]      uint gridding[256];\n"
-	 << "[" << SL::ns_phases_base << "]    float ns_phases[32];\n"
-	 << "[" << SL::per_frequency_data_base << "]    float per_frequency_data[3][32];\n"
-	 << "[" << SL::E_base << "]    uint E[24][" << SL::E_jstride << "];\n"
-	 << "[" << SL::I_base << "]   float I[24][" << SL::I_ew_stride << "];\n"
-	 << "[" << SL::G_base << "]   float G[24][" << SL::G_ew_stride << "];\n"
-	 << "[" << SL::beam_locs_base << "]  float beam_locs[2][" << SL::max_beams << "];\n"
-	 << "  Total size = " << SL::nbytes << " bytes = " << (SL::nbytes/1024.0) << " KB"
-	 << endl;
-}
-
-
-// Static member function.
-int CasmBeamformer::get_max_beams()
-{
-    // Maximum number of beams is currently determined by shared memory constraints.
-    return shmem_layout::max_beams;
-}
-
-
-// Static member function.
-Array<int> CasmBeamformer::make_random_feed_indices()
-{
-    Array<int> feed_indices({256,2}, af_uhost);
-    
-    vector<uint> v(43*6);
-    for (uint ns = 0; ns < 43; ns++)
-	for (uint ew = 0; ew < 6; ew++)
-	    v.at(6*ns+ew) = (ew << 16) | ns;
-
-    ksgpu::randomly_permute(v);
-
-    for (uint d = 0; d < 256; d++) {
-	feed_indices.at({d,0}) = v[d] & 0xffff;  // ns
-	feed_indices.at({d,1}) = v[d] >> 16;     // ew
-    }
-
-    return feed_indices;
-}
-
-
-// Static member function.
-Array<int> CasmBeamformer::make_regular_feed_indices()
-{
-    Array<int> feed_indices({256,2}, af_uhost);
-    
-    for (uint d = 0; d < 256; d++) {
-	feed_indices.at({d,0}) = d % 43;  // ns
-	feed_indices.at({d,1}) = d / 43;  // ew
-    }
-
-    return feed_indices;
-}
-
-
-// Static member function.
-CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
-{
-    auto w = ksgpu::random_integers_with_bounded_product(3, 100);
-    int B = 32 * ksgpu::rand_int(1,100);
-    int T = w[0] * w[1];
-    int ds = w[1];
-    int F = w[2];
-
-    // FIXME currently we have a requirement that (T % 48) == 0,
-    // in addition to the requirement that (T % ds) == 0.
-    int d = std::lcm(ds, 48);
-    T = ((T+d-1) / d) * d;  // round up to nearest multiple of d
-
-    Array<float> frequencies({F}, af_uhost);
-    Array<float> beam_locations({B,2}, af_uhost);
-    float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
-    float ew_feed_spacing[5];
-
-    // Make random 'frequencies' array.
-    for (int f = 0; f < F; f++)
-	frequencies.at({f}) = rand_uniform(400.0, 500.0);
-    
-    // Make random 'beam_locations' array.
-    for (int b = 0; b < B; b++)
-	for (int j = 0; j < 2; j++)
-	    beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
-
-    // Make random 'ew_feed_spacing' array.
-    for (int i = 0; i < 3; i++)
-	ew_feed_spacing[i] = ew_feed_spacing[4-i] = rand_uniform(0.3, 0.6);
-    
-    Array<int> feed_indices = randomize_feed_indices ? make_random_feed_indices() : make_regular_feed_indices();
-
-    CasmBeamformer ret(frequencies, feed_indices, beam_locations, ds, ns_feed_spacing, ew_feed_spacing);
-    ret.nominal_Tin_for_unit_tests = T;
-    
-    return ret;
-}
 
 
 // -------------------------------------------------------------------------------------------------
@@ -2228,6 +1929,244 @@ casm_beamforming_kernel(
 }
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// class CasmBeamformer
+
+
+CasmBeamformer::CasmBeamformer(
+    Array<float> &frequencies_,     // shape (F,)
+    Array<int> &feed_indices_,      // shape (256,2)
+    Array<float> &beam_locations_,  // shape (B,2)
+    int downsampling_factor_,
+    float ns_feed_spacing_,
+    const float *ew_feed_spacing_)
+    : frequencies(frequencies_),
+      feed_indices(feed_indices_),
+      beam_locations(beam_locations_),
+      downsampling_factor(downsampling_factor_),
+      ns_feed_spacing(ns_feed_spacing_)
+{
+    for (int i = 0; i < 5; i++)
+	ew_feed_spacing[i] = ew_feed_spacing_[i];
+    
+    // Argument checking
+    xassert_eq(frequencies.ndim, 1);
+    xassert_eq(beam_locations.ndim, 2);
+    xassert_eq(beam_locations.shape[1], 2);
+    xassert_shape_eq(feed_indices, ({256,2}));
+    
+    this->F = frequencies.shape[0];
+    this->B = beam_locations.shape[0];
+
+    xassert_gt(F, 0);
+    xassert_gt(B, 0);
+    xassert_divisible(B, 32);  // currently required by GPU kernel, but not python reference code
+    xassert_gt(downsampling_factor, 0);	       
+    xassert_ge(ns_feed_spacing, 0.3);
+    xassert_lt(ns_feed_spacing, 0.6);
+    
+    for (int i = 0; i < 5; i++) {
+	xassert_ge(ew_feed_spacing[i], 0.3);
+	xassert_le(ew_feed_spacing[i], 0.6);
+	xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // flip-symmetric
+    }
+
+    float s0 = (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
+    float s1 = (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
+    float s2 = (ew_feed_spacing[2]);
+
+    ew_feed_positions[0] = -s0 - s1 - s2/2.;
+    ew_feed_positions[1] =     - s1 - s2/2.;
+    ew_feed_positions[2] =          - s2/2.;
+    ew_feed_positions[3] =            s2/2.;
+    ew_feed_positions[4] =       s1 + s2/2.;
+    ew_feed_positions[5] =  s0 + s1 + s2/2.;
+	    
+    for (int i = 0; i < 24; i++)
+	ew_beam_locations[i] = (23-2*i) / 21.;
+    
+    // The rest of this function fills 'gpu_persistent_data' and copies to the GPU.
+    gpu_persistent_data = Array<float> ({256 + 32 + 96*F + 2*B}, af_rhost | af_zero);
+    
+    // Compute 'gridding' part of 'gpu_persistent_data' (with error-checking).
+    uint *gp = (uint *) (gpu_persistent_data.data);
+    vector<int> duplicate_checker({6*43}, -1);
+    
+    for (int d = 0; d < 256; d++) {
+	int ns = feed_indices.at({d,0});  // 0 <= ns < 43
+	int ew = feed_indices.at({d,1});  // 0 <= ew < 6
+
+	if ((ns < 0) || (ns >= 43) || (ew < 0) || (ew >= 6)) {
+	    stringstream ss;
+	    ss << "CasmBeamformer constructor: got feed_indices[" << d << "]=("
+	       << ns << "," << ew << "). Expected pair (j,k) where 0 <= j < 43"
+	       << " and 0 <= k < 6";
+	    throw runtime_error(ss.str());
+	}
+
+	int g = 43*ew + ns;
+	
+	if (duplicate_checker[g] >= 0) {
+	    stringstream ss;
+	    ss << "CasmBeamformer constructor: duplicate feed_indices["
+	       << duplicate_checker[g] << "] = feed_indices[" << d << "] = ("
+	       << ns << "," << ew << ")";
+	    throw runtime_error(ss.str());
+	}
+
+	duplicate_checker[g] = d;
+	gp[d] = g;
+    }
+    
+    // Compute 'ns_phases' part of 'gpu_persistent_data'.
+    float *nsp = gpu_persistent_data.data + shmem_layout::ns_phases_base;
+    for (int i = 0; i < 32; i++)
+	nsp[i] = cosf(2 * M_PI * i / 128.0);
+
+    // Compute 'per_frequency_data' part of 'gpu_persistent_data'.    
+    for (int f = 0; f < F; f++) {
+	float freq = frequencies.at({f});
+	
+	// Beamformer has only been validated for frequencies in [400,500] MHz.
+        // This assert also guards against using the wrong units (should be MHz).
+	xassert_ge(freq, 399.0);
+	xassert_lt(freq, 501.0);
+
+	for (int ew_feed = 0; ew_feed < 3; ew_feed++) {
+	    // Points to 32-element "inner" region (see (*) above).
+	    float *pf32 = gpu_persistent_data.data + gmem_layout::per_frequency_data_base(f) + 32*ew_feed;
+	    pf32[25] = freq;
+	    
+	    for (int ew_beam = 0; ew_beam < 12; ew_beam++) {
+		float feed_pos = ew_feed_positions[ew_feed + 3];
+		float beam_loc = ew_beam_locations[ew_beam + 12];
+		float theta = (2*M_PI / speed_of_light) * freq * feed_pos * beam_loc;
+		sincosf(theta, &pf32[2*ew_beam+1], &pf32[2*ew_beam]);  // note (sin, cos) ordering
+	    }
+	}
+    }
+
+    // Compute 'beam_locations' part of gpu_persistent_data
+    float *blp = gpu_persistent_data.data + gmem_layout::beam_locs_base(F);
+    
+    for (int b = 0; b < B; b++) {
+	for (int j = 0; j < 2; j++) {
+	    // We store {ns_feed_spacing * sin(za_ns), sin(za_ew)} in GPU memory.
+	    float prefactor = j ? 1.0 : ns_feed_spacing;
+	    float beam_location = beam_locations.at({b,j});
+	    xassert_ge(beam_location, -1.0);
+	    xassert_le(beam_location, 1.0);
+	    blp[2*b+j] = prefactor * beam_location;
+	}
+    }
+
+    // All done! Copy to GPU.
+    gpu_persistent_data = gpu_persistent_data.to_gpu();
+}
+
+
+// Static member function.
+void CasmBeamformer::show_shared_memory_layout()
+{
+    using SL = shmem_layout;
+
+    cout << "[" << SL::gridding_base << "]      uint gridding[256];\n"
+	 << "[" << SL::ns_phases_base << "]    float ns_phases[32];\n"
+	 << "[" << SL::per_frequency_data_base << "]    float per_frequency_data[3][32];\n"
+	 << "[" << SL::E_base << "]    uint E[24][" << SL::E_jstride << "];\n"
+	 << "[" << SL::I_base << "]   float I[24][" << SL::I_ew_stride << "];\n"
+	 << "[" << SL::G_base << "]   float G[24][" << SL::G_ew_stride << "];\n"
+	 << "[" << SL::beam_locs_base << "]  float beam_locs[2][" << SL::max_beams << "];\n"
+	 << "  Total size = " << SL::nbytes << " bytes = " << (SL::nbytes/1024.0) << " KB"
+	 << endl;
+}
+
+
+// Static member function.
+int CasmBeamformer::get_max_beams()
+{
+    // Maximum number of beams is currently determined by shared memory constraints.
+    return shmem_layout::max_beams;
+}
+
+
+// Static member function.
+Array<int> CasmBeamformer::make_random_feed_indices()
+{
+    Array<int> feed_indices({256,2}, af_uhost);
+    
+    vector<uint> v(43*6);
+    for (uint ns = 0; ns < 43; ns++)
+	for (uint ew = 0; ew < 6; ew++)
+	    v.at(6*ns+ew) = (ew << 16) | ns;
+
+    ksgpu::randomly_permute(v);
+
+    for (uint d = 0; d < 256; d++) {
+	feed_indices.at({d,0}) = v[d] & 0xffff;  // ns
+	feed_indices.at({d,1}) = v[d] >> 16;     // ew
+    }
+
+    return feed_indices;
+}
+
+
+// Static member function.
+Array<int> CasmBeamformer::make_regular_feed_indices()
+{
+    Array<int> feed_indices({256,2}, af_uhost);
+    
+    for (uint d = 0; d < 256; d++) {
+	feed_indices.at({d,0}) = d % 43;  // ns
+	feed_indices.at({d,1}) = d / 43;  // ew
+    }
+
+    return feed_indices;
+}
+
+
+// Static member function.
+CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
+{
+    auto w = ksgpu::random_integers_with_bounded_product(3, 100);
+    int B = 32 * ksgpu::rand_int(1,100);
+    int T = w[0] * w[1];
+    int ds = w[1];
+    int F = w[2];
+
+    // FIXME currently we have a requirement that (T % 48) == 0,
+    // in addition to the requirement that (T % ds) == 0.
+    int d = std::lcm(ds, 48);
+    T = ((T+d-1) / d) * d;  // round up to nearest multiple of d
+
+    Array<float> frequencies({F}, af_uhost);
+    Array<float> beam_locations({B,2}, af_uhost);
+    float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
+    float ew_feed_spacing[5];
+
+    // Make random 'frequencies' array.
+    for (int f = 0; f < F; f++)
+	frequencies.at({f}) = rand_uniform(400.0, 500.0);
+    
+    // Make random 'beam_locations' array.
+    for (int b = 0; b < B; b++)
+	for (int j = 0; j < 2; j++)
+	    beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
+
+    // Make random 'ew_feed_spacing' array.
+    for (int i = 0; i < 3; i++)
+	ew_feed_spacing[i] = ew_feed_spacing[4-i] = rand_uniform(0.3, 0.6);
+    
+    Array<int> feed_indices = randomize_feed_indices ? make_random_feed_indices() : make_regular_feed_indices();
+
+    CasmBeamformer ret(frequencies, feed_indices, beam_locations, ds, ns_feed_spacing, ew_feed_spacing);
+    ret.nominal_Tin_for_unit_tests = T;
+    
+    return ret;
+}
+
+
 void CasmBeamformer::launch_beamformer(
     const Array<uint8_t> &e_in,
     const Array<float> &feed_weights,
@@ -2266,7 +2205,8 @@ void CasmBeamformer::launch_beamformer(
 // -------------------------------------------------------------------------------------------------
 
 
-void test_casm()
+// Called by 'python -m pirate_frb test [--casm]'
+void test_casm_microkernels()
 {
     // CasmBeamformer::show_shared_memory_layout();
     CasmBeamformer bf = CasmBeamformer::make_random();

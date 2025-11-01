@@ -25,7 +25,7 @@ def parse_test(subparsers):
     parser.add_argument('--gpfk', action='store_true', help='Runs test_gpu_peak_finding_kernel()')
     parser.add_argument('--grck', action='store_true', help='Runs test_gpu_ringbuf_copy_kernel()')
     parser.add_argument('--gtgk', action='store_true', help='Runs test_gpu_tree_gridding_kernel()')
-    parser.add_argument('--casm', action='store_true', help='Runs test_casm()')
+    parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--dd', action='store_true', help='Runs test_dedisperser()')
 
     
@@ -66,7 +66,7 @@ def test(args):
             if i == 0:
                 # This test is slower than the others, but I don't think we need it more than once.
                 CasmReferenceBeamformer.test_interpolative_beamforming()
-            pirate_pybind11.test_casm()
+            pirate_pybind11.test_casm_microkernels()
         
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()
