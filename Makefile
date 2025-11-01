@@ -72,6 +72,7 @@ PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 # These get compiled into lib/libpirate.so.
 LIB_SRCFILES = \
   src_lib/BandwidthTracker.cu \
+  src_lib/CasmBeamformer.cu \
   src_lib/ChimeDedisperser.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
@@ -95,7 +96,6 @@ LIB_SRCFILES = \
   src_lib/file_utils.cu \
   src_lib/network_utils.cu \
   src_lib/system_utils.cu \
-  src_lib/test_casm.cu \
   src_lib/test_dedisperser.cu \
   src_lib/test_dedispersion_basics.cu \
   src_lib/test_gpu_dedispersion_kernels.cu \
@@ -160,6 +160,7 @@ BIN_SRCFILES = \
 # Must list all header files here.
 # (Otherwise they won't show up in 'pip install' or pypi.)
 HFILES = \
+  include/pirate/CasmBeamformer.hpp \
   include/pirate/Dedisperser.hpp \
   include/pirate/DedispersionBuffer.hpp \
   include/pirate/DedispersionConfig.hpp \
@@ -174,7 +175,6 @@ HFILES = \
   include/pirate/RingbufCopyKernel.hpp \
   include/pirate/TreeGriddingKernel.hpp \
   include/pirate/YamlFile.hpp \
-  include/pirate/casm.hpp \
   include/pirate/constants.hpp \
   include/pirate/file_utils.hpp \
   include/pirate/inlines.hpp \

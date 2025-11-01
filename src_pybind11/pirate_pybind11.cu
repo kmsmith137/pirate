@@ -10,12 +10,12 @@
 
 #include <ksgpu/pybind11.hpp>
 
+#include "../include/pirate/CasmBeamformer.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
 #include "../include/pirate/tests.hpp"
 #include "../include/pirate/timing.hpp"
 #include "../include/pirate/utils.hpp"  // show_kernels()
-#include "../include/pirate/casm.hpp"   // test_casm_microkernels()
 
 using namespace std;
 using namespace ksgpu;

@@ -1,4 +1,4 @@
-#include "../include/pirate/casm.hpp"
+#include "../include/pirate/CasmBeamformer.hpp"
 
 #include <cassert>
 #include <ksgpu/cuda_utils.hpp>

@@ -1,5 +1,5 @@
-#ifndef _PIRATE_CASM_HPP
-#define _PIRATE_CASM_HPP
+#ifndef _PIRATE_CASM_BEAMFORMER_HPP
+#define _PIRATE_CASM_BEAMFORMER_HPP
 
 #include <ksgpu/Array.hpp>
 
@@ -80,4 +80,4 @@ struct CasmBeamformer
 
 }  // namespace pirate
 
-#endif  // _PIRATE_CASM_HPP
+#endif  // _PIRATE_CASM_BEAMFORMER_HPP
