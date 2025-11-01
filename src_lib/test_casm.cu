@@ -1888,6 +1888,9 @@ struct interpolation_microkernel
 	static constexpr float one_sixth = 1.0f / 6.0f;
 	static constexpr float one_half = 1.0f / 2.0f;
 
+	if constexpr (Debug)
+	    assert((k >= 0) && (k < 4));
+	
 	// Factor cubic interpolation weight as w_k = w0 * (x+a) * (x+b) * (x+c).
 	// Could save a few clock cycles here by writing cryptic code, but I didn't
 	// bother since interpolation is a small fraction of the running time.
@@ -1910,6 +1913,8 @@ struct interpolation_microkernel
 	constexpr int NSB = shmem_layout::beam_locs_base;
 	constexpr int EWB = NSB + shmem_layout::max_beams;
 
+	int l = threadIdx.x;  // lane id
+	
 	for (int b = 32*threadIdx.y + threadIdx.x; b < nbeams; b += 24*32) {
 	    // Read grid locations from shared memory.
 	    float xns = shmem_f[NSB + b];  // 0 <= xns <= 128
@@ -1920,21 +1925,34 @@ struct interpolation_microkernel
 	    int ins = split_integer_and_fractional<Debug> (xns, 0, 127);
 	    int iew = split_integer_and_fractional<Debug> (xew, 1, 21);
 
+	    // "Reference" index for bank conflicts, see below.
+	    // Constructed so that sref = (iew-1)*IS + (ins-1) mod 32.
+	    int sref = (iew << 2) + ins + 27;
+
 	    float ret = 0.0f;
 
 	    // Cubic interpolation.
-	    // FIXME shared memory bank conflict disaster.
-	    for (int kns = 0; kns < 4; kns++) {
+	    for (int jns = 0; jns < 4; jns++) {
+		// Find kns such that (sref+kns) == (jns+l) mod 4
+		int kns = (jns + l - sref) & 3;
 		float wns = compute_wk(kns, xns);
 		int sns = (ins + kns - 1) & 127;
-		
-		for (int kew = 0; kew < 4; kew++) {
+		int sref2 = sref + kns;  // = (iew-1)*IS + (ins+kns-1) mod 32
+
+		for (int jew = 0; jew < 4; jew++) {
+		    // Find kew such that (sref2 + 4*kew) == (4*jew + jns + l) mod 16
+		    int kew = ((4*jew + jns + l - sref2) >> 2) & 3;
 		    float wew = compute_wk(kew, xew);
 		    int sew = (iew + kew - 1);
+		    int s = sew*IS + sns;
+
+		    if constexpr (Debug) {
+			assert((s & 0xf) == ((4*jew+jns+l) & 0xf));
+			check_bank_conflict_free<Debug> (s, 2);  // max_conflicts=2
+		    }
 
 		    // Read gridded I-value from shared memory.
-		    float x = shmem_f[IB + sew*IS + sns];
-		    ret += wns * wew * x;
+		    ret += wns * wew * shmem_f[IB + s];
 		}
 	    }
 
