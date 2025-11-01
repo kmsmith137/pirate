@@ -608,11 +608,10 @@ struct casm_shuffle_state
 	int i = (32 * threadIdx.y) + threadIdx.x;
 
 	while (i < nbeams) {
-	    // xns = 128 * (2*pi*freq/c) * yns, where yns = ns_feed_spacing * sin(za_ns)
+	    // xns = 128 * (freq/c) * ns_feed_spacing * sin(za_ns)
 	    // FIXME could optimize out this call to fmodf(), I think
-	    constexpr float a = 128.0f * 2.0f * 3.141592653589793f / CasmBeamformer::speed_of_light;
-	    float yns = shmem_f[NSB + i];
-	    float xns = fmodf(a * freq * yns, 128.0f);
+	    constexpr float a = 128.0f / CasmBeamformer::speed_of_light;
+	    float xns = fmodf(a * freq * shmem_f[NSB + i], 128.0f);
 	    xns = (xns > 0.0f) ? xns : (xns+128.0f);
 	    shmem_f[NSB + i] = xns;
 	    i += 24*32;
@@ -2023,7 +2022,6 @@ static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, con
 
     for (int f = 0; f < F; f++) {
 	for (int b = 0; b < B; b++) {
-	    constexpr float pi = M_PI;
 	    constexpr float c = CasmBeamformer::speed_of_light;
 	    
 	    float freq = bf.frequencies.at({f});
@@ -2032,8 +2030,8 @@ static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, con
 	    float dns = bf.ns_feed_spacing;
 	    
 	    // Grid coordinates (xns, xew).
-	    float xns = 128 * (2*pi*freq/c) * dns * sza_ns;  // 128-periodic
-	    float xew = 11.5f + (10.5f * sza_ew);            // 1 <= xew <= 22
+	    float xns = 128 * (freq/c) * dns * sza_ns;  // 128-periodic
+	    float xew = 11.5f + (10.5f * sza_ew);       // 1 <= xew <= 22
 
 	    // Normalize the periodic coordinate 'xns' to 0 <= xns <= 128.
 	    xns = fmodf(xns, 128.0f);
@@ -2085,7 +2083,10 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
 	(in.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, Tout, B);
 
     CUDA_PEEK("casm_interpolation_test_kernel launch");
-    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","b"}, 1.0e-3);  // FIXME why is such a high threshold needed?
+
+    // Slightly high threshold (10^{-4}) needed here, because 'xns' is reduced mod 128,
+    // but interpolation is sensitive to order-one changes.
+    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","b"}, 1.0e-4);
     
     cout << "test_casm_interpolation(Tout=" << Tout << ",F=" << F << ",B=" << B << "): pass" << endl;
 }
