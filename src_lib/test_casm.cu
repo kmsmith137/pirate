@@ -236,12 +236,16 @@ CasmBeamformer::CasmBeamformer(
 	xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // flip-symmetric
     }
 
-    ew_feed_positions[3] = ew_feed_spacing[2] / 2.;
-    ew_feed_positions[4] = ew_feed_positions[3] + (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
-    ew_feed_positions[5] = ew_feed_positions[4] + (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
+    float s0 = (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
+    float s1 = (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
+    float s2 = (ew_feed_spacing[2]);
 
-    for (int i = 0; i < 3; i++)
-	ew_feed_positions[i] = -ew_feed_positions[5-i];
+    ew_feed_positions[0] = -s0 - s1 - s2/2.;
+    ew_feed_positions[1] =     - s1 - s2/2.;
+    ew_feed_positions[2] =          - s2/2.;
+    ew_feed_positions[3] =            s2/2.;
+    ew_feed_positions[4] =       s1 + s2/2.;
+    ew_feed_positions[5] =  s0 + s1 + s2/2.;
 	    
     for (int i = 0; i < 24; i++)
 	ew_beam_locations[i] = (23-2*i) / 21.;
