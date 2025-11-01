@@ -6,6 +6,7 @@ import ksgpu
 from . import pirate_pybind11
 from . import cuda_generator
 
+from .CasmReferenceBeamformer import CasmReferenceBeamformer
 from .FakeCorrelator import FakeCorrelator
 from .FakeServer import FakeServer
 from .Hardware import Hardware

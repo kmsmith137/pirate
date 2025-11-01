@@ -9,6 +9,7 @@ from . import pirate_pybind11
 from .Hardware import Hardware
 from .FakeServer import FakeServer
 from .FakeCorrelator import FakeCorrelator
+from .CasmReferenceBeamformer import CasmReferenceBeamformer
 
 
 #########################################   test command  ##########################################
@@ -62,6 +63,9 @@ def test(args):
             pirate_pybind11.test_gpu_tree_gridding_kernel()
         
         if run_all_tests or args.casm:
+            if i == 0:
+                # This test is slower than the others, but I don't think we need it more than once.
+                CasmReferenceBeamformer.test_interpolative_beamforming()
             pirate_pybind11.test_casm()
         
         if run_all_tests or args.dd:
