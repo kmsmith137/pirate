@@ -168,6 +168,16 @@ struct CasmBeamformer
 	float ns_feed_spacing = 0.50,  // meters
 	const float *ew_feed_spacing = default_ew_feed_spacings
     );
+
+    // Beamforming kernel is launched asychronously, caller is responsible for synchronization.
+    void launch_beamformer(
+        const Array<uint8_t> &e_in,         // shape (T,F,2,256), axes (time,freq,pol,dish)
+	const Array<float> &feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
+	Array<float> &i_out,                // shape (Tout,F,B)
+	cudaStream_t stream = nullptr
+    ) const;
+
+    // ---------------------------------------------------------------------------------------------
     
     int F = 0;  // number of frequency channels (on one GPU)
     int B = 0;  // number of output beams
@@ -696,6 +706,9 @@ struct casm_shuffle_state
     __device__ void write_ungridded_e(int phase)
     {
 	extern __shared__ uint shmem_u[];
+
+	if constexpr (Debug)
+	    assert((phase >= 0) && (phase <= 1));
 	
 	// At top, 'e4' has register assignment:
 	//
@@ -883,6 +896,9 @@ struct casm_shuffle_state
     __device__ void load_gridded_e(int phase)
     {
 	extern __shared__ uint shmem_u[];
+
+	if constexpr (Debug)
+	    assert((phase >= 0) && (phase < 6));
 	
 	uint j = (threadIdx.y & 3);
 	uint ew = (threadIdx.y >> 2);
@@ -897,6 +913,9 @@ struct casm_shuffle_state
     {
 	// i is the length-4 index (t2 t1).
 	// FIXME save a few cycles by offset encoding earlier?
+	
+	if constexpr (Debug)
+	    assert((i >= 0) && (i < 4));
 
 	// Unweighted E-array values, before multiplying by feed weights.
 	float u0_re = unpack_int4(e0, 8*i);
@@ -1617,6 +1636,9 @@ struct fft2_state
 	// feed-stride in shared memory G[] array.
 	constexpr int FS = shmem_layout::G_ew_stride;
 	
+	if constexpr (Debug)
+	    assert(tpol < 4);  // note tpol is unsigned
+	
 	// Beamformed electric fields are accumulated here.
 	float Fre[2][2];   // (bouter, b1)
 	float Fim[2][2];   // (bouter, b1)
@@ -2111,6 +2133,133 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","b"}, 1.0e-4);
     
     cout << "test_casm_interpolation(Tout=" << Tout << ",F=" << F << ",B=" << B << "): pass" << endl;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// FIXME too many syncthreads!
+
+
+__global__ void __launch_bounds__(24*32, 1)
+casm_beamforming_kernel(
+    const uint8_t *e_in,                // (Tin,F,2,D) = (time,freq,pol,dish)
+    const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
+    const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
+    float *i_out,                       // (Tout,F,B)
+    int Tout,                           // Number of output times
+    int Tds,                            // Downsampling factor Tin/Tout
+    int B)                              // Number of beams
+{
+    constexpr bool Debug = false;
+    
+    casm_shuffle_state<Debug> shuffle(e_in, feed_weights, gpu_persistent_data, B);
+
+    // Must call __syncthreads() after constructor, and before calling load_ungridded_e().
+    __syncthreads();
+
+    fft1_state<Debug> fft1;
+    fft2_state<Debug> fft2;
+    interpolation_microkernel<Debug> interpolator(i_out, B);
+
+    int Tin = Tout * Tds;
+    int ds_counter = Tds;
+
+    // In each iteration of the outer loop:
+    //   - read input times (touter+48):(touter+72)
+    //   - process input times (touter):(touter+24)
+    
+    for (int touter = -48; touter < Tin; touter += 24) {
+	if (touter + 48 < Tin) {
+	    __syncthreads();
+	    shuffle.load_ungridded_e();
+	    __syncthreads();
+	}
+
+	// In each iteration of the middle loop, we process times (touter+8*m):(touter+8*m+8).
+	// The 'mstart' assignment skips the middle loop if (touter < 0).
+	int mstart = (touter >= 0) ? 0 : 3;
+	
+	for (int m = mstart; m < 3; m++) {
+	    // The "phase" argument to load_gridded_e() is a little awkward.
+	    int flag = (touter & 0x8) >> 3;      // ={0,1} if touter={24,48} mod 48.
+	    __syncthreads();
+	    shuffle.load_gridded_e(3*flag + m);  // phase = 3*flag + m
+	    __syncthreads();
+
+	    for (int tpol = 0; tpol < 16; tpol++) {
+		if ((tpol & 3) == 0) {
+		    float e0_re, e0_im, e1_re, e1_im;
+		    __syncthreads();
+		    shuffle.unpack_e(tpol >> 2, e0_re, e0_im, e1_re, e1_im);
+		    __syncthreads();
+		    fft1.apply(e0_re, e0_im, e1_re, e1_im);
+		    __syncthreads();
+		}
+
+		__syncthreads();
+		fft2.apply(tpol & 3);
+		__syncthreads();
+		    
+		if ((tpol & 1) && !(--ds_counter)) {
+		    __syncthreads();
+		    fft2.write_and_reset();
+		    __syncthreads();
+		    interpolator.apply();
+		    ds_counter = Tds;
+		    __syncthreads();  // xxx sometimes needed (I think Tds=1 is a necessary condition)
+		}
+	    }
+	}
+	
+	if (touter + 48 < Tin) {
+	    __syncthreads();
+	    int flag = (touter & 0x8) >> 3;   // ={0,1} if touter={24,48} mod 48.
+	    shuffle.write_ungridded_e(flag);
+	    __syncthreads();
+	    
+	    if ((touter & 0x8) == 0) {
+		__syncthreads();
+		shuffle.grid_shared_e();
+		__syncthreads();
+	    }
+	}
+    }
+}
+
+
+void CasmBeamformer::launch_beamformer(
+    const Array<uint8_t> &e_in,
+    const Array<float> &feed_weights,
+    Array<float> &i_out,
+    cudaStream_t stream) const
+{
+    static shmem_99kb s(casm_beamforming_kernel);
+    s.set();
+	
+    xassert(e_in.ndim >= 1);    
+    xassert_shape_eq(e_in, ({ e_in.shape[0], F, 2, 256 }));
+    xassert(e_in.is_fully_contiguous());
+    xassert(e_in.on_gpu());
+
+    xassert_shape_eq(feed_weights, ({ F,2,256,2 }));
+    xassert(feed_weights.is_fully_contiguous());
+    xassert(feed_weights.on_gpu());
+
+    xassert(i_out.ndim >= 1);
+    xassert_shape_eq(i_out, ({ i_out.shape[0], F, B }));
+    xassert(i_out.is_fully_contiguous());
+    xassert(i_out.on_gpu());
+
+    int Tin = e_in.shape[0];
+    int Tout = i_out.shape[0];
+    xassert(Tin == Tout * downsampling_factor);
+    xassert_divisible(Tin, 48);  // FIXME artifically required for now
+
+    casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
+	(e_in.data, feed_weights.data, gpu_persistent_data.data, i_out.data, Tout, downsampling_factor, B);
+
+    CUDA_PEEK("casm_beamforming_kernel launch");
 }
 
 
