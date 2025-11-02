@@ -66,7 +66,9 @@ def test(args):
             if i == 0:
                 # This test is slower than the others, but I don't think we need it more than once.
                 CasmReferenceBeamformer.test_interpolative_beamforming()
+            
             pirate_pybind11.test_casm_microkernels()
+            CasmReferenceBeamformer.test_cuda_implementation()
         
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()

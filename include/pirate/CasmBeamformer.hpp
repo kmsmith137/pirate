@@ -26,17 +26,18 @@ struct CasmBeamformer
 {
     // speed of light in weird units meters-MHz
     static constexpr float speed_of_light = 299.79;
-
+    static constexpr float default_ns_feed_spacing = 0.50;  // meters
+    
     inline static const float default_ew_feed_spacings[5]
 	= { 0.38f, 0.445f, 0.38f, 0.445f, 0.38f };  // meters
     
     CasmBeamformer(
-        ksgpu::Array<float> &frequencies,     // shape (F,)
-	ksgpu::Array<int> &feed_indices,      // shape (256,2)
-	ksgpu::Array<float> &beam_locations,  // shape (B,2)
+	const ksgpu::Array<float> &frequencies,     // shape (F,)
+	const ksgpu::Array<int> &feed_indices,      // shape (256,2)
+	const ksgpu::Array<float> &beam_locations,  // shape (B,2)
 	int downsampling_factor,
-	float ns_feed_spacing = 0.50,  // meters
-	const float *ew_feed_spacing = default_ew_feed_spacings
+	float ns_feed_spacing = default_ns_feed_spacing,
+	const ksgpu::Array<float> &ew_feed_spacings = ksgpu::Array<float>()
     );
 
     // Beamforming kernel is launched asychronously, caller is responsible for synchronization.

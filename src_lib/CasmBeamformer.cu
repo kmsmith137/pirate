@@ -1935,21 +1935,18 @@ casm_beamforming_kernel(
 
 
 CasmBeamformer::CasmBeamformer(
-    Array<float> &frequencies_,     // shape (F,)
-    Array<int> &feed_indices_,      // shape (256,2)
-    Array<float> &beam_locations_,  // shape (B,2)
+    const Array<float> &frequencies_,     // shape (F,)
+    const Array<int> &feed_indices_,      // shape (256,2)
+    const Array<float> &beam_locations_,  // shape (B,2)
     int downsampling_factor_,
     float ns_feed_spacing_,
-    const float *ew_feed_spacing_)
+    const Array<float> &ew_feed_spacing_)
     : frequencies(frequencies_),
       feed_indices(feed_indices_),
       beam_locations(beam_locations_),
       downsampling_factor(downsampling_factor_),
       ns_feed_spacing(ns_feed_spacing_)
 {
-    for (int i = 0; i < 5; i++)
-	ew_feed_spacing[i] = ew_feed_spacing_[i];
-    
     // Argument checking
     xassert_eq(frequencies.ndim, 1);
     xassert_eq(beam_locations.ndim, 2);
@@ -1965,13 +1962,17 @@ CasmBeamformer::CasmBeamformer(
     xassert_gt(downsampling_factor, 0);	       
     xassert_ge(ns_feed_spacing, 0.3);
     xassert_lt(ns_feed_spacing, 0.6);
+    xassert((ew_feed_spacing_.size == 0) || (ew_feed_spacing_.shape_equals({5})));
     
+    for (int i = 0; i < 5; i++)
+	ew_feed_spacing[i] = (ew_feed_spacing_.size > 0) ? ew_feed_spacing_.at({i}) : default_ew_feed_spacings[i];
+
     for (int i = 0; i < 5; i++) {
 	xassert_ge(ew_feed_spacing[i], 0.3);
 	xassert_le(ew_feed_spacing[i], 0.6);
 	xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // flip-symmetric
     }
-
+    
     float s0 = (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
     float s1 = (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
     float s2 = (ew_feed_spacing[2]);
@@ -2142,8 +2143,8 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 
     Array<float> frequencies({F}, af_uhost);
     Array<float> beam_locations({B,2}, af_uhost);
+    Array<float> ew_feed_spacing({5}, af_uhost);
     float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
-    float ew_feed_spacing[5];
 
     // Make random 'frequencies' array.
     for (int f = 0; f < F; f++)
@@ -2156,7 +2157,7 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 
     // Make random 'ew_feed_spacing' array.
     for (int i = 0; i < 3; i++)
-	ew_feed_spacing[i] = ew_feed_spacing[4-i] = rand_uniform(0.3, 0.6);
+	ew_feed_spacing.at({i}) = ew_feed_spacing.at({4-i}) = rand_uniform(0.3, 0.6);
     
     Array<int> feed_indices = randomize_feed_indices ? make_random_feed_indices() : make_regular_feed_indices();
 

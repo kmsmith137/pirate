@@ -1,4 +1,7 @@
+import math  # lcm()
 import numpy as np
+
+from . import pirate_pybind11
 
 
 class CasmReferenceBeamformer:
@@ -387,3 +390,60 @@ class CasmReferenceBeamformer:
             raise RuntimeError(f'test_casm_interpolative_beamforming: fail, min correlation = {np.min(r)}')
             
         print(f'test_casm_interpolative_beamforming: pass, min correlation = {np.min(r)}')
+
+
+    @classmethod
+    def test_cuda_implementation(cls):
+        # FIXME in the future, cupy will be a toplevel dependency
+        import cupy as cp
+        
+        bf_py = cls.make_random(F=4, B=32, D=8)
+        F, B, D = bf_py.F, bf_py.B, bf_py.downsampling_factor
+
+        # FIXME(?) pybind11->cuda interface currently requires annoying dtype conversions.
+        # (Currently the python interface is only used for testing, so it's not a serious issue.)
+        
+        bf_cuda = pirate_pybind11.CasmBeamformer(
+            frequencies = np.asarray(bf_py.frequencies, dtype=np.float32),
+            feed_indices = np.asarray(bf_py.feed_indices, dtype=np.int32),
+            beam_locations = np.asarray(bf_py.beam_locations, dtype=np.float32),
+            downsampling_factor = bf_py.downsampling_factor,
+            ns_feed_spacing = bf_py.ns_feed_spacing,
+            ew_feed_spacings = np.asarray(bf_py.ew_feed_spacings, dtype=np.float32)
+        )
+
+        # FIXME revisit Tin
+        Tin = math.lcm(D,48)
+        Tout = Tin // D
+
+        # Use uint8, since numpy doesn't have int4+4.
+        e44 = np.random.randint(0, 256, size=(Tin,F,2,256), dtype=np.uint8)
+
+        # Convert to np.complex.
+        e_re = ((e44 ^ 0x88) & 0xf) - 8.0
+        e_im = (((e44 ^ 0x88) >> 4) & 0xf) - 8.0
+        e = e_re + e_im*1j
+
+        feed_weights = cls.rand_complex((F,2,256))
+
+        # Convert complex64+64 -> float32[2]
+        fw32 = np.zeros((F,2,256,2), dtype=np.float32)
+        fw32[:,:,:,0] = feed_weights.real
+        fw32[:,:,:,1] = feed_weights.imag
+
+        # Call reference beamformer.
+        i_py = bf_py.beamform(e, feed_weights)
+
+        # Call cuda beamformer
+        e44 = cp.asarray(e44)
+        fw32 = cp.asarray(fw32)
+        i_cuda = cp.zeros((Tout,F,B), dtype=cp.float32)
+        bf_cuda.launch_beamformer(e44, fw32, i_cuda)
+
+        # Compare
+        i_cuda = cp.asnumpy(i_cuda)
+        rms = np.mean(np.abs(i_py))
+        eps = np.max(np.abs(i_py - i_cuda)) / rms
+        print(f'XXX {eps=}')
+        
+    

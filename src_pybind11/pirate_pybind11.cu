@@ -35,7 +35,44 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	PyErr_SetString(PyExc_ImportError, "pirate: numpy.core.multiarray failed to import");
 	return;
     }
+    
+    py::class_<CasmBeamformer> (m, "CasmBeamformer")
+	
+	// FIXME the constructor syntax I wanted was:
+	//
+	//    CasmBeamformer(
+        //      const Array<float> &frequencies,     // shape (F,)
+        //      const Array<int> &feed_indices,      // shape (256,2)
+        //      const Array<float> &beam_locations,  // shape (B,2)
+        //      int downsampling_factor,
+        //      float ns_feed_spacing = default_ns_feed_spacing,
+        //      const Array<float> &ew_feed_spacings = Array<float>()
+	//   )
+	//
+	// but I got an import-time error when I tried to specify a default
+	// argument for 'ew_feed_spacings'. For this reason, I ended up wrapping
+	// two constructors (with and without the 'ew_feed_spacings' arg).
+	
+	.def(py::init<const Array<float> &, const Array<int> &, const Array<float> &, int, float>(),
+	     py::arg("frequencies"), py::arg("feed_indices"),
+	     py::arg("beam_locations"), py::arg("downsampling_factor"),
+	     py::arg("ns_feed_spacing") = CasmBeamformer::default_ns_feed_spacing)
+	
+	.def(py::init<const Array<float> &, const Array<int> &, const Array<float> &, int, float, const Array<float> &>(),
+	     py::arg("frequencies"), py::arg("feed_indices"),
+	     py::arg("beam_locations"), py::arg("downsampling_factor"),
+	     py::arg("ns_feed_spacing"),
+	     py::arg("ew_feed_spacings"))
 
+	// FIXME figure out how to python-wrap 'stream' argument.
+	// (For now, the python interface always uses the default stream!
+	// Currently, we only use the python interface for testing, so this is okay.)
+	
+	.def("launch_beamformer",
+	     [](CasmBeamformer &self, const Array<uint8_t> &e_in, const Array<float> &feed_weights, Array<float> &i_out) {
+		 self.launch_beamformer(e_in, feed_weights, i_out, nullptr);    // stream=nullptr
+	     }, py::arg("e_in"), py::arg("feed_weights"), py::arg("i_out"))
+    ;
     
     py::class_<FakeCorrelator>(m, "FakeCorrelator")
 	.def(py::init<long, bool, bool, bool>(),
