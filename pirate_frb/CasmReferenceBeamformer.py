@@ -1,3 +1,5 @@
+import sys
+import time
 import math  # lcm()
 import numpy as np
 
@@ -353,14 +355,30 @@ class CasmReferenceBeamformer:
     
 
     @classmethod
-    def make_random(cls, F=4, B=5, D=8):
-        frequencies = np.random.uniform(400., 500., size=F)
-        beam_locations = np.random.uniform(-1., 1., size=(B,2))
+    def make_random_feed_indices(cls):
+        """Returns shape (256,2) array, representing 256 randomly ordered locations in a (43,6) grid."""
 
-        # Randomly ordered 256 locations in a (43,6) grid.
         feed_indices = [ (i,j) for i in range(43) for j in range(6) ]
         feed_indices = np.random.permutation(feed_indices)
-        feed_indices = feed_indices[:256]
+        return feed_indices[:256]
+
+
+    @classmethod
+    def make_regular_feed_indices(cls):
+        feed_indices = np.zeros((256,2), dtype=int)
+        
+        for d in range(256):
+            feed_indices[d,0] = (d % 43)
+            feed_indices[d,1] = (d // 43)
+
+        return feed_indices
+        
+        
+    @classmethod
+    def make_random(cls, F=4, B=5, D=8):
+        frequencies = np.random.uniform(400., 500., size=F)
+        feed_indices = cls.make_random_feed_indices()
+        beam_locations = np.random.uniform(-1., 1., size=(B,2))
 
         return cls(frequencies, feed_indices, beam_locations, downsampling_factor=D)
 
@@ -396,10 +414,10 @@ class CasmReferenceBeamformer:
     def test_cuda_implementation(cls):
         # FIXME in the future, cupy will be a toplevel dependency
         import cupy as cp
-        
-        bf_py = cls.make_random(F=4, B=32, D=8)
-        F, B, D = bf_py.F, bf_py.B, bf_py.downsampling_factor
 
+        bf_py = cls.make_random(F=4, B=1920, D=3)
+        F, B, D = bf_py.F, bf_py.B, bf_py.downsampling_factor
+        
         # FIXME(?) pybind11->cuda interface currently requires annoying dtype conversions.
         # (Currently the python interface is only used for testing, so it's not a serious issue.)
         
@@ -414,6 +432,7 @@ class CasmReferenceBeamformer:
 
         # FIXME revisit Tin
         Tin = math.lcm(D,48)
+        Tin *= 5
         Tout = Tin // D
 
         # Use uint8, since numpy doesn't have int4+4.
@@ -441,9 +460,7 @@ class CasmReferenceBeamformer:
         bf_cuda.launch_beamformer(e44, fw32, i_cuda)
 
         # Compare
-        i_cuda = cp.asnumpy(i_cuda)
+        i_cuda = cp.asnumpy(i_cuda) / (2*D)    # XXX normalized by hand!!
         rms = np.mean(np.abs(i_py))
         eps = np.max(np.abs(i_py - i_cuda)) / rms
-        print(f'XXX {eps=}')
-        
-    
+        print(f'XXX {eps=} {i_py[0,0,0]=} {i_cuda[0,0,0]=}')

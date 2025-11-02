@@ -1651,7 +1651,7 @@ struct interpolation_microkernel
 	    // (The values of 'xns', 'xew' are updated in-place to their fractional parts.)
 	    int ins = split_integer_and_fractional<Debug> (xns, 0, 127);
 	    int iew = split_integer_and_fractional<Debug> (xew, 1, 21);
-
+		
 	    // "Reference" index for bank conflicts, see below.
 	    // Constructed so that sref = (iew-1)*IS + (ins-1) mod 32.
 	    int sref = (iew << 2) + ins + 27;
@@ -1852,7 +1852,7 @@ casm_beamforming_kernel(
     int Tds,                            // Downsampling factor Tin/Tout
     int B)                              // Number of beams
 {
-    constexpr bool Debug = false;
+    constexpr bool Debug = true; // XXX
     
     casm_shuffle_state<Debug> shuffle(e_in, feed_weights, gpu_persistent_data, B);
 
@@ -1919,7 +1919,7 @@ casm_beamforming_kernel(
 	    shuffle.write_ungridded_e(flag);
 	    __syncthreads();
 	    
-	    if ((touter & 0x8) == 0) {
+	    if (flag) {
 		__syncthreads();
 		shuffle.grid_shared_e();
 		__syncthreads();
@@ -1985,7 +1985,7 @@ CasmBeamformer::CasmBeamformer(
     ew_feed_positions[5] =  s0 + s1 + s2/2.;
 	    
     for (int i = 0; i < 24; i++)
-	ew_beam_locations[i] = (23-2*i) / 21.;
+	ew_beam_locations[i] = (2*i-23) / 21.;
     
     // The rest of this function fills 'gpu_persistent_data' and copies to the GPU.
     gpu_persistent_data = Array<float> ({256 + 32 + 96*F + 2*B}, af_rhost | af_zero);
