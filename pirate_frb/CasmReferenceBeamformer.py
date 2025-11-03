@@ -451,10 +451,10 @@ class CasmReferenceBeamformer:
         import cupy as cp
 
         Bmax = pirate_pybind11.CasmBeamformer.get_max_beams()
-        B = 32 * int(np.exp(np.random.uniform(0.01, np.log(Bmax/32)+0.5)))
+        B = 32 * int(np.exp(np.random.uniform(0.01, np.log(Bmax/32))) + 0.5)
 
         Tmax = 100*(Bmax/B)
-        Tin = 32 * np.random.randint(1, Tmax//32+1)
+        Tin = 48 * np.random.randint(1, Tmax//48+1)
         Tout, D = cls.randomly_split(Tin)
 
         Fmax = 2*Tmax/Tin

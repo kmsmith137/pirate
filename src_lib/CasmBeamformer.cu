@@ -3,6 +3,7 @@
 #include <cassert>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
+#include <ksgpu/time_utils.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -1959,6 +1960,7 @@ CasmBeamformer::CasmBeamformer(
     xassert_gt(F, 0);
     xassert_gt(B, 0);
     xassert_divisible(B, 32);  // currently required by GPU kernel, but not python reference code
+    xassert_le(B, shmem_layout::max_beams);
     xassert_gt(downsampling_factor, 0);	       
     xassert_ge(ns_feed_spacing, 0.3);
     xassert_lt(ns_feed_spacing, 0.6);
@@ -2205,7 +2207,7 @@ void CasmBeamformer::launch_beamformer(
 
 // Static member function.
 // Called by 'python -m pirate_frb test [--casm]'
-void CasmBeamformer::test_casm_microkernels()
+void CasmBeamformer::test_microkernels()
 {
     // CasmBeamformer::show_shared_memory_layout();
     CasmBeamformer bf = CasmBeamformer::make_random();
@@ -2252,7 +2254,7 @@ void CasmBeamformer::time()
 	for (int j = 0; j < 2; j++)
 	    beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
     
-    bf = CasmBeamformer(frequencies, feed_indices, beam_locations, D);
+    CasmBeamformer bf(frequencies, feed_indices, beam_locations, D);
 
     vector<struct timeval> tv(niter);
     cout << "CasmBeamformer::time()\n";
@@ -2262,7 +2264,7 @@ void CasmBeamformer::time()
 	tv[i] = ksgpu::get_time();
 	bf.launch_beamformer(e_in, feed_weights, i_out);
 
-	k = i - (i/2);
+	int k = i - (i/2);
 	if (i > k) {
 	    double loadfrac = ksgpu::time_diff(tv[k], tv[i]) / ((k-i) * dt_rt);
 	    cout << "    " << i << " iterations, loadfrac = " << loadfrac << " (lower is better)" << endl;
