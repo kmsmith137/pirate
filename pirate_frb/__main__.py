@@ -67,7 +67,7 @@ def test(args):
                 # This test is slower than the others, but I don't think we need it more than once.
                 CasmReferenceBeamformer.test_interpolative_beamforming()
             
-            pirate_pybind11.test_casm_microkernels()
+            pirate_pybind11.CasmBeamformer.test_microkernels()
             CasmReferenceBeamformer.test_cuda_implementation()
         
         if run_all_tests or args.dd:
@@ -87,10 +87,11 @@ def parse_time(subparsers):
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
     parser.add_argument('--gpfk', action='store_true', help='Runs time_gpu_peak_finding_kernels()')
-
+    parser.add_argument('--casm', action='store_true', help='Time casm beamformer')
+    
     
 def time(args):
-    timing_flags = [ 'cd', 'gd', 'gt', 'gldk', 'gddk', 'gpfk' ]
+    timing_flags = [ 'cd', 'gd', 'gt', 'gldk', 'gddk', 'gpfk', 'casm' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -108,6 +109,8 @@ def time(args):
         pirate_pybind11.time_gpu_dedispersion_kernels()
     if run_all_timings or args.gpfk:
         pirate_pybind11.time_gpu_peak_finding_kernels()
+    if run_all_timings or args.casm:
+        pirate_pybind11.CasmBeamformer.time()
 
 
 #####################################   show_hardware command  #####################################

@@ -8,10 +8,6 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-
-// Called by 'python -m pirate_frb test [--casm]'
-extern void test_casm_microkernels();
-
     
 // -------------------------------------------------------------------------------------------------
 //
@@ -76,6 +72,12 @@ struct CasmBeamformer
     static ksgpu::Array<int> make_random_feed_indices();   // helper for make_random()
     static ksgpu::Array<int> make_regular_feed_indices();  // helper for make_random()
     static void show_shared_memory_layout();
+
+    // Called by 'python -m pirate_frb test [--casm]'
+    static void test_microkernels();
+
+    // Called by 'python -m pirate_frb time [--casm]'
+    static void time();
 };
 
 

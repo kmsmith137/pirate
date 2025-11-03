@@ -2203,11 +2203,9 @@ void CasmBeamformer::launch_beamformer(
 }
 
 
-// -------------------------------------------------------------------------------------------------
-
-
+// Static member function.
 // Called by 'python -m pirate_frb test [--casm]'
-void test_casm_microkernels()
+void CasmBeamformer::test_casm_microkernels()
 {
     // CasmBeamformer::show_shared_memory_layout();
     CasmBeamformer bf = CasmBeamformer::make_random();
@@ -2217,6 +2215,59 @@ void test_casm_microkernels()
     test_casm_fft1();
     test_casm_fft2(bf);
     test_casm_interpolation(bf);
+}
+
+
+// Static member function.
+// Called by 'python -m pirate_frb time [--casm]'
+void CasmBeamformer::time()
+{
+    int F = 512;          // frequency channels per gpu
+    int D = 32;           // time downsampling factor
+    int B = 1024;         // beams
+    int Tout = 1536;      // output time samples per kernel launch
+    int Tin = D * Tout;   // number of input time samples (must be multiple of 48)
+    int niter = 100;
+
+    double df = (93 * 1.0e6) / (6*512);  // channel bandwidth in Hz
+    double ts = 1.0 / df;                // time sampling rate, in seconds
+    double dt_rt = Tin * ts;             // real time elapsed per kernel launch, in seconds
+
+    Array<float> frequencies({F}, af_rhost);
+    Array<float> beam_locations({B,2}, af_rhost);
+    Array<int> feed_indices({256,2}, af_rhost);
+    Array<uint8_t> e_in({Tin,F,2,256}, af_gpu | af_zero);
+    Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);
+    Array<float> i_out({Tout,F,B}, af_gpu | af_zero);
+    
+    for (int f = 0; f < F; f++)
+	frequencies.at({f}) = rand_uniform(400.0, 500.0);
+
+    for (int d = 0; d < 256; d++) {
+	feed_indices.at({d,0}) = (d % 43);
+	feed_indices.at({d,1}) = (d / 43);
+    }
+
+    for (int b = 0; b < B; b++)
+	for (int j = 0; j < 2; j++)
+	    beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
+    
+    bf = CasmBeamformer(frequencies, feed_indices, beam_locations, D);
+
+    vector<struct timeval> tv(niter);
+    cout << "CasmBeamformer::time()\n";
+
+    for (int i = 0; i < niter; i++) {
+	CUDA_CALL(cudaDeviceSynchronize());
+	tv[i] = ksgpu::get_time();
+	bf.launch_beamformer(e_in, feed_weights, i_out);
+
+	k = i - (i/2);
+	if (i > k) {
+	    double loadfrac = ksgpu::time_diff(tv[k], tv[i]) / ((k-i) * dt_rt);
+	    cout << "    " << i << " iterations, loadfrac = " << loadfrac << " (lower is better)" << endl;
+	}
+    }
 }
 
 

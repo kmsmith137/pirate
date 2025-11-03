@@ -7,13 +7,17 @@ from . import pirate_pybind11
 
 
 class CasmReferenceBeamformer:
+    # Feed spacings are in meters.
+    default_ns_feed_spacing = 0.50
+    default_ew_feed_spacings = (0.38, 0.445, 0.38, 0.445, 0.38)
+        
     def __init__(self,
-                 frequencies,             # shape=(F,), dtype=float
-                 feed_indices,            # shape=(256,2), dtype=int
-                 beam_locations,          # shape=(B,2), dtype=float
-                 downsampling_factor,     # scalar (integer)
-                 ns_feed_spacing = 0.50,  # meters
-                 ew_feed_spacings = [0.38, 0.445, 0.38, 0.445, 0.38]):  # meters
+                 frequencies,               # shape=(F,), dtype=float
+                 feed_indices,              # shape=(256,2), dtype=int
+                 beam_locations,            # shape=(B,2), dtype=float
+                 downsampling_factor,       # scalar (integer)
+                 ns_feed_spacing = None,    # meters
+                 ew_feed_spacings = None):  # meters
         """
         CasmReferenceBeamformer: implements the following, in single-threaded numpy
         code which is slow and easy to read.
@@ -122,6 +126,11 @@ class CasmReferenceBeamformer:
           - ew_feed_spacings: length-5 array containing spacings (in meters) along
             the east-west axis. Must be flip-symmetric.
         """
+
+        if ns_feed_spacing is None:
+            ns_feed_spacing = cls.default_ns_feed_spacing
+        if ew_feed_spacings is None:
+            ew_feed_spacings = cls.default_ew_feed_spacings
         
         self.frequencies = np.asarray(frequencies, dtype=float)
         self.feed_indices = np.asarray(feed_indices)
@@ -375,13 +384,39 @@ class CasmReferenceBeamformer:
         
         
     @classmethod
-    def make_random(cls, F=4, B=5, D=8):
+    def make_random(cls, F=4, B=5, D=8, randomize_spacings=False):
         frequencies = np.random.uniform(400., 500., size=F)
         feed_indices = cls.make_random_feed_indices()
         beam_locations = np.random.uniform(-1., 1., size=(B,2))
 
-        return cls(frequencies, feed_indices, beam_locations, downsampling_factor=D)
+        ns_feed_spacing = cls.default_ns_feed_spacing
+        ew_feed_spacings = cls.default_ew_feed_spacings
 
+        if randomize_spacings:
+            ns_feed_spacing = np.random.uniform(0.3, 0.6)
+            ew_feed_spacings = np.random.uniform(0.3, 0.6, size=5)
+            ew_feed_spacings = (ew_feed_spacings + ew_feed_spacings[::-1]) / 2.0
+        
+        return cls(frequencies, feed_indices, beam_locations, D, ns_feed_spacing, ew_feed_spacings)
+
+    
+    @classmethod
+    def randomly_split(cls, n):
+        """Randomly split 'n' into n = a*b, and return (a,b)."""
+
+        a, b, p = 1, 1, 2
+        
+        while n > 1:
+            if (n % p) == 0:
+                flag = (np.random.uniform() > 0.5)
+                a = (a*p) if flag else (a)
+                b = (b) if flag else (b*p)
+                n /= p
+            else:
+                p += 1
+
+        return a, b
+    
 
     @classmethod
     def test_interpolative_beamforming(cls, T=1024, F=4, B=5, D=4):
@@ -415,8 +450,17 @@ class CasmReferenceBeamformer:
         # FIXME in the future, cupy will be a toplevel dependency
         import cupy as cp
 
-        bf_py = cls.make_random(F=4, B=1920, D=3)
-        F, B, D = bf_py.F, bf_py.B, bf_py.downsampling_factor
+        Bmax = pirate_pybind11.CasmBeamformer.get_max_beams()
+        B = 32 * int(np.exp(np.random.uniform(0.01, np.log(Bmax/32)+0.5)))
+
+        Tmax = 100*(Bmax/B)
+        Tin = 32 * np.random.randint(1, Tmax//32+1)
+        Tout, D = cls.randomly_split(Tin)
+
+        Fmax = 2*Tmax/Tin
+        F = np.random.randint(1, Fmax+1)
+
+        bf_py = cls.make_random(F=F, B=B, D=D, randomize_spacings=True)
         
         # FIXME(?) pybind11->cuda interface currently requires annoying dtype conversions.
         # (Currently the python interface is only used for testing, so it's not a serious issue.)
@@ -429,11 +473,6 @@ class CasmReferenceBeamformer:
             ns_feed_spacing = bf_py.ns_feed_spacing,
             ew_feed_spacings = np.asarray(bf_py.ew_feed_spacings, dtype=np.float32)
         )
-
-        # FIXME revisit Tin
-        Tin = math.lcm(D,48)
-        Tin *= 5
-        Tout = Tin // D
 
         # Use uint8, since numpy doesn't have int4+4.
         e44 = np.random.randint(0, 256, size=(Tin,F,2,256), dtype=np.uint8)
@@ -463,4 +502,6 @@ class CasmReferenceBeamformer:
         i_cuda = cp.asnumpy(i_cuda) / (2*D)    # XXX normalized by hand!!
         rms = np.mean(np.abs(i_py))
         eps = np.max(np.abs(i_py - i_cuda)) / rms
-        print(f'XXX {eps=} {i_py[0,0,0]=} {i_cuda[0,0,0]=}')
+        
+        print(f'test_cuda_implementation({F=}, {B=}, {D=}, {Tin=}, {Tout=}): {eps=}')
+        assert eps < 1.0e-4

@@ -72,6 +72,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	     [](CasmBeamformer &self, const Array<uint8_t> &e_in, const Array<float> &feed_weights, Array<float> &i_out) {
 		 self.launch_beamformer(e_in, feed_weights, i_out, nullptr);    // stream=nullptr
 	     }, py::arg("e_in"), py::arg("feed_weights"), py::arg("i_out"))
+
+	.def_static("get_max_beams", &CasmBeamformer::get_max_beams)
+	.def_static("test_microkernels", &CasmBeamformer::test_microkernels)
+	.def_static("time", &CasmBeamformer::time)
     ;
     
     py::class_<FakeCorrelator>(m, "FakeCorrelator")
@@ -118,7 +122,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	.def("stop", &FakeServer::stop)
     ;
 
-    m.def("test_casm_microkernels", &test_casm_microkernels);
     m.def("test_dedispersion_basics", &test_dedispersion_basics);
     m.def("test_gpu_lagged_downsampling_kernel", &test_gpu_lagged_downsampling_kernel);
     m.def("test_gpu_dedispersion_kernels", &test_gpu_dedispersion_kernels);
