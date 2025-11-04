@@ -1853,7 +1853,7 @@ casm_beamforming_kernel(
     int Tds,                            // Downsampling factor Tin/Tout
     int B)                              // Number of beams
 {
-    constexpr bool Debug = true; // XXX
+    constexpr bool Debug = false;
     
     casm_shuffle_state<Debug> shuffle(e_in, feed_weights, gpu_persistent_data, B);
 
@@ -1899,9 +1899,9 @@ casm_beamforming_kernel(
 		    __syncthreads();
 		}
 
-		__syncthreads();
+		// __syncthreads();
 		fft2.apply(tpol & 3);
-		__syncthreads();
+		// __syncthreads();
 		    
 		if ((tpol & 1) && !(--ds_counter)) {
 		    __syncthreads();
@@ -2229,7 +2229,7 @@ void CasmBeamformer::time()
     int B = 1024;         // beams
     int Tout = 1536;      // output time samples per kernel launch
     int Tin = D * Tout;   // number of input time samples (must be multiple of 48)
-    int niter = 100;
+    int niter = 10;
 
     double df = (93 * 1.0e6) / (6*512);  // channel bandwidth in Hz
     double ts = 1.0 / df;                // time sampling rate, in seconds
@@ -2266,7 +2266,7 @@ void CasmBeamformer::time()
 
 	int k = i - (i/2);
 	if (i > k) {
-	    double loadfrac = ksgpu::time_diff(tv[k], tv[i]) / ((k-i) * dt_rt);
+	    double loadfrac = ksgpu::time_diff(tv[k], tv[i]) / ((i-k) * dt_rt);
 	    cout << "    " << i << " iterations, loadfrac = " << loadfrac << " (lower is better)" << endl;
 	}
     }
