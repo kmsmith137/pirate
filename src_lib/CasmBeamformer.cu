@@ -73,22 +73,22 @@ struct gmem_layout
 
 
 // Shared memory layout (columns are [32-bit offset], physical layout, logical layout).
-// Note that max number of beams is 4640, which gives 99KB shared memory.
+// Note that max number of beams is 4672, which gives 99KB shared memory.
 //
 // [0]      uint gridding[256];                                         // contains (43*ew+ns), derived from 'feed_indices'
 // [256]    float ns_phases[32];                                        // contains cos(2pi * t / 128) for 0 <= t < 32
 // [288]    float per_frequency_data[3][32];                            // outer index is 0 <= ew_feed < 3, see (*) below
 // [384]    uint E[24][259];       union { E[24][256], E[24][6][43] }   // (j,dish) or (j,ew,ns), outer stride 259
 // [6600]   float I[24][132];      float I[24][128];                    // (ew,ns), ew-stride 132
-// [9768]   float G[24][260];      float G[2][2][6][2][128];            // (time,pol,ew,reim,ns), ew-stride 260
-// [16008]  float beam_locs[2][4640];                                   // contains { feed_spacing_ns * sin(za_ns), sin(za_ew) }
+// [9768]   float G[8][772];       float G[2][2][2][6][128];            // (time,pol,reim,ew,ns), reim-stride 6*128 + 4 (=772)
+// [15944]  float beam_locs[2][4672];                                   // contains { feed_spacing_ns * sin(za_ns), sin(za_ew) }
 
 struct shmem_layout
 {
     // All _*stride and _*base quantities are 32-bit offsets, not byte offsets.
     static constexpr int E_jstride = 259;
     static constexpr int I_ew_stride = 132;
-    static constexpr int G_ew_stride = 260;
+    static constexpr int G_reim_stride = 6*128 + 4;
     
     static constexpr int gridding_base = 0;
     static constexpr int ns_phases_base = 256;
@@ -96,7 +96,7 @@ struct shmem_layout
     static constexpr int E_base = per_frequency_data_base + 96;
     static constexpr int I_base = E_base + 24 * E_jstride;
     static constexpr int G_base = I_base + 24 * I_ew_stride;
-    static constexpr int beam_locs_base = G_base + 24 * G_ew_stride;
+    static constexpr int beam_locs_base = G_base + 8 * G_reim_stride;
 
     static constexpr int max_beams = ((99*1024 - 4*beam_locs_base) / 8) & ~31;
     static constexpr int beam_stride = max_beams;
@@ -1030,7 +1030,7 @@ void test_casm_fft_c2c()
 //   w2* w1 w0 <-> ew t0 pol
 //
 // Output array is written to shared memory:
-// float G[24][260];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 260
+// float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,ew,ns), reim-stride 6*128 + 4 (=772)
 
 
 template<bool Debug>
@@ -1073,11 +1073,12 @@ struct fft1_state
 	int t0 = (w >> 1) & 1;
 	int ew = w >> 2;
 
-	// float G[24][260];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 260
+	// float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,ew,ns), reim-stride 6*128 + 4 (=772)
 	constexpr uint GB = shmem_layout::G_base;
-	constexpr uint GS = shmem_layout::G_ew_stride;
-	sbase = GB + (12*t0 + 6*pol + ew) * GS + ns;
-	
+	constexpr uint GS = shmem_layout::G_reim_stride;
+	sbase = GB + (4*t0 + 2*pol) * GS + (128*ew + ns);
+
+	// Check that G-array write is bank conflict free.
 	check_bank_conflict_free<Debug> (sbase);
     }
     
@@ -1113,15 +1114,17 @@ struct fft1_state
 	// xy r1 r0 <-> y5 y6 ReIm
 	// l4 l3 l2 l1 l0 <-> y1 y2 y3 y4 y0
 
-	// Strides: xy=32, 01=64, ReIm=128
+	// Strides: xy=32, 01=64, ReIm=GS
+	constexpr uint GS = shmem_layout::G_reim_stride;
+
 	shmem_f[sbase] = x0_re;
 	shmem_f[sbase+32] = y0_re;
 	shmem_f[sbase+64] = x1_re;
 	shmem_f[sbase+96] = y1_re;
-	shmem_f[sbase+128] = x0_im;
-	shmem_f[sbase+160] = y0_im;
-	shmem_f[sbase+192] = x1_im;	
-	shmem_f[sbase+224] = y1_im;	
+	shmem_f[sbase+GS] = x0_im;
+	shmem_f[sbase+GS+32] = y0_im;
+	shmem_f[sbase+GS+64] = x1_im;	
+	shmem_f[sbase+GS+96] = y1_im;	
     }
 };
 
@@ -1164,7 +1167,8 @@ __global__ void fft1_test_kernel(const float *in, float *out)
     int ew = (w >> 2);
     int ns = l;
 
-    // This "flattened" index combination is convenient in 3 places below.
+    // These "flattened" index combinations ire convenient in two places below.
+    int tp = 2*t0 + pol;           // (time, pol)
     int tpe = 12*t0 + 6*pol + ew;  // (time, pol, ew)
     
     // Input array has shape (2,2,6,64,2) where axes are (time,pol,ew,ns,reim).
@@ -1178,16 +1182,16 @@ __global__ void fft1_test_kernel(const float *in, float *out)
     __syncthreads();
 
     // Shared memory output array has layout:
-    // 	 float G[24][260];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 260
+    //   float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,ew,ns), reim-stride 6*128 + 4 (=772)
     //
     // Output array has shape (2,2,6,128,2) where axes are (time,pol,ew,ns,reim)
 
     constexpr uint GB = shmem_layout::G_base;
-    constexpr uint GS = shmem_layout::G_ew_stride;
+    constexpr uint GS = shmem_layout::G_reim_stride;
     
     for (int reim = 0; reim < 2; reim++)
 	for (int ns2 = ns; ns2 < 128; ns2 += 32)
-	    out[256*tpe + 2*ns2 + reim] = shmem_f[GB + tpe*GS + 128*reim + ns2];
+	    out[256*tpe + 2*ns2 + reim] = shmem_f[GB + (2*tp+reim)*GS + (128*ew+ns2)];
 }
 
 
@@ -1264,14 +1268,12 @@ void test_casm_fft1()
 //
 // The G-array shared memory layout is (where "f" is an EW feed):
 //
-//   float G[24][260];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 260
+//   float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,f,ns), reim-stride 6*128 + 4 (=772)
 //
-// We read from the G-array in register assignment:
+// We read from the G-array in register assignment (bank conflict free,
+// since ReIm stride = 4 mod 8):
 //
-//   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (fouter)
-//
-// This is bank conflict free, since flipping 'fouter' always produces
-// an odd change in f, and the f-stride is 260, which is =4 mod 8.
+//   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (ReIm)
 //
 // The I-array shared memory layout is (where "b" indexes an EW beam):
 //
@@ -1335,16 +1337,15 @@ struct fft2_state
 	}
 
 	// Shared memory offset for reading G-array:
-	//   float G[24][260];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 260
+	//   float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,f,ns), reim-stride 6*128 + 4 (=772)
 	//
 	// When we read from the G-array, we read it as:
-	//   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (fouter)
+	//   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (ReIm)
 	//
-	// 'soff_g' is the offset assuming time = pol = finner = reim = 0.
-	
-	uint fouter = threadIdx.x & 1;
-	uint f = fouter ? 2 : 3;
-	soff_g = shmem_layout::G_base + (f * shmem_layout::G_ew_stride) + ns;
+	// 'soff_g' is the offset assuming time = pol = f = 0.
+
+	uint reim = threadIdx.x & 1;
+	soff_g = shmem_layout::G_base + (reim * shmem_layout::G_reim_stride) + ns;
 
 	// Shared memory offset for writing I-array:
 	//   float I[24][132];  float I[24][128];   (ew,ns), ew-stride 132
@@ -1357,6 +1358,7 @@ struct fft2_state
 	soff_i0 = shmem_layout::I_base + (12+b02) * shmem_layout::I_ew_stride + ns;  // offset for bouter=0
 	soff_i1 = shmem_layout::I_base + (11-b02) * shmem_layout::I_ew_stride + ns;  // offset for bouter=1
 
+	check_bank_conflict_free<Debug> (soff_g);
 	check_bank_conflict_free<Debug> (soff_i0);
 	check_bank_conflict_free<Debug> (soff_i1);
     }
@@ -1366,9 +1368,6 @@ struct fft2_state
     __device__ void apply(uint tpol)
     {
 	extern __shared__ float shmem_f[];
-	
-	// feed-stride in shared memory G[] array.
-	constexpr int FS = shmem_layout::G_ew_stride;
 	
 	if constexpr (Debug)
 	    assert(tpol < 4);  // note tpol is unsigned
@@ -1387,11 +1386,6 @@ struct fft2_state
 	//
 	//   (F_+) += Re(z) * (G_+)      where G_+ = (G0+G1)
 	//   (F_-) += i Im(z) * (G_-)    where G_- = (G0-G1)
-	
-	// float Fre[2][2];   // (bouter, b1)
-	// float Fim[2][2];   // (bouter, b1)
-	// Fre[0][0] = Fre[0][1] = Fre[1][0] = Fre[1][1] = 0.0f;
-	// Fim[0][0] = Fim[0][1] = Fim[1][0] = Fim[1][1] = 0.0f;
    
 	float Fp_re[2];  // length-2 axis is b1
 	float Fp_im[2];  // length-2 axis is b1
@@ -1400,36 +1394,31 @@ struct fft2_state
 	Fp_re[0] = Fp_im[0] = Fm_re[0] = Fm_im[0] = 0.0f;
 	Fp_re[1] = Fp_im[1] = Fm_re[1] = Fm_im[1] = 0.0f;
 
-	// finner-stride in the G-array
-	int fouter = threadIdx.x & 1;
-	int ds = fouter ? (-FS) : (FS);
+	constexpr int GS = 2 * shmem_layout::G_reim_stride;
+	int s = soff_g + (tpol * GS);   // shared memory offset assuming f=0
 	
         #pragma unroll
 	for (int finner = 0; finner < 3; finner++) {
-	    int s = soff_g + (tpol * 6 * FS) + (finner * ds);
-	    check_bank_conflict_free<Debug> (s);
-
-	    // Read G-array elements from shared memory
-	    //   r <-> ReIm
-	    //   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (fouter)
-	    float tre = shmem_f[s];
-	    float tim = shmem_f[s + 128];
-
-	    float xre = __shfl_sync(0xffffffff, tre, threadIdx.x ^ 1);
-	    float xim = __shfl_sync(0xffffffff, tim, threadIdx.x ^ 1);
 	    
-	    // u{0,1} index is fouter.
-	    bool flag = (threadIdx.x & 1);
-	    float G0_re = flag ? xre : tre;
-	    float G0_im = flag ? xim : tim;
-	    float G1_re = flag ? tre : xre;
-	    float G1_im = flag ? tim : xim;
+	    // Read G-array elements from shared memory
+	    //   r <-> fouter
+	    //   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (ReIm)
+	    //   float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,f,ns), reim-stride 6*128 + 4 (=772)
+	    
+	    float t0 = shmem_f[s + ((3+finner) * 128)];  // fouter=0
+	    float t1 = shmem_f[s + ((2-finner) * 128)];  // fouter=1
 
 	    // Change basis (G0,G1) -> G_{pm} = (G0 \pm G1).
-	    float Gp_re = G0_re + G1_re;
-	    float Gp_im = G0_im + G1_im;
-	    float Gm_re = G0_re - G1_re;
-	    float Gm_im = G0_im - G1_im;
+	    float tp = (t0 + t1);
+	    float tm = (t0 - t1);
+	    float up = __shfl_sync(0xffffffff, tp, threadIdx.x ^ 1);
+	    float um = __shfl_sync(0xffffffff, tm, threadIdx.x ^ 1);
+	    
+	    bool flag = (threadIdx.x & 1);
+	    float Gp_re = flag ? up : tp;
+	    float Gp_im = flag ? tp : up;
+	    float Gm_re = flag ? um : tm;
+	    float Gm_im = flag ? tm : um;
 
 	    #pragma unroll
 	    for (int b1 = 0; b1 < 2; b1++) {
@@ -1510,18 +1499,18 @@ __global__ void fft2_test_kernel(
     float2 *gp2 = (float2 *)(g_in) + f*6*128 + 128*gew + gns;
 
     // G-array destination shared memory index (offset 0 <= tp_sh < 4 remains to be applied)
-    // float G[24][260];  float G[2][2][6][2][128];  (time,pol,ew,reim,ns), ew-stride 260
+    //   float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,ew,ns), reim-stride 6*128 + 4 (=772)
     constexpr int GB = shmem_layout::G_base;
-    constexpr int GS = shmem_layout::G_ew_stride;
-    uint gsh = GB + (gew * GS) + gns;
+    constexpr int GS = shmem_layout::G_reim_stride;
+    uint gsh = GB + 128*gew + gns;
 
     for (int tp_glo = 0; tp_glo < TP; tp_glo++) {
 	int tp_sh = tp_glo & 3;
 	
 	// Copy G[6][128][2] from (global) -> (shared).
 	float2 g = *gp2;
-	shmem_f[gsh + tp_sh*6*GS] = g.x;        // real part
-	shmem_f[gsh + tp_sh*6*GS + 128] = g.y;  // imag part
+	shmem_f[gsh + (2*tp_sh)*GS] = g.x;    // real part
+	shmem_f[gsh + (2*tp_sh+1)*GS] = g.y;  // imag part
 	gp2 += F*6*128;
 
 	__syncthreads();
@@ -1635,7 +1624,7 @@ void test_casm_fft2(const CasmBeamformer &bf)
 // - Input: gridded I-values and beam locations from shared memory.
 //
 //     float I[24][132];  float I[24][128];  (ew,ns), ew-stride 132
-//     float beam_locs[2][4640];             contains { feed_spacing_ns * sin(za_ns), sin(za_ew) }
+//     float beam_locs[2][4672];             contains { feed_spacing_ns * sin(za_ns), sin(za_ew) }
 //
 // - Output: writes interpolated I-values to global memory, and advances output pointer.
 // 
@@ -2148,7 +2137,7 @@ void CasmBeamformer::show_shared_memory_layout()
 	 << "[" << SL::per_frequency_data_base << "]    float per_frequency_data[3][32];\n"
 	 << "[" << SL::E_base << "]    uint E[24][" << SL::E_jstride << "];\n"
 	 << "[" << SL::I_base << "]   float I[24][" << SL::I_ew_stride << "];\n"
-	 << "[" << SL::G_base << "]   float G[24][" << SL::G_ew_stride << "];\n"
+	 << "[" << SL::G_base << "]   float G[8][" << SL::G_reim_stride << "];\n"
 	 << "[" << SL::beam_locs_base << "]  float beam_locs[2][" << SL::max_beams << "];\n"
 	 << "  Total size = " << SL::nbytes << " bytes = " << (SL::nbytes/1024.0) << " KB"
 	 << endl;
