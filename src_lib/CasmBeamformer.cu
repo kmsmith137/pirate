@@ -1381,16 +1381,16 @@ struct fft2_state
 	    
 	    // u{0,1} index is fouter.
 	    bool flag = (threadIdx.x & 1);
-	    float u0_re = flag ? xre : tre;
-	    float u0_im = flag ? xim : tim;
-	    float u1_re = flag ? tre : xre;
-	    float u1_im = flag ? tim : xim;
+	    float G0_re = flag ? xre : tre;
+	    float G0_im = flag ? xim : tim;
+	    float G1_re = flag ? tre : xre;
+	    float G1_im = flag ? tim : xim;
 
 	    // Change basis (G0,G1) -> G_{pm} = (G0 \pm G1).
-	    float Gp_re = u0_re + u1_re;
-	    float Gp_im = u0_im + u1_im;
-	    float Gm_re = u0_re - u1_re;
-	    float Gm_im = u0_im - u1_im;
+	    float Gp_re = G0_re + G1_re;
+	    float Gp_im = G0_im + G1_im;
+	    float Gm_re = G0_re - G1_re;
+	    float Gm_im = G0_im - G1_im;
 
 	    #pragma unroll
 	    for (int b1 = 0; b1 < 2; b1++) {
