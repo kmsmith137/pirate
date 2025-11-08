@@ -391,10 +391,15 @@ struct casm_shuffle_state
 	ep4 = (const uint4 *) global_e;
 	ep4 += 32*(t*F+f) + 16*pol + d16;
     }
-    
-    __device__ void load_ungridded_e()
+
+    __device__ void load_ungridded_e(int tcurr, int T)
     {
-	e4 = *ep4;
+	uint i = (threadIdx.x >> 3);
+	uint j = (threadIdx.y >> 1);
+	uint dt = (i << 1) | ((j & 2) >> 1) | ((j >> 2) << 3);
+	
+	if ((tcurr + dt) < T)
+	    e4 = *ep4;
     }
 
     // "phase" is either 0 or 1
@@ -667,7 +672,6 @@ struct casm_shuffle_state
 
 
 // Launch with {32,24,1} threads and {F,1,1} blocks.
-// T must be a multiple of 48.
 
 __global__ void casm_shuffle_test_kernel(
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
@@ -681,7 +685,6 @@ __global__ void casm_shuffle_test_kernel(
     assert(blockDim.z == 1);
     assert(gridDim.y == 1);
     assert(gridDim.z == 1);
-    assert((T % 48) == 0);
 
     // Debug=true, nbeams=0
     casm_shuffle_state<true> shuffle(e_in, feed_weights, gpu_persistent_data, 0);
@@ -711,7 +714,7 @@ __global__ void casm_shuffle_test_kernel(
     for (int touter = 0; touter < T; touter += 48) {
 	for (int s = 0; s < 2; s++) {
 	    // Delta(t)=24, Delta(j)=12
-	    shuffle.load_ungridded_e();
+	    shuffle.load_ungridded_e(touter, T);
 	    shuffle.write_ungridded_e(s);
 	}
 
@@ -734,11 +737,16 @@ __global__ void casm_shuffle_test_kernel(
 		// l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
 		// w2* w1 w0 <-> ew t0 pol
 
-		// float out[T][F][2][6][64][2]
-		out[0] = e0_re;
-		out[1] = e0_im;
-		out[64] = e1_re;
-		out[65] = e1_im;
+		int t0 = (threadIdx.y & 2) >> 1;
+		int tinner = touter + 8*s + 2*i + t0;
+
+		if (tinner < Tin) {
+		    // float out[T][F][2][6][64][2]
+		    out[0] = e0_re;
+		    out[1] = e0_im;
+		    out[64] = e1_re;
+		    out[65] = e1_im;
+		}
 
 		// Delta(t)=2
 		out += (2*F*2*6*64*2);
@@ -1924,27 +1932,38 @@ casm_beamforming_kernel(
 
     int Tin = Tout * Tds;
     int ds_counter = Tds;
+    int touter = -48;
 
     // In each iteration of the outer loop:
     //   - read input times (touter+48):(touter+72)
     //   - process input times (touter):(touter+24)
-    
-    for (int touter = -48; touter < Tin; touter += 24) {
-	if (touter + 48 < Tin) {
+    //   - the value of 'touter' advances by 24
+
+    for (;;) {
+	// Start loading E-array (24 times, both pols, all 256 dishes) from global memory.
+	// No-ops on threads with (t > Tin).
+	__syncthreads();
+	shuffle.load_ungridded_e(touter+48, Tin);
+	__syncthreads();
+
+	if (touter < 0)
+	    goto write_e;
+
+	// outer_phase = {0,1}, depending on whether touter = {0,24} mod 48.
+	int outer_phase = ((touter & 0x8) >> 3);
+
+	if (outer_phase == 0) {
 	    __syncthreads();
-	    shuffle.load_ungridded_e();
+	    shuffle.grid_shared_e();
 	    __syncthreads();
 	}
 
 	// In each iteration of the middle loop, we process times (touter+8*m):(touter+8*m+8).
 	// The 'mstart' assignment skips the middle loop if (touter < 0).
-	int mstart = (touter >= 0) ? 0 : 3;
 	
-	for (int m = mstart; m < 3; m++) {
-	    // The "phase" argument to load_gridded_e() is a little awkward.
-	    int flag = (touter & 0x8) >> 3;      // ={0,1} if touter={24,48} mod 48.
+	for (int m = 0; m < 3; m++) {
 	    __syncthreads();
-	    shuffle.load_gridded_e(3*flag + m);  // phase = 3*flag + m
+	    shuffle.load_gridded_e(3*outer_phase + m);  // phase = 3*flag + m
 	    __syncthreads();
 
 	    for (int tpol = 0; tpol < 16; tpol++) {
@@ -1957,33 +1976,35 @@ casm_beamforming_kernel(
 		    __syncthreads();
 		}
 
-		// __syncthreads();
 		fft2.apply(tpol & 3);
-		// __syncthreads();
 		    
 		if ((tpol & 1) && !(--ds_counter)) {
 		    __syncthreads();
 		    fft2.write_and_reset();
 		    __syncthreads();
-		    interpolator.apply();
+		    interpolator.apply();  // writes to global memory
 		    ds_counter = Tds;
 		    __syncthreads();  // xxx sometimes needed (I think Tds=1 is a necessary condition)
+
+		    int tinner = touter + 8*m + (tpol >> 1);
+
+		    // This is the exit point from the kernel.
+		    if (tinner >= Tin)
+			return;
 		}
 	    }
 	}
-	
+
+    write_e:
 	if (touter + 48 < Tin) {
 	    __syncthreads();
-	    int flag = (touter & 0x8) >> 3;   // ={0,1} if touter={24,48} mod 48.
-	    shuffle.write_ungridded_e(flag);
+	    int phase = (touter & 0x8) >> 3;   // ={0,1} if touter={24,48} mod 48.
+	    shuffle.write_ungridded_e(phase);
 	    __syncthreads();
-	    
-	    if (flag) {
-		__syncthreads();
-		shuffle.grid_shared_e();
-		__syncthreads();
-	    }
 	}
+
+	// The value of 'touter' advances by 24, in each iteration of the outer loop.
+	touter += 24;
     }
 }
 
@@ -2196,10 +2217,8 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
     int ds = w[1];
     int F = w[2];
 
-    // FIXME currently we have a requirement that (T % 48) == 0,
-    // in addition to the requirement that (T % ds) == 0.
-    int d = std::lcm(ds, 48);
-    T = ((T+d-1) / d) * d;  // round up to nearest multiple of d
+    // Round up to nearest multiple of 'ds'.
+    T = ((T+d-1) / ds) * ds;
 
     Array<float> frequencies({F}, af_uhost);
     Array<float> beam_locations({B,2}, af_uhost);
@@ -2213,7 +2232,7 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
     // Make random 'beam_locations' array.
     for (int b = 0; b < B; b++)
 	for (int j = 0; j < 2; j++)
-	    beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
+ 	    beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
 
     // Make random 'ew_feed_spacing' array.
     for (int i = 0; i < 3; i++)
@@ -2254,7 +2273,6 @@ void CasmBeamformer::launch_beamformer(
     int Tin = e_in.shape[0];
     int Tout = i_out.shape[0];
     xassert(Tin == Tout * downsampling_factor);
-    xassert_divisible(Tin, 48);  // FIXME artifically required for now
 
     casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
 	(e_in.data, feed_weights.data, gpu_persistent_data.data, i_out.data, Tout, downsampling_factor, B);
@@ -2286,7 +2304,7 @@ void CasmBeamformer::time()
     int D = 32;           // time downsampling factor
     int B = 1024;         // beams
     int Tout = 768;       // output time samples per kernel launch
-    int Tin = D * Tout;   // number of input time samples (must be multiple of 48)
+    int Tin = D * Tout;   // number of input time samples
     int niter = 10;
 
     double df = (93 * 1.0e6) / (6*512);  // channel bandwidth in Hz
