@@ -561,10 +561,49 @@ struct casm_shuffle_state
 	    uint src = shmem_layout::ungridded_wts_base + d;
 	    uint dst = shmem_layout::gridded_wts_base + g;
 
-	    // FIXME bank conflict disaster.
-	    #pragma unroll
-	    for (int j = 0; j < 4; j++)
-		shmem_f[dst + j*WS] = shmem_f[src + j*WS];
+	    // These shared memory loads are bank conflict free.
+	    float fw0 = shmem_f[src];
+	    float fw1 = shmem_f[src + WS];
+	    float fw2 = shmem_f[src + 2*WS];
+	    float fw3 = shmem_f[src + 3*WS];
+
+	    // This is logically correct, but can produce arbitrarily bad bank conflicts,
+	    // so we shuffle things around a bit first.
+	    //
+	    //   shmem_f[dst] = fw0;
+	    //   shmem_f[dst + WS] = fw1;
+	    //   shmem_f[dst + 2*WS] = fw2;
+	    //   shmem_f[dst + 3*WS] = fw3;
+
+	    // If 'flag' is set, swap (fw0 <-> fw1) and (fw2 <-> fw3).
+	    bool flag = ((dst ^ threadIdx.x) & 1);
+	    float x0 = flag ? fw1 : fw0;
+	    float x1 = flag ? fw0 : fw1;
+	    float x2 = flag ? fw3 : fw2;
+	    float x3 = flag ? fw2 : fw3;
+	    int dd0 = flag ? (-WS) : WS;
+	    dst = flag ? (dst+WS) : dst;
+
+	    // If 'flag' is set, swap (fw0 <-> fw2) and (fw1 <-> fw3).
+	    flag = ((dst ^ threadIdx.x) & 2);
+	    float y0 = flag ? x2 : x0;
+	    float y1 = flag ? x3 : x1;
+	    float y2 = flag ? x0 : x2;
+	    float y3 = flag ? x1 : x3;
+	    int dd1 = flag ? (-2*WS) : (2*WS);
+	    dst = flag ? (dst+2*WS) : dst;
+
+	    // This assert implies that bank conflict is at most 8-to-1 (ugh).
+	    // Unfortunately, it's hard to do better! This bank conflict only happens
+	    // during initialization, so it shouldn't be a serious issue.
+	    
+	    if constexpr (Debug)
+		assert(((dst ^ threadIdx.x) & 3) == 0);
+
+	    shmem_f[dst] = y0;
+	    shmem_f[dst + dd0] = y1;
+	    shmem_f[dst + dd1] = y2;
+	    shmem_f[dst + dd0 + dd1] = y3;
 	}
 
 	__syncthreads();
@@ -1714,6 +1753,7 @@ struct interpolation_microkernel
 	    }
 
 	    out[b] = ret;
+	    // __stcs(out + b, ret);  // streaming write made no difference here
 	}
 
 	// Advance output pointer.
