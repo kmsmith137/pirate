@@ -17,13 +17,6 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 
 
-// Complex out += x*y
-__device__ void zma(float &out_re, float &out_im, float xre, float xim, float yre, float yim)
-{
-    out_re += (xre*yre - xim*yim);
-    out_im += (xre*yim + xim*yre);
-}
-
 // FIXME by calling warp_transpose() in pairs, am I being suboptimal?
 template<typename T>
 __device__ void warp_transpose(T &x, T &y, uint bit)
@@ -1341,12 +1334,32 @@ struct fft2_state
 	if constexpr (Debug)
 	    assert(tpol < 4);  // note tpol is unsigned
 	
-	// Beamformed electric fields are accumulated here.
-	float Fre[2][2];   // (bouter, b1)
-	float Fim[2][2];   // (bouter, b1)
-
-	Fre[0][0] = Fre[0][1] = Fre[1][0] = Fre[1][1] = 0.0f;
-	Fim[0][0] = Fim[0][1] = Fim[1][0] = Fim[1][1] = 0.0f;
+	// We accumulate the beamformed electric field (denoted F), for two choices of 'b1'
+	// and two choices of 'bouter'. Each F-element gets G-contributions from three choices
+	// of 'finner' and two choices of 'fouter'.
+	//
+	// For fixed (b1,finner), denote the F-array by (F0,F1), the G-array by (G0,G1),
+	// and the beamforming phase by z. The "inner" update step is:
+	//
+	//   F0 += (z G0) + (z^* G1)
+	//   F1 += (z^* G0) + (z G1)
+	//
+	// This could be done more efficiently by changing basis to F_{pm} = (F0 pm F1) / 2:
+	//
+	//   (F_+) += Re(z) * (G_+)      where G_+ = (G0+G1)
+	//   (F_-) += i Im(z) * (G_-)    where G_- = (G0-G1)
+	
+	// float Fre[2][2];   // (bouter, b1)
+	// float Fim[2][2];   // (bouter, b1)
+	// Fre[0][0] = Fre[0][1] = Fre[1][0] = Fre[1][1] = 0.0f;
+	// Fim[0][0] = Fim[0][1] = Fim[1][0] = Fim[1][1] = 0.0f;
+   
+	float Fp_re[2];  // length-2 axis is b1
+	float Fp_im[2];  // length-2 axis is b1
+	float Fm_re[2];  // length-2 axis is b1
+	float Fm_im[2];  // length-2 axis is b1
+	Fp_re[0] = Fp_im[0] = Fm_re[0] = Fm_im[0] = 0.0f;
+	Fp_re[1] = Fp_im[1] = Fm_re[1] = Fm_im[1] = 0.0f;
 
 	// finner-stride in the G-array
 	int fouter = threadIdx.x & 1;
@@ -1356,7 +1369,10 @@ struct fft2_state
 	for (int finner = 0; finner < 3; finner++) {
 	    int s = soff_g + (tpol * 6 * FS) + (finner * ds);
 	    check_bank_conflict_free<Debug> (s);
-	    
+
+	    // Read G-array elements from shared memory
+	    //   r <-> ReIm
+	    //   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (fouter)
 	    float tre = shmem_f[s];
 	    float tim = shmem_f[s + 128];
 
@@ -1367,28 +1383,38 @@ struct fft2_state
 	    float u0_im = __shfl_sync(0xffffffff, tim, threadIdx.x & ~1);
 	    float u1_im = __shfl_sync(0xffffffff, tim, threadIdx.x | 1);
 
+	    // Change basis (G0,G1) -> G_{pm} = (G0 \pm G1).
+	    float Gp_re = u0_re + u1_re;
+	    float Gp_im = u0_im + u1_im;
+	    float Gm_re = u0_re - u1_re;
+	    float Gm_im = u0_im - u1_im;
+
 	    #pragma unroll
 	    for (int b1 = 0; b1 < 2; b1++) {
-		// FIXME can be sped up with FFT-style trick.
+		float zre = pcos[b1][finner];
+		float zim = psin[b1][finner];
 
-		// F[0][b1] += (phase) (u0)
-		// F[0][b1] += (phase^*) (u1)
-		// F[1][b1] += (phase^*) (u0)
-		// F[1][b1] += (phase) (u1)
-		
-		// FIXME I don't think zma() will be called here, in the final kernel.
-		zma(Fre[0][b1], Fim[0][b1], pcos[b1][finner],  psin[b1][finner], u0_re, u0_im);
-		zma(Fre[0][b1], Fim[0][b1], pcos[b1][finner], -psin[b1][finner], u1_re, u1_im);  // note (-psin)
-		zma(Fre[1][b1], Fim[1][b1], pcos[b1][finner], -psin[b1][finner], u0_re, u0_im);  // note (-psin)
-		zma(Fre[1][b1], Fim[1][b1], pcos[b1][finner],  psin[b1][finner], u1_re, u1_im);
+		// (F_+) += Re(z) * (G_+)      where G_+ = (G0+G1)
+		// (F_-) += i Im(z) * (G_-)    where G_- = (G0-G1)
+
+		Fp_re[b1] += (zre * Gp_re);
+		Fp_im[b1] += (zre * Gp_im);
+		Fm_re[b1] -= (zim * Gm_im);
+		Fm_im[b1] += (zim * Gm_re);
 	    }
 	}
 
 	#pragma unroll
-	for (int bouter = 0; bouter < 2; bouter++) {
-	    #pragma unroll
-	    for (int b1 = 0; b1 < 2; b1++)
-		I[bouter][b1] += (Fre[bouter][b1] * Fre[bouter][b1]) + (Fim[bouter][b1] * Fim[bouter][b1]);
+	for (int b1 = 0; b1 < 2; b1++) {
+	    // Change basis from F_{pm} = (F0 \pm F1)/2 to {F0,F1}.
+	    float F0_re = Fp_re[b1] + Fm_re[b1];
+	    float F0_im = Fp_im[b1] + Fm_im[b1];
+	    float F1_re = Fp_re[b1] - Fm_re[b1];
+	    float F1_im = Fp_im[b1] - Fm_im[b1];
+
+	    // Accumulate I[2][2], where axes are (bouter,b1).
+	    I[0][b1] += (F0_re * F0_re) + (F0_im * F0_im);
+	    I[1][b1] += (F1_re * F1_re) + (F1_im * F1_im);
 	}
     }
 
@@ -1545,7 +1571,7 @@ void test_casm_fft2(const CasmBeamformer &bf)
     int F = bf.F;
     int TP = 2 * bf.nominal_Tin_for_unit_tests;
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
-    
+
     Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
     Array<float> i_gpu({F,24,128}, af_gpu | af_random);
     Array<float> i_cpu = fft2_reference_kernel(bf, g);
@@ -2227,7 +2253,7 @@ void CasmBeamformer::time()
     int F = 512;          // frequency channels per gpu
     int D = 32;           // time downsampling factor
     int B = 1024;         // beams
-    int Tout = 1536;      // output time samples per kernel launch
+    int Tout = 768;       // output time samples per kernel launch
     int Tin = D * Tout;   // number of input time samples (must be multiple of 48)
     int niter = 10;
 
