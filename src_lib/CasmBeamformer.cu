@@ -1376,12 +1376,15 @@ struct fft2_state
 	    float tre = shmem_f[s];
 	    float tim = shmem_f[s + 128];
 
-	    // FIXME can be improved.
+	    float xre = __shfl_sync(0xffffffff, tre, threadIdx.x ^ 1);
+	    float xim = __shfl_sync(0xffffffff, tim, threadIdx.x ^ 1);
+	    
 	    // u{0,1} index is fouter.
-	    float u0_re = __shfl_sync(0xffffffff, tre, threadIdx.x & ~1);
-	    float u1_re = __shfl_sync(0xffffffff, tre, threadIdx.x | 1);
-	    float u0_im = __shfl_sync(0xffffffff, tim, threadIdx.x & ~1);
-	    float u1_im = __shfl_sync(0xffffffff, tim, threadIdx.x | 1);
+	    bool flag = (threadIdx.x & 1);
+	    float u0_re = flag ? xre : tre;
+	    float u0_im = flag ? xim : tim;
+	    float u1_re = flag ? tre : xre;
+	    float u1_im = flag ? tim : xim;
 
 	    // Change basis (G0,G1) -> G_{pm} = (G0 \pm G1).
 	    float Gp_re = u0_re + u1_re;
