@@ -449,17 +449,16 @@ class CasmReferenceBeamformer:
     def test_cuda_implementation(cls):
         # FIXME in the future, cupy will be a toplevel dependency
         import cupy as cp
+        
+        # Randomize (B/32), D, F, Tout, such that product is <= 10**4
+        t = np.random.gamma(1.0, 1.0, size=4)
+        t = np.exp(np.log(10**4) * t / np.sum(t))
+        B32, D, F, Tout = [ int(x) for x in t ]
+        
+        B = min(32*B32, pirate_pybind11.CasmBeamformer.get_max_beams())
+        Tin = Tout * D
 
-        Bmax = pirate_pybind11.CasmBeamformer.get_max_beams()
-        B = 32 * int(np.exp(np.random.uniform(0.01, np.log(Bmax/32))) + 0.5)
-
-        Tmax = 100*(Bmax/B)
-        Tin = 48 * np.random.randint(1, Tmax//48+1)
-        Tout, D = cls.randomly_split(Tin)
-
-        Fmax = 2*Tmax/Tin
-        F = np.random.randint(1, Fmax+1)
-
+        print(f'test_cuda_implementation({F=}, {B=}, {D=}, {Tin=}, {Tout=}): start')
         bf_py = cls.make_random(F=F, B=B, D=D, randomize_spacings=True)
         
         # FIXME(?) pybind11->cuda interface currently requires annoying dtype conversions.

@@ -719,7 +719,7 @@ __global__ void casm_shuffle_test_kernel(
     for (int touter = 0; touter < T; touter += 48) {
 	for (int s = 0; s < 2; s++) {
 	    // Delta(t)=24, Delta(j)=12
-	    shuffle.load_ungridded_e(touter, T);
+	    shuffle.load_ungridded_e(touter + 24*s, T);
 	    shuffle.write_ungridded_e(s);
 	}
 
@@ -835,7 +835,7 @@ void test_casm_shuffle(const CasmBeamformer &bf)
     
     int F = bf.F;
     int T = bf.nominal_Tin_for_unit_tests;
-    xassert(T > 0);
+    cout << "test_casm_shuffle(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << ")" << endl;
     
     Array<uint8_t> e = make_random_e_array(T,F);
     Array<float> feed_weights = make_random_feed_weights(F);
@@ -850,7 +850,6 @@ void test_casm_shuffle(const CasmBeamformer &bf)
     CUDA_PEEK("casm_shuffle_test_kernel");
 
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
-    cout << "test_casm_shuffle(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << "): pass" << endl;
 }
 
 
@@ -999,7 +998,8 @@ void test_casm_fft_c2c()
     constexpr int R = 6;
     constexpr int N = (1 << R);
     constexpr int S = (1 << (6-R));
-    
+
+    cout << "test_casm_fft_c2c()" << endl;
     Array<float> in({S,N,2}, af_random | af_rhost);
     Array<float> out_cpu({S,N,2}, af_zero | af_rhost);
     Array<float> out_gpu({S,N,2}, af_random | af_gpu);
@@ -1025,7 +1025,6 @@ void test_casm_fft_c2c()
     CUDA_PEEK("fft_c2c_test_kernel");
 
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"s","i","reim"}, 1.0e-3);
-    cout << "test_casm_fft_c2c: pass" << endl;
 }
 
 
@@ -1215,6 +1214,7 @@ void test_casm_fft1()
     
     // Axis ordering (time,pol,ew,ns,reim).
     // It's convenient to "flatten" the outer 3 indices into 0 <= tpe < 24.
+    cout << "test_casm_fft1()" << endl;
     Array<float> in({24,64,2}, af_random | af_rhost);
     Array<float> out_cpu({24,128,2}, af_zero | af_rhost);
     Array<float> out_gpu({24,128,2}, af_random | af_gpu);
@@ -1241,7 +1241,6 @@ void test_casm_fft1()
     out_gpu = out_gpu.reshape({2,2,6,128,2});
     
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","pol","ew","i","reim"}, 1.0e-3);
-    cout << "test_casm_fft1: pass" << endl;
 }
 
 
@@ -1614,8 +1613,9 @@ void test_casm_fft2(const CasmBeamformer &bf)
 
     int F = bf.F;
     int TP = 2 * bf.nominal_Tin_for_unit_tests;
+    cout << "test_casm_fft2(TP=" << TP << ", F=" << F << ")" << endl;
+    
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
-
     Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
     Array<float> i_gpu({F,24,128}, af_gpu | af_random);
     Array<float> i_cpu = fft2_reference_kernel(bf, g);
@@ -1626,7 +1626,6 @@ void test_casm_fft2(const CasmBeamformer &bf)
     CUDA_PEEK("fft2_test_kernel");
 
     assert_arrays_equal(i_cpu, i_gpu, "cpu", "gpu", {"f","b","ns"});
-    cout << "test_casm_fft2(TP=" << TP << ", F=" << F << "): pass" << endl;
 }
 
 
@@ -1889,6 +1888,7 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
     int F = bf.F;
     int B = bf.B;
     int Tout = rand_int(1,5);;
+    cout << "test_casm_interpolation(Tout=" << Tout << ", F=" << F << ", B=" << B << ")" << endl;
     
     Array<float> in({Tout,F,24,128}, af_rhost | af_random);
     Array<float> out_gpu({Tout,F,B}, af_gpu | af_random);
@@ -1904,8 +1904,6 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
     // Slightly high threshold (10^{-4}) needed here, because 'xns' is reduced mod 128,
     // but interpolation is sensitive to order-one changes.
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","b"}, 1.0e-4);
-    
-    cout << "test_casm_interpolation(Tout=" << Tout << ",F=" << F << ",B=" << B << "): pass" << endl;
 }
 
 
@@ -1991,7 +1989,7 @@ casm_beamforming_kernel(
 		    ds_counter = Tds;
 		    __syncthreads();  // xxx sometimes needed (I think Tds=1 is a necessary condition)
 
-		    int tinner = touter + 8*m + (tpol >> 1);
+		    int tinner = touter + 8*m + ((tpol+1) >> 1);
 
 		    // This is the exit point from the kernel.
 		    if (tinner >= Tin)
@@ -2215,14 +2213,11 @@ Array<int> CasmBeamformer::make_regular_feed_indices()
 // Static member function.
 CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 {
-    auto w = ksgpu::random_integers_with_bounded_product(3, 100);
+    auto w = ksgpu::random_integers_with_bounded_product(3, 1000);
     int B = 32 * ksgpu::rand_int(1,100);
     int T = w[0] * w[1];
     int ds = w[1];
     int F = w[2];
-
-    // Round up to nearest multiple of 'ds'.
-    T = ((T+ds-1) / ds) * ds;
 
     Array<float> frequencies({F}, af_uhost);
     Array<float> beam_locations({B,2}, af_uhost);
