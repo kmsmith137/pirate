@@ -1944,10 +1944,9 @@ casm_beamforming_kernel(
 
     for (;;) {
 	// Start loading E-array (24 times, both pols, all 256 dishes) from global memory.
-	// No-ops on threads with (t > Tin).
-	__syncthreads();
+	// No-ops on threads which would read past the end of input data.
+	// No need for __syncthreads() here, since we're just reading into registers.
 	shuffle.load_ungridded_e(touter+48, Tin);
-	__syncthreads();
 
 	// outer_phase = {0,1}, depending on whether touter = {0,24} mod 48.
 	int outer_phase = (touter & 0x8) >> 3;
@@ -1956,38 +1955,38 @@ casm_beamforming_kernel(
 	    goto write_e;
 
 	if (outer_phase == 0) {
-	    __syncthreads();
+	    __syncthreads();   // wait for write_ungridded_e() in previous loop iteration.
 	    shuffle.grid_shared_e();
-	    __syncthreads();
+	    __syncthreads();   // barrier before calling load_gridded_e() below.
 	}
 
 	// In each iteration of the middle loop, we process times (touter+8*m):(touter+8*m+8).
 	// The 'mstart' assignment skips the middle loop if (touter < 0).
 	
 	for (int m = 0; m < 3; m++) {
-	    __syncthreads();
+	    // No syncthreads() needed before or after load_gridded_e(), since:
+	    //   - grid_shared_e() has syncthreads() after it, see above
+	    //   - write_ungridded_e() has syncthreads() before it, see above
 	    shuffle.load_gridded_e(3*outer_phase + m);  // phase = 3*flag + m
-	    __syncthreads();
 
 	    for (int tpol = 0; tpol < 16; tpol++) {
 		if ((tpol & 3) == 0) {
 		    float e0_re, e0_im, e1_re, e1_im;
-		    __syncthreads();
 		    shuffle.unpack_e(tpol >> 2, e0_re, e0_im, e1_re, e1_im);
+		    
 		    __syncthreads();
 		    fft1.apply(e0_re, e0_im, e1_re, e1_im);
 		    __syncthreads();
 		}
 
 		fft2.apply(tpol & 3);
-		    
+		
 		if ((tpol & 1) && !(--ds_counter)) {
+		    __syncthreads();         // wait for previous interpolator.apply()
+		    fft2.write_and_reset();  // writes I-array to shared memory
 		    __syncthreads();
-		    fft2.write_and_reset();
-		    __syncthreads();
-		    interpolator.apply();  // writes to global memory
+		    interpolator.apply();    // reads I-array from shared, writes to global memory
 		    ds_counter = Tds;
-		    __syncthreads();  // xxx sometimes needed (I think Tds=1 is a necessary condition)
 
 		    int tinner = touter + 8*m + ((tpol+1) >> 1);
 
@@ -2000,9 +1999,8 @@ casm_beamforming_kernel(
 
     write_e:
 	if (touter + 48 < Tin) {
-	    __syncthreads();
+	    __syncthreads();  // wait for load_gridded_e() above.
 	    shuffle.write_ungridded_e(outer_phase);
-	    __syncthreads();
 	}
 
 	// The value of 'touter' advances by 24, in each iteration of the outer loop.

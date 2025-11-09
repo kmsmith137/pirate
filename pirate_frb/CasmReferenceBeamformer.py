@@ -491,13 +491,13 @@ class CasmReferenceBeamformer:
         # Call reference beamformer.
         i_py = bf_py.beamform(e, feed_weights)
 
-        # Call cuda beamformer
+        # Call cuda beamformer.
         e44 = cp.asarray(e44)
         fw32 = cp.asarray(fw32)
         i_cuda = cp.zeros((Tout,F,B), dtype=cp.float32)
         bf_cuda.launch_beamformer(e44, fw32, i_cuda)
 
-        # Compare
+        # Compare results from python/cuda.
         i_cuda = cp.asnumpy(i_cuda) / (2*D)    # XXX normalized by hand!!
         rms = np.mean(np.abs(i_py))
         eps = np.max(np.abs(i_py - i_cuda)) / rms
