@@ -392,13 +392,18 @@ struct casm_shuffle_state
 	ep4 += 32*(t*F+f) + 16*pol + d16;
     }
 
-    __device__ void load_ungridded_e(int tcurr, int T)
+    // The value of 't0' is the same on all threads, and advances by 24
+    // after each call to load_ungridded_e(). A thread-dependent offset
+    // 'dt' will be added, and load_ungridded_e() no-ops if (t0+dt) >= T,
+    // where T is the total number of time samples.
+    
+    __device__ void load_ungridded_e(int t0, int T)
     {
 	uint i = (threadIdx.x >> 3);
 	uint j = (threadIdx.y >> 1);
 	uint dt = (i << 1) | ((j & 2) >> 1) | ((j >> 2) << 3);
 	
-	if ((tcurr + dt) < T)
+	if ((t0 + dt) < T)
 	    e4 = *ep4;
     }
 
@@ -740,7 +745,7 @@ __global__ void casm_shuffle_test_kernel(
 		int t0 = (threadIdx.y & 2) >> 1;
 		int tinner = touter + 8*s + 2*i + t0;
 
-		if (tinner < Tin) {
+		if (tinner < T) {
 		    // float out[T][F][2][6][64][2]
 		    out[0] = e0_re;
 		    out[1] = e0_im;
@@ -845,7 +850,7 @@ void test_casm_shuffle(const CasmBeamformer &bf)
     CUDA_PEEK("casm_shuffle_test_kernel");
 
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
-    cout << "test_casm_shuffle(T=" << T << ",F=" << F << "): pass" << endl;
+    cout << "test_casm_shuffle(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << "): pass" << endl;
 }
 
 
@@ -1621,7 +1626,7 @@ void test_casm_fft2(const CasmBeamformer &bf)
     CUDA_PEEK("fft2_test_kernel");
 
     assert_arrays_equal(i_cpu, i_gpu, "cpu", "gpu", {"f","b","ns"});
-    cout << "test_casm_fft2: pass" << endl;
+    cout << "test_casm_fft2(TP=" << TP << ", F=" << F << "): pass" << endl;
 }
 
 
@@ -1946,11 +1951,11 @@ casm_beamforming_kernel(
 	shuffle.load_ungridded_e(touter+48, Tin);
 	__syncthreads();
 
+	// outer_phase = {0,1}, depending on whether touter = {0,24} mod 48.
+	int outer_phase = (touter & 0x8) >> 3;
+
 	if (touter < 0)
 	    goto write_e;
-
-	// outer_phase = {0,1}, depending on whether touter = {0,24} mod 48.
-	int outer_phase = ((touter & 0x8) >> 3);
 
 	if (outer_phase == 0) {
 	    __syncthreads();
@@ -1998,8 +2003,7 @@ casm_beamforming_kernel(
     write_e:
 	if (touter + 48 < Tin) {
 	    __syncthreads();
-	    int phase = (touter & 0x8) >> 3;   // ={0,1} if touter={24,48} mod 48.
-	    shuffle.write_ungridded_e(phase);
+	    shuffle.write_ungridded_e(outer_phase);
 	    __syncthreads();
 	}
 
@@ -2218,7 +2222,7 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
     int F = w[2];
 
     // Round up to nearest multiple of 'ds'.
-    T = ((T+d-1) / ds) * ds;
+    T = ((T+ds-1) / ds) * ds;
 
     Array<float> frequencies({F}, af_uhost);
     Array<float> beam_locations({B,2}, af_uhost);
