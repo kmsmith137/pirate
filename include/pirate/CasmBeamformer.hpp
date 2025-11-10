@@ -12,10 +12,6 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 //
 // Host-side CasmBeamformer object
-//
-// FIXME make this a class, with some members protected.
-// FIXME switch to an API which doesn't use ksgpu::Array or xassert()
-// FIXME constructor should save current cuda device, and check equality in beamform()
 
 
 struct CasmBeamformer

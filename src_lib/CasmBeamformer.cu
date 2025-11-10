@@ -120,9 +120,9 @@ struct shmem_99kb
     bool flag = false;
     F *func = nullptr;
     
-    shmem_99kb(const F &func_) : func(func_) { }
+    inline shmem_99kb(const F &func_) : func(func_) { }
     
-    void set()
+    inline void set()
     {
 	if (!flag) {
 	    CUDA_CALL(cudaFuncSetAttribute(
@@ -159,14 +159,14 @@ struct shmem_99kb
 //
 // Assumes {32,24,1} thread grid, not {32*24,1,1}.
 
-__device__ void double_byte_perm(uint &x, uint &y, uint s1, uint s2)
+__device__ inline void double_byte_perm(uint &x, uint &y, uint s1, uint s2)
 {
     uint x0 = x;
     x = __byte_perm(x0, y, s1);
     y = __byte_perm(x0, y, s2);
 }
 
-__device__ float unpack_int4(uint x, uint s)
+__device__ inline float unpack_int4(uint x, uint s)
 {
     x = ((x >> s) ^ 0x88888888) & 0xf;
     return float(x) - 8.0f;
@@ -192,7 +192,7 @@ struct casm_shuffle_state
     // 'gpu_persistent_data' argument: see "global memory layout" earlier in source file.
 
     // Warning: caller must call __syncthreads() after calling constructor, and before calling load_ungridded_e().
-    __device__ casm_shuffle_state(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
+    __device__ inline casm_shuffle_state(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
     {
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
@@ -223,7 +223,7 @@ struct casm_shuffle_state
     //
     // Note: caller is responsible for calling __syncthreads() afterwards!
 
-    __device__ void copy_global_to_shared_memory(const float *gpu_persistent_data, const float *feed_weights, int nbeams)
+    __device__ inline void copy_global_to_shared_memory(const float *gpu_persistent_data, const float *feed_weights, int nbeams)
     {
 	extern __shared__ float shmem_f[];
 
@@ -305,7 +305,7 @@ struct casm_shuffle_state
     // Output: (xns, xew) in shared memory, where 0 <= xns <= 128 is a periodic
     // grid coordinate, and 1 <= xew <= 22 is a non-periodic grid coordinate.
 
-    __device__ void normalize_beam_locations(int nbeams)
+    __device__ inline void normalize_beam_locations(int nbeams)
     {
 	constexpr int F0 = shmem_layout::per_frequency_data_base + 25;
 	constexpr int NSB = shmem_layout::beam_locs_base;
@@ -360,7 +360,7 @@ struct casm_shuffle_state
     //
     // before writing to shared memory.
     
-    __device__ void setup_e_pointer(const uint8_t *global_e)
+    __device__ inline void setup_e_pointer(const uint8_t *global_e)
     {
 	uint l = threadIdx.x;  // lane id
 	uint w = threadIdx.y;  // warp id
@@ -397,7 +397,7 @@ struct casm_shuffle_state
     // 'dt' will be added, and load_ungridded_e() no-ops if (t0+dt) >= T,
     // where T is the total number of time samples.
     
-    __device__ void load_ungridded_e(int t0, int T)
+    __device__ inline void load_ungridded_e(int t0, int T)
     {
 	uint i = (threadIdx.x >> 3);
 	uint j = (threadIdx.y >> 1);
@@ -408,7 +408,7 @@ struct casm_shuffle_state
     }
 
     // "phase" is either 0 or 1
-    __device__ void write_ungridded_e(int phase)
+    __device__ inline void write_ungridded_e(int phase)
     {
 	extern __shared__ uint shmem_u[];
 
@@ -490,7 +490,7 @@ struct casm_shuffle_state
     // multiplies by the gridded feed_weights, which are always zero at missing grid
     // locations.
     
-    __device__ void grid_shared_e()
+    __device__ inline void grid_shared_e()
     {
 	extern __shared__ uint shmem_u[];
 	
@@ -546,7 +546,7 @@ struct casm_shuffle_state
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
     //   w2* w1 w0 <-> ew t0 pol  (= j1 j0)
 
-    __device__ void setup_feed_weights()
+    __device__ inline void setup_feed_weights()
     {
 	extern __shared__ float shmem_f[];
 	extern __shared__ uint shmem_u[];
@@ -637,7 +637,7 @@ struct casm_shuffle_state
     }
 
     // "phase" should satisfy 0 <= phase < 6.
-    __device__ void load_gridded_e(int phase)
+    __device__ inline void load_gridded_e(int phase)
     {
 	extern __shared__ uint shmem_u[];
 
@@ -653,7 +653,7 @@ struct casm_shuffle_state
 	e1 = (threadIdx.x < 11) ? shmem_u[s+32] : 0;
     }
     
-    __device__ void unpack_e(int i, float &e0_re, float &e0_im, float &e1_re, float &e1_im)
+    __device__ inline void unpack_e(int i, float &e0_re, float &e0_im, float &e1_re, float &e1_im)
     {
 	// i is the length-4 index (t2 t1).
 	// FIXME save a few cycles by offset encoding earlier?
@@ -763,7 +763,7 @@ __global__ void casm_shuffle_test_kernel(
 }
 
 
-void casm_shuffle_reference_kernel(
+static void casm_shuffle_reference_kernel(
     const CasmBeamformer &bf,
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
@@ -828,7 +828,7 @@ static Array<float> make_random_feed_weights(int F)
 }
 
 
-void test_casm_shuffle(const CasmBeamformer &bf)
+static void test_casm_shuffle(const CasmBeamformer &bf)
 {
     static shmem_99kb s(casm_shuffle_test_kernel);
     s.set();
@@ -858,7 +858,7 @@ void test_casm_shuffle(const CasmBeamformer &bf)
 // fft_c2c (helper for "FFT1" kernel)
 
 
-__device__ void fft0(float &xre, float &xim)
+__device__ inline void fft0(float &xre, float &xim)
 {
     float t = xre - xim;
     xre += xim;
@@ -883,7 +883,7 @@ struct fft_c2c_state
     float cre, cim;
 
     // phase128 = cos(2*pi*l/128), where 0 <= l < 32 is laneId.
-    __device__ void init(float phase128)
+    __device__ inline void init(float phase128)
     {
 	// We want to compute the phase:
 	//    exp(2*pi*i * t / 2^r)  where t = threadIdx.x mod 2^{r-1}
@@ -899,7 +899,7 @@ struct fft_c2c_state
 	next_fft.init(phase128);
     }
     
-    __device__ void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
+    __device__ inline void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
     {
 	// (x0,x1) = (x0+x1,x0-x1)
 	fft0(x0_re, x1_re);
@@ -924,9 +924,9 @@ struct fft_c2c_state
 template<>
 struct fft_c2c_state<2>
 {
-    __device__ void init(float phase128) { }
+    __device__ inline void init(float phase128) { }
     
-    __device__ void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
+    __device__ inline void apply(float  &x0_re, float &x0_im, float &x1_re, float &x1_im)
     {
 	// (x0,x1) = (x0+x1,x0-x1)
 	fft0(x0_re, x1_re);
@@ -993,7 +993,7 @@ __global__ void fft_c2c_test_kernel(const float *in, float *out)
 }
 
 
-void test_casm_fft_c2c()
+static void test_casm_fft_c2c()
 {
     constexpr int R = 6;
     constexpr int N = (1 << R);
@@ -1052,7 +1052,7 @@ struct fft1_state
     float cre, cim;   // "twiddle" factor exp(2*pi*i t / 128)
     int sbase;        // shared memory offset
 
-    __device__ fft1_state()
+    __device__ inline fft1_state()
     {
 	extern __shared__ float shmem_f[];
 	
@@ -1094,7 +1094,7 @@ struct fft1_state
 	check_bank_conflict_free<Debug> (sbase);
     }
     
-    __device__ void apply(float x0_re, float x0_im, float x1_re, float x1_im)
+    __device__ inline void apply(float x0_re, float x0_im, float x1_re, float x1_im)
     {
 	extern __shared__ float shmem_f[];
 	    
@@ -1207,7 +1207,7 @@ __global__ void fft1_test_kernel(const float *in, float *out)
 }
 
 
-void test_casm_fft1()
+static void test_casm_fft1()
 {
     static shmem_99kb s(fft1_test_kernel);
     s.set();
@@ -1313,7 +1313,7 @@ struct fft2_state
     int soff_i1;    // base shared memory offset in I-array, bouter=1
 
 
-    __device__ fft2_state()
+    __device__ inline fft2_state()
     {
 	extern __shared__ float shmem_f[];
 	
@@ -1377,7 +1377,7 @@ struct fft2_state
 
     
     // Accumulates one (time,pol) into I-registers, where 0 <= tpol < 4.
-    __device__ void apply(uint tpol)
+    __device__ inline void apply(uint tpol)
     {
 	extern __shared__ float shmem_f[];
 	
@@ -1462,7 +1462,7 @@ struct fft2_state
     }
 
     // Writes I[] register to shared memory and zeroes the registers.
-    __device__ void write_and_reset()
+    __device__ inline void write_and_reset()
     {
 	extern __shared__ float shmem_f[];
 
@@ -1549,7 +1549,7 @@ __global__ void fft2_test_kernel(
 // G.shape = {TP,F,6,128,2}
 // I.shape = {F,24,128}
 
-Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
+static Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 {
     int F = bf.F;
     int TP = (G.ndim > 0) ? G.shape[0] : 0;
@@ -1606,7 +1606,7 @@ Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
 }
 
 
-void test_casm_fft2(const CasmBeamformer &bf)
+static void test_casm_fft2(const CasmBeamformer &bf)
 {
     static shmem_99kb s(fft2_test_kernel);
     s.set();
@@ -1667,7 +1667,7 @@ struct interpolation_microkernel
     float *out;
     int nbeams;
     
-    __device__ interpolation_microkernel(float *out_, int nbeams_)
+    __device__ inline interpolation_microkernel(float *out_, int nbeams_)
     {
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
@@ -1680,7 +1680,7 @@ struct interpolation_microkernel
 	nbeams = nbeams_;
     }
 
-    __device__ float compute_wk(int k, float x)
+    __device__ inline float compute_wk(int k, float x)
     {
 	static constexpr float one_sixth = 1.0f / 6.0f;
 	static constexpr float one_half = 1.0f / 2.0f;
@@ -1701,7 +1701,7 @@ struct interpolation_microkernel
 	return w * (x+a) * (x+b) * (x+c);
     }
 
-    __device__ void apply()
+    __device__ inline void apply()
     {
 	extern __shared__ float shmem_f[];
 	
@@ -1812,7 +1812,7 @@ __global__ void casm_interpolation_test_kernel(
 }
 
 
-__host__ void compute_interpolation_weights(float dx, float w[4])
+__host__ inline void compute_interpolation_weights(float dx, float w[4])
 {
     static constexpr float one_sixth = 1.0f / 6.0f;
     static constexpr float one_half = 1.0f / 2.0f;

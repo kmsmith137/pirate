@@ -22,15 +22,23 @@ class CasmReferenceBeamformer:
 
           (1) Exact beamforming, by summing all electric fields with beamforming phases,
               squaring, and averaging over time/polarization. This is useful as a
-              reference for the details of the beamforming computation.
+              reference for the details of the beamforming computation (especially
+              sign conventions).
+        
               Implemented as self.beamform(..., interpolate=False).
 
           (2) Interpolated beamforming. This is the exact computation done by the GPU
-              kernel. This is useful for unit-testing the GPU kernel.
+              kernel, and may also be useful as a reference.
+        
               Implemented as self.beamform(..., interpolate=True).
 
-          (3) A unit test which verifies that (1)+(2) are >99% correlated. This
-              checks the validity of approximations.
+          (3) A unit test which verifies that (1)+(2) are >99% correlated. This checks
+              that interpolated beamforming is a good approximation to exact beamforming,
+              and checks that all conventions (e.g. signs) are consistent between (1)+(2).
+
+          (4) A unit test which verifies that the cuda kernel agrees with
+              python interpolated beamforming (2) to machine precision. This
+              tests correctness of the cuda kernel.
 
         For more info on the beamforming operation itself, see the beamform()
         docstring below.
@@ -109,15 +117,15 @@ class CasmReferenceBeamformer:
             field array (after complex-valued PFB channelization) and FRB
             beamformed timestreams.
 
-            Note that for CASM, with 3072 frequency channels and 93 MHz bandwidth,
-            the time sampling rate of the channelized electric field array is:
+            Note that for CASM, the time sampling rate of the channelized electric
+            field array is:
 
-              dt_in = 3072 / (93 MHz) = 33 microseconds
+              dt_in = 4096 / (125 MHz) = 32.768 microseconds
 
             and so the time sampling rate of the FRB beamformed timestreams will be
 
               dt_out = (dt_in / downsampling_factor)
-                     = (1.057 ms) * (32 / downsampling_factor).
+                     = (1.049 ms) * (32 / downsampling_factor).
 
           - ns_feed_spacing: spacing (in meters) of feeds along the north-south axis
 
