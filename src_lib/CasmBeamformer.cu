@@ -319,9 +319,12 @@ struct casm_shuffle_state
 	while (i < nbeams) {
 	    // xns = 128 * (freq/c) * ns_feed_spacing * sin(za_ns)
 	    // FIXME could optimize out this call to fmodf(), I think
-	    constexpr float a = 128.0f / CasmBeamformer::speed_of_light;
-	    float xns = fmodf(a * freq * shmem_f[NSB + i], 128.0f);
-	    xns = (xns > 0.0f) ? xns : (xns+128.0f);
+	    constexpr float a = 1.0f / CasmBeamformer::speed_of_light;
+	    float t = a * freq * shmem_f[NSB + i];   // shmem_f[...] = ns_feed_spacing * sin(za_ns)
+	    t -= int(t);
+	    t = (t >= 0) ? t : (t+1.0f);
+	    
+	    float xns = 128.0f * t;
 	    shmem_f[NSB + i] = xns;
 	    i += 24*32;
 	}
