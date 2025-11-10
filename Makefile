@@ -130,6 +130,7 @@ PYFILES = \
   pirate_frb/__init__.py \
   pirate_frb/__main__.py \
   pirate_frb/CasmReferenceBeamformer.py \
+  pirate_frb/Dense1dBeamformer.py \
   pirate_frb/FakeCorrelator.py \
   pirate_frb/FakeServer.py \
   pirate_frb/Hardware.py

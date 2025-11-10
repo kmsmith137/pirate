@@ -3,8 +3,6 @@ import time
 import math  # lcm()
 import numpy as np
 
-from . import pirate_pybind11
-
 
 class CasmReferenceBeamformer:
     # Feed spacings are in meters.
@@ -271,7 +269,6 @@ class CasmReferenceBeamformer:
 
     
     ##################################   Interpolative beamforming   ###################################
-
     
     def _setup_interpolation(self):
         """Called by constructor, to perform initializations related to interpolative beamforming."""
@@ -444,11 +441,18 @@ class CasmReferenceBeamformer:
             
         print(f'test_casm_interpolative_beamforming: pass, min correlation = {np.min(r)}')
 
-
+    
+    #############  Unit test: python and cuda implementations agree to machine precision   #############
+    
+    
     @classmethod
     def test_cuda_implementation(cls):
-        # FIXME in the future, cupy will be a toplevel dependency
+        # Hack: we put these imports (used only in this function) here, instead of
+        # at the top of the file, so that this file will be importable on a machine
+        # that doesn't have cuda.
+        
         import cupy as cp
+        from . import pirate_pybind11
         
         # Randomize (B/32), D, F, Tout, such that product is <= 10**4
         t = np.random.gamma(1.0, 1.0, size=4)
