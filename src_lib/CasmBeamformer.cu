@@ -138,7 +138,7 @@ struct shmem_99kb
 
 // -------------------------------------------------------------------------------------------------
 //
-// casm_shuffle_state
+// casm_controller
 //
 // Reindex (time,pol) as (i,j) where
 //   i1 i0 <-> t2 t1
@@ -174,7 +174,7 @@ __device__ inline float unpack_int4(uint x, uint s)
 
 
 template<bool Debug>
-struct casm_shuffle_state
+struct casm_controller
 {
     // Managed by setup_e_pointer(), load_ungridded_e(), write_ungridded_e()
     const uint4 *ep4;
@@ -192,7 +192,7 @@ struct casm_shuffle_state
     // 'gpu_persistent_data' argument: see "global memory layout" earlier in source file.
 
     // Warning: caller must call __syncthreads() after calling constructor, and before calling load_ungridded_e().
-    __device__ inline casm_shuffle_state(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
+    __device__ inline casm_controller(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
     {
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
@@ -681,7 +681,7 @@ struct casm_shuffle_state
 
 // Launch with {32,24,1} threads and {F,1,1} blocks.
 
-__global__ void casm_shuffle_test_kernel(
+__global__ void casm_controller_test_kernel(
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
     const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
@@ -695,11 +695,11 @@ __global__ void casm_shuffle_test_kernel(
     assert(gridDim.z == 1);
 
     // Debug=true, nbeams=0
-    casm_shuffle_state<true> shuffle(e_in, feed_weights, gpu_persistent_data, 0);
+    casm_controller<true> controller(e_in, feed_weights, gpu_persistent_data, 0);
     __syncthreads();  // must call __syncthreads() after calling constructor, and before calling load_ungridded_e()
 
     // Set up writing to the 'out' array, with Delta(t)=2.
-    // Output from casm_shuffle_state::unpack_e() has register assignment:
+    // Output from casm_controller::unpack_e() has register assignment:
     //
     //   r1 r0 <-> ns5 ReIm
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
@@ -722,24 +722,24 @@ __global__ void casm_shuffle_test_kernel(
     for (int touter = 0; touter < T; touter += 48) {
 	for (int s = 0; s < 2; s++) {
 	    // Delta(t)=24, Delta(j)=12
-	    shuffle.load_ungridded_e(touter + 24*s, T);
-	    shuffle.write_ungridded_e(s);
+	    controller.load_ungridded_e(touter + 24*s, T);
+	    controller.write_ungridded_e(s);
 	}
 
 	__syncthreads();
 	
-	shuffle.grid_shared_e();
+	controller.grid_shared_e();
 	
 	__syncthreads();
 
 	for (int s = 0; s < 6; s++) {
 	    // Delta(t)=8, Delta(j)=4
-	    shuffle.load_gridded_e(s);
+	    controller.load_gridded_e(s);
 	    
 	    for (int i = 0; i < 4; i++) {
 		// Delta(t)=2
 		float e0_re, e0_im, e1_re, e1_im;
-		shuffle.unpack_e(i, e0_re, e0_im, e1_re, e1_im);
+		controller.unpack_e(i, e0_re, e0_im, e1_re, e1_im);
 		
 		// r1 r0 <-> ns5 ReIm
 		// l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
@@ -766,7 +766,7 @@ __global__ void casm_shuffle_test_kernel(
 }
 
 
-static void casm_shuffle_reference_kernel(
+static void casm_controller_reference_kernel(
     const CasmBeamformer &bf,
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
@@ -831,26 +831,26 @@ static Array<float> make_random_feed_weights(int F)
 }
 
 
-static void test_casm_shuffle(const CasmBeamformer &bf)
+static void test_casm_controller(const CasmBeamformer &bf)
 {
-    static shmem_99kb s(casm_shuffle_test_kernel);
+    static shmem_99kb s(casm_controller_test_kernel);
     s.set();
     
     int F = bf.F;
     int T = bf.nominal_Tin_for_unit_tests;
-    cout << "test_casm_shuffle(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << ")" << endl;
+    cout << "test_casm_controller(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << ")" << endl;
     
     Array<uint8_t> e = make_random_e_array(T,F);
     Array<float> feed_weights = make_random_feed_weights(F);
     Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
     Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
     
-    casm_shuffle_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
+    casm_controller_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
     
     e = e.to_gpu();
     feed_weights = feed_weights.to_gpu();
-    casm_shuffle_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
-    CUDA_PEEK("casm_shuffle_test_kernel");
+    casm_controller_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
+    CUDA_PEEK("casm_controller_test_kernel");
 
     assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
 }
@@ -870,7 +870,7 @@ __device__ inline void fft0(float &xre, float &xim)
 
 
 template<int R>
-struct fft_c2c_state
+struct fft_c2c_microkernel
 {
     // Implements a c2c FFT with 2^R elements.
     //
@@ -882,7 +882,7 @@ struct fft_c2c_state
     //   r1 r0 <-> y_{r-1} ReIm
     //   l4 l3 l2 l1 l0 <-> s_{5-r} ... s0 y_0 ... y_{r-2}
 
-    fft_c2c_state<R-1> next_fft;
+    fft_c2c_microkernel<R-1> next_fft;
     float cre, cim;
 
     // phase128 = cos(2*pi*l/128), where 0 <= l < 32 is laneId.
@@ -923,9 +923,9 @@ struct fft_c2c_state
 };
 
 
-// Specializing fft_c2c_state<R> for R=2 saves two persistent registers (per thread).
+// Specializing fft_c2c_microkernel<R> for R=2 saves two persistent registers (per thread).
 template<>
-struct fft_c2c_state<2>
+struct fft_c2c_microkernel<2>
 {
     __device__ inline void init(float phase128) { }
     
@@ -978,7 +978,7 @@ __global__ void fft_c2c_test_kernel(const float *in, float *out)
     float x1_re = in[sin + (1<<R)];
     float x1_im = in[sin + (1<<R) + 1];
     
-    fft_c2c_state<R> fft;
+    fft_c2c_microkernel<R> fft;
     fft.init(phase128);
     fft.apply(x0_re, x0_im, x1_re, x1_im);
 
@@ -1038,7 +1038,7 @@ static void test_casm_fft_c2c()
 // Implements a zero-padded c2c FFT with 64 inputs and 128 outputs.
 //
 // Input array should be in registers, with the same register assignment as
-// casm_shuffler::load_gridded_e():
+// casm_controllerr::load_gridded_e():
 //
 //   r1 r0 <-> ns5 ReIm
 //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
@@ -1049,13 +1049,13 @@ static void test_casm_fft_c2c()
 
 
 template<bool Debug>
-struct fft1_state
+struct fft1_microkernel
 {
-    fft_c2c_state<6> next_fft;
+    fft_c2c_microkernel<6> next_fft;
     float cre, cim;   // "twiddle" factor exp(2*pi*i t / 128)
     int sbase;        // shared memory offset
 
-    __device__ inline fft1_state()
+    __device__ inline fft1_microkernel()
     {
 	extern __shared__ float shmem_f[];
 	
@@ -1171,7 +1171,7 @@ __global__ void fft1_test_kernel(const float *in, float *out)
 
     __syncthreads();
     
-    // Input register assignment for fft1_state::apply() is:
+    // Input register assignment for fft1_microkernel::apply() is:
     //
     //   r1 r0 <-> ns5 ReIm
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
@@ -1192,7 +1192,7 @@ __global__ void fft1_test_kernel(const float *in, float *out)
     float x1_re = in[128*tpe + 2*(ns+32)];
     float x1_im = in[128*tpe + 2*(ns+32) + 1];
 
-    fft1_state<true> fft1;  // Debug=true
+    fft1_microkernel<true> fft1;  // Debug=true
     fft1.apply(x0_re, x0_im, x1_re, x1_im);
     __syncthreads();
 
@@ -1300,7 +1300,7 @@ static void test_casm_fft1()
 
 
 template<bool Debug>
-struct fft2_state
+struct fft2_microkernel
 {
     // Note: we use 12 persistent registers/thread to store beamforming
     // phases, but the number of distinct phases is 24/warp or 72/block.
@@ -1316,7 +1316,7 @@ struct fft2_state
     int soff_i1;    // base shared memory offset in I-array, bouter=1
 
 
-    __device__ inline fft2_state()
+    __device__ inline fft2_microkernel()
     {
 	extern __shared__ float shmem_f[];
 	
@@ -1499,10 +1499,10 @@ __global__ void fft2_test_kernel(
     assert(blockDim.y == 24);
     assert(blockDim.z == 1);
 	
-    casm_shuffle_state<true> shuffle(nullptr, feed_weights, gpu_persistent_data, 0);
+    casm_controller<true> controller(nullptr, feed_weights, gpu_persistent_data, 0);
     __syncthreads(); // I dont think I actually need this
     
-    fft2_state<true> fft2;  // Debug=true
+    fft2_microkernel<true> fft2;  // Debug=true
 
     // Divide (F,6,128) array between threads.
     int f = blockIdx.x;
@@ -1784,7 +1784,7 @@ __global__ void casm_interpolation_test_kernel(
     assert((B % 32) == 0);
 
     // Debug=true, e_in=nullptr
-    casm_shuffle_state<true> shuffle(nullptr, feed_weights, gpu_persistent_data, B);
+    casm_controller<true> controller(nullptr, feed_weights, gpu_persistent_data, B);
     __syncthreads();  // must call __syncthreads() after calling constructor, and before calling interpolator.apply()
 
     interpolation_microkernel<true> interpolator(i_out, B);
@@ -1927,13 +1927,13 @@ casm_beamforming_kernel(
 {
     constexpr bool Debug = false;
     
-    casm_shuffle_state<Debug> shuffle(e_in, feed_weights, gpu_persistent_data, B);
+    casm_controller<Debug> controller(e_in, feed_weights, gpu_persistent_data, B);
 
     // Must call __syncthreads() after constructor, and before calling load_ungridded_e().
     __syncthreads();
 
-    fft1_state<Debug> fft1;
-    fft2_state<Debug> fft2;
+    fft1_microkernel<Debug> fft1;
+    fft2_microkernel<Debug> fft2;
     interpolation_microkernel<Debug> interpolator(i_out, B);
 
     int Tin = Tout * Tds;
@@ -1949,7 +1949,7 @@ casm_beamforming_kernel(
 	// Start loading E-array (24 times, both pols, all 256 dishes) from global memory.
 	// No-ops on threads which would read past the end of input data.
 	// No need for __syncthreads() here, since we're just reading into registers.
-	shuffle.load_ungridded_e(touter+48, Tin);
+	controller.load_ungridded_e(touter+48, Tin);
 
 	// outer_phase = {0,1}, depending on whether touter = {0,24} mod 48.
 	int outer_phase = (touter & 0x8) >> 3;
@@ -1959,7 +1959,7 @@ casm_beamforming_kernel(
 
 	if (outer_phase == 0) {
 	    __syncthreads();   // wait for write_ungridded_e() in previous loop iteration.
-	    shuffle.grid_shared_e();
+	    controller.grid_shared_e();
 	    __syncthreads();   // barrier before calling load_gridded_e() below.
 	}
 
@@ -1970,12 +1970,12 @@ casm_beamforming_kernel(
 	    // No syncthreads() needed before or after load_gridded_e(), since:
 	    //   - grid_shared_e() has syncthreads() after it, see above
 	    //   - write_ungridded_e() has syncthreads() before it, see above
-	    shuffle.load_gridded_e(3*outer_phase + m);  // phase = 3*flag + m
+	    controller.load_gridded_e(3*outer_phase + m);  // phase = 3*flag + m
 
 	    for (int tpol = 0; tpol < 16; tpol++) {
 		if ((tpol & 3) == 0) {
 		    float e0_re, e0_im, e1_re, e1_im;
-		    shuffle.unpack_e(tpol >> 2, e0_re, e0_im, e1_re, e1_im);
+		    controller.unpack_e(tpol >> 2, e0_re, e0_im, e1_re, e1_im);
 		    
 		    __syncthreads();
 		    fft1.apply(e0_re, e0_im, e1_re, e1_im);
@@ -2003,7 +2003,7 @@ casm_beamforming_kernel(
     write_e:
 	if (touter + 48 < Tin) {
 	    __syncthreads();  // wait for load_gridded_e() above.
-	    shuffle.write_ungridded_e(outer_phase);
+	    controller.write_ungridded_e(outer_phase);
 	}
 
 	// The value of 'touter' advances by 24, in each iteration of the outer loop.
@@ -2288,7 +2288,7 @@ void CasmBeamformer::test_microkernels()
     // CasmBeamformer::show_shared_memory_layout();
     CasmBeamformer bf = CasmBeamformer::make_random();
 
-    test_casm_shuffle(bf);
+    test_casm_controller(bf);
     test_casm_fft_c2c();
     test_casm_fft1();
     test_casm_fft2(bf);
