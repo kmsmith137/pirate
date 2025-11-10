@@ -44,6 +44,7 @@ struct CasmBeamformer
     
     int F = 0;  // number of frequency channels (on one GPU)
     int B = 0;  // number of output beams
+    int device = -1;
     int downsampling_factor = 0;
     
     ksgpu::Array<float> frequencies;     // shape (F,)

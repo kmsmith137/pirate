@@ -44,6 +44,10 @@ __device__ void check_bank_conflict_free(int offset, int max_conflicts=1)
 // -------------------------------------------------------------------------------------------------
 //
 // Memory layouts
+//
+// NOTE: we currently keep the beam locations in shared memory. In hindsight, maybe registers
+// would have been better? (I don't think it's worth revisiting for CASM-256, but I'm leaving
+// this note, in case the beamformer is ever extended to a larger array.)
 
 
 // Global memory layout for 'gpu_persistent_data'.
@@ -1644,6 +1648,12 @@ static void test_casm_fft2(const CasmBeamformer &bf)
 // - Output: writes interpolated I-values to global memory, and advances output pointer.
 // 
 //     float I[Tout][F][B];
+//
+// NOTE: interpolation currently has a 2-to-1 shared memory bank conflict. In principle,
+// this could be fixed by doing two interpolations in parallel (either two times, or two
+// beams if there are enough beams), and doubling the size of I[] in shared memory. In
+// practice, I didn't think this was worth implementing, since interpolation is fast
+// compared to other parts of the beamformer.
 
 
 template<bool Debug>
@@ -1912,7 +1922,7 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
 
 // -------------------------------------------------------------------------------------------------
 //
-// FIXME too many syncthreads!
+// Putting it all together: casm_beamforming_kernel.
 
 
 __global__ void __launch_bounds__(24*32, 1)
@@ -2039,6 +2049,8 @@ CasmBeamformer::CasmBeamformer(
     this->F = frequencies.shape[0];
     this->B = beam_locations.shape[0];
 
+    CUDA_CALL(cudaGetDevice(&this->device));
+    
     xassert_gt(F, 0);
     xassert_gt(B, 0);
     xassert_divisible(B, 32);  // currently required by GPU kernel, but not python reference code
@@ -2255,7 +2267,17 @@ void CasmBeamformer::launch_beamformer(
 {
     static shmem_99kb s(casm_beamforming_kernel);
     s.set();
-	
+
+    int d = -2;
+    CUDA_CALL(cudaGetDevice(&d));
+    
+    if (this->device != d) {
+	stringstream ss;
+	ss << "CasmBeamformer: CUDA device at construction (dev=" << this->device << ") differs"
+	   << " from device in launch_beamformer() (dev=" << d << ")";
+	throw runtime_error(ss.str());
+    }
+    
     xassert(e_in.ndim >= 1);    
     xassert_shape_eq(e_in, ({ e_in.shape[0], F, 2, 256 }));
     xassert(e_in.is_fully_contiguous());
