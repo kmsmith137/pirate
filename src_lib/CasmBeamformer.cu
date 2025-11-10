@@ -1679,8 +1679,9 @@ struct interpolation_microkernel
 {
     float *out;
     int nbeams;
+    float normalization;
     
-    __device__ inline interpolation_microkernel(float *out_, int nbeams_)
+    __device__ inline interpolation_microkernel(float *out_, int nbeams_, float normalization_)
     {
 	if constexpr (Debug) {
 	    assert(blockDim.x == 32);
@@ -1691,6 +1692,7 @@ struct interpolation_microkernel
 	int f = blockIdx.x;
 	out = out_ + f * nbeams_;
 	nbeams = nbeams_;
+	normalization = normalization_;
     }
 
     __device__ inline float compute_wk(int k, float x)
@@ -1766,8 +1768,8 @@ struct interpolation_microkernel
 		}
 	    }
 
-	    out[b] = ret;
-	    // __stcs(out + b, ret);  // streaming write made no difference here
+	    out[b] = normalization * ret;
+	    // __stcs(out + b, normalization * ret);  // streaming write made no difference here
 	}
 
 	// Advance output pointer.
@@ -1782,7 +1784,7 @@ __global__ void casm_interpolation_test_kernel(
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim), dereferenced but not used
     const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
     float *i_out,                       // (Tout,F,B)
-    int Tout, int B)
+    int Tout, int B, float normalization)
 {
     extern __shared__ float shmem_f[];
     
@@ -1797,7 +1799,7 @@ __global__ void casm_interpolation_test_kernel(
     casm_controller<true> controller(nullptr, feed_weights, gpu_persistent_data, B);
     __syncthreads();  // must call __syncthreads() after calling constructor, and before calling interpolator.apply()
 
-    interpolation_microkernel<true> interpolator(i_out, B);
+    interpolation_microkernel<true> interpolator(i_out, B, normalization);
     
     for (int t = 0; t < Tout; t++) {
 	// Read gridded I-array (global memory) -> (shared).
@@ -1838,7 +1840,7 @@ __host__ inline void compute_interpolation_weights(float dx, float w[4])
 
 
 // (Tout,F,24,128) -> (Tout,F,B)
-static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, const Array<float> &in)
+static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, const Array<float> &in, float normalization)
 {
     xassert_ge(in.ndim, 1);
     xassert_shape_eq(in, ({in.shape[0], bf.F, 24, 128}));
@@ -1884,7 +1886,7 @@ static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, con
 		    }
 		}
 
-		out.at({t,f,b}) = x;
+		out.at({t,f,b}) = normalization * x;
 	    }
 	}
     }
@@ -1900,17 +1902,19 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
 
     int F = bf.F;
     int B = bf.B;
-    int Tout = rand_int(1,5);;
-    cout << "test_casm_interpolation(Tout=" << Tout << ", F=" << F << ", B=" << B << ")" << endl;
+    int Tout = rand_int(1,5);
+    float normalization = rand_uniform();
+    cout << "test_casm_interpolation(Tout=" << Tout << ", F=" << F
+	 << ", B=" << B << ", norm=" << normalization << ")" << endl;
     
     Array<float> in({Tout,F,24,128}, af_rhost | af_random);
     Array<float> out_gpu({Tout,F,B}, af_gpu | af_random);
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
     
-    Array<float> out_cpu = interpolation_reference_kernel(bf, in);
+    Array<float> out_cpu = interpolation_reference_kernel(bf, in, normalization);
 
     casm_interpolation_test_kernel<<< F, {32,24,1}, 99*1024 >>>
-	(in.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, Tout, B);
+	(in.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, Tout, B, normalization);
 
     CUDA_PEEK("casm_interpolation_test_kernel launch");
 
@@ -1933,7 +1937,8 @@ casm_beamforming_kernel(
     float *i_out,                       // (Tout,F,B)
     int Tout,                           // Number of output times
     int Tds,                            // Downsampling factor Tin/Tout
-    int B)                              // Number of beams
+    int B,                              // Number of beams
+    float normalization)                // Currently equal to 1/(2*Tds)
 {
     constexpr bool Debug = false;
     
@@ -1944,7 +1949,7 @@ casm_beamforming_kernel(
 
     fft1_microkernel<Debug> fft1;
     fft2_microkernel<Debug> fft2;
-    interpolation_microkernel<Debug> interpolator(i_out, B);
+    interpolation_microkernel<Debug> interpolator(i_out, B, normalization);
 
     int Tin = Tout * Tds;
     int ds_counter = Tds;
@@ -2294,10 +2299,12 @@ void CasmBeamformer::launch_beamformer(
 
     int Tin = e_in.shape[0];
     int Tout = i_out.shape[0];
+    float normalization = 1.0f / (2.0f * downsampling_factor);
     xassert(Tin == Tout * downsampling_factor);
 
     casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
-	(e_in.data, feed_weights.data, gpu_persistent_data.data, i_out.data, Tout, downsampling_factor, B);
+	(e_in.data, feed_weights.data, gpu_persistent_data.data,
+	 i_out.data, Tout, downsampling_factor, B, normalization);
 
     CUDA_PEEK("casm_beamforming_kernel launch");
 }
