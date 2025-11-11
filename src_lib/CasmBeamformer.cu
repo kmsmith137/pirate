@@ -17,7 +17,16 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 
 
-// FIXME by calling warp_transpose() in pairs, am I being suboptimal?
+// Setup: suppose we have a pair of registers [x,y] on each thread,
+// which represent a 64-element array with register assignment:
+//
+//   l0 l1 l2 l3 l4 <-> i0 i1 i2 i3 i4   r <-> j
+//
+// Calling warp_transpose(x, y, 1 << N) will swap bits i_N and j,
+// so that the register assignment is:
+//
+//   l0 l1 l2 l3 l4 <-> i0 ... i_{N-1} j i_{N+1} ... i4    r <-> i_N
+
 template<typename T>
 __device__ void warp_transpose(T &x, T &y, uint bit)
 {
@@ -31,14 +40,37 @@ __device__ void warp_transpose(T &x, T &y, uint bit)
 
 
 template<bool Debug>
-__device__ void check_bank_conflict_free(int offset, int max_conflicts=1)
+__device__ void check_bank_conflict_free(int offset_32bit, int max_conflicts=1)
 {
     if constexpr (Debug) {
-	uint m = __match_any_sync(0xffffffff, offset & 31);
+	uint m = __match_any_sync(0xffffffff, offset_32bit & 31);
 	assert(__popc(m) <= max_conflicts);
-	assert(offset >= 0);
+	assert(offset_32bit >= 0);
     }
 }
+
+
+// Sets max shared memory size of a GPU kernel to 99KB (max possible on Ada architecture).
+template<typename F>
+struct shmem_99kb
+{
+    bool flag = false;
+    F *func = nullptr;
+    
+    inline shmem_99kb(const F &func_) : func(func_) { }
+    
+    inline void set()
+    {
+	if (!flag) {
+	    CUDA_CALL(cudaFuncSetAttribute(
+	        func,
+		cudaFuncAttributeMaxDynamicSharedMemorySize,
+		99 * 1024
+	    ));
+	    flag = true;
+	}
+    }
+};
 
 
 // -------------------------------------------------------------------------------------------------
@@ -58,13 +90,17 @@ __device__ void check_bank_conflict_free(int offset, int max_conflicts=1)
 //   uint gridding[256];                  contains (43*ew+ns) for each dish
 //   float ns_phases[32];                 contains cos(2pi * t / 128) for 0 <= t < 32
 //   float per_frequency_data[F][3][32];  middle index is 0 <= ew_feed < 3, see (*) below
-//   float beam_locs[B][2];               contains { feed_spacing_ns * sin(za_ns), sin(za_ew) }
+//   float beam_locs[B][2];               contains { feed_spacing_ns * sin(za_ns), sin(za_ew) } (**)
 //
-// (*) The 32-element per_frequency_data "inner" index is laid out as follows:
+// (*) The length-32 "inner" index in 'per_frequency_data' is laid out as follows:
 //
 //   float ew_phases[12][2];              (ew_beam, cos/sin) for fixed 0 <= ew_feed < 3
 //   float freq;                          array element 25
-
+//
+// (**) Note that beam locations are specified in **host-side** code as (sin(za_ns), sin(za_ew)),
+//  where (za_ns, za_ew) are the zenith angles. However, in the GPU kernel, it's more convenient
+//  to represent beam locations as (feed_spacing_ns * sin(za_ns), sin(za_ew)). The conversion is
+//  done in the CasmBeamformer constructor.
 
 struct gmem_layout
 {
@@ -76,8 +112,16 @@ struct gmem_layout
 };
 
 
-// Shared memory layout (columns are [32-bit offset], physical layout, logical layout).
+// Shared memory layout.
 // Note that max number of beams is 4672, which gives 99KB shared memory.
+// Some of these arrays have non-contiguous strides, in order to avoid a bank conflict.
+//
+// The E[] array stores int4+4 voltages, which may be either gridded or ungridded.
+// The I[] array stores a (24,128) regular grid of beamformed intensities, before interpolation.
+// The G[] array stores the "partially beamformed" intermediate array (beamformed in NS direction but not EW).
+//
+// For reference, here is the output of CasmBeamformer::show_shared_memory_layout().
+// Columns are ([32-bit offset], physical layout, logical layout).
 //
 // [0]      uint gridding[256];                                         // contains (43*ew+ns), derived from 'feed_indices'
 // [256]    float ns_phases[32];                                        // contains cos(2pi * t / 128) for 0 <= t < 32
@@ -118,50 +162,49 @@ struct shmem_layout
 };
 
 
-template<typename F>
-struct shmem_99kb
-{
-    bool flag = false;
-    F *func = nullptr;
-    
-    inline shmem_99kb(const F &func_) : func(func_) { }
-    
-    inline void set()
-    {
-	if (!flag) {
-	    CUDA_CALL(cudaFuncSetAttribute(
-	        func,
-		cudaFuncAttributeMaxDynamicSharedMemorySize,
-		99 * 1024
-	    ));
-	    flag = true;
-	}
-    }
-};
-
-
 // -------------------------------------------------------------------------------------------------
 //
-// casm_controller
+// casm_controller: this is one of four "microkernels" that get coalesced into the casm beamformer.
+// It is responsible for one-time initializations:
 //
-// Reindex (time,pol) as (i,j) where
+//    - copy_global_to_shared_memory(): gridding, fft phases, feed weights, beam locations, etc.
+//    - normalize_beam_locations(): (ns_feed_spacing * sin(za_ns), sin(za_ew)) -> (xns, xew)
+//    - setup_feed_weights(): convert 'feed_weights' array from shape (256,) to shape (6,43).
+//
+// and the following steps in the main kernel loop:
+// 
+//    - load_ungridded_e(): called every 24 time samples, to start reading E-array into registers
+//    - write_ungridded_e(): called every 24 time samples, to write E-array to shared memory
+//    - grid_shared_e(): called every 48 time samples, to "grid" E-array in shared memory
+//    - load_gridded_e(): called every 8 time samples, to read E-array from shared -> registers
+//    - unpack_e(): called every 2 time samples, to convert int4+4 -> float32+32 and apply weights
+//
+// The idea is that the casm_controller handles global memory management, and management of the
+// E-array in shared memory, so that other parts of the beamforming kernel don't need to worry
+// about these details.
+//
+//
+// **Note 1** the E-array shared memory layout is nontrivial to describe!
+// It's convenient to reindex (time,pol) as (i,j) where
+//
 //   i1 i0 <-> t2 t1
 //   j2* j1 j0 <-> t3* t0 pol
 //
-// load_ungridded_e(): Delta(t)=24
-// write_ungridded_e(): Delta(t)=24
-// grid_shared_e(): Delta(t)=48
-// load_gridded_e(): Delta(t)=8
-// unpack_e(): Delta(t)=2
+// The int4+4 E-array is "promoted" to uint32, using bits [i1,i0].
+// Then the E-array can be viewed as follows:
 //
-// Shared memory layout:
+//   uint E[J][256];     // if ungridded
+//   uint E[J][6][43];   // if gridded
 //
-//   uint E[24][259];   // first index is j, corresponds to 48 time samples
+// where J=24 corresponds to 48 time samples. The actual shared memory layout is:
 //
-// The length-259 axis represents either a shape-(256,) or shape-(6,43) array,
-// padded to stride 259.
+//   uint E[24][259];  union { E[24][256], E[24][6][43] }   // (j,dish) or (j,ew,ns), outer stride 259
 //
-// Assumes {32,24,1} thread grid, not {32*24,1,1}.
+// where we use j-stride 259 in order to avoid a shared memory bank conflict.
+//
+//
+// **Note 2** all kernels use {32,24,1} threads/block, and {F,1,1} blocks.
+
 
 __device__ inline void double_byte_perm(uint &x, uint &y, uint s1, uint s2)
 {
@@ -181,21 +224,25 @@ template<bool Debug>
 struct casm_controller
 {
     // Managed by setup_e_pointer(), load_ungridded_e(), write_ungridded_e()
-    const uint4 *ep4;
-    uint4 e4;
+    const uint4 *ep4;  // global memory pointer
+    uint4 e4;          // stores E-array, en route from global->shared
 
     // Managed by setup_feed_weights(), load_gridded_e(), unpack_e().
-    float fw0_re, fw0_im, fw1_re, fw1_im;
-    uint e0, e1;
-
-    // Gains in persistent registers.
-    // float g0_re, g0_im, g1_re, g1_im;
+    float fw0_re, fw0_im, fw1_re, fw1_im;  // persistent registers to store feed weights
+    uint e0, e1;       // stores E-array, en route from shared->unpacked
     
+    // Constructor does one-time initializations:
+    //
+    //    - copy_global_to_shared_memory(): gridding, fft phases, feed weights, beam locations, etc.
+    //    - normalize_beam_locations(): (ns_feed_spacing * sin(za_ns), sin(za_ew)) -> (xns, xew)
+    //    - setup_feed_weights(): convert 'feed_weights' array from shape (256,) to shape (6,43).
+    //
     // 'global_e' argument: points to (T,F,2,256)
     // 'feed_weights' argument: points to (F,2,256,2)
     // 'gpu_persistent_data' argument: see "global memory layout" earlier in source file.
-
+    //
     // Warning: caller must call __syncthreads() after calling constructor, and before calling load_ungridded_e().
+    
     __device__ inline casm_controller(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
     {
 	if constexpr (Debug) {
@@ -214,7 +261,7 @@ struct casm_controller
 	setup_feed_weights();
     }
 
-    // copy_global_to_shared_memory() performs the following copies
+    // copy_global_to_shared_memory(): called by constructor, performs the following copies
     //
     //    gridding (256 elts): gpu_persistent_data -> shmem
     //    ns_phases (32 elts): gpu_persistent_data -> shmem (32 elts)
@@ -302,7 +349,7 @@ struct casm_controller
 	// Note: no __syncthreads() here, caller is responsible for calling __syncthreads().
     }
 
-    // normalize_beam_locations()
+    // normalize_beam_locations(): called by constructor
     //
     // Input: (ns_feed_spacing * sin(za_ns), sin(za_ew)) in shared memory
     //
@@ -322,7 +369,6 @@ struct casm_controller
 
 	while (i < nbeams) {
 	    // xns = 128 * (freq/c) * ns_feed_spacing * sin(za_ns)
-	    // FIXME could optimize out this call to fmodf(), I think
 	    constexpr float a = 1.0f / CasmBeamformer::speed_of_light;
 	    float t = a * freq * shmem_f[NSB + i];   // shmem_f[...] = ns_feed_spacing * sin(za_ns)
 	    t -= int(t);
@@ -347,9 +393,9 @@ struct casm_controller
     // These member functions manage copying the ungridded E-array from global
     // memory to shared memory, with Delta(t)=24.
     //
-    //   setup_e_pointer()
-    //   load_ungridded_e()
-    //   write_ungridded_e()
+    //   setup_e_pointer(): called by constructor
+    //   load_ungridded_e(): called in kernel loop, every 24 time samples
+    //   write_ungridded_e(): called in kernel loop, every 24 time samples
     //
     // Data is read from global memory with (T=24, I=4, J=48, D=128):
     //
@@ -399,6 +445,9 @@ struct casm_controller
 	ep4 += 32*(t*F+f) + 16*pol + d16;
     }
 
+    // load_ungridded_e(): called every 24 time samples, to start reading
+    // E-array into registers.
+    //
     // The value of 't0' is the same on all threads, and advances by 24
     // after each call to load_ungridded_e(). A thread-dependent offset
     // 'dt' will be added, and load_ungridded_e() no-ops if (t0+dt) >= T,
@@ -414,7 +463,10 @@ struct casm_controller
 	    e4 = *ep4;
     }
 
-    // "phase" is either 0 or 1
+    // write_ungridded_e(): called every 24 time samples, to write E-array
+    // to shared memory. The "phase" argument is either 0 or 1, and indicates
+    // the phase within the 48-sample shared memory window.
+
     __device__ inline void write_ungridded_e(int phase)
     {
 	extern __shared__ uint shmem_u[];
@@ -487,7 +539,7 @@ struct casm_controller
 	ep4 += 24*32*F;        // advance by 24 time samples
     }
 
-    // grid_shared_e(): "gridding" the E-array in shared memory.
+    // grid_shared_e(): called every 48 time samples, to "grid" E-array in shared memory.
     //
     // A little awkward, since we want to loop over 256 dishes with 24 warps.
     // Note that 256 = 10*240 + 16.
@@ -530,15 +582,14 @@ struct casm_controller
 	}
     }
 
-
     // The member functions
     //
-    //   setup_feed_weights()
-    //   load_gridded_e()
-    //   unpack_e()
+    //   setup_feed_weights(): called by constructor
+    //   load_gridded_e(): called every 8 time samples
+    //   unpack_e(): called every 2 time samples
     //
-    // manage reading the int4+4 gridded E-array from shared memory with
-    // Delta(t)=8, and "unpacking" to float registers with Delta(t)=2.
+    // manage reading the int4+4 gridded E-array from shared memory, "unpacking"
+    // to float32+32, and applying feed weights.
     //
     // The int4+4 E-array uses register assignment (T=8, P=2, EW=6, NS=64):
     //
@@ -553,6 +604,8 @@ struct casm_controller
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
     //   w2* w1 w0 <-> ew t0 pol  (= j1 j0)
 
+
+    // Called by constructor, converts 'feed_weights' array from shape (256,) to shape (6,43).
     __device__ inline void setup_feed_weights()
     {
 	extern __shared__ float shmem_f[];
@@ -584,8 +637,8 @@ struct casm_controller
 	    float fw2 = shmem_f[src + 2*WS];
 	    float fw3 = shmem_f[src + 3*WS];
 
-	    // This is logically correct, but can produce arbitrarily bad bank conflicts,
-	    // so we shuffle things around a bit first.
+	    // The following 4 lines of code would be logically correct, but can produce arbitrarily
+	    // bad bank conflicts, so we shuffle things around first.
 	    //
 	    //   shmem_f[dst] = fw0;
 	    //   shmem_f[dst + WS] = fw1;
@@ -643,7 +696,10 @@ struct casm_controller
 	fw1_im = (l < 11) ? shmem_f[s + 2*WS + 32] : 0.0f;   // If (ns > 43), assign zero weight
     }
 
-    // "phase" should satisfy 0 <= phase < 6.
+    // load_gridded_e(): called every 8 time samples, to read E-array from shared -> registers.
+    // The "phase" argument satisfies 0 <= phase < 6, and indicates the phase within the 48-sample
+    // shared memory window.
+    
     __device__ inline void load_gridded_e(int phase)
     {
 	extern __shared__ uint shmem_u[];
@@ -659,11 +715,12 @@ struct casm_controller
 	e0 = shmem_u[s];
 	e1 = (threadIdx.x < 11) ? shmem_u[s+32] : 0;
     }
+
+    // unpack_e(): called every 2 time samples, to convert int4+4 -> float32+32 and apply weights.
     
     __device__ inline void unpack_e(int i, float &e0_re, float &e0_im, float &e1_re, float &e1_im)
     {
 	// i is the length-4 index (t2 t1).
-	// FIXME save a few cycles by offset encoding earlier?
 	
 	if constexpr (Debug)
 	    assert((i >= 0) && (i < 4));
@@ -683,8 +740,7 @@ struct casm_controller
 };
 
 
-// Launch with {32,24,1} threads and {F,1,1} blocks.
-
+// Unit test for 'struct casm_controller'.
 __global__ void casm_controller_test_kernel(
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
@@ -770,6 +826,7 @@ __global__ void casm_controller_test_kernel(
 }
 
 
+// Unit test for 'struct casm_controller'.
 static void casm_controller_reference_kernel(
     const CasmBeamformer &bf,
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
@@ -810,33 +867,10 @@ static void casm_controller_reference_kernel(
 }
 
 
-// FIXME should this be a CasmBeamformer member function?
-static Array<uint8_t> make_random_e_array(int T, int F)
-{
-    Array<uint8_t> ret({T,F,2,256}, af_rhost | af_zero);
-
-    uint *p = (uint *) (ret.data);
-    int n = (ret.size >> 2);
-
-    for (int i = 0; i < n; i++) {
-	uint t1 = ksgpu::default_rng();
-	uint t2 = ksgpu::default_rng();
-	p[i] = t1 ^ (t2 << 16);
-    }
-
-    return ret;
-}
-
-
-// FIXME should this be a CasmBeamformer member function?
-static Array<float> make_random_feed_weights(int F)
-{
-    return Array<float> ({F,2,256,2}, af_rhost | af_random);
-}
-
-
+// Unit test for 'struct casm_controller'.
 static void test_casm_controller(const CasmBeamformer &bf)
 {
+    // Allow kernel to use 99KB shared memory.
     static shmem_99kb s(casm_controller_test_kernel);
     s.set();
     
@@ -844,8 +878,8 @@ static void test_casm_controller(const CasmBeamformer &bf)
     int T = bf.nominal_Tin_for_unit_tests;
     cout << "test_casm_controller(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << ")" << endl;
     
-    Array<uint8_t> e = make_random_e_array(T,F);
-    Array<float> feed_weights = make_random_feed_weights(F);
+    Array<uint8_t> e = CasmBeamformer::make_random_e_array(T,F);
+    Array<float> feed_weights = CasmBeamformer::make_random_feed_weights(F);
     Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
     Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
     
@@ -862,7 +896,8 @@ static void test_casm_controller(const CasmBeamformer &bf)
 
 // -------------------------------------------------------------------------------------------------
 //
-// fft_c2c (helper for "FFT1" kernel)
+// fft_c2c_microkernel: implements a c2c FFT with 2^R "active" elements and 2^{6-R} "spectators".
+// (This is a helper for fft1_microkernel, see below.)
 
 
 __device__ inline void fft0(float &xre, float &xim)
@@ -876,7 +911,7 @@ __device__ inline void fft0(float &xre, float &xim)
 template<int R>
 struct fft_c2c_microkernel
 {
-    // Implements a c2c FFT with 2^R elements.
+    // Implements a c2c FFT with 2^R "active" elements and 2^{6-R} "spectators".
     //
     // Input register assignment:
     //   r1 r0 <-> x_{r-1} ReIm
@@ -889,7 +924,7 @@ struct fft_c2c_microkernel
     fft_c2c_microkernel<R-1> next_fft;
     float cre, cim;
 
-    // phase128 = cos(2*pi*l/128), where 0 <= l < 32 is laneId.
+    // Caller passes phase128 = cos(2*pi*l/128), where 0 <= l < 32 is laneId.
     __device__ inline void init(float phase128)
     {
 	// We want to compute the phase:
@@ -957,14 +992,19 @@ struct fft_c2c_microkernel<2>
 };
 
 
-// Call with {1,32} threads.
+// Unit test for 'struct fft_c2c_microkernel'.
 // Input and output arrays have shape (2^(6-R), 2^R, 2)
+// Call with 32 threads.
+
 template<int R>
 __global__ void fft_c2c_test_kernel(const float *in, float *out)
 {
     assert(blockDim.x == 32);
     assert(blockDim.y == 1);
     assert(blockDim.z == 1);
+    assert(gridDim.x == 1);
+    assert(gridDim.y == 1);
+    assert(gridDim.z == 1);
 
     constexpr float a = 6.283185307f / 128.0;   // 2*pi / 128
     float phase128 = cosf(a * threadIdx.x);
@@ -1000,13 +1040,14 @@ __global__ void fft_c2c_test_kernel(const float *in, float *out)
 }
 
 
-static void test_casm_fft_c2c()
+// Unit test for 'struct fft_c2c_microkernel'.
+static void test_casm_fft_c2c_microkernel()
 {
     constexpr int R = 6;
     constexpr int N = (1 << R);
     constexpr int S = (1 << (6-R));
 
-    cout << "test_casm_fft_c2c()" << endl;
+    cout << "test_casm_fft_c2c_microkernel()" << endl;
     Array<float> in({S,N,2}, af_random | af_rhost);
     Array<float> out_cpu({S,N,2}, af_zero | af_rhost);
     Array<float> out_gpu({S,N,2}, af_random | af_gpu);
@@ -1037,12 +1078,14 @@ static void test_casm_fft_c2c()
 
 // -------------------------------------------------------------------------------------------------
 //
-// FFT1
+// FFT1 microkernel: implements a zero-padded c2c FFT with 64 inputs and 128 outputs.
 //
-// Implements a zero-padded c2c FFT with 64 inputs and 128 outputs.
+// This is called in the main kernel every 2 time samples, to do the 43->128 beamforming
+// along the NS axis, and write the resulting "partially beamformed" (6,128) array to G[]
+// shared memory, for 2 time samples and both polarizations.
 //
 // Input array should be in registers, with the same register assignment as
-// casm_controllerr::load_gridded_e():
+// casm_controller::load_gridded_e():
 //
 //   r1 r0 <-> ns5 ReIm
 //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
@@ -1148,9 +1191,10 @@ struct fft1_microkernel
 };
 
 
-// Call with {32,24} threads.
-// Input array has shape (2,2,6,64,2) where axes are (time,pol,ew,ns,reim)
-// Output array has shape (2,2,6,128,2) where axes have same meaning
+// Unit test for 'struct fft1_microkernel'.
+// Input array has shape (2,2,6,64,2) where axes are (time,pol,ew,ns,reim).
+// Output array has shape (2,2,6,128,2) where axes have same meaning.
+// Launch with {32,24,1} threads.
 
 __global__ void fft1_test_kernel(const float *in, float *out)
 {
@@ -1159,7 +1203,10 @@ __global__ void fft1_test_kernel(const float *in, float *out)
     assert(blockDim.x == 32);
     assert(blockDim.y == 24);
     assert(blockDim.z == 1);
-    
+    assert(gridDim.x == 1);
+    assert(gridDim.y == 1);
+    assert(gridDim.z == 1);
+ 
     int w = threadIdx.y;  // warp id
     int l = threadIdx.x;  // lane id
 
@@ -1214,14 +1261,16 @@ __global__ void fft1_test_kernel(const float *in, float *out)
 }
 
 
-static void test_casm_fft1()
+// Unit test for 'struct fft1_microkernel'.
+static void test_casm_fft1_microkernel()
 {
+    // Allow kernel to use 99KB shared memory.
     static shmem_99kb s(fft1_test_kernel);
     s.set();
     
     // Axis ordering (time,pol,ew,ns,reim).
     // It's convenient to "flatten" the outer 3 indices into 0 <= tpe < 24.
-    cout << "test_casm_fft1()" << endl;
+    cout << "test_casm_fft1_microkernel()" << endl;
     Array<float> in({24,64,2}, af_random | af_rhost);
     Array<float> out_cpu({24,128,2}, af_zero | af_rhost);
     Array<float> out_gpu({24,128,2}, af_random | af_gpu);
@@ -1253,10 +1302,20 @@ static void test_casm_fft1()
 
 // -------------------------------------------------------------------------------------------------
 //
-// FFT2
+// FFT2 microkernel.
+//
+// This is the 6->24 beamforming FFT along the EW axis. We read the input from G[] shared memory,
+// but the output isn't written anywhere. Instead, we square and accumulate to persistent registers
+// which store beamformed intensities on the (24,128) grid. The FFT2 microkernel is called once per
+// (time,polarization) in the main kernel.
+//
+// When the number of accumulated time samples is a multiple of 'downsampling_factor', we call
+// fft2_microkernel::write_and_reset(), which writes the (24,128) beamformed intensity grid to I[]
+// shared memory, in preparation for interpolation.
+//
+// The indexing in this kernel is complicated  -- here is a high-level summary!
 //
 // There are 24 east-west beams 0 <= b < 24 and 6 east-west feeds 0 <= f < 6.
-//
 // Alternate parameterization: (bouter,binner) and (fouter,finner) where:
 //
 //   b = bouter ? (12+binner) : (11-binner)   0 <= bouter < 2    0 <= binner < 12
@@ -1273,13 +1332,7 @@ static void test_casm_fft1()
 // which we sometimes decompose into its base-2 digits [ns6,...,ns0].
 // These are spectator indices, as far as the FFT2 kernel is concerned.
 //
-// We store EW beamforming phases for fouter=bouter=0 only, since flipping
-// 'bouter' or 'fouter' sends the phase to its complex conjugate. The phase
-// can be written in the form (where alpha[3] is a kernel argument):
-//
-//   phase[binner,finner] = exp( i * (1+2*binner) * alpha[finner] )
-//
-// The I-array is distributed as follows:
+// The persistent I-arary is distributed in registers as follows:
 //
 //   r1 r0 <-> (bouter) (b1)
 //   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (b0)
@@ -1306,6 +1359,11 @@ static void test_casm_fft1()
 template<bool Debug>
 struct fft2_microkernel
 {
+    // We store EW beamforming phases for fouter=bouter=0 only, since
+    // flipping 'bouter' or 'fouter' sends the phase to its complex
+    // conjugate. This argument depends on the feed locations having
+    // the EW "flip symmetry"!
+    //
     // Note: we use 12 persistent registers/thread to store beamforming
     // phases, but the number of distinct phases is 24/warp or 72/block.
     // Instead, one could consider distributing phases as needed with
@@ -1343,8 +1401,12 @@ struct fft2_microkernel
 	uint l = threadIdx.x;  // lane id
 	uint ns = ((w & 0x6) << 4) | (l & 0x18) | ((w & 0x1) << 2) | ((l & 0x6) >> 1);
 	uint b02 = ((w & 0x18) >> 1) | (l & 0x1);
-	
-	// Initialize beamforming phases pcos/psin.
+
+	// Load beamforming phases from shared memory.
+	// (These were precomputed in the host-side CasmBeamformer constructor,
+	// copied to GPU global memory, and then copied from global->shared in the
+	// casm_controller constructor.)
+
 	#pragma unroll
 	for (uint finner = 0; finner < 3; finner++) {
 	    // ew_phases[12][2] indexed by (binner, cos/sin)
@@ -1382,8 +1444,17 @@ struct fft2_microkernel
 	check_bank_conflict_free<Debug> (soff_i1);
     }
 
-    
-    // Accumulates one (time,pol) into I-registers, where 0 <= tpol < 4.
+
+    // apply(): called once per (time,polarization) in the main kernel.
+    //
+    // Reads the partially beamformed array from G[] shared memory (hence no 'float'
+    // function args), does the 6->24 beamforming FFT, squares, and accumulates the
+    // result to persistent registers which store fully beamformed intensities on the
+    // (24,128) grid.
+    //
+    // The 'tpol' arg satisfies 0 <= tpol < 4, and specifies the "phase" within the G[]
+    // shared memory window (two time samples and both polarizations).
+
     __device__ inline void apply(uint tpol)
     {
 	extern __shared__ float shmem_f[];
@@ -1468,7 +1539,14 @@ struct fft2_microkernel
 	}
     }
 
-    // Writes I[] register to shared memory and zeroes the registers.
+
+    // write_and_reset(): called in the main kernel when the number of accumulated
+    // time samples is a multiple of 'downsampling_factor'.
+    //
+    // Writes the (24,128) beamformed intensity grid from persistent registers to I[]
+    // shared memory (in preparation for interpolation), and zeroes the registers (in
+    // preparation for the next call to fft2_microkernel.apply()).
+
     __device__ inline void write_and_reset()
     {
 	extern __shared__ float shmem_f[];
@@ -1489,6 +1567,7 @@ struct fft2_microkernel
 };
 
 
+// Unit testing 'struct fft2_microkernel'.
 // Launch with {32,24,1} threads and {F,1,1} blocks.
 __global__ void fft2_test_kernel(
     const float *g_in,                  // (TP,F,6,128,2) = (tpol,freq,ewfeed,ns,reim)
@@ -1553,6 +1632,7 @@ __global__ void fft2_test_kernel(
 }
 
 
+// Unit testing 'struct fft2_microkernel'.
 // G.shape = {TP,F,6,128,2}
 // I.shape = {F,24,128}
 
@@ -1613,14 +1693,16 @@ static Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float>
 }
 
 
-static void test_casm_fft2(const CasmBeamformer &bf)
+// Unit testing 'struct fft2_microkernel'.
+static void test_casm_fft2_microkernel(const CasmBeamformer &bf)
 {
+    // Allow kernel to use 99KB shared memory.
     static shmem_99kb s(fft2_test_kernel);
     s.set();
 
     int F = bf.F;
     int TP = 2 * bf.nominal_Tin_for_unit_tests;
-    cout << "test_casm_fft2(TP=" << TP << ", F=" << F << ")" << endl;
+    cout << "test_casm_fft2_microkernel(TP=" << TP << ", F=" << F << ")" << endl;
     
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
     Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
@@ -1638,7 +1720,7 @@ static void test_casm_fft2(const CasmBeamformer &bf)
 
 // -------------------------------------------------------------------------------------------------
 //
-// Interpolation
+// Interpolation microkernel.
 //
 // - Input: gridded I-values and beam locations from shared memory.
 //
@@ -1689,12 +1771,13 @@ struct interpolation_microkernel
 	    assert(blockDim.z == 1);
 	}
 	
-	int f = blockIdx.x;
+	int f = blockIdx.x;  // frequency channel
 	out = out_ + f * nbeams_;
 	nbeams = nbeams_;
 	normalization = normalization_;
     }
 
+    // Helper for apply().
     __device__ inline float compute_wk(int k, float x)
     {
 	static constexpr float one_sixth = 1.0f / 6.0f;
@@ -1716,6 +1799,12 @@ struct interpolation_microkernel
 	return w * (x+a) * (x+b) * (x+c);
     }
 
+    // apply(): called in the main kernel when the number of accumulated time samples is a
+    // multiple of 'downsampling_factor', after the call to fft2_microkernel.write_and_reset().
+    //
+    // Interpolates the (24,128) beamformed intensity grid in I[] shared memory to the
+    // specified beam locations, and writes the result to global memory.
+    
     __device__ inline void apply()
     {
 	extern __shared__ float shmem_f[];
@@ -1736,7 +1825,13 @@ struct interpolation_microkernel
 	    // (The values of 'xns', 'xew' are updated in-place to their fractional parts.)
 	    int ins = split_integer_and_fractional<Debug> (xns, 0, 127);
 	    int iew = split_integer_and_fractional<Debug> (xew, 1, 21);
-		
+
+	    // The logic below does some nontrivial reshuffling, in order to reduce
+	    // shared memory bank conflicts. If we omitted reshuffling logic entirely,
+	    // we could get an arbitrarily bad bank conflict (32-to-1) which would
+	    // really be a disaster. The purpose of the reshuffling is to reduce the
+	    // bank conflict to 2-to-1 by permuting the 4-by-4 bicubic interpolation tile.
+	    
 	    // "Reference" index for bank conflicts, see below.
 	    // Constructed so that sref = (iew-1)*IS + (ins-1) mod 32.
 	    int sref = (iew << 2) + ins + 27;
@@ -1779,6 +1874,7 @@ struct interpolation_microkernel
 };
 
 
+// Unit test of 'struct interpolation_microkernel'.
 __global__ void casm_interpolation_test_kernel(
     const float *i_in,                  // (Tout,F,24,128)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim), dereferenced but not used
@@ -1827,6 +1923,7 @@ __global__ void casm_interpolation_test_kernel(
 }
 
 
+// Helper for interpolation_reference_kernel().
 __host__ inline void compute_interpolation_weights(float dx, float w[4])
 {
     static constexpr float one_sixth = 1.0f / 6.0f;
@@ -1839,6 +1936,7 @@ __host__ inline void compute_interpolation_weights(float dx, float w[4])
 }
 
 
+// Unit test of 'struct interpolation_microkernel'.
 // (Tout,F,24,128) -> (Tout,F,B)
 static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, const Array<float> &in, float normalization)
 {
@@ -1895,8 +1993,10 @@ static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, con
 }
 
 
-static void test_casm_interpolation(const CasmBeamformer &bf)
+// Unit test of 'struct interpolation_microkernel'.
+static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
 {
+    // Allow kernel to use 99KB shared memory.
     static shmem_99kb s(casm_interpolation_test_kernel);
     s.set();
 
@@ -1904,8 +2004,8 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
     int B = bf.B;
     int Tout = rand_int(1,5);
     float normalization = rand_uniform();
-    cout << "test_casm_interpolation(Tout=" << Tout << ", F=" << F
-	 << ", B=" << B << ", norm=" << normalization << ")" << endl;
+    cout << "test_casm_interpolation_microkernel(Tout=" << Tout << ", F=" << F
+	 << ", B=" << B << ", normalization=" << normalization << ")" << endl;
     
     Array<float> in({Tout,F,24,128}, af_rhost | af_random);
     Array<float> out_gpu({Tout,F,B}, af_gpu | af_random);
@@ -1927,6 +2027,11 @@ static void test_casm_interpolation(const CasmBeamformer &bf)
 // -------------------------------------------------------------------------------------------------
 //
 // Putting it all together: casm_beamforming_kernel.
+//
+// Note that the number of input times (Tin) must be a multiple of 'downsampling_factor',
+// i.e. Tin = Tout * downsampling_factor.
+//
+// Launch with {32,24,1} threads/block, and F blocks/kernel.
 
 
 __global__ void __launch_bounds__(24*32, 1)
@@ -1956,12 +2061,17 @@ casm_beamforming_kernel(
     int touter = -48;
 
     // In each iteration of the outer loop:
+    //
     //   - read input times (touter+48):(touter+72)
     //   - process input times (touter):(touter+24)
     //   - the value of 'touter' advances by 24
+    //
+    // The loop runs over -48 <= t < Tin, but the first two iterations just load
+    // data from global memory (no processing), and the last two iterations just
+    // process pre-loaded data (no loading).
 
     for (;;) {
-	// Start loading E-array (24 times, both pols, all 256 dishes) from global memory.
+	// Every 24 time samples, start loading E-array from global memory.
 	// No-ops on threads which would read past the end of input data.
 	// No need for __syncthreads() here, since we're just reading into registers.
 	controller.load_ungridded_e(touter+48, Tin);
@@ -1970,36 +2080,48 @@ casm_beamforming_kernel(
 	int outer_phase = (touter & 0x8) >> 3;
 
 	if (touter < 0)
-	    goto write_e;
+	    goto write_e;  // hmmm, 'goto' seems to be least ugly option here
 
 	if (outer_phase == 0) {
+	    // Every 48 time samples, we "grid" the E-array in shared memory.
 	    __syncthreads();   // wait for write_ungridded_e() in previous loop iteration.
 	    controller.grid_shared_e();
 	    __syncthreads();   // barrier before calling load_gridded_e() below.
 	}
 
 	// In each iteration of the middle loop, we process times (touter+8*m):(touter+8*m+8).
-	// The 'mstart' assignment skips the middle loop if (touter < 0).
-	
 	for (int m = 0; m < 3; m++) {
+	    // Every 8 time samples, we read the E-array from shared memory -> registers.
 	    // No syncthreads() needed before or after load_gridded_e(), since:
 	    //   - grid_shared_e() has syncthreads() after it, see above
 	    //   - write_ungridded_e() has syncthreads() before it, see above
+	    
 	    controller.load_gridded_e(3*outer_phase + m);  // phase = 3*flag + m
 
 	    for (int tpol = 0; tpol < 16; tpol++) {
 		if ((tpol & 3) == 0) {
+		    // Every 2 time samples, we "unpack" the E-array from int4+4 -> float32+32,
+		    // apply feed weights, run the FFT1 kernel (beamforming 43->128 along NS axis),
+		    // and write the result to G[] shared memory.
+		    
 		    float e0_re, e0_im, e1_re, e1_im;
 		    controller.unpack_e(tpol >> 2, e0_re, e0_im, e1_re, e1_im);
 		    
-		    __syncthreads();
+		    __syncthreads();  // wait for calls to fft2.apply() in previous loop iteration
 		    fft1.apply(e0_re, e0_im, e1_re, e1_im);
-		    __syncthreads();
+		    __syncthreads();  // barrier before more calls to fft2.apply()
 		}
 
+		// For every (time,pol), we run the FFT2 kernel (beamform 6->24 along EW axis),
+		// square, and accumulate the result into persistent registers which store
+		// beamformed intensities on a (24,128) grid.
 		fft2.apply(tpol & 3);
 		
 		if ((tpol & 1) && !(--ds_counter)) {
+		    // When the number of accumulated time samples is a multiple of 'downsampling_factor',
+		    // we write the (24,128) grid of beamformed intensities to I[] shared memory, interpolate
+		    // to the target beam locations, and write the result to global memory.
+		    
 		    __syncthreads();         // wait for previous interpolator.apply()
 		    fft2.write_and_reset();  // writes I-array to shared memory
 		    __syncthreads();
@@ -2017,11 +2139,17 @@ casm_beamforming_kernel(
 
     write_e:
 	if (touter + 48 < Tin) {
-	    __syncthreads();  // wait for load_gridded_e() above.
+	    // Every 24 samples, we write the ungridded E-array from registers -> shared memory.
+	    // Note that the load (global -> registers) is at the top of the loop, and the store
+	    // (registers -> shared) is at the bottom. This way of organizing things is intended
+	    // to hide the latency of global memory, but may not actually matter, since the kernel
+	    // is not memory bandwidth limited anyway.
+	    
+	    __syncthreads();  // wait for load_gridded_e() above
 	    controller.write_ungridded_e(outer_phase);
 	}
 
-	// The value of 'touter' advances by 24, in each iteration of the outer loop.
+	// In each iteration of the outer loop, the value of 'touter' advances by 24.
 	touter += 24;
     }
 }
@@ -2054,7 +2182,7 @@ CasmBeamformer::CasmBeamformer(
     this->F = frequencies.shape[0];
     this->B = beam_locations.shape[0];
 
-    CUDA_CALL(cudaGetDevice(&this->device));
+    CUDA_CALL(cudaGetDevice(&this->constructor_device));
     
     xassert_gt(F, 0);
     xassert_gt(B, 0);
@@ -2064,34 +2192,44 @@ CasmBeamformer::CasmBeamformer(
     xassert_ge(ns_feed_spacing, 0.3);
     xassert_lt(ns_feed_spacing, 0.6);
     xassert((ew_feed_spacing_.size == 0) || (ew_feed_spacing_.shape_equals({5})));
-    
+
+    // If ew_feed_spacings are unspecified, then use defaults.
     for (int i = 0; i < 5; i++)
 	ew_feed_spacing[i] = (ew_feed_spacing_.size > 0) ? ew_feed_spacing_.at({i}) : default_ew_feed_spacings[i];
 
     for (int i = 0; i < 5; i++) {
 	xassert_ge(ew_feed_spacing[i], 0.3);
 	xassert_le(ew_feed_spacing[i], 0.6);
-	xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // flip-symmetric
+	xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // check flip-symmetric
     }
     
     float s0 = (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
     float s1 = (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
     float s2 = (ew_feed_spacing[2]);
 
+    // Use EW coordinates such that the array is centered at zero.
     ew_feed_positions[0] = -s0 - s1 - s2/2.;
     ew_feed_positions[1] =     - s1 - s2/2.;
     ew_feed_positions[2] =          - s2/2.;
     ew_feed_positions[3] =            s2/2.;
     ew_feed_positions[4] =       s1 + s2/2.;
     ew_feed_positions[5] =  s0 + s1 + s2/2.;
-	    
+
+    // EW beam locations (these are sin(ZA) values, not ZA).
+    // Note that ew_beam_locations[1] = -1, and ew_beam_locations[0] < -1.
+    // Similarly, ew_beam_locations[22] = 1, and ew_beam_locations[23] > 1.
+    // This padding (by one element) is needed for cubic interpolation.
     for (int i = 0; i < 24; i++)
 	ew_beam_locations[i] = (2*i-23) / 21.;
     
     // The rest of this function fills 'gpu_persistent_data' and copies to the GPU.
+    // See comment near the beginning of this file for the memory layout.
     gpu_persistent_data = Array<float> ({256 + 32 + 96*F + 2*B}, af_rhost | af_zero);
     
     // Compute 'gridding' part of 'gpu_persistent_data' (with error-checking).
+    // This contains the same info as the 'feed_indices' arg, just reparameterized
+    // as (ns,ew) -> (43*ew+ns).
+    
     uint *gp = (uint *) (gpu_persistent_data.data);
     vector<int> duplicate_checker({6*43}, -1);
     
@@ -2122,11 +2260,17 @@ CasmBeamformer::CasmBeamformer(
     }
     
     // Compute 'ns_phases' part of 'gpu_persistent_data'.
+    // This is just the phase cos(2pi*i/128) for 0 <= i < 32, which gets used
+    // in the length-128 FFT. Precomputing these phases on the host is faster,
+    // since it avoids the overhead of trig functions in the GPU kernel.
+    
     float *nsp = gpu_persistent_data.data + shmem_layout::ns_phases_base;
     for (int i = 0; i < 32; i++)
 	nsp[i] = cosf(2 * M_PI * i / 128.0);
 
-    // Compute 'per_frequency_data' part of 'gpu_persistent_data'.    
+    // Compute 'per_frequency_data' part of 'gpu_persistent_data'.
+    // See (*) near the beginning of this file for details.
+    
     for (int f = 0; f < F; f++) {
 	float freq = frequencies.at({f});
 	
@@ -2139,6 +2283,11 @@ CasmBeamformer::CasmBeamformer(
 	    // Points to 32-element "inner" region (see (*) above).
 	    float *pf32 = gpu_persistent_data.data + gmem_layout::per_frequency_data_base(f) + 32*ew_feed;
 	    pf32[25] = freq;
+
+	    // Instead of passing the ew_beam_locations and ew_feed_positions to the GPU
+	    // kernel, we precompute the phases sincos(2pi/c * freq * feed_pos * beam_loc).
+	    // This uses a little bit of GPU memory (~200 KB), but speeds things up by
+	    // avoiding the overhead of trig functions in the GPU kernel.
 	    
 	    for (int ew_beam = 0; ew_beam < 12; ew_beam++) {
 		float feed_pos = ew_feed_positions[ew_feed + 3];
@@ -2149,12 +2298,14 @@ CasmBeamformer::CasmBeamformer(
 	}
     }
 
-    // Compute 'beam_locations' part of gpu_persistent_data
+    // Compute 'beam_locations' part of gpu_persistent_data.
     float *blp = gpu_persistent_data.data + gmem_layout::beam_locs_base(F);
     
     for (int b = 0; b < B; b++) {
 	for (int j = 0; j < 2; j++) {
 	    // We store {ns_feed_spacing * sin(za_ns), sin(za_ew)} in GPU memory.
+	    // See (**) near the beginning of this file.
+	    
 	    float prefactor = j ? 1.0 : ns_feed_spacing;
 	    float beam_location = beam_locations.at({b,j});
 	    xassert_ge(beam_location, -1.0);
@@ -2229,6 +2380,31 @@ Array<int> CasmBeamformer::make_regular_feed_indices()
 
 
 // Static member function.
+Array<uint8_t> CasmBeamformer::make_random_e_array(int T, int F)
+{
+    Array<uint8_t> ret({T,F,2,256}, af_rhost | af_zero);
+
+    uint *p = (uint *) (ret.data);
+    int n = (ret.size >> 2);
+
+    for (int i = 0; i < n; i++) {
+	uint t1 = ksgpu::default_rng();
+	uint t2 = ksgpu::default_rng();
+	p[i] = t1 ^ (t2 << 16);
+    }
+
+    return ret;
+}
+
+
+// Static member function.
+Array<float> CasmBeamformer::make_random_feed_weights(int F)
+{
+    return Array<float> ({F,2,256,2}, af_rhost | af_random);
+}
+
+
+// Static member function.
 CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 {
     auto w = ksgpu::random_integers_with_bounded_product(3, 1000);
@@ -2270,16 +2446,17 @@ void CasmBeamformer::launch_beamformer(
     Array<float> &i_out,
     cudaStream_t stream) const
 {
+    // Allow kernel to use 99KB shared memory.
     static shmem_99kb s(casm_beamforming_kernel);
     s.set();
 
     int d = -2;
     CUDA_CALL(cudaGetDevice(&d));
     
-    if (this->device != d) {
+    if (this->constructor_device != d) {
 	stringstream ss;
-	ss << "CasmBeamformer: CUDA device at construction (dev=" << this->device << ") differs"
-	   << " from device in launch_beamformer() (dev=" << d << ")";
+	ss << "CasmBeamformer: CUDA device at construction (dev=" << this->constructor_device
+	   << ") differs from device in launch_beamformer() (dev=" << d << ")";
 	throw runtime_error(ss.str());
     }
     
@@ -2318,10 +2495,10 @@ void CasmBeamformer::test_microkernels()
     CasmBeamformer bf = CasmBeamformer::make_random();
 
     test_casm_controller(bf);
-    test_casm_fft_c2c();
-    test_casm_fft1();
-    test_casm_fft2(bf);
-    test_casm_interpolation(bf);
+    test_casm_fft_c2c_microkernel();
+    test_casm_fft1_microkernel();
+    test_casm_fft2_microkernel(bf);
+    test_casm_interpolation_microkernel(bf);
 }
 
 

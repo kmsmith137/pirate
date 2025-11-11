@@ -454,7 +454,7 @@ class CasmReferenceBeamformer:
     
     
     @classmethod
-    def test_cuda_implementation(cls):
+    def test_cuda_python_equivalence(cls):
         # Hack: we put these imports (used only in this function) here, instead of
         # at the top of the file, so that this file will be importable on a machine
         # that doesn't have cuda.
@@ -470,7 +470,7 @@ class CasmReferenceBeamformer:
         B = min(32*B32, pirate_pybind11.CasmBeamformer.get_max_beams())
         Tin = Tout * D
 
-        print(f'test_cuda_implementation({F=}, {B=}, {D=}, {Tin=}, {Tout=}): start')
+        print(f'test_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): start')
         bf_py = cls.make_random(F=F, B=B, D=D, randomize_spacings=True)
         
         # FIXME(?) pybind11->cuda interface currently requires annoying dtype conversions.
@@ -514,5 +514,5 @@ class CasmReferenceBeamformer:
         rms = np.mean(np.abs(i_py))
         eps = np.max(np.abs(i_py - i_cuda)) / rms
         
-        print(f'test_cuda_implementation({F=}, {B=}, {D=}, {Tin=}, {Tout=}): {eps=}')
+        print(f'test_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): {eps=}')
         assert eps < 1.0e-4

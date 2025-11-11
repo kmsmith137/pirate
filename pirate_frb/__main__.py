@@ -68,7 +68,7 @@ def test(args):
                 CasmReferenceBeamformer.test_interpolative_beamforming()
             
             pirate_pybind11.CasmBeamformer.test_microkernels()
-            CasmReferenceBeamformer.test_cuda_implementation()
+            CasmReferenceBeamformer.test_cuda_python_equivalence()
         
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()

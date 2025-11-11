@@ -52,6 +52,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 	// but I got an import-time error when I tried to specify a default
 	// argument for 'ew_feed_spacings'. For this reason, I ended up wrapping
 	// two constructors (with and without the 'ew_feed_spacings' arg).
+	//
+	// FIXME CasmBeamformer should have docstrings (low-priority since
+	// pybind11 interface is not "vendorized").
 	
 	.def(py::init<const Array<float> &, const Array<int> &, const Array<float> &, int, float>(),
 	     py::arg("frequencies"), py::arg("feed_indices"),
