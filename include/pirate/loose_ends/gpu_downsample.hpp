@@ -10,8 +10,8 @@ namespace pirate {
 
 
 extern void launch_downsample(ksgpu::Array<float> &dst_i, ksgpu::Array<float> &dst_w,
-			      const ksgpu::Array<float> &src_i, const ksgpu::Array<float> &src_w,
-			      int Df, int Dt, bool transpose_output, cudaStream_t stream=nullptr);
+                              const ksgpu::Array<float> &src_i, const ksgpu::Array<float> &src_w,
+                              int Df, int Dt, bool transpose_output, cudaStream_t stream=nullptr);
 
 
 } // namespace pirate

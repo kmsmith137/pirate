@@ -174,18 +174,18 @@ __device__ T shmem_rb_cycle(T x, T *rb, int lag, int &rpos)
     static_assert(sizeof(T) == 4);
     
     if (lag > 32) {
-	
-	// Case 1: lag > 32.
-	// In this case, rpos = (nreg_cumulative + laneId) % lag.
-	// Here, nreg_cumulative is the number of registers processed so far:
-	//   nreg_cumulative = ntime_cumulative      for float32
-	//   nreg_cumulative = ntime_cumulative/2    for float16
-	
-	T y = rb[rpos];
-	rb[rpos] = x;
-	rpos += 32;
-	rpos = (rpos < lag) ? rpos : (rpos - lag);
-	return y;
+        
+        // Case 1: lag > 32.
+        // In this case, rpos = (nreg_cumulative + laneId) % lag.
+        // Here, nreg_cumulative is the number of registers processed so far:
+        //   nreg_cumulative = ntime_cumulative      for float32
+        //   nreg_cumulative = ntime_cumulative/2    for float16
+        
+        T y = rb[rpos];
+        rb[rpos] = x;
+        rpos += 32;
+        rpos = (rpos < lag) ? rpos : (rpos - lag);
+        return y;
     }
 
     // Case 2: 0 <= lag < 32.
@@ -196,9 +196,9 @@ __device__ T shmem_rb_cycle(T x, T *rb, int lag, int &rpos)
 
     // Warp divergence!
     if (laneId < lag) {
-	T z = y;
-	y = rb[laneId];
-	rb[laneId] = z;
+        T z = y;
+        y = rb[laneId];
+        rb[laneId] = z;
     }
 
     __syncwarp();
@@ -246,21 +246,21 @@ struct wparams
     
     __device__ wparams(int D)
     {
-	const int A = blockDim.z * gridDim.y;
-	const int M = blockDim.y * gridDim.x;  // 2^(r-2)
-	const int nr = 2*M;                    // 2^(r-1)
+        const int A = blockDim.z * gridDim.y;
+        const int M = blockDim.y * gridDim.x;  // 2^(r-2)
+        const int nr = 2*M;                    // 2^(r-1)
 
-	// (i,j) are non-extended row indices.
-	const int a = threadIdx.z + blockIdx.y * blockDim.z;   // 0 <= a < A
-	const int i = threadIdx.y + blockIdx.x * blockDim.y;   // 0 <= i < M
-	const int j = nr - i - 1;                              // M <= j < 2*M
+        // (i,j) are non-extended row indices.
+        const int a = threadIdx.z + blockIdx.y * blockDim.z;   // 0 <= a < A
+        const int i = threadIdx.y + blockIdx.x * blockDim.y;   // 0 <= i < M
+        const int j = nr - i - 1;                              // M <= j < 2*M
 
-	iext = a*nr + i;
-	jext = a*nr + j;
-	nrext = A*nr;
-	
-	lag0 = (j >> dtype_shift<T>());  // note j here
-	lag1 = (i >> dtype_shift<T>());  // note i here
+        iext = a*nr + i;
+        jext = a*nr + j;
+        nrext = A*nr;
+        
+        lag0 = (j >> dtype_shift<T>());  // note j here
+        lag1 = (i >> dtype_shift<T>());  // note i here
     }
 };
 
@@ -423,15 +423,15 @@ struct ld_kernel
 
 
     __device__ ld_kernel(const wparams<T> &wp, long ntime_cumulative)
-	: next_kernel(wp, ntime_cumulative >> 1)   // Note right-shift by 1 here!
+        : next_kernel(wp, ntime_cumulative >> 1)   // Note right-shift by 1 here!
     {
-	// FIXME uses more %-operators than necessary.
-	// Seems very unlikely to be a bottleneck!
-	this->rpos0 = init_rpos<T> (wp.lag0, ntime_cumulative);
-	this->rpos1 = init_rpos<T> (wp.lag1, ntime_cumulative);
+        // FIXME uses more %-operators than necessary.
+        // Seems very unlikely to be a bottleneck!
+        this->rpos0 = init_rpos<T> (wp.lag0, ntime_cumulative);
+        this->rpos1 = init_rpos<T> (wp.lag1, ntime_cumulative);
     }
     
-	
+        
     // x_{ijk} arguments are a shape (2,2,2) logical array
     //  i = output row
     //  j = input row within output row
@@ -449,66 +449,66 @@ struct ld_kernel
     // If RestoreRs==false, then 'rs' is cycled by (2*D) registers.
 
     __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs,
-			    T x000, T x001, T x010, T x011, T x100, T x101, T x110, T x111)
+                            T x000, T x001, T x010, T x011, T x100, T x101, T x110, T x111)
     {
-	const int laneId = threadIdx.x;
-	const int W = blockDim.y * blockDim.z;
-	const int w = threadIdx.y + threadIdx.z * blockDim.y;
-	
-	// Downsample in time.
-	// Get shape (2,2) register array
-	//   i = output row
-	//   j = input row within output row
-	
-	T x00 = ld_downsample(x000, x001);
-	T x01 = ld_downsample(x010, x011);
-	T x10 = ld_downsample(x100, x101);
-	T x11 = ld_downsample(x110, x111);
+        const int laneId = threadIdx.x;
+        const int W = blockDim.y * blockDim.z;
+        const int w = threadIdx.y + threadIdx.z * blockDim.y;
+        
+        // Downsample in time.
+        // Get shape (2,2) register array
+        //   i = output row
+        //   j = input row within output row
+        
+        T x00 = ld_downsample(x000, x001);
+        T x01 = ld_downsample(x010, x011);
+        T x10 = ld_downsample(x100, x101);
+        T x11 = ld_downsample(x110, x111);
 
-	// Apply one-sample lag to x00 and x01.
-	// Cycles 'rs' by either 1 or 2 lanes, depending on whether float16 or float32.
+        // Apply one-sample lag to x00 and x01.
+        // Cycles 'rs' by either 1 or 2 lanes, depending on whether float16 or float32.
 
-	T x00u = x00;  // save "un-lagged" x00, for use in next_kernel.process() below
-	T x10u = x10;  // save "un-lagged" x10, for use in next_kernel.process() below
-	ld_lag_pair(x00, x10, rs);
+        T x00u = x00;  // save "un-lagged" x00, for use in next_kernel.process() below
+        T x10u = x10;  // save "un-lagged" x10, for use in next_kernel.process() below
+        ld_lag_pair(x00, x10, rs);
 
-	// Downsample in frequency.
-	// Get 1-d register array, indexed by output frequency.
-	
-	T x0 = x00 + x01;
-	T x1 = x10 + x11;
+        // Downsample in frequency.
+        // Get 1-d register array, indexed by output frequency.
+        
+        T x0 = x00 + x01;
+        T x1 = x10 + x11;
 
-	// If float16, need to apply one-sample lag to either x0 or x1
-	// (depending on whether j or i is odd).
-	//
-	// Cycles 'rs' by either 1 or 0 lanes, depending on whether float16 or float32.
-	// Note that 'rs' have been cycled by 2 lanes so far, in both float16/float32 cases.
-	
-	bool flag = (wp.iext & 1);  // if iext is odd, then lag x1, else lag x0
-	ld_lag_switch(x0, x1, rs, flag);
+        // If float16, need to apply one-sample lag to either x0 or x1
+        // (depending on whether j or i is odd).
+        //
+        // Cycles 'rs' by either 1 or 0 lanes, depending on whether float16 or float32.
+        // Note that 'rs' have been cycled by 2 lanes so far, in both float16/float32 cases.
+        
+        bool flag = (wp.iext & 1);  // if iext is odd, then lag x1, else lag x0
+        ld_lag_switch(x0, x1, rs, flag);
 
-	// Go through shared memory ring buffer.
-	// Reminder: shared memory ring buffer is an array of shape (D,W,S).
+        // Go through shared memory ring buffer.
+        // Reminder: shared memory ring buffer is an array of shape (D,W,S).
 
-	int S = wp.lag0 + wp.lag1;
-	T *rb0 = shmem_base<T>() + ((D-1)*W + w) * S;  // length wp.lag0
-	T *rb1 = rb0 + wp.lag0;                        // length wp.lag1
-	
-	x0 = shmem_rb_cycle(x0, rb0, wp.lag0, rpos0);
-	x1 = shmem_rb_cycle(x1, rb1, wp.lag1, rpos1);
-	
-	// Write output.
-	// Output array has shape (wp.nrext, nreg_out)
+        int S = wp.lag0 + wp.lag1;
+        T *rb0 = shmem_base<T>() + ((D-1)*W + w) * S;  // length wp.lag0
+        T *rb1 = rb0 + wp.lag0;                        // length wp.lag1
+        
+        x0 = shmem_rb_cycle(x0, rb0, wp.lag0, rpos0);
+        x1 = shmem_rb_cycle(x1, rb1, wp.lag1, rpos1);
+        
+        // Write output.
+        // Output array has shape (wp.nrext, nreg_out)
 
-	out[wp.iext * nreg_out + 32*counter + laneId] = x0;
-	out[wp.jext * nreg_out + 32*counter + laneId] = x1;
+        out[wp.iext * nreg_out + 32*counter + laneId] = x0;
+        out[wp.jext * nreg_out + 32*counter + laneId] = x1;
 
-	int nreg2 = nreg_out >> 1;
-	T *out2 = out + (wp.nrext * nreg_out);
-	next_kernel.process(wp, out2, nreg2, counter, rs, x00u, x01, x10u, x11);
+        int nreg2 = nreg_out >> 1;
+        T *out2 = out + (wp.nrext * nreg_out);
+        next_kernel.process(wp, out2, nreg2, counter, rs, x00u, x01, x10u, x11);
 
-	if constexpr (RestoreRs)
-	    rs = __shfl_sync(0xffffffff, rs, laneId + 2*D);
+        if constexpr (RestoreRs)
+            rs = __shfl_sync(0xffffffff, rs, laneId + 2*D);
     }
 };
 
@@ -528,7 +528,7 @@ struct ld_half_kernel
     ld_kernel<T,D,false> base_kernel;  // RestoreRs=false
 
     __device__ ld_half_kernel(const wparams<T> &wp, long ntime_cumulative)
-	: base_kernel(wp, ntime_cumulative)
+        : base_kernel(wp, ntime_cumulative)
     { }
 
     // x_{ij} arguments are a shape (2,2) logical array
@@ -542,22 +542,22 @@ struct ld_half_kernel
 
     __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T x00, T x01, T x10, T x11)
     {
-	if (counter & 1) {
-	    ld_transpose(y00, x00);
-	    ld_transpose(y01, x01);
-	    ld_transpose(y10, x10);
-	    ld_transpose(y11, x11);
+        if (counter & 1) {
+            ld_transpose(y00, x00);
+            ld_transpose(y01, x01);
+            ld_transpose(y10, x10);
+            ld_transpose(y11, x11);
 
-	    int counter2 = counter >> 1;
-	    base_kernel.process(wp, out, nreg_out, counter2, rs, y00, x00, y01, x01, y10, x10, y11, x11);
-	}
-	else {
-	    y00 = x00;
-	    y01 = x01;
-	    y10 = x10;
-	    y11 = x11;
-	    rs = __shfl_sync(0xffffffff, rs, threadIdx.x + 32 - 2*D);
-	}
+            int counter2 = counter >> 1;
+            base_kernel.process(wp, out, nreg_out, counter2, rs, y00, x00, y01, x01, y10, x10, y11, x11);
+        }
+        else {
+            y00 = x00;
+            y01 = x01;
+            y10 = x10;
+            y11 = x11;
+            rs = __shfl_sync(0xffffffff, rs, threadIdx.x + 32 - 2*D);
+        }
     }
 };
 
@@ -590,24 +590,24 @@ struct state_params
     
     __device__ state_params(const wparams<T> &wp)
     {
-	const int W = blockDim.y * blockDim.z;
-	const int w = threadIdx.y + threadIdx.z * blockDim.y;
-	const int S = wp.lag0 + wp.lag1;
-	const int ri = (int)threadIdx.x + (2*D-32);
-	
-	threadId = threadIdx.x + 32 * (threadIdx.y + threadIdx.z * blockDim.y);
-	nthreads = blockDim.x * blockDim.y * blockDim.z;
-	rs_idx = (W*D*S) + (2*D*w) + ri;
-	rs_flag = (ri >= 0);
-	
-	shmem_nelts = D * W * (S+2);
-	shmem_nelts = (shmem_nelts + 31) & ~0x1f;  // round up to multiple of 32
+        const int W = blockDim.y * blockDim.z;
+        const int w = threadIdx.y + threadIdx.z * blockDim.y;
+        const int S = wp.lag0 + wp.lag1;
+        const int ri = (int)threadIdx.x + (2*D-32);
+        
+        threadId = threadIdx.x + 32 * (threadIdx.y + threadIdx.z * blockDim.y);
+        nthreads = blockDim.x * blockDim.y * blockDim.z;
+        rs_idx = (W*D*S) + (2*D*w) + ri;
+        rs_flag = (ri >= 0);
+        
+        shmem_nelts = D * W * (S+2);
+        shmem_nelts = (shmem_nelts + 31) & ~0x1f;  // round up to multiple of 32
 
-	int block_id = blockIdx.z;
-	block_id = (block_id * gridDim.y) + blockIdx.y;
-	block_id = (block_id * gridDim.x) + blockIdx.x;
+        int block_id = blockIdx.z;
+        block_id = (block_id * gridDim.y) + blockIdx.y;
+        block_id = (block_id * gridDim.x) + blockIdx.x;
 
-	persistent_state_block_offset = long(block_id) * long(shmem_nelts);
+        persistent_state_block_offset = long(block_id) * long(shmem_nelts);
     }
 };
 
@@ -622,7 +622,7 @@ __device__ T restore_state(const wparams<T> &wp, const T *persistent_state)
     persistent_state += sp.persistent_state_block_offset;
     
     for (int s = sp.threadId; s < sp.shmem_nelts; s += sp.nthreads)
-	shmem[s] = persistent_state[s];
+        shmem[s] = persistent_state[s];
 
     __syncthreads();
 
@@ -642,7 +642,7 @@ __device__ void save_state(const wparams<T> &wp, T *persistent_state, T rs)
 
     // Warp divergence
     if (sp.rs_flag)
-	shmem[sp.rs_idx] = rs;
+        shmem[sp.rs_idx] = rs;
 
     __syncthreads();
     
@@ -650,7 +650,7 @@ __device__ void save_state(const wparams<T> &wp, T *persistent_state, T rs)
     persistent_state += sp.persistent_state_block_offset;
     
     for (int s = sp.threadId; s < sp.shmem_nelts; s += sp.nthreads)
-	persistent_state[s] = shmem[s];
+        persistent_state[s] = shmem[s];
 }
 
 
@@ -680,26 +680,26 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
 
     // Note row_off here (not ntime)
     for (int i = 0; i < row_off; i += 64) {
-	// FIXME use wide loads/stores here
-	T x000 = in[i_off];                 // (2*i, 0)
-	T x001 = in[i_off + 32];            // (2*i, 32)
-	T x010 = in[i_off + row_off];       // (2*i+1, 0)
-	T x011 = in[i_off + row_off + 32];  // (2*i+1, 32)
-	T x100 = in[j_off];                 // (2*j, 0)
-	T x101 = in[j_off + 32];            // (2*j, 32)
-	T x110 = in[j_off + row_off];       // (2*j+1, 0)
-	T x111 = in[j_off + row_off + 32];  // (2*j+1, 32)
+        // FIXME use wide loads/stores here
+        T x000 = in[i_off];                 // (2*i, 0)
+        T x001 = in[i_off + 32];            // (2*i, 32)
+        T x010 = in[i_off + row_off];       // (2*i+1, 0)
+        T x011 = in[i_off + row_off + 32];  // (2*i+1, 32)
+        T x100 = in[j_off];                 // (2*j, 0)
+        T x101 = in[j_off + 32];            // (2*j, 32)
+        T x110 = in[j_off + row_off];       // (2*j+1, 0)
+        T x111 = in[j_off + row_off + 32];  // (2*j+1, 32)
 
-	ld_transpose(x000, x001);
-	ld_transpose(x010, x011);
-	ld_transpose(x100, x101);
-	ld_transpose(x110, x111);
-	
-	kernel.process(wp, out, nreg_out, counter, rs,
-		       x000, x001, x010, x011, x100, x101, x110, x111);
-	
-	in += 64;
-	counter++;
+        ld_transpose(x000, x001);
+        ld_transpose(x010, x011);
+        ld_transpose(x100, x101);
+        ld_transpose(x110, x111);
+        
+        kernel.process(wp, out, nreg_out, counter, rs,
+                       x000, x001, x010, x011, x100, x101, x110, x111);
+        
+        in += 64;
+        counter++;
     }
 
     save_state<T,D> (wp, persistent_state, rs);
@@ -717,7 +717,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     
     if (params.num_downsampling_levels <= 1)
-	return;
+        return;
     
     int D = params.num_downsampling_levels - 1;
     int M = pow2(params.output_dd_rank - 1);
@@ -757,9 +757,9 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     this->bw_per_launch.nbytes_gmem = 2 * params.beams_per_batch * state_nelts_per_beam * ST;
 
     for (int ids = 0; ids < params.num_downsampling_levels; ids++) {
-	int r = params.input_total_rank - (ids ? 1 : 0);
-	long nt_ds = xdiv(params.ntime, pow2(ids));
-	this->bw_per_launch.nbytes_gmem += params.beams_per_batch * pow2(r) * nt_ds * ST;
+        int r = params.input_total_rank - (ids ? 1 : 0);
+        long nt_ds = xdiv(params.ntime, pow2(ids));
+        this->bw_per_launch.nbytes_gmem += params.beams_per_batch * pow2(r) * nt_ds * ST;
     }
 }
 
@@ -767,7 +767,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
 void GpuLaggedDownsamplingKernel::allocate()
 {
     if (is_allocated)
-	throw runtime_error("GpuLaggedDownsamplingKernel: double call to allocate()");
+        throw runtime_error("GpuLaggedDownsamplingKernel: double call to allocate()");
 
     // Note 'af_zero' flag here.
     std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
@@ -806,9 +806,9 @@ template<typename T32, int Dmax>
 static cuda_kernel_t<T32> get_kernel(int D)
 {
     if constexpr (Dmax == 0)
-	throw runtime_error("GpuLaggedDownsamplingKernel: precompiled kernel not found");
+        throw runtime_error("GpuLaggedDownsamplingKernel: precompiled kernel not found");
     else
-	return (D == Dmax) ? lagged_downsample<T32,Dmax> : get_kernel<T32,Dmax-1> (D);
+        return (D == Dmax) ? lagged_downsample<T32,Dmax> : get_kernel<T32,Dmax-1> (D);
 }
 
 
@@ -829,7 +829,7 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernel
     GpuLaggedDownsamplingKernel(params_)  // calls params.validate()
 {
     if (params.num_downsampling_levels <= 1)
-	return;
+        return;
 
     // NOTE!! The cuda kernels use a parameter "D" which is equal to (nds-1),
     // where nds = DedispersionConfig::num_downsampling_levels. Therefore, we
@@ -841,8 +841,8 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernel
     // FIXME rethink?
     CUDA_CALL(cudaFuncSetAttribute(
         this->kernel,
-	cudaFuncAttributeMaxDynamicSharedMemorySize,
-	99 * 1024
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        99 * 1024
     ));
 }
 
@@ -857,19 +857,19 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, lon
     
     buf.params.validate();
     xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
-    xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);	    
+    xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);         
     xassert(buf.is_allocated);
     xassert(buf.on_gpu());
 
     for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
-	long nb = params.beams_per_batch;
-	long rk = params.input_total_rank - (ids ? 1 : 0);
-	long nt = xdiv(params.ntime, pow2(ids));
-	xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
+        long nb = params.beams_per_batch;
+        long rk = params.input_total_rank - (ids ? 1 : 0);
+        long nt = xdiv(params.ntime, pow2(ids));
+        xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
     }
 
     if (params.num_downsampling_levels <= 1)
-	return;
+        return;
 
     T *pstate = (T*)persistent_state.data + (ibatch * params.beams_per_batch * state_nelts_per_beam);
     
@@ -895,14 +895,14 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, lon
     // 'input_total_rank' is communicated via A = A_B * A_W = pow2(input_total_rank - output_dd_rank - 1).
     
     this->kernel
-	<<< grid_dims, block_dims, shmem_nbytes_per_threadblock, stream >>>
-	(reinterpret_cast<const T32 *> (buf.bufs.at(0).data),
-	 reinterpret_cast<T32 *> (buf.bufs.at(1).data),
-	 params.ntime,
-	 it_chunk * params.ntime,  // ntime_cumulative
-	 buf.ref.strides[0],       // bstride_in,
-	 buf.ref.strides[0],       // bstride_out,
-	 reinterpret_cast<T32 *> (pstate));
+        <<< grid_dims, block_dims, shmem_nbytes_per_threadblock, stream >>>
+        (reinterpret_cast<const T32 *> (buf.bufs.at(0).data),
+         reinterpret_cast<T32 *> (buf.bufs.at(1).data),
+         params.ntime,
+         it_chunk * params.ntime,  // ntime_cumulative
+         buf.ref.strides[0],       // bstride_in,
+         buf.ref.strides[0],       // bstride_out,
+         reinterpret_cast<T32 *> (pstate));
 
     CUDA_PEEK("lagged downsampling kernel");
 }
@@ -914,9 +914,9 @@ shared_ptr<GpuLaggedDownsamplingKernel> GpuLaggedDownsamplingKernel::make(const 
     params.validate();
     
     if (params.dtype == Dtype::native<float>())
-	return make_shared<DownsamplingKernelImpl<float>> (params);
+        return make_shared<DownsamplingKernelImpl<float>> (params);
     if (params.dtype == Dtype::native<__half>())
-	return make_shared<DownsamplingKernelImpl<__half>> (params);
+        return make_shared<DownsamplingKernelImpl<__half>> (params);
     
     throw runtime_error("GpuLaggedDownsamplingKernel::make(): unsupported dtype: " + params.dtype.str());
 }

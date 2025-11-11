@@ -50,11 +50,11 @@ struct PeakFindingKernel
     PeakFindingKernel(const PeakFindingKernelParams &params, long Dcore);
 
     void _check_args(const ksgpu::Array<void> &out_max,
-		     const ksgpu::Array<void> &out_ssq,
-		     const ksgpu::Array<void> &in,
-		     const ksgpu::Array<void> &wt,
-		     ksgpu::Dtype expected_dtype,
-		     long ibatch);
+                     const ksgpu::Array<void> &out_ssq,
+                     const ksgpu::Array<void> &in,
+                     const ksgpu::Array<void> &wt,
+                     ksgpu::Dtype expected_dtype,
+                     long ibatch);
 };
 
 
@@ -87,10 +87,10 @@ struct ReferencePeakFindingKernel : PeakFindingKernel
     // All arrays must be fully contiguous (this could be changed if needed).
     
     void apply(ksgpu::Array<void> &out_max,     // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
-	       ksgpu::Array<void> &out_ssq,     // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
-	       const ksgpu::Array<void> &in,    // shape (beams_per_batch, ndm_in, nt_in)
-	       const ksgpu::Array<void> &wt,    // shape (beams_per_batch, nprofiles, ndm_in)
-	       long ibatch);
+               ksgpu::Array<void> &out_ssq,     // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
+               const ksgpu::Array<void> &in,    // shape (beams_per_batch, ndm_in, nt_in)
+               const ksgpu::Array<void> &wt,    // shape (beams_per_batch, nprofiles, ndm_in)
+               long ibatch);
 
     // The ReferenceKernel allocates persistent_state in the constructor (not a separate
     // allocate() method). We currently use a simple but suboptimal approach: just save the
@@ -127,11 +127,11 @@ struct GpuPeakFindingKernel : PeakFindingKernel
     
     void launch(
         ksgpu::Array<void> &out_max,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
-	ksgpu::Array<void> &out_ssq,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
-	const ksgpu::Array<void> &in,  // shape (beams_per_batch, ndm_in, nt_in)
-	const ksgpu::Array<void> &wt,  // shape (beams_per_batch, nprofiles, ndm_in)
-	long ibatch,                   // 0 <= ibatch < nbatches
-	cudaStream_t stream            // NULL stream is allowed, but is not the default
+        ksgpu::Array<void> &out_ssq,   // shape (beams_per_batch, nprofiles, ndm_out, nt_out)
+        const ksgpu::Array<void> &in,  // shape (beams_per_batch, ndm_in, nt_in)
+        const ksgpu::Array<void> &wt,  // shape (beams_per_batch, nprofiles, ndm_in)
+        long ibatch,                   // 0 <= ibatch < nbatches
+        cudaStream_t stream            // NULL stream is allowed, but is not the default
     );
 
     // -------------------- Internals start here --------------------
@@ -141,48 +141,48 @@ struct GpuPeakFindingKernel : PeakFindingKernel
 
     struct RegistryKey
     {
-	ksgpu::Dtype dtype;   // either float16 or float32
-	int M = 0;            // same as PeakFindingKernelParams::dm_downsampling_factor
-	int E = 0;            // same as PeakFindingKernelParams::max_kernel_width
-	int Dout = 0;         // same as PeakFindingKernelParams::time_downsampling_factor
+        ksgpu::Dtype dtype;   // either float16 or float32
+        int M = 0;            // same as PeakFindingKernelParams::dm_downsampling_factor
+        int E = 0;            // same as PeakFindingKernelParams::max_kernel_width
+        int Dout = 0;         // same as PeakFindingKernelParams::time_downsampling_factor
     };
 
     struct RegistryValue
     {
-	// We define two low-level cuda kernels: a "full peak-finding kernel" which is externally
-	// useful, and a "reduce-only" kernel which serves an internal debugging purpose.
-	//
-	// The full peak-finding kernel is called as:
-	//
-	//   void pf_full(out_max, out_ssq, pstate, in, wt, Mout, Tout);
-	//
-	// and the reduce-only kernel is called as:
-	//
-	//   void pf_reduce(out_max, out_ssq, in_max, in_ssq, wt, Mout, Tout);
-	//
-	// where:
-	//
-	//  - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout).
-	//  - 'in_max' and 'in_ssq' have shape (B, P, Mout*M, Tout*(Dout/Dcore))
-	//  - 'pstate' has shape (B, Mout, P32).
-	//  - 'in' has shape (B, Mout*M, Tout*Dout).
-	//  - 'wt' has shape (B, P, Mout*M).
-	//  - 'B' is the number of beams, and other params (P, M, ...) are defined below
-	//
-	// Kernels are launched with {BM,B,1} blocks and {32*W,1} threads, where BM = ceil(Mout/W).
-	// Shared memory is statically allocated.
-	
-	int Dcore = 0;   // internal downsampling factor (see discussion above)
-	int W = 0;       // warps per threadblock
-	int P = 0;       // number of peak-finding kernels (= 3*log2(E) + 1)
-	int P32 = 0;     // ring buffer 32-bit registers per output (beam, mout)
+        // We define two low-level cuda kernels: a "full peak-finding kernel" which is externally
+        // useful, and a "reduce-only" kernel which serves an internal debugging purpose.
+        //
+        // The full peak-finding kernel is called as:
+        //
+        //   void pf_full(out_max, out_ssq, pstate, in, wt, Mout, Tout);
+        //
+        // and the reduce-only kernel is called as:
+        //
+        //   void pf_reduce(out_max, out_ssq, in_max, in_ssq, wt, Mout, Tout);
+        //
+        // where:
+        //
+        //  - 'out_max' and 'out_ssq' have shape (B, P, Mout, Tout).
+        //  - 'in_max' and 'in_ssq' have shape (B, P, Mout*M, Tout*(Dout/Dcore))
+        //  - 'pstate' has shape (B, Mout, P32).
+        //  - 'in' has shape (B, Mout*M, Tout*Dout).
+        //  - 'wt' has shape (B, P, Mout*M).
+        //  - 'B' is the number of beams, and other params (P, M, ...) are defined below
+        //
+        // Kernels are launched with {BM,B,1} blocks and {32*W,1} threads, where BM = ceil(Mout/W).
+        // Shared memory is statically allocated.
+        
+        int Dcore = 0;   // internal downsampling factor (see discussion above)
+        int W = 0;       // warps per threadblock
+        int P = 0;       // number of peak-finding kernels (= 3*log2(E) + 1)
+        int P32 = 0;     // ring buffer 32-bit registers per output (beam, mout)
 
-	// The "full peak-finding" and "reduce-only" kernels have the same call signatures
-	// (five pointers and two ints), but the meaning of the args is different, see above.
-	using cuda_kernel_t = void (*) (void *, void *, void *, void *, void *, int, int);
-	
-	cuda_kernel_t full_kernel = nullptr;
-	cuda_kernel_t reduce_only_kernel = nullptr;
+        // The "full peak-finding" and "reduce-only" kernels have the same call signatures
+        // (five pointers and two ints), but the meaning of the args is different, see above.
+        using cuda_kernel_t = void (*) (void *, void *, void *, void *, void *, int, int);
+        
+        cuda_kernel_t full_kernel = nullptr;
+        cuda_kernel_t reduce_only_kernel = nullptr;
     };
 
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;

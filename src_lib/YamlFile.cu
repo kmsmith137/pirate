@@ -15,7 +15,7 @@ namespace pirate {
 static YAML::Node load_yaml(const string &filename)
 {
     if (!file_exists(filename))
-	throw runtime_error("File '" + filename + "' not found");
+        throw runtime_error("File '" + filename + "' not found");
     return YAML::LoadFile(filename);
 }
 
@@ -35,7 +35,7 @@ YamlFile YamlFile::operator[](const string &k) const
     YamlFile child = _get_child(k);
 
     if (!child.node)
-	throw runtime_error(name + ": key '" + k + "' not found");
+        throw runtime_error(name + ": key '" + k + "' not found");
 
     return child;
 }
@@ -46,9 +46,9 @@ YamlFile YamlFile::operator[](long ix) const
     this->assert_type_is(Type::Sequence);
 
     if ((ix < 0) || (ix >= size())) {
-	stringstream ss;
-	ss << name << ": bad index " << ix << " (size=" << size() << ")";
-	throw runtime_error(ss.str());
+        stringstream ss;
+        ss << name << ": bad index " << ix << " (size=" << size() << ")";
+        throw runtime_error(ss.str());
     }
 
     stringstream ss;
@@ -71,7 +71,7 @@ YamlFile YamlFile::_get_child(const string &k) const
     YamlFile child(ss.str(), node[k], verbosity);
 
     if (child.node)
-	this->requested_keys.insert(k);
+        this->requested_keys.insert(k);
 
     return child;    
 }
@@ -80,9 +80,9 @@ YamlFile YamlFile::_get_child(const string &k) const
 void YamlFile::assert_type_is(Type t) const
 {
     if (type() != t) {
-	stringstream ss;
-	ss << this->name << ": expected " << type_str(t) << ", got " << type_str(type());
-	throw runtime_error(ss.str());
+        stringstream ss;
+        ss << this->name << ": expected " << type_str(t) << ", got " << type_str(type());
+        throw runtime_error(ss.str());
     }
 }
 
@@ -93,14 +93,14 @@ void YamlFile::check_for_invalid_keys() const
     vector<string> unrequested_keys;
     
     for (YAML::const_iterator it = node.begin(); it != node.end(); it++) {
-	const string &k = it->first.as<string>();
-	
-	if (requested_keys.find(k) == requested_keys.end())
-	    unrequested_keys.push_back(k);
+        const string &k = it->first.as<string>();
+        
+        if (requested_keys.find(k) == requested_keys.end())
+            unrequested_keys.push_back(k);
     }
 
     if (unrequested_keys.size() == 0)
-	return;
+        return;
 
     stringstream ss;
     ss << name << ": the following unexpected key(s) were present: "
@@ -115,17 +115,17 @@ string YamlFile::type_str(Type t)
 {
     switch (t) {
     case YamlFile::Type::Undefined:
-	return "Undefined";
+        return "Undefined";
     case YamlFile::Type::Null:
-	return "Null";
+        return "Null";
     case YamlFile::Type::Scalar:
-	return "Scalar";
+        return "Scalar";
     case YamlFile::Type::Sequence:
-	return "Sequence";
+        return "Sequence";
     case YamlFile::Type::Map:
-	return "Map";
+        return "Map";
     default:
-	return "Unrecognized";
+        return "Unrecognized";
     }
 }
 

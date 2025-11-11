@@ -86,7 +86,7 @@ struct CasmBeamformer
     static constexpr float default_ns_feed_spacing = 0.50;  // meters
     
     inline static const float default_ew_feed_spacings[5]
-	= { 0.38f, 0.445f, 0.38f, 0.445f, 0.38f };  // meters
+        = { 0.38f, 0.445f, 0.38f, 0.445f, 0.38f };  // meters
                  
     // Constructor arguments
     // ---------------------
@@ -126,12 +126,12 @@ struct CasmBeamformer
     //   the east-west axis. Must be flip-symmetric.
     
     CasmBeamformer(
-	const ksgpu::Array<float> &frequencies,     // shape (F,)
-	const ksgpu::Array<int> &feed_indices,      // shape (256,2)
-	const ksgpu::Array<float> &beam_locations,  // shape (B,2)
-	int downsampling_factor,
-	float ns_feed_spacing = default_ns_feed_spacing,
-	const ksgpu::Array<float> &ew_feed_spacings = ksgpu::Array<float>()
+        const ksgpu::Array<float> &frequencies,     // shape (F,)
+        const ksgpu::Array<int> &feed_indices,      // shape (256,2)
+        const ksgpu::Array<float> &beam_locations,  // shape (B,2)
+        int downsampling_factor,
+        float ns_feed_spacing = default_ns_feed_spacing,
+        const ksgpu::Array<float> &ew_feed_spacings = ksgpu::Array<float>()
     );
     
     // The launch_beamformer() member function launches the beamforming kernel
@@ -159,9 +159,9 @@ struct CasmBeamformer
     
     void launch_beamformer(
         const ksgpu::Array<uint8_t> &e_arr,        // shape (T,F,2,256), axes (time,freq,pol,dish)
-	const ksgpu::Array<float> &feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
-	ksgpu::Array<float> &i_out,                // shape (Tout,F,B)
-	cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
+        const ksgpu::Array<float> &feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
+        ksgpu::Array<float> &i_out,                // shape (Tout,F,B)
+        cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
     ) const;
 
     // ---------------------------------------------------------------------------------------------

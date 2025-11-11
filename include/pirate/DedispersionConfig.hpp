@@ -32,8 +32,8 @@ struct DedispersionConfig
     
     struct EarlyTrigger
     {
-	long ds_level = -1;
-	long tree_rank = 0;
+        long ds_level = -1;
+        long tree_rank = 0;
     };
 
     // Sorted (by ds_level first, then tree_rank).

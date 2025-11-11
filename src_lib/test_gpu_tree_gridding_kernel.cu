@@ -37,21 +37,21 @@ void test_gpu_tree_gridding_kernel()
     params.ntime = T;
 
     cout << "test_gpu_tree_gridding_kernel()\n"
-	 << "    dtype = " << params.dtype << "\n"
-	 << "    beams_per_batch = " << B << "\n"
-	 << "    nfreq = " << F << "\n"
-	 << "    nchan = " << N << "\n"
-	 << "    ntime = " << T << "\n"
-	 << "    host_src_beam_stride = " << hs_in << "\n"
-	 << "    host_dst_beam_stride = " << hs_out << "\n"
-	 << "    gpu_src_beam_stride = " << gs_in << "\n"
-	 << "    gpu_dst_beam_stride = " << gs_out << endl;
+         << "    dtype = " << params.dtype << "\n"
+         << "    beams_per_batch = " << B << "\n"
+         << "    nfreq = " << F << "\n"
+         << "    nchan = " << N << "\n"
+         << "    ntime = " << T << "\n"
+         << "    host_src_beam_stride = " << hs_in << "\n"
+         << "    host_dst_beam_stride = " << hs_out << "\n"
+         << "    gpu_src_beam_stride = " << gs_in << "\n"
+         << "    gpu_dst_beam_stride = " << gs_out << endl;
     
     vector<float> cvec(N+1);
     cvec[0] = 0;
     cvec[N] = F;
     for (int i = 1; i < N; i++)
-	cvec[i] = rand_uniform(0, F);
+        cvec[i] = rand_uniform(0, F);
 
     std::sort(cvec.begin(), cvec.end());
 

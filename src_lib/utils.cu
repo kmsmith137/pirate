@@ -23,11 +23,11 @@ namespace pirate {
 int check_rank(int rank, const char *where, int min_rank)
 {
     if ((rank >= min_rank) && (rank <= constants::max_tree_rank))
-	return rank;
+        return rank;
 
     if (!where)
-	where = "check_rank";
-	    
+        where = "check_rank";
+            
     stringstream ss;
     ss << where << ": rank=" << rank << " is out-of-range (min_rank=" << min_rank
        << ", max_rank=" << constants::max_tree_rank << ")";
@@ -44,9 +44,9 @@ int bit_reverse_slow(int i, int nbits)
     int j = 0;
     
     while (nbits > 0) {
-	j = (j << 1) | (i & 1);
-	i >>= 1;
-	nbits--;
+        j = (j << 1) | (i & 1);
+        i >>= 1;
+        nbits--;
     }
 
     return j;
@@ -80,7 +80,7 @@ int rb_lag(int i, int j, int rank0, int rank1, bool uflag)
     int dm = bit_reverse_slow(j, rank0);
     
     if (uflag)
-	dm += n0;
+        dm += n0;
 
     int lag = (n1-1-i) * dm;
     xassert(lag >= 0);
@@ -94,7 +94,7 @@ long rstate_len(int rk)
     check_rank(rk, "rstate_len");
     
     if (rk <= 1)
-	return rk;  // Covers cases rk=0, rk=1.
+        return rk;  // Covers cases rk=0, rk=1.
     
     return pow2(2*rk-2) + (rk-1) * pow2(rk-2);
 }
@@ -117,12 +117,12 @@ int gcd(int m, int n)
     xassert(n > 0);
 
     if (m > n)
-	std::swap(m, n);
+        std::swap(m, n);
 
     while (m > 0) {
-	int mold = m;
-	m = n % m;
-	n = mold;
+        int mold = m;
+        m = n % m;
+        n = mold;
     }
 
     return n;
@@ -163,12 +163,12 @@ void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool n
     int nt = out.shape[1];
 
     for (int c = 0; c < nchan_out; c++) {
-	const float *src_row0 = in.data + (2*c) * in.strides[0];
-	const float *src_row1 = in.data + (2*c+1) * in.strides[0];
-	float *dst_row = out.data + c * out.strides[0];
+        const float *src_row0 = in.data + (2*c) * in.strides[0];
+        const float *src_row1 = in.data + (2*c+1) * in.strides[0];
+        float *dst_row = out.data + c * out.strides[0];
 
-	for (int t = 0; t < nt; t++)
-	    dst_row[t] = w * (src_row0[t] + src_row1[t]);
+        for (int t = 0; t < nt; t++)
+            dst_row[t] = w * (src_row0[t] + src_row1[t]);
     }
 }
 
@@ -186,11 +186,11 @@ void reference_downsample_time(const Array<float> &in, Array<float> &out, bool n
     int nt_out = out.shape[1];
 
     for (int c = 0; c < nchan; c++) {
-	const float *src_row = in.data + c * in.strides[0];
-	float *dst_row = out.data + c * out.strides[0];
+        const float *src_row = in.data + c * in.strides[0];
+        float *dst_row = out.data + c * out.strides[0];
 
-	for (int t = 0; t < nt_out; t++)
-	    dst_row[t] = w * (src_row[2*t] + src_row[2*t+1]);
+        for (int t = 0; t < nt_out; t++)
+            dst_row[t] = w * (src_row[2*t] + src_row[2*t+1]);
     }
 }
 
@@ -207,9 +207,9 @@ void reference_extract_odd_channels(const Array<float> &in, Array<float> &out)
     int nt = out.shape[1];
 
     for (int c = 0; c < nchan_out; c++) {
-	memcpy(out.data + c * out.strides[0],
-	       in.data + (2*c+1) * in.strides[0],
-	       nt * sizeof(float));
+        memcpy(out.data + c * out.strides[0],
+               in.data + (2*c+1) * in.strides[0],
+               nt * sizeof(float));
     }
 }
 
@@ -222,14 +222,14 @@ void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
 
     int nchan = arr.shape[0];
     int ntime = arr.shape[1];
-	
+        
     for (int c = 0; c < nchan; c++) {
-	xassert(lags[c] >= 0);
-	int lag = std::min(lags[c], ntime);
-	
-	float *row = arr.data + c*arr.strides[0];
-	memmove(row+lag, row, (ntime-lag) * sizeof(float));
-	memset(row, 0, lag * sizeof(float));
+        xassert(lags[c] >= 0);
+        int lag = std::min(lags[c], ntime);
+        
+        float *row = arr.data + c*arr.strides[0];
+        memmove(row+lag, row, (ntime-lag) * sizeof(float));
+        memset(row, 0, lag * sizeof(float));
     }
 }
 
@@ -251,26 +251,26 @@ void dedisperse_non_incremental(Array<float> &arr, long nspec)
     // long ntime = xdiv(ninner, nspec);   // not actually needed
 
     for (int r = 0; r < rank; r++) {
-	int pr = pow2(r);
-	
-	for (int i = 0; i < nfreq; i += 2*pr) {
-	    for (int j = 0; j < pr; j++) {
-		float *row0 = arr.data + (i+j)*arr.strides[0];
-		float *row1 = row0 + pr*arr.strides[0];
-		
-		long lag1 = bit_reverse_slow(j,r) * nspec;
-		long lag0 = lag1 + nspec;
+        int pr = pow2(r);
+        
+        for (int i = 0; i < nfreq; i += 2*pr) {
+            for (int j = 0; j < pr; j++) {
+                float *row0 = arr.data + (i+j)*arr.strides[0];
+                float *row1 = row0 + pr*arr.strides[0];
+                
+                long lag1 = bit_reverse_slow(j,r) * nspec;
+                long lag0 = lag1 + nspec;
 
-		for (int k = ninner-1; k >= 0; k--) {
-		    float x0 = (k >= lag0) ? row0[k-lag0] : 0.0f;
-		    float x1 = (k >= lag1) ? row0[k-lag1] : 0.0f;
-		    float y = row1[k];
+                for (int k = ninner-1; k >= 0; k--) {
+                    float x0 = (k >= lag0) ? row0[k-lag0] : 0.0f;
+                    float x1 = (k >= lag1) ? row0[k-lag1] : 0.0f;
+                    float y = row1[k];
 
-		    row0[k] = x1 + y;
-		    row1[k] = x0 + y;
-		}
-	    }
-	}
+                    row0[k] = x1 + y;
+                    row1[k] = x0 + y;
+                }
+            }
+        }
     }
 }
 

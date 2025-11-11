@@ -19,31 +19,31 @@ __global__ void reduce2_kernel(float *dst, const float *num, const float *den)
 void test_reduce2(int nblocks, int nwarps)
 {
     cout << "test_reduce2(nblocks=" << nblocks
-	 << ", nwarps=" << nwarps << "): start" << endl;
+         << ", nwarps=" << nwarps << "): start" << endl;
     
     int nthreads = nwarps * 32;
     Array<float> num_cpu({nblocks,nthreads}, af_rhost | af_random);
     Array<float> den_cpu({nblocks,nthreads}, af_rhost | af_random);
     Array<float> res_cpu({nblocks,nthreads}, af_rhost);
-	
+        
     for (int i = 0; i < nblocks; i++) {
-	float *np = num_cpu.data + i*nthreads;
-	float *dp = den_cpu.data + i*nthreads;
-	float *rp = res_cpu.data + i*nthreads;
-	
-	bool zero = (rand_uniform() < 0.05);
-	float nsum = 0.0;
-	float dsum = 0.0;
-	
-	for (int j = 0; j < nthreads; j++) {
-	    dp[j] = zero ? 0.0 : fabs(dp[j]);
-	    nsum += np[j];
-	    dsum += dp[j];
-	}
+        float *np = num_cpu.data + i*nthreads;
+        float *dp = den_cpu.data + i*nthreads;
+        float *rp = res_cpu.data + i*nthreads;
+        
+        bool zero = (rand_uniform() < 0.05);
+        float nsum = 0.0;
+        float dsum = 0.0;
+        
+        for (int j = 0; j < nthreads; j++) {
+            dp[j] = zero ? 0.0 : fabs(dp[j]);
+            nsum += np[j];
+            dsum += dp[j];
+        }
 
-	float r = (dsum > 0.0) ? (nsum/dsum) : nsum;
-	for (int j = 0; j < nthreads; j++)
-	    rp[j] = r;
+        float r = (dsum > 0.0) ? (nsum/dsum) : nsum;
+        for (int j = 0; j < nthreads; j++)
+            rp[j] = r;
     }
 
     Array<float> num_gpu = num_cpu.to_gpu();
@@ -58,12 +58,12 @@ void test_reduce2(int nblocks, int nwarps)
     assert_arrays_equal(res_cpu, res_gpu, "reduce2 (cpu)", "reduce2 (gpu)", {"block","thread"});
     cout << "test_reduce2: pass" << endl;
 }
-		  
+                  
 
 int main(int argc, char **argv)
 {
     for (int nwarps = 1; nwarps <= 32; nwarps++)
-	test_reduce2(100, nwarps);
+        test_reduce2(100, nwarps);
 
     return 0;
 }

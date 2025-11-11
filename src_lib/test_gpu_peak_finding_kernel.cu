@@ -19,13 +19,13 @@ namespace pirate {
 static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
 {
     cout << "\ntest_reduce_only_kernel: start\n"
-	 << "   dtype = " << params.dtype.str() << "\n"
-	 << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
-	 << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
-	 << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"
-	 << "   beams_per_batch = " << params.beams_per_batch << "\n"
-	 << "   ndm_in = " << params.ndm_in << "\n"
-	 << "   nt_in = " << params.nt_in << "\n";
+         << "   dtype = " << params.dtype.str() << "\n"
+         << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
+         << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
+         << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"
+         << "   beams_per_batch = " << params.beams_per_batch << "\n"
+         << "   ndm_in = " << params.ndm_in << "\n"
+         << "   nt_in = " << params.nt_in << "\n";
 
     GpuPeakFindingKernel gpu_kernel(params);
     auto k = gpu_kernel.registry_value;
@@ -54,28 +54,28 @@ static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
 
     // Weights must be positive.
     for (long i = 0; i < wt.size; i++)
-	wt.data[i] = rand_uniform(0.5, 1.0);
+        wt.data[i] = rand_uniform(0.5, 1.0);
 
     for (int b = 0; b < B; b++) {
-	for (int p = 0; p < P; p++) {
-	    for (int mout = 0; mout < Mout; mout++) {
-		for (int tout = 0; tout < Tout; tout++) {
-		    float rmax = -1.0e20;
-		    float rssq = 0.0;
+        for (int p = 0; p < P; p++) {
+            for (int mout = 0; mout < Mout; mout++) {
+                for (int tout = 0; tout < Tout; tout++) {
+                    float rmax = -1.0e20;
+                    float rssq = 0.0;
 
-		    for (int m = mout*M; m < (mout+1)*M; m++) {
-			float w = wt.at({b,p,m});
-			for (int t = tout*Dt; t < (tout+1)*Dt; t++) {
-			    rmax = max(rmax, w * in_max.at({b,p,m,t}));
-			    rssq += w * w * in_ssq.at({b,p,m,t});
-			}
-		    }
+                    for (int m = mout*M; m < (mout+1)*M; m++) {
+                        float w = wt.at({b,p,m});
+                        for (int t = tout*Dt; t < (tout+1)*Dt; t++) {
+                            rmax = max(rmax, w * in_max.at({b,p,m,t}));
+                            rssq += w * w * in_ssq.at({b,p,m,t});
+                        }
+                    }
 
-		    out_max.at({b,p,mout,tout}) = rmax;
-		    out_ssq.at({b,p,mout,tout}) = rssq;
-		}
-	    }
-	}
+                    out_max.at({b,p,mout,tout}) = rmax;
+                    out_ssq.at({b,p,mout,tout}) = rssq;
+                }
+            }
+        }
     }
 
     Array<void> gpu_out_max(dtype, {B,P,Mout,Tout}, af_gpu | af_zero | af_guard);
@@ -88,9 +88,9 @@ static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
     dim3 nblocks = {Bx, uint(B), 1};
    
     k.reduce_only_kernel <<< nblocks, 32*W >>>
-	(gpu_out_max.data, gpu_out_ssq.data,
-	 gpu_in_max.data, gpu_in_ssq.data,
-	 gpu_wt.data, Mout, Tout32);
+        (gpu_out_max.data, gpu_out_ssq.data,
+         gpu_in_max.data, gpu_in_ssq.data,
+         gpu_wt.data, Mout, Tout32);
 
     CUDA_PEEK("pf reduce-only kernel launch");
 
@@ -108,17 +108,17 @@ static void test_reduce_only_kernel(const PeakFindingKernelParams &params)
 static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu, long niter_cpu)
 {
     cout << "\ntest_pf_kernel: start\n"
-	 << "   dtype = " << params.dtype.str() << "\n"
-	 << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
-	 << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
-	 << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"
-	 << "   beams_per_batch = " << params.beams_per_batch << "\n"
-	 << "   total_beams = " << params.total_beams << "\n"
-	 << "   ndm_in = " << params.ndm_in << "\n"
-	 << "   nt_in = " << params.nt_in << "\n"
-	 << "   niter_gpu = " << niter_gpu << "\n"
-	 << "   niter_cpu = " << niter_cpu
-	 << endl;
+         << "   dtype = " << params.dtype.str() << "\n"
+         << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
+         << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
+         << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"
+         << "   beams_per_batch = " << params.beams_per_batch << "\n"
+         << "   total_beams = " << params.total_beams << "\n"
+         << "   ndm_in = " << params.ndm_in << "\n"
+         << "   nt_in = " << params.nt_in << "\n"
+         << "   niter_gpu = " << niter_gpu << "\n"
+         << "   niter_cpu = " << niter_cpu
+         << endl;
 
     params.validate();
     
@@ -130,7 +130,7 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 
     PeakFindingKernelParams ref_params = params;
     ref_params.nt_in = xdiv(params.nt_in, niter_cpu);
-	
+        
     ReferencePeakFindingKernel ref_kernel(ref_params, gpu_kernel.Dcore);
 
     // Allocate arrays.
@@ -151,7 +151,7 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
 
     // Weights must be positive.
     for (long i = 0; i < wt.size; i++)
-	wt.data[i] = rand_uniform(0.5, 1.0);
+        wt.data[i] = rand_uniform(0.5, 1.0);
     
     // Reference kernel.
     
@@ -163,29 +163,29 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
     Array<float> ssq_c({B,P,Mout,Tout_c}, af_uhost);
     
     for (long i = 0; i < niter_cpu; i++) {
-	long it0 = (i) * Tin_c;
-	long it1 = (i+1) * Tin_c;
+        long it0 = (i) * Tin_c;
+        long it1 = (i+1) * Tin_c;
 
-	Array<float> in_tmp = in.slice(2,it0,it1);
-	in_c.fill(in_tmp);
-	
-	for (long b = 0; b < gpu_kernel.nbatches; b++) {
-	    long ib0 = (b) * params.beams_per_batch;
-	    long ib1 = (b+1) * params.beams_per_batch;
+        Array<float> in_tmp = in.slice(2,it0,it1);
+        in_c.fill(in_tmp);
+        
+        for (long b = 0; b < gpu_kernel.nbatches; b++) {
+            long ib0 = (b) * params.beams_per_batch;
+            long ib1 = (b+1) * params.beams_per_batch;
 
-	    ref_kernel.apply(
-	        max_c.slice(0,ib0,ib1),
-		ssq_c.slice(0,ib0,ib1),
-		in_c.slice(0,ib0,ib1),
-		wt.slice(0,ib0,ib1),
-		b
-	   );
-	}
+            ref_kernel.apply(
+                max_c.slice(0,ib0,ib1),
+                ssq_c.slice(0,ib0,ib1),
+                in_c.slice(0,ib0,ib1),
+                wt.slice(0,ib0,ib1),
+                b
+           );
+        }
 
-	it0 = (i) * Tout_c;
-	it1 = (i+1) * Tout_c;
-	host_max.slice(3,it0,it1).fill(max_c);
-	host_ssq.slice(3,it0,it1).fill(ssq_c);
+        it0 = (i) * Tout_c;
+        it1 = (i+1) * Tout_c;
+        host_max.slice(3,it0,it1).fill(max_c);
+        host_ssq.slice(3,it0,it1).fill(ssq_c);
     }
 
     // GPU kernel.
@@ -199,39 +199,39 @@ static void test_pf_kernel(const PeakFindingKernelParams &params, long niter_gpu
     Array<void> ssq_g(params.dtype, {B,P,Mout,Tout_g}, af_gpu);
     
     for (long i = 0; i < niter_gpu; i++) {
-	long it0 = (i) * Tin_g;
-	long it1 = (i+1) * Tin_g;
+        long it0 = (i) * Tin_g;
+        long it1 = (i+1) * Tin_g;
 
-	Array<void> in_tmp = in.slice(2,it0,it1).convert(params.dtype);
-	in_g.fill(in_tmp);
-	
-	for (long b = 0; b < gpu_kernel.nbatches; b++) {
-	    long ib0 = (b) * params.beams_per_batch;
-	    long ib1 = (b+1) * params.beams_per_batch;
+        Array<void> in_tmp = in.slice(2,it0,it1).convert(params.dtype);
+        in_g.fill(in_tmp);
+        
+        for (long b = 0; b < gpu_kernel.nbatches; b++) {
+            long ib0 = (b) * params.beams_per_batch;
+            long ib1 = (b+1) * params.beams_per_batch;
 
-	    Array<void> max_tmp = max_g.slice(0,ib0, ib1);
-	    Array<void> ssq_tmp = ssq_g.slice(0,ib0, ib1);
-	    
-	    gpu_kernel.launch(
-		max_tmp,
-		ssq_tmp,
-	        in_g.slice(0,ib0,ib1),
-	        wt_g.slice(0,ib0,ib1),
-		b, NULL
-	    );
-	}
+            Array<void> max_tmp = max_g.slice(0,ib0, ib1);
+            Array<void> ssq_tmp = ssq_g.slice(0,ib0, ib1);
+            
+            gpu_kernel.launch(
+                max_tmp,
+                ssq_tmp,
+                in_g.slice(0,ib0,ib1),
+                wt_g.slice(0,ib0,ib1),
+                b, NULL
+            );
+        }
 
-	it0 = (i) * Tout_g;
-	it1 = (i+1) * Tout_g;
-	gpu_max.slice(3,it0,it1).fill(max_g);
-	gpu_ssq.slice(3,it0,it1).fill(ssq_g);
+        it0 = (i) * Tout_g;
+        it1 = (i+1) * Tout_g;
+        gpu_max.slice(3,it0,it1).fill(max_g);
+        gpu_ssq.slice(3,it0,it1).fill(ssq_g);
     }
 
     // Compare results.
     
     int nds = params.dm_downsampling_factor * params.time_downsampling_factor;
     double epsabs = 5.0 * sqrt(nds) * params.dtype.precision();  // appropriate epsabs for ssq comparison
-	
+        
     assert_arrays_equal(host_max, gpu_max, "host_max", "gpu_max", {"b","p","mout","tout"});
     assert_arrays_equal(host_ssq, gpu_ssq, "host_ssq", "gpu_ssq", {"b","p","mout","tout"}, epsabs);
     cout << endl;
@@ -246,7 +246,7 @@ void test_gpu_peak_finding_kernel(bool reduce_only)
     
     // Note that by choosing 'niter_cpu' and 'niter_gpu' independently, this test
     // checks the incremental logic in both the reference kernel and the GPU kernel.
-	
+        
     int niter_cpu = rand_int(1,4);
     int niter_gpu = rand_int(1,4);
     
@@ -279,9 +279,9 @@ void test_gpu_peak_finding_kernel(bool reduce_only)
     params.validate();
     
     if (reduce_only)
-	test_reduce_only_kernel(params);
+        test_reduce_only_kernel(params);
     else
-	test_pf_kernel(params, niter_gpu, niter_cpu);
+        test_pf_kernel(params, niter_gpu, niter_cpu);
 }
 
 

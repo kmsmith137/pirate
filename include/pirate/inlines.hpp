@@ -37,7 +37,7 @@ inline long align_up(long n, long nalign)
 inline long round_up_to_power_of_two(long n)
 {
     if (n <= 1)
-	return 1;
+        return 1;
     double x = log2(n - 0.5);
     return 1L << (int(x) + 1);
 }
@@ -81,10 +81,10 @@ inline bool is_sorted(const std::vector<T> &v, int min_length=0, bool allow_dupl
     xassert((int)v.size() >= min_length);
 
     for (unsigned int i = 1; i < v.size(); i++) {
-	if (v[i-1] > v[i])
-	    return false;
-	if ((v[i-1] == v[i]) && !allow_duplicates)
-	    return false;
+        if (v[i-1] > v[i])
+            return false;
+        if ((v[i-1] == v[i]) && !allow_duplicates)
+            return false;
     }
 
     return true;
@@ -94,12 +94,12 @@ inline bool is_sorted(const std::vector<T> &v, int min_length=0, bool allow_dupl
 inline bool is_aligned(const void *ptr, int nalign, bool allow_null=false)
 {
     if (!allow_null && !ptr)
-	return false;
+        return false;
     
     xassert(nalign > 0);
     return (((unsigned long)ptr) % nalign) == 0;
 }
-		       
+                       
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -115,7 +115,7 @@ struct Indent
 inline std::ostream &operator<<(std::ostream &os, const Indent &ind)
 {
     for (int i = 0; i < ind.n; i++)
-	os << " ";
+        os << " ";
     return os;
 }
 
@@ -126,7 +126,7 @@ inline void print_kv(const char *key, T val, std::ostream &os, int indent, const
     os << Indent(indent) << key << " = " << val;
 
     if (units != nullptr)
-	os << " " << units;
+        os << " " << units;
     
     os << std::endl;
 }
@@ -144,7 +144,7 @@ inline void print_kv_nbytes(const char *key, long nbytes, std::ostream &os, int 
     os << Indent(indent) << key;
     
     if (nbytes >= 1024)
-	os << " = " << nbytes;
+        os << " = " << nbytes;
 
     os << " = " << ksgpu::nbytes_to_str(nbytes) << std::endl;
 }

@@ -36,7 +36,7 @@ bool is_directory(const string &filename)
 
     int err = stat(filename.c_str(), &s);
     if (err < 0)
-	throw runtime_error(filename + ": " + strerror(errno));
+        throw runtime_error(filename + ": " + strerror(errno));
 
     return S_ISDIR(s.st_mode);
 }
@@ -47,16 +47,16 @@ bool is_empty_directory(const string &dirname)
     Directory dir(dirname);
 
     for (;;) {
-	struct dirent *entry = dir.read_next();
+        struct dirent *entry = dir.read_next();
 
-	if (!entry)
-	    return true;
-	if (!strcmp(entry->d_name, "."))
-	    continue;
-	if (!strcmp(entry->d_name, ".."))
-	    continue;
-	
-	return false;
+        if (!entry)
+            return true;
+        if (!strcmp(entry->d_name, "."))
+            continue;
+        if (!strcmp(entry->d_name, ".."))
+            continue;
+        
+        return false;
     }
 }
 
@@ -66,9 +66,9 @@ void makedir(const string &filename, bool throw_exception_if_directory_exists, m
     int err = mkdir(filename.c_str(), mode);
 
     if (err >= 0)
-	return;
+        return;
     if (throw_exception_if_directory_exists || (errno != EEXIST))
-	throw runtime_error(filename + ": mkdir() failed: " + strerror(errno));
+        throw runtime_error(filename + ": mkdir() failed: " + strerror(errno));
     
     // If we get here, then mkdir() failed with EEXIST, and throw_exception_if_directory_exists=false.
     // We still throw an exception if the file is not a directory.
@@ -78,10 +78,10 @@ void makedir(const string &filename, bool throw_exception_if_directory_exists, m
 
     // A weird corner case.
     if (err < 0)
-	throw runtime_error(filename + ": mkdir() returned EEXIST but stat() failed, not sure what is going on");
+        throw runtime_error(filename + ": mkdir() returned EEXIST but stat() failed, not sure what is going on");
 
     if (!S_ISDIR(s.st_mode))
-	throw runtime_error(filename + ": file exists but is not a directory");
+        throw runtime_error(filename + ": file exists but is not a directory");
 }
 
 
@@ -92,12 +92,12 @@ vector<string> listdir(const string &dirname)
     Directory dir(dirname);
 
     for (;;) {
-	struct dirent *entry = dir.read_next();
-	
-	if (entry)
-	    filenames.push_back(entry->d_name);
-	else
-	    return filenames;
+        struct dirent *entry = dir.read_next();
+        
+        if (entry)
+            filenames.push_back(entry->d_name);
+        else
+            return filenames;
     }
 }
 
@@ -107,7 +107,7 @@ void delete_file(const string &filename)
     int err = unlink(filename.c_str());
     
     if (err != 0)
-	throw runtime_error(filename + ": unlink() failed: " + strerror(errno));
+        throw runtime_error(filename + ": unlink() failed: " + strerror(errno));
 }
 
 
@@ -152,18 +152,18 @@ File::File(const string &filename_, int oflags, int mode)
     fd = open(filename.c_str(), oflags, mode);
     
     if (fd < 0) {
-	// FIXME exception text should show 'oflags' and 'mode'.
-	stringstream ss;
-	ss << filename << ": open() failed: " << strerror(errno);
-	throw runtime_error(ss.str());
+        // FIXME exception text should show 'oflags' and 'mode'.
+        stringstream ss;
+        ss << filename << ": open() failed: " << strerror(errno);
+        throw runtime_error(ss.str());
     }
 }
 
 File::~File()
 {
     if (fd >= 0) {
-	close(fd);
-	fd = -1;
+        close(fd);
+        fd = -1;
     }
 }
 
@@ -171,7 +171,7 @@ File::~File()
 void File::write(const void *p, long nbytes)
 {
     if (nbytes == 0)
-	return;
+        return;
     
     xassert(p != nullptr);
     xassert(nbytes > 0);
@@ -179,25 +179,25 @@ void File::write(const void *p, long nbytes)
 
     // C++ doesn't alllow '+=' on a (const void *).
     const char *pc = reinterpret_cast<const char *> (p);
-	
+        
     while (nbytes > 0) {
-	long n = ::write(fd, pc, nbytes);
-	
-	if (n < 0) {
-	    stringstream ss;
-	    ss << filename << ": write() failed: " << strerror(errno);
-	    throw runtime_error(ss.str());
-	}
-	
-	if (n == 0) {
-	    // Just being paranoid -- I don't think this can actually happen.
-	    stringstream ss;
-	    ss << filename << ": write() returned zero?!";
-	    throw runtime_error(ss.str());
-	}
-	
-	pc += n;
-	nbytes -= n;
+        long n = ::write(fd, pc, nbytes);
+        
+        if (n < 0) {
+            stringstream ss;
+            ss << filename << ": write() failed: " << strerror(errno);
+            throw runtime_error(ss.str());
+        }
+        
+        if (n == 0) {
+            // Just being paranoid -- I don't think this can actually happen.
+            stringstream ss;
+            ss << filename << ": write() returned zero?!";
+            throw runtime_error(ss.str());
+        }
+        
+        pc += n;
+        nbytes -= n;
     }
 }
 
@@ -211,15 +211,15 @@ Directory::Directory(const string &dirname_) :
     this->dirp = opendir(dirname.c_str());
     
     if (!dirp)
-	throw runtime_error(dirname + ": opendir() failed: " + strerror(errno));
+        throw runtime_error(dirname + ": opendir() failed: " + strerror(errno));
 }
 
 
 Directory::~Directory()
 {
     if (dirp) {
-	closedir(dirp);
-	dirp = nullptr;
+        closedir(dirp);
+        dirp = nullptr;
     }
 }
 
@@ -235,7 +235,7 @@ dirent *Directory::read_next()
     dirent *entry = readdir(dirp);
 
     if (!entry && errno)
-	throw runtime_error(dirname + ": readdir() failed: " + strerror(errno));
+        throw runtime_error(dirname + ": readdir() failed: " + strerror(errno));
 
     errno = errno ? errno : save_errno;
     return entry;

@@ -15,15 +15,15 @@ namespace pirate {
 
 
 void launch_downsample(Array<float> &dst_i, Array<float> &dst_w,
-		       const Array<float> &src_i, const Array<float> &src_w,
-		       int Df, int Dt, bool transpose_output, cudaStream_t stream)
+                       const Array<float> &src_i, const Array<float> &src_w,
+                       int Df, int Dt, bool transpose_output, cudaStream_t stream)
 {
     xassert(Df >= 1);
     xassert(Dt >= 1);
     xassert((Dt == 1) || (Dt == 2) || ((Dt % 4) == 0));
 
     if (!transpose_output)
-	throw runtime_error("launch_downsample(transpose_output=false) not implemented yet!");
+        throw runtime_error("launch_downsample(transpose_output=false) not implemented yet!");
 
     xassert(dst_i.ndim == 3);
     xassert(dst_w.ndim == 3);
@@ -31,10 +31,10 @@ void launch_downsample(Array<float> &dst_i, Array<float> &dst_w,
     xassert(src_w.ndim == 3);
     
     for (int d = 0; d < 3; d++) {
-	xassert(dst_i.shape[d] == dst_w.shape[d]);
-	xassert(dst_i.strides[d] == dst_w.strides[d]);
-	xassert(src_i.shape[d] == src_w.shape[d]);
-	xassert(src_i.strides[d] == src_w.strides[d]);
+        xassert(dst_i.shape[d] == dst_w.shape[d]);
+        xassert(dst_i.strides[d] == dst_w.strides[d]);
+        xassert(src_i.shape[d] == src_w.shape[d]);
+        xassert(src_i.strides[d] == src_w.strides[d]);
     }
     
     // Source array: (beam, freq, time)
@@ -70,17 +70,17 @@ void launch_downsample(Array<float> &dst_i, Array<float> &dst_w,
     nblocks.z = nbeams_dst;
 
     if (Dt == 1)
-	downsample_kernel<1>
-	    <<< nblocks, 32*DownsampleKernel::warps_per_block, 0, stream >>>
-	    (dst_i.data, dst_w.data, src_i.data, src_w.data, Df, Dt, src_fstride, src_bstride, dst_tstride, dst_bstride);
+        downsample_kernel<1>
+            <<< nblocks, 32*DownsampleKernel::warps_per_block, 0, stream >>>
+            (dst_i.data, dst_w.data, src_i.data, src_w.data, Df, Dt, src_fstride, src_bstride, dst_tstride, dst_bstride);
     else if (Dt == 2)
-	downsample_kernel<2>
-	    <<< nblocks, 32*DownsampleKernel::warps_per_block, 0, stream >>>
-	    (dst_i.data, dst_w.data, src_i.data, src_w.data, Df, Dt, src_fstride, src_bstride, dst_tstride, dst_bstride);
+        downsample_kernel<2>
+            <<< nblocks, 32*DownsampleKernel::warps_per_block, 0, stream >>>
+            (dst_i.data, dst_w.data, src_i.data, src_w.data, Df, Dt, src_fstride, src_bstride, dst_tstride, dst_bstride);
     else if (Dt >= 4)
-	downsample_kernel<4>
-	    <<< nblocks, 32*DownsampleKernel::warps_per_block, 0, stream >>>
-	    (dst_i.data, dst_w.data, src_i.data, src_w.data, Df, Dt, src_fstride, src_bstride, dst_tstride, dst_bstride);
+        downsample_kernel<4>
+            <<< nblocks, 32*DownsampleKernel::warps_per_block, 0, stream >>>
+            (dst_i.data, dst_w.data, src_i.data, src_w.data, Df, Dt, src_fstride, src_bstride, dst_tstride, dst_bstride);
 }
 
 

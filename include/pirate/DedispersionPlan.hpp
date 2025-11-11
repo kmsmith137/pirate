@@ -49,34 +49,34 @@ struct DedispersionPlan
     
     struct Stage1Tree
     {
-	// Note: total tree rank (rank0 + rank1) is equal to (config.tree_rank - (ds_level ? 1 : 0)).
-	
-	int ds_level = -1;  // downsampling level (downsampling "factor" is 2^level)
-	int rank0 = 0;      // rank of Stage1Tree
-	int rank1 = 0;      // rank of subsequent Stage2Tree (if no early trigger)
-	int nt_ds = 0;      // downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
-	
-	int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * (nt_ds / nelts_per_segment)
+        // Note: total tree rank (rank0 + rank1) is equal to (config.tree_rank - (ds_level ? 1 : 0)).
+        
+        int ds_level = -1;  // downsampling level (downsampling "factor" is 2^level)
+        int rank0 = 0;      // rank of Stage1Tree
+        int rank1 = 0;      // rank of subsequent Stage2Tree (if no early trigger)
+        int nt_ds = 0;      // downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
+        
+        int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * (nt_ds / nelts_per_segment)
         int base_segment = 0;        // cumulative (over all Stage1Trees) segment count
     };
 
     struct Stage2Tree
     {
-	int ds_level = -1;       // Same as Stage1Tree::ds_level
-	int rank0 = 0;           // Same as Stage1Tree::rank0
-	int rank1_ambient = 0;   // Same as Stage1Tree::rank1
-	int rank1_trigger = 0;   // Can be smaller than rank1_ambient, for early trigger
-	int nt_ds = 0;           // Same as Stage1Tree::nt_ds
-		
-	int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * (nt_ds / nelts_per_segment)
+        int ds_level = -1;       // Same as Stage1Tree::ds_level
+        int rank0 = 0;           // Same as Stage1Tree::rank0
+        int rank1_ambient = 0;   // Same as Stage1Tree::rank1
+        int rank1_trigger = 0;   // Can be smaller than rank1_ambient, for early trigger
+        int nt_ds = 0;           // Same as Stage1Tree::nt_ds
+                
+        int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * (nt_ds / nelts_per_segment)
         int base_segment = 0;        // cumulative (over all Stage2Trees) segment count
     };
 
     struct Ringbuf
     {
-	long rb_len = 0;           // number of (time chunk, beam) pairs, see below
-	long nseg_per_beam = 0;    // size (in segments) per (time chunk, beam) pair
-	long base_segment = -1;    // offset (in segments) relative to base memory address on either GPU or CPU
+        long rb_len = 0;           // number of (time chunk, beam) pairs, see below
+        long nseg_per_beam = 0;    // size (in segments) per (time chunk, beam) pair
+        long base_segment = -1;    // offset (in segments) relative to base memory address on either GPU or CPU
     };
     
     // --------------------  Members  --------------------

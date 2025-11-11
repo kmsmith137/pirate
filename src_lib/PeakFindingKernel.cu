@@ -21,7 +21,7 @@ namespace pirate {
 void PeakFindingKernelParams::validate() const
 {
     if ((dtype != Dtype::native<float>()) && (dtype != Dtype::native<__half>()))
-	throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());
+        throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());
 
     // The checks below (or a subset) arise in three other places:
     //
@@ -64,7 +64,7 @@ PeakFindingKernel::PeakFindingKernel(const PeakFindingKernelParams &params_, lon
     params.validate();
 
     if (Dcore == 0)
-	Dcore = params.time_downsampling_factor;
+        Dcore = params.time_downsampling_factor;
 
     xassert_divisible(params.time_downsampling_factor, Dcore);
 
@@ -128,8 +128,8 @@ struct pf_accumulator
 
     inline void update(float w, float x)
     {
-	rmax = max(rmax, w*x);
-	rssq += square(w*x);
+        rmax = max(rmax, w*x);
+        rssq += square(w*x);
     }
 };
 
@@ -162,32 +162,32 @@ void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_s
 
     // Note: _check_args() asserts that 'wt' is fully contiguous.
     for (long i = 0; i < wt.size; i++)
-	if (wt.data[i] < 0.0f)
-	    throw runtime_error("ReferencePeakFindingKernel::apply(): all weights must be positive");
+        if (wt.data[i] < 0.0f)
+            throw runtime_error("ReferencePeakFindingKernel::apply(): all weights must be positive");
     
     // This loop just does p=0.
     for (int b = 0; b < B; b++) {
-	for (int mout = 0; mout < Mout; mout++) {
-	    for (int tout = 0; tout < Tout; tout++) {
-		pf_accumulator acc0;
+        for (int mout = 0; mout < Mout; mout++) {
+            for (int tout = 0; tout < Tout; tout++) {
+                pf_accumulator acc0;
 
-		for (int m = mout*M; m < (mout+1)*M; m++) {
-		    float w = wt.at({b,0,m});   // p=0
-		    
-		    for (int t = tout*Dout; t < (tout+1)*Dout; t++) {
-			float x = in.at({b,m,t});  // decided to use 'in' here, not 'in_x'.
-			acc0.update(w, x);
-		    }
+                for (int m = mout*M; m < (mout+1)*M; m++) {
+                    float w = wt.at({b,0,m});   // p=0
+                    
+                    for (int t = tout*Dout; t < (tout+1)*Dout; t++) {
+                        float x = in.at({b,m,t});  // decided to use 'in' here, not 'in_x'.
+                        acc0.update(w, x);
+                    }
 
-		    out_max.at({b,0,mout,tout}) = acc0.rmax;  // p=0
-		    out_ssq.at({b,0,mout,tout}) = acc0.rssq;  // p=0
-		}
-	    }
-	}
+                    out_max.at({b,0,mout,tout}) = acc0.rmax;  // p=0
+                    out_ssq.at({b,0,mout,tout}) = acc0.rssq;  // p=0
+                }
+            }
+        }
     }
 
     if (E == 1)
-	return;
+        return;
     
     // Throughout this kernel, 'in_x' denotes a version of 'in' which has been:
     //   - downsampled by 2**ids elements
@@ -214,106 +214,106 @@ void ReferencePeakFindingKernel::apply(Array<void> &out_max_, Array<void> &out_s
     ps.fill(in_x.slice(2,Tin,Tin+Tpp));   // update pstate, for next call to apply().
 
     for (;;) {
-	
-	// The value of 'ids' increases by 1 in every iteration of the loop,
-	// but the value of isamp "saturates" at log2(Dcore).
-	//
-	// The output arrays have been filled for 0 <= p < (3*ids+1).
-	// In this iteration of the loop, we'll fill (3*ids+1) <= p < (3*ids+4).
+        
+        // The value of 'ids' increases by 1 in every iteration of the loop,
+        // but the value of isamp "saturates" at log2(Dcore).
+        //
+        // The output arrays have been filled for 0 <= p < (3*ids+1).
+        // In this iteration of the loop, we'll fill (3*ids+1) <= p < (3*ids+4).
 
-	long Tds = xdiv(Tin, pow2(isamp));
-	xassert_shape_eq(in_x, ({B,Min,Tds+Tpp}));
-	xassert_eq(isamp, min(ids, integer_log2(Dcore)));
-	xassert(in_x.is_fully_contiguous());  // assumed in downsampling logic
+        long Tds = xdiv(Tin, pow2(isamp));
+        xassert_shape_eq(in_x, ({B,Min,Tds+Tpp}));
+        xassert_eq(isamp, min(ids, integer_log2(Dcore)));
+        xassert(in_x.is_fully_contiguous());  // assumed in downsampling logic
 
-	// For computing profiles.
-	long DD = xdiv(Tds, Tout);  // Downsampling factor between 'in_ds' and 'out_{max,ssq}' arrays.
-	int p0 = 3*ids+1;           // Base profile index
+        // For computing profiles.
+        long DD = xdiv(Tds, Tout);  // Downsampling factor between 'in_ds' and 'out_{max,ssq}' arrays.
+        int p0 = 3*ids+1;           // Base profile index
 
-	// Time offset in 'in_ds' array corresponding to 2**ids samples (used for "prepadding" below)
-	long dt = pow2(ids-isamp);
-	xassert(Tpp >= 3*dt);
+        // Time offset in 'in_ds' array corresponding to 2**ids samples (used for "prepadding" below)
+        long dt = pow2(ids-isamp);
+        xassert(Tpp >= 3*dt);
  
-	// Compute 3 profiles.
-	for (int b = 0; b < B; b++) {
-	    for (int mout = 0; mout < Mout; mout++) {
-		for (int tout = 0; tout < Tout; tout++) {
-		    pf_accumulator acc0;
-		    pf_accumulator acc1;
-		    pf_accumulator acc2;
-		    
-		    for (int m = mout*M; m < (mout+1)*M; m++) {
-			float w0 = wt.at({b,p0,m});
-			float w1 = wt.at({b,p0+1,m});
-			float w2 = wt.at({b,p0+2,m});
-			float *p = &in_x.at({b,m,0});
-			
-			for (int t = tout*DD; t < (tout+1)*DD; t++) {
-			    float x0 = p[t+Tpp-3*dt];
-			    float x1 = p[t+Tpp-2*dt];
-			    float x2 = p[t+Tpp-dt];
-			    float x3 = p[t+Tpp];
+        // Compute 3 profiles.
+        for (int b = 0; b < B; b++) {
+            for (int mout = 0; mout < Mout; mout++) {
+                for (int tout = 0; tout < Tout; tout++) {
+                    pf_accumulator acc0;
+                    pf_accumulator acc1;
+                    pf_accumulator acc2;
+                    
+                    for (int m = mout*M; m < (mout+1)*M; m++) {
+                        float w0 = wt.at({b,p0,m});
+                        float w1 = wt.at({b,p0+1,m});
+                        float w2 = wt.at({b,p0+2,m});
+                        float *p = &in_x.at({b,m,0});
+                        
+                        for (int t = tout*DD; t < (tout+1)*DD; t++) {
+                            float x0 = p[t+Tpp-3*dt];
+                            float x1 = p[t+Tpp-2*dt];
+                            float x2 = p[t+Tpp-dt];
+                            float x3 = p[t+Tpp];
 
-			    acc0.update(w0, x2 + x3);
-			    acc1.update(w1, 0.5f*x1 + x2 + 0.5f*x3);
-			    acc2.update(w2, 0.5f*x0 + x1 + x2 + 0.5f*x3);
-			}
-		    }
+                            acc0.update(w0, x2 + x3);
+                            acc1.update(w1, 0.5f*x1 + x2 + 0.5f*x3);
+                            acc2.update(w2, 0.5f*x0 + x1 + x2 + 0.5f*x3);
+                        }
+                    }
 
-		    out_max.at({b,p0,mout,tout}) = acc0.rmax;
-		    out_max.at({b,p0+1,mout,tout}) = acc1.rmax;
-		    out_max.at({b,p0+2,mout,tout}) = acc2.rmax;
-		    
-		    out_ssq.at({b,p0,mout,tout}) = acc0.rssq;
-		    out_ssq.at({b,p0+1,mout,tout}) = acc1.rssq;
-		    out_ssq.at({b,p0+2,mout,tout}) = acc2.rssq;
-		}
-	    }
-	}
+                    out_max.at({b,p0,mout,tout}) = acc0.rmax;
+                    out_max.at({b,p0+1,mout,tout}) = acc1.rmax;
+                    out_max.at({b,p0+2,mout,tout}) = acc2.rmax;
+                    
+                    out_ssq.at({b,p0,mout,tout}) = acc0.rssq;
+                    out_ssq.at({b,p0+1,mout,tout}) = acc1.rssq;
+                    out_ssq.at({b,p0+2,mout,tout}) = acc2.rssq;
+                }
+            }
+        }
 
-	if (E <= 2*pow2(ids))
-	    return;
+        if (E <= 2*pow2(ids))
+            return;
 
-	// Downsample, for next iteration of the loop.
+        // Downsample, for next iteration of the loop.
 
-	// Define constants (s,t0,dt) so that downsampled array at time t
-	// is obtained from input array at times (s*t + t0), (s*t + t0 + dt).
-	// Note: t0 is a "logical" time index, that does not incorporate prepadding.
-	
-	int s = (isamp < integer_log2(Dcore)) ? 2 : 1;
-	// int dt = pow2(ids - isamp);   // already defined above
-	int t0 = (s-1) - dt;
-	xassert(t0 <= 0);
-	xassert(t0 >= -Tpp);
+        // Define constants (s,t0,dt) so that downsampled array at time t
+        // is obtained from input array at times (s*t + t0), (s*t + t0 + dt).
+        // Note: t0 is a "logical" time index, that does not incorporate prepadding.
+        
+        int s = (isamp < integer_log2(Dcore)) ? 2 : 1;
+        // int dt = pow2(ids - isamp);   // already defined above
+        int t0 = (s-1) - dt;
+        xassert(t0 <= 0);
+        xassert(t0 >= -Tpp);
 
-	long Tds2 = xdiv(Tds,s);
-	long Tpp2 = (Tpp+t0)/s;  // round down
-	xassert(Tpp2 >= 0);
+        long Tds2 = xdiv(Tds,s);
+        long Tpp2 = (Tpp+t0)/s;  // round down
+        xassert(Tpp2 >= 0);
 
-	Array<float> in_x2({B,Min,Tds2+Tpp2}, af_uhost);
-	
-	// t1 = version of t0 which accounts for prepadding
-	int t1 = (t0 - Tpp2*s) + Tpp;
-	int tlast = s*(Tds2+Tpp2-1) + t1 + dt;  // only used for range check
-	
-	// Range check for loop below.
-	xassert(t1 >= 0);
-	xassert(tlast < Tds+Tpp);
-	
-	for (long b = 0; b < B; b++) {
-	    for (long m = 0; m < Min; m++) {
-		float *src = &in_x.at({b,m,0});
-		float *dst = &in_x2.at({b,m,0});
+        Array<float> in_x2({B,Min,Tds2+Tpp2}, af_uhost);
+        
+        // t1 = version of t0 which accounts for prepadding
+        int t1 = (t0 - Tpp2*s) + Tpp;
+        int tlast = s*(Tds2+Tpp2-1) + t1 + dt;  // only used for range check
+        
+        // Range check for loop below.
+        xassert(t1 >= 0);
+        xassert(tlast < Tds+Tpp);
+        
+        for (long b = 0; b < B; b++) {
+            for (long m = 0; m < Min; m++) {
+                float *src = &in_x.at({b,m,0});
+                float *dst = &in_x2.at({b,m,0});
 
-		for (long i = 0; i < (Tds2+Tpp2); i++)
-		    dst[i] = one_over_sqrt2 * (src[s*i+t1] + src[s*i+t1+dt]);
-	    }
-	}
+                for (long i = 0; i < (Tds2+Tpp2); i++)
+                    dst[i] = one_over_sqrt2 * (src[s*i+t1] + src[s*i+t1+dt]);
+            }
+        }
 
-	in_x = in_x2;
-	Tpp = Tpp2;
-	isamp += integer_log2(s);
-	ids++;
+        in_x = in_x2;
+        Tpp = Tpp2;
+        isamp += integer_log2(s);
+        ids++;
     }
 }
 
@@ -351,7 +351,7 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
 void GpuPeakFindingKernel::allocate()
 {
     if (is_allocated)
-	throw runtime_error("GpuPeakFindingKernel: double call to allocate()");
+        throw runtime_error("GpuPeakFindingKernel: double call to allocate()");
 
     // Note 'af_zero' flag here.
     long ninner = registry_value.P32 * xdiv(32, params.dtype.nbits);
@@ -374,14 +374,14 @@ void GpuPeakFindingKernel::launch(Array<void> &out_max, Array<void> &out_ssq, co
     int W = registry_value.W;
     uint Bx = (ndm_out + W - 1) / W;
     dim3 nblocks = {Bx, uint(params.beams_per_batch), 1};
-	
+        
     char *pstate = (char *) persistent_state.data;
     pstate += ibatch * params.beams_per_batch * ndm_out * registry_value.P32 * 4;
 
     long Tout32 = xdiv(nt_out * params.dtype.nbits, 32);
 
     registry_value.full_kernel <<< nblocks, 32*W, 0, stream >>>
-	(out_max.data, out_ssq.data, pstate, in.data, wt.data, ndm_out, Tout32);
+        (out_max.data, out_ssq.data, pstate, in.data, wt.data, ndm_out, Tout32);
 
     CUDA_PEEK("pf kernel launch");    
 }
@@ -399,21 +399,21 @@ struct PfRegistry : public GpuPeakFindingKernel::Registry
 
     virtual void add(const Key &key, const Val &val, bool debug) override
     {
-	// Just check that all members have been initialized.
-	// (In the future, I may add more argument checking here.)
-	
-	xassert(key.M > 0);
-	xassert(key.E > 0);
-	xassert(key.Dout > 0);
-	xassert(val.Dcore > 0);
-	xassert(val.W > 0);
-	xassert(val.P > 0);
-	xassert((key.E == 1) || (val.P32 > 0));
-	xassert(val.full_kernel != nullptr);
-	xassert(val.reduce_only_kernel != nullptr);
+        // Just check that all members have been initialized.
+        // (In the future, I may add more argument checking here.)
+        
+        xassert(key.M > 0);
+        xassert(key.E > 0);
+        xassert(key.Dout > 0);
+        xassert(val.Dcore > 0);
+        xassert(val.W > 0);
+        xassert(val.P > 0);
+        xassert((key.E == 1) || (val.P32 > 0));
+        xassert(val.full_kernel != nullptr);
+        xassert(val.reduce_only_kernel != nullptr);
 
-	// Call add() in base class.
-	GpuPeakFindingKernel::Registry::add(key, val, debug);
+        // Call add() in base class.
+        GpuPeakFindingKernel::Registry::add(key, val, debug);
     }
 };
 

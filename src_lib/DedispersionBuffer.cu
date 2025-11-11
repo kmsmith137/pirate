@@ -31,7 +31,7 @@ long DedispersionBufferParams::get_nelts() const
     
     long ret = 0;
     for (long i = 0; i < nbuf; i++)
-	ret += beams_per_batch * pow2(buf_rank[i]) * buf_ntime[i];
+        ret += beams_per_batch * pow2(buf_rank[i]) * buf_ntime[i];
     
     return ret;
 }
@@ -47,14 +47,14 @@ void DedispersionBufferParams::validate() const
     xassert_eq(long(buf_ntime.size()), nbuf);
     
     if ((dtype != Dtype::native<float>()) && (dtype != Dtype::native<__half>()))
-	throw runtime_error("DedispersionBufferParams: unsupported dtype: " + dtype.str());    
+        throw runtime_error("DedispersionBufferParams: unsupported dtype: " + dtype.str());    
 
     long nt_divisor = xdiv(8 * constants::bytes_per_gpu_cache_line, dtype.nbits);;
     
     for (long i = 0; i < nbuf; i++) {
-	xassert((buf_rank[i] >= 0) && (buf_rank[i] <= 16));
-	xassert(buf_ntime[i] > 0);
-	xassert_divisible(buf_ntime[i], nt_divisor);
+        xassert((buf_rank[i] >= 0) && (buf_rank[i] <= 16));
+        xassert(buf_ntime[i] > 0);
+        xassert_divisible(buf_ntime[i], nt_divisor);
     }
 }
 
@@ -74,7 +74,7 @@ void DedispersionBuffer::allocate(int aflags)
     params.validate(); // paranoid
     
     if (is_allocated)
-	throw runtime_error("double call to DedispersionBuffer::allocate()");
+        throw runtime_error("double call to DedispersionBuffer::allocate()");
 
     long nb = params.beams_per_batch;
     long nbuf = params.nbuf;
@@ -86,18 +86,18 @@ void DedispersionBuffer::allocate(int aflags)
 
     long bstride = 0;
     for (long i = 0; i < nbuf; i++)
-	bstride += pow2(params.buf_rank[i]) * params.buf_ntime[i];
+        bstride += pow2(params.buf_rank[i]) * params.buf_ntime[i];
 
     this->ref = Array<void> (params.dtype, {nb,bstride}, aflags);
     this->bufs.resize(nbuf);
 
     long j = 0;
     for (long i = 0; i < nbuf; i++) {
-	long nr = pow2(params.buf_rank[i]);
-	long nt = params.buf_ntime[i];
-	Array<void> a = ref.slice(1, j, j + nr*nt);
-	this->bufs[i] = a.reshape({ nb, nr, nt });
-	j += nr*nt;
+        long nr = pow2(params.buf_rank[i]);
+        long nt = params.buf_ntime[i];
+        Array<void> a = ref.slice(1, j, j + nr*nt);
+        this->bufs[i] = a.reshape({ nb, nr, nt });
+        j += nr*nt;
     }
 
     xassert(bstride == j);

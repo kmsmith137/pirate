@@ -31,11 +31,11 @@ static long dedispersion_delay(int rank, long freq, long dm_brev)
     long delay0 = 0;
 
     for (int r = 0; r < rank; r++) {
-	long d = (dm_brev & 1) ? (delay0+1) : delay0;
-	delay += ((freq & 1) ? 0 : d);
-	delay0 += d;
-	dm_brev >>= 1;
-	freq >>= 1;
+        long d = (dm_brev & 1) ? (delay0+1) : delay0;
+        delay += ((freq & 1) ? 0 : d);
+        delay0 += d;
+        dm_brev >>= 1;
+        freq >>= 1;
     }
 
     return delay;
@@ -45,8 +45,8 @@ static long dedispersion_delay(int rank, long freq, long dm_brev)
 void test_non_incremental_dedispersion(int rank, long ntime, long nspec, long dm_brev, long t0, long s0)
 {
     cout << "test_non_incremental_dedispersion(rank=" << rank << ", ntime=" << ntime
-	 << ", nspec=" << nspec << ", dm_brev=" << dm_brev << ", t0=" << t0
-	 << ", s0=" << s0 << ")" << endl;
+         << ", nspec=" << nspec << ", dm_brev=" << dm_brev << ", t0=" << t0
+         << ", s0=" << s0 << ")" << endl;
     
     check_rank(rank, "test_non_incremental_dedispersion");
     xassert((dm_brev >= 0) && (dm_brev < pow2(rank)));
@@ -59,9 +59,9 @@ void test_non_incremental_dedispersion(int rank, long ntime, long nspec, long dm
 
     float x = 0.0;
     for (int ifreq = 0; ifreq < nchan; ifreq++) {
-	long t = t0 - dedispersion_delay(rank, ifreq, dm_brev);
-	if (t >= 0)
-	    x += arr.at({ifreq, t*nspec + s0 });
+        long t = t0 - dedispersion_delay(rank, ifreq, dm_brev);
+        if (t >= 0)
+            x += arr.at({ifreq, t*nspec + s0 });
     }
 
     dedisperse_non_incremental(arr, nspec);
@@ -104,12 +104,12 @@ static void lag_non_incremental(Array<float> &arr, const Array<int> &lags)
     lags_1d = lags_1d.reshape({nchan});
 
     for (long i = 0; i < nchan; i++) {
-	float *row = arr_2d.data + i*nt;
-	long lag = lags_1d.data[i];
+        float *row = arr_2d.data + i*nt;
+        long lag = lags_1d.data[i];
 
-	lag = min(lag, nt);
-	memmove(row+lag, row, (nt-lag) * sizeof(float));
-	memset(row, 0, lag * sizeof(float));
+        lag = min(lag, nt);
+        memmove(row+lag, row, (nt-lag) * sizeof(float));
+        memset(row, 0, lag * sizeof(float));
     }
 }
 
@@ -117,11 +117,11 @@ static void lag_non_incremental(Array<float> &arr, const Array<int> &lags)
 static void test_reference_lagbuf(const Array<int> &lags, const vector<long> data_strides, int nt_chunk, int nchunks)
 {
     cout << "test_reference_lagbuf:"
-	 << " lags.shape=" << lags.shape_str()
-	 << ", lags.strides=" << lags.stride_str()
-	 << ", data_strides=" << tuple_str(data_strides)
-	 << ", nt_chunk=" << nt_chunk
-	 << ", nchunks=" << nchunks << endl;
+         << " lags.shape=" << lags.shape_str()
+         << ", lags.strides=" << lags.stride_str()
+         << ", data_strides=" << tuple_str(data_strides)
+         << ", nt_chunk=" << nt_chunk
+         << ", nchunks=" << nchunks << endl;
 
     xassert(long(data_strides.size()) == lags.ndim+1);
     xassert(data_strides[lags.ndim] == 1);
@@ -132,14 +132,14 @@ static void test_reference_lagbuf(const Array<int> &lags, const vector<long> dat
     // Creating axis names feels silly, but assert_arrays_equal() requires them.
     vector<string> axis_names(d+1);
     for (int i = 0; i < d; i++)
-	axis_names[i] = "ix" + to_string(i);
+        axis_names[i] = "ix" + to_string(i);
     axis_names[d] = "t";
     
     vector<long> shape_lg(d+1);
     vector<long> shape_sm(d+1);
     
     for (int i = 0; i < d; i++)
-	shape_lg[i] = shape_sm[i] = lags.shape[i];
+        shape_lg[i] = shape_sm[i] = lags.shape[i];
 
     shape_lg[d] = nt_tot;
     shape_sm[d] = nt_chunk;
@@ -154,19 +154,19 @@ static void test_reference_lagbuf(const Array<int> &lags, const vector<long> dat
     ReferenceLagbuf rbuf(lags, nt_chunk);
     
     for (int c = 0; c < nchunks; c++) {
-	// Extract chunk (arr_lg) -> (arr_sm)
-	Array<float> s = arr_lg.slice(d, c*nt_chunk, (c+1)*nt_chunk);
-	arr_sm.fill(s);
+        // Extract chunk (arr_lg) -> (arr_sm)
+        Array<float> s = arr_lg.slice(d, c*nt_chunk, (c+1)*nt_chunk);
+        arr_sm.fill(s);
 
-	// Apply lagbuf
-	rbuf.apply_lags(arr_sm);
+        // Apply lagbuf
+        rbuf.apply_lags(arr_sm);
 
-	// Extract chunk (arr_lg_ref) -> (arr_sm_ref)
-	s = arr_lg_ref.slice(d, c*nt_chunk, (c+1)*nt_chunk);
-	arr_sm_ref.fill(s);
+        // Extract chunk (arr_lg_ref) -> (arr_sm_ref)
+        s = arr_lg_ref.slice(d, c*nt_chunk, (c+1)*nt_chunk);
+        arr_sm_ref.fill(s);
 
-	// Compare arr_sm, arr_sm_ref.
-	ksgpu::assert_arrays_equal(arr_sm, arr_sm_ref, "incremental", "non-incremental", axis_names);
+        // Compare arr_sm, arr_sm_ref.
+        ksgpu::assert_arrays_equal(arr_sm, arr_sm_ref, "incremental", "non-incremental", axis_names);
     }
 }
 
@@ -193,8 +193,8 @@ void test_reference_lagbuf()
     double maxlog = log(1.5 * nt_chunk * nchunks);
     
     for (auto ix = lags.ix_start(); lags.ix_valid(ix); lags.ix_next(ix)) {
-	double t = rand_uniform(-1.0, maxlog);
-	lags.at(ix) = int(exp(t));
+        double t = rand_uniform(-1.0, maxlog);
+        lags.at(ix) = int(exp(t));
     }
 
     test_reference_lagbuf(lags, data_strides, nt_chunk, nchunks);
@@ -209,10 +209,10 @@ void test_reference_lagbuf()
 static void test_reference_tree(const vector<long> &shape, const vector<long> &strides, long nchunks, long nspec)
 {
     cout << "test_reference_tree: shape=" << tuple_str(shape)
-	 << ", strides=" << tuple_str(strides)
-	 << ", nchunks=" << nchunks
-	 << ", nspec=" << nspec
-	 << endl;
+         << ", strides=" << tuple_str(strides)
+         << ", nchunks=" << nchunks
+         << ", nspec=" << nspec
+         << endl;
 
     int ndim = shape.size();
     xassert(ndim >= 2);
@@ -230,7 +230,7 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
 
     long nouter = 1;
     for (int d = 0; d < ndim-2; d++)
-	nouter *= shape[d];
+        nouter *= shape[d];
     
     Array<float> arr1 = arr0.clone();  // note deep copy here
     arr1 = arr1.reshape({nouter, nfreq, ninner_tot});
@@ -238,8 +238,8 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
     // Step 2. loop over outer spectator axis, and call dedisperse_non_incremental().
     
     for (long i = 0; i < nouter; i++) {
-	Array<float> view_2d = arr1.slice(0, i);  // shape (nfreq, ninner_tot)
-	dedisperse_non_incremental(view_2d, nspec);
+        Array<float> view_2d = arr1.slice(0, i);  // shape (nfreq, ninner_tot)
+        dedisperse_non_incremental(view_2d, nspec);
     }
 
     // Step 3. reshape back to original shape.
@@ -254,16 +254,16 @@ static void test_reference_tree(const vector<long> &shape, const vector<long> &s
 
     // Apply incremental dedispersion to arr0 (in place)
     for (long c = 0; c < nchunks; c++) {
-	Array<float> slice = arr0.slice(ndim-1, c*ninner_chunk, (c+1)*ninner_chunk);
-	chunk.fill(slice);
-	rtree.dedisperse(chunk);
-	slice.fill(chunk);
+        Array<float> slice = arr0.slice(ndim-1, c*ninner_chunk, (c+1)*ninner_chunk);
+        chunk.fill(slice);
+        rtree.dedisperse(chunk);
+        slice.fill(chunk);
     }
 
     // Need axis names for assert_arrays_equal().
     vector<string> axis_names(ndim);
     for (int d = 0; d < ndim-2; d++)
-	axis_names[d] = "spec" + to_string(d);
+        axis_names[d] = "spec" + to_string(d);
     axis_names[ndim-2] = "dm_brev";
     axis_names[ndim-1] = "inner";
     
@@ -285,7 +285,7 @@ void test_reference_tree()
     // shape = (spectators) + (2^rank, nspec*nchunks)
     vector<long> shape(ndim);
     for (long d = 0; d < ndim-2; d++)
-	shape[d] = v[d];
+        shape[d] = v[d];
     shape[ndim-2] = pow2(rank);
     shape[ndim-1] = nspec * nchunks;
 
@@ -300,22 +300,22 @@ void test_reference_tree()
 void test_tree_recursion(int rank0, int rank1, long nt_chunk, long nchunks)
 {
     cout << "test_tree_recursion: rank0=" << rank0 << ", rank1=" << rank1
-	 << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks << endl;
+         << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks << endl;
 
     int rank_tot = rank0 + rank1;
     
     check_rank(rank0, "test_tree_recursion [rank0]");
     check_rank(rank1, "test_tree_recursion [rank1]");
     check_rank(rank_tot, "test_tree_recursion [rank_tot]");
-	       
+               
     long nfreq_tot = pow2(rank_tot);
     long nfreq0 = pow2(rank0);
     long nfreq1 = pow2(rank1);
 
     Array<int> lags({nfreq1,nfreq0}, af_uhost | af_zero);
     for (long i = 0; i < nfreq1; i++)
-	for (long j = 0; j < nfreq0; j++)
-	    lags.at({i,j}) = rb_lag(i, j, rank0, rank1, false);  // uflag=false
+        for (long j = 0; j < nfreq0; j++)
+            lags.at({i,j}) = rb_lag(i, j, rank0, rank1, false);  // uflag=false
 
     ReferenceTree big_tree({nfreq_tot, nt_chunk}, 1);    // nspec=1
     ReferenceTree tree0({nfreq1, nfreq0, nt_chunk}, 1);  // nspec=1
@@ -323,24 +323,24 @@ void test_tree_recursion(int rank0, int rank1, long nt_chunk, long nchunks)
     ReferenceLagbuf lagbuf(lags, nt_chunk);
 
     for (long c = 0; c < nchunks; c++) {
-	Array<float> chunk0({nfreq_tot, nt_chunk}, af_uhost | af_random);
+        Array<float> chunk0({nfreq_tot, nt_chunk}, af_uhost | af_random);
 
-	// "Two-step" dedispersion.
-	Array<float> chunk1 = chunk0.clone();
-	chunk1 = chunk1.reshape({nfreq1, nfreq0, nt_chunk});
-	tree0.dedisperse(chunk1);
-	lagbuf.apply_lags(chunk1);
-	chunk1 = chunk1.transpose({1,0,2});
-	tree1.dedisperse(chunk1);
-	chunk1 = chunk1.transpose({1,0,2});
-	chunk1 = chunk1.reshape({nfreq_tot, nt_chunk});
+        // "Two-step" dedispersion.
+        Array<float> chunk1 = chunk0.clone();
+        chunk1 = chunk1.reshape({nfreq1, nfreq0, nt_chunk});
+        tree0.dedisperse(chunk1);
+        lagbuf.apply_lags(chunk1);
+        chunk1 = chunk1.transpose({1,0,2});
+        tree1.dedisperse(chunk1);
+        chunk1 = chunk1.transpose({1,0,2});
+        chunk1 = chunk1.reshape({nfreq_tot, nt_chunk});
 
-	// "One-step" dedispersion.
-	big_tree.dedisperse(chunk0);
+        // "One-step" dedispersion.
+        big_tree.dedisperse(chunk0);
 
-	// Third step: compare chunk0 / chunk1
-	// (arr0, arr1, name0, name1, axis_names)
-	ksgpu::assert_arrays_equal(chunk0, chunk1, "1-step", "2-step", {"dm_brev","t"});
+        // Third step: compare chunk0 / chunk1
+        // (arr0, arr1, name0, name1, axis_names)
+        ksgpu::assert_arrays_equal(chunk0, chunk1, "1-step", "2-step", {"dm_brev","t"});
     }
 }
 

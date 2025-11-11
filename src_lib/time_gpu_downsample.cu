@@ -41,14 +41,14 @@ static void time_one_gpu_downsample(int Df, int Dt)
 
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
         {
-	    Array<float> src_i = src_si.slice(0, istream);
-	    Array<float> src_w = src_sw.slice(0, istream);
-	    Array<float> dst_i = dst_si.slice(0, istream);
-	    Array<float> dst_w = dst_sw.slice(0, istream);
-	    
-	    for (int i = 0; i < niter; i++)
-		launch_downsample(dst_i, dst_w, src_i, src_w, Df, Dt, transpose_output, stream);
-	};
+            Array<float> src_i = src_si.slice(0, istream);
+            Array<float> src_w = src_sw.slice(0, istream);
+            Array<float> dst_i = dst_si.slice(0, istream);
+            Array<float> dst_w = dst_sw.slice(0, istream);
+            
+            for (int i = 0; i < niter; i++)
+                launch_downsample(dst_i, dst_w, src_i, src_w, Df, Dt, transpose_output, stream);
+        };
 
     stringstream sp_name;
     sp_name << "gpu_downsample(Df=" << Df << ",Dt=" << Dt << ",transpose_output=" << transpose_output << ")";
@@ -62,8 +62,8 @@ static void time_one_gpu_downsample(int Df, int Dt)
 void time_gpu_downsample()
 {
     for (int Df: {1,4,16})
-	for (int Dt: {1,4,16})
-	    time_one_gpu_downsample(Df,Dt);
+        for (int Dt: {1,4,16})
+            time_one_gpu_downsample(Df,Dt);
 }
 
 

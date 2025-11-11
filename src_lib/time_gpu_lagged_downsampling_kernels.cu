@@ -26,10 +26,10 @@ static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_
     dd_params.nbuf = lds_params.num_downsampling_levels;
 
     for (long ids = 0; ids < lds_params.num_downsampling_levels; ids++) {
-	long rk = lds_params.input_total_rank - (ids ? 1 : 0);
-	long nt = xdiv(lds_params.ntime, pow2(ids));
-	dd_params.buf_rank.push_back(rk);
-	dd_params.buf_ntime.push_back(nt);
+        long rk = lds_params.input_total_rank - (ids ? 1 : 0);
+        long nt = xdiv(lds_params.ntime, pow2(ids));
+        dd_params.buf_rank.push_back(rk);
+        dd_params.buf_ntime.push_back(nt);
     }
 
     dd_params.validate();
@@ -55,7 +55,7 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
     
     vector<DedispersionBuffer> bufs;
     for (long s = 0; s < nstreams; s++)
-	bufs.push_back(make_buffer(params, af_zero | af_gpu));
+        bufs.push_back(make_buffer(params, af_zero | af_gpu));
     
     long buf_nelts_per_stream = bufs[0].ref.size;
     long pstate_nelts_per_stream = nb_batch * kernel->state_nelts_per_beam;
@@ -70,25 +70,25 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
     
     stringstream kernel_name;
     kernel_name << "gpu_lagged_downsample("
-		<< "dtype=" << params.dtype
-		<< ", input_total_rank=" << params.input_total_rank
-		<< ", output_dd_rank=" << params.output_dd_rank
-		<< ", num_downsampling_levels=" << params.num_downsampling_levels
-		<< ", pstate_overhead = " << pstate_overhead_percentage << "%"
-		<< ")";
+                << "dtype=" << params.dtype
+                << ", input_total_rank=" << params.input_total_rank
+                << ", output_dd_rank=" << params.output_dd_rank
+                << ", num_downsampling_levels=" << params.num_downsampling_levels
+                << ", pstate_overhead = " << pstate_overhead_percentage << "%"
+                << ")";
 
     cout << "\n" << kernel_name.str() << "\n";
     kernel->print(cout, 4);  // indent=4
 
     cout << "    niter = " << niter << endl
-	 << "    gpu memory footprint = " << ksgpu::nbytes_to_str(footprint_nbytes) << endl;
+         << "    gpu memory footprint = " << ksgpu::nbytes_to_str(footprint_nbytes) << endl;
 
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
         {
-	    DedispersionBuffer &buf = bufs.at(istream);
-	    for (int i = 0; i < niter; i++)
-		kernel->launch(buf, istream, i, stream);
-	};
+            DedispersionBuffer &buf = bufs.at(istream);
+            for (int i = 0; i < niter; i++)
+                kernel->launch(buf, istream, i, stream);
+        };
     
     CudaStreamPool pool(callback, ncallbacks, nstreams, kernel_name.str());
     pool.monitor_throughput("global memory (GB/s)", gmem_tot);
@@ -99,18 +99,18 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
 void time_gpu_lagged_downsampling_kernels()
 {
     for (int num_downsampling_levels: {2,6}) {
-	for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
-	    LaggedDownsamplingKernelParams params;
-	    params.dtype = dtype;
-	    params.input_total_rank = 16;
-	    params.output_dd_rank = 7;
-	    params.num_downsampling_levels = num_downsampling_levels;
-	    params.total_beams = 4;
-	    params.beams_per_batch = 4;
-	    params.ntime = 2048;
+        for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {
+            LaggedDownsamplingKernelParams params;
+            params.dtype = dtype;
+            params.input_total_rank = 16;
+            params.output_dd_rank = 7;
+            params.num_downsampling_levels = num_downsampling_levels;
+            params.total_beams = 4;
+            params.beams_per_batch = 4;
+            params.ntime = 2048;
     
-	    time_gpu_lagged_downsampling_kernel(params);
-	}
+            time_gpu_lagged_downsampling_kernel(params);
+        }
     }
 }
 

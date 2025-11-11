@@ -32,10 +32,10 @@ const RingbufCopyKernelParams &RingbufCopyKernelParams::validate() const
 
     // Locations array can either be size-zero, or shape-(2N,4) contiguous.
     if (locations.size != 0) {
-	xassert_eq(locations.ndim, 2);
-	xassert_eq(locations.shape[1], 4);
-	xassert_divisible(locations.shape[0], 2);
-	xassert(locations.is_fully_contiguous());
+        xassert_eq(locations.ndim, 2);
+        xassert_eq(locations.shape[1], 4);
+        xassert_divisible(locations.shape[0], 2);
+        xassert(locations.is_fully_contiguous());
     }
 
     return *this;
@@ -64,31 +64,31 @@ static void _cpu_copy(void *ringbuf, const uint *locations, long nlocations, int
     char *rp = reinterpret_cast<char *> (ringbuf);
     
     for (long i = 0; i < nlocations; i++) {
-	uint src_offset = locations[8*i];     // in segments, not bytes
-	uint src_phase = locations[8*i+1];    // index of (time chunk, beam) pair, relative to current pair
-	uint src_len = locations[8*i+2];      // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
-	uint src_nseg = locations[8*i+3];     // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
-	
-	uint dst_offset = locations[8*i+4];
-	uint dst_phase = locations[8*i+5];
-	uint dst_len = locations[8*i+6];
-	uint dst_nseg = locations[8*i+7];
+        uint src_offset = locations[8*i];     // in segments, not bytes
+        uint src_phase = locations[8*i+1];    // index of (time chunk, beam) pair, relative to current pair
+        uint src_len = locations[8*i+2];      // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+        uint src_nseg = locations[8*i+3];     // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+        
+        uint dst_offset = locations[8*i+4];
+        uint dst_phase = locations[8*i+5];
+        uint dst_len = locations[8*i+6];
+        uint dst_nseg = locations[8*i+7];
 
-	// Absorb iframe into phases. (Note that 'iframe' has ulong type.)
-	src_phase = (ulong(src_phase) + iframe) % ulong(src_len);
-	dst_phase = (ulong(dst_phase) + iframe) % ulong(dst_len);
+        // Absorb iframe into phases. (Note that 'iframe' has ulong type.)
+        src_phase = (ulong(src_phase) + iframe) % ulong(src_len);
+        dst_phase = (ulong(dst_phase) + iframe) % ulong(dst_len);
 
-	for (int j = 0; j < nbeams; j++) {
-	    ulong s = ulong(src_offset + src_phase * src_nseg) * B;
-	    ulong d = ulong(dst_offset + dst_phase * dst_nseg) * B;
+        for (int j = 0; j < nbeams; j++) {
+            ulong s = ulong(src_offset + src_phase * src_nseg) * B;
+            ulong d = ulong(dst_offset + dst_phase * dst_nseg) * B;
 
-	    // FIXME is memmove() fastest here?
-	    memmove(rp + d, rp + s, B);
-	    
-	    // Equivalent to (phase = (phase+1) % len), but avoids cost of %-operator.
-	    src_phase = (src_phase == src_len-1) ? 0 : (src_phase+1);
-	    dst_phase = (dst_phase == dst_len-1) ? 0 : (dst_phase+1);
-	}
+            // FIXME is memmove() fastest here?
+            memmove(rp + d, rp + s, B);
+            
+            // Equivalent to (phase = (phase+1) % len), but avoids cost of %-operator.
+            src_phase = (src_phase == src_len-1) ? 0 : (src_phase+1);
+            dst_phase = (dst_phase == dst_len-1) ? 0 : (dst_phase+1);
+        }
     }
 }
 
@@ -108,15 +108,15 @@ void CpuRingbufCopyKernel::apply(ksgpu::Array<void> &ringbuf, long ibatch, long 
 
     // These two cases are all we currently need.
     if (nbits_per_segment == 1024)
-	_cpu_copy<128> (ringbuf.data, params.locations.data, nlocations, params.beams_per_batch, iframe);
+        _cpu_copy<128> (ringbuf.data, params.locations.data, nlocations, params.beams_per_batch, iframe);
     else if (nbits_per_segment == 2048)
-	_cpu_copy<256> (ringbuf.data, params.locations.data, nlocations, params.beams_per_batch, iframe);
+        _cpu_copy<256> (ringbuf.data, params.locations.data, nlocations, params.beams_per_batch, iframe);
     else {
-	stringstream ss;
-	ss << "CpuRingbufCopyKernel: expected nbits_per_segment in {1024,2048}, got "
-	   << params.nelts_per_segment << " (nelts_per_segment=" << params.nelts_per_segment
-	   << ", dtype=" << ringbuf.dtype << ")";
-	throw runtime_error(ss.str());
+        stringstream ss;
+        ss << "CpuRingbufCopyKernel: expected nbits_per_segment in {1024,2048}, got "
+           << params.nelts_per_segment << " (nelts_per_segment=" << params.nelts_per_segment
+           << ", dtype=" << ringbuf.dtype << ")";
+        throw runtime_error(ss.str());
     }
 }
 
@@ -136,7 +136,7 @@ GpuRingbufCopyKernel::GpuRingbufCopyKernel(const RingbufCopyKernelParams &params
 void GpuRingbufCopyKernel::allocate()
 {
     if (is_allocated)
-	throw runtime_error("double call to GpuRingbufCopyKernel::allocate()");
+        throw runtime_error("double call to GpuRingbufCopyKernel::allocate()");
 
     // Copy host -> GPU.
     this->gpu_locations = params.locations.to_gpu();    
@@ -176,16 +176,16 @@ __global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *locations, long nloc
     uint dst_nseg = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 7);
     
     for (int b = 0; b < nbeams; b++) {
-	ulong s = ulong(src_offset + src_phase * src_nseg) << 3;   // int4 offset
-	ulong d = ulong(dst_offset + dst_phase * dst_nseg) << 3;   // int4 offset
-	uint4 rb_data = ringbuf[s + (threadIdx.x & 0x7)];
-	
-	if (tid == treg)
-	    ringbuf[d + (threadIdx.x & 0x7)] = rb_data;
+        ulong s = ulong(src_offset + src_phase * src_nseg) << 3;   // int4 offset
+        ulong d = ulong(dst_offset + dst_phase * dst_nseg) << 3;   // int4 offset
+        uint4 rb_data = ringbuf[s + (threadIdx.x & 0x7)];
+        
+        if (tid == treg)
+            ringbuf[d + (threadIdx.x & 0x7)] = rb_data;
 
-	// Equivalent to (phase = (phase+1) % len), but avoids cost of %-operator.
-	src_phase = (src_phase == src_len-1) ? 0 : (src_phase+1);
-	dst_phase = (dst_phase == dst_len-1) ? 0 : (dst_phase+1);
+        // Equivalent to (phase = (phase+1) % len), but avoids cost of %-operator.
+        src_phase = (src_phase == src_len-1) ? 0 : (src_phase+1);
+        dst_phase = (dst_phase == dst_len-1) ? 0 : (dst_phase+1);
     }
 }
 
@@ -205,18 +205,18 @@ void GpuRingbufCopyKernel::launch(ksgpu::Array<void> &ringbuf, long ibatch, long
     xassert(this->is_allocated);
 
     if (nlocations == 0)
-	return;
+        return;
     
     int W = 4;
     int B = (nlocations + 4*W - 1) / (4*W);  // each block does 4*W locations
     ulong iframe = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
     
     gpu_copy_kernel<<< B, 32*W, 0, stream >>> (
-	reinterpret_cast<uint4 *> (ringbuf.data),   // uint4 *ringbuf
-	gpu_locations.data,                         // const uint *locations
-	nlocations,                                 // long nlocations
-	params.beams_per_batch,                     // int nbeams
-	iframe                                      // ulong iframe
+        reinterpret_cast<uint4 *> (ringbuf.data),   // uint4 *ringbuf
+        gpu_locations.data,                         // const uint *locations
+        nlocations,                                 // long nlocations
+        params.beams_per_batch,                     // int nbeams
+        iframe                                      // ulong iframe
     );
 
     CUDA_PEEK("gpu_copy_kernel");

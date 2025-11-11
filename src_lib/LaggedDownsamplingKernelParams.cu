@@ -43,7 +43,7 @@ void LaggedDownsamplingKernelParams::validate() const
     xassert_divisible(ntime, pow2(num_downsampling_levels));
     
     if ((dtype != Dtype::native<float>()) && (dtype != Dtype::native<__half>()))
-	throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());    
+        throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());    
 }
 
 

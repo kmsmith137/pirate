@@ -52,7 +52,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 void GpuDedispersionKernel::allocate()
 {
     if (is_allocated)
-	throw runtime_error("double call to GpuDedispersionKernel::allocate()");
+        throw runtime_error("double call to GpuDedispersionKernel::allocate()");
     
     // Note 'af_zero' flag here.
     long ninner = registry_value.pstate32_per_small_tree * xdiv(32, params.dtype.nbits);
@@ -61,12 +61,12 @@ void GpuDedispersionKernel::allocate()
 
     // Copy host -> GPU.
     if (params.input_is_ringbuf || params.output_is_ringbuf) {
-	this->gpu_ringbuf_locations = params.ringbuf_locations.to_gpu();
+        this->gpu_ringbuf_locations = params.ringbuf_locations.to_gpu();
 
-	long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment);
-	xassert_shape_eq(gpu_ringbuf_locations, ({nrb,4}));
-	xassert(gpu_ringbuf_locations.is_fully_contiguous());
-	xassert(gpu_ringbuf_locations.on_gpu());
+        long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment);
+        xassert_shape_eq(gpu_ringbuf_locations, ({nrb,4}));
+        xassert(gpu_ringbuf_locations.is_fully_contiguous());
+        xassert(gpu_ringbuf_locations.on_gpu());
     }
 
     this->is_allocated = true;
@@ -96,37 +96,37 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
     ulong nt_cumul = it_chunk * params.ntime;
 
     if (!params.input_is_ringbuf && !params.output_is_ringbuf) {
-	// Case 1: neither input nor output are ringbufs.
-	auto cuda_kernel = this->registry_value.cuda_kernel_no_rb;
-	xassert(cuda_kernel != nullptr);
-	    
-	cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-	    (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
-	     out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
-	     pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
+        // Case 1: neither input nor output are ringbufs.
+        auto cuda_kernel = this->registry_value.cuda_kernel_no_rb;
+        xassert(cuda_kernel != nullptr);
+            
+        cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
+            (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
+             out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
+             pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }
     else if (params.input_is_ringbuf && !params.output_is_ringbuf) {
-	// Case 2: input is ringbuf.
-	auto cuda_kernel = this->registry_value.cuda_kernel_in_rb;
-	xassert(cuda_kernel != nullptr);
-	
-	cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-	    (in.buf, gpu_ringbuf_locations.data, rb_pos,
-	     out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
-	     pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
-    }	
+        // Case 2: input is ringbuf.
+        auto cuda_kernel = this->registry_value.cuda_kernel_in_rb;
+        xassert(cuda_kernel != nullptr);
+        
+        cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
+            (in.buf, gpu_ringbuf_locations.data, rb_pos,
+             out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
+             pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
+    }   
     else if (!params.input_is_ringbuf && params.output_is_ringbuf) {
-	// Case 3: output is ringbuf.
-	auto cuda_kernel = this->registry_value.cuda_kernel_out_rb;
-	xassert(cuda_kernel != nullptr);
-	    
-	cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-	    (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
-	     out.buf, gpu_ringbuf_locations.data, rb_pos,
-	     pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
+        // Case 3: output is ringbuf.
+        auto cuda_kernel = this->registry_value.cuda_kernel_out_rb;
+        xassert(cuda_kernel != nullptr);
+            
+        cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
+            (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
+             out.buf, gpu_ringbuf_locations.data, rb_pos,
+             pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }
     else
-	throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
+        throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
     
     CUDA_PEEK("dedispersion kernel");
 }
@@ -142,11 +142,11 @@ template<typename F>
 inline void _set_shmem(F kernel, uint nbytes)
 {
     if ((kernel != nullptr) && (nbytes > 48*1024)) {
-	CUDA_CALL(cudaFuncSetAttribute(
-	    kernel,
-	    cudaFuncAttributeMaxDynamicSharedMemorySize,
-	    nbytes
-	));
+        CUDA_CALL(cudaFuncSetAttribute(
+            kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            nbytes
+        ));
     }
 }
 
@@ -158,30 +158,30 @@ struct DedispRegistry : public GpuDedispersionKernel::Registry
     
     virtual void add(const Key &key, const Val &val, bool debug) override
     {
-	// Just check that all members have been initialized.
-	// (In the future, I may add more argument checking here.)
+        // Just check that all members have been initialized.
+        // (In the future, I may add more argument checking here.)
     
-	xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
-	xassert(key.nspec > 0);
-	
-	xassert(val.warps_per_threadblock > 0);
-	xassert(val.nt_per_segment > 0);
-	
-	auto k1 = val.cuda_kernel_no_rb;
-	auto k2 = val.cuda_kernel_in_rb;
-	auto k3 = val.cuda_kernel_out_rb;
-	
-	if (!key.input_is_ringbuf && !key.output_is_ringbuf)
-	    xassert(k1 && !k2 && !k3);
-	else if (key.input_is_ringbuf && !key.output_is_ringbuf)
-	    xassert(!k1 && k2 && !k3);
-	else if (!key.input_is_ringbuf && key.output_is_ringbuf)
-	    xassert(!k1 && !k2 && k3);
-	else
-	    throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
+        xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+        xassert(key.nspec > 0);
+        
+        xassert(val.warps_per_threadblock > 0);
+        xassert(val.nt_per_segment > 0);
+        
+        auto k1 = val.cuda_kernel_no_rb;
+        auto k2 = val.cuda_kernel_in_rb;
+        auto k3 = val.cuda_kernel_out_rb;
+        
+        if (!key.input_is_ringbuf && !key.output_is_ringbuf)
+            xassert(k1 && !k2 && !k3);
+        else if (key.input_is_ringbuf && !key.output_is_ringbuf)
+            xassert(!k1 && k2 && !k3);
+        else if (!key.input_is_ringbuf && key.output_is_ringbuf)
+            xassert(!k1 && !k2 && k3);
+        else
+            throw runtime_error("DedispersionKernelParams::{input,output}_is_ringbuf flags are both set");
 
-	// Call add() in base class.
-	GpuDedispersionKernel::Registry::add(key, val, debug);
+        // Call add() in base class.
+        GpuDedispersionKernel::Registry::add(key, val, debug);
     }
     
     // Setting shared memory size is "deferred" from when the kernel is registered, to when
@@ -192,9 +192,9 @@ struct DedispRegistry : public GpuDedispersionKernel::Registry
 
     virtual void deferred_initialization(Val &val) override
     {
-	_set_shmem(val.cuda_kernel_no_rb, val.shmem_nbytes);
-	_set_shmem(val.cuda_kernel_in_rb, val.shmem_nbytes);
-	_set_shmem(val.cuda_kernel_out_rb, val.shmem_nbytes);
+        _set_shmem(val.cuda_kernel_no_rb, val.shmem_nbytes);
+        _set_shmem(val.cuda_kernel_in_rb, val.shmem_nbytes);
+        _set_shmem(val.cuda_kernel_out_rb, val.shmem_nbytes);
     }
 };
 
@@ -219,11 +219,11 @@ GpuDedispersionKernel::Registry &GpuDedispersionKernel::registry()
 bool operator==(const GpuDedispersionKernel::RegistryKey &k1, const GpuDedispersionKernel::RegistryKey &k2)
 {
     return (k1.dtype == k2.dtype) &&
-	(k1.rank == k2.rank) &&
-	(k1.nspec == k2.nspec) &&
-	(k1.input_is_ringbuf == k2.input_is_ringbuf) &&
-	(k1.output_is_ringbuf == k2.output_is_ringbuf) &&
-	(k1.apply_input_residual_lags == k2.apply_input_residual_lags);
+        (k1.rank == k2.rank) &&
+        (k1.nspec == k2.nspec) &&
+        (k1.input_is_ringbuf == k2.input_is_ringbuf) &&
+        (k1.output_is_ringbuf == k2.output_is_ringbuf) &&
+        (k1.apply_input_residual_lags == k2.apply_input_residual_lags);
 }
 
 

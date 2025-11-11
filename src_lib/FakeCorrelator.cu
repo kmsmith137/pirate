@@ -47,9 +47,9 @@ void FakeCorrelator::add_endpoint(const string &ip_addr, long num_tcp_connection
 static void sender_thread_main(FakeCorrelator *correlator, long endpoint_index)
 {
     try {
-	correlator->sender_main(endpoint_index);
+        correlator->sender_main(endpoint_index);
     } catch (const exception &exc) {
-	correlator->abort(exc.what());
+        correlator->abort(exc.what());
     }
 }
 
@@ -60,18 +60,18 @@ void FakeCorrelator::run()
     xassert(num_endpoints >= 0);
 
     cout << "\n"
-	 << "Warning: this half-finished program will \"hang\" unless you wait to\n"
-	 << "start it until after the receiver is fully initialized. The receiver is\n"
-	 << "fully initialized when every TcpReceiver thread prints a line like this:\n"
-	 << "\n"
-	 << "  TcpReceiver(10.1.1.2, 1 connections, use_epoll=1): listening for TCP connections\n"
-	 << endl;
+         << "Warning: this half-finished program will \"hang\" unless you wait to\n"
+         << "start it until after the receiver is fully initialized. The receiver is\n"
+         << "fully initialized when every TcpReceiver thread prints a line like this:\n"
+         << "\n"
+         << "  TcpReceiver(10.1.1.2, 1 connections, use_epoll=1): listening for TCP connections\n"
+         << endl;
     
     barrier.initialize(num_endpoints+1);
     vector<std::thread> threads(num_endpoints);
 
     for (long i = 0; i < num_endpoints; i++)
-	threads.at(i) = std::thread(sender_thread_main, this, i);
+        threads.at(i) = std::thread(sender_thread_main, this, i);
 
     barrier.wait();
     
@@ -83,17 +83,17 @@ void FakeCorrelator::run()
     barrier.wait();
     
     for (int ithread = 0; ithread < num_endpoints; ithread++)
-	threads[ithread].join();
+        threads[ithread].join();
 }
 
 
 void FakeCorrelator::abort(const string &msg)
 {
     std::unique_lock<mutex> lk(lock);
-	
+        
     if (aborted)
-	return;
-	
+        return;
+        
     this->aborted = true;
     this->abort_msg = msg;
     cout << msg << endl;
@@ -104,7 +104,7 @@ void FakeCorrelator::throw_exception_if_aborted()
 {
     std::unique_lock<mutex> lk(lock);
     if (aborted)
-	throw runtime_error(abort_msg);
+        throw runtime_error(abort_msg);
 }
 
     
@@ -123,25 +123,25 @@ void FakeCorrelator::sender_main(long endpoint_index)
     
     int aflags = ksgpu::af_uhost;
     if (use_mmap)
-	aflags |= (use_hugepages ? ksgpu::af_mmap_huge : ksgpu::af_mmap_small);
+        aflags |= (use_hugepages ? ksgpu::af_mmap_huge : ksgpu::af_mmap_small);
     
     shared_ptr<char> buf = ksgpu::af_alloc<char> (send_bufsize, aflags);
     vector<Socket> sockets;
 
     for (long i = 0; i < nconn; i++) {
-	sockets.push_back(Socket(PF_INET, SOCK_STREAM));
-	Socket &socket = sockets[i];
-	
-	// later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)
-	socket.connect(e.ip_addr, 8787);  // TCP port 8787
+        sockets.push_back(Socket(PF_INET, SOCK_STREAM));
+        Socket &socket = sockets[i];
+        
+        // later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)
+        socket.connect(e.ip_addr, 8787);  // TCP port 8787
 
-	if (e.total_gbps > 0.0) {
-	    double nbytes_per_sec = e.total_gbps / nconn / 8.0e-9;
-	    socket.set_pacing_rate(nbytes_per_sec);
-	}
+        if (e.total_gbps > 0.0) {
+            double nbytes_per_sec = e.total_gbps / nconn / 8.0e-9;
+            socket.set_pacing_rate(nbytes_per_sec);
+        }
     
-	if (use_zerocopy)
-	    socket.set_zerocopy();
+        if (use_zerocopy)
+            socket.set_zerocopy();
     }
 
     this->barrier.wait();    
@@ -150,21 +150,21 @@ void FakeCorrelator::sender_main(long endpoint_index)
     long nbytes_total = 0;
 
     for (;;) {
-	for (long i = 0; i < nconn; i++) {
-	    Socket &socket = sockets[i];
+        for (long i = 0; i < nconn; i++) {
+            Socket &socket = sockets[i];
 
-	    // FIXME should have a flag in socket.send() to enable this loop automatically
-	    long pos = 0;
-	    while (pos < send_bufsize) {
-		long nbytes_sent = socket.send(buf.get() + pos, send_bufsize - pos);
-		throw_exception_if_aborted();
-		if (socket.connreset)
-		    return;
-		pos += nbytes_sent;
-	    }
-	    
-	    nbytes_total += send_bufsize;
-	}
+            // FIXME should have a flag in socket.send() to enable this loop automatically
+            long pos = 0;
+            while (pos < send_bufsize) {
+                long nbytes_sent = socket.send(buf.get() + pos, send_bufsize - pos);
+                throw_exception_if_aborted();
+                if (socket.connreset)
+                    return;
+                pos += nbytes_sent;
+            }
+            
+            nbytes_total += send_bufsize;
+        }
     }
 }
 

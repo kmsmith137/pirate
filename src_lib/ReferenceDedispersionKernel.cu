@@ -42,12 +42,12 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
     long T = params.ntime;
     long S = params.nspec;
     
-    this->trees.resize(nbatches);			  
+    this->trees.resize(nbatches);                         
     for (long n = 0; n < nbatches; n++)
-	trees[n] = ReferenceTree::make({B,A,F,T*S}, S);   // (shape, nspec)
+        trees[n] = ReferenceTree::make({B,A,F,T*S}, S);   // (shape, nspec)
 
     if (params.apply_input_residual_lags)
-	this->_init_rlags();
+        this->_init_rlags();
 }
 
 
@@ -78,19 +78,19 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
     Array<float> dd = params.output_is_ringbuf ? in : out;
 
     if (params.input_is_ringbuf)
-	_copy_from_ringbuf(in, dd, rb_pos);
+        _copy_from_ringbuf(in, dd, rb_pos);
     else if (dd.data != in.data)
-	dd.fill(in);
-	
+        dd.fill(in);
+        
     if (params.apply_input_residual_lags)
-	rlag_bufs.at(ibatch)->apply_lags(dd);
+        rlag_bufs.at(ibatch)->apply_lags(dd);
 
     trees.at(ibatch)->dedisperse(dd);
 
     if (params.output_is_ringbuf)
-	_copy_to_ringbuf(dd, out, rb_pos);
+        _copy_to_ringbuf(dd, out, rb_pos);
     else
-	xassert(out.data == dd.data);   // FIXME in-place assumed
+        xassert(out.data == dd.data);   // FIXME in-place assumed
 }
 
 
@@ -107,19 +107,19 @@ void ReferenceDedispersionKernel::_init_rlags()
     Array<int> rlags({B,A,F}, af_uhost);
     
     for (long b = 0; b < B; b++) {
-	for (long a = 0; a < A; a++) {
-	    // Ambient index 'a' represents a bit-reversed coarse DM.
-	    // Index 'f' represents a fine frequency.
-	    for (long f = 0; f < F; f++) {
-		long lag = rb_lag(f, a, params.amb_rank, params.dd_rank, params.input_is_downsampled_tree);
-		rlags.data[b*A*F + a*F + f] = (lag % N) * S;  // residual lag (including factor nspec)
-	    }
-	}
+        for (long a = 0; a < A; a++) {
+            // Ambient index 'a' represents a bit-reversed coarse DM.
+            // Index 'f' represents a fine frequency.
+            for (long f = 0; f < F; f++) {
+                long lag = rb_lag(f, a, params.amb_rank, params.dd_rank, params.input_is_downsampled_tree);
+                rlags.data[b*A*F + a*F + f] = (lag % N) * S;  // residual lag (including factor nspec)
+            }
+        }
     }
     
     this->rlag_bufs.resize(nbatches);
     for (long n = 0; n < nbatches; n++)
-	rlag_bufs[n] = make_shared<ReferenceLagbuf> (rlags, T*S);
+        rlag_bufs[n] = make_shared<ReferenceLagbuf> (rlags, T*S);
 }
 
 // Helper function called by apply().
@@ -151,23 +151,23 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
     
     // Loop over segments in tree.
     for (long s = 0; s < ns; s++) {
-	for (long a = 0; a < A; a++) {
-	    for (long n = 0; n < N; n++) {
-		long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
-		const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*RS;  // address in dedispersion buf (at beam 0)
+        for (long a = 0; a < A; a++) {
+            for (long n = 0; n < N; n++) {
+                long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
+                const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*RS;  // address in dedispersion buf (at beam 0)
 
-		uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
-		uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
-		uint rb_len = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
-		uint rb_nseg = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
-		
-		for (long b = 0; b < B; b++) {
-		    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
-		    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
-		    memcpy(ringbuf + s*RS, dd0 + b*dd_bstride, RS * sizeof(float));
-		}
-	    }
-	}
+                uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
+                uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
+                uint rb_len = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+                uint rb_nseg = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+                
+                for (long b = 0; b < B; b++) {
+                    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
+                    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
+                    memcpy(ringbuf + s*RS, dd0 + b*dd_bstride, RS * sizeof(float));
+                }
+            }
+        }
     }
 }
 
@@ -202,23 +202,23 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
 
     // Loop over segments in tree.
     for (long s = 0; s < ns; s++) {
-	for (long a = 0; a < A; a++) {
-	    for (long n = 0; n < N; n++) {
-		long iseg = s*A*N + a*N + n;         // index in rb_loc array (same for all beams)
-		float *dd0 = dd + n*dd_nstride + a*dd_astride + s*RS; // address in dedispersion buf (at beam 0)
-		
-		uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
-		uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
-		uint rb_len = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
-		uint rb_nseg = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
-		
-		for (long b = 0; b < B; b++) {
-		    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
-		    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
-		    memcpy(dd0 + b*dd_bstride, ringbuf + s*RS, RS * sizeof(float));
-		}
-	    }
-	}
+        for (long a = 0; a < A; a++) {
+            for (long n = 0; n < N; n++) {
+                long iseg = s*A*N + a*N + n;         // index in rb_loc array (same for all beams)
+                float *dd0 = dd + n*dd_nstride + a*dd_astride + s*RS; // address in dedispersion buf (at beam 0)
+                
+                uint rb_offset = rb_loc[4*iseg];    // in segments, not bytes
+                uint rb_phase = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
+                uint rb_len = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+                uint rb_nseg = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+                
+                for (long b = 0; b < B; b++) {
+                    uint i = (rb_pos + rb_phase + b) % rb_len;  // note "+b" here
+                    long s = rb_offset + (i * rb_nseg);         // segment offset, relative to (float *ringbuf)
+                    memcpy(dd0 + b*dd_bstride, ringbuf + s*RS, RS * sizeof(float));
+                }
+            }
+        }
     }
 }
 

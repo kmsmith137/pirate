@@ -33,14 +33,14 @@ bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionCon
 bool operator>(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y)
 {
     if (x.ds_level > y.ds_level)
-	return true;
+        return true;
     if (x.ds_level < y.ds_level)
-	return false;
+        return false;
     
     if (x.tree_rank > y.tree_rank)
-	return true;
+        return true;
     if (x.tree_rank < y.tree_rank)
-	return false;
+        return false;
     
     return false;  // equal
 }
@@ -64,9 +64,9 @@ ostream &operator<<(ostream &os, const DedispersionConfig::EarlyTrigger &et)
 int DedispersionConfig::get_nelts_per_segment() const
 {
     if (dtype == ksgpu::Dtype::native<float>())
-	return xdiv(constants::bytes_per_gpu_cache_line, 4);
+        return xdiv(constants::bytes_per_gpu_cache_line, 4);
     else if (dtype == ksgpu::Dtype::native<__half>())
-	return xdiv(constants::bytes_per_gpu_cache_line, 2);
+        return xdiv(constants::bytes_per_gpu_cache_line, 2);
 
     throw runtime_error("DedispersionConfig: invalid dtype: " + dtype.str());
 }
@@ -86,17 +86,17 @@ void DedispersionConfig::add_early_trigger(long ds_level, long tree_rank)
 void DedispersionConfig::add_early_triggers(long ds_level, std::initializer_list<long> tree_ranks)
 {
     for (long tree_rank: tree_ranks) {
-	EarlyTrigger e;
-	e.ds_level = ds_level;
-	e.tree_rank = tree_rank;
-	this->early_triggers.push_back(e);
+        EarlyTrigger e;
+        e.ds_level = ds_level;
+        e.tree_rank = tree_rank;
+        this->early_triggers.push_back(e);
     }
     
     // Incredibly lazy -- add and re-sort
     std::sort(early_triggers.begin(), early_triggers.end());
 }
 
-			
+                        
 void DedispersionConfig::validate() const
 {
     // Check that all members have been initialized.
@@ -116,11 +116,11 @@ void DedispersionConfig::validate() const
     int min_nt = nelts_per_segment * pow2(num_downsampling_levels-1);
     
     if (time_samples_per_chunk % min_nt) {
-	stringstream ss;
-	ss << "DedispersionConfig: time_samples_per_chunk=" << time_samples_per_chunk
-	   << " must be a multiple of " << min_nt
-	   << " (this value depends on dtype and num_downsampling levels)";
-	throw runtime_error(ss.str());
+        stringstream ss;
+        ss << "DedispersionConfig: time_samples_per_chunk=" << time_samples_per_chunk
+           << " must be a multiple of " << min_nt
+           << " (this value depends on dtype and num_downsampling levels)";
+        throw runtime_error(ss.str());
     }
 
     // GPU configuration.
@@ -131,11 +131,11 @@ void DedispersionConfig::validate() const
 
     // Check validity of early triggers.
     for (const EarlyTrigger &et: early_triggers) {
-	long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
-	long ds_rank0 = ds_rank / 2;
-	
-	xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
-	xassert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
+        long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
+        long ds_rank0 = ds_rank / 2;
+        
+        xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
+        xassert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
     }
 }
 
@@ -153,7 +153,7 @@ void DedispersionConfig::print(ostream &os, int indent) const
     print_kv("num_active_batches", num_active_batches, os, indent);
 
     if (gpu_clag_maxfrac < 1.0)
-	print_kv("gpu_clag_maxfrac", gpu_clag_maxfrac, os, indent);
+        print_kv("gpu_clag_maxfrac", gpu_clag_maxfrac, os, indent);
 }
 
 
@@ -162,30 +162,30 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
     this->validate();
     
     emitter
-	<< YAML::BeginMap
-	<< YAML::Key << "tree_rank" << YAML::Value << tree_rank
-	<< YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels
-	<< YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk
-	<< YAML::Key << "dtype" << YAML::Value << dtype.str()
-	<< YAML::Key << "early_triggers"
-	<< YAML::Value 
-	<< YAML::BeginSeq;
+        << YAML::BeginMap
+        << YAML::Key << "tree_rank" << YAML::Value << tree_rank
+        << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels
+        << YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk
+        << YAML::Key << "dtype" << YAML::Value << dtype.str()
+        << YAML::Key << "early_triggers"
+        << YAML::Value 
+        << YAML::BeginSeq;
 
     for (const auto &early_trigger: this->early_triggers) {
-	emitter
-	    << YAML::Flow
-	    << YAML::BeginMap
-	    << YAML::Key << "ds_level" << YAML::Value << early_trigger.ds_level
-	    << YAML::Key << "tree_rank" << YAML::Value << early_trigger.tree_rank
-	    << YAML::EndMap;
+        emitter
+            << YAML::Flow
+            << YAML::BeginMap
+            << YAML::Key << "ds_level" << YAML::Value << early_trigger.ds_level
+            << YAML::Key << "tree_rank" << YAML::Value << early_trigger.tree_rank
+            << YAML::EndMap;
     }
     
     emitter
-	<< YAML::EndSeq
-	<< YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu
-	<< YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch
-	<< YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
-	<< YAML::EndMap;
+        << YAML::EndSeq
+        << YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu
+        << YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch
+        << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
+        << YAML::EndMap;
 }
 
 
@@ -235,12 +235,12 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     YamlFile ets = f["early_triggers"];
 
     for (long i = 0; i < ets.size(); i++) {
-	YamlFile et = ets[i];
-	long ds_level = et.get_scalar<long> ("ds_level");
-	long tree_rank = et.get_scalar<long> ("tree_rank");
-	ret.add_early_trigger(ds_level, tree_rank);
-	et.check_for_invalid_keys();
-    }	
+        YamlFile et = ets[i];
+        long ds_level = et.get_scalar<long> ("ds_level");
+        long tree_rank = et.get_scalar<long> ("tree_rank");
+        ret.add_early_trigger(ds_level, tree_rank);
+        et.check_for_invalid_keys();
+    }   
     
     f.check_for_invalid_keys();
     
@@ -276,33 +276,33 @@ DedispersionConfig DedispersionConfig::make_random()
 #if 0
     // Early triggers
     for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
-	// FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
-	// as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
-	int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
-	int min_et_rank = (rank/2) + 1;
-	int max_et_rank = rank-1;
-	
-	// Use at most 4 early triggers per downsampling level (arbitrary cutoff)
-	int num_candidates = max_et_rank - min_et_rank + 1;
-	int max_triggers = std::min(num_candidates, 4);
+        // FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
+        // as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
+        int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
+        int min_et_rank = (rank/2) + 1;
+        int max_et_rank = rank-1;
+        
+        // Use at most 4 early triggers per downsampling level (arbitrary cutoff)
+        int num_candidates = max_et_rank - min_et_rank + 1;
+        int max_triggers = std::min(num_candidates, 4);
 
-	if (max_triggers <= 0)
-	    continue;
+        if (max_triggers <= 0)
+            continue;
 
-	// Randomly choose a trigger count, but bias toward a low number.
-	double y = ksgpu::rand_uniform(-1.0, log(max_triggers+0.5));
-	int num_triggers = int(exp(y));
+        // Randomly choose a trigger count, but bias toward a low number.
+        double y = ksgpu::rand_uniform(-1.0, log(max_triggers+0.5));
+        int num_triggers = int(exp(y));
 
-	vector<int> et_ranks(num_candidates);
-	for (int i = 0; i < num_candidates; i++)
-	    et_ranks[i] = min_et_rank + i;
+        vector<int> et_ranks(num_candidates);
+        for (int i = 0; i < num_candidates; i++)
+            et_ranks[i] = min_et_rank + i;
 
-	ksgpu::randomly_permute(et_ranks);
-	et_ranks.resize(num_triggers);
-	std::sort(et_ranks.begin(), et_ranks.end());
+        ksgpu::randomly_permute(et_ranks);
+        et_ranks.resize(num_triggers);
+        std::sort(et_ranks.begin(), et_ranks.end());
 
-	for (int et_rank: et_ranks)
-	    ret.add_early_trigger(ds_level, et_rank);
+        for (int et_rank: et_ranks)
+            ret.add_early_trigger(ds_level, et_rank);
     }
 #endif
 
@@ -313,7 +313,7 @@ DedispersionConfig DedispersionConfig::make_random()
 
     ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
     ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
-	
+        
     ret.validate();
     return ret;
 }

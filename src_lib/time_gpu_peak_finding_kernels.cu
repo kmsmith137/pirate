@@ -16,14 +16,14 @@ namespace pirate {
 static void time_gpu_peak_finding_kernel(const PeakFindingKernelParams &params, long nouter, long ninner, long nstreams)
 {
     cout << "\ntime_pf_kernel: start\n"
-	 << "   dtype = " << params.dtype.str() << "\n"
-	 << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
-	 << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
-	 << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"
-	 << "   beams_per_batch = " << params.beams_per_batch << "\n"
-	 << "   ndm_in = " << params.ndm_in << "\n"
-	 << "   nt_in = " << params.nt_in << "\n"
-	 << endl;
+         << "   dtype = " << params.dtype.str() << "\n"
+         << "   M = dm_downsampling_factor = " << params.dm_downsampling_factor << "\n"
+         << "   E = max_kernel_width = " << params.max_kernel_width << "\n"
+         << "   Dout = time_downsampling_factor = " << params.time_downsampling_factor << "\n"
+         << "   beams_per_batch = " << params.beams_per_batch << "\n"
+         << "   ndm_in = " << params.ndm_in << "\n"
+         << "   nt_in = " << params.nt_in << "\n"
+         << endl;
 
     GpuPeakFindingKernel gpu_kernel(params);
     gpu_kernel.allocate();
@@ -47,26 +47,26 @@ static void time_gpu_peak_finding_kernel(const PeakFindingKernelParams &params, 
     vector<struct timeval> tv(nouter);
 
     for (int i = 0; i < nouter; i++) {
-	int s = i % S;
-	CUDA_CALL(cudaStreamSynchronize(streams[s]));
-	tv[i] = get_time();
+        int s = i % S;
+        CUDA_CALL(cudaStreamSynchronize(streams[s]));
+        tv[i] = get_time();
 
-	Array<void> max_slice = out_max.slice(0,s);
-	Array<void> ssq_slice = out_ssq.slice(0,s);
-	
-	for (int j = 0; j < ninner; j++) {
-	    gpu_kernel.launch(
-		max_slice,
-		ssq_slice,	      
-		in.slice(0,s),
-		wt.slice(0,s),
-		0, streams[s]
-	    );
-	}
-	
-	int k = i - (i/(2*S))*S;
-	if (i > k)
-	    cout << "        " << ((i-k) * gb / time_diff(tv[k],tv[i])) << " GB/s\n";
+        Array<void> max_slice = out_max.slice(0,s);
+        Array<void> ssq_slice = out_ssq.slice(0,s);
+        
+        for (int j = 0; j < ninner; j++) {
+            gpu_kernel.launch(
+                max_slice,
+                ssq_slice,            
+                in.slice(0,s),
+                wt.slice(0,s),
+                0, streams[s]
+            );
+        }
+        
+        int k = i - (i/(2*S))*S;
+        if (i > k)
+            cout << "        " << ((i-k) * gb / time_diff(tv[k],tv[i])) << " GB/s\n";
     }
 }
 

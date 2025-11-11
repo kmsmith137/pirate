@@ -16,10 +16,10 @@ namespace pirate {
 struct FakeCorrelator
 {
     FakeCorrelator(
-	long send_bufsize = 64*1024,
-	bool use_zerocopy = true,
-	bool use_mmap = false,
-	bool use_hugepages = true
+        long send_bufsize = 64*1024,
+        bool use_zerocopy = true,
+        bool use_mmap = false,
+        bool use_hugepages = true
     );
 
     // total_gbps=0 means "no rate limit".
@@ -30,10 +30,10 @@ struct FakeCorrelator
     // Lower-level interface.
 
     struct Endpoint {
-	std::string ip_addr;
-	long num_tcp_connections;
-	double total_gbps;
-	std::vector<int> vcpu_list;
+        std::string ip_addr;
+        long num_tcp_connections;
+        double total_gbps;
+        std::vector<int> vcpu_list;
     };
 
     ksgpu::Barrier barrier;

@@ -35,7 +35,7 @@ ChimeDedisperser::ChimeDedisperser(int beams_per_gpu_, int num_active_batches_, 
 void ChimeDedisperser::initialize()
 {
     if (plan)
-	throw runtime_error("Double call to ChimeDedisperser::initialize()");
+        throw runtime_error("Double call to ChimeDedisperser::initialize()");
 
     long nstreams = config.num_active_batches;
     long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
@@ -45,7 +45,7 @@ void ChimeDedisperser::initialize()
     this->dedisperser->allocate();  // note: all buffers are zeroed or initialized
     
     for (long i = 0; i < nstreams; i++)
-	this->streams.push_back(ksgpu::CudaStreamWrapper());
+        this->streams.push_back(ksgpu::CudaStreamWrapper());
     
     // FIXME currently, gridding and peak-finding are not implemented.
     // As a kludge, we put in some extra GPU->GPU memcopies with the same bandwidth.
@@ -66,37 +66,37 @@ void ChimeDedisperser::initialize()
     this->bw_per_run_call.nbytes_gmem += 2 * nbatches * extra_nbytes_per_batch;  // factor 2 is from {dst,src}.
 
     if (use_copy_engine)
-	this->bw_per_run_call.memcpy_g2g_calls += nbatches;
+        this->bw_per_run_call.memcpy_g2g_calls += nbatches;
     else
-	this->bw_per_run_call.kernel_launches += nbatches;
+        this->bw_per_run_call.kernel_launches += nbatches;
 }
 
 
 void ChimeDedisperser::run(long ichunk)
 {
     if (!plan)
-	throw runtime_error("Must call ChimeDedisperser::initialize() before ChimeDedisperser::run()");
+        throw runtime_error("Must call ChimeDedisperser::initialize() before ChimeDedisperser::run()");
 
     long nstreams = config.num_active_batches;
     long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
     
     for (long ibatch = 0; ibatch < nbatches; ibatch++) {
-	// Call to cudaStreamSynchronize() prevents streams from getting too out-of-sync.
-	// Later, I'll replace this with something better (involving cudaEvents).
-	CudaStreamWrapper &s = streams.at(istream);
-	CUDA_CALL(cudaStreamSynchronize(s));
+        // Call to cudaStreamSynchronize() prevents streams from getting too out-of-sync.
+        // Later, I'll replace this with something better (involving cudaEvents).
+        CudaStreamWrapper &s = streams.at(istream);
+        CUDA_CALL(cudaStreamSynchronize(s));
 
-	// "Extra" GPU->GPU memcopies (see above).
-	char *xdst = extra_buffers.data + (2*istream) * extra_nbytes_per_batch;
-	char *xsrc = extra_buffers.data + (2*istream+1) * extra_nbytes_per_batch;
-	
-	if (use_copy_engine)
-	    CUDA_CALL(cudaMemcpyAsync(xdst, xsrc, extra_nbytes_per_batch, cudaMemcpyDeviceToDevice, s));
-	else
-	    ksgpu::launch_memcpy_kernel(xdst, xsrc, extra_nbytes_per_batch, s);
-	
-	dedisperser->launch(ibatch, ichunk, istream, s);
-	istream = (istream + 1) % nstreams;
+        // "Extra" GPU->GPU memcopies (see above).
+        char *xdst = extra_buffers.data + (2*istream) * extra_nbytes_per_batch;
+        char *xsrc = extra_buffers.data + (2*istream+1) * extra_nbytes_per_batch;
+        
+        if (use_copy_engine)
+            CUDA_CALL(cudaMemcpyAsync(xdst, xsrc, extra_nbytes_per_batch, cudaMemcpyDeviceToDevice, s));
+        else
+            ksgpu::launch_memcpy_kernel(xdst, xsrc, extra_nbytes_per_batch, s);
+        
+        dedisperser->launch(ibatch, ichunk, istream, s);
+        istream = (istream + 1) % nstreams;
     }
 }
 

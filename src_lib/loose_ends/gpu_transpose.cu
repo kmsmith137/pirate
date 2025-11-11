@@ -38,7 +38,7 @@ void launch_transpose(Array<float> &dst, const Array<float> &src, cudaStream_t s
     nblocks.z = nz;
 
     transpose_kernel<<< nblocks, 32*TransposeKernel::warps_per_block, 0, stream >>>
-	(dst.data, src.data, src.strides[1], src.strides[0], dst.strides[1], dst.strides[0]);
+        (dst.data, src.data, src.strides[1], src.strides[0], dst.strides[1], dst.strides[0]);
 }
 
 

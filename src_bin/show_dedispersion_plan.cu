@@ -7,8 +7,8 @@ using namespace pirate;
 int main(int argc, char **argv)
 {
     if (argc != 2) {
-	cerr << "usage: show_dedispersion_plan <dedispersion_config.yml>" << endl;
-	exit(2);
+        cerr << "usage: show_dedispersion_plan <dedispersion_config.yml>" << endl;
+        exit(2);
     }
 
     auto config = DedispersionConfig::from_yaml(argv[1]);

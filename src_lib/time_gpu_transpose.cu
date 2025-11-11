@@ -28,15 +28,15 @@ void time_gpu_transpose()
     vector<Array<float>> dst(nstreams);
 
     for (int istream = 0; istream < nstreams; istream++) {
-	src[istream] = Array<float> ({nz,ny,nx}, af_gpu | af_zero);
-	dst[istream] = Array<float> ({nz,nx,ny}, af_gpu | af_zero);
+        src[istream] = Array<float> ({nz,ny,nx}, af_gpu | af_zero);
+        dst[istream] = Array<float> ({nz,nx,ny}, af_gpu | af_zero);
     }
 
     auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
         {
-	    for (int i = 0; i < niter; i++)
-		launch_transpose(dst[istream], src[istream], stream);
-	};
+            for (int i = 0; i < niter; i++)
+                launch_transpose(dst[istream], src[istream], stream);
+        };
 
     CudaStreamPool pool(callback, num_callbacks, nstreams, "gpu_transpose");
     pool.monitor_throughput("global memory (GB/s)", 8. * nx*ny*nz * double(niter) / pow(2,30.));

@@ -44,18 +44,18 @@ static void test_ift1()
     Array<float> dst({32,2}, af_rhost | af_random);  // (register, thread, simd)
     
     for (int ti = 0; ti < 64; ti++) {
-	int ti0 = ti & 1;
-	int ti5 = ti >> 5;
-	int ti04 = ti & 0x1f;
-	int ti15 = ti >> 1;
-	
-	// Input:
-	// b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5
-	//
-	// Output:
-	// b <-> ti5   th0 th1 th2 th3 th4 <-> ti0 ti1 ti2 ti3 ti4
-	
-	dst.at({ ti04, ti5 }) = src.at({ ti15, ti0 });
+        int ti0 = ti & 1;
+        int ti5 = ti >> 5;
+        int ti04 = ti & 0x1f;
+        int ti15 = ti >> 1;
+        
+        // Input:
+        // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5
+        //
+        // Output:
+        // b <-> ti5   th0 th1 th2 th3 th4 <-> ti0 ti1 ti2 ti3 ti4
+        
+        dst.at({ ti04, ti5 }) = src.at({ ti15, ti0 });
     }
 
     Array<__half> garr = src.template convert<__half> ();
@@ -126,22 +126,22 @@ static void test_ift2()
     Array<float> dst({2,32,2}, af_rhost | af_random);  // (register, thread, simd)
     
     for (int s = 0; s < 2; s++) {
-	for (int ti = 0; ti < 64; ti++) {
-	    int ti0 = ti & 1;
-	    int ti5 = ti >> 5;
-	    int ti15 = ti >> 1;
-	    int ti14 = ti15 & 0xf;
-	    
-	    // Input:
-	    // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5    r <-> s
-	    //
-	    // Output:
-	    // b <-> ti5   th0 th1 th2 th3 th4 <-> s ti1 ti2 ti3 ti4    r <-> ti0
+        for (int ti = 0; ti < 64; ti++) {
+            int ti0 = ti & 1;
+            int ti5 = ti >> 5;
+            int ti15 = ti >> 1;
+            int ti14 = ti15 & 0xf;
+            
+            // Input:
+            // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5    r <-> s
+            //
+            // Output:
+            // b <-> ti5   th0 th1 th2 th3 th4 <-> s ti1 ti2 ti3 ti4    r <-> ti0
 
-	    // src.at({s, ti15, ti0 }) = 64*s + ti;
-	    // src.at({s, ti15, ti0 }) = ((s==0) && (ti==0)) ? 1 : 0;
-	    dst.at({ ti0, (2*ti14+s), ti5 }) = src.at({ s, ti15, ti0 });
-	}
+            // src.at({s, ti15, ti0 }) = 64*s + ti;
+            // src.at({s, ti15, ti0 }) = ((s==0) && (ti==0)) ? 1 : 0;
+            dst.at({ ti0, (2*ti14+s), ti5 }) = src.at({ s, ti15, ti0 });
+        }
     }
 
     Array<__half> garr = src.template convert<__half> ();
@@ -195,32 +195,32 @@ static void test_fft1()
     Array<float> dst({32,2}, af_rhost | af_random);  // (register, thread, simd)
     
     for (int L = 1; L <= 5; L++) {
-	cout << "test_fft1: L=" << L << endl;
-	
-	for (int ti = 0; ti < 64; ti++) {
-	    int ti0 = ti & 1;
-	    int tiL = (ti >> L) & 1;
-	    
-	    int ti15 = ti >> 1;
-	    int ti_0_L1 = ti & ((1 << L) - 1);  // ti_0 ... ti_{L-1}
-	    int ti_L1_5 = ti >> (L+1);          // ti_{L+1} ... ti_5
-	    
-	    // Input:
-	    // b <-> ti_L   th0 th1 th2 th3 th4 <-> ti_{L+1} ... ti_5 ti_0 ... ti_{L-1}
-	    //
-	    // Output:
-	    // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5
+        cout << "test_fft1: L=" << L << endl;
+        
+        for (int ti = 0; ti < 64; ti++) {
+            int ti0 = ti & 1;
+            int tiL = (ti >> L) & 1;
+            
+            int ti15 = ti >> 1;
+            int ti_0_L1 = ti & ((1 << L) - 1);  // ti_0 ... ti_{L-1}
+            int ti_L1_5 = ti >> (L+1);          // ti_{L+1} ... ti_5
+            
+            // Input:
+            // b <-> ti_L   th0 th1 th2 th3 th4 <-> ti_{L+1} ... ti_5 ti_0 ... ti_{L-1}
+            //
+            // Output:
+            // b <-> ti0   th0 th1 th2 th3 th4 <-> ti1 ti2 ti3 ti4 ti5
 
-	    dst.at({ ti15, ti0 }) = src.at({ ti_L1_5 | (ti_0_L1 << (5-L)) , tiL });
-	}
+            dst.at({ ti15, ti0 }) = src.at({ ti_L1_5 | (ti_0_L1 << (5-L)) , tiL });
+        }
 
-	Array<__half> garr = src.template convert<__half> ();
-	garr = garr.to_gpu();
+        Array<__half> garr = src.template convert<__half> ();
+        garr = garr.to_gpu();
 
-	fft1_kernel<<<1,32>>> ((half2 *) garr.data, L);
-	CUDA_PEEK("ift2_kernel launch");
+        fft1_kernel<<<1,32>>> ((half2 *) garr.data, L);
+        CUDA_PEEK("ift2_kernel launch");
 
-	assert_arrays_equal(dst, garr, "host", "gpu", {"th","b"});
+        assert_arrays_equal(dst, garr, "host", "gpu", {"th","b"});
     }
 }
 

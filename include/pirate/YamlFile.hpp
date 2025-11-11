@@ -75,7 +75,7 @@ struct YamlFile {
 
     template<typename T> inline T as_scalar() const;
     template<typename T> inline std::vector<T> as_vector() const;
-					    
+                                            
     template<typename T> inline T get_scalar(const std::string &k) const;
     template<typename T> inline T get_scalar(const std::string &k, const T &default_value) const;
     
@@ -102,11 +102,11 @@ template<typename T>
 inline bool _yaml_node_to_scalar(const YAML::Node &node, T &val)
 {
     try {
-	val = node.as<T>();
-	return true;
+        val = node.as<T>();
+        return true;
     }
     catch (...) {
-	return false;
+        return false;
     }
 }
 
@@ -118,10 +118,10 @@ inline T YamlFile::as_scalar() const
     
     T ret;
     if (!_yaml_node_to_scalar<T> (node, ret))
-	throw std::runtime_error(name + ": parse failure (expected type " + ksgpu::type_name<T>() + ")");
+        throw std::runtime_error(name + ": parse failure (expected type " + ksgpu::type_name<T>() + ")");
 
     if (verbosity >= 2)
-	std::cout << name << " = " << ret << std::endl;
+        std::cout << name << " = " << ret << std::endl;
 
     return ret;
 }
@@ -136,14 +136,14 @@ inline std::vector<T> YamlFile::as_vector() const
     std::vector<T> ret(n);
 
     for (long i = 0; i < n; i++) {
-	YAML::Node child_node = node[i];
+        YAML::Node child_node = node[i];
 
-	if (!child_node.IsScalar() || !_yaml_node_to_scalar<T> (child_node, ret[i]))
-	    throw std::runtime_error(name + ": parse failure (expected type vector<" + ksgpu::type_name<T>() + ">)");
+        if (!child_node.IsScalar() || !_yaml_node_to_scalar<T> (child_node, ret[i]))
+            throw std::runtime_error(name + ": parse failure (expected type vector<" + ksgpu::type_name<T>() + ">)");
     }
     
     if (verbosity >= 2)
-	std::cout << name << " = " << ksgpu::tuple_str(ret) << std::endl;
+        std::cout << name << " = " << ksgpu::tuple_str(ret) << std::endl;
 
     return ret;
 }
@@ -162,10 +162,10 @@ inline T YamlFile::get_scalar(const std::string &k, const T &default_value) cons
     YamlFile child = _get_child(k);
 
     if (child.node)
-	return child.as_scalar<T> ();
-	
+        return child.as_scalar<T> ();
+        
     if (verbosity >= 1)
-	std::cout << child.name << " = " << default_value << " (using default value)" << std::endl;
+        std::cout << child.name << " = " << default_value << " (using default value)" << std::endl;
 
     return default_value;
 }
@@ -184,10 +184,10 @@ inline std::vector<T> YamlFile::get_vector(const std::string &k, const std::vect
     YamlFile child = _get_child(k);
 
     if (child.node)
-	return child.as_vector<T> ();
-	
+        return child.as_vector<T> ();
+        
     if (verbosity >= 1)
-	std::cout << child.name << " = " << ksgpu::tuple_str(default_value) << " (using default value)" << std::endl;
+        std::cout << child.name << " = " << ksgpu::tuple_str(default_value) << " (using default value)" << std::endl;
 
     return default_value;
 }

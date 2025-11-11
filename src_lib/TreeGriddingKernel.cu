@@ -62,27 +62,27 @@ void ReferenceTreeGriddingKernel::apply(Array<float> &out, const Array<float> &i
     xassert(in.get_ncontig() >= 2);
 
     for (long b = 0; b < B; b++) {
-	float *outp = out.data + b * out.strides[0];
-	const float *inp = in.data + b * in.strides[0];
+        float *outp = out.data + b * out.strides[0];
+        const float *inp = in.data + b * in.strides[0];
 
-	memset(outp, 0, N * T * sizeof(float));
-	       
-	for (long n = 0; n < N; n++) {
-	    float f0 = params.channel_map.data[n];
-	    float f1 = params.channel_map.data[n+1];
+        memset(outp, 0, N * T * sizeof(float));
+               
+        for (long n = 0; n < N; n++) {
+            float f0 = params.channel_map.data[n];
+            float f1 = params.channel_map.data[n+1];
 
-	    long if0 = max(long(f0), 0L);
-	    long if1 = min(long(f1)+1, F);
+            long if0 = max(long(f0), 0L);
+            long if1 = min(long(f1)+1, F);
 
-	    for (long f = if0; f < if1; f++) {
-		float flo = max(f0, float(f));
-		float fhi = min(f1, float(f)+1);
-		float w = max(fhi-flo, 0.0f);
-		
-		for (long t = 0; t < T; t++)
-		    outp[n*T + t] += w * inp[f*T + t];
-	    }
-	}
+            for (long f = if0; f < if1; f++) {
+                float flo = max(f0, float(f));
+                float fhi = min(f1, float(f)+1);
+                float w = max(fhi-flo, 0.0f);
+                
+                for (long t = 0; t < T; t++)
+                    outp[n*T + t] += w * inp[f*T + t];
+            }
+        }
     }
 }
 
@@ -110,7 +110,7 @@ GpuTreeGriddingKernel::GpuTreeGriddingKernel(const TreeGriddingKernelParams &par
 void GpuTreeGriddingKernel::allocate()
 {
     if (is_allocated)
-	throw runtime_error("double call to GpuTreeGriddingKernel::allocate()");
+        throw runtime_error("double call to GpuTreeGriddingKernel::allocate()");
 
     // Copy host -> GPU.
     this->gpu_channel_map = params.channel_map.to_gpu();
@@ -152,7 +152,7 @@ __global__ void gpu_tree_gridding_kernel(
     int b = (blockIdx.z * blockDim.z + threadIdx.z);   // beam index
 
     if ((t >= ntime32) || (n >= nchan) || (b >= nbeams))
-	return;
+        return;
     
     // Number of tree channels processed by thread.
     int M = min(nchan_per_thread, nchan - n);
@@ -171,23 +171,23 @@ __global__ void gpu_tree_gridding_kernel(
     // be fast enough to be memory bandwidth limited.
     
     for (int m = 0; m < M; m++) {
-	float f0 = __shfl_sync(FULL_MASK, cmap, m);
-	float f1 = __shfl_sync(FULL_MASK, cmap, m+1);
-	
-	int if0 = max(int(f0), 0);
-	int if1 = min(int(f1)+1, nfreq);
+        float f0 = __shfl_sync(FULL_MASK, cmap, m);
+        float f1 = __shfl_sync(FULL_MASK, cmap, m+1);
+        
+        int if0 = max(int(f0), 0);
+        int if1 = min(int(f1)+1, nfreq);
 
-	T32 t;
-	_set_zero(t);
+        T32 t;
+        _set_zero(t);
 
-	for (int f = if0; f < if1; f++) {
-	    float flo = max(f0, float(f));
-	    float fhi = min(f1, float(f)+1);
-	    float w = fhi - flo;
-	    t += _mult(w, in[f*ntime32]);
-	}
+        for (int f = if0; f < if1; f++) {
+            float flo = max(f0, float(f));
+            float fhi = min(f1, float(f)+1);
+            float w = fhi - flo;
+            t += _mult(w, in[f*ntime32]);
+        }
 
-	out[m*ntime32] = t;
+        out[m*ntime32] = t;
     }
 }
 
@@ -200,17 +200,17 @@ static void _launch(const GpuTreeGriddingKernel &k, Array<void> &out, const Arra
     // Note that beam_strides and 'ntime' get divided by s.
     
     gpu_tree_gridding_kernel<T32>
-	<<< k.nblocks, k.nthreads, 0, stream >>>
-	(reinterpret_cast<T32 *> (out.data),       // T32 *out,
-	 reinterpret_cast<const T32 *> (in.data),  // const T32 *in,
-	 k.gpu_channel_map.data,                   // const float *channel_map,
-	 xdiv(out.strides[0], s),                  // long out_bstride32,
-	 xdiv(in.strides[0], s),                   // long in_bstride32,
-	 k.nchan_per_thread,                       // int nchan_per_thread
-	 k.params.beams_per_batch,                 // int beams per batch
-	 k.params.nchan,                           // int nchan (number of tree channels)
-	 k.params.nfreq,                           // int nfreq
-	 xdiv(k.params.ntime, s));                 // int ntime32
+        <<< k.nblocks, k.nthreads, 0, stream >>>
+        (reinterpret_cast<T32 *> (out.data),       // T32 *out,
+         reinterpret_cast<const T32 *> (in.data),  // const T32 *in,
+         k.gpu_channel_map.data,                   // const float *channel_map,
+         xdiv(out.strides[0], s),                  // long out_bstride32,
+         xdiv(in.strides[0], s),                   // long in_bstride32,
+         k.nchan_per_thread,                       // int nchan_per_thread
+         k.params.beams_per_batch,                 // int beams per batch
+         k.params.nchan,                           // int nchan (number of tree channels)
+         k.params.nfreq,                           // int nfreq
+         xdiv(k.params.ntime, s));                 // int ntime32
 }
 
 
@@ -237,11 +237,11 @@ void GpuTreeGriddingKernel::launch(Array<void> &out, const Array<void> &in, cuda
     Dtype fp32(df_float, 32);
 
     if (params.dtype == fp32)
-	_launch<float> (*this, out, in, stream);
+        _launch<float> (*this, out, in, stream);
     else if (params.dtype == fp16)
-	_launch<__half2> (*this, out, in, stream);
+        _launch<__half2> (*this, out, in, stream);
     else
-	throw runtime_error("GpuTreeGriddingKernel::launch(): couldn't find kernel matching dtype");
+        throw runtime_error("GpuTreeGriddingKernel::launch(): couldn't find kernel matching dtype");
     
     CUDA_PEEK("GpuTreeGriddingKernel::launch");
 }

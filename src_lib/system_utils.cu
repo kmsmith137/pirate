@@ -29,7 +29,7 @@ void sys_mlockall(int flags)
     int err = mlockall(flags);
 
     if (err < 0)
-	throw runtime_error(string("mlockall: ") + strerror(errno));
+        throw runtime_error(string("mlockall: ") + strerror(errno));
 }
 
 
@@ -37,17 +37,17 @@ void sys_usleep(long usec)
 {
     // According to usleep() manpage, sleeping for longer than this is an error!
     static constexpr long max_usleep = 1000000;
-	
+        
     xassert(usec >= 0);
 
     while (usec > 0) {
-	long n = std::min(usec, max_usleep);
-	usec -= n;
-	
-	int err = usleep(n);
+        long n = std::min(usec, max_usleep);
+        usec -= n;
+        
+        int err = usleep(n);
 
-	if (err < 0)
-	    throw runtime_error(string("usleep: ") + strerror(errno));
+        if (err < 0)
+            throw runtime_error(string("usleep: ") + strerror(errno));
     }
 }
 
@@ -72,7 +72,7 @@ void sys_usleep(long usec)
 void pin_thread_to_vcpus(const vector<int> &vcpu_list)
 {
     if (vcpu_list.size() == 0)
-	return;
+        return;
 
     // I wanted to argument-check 'vcpu_list', by comparing with the number of VCPUs available.
     //
@@ -90,22 +90,22 @@ void pin_thread_to_vcpus(const vector<int> &vcpu_list)
     CPU_ZERO(&cs);
 
     for (int vcpu: vcpu_list) {
-	if ((vcpu < 0) || (vcpu >= num_vcpus)) {
-	    stringstream ss;
-	    ss << "pirate::pin_thread_to_vcpus(): vcpu=" << vcpu
-	       << " is out of range (num_vcpus=" << num_vcpus <<  to_string(num_vcpus) + ")";
-	    throw runtime_error(ss.str());
-	}
-	CPU_SET(vcpu, &cs);
+        if ((vcpu < 0) || (vcpu >= num_vcpus)) {
+            stringstream ss;
+            ss << "pirate::pin_thread_to_vcpus(): vcpu=" << vcpu
+               << " is out of range (num_vcpus=" << num_vcpus <<  to_string(num_vcpus) + ")";
+            throw runtime_error(ss.str());
+        }
+        CPU_SET(vcpu, &cs);
     }
 
     // Note: pthread_self() always succeeds, no need to check its return value.
     int err = pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs);
 
     if (err != 0) {
-	// If pthread_setaffinity_np() fails, then according to its manpage,
-	// it returns an error code, rather than setting 'errno'.
-	throw runtime_error(string("pthread_setaffinity_np(): ") + strerror(err));
+        // If pthread_setaffinity_np() fails, then according to its manpage,
+        // it returns an error code, rather than setting 'errno'.
+        throw runtime_error(string("pthread_setaffinity_np(): ") + strerror(err));
     }
 }
 

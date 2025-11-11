@@ -40,25 +40,25 @@ ReferenceLaggedDownsamplingKernel::ReferenceLaggedDownsamplingKernel(const Lagge
     int nt2 = xdiv(params.ntime, 2);
     
     if (nds <= 1)
-	return;
+        return;
     
     Array<int> small_lags({nb * pow2(r)}, af_uhost | af_zero);
     Array<int> large_lags({nb * pow2(r-1)}, af_uhost | af_zero);
 
     for (int i = 0; i < nb * pow2(r); i++)
-	small_lags.data[i] = (i & 1) ? 0 : 1;
+        small_lags.data[i] = (i & 1) ? 0 : 1;
     
     for (int i = 0; i < nb * pow2(r-s); i++)
-	for (int j = 0; j < pow2(s-1); j++)
-	    large_lags.data[i*pow2(s-1)+j] = pow2(s-1)-j-1;
+        for (int j = 0; j < pow2(s-1); j++)
+            large_lags.data[i*pow2(s-1)+j] = pow2(s-1)-j-1;
 
     for (int i = 0; i < nbatches; i++) {
-	this->lagbufs_small.push_back(make_shared<ReferenceLagbuf> (small_lags, nt2));
-	this->lagbufs_large.push_back(make_shared<ReferenceLagbuf> (large_lags, nt2));
+        this->lagbufs_small.push_back(make_shared<ReferenceLagbuf> (small_lags, nt2));
+        this->lagbufs_large.push_back(make_shared<ReferenceLagbuf> (large_lags, nt2));
     }
     
     if (nds == 2)
-	return;
+        return;
     
     LaggedDownsamplingKernelParams next_params = params;
     next_params.num_downsampling_levels = nds-1;
@@ -72,28 +72,28 @@ void ReferenceLaggedDownsamplingKernel::apply(DedispersionBuffer &buf, long ibat
 {
     buf.params.validate();
     xassert_eq(buf.params.nbuf, params.num_downsampling_levels);
-    xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);	    
+    xassert_eq(buf.params.beams_per_batch, params.beams_per_batch);         
     xassert(buf.is_allocated);
     xassert(buf.on_host());
 
     xassert((ibatch >= 0) && (ibatch < nbatches));
     
     for (long ids = 0; ids < params.num_downsampling_levels; ids++) {
-	long nb = params.beams_per_batch;
-	long rk = params.input_total_rank - (ids ? 1 : 0);
-	long nt = xdiv(params.ntime, pow2(ids));
-	xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
+        long nb = params.beams_per_batch;
+        long rk = params.input_total_rank - (ids ? 1 : 0);
+        long nt = xdiv(params.ntime, pow2(ids));
+        xassert_shape_eq(buf.bufs.at(ids), ({ nb, pow2(rk), nt }));
     }
 
     if (params.num_downsampling_levels <= 1)
-	return;
+        return;
 
     // The reference kernel uses float32, regardless of the dtype specified in 'params'.
     Array<float> in = buf.bufs.at(0).template cast<float> ("ReferenceLaggedDownsamplingKernel::apply(): 'in' array");
     this->_apply(in, &buf.bufs[1], ibatch);
 }
 
-	    
+            
 void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<void> *outp, long ibatch)
 {
     long r = params.input_total_rank;
@@ -131,7 +131,7 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
     out.fill(out_tmp);
 
     if (nds == 2)
-	return;
+        return;
     
     // Recurse to next downsampling level.
     in_ds = in_ds.reshape({ nb, pow2(r), ntime/2 });

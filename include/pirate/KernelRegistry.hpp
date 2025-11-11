@@ -45,10 +45,10 @@ struct KernelRegistry
 {
     struct Entry
     {
-	Key key;
-	Val val;
-	bool debug = false;        // debug kernel "clobbers" non-debug kernel
-	bool initialized = false;  // has deferred_initialization() been called?
+        Key key;
+        Val val;
+        bool debug = false;        // debug kernel "clobbers" non-debug kernel
+        bool initialized = false;  // has deferred_initialization() been called?
     };
     
     mutable std::mutex lock;
@@ -73,101 +73,101 @@ struct KernelRegistry
     // Returned pointer is only valid until lock is dropped.
     Entry *_get_locked(const Key &key)
     {
-	for (Entry &e: entries)
-	    if (e.key == key)
-		return &e;
-	return nullptr;
+        for (Entry &e: entries)
+            if (e.key == key)
+                return &e;
+        return nullptr;
     }
 
 
     // Subclass can override add(), e.g. for error-checking.
     virtual void add(const Key &key, const Val &val, bool debug)
     {
-	Entry enew;
-	enew.key = key;
-	enew.val = val;
-	enew.debug = debug;
-	
-	std::unique_lock<std::mutex> lk(this->lock);
-	Entry *e = this->_get_locked(key);
+        Entry enew;
+        enew.key = key;
+        enew.val = val;
+        enew.debug = debug;
+        
+        std::unique_lock<std::mutex> lk(this->lock);
+        Entry *e = this->_get_locked(key);
 
-	if (!e) {
-	    this->entries.push_back(enew);
-	    return;
-	}
+        if (!e) {
+            this->entries.push_back(enew);
+            return;
+        }
 
-	if (!e->debug && debug)
-	    *e = enew;   // clobber and fall through
-	else if (!e->debug || debug) {
-	    std::stringstream ss;
-	    ss << "KernelRegistry::add() called twice, perhaps you forgot to set the 'debug' flag? Kernel is: " << key;
-	    throw std::runtime_error(ss.str());
-	}
+        if (!e->debug && debug)
+            *e = enew;   // clobber and fall through
+        else if (!e->debug || debug) {
+            std::stringstream ss;
+            ss << "KernelRegistry::add() called twice, perhaps you forgot to set the 'debug' flag? Kernel is: " << key;
+            throw std::runtime_error(ss.str());
+        }
 
-	// If we get here, then both a debug and non-debug kernel were registered.
-	// This is not an error, but we print an informational message.
+        // If we get here, then both a debug and non-debug kernel were registered.
+        // This is not an error, but we print an informational message.
 
-	std::cout << "\nNote: debug and non-debug kernels were registered; debug kernel takes priority"
-		  << "\nKernel is: " << key << "\n\n";
+        std::cout << "\nNote: debug and non-debug kernels were registered; debug kernel takes priority"
+                  << "\nKernel is: " << key << "\n\n";
     }
 
 
     Val get(const Key &key)
     {
-	std::unique_lock<std::mutex> lk(this->lock);
-	Entry *e = this->_get_locked(key);
+        std::unique_lock<std::mutex> lk(this->lock);
+        Entry *e = this->_get_locked(key);
 
-	if (!e) {
-	    lk.unlock();
-	    std::stringstream ss;
-	    ss << "Kernel not found in registry: " << key;
-	    throw std::runtime_error(ss.str());
-	}
+        if (!e) {
+            lk.unlock();
+            std::stringstream ss;
+            ss << "Kernel not found in registry: " << key;
+            throw std::runtime_error(ss.str());
+        }
 
-	if (!e->initialized) {
-	    this->deferred_initialization(e->val);
-	    e->initialized = true;
-	}
-	
-	Val ret = e->val;
-	lk.unlock();
-	return ret;
+        if (!e->initialized) {
+            this->deferred_initialization(e->val);
+            e->initialized = true;
+        }
+        
+        Val ret = e->val;
+        lk.unlock();
+        return ret;
     }
 
 
     Key get_random_key()
     {
-	std::unique_lock<std::mutex> lk(this->lock);
-	
-	if (entries.size() == 0)
-	    throw std::runtime_error("KernelRegistry::get_random() called on empty registry");
-	    
-	long i = ksgpu::rand_int(0, entries.size());
-	Key ret = entries[i].key;
-	lk.unlock();
-	return ret;
+        std::unique_lock<std::mutex> lk(this->lock);
+        
+        if (entries.size() == 0)
+            throw std::runtime_error("KernelRegistry::get_random() called on empty registry");
+            
+        long i = ksgpu::rand_int(0, entries.size());
+        Key ret = entries[i].key;
+        lk.unlock();
+        return ret;
     }
 
 
     long size()
     {
-	std::unique_lock<std::mutex> lk(this->lock);
-	long ret = entries.size();
-	lk.unlock();
-	return ret;
+        std::unique_lock<std::mutex> lk(this->lock);
+        long ret = entries.size();
+        lk.unlock();
+        return ret;
     }
 
 
     virtual void show(std::ostream &os = std::cout)
     {
-	// FIXME ordering is arbitrary; could improve by sorting keys.
+        // FIXME ordering is arbitrary; could improve by sorting keys.
 
-	std::unique_lock<std::mutex> lk(this->lock);
+        std::unique_lock<std::mutex> lk(this->lock);
 
-	for (ulong i = 0; i < entries.size(); i++) {
-	    os << "    [" << i << "]: " << entries[i].key << "\n"
-	       << "        " << entries[i].val << "\n";
-	}
+        for (ulong i = 0; i < entries.size(); i++) {
+            os << "    [" << i << "]: " << entries[i].key << "\n"
+               << "        " << entries[i].val << "\n";
+        }
     }
 };
 

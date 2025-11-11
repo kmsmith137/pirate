@@ -52,36 +52,36 @@ void test_dedisperser(const DedispersionConfig &config, int nchunks)
     double epsabs_g = epsrel_g * pow(1.414, config.tree_rank);  // gpu
 
     for (int c = 0; c < nchunks; c++) {
-	for (int b = 0; b < nbatches; b++) {
-	    Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost | af_random);
-	    // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
-	    // arr.at({0,0}) = 1.0;
+        for (int b = 0; b < nbatches; b++) {
+            Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost | af_random);
+            // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
+            // arr.at({0,0}) = 1.0;
 
-	    rdd0->input_array.fill(arr);
-	    rdd0->dedisperse(b, c);
+            rdd0->input_array.fill(arr);
+            rdd0->dedisperse(b, c);
 
-	    rdd1->input_array.fill(arr);
-	    rdd1->dedisperse(b, c);
+            rdd1->input_array.fill(arr);
+            rdd1->dedisperse(b, c);
 
-	    rdd2->input_array.fill(arr);
-	    rdd2->dedisperse(b, c);
+            rdd2->input_array.fill(arr);
+            rdd2->dedisperse(b, c);
 
-	    Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
-	    gdd_inbuf.fill(arr.convert(config.dtype));
-	    gdd->launch(b, c, 0, nullptr);  // (ibatch, it_chunk, istream, stream)
-	    
-	    for (int iout = 0; iout < nout; iout++) {
-		const Array<float> &rdd0_out = rdd0->output_arrays.at(iout);
-		const Array<float> &rdd1_out = rdd1->output_arrays.at(iout);
-		const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
-		const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
+            Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
+            gdd_inbuf.fill(arr.convert(config.dtype));
+            gdd->launch(b, c, 0, nullptr);  // (ibatch, it_chunk, istream, stream)
+            
+            for (int iout = 0; iout < nout; iout++) {
+                const Array<float> &rdd0_out = rdd0->output_arrays.at(iout);
+                const Array<float> &rdd1_out = rdd1->output_arrays.at(iout);
+                const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
+                const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
 
-		// Last two arguments are (epsabs, epsrel).
-		assert_arrays_equal(rdd0_out, rdd1_out, "soph0", "soph1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
-		assert_arrays_equal(rdd0_out, rdd2_out, "soph0", "soph2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
-		assert_arrays_equal(rdd0_out, gdd_out, "soph0", "gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
-	    }
-	}
+                // Last two arguments are (epsabs, epsrel).
+                assert_arrays_equal(rdd0_out, rdd1_out, "soph0", "soph1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
+                assert_arrays_equal(rdd0_out, rdd2_out, "soph0", "soph2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
+                assert_arrays_equal(rdd0_out, gdd_out, "soph0", "gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
+            }
+        }
     }
     
     cout << endl;

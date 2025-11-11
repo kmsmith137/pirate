@@ -37,21 +37,21 @@ void DedispersionKernelParams::validate() const
     xassert_divisible(total_beams, beams_per_batch);
     
     if (input_is_ringbuf || output_is_ringbuf) {
-	long nsegments_per_tree = pow2(dd_rank+amb_rank) * xdiv(ntime,nt_per_segment);
-	xassert_shape_eq(ringbuf_locations, ({ nsegments_per_tree, 4 }));
-	xassert(ringbuf_locations.is_fully_contiguous());
-	xassert(ringbuf_nseg > 0);
-	xassert(ringbuf_nseg <= UINT_MAX);
-	xassert(ringbuf_locations.on_host());
-	
-	for (long iseg = 0; iseg < nsegments_per_tree; iseg++) {
-	    const uint *rb_locs = ringbuf_locations.data + (4*iseg);
-	    long rb_offset = rb_locs[0];  // in segments, not bytes
-	    // long rb_phase = rb_locs[1];   // index of (time chunk, beam) pair, relative to current pair
-	    long rb_len = rb_locs[2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
-	    long rb_nseg = rb_locs[3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
-	    xassert(rb_offset + (rb_len-1)*rb_nseg < ringbuf_nseg);
-	}
+        long nsegments_per_tree = pow2(dd_rank+amb_rank) * xdiv(ntime,nt_per_segment);
+        xassert_shape_eq(ringbuf_locations, ({ nsegments_per_tree, 4 }));
+        xassert(ringbuf_locations.is_fully_contiguous());
+        xassert(ringbuf_nseg > 0);
+        xassert(ringbuf_nseg <= UINT_MAX);
+        xassert(ringbuf_locations.on_host());
+        
+        for (long iseg = 0; iseg < nsegments_per_tree; iseg++) {
+            const uint *rb_locs = ringbuf_locations.data + (4*iseg);
+            long rb_offset = rb_locs[0];  // in segments, not bytes
+            // long rb_phase = rb_locs[1];   // index of (time chunk, beam) pair, relative to current pair
+            long rb_len = rb_locs[2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+            long rb_nseg = rb_locs[3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+            xassert(rb_offset + (rb_len-1)*rb_nseg < ringbuf_nseg);
+        }
     }
 }
 
@@ -59,20 +59,20 @@ void DedispersionKernelParams::validate() const
 void DedispersionKernelParams::print(const char *prefix) const
 {
     if (!prefix)
-	prefix = "";
+        prefix = "";
     
     cout << prefix << "dtype = " << this->dtype << ";\n"
-	 << prefix << "dd_rank = " << this->dd_rank << ";\n"
-	 << prefix << "amb_rank = " << this->amb_rank << ";\n"
-	 << prefix << "total_beams = " << this->total_beams << ";\n"
-	 << prefix << "beams_per_batch = " << this->beams_per_batch << ";\n"
-	 << prefix << "ntime = " << this->ntime << ";\n"
-	 << prefix << "nspec = " << this->nspec << ";\n"
-	 << prefix << "input_is_ringbuf = " << (this->input_is_ringbuf ? "true" : "false")  << ";\n"
-	 << prefix << "output_is_ringbuf = " << (this->output_is_ringbuf ? "true" : "false")  << ";\n"
-	 << prefix << "apply_input_residual_lags = " << (this->apply_input_residual_lags ? "true" : "false")  << ";\n"
-	 << prefix << "input_is_downsampled_tree = " << (this->input_is_downsampled_tree ? "true" : "false")  << ";\n"
-	 << prefix << "nt_per_segment = " << this->nt_per_segment << ";\n";
+         << prefix << "dd_rank = " << this->dd_rank << ";\n"
+         << prefix << "amb_rank = " << this->amb_rank << ";\n"
+         << prefix << "total_beams = " << this->total_beams << ";\n"
+         << prefix << "beams_per_batch = " << this->beams_per_batch << ";\n"
+         << prefix << "ntime = " << this->ntime << ";\n"
+         << prefix << "nspec = " << this->nspec << ";\n"
+         << prefix << "input_is_ringbuf = " << (this->input_is_ringbuf ? "true" : "false")  << ";\n"
+         << prefix << "output_is_ringbuf = " << (this->output_is_ringbuf ? "true" : "false")  << ";\n"
+         << prefix << "apply_input_residual_lags = " << (this->apply_input_residual_lags ? "true" : "false")  << ";\n"
+         << prefix << "input_is_downsampled_tree = " << (this->input_is_downsampled_tree ? "true" : "false")  << ";\n"
+         << prefix << "nt_per_segment = " << this->nt_per_segment << ";\n";
 }
 
 
@@ -95,18 +95,18 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
     xassert(is_aligned(buf, constants::bytes_per_gpu_cache_line));   // also checks non_NULL
     
     if (on_gpu)
-	xassert(arr.on_gpu());
+        xassert(arr.on_gpu());
     else
-	xassert(arr.on_host());
+        xassert(arr.on_host());
 
     // FIXME constructor should include overflow checks on strides.
     // (Check on act_stride is nontrivial, since it gets multiplied by a small integer in the kernel.)
     
     if (is_ringbuf) {
-	// Case 1: ringbuf, 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
-	xassert_shape_eq(arr, ({ params.ringbuf_nseg * params.nt_per_segment * params.nspec }));
-	xassert(arr.get_ncontig() == 1);  // fully contiguous
-	return;
+        // Case 1: ringbuf, 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
+        xassert_shape_eq(arr, ({ params.ringbuf_nseg * params.nt_per_segment * params.nspec }));
+        xassert(arr.get_ncontig() == 1);  // fully contiguous
+        return;
     }
     
     // Case 2: simple buf. Shape is either:
@@ -126,11 +126,11 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
     bool valid2 = (S==1) && arr.shape_equals(shape2);
 
     if (!valid1 && !valid2) {
-	stringstream ss;
-	ss << "DedispersionKernelIobuf: got shape " << arr.shape_str() << ", expected shape " << ksgpu::tuple_str(shape1);
-	if (S == 1)
-	    ss << " or " << ksgpu::tuple_str(shape2);
-	throw runtime_error(ss.str());
+        stringstream ss;
+        ss << "DedispersionKernelIobuf: got shape " << arr.shape_str() << ", expected shape " << ksgpu::tuple_str(shape1);
+        if (S == 1)
+            ss << " or " << ksgpu::tuple_str(shape2);
+        throw runtime_error(ss.str());
     }
  
     // Valid for both shapes.
@@ -147,10 +147,10 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
     xassert((params.dd_rank == 0) || (act_stride32 != 0));
 
     if (on_gpu) {
-	// Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
-	xassert_divisible(beam_stride32 * 4, constants::bytes_per_gpu_cache_line);
-	xassert_divisible(amb_stride32 * 4, constants::bytes_per_gpu_cache_line);
-	xassert_divisible(act_stride32 * 4, constants::bytes_per_gpu_cache_line);
+        // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
+        xassert_divisible(beam_stride32 * 4, constants::bytes_per_gpu_cache_line);
+        xassert_divisible(amb_stride32 * 4, constants::bytes_per_gpu_cache_line);
+        xassert_divisible(act_stride32 * 4, constants::bytes_per_gpu_cache_line);
     }
 }
 

@@ -42,11 +42,11 @@ static vector<TestRingbuf> make_ringbufs(int nbuf, long beams_per_batch)
     vector<TestRingbuf> ret(nbuf);
 
     for (int i = 0; i < nbuf; i++) {
-	do {
-	    auto v = ksgpu::random_integers_with_bounded_product(2,10000);
-	    ret[i].num_frames = v[0];
-	    ret[i].segments_per_frame = v[1];
-	} while (ret[i].num_frames < beams_per_batch);
+        do {
+            auto v = ksgpu::random_integers_with_bounded_product(2,10000);
+            ret[i].num_frames = v[0];
+            ret[i].segments_per_frame = v[1];
+        } while (ret[i].num_frames < beams_per_batch);
     }
 
     return ret;
@@ -56,30 +56,30 @@ static vector<TestRingbuf> make_ringbufs(int nbuf, long beams_per_batch)
 static Array<uint> make_location_array(const vector<TestLocationPair> &v, bool permute)
 {
     if (permute) {
-	vector<TestLocationPair> w = v;        // copy
-	randomly_permute(w);
-	return make_location_array(w, false);  // permute=false
+        vector<TestLocationPair> w = v;        // copy
+        randomly_permute(w);
+        return make_location_array(w, false);  // permute=false
     } 
-	
+        
     long n = v.size();
     Array<uint> ret({2*n,4}, af_rhost);
 
     // I got paranoid and decided not to memcpy() here.
     for (long i = 0; i < n; i++) {
-	ret.data[8*i] = v[i].src_seg_offset;
-	ret.data[8*i+1] = v[i].src_frame_phase;
-	ret.data[8*i+2] = v[i].src_num_frames;
-	ret.data[8*i+3] = v[i].src_segments_per_frame;
-	ret.data[8*i+4] = v[i].dst_seg_offset;
-	ret.data[8*i+5] = v[i].dst_frame_phase;
-	ret.data[8*i+6] = v[i].dst_num_frames;
-	ret.data[8*i+7] = v[i].dst_segments_per_frame;
+        ret.data[8*i] = v[i].src_seg_offset;
+        ret.data[8*i+1] = v[i].src_frame_phase;
+        ret.data[8*i+2] = v[i].src_num_frames;
+        ret.data[8*i+3] = v[i].src_segments_per_frame;
+        ret.data[8*i+4] = v[i].dst_seg_offset;
+        ret.data[8*i+5] = v[i].dst_frame_phase;
+        ret.data[8*i+6] = v[i].dst_num_frames;
+        ret.data[8*i+7] = v[i].dst_segments_per_frame;
     }
 
     return ret;
 }
 
-	
+        
 void test_gpu_ringbuf_copy_kernel()
 {
     cout << "test_gpu_ringbuf_copy_kernel()" << endl;
@@ -101,48 +101,48 @@ void test_gpu_ringbuf_copy_kernel()
     long nseg_tot = 0;
     vector<TestRingbuf *> all_ringbufs(nbuf_src + nbuf_dst);
     for (int i = 0; i < nbuf_src; i++)
-	all_ringbufs[i] = &src_ringbufs[i];
+        all_ringbufs[i] = &src_ringbufs[i];
     for (int i = 0; i < nbuf_dst; i++)
-	all_ringbufs[nbuf_src + i] = &dst_ringbufs[i];
+        all_ringbufs[nbuf_src + i] = &dst_ringbufs[i];
 
     randomly_permute(all_ringbufs);
 
     for (TestRingbuf *rb: all_ringbufs) {
-	rb->base_segment = nseg_tot;
-	nseg_tot += rb->num_frames * rb->segments_per_frame;
+        rb->base_segment = nseg_tot;
+        nseg_tot += rb->num_frames * rb->segments_per_frame;
     }
 
     vector<TestLocationPair> lpairs;
     for (TestRingbuf &rb_dst: dst_ringbufs) {
-	for (long sdst = 0; sdst < rb_dst.segments_per_frame; sdst++) {
-	    long nf_dst = rb_dst.num_frames;
-	    long fdst = rand_int(0, nf_dst);
-	    long fend = fdst + nf_dst - beams_per_batch;
-	    
-	    while (fdst <= fend) {
-		if (rand_uniform() < 0.5) {
-		    fdst++;
-		    continue;
-		}
-		
-		int isrc = rand_int(0, nbuf_src);
-		TestRingbuf &rb_src = src_ringbufs[isrc];	
-		TestLocationPair lpair;
-		
-		lpair.src_seg_offset = rb_src.base_segment + rand_int(0, rb_src.segments_per_frame);
-		lpair.src_frame_phase = rand_int(0, 1000*1000);
-		lpair.src_num_frames = rb_src.num_frames;
-		lpair.src_segments_per_frame = rb_src.segments_per_frame;
-		
-		lpair.dst_seg_offset = rb_dst.base_segment + sdst;
-		lpair.dst_frame_phase = fdst + rand_int(0,1000) * rb_dst.num_frames;
-		lpair.dst_num_frames = rb_dst.num_frames;
-		lpair.dst_segments_per_frame = rb_dst.segments_per_frame;
-		
-		lpairs.push_back(lpair);
-		fdst += beams_per_batch;
-	    }
-	}
+        for (long sdst = 0; sdst < rb_dst.segments_per_frame; sdst++) {
+            long nf_dst = rb_dst.num_frames;
+            long fdst = rand_int(0, nf_dst);
+            long fend = fdst + nf_dst - beams_per_batch;
+            
+            while (fdst <= fend) {
+                if (rand_uniform() < 0.5) {
+                    fdst++;
+                    continue;
+                }
+                
+                int isrc = rand_int(0, nbuf_src);
+                TestRingbuf &rb_src = src_ringbufs[isrc];       
+                TestLocationPair lpair;
+                
+                lpair.src_seg_offset = rb_src.base_segment + rand_int(0, rb_src.segments_per_frame);
+                lpair.src_frame_phase = rand_int(0, 1000*1000);
+                lpair.src_num_frames = rb_src.num_frames;
+                lpair.src_segments_per_frame = rb_src.segments_per_frame;
+                
+                lpair.dst_seg_offset = rb_dst.base_segment + sdst;
+                lpair.dst_frame_phase = fdst + rand_int(0,1000) * rb_dst.num_frames;
+                lpair.dst_num_frames = rb_dst.num_frames;
+                lpair.dst_segments_per_frame = rb_dst.segments_per_frame;
+                
+                lpairs.push_back(lpair);
+                fdst += beams_per_batch;
+            }
+        }
     }
 
     RingbufCopyKernelParams hparams;
@@ -166,7 +166,7 @@ void test_gpu_ringbuf_copy_kernel()
     uint *p = reinterpret_cast<uint *> (hbuf.data);
     long nuint_tot = nseg_tot * (128 / sizeof(uint));
     for (long i = 0; i < nuint_tot; i++)
-	p[i] = default_rng();
+        p[i] = default_rng();
     
     // Copy to GPU before running copy kernel
     Array<void> gbuf = hbuf.to_gpu();
