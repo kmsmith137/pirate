@@ -1111,6 +1111,29 @@ __global__ void fft_c2c_test_kernel(const float *in, float *out)
 
 
 // Unit test for 'struct fft_c2c_microkernel'.
+// Length-N FFT, with S spectator indices
+// out.shape == in.shape == (S,N,2)
+static void fft_c2c_reference_kernel(float *out, const float *in, int N, int S)
+{
+    for (int j = 0; j < N; j++) {
+        for (int k = 0; k < N; k++) {
+            float theta = (2*M_PI/N) * ((j*k) % N);
+            float cth = cosf(theta);
+            float sth = sinf(theta);
+            
+            for (int s = 0; s < S; s++) {
+                float xre = in[s*2*N + 2*k];
+                float xim = in[s*2*N + 2*k+1];
+
+                out[s*2*N + 2*j] += (cth*xre - sth*xim);
+                out[s*2*N + 2*j+1] += (sth*xre + cth*xim);
+            }
+        }
+    }
+}
+
+
+// Unit test for 'struct fft_c2c_microkernel'.
 static void test_casm_fft_c2c_microkernel()
 {
     constexpr int R = 6;
@@ -1121,23 +1144,9 @@ static void test_casm_fft_c2c_microkernel()
     Array<float> in({S,N,2}, af_random | af_rhost);
     Array<float> out_cpu({S,N,2}, af_zero | af_rhost);
     Array<float> out_gpu({S,N,2}, af_random | af_gpu);
-    
-    for (int j = 0; j < N; j++) {
-        for (int k = 0; k < N; k++) {
-            float theta = (2*M_PI/N) * ((j*k) % N);
-            float cth = cosf(theta);
-            float sth = sinf(theta);
-            
-            for (int s = 0; s < S; s++) {
-                float xre = in.at({s,k,0});
-                float xim = in.at({s,k,1});
-                
-                out_cpu.at({s,j,0}) += (cth*xre - sth*xim);
-                out_cpu.at({s,j,1}) += (sth*xre + cth*xim);
-            }
-        }
-    }
 
+    fft_c2c_reference_kernel(out_cpu.data, in.data, N, S);
+    
     in = in.to_gpu();
     fft_c2c_test_kernel<R> <<<1,32>>> (in.data, out_gpu.data);
     CUDA_PEEK("fft_c2c_test_kernel");
@@ -1352,6 +1361,29 @@ __global__ void fft1_test_kernel(const float *in, float *out)
 
 
 // Unit test for 'struct fft1_microkernel'.
+// out.shape == (24,128,2)
+// in.shape == (24,64,2)
+static void fft1_reference_kernel(float *out, const float *in)
+{
+    for (int j = 0; j < 128; j++) {
+        for (int k = 0; k < 64; k++) {
+            float theta = (2*M_PI/128) * ((j*k) % 128);
+            float cth = cosf(theta);
+            float sth = sinf(theta);
+
+            for (int tpe = 0; tpe < 24; tpe++) {
+                float xre = in[128*tpe + 2*k];
+                float xim = in[128*tpe + 2*k+1];
+
+                out[256*tpe + 2*j] += (cth * xre) - (sth * xim);
+                out[256*tpe + 2*j+1] += (sth * xre) + (cth * xim);
+            }
+        }
+    }
+}
+
+
+// Unit test for 'struct fft1_microkernel'.
 static void test_casm_fft1_microkernel()
 {
     // Allow kernel to use 99KB shared memory.
@@ -1365,18 +1397,7 @@ static void test_casm_fft1_microkernel()
     Array<float> out_cpu({24,128,2}, af_zero | af_rhost);
     Array<float> out_gpu({24,128,2}, af_random | af_gpu);
 
-    for (int j = 0; j < 128; j++) {
-        for (int k = 0; k < 64; k++) {
-            float theta = (2*M_PI/128) * ((j*k) % 128);
-            float cth = cosf(theta);
-            float sth = sinf(theta);
-
-            for (int tpe = 0; tpe < 24; tpe++) {
-                out_cpu.at({tpe,j,0}) += (cth * in.at({tpe,k,0})) - (sth * in.at({tpe,k,1}));
-                out_cpu.at({tpe,j,1}) += (sth * in.at({tpe,k,0})) + (cth * in.at({tpe,k,1}));
-            }
-        }
-    }
+    fft1_reference_kernel(out_cpu.data, in.data);
 
     in = in.to_gpu();
     fft1_test_kernel <<< 1, {32,24,1}, 99*1024 >>> (in.data, out_gpu.data);
