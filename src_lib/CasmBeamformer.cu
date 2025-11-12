@@ -888,9 +888,6 @@ static void casm_controller_reference_kernel(
     int FP = 2 * bf.F;
     memset(out, 0, T * FP * 6*64*2 * sizeof(float));
 
-    xassert(bf.feed_indices.is_fully_contiguous());
-    const int *feed_indices = bf.feed_indices.data;
-
     for (int t = 0; t < T; t++) {
         for (int fp = 0; fp < FP; fp++) {
             int tfp = t*FP + fp;
@@ -906,8 +903,8 @@ static void casm_controller_reference_kernel(
                 float fw_re = fw2[2*d];
                 float fw_im = fw2[2*d+1];
                 
-                int ns = feed_indices[2*d];
-                int ew = feed_indices[2*d+1];
+                int ns = bf.feed_indices[2*d];
+                int ew = bf.feed_indices[2*d+1];
                 int g = 64*ew + ns;
                 
                 out2[2*g] = (fw_re * e_re) - (fw_im * e_im);
@@ -1800,7 +1797,7 @@ static void fft2_reference_kernel(const CasmBeamformer &bf, float *I, const floa
 
             for (int ew_feed = 0; ew_feed < 6; ew_feed++) {
                 float c = bf.speed_of_light;
-                float freq = bf.frequencies.at({ifreq});
+                float freq = bf.frequencies[ifreq];
                 float ew_bpos = bf.ew_beam_locations[ew_beam];
                 float ew_fpos = bf.ew_feed_positions[ew_feed];
                 float theta = 2*M_PI * freq * ew_bpos * ew_fpos / c;
@@ -2117,9 +2114,9 @@ static void interpolation_reference_kernel(const CasmBeamformer &bf, float *out,
         for (int b = 0; b < B; b++) {
             constexpr float c = CasmBeamformer::speed_of_light;
             
-            float freq = bf.frequencies.at({f});
-            float sza_ns = bf.beam_locations.at({b,0});
-            float sza_ew = bf.beam_locations.at({b,1});
+            float freq = bf.frequencies[f];
+            float sza_ns = bf.beam_locations[2*b];
+            float sza_ew = bf.beam_locations[2*b+1];
             float dns = bf.ns_feed_spacing;
             
             // Grid coordinates (xns, xew).
@@ -2359,23 +2356,91 @@ CasmBeamformer::CasmBeamformer(
     const Array<float> &beam_locations_,  // shape (B,2)
     int downsampling_factor_,
     float ns_feed_spacing_,
-    const Array<float> &ew_feed_spacing_)
-    : frequencies(frequencies_),
-      feed_indices(feed_indices_),
-      beam_locations(beam_locations_),
-      downsampling_factor(downsampling_factor_),
-      ns_feed_spacing(ns_feed_spacing_)
+    const Array<float> &ew_feed_spacings_)
 {
     // Argument checking
-    xassert_eq(frequencies.ndim, 1);
-    xassert_eq(beam_locations.ndim, 2);
-    xassert_eq(beam_locations.shape[1], 2);
-    xassert_shape_eq(feed_indices, ({256,2}));
     
-    this->F = frequencies.shape[0];
-    this->B = beam_locations.shape[0];
+    xassert_eq(frequencies_.ndim, 1);
+    xassert_eq(beam_locations_.ndim, 2);
+    xassert_eq(beam_locations_.shape[1], 2);
+    xassert_shape_eq(feed_indices_, ({256,2}));
 
-    CUDA_CALL(cudaGetDevice(&this->constructor_device));
+    xassert(frequencies_.is_fully_contiguous());
+    xassert(feed_indices_.is_fully_contiguous());
+    xassert(beam_locations_.is_fully_contiguous());
+
+    xassert(frequencies_.on_host());
+    xassert(feed_indices_.on_host());
+    xassert(beam_locations_.on_host());
+
+    if (ew_feed_spacings_.size > 0) {
+        xassert_shape_eq(ew_feed_spacings_, ({5}));
+        xassert(ew_feed_spacings_.is_fully_contiguous());
+        xassert(ew_feed_spacings_.on_host());
+    }
+
+    // Delegate to bare-pointer constructor.
+    
+    this->_construct(
+        frequencies_.data,
+        feed_indices_.data,
+        beam_locations_.data,
+        downsampling_factor_,
+        frequencies_.shape[0],     // F = number of frequency channels
+        beam_locations_.shape[0],  // B = number of beams
+        ns_feed_spacing_,
+        (ew_feed_spacings_.size > 0) ? ew_feed_spacings_.data : nullptr
+    );
+}
+
+
+CasmBeamformer::CasmBeamformer(
+    const float *frequencies_,        // shape (nfreq,)
+    const int *feed_indices_,         // shape (256,2)
+    const float *beam_locations_,     // shape (nbeams,2)
+    int downsampling_factor_,
+    int nfreq_,
+    int nbeams_,
+    float ns_feed_spacing_,
+    const float *ew_feed_spacings_)
+{
+    this->_construct(
+        frequencies_, feed_indices_, beam_locations_,
+        downsampling_factor_, nfreq_, nbeams_,
+        ns_feed_spacing_, ew_feed_spacings_
+    );
+}
+
+
+template<typename T>
+static vector<T> copy_to_vector(const T *src, long nelts)
+{
+    vector<T> ret(nelts);
+    memcpy(&ret[0], src, nelts * sizeof(T));
+    return ret;
+}
+
+void CasmBeamformer::_construct(
+    const float *frequencies_,       // shape (F,)
+    const int *feed_indices_,        // shape (256,2)
+    const float *beam_locations_,    // shape (B,2)
+    int downsampling_factor_,
+    int nfreq_,
+    int nbeams_,
+    float ns_feed_spacing_,
+    const float *ew_feed_spacings_)  // either shape (5,) or NULL
+{
+    this->F = nfreq_;
+    this->B = nbeams_;
+    this->downsampling_factor = downsampling_factor_;
+    this->ns_feed_spacing = ns_feed_spacing_;
+
+    xassert(frequencies_ != nullptr);
+    xassert(feed_indices_ != nullptr);
+    xassert(beam_locations_ != nullptr);
+    
+    if (!ew_feed_spacings_)
+        ew_feed_spacings_ = CasmBeamformer::default_ew_feed_spacings;
     
     xassert_gt(F, 0);
     xassert_gt(B, 0);
@@ -2384,21 +2449,23 @@ CasmBeamformer::CasmBeamformer(
     xassert_gt(downsampling_factor, 0);        
     xassert_ge(ns_feed_spacing, 0.3);
     xassert_lt(ns_feed_spacing, 0.6);
-    xassert((ew_feed_spacing_.size == 0) || (ew_feed_spacing_.shape_equals({5})));
 
-    // If ew_feed_spacings are unspecified, then use defaults.
-    for (int i = 0; i < 5; i++)
-        ew_feed_spacing[i] = (ew_feed_spacing_.size > 0) ? ew_feed_spacing_.at({i}) : default_ew_feed_spacings[i];
+    CUDA_CALL(cudaGetDevice(&this->constructor_device));
+    
+    this->frequencies = copy_to_vector(frequencies_, F);
+    this->feed_indices = copy_to_vector(feed_indices_, 256*2);
+    this->beam_locations = copy_to_vector(beam_locations_, B*2);
 
     for (int i = 0; i < 5; i++) {
-        xassert_ge(ew_feed_spacing[i], 0.3);
-        xassert_le(ew_feed_spacing[i], 0.6);
-        xassert(fabsf(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // check flip-symmetric
+        xassert_ge(ew_feed_spacings_[i], 0.3);
+        xassert_le(ew_feed_spacings_[i], 0.6);
+        xassert(fabsf(ew_feed_spacings_[i] - ew_feed_spacings_[4-i]) < 1.0e-5);  // check flip-symmetric
+        this->ew_feed_spacings[i] = ew_feed_spacings_[i];
     }
     
-    float s0 = (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
-    float s1 = (ew_feed_spacing[1] + ew_feed_spacing[3]) / 2.;
-    float s2 = (ew_feed_spacing[2]);
+    float s0 = (ew_feed_spacings[0] + ew_feed_spacings[4]) / 2.;
+    float s1 = (ew_feed_spacings[1] + ew_feed_spacings[3]) / 2.;
+    float s2 = (ew_feed_spacings[2]);
 
     // Use EW coordinates such that the array is centered at zero.
     ew_feed_positions[0] = -s0 - s1 - s2/2.;
@@ -2427,8 +2494,8 @@ CasmBeamformer::CasmBeamformer(
     vector<int> duplicate_checker({6*43}, -1);
     
     for (int d = 0; d < 256; d++) {
-        int ns = feed_indices.at({d,0});  // 0 <= ns < 43
-        int ew = feed_indices.at({d,1});  // 0 <= ew < 6
+        int ns = feed_indices[2*d];    // 0 <= ns < 43
+        int ew = feed_indices[2*d+1];  // 0 <= ew < 6
 
         if ((ns < 0) || (ns >= 43) || (ew < 0) || (ew >= 6)) {
             stringstream ss;
@@ -2465,7 +2532,7 @@ CasmBeamformer::CasmBeamformer(
     // See (*) near the beginning of this file for details.
     
     for (int f = 0; f < F; f++) {
-        float freq = frequencies.at({f});
+        float freq = frequencies[f];
         
         // Beamformer has only been validated for frequencies in [400,500] MHz.
         // This assert also guards against using the wrong units (should be MHz).
@@ -2500,7 +2567,7 @@ CasmBeamformer::CasmBeamformer(
             // See (**) near the beginning of this file.
             
             float prefactor = j ? 1.0 : ns_feed_spacing;
-            float beam_location = beam_locations.at({b,j});
+            float beam_location = beam_locations[2*b+j];
             xassert_ge(beam_location, -1.0);
             xassert_le(beam_location, 1.0);
             blp[2*b+j] = prefactor * beam_location;
@@ -2510,7 +2577,6 @@ CasmBeamformer::CasmBeamformer(
     // All done! Copy to GPU.
     gpu_persistent_data = to_gpu(gpu_persistent_data, gmem_layout::nelts(F,B));
 }
-
 
 // Static member function.
 void CasmBeamformer::show_shared_memory_layout()
@@ -2583,7 +2649,7 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 
     Array<float> frequencies({F}, af_uhost);
     Array<float> beam_locations({B,2}, af_uhost);
-    Array<float> ew_feed_spacing({5}, af_uhost);
+    Array<float> ew_feed_spacings({5}, af_uhost);
     float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
 
     // Make random 'frequencies' array.
@@ -2595,13 +2661,13 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
         for (int j = 0; j < 2; j++)
             beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
 
-    // Make random 'ew_feed_spacing' array.
+    // Make random 'ew_feed_spacings' array.
     for (int i = 0; i < 3; i++)
-        ew_feed_spacing.at({i}) = ew_feed_spacing.at({4-i}) = rand_uniform(0.3, 0.6);
+        ew_feed_spacings.at({i}) = ew_feed_spacings.at({4-i}) = rand_uniform(0.3, 0.6);
     
     Array<int> feed_indices = randomize_feed_indices ? make_random_feed_indices() : make_regular_feed_indices();
 
-    CasmBeamformer ret(frequencies, feed_indices, beam_locations, ds, ns_feed_spacing, ew_feed_spacing);
+    CasmBeamformer ret(frequencies, feed_indices, beam_locations, ds, ns_feed_spacing, ew_feed_spacings);
     ret.nominal_Tin_for_unit_tests = T;
     
     return ret;

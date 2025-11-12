@@ -124,14 +124,27 @@ struct CasmBeamformer
     //
     // - ew_feed_spacings: length-5 array containing spacings (in meters) along
     //   the east-west axis. Must be flip-symmetric.
-    
+
+    // "ksgpu::Array" constructor.
     CasmBeamformer(
-        const ksgpu::Array<float> &frequencies,     // shape (F,)
+        const ksgpu::Array<float> &frequencies,     // shape (nfreq,)
         const ksgpu::Array<int> &feed_indices,      // shape (256,2)
-        const ksgpu::Array<float> &beam_locations,  // shape (B,2)
+        const ksgpu::Array<float> &beam_locations,  // shape (nbeams,2)
         int downsampling_factor,
         float ns_feed_spacing = default_ns_feed_spacing,
         const ksgpu::Array<float> &ew_feed_spacings = ksgpu::Array<float>()
+    );
+    
+    // "Bare-pointer" constructor.
+    CasmBeamformer(
+        const float *frequencies,        // shape (nfreq,)
+        const int *feed_indices,         // shape (256,2)
+        const float *beam_locations,     // shape (nbeams,2)
+        int downsampling_factor,
+        int nfreq,
+        int nbeams,
+        float ns_feed_spacing = default_ns_feed_spacing,
+        const float *ew_feed_spacings = default_ew_feed_spacings
     );
     
     // The launch_beamformer() member function launches the beamforming kernel
@@ -164,25 +177,32 @@ struct CasmBeamformer
         cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
     ) const;
 
+    // There is a maximum beam count that the beamformer can support
+    // (currently 4672), due to GPU shared memory limitations.
+    static int get_max_beams();
+    static void show_shared_memory_layout();
+
+    // Called by 'python -m pirate_frb test [--casm]'
+    static void test_microkernels();
+
+    // Called by 'python -m pirate_frb time [--casm]'
+    static void time();
+
     // ---------------------------------------------------------------------------------------------
     
     int F = 0;  // number of frequency channels (on one GPU)
     int B = 0;  // number of output beams
     int constructor_device = -1;  // cuda device when constructor was called
     int downsampling_factor = 0;
-    
-    ksgpu::Array<float> frequencies;     // shape (F,)
-    ksgpu::Array<int> feed_indices;      // shape (256,2)
-    ksgpu::Array<float> beam_locations;  // shape (B,2)
+
+    std::vector<float> frequencies;     // shape (F,)
+    std::vector<int> feed_indices;      // shape (256,2)
+    std::vector<float> beam_locations;  // shape (B,2)
     float ns_feed_spacing = 0.0;
 
-    float ew_feed_spacing[5];     // meters
+    float ew_feed_spacings[5];    // meters
     float ew_feed_positions[6];   // meters
     float ew_beam_locations[24];  // sin(ZA)
-
-    // There is a maximum beam count that the beamformer can support
-    // (currently 4672), due to GPU shared memory limitations.
-    static int get_max_beams();
     
     // This is a ~200KB region of global GPU memory, which is initialized by the
     // CasmBeamformer constructor, and passed to the beamformer on every kernel launch.
@@ -194,14 +214,17 @@ struct CasmBeamformer
     static CasmBeamformer make_random(bool randomize_feed_indices=true);
     static ksgpu::Array<int> make_random_feed_indices();   // helper for make_random()
     static ksgpu::Array<int> make_regular_feed_indices();  // helper for make_random()
-    
-    static void show_shared_memory_layout();
 
-    // Called by 'python -m pirate_frb test [--casm]'
-    static void test_microkernels();
-
-    // Called by 'python -m pirate_frb time [--casm]'
-    static void time();
+    void _construct(
+        const float *frequencies,        // shape (F,)
+        const int *feed_indices,         // shape (256,2)
+        const float *beam_locations,     // shape (B,2)
+        int downsampling_factor,
+        int nfreq,
+        int nbeams,
+        float ns_feed_spacing,
+        const float *ew_feed_spacings    // either shape (5,) or NULL
+    );
 };
 
 
