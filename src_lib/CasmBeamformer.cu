@@ -1,9 +1,9 @@
 #include "../include/pirate/CasmBeamformer.hpp"
 
 #include <cassert>
+#include <sys/time.h>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
-#include <ksgpu/time_utils.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -15,6 +15,8 @@ namespace pirate {
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// CUDA utils
 
 
 // Setup: suppose we have a pair of registers [x,y] on each thread,
@@ -71,6 +73,47 @@ struct shmem_99kb
         }
     }
 };
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Helpers for allocating memory, copying to/from GPU, and random number generation.
+
+
+template<typename T>
+static shared_ptr<T> cpu_alloc(ssize_t nelts, bool randomize=false)
+{
+    T *p = nullptr;
+    CUDA_CALL(cudaHostAlloc((void **) &p, nelts * sizeof(T), 0));
+    return shared_ptr<T> (p, cudaFreeHost);
+}
+
+
+template<typename T>
+static shared_ptr<T> gpu_alloc(ssize_t nelts, bool randomize=false)
+{
+    T *p = nullptr;
+    CUDA_CALL(cudaMalloc((void **) &p, nelts * sizeof(T)));
+    return shared_ptr<T> (p, cudaFree);
+}
+
+
+template<typename T>
+static shared_ptr<T> to_gpu(const shared_ptr<T> &src, ssize_t nelts)
+{
+    shared_ptr<T> dst = gpu_alloc<T> (nelts);
+    CUDA_CALL(cudaMemcpy(dst.get(), src.get(), nelts * sizeof(T), cudaMemcpyHostToDevice));
+    return dst;
+}
+
+
+template<typename T>
+static shared_ptr<T> to_cpu(const shared_ptr<T> &src, ssize_t nelts)
+{
+    shared_ptr<T> dst = cpu_alloc<T> (nelts);
+    CUDA_CALL(cudaMemcpy(dst.get(), src.get(), nelts * sizeof(T), cudaMemcpyDeviceToHost));
+    return dst;
+}
 
 
 // -------------------------------------------------------------------------------------------------
@@ -2660,12 +2703,17 @@ void CasmBeamformer::time()
         
         for (int i = 0; i < niter; i++) {
             CUDA_CALL(cudaDeviceSynchronize());
-            tv[i] = ksgpu::get_time();
+            
+            int err = gettimeofday(&tv[i], NULL);
+            if (err != 0)
+                throw runtime_error("gettimeofday() failed?!");
+    
             bf.launch_beamformer(e_in, feed_weights, i_out);
             
             int k = i - (i/2);
             if (i > k) {
-                double loadfrac = ksgpu::time_diff(tv[k], tv[i]) / ((i-k) * dt_rt);
+                double dt = (tv[i].tv_sec - tv[k].tv_sec) + 1.0e-6 * (tv[i].tv_usec - tv[k].tv_usec);
+                double loadfrac = dt / ((i-k) * dt_rt);
                 cout << "    " << i << " iterations, loadfrac = " << loadfrac << " (lower is better)" << endl;
                 lfvec[ib] = loadfrac;
             }
