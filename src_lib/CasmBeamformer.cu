@@ -85,16 +85,22 @@ static shared_ptr<T> cpu_alloc(ssize_t nelts, bool randomize=false)
 {
     T *p = nullptr;
     CUDA_CALL(cudaHostAlloc((void **) &p, nelts * sizeof(T), 0));
-    return shared_ptr<T> (p, cudaFreeHost);
+    
+    if (randomize)
+        ksgpu::randomize(p, nelts);
+    else
+        memset(p, 0, nelts * sizeof(T));
+    
+    return shared_ptr<T> (p, cudaFreeHost);  // cudaFreeHost() will be called by shared_ptr destructor
 }
 
 
 template<typename T>
-static shared_ptr<T> gpu_alloc(ssize_t nelts, bool randomize=false)
+static shared_ptr<T> gpu_alloc(ssize_t nelts)
 {
     T *p = nullptr;
     CUDA_CALL(cudaMalloc((void **) &p, nelts * sizeof(T)));
-    return shared_ptr<T> (p, cudaFree);
+    return shared_ptr<T> (p, cudaFree);   // cudaFree() will be called by shared_ptr destructor
 }
 
 
@@ -222,10 +228,10 @@ struct shmem_layout
 //    - load_gridded_e(): called every 8 time samples, to read E-array from shared -> registers
 //    - unpack_e(): called every 2 time samples, to convert int4+4 -> float32+32 and apply weights
 //
-// The idea is that the casm_controller handles global memory management, and management of the
-// E-array in shared memory, so that other parts of the beamforming kernel don't need to worry
-// about these details.
-//
+// The idea is that the casm_controller handles global memory management, and management of
+// the E-array in shared memory. It presents the E-array to "downstream" microkernels as a
+// sequence of floats (with feed_weights applied), so that these microkernels don't need to
+// worry about memory management details.
 //
 // **Note 1** the E-array shared memory layout is nontrivial to describe!
 // It's convenient to reindex (time,pol) as (i,j) where
@@ -920,25 +926,27 @@ static void test_casm_controller(const CasmBeamformer &bf)
     int F = bf.F;
     int T = bf.nominal_Tin_for_unit_tests;
     cout << "test_casm_controller(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << ")" << endl;
-    
-    Array<uint8_t> e = CasmBeamformer::make_random_e_array(T,F);
-    Array<float> feed_weights = CasmBeamformer::make_random_feed_weights(F);
-    Array<float> out_cpu({T,F,2,6,64,2}, af_random | af_rhost);
-    Array<float> out_gpu({T,F,2,6,64,2}, af_random | af_gpu);
-    
-    casm_controller_reference_kernel(bf, e.data, feed_weights.data, out_cpu.data, T);
-    
-    e = e.to_gpu();
-    feed_weights = feed_weights.to_gpu();
-    casm_controller_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
+
+    shared_ptr<uint8_t> e = cpu_alloc<uint8_t> (T*F*2*256, true);         // shape (T,F,2,256), randomize=true
+    shared_ptr<float> feed_weights = cpu_alloc<float> (F*2*256*2, true);  // shape (F,2,256,2), randomize=true
+    shared_ptr<float> out_cpu = cpu_alloc<float> (T*F*2*6*64*2);          // shape (T,F,2,6,64,2)
+    shared_ptr<float> out_gpu = gpu_alloc<float> (T*F*2*6*64*2);          // shape (T,F,2,6,64,2)
+
+    // Run CPU reference kernel.
+    casm_controller_reference_kernel(bf, e.get(), feed_weights.get(), out_cpu.get(), T);
+
+    // Run GPU kernel.
+    e = to_gpu(e, T*F*2*256);
+    feed_weights = to_gpu(feed_weights, F*2*256*2);
+    casm_controller_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.get(), feed_weights.get(), bf.gpu_persistent_data.data, out_gpu.get(), T);
     CUDA_PEEK("casm_controller_test_kernel");
 
-    // check that arrays are equal
-    // shape (T,F,2,6,64,2)
+    // Check that arrays are equal.
+    // out_cpu.shape == out_gpu.shape == (T,F,2,6,64,2).
     
-    out_gpu = out_gpu.to_host();
-    float *cp = out_cpu.data;
-    float *gp = out_gpu.data;
+    out_gpu = to_cpu(out_gpu, T*F*2*6*64*2);
+    float *cp = out_cpu.get();
+    float *gp = out_gpu.get();
     int pos = 0;
     
     for (int t = 0; t < T; t++) {
@@ -1115,6 +1123,8 @@ __global__ void fft_c2c_test_kernel(const float *in, float *out)
 // out.shape == in.shape == (S,N,2)
 static void fft_c2c_reference_kernel(float *out, const float *in, int N, int S)
 {
+    memset(out, 0, S*N*2 * sizeof(float));
+    
     for (int j = 0; j < N; j++) {
         for (int k = 0; k < N; k++) {
             float theta = (2*M_PI/N) * ((j*k) % N);
@@ -1141,22 +1151,24 @@ static void test_casm_fft_c2c_microkernel()
     constexpr int S = (1 << (6-R));
 
     cout << "test_casm_fft_c2c_microkernel()" << endl;
-    Array<float> in({S,N,2}, af_random | af_rhost);
-    Array<float> out_cpu({S,N,2}, af_zero | af_rhost);
-    Array<float> out_gpu({S,N,2}, af_random | af_gpu);
+    shared_ptr<float> in = cpu_alloc<float> (S*N*2, true);   // shape (S,N,2), randomize=true
+    shared_ptr<float> out_cpu = cpu_alloc<float> (S*N*2);    // shape (S,N,2)
+    shared_ptr<float> out_gpu = gpu_alloc<float> (S*N*2);
 
-    fft_c2c_reference_kernel(out_cpu.data, in.data, N, S);
-    
-    in = in.to_gpu();
-    fft_c2c_test_kernel<R> <<<1,32>>> (in.data, out_gpu.data);
+    // Run CPU reference kernel.
+    fft_c2c_reference_kernel(out_cpu.get(), in.get(), N, S);
+
+    // Run GPU kernel.
+    in = to_gpu(in, S*N*2);
+    fft_c2c_test_kernel<R> <<<1,32>>> (in.get(), out_gpu.get());
     CUDA_PEEK("fft_c2c_test_kernel");
 
-    // check that arrays are equal
-    // shape (S,N,2)
+    // Check that arrays are equal
+    // out_cpu.shape == out_gpu.shape == (S,N,2)
 
-    out_gpu = out_gpu.to_host();
-    float *gp = out_gpu.data;
-    float *cp = out_cpu.data;
+    out_gpu = to_cpu(out_gpu, S*N*2);
+    float *gp = out_gpu.get();
+    float *cp = out_cpu.get();
     int pos = 0;
 
     for (int s = 0; s < S; s++) {
@@ -1361,16 +1373,20 @@ __global__ void fft1_test_kernel(const float *in, float *out)
 
 
 // Unit test for 'struct fft1_microkernel'.
-// out.shape == (24,128,2)
-// in.shape == (24,64,2)
+// out.shape == (2,2,6,128,2), axes (time,pol,ew,ns,reim)
+// in.shape == (2,2,6,64,2), axes (time,pol,ew,ns,reim)
+
 static void fft1_reference_kernel(float *out, const float *in)
 {
+    memset(out, 0, 24*128*2 * sizeof(float));
+    
     for (int j = 0; j < 128; j++) {
         for (int k = 0; k < 64; k++) {
             float theta = (2*M_PI/128) * ((j*k) % 128);
             float cth = cosf(theta);
             float sth = sinf(theta);
 
+            // The (time,pol,ew) indices can be "flattened" into a single index 0 <= tpe < 24.
             for (int tpe = 0; tpe < 24; tpe++) {
                 float xre = in[128*tpe + 2*k];
                 float xim = in[128*tpe + 2*k+1];
@@ -1391,29 +1407,24 @@ static void test_casm_fft1_microkernel()
     s.set();
     
     // Axis ordering (time,pol,ew,ns,reim).
-    // It's convenient to "flatten" the outer 3 indices into 0 <= tpe < 24.
     cout << "test_casm_fft1_microkernel()" << endl;
-    Array<float> in({24,64,2}, af_random | af_rhost);
-    Array<float> out_cpu({24,128,2}, af_zero | af_rhost);
-    Array<float> out_gpu({24,128,2}, af_random | af_gpu);
+    shared_ptr<float> in = cpu_alloc<float> (2*2*6*64*2, true);   // shape (2,2,6,64,2), randomize=true
+    shared_ptr<float> out_cpu = cpu_alloc<float> (2*2*6*128*2);   // shape (2,2,6,128,2)
+    shared_ptr<float> out_gpu = gpu_alloc<float> (2*2*6*128*2);   // shape (2,2,6,128,2)
 
-    fft1_reference_kernel(out_cpu.data, in.data);
+    // Run CPU reference kernel.
+    fft1_reference_kernel(out_cpu.get(), in.get());
 
-    in = in.to_gpu();
-    fft1_test_kernel <<< 1, {32,24,1}, 99*1024 >>> (in.data, out_gpu.data);
+    in = to_gpu(in, 2*2*6*64*2);
+    fft1_test_kernel <<< 1, {32,24,1}, 99*1024 >>> (in.get(), out_gpu.get());
     CUDA_PEEK("fft1_test_kernel");
-
-    // XXX
-    // Reshape from (tpe,ns,reim) -> (time,pol,ew,ns,reim).
-    // out_cpu = out_cpu.reshape({2,2,6,128,2});
-    // out_gpu = out_gpu.reshape({2,2,6,128,2});
     
-    // check that arrays are equal
-    // shape (2,2,6,128,2), axes (time,pol,ew,ns,reim)
+    // Check that arrays are equal
+    // out_cpu.shape == out_gpu.shape == (2,2,6,128,2), axes (time,pol,ew,ns,reim)
 
-    out_gpu = out_gpu.to_host();
-    float *gp = out_gpu.data;
-    float *cp = out_cpu.data;
+    out_gpu = to_cpu(out_gpu, 2*2*6*128*2);
+    float *gp = out_gpu.get();
+    float *cp = out_cpu.get();
     int pos = 0;
 
     for (int t = 0; t < 2; t++) {
@@ -1833,24 +1844,27 @@ static void test_casm_fft2_microkernel(const CasmBeamformer &bf)
     int F = bf.F;
     int TP = 2 * bf.nominal_Tin_for_unit_tests;
     cout << "test_casm_fft2_microkernel(TP=" << TP << ", F=" << F << ")" << endl;
-    
-    Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
-    Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
-    Array<float> i_cpu({F,24,128}, af_rhost | af_random);
-    Array<float> i_gpu({F,24,128}, af_gpu | af_random);
 
-    fft2_reference_kernel(bf, i_cpu.data, g.data);
-    
-    g = g.to_gpu();    
-    fft2_test_kernel<<< F, {32,24,1}, 99*1024 >>> (g.data, feed_weights.data, bf.gpu_persistent_data.data, i_gpu.data, TP);
+    // Note: feed_weights must be allocated, but are not actually used.
+    shared_ptr<float> feed_weights = cpu_alloc<float> (F*2*256*2);  // shape (F,2,256,2)
+    shared_ptr<float> g = cpu_alloc<float> (TP*F*6*128*2, true);    // shape (TP,F,6,128,2), randomize=true
+    shared_ptr<float> i_cpu = cpu_alloc<float> (F*24*128);          // shape (F,24,128)
+    shared_ptr<float> i_gpu = gpu_alloc<float> (F*24*128);          // shape (F,24,128)
+
+    // Run CPU reference kernel.
+    fft2_reference_kernel(bf, i_cpu.get(), g.get());
+
+    // Run GPU kernel.
+    g = to_gpu(g, TP*F*6*128*2);
+    fft2_test_kernel<<< F, {32,24,1}, 99*1024 >>> (g.get(), feed_weights.get(), bf.gpu_persistent_data.data, i_gpu.get(), TP);
     CUDA_PEEK("fft2_test_kernel");
     
-    // check that arrays are equal
-    // shape (F,24,128)
+    // Check that arrays are equal.
+    // i_cpu.shape == i_gpu.shape == (F,24,128)
 
-    i_gpu = i_gpu.to_host();
-    float *gp = i_gpu.data;
-    float *cp = i_cpu.data;
+    i_gpu = to_cpu(i_gpu, F*24*128);
+    float *gp = i_gpu.get();
+    float *cp = i_cpu.get();
     int pos = 0;
 
     for (int f = 0; f < F; f++) {
@@ -2152,27 +2166,34 @@ static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
     int B = bf.B;
     int Tout = rand_int(1,5);
     float normalization = rand_uniform();
+    
     cout << "test_casm_interpolation_microkernel(Tout=" << Tout << ", F=" << F
          << ", B=" << B << ", normalization=" << normalization << ")" << endl;
+
+    // Note: feed_weights must be allocated, but are not actually used.
+    shared_ptr<float> feed_weights = cpu_alloc<float> (F*2*256*2);  // shape (F,2,256,2)
+    shared_ptr<float> in = cpu_alloc<float> (Tout*F*24*128, true);  // shape (Tout,F,24,128)
+    shared_ptr<float> out_cpu = cpu_alloc<float> (Tout*F*B);        // shape (Tout,F,B)
+    shared_ptr<float> out_gpu = gpu_alloc<float> (Tout*F*B);        // shape (Tout,F,B)
+
+    // Run CPU reference kernel.
+    interpolation_reference_kernel(bf, out_cpu.get(), in.get(), Tout, normalization);
+
+    // Run GPU kernel.
     
-    Array<float> in({Tout,F,24,128}, af_rhost | af_random);
-    Array<float> out_cpu({Tout,F,B}, af_rhost | af_random);
-    Array<float> out_gpu({Tout,F,B}, af_gpu | af_random);
-    Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
-
-    interpolation_reference_kernel(bf, out_cpu.data, in.data, Tout, normalization);
-
+    in = to_gpu(in, Tout*F*24*128);
+    
     casm_interpolation_test_kernel<<< F, {32,24,1}, 99*1024 >>>
-        (in.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, Tout, B, normalization);
+        (in.get(), feed_weights.get(), bf.gpu_persistent_data.data, out_gpu.get(), Tout, B, normalization);
 
     CUDA_PEEK("casm_interpolation_test_kernel launch");
 
-    // check that arrays are equal
-    // shape (Tout,F,B)
+    // Check that arrays are equal.
+    // out_cpu.shape == out_gpu.shape == (Tout,F,B)
 
-    out_gpu = out_gpu.to_host();
-    float *gp = out_gpu.data;
-    float *cp = out_cpu.data;
+    out_gpu = to_cpu(out_gpu, Tout*F*B);
+    float *gp = out_gpu.get();
+    float *cp = out_cpu.get();
     int pos = 0;
 
     for (int t = 0; t < Tout; t++) {
@@ -2546,31 +2567,6 @@ Array<int> CasmBeamformer::make_regular_feed_indices()
     }
 
     return feed_indices;
-}
-
-
-// Static member function.
-Array<uint8_t> CasmBeamformer::make_random_e_array(int T, int F)
-{
-    Array<uint8_t> ret({T,F,2,256}, af_rhost | af_zero);
-
-    uint *p = (uint *) (ret.data);
-    int n = (ret.size >> 2);
-
-    for (int i = 0; i < n; i++) {
-        uint t1 = ksgpu::default_rng();
-        uint t2 = ksgpu::default_rng();
-        p[i] = t1 ^ (t2 << 16);
-    }
-
-    return ret;
-}
-
-
-// Static member function.
-Array<float> CasmBeamformer::make_random_feed_weights(int F)
-{
-    return Array<float> ({F,2,256,2}, af_rhost | af_random);
 }
 
 

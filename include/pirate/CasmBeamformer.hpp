@@ -194,8 +194,6 @@ struct CasmBeamformer
     static CasmBeamformer make_random(bool randomize_feed_indices=true);
     static ksgpu::Array<int> make_random_feed_indices();   // helper for make_random()
     static ksgpu::Array<int> make_regular_feed_indices();  // helper for make_random()
-    static ksgpu::Array<uint8_t> make_random_e_array(int T, int F);
-    static ksgpu::Array<float> make_random_feed_weights(int F);
     
     static void show_shared_memory_layout();
 
