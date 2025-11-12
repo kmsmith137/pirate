@@ -1772,17 +1772,13 @@ __global__ void fft2_test_kernel(
 // G.shape = {TP,F,6,128,2}
 // I.shape = {F,24,128}
 
-static Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float> &G)
+static void fft2_reference_kernel(const CasmBeamformer &bf, float *I, const float *G)
 {
     int F = bf.F;
-    int TP = (G.ndim > 0) ? G.shape[0] : 0;
+    int TP = 2 * bf.nominal_Tin_for_unit_tests;
+
+    memset(I, 0, F*24*128 * sizeof(float));
     
-    xassert(G.ndim > 0);
-    xassert_shape_eq(G, ({TP,F,6,128,2}));
-    xassert(G.get_ncontig() >= 3);
-
-    Array<float> I({F,24,128}, af_uhost | af_zero);    // output array
-
     for (int ifreq = 0; ifreq < F; ifreq++) {
         for (int ew_beam = 0; ew_beam < 24; ew_beam++) {
             // Beamforming phase is exp(2*pi*i * freq * beam * feed / c)
@@ -1801,8 +1797,8 @@ static Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float>
             }
             
             for (int tpol = 0; tpol < TP; tpol++) {
-                float *G2 = &G.at({tpol,ifreq,0,0,0});  // shape (6,128,2)
-                float *I2 = &I.at({ifreq,ew_beam,0});   // shape (128,)
+                float *I2 = I + (ifreq*24 + ew_beam) * 128;         // shape (128,)
+                const float *G2 = G + (tpol*F + ifreq) * 6*128*2;   // shape (6,128,2)
 
                 for (int ns = 0; ns < 128; ns++) {
                     // Beamformed electric field.
@@ -1824,8 +1820,6 @@ static Array<float> fft2_reference_kernel(const CasmBeamformer &bf, Array<float>
             }
         }               
     }
-
-    return I;
 }
 
 
@@ -1842,11 +1836,12 @@ static void test_casm_fft2_microkernel(const CasmBeamformer &bf)
     
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
     Array<float> g({TP,F,6,128,2}, af_rhost | af_random);
+    Array<float> i_cpu({F,24,128}, af_rhost | af_random);
     Array<float> i_gpu({F,24,128}, af_gpu | af_random);
-    Array<float> i_cpu = fft2_reference_kernel(bf, g);
+
+    fft2_reference_kernel(bf, i_cpu.data, g.data);
     
-    g = g.to_gpu();
-    
+    g = g.to_gpu();    
     fft2_test_kernel<<< F, {32,24,1}, 99*1024 >>> (g.data, feed_weights.data, bf.gpu_persistent_data.data, i_gpu.data, TP);
     CUDA_PEEK("fft2_test_kernel");
     
@@ -2094,17 +2089,13 @@ __host__ inline void compute_interpolation_weights(float dx, float w[4])
 
 
 // Unit test of 'struct interpolation_microkernel'.
-// (Tout,F,24,128) -> (Tout,F,B)
-static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, const Array<float> &in, float normalization)
+// out.shape = (Tout,F,B)
+// in.shape = (Tout,F,24,128)
+
+static void interpolation_reference_kernel(const CasmBeamformer &bf, float *out, const float *in, int Tout, float normalization)
 {
-    xassert_ge(in.ndim, 1);
-    xassert_shape_eq(in, ({in.shape[0], bf.F, 24, 128}));
-    
-    int Tout = in.shape[0];
     int F = bf.F;
     int B = bf.B;
-
-    Array<float> out({Tout,F,B}, af_uhost | af_zero);
 
     for (int f = 0; f < F; f++) {
         for (int b = 0; b < B; b++) {
@@ -2137,16 +2128,16 @@ static Array<float> interpolation_reference_kernel(const CasmBeamformer &bf, con
                     int sns = (ins + kns - 1) & 127;
                     for (int kew = 0; kew < 4; kew++) {
                         int sew = (iew + kew - 1);
-                        x += wns[kns] * wew[kew] * in.at({t,f,sew,sns});
+                        int sin = (t*F+f)*24*128 + 128*sew + sns;  // index in 'in' array
+                        x += wns[kns] * wew[kew] * in[sin];
                     }
                 }
 
-                out.at({t,f,b}) = normalization * x;
+                int sout = t*F*B + f*B + b;  // index in 'out' array
+                out[sout] = normalization * x;
             }
         }
     }
-
-    return out;
 }
 
 
@@ -2165,10 +2156,11 @@ static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
          << ", B=" << B << ", normalization=" << normalization << ")" << endl;
     
     Array<float> in({Tout,F,24,128}, af_rhost | af_random);
+    Array<float> out_cpu({Tout,F,B}, af_rhost | af_random);
     Array<float> out_gpu({Tout,F,B}, af_gpu | af_random);
     Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);  // not actually used
-    
-    Array<float> out_cpu = interpolation_reference_kernel(bf, in, normalization);
+
+    interpolation_reference_kernel(bf, out_cpu.data, in.data, Tout, normalization);
 
     casm_interpolation_test_kernel<<< F, {32,24,1}, 99*1024 >>>
         (in.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, Tout, B, normalization);
@@ -2203,8 +2195,11 @@ static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
 //
 // Putting it all together: casm_beamforming_kernel.
 //
-// Note that the number of input times (Tin) must be a multiple of 'downsampling_factor',
+// The number of input times (Tin) must be a multiple of 'downsampling_factor',
 // i.e. Tin = Tout * downsampling_factor.
+//
+// The casm_beamforming_kernel is unit-tested from python, so there's no unit
+// test in this source file.
 //
 // Launch with {32,24,1} threads/block, and F blocks/kernel.
 
