@@ -890,7 +890,34 @@ static void test_casm_controller(const CasmBeamformer &bf)
     casm_controller_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.data, feed_weights.data, bf.gpu_persistent_data.data, out_gpu.data, T);
     CUDA_PEEK("casm_controller_test_kernel");
 
-    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","p","ew","ns","reim"});
+    // check that arrays are equal
+    // shape (T,F,2,6,64,2)
+    
+    out_gpu = out_gpu.to_host();
+    float *cp = out_cpu.data;
+    float *gp = out_gpu.data;
+    int pos = 0;
+    
+    for (int t = 0; t < T; t++) {
+        for (int f = 0; f < F; f++) {
+            for (int pol = 0; pol < 2; pol++) {
+                for (int ew = 0; ew < 6; ew++) {
+                    for (int ns = 0; ns < 64; ns++) {
+                        for (int reim = 0; reim < 2; reim++) {
+                            if (fabsf(cp[pos] - gp[pos]) > 1.0e-5) {
+                                stringstream ss;
+                                ss << "failed: t=" << t << ", f=" << f << ", pol=" << pol
+                                   << ", ew=" << ew << ", ns=" << ns << ", reim=" << reim
+                                   << ": cpu=" << cp[pos] << ", gpu=" << gp[pos];
+                                throw runtime_error(ss.str());
+                            }
+                            pos++;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 
@@ -1072,7 +1099,27 @@ static void test_casm_fft_c2c_microkernel()
     fft_c2c_test_kernel<R> <<<1,32>>> (in.data, out_gpu.data);
     CUDA_PEEK("fft_c2c_test_kernel");
 
-    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"s","i","reim"}, 1.0e-3);
+    // check that arrays are equal
+    // shape (S,N,2)
+
+    out_gpu = out_gpu.to_host();
+    float *gp = out_gpu.data;
+    float *cp = out_cpu.data;
+    int pos = 0;
+
+    for (int s = 0; s < S; s++) {
+        for (int i = 0; i < N; i++) {
+            for (int reim = 0; reim < 2; reim++) {
+                if (fabsf(gp[pos] - cp[pos]) > 1.0e-3) {
+                    stringstream ss;
+                    ss << "failed: s=" << s << ", i=" << i << ", reim=" << reim
+                       << ": cpu=" << cp[pos] << ", gpu=" << gp[pos];
+                    throw runtime_error(ss.str());
+                }
+                pos++;
+            }
+        }
+    }
 }
 
 
@@ -1292,11 +1339,36 @@ static void test_casm_fft1_microkernel()
     fft1_test_kernel <<< 1, {32,24,1}, 99*1024 >>> (in.data, out_gpu.data);
     CUDA_PEEK("fft1_test_kernel");
 
+    // XXX
     // Reshape from (tpe,ns,reim) -> (time,pol,ew,ns,reim).
-    out_cpu = out_cpu.reshape({2,2,6,128,2});
-    out_gpu = out_gpu.reshape({2,2,6,128,2});
+    // out_cpu = out_cpu.reshape({2,2,6,128,2});
+    // out_gpu = out_gpu.reshape({2,2,6,128,2});
     
-    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","pol","ew","i","reim"}, 1.0e-3);
+    // check that arrays are equal
+    // shape (2,2,6,128,2), axes (time,pol,ew,ns,reim)
+
+    out_gpu = out_gpu.to_host();
+    float *gp = out_gpu.data;
+    float *cp = out_cpu.data;
+    int pos = 0;
+
+    for (int t = 0; t < 2; t++) {
+        for (int pol = 0; pol < 2; pol++) {
+            for (int ew = 0; ew < 6; ew++) {
+                for (int ns = 0; ns < 128; ns++) {
+                    for (int reim = 0; reim < 2; reim++) {
+                        if (fabsf(gp[pos] - cp[pos]) > 1.0e-3) {
+                            stringstream ss;
+                            ss << "failed: t=" << t << ", pol=" << pol << ", ew=" << ew << ", ns=" << ns
+                               << ", reim=" << reim << ": cpu=" << cp[pos] << ", gpu=" << gp[pos];
+                            throw runtime_error(ss.str());
+                        }
+                        pos++;
+                    }
+                }
+            }
+        }
+    }
 }
 
 
@@ -1713,8 +1785,29 @@ static void test_casm_fft2_microkernel(const CasmBeamformer &bf)
     
     fft2_test_kernel<<< F, {32,24,1}, 99*1024 >>> (g.data, feed_weights.data, bf.gpu_persistent_data.data, i_gpu.data, TP);
     CUDA_PEEK("fft2_test_kernel");
+    
+    // check that arrays are equal
+    // shape (F,24,128)
 
-    assert_arrays_equal(i_cpu, i_gpu, "cpu", "gpu", {"f","b","ns"});
+    i_gpu = i_gpu.to_host();
+    float *gp = i_gpu.data;
+    float *cp = i_cpu.data;
+    int pos = 0;
+
+    for (int f = 0; f < F; f++) {
+        for (int ew = 0; ew < 24; ew++) {
+            for (int ns = 0; ns < 128; ns++) {
+                float x = cp[pos];
+                float y = gp[pos];
+                if (fabsf(x-y) > 1.0e-5 * (fabsf(x)+fabsf(y))) {
+                    stringstream ss;
+                    ss << "failed: f=" << f << ", ew=" << ew << ", ns=" << ns << ": cpu=" << x << ", gpu=" << y;
+                    throw runtime_error(ss.str());
+                }
+                pos++;
+            }
+        }
+    }
 }
 
 
@@ -2018,9 +2111,27 @@ static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
 
     CUDA_PEEK("casm_interpolation_test_kernel launch");
 
-    // Slightly high threshold (10^{-4}) needed here, because 'xns' is reduced mod 128,
-    // but interpolation is sensitive to order-one changes.
-    assert_arrays_equal(out_cpu, out_gpu, "cpu", "gpu", {"t","f","b"}, 1.0e-4);
+    // check that arrays are equal
+    // shape (Tout,F,B)
+
+    out_gpu = out_gpu.to_host();
+    float *gp = out_gpu.data;
+    float *cp = out_cpu.data;
+    int pos = 0;
+
+    for (int t = 0; t < Tout; t++) {
+        for (int f = 0; f < F; f++) {
+            for (int b = 0; b < B; b++) {
+                if (fabsf(gp[pos] - cp[pos]) > 1.0e-4) {
+                    stringstream ss;
+                    ss << "failed: t=" << t << ", f=" << f << ", b=" << b
+                       << ": cpu=" << cp[pos] << ", gpu=" << gp[pos];
+                    throw runtime_error(ss.str());
+                }
+                pos++;
+            }
+        }
+    }
 }
 
 
@@ -2200,7 +2311,7 @@ CasmBeamformer::CasmBeamformer(
     for (int i = 0; i < 5; i++) {
         xassert_ge(ew_feed_spacing[i], 0.3);
         xassert_le(ew_feed_spacing[i], 0.6);
-        xassert(fabs(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // check flip-symmetric
+        xassert(fabsf(ew_feed_spacing[i] - ew_feed_spacing[4-i]) < 1.0e-5);  // check flip-symmetric
     }
     
     float s0 = (ew_feed_spacing[0] + ew_feed_spacing[4]) / 2.;
