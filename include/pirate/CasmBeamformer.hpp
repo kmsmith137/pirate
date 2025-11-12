@@ -187,7 +187,7 @@ struct CasmBeamformer
     // This is a ~200KB region of global GPU memory, which is initialized by the
     // CasmBeamformer constructor, and passed to the beamformer on every kernel launch.
     // See "global memory layout" in CasmBeamformer.cu for more info.
-    ksgpu::Array<float> gpu_persistent_data;
+    std::shared_ptr<float> gpu_persistent_data;
     
     // For unit tests
     int nominal_Tin_for_unit_tests = 0;

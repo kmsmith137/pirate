@@ -153,11 +153,13 @@ static shared_ptr<T> to_cpu(const shared_ptr<T> &src, ssize_t nelts)
 
 struct gmem_layout
 {
-    // All _*base quantities are 32-bit offsets, not byte offsets.
+    // All quantities below are 32-bit offsets, not byte offsets.
     static constexpr int gridding_base = 0;
     static constexpr int ns_phases_base = 256;
+    
     static __host__ __device__ constexpr int per_frequency_data_base(int f=0)  { return ns_phases_base + 32 + 96*f; }
     static __host__ __device__ constexpr int beam_locs_base(int F, int b=0)    { return ns_phases_base + 32 + 96*F + 2*b; }
+    static __host__ __device__ constexpr int nelts(int F, int B)               { return ns_phases_base + 32 + 96*F + 2*B; }
 };
 
 
@@ -938,7 +940,7 @@ static void test_casm_controller(const CasmBeamformer &bf)
     // Run GPU kernel.
     e = to_gpu(e, T*F*2*256);
     feed_weights = to_gpu(feed_weights, F*2*256*2);
-    casm_controller_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.get(), feed_weights.get(), bf.gpu_persistent_data.data, out_gpu.get(), T);
+    casm_controller_test_kernel<<< F, {32,24,1}, 99*1024 >>> (e.get(), feed_weights.get(), bf.gpu_persistent_data.get(), out_gpu.get(), T);
     CUDA_PEEK("casm_controller_test_kernel");
 
     // Check that arrays are equal.
@@ -1856,7 +1858,7 @@ static void test_casm_fft2_microkernel(const CasmBeamformer &bf)
 
     // Run GPU kernel.
     g = to_gpu(g, TP*F*6*128*2);
-    fft2_test_kernel<<< F, {32,24,1}, 99*1024 >>> (g.get(), feed_weights.get(), bf.gpu_persistent_data.data, i_gpu.get(), TP);
+    fft2_test_kernel<<< F, {32,24,1}, 99*1024 >>> (g.get(), feed_weights.get(), bf.gpu_persistent_data.get(), i_gpu.get(), TP);
     CUDA_PEEK("fft2_test_kernel");
     
     // Check that arrays are equal.
@@ -2184,7 +2186,7 @@ static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
     in = to_gpu(in, Tout*F*24*128);
     
     casm_interpolation_test_kernel<<< F, {32,24,1}, 99*1024 >>>
-        (in.get(), feed_weights.get(), bf.gpu_persistent_data.data, out_gpu.get(), Tout, B, normalization);
+        (in.get(), feed_weights.get(), bf.gpu_persistent_data.get(), out_gpu.get(), Tout, B, normalization);
 
     CUDA_PEEK("casm_interpolation_test_kernel launch");
 
@@ -2415,13 +2417,13 @@ CasmBeamformer::CasmBeamformer(
     
     // The rest of this function fills 'gpu_persistent_data' and copies to the GPU.
     // See comment near the beginning of this file for the memory layout.
-    gpu_persistent_data = Array<float> ({256 + 32 + 96*F + 2*B}, af_rhost | af_zero);
+    gpu_persistent_data = cpu_alloc<float> (gmem_layout::nelts(F,B));
     
     // Compute 'gridding' part of 'gpu_persistent_data' (with error-checking).
     // This contains the same info as the 'feed_indices' arg, just reparameterized
     // as (ns,ew) -> (43*ew+ns).
     
-    uint *gp = (uint *) (gpu_persistent_data.data);
+    uint *gp = (uint *) (gpu_persistent_data.get());
     vector<int> duplicate_checker({6*43}, -1);
     
     for (int d = 0; d < 256; d++) {
@@ -2455,7 +2457,7 @@ CasmBeamformer::CasmBeamformer(
     // in the length-128 FFT. Precomputing these phases on the host is faster,
     // since it avoids the overhead of trig functions in the GPU kernel.
     
-    float *nsp = gpu_persistent_data.data + shmem_layout::ns_phases_base;
+    float *nsp = gpu_persistent_data.get() + shmem_layout::ns_phases_base;
     for (int i = 0; i < 32; i++)
         nsp[i] = cosf(2 * M_PI * i / 128.0);
 
@@ -2472,7 +2474,7 @@ CasmBeamformer::CasmBeamformer(
 
         for (int ew_feed = 0; ew_feed < 3; ew_feed++) {
             // Points to 32-element "inner" region (see (*) above).
-            float *pf32 = gpu_persistent_data.data + gmem_layout::per_frequency_data_base(f) + 32*ew_feed;
+            float *pf32 = gpu_persistent_data.get() + gmem_layout::per_frequency_data_base(f) + 32*ew_feed;
             pf32[25] = freq;
 
             // Instead of passing the ew_beam_locations and ew_feed_positions to the GPU
@@ -2490,7 +2492,7 @@ CasmBeamformer::CasmBeamformer(
     }
 
     // Compute 'beam_locations' part of gpu_persistent_data.
-    float *blp = gpu_persistent_data.data + gmem_layout::beam_locs_base(F);
+    float *blp = gpu_persistent_data.get() + gmem_layout::beam_locs_base(F);
     
     for (int b = 0; b < B; b++) {
         for (int j = 0; j < 2; j++) {
@@ -2506,7 +2508,7 @@ CasmBeamformer::CasmBeamformer(
     }
 
     // All done! Copy to GPU.
-    gpu_persistent_data = gpu_persistent_data.to_gpu();
+    gpu_persistent_data = to_gpu(gpu_persistent_data, gmem_layout::nelts(F,B));
 }
 
 
@@ -2646,7 +2648,7 @@ void CasmBeamformer::launch_beamformer(
     xassert(Tin == Tout * downsampling_factor);
 
     casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
-        (e_in.data, feed_weights.data, gpu_persistent_data.data,
+        (e_in.data, feed_weights.data, gpu_persistent_data.get(),
          i_out.data, Tout, downsampling_factor, B, normalization);
 
     CUDA_PEEK("casm_beamforming_kernel launch");
