@@ -2604,9 +2604,10 @@ int CasmBeamformer::get_max_beams()
 
 
 // Static member function.
-Array<int> CasmBeamformer::make_random_feed_indices()
+shared_ptr<int> CasmBeamformer::make_random_feed_indices()
 {
-    Array<int> feed_indices({256,2}, af_uhost);
+    shared_ptr<int> feed_indices = cpu_alloc<int> (256*2);
+    int *fp = feed_indices.get();
     
     vector<uint> v(43*6);
     for (uint ns = 0; ns < 43; ns++)
@@ -2616,8 +2617,8 @@ Array<int> CasmBeamformer::make_random_feed_indices()
     ksgpu::randomly_permute(v);
 
     for (uint d = 0; d < 256; d++) {
-        feed_indices.at({d,0}) = v[d] & 0xffff;  // ns
-        feed_indices.at({d,1}) = v[d] >> 16;     // ew
+        fp[2*d] = v[d] & 0xffff;  // ns
+        fp[2*d+1] = v[d] >> 16;   // ew
     }
 
     return feed_indices;
@@ -2625,13 +2626,14 @@ Array<int> CasmBeamformer::make_random_feed_indices()
 
 
 // Static member function.
-Array<int> CasmBeamformer::make_regular_feed_indices()
+shared_ptr<int> CasmBeamformer::make_regular_feed_indices()
 {
-    Array<int> feed_indices({256,2}, af_uhost);
+    shared_ptr<int> feed_indices = cpu_alloc<int> (256*2);
+    int *fp = feed_indices.get();
     
     for (uint d = 0; d < 256; d++) {
-        feed_indices.at({d,0}) = d % 43;  // ns
-        feed_indices.at({d,1}) = d / 43;  // ew
+        fp[2*d] = d % 43;    // ns
+        fp[2*d+1] = d / 43;  // ew
     }
 
     return feed_indices;
@@ -2643,31 +2645,31 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 {
     auto w = ksgpu::random_integers_with_bounded_product(3, 1000);
     int B = 32 * ksgpu::rand_int(1,100);
-    int T = w[0] * w[1];
-    int ds = w[1];
-    int F = w[2];
+    int T = w[0] * w[1];   // number of input time samples
+    int ds = w[1];         // downsampling factor
+    int F = w[2];          // number of frequency channels
 
-    Array<float> frequencies({F}, af_uhost);
-    Array<float> beam_locations({B,2}, af_uhost);
-    Array<float> ew_feed_spacings({5}, af_uhost);
+    vector<float> frequencies(F);
+    vector<float> beam_locations(B*2);
+    vector<float> ew_feed_spacings(5);
     float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
 
     // Make random 'frequencies' array.
     for (int f = 0; f < F; f++)
-        frequencies.at({f}) = rand_uniform(400.0, 500.0);
+        frequencies.at(f) = rand_uniform(400.0, 500.0);
     
     // Make random 'beam_locations' array.
     for (int b = 0; b < B; b++)
         for (int j = 0; j < 2; j++)
-            beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
+            beam_locations.at(2*b+j) = rand_uniform(-1.0, 1.0);
 
     // Make random 'ew_feed_spacings' array.
     for (int i = 0; i < 3; i++)
-        ew_feed_spacings.at({i}) = ew_feed_spacings.at({4-i}) = rand_uniform(0.3, 0.6);
+        ew_feed_spacings.at(i) = ew_feed_spacings.at(4-i) = rand_uniform(0.3, 0.6);
     
-    Array<int> feed_indices = randomize_feed_indices ? make_random_feed_indices() : make_regular_feed_indices();
+    shared_ptr<int> feed_indices = randomize_feed_indices ? make_random_feed_indices() : make_regular_feed_indices();
 
-    CasmBeamformer ret(frequencies, feed_indices, beam_locations, ds, ns_feed_spacing, ew_feed_spacings);
+    CasmBeamformer ret(&frequencies[0], feed_indices.get(), &beam_locations[0], ds, F, B, ns_feed_spacing, &ew_feed_spacings[0]);
     ret.nominal_Tin_for_unit_tests = T;
     
     return ret;

@@ -212,8 +212,8 @@ struct CasmBeamformer
     // For unit tests
     int nominal_Tin_for_unit_tests = 0;
     static CasmBeamformer make_random(bool randomize_feed_indices=true);
-    static ksgpu::Array<int> make_random_feed_indices();   // helper for make_random()
-    static ksgpu::Array<int> make_regular_feed_indices();  // helper for make_random()
+    static std::shared_ptr<int> make_random_feed_indices();   // helper for make_random()
+    static std::shared_ptr<int> make_regular_feed_indices();  // helper for make_random()
 
     void _construct(
         const float *frequencies,        // shape (F,)
