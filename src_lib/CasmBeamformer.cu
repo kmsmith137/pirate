@@ -1,6 +1,7 @@
 #include "../include/pirate/CasmBeamformer.hpp"
 
 #include <cassert>
+#include <iomanip>
 #include <sys/time.h>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
@@ -77,6 +78,115 @@ struct shmem_99kb
 
 // -------------------------------------------------------------------------------------------------
 //
+// RNG utils
+
+
+static std::mt19937 casm_rng;
+
+static inline long rand_int(long lo, long hi)
+{
+    assert(lo < hi);
+    return std::uniform_int_distribution<long>(lo,hi-1)(casm_rng);
+}
+
+static inline float rand_uniform(float lo=0.0, float hi=1.0)
+{
+    return std::uniform_real_distribution<float>(lo,hi) (casm_rng);
+}
+
+static vector<double> random_doubles_with_fixed_sum(int n, double sum)
+{
+    if (n < 1)
+        throw runtime_error("random_doubles_with_fixed_sum(): 'n' argument must be >= 1");
+    if (sum <= 0.0)
+        throw runtime_error("random_doubles_with_fixed_sum(): 'sum' argument must be > 0");
+
+    vector<double> ret(n);
+
+    for (int i = 0; i < n-1; i++) {
+        double t = rand_uniform();
+        double p = 1.0 / double(n-1-i);
+        ret[i] = sum * (1 - pow(t,p));
+        sum -= ret[i];
+    }
+
+    ret[n-1] = sum;
+    return ret;
+}
+
+static vector<long> random_integers_with_bounded_product(int n, long bound)
+{
+    if (n < 1)
+        throw runtime_error("random_integers_with_bounded_product(): 'n' argument must be >= 1");
+    if (bound < 1)
+        throw runtime_error("random_integers_with_bounded_product(): 'bound' argument must be >= 1");
+
+    double target_log = log(rand_uniform(1.01, bound+0.99));
+    vector<double> x = random_doubles_with_fixed_sum(n, target_log);
+
+    vector<long> ret(n);
+    for (int i = 0; i < n; i++)
+        ret[i] = long(exp(x[i]) + 0.5);
+
+    int i0 = rand_int(0, n);
+
+    for (int i1 = 0; i1 < n; i1++) {
+        int i = (i0 + i1) % n;
+
+        long p = 1;
+        for (int j = 0; j < n; j++)
+            if (j != i)
+                p *= ret[j];
+
+        ret[i] = long(exp(target_log-log(p)) + 0.5);
+        ret[i] = min(ret[i], bound/p);
+        ret[i] = max(ret[i], 1L);
+    }
+
+    long p = 1;
+    for (int j = 0; j < n; j++)
+        p *= ret[j];
+
+    assert(p > 0);
+    assert(p <= bound);
+    return ret;
+}
+
+// Called by cpu_alloc(..., randomize=true)
+template<typename T>
+static void randomize_array(T *buf, long nelts)
+{
+    if constexpr (std::is_same_v<T, float>) {
+        for (long i = 0; i < nelts; i++)
+            buf[i] = rand_uniform();
+    }
+    else if constexpr (std::is_integral_v<T>) {
+        long nbytes = nelts * sizeof(T);
+        uint *buf32 = (uint *) buf;
+
+        while (nbytes >= 4) {
+            *buf32++ = casm_rng();
+            nbytes -= 4;
+        }
+        
+        if (nbytes == 0)
+            return;
+        
+        uint8_t *buf8 = (uint8_t *) buf32;
+        uint x = casm_rng();
+
+        while (nbytes > 0) {
+            *buf8++ = (x >> (8*nbytes-8));
+            nbytes--;
+        }
+    }
+    else
+        throw runtime_error("CasmBeamformer: unsupported dtype in randomize_array()");
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // Helpers for allocating memory, copying to/from GPU, and random number generation.
 
 
@@ -87,7 +197,7 @@ static shared_ptr<T> cpu_alloc(long nelts, bool randomize=false)
     CUDA_CALL(cudaHostAlloc((void **) &p, nelts * sizeof(T), 0));
     
     if (randomize)
-        ksgpu::randomize(p, nelts);
+        randomize_array(p, nelts);
     else
         memset(p, 0, nelts * sizeof(T));
     
@@ -2655,19 +2765,23 @@ int CasmBeamformer::get_max_beams()
 // Static member function.
 shared_ptr<int> CasmBeamformer::make_random_feed_indices()
 {
-    shared_ptr<int> feed_indices = cpu_alloc<int> (256*2);
+    // It's convenient to overallocate (256 -> 258).
+    shared_ptr<int> feed_indices = cpu_alloc<int> (43*6*2);
     int *fp = feed_indices.get();
-    
-    vector<uint> v(43*6);
-    for (uint ns = 0; ns < 43; ns++)
-        for (uint ew = 0; ew < 6; ew++)
-            v.at(6*ns+ew) = (ew << 16) | ns;
 
-    ksgpu::randomly_permute(v);
+    for (uint ns = 0; ns < 43; ns++) {
+        for (uint ew = 0; ew < 6; ew++ ) {
+            int i = 6*ns + ew;
+            fp[2*i] = ns;
+            fp[2*i+1] = ew;
+        }
+    }
 
-    for (uint d = 0; d < 256; d++) {
-        fp[2*d] = v[d] & 0xffff;  // ns
-        fp[2*d+1] = v[d] >> 16;   // ew
+    // Randomly permute.
+    for (int i = 1; i < 43*6; i++) {
+        int j = rand_int(0, i+1);
+        std::swap(fp[2*i], fp[2*j]);
+        std::swap(fp[2*i+1], fp[2*j+1]);
     }
 
     return feed_indices;
@@ -2692,8 +2806,8 @@ shared_ptr<int> CasmBeamformer::make_regular_feed_indices()
 // Static member function.
 CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 {
-    auto w = ksgpu::random_integers_with_bounded_product(3, 1000);
-    int B = 32 * ksgpu::rand_int(1,100);
+    auto w = random_integers_with_bounded_product(3, 1000);
+    int B = 32 * rand_int(1,100);
     int T = w[0] * w[1];   // number of input time samples
     int ds = w[1];         // downsampling factor
     int F = w[2];          // number of frequency channels
@@ -2701,7 +2815,7 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
     vector<float> frequencies(F);
     vector<float> beam_locations(B*2);
     vector<float> ew_feed_spacings(5);
-    float ns_feed_spacing = ksgpu::rand_uniform(0.3, 0.6);
+    float ns_feed_spacing = rand_uniform(0.3, 0.6);
 
     // Make random 'frequencies' array.
     for (int f = 0; f < F; f++)
@@ -2808,7 +2922,7 @@ void CasmBeamformer::test_microkernels()
 {
     // CasmBeamformer::show_shared_memory_layout();
     CasmBeamformer bf = CasmBeamformer::make_random();
-
+    
     test_casm_controller(bf);
     test_casm_fft_c2c_microkernel();
     test_casm_fft1_microkernel();
