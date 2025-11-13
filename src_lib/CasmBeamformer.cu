@@ -81,7 +81,7 @@ struct shmem_99kb
 
 
 template<typename T>
-static shared_ptr<T> cpu_alloc(ssize_t nelts, bool randomize=false)
+static shared_ptr<T> cpu_alloc(long nelts, bool randomize=false)
 {
     T *p = nullptr;
     CUDA_CALL(cudaHostAlloc((void **) &p, nelts * sizeof(T), 0));
@@ -96,16 +96,17 @@ static shared_ptr<T> cpu_alloc(ssize_t nelts, bool randomize=false)
 
 
 template<typename T>
-static shared_ptr<T> gpu_alloc(ssize_t nelts)
+static shared_ptr<T> gpu_alloc(long nelts)
 {
     T *p = nullptr;
     CUDA_CALL(cudaMalloc((void **) &p, nelts * sizeof(T)));
+    CUDA_CALL(cudaMemset(p, 0, nelts * sizeof(T)));
     return shared_ptr<T> (p, cudaFree);   // cudaFree() will be called by shared_ptr destructor
 }
 
 
 template<typename T>
-static shared_ptr<T> to_gpu(const shared_ptr<T> &src, ssize_t nelts)
+static shared_ptr<T> to_gpu(const shared_ptr<T> &src, long nelts)
 {
     shared_ptr<T> dst = gpu_alloc<T> (nelts);
     CUDA_CALL(cudaMemcpy(dst.get(), src.get(), nelts * sizeof(T), cudaMemcpyHostToDevice));
@@ -114,7 +115,7 @@ static shared_ptr<T> to_gpu(const shared_ptr<T> &src, ssize_t nelts)
 
 
 template<typename T>
-static shared_ptr<T> to_cpu(const shared_ptr<T> &src, ssize_t nelts)
+static shared_ptr<T> to_cpu(const shared_ptr<T> &src, long nelts)
 {
     shared_ptr<T> dst = cpu_alloc<T> (nelts);
     CUDA_CALL(cudaMemcpy(dst.get(), src.get(), nelts * sizeof(T), cudaMemcpyDeviceToHost));
@@ -2764,57 +2765,52 @@ void CasmBeamformer::test_microkernels()
 // Static member function.
 void CasmBeamformer::time()
 {
-    int F = 512;          // frequency channels per gpu
-    int D = 32;           // time downsampling factor
-    int Tout = 512;       // output time samples per kernel launch
-    int Tin = D * Tout;   // number of input time samples
-    int niter = 20;
+    long F = 512;          // frequency channels per gpu
+    long D = 32;           // time downsampling factor
+    long Tout = 512;       // output time samples per kernel launch
+    long Tin = D * Tout;   // number of input time samples
+    long niter = 20;
 
-    vector<int> Bvec = {32,1024,2048,3072,4096};   // number of beams
+    vector<long> Bvec = {32,1024,2048,3072,4096};   // number of beams
     vector<double> lfvec(Bvec.size());
     
     double ts = 4096 / (125 * 1.0e6);    // time sampling rate, in seconds
     double dt_rt = Tin * ts;             // real time elapsed per kernel launch, in seconds
 
-    Array<float> frequencies({F}, af_rhost);
-    Array<int> feed_indices({256,2}, af_rhost);
-    Array<uint8_t> e_in({Tin,F,2,256}, af_gpu | af_zero);
-    Array<float> feed_weights({F,2,256,2}, af_gpu | af_zero);
+    vector<float> frequencies(F);
+    shared_ptr<int> feed_indices = CasmBeamformer::make_regular_feed_indices();
+    shared_ptr<uint8_t> e_in = gpu_alloc<uint8_t> (Tin*F*2*256);
+    shared_ptr<float> feed_weights = gpu_alloc<float> (F*2*256*2);
     
-    for (int f = 0; f < F; f++)
-        frequencies.at({f}) = rand_uniform(400.0, 500.0);
+    for (long f = 0; f < F; f++)
+        frequencies.at(f) = rand_uniform(400.0, 500.0);
 
-    for (int d = 0; d < 256; d++) {
-        feed_indices.at({d,0}) = (d % 43);
-        feed_indices.at({d,1}) = (d / 43);
-    }
-
-    for (uint ib = 0; ib < Bvec.size(); ib++) {
+    for (ulong ib = 0; ib < Bvec.size(); ib++) {
         int B = Bvec[ib];
         cout << "Starting timing, B=" << B << ", Tin=" << Tin << endl;
         cout << "Input array: " << (1.0e-9 * Tin * F * 2 * 256) << " GB" << endl;
         cout << "Output array: " << (4.0e-9 * Tout * F * B) << " GB" << endl;
-        
-        Array<float> beam_locations({B,2}, af_rhost);
-        Array<float> i_out({Tout,F,B}, af_gpu | af_zero);
 
-        for (int b = 0; b < B; b++)
-            for (int j = 0; j < 2; j++)
-                beam_locations.at({b,j}) = rand_uniform(-1.0, 1.0);
-        
-        CasmBeamformer bf(frequencies, feed_indices, beam_locations, D);
+        vector<float> beam_locations(B*2);
+        shared_ptr<float> i_out = gpu_alloc<float> (Tout*F*B);
+
+        for (long b = 0; b < B; b++)
+            for (long j = 0; j < 2; j++)
+                beam_locations.at(2*b+j) = rand_uniform(-1.0, 1.0);
+           
+        CasmBeamformer bf(&frequencies[0], feed_indices.get(), &beam_locations[0], D, F, B);
         vector<struct timeval> tv(niter);
         
-        for (int i = 0; i < niter; i++) {
+        for (long i = 0; i < niter; i++) {
             CUDA_CALL(cudaDeviceSynchronize());
             
             int err = gettimeofday(&tv[i], NULL);
             if (err != 0)
                 throw runtime_error("gettimeofday() failed?!");
     
-            bf.launch_beamformer(e_in, feed_weights, i_out);
+            bf.launch_beamformer(e_in.get(), feed_weights.get(), i_out.get(), Tin);
             
-            int k = i - (i/2);
+            long k = i - (i/2);
             if (i > k) {
                 double dt = (tv[i].tv_sec - tv[k].tv_sec) + 1.0e-6 * (tv[i].tv_usec - tv[k].tv_usec);
                 double loadfrac = dt / ((i-k) * dt_rt);
@@ -2825,7 +2821,7 @@ void CasmBeamformer::time()
     }
 
     cout << "# B loadfrac\n";
-    for (uint ib = 0; ib < Bvec.size(); ib++)
+    for (ulong ib = 0; ib < Bvec.size(); ib++)
         cout << Bvec[ib] << " " << lfvec[ib] << endl;
 }
 
