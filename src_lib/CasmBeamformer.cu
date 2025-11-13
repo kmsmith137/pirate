@@ -2436,20 +2436,39 @@ void CasmBeamformer::_construct(
     this->downsampling_factor = downsampling_factor_;
     this->ns_feed_spacing = ns_feed_spacing_;
 
-    xassert(frequencies_ != nullptr);
-    xassert(feed_indices_ != nullptr);
-    xassert(beam_locations_ != nullptr);
+    if (!frequencies_)
+        throw runtime_error("CasmBeamformer constructor: 'frequencies' pointer is NULL");
+    if (!feed_indices_)
+        throw runtime_error("CasmBeamformer constructor: 'feed_indices' pointer is NULL");
+    if (!beam_locations_)
+        throw runtime_error("CasmBeamformer constructor: 'beam_locations' pointer is NULL");
     
     if (!ew_feed_spacings_)
         ew_feed_spacings_ = CasmBeamformer::default_ew_feed_spacings;
+
+    if (F <= 0)
+        throw runtime_error("CasmBeamformer constructor: num_freqs must be > 0");
+    if (B <= 0)
+        throw runtime_error("CasmBeamformer constructor: num_beams must be > 0");
+    if (B % 32)
+        throw runtime_error("CasmBeamformer constructor: num_beams must be a multiple of 32");
+    if (downsampling_factor <= 0)
+        throw runtime_error("CasmBeamformer constructor: downsampling_factor must be > 0");
     
-    xassert_gt(F, 0);
-    xassert_gt(B, 0);
-    xassert_divisible(B, 32);  // currently required by GPU kernel, but not python reference code
-    xassert_le(B, shmem_layout::max_beams);
-    xassert_gt(downsampling_factor, 0);        
-    xassert_ge(ns_feed_spacing, 0.3);
-    xassert_lt(ns_feed_spacing, 0.6);
+    if (B > shmem_layout::max_beams) {
+        stringstream ss;
+        ss << "CasmBeamformer constructor: num_beams(=" << B << ") must be <="
+           << " " << shmem_layout::max_beams << ". (This limit is set by GPU"
+           << " shared memory considerations.)";
+        throw runtime_error(ss.str());
+    }
+
+    if ((ns_feed_spacing < 0.3) || (ns_feed_spacing > 0.6)) {
+        stringstream ss;
+        ss << "CasmBeamformer constructor: ns_feed_spacing(=" << ns_feed_spacing
+           << ") must be in the range [0.3, 0.6]. Note that the units are meters, not cm!";
+        throw runtime_error(ss.str());
+    }
 
     CUDA_CALL(cudaGetDevice(&this->constructor_device));
     
@@ -2458,10 +2477,25 @@ void CasmBeamformer::_construct(
     this->beam_locations = copy_to_vector(beam_locations_, B*2);
 
     for (int i = 0; i < 5; i++) {
-        xassert_ge(ew_feed_spacings_[i], 0.3);
-        xassert_le(ew_feed_spacings_[i], 0.6);
-        xassert(fabsf(ew_feed_spacings_[i] - ew_feed_spacings_[4-i]) < 1.0e-5);  // check flip-symmetric
         this->ew_feed_spacings[i] = ew_feed_spacings_[i];
+        
+        if ((ew_feed_spacings[i] < 0.3) || (ew_feed_spacings[i] > 0.6)) {
+            stringstream ss;
+            ss << "CasmBeamformer constructor: ew_feed_spacings (" << ew_feed_spacings[0];
+            for (int j = 1; j < 5; j++)
+                ss << ", " << ew_feed_spacings[j];
+            ss << ") must all be in the range [0.3, 0.6]. Note that the units are meters, not cm!";
+            throw runtime_error(ss.str());
+        }
+
+        if (fabsf(ew_feed_spacings_[i] - ew_feed_spacings_[4-i]) > 1.0e-5) {
+            stringstream ss;
+            ss << "CasmBeamformer constructor: ew_feed_spacings (" << ew_feed_spacings[0];
+            for (int j = 1; j < 5; j++)
+                ss << ", " << ew_feed_spacings[j];
+            ss << ") must be \"flip-symmetric\"";
+            throw runtime_error(ss.str());
+        }
     }
     
     float s0 = (ew_feed_spacings[0] + ew_feed_spacings[4]) / 2.;
@@ -2534,11 +2568,17 @@ void CasmBeamformer::_construct(
     
     for (int f = 0; f < F; f++) {
         float freq = frequencies[f];
-        
+
         // Beamformer has only been validated for frequencies in [400,500] MHz.
-        // This assert also guards against using the wrong units (should be MHz).
-        xassert_ge(freq, 399.0);
-        xassert_lt(freq, 501.0);
+        // This check also guards against using the wrong units (should be MHz).
+        
+        if ((freq < 399.0) || (freq > 501.0)) {
+            stringstream ss;
+            ss << "CasmBeamformer constructor: got freq=" << freq << ", expected all frequencies"
+               << " to be in the range [400,500]. The beamforming algorithm has only been validated"
+               << " in this range. Note that units are MHz!";
+            throw runtime_error(ss.str());
+        }
 
         for (int ew_feed = 0; ew_feed < 3; ew_feed++) {
             // Points to 32-element "inner" region (see (*) above).
@@ -2569,8 +2609,16 @@ void CasmBeamformer::_construct(
             
             float prefactor = j ? 1.0 : ns_feed_spacing;
             float beam_location = beam_locations[2*b+j];
-            xassert_ge(beam_location, -1.0);
-            xassert_le(beam_location, 1.0);
+
+            if ((beam_location < -1.0) || (beam_location > 1.0)) {
+                stringstream ss;
+                ss << "CasmBeamformer constructor: got beam_location = ("
+                   << beam_locations[2*b] << ", " << beam_locations[2*b+1]
+                   << "), expected both coordinates to be in range [-1,1]."
+                   << " Note that beam coordinates are sines of zenith angles.";
+                throw runtime_error(ss.str());
+            }
+            
             blp[2*b+j] = prefactor * beam_location;
         }
     }
@@ -2715,6 +2763,13 @@ void CasmBeamformer::launch_beamformer(
     // Allow kernel to use 99KB shared memory.
     static shmem_99kb s(casm_beamforming_kernel);
     s.set();
+    
+    if (!e_arr)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'e_arr' pointer is NULL");
+    if (!feed_weights)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'feed_weights' pointer is NULL");
+    if (!i_out)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'i_out' pointer is NULL");
 
     if (Tin <= 0)
         throw runtime_error("CasmBeamformer::launch_beamformer(): 'Tin' must be > 0");
