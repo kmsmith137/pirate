@@ -169,24 +169,31 @@ struct CasmBeamformer
     //    the gain).
     //
     // Outputs an array of shape (Tout,F,B) containing beamformed intensities.
-    
+
+    // "ksgpu::Array" version.
     void launch_beamformer(
-        const ksgpu::Array<uint8_t> &e_arr,        // shape (T,F,2,256), axes (time,freq,pol,dish)
+        const ksgpu::Array<uint8_t> &e_arr,        // shape (Tin,F,2,256), axes (time,freq,pol,dish)
         const ksgpu::Array<float> &feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
         ksgpu::Array<float> &i_out,                // shape (Tout,F,B)
         cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
     ) const;
 
+    // "Bare-pointer" version.
+    void launch_beamformer(
+        const uint8_t *e_arr,                      // shape (Tin,F,2,256), axes (time,freq,pol,dish)
+        const float *feed_weights,                 // shape (F,2,256,2), axes (freq,pol,dish,reim)
+        float *i_out,                              // shape (Tout,F,B)
+        int Tin,                                   // number of input times Tin = Tout * downsampling_factor
+        cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
+    ) const;    
+
     // There is a maximum beam count that the beamformer can support
     // (currently 4672), due to GPU shared memory limitations.
     static int get_max_beams();
+    
     static void show_shared_memory_layout();
-
-    // Called by 'python -m pirate_frb test [--casm]'
     static void test_microkernels();
-
-    // Called by 'python -m pirate_frb time [--casm]'
-    static void time();
+    static void time();   // run timings
 
     // ---------------------------------------------------------------------------------------------
     
@@ -209,12 +216,13 @@ struct CasmBeamformer
     // See "global memory layout" in CasmBeamformer.cu for more info.
     std::shared_ptr<float> gpu_persistent_data;
     
-    // For unit tests
+    // For unit tests.
     int nominal_Tin_for_unit_tests = 0;
     static CasmBeamformer make_random(bool randomize_feed_indices=true);
     static std::shared_ptr<int> make_random_feed_indices();   // helper for make_random()
     static std::shared_ptr<int> make_regular_feed_indices();  // helper for make_random()
 
+    // Helper function called by constructor.
     void _construct(
         const float *frequencies,        // shape (F,)
         const int *feed_indices,         // shape (256,2)

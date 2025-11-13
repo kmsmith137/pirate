@@ -2682,20 +2682,6 @@ void CasmBeamformer::launch_beamformer(
     Array<float> &i_out,
     cudaStream_t stream) const
 {
-    // Allow kernel to use 99KB shared memory.
-    static shmem_99kb s(casm_beamforming_kernel);
-    s.set();
-
-    int d = -2;
-    CUDA_CALL(cudaGetDevice(&d));
-    
-    if (this->constructor_device != d) {
-        stringstream ss;
-        ss << "CasmBeamformer: CUDA device at construction (dev=" << this->constructor_device
-           << ") differs from device in launch_beamformer() (dev=" << d << ")";
-        throw runtime_error(ss.str());
-    }
-    
     xassert(e_in.ndim >= 1);    
     xassert_shape_eq(e_in, ({ e_in.shape[0], F, 2, 256 }));
     xassert(e_in.is_fully_contiguous());
@@ -2712,19 +2698,56 @@ void CasmBeamformer::launch_beamformer(
 
     int Tin = e_in.shape[0];
     int Tout = i_out.shape[0];
-    float normalization = 1.0f / (2.0f * downsampling_factor);
     xassert(Tin == Tout * downsampling_factor);
 
-    casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
-        (e_in.data, feed_weights.data, gpu_persistent_data.get(),
-         i_out.data, Tout, downsampling_factor, B, normalization);
+    this->launch_beamformer(e_in.data, feed_weights.data, i_out.data, Tin, stream);
+}
 
-    CUDA_PEEK("casm_beamforming_kernel launch");
+
+void CasmBeamformer::launch_beamformer(
+    const uint8_t *e_arr,        // shape (Tin,F,2,256), axes (time,freq,pol,dish)
+    const float *feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
+    float *i_out,                // shape (Tout,F,B)
+    int Tin,                     // number of input times Tin = Tout * downsampling_factor
+    cudaStream_t stream) const
+{
+    // Allow kernel to use 99KB shared memory.
+    static shmem_99kb s(casm_beamforming_kernel);
+    s.set();
+
+    if (Tin <= 0)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'Tin' must be > 0");
+    
+    int Tout = Tin / downsampling_factor;
+    if (Tin != Tout * downsampling_factor) {
+        stringstream ss;
+        ss << "CasmBeamformer::launch_beamformer: Tin=" << Tin << " must be a multiple"
+           << " of downsampling_factor=" << downsampling_factor;
+        throw runtime_error(ss.str());
+    }
+
+    int d = -2;
+    CUDA_CALL(cudaGetDevice(&d));
+    
+    if (this->constructor_device != d) {
+        stringstream ss;
+        ss << "CasmBeamformer: CUDA device at construction (dev=" << this->constructor_device << ")"
+           << " differs from CUDA device in launch_beamformer() (dev=" << d << "). This is an"
+           << " error, since the constructor stores precomputations on the GPU.";
+        throw runtime_error(ss.str());
+    }
+    
+    float normalization = 1.0f / (2.0f * downsampling_factor);
+
+    casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
+        (e_arr, feed_weights, gpu_persistent_data.get(),
+         i_out, Tout, downsampling_factor, B, normalization);
+
+    CUDA_PEEK("casm_beamforming_kernel launch");    
 }
 
 
 // Static member function.
-// Called by 'python -m pirate_frb test [--casm]'
 void CasmBeamformer::test_microkernels()
 {
     // CasmBeamformer::show_shared_memory_layout();
@@ -2739,7 +2762,6 @@ void CasmBeamformer::test_microkernels()
 
 
 // Static member function.
-// Called by 'python -m pirate_frb time [--casm]'
 void CasmBeamformer::time()
 {
     int F = 512;          // frequency channels per gpu
