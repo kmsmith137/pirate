@@ -1,6 +1,9 @@
 #ifndef _PIRATE_CASM_BEAMFORMER_HPP
 #define _PIRATE_CASM_BEAMFORMER_HPP
 
+#include <vector>
+#include <memory>
+#include <cstdint>
 #include <ksgpu/Array.hpp>
 
 namespace pirate {

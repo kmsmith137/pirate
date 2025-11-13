@@ -1,8 +1,12 @@
 #include "../include/pirate/CasmBeamformer.hpp"
 
+#include <random>
 #include <cassert>
-#include <iomanip>
+#include <sstream>
+#include <iostream>
+#include <stdexcept>
 #include <sys/time.h>
+
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
 
@@ -18,6 +22,47 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 //
 // CUDA utils
+
+#if 0
+
+// Branch predictor hint
+#ifndef _unlikely
+#define _unlikely(cond)  (__builtin_expect(cond,0))
+#endif
+
+#define CUDA_CALL(x) _CUDA_CALL(x, __STRING(x), __FILE__, __LINE__)
+#define CUDA_PEEK(x) _CUDA_CALL(cudaPeekAtLastError(), x, __FILE__, __LINE__)
+#define CUDA_CALL_ABORT(x) _CUDA_CALL_ABORT(x, __STRING(x), __FILE__, __LINE__)
+
+#define _CUDA_CALL(x, xstr, file, line) \
+    do { \
+        cudaError_t xerr = (x); \
+        if (_unlikely(xerr != cudaSuccess)) \
+            throw make_cuda_exception(xerr, xstr, file, line); \
+    } while (0)
+
+#define _CUDA_CALL_ABORT(x, xstr, file, line) \
+    do { \
+        cudaError_t xerr = (x); \
+        if (_unlikely(xerr != cudaSuccess)) { \
+            fprintf(stderr, "CUDA call '%s' failed at %s:%d\n", xstr, file, line); \
+            exit(1); \
+        } \
+    } while (0)
+
+// Helper for CUDA_CALL().
+static std::runtime_error make_cuda_exception(cudaError_t xerr, const char *xstr, const char *file, int line)
+{
+    stringstream ss;
+
+    ss << "CUDA error: " << xstr << " returned " << xerr
+       << " (" << cudaGetErrorString(xerr) << ")"
+       << " [" << file << ":" << line << "]";
+
+    return runtime_error(ss.str());
+}
+
+#endif
 
 
 // Setup: suppose we have a pair of registers [x,y] on each thread,
