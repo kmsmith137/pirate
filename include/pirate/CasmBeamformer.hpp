@@ -1,16 +1,19 @@
-#ifndef _PIRATE_CASM_BEAMFORMER_HPP
-#define _PIRATE_CASM_BEAMFORMER_HPP
+//x This script is processed with 'vendorize.py' (in the toplevel pirate dir)
+//x to produce a "vendorized" source file for the casm pipeline. The markup
+//x in comments (e.g. "//x") is parsed by vendorize.py.
+//x
+#ifndef _CASM_BEAMFORMER_HPP
+#define _CASM_BEAMFORMER_HPP
 
 #include <vector>
 #include <memory>
 #include <cstdint>
-#include <ksgpu/Array.hpp>
+#include <ksgpu/Array.hpp>  //x
 
-namespace pirate {
-#if 0
-}  // editor auto-indent
-#endif
-
+namespace pirate {  //x
+#if 0               //x
+}                   //x editor auto-indent
+#endif              //x
 
 // CasmBeamformer: this is constructed once on the host, with some constructor
 // arguments that are assumed to be independent of time (e.g. beam locations on
@@ -128,7 +131,7 @@ struct CasmBeamformer
     // - ew_feed_spacings: length-5 array containing spacings (in meters) along
     //   the east-west axis. Must be flip-symmetric.
 
-    // "ksgpu::Array" constructor.
+    //xbegin "ksgpu::Array" constructor.
     CasmBeamformer(
         const ksgpu::Array<float> &frequencies,     // shape (nfreq,)
         const ksgpu::Array<int> &feed_indices,      // shape (256,2)
@@ -137,6 +140,7 @@ struct CasmBeamformer
         float ns_feed_spacing = default_ns_feed_spacing,
         const ksgpu::Array<float> &ew_feed_spacings = ksgpu::Array<float>()
     );
+    //xend
     
     // "Bare-pointer" constructor.
     CasmBeamformer(
@@ -173,13 +177,14 @@ struct CasmBeamformer
     //
     // Outputs an array of shape (Tout,F,B) containing beamformed intensities.
 
-    // "ksgpu::Array" version.
+    //xbegin "ksgpu::Array" version.
     void launch_beamformer(
         const ksgpu::Array<uint8_t> &e_arr,        // shape (Tin,F,2,256), axes (time,freq,pol,dish)
         const ksgpu::Array<float> &feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
         ksgpu::Array<float> &i_out,                // shape (Tout,F,B)
         cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
     ) const;
+    //xend
 
     // "Bare-pointer" version.
     void launch_beamformer(
@@ -239,7 +244,6 @@ struct CasmBeamformer
     );
 };
 
-
-}  // namespace pirate
-
-#endif  // _PIRATE_CASM_BEAMFORMER_HPP
+}  //x namespace pirate
+   //x
+#endif  // _CASM_BEAMFORMER_HPP

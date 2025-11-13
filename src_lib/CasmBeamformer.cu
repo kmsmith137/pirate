@@ -1,4 +1,9 @@
-#include "../include/pirate/CasmBeamformer.hpp"
+//x This script is processed with 'vendorize.py' (in the toplevel pirate dir)
+//x to produce a "vendorized" source file for the casm pipeline. The markup
+//x in comments (e.g. "//x") is parsed by vendorize.py.
+//x
+#include "../include/pirate/CasmBeamformer.hpp" //x
+//i #include "CasmBeamformer.hpp"
 
 #include <random>
 #include <cassert>
@@ -7,23 +12,23 @@
 #include <stdexcept>
 #include <sys/time.h>
 
-#include <ksgpu/cuda_utils.hpp>
-#include <ksgpu/rand_utils.hpp>
+#include <ksgpu/cuda_utils.hpp>  //x
+#include <ksgpu/rand_utils.hpp>  //x
 
 using namespace std;
-using namespace ksgpu;
+using namespace ksgpu;  //x
 
-namespace pirate {
-#if 0
-}  // editor auto-indent
-#endif
+namespace pirate {      //x
+#if 0                   //x
+}                       //x editor auto-indent
+#endif                  //x
 
 
 // -------------------------------------------------------------------------------------------------
 //
 // CUDA utils
 
-#if 0
+#if 0  //x Code below is included in the vendorized version, but commented out in the original.
 
 // Branch predictor hint
 #ifndef _unlikely
@@ -62,8 +67,7 @@ static std::runtime_error make_cuda_exception(cudaError_t xerr, const char *xstr
     return runtime_error(ss.str());
 }
 
-#endif
-
+#endif  //x Code above is included in the vendorized version, but commented out in the original.
 
 // Setup: suppose we have a pair of registers [x,y] on each thread,
 // which represent a 64-element array with register assignment:
@@ -2506,6 +2510,7 @@ casm_beamforming_kernel(
 // class CasmBeamformer
 
 
+//xbegin
 CasmBeamformer::CasmBeamformer(
     const Array<float> &frequencies_,     // shape (F,)
     const Array<int> &feed_indices_,      // shape (256,2)
@@ -2548,6 +2553,7 @@ CasmBeamformer::CasmBeamformer(
         (ew_feed_spacings_.size > 0) ? ew_feed_spacings_.data : nullptr
     );
 }
+//xend
 
 
 CasmBeamformer::CasmBeamformer(
@@ -2782,6 +2788,87 @@ void CasmBeamformer::_construct(
     gpu_persistent_data = to_gpu(gpu_persistent_data, gmem_layout::nelts(F,B));
 }
 
+
+//xbegin
+void CasmBeamformer::launch_beamformer(
+    const Array<uint8_t> &e_in,
+    const Array<float> &feed_weights,
+    Array<float> &i_out,
+    cudaStream_t stream) const
+{
+    xassert(e_in.ndim >= 1);    
+    xassert_shape_eq(e_in, ({ e_in.shape[0], F, 2, 256 }));
+    xassert(e_in.is_fully_contiguous());
+    xassert(e_in.on_gpu());
+
+    xassert_shape_eq(feed_weights, ({ F,2,256,2 }));
+    xassert(feed_weights.is_fully_contiguous());
+    xassert(feed_weights.on_gpu());
+
+    xassert(i_out.ndim >= 1);
+    xassert_shape_eq(i_out, ({ i_out.shape[0], F, B }));
+    xassert(i_out.is_fully_contiguous());
+    xassert(i_out.on_gpu());
+
+    int Tin = e_in.shape[0];
+    int Tout = i_out.shape[0];
+    xassert(Tin == Tout * downsampling_factor);
+
+    this->launch_beamformer(e_in.data, feed_weights.data, i_out.data, Tin, stream);
+}
+//xend
+
+
+void CasmBeamformer::launch_beamformer(
+    const uint8_t *e_arr,        // shape (Tin,F,2,256), axes (time,freq,pol,dish)
+    const float *feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
+    float *i_out,                // shape (Tout,F,B)
+    int Tin,                     // number of input times Tin = Tout * downsampling_factor
+    cudaStream_t stream) const
+{
+    // Allow kernel to use 99KB shared memory.
+    static shmem_99kb s(casm_beamforming_kernel);
+    s.set();
+    
+    if (!e_arr)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'e_arr' pointer is NULL");
+    if (!feed_weights)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'feed_weights' pointer is NULL");
+    if (!i_out)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'i_out' pointer is NULL");
+
+    if (Tin <= 0)
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'Tin' must be > 0");
+    
+    int Tout = Tin / downsampling_factor;
+    if (Tin != Tout * downsampling_factor) {
+        stringstream ss;
+        ss << "CasmBeamformer::launch_beamformer: Tin=" << Tin << " must be a multiple"
+           << " of downsampling_factor=" << downsampling_factor;
+        throw runtime_error(ss.str());
+    }
+
+    int d = -2;
+    CUDA_CALL(cudaGetDevice(&d));
+    
+    if (this->constructor_device != d) {
+        stringstream ss;
+        ss << "CasmBeamformer: CUDA device at construction (dev=" << this->constructor_device << ")"
+           << " differs from CUDA device in launch_beamformer() (dev=" << d << "). This is an"
+           << " error, since the constructor stores precomputations on the GPU.";
+        throw runtime_error(ss.str());
+    }
+    
+    float normalization = 1.0f / (2.0f * downsampling_factor);
+
+    casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
+        (e_arr, feed_weights, gpu_persistent_data.get(),
+         i_out, Tout, downsampling_factor, B, normalization);
+
+    CUDA_PEEK("casm_beamforming_kernel launch");    
+}
+
+
 // Static member function.
 void CasmBeamformer::show_shared_memory_layout()
 {
@@ -2884,84 +2971,6 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 }
 
 
-void CasmBeamformer::launch_beamformer(
-    const Array<uint8_t> &e_in,
-    const Array<float> &feed_weights,
-    Array<float> &i_out,
-    cudaStream_t stream) const
-{
-    xassert(e_in.ndim >= 1);    
-    xassert_shape_eq(e_in, ({ e_in.shape[0], F, 2, 256 }));
-    xassert(e_in.is_fully_contiguous());
-    xassert(e_in.on_gpu());
-
-    xassert_shape_eq(feed_weights, ({ F,2,256,2 }));
-    xassert(feed_weights.is_fully_contiguous());
-    xassert(feed_weights.on_gpu());
-
-    xassert(i_out.ndim >= 1);
-    xassert_shape_eq(i_out, ({ i_out.shape[0], F, B }));
-    xassert(i_out.is_fully_contiguous());
-    xassert(i_out.on_gpu());
-
-    int Tin = e_in.shape[0];
-    int Tout = i_out.shape[0];
-    xassert(Tin == Tout * downsampling_factor);
-
-    this->launch_beamformer(e_in.data, feed_weights.data, i_out.data, Tin, stream);
-}
-
-
-void CasmBeamformer::launch_beamformer(
-    const uint8_t *e_arr,        // shape (Tin,F,2,256), axes (time,freq,pol,dish)
-    const float *feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
-    float *i_out,                // shape (Tout,F,B)
-    int Tin,                     // number of input times Tin = Tout * downsampling_factor
-    cudaStream_t stream) const
-{
-    // Allow kernel to use 99KB shared memory.
-    static shmem_99kb s(casm_beamforming_kernel);
-    s.set();
-    
-    if (!e_arr)
-        throw runtime_error("CasmBeamformer::launch_beamformer(): 'e_arr' pointer is NULL");
-    if (!feed_weights)
-        throw runtime_error("CasmBeamformer::launch_beamformer(): 'feed_weights' pointer is NULL");
-    if (!i_out)
-        throw runtime_error("CasmBeamformer::launch_beamformer(): 'i_out' pointer is NULL");
-
-    if (Tin <= 0)
-        throw runtime_error("CasmBeamformer::launch_beamformer(): 'Tin' must be > 0");
-    
-    int Tout = Tin / downsampling_factor;
-    if (Tin != Tout * downsampling_factor) {
-        stringstream ss;
-        ss << "CasmBeamformer::launch_beamformer: Tin=" << Tin << " must be a multiple"
-           << " of downsampling_factor=" << downsampling_factor;
-        throw runtime_error(ss.str());
-    }
-
-    int d = -2;
-    CUDA_CALL(cudaGetDevice(&d));
-    
-    if (this->constructor_device != d) {
-        stringstream ss;
-        ss << "CasmBeamformer: CUDA device at construction (dev=" << this->constructor_device << ")"
-           << " differs from CUDA device in launch_beamformer() (dev=" << d << "). This is an"
-           << " error, since the constructor stores precomputations on the GPU.";
-        throw runtime_error(ss.str());
-    }
-    
-    float normalization = 1.0f / (2.0f * downsampling_factor);
-
-    casm_beamforming_kernel<<< F, {32,24,1}, 99*1024, stream >>>
-        (e_arr, feed_weights, gpu_persistent_data.get(),
-         i_out, Tout, downsampling_factor, B, normalization);
-
-    CUDA_PEEK("casm_beamforming_kernel launch");    
-}
-
-
 // Static member function.
 void CasmBeamformer::test_microkernels()
 {
@@ -3040,4 +3049,4 @@ void CasmBeamformer::time()
 }
 
 
-}  // namespace pirate
+}  //x namespace pirate
