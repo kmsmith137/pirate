@@ -136,7 +136,7 @@ struct CasmBeamformer
         const ksgpu::Array<float> &frequencies,     // shape (nfreq,)
         const ksgpu::Array<int> &feed_indices,      // shape (256,2)
         const ksgpu::Array<float> &beam_locations,  // shape (nbeams,2)
-        int downsampling_factor,
+        long downsampling_factor,
         float ns_feed_spacing = default_ns_feed_spacing,
         const ksgpu::Array<float> &ew_feed_spacings = ksgpu::Array<float>()
     );
@@ -147,9 +147,9 @@ struct CasmBeamformer
         const float *frequencies,        // shape (nfreq,)
         const int *feed_indices,         // shape (256,2)
         const float *beam_locations,     // shape (nbeams,2)
-        int downsampling_factor,
-        int nfreq,
-        int nbeams,
+        long downsampling_factor,
+        long nfreq,
+        long nbeams,
         float ns_feed_spacing = default_ns_feed_spacing,
         const float *ew_feed_spacings = default_ew_feed_spacings
     );
@@ -191,13 +191,13 @@ struct CasmBeamformer
         const uint8_t *e_arr,                      // shape (Tin,F,2,256), axes (time,freq,pol,dish)
         const float *feed_weights,                 // shape (F,2,256,2), axes (freq,pol,dish,reim)
         float *i_out,                              // shape (Tout,F,B)
-        int Tin,                                   // number of input times Tin = Tout * downsampling_factor
+        long Tin,                                  // number of input times Tin = Tout * downsampling_factor
         cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
     ) const;    
 
     // There is a maximum beam count that the beamformer can support
     // (currently 4672), due to GPU shared memory limitations.
-    static int get_max_beams();
+    static long get_max_beams();
     
     static void show_shared_memory_layout();
     static void test_microkernels();
@@ -205,10 +205,10 @@ struct CasmBeamformer
 
     // ---------------------------------------------------------------------------------------------
     
-    int F = 0;  // number of frequency channels (on one GPU)
-    int B = 0;  // number of output beams
+    long F = 0;  // number of frequency channels (on one GPU)
+    long B = 0;  // number of output beams
+    long downsampling_factor = 0;
     int constructor_device = -1;  // cuda device when constructor was called
-    int downsampling_factor = 0;
 
     std::vector<float> frequencies;     // shape (F,)
     std::vector<int> feed_indices;      // shape (256,2)
@@ -226,7 +226,7 @@ struct CasmBeamformer
     std::shared_ptr<float> gpu_persistent_data;
     
     // For unit tests.
-    int nominal_Tin_for_unit_tests = 0;
+    long nominal_Tin_for_unit_tests = 0;
     static CasmBeamformer make_random(bool randomize_feed_indices=true);
     static std::shared_ptr<int> make_random_feed_indices();   // helper for make_random()
     static std::shared_ptr<int> make_regular_feed_indices();  // helper for make_random()
@@ -236,9 +236,9 @@ struct CasmBeamformer
         const float *frequencies,        // shape (F,)
         const int *feed_indices,         // shape (256,2)
         const float *beam_locations,     // shape (B,2)
-        int downsampling_factor,
-        int nfreq,
-        int nbeams,
+        long downsampling_factor,
+        long nfreq,
+        long nbeams,
         float ns_feed_spacing,
         const float *ew_feed_spacings    // either shape (5,) or NULL
     );
@@ -251,7 +251,7 @@ struct CasmBeamformer
 //i
 //i void casm_bf_run_timings();
 //i
-//i int casm_bf_get_max_beams();
+//i long casm_bf_get_max_beams();
 //i
 //i void casm_bf_one_shot_for_testing(
 //i     const float *frequencies,        // shape (nfreq,)

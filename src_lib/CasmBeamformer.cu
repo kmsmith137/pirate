@@ -357,10 +357,11 @@ struct gmem_layout
     // All quantities below are 32-bit offsets, not byte offsets.
     static constexpr int gridding_base = 0;
     static constexpr int ns_phases_base = 256;
-    
-    static __host__ __device__ constexpr int per_frequency_data_base(int f=0)  { return ns_phases_base + 32 + 96*f; }
-    static __host__ __device__ constexpr int beam_locs_base(int F, int b=0)    { return ns_phases_base + 32 + 96*F + 2*b; }
-    static __host__ __device__ constexpr int nelts(int F, int B)               { return ns_phases_base + 32 + 96*F + 2*B; }
+
+    // 32-bit overflow safe
+    static __host__ __device__ constexpr long per_frequency_data_base(long f=0)  { return ns_phases_base + 32 + 96L*f; }
+    static __host__ __device__ constexpr long beam_locs_base(long F, int b=0)    { return ns_phases_base + 32 + 96L*F + 2*b; }
+    static __host__ __device__ constexpr long nelts(long F, long B)              { return ns_phases_base + 32 + 96L*F + 2*B; }
 };
 
 
@@ -532,8 +533,8 @@ struct casm_controller
 
         uint w = threadIdx.y;          // warp id
         uint l = threadIdx.x;          // lane id
-        uint f = blockIdx.x;           // frequency channel
-        uint F = gridDim.x;            // number of frequency channels
+        long f = blockIdx.x;           // frequency channel
+        long F = gridDim.x;            // number of frequency channels
         uint B32 = nbeams >> 5;
 
         if (w < 9) {
@@ -547,7 +548,7 @@ struct casm_controller
             // per_frequency_data (96 elts)
             uint s = 32*(w-9) + l;
             uint dst = shmem_layout::per_frequency_data_base + s;
-            uint src = gmem_layout::per_frequency_data_base(f) + s;
+            long src = gmem_layout::per_frequency_data_base(f) + s;
             shmem_f[dst] = gpu_persistent_data[src];
             w += 24;
         }
@@ -556,8 +557,9 @@ struct casm_controller
             // feed_weights (512 complex elements, where each "element" is a pol+dish).
             // Note that the 'feed_weights' array ordering is feed_weights[F][512][2];
             // It's easiest to read these as float2.
-            
-            const float2 *fw2 = (const float2 *) (feed_weights + 1024*f);  // length-512 float2
+
+            // 'fw2' points to length-512 float2 (32-bit overflow safe)
+            const float2 *fw2 = (const float2 *) (feed_weights + 1024L*f);
             constexpr uint S = shmem_layout::wt_pol_stride;
             
             uint e = 32*(w-12) + l;  // "element" (pol+dish)
@@ -575,7 +577,8 @@ struct casm_controller
         while (w < B32+28) {
             // beam_locations (B*2 floats).
             // It's easiest to read these as float2.
-            
+
+            // 32-bit overflow safe
             const float2 *bl2 = (const float2 *) (gpu_persistent_data + gmem_layout::beam_locs_base(F));
             constexpr uint S = shmem_layout::beam_stride;
                           
@@ -669,8 +672,8 @@ struct casm_controller
     {
         uint l = threadIdx.x;  // lane id
         uint w = threadIdx.y;  // warp id
-        uint f = blockIdx.x;   // frequency channel for this threadblock
-        uint F = gridDim.x;    // total frequency channels
+        long f = blockIdx.x;   // frequency channel for this threadblock
+        long F = gridDim.x;    // total frequency channels
 
         // Initialize the 'ep4' global memory pointer.
         //
@@ -694,7 +697,8 @@ struct casm_controller
         // uint8 E[T][F][2][256];
         // uint128 E[T][F][2][16];
         ep4 = (const uint4 *) global_e;
-        ep4 += 32*(t*F+f) + 16*pol + d16;
+        ep4 += 32L*(t*F+f);    // 32-bit overflow safe
+        ep4 += 16*pol + d16;
     }
 
     // load_ungridded_e(): called every 24 time samples, to start reading
@@ -787,8 +791,8 @@ struct casm_controller
 
         // Advance global E-array pointer 'ep4'.
         
-        uint F = gridDim.x;    // total frequency channels
-        ep4 += 24*32*F;        // advance by 24 time samples
+        long F = gridDim.x;    // total frequency channels
+        ep4 += 24L*32L*F;      // advance by 24 time samples (32-bit overflow safe)
     }
 
     // grid_shared_e(): called every 48 time samples, to "grid" E-array in shared memory.
@@ -1017,8 +1021,8 @@ __global__ void casm_controller_test_kernel(
     //   l4 l3 l2 l1 l0 <-> ns4 ns3 ns2 ns1 ns0
     //   w2* w1 w0 <-> ew t0 pol
 
-    uint f = blockIdx.x;   // frequency channel of threadblock
-    uint F = gridDim.x;    // total frequency channels
+    long f = blockIdx.x;   // frequency channel of threadblock
+    long F = gridDim.x;    // total frequency channels
     uint pol = (threadIdx.y & 1);
     uint t0 = (threadIdx.y & 2) >> 1;
     uint ew = (threadIdx.y >> 2);
@@ -1084,14 +1088,14 @@ static void casm_controller_reference_kernel(
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
     float *out,                         // (T,F,2,6,64,2) = (time,freq,pol,ew,ns,reim)
-    int T)
+    long T)
 {
-    int FP = 2 * bf.F;
+    long FP = 2 * bf.F;
     memset(out, 0, T * FP * 6*64*2 * sizeof(float));
 
-    for (int t = 0; t < T; t++) {
-        for (int fp = 0; fp < FP; fp++) {
-            int tfp = t*FP + fp;
+    for (long t = 0; t < T; t++) {
+        for (long fp = 0; fp < FP; fp++) {
+            long tfp = t*FP + fp;
             
             const uint8_t *e2 = e_in + 256*tfp;        // points to shape (256,)
             const float *fw2 = feed_weights + 512*fp;  // points to shape (256,2)
@@ -1123,8 +1127,8 @@ static void test_casm_controller(const CasmBeamformer &bf)
     static shmem_99kb s(casm_controller_test_kernel);
     s.set();
     
-    int F = bf.F;
-    int T = bf.nominal_Tin_for_unit_tests;
+    long F = bf.F;
+    long T = bf.nominal_Tin_for_unit_tests;
     cout << "test_casm_controller(T=" << T << ", F=" << F << ", D=" << bf.downsampling_factor << ")" << endl;
 
     shared_ptr<uint8_t> e = cpu_alloc<uint8_t> (T*F*2*256, true);         // shape (T,F,2,256), randomize=true
@@ -1147,10 +1151,10 @@ static void test_casm_controller(const CasmBeamformer &bf)
     out_gpu = to_cpu(out_gpu, T*F*2*6*64*2);
     float *cp = out_cpu.get();
     float *gp = out_gpu.get();
-    int pos = 0;
+    long pos = 0;
     
-    for (int t = 0; t < T; t++) {
-        for (int f = 0; f < F; f++) {
+    for (long t = 0; t < T; t++) {
+        for (long f = 0; f < F; f++) {
             for (int pol = 0; pol < 2; pol++) {
                 for (int ew = 0; ew < 6; ew++) {
                     for (int ns = 0; ns < 64; ns++) {
@@ -1935,13 +1939,13 @@ __global__ void fft2_test_kernel(
     fft2_microkernel<true> fft2;  // Debug=true
 
     // Divide (F,6,128) array between threads.
-    int f = blockIdx.x;
-    int F = gridDim.x;
+    long f = blockIdx.x;
+    long F = gridDim.x;
     int gns = ((threadIdx.y & 3) << 5) + threadIdx.x;
     int gew = (threadIdx.y >> 2);
 
     // G-array source global memory pointer. For each tpol, each thread copies one complex32+32.
-    float2 *gp2 = (float2 *)(g_in) + f*6*128 + 128*gew + gns;
+    float2 *gp2 = (float2 *)(g_in) + 6L*128L*f + 128*gew + gns;
 
     // G-array destination shared memory index (offset 0 <= tp_sh < 4 remains to be applied)
     //   float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,ew,ns), reim-stride 6*128 + 4 (=772)
@@ -1956,7 +1960,7 @@ __global__ void fft2_test_kernel(
         float2 g = *gp2;
         shmem_f[gsh + (2*tp_sh)*GS] = g.x;    // real part
         shmem_f[gsh + (2*tp_sh+1)*GS] = g.y;  // imag part
-        gp2 += F*6*128;
+        gp2 += 6L*128L*F;
 
         __syncthreads();
 
@@ -1971,8 +1975,8 @@ __global__ void fft2_test_kernel(
     // Set up I-array copy (shared) -> (global)
     constexpr int IB = shmem_layout::I_base;
     constexpr int IS = shmem_layout::I_ew_stride;
-    int goff = 24*128*f + 128*threadIdx.y + threadIdx.x;  // array offset in ip[] global array
-    int soff = IB + IS*threadIdx.y + threadIdx.x;         // array offset in shmem_i[] shared array
+    int goff = 24L*128L*f + 128*threadIdx.y + threadIdx.x;  // array offset in ip[] global array
+    int soff = IB + IS*threadIdx.y + threadIdx.x;           // array offset in shmem_i[] shared array
     
     for (int j = 0; j < 4; j++)
         i_out[goff + 32*j] = shmem_f[soff + 32*j];
@@ -1985,12 +1989,12 @@ __global__ void fft2_test_kernel(
 
 static void fft2_reference_kernel(const CasmBeamformer &bf, float *I, const float *G)
 {
-    int F = bf.F;
-    int TP = 2 * bf.nominal_Tin_for_unit_tests;
+    long F = bf.F;
+    long TP = 2 * bf.nominal_Tin_for_unit_tests;
 
     memset(I, 0, F*24*128 * sizeof(float));
     
-    for (int ifreq = 0; ifreq < F; ifreq++) {
+    for (long ifreq = 0; ifreq < F; ifreq++) {
         for (int ew_beam = 0; ew_beam < 24; ew_beam++) {
             // Beamforming phase is exp(2*pi*i * freq * beam * feed / c)
             float bre[6];
@@ -2007,7 +2011,7 @@ static void fft2_reference_kernel(const CasmBeamformer &bf, float *I, const floa
                 bim[ew_feed] = sinf(theta);
             }
             
-            for (int tpol = 0; tpol < TP; tpol++) {
+            for (long tpol = 0; tpol < TP; tpol++) {
                 float *I2 = I + (ifreq*24 + ew_beam) * 128;         // shape (128,)
                 const float *G2 = G + (tpol*F + ifreq) * 6*128*2;   // shape (6,128,2)
 
@@ -2041,8 +2045,8 @@ static void test_casm_fft2_microkernel(const CasmBeamformer &bf)
     static shmem_99kb s(fft2_test_kernel);
     s.set();
 
-    int F = bf.F;
-    int TP = 2 * bf.nominal_Tin_for_unit_tests;
+    long F = bf.F;
+    long TP = 2 * bf.nominal_Tin_for_unit_tests;
     cout << "test_casm_fft2_microkernel(TP=" << TP << ", F=" << F << ")" << endl;
 
     // Note: feed_weights must be allocated, but are not actually used.
@@ -2065,9 +2069,9 @@ static void test_casm_fft2_microkernel(const CasmBeamformer &bf)
     i_gpu = to_cpu(i_gpu, F*24*128);
     float *gp = i_gpu.get();
     float *cp = i_cpu.get();
-    int pos = 0;
+    long pos = 0;
 
-    for (int f = 0; f < F; f++) {
+    for (long f = 0; f < F; f++) {
         for (int ew = 0; ew < 24; ew++) {
             for (int ns = 0; ns < 128; ns++) {
                 float x = cp[pos];
@@ -2137,10 +2141,11 @@ struct interpolation_microkernel
             assert(blockDim.z == 1);
         }
         
-        int f = blockIdx.x;  // frequency channel
-        out = out_ + f * nbeams_;
         nbeams = nbeams_;
         normalization = normalization_;
+        
+        long f = blockIdx.x;            // frequency channel
+        out = out_ + f * long(nbeams);  // 32-bit overflow safe
     }
 
     // Helper for apply().
@@ -2234,8 +2239,8 @@ struct interpolation_microkernel
         }
 
         // Advance output pointer.
-        int F = gridDim.x;
-        out += F * nbeams;
+        long F = gridDim.x;
+        out += F * long(nbeams);  // 32-bit overflow safe
     }
 };
 
@@ -2273,8 +2278,8 @@ __global__ void casm_interpolation_test_kernel(
         
         int w = threadIdx.y;  // warp id
         int l = threadIdx.x;  // lane id
-        int f = blockIdx.x;   // current frequency
-        int F = gridDim.x;    // total frequencies
+        long f = blockIdx.x;   // current frequency
+        long F = gridDim.x;    // total frequencies
 
         for (int ns = l; ns < 128; ns += 32)
             shmem_f[IB + w*IS + ns] = i_in[t*F*24*128 + f*24*128 + w*128 + ns];
@@ -2306,13 +2311,13 @@ __host__ inline void compute_interpolation_weights(float dx, float w[4])
 // out.shape = (Tout,F,B)
 // in.shape = (Tout,F,24,128)
 
-static void interpolation_reference_kernel(const CasmBeamformer &bf, float *out, const float *in, int Tout, float normalization)
+static void interpolation_reference_kernel(const CasmBeamformer &bf, float *out, const float *in, long Tout, float normalization)
 {
-    int F = bf.F;
-    int B = bf.B;
+    long F = bf.F;
+    long B = bf.B;
 
-    for (int f = 0; f < F; f++) {
-        for (int b = 0; b < B; b++) {
+    for (long f = 0; f < F; f++) {
+        for (long b = 0; b < B; b++) {
             constexpr float c = CasmBeamformer::speed_of_light;
             
             float freq = bf.frequencies[f];
@@ -2335,19 +2340,19 @@ static void interpolation_reference_kernel(const CasmBeamformer &bf, float *out,
             compute_interpolation_weights(xns, wns);
             compute_interpolation_weights(xew, wew);
 
-            for (int t = 0; t < Tout; t++) {
+            for (long t = 0; t < Tout; t++) {
                 float x = 0.0f;
                 
                 for (int kns = 0; kns < 4; kns++) {
                     int sns = (ins + kns - 1) & 127;
                     for (int kew = 0; kew < 4; kew++) {
                         int sew = (iew + kew - 1);
-                        int sin = (t*F+f)*24*128 + 128*sew + sns;  // index in 'in' array
+                        long sin = (t*F+f)*24*128 + 128*sew + sns;  // index in 'in' array
                         x += wns[kns] * wew[kew] * in[sin];
                     }
                 }
 
-                int sout = t*F*B + f*B + b;  // index in 'out' array
+                long sout = t*F*B + f*B + b;  // index in 'out' array
                 out[sout] = normalization * x;
             }
         }
@@ -2362,9 +2367,9 @@ static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
     static shmem_99kb s(casm_interpolation_test_kernel);
     s.set();
 
-    int F = bf.F;
-    int B = bf.B;
-    int Tout = rand_int(1,5);
+    long F = bf.F;
+    long B = bf.B;
+    long Tout = rand_int(1,5);
     float normalization = rand_uniform();
     
     cout << "test_casm_interpolation_microkernel(Tout=" << Tout << ", F=" << F
@@ -2394,11 +2399,11 @@ static void test_casm_interpolation_microkernel(const CasmBeamformer &bf)
     out_gpu = to_cpu(out_gpu, Tout*F*B);
     float *gp = out_gpu.get();
     float *cp = out_cpu.get();
-    int pos = 0;
+    long pos = 0;
 
-    for (int t = 0; t < Tout; t++) {
-        for (int f = 0; f < F; f++) {
-            for (int b = 0; b < B; b++) {
+    for (long t = 0; t < Tout; t++) {
+        for (long f = 0; f < F; f++) {
+            for (long b = 0; b < B; b++) {
                 if (fabsf(gp[pos] - cp[pos]) > 1.0e-4) {
                     stringstream ss;
                     ss << "failed: t=" << t << ", f=" << f << ", b=" << b
@@ -2556,7 +2561,7 @@ CasmBeamformer::CasmBeamformer(
     const Array<float> &frequencies_,     // shape (F,)
     const Array<int> &feed_indices_,      // shape (256,2)
     const Array<float> &beam_locations_,  // shape (B,2)
-    int downsampling_factor_,
+    long downsampling_factor_,
     float ns_feed_spacing_,
     const Array<float> &ew_feed_spacings_)
 {
@@ -2601,9 +2606,9 @@ CasmBeamformer::CasmBeamformer(
     const float *frequencies_,        // shape (nfreq,)
     const int *feed_indices_,         // shape (256,2)
     const float *beam_locations_,     // shape (nbeams,2)
-    int downsampling_factor_,
-    int nfreq_,
-    int nbeams_,
+    long downsampling_factor_,
+    long nfreq_,
+    long nbeams_,
     float ns_feed_spacing_,
     const float *ew_feed_spacings_)
 {
@@ -2627,9 +2632,9 @@ void CasmBeamformer::_construct(
     const float *frequencies_,       // shape (F,)
     const int *feed_indices_,        // shape (256,2)
     const float *beam_locations_,    // shape (B,2)
-    int downsampling_factor_,
-    int nfreq_,
-    int nbeams_,
+    long downsampling_factor_,
+    long nfreq_,
+    long nbeams_,
     float ns_feed_spacing_,
     const float *ew_feed_spacings_)  // either shape (5,) or NULL
 {
@@ -2656,6 +2661,12 @@ void CasmBeamformer::_construct(
         throw runtime_error("CasmBeamformer constructor: num_beams must be a multiple of 32");
     if (downsampling_factor <= 0)
         throw runtime_error("CasmBeamformer constructor: downsampling_factor must be > 0");
+
+    // Avoid 32-bit overflows
+    if (F > (1L<<30))
+        throw runtime_error("CasmBeamformer constructor: num_freqs must be <= 2^30");
+    if (downsampling_factor > (1L<<30))
+        throw runtime_error("CasmBeamformer constructor: downsampling_factor must be <= 2^30");
     
     if (B > shmem_layout::max_beams) {
         stringstream ss;
@@ -2768,7 +2779,7 @@ void CasmBeamformer::_construct(
     // Compute 'per_frequency_data' part of 'gpu_persistent_data'.
     // See (*) near the beginning of this file for details.
     
-    for (int f = 0; f < F; f++) {
+    for (long f = 0; f < F; f++) {
         float freq = frequencies[f];
 
         // Beamformer has only been validated for frequencies in [400,500] MHz.
@@ -2804,7 +2815,7 @@ void CasmBeamformer::_construct(
     // Compute 'beam_locations' part of gpu_persistent_data.
     float *blp = gpu_persistent_data.get() + gmem_layout::beam_locs_base(F);
     
-    for (int b = 0; b < B; b++) {
+    for (long b = 0; b < B; b++) {
         for (int j = 0; j < 2; j++) {
             // We store {ns_feed_spacing * sin(za_ns), sin(za_ew)} in GPU memory.
             // See (**) near the beginning of this file.
@@ -2851,8 +2862,8 @@ void CasmBeamformer::launch_beamformer(
     xassert(i_out.is_fully_contiguous());
     xassert(i_out.on_gpu());
 
-    int Tin = e_in.shape[0];
-    int Tout = i_out.shape[0];
+    long Tin = e_in.shape[0];
+    long Tout = i_out.shape[0];
     xassert(Tin == Tout * downsampling_factor);
 
     this->launch_beamformer(e_in.data, feed_weights.data, i_out.data, Tin, stream);
@@ -2864,7 +2875,7 @@ void CasmBeamformer::launch_beamformer(
     const uint8_t *e_arr,        // shape (Tin,F,2,256), axes (time,freq,pol,dish)
     const float *feed_weights,   // shape (F,2,256,2), axes (freq,pol,dish,reim)
     float *i_out,                // shape (Tout,F,B)
-    int Tin,                     // number of input times Tin = Tout * downsampling_factor
+    long Tin,                    // number of input times Tin = Tout * downsampling_factor
     cudaStream_t stream) const
 {
     // Allow kernel to use 99KB shared memory.
@@ -2880,8 +2891,10 @@ void CasmBeamformer::launch_beamformer(
 
     if (Tin <= 0)
         throw runtime_error("CasmBeamformer::launch_beamformer(): 'Tin' must be > 0");
+    if (Tin > (1L<<30))
+        throw runtime_error("CasmBeamformer::launch_beamformer(): 'Tin' must be <= 2^30");
     
-    int Tout = Tin / downsampling_factor;
+    long Tout = Tin / downsampling_factor;
     if (Tin != Tout * downsampling_factor) {
         stringstream ss;
         ss << "CasmBeamformer::launch_beamformer: Tin=" << Tin << " must be a multiple"
@@ -2928,7 +2941,7 @@ void CasmBeamformer::show_shared_memory_layout()
 
 
 // Static member function.
-int CasmBeamformer::get_max_beams()
+long CasmBeamformer::get_max_beams()
 {
     // Maximum number of beams is currently determined by shared memory constraints.
     return shmem_layout::max_beams;
@@ -2980,10 +2993,10 @@ shared_ptr<int> CasmBeamformer::make_regular_feed_indices()
 CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
 {
     auto w = random_integers_with_bounded_product(3, 1000);
-    int B = 32 * rand_int(1,100);
-    int T = w[0] * w[1];   // number of input time samples
-    int ds = w[1];         // downsampling factor
-    int F = w[2];          // number of frequency channels
+    long B = 32 * rand_int(1,100);
+    long T = w[0] * w[1];   // number of input time samples
+    long ds = w[1];         // downsampling factor
+    long F = w[2];          // number of frequency channels
 
     vector<float> frequencies(F);
     vector<float> beam_locations(B*2);
@@ -2991,11 +3004,11 @@ CasmBeamformer CasmBeamformer::make_random(bool randomize_feed_indices)
     float ns_feed_spacing = rand_uniform(0.3, 0.6);
 
     // Make random 'frequencies' array.
-    for (int f = 0; f < F; f++)
+    for (long f = 0; f < F; f++)
         frequencies.at(f) = rand_uniform(400.0, 500.0);
     
     // Make random 'beam_locations' array.
-    for (int b = 0; b < B; b++)
+    for (long b = 0; b < B; b++)
         for (int j = 0; j < 2; j++)
             beam_locations.at(2*b+j) = rand_uniform(-1.0, 1.0);
 
@@ -3050,7 +3063,7 @@ void CasmBeamformer::run_timings()
         frequencies.at(f) = rand_uniform(400.0, 500.0);
 
     for (ulong ib = 0; ib < Bvec.size(); ib++) {
-        int B = Bvec[ib];
+        long B = Bvec[ib];
         cout << "Starting timing, B=" << B << ", Tin=" << Tin << endl;
         cout << "Input array: " << (1.0e-9 * Tin * F * 2 * 256) << " GB" << endl;
         cout << "Output array: " << (4.0e-9 * Tout * F * B) << " GB" << endl;
@@ -3120,7 +3133,7 @@ void casm_bf_run_timings()
     }
 }
 
-int casm_bf_get_max_beams()
+long casm_bf_get_max_beams()
 {
     return shmem_layout::max_beams;
 }
@@ -3143,7 +3156,7 @@ void casm_bf_one_shot_for_testing(
         CasmBeamformer bf(
             frequencies, feed_indices, beam_locations,
             downsampling_factor, nfreq, nbeams,
-            ns_feed_spacing, ew_feed_spacings);        
+            ns_feed_spacing, ew_feed_spacings);
         bf.launch_beamformer(e_arr, feed_weights, i_out, Tin);
     } catch (const std::exception& e) {
         cerr << "casm_bf_one_shot_for_testing() raised exception: " << e.what() << "\n";

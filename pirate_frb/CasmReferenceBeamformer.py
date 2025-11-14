@@ -427,8 +427,6 @@ class CasmReferenceBeamformer:
 
     @classmethod
     def test_interpolative_beamforming(cls, T=1024, F=4, B=5, D=4):
-        """Run with 'python -m pirate_frb test [--casm]'."""
-        
         print(f'test_casm_interpolative_beamforming: start, {T=}, {F=}, {B=}, {D=}')
         
         bf = cls.make_random(F,B,D)
@@ -492,7 +490,7 @@ class CasmReferenceBeamformer:
         lib.casm_bf_run_timings.restype  = None    # returns void
 
         lib.casm_bf_get_max_beams.argtypes = []   # no arguments
-        lib.casm_bf_get_max_beams.restype  = ctypes.c_int
+        lib.casm_bf_get_max_beams.restype  = ctypes.c_long
 
         lib.casm_bf_one_shot_for_testing.argtypes = [
             ctypes.POINTER(ctypes.c_float),   # frequencies
