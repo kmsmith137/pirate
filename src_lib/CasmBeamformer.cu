@@ -2453,7 +2453,7 @@ casm_beamforming_kernel(
     interpolation_microkernel<Debug> interpolator(i_out, B, normalization);
 
     int Tin = Tout * Tds;
-    int ds_counter = Tds;
+    int ds_counter = 2*Tds;
     int touter = -48;
 
     // In each iteration of the outer loop:
@@ -2512,8 +2512,8 @@ casm_beamforming_kernel(
                 // square, and accumulate the result into persistent registers which store
                 // beamformed intensities on a (24,128) grid.
                 fft2.apply(tpol & 3);
-                
-                if ((tpol & 1) && !(--ds_counter)) {
+
+                if (!(--ds_counter)) {
                     // When the number of accumulated time samples is a multiple of 'downsampling_factor',
                     // we write the (24,128) grid of beamformed intensities to I[] shared memory, interpolate
                     // to the target beam locations, and write the result to global memory.
@@ -2522,8 +2522,11 @@ casm_beamforming_kernel(
                     fft2.write_and_reset();  // writes I-array to shared memory
                     __syncthreads();
                     interpolator.apply();    // reads I-array from shared, writes to global memory
-                    ds_counter = Tds;
 
+                    // We write I[] to global memory every (2*Tds) iterations of the inner loop,
+                    // since the inner loop is over (time,pol) pairs.
+                    ds_counter = 2*Tds;
+                    
                     int tinner = touter + 8*m + ((tpol+1) >> 1);
 
                     // This is the exit point from the kernel.
