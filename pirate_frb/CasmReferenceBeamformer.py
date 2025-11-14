@@ -1,6 +1,8 @@
 import sys
 import time
 import math  # lcm()
+import ctypes
+import functools
 import numpy as np
 
 
@@ -452,38 +454,154 @@ class CasmReferenceBeamformer:
     
     #############  Unit test: python and cuda implementations agree to machine precision   #############
     
-    
-    @classmethod
-    def test_cuda_python_equivalence(cls):
-        # Hack: we put these imports (used only in this function) here, instead of
-        # at the top of the file, so that this file will be importable on a machine
-        # that doesn't have cuda.
-        
-        import cupy as cp
-        from . import pirate_pybind11
-        
-        # Randomize (B/32), D, F, Tout, such that product is <= 10**4
-        t = np.random.gamma(1.0, 1.0, size=4)
-        t = np.exp(np.log(10**4) * t / np.sum(t))
-        B32, D, F, Tout = [ int(x) for x in t ]
-        
-        B = min(32*B32, pirate_pybind11.CasmBeamformer.get_max_beams())
-        Tin = Tout * D
 
-        print(f'test_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): start')
-        bf_py = cls.make_random(F=F, B=B, D=D, randomize_spacings=True)
+    def run_cuda_kernel_via_pybind11(self, e_in, feed_weights, i_out):
+        """
+        Launches cuda kernel via pybind11 (works in chord pipeline, but not casm pipeline).
+        Inefficient and used only for testing.
+        """
+        
+        from . import pirate_pybind11
         
         # FIXME(?) pybind11->cuda interface currently requires annoying dtype conversions.
         # (Currently the python interface is only used for testing, so it's not a serious issue.)
         
         bf_cuda = pirate_pybind11.CasmBeamformer(
-            frequencies = np.asarray(bf_py.frequencies, dtype=np.float32),
-            feed_indices = np.asarray(bf_py.feed_indices, dtype=np.int32),
-            beam_locations = np.asarray(bf_py.beam_locations, dtype=np.float32),
-            downsampling_factor = bf_py.downsampling_factor,
-            ns_feed_spacing = bf_py.ns_feed_spacing,
-            ew_feed_spacings = np.asarray(bf_py.ew_feed_spacings, dtype=np.float32)
+            frequencies = np.asarray(self.frequencies, dtype=np.float32),
+            feed_indices = np.asarray(self.feed_indices, dtype=np.int32),
+            beam_locations = np.asarray(self.beam_locations, dtype=np.float32),
+            downsampling_factor = self.downsampling_factor,
+            ns_feed_spacing = self.ns_feed_spacing,
+            ew_feed_spacings = np.asarray(self.ew_feed_spacings, dtype=np.float32)
         )
+        
+        bf_cuda.launch_beamformer(e_in, feed_weights, i_out)
+
+
+    @classmethod
+    @functools.lru_cache(None)
+    def libcasm_bf(cls):
+        print(f'Loading libcasm_bf.so (works in casm pipeline, but not chord pipeline)')
+        
+        lib = ctypes.CDLL("./libcasm_bf.so")
+        
+        lib.casm_bf_test_microkernels.argtypes = []      # no arguments
+        lib.casm_bf_test_microkernels.restype  = None    # returns void
+        
+        lib.casm_bf_run_timings.argtypes = []      # no arguments
+        lib.casm_bf_run_timings.restype  = None    # returns void
+
+        lib.casm_bf_get_max_beams.argtypes = []   # no arguments
+        lib.casm_bf_get_max_beams.restype  = ctypes.c_int
+
+        lib.casm_bf_one_shot_for_testing.argtypes = [
+            ctypes.POINTER(ctypes.c_float),   # frequencies
+            ctypes.POINTER(ctypes.c_int),     # feed_indices
+            ctypes.POINTER(ctypes.c_float),   # beam_locations
+            ctypes.c_long,                    # downsampling_factor
+            ctypes.c_long,                    # nfreq
+            ctypes.c_long,                    # nbeams
+            ctypes.c_float,                   # ns_feed_spacing
+            ctypes.POINTER(ctypes.c_float),   # ew_feed_spacings
+            ctypes.c_void_p,                  # e_arr (device pointer)
+            ctypes.c_void_p,                  # feed_weights (device pointer)
+            ctypes.c_void_p,                  # i_out (device pointer)
+            ctypes.c_long                     # Tin
+        ]
+        
+        return lib
+
+
+    def run_cuda_kernel_via_ctypes(self, e_in, feed_weights, i_out):
+        """
+        Launches cuda kernel via pybind11 (works in casm pipeline, but not chord pipeline).
+        Inefficient and used only for testing.
+        """
+
+        import cupy as cp
+        
+        lib = CasmReferenceBeamformer.libcasm_bf()
+
+        freqs = np.asarray(self.frequencies, dtype=np.float32)
+        assert freqs.flags['C_CONTIGUOUS']
+        assert freqs.shape == (self.F,)
+
+        feed_ix = np.asarray(self.feed_indices, dtype=np.int32)
+        assert feed_ix.flags['C_CONTIGUOUS']
+        assert feed_ix.shape == (256,2)
+
+        beam_locs = np.asarray(self.beam_locations, dtype=np.float32)
+        assert beam_locs.flags['C_CONTIGUOUS']
+        assert beam_locs.shape == (self.B,2)
+
+        ew_fs = np.asarray(self.ew_feed_spacings, dtype=np.float32)
+        assert ew_fs.flags['C_CONTIGUOUS']
+        assert ew_fs.shape == (5,)
+        
+        assert isinstance(e_in, cp.ndarray)
+        assert e_in.ndim == 4
+        assert e_in.shape == (e_in.shape[0], self.F, 2, 256)
+        assert e_in.dtype == cp.uint8
+        assert e_in.flags.c_contiguous
+        
+        assert isinstance(feed_weights, cp.ndarray)
+        assert feed_weights.shape == (self.F, 2, 256, 2)
+        assert feed_weights.dtype == cp.float32
+        assert feed_weights.flags.c_contiguous
+        
+        assert isinstance(i_out, cp.ndarray)
+        assert i_out.ndim == 3
+        assert i_out.shape == (i_out.shape[0], self.F, self.B)
+        assert i_out.dtype == cp.float32
+        assert i_out.flags.c_contiguous
+
+        assert e_in.shape[0] == i_out.shape[0] * self.downsampling_factor
+        
+        lib.casm_bf_one_shot_for_testing(
+            freqs.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+            feed_ix.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+            beam_locs.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+            ctypes.c_long(self.downsampling_factor),
+            ctypes.c_long(self.F),
+            ctypes.c_long(self.B),
+            ctypes.c_float(self.ns_feed_spacing),
+            ew_fs.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+            ctypes.c_void_p(e_in.data.ptr),
+            ctypes.c_void_p(feed_weights.data.ptr),
+            ctypes.c_void_p(i_out.data.ptr),
+            ctypes.c_long(e_in.shape[0]),   # Tin
+        )
+    
+    
+    @classmethod
+    def test_cuda_python_equivalence(cls, linkage):
+        """
+        The 'linkage' arg should be either:
+          - 'pybind11' (works in chord pipeline, but not casm pipeline)
+          - 'ctypes' (works in casm pipeline, but not chord pipeline)
+        """
+        
+        import cupy as cp
+
+        # Get max beams
+        if linkage == 'pybind11':
+            from . import pirate_pybind11
+            Bmax = pirate_pybind11.CasmBeamformer.get_max_beams()
+        elif linkage == 'ctypes':
+            Bmax = cls.libcasm_bf().casm_bf_get_max_beams()
+        else:
+            raise RuntimeError(f"{linkage=} unrecognized (expected 'pybind11' or 'ctypes')")
+            
+        # Randomize (B/32), D, F, Tout, such that product is <= 10**4
+        t = np.random.gamma(1.0, 1.0, size=4)
+        t = np.exp(np.log(10**4) * t / np.sum(t))
+        B32, D, F, Tout = [ int(x) for x in t ]
+
+        B = min(32*B32, Bmax)
+        Tin = Tout * D
+
+        print(f'test_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): start')
+        bf_py = cls.make_random(F=F, B=B, D=D, randomize_spacings=True)
 
         # Use uint8, since numpy doesn't have int4+4.
         e44 = np.random.randint(0, 256, size=(Tin,F,2,256), dtype=np.uint8)
@@ -507,12 +625,19 @@ class CasmReferenceBeamformer:
         e44 = cp.asarray(e44)
         fw32 = cp.asarray(fw32)
         i_cuda = cp.zeros((Tout,F,B), dtype=cp.float32)
-        bf_cuda.launch_beamformer(e44, fw32, i_cuda)
+
+        if linkage == 'pybind11':
+            bf_py.run_cuda_kernel_via_pybind11(e44, fw32, i_cuda)
+        elif linkage == 'ctypes':
+            bf_py.run_cuda_kernel_via_ctypes(e44, fw32, i_cuda)
+        else:
+            raise RuntimeError(f"{linkage=} unrecognized (expected 'pybind11' or 'ctypes')")
 
         # Compare results from python/cuda.
         i_cuda = cp.asnumpy(i_cuda)
         rms = np.mean(np.abs(i_py))
         eps = np.max(np.abs(i_py - i_cuda)) / rms
+        eps = float(eps)   # np.float64 -> float
         
         print(f'test_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): {eps=}')
         assert eps < 1.0e-4

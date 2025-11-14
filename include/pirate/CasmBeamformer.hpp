@@ -201,7 +201,7 @@ struct CasmBeamformer
     
     static void show_shared_memory_layout();
     static void test_microkernels();
-    static void time();   // run timings
+    static void run_timings();
 
     // ---------------------------------------------------------------------------------------------
     
@@ -244,6 +244,32 @@ struct CasmBeamformer
     );
 };
 
+// For python ctypes
+//i extern "C" {
+//i
+//i void casm_bf_test_microkernels();
+//i
+//i void casm_bf_run_timings();
+//i
+//i int casm_bf_get_max_beams();
+//i
+//i void casm_bf_one_shot_for_testing(
+//i     const float *frequencies,        // shape (nfreq,)
+//i     const int *feed_indices,         // shape (256,2)
+//i     const float *beam_locations,     // shape (nbeams,2)
+//i     long downsampling_factor,
+//i     long nfreq,
+//i     long nbeams,
+//i     float ns_feed_spacing,
+//i     const float *ew_feed_spacings,
+//i     const uint8_t *e_arr,            // shape (Tin,F,2,256), on gpu
+//i     const float *feed_weights,       // shape (F,2,256,2), on gpu
+//i     float *i_out,                    // shape (Tout,F,B), on gpu
+//i     long Tin
+//i );
+//i
+//i }  // extern "C"
+
 }  //x namespace pirate
-   //x
+
 #endif  // _CASM_BEAMFORMER_HPP

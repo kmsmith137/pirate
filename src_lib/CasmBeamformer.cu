@@ -2986,7 +2986,7 @@ void CasmBeamformer::test_microkernels()
 
 
 // Static member function.
-void CasmBeamformer::time()
+void CasmBeamformer::run_timings()
 {
     long F = 512;          // frequency channels per gpu
     long D = 32;           // time downsampling factor
@@ -3047,6 +3047,73 @@ void CasmBeamformer::time()
     for (ulong ib = 0; ib < Bvec.size(); ib++)
         cout << Bvec[ib] << " " << lfvec[ib] << endl;
 }
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// For python ctypes
+
+#if 0  //x Code below is included in the vendorized version, but commented out in the original.
+
+extern "C" {
+
+void casm_bf_test_microkernels()
+{
+    try {
+        CasmBeamformer::test_microkernels();
+    } catch (const std::exception& e) {
+        cerr << "CasmBeamformer::test_microkernels() raised exception: " << e.what() << "\n";
+    } catch (...) {
+        cerr << "Unknown exception caught\n";
+    }
+}
+
+void casm_bf_run_timings()
+{
+    try {
+        CasmBeamformer::run_timings();
+    } catch (const std::exception& e) {
+        cerr << "CasmBeamformer::run_timings() raised exception: " << e.what() << "\n";
+    } catch (...) {
+        cerr << "Unknown exception caught\n";
+    }
+}
+
+int casm_bf_get_max_beams()
+{
+    return shmem_layout::max_beams;
+}
+    
+void casm_bf_one_shot_for_testing(
+    const float *frequencies,        // shape (nfreq,)
+    const int *feed_indices,         // shape (256,2)
+    const float *beam_locations,     // shape (nbeams,2)
+    long downsampling_factor,
+    long nfreq,
+    long nbeams,
+    float ns_feed_spacing,
+    const float *ew_feed_spacings,
+    const uint8_t *e_arr,            // shape (Tin,F,2,256), on gpu
+    const float *feed_weights,       // shape (F,2,256,2), on gpu
+    float *i_out,                    // shape (Tout,F,B), on gpu
+    long Tin)
+{
+    try {
+        CasmBeamformer bf(
+            frequencies, feed_indices, beam_locations,
+            downsampling_factor, nfreq, nbeams,
+            ns_feed_spacing, ew_feed_spacings);        
+        bf.launch_beamformer(e_arr, feed_weights, i_out, Tin);
+    } catch (const std::exception& e) {
+        cerr << "casm_bf_one_shot_for_testing() raised exception: " << e.what() << "\n";
+    } catch (...) {
+        cerr << "Unknown exception caught\n";
+    }
+}
+
+}   // extern "C"
+
+#endif  //x Code above is included in the vendorized version, but commented out in the original.
 
 
 }  //x namespace pirate

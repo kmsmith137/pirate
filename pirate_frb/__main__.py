@@ -68,7 +68,7 @@ def test(args):
                 CasmReferenceBeamformer.test_interpolative_beamforming()
             
             pirate_pybind11.CasmBeamformer.test_microkernels()
-            CasmReferenceBeamformer.test_cuda_python_equivalence()
+            CasmReferenceBeamformer.test_cuda_python_equivalence(linkage='pybind11')
         
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()
@@ -110,7 +110,7 @@ def time(args):
     if run_all_timings or args.gpfk:
         pirate_pybind11.time_gpu_peak_finding_kernels()
     if run_all_timings or args.casm:
-        pirate_pybind11.CasmBeamformer.time()
+        pirate_pybind11.CasmBeamformer.run_timings()
 
 
 #####################################   show_hardware command  #####################################

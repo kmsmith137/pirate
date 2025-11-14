@@ -8,7 +8,7 @@ class Dense1dBeamformer:
     def __init__(self, freq, feed_positions, sin_za_grid):
         """
         Currently, this class is only used to make some exploratory/forecasting
-        plots for the CASM beamformer.
+        plots for the CASM beamforming design doc.
         
         Args:
         

@@ -57,7 +57,8 @@ def vendorize(infile, outfile):
             #   //i #include <something>
             # → #include <something>
             text_after = line[idx+3:]     # text after "//i"
-            outfile.write(text_after.lstrip())
+            text_after = text_after[1:] if text_after.startswith(' ') else text_after
+            outfile.write(text_after)
             continue
 
         # --- Default case: write line unchanged ---

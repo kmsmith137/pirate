@@ -78,7 +78,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
         .def_static("get_max_beams", &CasmBeamformer::get_max_beams)
         .def_static("test_microkernels", &CasmBeamformer::test_microkernels)
-        .def_static("time", &CasmBeamformer::time)
+        .def_static("run_timings", &CasmBeamformer::run_timings)
     ;
     
     py::class_<FakeCorrelator>(m, "FakeCorrelator")
