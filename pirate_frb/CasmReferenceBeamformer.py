@@ -600,7 +600,7 @@ class CasmReferenceBeamformer:
         B = min(32*B32, Bmax)
         Tin = Tout * D
 
-        print(f'test_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): start')
+        print(f'test_casm_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): start')
         bf_py = cls.make_random(F=F, B=B, D=D, randomize_spacings=True)
 
         # Use uint8, since numpy doesn't have int4+4.
@@ -639,5 +639,5 @@ class CasmReferenceBeamformer:
         eps = np.max(np.abs(i_py - i_cuda)) / rms
         eps = float(eps)   # np.float64 -> float
         
-        print(f'test_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): {eps=}')
+        print(f'test_casm_cuda_python_equivalence({F=}, {B=}, {D=}, {Tin=}, {Tout=}): {eps=}')
         assert eps < 1.0e-4

@@ -63,6 +63,7 @@ def test(args):
             pirate_pybind11.test_gpu_tree_gridding_kernel()
         
         if run_all_tests or args.casm:
+            print()
             if i == 0:
                 # This test is slower than the others, but I don't think we need it more than once.
                 CasmReferenceBeamformer.test_interpolative_beamforming()

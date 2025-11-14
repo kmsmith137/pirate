@@ -26,7 +26,18 @@ namespace pirate {      //x
 
 // -------------------------------------------------------------------------------------------------
 //
-// CUDA utils
+// CUDA utils. Mostly cut-and-paste from ksgpu (https://github.com/kmsmith137/ksgpu),
+// since I didn't want ksgpu to be a dependency for the casm pipeline.
+//
+// CUDA_CALL(f()): wrapper for CUDA API calls which return cudaError_t.
+//
+// CUDA_PEEK("label"): throws exception if (cudaPeekAtLastError() != cudaSuccess).
+// The argument is a string label which appears in the error message.
+// Can be used anywhere, but intended to be called immediately after kernel launches.
+//
+// CUDA_CALL_ABORT(f()): infrequently-used version of CUDA_CALL() which aborts instead
+// of throwing an exception (for use in contexts where exception-throwing is not allowed,
+// e.g. shared_ptr deleters).
 
 #if 0  //x Code below is included in the vendorized version, but commented out in the original.
 
@@ -50,7 +61,8 @@ namespace pirate {      //x
     do { \
         cudaError_t xerr = (x); \
         if (_unlikely(xerr != cudaSuccess)) { \
-            fprintf(stderr, "CUDA call '%s' failed at %s:%d\n", xstr, file, line); \
+            fprintf(stderr, "CUDA call '%s' returned %d (%s) [%s:%d]\n", \
+                    xstr, int(xerr), cudaGetErrorString(xerr), file, line); \
             exit(1); \
         } \
     } while (0)
@@ -127,7 +139,8 @@ struct shmem_99kb
 
 // -------------------------------------------------------------------------------------------------
 //
-// RNG utils
+// RNG utils. Mostly cut-and-paste from ksgpu (https://github.com/kmsmith137/ksgpu),
+// since I didn't want ksgpu to be a dependency for the casm pipeline.
 
 
 static std::mt19937 casm_rng;
@@ -239,6 +252,29 @@ static void randomize_array(T *buf, long nelts)
 // Helpers for allocating memory, copying to/from GPU, and random number generation.
 
 
+static void cuda_free_on_device(int free_dev, void *p)
+{
+    // This wrapper ensures that cudaMalloc() and cudaFree() are called on the same device.
+    // Note that we use CUDA_CALL_ABORT() instead of CUDA_CALL(), since we're in a context
+    // (shared_ptr deleter) where throwing exceptions is unsafe.
+    
+    int curr_dev = -1;
+    CUDA_CALL_ABORT(cudaGetDevice(&curr_dev));
+
+    if (curr_dev != free_dev)
+        CUDA_CALL_ABORT(cudaSetDevice(free_dev));
+
+    cudaFree(p);
+    
+    // Restore the original cuda device. (Otherwise, the shared_ptr deleter could trigger
+    // an unexpected persistent change in the current cuda device, which sounds like a recipe
+    // for bugs that are hard to track down.)
+    
+    if (curr_dev != free_dev)
+        CUDA_CALL_ABORT(cudaSetDevice(curr_dev));
+}
+
+
 template<typename T>
 static shared_ptr<T> cpu_alloc(long nelts, bool randomize=false)
 {
@@ -257,10 +293,15 @@ static shared_ptr<T> cpu_alloc(long nelts, bool randomize=false)
 template<typename T>
 static shared_ptr<T> gpu_alloc(long nelts)
 {
+    int dev = -1;
+    CUDA_CALL(cudaGetDevice(&dev));
+    
     T *p = nullptr;
     CUDA_CALL(cudaMalloc((void **) &p, nelts * sizeof(T)));
     CUDA_CALL(cudaMemset(p, 0, nelts * sizeof(T)));
-    return shared_ptr<T> (p, cudaFree);   // cudaFree() will be called by shared_ptr destructor
+
+    auto deleter = [dev](void *p) { cuda_free_on_device(dev,p); };
+    return shared_ptr<T> (p, deleter);
 }
 
 
