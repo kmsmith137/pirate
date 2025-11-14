@@ -3097,7 +3097,10 @@ void CasmBeamformer::run_timings()
         }
     }
 
-    cout << "# B loadfrac\n";
+    cout << "\n# Timing summary\n"
+         << "# col 1: number of beams\n"
+         << "# col 2: load fraction (lower is better)\n";
+    
     for (ulong ib = 0; ib < Bvec.size(); ib++)
         cout << Bvec[ib] << " " << lfvec[ib] << endl;
 }

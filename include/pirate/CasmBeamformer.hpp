@@ -142,7 +142,7 @@ struct CasmBeamformer
     );
     //xend
     
-    // "Bare-pointer" constructor.
+    // "Bare-pointer" constructor. All pointers should be host memory, not GPU memory.
     CasmBeamformer(
         const float *frequencies,        // shape (nfreq,)
         const int *feed_indices,         // shape (256,2)
@@ -188,11 +188,11 @@ struct CasmBeamformer
 
     // "Bare-pointer" version.
     void launch_beamformer(
-        const uint8_t *e_arr,                      // shape (Tin,F,2,256), axes (time,freq,pol,dish)
-        const float *feed_weights,                 // shape (F,2,256,2), axes (freq,pol,dish,reim)
-        float *i_out,                              // shape (Tout,F,B)
-        long Tin,                                  // number of input times Tin = Tout * downsampling_factor
-        cudaStream_t stream = nullptr              // nullptr = "default cuda stream"
+        const uint8_t *e_arr,           // Pointer to GPU memory! Shape (Tin,F,2,256), axes (time,freq,pol,dish)
+        const float *feed_weights,      // Pointer to GPU memory! Shape (F,2,256,2), axes (freq,pol,dish,reim)
+        float *i_out,                   // Pointer to GPU memory! shape (Tout,F,B)
+        long Tin,                       // number of input times Tin = Tout * downsampling_factor
+        cudaStream_t stream = nullptr   // nullptr = "default cuda stream"
     ) const;    
 
     // There is a maximum beam count that the beamformer can support
@@ -244,7 +244,13 @@ struct CasmBeamformer
     );
 };
 
-// For python ctypes
+
+// -------------------------------------------------------------------------------------------------
+//
+// Code below is only needed for python ctypes (i.e. not needed if you're calling from C++).
+//
+// Note that casm_bf_one_shot_for_testing() is a slow interface, but is only used for a unit test.
+
 //i extern "C" {
 //i
 //i void casm_bf_test_microkernels();
