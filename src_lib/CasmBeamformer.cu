@@ -513,7 +513,7 @@ struct casm_controller
     //
     // Warning: caller must call __syncthreads() after calling constructor, and before calling load_ungridded_e().
     
-    __device__ inline casm_controller(const uint8_t *global_e, const float *feed_weights, const float *gpu_persistent_data, int nbeams)
+    __device__ inline casm_controller(const uint8_t *global_e, const float *feed_weights, const uint *gpu_persistent_data, int nbeams)
     {
         if constexpr (Debug) {
             assert(blockDim.x == 32);
@@ -544,8 +544,9 @@ struct casm_controller
     //
     // Note: caller is responsible for calling __syncthreads() afterwards!
 
-    __device__ inline void copy_global_to_shared_memory(const float *gpu_persistent_data, const float *feed_weights, int nbeams)
+    __device__ inline void copy_global_to_shared_memory(const uint *gpu_persistent_data, const float *feed_weights, int nbeams)
     {
+        extern __shared__ uint shmem_u[];
         extern __shared__ float shmem_f[];
 
         uint w = threadIdx.y;          // warp id
@@ -557,7 +558,7 @@ struct casm_controller
         if (w < 9) {
             // gridding + ns_phases (256+32 elts)
             uint s = 32*w + l;
-            shmem_f[s] = gpu_persistent_data[s];
+            shmem_u[s] = gpu_persistent_data[s];
             w += 24;
         }
 
@@ -566,7 +567,7 @@ struct casm_controller
             uint s = 32*(w-9) + l;
             uint dst = shmem_layout::per_frequency_data_base + s;
             long src = gmem_layout::per_frequency_data_base(f) + s;
-            shmem_f[dst] = gpu_persistent_data[src];
+            shmem_u[dst] = gpu_persistent_data[src];
             w += 24;
         }
             
@@ -1017,7 +1018,7 @@ struct casm_controller
 __global__ void casm_controller_test_kernel(
     const uint8_t *e_in,                // (T,F,2,D) = (time,freq,pol,dish)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
-    const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
+    const uint *gpu_persistent_data,    // see "global memory layout" earlier in source file
     float *out,                         // (T,F,2,6,64,2) = (time,freq,pol,ew,ns,reim)
     int T)
 {
@@ -1941,7 +1942,7 @@ struct fft2_microkernel
 __global__ void fft2_test_kernel(
     const float *g_in,                  // (TP,F,6,128,2) = (tpol,freq,ewfeed,ns,reim)
     const float *feed_weights,          // (F,2,256,2), not used
-    const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
+    const uint *gpu_persistent_data,    // see "global memory layout" earlier in source file
     float *i_out,                       // (F,24,128) = (freq,ewbeam,ns)
     int TP)
 {
@@ -2267,7 +2268,7 @@ struct interpolation_microkernel
 __global__ void casm_interpolation_test_kernel(
     const float *i_in,                  // (Tout,F,24,128)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim), dereferenced but not used
-    const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
+    const uint *gpu_persistent_data,    // see "global memory layout" earlier in source file
     float *i_out,                       // (Tout,F,B)
     int Tout, int B, float normalization)
 {
@@ -2452,7 +2453,7 @@ __global__ void __launch_bounds__(24*32, 1)
 casm_beamforming_kernel(
     const uint8_t *e_in,                // (Tin,F,2,D) = (time,freq,pol,dish)
     const float *feed_weights,          // (F,2,256,2) = (freq,pol,dish,reim)
-    const float *gpu_persistent_data,   // see "global memory layout" earlier in source file
+    const uint *gpu_persistent_data,    // see "global memory layout" earlier in source file
     float *i_out,                       // (Tout,F,B)
     int Tout,                           // Number of output times
     int Tds,                            // Downsampling factor Tin/Tout
@@ -2753,13 +2754,13 @@ void CasmBeamformer::_construct(
     
     // The rest of this function fills 'gpu_persistent_data' and copies to the GPU.
     // See comment near the beginning of this file for the memory layout.
-    gpu_persistent_data = cpu_alloc<float> (gmem_layout::nelts(F,B));
+    gpu_persistent_data = cpu_alloc<uint> (gmem_layout::nelts(F,B));
     
     // Compute 'gridding' part of 'gpu_persistent_data' (with error-checking).
     // This contains the same info as the 'feed_indices' arg, just reparameterized
     // as (ns,ew) -> (43*ew+ns).
     
-    uint *gp = (uint *) (gpu_persistent_data.get());
+    uint *gp = gpu_persistent_data.get();
     vector<int> duplicate_checker({6*43}, -1);
     
     for (int d = 0; d < 256; d++) {
@@ -2793,7 +2794,7 @@ void CasmBeamformer::_construct(
     // in the length-128 FFT. Precomputing these phases on the host is faster,
     // since it avoids the overhead of trig functions in the GPU kernel.
     
-    float *nsp = gpu_persistent_data.get() + shmem_layout::ns_phases_base;
+    float *nsp = (float *) (gpu_persistent_data.get() + shmem_layout::ns_phases_base);
     for (int i = 0; i < 32; i++)
         nsp[i] = cosf(2 * M_PI * i / 128.0);
 
@@ -2816,7 +2817,7 @@ void CasmBeamformer::_construct(
 
         for (int ew_feed = 0; ew_feed < 3; ew_feed++) {
             // Points to 32-element "inner" region (see (*) above).
-            float *pf32 = gpu_persistent_data.get() + gmem_layout::per_frequency_data_base(f) + 32*ew_feed;
+            float *pf32 = (float *) (gpu_persistent_data.get() + gmem_layout::per_frequency_data_base(f) + 32*ew_feed);
             pf32[25] = freq;
 
             // Instead of passing the ew_beam_locations and ew_feed_positions to the GPU
@@ -2834,7 +2835,7 @@ void CasmBeamformer::_construct(
     }
 
     // Compute 'beam_locations' part of gpu_persistent_data.
-    float *blp = gpu_persistent_data.get() + gmem_layout::beam_locs_base(F);
+    float *blp = (float *) (gpu_persistent_data.get() + gmem_layout::beam_locs_base(F));
     
     for (long b = 0; b < B; b++) {
         for (int j = 0; j < 2; j++) {

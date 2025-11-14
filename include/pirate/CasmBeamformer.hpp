@@ -223,7 +223,7 @@ struct CasmBeamformer
     // CasmBeamformer constructor, and passed to the beamformer on every kernel launch.
     // See "global memory layout" in CasmBeamformer.cu for more info.
     // (Represented as a std::shared_ptr whose deleter calls cudaFree().)
-    std::shared_ptr<float> gpu_persistent_data;
+    std::shared_ptr<uint> gpu_persistent_data;
     
     // For unit tests.
     long nominal_Tin_for_unit_tests = 0;
