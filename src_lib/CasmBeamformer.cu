@@ -1,7 +1,22 @@
+// CasmBeamformer.cu: this is the low-level cuda implementation of the casm beamformer.
+//
+// Reference: https://www.overleaf.com/project/68e147bd38d7ce3e40931bf1
+// (Let me know if you need access.)
+//
+// The casm beamformer is organized as a sequence of four all-inline "microkernels":
+//
+//   - casm_controller: handles most global/shared memory management
+//   - casm_fft1_microkernel: FFT in the north-south (43->128) direction
+//   - casm_fft2_microkernel: FFT in the east-west (6->24) direction
+//   - interpolation_microkernel: bicubic interpolation, writes to global memory
+//
+// The microkernels are separately unit-tested, and chained together in the "toplevel"
+// kernel (casm_beamforming_kernel, toward the end of this source files).
+//x
 //x This script is processed with 'vendorize.py' (in the toplevel pirate dir)
 //x to produce a "vendorized" source file for the casm pipeline. The markup
 //x in comments (e.g. "//x") is parsed by vendorize.py.
-//x
+
 #include "../include/pirate/CasmBeamformer.hpp" //x
 //i #include "CasmBeamformer.hpp"
 
@@ -27,7 +42,7 @@ namespace pirate {      //x
 // -------------------------------------------------------------------------------------------------
 //
 // CUDA utils. Mostly cut-and-paste from ksgpu (https://github.com/kmsmith137/ksgpu),
-// since I didn't want ksgpu to be a dependency for the casm pipeline.
+// since I didn't want ksgpu to be a dependency for the casm_bf repo.
 //
 // CUDA_CALL(f()): wrapper for CUDA API calls which return cudaError_t.
 //
@@ -140,7 +155,7 @@ struct shmem_99kb
 // -------------------------------------------------------------------------------------------------
 //
 // RNG utils. Mostly cut-and-paste from ksgpu (https://github.com/kmsmith137/ksgpu),
-// since I didn't want ksgpu to be a dependency for the casm pipeline.
+// since I didn't want ksgpu to be a dependency for the casm_bf repo.
 
 
 static std::mt19937 casm_rng;
@@ -249,7 +264,9 @@ static void randomize_array(T *buf, long nelts)
 
 // -------------------------------------------------------------------------------------------------
 //
-// Helpers for allocating memory, copying to/from GPU, and random number generation.
+// Helpers for allocating memory and copying to/from GPU. Mostly cut-and-paste from ksgpu
+// (https://github.com/kmsmith137/ksgpu), since I didn't want ksgpu to be a dependency
+// for the casm_bf repo.
 
 
 static void cuda_free_on_device(int free_dev, void *p)
@@ -1619,6 +1636,7 @@ static void test_casm_fft1_microkernel()
     // Run CPU reference kernel.
     fft1_reference_kernel(out_cpu.get(), in.get());
 
+    // Run GPU kernel.
     in = to_gpu(in, 2*2*6*64*2);
     fft1_test_kernel <<< 1, {32,24,1}, 99*1024 >>> (in.get(), out_gpu.get());
     CUDA_PEEK("fft1_test_kernel");

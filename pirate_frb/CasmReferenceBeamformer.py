@@ -451,12 +451,20 @@ class CasmReferenceBeamformer:
 
     
     #############  Unit test: python and cuda implementations agree to machine precision   #############
-    
+
+    # We define two ways of calling the C++/cuda code from python.
+    #
+    #   - pybind11: Used in the chord pipeline. A better interface, but has
+    #       dependencies (pybind11, ksgpu) that I didn't want to include
+    #       in the casm_bf repo.
+    #
+    #   - ctypes: Used in the casm_bf repo. This interface is pretty awkward,
+    #       but only needs the python standard library (via 'import ctypes')
 
     def run_cuda_kernel_via_pybind11(self, e_in, feed_weights, i_out):
         """
-        Launches cuda kernel via pybind11 (works in chord pipeline, but not casm pipeline).
-        Inefficient and used only for testing.
+        Launches cuda kernel via pybind11 interface. Only used for testing.
+        Note: this works in the chord pipeline, but not in the casm_bf repo!
         """
         
         from . import pirate_pybind11
@@ -479,7 +487,12 @@ class CasmReferenceBeamformer:
     @classmethod
     @functools.lru_cache(None)
     def libcasm_bf(cls):
-        print(f'Loading libcasm_bf.so (works in casm pipeline, but not chord pipeline)')
+        """
+        Helper function to load and initialize the C++/cuda code via ctypes interface.
+        Only used for testing.
+
+        Note: this works in the casm_bf repo, but not in the chord pipeline!
+        """
         
         lib = ctypes.CDLL("./libcasm_bf.so")
         
@@ -512,8 +525,10 @@ class CasmReferenceBeamformer:
 
     def run_cuda_kernel_via_ctypes(self, e_in, feed_weights, i_out):
         """
-        Launches cuda kernel via pybind11 (works in casm pipeline, but not chord pipeline).
-        Inefficient and used only for testing.
+        Launches cuda kernel via ctypes interface. This is a slow interface,
+        used only for testing.
+
+        Note: this works in the casm_bf repo, but not in the chord pipeline!
         """
 
         import cupy as cp
@@ -574,9 +589,11 @@ class CasmReferenceBeamformer:
     @classmethod
     def test_cuda_python_equivalence(cls, linkage):
         """
+        Unit test: python and cuda implementations agree to machine precision.
+        
         The 'linkage' arg should be either:
-          - 'pybind11' (works in chord pipeline, but not casm pipeline)
-          - 'ctypes' (works in casm pipeline, but not chord pipeline)
+          - 'pybind11' (works in chord pipeline, but not casm_bf repo)
+          - 'ctypes' (works in casm_bf repo, but not chord pipeline)
         """
         
         import cupy as cp
