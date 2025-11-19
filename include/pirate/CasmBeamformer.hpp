@@ -258,7 +258,7 @@ struct CasmBeamformer
 //i
 //i void casm_bf_test_microkernels();
 //i
-//i void casm_bf_run_timings();
+//i void casm_bf_run_timings(int ncu_hack);
 //i
 //i long casm_bf_get_max_beams();
 //i
