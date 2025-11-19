@@ -69,6 +69,7 @@ class PfOutput2:
         """
         The 'z' arg is the name of a variable containing Z-values to be reduced (dtype=dt32).
         The 'alist' arg is a list of varnames for corresponding argmax values (length 1,2 for fp32,fp16).
+        Contents of the 'alist' registers are opaque "tokens" in class PfOutput2.
         """
 
         dtype, dt32, L, S = self.dtype, self.dt32, self.L, self.S
@@ -111,8 +112,10 @@ class PfOutput2:
         """
         The 'zout' arg is a per-warp (dt32 *) varname.
         The 'aout' arg is a per-warp (uint *) varname.
-        The 'tin' and 'Tin' args are uint varnames;
-        Both pointers will be advanced in apply_outer(), as data gets written to global memory.
+        The 'tin' and 'Tin' args are uint varnames.
+
+        NOTE: The'zout' and 'aout' pointers are "owned" by the PfOutput2 class, and these
+        pointers will be incremented, as data gets written to global memory.
         """
         
         dtype, L, S = self.dtype, self.L, self.S

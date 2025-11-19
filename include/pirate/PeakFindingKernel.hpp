@@ -203,7 +203,7 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::Re
 
 // -------------------------------------------------------------------------------------------------
 //
-// "Microkernel" unit tests.
+// Unit tests of peak-finding "microkernels".
 
 
 extern void test_pf_output_microkernel();
