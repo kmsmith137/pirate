@@ -86,6 +86,7 @@ def parse_time(subparsers):
     parser = subparsers.add_parser("time", help="Run unit times (by default, all timings are run)")
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
     parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (only for time_cpu_downsample)")
+    parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
     parser.add_argument('--cd', action='store_true', help='Runs time_cpu_downsample()')
     parser.add_argument('--gd', action='store_true', help='Runs time_gpu_downsample()')
     parser.add_argument('--gt', action='store_true', help='Runs time_gpu_transpose()')
@@ -98,7 +99,14 @@ def parse_time(subparsers):
 def time(args):
     timing_flags = [ 'cd', 'gd', 'gt', 'gldk', 'gddk', 'gpfk', 'casm' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
-    
+
+    if args.ncu:
+        nflags = sum((1 if getattr(args,x) else 0) for x in timing_flags)
+        if nflags != 1:
+            raise RuntimeError(f'If --ncu is specified, then precisely one of {timing_flags} must be specified')
+        if not args.casm:
+            raise RuntimeError(f'Currently, the --ncu flag is only supported with --casm (FIXME)')
+        
     ksgpu.set_cuda_device(args.gpu)
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
         
@@ -115,7 +123,7 @@ def time(args):
     if run_all_timings or args.gpfk:
         pirate_pybind11.time_gpu_peak_finding_kernels()
     if run_all_timings or args.casm:
-        pirate_pybind11.CasmBeamformer.run_timings()
+        pirate_pybind11.CasmBeamformer.run_timings(args.ncu)
 
 
 #####################################   show_hardware command  #####################################

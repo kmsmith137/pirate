@@ -201,7 +201,10 @@ struct CasmBeamformer
     
     static void show_shared_memory_layout();
     static void test_microkernels();
-    static void run_timings();
+
+    // If ncu_hack=true, just run a single kernel, and do not report timings.
+    // (Intended for profiling with nvidia 'ncu'.)
+    static void run_timings(bool ncu_hack);
 
     // ---------------------------------------------------------------------------------------------
     

@@ -1253,7 +1253,13 @@ struct fft_c2c_microkernel
         x1_re = yre;
         x1_im = yim;
 
-        // swap "01" register bit with thread bit (R-2)
+        // Swap "01" register bit with thread bit (R-2)
+        //
+        // FIXME here and in other places, we do "back-to-back" warp_transpose() calls, which
+        // repeats some bitwise logic. Is this suboptimal? Similarly, in fft1_microkernel.apply(),
+        // we do "back-to-back" calls to fft_c2c_microkernel<6>::apply(). Would it be faster to
+        // define a method fft_c2c_microkernel<6>::apply2() which does two FFTs in parallel?
+        
         warp_transpose(x0_re, x1_re, (1 << (R-2)));
         warp_transpose(x0_im, x1_im, (1 << (R-2)));
         
@@ -1433,7 +1439,7 @@ struct fft1_microkernel
 {
     fft_c2c_microkernel<6> next_fft;
     float cre, cim;   // "twiddle" factor exp(2*pi*i t / 128)
-    int sbase;        // shared memory offset
+    int soff;         // shared memory offset
 
     __device__ inline fft1_microkernel()
     {
@@ -1471,10 +1477,10 @@ struct fft1_microkernel
         // float G[8][772];  float G[2][2][2][6][128];  (time,pol,reim,ew,ns), reim-stride 6*128 + 4 (=772)
         constexpr uint GB = shmem_layout::G_base;
         constexpr uint GS = shmem_layout::G_reim_stride;
-        sbase = GB + (4*t0 + 2*pol) * GS + (128*ew + ns);
+        soff = GB + (4*t0 + 2*pol) * GS + (128*ew + ns);
 
         // Check that G-array write is bank conflict free.
-        check_bank_conflict_free<Debug> (sbase);
+        check_bank_conflict_free<Debug> (soff);
     }
     
     __device__ inline void apply(float x0_re, float x0_im, float x1_re, float x1_im)
@@ -1512,14 +1518,14 @@ struct fft1_microkernel
         // Strides: xy=32, 01=64, ReIm=GS
         constexpr uint GS = shmem_layout::G_reim_stride;
 
-        shmem_f[sbase] = x0_re;
-        shmem_f[sbase+32] = y0_re;
-        shmem_f[sbase+64] = x1_re;
-        shmem_f[sbase+96] = y1_re;
-        shmem_f[sbase+GS] = x0_im;
-        shmem_f[sbase+GS+32] = y0_im;
-        shmem_f[sbase+GS+64] = x1_im;   
-        shmem_f[sbase+GS+96] = y1_im;   
+        shmem_f[soff] = x0_re;
+        shmem_f[soff+32] = y0_re;
+        shmem_f[soff+64] = x1_re;
+        shmem_f[soff+96] = y1_re;
+        shmem_f[soff+GS] = x0_im;
+        shmem_f[soff+GS+32] = y0_im;
+        shmem_f[soff+GS+64] = x1_im;   
+        shmem_f[soff+GS+96] = y1_im;   
     }
 };
 
@@ -1805,6 +1811,10 @@ struct fft2_microkernel
         //   l4 l3 l2 l1 l0 <-> (ns4) (ns3) (ns1) (ns0) (b0)
         //
         // 'soff_i{0,1}' is the offset with bouter={0,1} and b1=0.
+        //
+        // FIXME could consider computing soff_{i0,i1} on-the-fly, rather than
+        // keeping in persistent registers. (Doesn't seem important in CASM-256,
+        // but may help with register pressure in a large CASM.)
 
         soff_i0 = shmem_layout::I_base + (12+b02) * shmem_layout::I_ew_stride + ns;  // offset for bouter=0
         soff_i1 = shmem_layout::I_base + (11-b02) * shmem_layout::I_ew_stride + ns;  // offset for bouter=1
@@ -3062,15 +3072,17 @@ void CasmBeamformer::test_microkernels()
 
 
 // Static member function.
-void CasmBeamformer::run_timings()
+void CasmBeamformer::run_timings(bool ncu_hack)
 {
     long F = 512;          // frequency channels per gpu
     long D = 32;           // time downsampling factor
     long Tout = 512;       // output time samples per kernel launch
     long Tin = D * Tout;   // number of input time samples
-    long niter = 20;
+    long niter = ncu_hack ? 1 : 20;
 
-    vector<long> Bvec = {32,1024,2048,3072,4096};   // number of beams
+    vector<long> Bvec_ncu = {1024};
+    vector<long> Bvec_timing = {32,1024,2048,3072,4096};
+    vector<long> Bvec = ncu_hack ? Bvec_ncu : Bvec_timing;
     vector<double> lfvec(Bvec.size());
     
     double ts = 4096 / (125 * 1.0e6);    // time sampling rate, in seconds
@@ -3086,7 +3098,7 @@ void CasmBeamformer::run_timings()
 
     for (ulong ib = 0; ib < Bvec.size(); ib++) {
         long B = Bvec[ib];
-        cout << "Starting timing, B=" << B << ", Tin=" << Tin << endl;
+        cout << "Starting run, B=" << B << ", Tin=" << Tin << endl;
         cout << "Input array: " << (1.0e-9 * Tin * F * 2 * 256) << " GB" << endl;
         cout << "Output array: " << (4.0e-9 * Tout * F * B) << " GB" << endl;
 
@@ -3118,6 +3130,9 @@ void CasmBeamformer::run_timings()
             }
         }
     }
+
+    if (ncu_hack)
+        return;
 
     cout << "\n# Timing summary\n"
          << "# col 1: number of beams\n"
