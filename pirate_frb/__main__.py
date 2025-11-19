@@ -31,7 +31,7 @@ def parse_test(subparsers):
 
     
 def test(args):
-    test_flags = [ 'ddb', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'dd' ]
+    test_flags = [ 'ddb', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'dd' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)

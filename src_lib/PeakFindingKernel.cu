@@ -515,10 +515,10 @@ ostream &operator<<(ostream &os, const TestPfOutput2::RegistryValue &v)
 
 void test_pf_output_microkernel()
 {
-    auto key = TestPfOutput2::registry().get_random_key();
-    uint Dout = key.Dout;
-    Dtype dtype = key.dtype;
+    TestPfOutput2::RegistryKey key = TestPfOutput2::registry().get_random_key();
     
+    Dtype dtype = key.dtype;
+    uint Dout = key.Dout;
     uint Tin = xdiv(1024, dtype.nbits) * rand_int(1, 100);
     uint Tout = xdiv(Tin, Dout);
     
@@ -538,11 +538,11 @@ void test_pf_output_microkernel()
 	for (uint tin = 0; tin < Tin; tin++) {
 	    for (;;) {
 		uint token = ksgpu::default_rng();
-		if (token_mapping.find(token) != token_mapping.end())
-		    continue;  // token is already assigned
-
-		token_mapping[token] = std::pair<int,int> (s,tin);
-		ain_cpu.at({s,tin}) = token;
+		if (token_mapping.find(token) == token_mapping.end()) {
+		    token_mapping[token] = std::pair<int,int> (s,tin);
+		    ain_cpu.at({s,tin}) = token;
+		    break;
+		}
 	    }
 	}
     }
@@ -572,7 +572,7 @@ void test_pf_output_microkernel()
 
     zout_gpu = zout_gpu.to_host();
     aout_gpu = aout_gpu.to_host();
-
+    
     // The 'zout_gpu' array can be directly compared to the 'zout_cpu' array.
     // However, 'aout_gpu' cannot be directly compared to a CPU reference implementation,
     // because of (near-)ties. Therefore, we compute 'za_gpu', by evaluating the
@@ -584,13 +584,13 @@ void test_pf_output_microkernel()
 
     for (uint tout = 0; tout < Tout; tout++) {
 	uint token = aout_gpu.at({tout});
+	
 	auto it = token_mapping.find(token);
 	if (token_mapping.find(token) == token_mapping.end())
-	    throw runtime_error("aout_gpu contains an invalid token?!");
+	    throw runtime_error("aout_gpu contains invalid token?!");
 
 	auto [s,tin] = it->second;
-
-	if ((tin < tout*Dout) || (tin >= tout*Dout))
+	if ((tin < tout*Dout) || (tin >= (tout+1)*Dout))
 	    throw runtime_error("tin is out-of-range?!");
 
 	za_gpu.at({tout}) = zin_cpu.at({s,tin});

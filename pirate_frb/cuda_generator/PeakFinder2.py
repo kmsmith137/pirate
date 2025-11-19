@@ -145,7 +145,7 @@ class PfOutput2:
             k.emit(f'\n// Reduce {z}, ainner0 over lanes, stride={2**b}')
             k.emit(f'{dtype} {zz} = __shfl_sync(~0u, {z}, threadIdx.x ^ {2**b});')
             k.emit(f'uint {aa} = __shfl_sync(~0u, ainner0, threadIdx.x ^ {2**b});')
-            k.emit(f'ainner0 = ({z} < {zz}) ? {zz} : {z};')
+            k.emit(f'ainner0 = ({z} < {zz}) ? {aa} : ainner0;')
             k.emit(f'{z} = {self.dtmax}({z},{zz});')
 
         if dtype == 'float':
@@ -167,7 +167,7 @@ class PfOutput2:
             
             lo, hi = k.get_tmp_rname(2)
             k.emit(f'__half {lo} = __shfl_sync(~0u, {z}, (threadIdx.x << {L}));')
-            k.emit(f'__half {hi} = __shfl_sync(~0u, {z}, (threadIdx.x << {L}) + 1);')
+            k.emit(f'__half {hi} = __shfl_sync(~0u, {z}, (threadIdx.x << {L}) + {1<<(L-1)});')
             k.emit(f'zinner = __halves2half2({lo}, {hi});')
 
             if L >= 2:
