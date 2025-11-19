@@ -201,6 +201,49 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::Re
 extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::RegistryValue &v);
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// "Microkernel" unit tests.
+
+
+extern void test_pf_output_microkernel();
+
+
+// Registry boilerplate starts here.
+
+struct TestPfOutput2
+{
+    
+    struct RegistryKey
+    {
+        ksgpu::Dtype dtype;   // either float16 or float32
+        int Dout = 0;
+    };
+
+    struct RegistryValue
+    {
+	// The test kernel is called as (32 threads, 1 threadblock):
+	//   void kernel(void *zout, uint *aout, void *zin, uint *ain, uint Tin);
+	//
+	// where 'zout' and 'zin' have type RegistryKey::dtype, and:
+	//   zout.shape == aout.shape == (Tin//Dout)
+	//   zin.shape == ain.shape == (4, Tin)
+
+	void (*cuda_kernel) (void *, uint *, void *, uint *, uint) = nullptr;
+    };
+    
+    using Registry = KernelRegistry<RegistryKey, RegistryValue>;
+
+    // Static member function to access registry.
+    static Registry &registry();    
+};
+
+// Defined in GpuPeakFindingKernel.cu
+extern bool operator==(const TestPfOutput2::RegistryKey &k1, const TestPfOutput2::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const TestPfOutput2::RegistryKey &k);
+extern std::ostream &operator<<(std::ostream &os, const TestPfOutput2::RegistryValue &v);
+
+
 }  // namespace pirate
 
 #endif // _PIRATE_PEAK_FINDING_KERNEL_HPP

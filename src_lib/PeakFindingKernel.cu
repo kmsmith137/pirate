@@ -3,6 +3,7 @@
 #include "../include/pirate/utils.hpp"
 
 #include <mutex>
+#include <unordered_map>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
 
@@ -401,7 +402,8 @@ struct PfRegistry : public GpuPeakFindingKernel::Registry
     {
         // Just check that all members have been initialized.
         // (In the future, I may add more argument checking here.)
-        
+	
+	xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
         xassert(key.M > 0);
         xassert(key.E > 0);
         xassert(key.Dout > 0);
@@ -451,6 +453,154 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryValue &v)
 {
     os << "warps_per_threadblock=" << v.W << ", Dcore=" << v.Dcore;
     return os;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// TestPfOutput2
+
+
+struct TestPfOutput2Registry : public TestPfOutput2::Registry
+{
+    using Key = TestPfOutput2::RegistryKey;
+    using Val = TestPfOutput2::RegistryValue;
+
+    virtual void add(const Key &key, const Val &val, bool debug) override
+    {
+        // Just check that all members have been initialized.
+        // (In the future, I may add more argument checking here.)
+	
+        xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+	xassert(key.Dout > 0);
+	xassert(val.cuda_kernel != nullptr);
+
+        // Call add() in base class.
+        TestPfOutput2::Registry::add(key, val, debug);
+    }
+};
+
+// Instead of declaring the registry as a static global variable, we declare it as a
+// static local variable in the static member function TestPfOutput2::registry().
+// The registry will be initialized the first time that TestPfOutput2::registry()
+// is called.
+//
+// This kludge is necessary because the registry is accessed at library initialization
+// time, by callers in other source files, and source files are executed in an
+// arbitrary order.
+
+// Static member function
+TestPfOutput2::Registry &TestPfOutput2::registry()
+{
+    static TestPfOutput2Registry reg;
+    return reg;  // note: thread-safe (as of c++11)
+}
+
+bool operator==(const TestPfOutput2::RegistryKey &k1, const TestPfOutput2::RegistryKey &k2)
+{
+    return (k1.dtype == k2.dtype) && (k1.Dout == k2.Dout);
+}
+
+ostream &operator<<(ostream &os, const TestPfOutput2::RegistryKey &k)
+{
+    os << "TestPfOutput2(dtype=" << k.dtype << ", Dout=" << k.Dout << ")";
+    return os;
+}
+
+ostream &operator<<(ostream &os, const TestPfOutput2::RegistryValue &v)
+{
+    return os;
+}
+
+
+void test_pf_output_microkernel()
+{
+    auto key = TestPfOutput2::registry().get_random_key();
+    uint Dout = key.Dout;
+    Dtype dtype = key.dtype;
+    
+    uint Tin = xdiv(1024, dtype.nbits) * rand_int(1, 100);
+    uint Tout = xdiv(Tin, Dout);
+    
+    cout << "test_pf_output2_microkernel: dtype=" << dtype << ", Dout=" << Dout << ", Tin=" << Tin << endl;
+
+    Array<float> zin_cpu({4,Tin}, af_uhost | af_random);
+    Array<float> zout_cpu({Tout}, af_uhost);
+    Array<uint> ain_cpu({4,Tin}, af_uhost);
+
+    // Each (s,tin) pair gets a random uint token.
+    //   - token_mapping: (token) -> (s,tin)
+    //   - ain_cpu: inverse (s,tin) -> (token)
+
+    std::unordered_map<uint, std::pair<uint,uint>> token_mapping;
+
+    for (uint s = 0; s < 4; s++) {
+	for (uint tin = 0; tin < Tin; tin++) {
+	    for (;;) {
+		uint token = ksgpu::default_rng();
+		if (token_mapping.find(token) != token_mapping.end())
+		    continue;  // token is already assigned
+
+		token_mapping[token] = std::pair<int,int> (s,tin);
+		ain_cpu.at({s,tin}) = token;
+	    }
+	}
+    }
+
+    // Compute 'zout_cpu' (reference CPU implementation).
+
+    for (uint tout = 0; tout < Tout; tout++) {
+	float zmax = -1.0e10f;
+	for (uint s = 0; s < 4; s++)
+	    for (uint tin = tout*Dout; tin < (tout+1)*Dout; tin++)
+		zmax = fmaxf(zmax, zin_cpu.at({s,tin}));
+	zout_cpu.at({tout}) = zmax;
+    }
+
+    // Run GPU kernel.
+
+    Array<void> zin_gpu = zin_cpu.convert(dtype).to_gpu();
+    Array<uint> ain_gpu = ain_cpu.to_gpu();
+    Array<void> zout_gpu(dtype, {Tout}, af_gpu | af_guard);
+    Array<uint> aout_gpu({Tout}, af_gpu | af_guard);
+
+    // void kernel(void *zout, uint *aout, void *zin, uint *ain, uint Tin);
+    auto kernel = TestPfOutput2::registry().get(key).cuda_kernel;
+
+    kernel<<<1,32>>> (zout_gpu.data, aout_gpu.data, zin_gpu.data, ain_gpu.data, Tin);
+    CUDA_PEEK("pf_output2_test_kernel");
+
+    zout_gpu = zout_gpu.to_host();
+    aout_gpu = aout_gpu.to_host();
+
+    // The 'zout_gpu' array can be directly compared to the 'zout_cpu' array.
+    // However, 'aout_gpu' cannot be directly compared to a CPU reference implementation,
+    // because of (near-)ties. Therefore, we compute 'za_gpu', by evaluating the
+    // 'zin_cpu' array at the array locations given by the 'aout_gpu' tokens. If 'za_gpu'
+    // agrees with 'zout_cpu' (within roundoff error), then the 'aout_gpu' array is
+    // correct.
+
+    Array<float> za_gpu({Tout}, af_uhost);
+
+    for (uint tout = 0; tout < Tout; tout++) {
+	uint token = aout_gpu.at({tout});
+	auto it = token_mapping.find(token);
+	if (token_mapping.find(token) == token_mapping.end())
+	    throw runtime_error("aout_gpu contains an invalid token?!");
+
+	auto [s,tin] = it->second;
+
+	if ((tin < tout*Dout) || (tin >= tout*Dout))
+	    throw runtime_error("tin is out-of-range?!");
+
+	za_gpu.at({tout}) = zin_cpu.at({s,tin});
+    }
+
+    // Now we can compare everything.
+
+    double eps = 10 * dtype.precision();
+    assert_arrays_equal(zout_cpu, zout_gpu, "zout_cpu", "zout_gpu", {"tout"}, eps);
+    assert_arrays_equal(zout_cpu, za_gpu, "zout_cpu", "za_gpu", {"tout"}, eps);
 }
 
 

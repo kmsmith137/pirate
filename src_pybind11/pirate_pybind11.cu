@@ -13,6 +13,7 @@
 #include "../include/pirate/CasmBeamformer.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
+#include "../include/pirate/PeakFindingKernel.hpp"
 #include "../include/pirate/tests.hpp"
 #include "../include/pirate/timing.hpp"
 #include "../include/pirate/utils.hpp"  // show_kernels()
@@ -132,6 +133,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     m.def("test_gpu_ringbuf_copy_kernel", &test_gpu_ringbuf_copy_kernel);
     m.def("test_gpu_tree_gridding_kernel", &test_gpu_tree_gridding_kernel);
     m.def("test_dedisperser", static_cast<void (*)()> (&test_dedisperser));
+    m.def("test_pf_output_microkernel", &test_pf_output_microkernel);
 
     m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));
     m.def("time_gpu_dedispersion_kernels", &time_gpu_dedispersion_kernels);

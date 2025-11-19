@@ -19,3 +19,6 @@ from .PeakFinder import \
     PfCore, \
     PfReducer, \
     make_pf_file
+
+from .PeakFinder2 import \
+    PfOutput2

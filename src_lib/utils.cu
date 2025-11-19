@@ -284,6 +284,9 @@ void show_kernels()
 
     cout << "\nPeak-finding kernel registry:\n";
     GpuPeakFindingKernel::registry().show();
+
+    cout << "\nFor unit-testing the PfOutput microkernel:\n";
+    TestPfOutput2::registry().show();
 }
 
 

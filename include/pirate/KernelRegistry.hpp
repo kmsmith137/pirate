@@ -4,6 +4,7 @@
 #include <mutex>
 #include <vector>
 #include <string>
+#include <sstream>
 #include <iostream>
 #include <stdexcept>
 #include <ksgpu/rand_utils.hpp>
@@ -165,8 +166,14 @@ struct KernelRegistry
         std::unique_lock<std::mutex> lk(this->lock);
 
         for (ulong i = 0; i < entries.size(); i++) {
-            os << "    [" << i << "]: " << entries[i].key << "\n"
-               << "        " << entries[i].val << "\n";
+            os << "    [" << i << "]: " << entries[i].key << "\n";
+	    
+	    std::stringstream ss;
+	    ss << entries[i].val;
+	    
+	    std::string s = ss.str();
+	    if (!s.empty())
+		os << "        " << entries[i].val << "\n";
         }
     }
 };

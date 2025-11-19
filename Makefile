@@ -144,6 +144,7 @@ CUDAGEN_PYFILES = \
   pirate_frb/cuda_generator/Dedisperser.py \
   pirate_frb/cuda_generator/Kernel.py \
   pirate_frb/cuda_generator/PeakFinder.py \
+  pirate_frb/cuda_generator/PeakFinder2.py \
   pirate_frb/cuda_generator/Ringbuf.py \
   pirate_frb/cuda_generator/utils.py
 

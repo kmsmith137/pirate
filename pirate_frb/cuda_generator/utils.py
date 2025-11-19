@@ -34,6 +34,11 @@ def bit_reverse(i, nbits):
     return ret
 
 
+def srange(s, *args, sep=' '):
+    """Example: srange('x',2,5) returns 'x2 x3 x4'."""
+    return sep.join(f'{s}{n}' for n in range(*args))
+
+
 def tf(x):
     """Needed since C++ uses lower-case true/false, and python uses upper-case True/False."""
     return "true" if x else "false"

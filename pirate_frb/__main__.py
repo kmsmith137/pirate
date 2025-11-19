@@ -20,6 +20,7 @@ def parse_test(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
     parser.add_argument('--ddb', action='store_true', help='Runs test_dedispersion_basics()')
+    parser.add_argument('--pfom', action='store_true', help='Runs test_pf_output_microkernel()')
     parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel()')
     parser.add_argument('--gddk', action='store_true', help='Runs test_gpu_dedispersion_kernels()')
     parser.add_argument('--gpfk', action='store_true', help='Runs test_gpu_peak_finding_kernel()')
@@ -40,6 +41,9 @@ def test(args):
         
         if run_all_tests or args.ddb:
             pirate_pybind11.test_dedispersion_basics()
+        
+        if run_all_tests or args.pfom:
+            pirate_pybind11.test_pf_output_microkernel()
         
         if run_all_tests or args.gldk:
             pirate_pybind11.test_gpu_lagged_downsampling_kernel()
@@ -132,7 +136,7 @@ def parse_show_kernels(subparsers):
     subparsers.add_parser("show_kernels", help="Show all registered cuda kernels")
     
 def show_kernels(args):
-    pirate_pybind11.show_kernels()
+    pirate_pybind11.show_kernels()  # note: defined in src_lib/utils.cu
 
 
 #######################################   test_node command  #######################################
