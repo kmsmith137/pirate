@@ -19,7 +19,7 @@ class FrequencySubbands:
         
           - self.F = number of distinct frequency subbands
           - self.M = number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
-          - self.f_to_ii: mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+          - self.f_to_irange: mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
           - self.m_to_fd: mapping (multiplet) -> (frequency_subband, fine_grained_dm)
           - self.i_to_f:  mapping (0 <= index <= 2**rank) -> (frequency), only defined if fmin/fmax are specified
           - self.subband_counts: length-(rank+1) list, containing number of frequency subbands at each level.
@@ -76,10 +76,11 @@ class FrequencySubbands:
                     if (level == pf_rank) or ((freq_hi/freq_lo) > (1+threshold)):
                         self.subband_counts[level] += 1
             
-        self.F = 0           # number of frequency_subbands
-        self.M = 0           # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
-        self.m_to_fd = [ ]   # mapping (multiplet) -> (frequency_subband, fine_grained_dm)
-        self.f_to_ii = [ ]   # mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)        
+        self.F = 0               # number of frequency_subbands
+        self.M = 0               # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
+        self.m_to_fd = [ ]       # mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+        self.f_to_irange = [ ]   # mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+        self.f_to_mrange = [ ]   # mapping (frequency_subband) -> (multiplet pair 0 <= mlo < mhi <= M)
 
         for level in range(pf_rank+1):
             assert self.subband_counts[level] >= 0
@@ -89,7 +90,8 @@ class FrequencySubbands:
                     self.m_to_fd.append((self.F,d))
                 
                 ilo, ihi = self.get_band_index_range(level, b)
-                self.f_to_ii.append((ilo,ihi))
+                self.f_to_irange.append((ilo,ihi))
+                self.f_to_mrange.append((self.M, self.M + 2**level))
 
                 self.M += 2**level
                 self.F += 1
@@ -115,18 +117,13 @@ class FrequencySubbands:
         print(f'FrequencySubbands(pf_rank={self.pf_rank}, subband_counts={self.subband_counts},'
               + f' fmin={self.fmin}, fmax={self.fmax}, threshold={self.threshold})')
 
-        Mlo = 0
-        for (f,(ilo,ihi)) in enumerate(self.f_to_ii):
-            Mhi = Mlo + (ihi-ilo)
-            assert all(self.m_to_fd[m]==(f,m-Mlo) for m in range(Mlo,Mhi))  # consistency check
-                       
+        for f,((ilo,ihi),(mlo,mhi)) in enumerate(zip(self.f_to_irange,self.f_to_mrange)):
             level = utils.integer_log2(ihi-ilo)
-            line = f'  {f=}: {level=}  (Mlo,Mhi)=({Mlo},{Mhi})  (ilo,ihi)=({ilo},{ihi})'
+            line = f'  {f=}: {level=}  (mlo,mhi)=({mlo},{mhi})  (ilo,ihi)=({ilo},{ihi})'
             if hasattr(self, 'i_to_f'):
                 flo, fhi = self.i_to_f[ihi], self.i_to_f[ilo]   # note (lo,hi) swap
                 line += f'  (flo,fhi)=({flo:.01f},{fhi:.01f})'
             print(line)
-            Mlo = Mhi
 
         print(f'F={self.F}  # number of distinct frequency subbands')
         print(f'M={self.M}  # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs')

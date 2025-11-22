@@ -3,6 +3,7 @@ import copy
 
 from . import utils
 
+from .Dtype import Dtype
 from .Kernel import Kernel
 from .Ringbuf import Ringbuf
 
@@ -16,22 +17,13 @@ class DedisperserParams:
         The 'rank' arg can either be an integer (representing a single kernel),
         or a list of integers (representing a file containing multiple kernels).
         """
-                
-        if dtype == 'float':
-            self.dt32 = 'float'
-            self.nbits = 32
-        elif dtype == '__half':
-            self.dt32 = '__half2'
-            self.nbits = 16
-        else:
-            raise RuntimeError(f"Unrecognized dtype: {dtype}")
-        
-        assert nspec >= 1
-        assert nspec <= (512 // self.nbits)
+
+        dtype = Dtype(dtype)
+        assert 1 <= nspec <= (512 // dtype.nbits)
         assert utils.is_power_of_two(nspec)
         assert not (input_is_ringbuf and output_is_ringbuf)
         
-        max_rank = self.max_rank(self.nbits, nspec)
+        max_rank = self.max_rank(dtype.nbits, nspec)
 
         if isinstance(rank, int):
             assert 1 <= rank <= max_rank
@@ -72,7 +64,7 @@ class DedisperserParams:
             raise RuntimeError('should never get here')
 
         lag = 'rlag' if self.apply_input_residual_lags else 'nolag'
-        return f'dd_fp{self.nbits}_{rb}_{lag}_s{self.nspec}.cu'
+        return f'dd_{self.dtype.fname}_{rb}_{lag}_s{self.nspec}.cu'
 
 
     @classmethod
@@ -84,15 +76,13 @@ class DedisperserParams:
         For example, /path/to/dd_fp16_inrb_rlag_s8.cu matches.
         """
 
-        dt_dict = { 32: 'float', 16: '__half' }
         rb_dict = { 'norb': (False,False), 'inrb': (True,False), 'outrb': (False,True) }   # (in_rb, out_rb)
         lag_dict = { 'nolag': False, 'rlag': True}   # rlag
 
         try:
             # Reminder: (?:...) defines a "non-capturing group".
-            m = re.match(r'^(?:.*/)?dd_fp(\d+)_([a-z]+rb)_([a-z]+lag)_s(\d+)(?:\.cu)?', filename)
-            nbits = int(m.group(1))
-            dtype = dt_dict[nbits]
+            m = re.match(r'^(?:.*/)?dd_(fp\d+)_([a-z]+rb)_([a-z]+lag)_s(\d+)(?:\.cu)?', filename)
+            dtype = Dtype(m.group(1))
             irb, orb = rb_dict[m.group(2)]
             rlag = lag_dict[m.group(3)]
             nspec = int(m.group(4))
@@ -100,7 +90,7 @@ class DedisperserParams:
             raise RuntimeError(f"cuda_generator.DedisperserParams: couldn't parse {filename=}")
 
         # We generate all kernels up to the max rank.
-        max_rank = cls.max_rank(nbits, nspec)
+        max_rank = cls.max_rank(dtype.nbits, nspec)
         rank_list = list(range(1, max_rank+1))
         
         return cls(
@@ -156,7 +146,7 @@ def make_dd_file(filename):
         k.emit()
 
         k.emit('GpuDedispersionKernel::RegistryKey k;')
-        k.emit(f'k.dtype = ksgpu::Dtype::native<{params.dtype}>();')
+        k.emit(f'k.dtype = ksgpu::Dtype::native<{params.dtype.scalar}>();')
         k.emit(f'k.rank = {rank};')
         k.emit(f'k.nspec = {params.nspec};')
         k.emit(f'k.input_is_ringbuf = {utils.tf(params.input_is_ringbuf)};')
@@ -212,8 +202,8 @@ class Dedisperser:
         
         self.params = params
         self.dtype = params.dtype
-        self.dt32 = params.dt32
-        self.nbits = params.nbits
+        self.dt32 = params.dtype.simd32
+        self.nbits = params.dtype.nbits
         self.rank = params.rank
         self.apply_input_residual_lags = params.apply_input_residual_lags
         self.input_is_ringbuf = params.input_is_ringbuf
@@ -228,7 +218,7 @@ class Dedisperser:
         self.kernel_name += f'_orb{int(params.output_is_ringbuf)}'
         self.kernel_name += f'_s{params.nspec}'
         
-        self.rrb = Ringbuf(self.dt32)   # not self.dtype
+        self.rrb = Ringbuf(self.dt32)   # simd dtype, not scalar dtype
 
         # This simple rule works and gives good performance, for a reasonable
         # range of 'nspec' values.
@@ -432,7 +422,7 @@ class Dedisperser:
             tmp0, tmp1 = self.rrb.advance2(k, x0, lag32a, lag32b)
         else:
             # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
-            assert (self.dtype == '__half') and (self.nspec == 1)
+            assert (self.dtype.scalar == '__half') and (self.nspec == 1)
             tmp0, tmp1 = self.rrb.advance2(k, x0, lag32a, 1)
             tdst = tmp1 if (lag % 2) else tmp0
             k.emit(f'{tdst} = ksgpu::f16_align({tmp0}, {tmp1});')
@@ -489,7 +479,7 @@ class Dedisperser:
 
             else:
                 # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
-                assert (self.dtype == '__half') and (self.nspec == 1)
+                assert (self.nbits == 16) and (self.nspec == 1)
                 rlag2, tmp, tmp2 = k.get_tmp_rname(3)
                 k.emit(f'uint {rlag2} = {rlag} >> 1;   // (rlag // 2)')
 
@@ -651,7 +641,7 @@ class Dedisperser:
                 
         else:
             # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
-            assert (self.dtype == '__half') and (self.nspec == 1)
+            assert (self.dtype.scalar == '__half') and (self.nspec == 1)
             a = (2**rank1 - 1) * 2**(rank1-1)
             b = (256 - 2**rank1) * 2**(rank1-1)
             c = 2**(rank1-1) + 1
@@ -901,7 +891,7 @@ class Dedisperser:
 
         else:
             # Case 2 (contrary case): should only get here if dtype==float16 and nspec==1.
-            assert (self.dtype == '__half') and (self.nspec == 1)
+            assert (self.nbits == 16) and (self.nspec == 1)
 
             # "Intuitive form" (assumes rank1 >= 2)
             # n1 = 2**rank1
