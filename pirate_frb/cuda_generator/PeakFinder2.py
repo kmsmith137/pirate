@@ -1,4 +1,4 @@
- import os
+import os
 import re
 
 from . import utils
@@ -530,16 +530,6 @@ class PfOutput2:
             self.SW = 2   # simd width
         else:
             raise RuntimeError(f'Unrecognized {dtype=}')
-            
-
-        # XXX some of these deserve discussion
-        assert rank >= 0
-        assert Dcore >= self.SW
-        assert Dt <= (32 * self.SW)
-        assert Dcore <= Dt
-        xxxx  # more asserts
-        assert utils.is_power_of_two(Dout)
-        assert self.SW <= Dout <= 32
         
         self.dtype = dtype
         self.Dout = Dout

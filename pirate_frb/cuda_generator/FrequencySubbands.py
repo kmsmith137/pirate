@@ -1,3 +1,5 @@
+import numpy as np
+from . import utils
 
 # Note: the FrequencySubbands class is in the 'cuda_generator' submodule, since it
 # might be useful in 'makefile_helper.py', which imports the cuda_generator submodule,
@@ -6,91 +8,118 @@
 class FrequencySubbands:
     def __init__(self, *, subband_counts=None, pf_rank=None, fmin=None, fmax=None, threshold=None):
         """
-    
+        Constructor syntax 1: FrequencySubbands(subband_counts=[5,3,2,1], pf_rank=None, fmin=None, fmax=None)
+        Constructor syntax 2: FrequencySubbands(pf_rank=4, fmin=300., fmax=1500., threshold=0.2)
         
-                 
-class SubbandHelper:
-    def __init__(self, pf_rank):
+        self.subband_counts: length-(rank+1) list, containing number of frequency subbands at each level.
+          This is used as an "identifier" for frequency subbands in low-level code.
+
+        self.F = number of distinct frequency subbands
+        self.M = number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
+        
+        self.f_to_ii: mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+        self.m_to_fd: mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+        self.i_to_f:  mapping (0 <= index <= 2**rank) -> (frequency), only defined if fmin/fmax are specified
+        """
+
+        self.subband_counts = subband_counts
+        self.threshold = threshold
+        self.pf_rank = pf_rank
+        self.fmin = fmin
+        self.fmax = fmax
+
+        have_sc = (subband_counts is not None)
+        have_rk = (pf_rank is not None)
+        have_fmin = (fmin is not None)
+        have_fmax = (fmax is not None)
+        have_th = (threshold is not None)
+
+        constructor_syntax1 = have_sc and (not have_th) and (have_fmin == have_fmax)
+        constructor_syntax2 = (not have_sc) and all([have_rk, have_fmin, have_fmax, have_th])
+
+        if not (constructor_syntax1 or constructor_syntax2):
+            raise RuntimeError(
+                "FrequencySubbands: invalid combination of constructor args: "
+                + f"({subband_counts=}, {pf_rank=}, {fmin=}, {fmax=}, {threshold=}")
+
+        if constructor_syntax1:            
+            if (pf_rank is not None):
+                assert pf_rank == len(subband_counts) - 1
+            
+            assert len(subband_counts) > 0
+            assert subband_counts[-1] == 1   # must search full band
+            self.pf_rank = pf_rank = len(subband_counts) - 1
+
         # Currently, pf_rank=4 is max value supported by the peak-finding kernel,
         # so a larger value would indicate a bug (such as using the total tree rank
         # instead of the peak-finding rank).
-        assert 0 <= pf_rank <= 4
-        
-        self.pf_rank = pf_rank
-        self.num_levels = pf_rank + 1
-        self.band_width_at_level = [ 2**l for l in range(pf_rank+1) ]
-        self.band_spacing_at_level = [ 2**max(l-1,0) for l in range(pf_rank+1) ]
+        if (pf_rank > 4):
+            raise RuntimeError('FrequencySubbands: max allowed pf_rank is 4. This may change in the future.')
 
+        if have_fmin and have_fmax:
+            # Initialize self.i_to_f: mapping (0 <= index <= 2**rank) -> (frequency)            
+            assert 0 < fmin < fmax
+            self.i_to_f = np.linspace(fmax**(-2), fmin**(-2), 2**pf_rank + 1)**(-0.5)
+
+        if constructor_syntax2:
+            assert pf_rank >= 0
+            self.subband_counts = [0] * (pf_rank+1)
+            
+            for level in range(pf_rank + 1):
+                for b in range(self.max_bands_at_level(level)):
+                    ilo, ihi = self.get_band_index_range(level, b)
+                    freq_lo, freq_hi = self.i_to_f[ihi], self.i_to_f[ilo]  # note (lo,hi) swap
+                    if (level == pf_rank) or ((freq_hi/freq_lo) > (1+threshold)):
+                        self.subband_counts[level] += 1
+            
+        self.F = len(self.f_to_ii)   # number of frequency_subbands
+        self.M = len(self.m_to_fd)   # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
+        self.m_to_fd = [ ]   # mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+        self.f_to_ii = [ ]   # mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)        
+
+        for level in range(pf_rank+1):
+            assert self.subband_counts[level] >= 0
+            
+            for b in range(self.subband_counts[level]):
+                for d in range(2**level):
+                    self.m_to_fd.append((self.F,d))
+                
+                ilo, ihi = self.get_band_index_range(level, b)
+                self.f_to_ii.append((ilo,ihi))
+
+                self.M += 2**level
+                self.F += 1
+        
     
     def max_bands_at_level(self, level):
+        # Level==0 is special (non-overlapping bands).
         assert 0 <= level <= self.pf_rank
-        bw = self.band_width_at_level[level]
-        bs = self.band_spacing_at_level[level]
-        return ((2**self.pf_rank - bw) // bs) + 1
+        return (2**(self.pf_rank+1-level) - 1) if (level > 0) else (2**self.pf_rank)
 
     
-    def get_band_limits(self, level, ix):
+    def get_band_index_range(self, level, b):
         """Returns (ilo, ihi), where 0 <= ilo < ihi <= 2**pf_rank."""
         
         assert 0 <= level <= self.pf_rank
-        assert 0 <= ix < self.max_bands_at_level(level)
+        assert 0 <= b < self.max_bands_at_level(level)
 
-        ilo = ix * self.band_spacing_at_level[level]
-        ihi = ilo + self.band_width_at_level[level]
-        assert 0 <= ilo < ihi <= 2**self.pf_rank
-        return ilo, ihi
-
-
-class FrequencySubbands:
-    def __init__(self, pf_rank, fmin, fmax, threshold):
-        """Example: FrequencySubbands(4, 300, 1500, 0.1) for CHORD."""
-        
-        self.fmin = fmin
-        self.fmax = fmax
-        self.pf_rank = pf_rank
-        self.threshold = threshold
-        self.h = SubbandHelper(pf_rank)
-
-        # subband_counts: length-(rank+1) list, containing number of frequency subbands
-        # at each level. This is used as an "identifier" for frequency subbands in other
-        # parts of the code generator (e.g. peak-finding kernel).
-        
-        self.subband_counts = [0]*pf_rank + [1]
-        
-        for level in range(pf_rank):  # not range(pf_rank+1)
-            for ix in range(self.h.max_bands_at_level(level)):
-                freq_lo, freq_hi = self.get_subband(level, ix)
-                if (freq_hi / freq_lo) > (1+threshold):
-                    self.subband_counts[level] += 1
-
-
-    def get_subband(self, level, ix):
-        """Returns (freq_lo, freq_hi)."""
-
-        ilo, ihi = self.h.get_band_limits(level, ix)
-        dmin, dmax = self.fmax**(-2), self.fmin**(-2)
-        dlo = dmin + (ilo / 2**self.pf_rank) * (dmax-dmin)
-        dhi = dmin + (ihi / 2**self.pf_rank) * (dmax-dmin)
-        return dhi**(-0.5), dlo**(-0.5)   # freq_lo, freq_hi
+        s = 2**max(level-1,0)         # spacing between bands
+        return (b*s, b*s + 2**level)  # (ilo, ihi)
 
 
     def show(self):
-        print(f'pf_rank={self.pf_rank}, fmin={self.fmin}, fmax={self.fmax}, threshold={self.threshold}')
-        F = 0  # number of distinct frequency subbands
-        M = 0  # number of "multiplets" in search, i.e. (frequency subband, fine dm) pairs
-        
-        for level,n in enumerate(self.subband_counts):
-            F += n
-            M += n * 2**level
-            
-            print(f'  {level=}:', end='')
-            for ix in range(n):
-                freq_lo, freq_hi = self.get_subband(level,ix)
-                print(f' [{freq_lo:.01f},{freq_hi:.01f}]', end='')
-            print()
+        print(f'FrequencySubbands(pf_rank={self.pf_rank}, subband_counts={self.subband_counts},'
+              + f' fmin={self.fmin}, fmax={self.fmax}, threshold={self.threshold})')
 
-        print(f'  {F=}  (number of distinct frequency subbands)')
-        print(f'  {M=}  (number of "multiplets" in search, i.e. (frequency subband, fine dm) pairs)')
+        for (f,(ilo,ihi)) in enumerate(self.f_to_ii):
+            level = utils.integer_log2(ihi-ilo)
+            line = f'  {f=}: {level=} {(ilo,ihi)=}'
+            if hasattr(self, 'i_to_f'):
+                line += f' {(flo,fhi)=:.01f}'
+            print(line)
+
+        print(f'  F={self.F}  (number of distinct frequency_subbands)')
+        print(f'  M={self.M}  (number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs)')
         
 
 ####################################################################################################
