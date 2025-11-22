@@ -199,18 +199,18 @@ struct DedispRegistry : public GpuDedispersionKernel::Registry
 };
 
 
-// Instead of declaring the registry as a static global variable, we declare it as a
-// static local variable in the static member function GpuDedispersionKernel::registry().
-// The registry will be initialized the first time that GpuDedispersionKernel::registry()
-// is called.
-//
-// This kludge is necessary because the registry is accessed at library initialization
-// time, by callers in other source files, and source files are executed in an
-// arbitrary order.
-
 // Static member function
 GpuDedispersionKernel::Registry &GpuDedispersionKernel::registry()
 {
+    // Instead of declaring the registry as a static global variable, we declare it as a
+    // static local variable in the static member function GpuDedispersionKernel::registry().
+    // The registry will be initialized the first time that GpuDedispersionKernel::registry()
+    // is called.
+    //
+    // This kludge is necessary because the registry is accessed at library initialization
+    // time, by callers in other source files, and source files are executed in an
+    // arbitrary order.
+    
     static DedispRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }

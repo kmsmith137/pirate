@@ -5,6 +5,7 @@ from . import utils
 
 from .Kernel import Kernel
 from .Ringbuf import Ringbuf, Ringbuf16
+from .FrequencySubbands import FrequencySubbands
 
 from .Dedisperser import \
     DedisperserParams, \
@@ -21,4 +22,5 @@ from .PeakFinder import \
     make_pf_file
 
 from .PeakFinder2 import \
+    PfWeightReader, \
     PfOutput2

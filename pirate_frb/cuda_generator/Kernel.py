@@ -7,8 +7,8 @@ class Kernel:
         """Currently the Kernel class is minimal -- I may add more features later."""
 
         self.active_buffer = io.StringIO()
-        self.splices = [ ]   # list of (StringIO, kernel) pairs.
-        self.tmp_ix = [ 0 ]  # use a length-zero list so that splices can share the same tmp_ix
+        self.splices = [ ]       # list of (StringIO, kernel) pairs.
+        self.name_counts = { }   # stem -> (count of names with given stem)
 
 
     def emit(self, s=''):
@@ -17,8 +17,9 @@ class Kernel:
     
     def splice(self):
         k = Kernel()
-        k.tmp_ix = self.tmp_ix   # all splices share the same tmp_ix
-        
+
+        # Important: all splices share the same 'name_counts' dict.
+        self.name_counts = k.name_counts
         self.splices.append((self.active_buffer, k))
         self.active_buffer = io.StringIO()
         return k
@@ -34,17 +35,24 @@ class Kernel:
         print(self.active_buffer.getvalue(), file=f)
 
 
-    def get_tmp_rname(self, n=None):
+    def get_name(self, stem, n=None):
         if n is not None:
-            return [ self.get_tmp_rname() for _ in range(n) ]
-        
-        ret = f'tmp{self.tmp_ix[0]}'
-        self.tmp_ix[0] += 1
-        return ret
+            return [ self.get_name(stem) for _ in range(n) ]
+
+        n = self.name_counts.get(stem,0)
+        self.name_counts[stem] = n+1
+        return f'{stem}_{n}'
 
     
-    def reset_tmp_vars(self):
-        self.tmp_ix[0] = 0
+    def get_tmp_rname(self, n=None):
+        # FIXME phase out get_tmp_rname() in favor of get_name('tmp')
+        return self.get_name('tmp',n)
+
+    
+    def reset_names(self):
+        # We reset the dict, rather than doing "self.name_counts = {}", so that all
+        # splices continue to share the same 'name_counts' dict.
+        self.name_counts.reset()
         
 
     def warp_transpose(self, rname1, rname2, thread_stride, dtype):

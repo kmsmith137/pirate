@@ -1,9 +1,482 @@
-import os
+ import os
 import re
 
 from . import utils
 from .utils import srange
+
 from .Kernel import Kernel
+
+
+####################################################################################################
+
+
+class PfWeightLayout:
+    def __init__(self, dtype, rank, subband_counts, P, Tinner):
+        """
+        PfWeightLayout: helper class for PfWeightReader.
+        
+        The W-array in global memory
+        ----------------------------
+        
+        The W-array is a logical 4-d array with shape (Dbar,Tbar,P,F) parameterized by:
+        
+          - Dbar = number of coarse DMs
+          - Tbar = number of coarse time samples
+          - P = number of peak-finding profiles
+          - F = number of frequency subbands F
+
+        The coarse quantites (Dbar,Tbar) are related to the "fine" quantities (Dtree,Ttree)
+        in the dedispersion tree by downsampling factors (Dt,Dd):
+
+          Dd = Dtree / Dbar
+          Dt = Ttree / Tbar
+
+        Before describing the global memory layout, a few more definitions:
+
+          SW = 32 / sizeof(T)         "simd width"
+          Tinner = max(32*SW/Dt, 1)   see (*) below
+          Pinner = SW                 see (**) below
+
+        Then, we split P,Tbar into "outer" and "inner" parts:
+        
+          Pouter = ceil(P / Pinner)   where Pinner = SW (**)
+          Touter = Tbar / Tinner
+
+        The W-array global memory layout can be described as either a 6-d or a 5-d array:
+        
+           dtype          W[Dbar,Touter,Pouter,F,Tinner,Pinner]
+           dtype*Pinnner  W[Dbar,Touter,Pouter,F,Tinner]
+
+        Important note: we always pad so that the 'Touter' stride is 128-byte aligned!
+        (See "self.touter_stride" below.)
+
+        (*) Tinner is the number of W-array t-indices per iteration of the "outer time loop"
+            in the larger kernel. Each iteration of this loop processes 128 / sizeof(dtype) / Dt
+            "tree" time samples.
+        
+        (**) Pinner is an "innermost width" used for weights in the peak-finding kernel. Currently,
+             it is always equal to the simd_width SW. However, in a future update, I may implement
+             a shared-memory code path (see FIXME below) in which Pinner = 2*SW.
+
+        
+        Constructor args
+        ----------------
+
+          - dtype: either 'float' or '__half'
+        
+          - rank: integer >= 0 (see 'class FrequencySubbands').
+
+          - subband_counts: list of integers (see 'class FrequencySubbands').
+
+          - P: number of peak-finding kernels (see toplevel kernel).
+
+          - Tinner: defined as max(32*SW/Dt, 1), see above for discussion.
+        
+        XXXX should explain "multiplets".
+        """
+
+        # Constructor args
+        self.subband_counts = subband_counts
+        self.Tinner = Tinner
+        self.dtype = dtype
+        self.rank = rank
+        self.P = P
+        
+        if dtype == 'float':
+            self.dt32 = 'float'
+            self.SW = 1   # simd width
+        elif dtype == '__half':
+            self.dt32 = '__half2'
+            self.SW = 2   # simd width
+        else:
+            raise RuntimeError(f'Unrecognized {dtype=}')
+
+        # Currently, pf_rank=4 is max value supported by the peak-finding kernel,
+        # so a larger value would indicate a bug (such as using the total tree rank
+        # instead of the peak-finding rank).
+        assert 0 <= rank <= 4
+        assert 1 <= Tinner <= 32
+        assert utils.is_power_of_two(Tinner)
+        assert P > 0
+        
+        assert len(subband_counts) == rank+1
+        assert subband_counts[-1] == 1   # full band must be included
+
+        self.m_to_fd = [ ]   # mapping (multiplet) -> (frequency subband, fine-grained dm)
+        self.f_to_ii = [ ]   # mapping (frequency subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+
+        for level,n in enumerate(subband_counts):
+            assert n >= 0
+            for ix in range(n):
+                f = len(self.f_to_ii)
+                for d in range(2**level):
+                    self.m_to_fd.append((f,d))
+                
+                ilo, ihi = h.get_subband(level, ix)
+                self.f_to_ii.append((ilo,ihi))
+
+        self.F = len(self.f_to_ii)   # number of frequency subbands
+        self.M = len(self.m_to_fd)   # number of "multiplets", i.e. (frequency subband, fine-grained dm) pairs
+        
+        # See docstring for definitions of these quantities. Note that for now, Pinner
+        # is equal to the simd width, but this may change in the future.
+        self.Pinner = self.SW
+        self.Pouter = (self.P + self.Pinner - 1) // self.Pinner
+
+        # Compute self.touter_byte_stride.
+        self.unpadded_byte_stride = self.Pouter * self.F * Tinner * self.Pinner * utils.xdiv(4,self.SW)
+        self.touter_byte_stride = (self.unpadded_byte_stride + 127) & ~127   # round up to multiple of 128
+        
+
+####################################################################################################
+
+
+class PfWeightReader:
+    def __init__(self, weight_layout, Dcore):
+        """
+        The read_weights() method
+        -------------------------
+
+        Each call to read_weights() reads 
+        
+        
+        Generated code looks like this
+        ------------------------------
+
+          constexpr int SW = 128 / sizeof(dtype);  // simd width
+        
+          // Initialization of input pointer is not supplied by PfWeightReader.
+          // 'wp' is a per-warp pointer to shape (Touter,Pouter,F,Tinner,Pinner/SW),
+          // where the 'touter' stride is 128-byte aligned. The pointer is "owned"
+          // by the PfWeightReader class, and will be incremented as data is read
+          // from global memory.
+        
+          T32 *wp = ...;
+          pfw_reader.top('wp');
+        
+          // Loop over t-values is not supplied by PfOutput2.
+          for (uint tin = 0; tin < Tin; t += 32*SW) {
+
+              // Outer "unrolled" loop over 0 <= mouter < Mouter.
+              // Inner "unrolled" loop over 0 <= pouter < Pouter.
+              w = pfw_reader.read_weights(mouter=0, pouter=0)
+              w = pfw_reader.read_weights(mouter=0, pouter=1)
+                // ...
+              w = pfw_reader.read_weights(mouter=Mouter-1, pouter=Pouter-1)
+        
+              pfw_reader.bottom('tin', 'Tin')
+          }
+        """
+
+        assert isinstance(weight_layout, PfWeightLayout)
+        
+        self.weight_layout = weight_layout
+        self.dtype = weight_layout.dtype
+        self.dt32 = weight_layout.dt32
+        self.SW = weight_layout.SW    # simd width
+        self.M = weight_layout.M
+        self.F = weight_layout.F
+        self.P = weight_layout.P
+        self.Dcore = Dcore
+
+        self.Tinner = weight_layout.Tinner
+        
+        # XXX these deserve discussion
+        assert Dcore >= self.SW
+        assert Dcore <= self.Dt
+        assert self.Dt <= (32 * self.SW)
+        xxxx  # more asserts?
+        
+        # See docstring for definitions of these quantities. Note that for now, Pinner
+        # is equal to the simd width, but this may change in the future (see FIXME below).
+        self.Minner = utils.xdiv(Dcore, self.SW)
+        self.Mouter = (self.M + self.Minner - 1) // self.Minner
+
+        fstr = ''.join(f'f{n}' for n in weight_layout.subband_counts)
+        self.test_kernel_name = f'pf_weight_reader_test_fp{32//self.SW}_{fstr}_Dcore{Dcore}_P{self.P}_Tinner{self.Tinner}'
+        self.test_kernel_basename = self.test_kernel_name + '.cu'
+
+        # Throughout 'class PfWeightReader', a capitalized index 0 <= I < Pouter*F*Tinner
+        # denotes a "flattened" index triple (pouter, f, tinner). Such an index I can be
+        # viewed as an offset relative to the 'wp' pointer (see docstring), and (I >> 5)
+        # corresponds to a cache line.
+
+        # 'pf_I0' is the mapping (mouter,minner) -> I, for pouter=tinner=0.
+        self.pf_I0 = np.zeros((Mouter,Minner), xx)
+        for mouter in range(Mouter):
+            for minner in range(Minner):
+                m = min(mouter*Minner + minner, self.M-1)
+                f = weight_layout.m_to_fd[m][0]
+                self.pf_I0[mouter, minner] = f * self.Tinner
+
+        # pf_Imin = min(pf_I0) over all lanes, i.e. all (minner,tinner) pairs.
+        self.pf_Imin = np.min(self.pf_I0, axis=1)
+        self.pf_Imax = np.max(self.pf_I0, axis=1) + (self.Tinner - 1)
+
+        # Dict (cache line index I>>5) -> (wcl string varname).
+        self.wcl_cache = { }
+        
+        # FIXME 1: shared memory
+        #  - less global memory bandwidth
+        #  - faster than warp shuffle, if 64-bit loads are used, on some architectures
+        #  - Pinner may change to (2 * simd_width)
+        #  - API change: read_weights() can now return two T32s
+        #
+        # FIXME 2: register limit
+        #  - Use Belady's algorithm
+        #
+        # FIXME 3: if Dt=0 then test whether re-reading is really necessary
+        #
+        # The optimal interface would specify a register limit, a shared memory limit,
+        # and let the constructor choose the strategy!
+        #
+        # FIXME 4: dynamic programming
+        
+        
+    def top(self, k, wp):
+        """Placehodler for future expansion."""
+        self.wp = wp
+
+
+    def _read_wcl(self, k, Icl):
+        if Icl in self.wcl_cache:
+            w = self.wcl_cache[Icl]
+            k.emit(f"// At this point in the code, '{w}' contains {self.wp}[{32*Icl}:{32*Icl+32}]")
+            return w
+
+        wcl = k.get_name('pf_wcl')
+        self.wcl_cache[Icl] = wcl
+        k.emit(f"{self.dt32} {wcl} = {self.wp}[{32*Icl}] + (threadIdx.x & 0x1f)]; // {self.wp}[{32*Icl}:{32*Icl+32}]")
+        return wcl
+
+    
+    def read_weights(self, k, mouter, pouter):
+        wp, F, Tinner = self.wp, self.F, self.Tinner
+        k.emit(f'// PfWeightReader.read_weights({mouter=}, {pouter=}): start.')
+        
+        verbose = (mouter == pouter == 0)
+        
+        xxx # assert mouter, pouter are as expected
+
+        if pouter == 0:
+            self._init_pf_I(k, mouter, verbose=verbose)
+
+        dI = pouter * F * TInner
+        Imin = int(pf_Imin[mouter]) + dI
+        Imax = int(pf_Imax[mouter]) + dI
+        Istr = f'pf_I + {dI}' if (dI > 0) else 'pf_I'
+
+        # Very important assert -- our algorithm depends on this!
+        assert np.all(Imax < Imin + 32)
+
+        k.emit(f'// We want to load {wp}[{Istr}] on each thread, where {Imin} <= ({Istr}) <= {Imax}.')
+        wcl = self._read_weight(k, Imin >> 5)
+
+        if ((Imin >> 5) != (Imax >> 5)):
+            wcl2 = self._read_weight(k, Imax >> 5)
+            wtmp = k.get_name('tmp')
+            k.emit(f'{self.dt32} {wtmp} = ((threadIdx.x & 0x1f) >= {Imin & 0x1f}) ? {wcl} : {wcl2};')
+            wcl = wtmp
+
+        w = k.get_name('pf_w')
+        k.emit(f'{self.dt32} {w} = __shfl_sync(~0u, {wcl}, {Istr});')
+        k.emit(f'// PfWeightReader.read_weights({mouter=}, {pouter=}): end.')
+        return w
+
+
+    def _init_pf_I(self, k, mouter, verbose=False):
+        """Helper called by read_weights()."""
+        
+        Minner, Tinner = self.Minner, self.Tinner
+        
+        Mbits = utils.integer_log2(Minner)
+        Tbits = utils.integer_log2(Tinner)
+        minner = f'(threadIdx.x & {Minner-1})' if (Minner > 1) else '0'
+        tinner = f'((threadIdx.x & 0x1f) >> {5-Tbits})' if (Tinner > 1) else '0'
+        
+        k.emit()
+        k.emit(f'// In this part, we have {Minner=}, {Tinner=}, and the following mapping between')
+        k.emit(f'// lanes and (minner,tinner) pairs:')
+        k.emit(f'//    {Mbits} lane bits <-> minner')
+        k.emit(f'//    {5-Mbits-Tbits} lane bits <-> spectator t-indices')
+        k.emit(f'//    {Tbits} lane bits <-> tinner')
+        k.emit(f'//')
+        k.emit(f'// Therefore, {minner = } and {tinner = }')
+        k.emit(f'//')
+        k.emit(f'// Compute pf_I: the I-index for (mouter,pouter)=(XX,0), and (minner,tinner)')
+        k.emit(f'// defined by the laneId. For tinner=0, this is described by the following looking')
+        k.emit(f'// table (minner) -> pf_I: {list(map(int,self.pf_I0[mouter,:]))}')
+        
+        if verbose:
+            k.emit('//')
+            k.emit('// FIXME: placeholder algorithm for computing pf_I.')
+            k.emit('// It can be computed more efficiently using dynamic programming!')
+
+        decl = 'int ' if (mouter == 0) else ''
+        k.emit(f'{decl}pf_I = {int(self.pf_I0[mouter,0])};')
+
+        for m in range(1, Minner):
+            if self.pf_I0[mouter,m] != self.pf_I0[mouter,m-1]:
+                k.emit(f'pf_I = ({minner} < {m}) ? pf_I : {int(self.pf_I0[mouter,m])};')
+
+        if Tinner != 1:
+            k.emit(f'pf_I += {tinner};')
+        else:
+            k.emit(f'// since Tinner=1, no need for "pf_I += tinner;"')
+
+    
+    def bottom(self, k, tin, Dt):
+        """The 'tin', 'Dt' args are string varnames."""
+        
+        nelts = self.Pouter * self.F * self.Tinner * self.Pinner
+        us = self.weight_layout.unpadded_byte_stride
+        bs = self.weight_layout.touter_byte_stride
+        ps = xdiv(bs, 4)   # since 'wp' is a 32-bit type
+
+        k.emit()
+        k.emit(f'// PfWeightReader.bottom()')
+        k.emit(f'// One touter-step corresponds to (Pouter * F * Tinner * Pinner) = {nelts} W-array elements')
+        k.emit(f'// unpadded_byte_stride = {us}, byte_stride = {bs}, pointer_stride = {ps}')
+
+        if self.Tinner > 1:
+            k.emit(f"// Since Tinner > 1, we ignore '{Dt}', and always increment the weight pointer '{self.wp}'.")
+        else:
+            k.emit("// FIXME optimize out mod-operator")
+            k.emit(f"if (!(({tin} + {32*SW}) % {Dt}))")
+            
+        k.emit(f"{self.wp} += {ps};")
+        
+        
+    @classmethod
+    def write_test_kernel(cls, filename):
+        """Called from 'autogenerate_kernel.py' in the toplevel pirate directory."""
+        
+        basename = os.path.basename(filename)
+
+        # Typical basename: pf_weight_reader_test_fp32_f11_f6_f3_f1_Dcore8_P13_Tinner2.cu
+        m = re.fullmatch(r'pf_weight_reader_test_fp(\d+)_((?:f\d+_)+)Dcore(\d+)_P(\d+)_Tinner(\d+)\.cu', basename)
+        if not m:
+            raise RuntimeError(f"Couldn't match filename '{filename}'")
+            
+        nbits, Dcore, P, Tinner = int(m.group(1)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        subbands = list(map(int, re.findall(r'f(\d+)_', m.group(2))))
+        rank = len(subbands) - 1    # inferred
+        
+        if nbits == 32:
+            dtype = 'float'
+        elif nbits == 16:
+            dtype = '__half'
+        else:
+            raise RuntimeError(f'Invalid {nbits=}')
+
+        pf_weight_layout = PfWeightLayout(dtype, rank, subband_counts, P, Tinner)
+        pf_weight_reader = PfWeightReader(weight_layout, Dcore)
+        assert pf_weight_reader.test_kernel_basename == basename
+
+        dt32 = pf_weight_reader.dt32
+        SW = pf_weight_reader.SW
+        
+        k = Kernel()
+        
+        k.emit('// Autogenerated by pirate_frb.cuda_generator')
+        k.emit()
+        k.emit('// For a high-level overview, see the long comment at the top of')
+        k.emit('// pirate_frb/cuda_generator/PeakFinder.py')
+        k.emit()
+        k.emit('#include <cstdio>')
+        k.emit('#include <iostream>')
+        k.emit('#include "../../include/pirate/PeakFindingKernel.hpp"')
+        k.emit()
+        k.emit('namespace pirate {')
+        k.emit()
+
+        k.emit(f'// out.shape == (Tin/(32*SW), Mouter, Pouter, 32, Pinner)')
+        k.emit(f'// in.shape == (Tin/(Dt*Tinner), Pouter, F, Tinner, Pinner)')
+        k.emit(f'//')
+        k.emit(f'// The test kernel does the following (schematically):')
+        k.emit(f'//')
+        k.emit(f'//   for (int tin = 0; tin < tin; tin += 32*SW)')
+        k.emit(f'//       for (int mouter = 0; mouter < Mouter; mouter++)')
+        k.emit(f'//           for (int Pouter = 0; pouter < Pouter; pouter++)')
+        k.emit(f'//               call read_weights(), and write to out[tin/(32*SW), mouter, pouter, ...]')
+        k.emit(f'//')
+        k.emit(f"// The length-32 axis of 'out' can be viewed as (Tinner, 32/(Minner*Tinner), Minner).")
+        k.emit(f"// The 'in' array can have a non-contiguous touter-index, see 'touter_byte_stride' below.")
+        k.emit(f"//")
+        k.emit(f'// If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).')
+        k.emit(f'// If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.')
+        k.emit(f"//")
+        k.emit(f'// Launch with 32 threads, 1 block.')
+        k.emit()
+        
+        k.emit('__global__ void kernel_name(void *out_, const void *in_, uint Tin, uint Dt)')
+        k.emit('{')
+        k.emit(f'{dt32} *out = ({dt32} *) out_;')
+        k.emit(f'const {dt32} *in = (const {dt32} *) in_;')
+
+        pf_weight_reader.top(k, 'in')
+
+        k.emit(f'for (uint tin = 0; tin < Tin; tin += {32*SW}) {{')
+
+        for mouter in range(pf_weight_reader.Mouter):
+            for pouter in range(pf_weight_reader.Pouter):
+                w = pf_weight_reader.read_weights(k, mouter, pouter)
+                k.emit(f'out[threadIdx.x] = {w};')
+                k.emit(f'out += 32;')
+
+        pf_weight_reader.bottom(k, 'tin', 'Dt')
+        
+        k.emit('}   // end of tin loop')
+        k.emit('}   // end of cuda kernel')
+
+        m_to_f = [ ]
+        
+        for mm in range(pf_weight_reader.Mouter * pf_weight_reader.Minner):
+            m = min(mm, pf_weight_reader.weight_layout.M-1)
+            f, d = pf_weight_reader.weight_layout.m_to_f[m]
+            m_to_f.append(int(f))
+
+        m_to_f = ', '.join(str(x) for x in m_to_f)
+        sb_counts = ', ',join(str(x) for x in pf_weight_reader.subband_counts)
+        
+        k.emit('\n// Boilerplate to register the kernel when the library is loaded.')
+        k.emit('namespace {')
+        k.emit('struct register_hack {')
+        k.emit('register_hack() {')
+        k.emit('TestPfWeightReader::RegistryKey k;')
+        k.emit(f'k.dtype = ksgpu::Dtype::native<{pf_weight_reader.dtype}>();')
+        k.emit(f'k.subband_counts = {{ {sb_counts} }};')
+        k.emit(f'k.rank = {pf_weight_reader.rank};')
+        k.emit(f'k.Dcore = {pf_weight_reader.Dcore};')
+        k.emit(f'k.Tinner = {pf_weight_reader.Tinner};')
+        k.emit(f'k.P = {pf_weight_reader.P};')
+        k.emit()
+        k.emit('TestPfWeightReader::RegistryValue v;')
+        k.emit(f'v.cuda_kernel = {pf_weight_reader.test_kernel_name};')
+        k.emit(f'v.Mouter = {pf_weight_reader.Mouter};')
+        k.emit(f'v.Minner = {pf_weight_reader.Minner};')
+        k.emit(f'v.Pouter = {pf_weight_reader.Pouter};')
+        k.emit(f'v.Pinner = {pf_weight_reader.Pinner};')
+        k.emit(f'v.F = {pf_weight_reader.F};')
+        k.emit(f'v.touter_byte_stride = {pf_weight_reader.weight_layout.touter_byte_stride};')
+        k.emit(f'v.m_to_f = {{ {m_to_f} }};')
+        k.emit()
+        k.emit('bool debug = false;')
+        k.emit('TestPfWeightReader::registry().add(k, v, debug);')
+        k.emit('} // register_hack constructor')
+        k.emit('}; // struct register hack')
+        k.emit('register_hack hack;')
+        k.emit('} // anonymous namespace')
+        k.emit()
+        
+        k.emit('}   // namespace pirate')
+
+        with open(filename,'w') as f:
+            with utils.clang_formatter(f) as ff:
+                k.write(ff)
+
+
+####################################################################################################
 
 
 class PfOutput2:
@@ -22,38 +495,51 @@ class PfOutput2:
 
         Generated code looks like this:
 
+          constexpr int SW = 128 / sizeof(dtype);  // simd width
+        
           // Initialization of output pointers is not supplied by PfOutput2.
-          T32 *zp = ...;   // per-warp output pointer, points to length (Tin/(Dout*S))
-          uint *ap = ...;  // per-warp "argmax" pointer, points to length (Tin/(Dout*S))
+          T32 *zp = ...;   // per-warp output pointer, points to length (Tin/(Dout*SW))
+          uint *ap = ...;  // per-warp "argmax" pointer, points to length (Tin/(Dout*SW))
           
           // Loop over t-values is not supplied by PfOutput2.
-          for (uint tin = 0; tin < Tin; t += 32*S) {
+          for (uint tin = 0; tin < Tin; t += 32*SW) {
         
               // Multiple calls to PfOutput2.apply_inner().
-              // Caller should not reuse 'zname' or 'amax_names' after calling apply_inner().
-              apply_inner(k, zname, amax_names);
-              apply_inner(k, zname, amax_names);
+        
+              pf_output2.apply_inner(k, zname1, amax_names1);
+                // ...
+              pf_output2.apply_inner(k, zname2, amax_names2);
                 // ...
 
-              // One call to PfOutput2.apply_outer(), at bottom of t-loop.
-              // Incrementally writes output.
-              apply_outer(k, 'zp', 'ap', 'tin', 'Tin');
+              // One call to PfOutput2.apply_outer(), at bottom of t-loop, to write
+              // output incrementally. The'zout' and 'aout' pointers are "owned" by
+              // the PfOutput2 class, and these pointers will be incremented, as data
+              // gets written to global memory.
+
+              pf_output2.apply_outer(k, 'zp', 'ap', 'tin', 'Tin');
           }
         """
         
         if dtype == 'float':
             self.dt32 = 'float'
             self.dtmax = 'fmaxf'
-            self.S = 1
+            self.SW = 1   # simd width
         elif dtype == '__half':
             self.dt32 = '__half2'
             self.dtmax = '__hmax'
-            self.S = 2
+            self.SW = 2   # simd width
         else:
             raise RuntimeError(f'Unrecognized {dtype=}')
             
+
+        # XXX some of these deserve discussion
+        assert rank >= 0
+        assert Dcore >= self.SW
+        assert Dt <= (32 * self.SW)
+        assert Dcore <= Dt
+        xxxx  # more asserts
         assert utils.is_power_of_two(Dout)
-        assert self.S <= Dout <= 32
+        assert self.SW <= Dout <= 32
         
         self.dtype = dtype
         self.Dout = Dout
@@ -61,7 +547,7 @@ class PfOutput2:
         self.apply_inner_called = False
         self.apply_outer_called = False
 
-        self.test_kernel_name = f'pf_output2_test_fp{32//self.S}_Dout{Dout}'
+        self.test_kernel_name = f'pf_output2_test_fp{32//self.SW}_Dout{Dout}'
         self.test_kernel_basename = self.test_kernel_name + '.cu'
         
         
@@ -72,10 +558,10 @@ class PfOutput2:
         Contents of the 'alist' registers are opaque "tokens" in class PfOutput2.
         """
 
-        dtype, dt32, L, S = self.dtype, self.dt32, self.L, self.S
+        dtype, dt32, L, SW = self.dtype, self.dt32, self.L, self.SW
         
         assert not self.apply_outer_called
-        assert len(alist) == S
+        assert len(alist) == SW
 
         k.emit()
         k.emit(f'// PfOutput2.apply_inner() called: {z=}, {alist=}')
@@ -87,7 +573,7 @@ class PfOutput2:
         if not self.apply_inner_called:
             k.emit(f'// First call to apply_inner() just initializes zinner, ainner*')
             k.emit(f'{dt32} zinner = {z};')
-            for s in range(S):
+            for s in range(SW):
                 k.emit(f'uint ainner{s} = {alist[s]};')
             self.apply_inner_called = True
             return
@@ -118,7 +604,7 @@ class PfOutput2:
         pointers will be incremented, as data gets written to global memory.
         """
         
-        dtype, L, S = self.dtype, self.L, self.S
+        dtype, L, SW = self.dtype, self.L, self.SW
 
         assert self.apply_inner_called
         assert not self.apply_outer_called
@@ -128,7 +614,7 @@ class PfOutput2:
         k.emit(f'// PfOutput2.apply_outer() called: {zout=}, {aout}, {tin=}, {Tin=}')
         k.emit(f'// In this placeholder implementation, we ignore values of tin/Tin,')
         k.emit(f'// and do partial writes directly to global memory. (FIXME suboptimal)')
-        k.emit(f'// Starting point is zinner, {srange("ainner",S,sep=", ")}, with register assignemnt')
+        k.emit(f'// Starting point is zinner, {srange("ainner",SW,sep=", ")}, with register assignemnt')
 
         self._emit_za_register_assignment(k)
 
@@ -143,7 +629,7 @@ class PfOutput2:
             k.emit(f'ainner0 = (zinner0 < zinner1) ? ainner1 : ainner0;')
             k.emit(f'zinner0 = __hmax(zinner0, zinner1);')
 
-        for b in range(L+1-S):
+        for b in range(L+1-SW):
             zz, aa = k.get_tmp_rname(2);
             k.emit(f'\n// Reduce {z}, ainner0 over lanes, stride={2**b}')
             k.emit(f'{dtype} {zz} = __shfl_sync(~0u, {z}, threadIdx.x ^ {2**b});')
@@ -185,7 +671,7 @@ class PfOutput2:
         k.emit(f'// This code could be improved, but apply_outer() is currently a placeholder anyway.')
         
         nz = 2**(5-L)
-        na = 2**(4+S-L)
+        na = 2**(4+SW-L)
         laneId = k.get_tmp_rname()
         
         k.emit(f'uint {laneId} = (threadIdx.x & 0x1f); // laneId')
@@ -236,7 +722,7 @@ class PfOutput2:
         assert pf_output.test_kernel_basename == basename
 
         k = Kernel()
-        S = pf_output.S
+        SW = pf_output.SW
         
         k.emit('// Autogenerated by pirate_frb.cuda_generator')
         k.emit()
@@ -268,7 +754,7 @@ class PfOutput2:
             k.emit(f'__half2 *zin32 = (__half2 *) zin_;')
             k.emit(f'uint2 *ain64 = (uint2 *) ain32;')
 
-        k.emit(f'\nfor (uint tin = 0; tin < Tin; tin += {32*S}) {{')
+        k.emit(f'\nfor (uint tin = 0; tin < Tin; tin += {32*SW}) {{')
         
         for s in range(4):
             if dtype == 'float':

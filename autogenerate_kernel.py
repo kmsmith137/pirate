@@ -31,8 +31,11 @@ basename = os.path.basename(filename)
 
 if basename.startswith('dd_'):
     k = cuda_generator.make_dd_file(basename)
-elif basename.startswith('pf_output'):
+elif basename.startswith('pf_weight_reader'):
     cuda_generator.PfOutput2.write_test_kernel(filename)
+    sys.exit(0)  # FIXME
+elif basename.startswith('pf_output'):
+    cuda_generator.PfWeightReader.write_test_kernel(filename)
     sys.exit(0)  # FIXME
 elif basename.startswith('pf_'):
     k = cuda_generator.make_pf_file(basename)

@@ -22,7 +22,7 @@ all: bin lib build_wheel build_sdist
 # For now, if you want to change the defaults, just edit the Makfile.
 
 PYTHON ?= python3
-NVCC ?= nvcc -std=c++17 -m64 -O3 --compiler-options -Wall,-fPIC,-march=x86-64-v3
+NVCC ?= nvcc -std=c++17 -m64 -O3 -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
 
 # If using a conda env, add -I$(CONDA_PREFIX)/include to nvcc flags.
 ifneq ($(CONDA_PREFIX),)
@@ -142,6 +142,7 @@ PYFILES = \
 CUDAGEN_PYFILES = \
   pirate_frb/cuda_generator/__init__.py \
   pirate_frb/cuda_generator/Dedisperser.py \
+  pirate_frb/cuda_generator/FrequencySubbands.py \
   pirate_frb/cuda_generator/Kernel.py \
   pirate_frb/cuda_generator/PeakFinder.py \
   pirate_frb/cuda_generator/PeakFinder2.py \

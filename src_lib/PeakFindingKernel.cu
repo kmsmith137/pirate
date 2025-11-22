@@ -420,23 +420,21 @@ struct PfRegistry : public GpuPeakFindingKernel::Registry
 };
 
 
-// Instead of declaring the registry as a static global variable, we declare it as a
-// static local variable in the static member function GpuPeakFindingKernel::registry().
-// The registry will be initialized the first time that GpuPeakFindingKernel::registry()
-// is called.
-//
-// This kludge is necessary because the registry is accessed at library initialization
-// time, by callers in other source files, and source files are executed in an
-// arbitrary order.
-
 // Static member function
 GpuPeakFindingKernel::Registry &GpuPeakFindingKernel::registry()
 {
+    // Instead of declaring the registry as a static global variable, we declare it as a
+    // static local variable in the static member function GpuPeakFindingKernel::registry().
+    // The registry will be initialized the first time that GpuPeakFindingKernel::registry()
+    // is called.
+    //
+    // This kludge is necessary because the registry is accessed at library initialization
+    // time, by callers in other source files, and source files are executed in an
+    // arbitrary order.
+    
     static PfRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
-
-
 
 bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindingKernel::RegistryKey &k2)
 {
@@ -453,6 +451,99 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryValue &v)
 {
     os << "warps_per_threadblock=" << v.W << ", Dcore=" << v.Dcore;
     return os;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// TestPfWeightReader
+
+
+struct TestPfWeightReaderRegistry : public TestPfWeightReader::Registry
+{
+    using Key = TestPfWeightReader::RegistryKey;
+    using Val = TestPfWeightReader::RegistryValue;
+
+    virtual void add(const Key &key, const Val &val, bool debug) override
+    {
+        // Just check that all members have been initialized.
+        // (In the future, I may add more argument checking here.)
+	
+        xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+	xassert_ge(key.rank, 0);
+	xassert_le(key.rank, 4);
+	xassert_eq(key.subband_counts.size(), uint(key.rank)+1);
+	xassert_ge(key.Dcore, 0);
+	xassert_ge(key.Tinner, 0);
+	xassert_ge(key.P, 0);
+	
+	xassert(val.cuda_kernel != nullptr);
+	xassert(val.Mouter > 0);
+	xassert(val.Minner > 0);
+	xassert(val.Pouter > 0);
+	xassert(val.Pinner > 0);
+	xassert(val.F > 0);
+	xassert(val.touter_byte_stride > 0);
+	xassert(val.m_to_f.size() == uint(val.Mouter * val.Minner));
+
+	for (uint m = 0; m < val.m_to_f.size(); m++) {
+	    int f = val.m_to_f[m];
+	    xassert((f >= 0) && (f < val.F));
+	}
+	
+        // Call add() in base class.
+        TestPfWeightReader::Registry::add(key, val, debug);
+    }
+};
+
+
+// Static member function
+TestPfWeightReader::Registry &TestPfWeightReader::registry()
+{
+    // Instead of declaring the registry as a static global variable, we declare it as a
+    // static local variable in the static member function TestPfWeightReader::registry().
+    // The registry will be initialized the first time that TestPfWeightReader::registry()
+    // is called.
+    //
+    // This kludge is necessary because the registry is accessed at library initialization
+    // time, by callers in other source files, and source files are executed in an
+    // arbitrary order.
+    
+    static TestPfWeightReaderRegistry reg;
+    return reg;  // note: thread-safe (as of c++11)
+}
+
+bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightReader::RegistryKey &k2)
+{
+    return (k1.dtype == k2.dtype)
+	&& (k1.subband_counts == k2.subband_counts)
+	&& (k1.rank == k2.rank)
+	&& (k1.Dcore == k2.Dcore)
+	&& (k1.Tinner == k2.Tinner)
+	&& (k1.P == k2.P);
+}
+
+ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryKey &k)
+{
+    os << "TestPfWeightReader(dtype=" << k.dtype << ", rank=" << k.rank
+       << ", subband_counts=[";
+
+    for (int i = 0; i < min(k.rank+1,5); i++)
+	os << (i ? "," : "") << k.subband_counts[i];
+
+    os << "], Dcore=" << k.Dcore << ", Tinner=" << k.Tinner << ", P=" << k.P << ")";
+    return os;
+}
+
+ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryValue &v)
+{
+    os << "Mouter=" << v.Mouter << ", Minner=" << v.Minner << ", Pinner=" << v.Pinner << ", F=" << v.F;
+    return os;
+}
+
+void test_pf_weight_reader_microkernel()
+{
+    throw runtime_error("test_pf_weight_reader_microkernel() not implemented yet");
 }
 
 

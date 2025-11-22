@@ -206,11 +206,68 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::Re
 // Unit tests of peak-finding "microkernels".
 
 
+extern void test_pf_weight_reader_microkernel();
 extern void test_pf_output_microkernel();
 
 
-// Registry boilerplate starts here.
+// Everything after this point is KernelRegistry boilerplate.
+// First, a registry for test_pf_weight_reader kernels.
+struct TestPfWeightReader
+{
+    struct RegistryKey
+    {
+        ksgpu::Dtype dtype;   // either float16 or float32
+	std::vector<int> subband_counts;  // length (max_rank+1)
+	int rank = -1;
+	int Dcore = 0;
+	int Tinner = 0;
+	int P = 0;
+    };
 
+    struct RegistryValue
+    {
+	// The test kernel is called as (32 threads, 1 threadblock):
+	//   void kernel(void *out, void *in, uint Tin, uint Dt);
+	//
+	// where 'out' and 'in' have type RegistryKey::dtype, and:
+	//   out.shape ==  (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
+	//   in.shape == (Touter, Pouter, F, Pinner)    where Touter=Tin/(Dt*Tinner)
+	//
+	// The length-32 axis of 'out' can be viewed as (Tinner, 32/(Minner*Tinner), Minner).
+	// The 'in' array can have a non-contiguous touter-index, see 'touter_byte_stride' below.
+	//
+	// If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
+	// If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
+	
+	void (*cuda_kernel)(void *, void *, uint, uint) = nullptr;
+
+	// 'Tinner' is not included here, since it's part of the RegistryKey.
+	int Mouter = 0;
+	int Minner = 0;
+	int Pouter = 0;
+	int Pinner = 0;
+	int F = 0;
+
+	// Input array touter-stride expected by kernel.
+	int touter_byte_stride = 0;
+
+	// Mapping from "multiplet" index 0 <= m < (Mouter*Minner) to frequency index 0 <= f < F.
+	std::vector<int> m_to_f;
+    };
+
+    using Registry = KernelRegistry<RegistryKey, RegistryValue>;
+
+    // Static member function to access registry.
+    static Registry &registry();        
+};
+
+// Defined in GpuPeakFindingKernel.cu
+extern bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightReader::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const TestPfWeightReader::RegistryKey &k);
+extern std::ostream &operator<<(std::ostream &os, const TestPfWeightReader::RegistryValue &v);
+
+
+// Registry for test_pf_output kernels.
 struct TestPfOutput2
 {
     
