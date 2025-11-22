@@ -348,7 +348,7 @@ class PeakFinder:
             in_line1 = "'in_max' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
             in_line2 = "'in_ssq' has shape (B, P, Mout*M, Tout*(Dout/Dcore))"
 
-        k.reset_tmp_vars()
+        k.reset_names()
         
         k.emit(f'// Kernel args are (out_max, out_ssq, {in_args[0]}, {in_args[1]}, wt, Mout, Tout32).')
         k.emit(f'//')

@@ -1,5 +1,6 @@
 import os
 import sys
+import textwrap
 import argparse
 
 import ksgpu
@@ -10,6 +11,7 @@ from .Hardware import Hardware
 from .FakeServer import FakeServer
 from .FakeCorrelator import FakeCorrelator
 from .CasmReferenceBeamformer import CasmReferenceBeamformer
+from .cuda_generator import FrequencySubbands
 
 
 #########################################   test command  ##########################################
@@ -145,6 +147,40 @@ def parse_show_kernels(subparsers):
     
 def show_kernels(args):
     pirate_pybind11.show_kernels()  # note: defined in src_lib/utils.cu
+
+
+######################################   show_subbands command  #####################################
+
+
+def parse_show_subbands(subparsers):
+    parser = subparsers.add_parser(
+        "show_subbands",
+        help = "Show info on frequency subband scheme (see 'python -m pirate_frb show_subbands --help')",
+        formatter_class = argparse.RawDescriptionHelpFormatter,   # multi-line epilog
+        epilog = textwrap.dedent("""
+        Example usage:
+
+           # Specify subband_counts (rank is inferred)
+           python -m pirate_frb show_subbands 5 3 2 1
+
+           # Specify rank, frequency min/max, and threshold flo/fhi
+           python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.2
+        """)
+    )
+
+    parser.add_argument('subband_counts', nargs='*', type=int)
+    parser.add_argument('-r', '--rank', type=int)
+    parser.add_argument('-f', '--fmin', type=float)
+    parser.add_argument('-F', '--fmax', type=float)
+    parser.add_argument('-t', '--threshold', type=float)
+
+
+def show_subbands(args):
+    subband_counts = args.subband_counts if (len(args.subband_counts) > 0) else None
+    print(f'Constructing FrequencySubbands({subband_counts=}, pf_rank={args.rank}, fmin={args.fmin}, fmax={args.fmax}, threshold={args.threshold})')
+    
+    fs = FrequencySubbands(subband_counts=subband_counts, pf_rank=args.rank, fmin=args.fmin, fmax=args.fmax, threshold=args.threshold)
+    fs.show()
 
 
 #######################################   test_node command  #######################################
@@ -346,6 +382,7 @@ if __name__ == '__main__':
     parse_time(subparsers)
     parse_show_hardware(subparsers)
     parse_show_kernels(subparsers)
+    parse_show_subbands(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
 
@@ -359,6 +396,8 @@ if __name__ == '__main__':
         show_hardware(args)
     elif args.command == "show_kernels":
         show_kernels(args)
+    elif args.command == "show_subbands":
+        show_subbands(args)
     elif args.command == "test_node":
         test_node(args)
     elif args.command == "send":

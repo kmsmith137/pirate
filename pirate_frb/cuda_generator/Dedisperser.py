@@ -147,7 +147,7 @@ def make_dd_file(filename):
         dd.emit_global(k_code)
         k_code.emit()
 
-        k_code.reset_tmp_vars()
+        k_code.reset_names()
         
         k.emit(f'// Boilerplate to register the rank={rank} kernel when the library is loaded.')
         k.emit('namespace {')

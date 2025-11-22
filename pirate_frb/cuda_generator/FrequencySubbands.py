@@ -10,16 +10,20 @@ class FrequencySubbands:
         """
         Constructor syntax 1: FrequencySubbands(subband_counts=[5,3,2,1], pf_rank=None, fmin=None, fmax=None)
         Constructor syntax 2: FrequencySubbands(pf_rank=4, fmin=300., fmax=1500., threshold=0.2)
-        
-        self.subband_counts: length-(rank+1) list, containing number of frequency subbands at each level.
-          This is used as an "identifier" for frequency subbands in low-level code.
 
-        self.F = number of distinct frequency subbands
-        self.M = number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
+        These examples are accessible from the command line:
+          python -m pirate_frb show_subbands 5 3 2 1
+          python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.2
         
-        self.f_to_ii: mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
-        self.m_to_fd: mapping (multiplet) -> (frequency_subband, fine_grained_dm)
-        self.i_to_f:  mapping (0 <= index <= 2**rank) -> (frequency), only defined if fmin/fmax are specified
+        Key members:
+        
+          - self.F = number of distinct frequency subbands
+          - self.M = number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
+          - self.f_to_ii: mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+          - self.m_to_fd: mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+          - self.i_to_f:  mapping (0 <= index <= 2**rank) -> (frequency), only defined if fmin/fmax are specified
+          - self.subband_counts: length-(rank+1) list, containing number of frequency subbands at each level.
+            This is used as an "identifier" for frequency subbands in low-level code.
         """
 
         self.subband_counts = subband_counts
@@ -72,8 +76,8 @@ class FrequencySubbands:
                     if (level == pf_rank) or ((freq_hi/freq_lo) > (1+threshold)):
                         self.subband_counts[level] += 1
             
-        self.F = len(self.f_to_ii)   # number of frequency_subbands
-        self.M = len(self.m_to_fd)   # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
+        self.F = 0           # number of frequency_subbands
+        self.M = 0           # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
         self.m_to_fd = [ ]   # mapping (multiplet) -> (frequency_subband, fine_grained_dm)
         self.f_to_ii = [ ]   # mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)        
 
@@ -111,20 +115,18 @@ class FrequencySubbands:
         print(f'FrequencySubbands(pf_rank={self.pf_rank}, subband_counts={self.subband_counts},'
               + f' fmin={self.fmin}, fmax={self.fmax}, threshold={self.threshold})')
 
+        Mlo = 0
         for (f,(ilo,ihi)) in enumerate(self.f_to_ii):
+            Mhi = Mlo + (ihi-ilo)
+            assert all(self.m_to_fd[m]==(f,m-Mlo) for m in range(Mlo,Mhi))  # consistency check
+                       
             level = utils.integer_log2(ihi-ilo)
-            line = f'  {f=}: {level=} {(ilo,ihi)=}'
+            line = f'  {f=}: {level=}  (Mlo,Mhi)=({Mlo},{Mhi})  (ilo,ihi)=({ilo},{ihi})'
             if hasattr(self, 'i_to_f'):
-                line += f' {(flo,fhi)=:.01f}'
+                flo, fhi = self.i_to_f[ihi], self.i_to_f[ilo]   # note (lo,hi) swap
+                line += f'  (flo,fhi)=({flo:.01f},{fhi:.01f})'
             print(line)
+            Mlo = Mhi
 
-        print(f'  F={self.F}  (number of distinct frequency_subbands)')
-        print(f'  M={self.M}  (number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs)')
-        
-
-####################################################################################################
-
-
-if __name__ == '__main__':
-    FrequencySubbands(4, 300, 1500, 0.1).show()
-    FrequencySubbands(4, 400, 800, 0.1).show()
+        print(f'F={self.F}  # number of distinct frequency subbands')
+        print(f'M={self.M}  # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs')

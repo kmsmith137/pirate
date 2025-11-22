@@ -50,9 +50,9 @@ class Kernel:
 
     
     def reset_names(self):
-        # We reset the dict, rather than doing "self.name_counts = {}", so that all
+        # We clear the dict, rather than doing "self.name_counts = {}", so that all
         # splices continue to share the same 'name_counts' dict.
-        self.name_counts.reset()
+        self.name_counts.clear()
         
 
     def warp_transpose(self, rname1, rname2, thread_stride, dtype):
