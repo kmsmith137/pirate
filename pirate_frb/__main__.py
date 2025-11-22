@@ -22,6 +22,7 @@ def parse_test(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
     parser.add_argument('--ddb', action='store_true', help='Runs test_dedispersion_basics()')
+    parser.add_argument('--pfwr', action='store_true', help='Runs test_pf_weight_reader_microkernel()')
     parser.add_argument('--pfom', action='store_true', help='Runs test_pf_output_microkernel()')
     parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel()')
     parser.add_argument('--gddk', action='store_true', help='Runs test_gpu_dedispersion_kernels()')
@@ -33,7 +34,7 @@ def parse_test(subparsers):
 
     
 def test(args):
-    test_flags = [ 'ddb', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'dd' ]
+    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'dd' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -43,6 +44,9 @@ def test(args):
         
         if run_all_tests or args.ddb:
             pirate_pybind11.test_dedispersion_basics()
+        
+        if run_all_tests or args.pfwr:
+            pirate_pybind11.test_pf_weight_reader_microkernel()
         
         if run_all_tests or args.pfom:
             pirate_pybind11.test_pf_output_microkernel()

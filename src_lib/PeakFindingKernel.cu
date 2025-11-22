@@ -541,9 +541,102 @@ ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryValue &v)
     return os;
 }
 
+
 void test_pf_weight_reader_microkernel()
 {
-    throw runtime_error("test_pf_weight_reader_microkernel() not implemented yet");
+    TestPfWeightReader::RegistryKey key = TestPfWeightReader::registry().get_random_key();
+    TestPfWeightReader::RegistryValue val = TestPfWeightReader::registry().get(key);
+
+    Dtype dtype = key.dtype;
+    int Tinner = key.Tinner;
+    int SW = xdiv(32, dtype.nbits);   // simd width
+
+    cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
+	 << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
+	 << ", Dcore=" << key.Dcore << ", P=" << key.P
+	 << ", Tinner=" << Tinner << endl;
+
+    int F = val.F;
+    int Mouter = val.Mouter;
+    int Minner = val.Minner;
+    int Pouter = val.Pouter;
+    int Pinner = val.Pinner;
+    vector<int> m_to_f = val.m_to_f;  // length (Mouter*Minner)
+
+    // Choose Dt, Tin.
+    // If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
+    // If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
+    
+    auto v = ksgpu::random_integers_with_bounded_product(1, 20);
+    int Dt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
+    int Tin = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (Dt*v[1]);
+    
+    // Input array: (Touter, Pouter, F, Tinner, Pinner)   where Touter = Tin/(Dt*Tinner)
+    // Note that on the GPU, the touter-stride can be discontiguous (see below),
+    // but we use contiguous strides on the CPU.
+    
+    int Touter = xdiv(Tin, Dt*Tinner);
+    Array<float> in_cpu({Touter, Pouter, F, Tinner, Pinner}, af_rhost | af_random);
+
+    // Output array: can be viewed as shape
+    //   (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
+    //
+    // The length-(Tin/(32*SW)) axis can be reinterpreted as (where S1 is a spectator axis):
+    //   Tin/(32*SW) -> (Touter, S1)        where S1 = Tin/(32*SW*Touter) = (Dt*Tinner)/(32*SW)
+    //
+    // The length-32 axis can be reinterpreted as (where S2 is a spectator axis):
+    //   32 -> (Tinner, S2, Minner)         where S2 = 32/(Tinner*Minner)
+    //
+    // Combining, the output array can be viewed as shape
+    //  (Touter, S1, Mouter, Pouter, Tinner, S2, Minner, Pinner)
+    
+    int S1 = xdiv(Dt*Tinner, 32*SW);
+    int S2 = xdiv(32, Tinner*Minner);
+    Array<float> out_cpu({Touter,S1,Mouter,Pouter,Tinner,S2,Minner,Pinner}, af_uhost | af_zero);
+
+    // Emulate PfWeightReader kernel on the CPU (eight nested for-loops!)
+
+    for (int mouter = 0; mouter < Mouter; mouter++) {
+	for (int minner = 0; minner < Minner; minner++) {
+	    int m = mouter*Minner + minner;
+	    int f = m_to_f.at(m);
+	    
+	    for (int touter = 0; touter < Touter; touter++) {
+		for (int tinner = 0; tinner < Tinner; tinner++) {
+		    for (int pouter = 0; pouter < Pouter; pouter++) {
+			for (int pinner = 0; pinner < Pinner; pinner++) {
+			    float w = in_cpu.at({touter,pouter,f,tinner,pinner});
+
+			    for (int s1 = 0; s1 < S1; s1++)
+				for (int s2 = 0; s2 < S2; s2++)
+				    out_cpu.at({touter,s1,mouter,pouter,tinner,s2,minner,pinner}) = w;
+			}
+		    }
+		}
+	    }
+	}
+    }
+
+    // Copy input array to GPU.
+    // Don't forget to account for the touter-stride!
+
+    int tstride = xdiv(val.touter_byte_stride * 8, dtype.nbits);
+    xassert_ge(tstride, Pouter*F*Tinner*Pinner);
+    
+    vector<long> ishape = { Touter, Pouter, F, Tinner, Pinner };
+    vector<long> istrides = { tstride, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };    
+    Array<void> in_gpu(dtype, ishape, istrides, af_gpu);
+    
+    Array<void> in_tmp = in_cpu.convert(dtype);
+    in_gpu.fill(in_tmp);
+
+    // Run kernel on GPU.
+    Array<void> out_gpu(dtype, out_cpu.ndim, out_cpu.shape, af_gpu | af_guard);
+    val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, Tin, Dt);
+    CUDA_PEEK("pf_weight_reader");
+
+    // Compare.
+    assert_arrays_equal(out_cpu, out_gpu, "out_cpu", "out_gpu", {});
 }
 
 

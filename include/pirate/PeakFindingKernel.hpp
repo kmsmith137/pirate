@@ -216,8 +216,8 @@ struct TestPfWeightReader
 {
     struct RegistryKey
     {
-        ksgpu::Dtype dtype;   // either float16 or float32
-	std::vector<int> subband_counts;  // length (max_rank+1)
+        ksgpu::Dtype dtype;     // either float16 or float32
+	std::vector<int> subband_counts;  // length (rank+1)
 	int rank = -1;
 	int Dcore = 0;
 	int Tinner = 0;
@@ -227,19 +227,21 @@ struct TestPfWeightReader
     struct RegistryValue
     {
 	// The test kernel is called as (32 threads, 1 threadblock):
-	//   void kernel(void *out, void *in, uint Tin, uint Dt);
+	//   void kernel(void *out, const void *in, uint Tin, uint Dt);
 	//
 	// where 'out' and 'in' have type RegistryKey::dtype, and:
 	//   out.shape ==  (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
-	//   in.shape == (Touter, Pouter, F, Pinner)    where Touter=Tin/(Dt*Tinner)
+	//   in.shape == (Touter, Pouter, F, Tinner, Pinner)    where Touter=Tin/(Dt*Tinner)
 	//
-	// The length-32 axis of 'out' can be viewed as (Tinner, 32/(Minner*Tinner), Minner).
+	// The length-32 axis of 'out' can be viewed as (Minner, Nspectator, Tinner), where
+	// Nspectator = 32 / (Minner * Tinner).
+	//
 	// The 'in' array can have a non-contiguous touter-index, see 'touter_byte_stride' below.
 	//
 	// If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
 	// If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
 	
-	void (*cuda_kernel)(void *, void *, uint, uint) = nullptr;
+	void (*cuda_kernel)(void *, const void *, uint, uint) = nullptr;
 
 	// 'Tinner' is not included here, since it's part of the RegistryKey.
 	int Mouter = 0;
