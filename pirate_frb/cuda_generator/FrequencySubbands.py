@@ -1,4 +1,6 @@
+import re
 import numpy as np
+
 from . import utils
 
 # Note: the FrequencySubbands class is in the 'cuda_generator' submodule, since it
@@ -96,6 +98,18 @@ class FrequencySubbands:
                 self.M += 2**level
                 self.F += 1
         
+        # For kernel/file names in code generator.
+        self.fstr = '_'.join(f'f{int(n)}' for n in self.subband_counts)
+
+        
+    @classmethod
+    def from_fstr(cls, fstr):
+        # For parsing filenames in code generator.
+        if not re.fullmatch(r'f\d+(?:_f\d+)*', fstr):
+            raise RuntimeError(f"FrequencySubbands.from_fstr(): couldn't parse fstr='{fstr}'")
+        subband_counts = [int(x) for x in re.findall(r'\d+', fstr) ]
+        return cls(subband_counts = subband_counts)
+    
     
     def max_bands_at_level(self, level):
         # Level==0 is special (non-overlapping bands).
