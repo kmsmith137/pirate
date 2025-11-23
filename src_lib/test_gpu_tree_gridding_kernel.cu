@@ -1,5 +1,5 @@
 #include "../include/pirate/TreeGriddingKernel.hpp"
-#include "../include/pirate/inlines.hpp"  // xdiv
+#include "../include/pirate/inlines.hpp"  // xdiv(), align_up()
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/rand_utils.hpp>
@@ -21,15 +21,19 @@ void test_gpu_tree_gridding_kernel()
     params.dtype = (rand_uniform() < 0.5) ? Dtype(df_float,16) : Dtype(df_float,32);
 
     auto v = ksgpu::random_integers_with_bounded_product(3, 1000);
+    int Ncl = xdiv(1024, params.dtype.nbits);   // elements per cache line
     int B = v[0];
     int F = v[1];
-    int T = v[2] * xdiv(1024, params.dtype.nbits);
+    int T = v[2] * Ncl;
     int N = rand_int(1, 2000/(v[0]*v[2]));
     
     long hs_in = rand_int(F*T, 2*F*T);   // host beam stride, input array
     long gs_in = rand_int(F*T, 2*F*T);   // gpu beam stride, input array
     long hs_out = rand_int(N*T, 2*N*T);  // host beam stride, output array
     long gs_out = rand_int(N*T, 2*N*T);  // gpu beam stride, output array
+
+    gs_in = align_up(gs_in, Ncl);
+    gs_out = align_up(gs_out, Ncl);
     
     params.beams_per_batch = B;
     params.nfreq = F;
