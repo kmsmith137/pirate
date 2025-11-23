@@ -551,11 +551,6 @@ void test_pf_weight_reader_microkernel()
     int Tinner = key.Tinner;
     int SW = xdiv(32, dtype.nbits);   // simd width
 
-    cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
-	 << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
-	 << ", Dcore=" << key.Dcore << ", P=" << key.P
-	 << ", Tinner=" << Tinner << endl;
-
     int F = val.F;
     int Mouter = val.Mouter;
     int Minner = val.Minner;
@@ -567,11 +562,17 @@ void test_pf_weight_reader_microkernel()
     // If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
     // If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
     
-    auto v = ksgpu::random_integers_with_bounded_product(1, 20);
+    auto v = ksgpu::random_integers_with_bounded_product(2, 20);
     int Dt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
     int Tin = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (Dt*v[1]);
+
+    cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
+	 << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
+	 << ", Dcore=" << key.Dcore << ", P=" << key.P
+	 << ", Tinner=" << Tinner << ", Dt=" << Dt
+	 << ", Tin=" << Tin << endl;
     
-    // Input array: (Touter, Pouter, F, Tinner, Pinner)   where Touter = Tin/(Dt*Tinner)
+    // Input array: (Touter, Pouter, F, Tinner, Pinner) where Touter = Tin/(Dt*Tinner)
     // Note that on the GPU, the touter-stride can be discontiguous (see below),
     // but we use contiguous strides on the CPU.
     
@@ -631,12 +632,15 @@ void test_pf_weight_reader_microkernel()
     in_gpu.fill(in_tmp);
 
     // Run kernel on GPU.
-    Array<void> out_gpu(dtype, out_cpu.ndim, out_cpu.shape, af_gpu | af_guard);
+    Array<void> out_gpu(dtype, out_cpu.ndim, out_cpu.shape, af_gpu | af_zero | af_guard);
     val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, Tin, Dt);
     CUDA_PEEK("pf_weight_reader");
 
     // Compare.
-    assert_arrays_equal(out_cpu, out_gpu, "out_cpu", "out_gpu", {});
+    assert_arrays_equal(
+        out_cpu, out_gpu, "out_cpu", "out_gpu",
+	{"touter","s1","mouter","pouter","tinner","s2","minner","pinner"}
+    );
 }
 
 

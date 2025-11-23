@@ -76,7 +76,7 @@ class PfWeightLayout:
 
         assert isinstance(frequency_subbands, FrequencySubbands)
         assert utils.is_power_of_two(Tinner)
-        assert 1 <= Tinner <= 32
+        assert Tinner <= 32
         assert P > 0
 
         self.frequency_subbands = frequency_subbands
@@ -148,10 +148,12 @@ class PfWeightReader:
         self.Pinner = self.weight_layout.Pinner
         self.M = frequency_subbands.M
         self.F = frequency_subbands.F
-        
-        # FIXME explain
+
+        assert utils.is_power_of_two(Dcore)
+        assert utils.is_power_of_two(Tinner)
         assert (Dcore) >= (self.SW)
         assert (Dcore * Tinner) <= (32 * self.SW)
+        assert P > 0
         
         # See docstring for definitions of these quantities. Note that for now, Pinner
         # is equal to the simd width, but this may change in the future (see FIXME below).
@@ -322,7 +324,7 @@ class PfWeightReader:
             k.emit(f"// Since Tinner > 1, we ignore '{Dt}', and always increment the weight pointer '{self.wp}'.")
         else:
             k.emit("// FIXME optimize out mod-operator")
-            k.emit(f"if (!(({tin} + {32*SW}) % {Dt}))")
+            k.emit(f"if (!(({tin} + {32*self.SW}) % {Dt}))")
             
         k.emit(f"{self.wp} += {ps};")
         
