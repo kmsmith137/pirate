@@ -23,5 +23,7 @@ from .PeakFinder import \
     make_pf_file
 
 from .PeakFinder2 import \
+    PeakFinder2, \
+    PfWeightLayout, \
     PfWeightReader, \
     PfOutput2

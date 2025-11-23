@@ -37,7 +37,7 @@ elif basename.startswith('pf_output'):
     cuda_generator.PfOutput2.write_test_kernel(filename)
     sys.exit(0)  # FIXME
 elif basename.startswith('pf2_'):
-    cuda_generator.PeakFinder2.write_test_kernel(filename)
+    cuda_generator.PeakFinder2.write_kernel(filename)
     sys.exit(0)  # FIXME
 elif basename.startswith('pf_'):
     k = cuda_generator.make_pf_file(basename)

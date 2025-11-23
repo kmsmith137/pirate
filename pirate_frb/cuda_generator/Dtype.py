@@ -24,14 +24,17 @@ class Dtype:
         else:
             raise RuntimeError(f'unrecognized dtype: {x}')
 
-            
+
+    def __eq__(self, other):
+        # Enables comparisons such as (dtype == 'float').
+        return self.fname == Dtype(other).fname
+        
     def from_float(self, expr, paren=False):
         if self._from_float_str is not None:
             return f'{self._from_float_str}({expr})'
         if paren:
             return f'({expr})'
         return expr
-
     
     def max(self, x, y):
         return f'{self._max_str}({x}, {y})'

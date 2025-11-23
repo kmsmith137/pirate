@@ -13,6 +13,43 @@ from .FrequencySubbands import FrequencySubbands
 ####################################################################################################
 
 
+class PfRegister:
+    def __init__(self, mbase, tbase, b, l):
+        """
+        Helper class for PeakFinder2. Example usage:
+        
+          PfRegister(10, 1, (), (('m',0),('t',1),('t',2)))           # fp32
+          PfRegister(12, 2, (('t',0),), (('m',0),('m',1),('t',3)))   # fp16
+        """
+
+        assert isinstance(mbase, int)
+        assert isinstance(tbase, int)
+        assert self.is_si_pair_tuple(b)
+        assert self.is_si_pair_tuple(l)
+        
+        self.name = f'pf_m{mbase}t{tbase}{self.tstr(b)}{self.tstr(l)}'
+        self.mbase = mbase
+        self.tbase = tbase
+        self.b = b
+        self.l = l
+
+    @classmethod
+    def is_si_pair(cls, x):
+        return isinstance(x,tuple) and (len(x)==2) and isinstance(x[0],str) and isinstance(x[1],int)
+
+    @classmethod
+    def is_si_pair_tuple(cls, x):
+        return isinstance(x,tuple) and all(cls.is_si_pair(y) for y in x)
+
+    @classmethod
+    def pstr(cls, x):
+        return f'{x[0]}{x[1]}'
+    
+    @classmethod
+    def tstr(cls, x):
+        return ('_' + ''.join(cls.pstr(y) for y in x)) if (len(x) > 0) else ''
+    
+        
 class PeakFinder2:
     def __init__(self, dtype, frequency_subbands, E, Dcore, Dout, Tinner):
         self.dtype = dtype = Dtype(dtype)
@@ -23,52 +60,121 @@ class PeakFinder2:
         self.E = E
         
         self.P = 3 * utils.integer_log2(E) + 1   # number of peak-finding profiles
-        self.weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, P, Toinner)
+        self.weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         self.weight_layout = self.weight_reader.weight_layout
         self.output = PfOutput2(dtype, Dout)
         
-        self.Pouter = weight_layout.Pouter
-        self.Pinner = weight_layout.Pinner
-        self.Mouter = weight_reader.Mouter
-        self.Minner = weight_reader.Minner
-        self.M = weight_reader.M
-        
+        self.M = self.weight_reader.M
+        self.Mouter = self.weight_reader.Mouter
+        self.Minner = self.weight_reader.Minner
+        self.Pouter = self.weight_layout.Pouter
+        self.Pinner = self.weight_layout.Pinner
+        self.wt_touter_byte_stride = self.weight_layout.touter_byte_stride
+
+        self.dt32 = dtype.simd32
+        self.SW = dtype.simd_width
+        self.pf_rank = frequency_subbands.pf_rank
+
         # Typical kernel name: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1
         self.kernel_name = f'pf2_{dtype.fname}_{frequency_subbands.fstr}_E{E}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
-        self.kernel_basename = self.test_kernel_name + '.cu'
+        self.kernel_basename = self.kernel_name + '.cu'
 
         # For testing: if a peak-finding kernel is precompiled, we also precompile unit tests
         # for the associated 'weight_reader' and 'output' microkernels.
         self.all_kernel_basenames = [
-            self.test_kernel_basename,
+            self.kernel_basename,
             self.weight_reader.test_kernel_basename,
             self.output.test_kernel_basename
         ]
 
+
+    def process_pf_input(self, k, expr, m):
+        nb = utils.integer_log2(self.SW)
+        nl = utils.integer_log2(self.Dcore) - nb
+        b = tuple(('t',i) for i in range(nb))
+        l = tuple(('t',i+nb) for i in range(nl))
+        reg = PfRegister(m, 0, b, l)
+        
+        k.emit(f'{self.dt32} {reg.name} = {expr};')
+        self._process_pf_register(k, reg)
+
     
+    def _process_pf_register(self, k, reg):
+        nb = utils.integer_log2(self.SW)
+        nl = utils.integer_log2(self.Dcore) - nb
+        dt32 = self.dt32
+
+        # Transpose lanes?
+        
+        for i in range(nl):
+            if reg.l[i][0] != 't':
+                continue
+            
+            mbit = (1 << i)
+            tbit = (1 << reg.l[i][1])
+            if (reg.mbase & mbit) == 0:
+                return
+
+            lnew = reg.l[:i] + (('m',i),) + reg.l[(i+1):]
+            ireg0 = PfRegister(reg.mbase - mbit, reg.tbase, reg.b, reg.l)
+            ireg1 = PfRegister(reg.mbase, reg.tbase, reg.b, reg.l)
+            oreg0 = PfRegister(reg.mbase - mbit, reg.tbase, reg.b, lnew)
+            oreg1 = PfRegister(reg.mbase - mbit, reg.tbase + tbit, reg.b, lnew)
+
+            k.emit()
+            k.emit(f'// Warp transpose (bit {i})')
+            k.emit(f'// Inputs: {ireg0.name}, {ireg1.name}')
+            k.emit(f'// Outputs: {oreg0.name}, {oreg1.name}')
+
+            tmp1, tmp2 = k.get_name('tmp', 2)
+            k.emit(f'{dt32} {tmp1} = (threadIdx.x & {1<<i}) ? {ireg0.name} : {ireg1.name};')
+            k.emit(f'{dt32} {tmp2} = __shfl_xor_sync(~0u, {tmp1}, {1<<i});')
+            k.emit(f'{dt32} {oreg0.name} = (threadIdx.x & {1<<i}) ? {tmp2} : {ireg0.name};')
+            k.emit(f'{dt32} {oreg1.name} = (threadIdx.x & {1<<i}) ? {ireg1.name} : {tmp2};')
+            
+            self._process_pf_register(k, oreg0)
+            self._process_pf_register(k, oreg1)
+            return
+
+        # Transpose simd bit?
+
+        if (nb == 1) and (reg.b[0] == ('t',0)):
+            mbit = (1 << nl)
+            if (reg.mbase & mbit) == 0:
+                return
+
+            bnew = (('m',nl),)
+            ireg0 = PfRegister(reg.mbase - mbit, reg.tbase, reg.b, reg.l)
+            ireg1 = PfRegister(reg.mbase, reg.tbase, reg.b, reg.l)
+            oreg0 = PfRegister(reg.mbase - mbit, reg.tbase, bnew, reg.l)
+            oreg1 = PfRegister(reg.mbase - mbit, reg.tbase + 1, bnew, reg.l)
+
+            k.emit()
+            k.emit(f'// Local (__half2) transpose')
+            k.emit(f'// Inputs: {ireg0.name}, {ireg1.name}')
+            k.emit(f'// Outputs: {oreg0.name}, {oreg1.name}')
+
+            k.emit(f'{dt32} {oreg0.name} = __lows2half2({ireg0.name}, {ireg1.name});')
+            k.emit(f'{dt32} {oreg1.name} = __highs2half2({ireg0.name}, {ireg1.name});')
+            
+            self._process_pf_register(k, oreg0)
+            self._process_pf_register(k, oreg1)
+            return
+
+        # If we get here, then register should be "all ms".
+        assert reg.b == tuple(('m',i+nl) for i in range(nb))
+        assert reg.l == tuple(('m',i) for i in range(nl))
+        k.emit()
+        k.emit(f'// VICTORY: {reg.name} has tbase={reg.tbase}')
+
+
     @classmethod
-    def write_kernel(cls, filename):
-        """Called from 'autogenerate_kernel.py' in the toplevel pirate directory."""
+    def _idiv(cls, var, n):
+        return f'({var} >> {utils.integer_log2(n)})' if (n != 1) else var
         
-        basename = os.path.basename(filename)
+    def emit_kernel(self, k):
+        dt32, SW, Dcore, Dout, M = self.dt32, self.dtype.simd_width, self.Dcore, self.Dout, self.M
 
-        # Typical basename: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1.cu
-        m = re.fullmatch(r'pf2_(fp\d+)_((?:f\d+_)*f\d+)_E(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
-        if not m:
-            raise RuntimeError(f"Couldn't match filename '{filename}'")
-        
-        dtype = Dtype(m.group(1))
-        frequency_subbands = FrequencySubbands.from_fstr(m.group(2))
-        E, Dcore, Dout, Tinner = int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6))
-
-        pf_kernel = PfKernel2(frequency_subbands, dtype, Dcore, P, Tinner)
-
-        if pf_kernel.kernel_basename != basename:
-            raise RuntimeError("PfKernel2.write_test_kernel(): internal error: expected "
-                               + f" {pf_kernel.kernel_basename=} and {basename=} to be equal")
-                
-        k = Kernel()
-        
         k.emit('// Autogenerated by pirate_frb.cuda_generator')
         k.emit()
         k.emit('// For a high-level overview, see the long comment at the top of')
@@ -90,17 +196,87 @@ class PeakFinder2:
         k.emit('// pstate: (B*W,PW) where PW = pstate elements per warp (sizeof(dtype), not bytes)')
         k.emit('//')
         k.emit('// WDd, WDt: coarse-graining factors for weight array.')
-        k.emit('// WDd must be a multiple of 2^pf_rank.')
+        k.emit('// WDd must be a multiple of 2**pf_rank.')
         k.emit('// If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).')
         k.emit('// If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.')
         k.emit('// Here, SW = (128/sizeof(dtype)) is the simd width.')
         k.emit()
-        k.emit(f'__global__ void {k.kernel_name}(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, int Tin, int WDd, int WDt)')
+        k.emit('// FIXME assuming 4 warps/threadblock and 6 threadblocks/SM for now')
+        k.emit('__global__ void __launch_bounds__(4,6)')
+        k.emit(f'{self.kernel_name}(const void *in_, void *out_max_, uint *out_argmax, const void *wt_, void *pstate_, uint Tin, uint WDd, uint WDt)')
         k.emit('{')
-        k.emit('    return;')
+        k.emit(f'constexpr int M = {self.M};')
+        k.emit(f'constexpr int PW = 0;   // FIXME placeholder')
+        k.emit(f'constexpr int Tinner = {self.Tinner};')
+        k.emit(f'constexpr int pf_rank = {self.pf_rank};')
+        k.emit(f'constexpr int wt_touter_stride32 = {utils.xdiv(self.wt_touter_byte_stride,4)};')
+        k.emit()
+        k.emit(f'const {dt32} *in = (const {dt32} *) in_;')
+        k.emit(f'const {dt32} *wt = (const {dt32} *) wt_;')
+        k.emit(f'{dt32} *out_max = ({dt32} *) out_max_;')
+        k.emit(f'{dt32} *pstate = ({dt32} *) pstate_;')
+        k.emit()
+
+        Tout = self._idiv('Tin', Dout)
+        Tin32 = self._idiv('Tin', SW)
+        Tout32 = self._idiv('Tin', Dout*SW)
+
+        k.emit(f'// FIXME could optimize out integer divisions')
+        k.emit(f'uint wb = blockIdx.x * blockDim.x + threadIdx.y;')
+        k.emit(f'uint dbar = wb / (WDd >> pf_rank);   // dbar index in weight array')
+        k.emit(f'uint Touter = Tin / (Tinner * WDt);  // see PfWeightLayout')
+        k.emit()
+        
+        k.emit(f'// Add per-warp pointer offsets, but not per-lane offsets')
+        k.emit(f'in += wb * M * {Tin32};                    // shape (B*W, M, Tin)')
+        k.emit(f'out_max += wb * {Tout32};                  // shape (B*W, Tin/Dout)')
+        k.emit(f'out_argmax += wb * {Tout};                 // shape (B*W, Tin/Dout)')
+        k.emit(f'wt += dbar * Touter * wt_touter_stride32;  // shape (Dbar,Touter,...)')
+        k.emit(f'pstate += wb * PW;                         // shape (B*W, PW)')
+        k.emit()
+
+        k.emit(f'for (uint tin = 0; tin < Tin; tin += {32*SW}) {{')
+
+        Mxxx = (M+Dcore-1) & ~(Dcore-1)
+        for m in range(Mxxx):
+            t = f'({m} * {Tin32})' if (m > 1) else Tin32
+            t = f'in[{t} + threadIdx.x]' if (m > 0) else 'in[threadIdx.x]'
+
+            k.emit()
+            k.emit(f'// Read {m=} from global memory')
+            self.process_pf_input(k, t, m)
+
+        k.emit('in += 32;')
+        
+        k.emit('}  // end of tin loop')
         k.emit('}  // end of cuda kernel')
         k.emit()
         k.emit('}   // namespace pirate')
+        
+    
+    @classmethod
+    def write_kernel(cls, filename):
+        """Called from 'autogenerate_kernel.py' in the toplevel pirate directory."""
+        
+        basename = os.path.basename(filename)
+
+        # Typical basename: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1.cu
+        m = re.fullmatch(r'pf2_(fp\d+)_((?:f\d+_)*f\d+)_E(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
+        if not m:
+            raise RuntimeError(f"Couldn't match filename '{filename}'")
+        
+        dtype = Dtype(m.group(1))
+        frequency_subbands = FrequencySubbands.from_fstr(m.group(2))
+        E, Dcore, Dout, Tinner = int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6))
+
+        pf_kernel = cls(dtype, frequency_subbands, E, Dcore, Dout, Tinner)
+
+        if pf_kernel.kernel_basename != basename:
+            raise RuntimeError("PfKernel2.write_test_kernel(): internal error: expected "
+                               + f" {pf_kernel.kernel_basename=} and {basename=} to be equal")
+                
+        k = Kernel()
+        pf_kernel.emit_kernel(k)
 
         with open(filename,'w') as f:
             with utils.clang_formatter(f) as ff:
