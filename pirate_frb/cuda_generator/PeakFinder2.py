@@ -12,43 +12,6 @@ from .FrequencySubbands import FrequencySubbands
 
 ####################################################################################################
 
-
-class PfRegister:
-    def __init__(self, mbase, tbase, b, l):
-        """
-        Helper class for PeakFinder2. Example usage:
-        
-          PfRegister(10, 1, (), (('m',0),('t',1),('t',2)))           # fp32
-          PfRegister(12, 2, (('t',0),), (('m',0),('m',1),('t',3)))   # fp16
-        """
-
-        assert isinstance(mbase, int)
-        assert isinstance(tbase, int)
-        assert self.is_si_pair_tuple(b)
-        assert self.is_si_pair_tuple(l)
-        
-        self.name = f'pf_m{mbase}t{tbase}{self.tstr(b)}{self.tstr(l)}'
-        self.mbase = mbase
-        self.tbase = tbase
-        self.b = b
-        self.l = l
-
-    @classmethod
-    def is_si_pair(cls, x):
-        return isinstance(x,tuple) and (len(x)==2) and isinstance(x[0],str) and isinstance(x[1],int)
-
-    @classmethod
-    def is_si_pair_tuple(cls, x):
-        return isinstance(x,tuple) and all(cls.is_si_pair(y) for y in x)
-
-    @classmethod
-    def pstr(cls, x):
-        return f'{x[0]}{x[1]}'
-    
-    @classmethod
-    def tstr(cls, x):
-        return ('_' + ''.join(cls.pstr(y) for y in x)) if (len(x) > 0) else ''
-    
         
 class PeakFinder2:
     def __init__(self, dtype, frequency_subbands, E, Dcore, Dout, Tinner):
@@ -74,6 +37,8 @@ class PeakFinder2:
         self.dt32 = dtype.simd32
         self.SW = dtype.simd_width
         self.pf_rank = frequency_subbands.pf_rank
+        self.pfx_nb = utils.integer_log2(self.SW)
+        self.pfx_nl = utils.integer_log2(self.Dcore) - self.pfx_nb
 
         # Typical kernel name: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1
         self.kernel_name = f'pf2_{dtype.fname}_{frequency_subbands.fstr}_E{E}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
@@ -87,90 +52,6 @@ class PeakFinder2:
             self.output.test_kernel_basename
         ]
 
-
-    def process_pf_input(self, k, expr, m):
-        nb = utils.integer_log2(self.SW)
-        nl = utils.integer_log2(self.Dcore) - nb
-        b = tuple(('t',i) for i in range(nb))
-        l = tuple(('t',i+nb) for i in range(nl))
-        reg = PfRegister(m, 0, b, l)
-        
-        k.emit(f'{self.dt32} {reg.name} = {expr};')
-        self._process_pf_register(k, reg)
-
-    
-    def _process_pf_register(self, k, reg):
-        nb = utils.integer_log2(self.SW)
-        nl = utils.integer_log2(self.Dcore) - nb
-        dt32 = self.dt32
-
-        # Transpose lanes?
-        
-        for i in range(nl):
-            if reg.l[i][0] != 't':
-                continue
-            
-            mbit = (1 << i)
-            tbit = (1 << reg.l[i][1])
-            if (reg.mbase & mbit) == 0:
-                return
-
-            lnew = reg.l[:i] + (('m',i),) + reg.l[(i+1):]
-            ireg0 = PfRegister(reg.mbase - mbit, reg.tbase, reg.b, reg.l)
-            ireg1 = PfRegister(reg.mbase, reg.tbase, reg.b, reg.l)
-            oreg0 = PfRegister(reg.mbase - mbit, reg.tbase, reg.b, lnew)
-            oreg1 = PfRegister(reg.mbase - mbit, reg.tbase + tbit, reg.b, lnew)
-
-            k.emit()
-            k.emit(f'// Warp transpose (bit {i})')
-            k.emit(f'// Inputs: {ireg0.name}, {ireg1.name}')
-            k.emit(f'// Outputs: {oreg0.name}, {oreg1.name}')
-
-            tmp1, tmp2 = k.get_name('tmp', 2)
-            k.emit(f'{dt32} {tmp1} = (threadIdx.x & {1<<i}) ? {ireg0.name} : {ireg1.name};')
-            k.emit(f'{dt32} {tmp2} = __shfl_xor_sync(~0u, {tmp1}, {1<<i});')
-            k.emit(f'{dt32} {oreg0.name} = (threadIdx.x & {1<<i}) ? {tmp2} : {ireg0.name};')
-            k.emit(f'{dt32} {oreg1.name} = (threadIdx.x & {1<<i}) ? {ireg1.name} : {tmp2};')
-            
-            self._process_pf_register(k, oreg0)
-            self._process_pf_register(k, oreg1)
-            return
-
-        # Transpose simd bit?
-
-        if (nb == 1) and (reg.b[0] == ('t',0)):
-            mbit = (1 << nl)
-            if (reg.mbase & mbit) == 0:
-                return
-
-            bnew = (('m',nl),)
-            ireg0 = PfRegister(reg.mbase - mbit, reg.tbase, reg.b, reg.l)
-            ireg1 = PfRegister(reg.mbase, reg.tbase, reg.b, reg.l)
-            oreg0 = PfRegister(reg.mbase - mbit, reg.tbase, bnew, reg.l)
-            oreg1 = PfRegister(reg.mbase - mbit, reg.tbase + 1, bnew, reg.l)
-
-            k.emit()
-            k.emit(f'// Local (__half2) transpose')
-            k.emit(f'// Inputs: {ireg0.name}, {ireg1.name}')
-            k.emit(f'// Outputs: {oreg0.name}, {oreg1.name}')
-
-            k.emit(f'{dt32} {oreg0.name} = __lows2half2({ireg0.name}, {ireg1.name});')
-            k.emit(f'{dt32} {oreg1.name} = __highs2half2({ireg0.name}, {ireg1.name});')
-            
-            self._process_pf_register(k, oreg0)
-            self._process_pf_register(k, oreg1)
-            return
-
-        # If we get here, then register should be "all ms".
-        assert reg.b == tuple(('m',i+nl) for i in range(nb))
-        assert reg.l == tuple(('m',i) for i in range(nl))
-        k.emit()
-        k.emit(f'// VICTORY: {reg.name} has tbase={reg.tbase}')
-
-
-    @classmethod
-    def _idiv(cls, var, n):
-        return f'({var} >> {utils.integer_log2(n)})' if (n != 1) else var
         
     def emit_kernel(self, k):
         dt32, SW, Dcore, Dout, M = self.dt32, self.dtype.simd_width, self.Dcore, self.Dout, self.M
@@ -252,6 +133,109 @@ class PeakFinder2:
         k.emit('}  // end of cuda kernel')
         k.emit()
         k.emit('}   // namespace pirate')
+
+        
+    def process_pf_input(self, k, expr, m):
+        """Called in main loop of emit_kernel()."""
+        
+        b = tuple(('t',i) for i in range(self.pfx_nb))
+        l = tuple(('t',i+self.pfx_nb) for i in range(self.pfx_nl))
+        var = self.pfx_name(m, 0, b, l)
+        
+        k.emit(f'{self.dt32} {var} = {expr};')        
+        self.pfx_register_ready(k, m, 0, b, l)
+
+
+    def _is_si_pair(self, x):
+        return isinstance(x,tuple) and (len(x)==2) and isinstance(x[0],str) and isinstance(x[1],int)
+
+    def _assert_is_si_tuple(self, x, expected_length):
+        """Helper for pfx_name()."""
+        if (not isinstance(x,tuple)) or (len(x) != expected_length) or any(not self._is_si_pair(y) for y in x):
+            raise RuntimeError(f'Expected length-{expected_length} tuple of (str,int) pairs, got: {x}')
+
+    def _si_tuple_str(self, x):
+        """Helper for pfx_name()."""
+        return ('_' + ''.join(f'{s}{i}' for s,i in x)) if (len(x) > 0) else ''
+
+    def pfx_name(self, m, t, b, l):
+        """Helper for pfx_register_ready() and friends."""
+        assert isinstance(m,int) and isinstance(t,int)
+        self._assert_is_si_tuple(b, self.pfx_nb)
+        self._assert_is_si_tuple(l, self.pfx_nl)
+        return f'pf_m{m}t{t}{self._si_tuple_str(b)}{self._si_tuple_str(l)}'
+
+        
+    def pfx_register_ready(self, k, m, t, b, l):
+        dt32 = self.dt32
+
+        # Transpose lanes?
+        
+        for i in range(self.pfx_nl):
+            if l[i][0] != 't':
+                continue
+            
+            mbit = (1 << i)
+            tbit = (1 << l[i][1])
+            if (m & mbit) == 0:
+                return
+
+            lnew = l[:i] + (('m',i),) + l[(i+1):]
+            iname0 = self.pfx_name(m-mbit, t, b, l)
+            iname1 = self.pfx_name(m, t, b, l)
+            oname0 = self.pfx_name(m-mbit, t, b, lnew)
+            oname1 = self.pfx_name(m-mbit, t+tbit, b, lnew)
+
+            k.emit()
+            k.emit(f'// Warp transpose (bit {i})')
+            k.emit(f'// Inputs: {iname0}, {iname1}')
+            k.emit(f'// Outputs: {oname0}, {oname1}')
+
+            tmp1, tmp2 = k.get_name('tmp', 2)
+            k.emit(f'{dt32} {tmp1} = (threadIdx.x & {1<<i}) ? {iname0} : {iname1};')
+            k.emit(f'{dt32} {tmp2} = __shfl_xor_sync(~0u, {tmp1}, {1<<i});')
+            k.emit(f'{dt32} {oname0} = (threadIdx.x & {1<<i}) ? {tmp2} : {iname0};')
+            k.emit(f'{dt32} {oname1} = (threadIdx.x & {1<<i}) ? {iname1} : {tmp2};')
+
+            self.pfx_register_ready(k, m-mbit, t, b, lnew)
+            self.pfx_register_ready(k, m-mbit, t+tbit, b, lnew)
+            return
+
+        # Transpose simd bit?
+
+        if (self.pfx_nb == 1) and (b[0] == ('t',0)):
+            mbit = (1 << self.pfx_nl)
+            if (m & mbit) == 0:
+                return
+
+            bnew = (('m',self.pfx_nl),)
+            iname0 = self.pfx_name(m-mbit, t, b, l)
+            iname1 = self.pfx_name(m, t, b, l)
+            oname0 = self.pfx_name(m-mbit, t, bnew, l)
+            oname1 = self.pfx_name(m-mbit, t+1, bnew, l)
+
+            k.emit()
+            k.emit(f'// Local (__half2) transpose')
+            k.emit(f'// Inputs: {iname0}, {iname1}')
+            k.emit(f'// Outputs: {oname0}, {oname1}')
+
+            k.emit(f'{dt32} {oname0} = __lows2half2({iname0}, {iname1});')
+            k.emit(f'{dt32} {oname1} = __highs2half2({iname0}, {iname1});')
+            
+            self.pfx_register_ready(k, m-mbit, t, bnew, l)
+            self.pfx_register_ready(k, m-mbit, t+1, bnew, l)
+            return
+
+        # If we get here, then register should be "all ms".
+        assert b == tuple(('m',i+self.pfx_nl) for i in range(self.pfx_nb))
+        assert l == tuple(('m',i) for i in range(self.pfx_nl))
+        k.emit()
+        k.emit(f'// VICTORY: {self.pfx_name(m,t,b,l)} has tbase={t}')
+
+
+    @classmethod
+    def _idiv(cls, var, n):
+        return f'({var} >> {utils.integer_log2(n)})' if (n != 1) else var
         
     
     @classmethod
