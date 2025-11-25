@@ -23,6 +23,12 @@ def integer_log2(n):
     return r
 
 
+def align_up(n, nalign):
+    assert n >= 0
+    assert nalign > 0
+    return ((n + nalign - 1) // nalign) * nalign
+
+
 def bit_reverse(i, nbits):
     assert 0 <= i < 2**nbits
     

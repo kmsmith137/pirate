@@ -52,6 +52,10 @@ class PeakFinder2:
             self.output.test_kernel_basename
         ]
 
+
+    @classmethod
+    def _idiv(cls, var, n):
+        return f'({var} >> {utils.integer_log2(n)})' if (n != 1) else var
         
     def emit_kernel(self, k):
         dt32, SW, Dcore, Dout, M = self.dt32, self.dtype.simd_width, self.Dcore, self.Dout, self.M
@@ -118,8 +122,7 @@ class PeakFinder2:
 
         k.emit(f'for (uint tin = 0; tin < Tin; tin += {32*SW}) {{')
 
-        Mxxx = (M+Dcore-1) & ~(Dcore-1)
-        for m in range(Mxxx):
+        for m in range(M):
             t = f'({m} * {Tin32})' if (m > 1) else Tin32
             t = f'in[{t} + threadIdx.x]' if (m > 0) else 'in[threadIdx.x]'
 
@@ -127,6 +130,8 @@ class PeakFinder2:
             k.emit(f'// Read {m=} from global memory')
             self.process_pf_input(k, t, m)
 
+        k.emit()
+        k.emit('// Advance input pointer.')
         k.emit('in += 32;')
         
         k.emit('}  // end of tin loop')
@@ -137,6 +142,9 @@ class PeakFinder2:
         
     def process_pf_input(self, k, expr, m):
         """Called in main loop of emit_kernel()."""
+
+        M = self.M
+        Mpad = utils.align_up(M, self.Dcore)
         
         b = tuple(('t',i) for i in range(self.pfx_nb))
         l = tuple(('t',i+self.pfx_nb) for i in range(self.pfx_nl))
@@ -144,6 +152,18 @@ class PeakFinder2:
         
         k.emit(f'{self.dt32} {var} = {expr};')        
         self.pfx_register_ready(k, m, 0, b, l)
+
+        if (m == M-1) and (M < Mpad):
+            k.emit()
+            k.emit(f'// FIXME: creating dummy pfx registers for M <= m < Mpad, where {M=} and {Mpad=}.')
+            k.emit(f'// FIXME: dumb and suboptimal -- revisit!')
+            
+            for mm in range(M, Mpad):
+                dummy = self.pfx_name(mm, 0, b, l)
+                k.emit(f'{self.dt32} {dummy} = {var};')
+
+            for mm in range(M, Mpad):
+                self.pfx_register_ready(k, mm, 0, b, l)
 
 
     def _is_si_pair(self, x):
@@ -163,11 +183,11 @@ class PeakFinder2:
         assert isinstance(m,int) and isinstance(t,int)
         self._assert_is_si_tuple(b, self.pfx_nb)
         self._assert_is_si_tuple(l, self.pfx_nl)
-        return f'pf_m{m}t{t}{self._si_tuple_str(b)}{self._si_tuple_str(l)}'
+        return f'pfx_m{m}t{t}{self._si_tuple_str(b)}{self._si_tuple_str(l)}'
 
         
     def pfx_register_ready(self, k, m, t, b, l):
-        dt32 = self.dt32
+        dt32, M, Dcore = self.dt32, self.M, self.Dcore
 
         # Transpose lanes?
         
@@ -227,16 +247,25 @@ class PeakFinder2:
             return
 
         # If we get here, then register should be "all ms".
+        assert (m % Dcore) == 0
         assert b == tuple(('m',i+self.pfx_nl) for i in range(self.pfx_nb))
         assert l == tuple(('m',i) for i in range(self.pfx_nl))
-        k.emit()
-        k.emit(f'// VICTORY: {self.pfx_name(m,t,b,l)} has tbase={t}')
+
+        if (t == Dcore-1):
+            k.emit()
+            k.emit(f'// Transpose complete -- now ready to run peak-finders for {m} <= m < {m+Dcore}')
+            k.emit(f'// First, some renames for readability.')
+
+            for tt in range(Dcore):
+                src = self.pfx_name(m, tt, b, l)
+                k.emit(f'{dt32} pf1_m{m}_t{tt} = {src};')
+
+        self.pf1_registers_ready(k, m)
 
 
-    @classmethod
-    def _idiv(cls, var, n):
-        return f'({var} >> {utils.integer_log2(n)})' if (n != 1) else var
-        
+    def pf1_registers_ready(self, k, m):
+        return
+    
     
     @classmethod
     def write_kernel(cls, filename):
