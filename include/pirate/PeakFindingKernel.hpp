@@ -204,6 +204,26 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::Re
 // -------------------------------------------------------------------------------------------------
 
 
+// FIXME relocate this to a different .hpp?
+struct FrequencySubbands
+{
+    FrequencySubbands(const std::vector<long> &subband_counts);
+
+    long pf_rank = -1;
+    long F = 0;  // number of distinct frequency subbands
+    long M = 0;  // number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
+
+    std::vector<long> m_to_f;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+    std::vector<long> m_to_d;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+    std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+    std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+
+    // Length-(rank+1) vector, containing number of frequency subbands at each level.
+    // This vector is used as an "identifier" for frequency subbands in low-level code.
+    std::vector<long> subband_counts;  // length (pf_rank+1);    
+};
+
+
 // GpuPfWeightLayout: describes the layout of peak-finding weights on the GPU.
 //
 // Peak-finding weights are logically a 5-d array with shape:
@@ -236,6 +256,8 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::Re
 struct GpuPfWeightLayout
 {
     ksgpu::Dtype dtype;
+    std::vector<int> subband_counts;
+    
     long F = 0;     // number of distinct frequency subbands
     long P = 0;     // number of peak-finding kernels
     long WDd = 0;   // DM downsampling factor for weights (relative to tree)

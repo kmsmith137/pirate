@@ -3,9 +3,12 @@ import numpy as np
 
 from . import utils
 
-# Note: the FrequencySubbands class is in the 'cuda_generator' submodule, since it
+# Note 1: the FrequencySubbands class is in the 'cuda_generator' submodule, since it
 # might be useful in 'makefile_helper.py', which imports the cuda_generator submodule,
 # but not the toplevel pirate_frb module.
+#
+# Note 2: there is a similar C++ class (pirate::FrequencySubbands), so changes made here
+# should also be reflected there.
 
 class FrequencySubbands:
     def __init__(self, *, subband_counts=None, pf_rank=None, fmin=None, fmax=None, threshold=None):
@@ -112,7 +115,7 @@ class FrequencySubbands:
     
     
     def max_bands_at_level(self, level):
-        # Level==0 is special (non-overlapping bands).
+        # Level 0 is special (non-overlapping bands).
         assert 0 <= level <= self.pf_rank
         return (2**(self.pf_rank+1-level) - 1) if (level > 0) else (2**self.pf_rank)
 

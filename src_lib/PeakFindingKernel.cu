@@ -456,6 +456,57 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryValue &v)
 
 // -------------------------------------------------------------------------------------------------
 //
+// FrequencySubbands
+//
+// Note: there is a similar python class (pirate_frb.cuda_generator.FrequencySubbands), so changes
+// made here should also be reflected there.
+
+
+FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
+    subband_counts(subband_counts_)
+{
+    this->pf_rank = subband_counts.size() - 1;
+    this->F = 0;
+    this->M = 0;
+    
+    xassert_ge(subband_counts.size(), 1);
+    xassert_eq(subband_counts.at(pf_rank), 1);  // must search full band
+
+    // Currently, pf_rank=4 is max value supported by the peak-finding kernel,
+    // so a larger value would indicate a bug (such as using the total tree rank
+    // instead of the peak-finding rank).
+    xassert_le(pf_rank, 4);
+
+    for (long level = 0; level <= pf_rank; level++) {
+	// Level 0 is special (non-overlapping bands).
+	long max_bands = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
+	xassert_ge(subband_counts.at(level), 0);
+	xassert_le(subband_counts.at(level), max_bands);
+
+	for (long b = 0; b < subband_counts.at(level); b++) {
+	    long s = pow2(max(level-1,0L));   // spacing between bands
+	    long f = this->F;                 // current value
+
+	    this->f_to_ilo.push_back(b*s);
+	    this->f_to_ihi.push_back(b*s + pow2(level));
+		
+	    for (long d = 0; d < pow2(level); d++) {
+		this->m_to_f.push_back(f);
+		this->m_to_d.push_back(d);
+	    }
+
+	    this->M += pow2(level);
+	    this->F += 1;
+	}
+    }
+
+    xassert_eq(m_to_f.size(), uint(M));
+    xassert_eq(f_to_ilo.size(), uint(F));
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // GpuPfWeightLayout
 
 
