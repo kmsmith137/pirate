@@ -669,19 +669,20 @@ void test_pf_weight_reader_microkernel()
     TestPfWeightReader::RegistryValue val = TestPfWeightReader::registry().get(key);
 
     FrequencySubbands fs(key.subband_counts);
+    GpuPfWeightLayout &wl = val.pf_weight_layout;
+    
+    Dtype dtype = key.dtype;
+    int SW = xdiv(32, dtype.nbits);   // simd width
+    
     int F = fs.F;
     int M = fs.M;
-
-    Dtype dtype = key.dtype;
-    int Tinner = key.Tinner;
+    int P = wl.P;
     int Dcore = key.Dcore;
-    int SW = xdiv(32, dtype.nbits);   // simd width
-
+    int Tinner = key.Tinner;
+    int Pouter = wl.Pouter;
+    int Pinner = wl.Pinner;
     int Minner = xdiv(Dcore, SW);
-    int Mouter = (M + Minner - 1) / Minner;
-    int Pouter = val.pf_weight_layout.Pouter;
-    int Pinner = val.pf_weight_layout.Pinner;
-    int P = val.pf_weight_layout.P;
+    int Mouter = (M + Minner - 1) / Minner;  // round down
 
     xassert(fs.m_to_f.size() == uint(M));
     long fend = fs.m_to_f.at(M-1);
@@ -708,7 +709,7 @@ void test_pf_weight_reader_microkernel()
 	 << ", Tin=" << Tin << endl;
     
     // Input array: (1,1,Tbar,P,F), where the length-1 axes are beams and DMs.
-    Array<float> in_cpu1({1,1,Tbar,P,F}, af_rhost | af_random);
+    Array<float> in_cpu({1,1,Tbar,P,F}, af_rhost | af_random);
 
     // Output array: can be viewed as shape
     //   (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
@@ -740,7 +741,7 @@ void test_pf_weight_reader_microkernel()
 		    for (int pouter = 0; pouter < Pouter; pouter++) {
 			for (int pinner = 0; pinner < Pinner; pinner++) {
 			    int p = min(pouter*Pinner + pinner, P-1);
-			    float w = in_cpu1.at({0,0,tbar,p,f});
+			    float w = in_cpu.at({0,0,tbar,p,f});
 
 			    for (int s1 = 0; s1 < S1; s1++)
 				for (int s2 = 0; s2 < S2; s2++)
@@ -753,7 +754,7 @@ void test_pf_weight_reader_microkernel()
     }
 
     // Copy input array to GPU.
-    Array<void> in_gpu = val.pf_weight_layout.to_gpu(in_cpu1);
+    Array<void> in_gpu = val.pf_weight_layout.to_gpu(in_cpu);
 
     // Run kernel on GPU.
     Array<void> out_gpu(dtype, out_cpu.ndim, out_cpu.shape, af_gpu | af_zero | af_guard);
