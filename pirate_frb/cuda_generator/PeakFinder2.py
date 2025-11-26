@@ -44,6 +44,7 @@ class PeakFinder2:
 
         self.rb = Ringbuf(self.dt32)
         self.pf_output = PfOutput2(dtype, Dout)
+        self.pf_weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         
         # Typical kernel name: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1
         self.kernel_name = f'pf2_{dtype.fname}_{frequency_subbands.fstr}_E{E}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
@@ -130,7 +131,10 @@ class PeakFinder2:
         k.emit(f'pstate += wb * PW32;                       // shape (B*W, PW32)')        
         k.emit()
 
-        # Code to load pstate will be spliced in here.
+        # PfWeightReader.top() is currently a placeholder that does not emit any code.
+        self.pf_weight_reader.top(k, 'wt')
+        
+        # Code to load ring buffer pstate will be spliced in here.
         self.kps = k.splice()
 
         k.emit()
@@ -146,11 +150,14 @@ class PeakFinder2:
 
         # Bottom of tin-loop 1: process pf_output.
         self.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'tin', 'Tin')
+
+        # bottom of tin-loop 2: advance weight_reader.
+        self.pf_weight_reader.bottom(k, 'tin', 'Dt')
         
-        # Bottom of tin-loop 2: advance ringbuf.
+        # Bottom of tin-loop 3: advance ringbuf.
         self.rb.advance_outer(k)
         
-        # Bottom of tin-loop 3: advance input pointer.
+        # Bottom of tin-loop 4: advance input pointer.
         k.emit()
         k.emit('// Advance input pointer.')
         k.emit('in += 32;')
@@ -295,6 +302,8 @@ class PeakFinder2:
 
 
     def _absorb_pfz(self, k, var, m, p, t):
+        """Helper for pfy_registers_ready()."""
+        
         pfz = f'pfz_m{m}_p{p}'
         pfiz = f'pfiz_m{m}_p{p}'
         assert 0 <= t < self.Dcore
@@ -314,7 +323,34 @@ class PeakFinder2:
             k.emit(f'{pfz} = __hmax2({pfz}, {var});')
         else:
             raise RuntimeError('should never get here')
-            
+
+    
+    def _read_weights(self, k, m, p):
+        """
+        Called in pfy_registers_ready(), to "prefetch" weights.
+        The weights are applied in pfz_register_ready().
+        """
+
+        Dcore, Minner, Pinner = self.Dcore, self.Minner, self.Pinner
+        assert (m % Dcore) == 0
+        
+        if self.dtype == 'float':
+            assert Pinner == 1
+            assert Dcore == Minner
+            mouter = utils.xdiv(m, Minner)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', mouter, p)
+        
+        elif self.dtype == '__half' and ((p % 2) == 0):
+            assert Pinner == 2
+            assert Dcore == 2*Minner
+            mouter = utils.xdiv(m, Minner)
+            pouter = utils.xdiv(p, Pinner)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', mouter, pouter)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m+Minner}_p{p}', mouter+1, pouter)
+                
+        elif self.dtype != '__half':
+            raise RuntimeError('should never get here')
+        
         
     def pfy_registers_ready(self, k, m):
         dt32, E, Dcore, Minner = self.dt32, self.E, self.Dcore, self.Minner
@@ -323,6 +359,8 @@ class PeakFinder2:
         # For formatting register names
         pfy = lambda w,t: f'pfy{w}_m{m}_t{t}' if (t >= 0) else f'pfy{w}_m{m}_tn{-t}'
 
+        self._read_weights(k, m, p=0)
+        
         k.emit()
         k.emit(f'// Compute p=0 peak-finding kernel')
         for t in range(0, self.Dcore):
@@ -336,9 +374,12 @@ class PeakFinder2:
             W = 2**lgW
             t0, t1 = min(Dcore-W,0), Dcore
 
+            for p in range(3*lgW+1, 3*lgW+4):
+                self._read_weights(k, m, p)
+            
             # In each iteration of the loop, we want to process all "triggers" whose
             # last sample is of the form (pfy(W,t) for t in range(t0,t1,W).
-            # First, we get (pfy(W,t) for t >= t0-3*W) from the ring buffer.
+            # First, we obtain (pfy(W,t) for t >= t0-3*W) from the ring buffer.
             # Invariant: from previous iteration of loop, we have pfy(w,t) for t >= tmin.
 
             for t in reversed(range(t0-3*W,tmin,W)):
@@ -347,15 +388,26 @@ class PeakFinder2:
                 k.emit(f'{dt32} {pfy(W,t)};')
                 self.rb.advance(k, pfy(W,t+Dcore), self.Minner, dst=pfy(W,t))
 
-            # This slightly cryptic code computes "stray" pfy(2*W,*) values that are
-            # needed before starting the "main peak-finding loops" below.
-            # It also maintains the loop invariant, by updating tmin.
+            # Update tmin after obtaining new pfys from the ring buffer.
+            tmin = t0-3*W
             
-            tmin = (t0-2*W) if (W < Dcore) else (t0-3*W)
+            # In the first "main peak-finding loop" below, we'll compute
+            #    (pfy(2*W,t) for t in range(t0-W,t1-W,W)).
+            # In addition, we'll need some "stray" pfy(2*W,t) values.
+            
+            # This "stray t" is always needed for third "main peak-finding loop" below.
+            stray_ts = [ t0-2*W ]
+
+            # If this is not the last loop iteration, then compute as many "stray ts" as we can.
+            if (2*W) < E:
+                t0_next = min(Dcore-2*W,0)
+                aligned = (t0_next % W) == ((t0-3*W) % W)
+                tmin = tmin if aligned else (tmin+W)  # note: updates 'tmin' to preserve loop invariant
+                stray_ts = list(range(tmin,tmin-2*W,2*W)) + stray_ts
 
             k.emit()
-            k.emit(f'// Compute "stray" pfy{2*W} value(s)')
-            for t in range(tmin, t0-W, W):
+            k.emit(f'// Compute "stray" pfy{2*W} value(s): {[pfy(2*W,t) for t in stray_ts]}')
+            for t in stray_ts:
                 k.emit(f'{dt32} {pfy(2*W,t)} = {pfy(W,t)} + {pfy(W,t+W)};')
 
             # Main peak-finding loops. (This could be one loop instead of three, but
@@ -595,10 +647,11 @@ class PfWeightReader:
 
               // Outer "unrolled" loop over 0 <= mouter < Mouter.
               // Inner "unrolled" loop over 0 <= pouter < Pouter.
-              w = pfw_reader.read_weights(mouter=0, pouter=0)
-              w = pfw_reader.read_weights(mouter=0, pouter=1)
+              w = pfw_reader.read_weights('pfw_m0_p0', mouter=0, pouter=0)
+              w = pfw_reader.read_weights('pfw_m0_p1, mouter=0, pouter=1)
                 // ...
-              w = pfw_reader.read_weights(mouter=Mouter-1, pouter=Pouter-1)
+              w = pfw_reader.read_weights(f'pfw_m{Minner*(Mouter-1)}_p{Pouter-1}',
+                                          mouter=Mouter-1, pouter=Pouter-1)
         
               pfw_reader.bottom('tin', 'Tin')
           }
@@ -696,15 +749,18 @@ class PfWeightReader:
         return wcl
 
     
-    def read_weights(self, k, mouter, pouter):
+    def read_weights(self, k, dst, mouter, pouter, declare_dst=True):
         assert self.top_called
         assert not self.bottom_called
-        assert (mouter, pouter) == (self.expected_mouter, self.expected_pouter)
+
+        if (mouter, pouter) != (self.expected_mouter, self.expected_pouter):
+            raise RuntimeError(f'PfWeightReader.read_weights(): {(mouter,pouter)=}, expected={(self.expected_mouter,self.expected_pouter)}')
+
         self.expected_mouter = (mouter) if (pouter < self.Pouter-1) else (mouter+1)
         self.expected_pouter = (pouter+1) if (pouter < self.Pouter-1) else 0
         
         wp, F, Tinner = self.wp, self.F, self.Tinner
-        k.emit(f'// PfWeightReader.read_weights({mouter=}, {pouter=}): start.')
+        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): start.')
 
         if pouter == 0:
             self._init_pf_I(k, mouter)
@@ -727,10 +783,9 @@ class PfWeightReader:
             k.emit(f'{self.dt32} {wrap} = ((threadIdx.x & 0x1f) >= {Imin & 0x1f}) ? {wcl} : {wcl2};')
             wcl = wrap
 
-        w = k.get_name('pf_w')
-        k.emit(f'{self.dt32} {w} = __shfl_sync(~0u, {wcl}, {Istr});')
-        k.emit(f"// PfWeightReader.read_weights({mouter=}, {pouter=}): end (weights are in '{w}')")
-        return w
+        decl = f'{self.dt32} ' if declare_dst else ''
+        k.emit(f'{decl}{dst} = __shfl_sync(~0u, {wcl}, {Istr});')
+        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): end')
 
 
     def _init_pf_I(self, k, mouter):
@@ -868,7 +923,8 @@ class PfWeightReader:
 
         for mouter in range(pf_weight_reader.Mouter):
             for pouter in range(pf_weight_reader.Pouter):
-                w = pf_weight_reader.read_weights(k, mouter, pouter)
+                w = f'pfw_m{mouter}_p{pouter}'
+                pf_weight_reader.read_weights(k, w, mouter, pouter)
                 k.emit()
                 k.emit(f'out[threadIdx.x] = {w};')
                 k.emit(f'out += 32;')
