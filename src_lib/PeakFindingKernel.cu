@@ -551,8 +551,9 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     vector<long> strides = { Dbar*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
 
     // Note: code below is poorly optimized! (Intended for unit tests.)
-    
-    Array<float> tmp({nbeams, Dbar, Touter, Pouter, F, Tinner, Pinner}, af_rhost | af_zero);
+
+    // On host, dtype=float32, GPU shape, contiguous strides.
+    Array<float> tmp(shape, af_rhost | af_zero);
 
     for (long b = 0; b < nbeams; b++) {
 	for (long dbar = 0; dbar < Dbar; dbar++) {
@@ -680,6 +681,7 @@ void test_pf_weight_reader_microkernel()
     int Mouter = (M + Minner - 1) / Minner;
     int Pouter = val.pf_weight_layout.Pouter;
     int Pinner = val.pf_weight_layout.Pinner;
+    int P = val.pf_weight_layout.P;
 
     xassert(fs.m_to_f.size() == uint(M));
     long fend = fs.m_to_f.at(M-1);
@@ -696,6 +698,8 @@ void test_pf_weight_reader_microkernel()
     auto v = ksgpu::random_integers_with_bounded_product(2, 20);
     int Dt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
     int Tin = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (Dt*v[1]);
+    int Touter = xdiv(Tin, Dt*Tinner);
+    int Tbar = xdiv(Tin, Dt);
 
     cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
 	 << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
@@ -706,9 +710,25 @@ void test_pf_weight_reader_microkernel()
     // Input array: (Touter, Pouter, F, Tinner, Pinner) where Touter = Tin/(Dt*Tinner)
     // Note that on the GPU, the touter-stride can be discontiguous (see below),
     // but we use contiguous strides on the CPU.
-    
-    int Touter = xdiv(Tin, Dt*Tinner);
-    Array<float> in_cpu({Touter, Pouter, F, Tinner, Pinner}, af_rhost | af_random);
+
+    xassert(Tbar == Touter*Tinner);
+    Array<float> in_cpu1({Tbar,P,F}, af_rhost | af_random);
+
+    Array<float> in_cpu2({Touter, Pouter, F, Tinner, Pinner}, af_rhost);
+
+    for (int touter = 0; touter < Touter; touter++) {
+	for (int pouter = 0; pouter < Pouter; pouter++) {
+	    for (int f = 0; f < F; f++) {
+		for (int tinner = 0; tinner < Tinner; tinner++) {
+		    for (int pinner = 0; pinner < Pinner; pinner++) {
+			int tbar = touter*Tinner + tinner;
+			int p = min(pouter*Pinner + pinner, P-1);
+			in_cpu2.at({touter,pouter,f,tinner,pinner}) = in_cpu1.at({tbar,p,f});
+		    }
+		}
+	    }
+	}
+    }
 
     // Output array: can be viewed as shape
     //   (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
@@ -737,7 +757,7 @@ void test_pf_weight_reader_microkernel()
 		for (int tinner = 0; tinner < Tinner; tinner++) {
 		    for (int pouter = 0; pouter < Pouter; pouter++) {
 			for (int pinner = 0; pinner < Pinner; pinner++) {
-			    float w = in_cpu.at({touter,pouter,f,tinner,pinner});
+			    float w = in_cpu2.at({touter,pouter,f,tinner,pinner});
 
 			    for (int s1 = 0; s1 < S1; s1++)
 				for (int s2 = 0; s2 < S2; s2++)
@@ -759,7 +779,7 @@ void test_pf_weight_reader_microkernel()
     vector<long> istrides = { tstride, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };    
     Array<void> in_gpu(dtype, ishape, istrides, af_gpu);
     
-    Array<void> in_tmp = in_cpu.convert(dtype);
+    Array<void> in_tmp = in_cpu2.convert(dtype);
     in_gpu.fill(in_tmp);
 
     // Run kernel on GPU.
