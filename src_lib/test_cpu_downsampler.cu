@@ -3,10 +3,15 @@
 
 #include "../include/pirate/loose_ends/bitvec.hpp"
 #include "../include/pirate/loose_ends/cpu_downsample.hpp"
+#include "../include/pirate/tests.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 static void test_cpu_downsampler(int src_bit_depth, int nchunks)
@@ -59,16 +64,14 @@ static void test_cpu_downsampler(int src_bit_depth, int nchunks)
 }
 
 
-// -------------------------------------------------------------------------------------------------
-
-
-int main(int argc, char **argv)
+void test_cpu_downsampler()
 {
-    for (int src_bit_depth = 4; src_bit_depth <= 7; src_bit_depth++) {
+    cout << "test_cpu_downsampler()" << endl;
+    
+    for (int src_bit_depth = 4; src_bit_depth <= 7; src_bit_depth++)
         for (int i = 1; i <= 10; i++)
             test_cpu_downsampler(src_bit_depth, i);
-        cout << "test-cpu-downsampler(src_bit_depth=" << src_bit_depth << "): pass" << endl;
-    }
-    
-    return 0;
 }
+
+
+}  // namespace pirate

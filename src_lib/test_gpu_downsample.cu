@@ -5,10 +5,15 @@
 #include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/loose_ends/gpu_downsample.hpp"
+#include "../include/pirate/tests.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 // FIXME could move somewhere more general
@@ -25,9 +30,9 @@ static Array<float> make_random_weights(const vector<long> &shape)
 
 
 // FIXME currently assuming transpose_output=true
-static void test_downsample(int Df, int Dt, int nbeams, int nfreq_dst, int ntime_dst, int src_bstride, int src_fstride, int dst_bstride, int dst_tstride)
+static void test_gpu_downsample(int Df, int Dt, int nbeams, int nfreq_dst, int ntime_dst, int src_bstride, int src_fstride, int dst_bstride, int dst_tstride)
 {
-    cout << "test_downsample: (Df,Dt)=(" << Df << "," << Dt << "),"
+    cout << "test_gpu_downsample: (Df,Dt)=(" << Df << "," << Dt << "),"
          << " (nbeams,nfreq_dst,ntime_dst)=(" << nbeams << "," << nfreq_dst << "," << ntime_dst << "),"
          << " src (bstride,fstride)=(" << src_bstride << "," << src_fstride << "),"
          << " dst (bstride,tstride)=(" << dst_bstride << "," << dst_tstride << ")"
@@ -76,33 +81,30 @@ static void test_downsample(int Df, int Dt, int nbeams, int nfreq_dst, int ntime
 
     assert_arrays_equal(dsti_cpu, dsti_gpu, "cpu", "gpu", {"beam","time","freq"});
     assert_arrays_equal(dstw_cpu, dstw_gpu, "cpu", "gpu", {"beam","time","freq"});
-    
-    cout << "test_downsample: pass" << endl;
 }
 
 
-int main(int argc, char **argv)
+void test_gpu_downsample()
 {
-    for (int i = 0; i < 50; i++) {
-        int Df = rand_int(1,6);
-        int Dt = (rand_uniform() < 0.5) ? (1 << rand_int(0,2)) : (4 * rand_int(1,4));
-        
-        long nbeams = rand_int(1, 6);
-        long nfreq_dst = 32 * rand_int(1, 6);
-        long ntime_dst = 32 * rand_int(1, 6);
-        long nfreq_src = Df * nfreq_dst;
-        long ntime_src = Dt * ntime_dst;
-        
-        auto src_strides = make_random_strides({nbeams, nfreq_src, ntime_src}, 1, 4);  // ncontig=1, nalign=4
-        auto dst_strides = make_random_strides({nbeams, ntime_dst, nfreq_dst}, 1, 4);  // ncontig=1, nalign=4
-
-        int src_bstride = src_strides[0];
-        int src_fstride = src_strides[1];
-        int dst_bstride = dst_strides[0];
-        int dst_tstride = dst_strides[1];
-        
-        test_downsample(Df, Dt, nbeams, nfreq_dst, ntime_dst, src_bstride, src_fstride, dst_bstride, dst_tstride);
-    }
+    int Df = rand_int(1,6);
+    int Dt = (rand_uniform() < 0.5) ? (1 << rand_int(0,2)) : (4 * rand_int(1,4));
     
-    return 0;
+    long nbeams = rand_int(1, 6);
+    long nfreq_dst = 32 * rand_int(1, 6);
+    long ntime_dst = 32 * rand_int(1, 6);
+    long nfreq_src = Df * nfreq_dst;
+    long ntime_src = Dt * ntime_dst;
+    
+    auto src_strides = make_random_strides({nbeams, nfreq_src, ntime_src}, 1, 4);  // ncontig=1, nalign=4
+    auto dst_strides = make_random_strides({nbeams, ntime_dst, nfreq_dst}, 1, 4);  // ncontig=1, nalign=4
+    
+    int src_bstride = src_strides[0];
+    int src_fstride = src_strides[1];
+    int dst_bstride = dst_strides[0];
+    int dst_tstride = dst_strides[1];
+    
+    test_gpu_downsample(Df, Dt, nbeams, nfreq_dst, ntime_dst, src_bstride, src_fstride, dst_bstride, dst_tstride);
 }
+
+
+}  // namespace pirate

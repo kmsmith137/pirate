@@ -30,11 +30,12 @@ def parse_test(subparsers):
     parser.add_argument('--grck', action='store_true', help='Runs test_gpu_ringbuf_copy_kernel()')
     parser.add_argument('--gtgk', action='store_true', help='Runs test_gpu_tree_gridding_kernel()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
+    parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs test_dedisperser()')
 
     
 def test(args):
-    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'dd' ]
+    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'zomb', 'dd' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -80,7 +81,15 @@ def test(args):
             
             pirate_pybind11.CasmBeamformer.test_microkernels()
             CasmReferenceBeamformer.test_cuda_python_equivalence(linkage='pybind11')
-        
+            
+        if run_all_tests or args.zomb:
+            # print()
+            pirate_pybind11.test_avx2_m64_outbuf()
+            pirate_pybind11.test_cpu_downsampler()
+            pirate_pybind11.test_gpu_downsample()
+            pirate_pybind11.test_gpu_transpose()
+            pirate_pybind11.test_gpu_reduce2()
+            
         if run_all_tests or args.dd:
             pirate_pybind11.test_dedisperser()
             

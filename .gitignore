@@ -2,7 +2,6 @@
 *.o
 *.d
 *.so
-bin/
 pirate_frb/lib
 pirate_frb/include
 pirate_frb/__pycache__/

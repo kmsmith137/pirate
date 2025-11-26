@@ -4,14 +4,19 @@
 #include "../include/pirate/loose_ends/m64_outbuf.hpp"
 #include "../include/pirate/loose_ends/avx256_downsample.hpp"
 #include "../include/pirate/loose_ends/bitvec.hpp"
+#include "../include/pirate/tests.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 template<int P0, int P1, int P2, int P3, int P4>
-static void test_avx256_m64_outbuf()
+static void _test_avx256_m64_outbuf()
 {
     int Q0 = P0 % 64;
     
@@ -83,7 +88,7 @@ static void test_d4()
     constexpr int P3 = 160*I + 120;
     constexpr int P4 = 160*I + 160;
 
-    test_avx256_m64_outbuf<P0,P1,P2,P3,P4> ();
+    _test_avx256_m64_outbuf<P0,P1,P2,P3,P4> ();
 }
 
 
@@ -99,18 +104,16 @@ static void test_d5()
     constexpr int P3 = avx256_5bit_downsampler::nbits_out(256*I + 192);
     constexpr int P4 = avx256_5bit_downsampler::nbits_out(256*I + 256);
 
-    test_avx256_m64_outbuf<P0,P1,P2,P3,P4> ();
+    _test_avx256_m64_outbuf<P0,P1,P2,P3,P4> ();
 }
 
 
-
-int main(int argc, char **argv)
+void test_avx2_m64_outbuf()
 {
-    for (int i = 0; i < 10; i++) {
-        test_d4<7> ();
-        test_d5<4> ();
-    }
-
-    cout << "test-avx256-m64-outbuf: pass" << endl;
-    return 0;
+    cout << "test_avx2_m64_outbuf()" << endl;
+    test_d4<7> ();
+    test_d5<4> ();
 }
+
+
+}  // namespace pirate

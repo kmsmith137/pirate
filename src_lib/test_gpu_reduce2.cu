@@ -2,10 +2,16 @@
 #include <ksgpu.hpp>
 
 #include "../include/pirate/loose_ends/reduce2.hpp"
+#include "../include/pirate/tests.hpp"
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
+
 
 
 __global__ void reduce2_kernel(float *dst, const float *num, const float *den)
@@ -16,10 +22,9 @@ __global__ void reduce2_kernel(float *dst, const float *num, const float *den)
 }
 
 
-void test_reduce2(int nblocks, int nwarps)
+static void test_gpu_reduce2(int nblocks, int nwarps)
 {
-    cout << "test_reduce2(nblocks=" << nblocks
-         << ", nwarps=" << nwarps << "): start" << endl;
+    cout << "test_gpu_reduce2(nblocks=" << nblocks << ", nwarps=" << nwarps << ")" << endl;
     
     int nthreads = nwarps * 32;
     Array<float> num_cpu({nblocks,nthreads}, af_rhost | af_random);
@@ -60,11 +65,13 @@ void test_reduce2(int nblocks, int nwarps)
 }
                   
 
-int main(int argc, char **argv)
+void test_gpu_reduce2()
 {
-    for (int nwarps = 1; nwarps <= 32; nwarps++)
-        test_reduce2(100, nwarps);
-
-    return 0;
+    int nwarps = rand_int(1,33);
+    int nblocks = rand_int(1,10);
+    
+    test_gpu_reduce2(nblocks, nwarps);
 }
 
+
+}  // namespace pirate

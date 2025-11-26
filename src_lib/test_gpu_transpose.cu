@@ -7,12 +7,16 @@
 
 using namespace std;
 using namespace ksgpu;
-using namespace pirate;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
-static void test_transpose(int nx, int ny, int nz, int src_ystride, int src_zstride, int dst_xstride, int dst_zstride)
+static void test_gpu_transpose(int nx, int ny, int nz, int src_ystride, int src_zstride, int dst_xstride, int dst_zstride)
 {
-    cout << "test_transpose: (nx, ny, nz, src_ystride, src_zstride, dst_xstride, dst_zstride) = "
+    cout << "test_gpu_transpose: (nx, ny, nz, src_ystride, src_zstride, dst_xstride, dst_zstride) = "
          << nx << ", " << ny << ", " << nz << ", " << src_ystride << ", " << src_zstride
          << ", " << dst_xstride << ", " << dst_zstride << ")"
          << endl;
@@ -32,22 +36,20 @@ static void test_transpose(int nx, int ny, int nz, int src_ystride, int src_zstr
     CUDA_CALL(cudaDeviceSynchronize());
 
     assert_arrays_equal(dst_cpu, dst_gpu, "cpu", "gpu", {"z","y","x"});
-    cout << "test_transpose: pass" << endl;
 }
 
 
-int main(int argc, char **argv)
+void test_gpu_transpose()
 {
-    for (int i = 0; i < 50; i++) {
-        long nx = 32 * rand_int(1, 10);
-        long ny = 32 * rand_int(1, 10);
-        long nz = rand_int(1, 10);
+    long nx = 32 * rand_int(1, 10);
+    long ny = 32 * rand_int(1, 10);
+    long nz = rand_int(1, 10);
         
-        auto src_strides = make_random_strides({nz,ny,nx}, 1, 4);  // ncontig=1, nalign=4
-        auto dst_strides = make_random_strides({nz,nx,ny}, 1, 4);  // ncontig=1, nalign=4
-
-        test_transpose(nx, ny, nz, src_strides[1], src_strides[0], dst_strides[1], dst_strides[0]);
-    }
+    auto src_strides = make_random_strides({nz,ny,nx}, 1, 4);  // ncontig=1, nalign=4
+    auto dst_strides = make_random_strides({nz,nx,ny}, 1, 4);  // ncontig=1, nalign=4
     
-    return 0;
+    test_gpu_transpose(nx, ny, nz, src_strides[1], src_strides[0], dst_strides[1], dst_strides[0]);
 }
+
+
+}  // namespace pirate
