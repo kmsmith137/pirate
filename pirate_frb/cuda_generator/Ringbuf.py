@@ -11,6 +11,37 @@ class Ringbuf:
         This can partly be accomplished with warp shuffles, but we need a per-warp data
         structure ("class Ringbuf") to store the overlaps ('lag' registers per warp),
         and store the overlaps in global GPU memory between kernel launches.
+
+        Example usage:
+
+           rb = Ringbuf(dt32)
+        
+           # Near beginning of kernel: create splice.
+           # Ring buffer initialization code will be emitted into the splice.
+           krb = k.splice()
+
+           for (time loop) {
+               rb.advance(k, rname1, nelts1, dst=None, comment=True)
+               rb.advance(k, rname2, nelts2, dst=None, comment=True)
+                 ...
+               rb.advance_outer()
+           }
+
+           # Slightly confusing: 'pstate_warp' is a pointer that is defined later in
+           # the code generator (see below), but appears earlier in the generated code
+           # (via the splice).
+        
+           rb.finalize(k, pwarp_rname = 'pstate_warp')
+        
+           # After calling finalize(): go back and emit initialization code into splice.
+           # This example code will probably need to be customized for a particular kernel.
+           # Note that the definition of 'pstate_warp' is emitted here.
+           # Note 'krb' throughout, not 'k'!
+
+           krb.emit(f'constexpr int RB32 = {rb.get_n32_per_warp()};      // 32-bit registers per warp')
+           krb.emit(f'int bw = blockIdx.x * blockDim.y + threadIdx.y;    // warp index within kernel')
+           krb.emit(f'{dt32} *pstate_warp = (dt32 *)pstate_ + bw*RB32;   // pstate with per-warp offset applied')
+           rb.initialize(krb, 'pstate_warp')
         """
 
         # Check against accidentially specifying a non-32-bit dtype (such as __half).
