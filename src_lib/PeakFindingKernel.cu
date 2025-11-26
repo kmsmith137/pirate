@@ -521,66 +521,67 @@ void GpuPfWeightLayout::validate() const
 
     xassert(is_power_of_two(Pinner));
     xassert(is_power_of_two(Tinner));
-    xassert(Pouter == (P+Pinner-1)/Pinner);
+    xassert(Pouter == (P+Pinner-1)/Pinner);   // round up
     xassert(touter_byte_stride >= Pouter * F * Tinner * xdiv(dtype.nbits,8));
     xassert_divisible(touter_byte_stride, 128);
 }
 
 
-Array<void> GpuPfWeightLayout::to_gpu(const Array<void> &src_)
+
+Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
 {
     this->validate();
     
-    Dtype fp32 = Dtype::native<float> ();
-    Dtype fp16 = Dtype::native<__half> ();
-    Array<void> src = src_;  // shallow copy
-
     if (src.ndim != 5) {
 	stringstream ss;
 	ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, Dbar, Tbar, P, F), got " << src.shape_str();
 	throw runtime_error(ss.str());
     }
 
-    xassert((src.dtype == fp32) || (src.dtype == fp16));
     xassert_eq(src.shape[3], P);
     xassert_eq(src.shape[4], F);
-    
-    if (src.dtype != this->dtype)
-	src = src.convert(dtype);
 
     long nbeams = src.shape[0];
     long Dbar = src.shape[1];
     long Tbar = src.shape[2];
-    long Touter = (Tbar + Tinner - 1) / Tinner;  // round up
-
-    // Note: to_gpu() is poorly optimized! (Intended for unit tests.)
+    long Touter = xdiv(Tbar, Tinner);   // must divide evenly
     
-    // Pad so that Tbar = Touter * Tinner.
-    if (Tbar != Touter*Tinner) {
-	Array<void> pad(dtype, {nbeams, Dbar, Touter*Tinner, P, F}, af_rhost | af_zero);
-	Array<void> s = pad.slice(2, 0, Tbar);
-	s.fill(src);
-	src = s;
-	Tbar = Touter * Tinner;
-    }
-
-    // (nbeams, Dbar, Touter, Tinner, Pouter, Pinner, F)
-    src = src.reshape({nbeams, Dbar, Touter, Tinner, Pouter, Pinner, F});
-    
-    // (nbeams, Dbar, Touter, Pouter, F, Tinner, Pinner)
-    src = src.transpose({0,1,2,4,6,3,5});
-    src = src.clone();  // decided to make it contiguous
-
-    // Allocate GPU array with non-contiguous touter-stride.
     long S = xdiv(touter_byte_stride * 8, dtype.nbits);
     vector<long> shape = { nbeams, Dbar, Touter, Pouter, F, Tinner, Pinner };
-    vector<long> strides = { Dbar*Touter*S, Touter*S, S, Pouter*F*Tinner*Pinner, F*Tinner*Pinner, Pinner, 1 };
+    vector<long> strides = { Dbar*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
+
+    // Note: code below is poorly optimized! (Intended for unit tests.)
+    
+    Array<float> tmp({nbeams, Dbar, Touter, Pouter, F, Tinner, Pinner}, af_rhost | af_zero);
+
+    for (long b = 0; b < nbeams; b++) {
+	for (long dbar = 0; dbar < Dbar; dbar++) {
+	    for (long touter = 0; touter < Touter; touter++) {
+		for (long pouter = 0; pouter < Pouter; pouter++) {
+		    for (long f = 0; f < F; f++) {
+			for (long tinner = 0; tinner < Tinner; tinner++) {
+			    for (long pinner = 0; pinner < Pinner; pinner++) {
+				long tbar = touter*Tinner + tinner;
+				long p = min(pouter*Pinner + pinner, P-1);
+
+				float w = src.at({b,dbar,tbar,p,f});
+				tmp.at({b,dbar,touter,pouter,f,tinner,pinner}) = w;
+			    }
+			}
+		    }
+		}
+	    }
+	}
+    }
+
+    Array<void> tmp2 = tmp.convert(dtype);
+    
+    // Allocate GPU array with non-contiguous touter-stride.
     Array<void> dst(dtype, shape, strides, af_gpu | af_zero);
     
-    dst.fill(src);  // copy CPU->GPU
+    dst.fill(tmp2);  // copy CPU->GPU
     return dst;
 }
-
 
 
 // -------------------------------------------------------------------------------------------------
