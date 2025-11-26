@@ -550,16 +550,16 @@ class PfWeightLayout:
           - F = number of frequency subbands F
 
         The coarse quantites (Dbar,Tbar) are related to the "fine" quantities (Dtree,Ttree)
-        in the dedispersion tree by downsampling factors (Dt,Dd):
+        in the dedispersion tree by downsampling factors (WDt,WDd):
 
-          Dd = Dtree / Dbar
-          Dt = Ttree / Tbar
+          WDd = Dtree / Dbar
+          WDt = Ttree / Tbar
 
         Before describing the global memory layout, a few more definitions:
 
           SW = 32 / sizeof(T)         "simd width"
-          Tinner = max(32*SW/Dt, 1)   see (*) below
-          Pinner = SW                 see (**) below
+          Tinner = max(32*SW/WDt, 1)   see (*) below
+          Pinner = SW                  see (**) below
 
         Then, we split P,Tbar into "outer" and "inner" parts:
         
@@ -575,13 +575,12 @@ class PfWeightLayout:
         (See "self.touter_stride" below.)
 
         (*) Tinner is the number of W-array t-indices per iteration of the "outer time loop"
-            in the larger kernel. Each iteration of this loop processes 128 / sizeof(dtype) / Dt
+            in the larger kernel. Each iteration of this loop processes 128 / sizeof(dtype) / WDt
             "tree" time samples.
         
         (**) Pinner is an "innermost width" used for weights in the peak-finding kernel. Currently,
              it is always equal to the simd_width SW. However, in a future update, I may implement
              a shared-memory code path (see FIXME below) in which Pinner = 2*SW.
-
         
         Constructor args
         ----------------
@@ -592,7 +591,7 @@ class PfWeightLayout:
         
           - P: number of peak-finding kernels (see toplevel kernel).
         
-          - Tinner: defined as max(32*SW/Dt, 1), see above for discussion.
+          - Tinner: defined as max(32*SW/WDt, 1), see above for discussion.
         """
 
         assert isinstance(frequency_subbands, FrequencySubbands)
