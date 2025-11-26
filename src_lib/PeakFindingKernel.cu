@@ -707,28 +707,8 @@ void test_pf_weight_reader_microkernel()
 	 << ", Tinner=" << Tinner << ", Dt=" << Dt
 	 << ", Tin=" << Tin << endl;
     
-    // Input array: (Touter, Pouter, F, Tinner, Pinner) where Touter = Tin/(Dt*Tinner)
-    // Note that on the GPU, the touter-stride can be discontiguous (see below),
-    // but we use contiguous strides on the CPU.
-
-    xassert(Tbar == Touter*Tinner);
-    Array<float> in_cpu1({Tbar,P,F}, af_rhost | af_random);
-
-    Array<float> in_cpu2({Touter, Pouter, F, Tinner, Pinner}, af_rhost);
-
-    for (int touter = 0; touter < Touter; touter++) {
-	for (int pouter = 0; pouter < Pouter; pouter++) {
-	    for (int f = 0; f < F; f++) {
-		for (int tinner = 0; tinner < Tinner; tinner++) {
-		    for (int pinner = 0; pinner < Pinner; pinner++) {
-			int tbar = touter*Tinner + tinner;
-			int p = min(pouter*Pinner + pinner, P-1);
-			in_cpu2.at({touter,pouter,f,tinner,pinner}) = in_cpu1.at({tbar,p,f});
-		    }
-		}
-	    }
-	}
-    }
+    // Input array: (1,1,Tbar,P,F), where the length-1 axes are beams and DMs.
+    Array<float> in_cpu1({1,1,Tbar,P,F}, af_rhost | af_random);
 
     // Output array: can be viewed as shape
     //   (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
@@ -760,7 +740,7 @@ void test_pf_weight_reader_microkernel()
 		    for (int pouter = 0; pouter < Pouter; pouter++) {
 			for (int pinner = 0; pinner < Pinner; pinner++) {
 			    int p = min(pouter*Pinner + pinner, P-1);
-			    float w = in_cpu1.at({tbar,p,f});
+			    float w = in_cpu1.at({0,0,tbar,p,f});
 
 			    for (int s1 = 0; s1 < S1; s1++)
 				for (int s2 = 0; s2 < S2; s2++)
@@ -775,11 +755,27 @@ void test_pf_weight_reader_microkernel()
     // Copy input array to GPU.
     // Don't forget to account for the touter-stride!
 
+    Array<float> in_cpu2({1, 1, Touter, Pouter, F, Tinner, Pinner}, af_rhost);
+
+    for (int touter = 0; touter < Touter; touter++) {
+	for (int pouter = 0; pouter < Pouter; pouter++) {
+	    for (int f = 0; f < F; f++) {
+		for (int tinner = 0; tinner < Tinner; tinner++) {
+		    for (int pinner = 0; pinner < Pinner; pinner++) {
+			int tbar = touter*Tinner + tinner;
+			int p = min(pouter*Pinner + pinner, P-1);
+			in_cpu2.at({0,0,touter,pouter,f,tinner,pinner}) = in_cpu1.at({0,0,tbar,p,f});
+		    }
+		}
+	    }
+	}
+    }
+
     int tstride = xdiv(val.pf_weight_layout.touter_byte_stride * 8, dtype.nbits);
     xassert_ge(tstride, Pouter*F*Tinner*Pinner);
     
-    vector<long> ishape = { Touter, Pouter, F, Tinner, Pinner };
-    vector<long> istrides = { tstride, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };    
+    vector<long> ishape = { 1, 1, Touter, Pouter, F, Tinner, Pinner };
+    vector<long> istrides = { Touter*tstride, Touter*tstride, tstride, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };    
     Array<void> in_gpu(dtype, ishape, istrides, af_gpu);
     
     Array<void> in_tmp = in_cpu2.convert(dtype);
