@@ -755,9 +755,12 @@ void test_pf_weight_reader_microkernel()
 	    
 	    for (int touter = 0; touter < Touter; touter++) {
 		for (int tinner = 0; tinner < Tinner; tinner++) {
+		    int tbar = touter*Tinner + tinner;;
+		    
 		    for (int pouter = 0; pouter < Pouter; pouter++) {
 			for (int pinner = 0; pinner < Pinner; pinner++) {
-			    float w = in_cpu2.at({touter,pouter,f,tinner,pinner});
+			    int p = min(pouter*Pinner + pinner, P-1);
+			    float w = in_cpu1.at({tbar,p,f});
 
 			    for (int s1 = 0; s1 < S1; s1++)
 				for (int s2 = 0; s2 < S2; s2++)
