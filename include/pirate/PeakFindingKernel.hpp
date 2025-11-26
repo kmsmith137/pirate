@@ -256,12 +256,9 @@ struct FrequencySubbands
 struct GpuPfWeightLayout
 {
     ksgpu::Dtype dtype;
-    std::vector<int> subband_counts;
     
     long F = 0;     // number of distinct frequency subbands
     long P = 0;     // number of peak-finding kernels
-    long WDd = 0;   // DM downsampling factor for weights (relative to tree)
-    long WDt = 0;   // time downsampling factor for weights (relative to tree)
 
     // Used internally to define layout.
     long Pouter = 0;
@@ -292,11 +289,11 @@ struct GpuPeakFindingKernel2
     struct RegistryKey
     {
 	ksgpu::Dtype dtype;     // either float16 or float32
-	std::vector<int> subband_counts;  // length (rank+1)
-	int rank = -1;
-	int Dcore = 0;
-	int Tinner = 0;
-	int P = 0;
+	std::vector<long> subband_counts;  // length (rank+1)
+	long rank = -1;
+	long Dcore = 0;
+	long Tinner = 0;
+	long P = 0;
     };
 
     struct RegistryValue
@@ -324,8 +321,7 @@ struct TestPfWeightReader
     struct RegistryKey
     {
         ksgpu::Dtype dtype;     // either float16 or float32
-	std::vector<int> subband_counts;  // length (rank+1)
-	int rank = -1;
+	std::vector<long> subband_counts;  // length (rank+1)
 	int Dcore = 0;
 	int Tinner = 0;
 	int P = 0;
@@ -350,18 +346,8 @@ struct TestPfWeightReader
 	
 	void (*cuda_kernel)(void *, const void *, uint, uint) = nullptr;
 
-	// 'Tinner' is not included here, since it's part of the RegistryKey.
-	int Mouter = 0;
-	int Minner = 0;
-	int Pouter = 0;
-	int Pinner = 0;
-	int F = 0;
-
-	// Input array touter-stride expected by kernel.
-	int touter_byte_stride = 0;
-
-	// Mapping from "multiplet" index 0 <= m < (Mouter*Minner) to frequency index 0 <= f < F.
-	std::vector<int> m_to_f;
+	// Layout of peak-finding weights in GPU memory, expected by the kernel.
+	GpuPfWeightLayout pf_weight_layout;
     };
 
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;

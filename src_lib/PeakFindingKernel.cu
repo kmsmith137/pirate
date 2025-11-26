@@ -516,8 +516,6 @@ void GpuPfWeightLayout::validate() const
     Dtype fp16 = Dtype::native<__half> ();
 
     xassert((dtype == fp32) || (dtype == fp16));
-    xassert(is_power_of_two(WDd));
-    xassert(is_power_of_two(WDt));
     xassert(F > 0);
     xassert(P > 0);
 
@@ -601,26 +599,13 @@ struct TestPfWeightReaderRegistry : public TestPfWeightReader::Registry
         // (In the future, I may add more argument checking here.)
 	
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
-	xassert_ge(key.rank, 0);
-	xassert_le(key.rank, 4);
-	xassert_eq(key.subband_counts.size(), uint(key.rank)+1);
+	xassert_ge(key.subband_counts.size(), 1);
 	xassert_ge(key.Dcore, 0);
 	xassert_ge(key.Tinner, 0);
 	xassert_ge(key.P, 0);
 	
 	xassert(val.cuda_kernel != nullptr);
-	xassert(val.Mouter > 0);
-	xassert(val.Minner > 0);
-	xassert(val.Pouter > 0);
-	xassert(val.Pinner > 0);
-	xassert(val.F > 0);
-	xassert(val.touter_byte_stride > 0);
-	xassert(val.m_to_f.size() == uint(val.Mouter * val.Minner));
-
-	for (uint m = 0; m < val.m_to_f.size(); m++) {
-	    int f = val.m_to_f[m];
-	    xassert((f >= 0) && (f < val.F));
-	}
+	val.pf_weight_layout.validate();
 	
         // Call add() in base class.
         TestPfWeightReader::Registry::add(key, val, debug);
@@ -648,7 +633,6 @@ bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightRea
 {
     return (k1.dtype == k2.dtype)
 	&& (k1.subband_counts == k2.subband_counts)
-	&& (k1.rank == k2.rank)
 	&& (k1.Dcore == k2.Dcore)
 	&& (k1.Tinner == k2.Tinner)
 	&& (k1.P == k2.P);
@@ -656,19 +640,23 @@ bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightRea
 
 ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryKey &k)
 {
-    os << "TestPfWeightReader(dtype=" << k.dtype << ", rank=" << k.rank
-       << ", subband_counts=[";
-
-    for (int i = 0; i < min(k.rank+1,5); i++)
-	os << (i ? "," : "") << k.subband_counts[i];
-
-    os << "], Dcore=" << k.Dcore << ", Tinner=" << k.Tinner << ", P=" << k.P << ")";
+    FrequencySubbands fs(k.subband_counts);
+    
+    os << "TestPfWeightReader(dtype=" << k.dtype
+       << ", rank=" << fs.pf_rank
+       << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
+       << ", Dcore=" << k.Dcore
+       << ", Tinner=" << k.Tinner
+       << ", P=" << k.P
+       << ", F=" << fs.F
+       << ", M=" << fs.M
+       << ")";
+    
     return os;
 }
 
 ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryValue &v)
 {
-    os << "Mouter=" << v.Mouter << ", Minner=" << v.Minner << ", Pinner=" << v.Pinner << ", F=" << v.F;
     return os;
 }
 
@@ -678,17 +666,28 @@ void test_pf_weight_reader_microkernel()
     TestPfWeightReader::RegistryKey key = TestPfWeightReader::registry().get_random_key();
     TestPfWeightReader::RegistryValue val = TestPfWeightReader::registry().get(key);
 
+    FrequencySubbands fs(key.subband_counts);
+    int F = fs.F;
+    int M = fs.M;
+
     Dtype dtype = key.dtype;
     int Tinner = key.Tinner;
+    int Dcore = key.Dcore;
     int SW = xdiv(32, dtype.nbits);   // simd width
 
-    int F = val.F;
-    int Mouter = val.Mouter;
-    int Minner = val.Minner;
-    int Pouter = val.Pouter;
-    int Pinner = val.Pinner;
-    vector<int> m_to_f = val.m_to_f;  // length (Mouter*Minner)
+    int Minner = xdiv(Dcore, SW);
+    int Mouter = (M + Minner - 1) / Minner;
+    int Pouter = val.pf_weight_layout.Pouter;
+    int Pinner = val.pf_weight_layout.Pinner;
 
+    xassert(fs.m_to_f.size() == uint(M));
+    long fend = fs.m_to_f.at(M-1);
+    
+    // Pad (length M) -> length (Mouter * Minner)
+    vector<long> m_to_f = fs.m_to_f;
+    while (m_to_f.size() < uint(Mouter*Minner))
+	m_to_f.push_back(fend);
+    
     // Choose Dt, Tin.
     // If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
     // If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
@@ -752,7 +751,7 @@ void test_pf_weight_reader_microkernel()
     // Copy input array to GPU.
     // Don't forget to account for the touter-stride!
 
-    int tstride = xdiv(val.touter_byte_stride * 8, dtype.nbits);
+    int tstride = xdiv(val.pf_weight_layout.touter_byte_stride * 8, dtype.nbits);
     xassert_ge(tstride, Pouter*F*Tinner*Pinner);
     
     vector<long> ishape = { Touter, Pouter, F, Tinner, Pinner };
