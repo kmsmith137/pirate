@@ -753,33 +753,7 @@ void test_pf_weight_reader_microkernel()
     }
 
     // Copy input array to GPU.
-    // Don't forget to account for the touter-stride!
-
-    Array<float> in_cpu2({1, 1, Touter, Pouter, F, Tinner, Pinner}, af_rhost);
-
-    for (int touter = 0; touter < Touter; touter++) {
-	for (int pouter = 0; pouter < Pouter; pouter++) {
-	    for (int f = 0; f < F; f++) {
-		for (int tinner = 0; tinner < Tinner; tinner++) {
-		    for (int pinner = 0; pinner < Pinner; pinner++) {
-			int tbar = touter*Tinner + tinner;
-			int p = min(pouter*Pinner + pinner, P-1);
-			in_cpu2.at({0,0,touter,pouter,f,tinner,pinner}) = in_cpu1.at({0,0,tbar,p,f});
-		    }
-		}
-	    }
-	}
-    }
-
-    int tstride = xdiv(val.pf_weight_layout.touter_byte_stride * 8, dtype.nbits);
-    xassert_ge(tstride, Pouter*F*Tinner*Pinner);
-    
-    vector<long> ishape = { 1, 1, Touter, Pouter, F, Tinner, Pinner };
-    vector<long> istrides = { Touter*tstride, Touter*tstride, tstride, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };    
-    Array<void> in_gpu(dtype, ishape, istrides, af_gpu);
-    
-    Array<void> in_tmp = in_cpu2.convert(dtype);
-    in_gpu.fill(in_tmp);
+    Array<void> in_gpu = val.pf_weight_layout.to_gpu(in_cpu1);
 
     // Run kernel on GPU.
     Array<void> out_gpu(dtype, out_cpu.ndim, out_cpu.shape, af_gpu | af_zero | af_guard);
