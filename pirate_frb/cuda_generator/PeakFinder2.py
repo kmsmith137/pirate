@@ -43,6 +43,7 @@ class PeakFinder2:
         self.pfz_decl = set()
 
         self.rb = Ringbuf(self.dt32)
+        self.pf_output = PfOutput2(dtype, Dout)
         
         # Typical kernel name: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1
         self.kernel_name = f'pf2_{dtype.fname}_{frequency_subbands.fstr}_E{E}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
@@ -95,6 +96,7 @@ class PeakFinder2:
         k.emit(f'{self.kernel_name}(const void *in_, void *out_max_, uint *out_argmax, const void *wt_, void *pstate_, uint Tin, uint WDd, uint WDt)')
         k.emit('{')
         k.emit(f'constexpr int M = {self.M};')
+        k.emit(f'constexpr int Dcore = {self.Dcore};')
         k.emit(f'constexpr int Tinner = {self.Tinner};')
         k.emit(f'constexpr int pf_rank = {self.pf_rank};')
         k.emit(f'constexpr int wt_touter_stride32 = {utils.xdiv(self.wt_touter_byte_stride,4)};')
@@ -142,8 +144,13 @@ class PeakFinder2:
             k.emit(f'// Read {m=} from global memory')
             self.process_pf_input(k, t, m)
 
+        # Bottom of tin-loop 1: process pf_output.
+        self.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'tin', 'Tin')
+        
+        # Bottom of tin-loop 2: advance ringbuf.
         self.rb.advance_outer(k)
         
+        # Bottom of tin-loop 3: advance input pointer.
         k.emit()
         k.emit('// Advance input pointer.')
         k.emit('in += 32;')
@@ -180,7 +187,7 @@ class PeakFinder2:
         if (m == M-1) and (M < Mpad):
             k.emit()
             k.emit(f'// FIXME: creating dummy pfx registers for M <= m < Mpad, where {M=} and {Mpad=}.')
-            k.emit(f'// FIXME: dumb and suboptimal -- revisit!')
+            k.emit(f'// FIXME: this is suboptimal but convenient!')
             
             for mm in range(M, Mpad):
                 dummy = self.pfx_name(mm, 0, b, l)
@@ -290,6 +297,7 @@ class PeakFinder2:
     def _absorb_pfz(self, k, var, m, p, t):
         pfz = f'pfz_m{m}_p{p}'
         pfiz = f'pfiz_m{m}_p{p}'
+        assert 0 <= t < self.Dcore
 
         if (m,p) not in self.pfz_decl:
             k.emit(f'{self.dt32} {pfz} = {var};')
@@ -340,7 +348,7 @@ class PeakFinder2:
                 self.rb.advance(k, pfy(W,t+Dcore), self.Minner, dst=pfy(W,t))
 
             # This slightly cryptic code computes "stray" pfy(2*W,*) values that are
-            # needed before starting the "main peak-finding loop" below.
+            # needed before starting the "main peak-finding loops" below.
             # It also maintains the loop invariant, by updating tmin.
             
             tmin = (t0-2*W) if (W < Dcore) else (t0-3*W)
@@ -350,29 +358,96 @@ class PeakFinder2:
             for t in range(tmin, t0-W, W):
                 k.emit(f'{dt32} {pfy(2*W,t)} = {pfy(W,t)} + {pfy(W,t+W)};')
 
-            # Main peak-finding loop.
-            
+            # Main peak-finding loops. (This could be one loop instead of three, but
+            # organizing it as three loops may help the compiler improve register usage.)
+
+            k.emit()
+            k.emit(f'// Compute p={3*lgW+1} peak-finding kernel.')
             for t in range(t0,t1,W):
-                k.emit()
-                k.emit(f'// Compute all 3 triggers whose last sample is {pfy(W,t)}.')
-                
                 k.emit(f'{dt32} {pfy(2*W,t-W)} = {pfy(W,t-W)} + {pfy(W,t)};  // p={3*lgW+1}')
-                self._absorb_pfz(k, pfy(2*W,t-W), m, 3*lgW+1, t)
+                self._absorb_pfz(k, pfy(2*W,t-W), m, 3*lgW+1, t-t0)
+            self.pfz_register_ready(k, m, 3*lgW+1)
+            
+            k.emit()
+            k.emit(f'// Compute p={3*lgW+2} peak-finding kernel.')
+            for t in range(t0,t1,W):
+                tmp = k.get_name('tmp')
+                k.emit(f'{dt32} {tmp} = {pfy(W,t-W)} + pf_a * ({pfy(W,t-2*W)} + {pfy(W,t)});  // p={3*lgW+2}')
+                self._absorb_pfz(k, tmp, m, 3*lgW+2, t-t0)
+            self.pfz_register_ready(k, m, 3*lgW+2)
 
-                tmp1, tmp2 = k.get_name('tmp', 2)
-                k.emit(f'{dt32} {tmp1} = {pfy(W,t-W)} + pf_a * ({pfy(W,t-2*W)} + {pfy(W,t)});  // p={3*lgW+2}')
-                self._absorb_pfz(k, tmp1, m, 3*lgW+2, t)
-                
+            k.emit()
+            k.emit(f'// Compute p={3*lgW+3} peak-finding kernel.')
+            for t in range(t0,t1,W):
+                tmp2 = k.get_name('tmp')
                 k.emit(f'{dt32} {tmp2} = {pfy(2*W,t-2*W)} + pf_a * ({pfy(W,t-3*W)} + {pfy(W,t)});  // p={3*lgW+3}')
-                self._absorb_pfz(k, tmp2, m, 3*lgW+3, t)
+                self._absorb_pfz(k, tmp2, m, 3*lgW+3, t-t0)
+            self.pfz_register_ready(k, m, 3*lgW+3)
 
-            for p in range(3*lgW+1, 3*lgW+4):
-                self.pfz_register_ready(k, m, p)
+
+    def _tokenize_mp(self, k, m, p):
+        # Token = (t) | (p << 8) | (d << 14) | (flo << 20) | (fhi << 26);
+        mm = min(m, self.M-1)
+        f_ix, d = self.frequency_subbands.m_to_fd[mm]
+        f_lo, f_hi = self.frequency_subbands.f_to_irange[f_ix]
+        token = (p << 8) | (d << 14) | (f_lo << 20) | (f_hi << 26)
+        token = f'0x{token:x}U'
+        k.emit(f'// Note: ({m=},{p=}) tokenizes to {token}')
+        return token
 
     
     def pfz_register_ready(self, k, m, p):
-        k.emit(f'// XXX pfz_register_ready({m=}, {p=})')
-    
+        Minner, P = self.Minner, self.P
+        
+        k.emit()
+        k.emit(f'// pfz_register_ready({m=}, {p=}) called.')
+
+        if self.dtype == 'float':
+            k.emit('// XXX placeholder: apply weights here')
+            token_mp = self._tokenize_mp(k, m, p)
+            k.emit(f'uint token_m{m}_p{p} = pfiz_m{m}_p{p} | (threadIdx.x & ~(Dcore-1)) | {token_mp};')
+            self.pf_output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
+
+        elif (self.dtype == '__half') and ((p % 2) == 0) and (p < (P-1)):
+            k.emit(f'// This is a no-op (need to wait for p={P+1}).')
+
+        elif (self.dtype == '__half') and ((p % 2) == 0) and (p == (P-1)):
+            k.emit(f'// Creating dummpy pfz registers for {m=}, p={P}')
+            k.emit(f'// FIXME: this is suboptimal but convenient!')
+            k.emit(f'__half2 pfz_m{m}_p{P} = pfz_m{m}_p{P-1};')
+            k.emit(f'uint pfiz_m{m}_p{P} = pfiz_m{m}_p{P-1};')            
+            self.pfz_register_ready(k, m, P)
+
+        elif (self.dtype == '__half') and (p % 2):
+            m0, m1 = m, (m+Minner)
+            p0, p1 = (p-1), p
+            pfz0, pfz1 = f'pfz_m{m0}_p{p0}', f'pfz_m{m0}_p{p1}'
+            pfu0, pfu1 = f'pfu_m{m0}_p{p0}', f'pfu_m{m1}_p{p0}'
+
+            k.emit(f'// Local transpose')
+            k.emit(f'// Input: {pfz0}, {pfz1}  (simd <-> (m{m0},m{m1}), reg <-> (p{p0},p{p1})')
+            k.emit(f'// Output: {pfu0}, {pfu1} (simd <-> (p{p0},p{p1}), reg <-> (m{m0},m{m1})')
+            k.emit(f'__half2 {pfu0} = __lows2half2({pfz0}, {pfz1});')
+            k.emit(f'__half2 {pfu1} = __highs2half2({pfz0}, {pfz1});')
+
+            k.emit('// XXX placeholder: apply weights here')
+                    
+            token_m0_p0 = self._tokenize_mp(k, m0, p0)
+            token_m0_p1 = self._tokenize_mp(k, m0, p1)
+            token_m1_p0 = self._tokenize_mp(k, m1, p0)
+            token_m1_p1 = self._tokenize_mp(k, m1, p1)
+            
+            k.emit(f'uint token_m0_p0 = (pfiz_m{m0}_p{p0} & 0x0000ffffu) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m0_p0};')
+            k.emit(f'uint token_m0_p1 = (pfiz_m{m0}_p{p1} & 0x0000ffffu) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m0_p1};')
+            k.emit(f'uint token_m1_p0 = (pfiz_m{m0}_p{p0} & 0xffff0000u) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m1_p0};')
+            k.emit(f'uint token_m1_p1 = (pfiz_m{m0}_p{p1} & 0xffff0000u) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m1_p1};')
+            
+            self.pf_output.apply_inner(k, pfu0, [ f'token_m{m0}_p{p0}', f'token_m{m0}_p{p1}' ])
+            self.pf_output.apply_inner(k, pfu1, [ f'token_m{m1}_p{p0}', f'token_m{m1}_p{p1}' ])
+
+        else:
+            raise RuntimeError('should never get here')
+        
     
     @classmethod
     def write_kernel(cls, filename):
