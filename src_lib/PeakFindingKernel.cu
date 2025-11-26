@@ -683,14 +683,6 @@ void test_pf_weight_reader_microkernel()
     int Pinner = wl.Pinner;
     int Minner = xdiv(Dcore, SW);
     int Mouter = (M + Minner - 1) / Minner;  // round down
-
-    xassert(fs.m_to_f.size() == uint(M));
-    long fend = fs.m_to_f.at(M-1);
-    
-    // Pad (length M) -> length (Mouter * Minner)
-    vector<long> m_to_f = fs.m_to_f;
-    while (m_to_f.size() < uint(Mouter*Minner))
-	m_to_f.push_back(fend);
     
     // Choose Dt, Tin.
     // If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
@@ -731,8 +723,8 @@ void test_pf_weight_reader_microkernel()
 
     for (int mouter = 0; mouter < Mouter; mouter++) {
 	for (int minner = 0; minner < Minner; minner++) {
-	    int m = mouter*Minner + minner;
-	    int f = m_to_f.at(m);
+	    int m = min(mouter*Minner + minner, M-1);
+	    int f = fs.m_to_f.at(m);
 	    
 	    for (int touter = 0; touter < Touter; touter++) {
 		for (int tinner = 0; tinner < Tinner; tinner++) {
