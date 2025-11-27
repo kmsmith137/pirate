@@ -322,32 +322,29 @@ struct TestPfWeightReader
     {
         ksgpu::Dtype dtype;     // either float16 or float32
         std::vector<long> subband_counts;  // length (rank+1)
-        int Dcore = 0;
-        int Tinner = 0;
-        int P = 0;
+        long Dcore = 0;
+        long Tinner = 0;
+        long P = 0;
     };
 
     struct RegistryValue
     {
         // The test kernel is called as (32 threads, 1 threadblock):
-        //   void kernel(void *out, const void *in, uint Tin, uint Dt);
+        //   void kernel(void *out, const void *in, uint Tin, uint WDt);
         //
-        // where 'out' and 'in' have type RegistryKey::dtype, and:
-        //   out.shape ==  (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
-        //   in.shape == (Touter, Pouter, F, Tinner, Pinner)    where Touter=Tin/(Dt*Tinner)
+        // where 'out' has shape (Tin/Dcore, Mouter * Minner, Pouter * Pinner)
+        // and 'in' is managed by 'struct GpuPfWeightLayout' (see above).
         //
-        // The length-32 axis of 'out' can be viewed as (Minner, Nspectator, Tinner), where
-        // Nspectator = 32 / (Minner * Tinner).
-        //
-        // The 'in' array can have a non-contiguous touter-index, see 'touter_byte_stride' below.
-        //
-        // If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
-        // If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
+        // If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
+        // If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.
         
         void (*cuda_kernel)(void *, const void *, uint, uint) = nullptr;
 
         // Layout of peak-finding weights in GPU memory, expected by the kernel.
         GpuPfWeightLayout pf_weight_layout;
+
+        long Mouter = 0;
+        long Minner = 0;
     };
 
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;

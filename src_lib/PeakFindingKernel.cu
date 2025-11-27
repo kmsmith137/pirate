@@ -607,6 +607,9 @@ struct TestPfWeightReaderRegistry : public TestPfWeightReader::Registry
         xassert_ge(key.P, 0);
         
         xassert(val.cuda_kernel != nullptr);
+        xassert(val.Mouter > 0);
+        xassert(val.Minner > 0);
+        
         val.pf_weight_layout.validate();
         
         // Call add() in base class.
@@ -679,85 +682,60 @@ void test_pf_weight_reader_microkernel()
     int P = wl.P;
     int Dcore = key.Dcore;
     int Tinner = key.Tinner;
-    int Pouter = wl.Pouter;
-    int Pinner = wl.Pinner;
-    int Minner = xdiv(Dcore, SW);
-    int Mouter = (M + Minner - 1) / Minner;  // round down
     
-    // Choose Dt, Tin.
-    // If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
-    // If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
+    // Choose WDt, Tin.
+    // If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
+    // If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.
     
     auto v = ksgpu::random_integers_with_bounded_product(2, 20);
-    int Dt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
-    int Tin = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (Dt*v[1]);
-    int Touter = xdiv(Tin, Dt*Tinner);
-    int Tbar = xdiv(Tin, Dt);
+    int WDt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
+    int Tin = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (WDt*v[1]);  // number of tree samples (not used for anything)
 
     cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
          << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
-         << ", Dcore=" << key.Dcore << ", P=" << key.P
-         << ", Tinner=" << Tinner << ", Dt=" << Dt
+         << ", Dcore=" << key.Dcore
+         << ", P=" << key.P
+         << ", Tinner=" << Tinner
+         << ", WDt=" << WDt
          << ", Tin=" << Tin << endl;
+    
+    int Tbar = xdiv(Tin, WDt);     // number of time samples in weights array (input array to test kernel)
+    int Tout = xdiv(Tin, Dcore);   // number of time samples in output array of test kernel
+    int Tspec = xdiv(Tout, Tbar);  // number of "spectator" time samples in test kernel
+    int Mpad = val.Mouter * val.Minner;
+    int Ppad = wl.Pouter * wl.Pinner;    
     
     // Input array: (1,1,Tbar,P,F), where the length-1 axes are beams and DMs.
     Array<float> in_cpu({1,1,Tbar,P,F}, af_rhost | af_random);
 
-    // Output array: can be viewed as shape
-    //   (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
-    //
-    // The length-(Tin/(32*SW)) axis can be reinterpreted as (where S1 is a spectator axis):
-    //   Tin/(32*SW) -> (Touter, S1)        where S1 = Tin/(32*SW*Touter) = (Dt*Tinner)/(32*SW)
-    //
-    // The length-32 axis can be reinterpreted as (where S2 is a spectator axis):
-    //   32 -> (Tinner, S2, Minner)         where S2 = 32/(Tinner*Minner)
-    //
-    // Combining, the output array can be viewed as shape
-    //  (Touter, S1, Mouter, Pouter, Tinner, S2, Minner, Pinner)
-    
-    int S1 = xdiv(Dt*Tinner, 32*SW);
-    int S2 = xdiv(32, Tinner*Minner);
-    Array<float> out_cpu({Touter,S1,Mouter,Pouter,Tinner,S2,Minner,Pinner}, af_uhost | af_zero);
+    // Output array: (Tout, Mouter*Minner, Pouter*Pinner)
+    Array<float> out_cpu({Tout,Mpad,Ppad}, af_rhost | af_zero);
 
     // Emulate PfWeightReader kernel on the CPU (eight nested for-loops!)
-
-    for (int mouter = 0; mouter < Mouter; mouter++) {
-        for (int minner = 0; minner < Minner; minner++) {
-            int m = min(mouter*Minner + minner, M-1);
-            int f = fs.m_to_f.at(m);
-            
-            for (int touter = 0; touter < Touter; touter++) {
-                for (int tinner = 0; tinner < Tinner; tinner++) {
-                    int tbar = touter*Tinner + tinner;;
-                    
-                    for (int pouter = 0; pouter < Pouter; pouter++) {
-                        for (int pinner = 0; pinner < Pinner; pinner++) {
-                            int p = min(pouter*Pinner + pinner, P-1);
-                            float w = in_cpu.at({0,0,tbar,p,f});
-
-                            for (int s1 = 0; s1 < S1; s1++)
-                                for (int s2 = 0; s2 < S2; s2++)
-                                    out_cpu.at({touter,s1,mouter,pouter,tinner,s2,minner,pinner}) = w;
-                        }
-                    }
+    for (int tbar = 0; tbar < Tbar; tbar++) {
+        for (int tout = tbar*Tspec; tout < (tbar+1)*Tspec; tout++) {
+            for (int mpad = 0; mpad < Mpad; mpad++) {
+                int m = min(mpad, M-1);
+                int f = fs.m_to_f.at(m);
+                
+                for (int ppad = 0; ppad < Ppad; ppad++) {
+                    int p = min(ppad, P-1);
+                    out_cpu.at({tout,mpad,ppad}) = in_cpu.at({0,0,tbar,p,f});
                 }
             }
         }
     }
 
-    // Copy input array to GPU.
+    // Send input array to GPU, using GpuPfWeightLayout::to_gpu().
     Array<void> in_gpu = val.pf_weight_layout.to_gpu(in_cpu);
 
     // Run kernel on GPU.
-    Array<void> out_gpu(dtype, out_cpu.ndim, out_cpu.shape, af_gpu | af_zero | af_guard);
-    val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, Tin, Dt);
+    Array<void> out_gpu(dtype, {Tout,Mpad,Ppad}, af_gpu | af_zero | af_guard);
+    val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, Tin, WDt);
     CUDA_PEEK("pf_weight_reader");
 
     // Compare.
-    assert_arrays_equal(
-        out_cpu, out_gpu, "out_cpu", "out_gpu",
-        {"touter","s1","mouter","pouter","tinner","s2","minner","pinner"}
-    );
+    assert_arrays_equal(out_cpu, out_gpu, "out_cpu", "out_gpu", {"tout","mpad","ppad"});
 }
 
 
