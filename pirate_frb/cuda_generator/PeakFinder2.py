@@ -40,6 +40,7 @@ class PeakFinder2:
         self.pf_rank = frequency_subbands.pf_rank
         self.pfx_nb = utils.integer_log2(self.SW)
         self.pfx_nl = utils.integer_log2(self.Dcore) - self.pfx_nb
+        self.pfys_held = set()
         self.pfz_decl = set()
 
         self.rb = Ringbuf(self.dt32)
@@ -152,7 +153,7 @@ class PeakFinder2:
         self.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'tin', 'Tin')
 
         # bottom of tin-loop 2: advance weight_reader.
-        self.pf_weight_reader.bottom(k, 'tin', 'Dt')
+        self.pf_weight_reader.bottom(k, 'tin', 'WDt')
         
         # Bottom of tin-loop 3: advance ringbuf.
         self.rb.advance_outer(k)
@@ -295,34 +296,42 @@ class PeakFinder2:
             k.emit(f'// First, some renames for readability.')
 
             for tt in range(Dcore):
-                src = self.pfx_name(m, tt, b, l)
-                k.emit(f'{dt32} pfy1_m{m}_t{tt} = {src};')
+                k.emit(f'{dt32} {self.pfy_name(1,m,tt)} = {self.pfx_name(m,tt,b,l)};')
 
             self.pfy_registers_ready(k, m)
 
 
-    def _absorb_pfz(self, k, var, m, p, t):
-        """Helper for pfy_registers_ready()."""
-        
-        pfz = f'pfz_m{m}_p{p}'
-        pfiz = f'pfiz_m{m}_p{p}'
-        assert 0 <= t < self.Dcore
+    def pfy_name(self, W, m, t):
+        """Helper for pfy_registers_ready() and friends."""
+        return f'pfy{W}_m{m}_t{t}' if (t >= 0) else f'pfy{W}_m{m}_tn{-t}'
 
-        if (m,p) not in self.pfz_decl:
-            k.emit(f'{self.dt32} {pfz} = {var};')
-            k.emit(f'uint {pfiz} = 0;')
-            self.pfz_decl.add((m,p))
-        elif self.dtype == 'float':
-            k.emit(f'{pfiz} = ({pfz} < {var}) ? {t} : {pfiz};')
-            k.emit(f'{pfz} = fmaxf({pfz}, {var});')
-        elif self.dtype == '__half':
-            cmp1, cmp2 = k.get_name('cmp', 2)
-            k.emit(f'__half2 {cmp1} = __hle2({pfz}, {var});')
-            k.emit(f'uint {cmp2} = *reinterpret_cast<uint*>(&{cmp1});  // __half2 -> uint')
-            k.emit(f'{pfiz} = ({cmp2} & 0x{(t|(t<<16)):0x}) | (~{cmp2} & {pfiz});  // compiles to lop3')
-            k.emit(f'{pfz} = __hmax2({pfz}, {var});')
-        else:
-            raise RuntimeError('should never get here')
+    
+    def _get_pfy(self, k, W, m, t, allow_ringbuf=True):
+        """Helper for pfy_registers_ready()."""
+
+        dt32, Dcore, Minner = self.dt32, self.Dcore, self.Minner
+        
+        # Convenient shorthand.
+        pfy = lambda W,t: self.pfy_name(W,m,t)
+        check = lambda W,t: ((W,m,t) in self.pfys_held)
+
+        if check(W,t):
+            return
+        
+        if (W > 1) and check(W//2,t) and check(W//2,t+W//2):
+            k.emit(f'{dt32} {pfy(W,t)} = {pfy(W//2,t)} + {pfy(W//2,t+W//2)};')
+            self.pfys_held.add((W,m,t))
+            return
+                    
+        for l in range(32):
+            if allow_ringbuf and check(W,t+l*Dcore):
+                k.emit(f'// Set {pfy(W,t)} = ringbuf.advance({pfy(W,t+l*Dcore)}, {l*Minner})')
+                k.emit(f'{dt32} {pfy(W,t)};')
+                self.rb.advance(k, pfy(W,t+l*Dcore), l*Minner, dst=pfy(W,t))
+                self.pfys_held.add((W,m,t))
+                return
+
+        raise RuntimeError(f'Internal error: PeakFinder._get_pfy({W=}, {m=}, {t=}, {allow_ringbuf=}) failed')
 
     
     def _read_weights(self, k, m, p):
@@ -350,14 +359,45 @@ class PeakFinder2:
                 
         elif self.dtype != '__half':
             raise RuntimeError('should never get here')
+
+    
+    def _absorb_pfz(self, k, var, m, p, t):
+        """Helper for pfy_registers_ready()."""
         
+        pfz = f'pfz_m{m}_p{p}'
+        pfiz = f'pfiz_m{m}_p{p}'
+        assert 0 <= t < self.Dcore
+
+        if (m,p) not in self.pfz_decl:
+            k.emit(f'{self.dt32} {pfz} = {var};')
+            k.emit(f'uint {pfiz} = 0;')
+            self.pfz_decl.add((m,p))
+        
+        elif self.dtype == 'float':
+            k.emit(f'{pfiz} = ({pfz} < {var}) ? {t} : {pfiz};')
+            k.emit(f'{pfz} = fmaxf({pfz}, {var});')
+        
+        elif self.dtype == '__half':
+            cmp1, cmp2 = k.get_name('cmp', 2)
+            k.emit(f'__half2 {cmp1} = __hle2({pfz}, {var});')
+            k.emit(f'uint {cmp2} = *reinterpret_cast<uint*>(&{cmp1});  // __half2 -> uint')
+            k.emit(f'{pfiz} = ({cmp2} & 0x{(t|(t<<16)):0x}) | (~{cmp2} & {pfiz});  // compiles to lop3')
+            k.emit(f'{pfz} = __hmax2({pfz}, {var});')
+        
+        else:
+            raise RuntimeError('should never get here')
+            
         
     def pfy_registers_ready(self, k, m):
         dt32, E, Dcore, Minner = self.dt32, self.E, self.Dcore, self.Minner
         assert m % Dcore == 0
 
-        # For formatting register names
-        pfy = lambda w,t: f'pfy{w}_m{m}_t{t}' if (t >= 0) else f'pfy{w}_m{m}_tn{-t}'
+        # Convenient shorthand.
+        pfy = lambda W,t: self.pfy_name(W,m,t)
+
+        # Caller has ensured that these pfy registers are defined.
+        for t in range(Dcore):
+            self.pfys_held.add((1,m,t))
 
         self._read_weights(k, m, p=0)
         
@@ -367,73 +407,50 @@ class PeakFinder2:
             self._absorb_pfz(k, pfy(1,t), m, 0, t)
 
         self.pfz_register_ready(k, m, 0)
-        tmin = 0   # see below
 
         # Loop over W = 1, 2, 4, ..., (E//2).
         for lgW in range(utils.integer_log2(E)):
             W = 2**lgW
-            t0, t1 = min(Dcore-W,0), Dcore
 
-            for p in range(3*lgW+1, 3*lgW+4):
-                self._read_weights(k, m, p)
+            # tends = "we want to process width-W kernels which end at these times"
+            # tstarts = "we will need width-W pfy-registers which start at these times"
+            # t0 = "when computing time indices in argmax tokens, use (tend-t0)"
             
-            # In each iteration of the loop, we want to process all "triggers" whose
-            # last sample is of the form (pfy(W,t) for t in range(t0,t1,W).
-            # First, we obtain (pfy(W,t) for t >= t0-3*W) from the ring buffer.
-            # Invariant: from previous iteration of loop, we have pfy(w,t) for t >= tmin.
+            tends = list(range(W,Dcore+W,W)) if (W < Dcore) else [Dcore]
+            tstarts = sorted(set(tend-i*W for tend in tends for i in range(1,5)))
+            t0 = tends[0]
 
-            for t in reversed(range(t0-3*W,tmin,W)):
-                k.emit()
-                k.emit(f'// Set {pfy(W,t)} = ringbuf.advance({pfy(W,t+Dcore)}, {self.Minner})')
-                k.emit(f'{dt32} {pfy(W,t)};')
-                self.rb.advance(k, pfy(W,t+Dcore), self.Minner, dst=pfy(W,t))
-
-            # Update tmin after obtaining new pfys from the ring buffer.
-            tmin = t0-3*W
-            
-            # In the first "main peak-finding loop" below, we'll compute
-            #    (pfy(2*W,t) for t in range(t0-W,t1-W,W)).
-            # In addition, we'll need some "stray" pfy(2*W,t) values.
-            
-            # This "stray t" is always needed for third "main peak-finding loop" below.
-            stray_ts = [ t0-2*W ]
-
-            # If this is not the last loop iteration, then compute as many "stray ts" as we can.
-            if (2*W) < E:
-                t0_next = min(Dcore-2*W,0)
-                aligned = (t0_next % W) == ((t0-3*W) % W)
-                tmin = tmin if aligned else (tmin+W)  # note: updates 'tmin' to preserve loop invariant
-                stray_ts = list(range(tmin,tmin-2*W,2*W)) + stray_ts
-
-            k.emit()
-            k.emit(f'// Compute "stray" pfy{2*W} value(s): {[pfy(2*W,t) for t in stray_ts]}')
-            for t in stray_ts:
-                k.emit(f'{dt32} {pfy(2*W,t)} = {pfy(W,t)} + {pfy(W,t+W)};')
-
-            # Main peak-finding loops. (This could be one loop instead of three, but
-            # organizing it as three loops may help the compiler improve register usage.)
+            for t in tstarts:
+                self._get_pfy(k, W, m, t)
+                
+            self._read_weights(k, m, 3*lgW+1)
 
             k.emit()
             k.emit(f'// Compute p={3*lgW+1} peak-finding kernel.')
-            for t in range(t0,t1,W):
-                k.emit(f'{dt32} {pfy(2*W,t-W)} = {pfy(W,t-W)} + {pfy(W,t)};  // p={3*lgW+1}')
-                self._absorb_pfz(k, pfy(2*W,t-W), m, 3*lgW+1, t-t0)
+            for tend in tends:
+                self._get_pfy(k, 2*W, m, tend-2*W, allow_ringbuf=False)
+                self._absorb_pfz(k, pfy(2*W,tend-2*W), m, 3*lgW+1, tend-t0)
             self.pfz_register_ready(k, m, 3*lgW+1)
+            
+            self._read_weights(k, m, 3*lgW+2)
             
             k.emit()
             k.emit(f'// Compute p={3*lgW+2} peak-finding kernel.')
-            for t in range(t0,t1,W):
+            for tend in tends:
                 tmp = k.get_name('tmp')
-                k.emit(f'{dt32} {tmp} = {pfy(W,t-W)} + pf_a * ({pfy(W,t-2*W)} + {pfy(W,t)});  // p={3*lgW+2}')
-                self._absorb_pfz(k, tmp, m, 3*lgW+2, t-t0)
+                k.emit(f'{dt32} {tmp} = {pfy(W,tend-2*W)} + pf_a * ({pfy(W,tend-3*W)} + {pfy(W,tend-W)});  // p={3*lgW+2}')
+                self._absorb_pfz(k, tmp, m, 3*lgW+2, tend-t0)
             self.pfz_register_ready(k, m, 3*lgW+2)
+
+            self._read_weights(k, m, 3*lgW+3)
+            self._get_pfy(k, 2*W, m, tends[0]-3*W, allow_ringbuf=False)    # stray
 
             k.emit()
             k.emit(f'// Compute p={3*lgW+3} peak-finding kernel.')
-            for t in range(t0,t1,W):
+            for tend in tends:
                 tmp2 = k.get_name('tmp')
-                k.emit(f'{dt32} {tmp2} = {pfy(2*W,t-2*W)} + pf_a * ({pfy(W,t-3*W)} + {pfy(W,t)});  // p={3*lgW+3}')
-                self._absorb_pfz(k, tmp2, m, 3*lgW+3, t-t0)
+                k.emit(f'{dt32} {tmp2} = {pfy(2*W,tend-3*W)} + pf_a * ({pfy(W,tend-4*W)} + {pfy(W,tend-W)});  // p={3*lgW+3}')
+                self._absorb_pfz(k, tmp2, m, 3*lgW+3, tend-t0)
             self.pfz_register_ready(k, m, 3*lgW+3)
 
 
@@ -455,7 +472,7 @@ class PeakFinder2:
         k.emit(f'// pfz_register_ready({m=}, {p=}) called.')
 
         if self.dtype == 'float':
-            k.emit('// XXX placeholder: apply weights here')
+            k.emit(f'pfz_m{m}_p{p} *= pfw_m{m}_p{p};')
             token_mp = self._tokenize_mp(k, m, p)
             k.emit(f'uint token_m{m}_p{p} = pfiz_m{m}_p{p} | (threadIdx.x & ~(Dcore-1)) | {token_mp};')
             self.pf_output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
@@ -482,7 +499,8 @@ class PeakFinder2:
             k.emit(f'__half2 {pfu0} = __lows2half2({pfz0}, {pfz1});')
             k.emit(f'__half2 {pfu1} = __highs2half2({pfz0}, {pfz1});')
 
-            k.emit('// XXX placeholder: apply weights here')
+            k.emit(f'{pfu0} *= pfw_m{m0}_p{p};')
+            k.emit(f'{pfu1} *= pfw_m{m1}_p{p};')
                     
             token_m0_p0 = self._tokenize_mp(k, m0, p0)
             token_m0_p1 = self._tokenize_mp(k, m0, p1)
@@ -720,7 +738,7 @@ class PfWeightReader:
         # FIXME 2: register limit
         #  - Use Belady's algorithm
         #
-        # FIXME 3: if Dt=0 then test whether re-reading is really necessary
+        # FIXME 3: if Tinner=1 then test whether re-reading is really necessary
         #
         # The optimal interface would specify a register limit, a shared memory limit,
         # and let the constructor choose the strategy!
@@ -825,8 +843,8 @@ class PfWeightReader:
             k.emit(f'// since Tinner=1, no need for "pf_I += tinner;"')
 
     
-    def bottom(self, k, tin, Dt):
-        """The 'tin', 'Dt' args are string varnames."""
+    def bottom(self, k, tin, WDt):
+        """The 'tin', 'WDt' args are string varnames."""
         
         assert self.top_called
         assert not self.bottom_called
@@ -844,10 +862,10 @@ class PfWeightReader:
         k.emit(f'// unpadded_byte_stride = {us}, byte_stride = {bs}, pointer_stride = {ps}')
 
         if self.Tinner > 1:
-            k.emit(f"// Since Tinner > 1, we ignore '{Dt}', and always increment the weight pointer '{self.wp}'.")
+            k.emit(f"// Since Tinner > 1, we ignore '{WDt}', and always increment the weight pointer '{self.wp}'.")
         else:
             k.emit("// FIXME optimize out mod-operator")
-            k.emit(f"if (!(({tin} + {32*self.SW}) % {Dt}))")
+            k.emit(f"if (!(({tin} + {32*self.SW}) % {WDt}))")
             
         k.emit(f"{self.wp} += {ps};")
         
