@@ -38,41 +38,41 @@ struct ChunkPool::Core
 
     
     ChunkPool::Core(ssize_t nbytes_per_chunk_, ssize_t nchunks_) :
-	nbytes_per_chunk(nbytes_per_chunk_),
-	nchunks_max(nchunks_),
-	nchunks_free(nchunks_),
-	chunks(nchunks_, nullptr)
+        nbytes_per_chunk(nbytes_per_chunk_),
+        nchunks_max(nchunks_),
+        nchunks_free(nchunks_),
+        chunks(nchunks_, nullptr)
     {
-	for (ssize_t i = 0; i < nchunks; i++) {
-	    chunks[i] = malloc(xxx);
-	    if (!chunks[i])
-		throw runtime_error(xxx);
-	}
+        for (ssize_t i = 0; i < nchunks; i++) {
+            chunks[i] = malloc(xxx);
+            if (!chunks[i])
+                throw runtime_error(xxx);
+        }
     }
 
 
     char *get_chunk()
     {
-	lock_guard<mutex> lg(lock);
-	if (nchunks_free <= 0)
-	    throw runtime_error();
-	return chunks[--nchunks_free];
+        lock_guard<mutex> lg(lock);
+        if (nchunks_free <= 0)
+            throw runtime_error();
+        return chunks[--nchunks_free];
     }
 
 
     void put_chunk(char *p)
     {
-	lock_guard<mutex> lg(lock);
-	if (nchunks_free >= nchunks_max)
-	    throw runtime_error();
-	chunks[nchunks_free++] = p;
+        lock_guard<mutex> lg(lock);
+        if (nchunks_free >= nchunks_max)
+            throw runtime_error();
+        chunks[nchunks_free++] = p;
     }
 
     
     ssize_t get_nchunks_free() const
     {
-	lock_guard<mutex> lg(lock);
-	return nchunks_free;
+        lock_guard<mutex> lg(lock);
+        return nchunks_free;
     }
 };
 

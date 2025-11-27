@@ -288,18 +288,18 @@ struct GpuPeakFindingKernel2
 {
     struct RegistryKey
     {
-	ksgpu::Dtype dtype;     // either float16 or float32
-	std::vector<long> subband_counts;  // length (rank+1)
-	long rank = -1;
-	long Dcore = 0;
-	long Tinner = 0;
-	long P = 0;
+        ksgpu::Dtype dtype;     // either float16 or float32
+        std::vector<long> subband_counts;  // length (rank+1)
+        long rank = -1;
+        long Dcore = 0;
+        long Tinner = 0;
+        long P = 0;
     };
 
     struct RegistryValue
     {
-	// cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint Tin, uint WDd, uint WDt)
-	void (*cuda_kernel)(const void *, void *, uint *, const void *, void *, uint, uint, uint) = nullptr;
+        // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint Tin, uint WDd, uint WDt)
+        void (*cuda_kernel)(const void *, void *, uint *, const void *, void *, uint, uint, uint) = nullptr;
     };
 };
 #endif
@@ -321,33 +321,33 @@ struct TestPfWeightReader
     struct RegistryKey
     {
         ksgpu::Dtype dtype;     // either float16 or float32
-	std::vector<long> subband_counts;  // length (rank+1)
-	int Dcore = 0;
-	int Tinner = 0;
-	int P = 0;
+        std::vector<long> subband_counts;  // length (rank+1)
+        int Dcore = 0;
+        int Tinner = 0;
+        int P = 0;
     };
 
     struct RegistryValue
     {
-	// The test kernel is called as (32 threads, 1 threadblock):
-	//   void kernel(void *out, const void *in, uint Tin, uint Dt);
-	//
-	// where 'out' and 'in' have type RegistryKey::dtype, and:
-	//   out.shape ==  (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
-	//   in.shape == (Touter, Pouter, F, Tinner, Pinner)    where Touter=Tin/(Dt*Tinner)
-	//
-	// The length-32 axis of 'out' can be viewed as (Minner, Nspectator, Tinner), where
-	// Nspectator = 32 / (Minner * Tinner).
-	//
-	// The 'in' array can have a non-contiguous touter-index, see 'touter_byte_stride' below.
-	//
-	// If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
-	// If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
-	
-	void (*cuda_kernel)(void *, const void *, uint, uint) = nullptr;
+        // The test kernel is called as (32 threads, 1 threadblock):
+        //   void kernel(void *out, const void *in, uint Tin, uint Dt);
+        //
+        // where 'out' and 'in' have type RegistryKey::dtype, and:
+        //   out.shape ==  (Tin/(32*SW), Mouter, Pouter, 32, Pinner)
+        //   in.shape == (Touter, Pouter, F, Tinner, Pinner)    where Touter=Tin/(Dt*Tinner)
+        //
+        // The length-32 axis of 'out' can be viewed as (Minner, Nspectator, Tinner), where
+        // Nspectator = 32 / (Minner * Tinner).
+        //
+        // The 'in' array can have a non-contiguous touter-index, see 'touter_byte_stride' below.
+        //
+        // If Tinner > 1, then Dt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
+        // If Tinner == 1, then Dt must be a multiple of (32*SW), and Tin must be a multiple of Dt.
+        
+        void (*cuda_kernel)(void *, const void *, uint, uint) = nullptr;
 
-	// Layout of peak-finding weights in GPU memory, expected by the kernel.
-	GpuPfWeightLayout pf_weight_layout;
+        // Layout of peak-finding weights in GPU memory, expected by the kernel.
+        GpuPfWeightLayout pf_weight_layout;
     };
 
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;
@@ -374,14 +374,14 @@ struct TestPfOutput2
 
     struct RegistryValue
     {
-	// The test kernel is called as (32 threads, 1 threadblock):
-	//   void kernel(void *zout, uint *aout, void *zin, uint *ain, uint Tin);
-	//
-	// where 'zout' and 'zin' have type RegistryKey::dtype, and:
-	//   zout.shape == aout.shape == (Tin//Dout)
-	//   zin.shape == ain.shape == (4, Tin)
+        // The test kernel is called as (32 threads, 1 threadblock):
+        //   void kernel(void *zout, uint *aout, void *zin, uint *ain, uint Tin);
+        //
+        // where 'zout' and 'zin' have type RegistryKey::dtype, and:
+        //   zout.shape == aout.shape == (Tin//Dout)
+        //   zin.shape == ain.shape == (4, Tin)
 
-	void (*cuda_kernel) (void *, uint *, void *, uint *, uint) = nullptr;
+        void (*cuda_kernel) (void *, uint *, void *, uint *, uint) = nullptr;
     };
     
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;

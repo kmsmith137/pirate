@@ -167,13 +167,13 @@ struct KernelRegistry
 
         for (ulong i = 0; i < entries.size(); i++) {
             os << "    [" << i << "]: " << entries[i].key << "\n";
-	    
-	    std::stringstream ss;
-	    ss << entries[i].val;
-	    
-	    std::string s = ss.str();
-	    if (!s.empty())
-		os << "        " << entries[i].val << "\n";
+            
+            std::stringstream ss;
+            ss << entries[i].val;
+            
+            std::string s = ss.str();
+            if (!s.empty())
+                os << "        " << entries[i].val << "\n";
         }
     }
 };

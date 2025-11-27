@@ -402,8 +402,8 @@ struct PfRegistry : public GpuPeakFindingKernel::Registry
     {
         // Just check that all members have been initialized.
         // (In the future, I may add more argument checking here.)
-	
-	xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+        
+        xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
         xassert(key.M > 0);
         xassert(key.E > 0);
         xassert(key.Dout > 0);
@@ -478,26 +478,26 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
     xassert_le(pf_rank, 4);
 
     for (long level = 0; level <= pf_rank; level++) {
-	// Level 0 is special (non-overlapping bands).
-	long max_bands = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
-	xassert_ge(subband_counts.at(level), 0);
-	xassert_le(subband_counts.at(level), max_bands);
+        // Level 0 is special (non-overlapping bands).
+        long max_bands = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
+        xassert_ge(subband_counts.at(level), 0);
+        xassert_le(subband_counts.at(level), max_bands);
 
-	for (long b = 0; b < subband_counts.at(level); b++) {
-	    long s = pow2(max(level-1,0L));   // spacing between bands
-	    long f = this->F;                 // current value
+        for (long b = 0; b < subband_counts.at(level); b++) {
+            long s = pow2(max(level-1,0L));   // spacing between bands
+            long f = this->F;                 // current value
 
-	    this->f_to_ilo.push_back(b*s);
-	    this->f_to_ihi.push_back(b*s + pow2(level));
-		
-	    for (long d = 0; d < pow2(level); d++) {
-		this->m_to_f.push_back(f);
-		this->m_to_d.push_back(d);
-	    }
+            this->f_to_ilo.push_back(b*s);
+            this->f_to_ihi.push_back(b*s + pow2(level));
+                
+            for (long d = 0; d < pow2(level); d++) {
+                this->m_to_f.push_back(f);
+                this->m_to_d.push_back(d);
+            }
 
-	    this->M += pow2(level);
-	    this->F += 1;
-	}
+            this->M += pow2(level);
+            this->F += 1;
+        }
     }
 
     xassert_eq(m_to_f.size(), uint(M));
@@ -533,9 +533,9 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     this->validate();
     
     if (src.ndim != 5) {
-	stringstream ss;
-	ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, Dbar, Tbar, P, F), got " << src.shape_str();
-	throw runtime_error(ss.str());
+        stringstream ss;
+        ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, Dbar, Tbar, P, F), got " << src.shape_str();
+        throw runtime_error(ss.str());
     }
 
     xassert_eq(src.shape[3], P);
@@ -556,23 +556,23 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     Array<float> tmp(shape, af_rhost | af_zero);
 
     for (long b = 0; b < nbeams; b++) {
-	for (long dbar = 0; dbar < Dbar; dbar++) {
-	    for (long touter = 0; touter < Touter; touter++) {
-		for (long pouter = 0; pouter < Pouter; pouter++) {
-		    for (long f = 0; f < F; f++) {
-			for (long tinner = 0; tinner < Tinner; tinner++) {
-			    for (long pinner = 0; pinner < Pinner; pinner++) {
-				long tbar = touter*Tinner + tinner;
-				long p = min(pouter*Pinner + pinner, P-1);
+        for (long dbar = 0; dbar < Dbar; dbar++) {
+            for (long touter = 0; touter < Touter; touter++) {
+                for (long pouter = 0; pouter < Pouter; pouter++) {
+                    for (long f = 0; f < F; f++) {
+                        for (long tinner = 0; tinner < Tinner; tinner++) {
+                            for (long pinner = 0; pinner < Pinner; pinner++) {
+                                long tbar = touter*Tinner + tinner;
+                                long p = min(pouter*Pinner + pinner, P-1);
 
-				float w = src.at({b,dbar,tbar,p,f});
-				tmp.at({b,dbar,touter,pouter,f,tinner,pinner}) = w;
-			    }
-			}
-		    }
-		}
-	    }
-	}
+                                float w = src.at({b,dbar,tbar,p,f});
+                                tmp.at({b,dbar,touter,pouter,f,tinner,pinner}) = w;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Array<void> tmp2 = tmp.convert(dtype);
@@ -599,16 +599,16 @@ struct TestPfWeightReaderRegistry : public TestPfWeightReader::Registry
     {
         // Just check that all members have been initialized.
         // (In the future, I may add more argument checking here.)
-	
+        
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
-	xassert_ge(key.subband_counts.size(), 1);
-	xassert_ge(key.Dcore, 0);
-	xassert_ge(key.Tinner, 0);
-	xassert_ge(key.P, 0);
-	
-	xassert(val.cuda_kernel != nullptr);
-	val.pf_weight_layout.validate();
-	
+        xassert_ge(key.subband_counts.size(), 1);
+        xassert_ge(key.Dcore, 0);
+        xassert_ge(key.Tinner, 0);
+        xassert_ge(key.P, 0);
+        
+        xassert(val.cuda_kernel != nullptr);
+        val.pf_weight_layout.validate();
+        
         // Call add() in base class.
         TestPfWeightReader::Registry::add(key, val, debug);
     }
@@ -634,10 +634,10 @@ TestPfWeightReader::Registry &TestPfWeightReader::registry()
 bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightReader::RegistryKey &k2)
 {
     return (k1.dtype == k2.dtype)
-	&& (k1.subband_counts == k2.subband_counts)
-	&& (k1.Dcore == k2.Dcore)
-	&& (k1.Tinner == k2.Tinner)
-	&& (k1.P == k2.P);
+        && (k1.subband_counts == k2.subband_counts)
+        && (k1.Dcore == k2.Dcore)
+        && (k1.Tinner == k2.Tinner)
+        && (k1.P == k2.P);
 }
 
 ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryKey &k)
@@ -695,10 +695,10 @@ void test_pf_weight_reader_microkernel()
     int Tbar = xdiv(Tin, Dt);
 
     cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
-	 << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
-	 << ", Dcore=" << key.Dcore << ", P=" << key.P
-	 << ", Tinner=" << Tinner << ", Dt=" << Dt
-	 << ", Tin=" << Tin << endl;
+         << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
+         << ", Dcore=" << key.Dcore << ", P=" << key.P
+         << ", Tinner=" << Tinner << ", Dt=" << Dt
+         << ", Tin=" << Tin << endl;
     
     // Input array: (1,1,Tbar,P,F), where the length-1 axes are beams and DMs.
     Array<float> in_cpu({1,1,Tbar,P,F}, af_rhost | af_random);
@@ -722,27 +722,27 @@ void test_pf_weight_reader_microkernel()
     // Emulate PfWeightReader kernel on the CPU (eight nested for-loops!)
 
     for (int mouter = 0; mouter < Mouter; mouter++) {
-	for (int minner = 0; minner < Minner; minner++) {
-	    int m = min(mouter*Minner + minner, M-1);
-	    int f = fs.m_to_f.at(m);
-	    
-	    for (int touter = 0; touter < Touter; touter++) {
-		for (int tinner = 0; tinner < Tinner; tinner++) {
-		    int tbar = touter*Tinner + tinner;;
-		    
-		    for (int pouter = 0; pouter < Pouter; pouter++) {
-			for (int pinner = 0; pinner < Pinner; pinner++) {
-			    int p = min(pouter*Pinner + pinner, P-1);
-			    float w = in_cpu.at({0,0,tbar,p,f});
+        for (int minner = 0; minner < Minner; minner++) {
+            int m = min(mouter*Minner + minner, M-1);
+            int f = fs.m_to_f.at(m);
+            
+            for (int touter = 0; touter < Touter; touter++) {
+                for (int tinner = 0; tinner < Tinner; tinner++) {
+                    int tbar = touter*Tinner + tinner;;
+                    
+                    for (int pouter = 0; pouter < Pouter; pouter++) {
+                        for (int pinner = 0; pinner < Pinner; pinner++) {
+                            int p = min(pouter*Pinner + pinner, P-1);
+                            float w = in_cpu.at({0,0,tbar,p,f});
 
-			    for (int s1 = 0; s1 < S1; s1++)
-				for (int s2 = 0; s2 < S2; s2++)
-				    out_cpu.at({touter,s1,mouter,pouter,tinner,s2,minner,pinner}) = w;
-			}
-		    }
-		}
-	    }
-	}
+                            for (int s1 = 0; s1 < S1; s1++)
+                                for (int s2 = 0; s2 < S2; s2++)
+                                    out_cpu.at({touter,s1,mouter,pouter,tinner,s2,minner,pinner}) = w;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Copy input array to GPU.
@@ -756,7 +756,7 @@ void test_pf_weight_reader_microkernel()
     // Compare.
     assert_arrays_equal(
         out_cpu, out_gpu, "out_cpu", "out_gpu",
-	{"touter","s1","mouter","pouter","tinner","s2","minner","pinner"}
+        {"touter","s1","mouter","pouter","tinner","s2","minner","pinner"}
     );
 }
 
@@ -775,28 +775,28 @@ struct TestPfOutput2Registry : public TestPfOutput2::Registry
     {
         // Just check that all members have been initialized.
         // (In the future, I may add more argument checking here.)
-	
+        
         xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
-	xassert(key.Dout > 0);
-	xassert(val.cuda_kernel != nullptr);
+        xassert(key.Dout > 0);
+        xassert(val.cuda_kernel != nullptr);
 
         // Call add() in base class.
         TestPfOutput2::Registry::add(key, val, debug);
     }
 };
 
-// Instead of declaring the registry as a static global variable, we declare it as a
-// static local variable in the static member function TestPfOutput2::registry().
-// The registry will be initialized the first time that TestPfOutput2::registry()
-// is called.
-//
-// This kludge is necessary because the registry is accessed at library initialization
-// time, by callers in other source files, and source files are executed in an
-// arbitrary order.
-
 // Static member function
 TestPfOutput2::Registry &TestPfOutput2::registry()
 {
+    // Instead of declaring the registry as a static global variable, we declare it as a
+    // static local variable in the static member function TestPfOutput2::registry().
+    // The registry will be initialized the first time that TestPfOutput2::registry()
+    // is called.
+    //
+    // This kludge is necessary because the registry is accessed at library initialization
+    // time, by callers in other source files, and source files are executed in an
+    // arbitrary order.
+    
     static TestPfOutput2Registry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
@@ -840,26 +840,26 @@ void test_pf_output_microkernel()
     std::unordered_map<uint, std::pair<uint,uint>> token_mapping;
 
     for (uint s = 0; s < 4; s++) {
-	for (uint tin = 0; tin < Tin; tin++) {
-	    for (;;) {
-		uint token = ksgpu::default_rng();
-		if (token_mapping.find(token) == token_mapping.end()) {
-		    token_mapping[token] = std::pair<int,int> (s,tin);
-		    ain_cpu.at({s,tin}) = token;
-		    break;
-		}
-	    }
-	}
+        for (uint tin = 0; tin < Tin; tin++) {
+            for (;;) {
+                uint token = ksgpu::default_rng();
+                if (token_mapping.find(token) == token_mapping.end()) {
+                    token_mapping[token] = std::pair<int,int> (s,tin);
+                    ain_cpu.at({s,tin}) = token;
+                    break;
+                }
+            }
+        }
     }
 
     // Compute 'zout_cpu' (reference CPU implementation).
 
     for (uint tout = 0; tout < Tout; tout++) {
-	float zmax = -1.0e10f;
-	for (uint s = 0; s < 4; s++)
-	    for (uint tin = tout*Dout; tin < (tout+1)*Dout; tin++)
-		zmax = fmaxf(zmax, zin_cpu.at({s,tin}));
-	zout_cpu.at({tout}) = zmax;
+        float zmax = -1.0e10f;
+        for (uint s = 0; s < 4; s++)
+            for (uint tin = tout*Dout; tin < (tout+1)*Dout; tin++)
+                zmax = fmaxf(zmax, zin_cpu.at({s,tin}));
+        zout_cpu.at({tout}) = zmax;
     }
 
     // Run GPU kernel.
@@ -888,17 +888,17 @@ void test_pf_output_microkernel()
     Array<float> za_gpu({Tout}, af_uhost);
 
     for (uint tout = 0; tout < Tout; tout++) {
-	uint token = aout_gpu.at({tout});
-	
-	auto it = token_mapping.find(token);
-	if (token_mapping.find(token) == token_mapping.end())
-	    throw runtime_error("aout_gpu contains invalid token?!");
+        uint token = aout_gpu.at({tout});
+        
+        auto it = token_mapping.find(token);
+        if (token_mapping.find(token) == token_mapping.end())
+            throw runtime_error("aout_gpu contains invalid token?!");
 
-	auto [s,tin] = it->second;
-	if ((tin < tout*Dout) || (tin >= (tout+1)*Dout))
-	    throw runtime_error("tin is out-of-range?!");
+        auto [s,tin] = it->second;
+        if ((tin < tout*Dout) || (tin >= (tout+1)*Dout))
+            throw runtime_error("tin is out-of-range?!");
 
-	za_gpu.at({tout}) = zin_cpu.at({s,tin});
+        za_gpu.at({tout}) = zin_cpu.at({s,tin});
     }
 
     // Now we can compare everything.
