@@ -913,7 +913,7 @@ class PfWeightReader:
                 self.read_weights(k, w, mouter, pouter)
                 k.emit()
                 k.emit(f'// (mouter, pouter) = ({mouter}, {pouter})')
-                k.emit(f'out[({mouter} * Pouter) + {pouter}] = {w};')
+                k.emit(f'out[({mouter} * Minner * Pouter) + {pouter}] = {w};')
                 k.emit()
         
         k.emit(f'// Advance output pointer by ({32*SW}/Dcore) time samples')
