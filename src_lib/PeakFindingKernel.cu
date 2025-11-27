@@ -711,7 +711,7 @@ void test_pf_weight_reader_microkernel()
     // Output array: (Tout, Mouter*Minner, Pouter*Pinner)
     Array<float> out_cpu({Tout,Mpad,Ppad}, af_rhost | af_zero);
 
-    // Emulate PfWeightReader kernel on the CPU (eight nested for-loops!)
+    // Emulate PfWeightReader kernel on the CPU.
     for (int tbar = 0; tbar < Tbar; tbar++) {
         for (int tout = tbar*Tspec; tout < (tbar+1)*Tspec; tout++) {
             for (int mpad = 0; mpad < Mpad; mpad++) {
