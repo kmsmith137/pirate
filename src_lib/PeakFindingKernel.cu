@@ -586,6 +586,104 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
 
 
 // -------------------------------------------------------------------------------------------------
+
+
+struct ReferencePeakFindingKernel2
+{
+    FrequencySubbands fs;
+    int A;
+    int E;
+    int Tin;
+    
+    // At "level" l (where 0 <= l <= log2(E)), we have:
+    //  - nt: number of time samples in temp array (i.e. shape is (B,A,M,nt))
+    //  - t0: time index of first sample in temp array (negative multiple of min(Dcore,W))
+    //  - dt: step size (in time) of temp array
+    //  - arr: shape-(B,A,M,nt) array, downsampled by 2^l relative to toplevel array, zero-padded
+
+    long tmp_t0 = 0;  // negative, same for all levels
+    std::vector<long> tmp_nt;
+    std::vector<long> tmp_dt;
+    std::vector<ksgpu::Array<float>> tmp_arr;
+
+    // The reference kernel allocates persistent_state in the constructor (not a separate
+    // allocate() method). We just save the last (-tmp_t0) samples from the previous chunk.
+
+    ksgpu::Array<float> pstate;  // shape (B, A, M, -tmp_t0)
+    
+    // Input array has shape (A,M,Tin)
+    void _init_tmp_arrays(const ksgpu::Array<float> &in);
+    void _clear_tmp_arrays();
+};
+
+
+ReferencePeakFindingKernel2::ReferencePeakFindingKernel2()
+{
+    this->tmp_t0 = -2*E;   // small overkill
+    this->pstate = Array<float> ({B, A, M, -tmp_t0}, af_uhost | af_zero);
+}
+
+
+void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in)
+{
+    long M = fs.M;
+    long L = integer_log2(E) + 1;  // number of levels
+    
+    xassert_shape_eq(in, ({B,A,M,Tin}));
+    xassert(in.get_ncontig() >= 1);
+
+    this->tmp_t0.resize(L);
+    this->tmp_dt.resize(L);
+    this->tmp_arr.resize(L);
+        
+    for (long l = 0; l < L; l++) {
+        tmp_dt[l] = (l > 0) ? min(Dcore, pow2(l-1)) : 1;
+        tmp_nt[l] = xdiv(Tin-t0-pow2(l), tmp_dt[l]) + 1;
+        tmp_arr[l] = Array<float> ({A,M,tmp_nt[l]}, af_uhost | af_zero);
+        xassert(tmp_dt[l] + (tmp_nt[l]-1)*tmp_dt[l] + pow2(l), Tin);
+    }
+
+    // Fill l=0 (zero-prepadded)
+    Array<float> s = tmp_arr[0].slice(2, -tmp_t0, tmp_nt[0]);
+    s.fill(in);
+
+    // Downsample l -> (l+1)
+    for (long l = 0; l < L; l++) {
+        long nsrc = tmp_nt[l]
+        long ndst = tmp_nt[l+1];
+        long r = xdiv(tmp_dt[l+1], tmp_dt[l]);  // ratio of step sizes
+
+        xassert_eq(r*(ndst-1) + 2, tmp_nt[l]);
+        
+        for (long a = 0; a < A; a++) {
+            for (long m = 0; m < M; m++) {
+                float *dst = &tmp_arr.at(l+1).at({a,m,0});
+                float *src = &tmp_arr.at(l).at({a,m,0});
+                
+                for (long t = 0; t < ndst; t++)
+                    dst[t] = src[r*t] + src[r*t+1];
+            }
+        }
+    }
+}
+
+
+void ReferencePeakFindingKernel2::_peak_find(out, out_argmax, weights)
+{
+    
+}
+
+
+void ReferencePeakFindingKernel2::_clear_tmp_arrays()
+{
+    tmp_t0 = 0;
+    tmp_nt.clear();
+    tmp_dt.clear();
+    tmp_arr.clear();
+}
+
+
+// -------------------------------------------------------------------------------------------------
 //
 // TestPfWeightReader
 
