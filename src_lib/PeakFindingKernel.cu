@@ -942,6 +942,87 @@ void ReferencePeakFindingKernel2::_eval_tokens(Array<float> &out_max, const Arra
 
 // -------------------------------------------------------------------------------------------------
 //
+// GpuPeakFindingKernel2
+
+
+struct GpuPf2Registry : public GpuPeakFindingKernel2::Registry
+{
+    using Key = GpuPeakFindingKernel2::RegistryKey;
+    using Val = GpuPeakFindingKernel2::RegistryValue;
+
+    virtual void add(const Key &key, const Val &val, bool debug) override
+    {
+        // Just check that all members have been initialized.
+        // (In the future, I may add more argument checking here.)
+        
+        xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+        xassert_ge(key.subband_counts.size(), 1);
+        xassert(key.Tinner > 0);
+        xassert(key.Dout > 0);
+        xassert(key.E > 0);
+        
+        xassert(val.cuda_kernel != nullptr);
+        xassert(val.Dcore > 0);
+        
+        val.pf_weight_layout.validate();
+        
+        // Call add() in base class.
+        GpuPeakFindingKernel2::Registry::add(key, val, debug);
+    }
+};
+
+
+// Static member function
+GpuPeakFindingKernel2::Registry &GpuPeakFindingKernel2::registry()
+{
+    // Instead of declaring the registry as a static global variable, we declare it as a
+    // static local variable in the static member function GpuPeakFindingKernel2::registry().
+    // The registry will be initialized the first time that GpuPeakFindingKernel2::registry()
+    // is called.
+    //
+    // This kludge is necessary because the registry is accessed at library initialization
+    // time, by callers in other source files, and source files are executed in an
+    // arbitrary order.
+    
+    static GpuPf2Registry reg;
+    return reg;  // note: thread-safe (as of c++11)
+}
+
+bool operator==(const GpuPeakFindingKernel2::RegistryKey &k1, const GpuPeakFindingKernel2::RegistryKey &k2)
+{
+    return (k1.dtype == k2.dtype)
+        && (k1.subband_counts == k2.subband_counts)
+        && (k1.Tinner == k2.Tinner)
+        && (k1.Dout == k2.Dout)
+        && (k1.E == k2.E);
+}
+
+ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryKey &k)
+{
+    FrequencySubbands fs(k.subband_counts);
+    
+    os << "GpuPeakFindingKernel2(dtype=" << k.dtype
+       << ", rank=" << fs.pf_rank
+       << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
+       << ", Tinner=" << k.Tinner
+       << ", Dout=" << k.Dout
+       << ", E=" << k.E
+       << ", F=" << fs.F
+       << ", M=" << fs.M
+       << ")";
+    
+    return os;
+}
+
+ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryValue &v)
+{
+    os << "Dcore=" << v.Dcore;
+    return os;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // TestPfWeightReader
 
 

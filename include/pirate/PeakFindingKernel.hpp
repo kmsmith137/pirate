@@ -228,7 +228,7 @@ struct FrequencySubbands
 
     std::vector<uint> m_to_token;                      // (d,f0,f1) part of token only
     std::unordered_map<uint,long> token_to_m;          // (token & token_m_mask) -> m
-    
+
     static constexpr uint token_m_mask = 0xffffc000u;  // selects (d,f0,f1) part of token
 };
 
@@ -390,26 +390,53 @@ struct ReferencePeakFindingKernel2
 };
 
 
-#if 0
 struct GpuPeakFindingKernel2
 {
+    // -------------------- Internals start here --------------------
+
     struct RegistryKey
     {
-        ksgpu::Dtype dtype;     // either float16 or float32
+        ksgpu::Dtype dtype;   // either float16 or float32
         std::vector<long> subband_counts;  // length (rank+1)
-        long rank = -1;
-        long Dcore = 0;
         long Tinner = 0;
-        long P = 0;
+        long Dout = 0;
+        long E = 0;
     };
 
     struct RegistryValue
     {
         // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint Tin, uint WDd, uint WDt)
+        //
+        // in: shape (B*W, M, Tin)
+        // out_max: shape (B*W, Tin/Dout)
+        // out_argmax: shape (B*W, Tin/Dout)
+        // wt: complicated format (see class PfWeightLayout), Dbar=(B*W*2^pf_rank/WDd), Tbar=(Tin/WDt)
+        // pstate: (B*W, PW32) where PW32 = pstate 32-bit registers per warp
+        //
+        // WDd, WDt: coarse-graining factors for weight array.
+        // WDd must be a multiple of 2**pf_rank.
+        // If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
+        // If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.
+        // Here, SW = (128/sizeof(dtype)) is the simd width.
+
         void (*cuda_kernel)(const void *, void *, uint *, const void *, void *, uint, uint, uint) = nullptr;
+
+        int Dcore = 0;   // internal downsampling factor (see discussion above)
+
+        // Layout of peak-finding weights in GPU memory, expected by the kernel.
+        GpuPfWeightLayout pf_weight_layout;
     };
+
+    using Registry = KernelRegistry<RegistryKey, RegistryValue>;
+
+    // Static member function to access registry.
+    static Registry &registry();
 };
-#endif
+
+// Defined in PeakFindingKernel.cu
+extern bool operator==(const GpuPeakFindingKernel2::RegistryKey &k1, const GpuPeakFindingKernel2::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel2::RegistryKey &k);
+extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel2::RegistryValue &v);
 
 
 // -------------------------------------------------------------------------------------------------
