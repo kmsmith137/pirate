@@ -3,6 +3,7 @@
 #include "../include/pirate/utils.hpp"
 
 #include <mutex>
+#include <sstream>
 #include <unordered_map>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
@@ -541,6 +542,18 @@ void GpuPfWeightLayout::validate() const
 }
 
 
+vector<long> GpuPfWeightLayout::get_shape(long nbeams, long Dw, long Tw) const
+{
+    long Touter = xdiv(Tw, Tinner);   // must divide evenly
+    return { nbeams, Dw, Touter, Pouter, F, Tinner, Pinner };
+}
+
+vector<long> GpuPfWeightLayout::get_strides(long nbeams, long Dw, long Tw) const
+{
+    long Touter = xdiv(Tw, Tinner);   // must divide evenly
+    long S = xdiv(touter_byte_stride * 8, dtype.nbits);
+    return { Dw*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
+}
 
 Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
 {
@@ -548,7 +561,7 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     
     if (src.ndim != 5) {
         stringstream ss;
-        ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, Dbar, Tbar, P, F), got " << src.shape_str();
+        ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, Dw, Tw, P, F), got " << src.shape_str();
         throw runtime_error(ss.str());
     }
 
@@ -556,13 +569,12 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     xassert_eq(src.shape[4], F);
 
     long nbeams = src.shape[0];
-    long Dbar = src.shape[1];
-    long Tbar = src.shape[2];
-    long Touter = xdiv(Tbar, Tinner);   // must divide evenly
+    long Dw = src.shape[1];
+    long Tw = src.shape[2];
+    long Touter = xdiv(Tw, Tinner);   // must divide evenly
     
-    long S = xdiv(touter_byte_stride * 8, dtype.nbits);
-    vector<long> shape = { nbeams, Dbar, Touter, Pouter, F, Tinner, Pinner };
-    vector<long> strides = { Dbar*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
+    vector<long> shape = get_shape(nbeams, Dw, Tw);
+    vector<long> strides = get_strides(nbeams, Dw, Tw);
 
     // Note: code below is poorly optimized! (Intended for unit tests.)
 
@@ -570,17 +582,17 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     Array<float> tmp(shape, af_rhost | af_zero);
 
     for (long b = 0; b < nbeams; b++) {
-        for (long dbar = 0; dbar < Dbar; dbar++) {
+        for (long dw = 0; dw < Dw; dw++) {
             for (long touter = 0; touter < Touter; touter++) {
                 for (long pouter = 0; pouter < Pouter; pouter++) {
                     for (long f = 0; f < F; f++) {
                         for (long tinner = 0; tinner < Tinner; tinner++) {
                             for (long pinner = 0; pinner < Pinner; pinner++) {
-                                long tbar = touter*Tinner + tinner;
+                                long tw = touter*Tinner + tinner;
                                 long p = min(pouter*Pinner + pinner, P-1);
 
-                                float w = src.at({b,dbar,tbar,p,f});
-                                tmp.at({b,dbar,touter,pouter,f,tinner,pinner}) = w;
+                                float w = src.at({b,dw,tw,p,f});
+                                tmp.at({b,dw,touter,pouter,f,tinner,pinner}) = w;
                             }
                         }
                     }
@@ -592,8 +604,8 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     Array<void> tmp2 = tmp.convert(dtype);
     
     // Allocate GPU array with non-contiguous touter-stride.
-    Array<void> dst(dtype, shape, strides, af_gpu | af_zero);
-    
+    Array<void> dst(dtype, shape, strides, af_gpu | af_zero);    
+
     dst.fill(tmp2);  // copy CPU->GPU
     return dst;
 }
@@ -693,22 +705,23 @@ ReferencePeakFindingKernel2::ReferencePeakFindingKernel2(const PeakFindingKernel
 
 
 void ReferencePeakFindingKernel2::apply(
-    ksgpu::Array<void> &out_max_,      // shape (beams_per_batch, ndm_out, nt_out)
+    ksgpu::Array<float> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,    // shape (beams_per_batch, ndm_out, nt_out)
-    const ksgpu::Array<void> &in_,     // shape (beams_per_batch, ndm_out, M, nt_in)
-    const ksgpu::Array<void> &wt_,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F)
+    const ksgpu::Array<float> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
+    const ksgpu::Array<float> &wt,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F)
     long ibatch)
 {
-    // The reference kernel uses float32, regardless of what dtype is specified.
-    Array<float> out_max = out_max_.template cast<float> ("ReferencePeakFindingKernel2::apply(): 'out_max' array");
-    Array<float> in = in_.template cast<float> ("ReferencePeakFindingKernel2::apply(): 'in' array");
-    Array<float> wt = wt_.template cast<float> ("ReferencePeakFindingKernel2::apply(): 'wt' array");
-
     const PeakFindingKernelParams2 &p = params;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, p.fs.M, p.nt_in}));
     xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, p.fs.F}));
+    // contiguity requirements are checked in _init_tmp_arrays() and _peak_find().
+ 
+    xassert(out_max.on_host());
+    xassert(out_argmax.on_host());
+    xassert(in.on_host());
+    xassert(wt.on_host());
 
     xassert_eq(ibatch, expected_ibatch);
     expected_ibatch = (ibatch + 1) % nbatches;
@@ -945,6 +958,128 @@ void ReferencePeakFindingKernel2::_eval_tokens(Array<float> &out_max, const Arra
 // GpuPeakFindingKernel2
 
 
+GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &params_) :
+    params(params_)
+{
+    params.validate();
+
+    registry_key.dtype = params.dtype;
+    registry_key.subband_counts = params.fs.subband_counts;
+    registry_key.Dout = xdiv(params.nt_in, params.nt_out);
+    registry_key.E = params.max_kernel_width;
+
+    // Recall the definition of Tinner (from cuda_generator.PfWeightLayout):
+    //
+    //    Tinner = "number of W-array time samples per iteration of GPU tin-loop"
+    //           = max(32*SW/Dt, 1)
+    //
+    //  where SW = (4/sizeof(dtype)) is simd width
+    //        Dt = (Tin/Tw) is time downsampling factor (tree) -> (weights)
+
+    long SW = xdiv(32, params.dtype.nbits);      // simd width
+    long Dt = xdiv(params.nt_in, params.nt_wt);  // downsampling factor tree -> weights
+    registry_key.Tinner = (Dt < 32*SW) ? xdiv(32*SW, Dt) : 1;
+
+    registry_value = registry().get(registry_key);
+    
+    pf_weight_layout = registry_value.pf_weight_layout;
+    expected_wt_shape = pf_weight_layout.get_shape(params.beams_per_batch, params.ndm_out, params.nt_out);
+    expected_wt_strides = pf_weight_layout.get_strides(params.beams_per_batch, params.ndm_out, params.nt_out);
+    Dcore = registry_value.Dcore;
+
+    dtype = params.dtype;
+    Dout = xdiv(params.nt_in, params.nt_out);
+    nbatches = xdiv(params.total_beams, params.beams_per_batch);
+    nprofiles = pf_weight_layout.P;
+
+    // FIXME add bandwidth tracking later.
+    // this->bw_per_launch.nbytes_gmem = params.beams_per_batch * n * xdiv(params.dtype.nbits,8);
+    // this->bw_per_launch.kernel_launches = 1;
+}
+
+
+void GpuPeakFindingKernel2::allocate()
+{
+    if (is_allocated)
+        throw runtime_error("GpuPeakFindingKernel2: double call to allocate()");
+
+    // Allocate persistent_state. Note 'af_zero' flag here.
+    std::initializer_list<long> shape = { params.total_beams, params.ndm_out, registry_value.PW32 };
+    this->persistent_state = Array<uint> (shape, af_zero | af_gpu);
+    this->is_allocated = true;
+}
+
+
+void GpuPeakFindingKernel2::launch(
+    ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
+    ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
+    const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
+    const ksgpu::Array<void> &wt,     // from GpuPfWeightLayout::to_gpu()
+    long ibatch,                      // 0 <= ibatch < nbatches
+    cudaStream_t stream)              // NULL stream is allowed, but is not the default);
+{
+    const PeakFindingKernelParams2 &p = params;
+
+    xassert(this->is_allocated);
+    xassert(out_max.dtype == dtype);
+    xassert(in.dtype == dtype);
+    xassert(wt.dtype == dtype);
+
+    xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
+    xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
+    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, p.fs.M, p.nt_in}));
+
+    if (!wt.shape_equals(expected_wt_shape)) {
+        stringstream ss;
+        ss << "GpuPeakFindingKernel2::launch(): wt.shape=" << wt.shape_str()
+           << ", expected_wt_shape=" << ksgpu::tuple_str(expected_wt_shape);
+        throw runtime_error(ss.str());
+    }
+
+    if (!wt.strides_equal(expected_wt_strides)) {
+        stringstream ss;
+        ss << "GpuPeakFindingKernel2::launch(): wt.strides=" << wt.stride_str()
+           << ", expected_wt_strides=" << ksgpu::tuple_str(expected_wt_strides);
+        throw runtime_error(ss.str());
+    }
+
+    xassert(out_max.is_fully_contiguous());
+    xassert(out_argmax.is_fully_contiguous());
+    xassert(in.is_fully_contiguous());
+
+    xassert(out_max.on_gpu());
+    xassert(out_argmax.on_gpu());
+    xassert(in.on_gpu());
+    xassert(wt.on_gpu());
+
+    // Get 'pstate' pointer before incrementing ibatch.
+    void *pstate = &persistent_state.at({ibatch * p.beams_per_batch, 0, 0});
+
+    xassert(ibatch == expected_ibatch);
+    expected_ibatch = (ibatch + 1) % nbatches;
+
+    uint nwarps = p.beams_per_batch * p.ndm_out;
+    xassert_divisible(nwarps, 4);  // FIXME temporary restriction
+
+    dim3 nblocks = { nwarps/4, 1, 1 };
+    dim3 nthreads = { 32, 4, 1 };
+
+    // FIXME these kernel arguments are a confusing parameterization.
+    long WDd = xdiv(p.ndm_out, p.ndm_wt) << params.fs.pf_rank;
+    long WDt = xdiv(p.nt_in, p.nt_wt);
+
+    registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>> 
+       (in.data, out_max.data, out_argmax.data, wt.data, pstate, p.nt_in, WDd, WDt);
+
+    CUDA_PEEK("pf kernel launch");    
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Kernel registry.
+
+
 struct GpuPf2Registry : public GpuPeakFindingKernel2::Registry
 {
     using Key = GpuPeakFindingKernel2::RegistryKey;
@@ -963,6 +1098,7 @@ struct GpuPf2Registry : public GpuPeakFindingKernel2::Registry
         
         xassert(val.cuda_kernel != nullptr);
         xassert(val.Dcore > 0);
+        xassert(val.PW32 >= 0);
         
         val.pf_weight_layout.validate();
         
@@ -1135,28 +1271,28 @@ void test_pf_weight_reader_microkernel()
          << ", WDt=" << WDt
          << ", Tin=" << Tin << endl;
     
-    int Tbar = xdiv(Tin, WDt);     // number of time samples in weights array (input array to test kernel)
+    int Tw = xdiv(Tin, WDt);     // number of time samples in weights array (input array to test kernel)
     int Tout = xdiv(Tin, Dcore);   // number of time samples in output array of test kernel
-    int Tspec = xdiv(Tout, Tbar);  // number of "spectator" time samples in test kernel
+    int Tspec = xdiv(Tout, Tw);  // number of "spectator" time samples in test kernel
     int Mpad = val.Mouter * val.Minner;
     int Ppad = wl.Pouter * wl.Pinner;    
     
-    // Input array: (1,1,Tbar,P,F), where the length-1 axes are beams and DMs.
-    Array<float> in_cpu({1,1,Tbar,P,F}, af_rhost | af_random);
+    // Input array: (1,1,Tw,P,F), where the length-1 axes are beams and DMs.
+    Array<float> in_cpu({1,1,Tw,P,F}, af_rhost | af_random);
 
     // Output array: (Tout, Mouter*Minner, Pouter*Pinner)
     Array<float> out_cpu({Tout,Mpad,Ppad}, af_rhost | af_zero);
 
     // Emulate PfWeightReader kernel on the CPU.
-    for (int tbar = 0; tbar < Tbar; tbar++) {
-        for (int tout = tbar*Tspec; tout < (tbar+1)*Tspec; tout++) {
+    for (int tw = 0; tw < Tw; tw++) {
+        for (int tout = tw*Tspec; tout < (tw+1)*Tspec; tout++) {
             for (int mpad = 0; mpad < Mpad; mpad++) {
                 int m = min(mpad, M-1);
                 int f = fs.m_to_f.at(m);
                 
                 for (int ppad = 0; ppad < Ppad; ppad++) {
                     int p = min(ppad, P-1);
-                    out_cpu.at({tout,mpad,ppad}) = in_cpu.at({0,0,tbar,p,f});
+                    out_cpu.at({tout,mpad,ppad}) = in_cpu.at({0,0,tw,p,f});
                 }
             }
         }

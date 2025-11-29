@@ -86,7 +86,7 @@ class PeakFinder2:
         k.emit('// in: shape (B*W, M, Tin)')
         k.emit('// out_max: shape (B*W, Tin/Dout)')
         k.emit('// out_argmax: shape (B*W, Tin/Dout)')
-        k.emit('// wt: complicated format (see class PfWeightLayout), Dbar=(B*W*2^pf_rank/WDd), Tbar=(Tin/WDt)')
+        k.emit('// wt: complicated format (see class PfWeightLayout), Dw=(B*W*2^pf_rank/WDd), Tw=(Tin/WDt)')
         k.emit('// pstate: (B*W, PW32) where PW32 = pstate 32-bit registers per warp')
         k.emit('//')
         k.emit('// WDd, WDt: coarse-graining factors for weight array.')
@@ -122,7 +122,7 @@ class PeakFinder2:
 
         k.emit(f'// FIXME could optimize out integer divisions')
         k.emit(f'uint wb = blockIdx.x * blockDim.x + threadIdx.y;')
-        k.emit(f'uint dbar = wb / (WDd >> pf_rank);   // dbar index in weight array')
+        k.emit(f'uint dw = wb / (WDd >> pf_rank);   // dw index in weight array')
         k.emit(f'uint Touter = Tin / (Tinner * WDt);  // see PfWeightLayout')
         k.emit(f'{dt32} pf_a = {self.dtype.from_float("0.5f")};')
         k.emit()
@@ -131,7 +131,7 @@ class PeakFinder2:
         k.emit(f'in += wb * M * {Tin32};                    // shape (B*W, M, Tin)')
         k.emit(f'out_max += wb * {Tout32};                  // shape (B*W, Tin/Dout)')
         k.emit(f'out_argmax += wb * {Tout};                 // shape (B*W, Tin/Dout)')
-        k.emit(f'wt += dbar * Touter * wt_touter_stride32;  // shape (Dbar,Touter,...)')
+        k.emit(f'wt += dw * Touter * wt_touter_stride32;  // shape (Dw,Touter,...)')
         k.emit(f'pstate += wb * PW32;                       // shape (B*W, PW32)')        
         k.emit()
 
@@ -209,6 +209,7 @@ class PeakFinder2:
         k.emit('GpuPeakFindingKernel2::RegistryValue v;')
         k.emit(f'v.cuda_kernel = {self.kernel_name};')
         k.emit(f'v.Dcore = {self.Dcore};')
+        k.emit(f'v.PW32 = {self.PW32};')
         k.emit()
         k.emit(f'v.pf_weight_layout.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
         k.emit(f'v.pf_weight_layout.F = {fs.F};')
@@ -643,18 +644,18 @@ class PfWeightLayout:
         The W-array in global memory
         ----------------------------
         
-        The W-array is a logical 4-d array with shape (Dbar,Tbar,P,F) parameterized by:
+        The W-array is a logical 4-d array with shape (Dw,Tw,P,F) parameterized by:
         
-          - Dbar = number of coarse DMs
-          - Tbar = number of coarse time samples
+          - Dw = number of coarse DMs
+          - Tw = number of coarse time samples
           - P = number of peak-finding profiles
           - F = number of frequency subbands F
 
-        The coarse quantites (Dbar,Tbar) are related to the "fine" quantities (Dtree,Ttree)
+        The coarse quantites (Dw,Tw) are related to the "fine" quantities (Dtree,Ttree)
         in the dedispersion tree by downsampling factors (WDt,WDd):
 
-          WDd = Dtree / Dbar
-          WDt = Ttree / Tbar
+          WDd = Dtree / Dw
+          WDt = Ttree / Tw
 
         Before describing the global memory layout, a few more definitions:
 
@@ -662,15 +663,15 @@ class PfWeightLayout:
           Tinner = max(32*SW/WDt, 1)   see (*) below
           Pinner = SW                  see (**) below
 
-        Then, we split P,Tbar into "outer" and "inner" parts:
+        Then, we split P,Tw into "outer" and "inner" parts:
         
           Pouter = ceil(P / Pinner)   where Pinner = SW (**)
-          Touter = Tbar / Tinner
+          Touter = Tw / Tinner
 
         The W-array global memory layout can be described as either a 6-d or a 5-d array:
         
-           dtype          W[Dbar,Touter,Pouter,F,Tinner,Pinner]
-           dtype*Pinnner  W[Dbar,Touter,Pouter,F,Tinner]
+           dtype          W[Dw,Touter,Pouter,F,Tinner,Pinner]
+           dtype*Pinnner  W[Dw,Touter,Pouter,F,Tinner]
 
         Important note: we always pad so that the 'Touter' stride is 128-byte aligned!
         (See "self.touter_stride" below.)
