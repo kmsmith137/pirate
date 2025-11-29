@@ -2,6 +2,7 @@
 #define _PIRATE_PEAK_FINDING_KERNEL_HPP
 
 #include <vector>
+#include <unordered_map>
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
 
@@ -209,7 +210,11 @@ struct FrequencySubbands
 {
     FrequencySubbands(const std::vector<long> &subband_counts);
 
-    long pf_rank = -1;
+    // Length-(rank+1) vector, containing number of frequency subbands at each level.
+    // This vector is used as an "identifier" for frequency subbands in low-level code.
+    std::vector<long> subband_counts;   
+
+    long pf_rank = -1;  // = subband_counts.size() - 1
     long F = 0;  // number of distinct frequency subbands
     long M = 0;  // number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
 
@@ -218,9 +223,13 @@ struct FrequencySubbands
     std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
     std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
 
-    // Length-(rank+1) vector, containing number of frequency subbands at each level.
-    // This vector is used as an "identifier" for frequency subbands in low-level code.
-    std::vector<long> subband_counts;  // length (pf_rank+1);    
+    // These members are used in the peak-finding kernel, whose 'out_argmax' array consists
+    // of "tokens" of the form (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26).
+
+    std::vector<uint> m_to_token;                      // (d,f0,f1) part of token only
+    std::unordered_map<uint,long> token_to_m;          // (token & token_m_mask) -> m
+    
+    static constexpr uint token_m_mask = 0xffffc000u;  // selects (d,f0,f1) part of token
 };
 
 
@@ -281,6 +290,104 @@ struct GpuPfWeightLayout
 
 // -------------------------------------------------------------------------------------------------
 
+
+struct PeakFindingKernelParams2
+{
+    FrequencySubbands fs;  // includes pf_rank, F, M
+    ksgpu::Dtype dtype;
+
+    long max_kernel_width = 0;
+    long beams_per_batch = 0;
+    long total_beams = 0;
+
+    // Peak-finding input array has shape (beams_per_batch, ndm_out, fs.M, nt_in).
+    // Output arrays have shape (beams_per_batch, ndm_out, nt_out).
+    // Weight array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F).
+
+    long ndm_out = 0;
+    long ndm_wt = 0;
+    long nt_out = 0;
+    long nt_in = 0;
+    long nt_wt = 0;
+
+    void validate() const;  // throws an exception if anything is wrong
+};
+
+
+struct ReferencePeakFindingKernel2
+{
+    // Parameters specified at construction.
+    // params include: beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt, fs.F, fs.M  
+    PeakFindingKernelParams2 params;
+    long Dcore = 0;
+
+    // Derived parameters, computed in constructor.
+    long Dout = 0;             // = (nt_in/nt_out) = time downsampling factor of output array 
+    long nbatches = 0;         // = (total_beams / beams_per_batch)
+    long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
+
+    // Note that the reference kernel uses float32, regardless of what dtype is specified.
+    // All arrays must be fully contiguous (this could be changed if needed).
+    
+    ReferencePeakFindingKernel2(const PeakFindingKernelParams2 &params, long Dcore);
+
+    void apply(ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
+               ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
+               const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
+               const ksgpu::Array<void> &wt,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F)
+               long ibatch);
+    
+    void _init_tmp_arrays(const ksgpu::Array<float> &in, long ibatch);
+    void _peak_find(ksgpu::Array<float> &out_max, ksgpu::Array<uint> &out_argmax, const ksgpu::Array<float> &wt);
+    void _eval_tokens(ksgpu::Array<float> &out_max, const ksgpu::Array<uint> &in_tokens, const ksgpu::Array<float> &wt);
+
+    // At "level" l (where 0 <= l < log2(E)), we have an array 'tmp_arr' containing input
+    // array elements downsampled by 2^l (prepadded with data from the previous chunk).
+    //
+    //  - tmp_dt[l]: step size (in time) of temp array
+    //  - tmp_nt[l]: number of time samples in temp array
+    //  - tmp_arr[l]: array of shape is (B, D, M, tmp_nt[l]))
+    //
+    // Array element tmp_arr[l][b,d,m,j] is obtained by summing:
+    //
+    //    in[b,d,m, ilo:(ilo+2^l)]    where ilo = -tpad + j*tmp_dt[l]
+    //
+    // We also compute the following members, for convenience in computing
+    // "triggers":
+    //
+    //   - tmp_iout[l]: "base" time index in tmp_arr
+    //   - tmp_nout[l]: number of tmp time indices per output time index
+    //   - tmp_sout[l]: spacing between tmp time indices that are logically contiguous
+    //
+    // To be totally precise about what these mean, when we compute triggers
+    // for p=3*l+q and 0 <= tout < nt_out, we use a loop like this:
+    //
+    //   I = tmp_iout[l];   // base
+    //   N = tmp_nout[l];   // count
+    //   S = tmp_sout[l];   // spacing
+    //
+    //   for (n = 0; n < N; n++) {
+    //       float x_0 = tmp_arr[l][b,d,m, I + tout*N + n - (q-1)*S];
+    //       float x_1 = tmp_arr[l][b,d,m, I + tout*N + n - (q-2)*S];
+    //           ...
+    //       float x_end = tmp_arr[l][b,d,m, I + tout*N + n];
+
+    long tpad = 0;  // prepadding (in "input time samples"), same for all levels
+    long num_levels = 0;
+    long expected_ibatch = 0;  // checked in apply()
+
+    std::vector<long> tmp_dt;
+    std::vector<long> tmp_nt;
+    std::vector<long> tmp_iout;
+    std::vector<long> tmp_nout;
+    std::vector<long> tmp_sout;
+    std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, M, tmp_nt[l])
+
+    // The reference kernel allocates persistent state in the constructor (not a separate
+    // allocate() method). We just save the last (tpad) samples from the previous chunk.
+
+    ksgpu::Array<float> pstate;  // shape (total_beams, A, M, tpad)
+};
 
 
 #if 0

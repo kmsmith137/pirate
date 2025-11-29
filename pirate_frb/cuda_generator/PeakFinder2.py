@@ -98,6 +98,7 @@ class PeakFinder2:
         k.emit(f'{self.kernel_name}(const void *in_, void *out_max_, uint *out_argmax, const void *wt_, void *pstate_, uint Tin, uint WDd, uint WDt)')
         k.emit('{')
         k.emit(f'constexpr int M = {self.M};')
+        k.emit(f'constexpr int Dout = {self.Dout};')
         k.emit(f'constexpr int Dcore = {self.Dcore};')
         k.emit(f'constexpr int Tinner = {self.Tinner};')
         k.emit(f'constexpr int pf_rank = {self.pf_rank};')
@@ -362,7 +363,12 @@ class PeakFinder2:
 
     
     def _absorb_pfz(self, k, var, m, p, t):
-        """Helper for pfy_registers_ready()."""
+        """
+        Helper for pfy_registers_ready().
+        Variables named 'pfz_m{m}_p{p}' store max-values (either float or __half2)
+        Variables named 'pfiz_m{m}_p{p}' store "mini-tokens" 0 <= t < Dcore.
+        Mini-tokens are always declared 'uint', but are secretly either u32 or u16x2.
+        """
         
         pfz = f'pfz_m{m}_p{p}'
         pfiz = f'pfiz_m{m}_p{p}'
@@ -370,7 +376,7 @@ class PeakFinder2:
 
         if (m,p) not in self.pfz_decl:
             k.emit(f'{self.dt32} {pfz} = {var};')
-            k.emit(f'uint {pfiz} = 0;')
+            k.emit(f'uint {pfiz} = {t};')
             self.pfz_decl.add((m,p))
         
         elif self.dtype == 'float':
@@ -455,6 +461,11 @@ class PeakFinder2:
 
 
     def _tokenize_mp(self, k, m, p):
+        """
+        Recall that tokens are formatted as (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26).
+        This function returns everything after the (t), as an immediate (not a varname).
+        """
+
         # Token = (t) | (p << 8) | (d << 14) | (flo << 20) | (fhi << 26);
         mm = min(m, self.M-1)
         f_ix, d = self.frequency_subbands.m_to_fd[mm]
@@ -466,6 +477,20 @@ class PeakFinder2:
 
     
     def pfz_register_ready(self, k, m, p):
+        """
+        Called when the following vars are ready:
+
+          - pfz_m{m}_p{p}: stores max-values (either float or __half2)
+
+          - pfiz_m{m}_p{p}: store "mini-tokens" 0 <= t < Dcore.
+            Mini-tokens are always declared 'uint', but are secretly either u32 or u16x2.
+
+        Recall that tokens are formatted as (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26).
+        To convert a minitoken to a token, we do something like this:
+
+            token = minitoken | (threadIdx.x & (Dout-Dcore)) | _tokenize_mp(k,m,p);
+        """
+
         Minner, P = self.Minner, self.P
         
         k.emit()
@@ -474,7 +499,7 @@ class PeakFinder2:
         if self.dtype == 'float':
             k.emit(f'pfz_m{m}_p{p} *= pfw_m{m}_p{p};')
             token_mp = self._tokenize_mp(k, m, p)
-            k.emit(f'uint token_m{m}_p{p} = pfiz_m{m}_p{p} | (threadIdx.x & ~(Dcore-1)) | {token_mp};')
+            k.emit(f'uint token_m{m}_p{p} = pfiz_m{m}_p{p} | (threadIdx.x & (Dout-Dcore)) | {token_mp};')
             self.pf_output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
 
         elif (self.dtype == '__half') and ((p % 2) == 0) and (p < (P-1)):
@@ -507,10 +532,10 @@ class PeakFinder2:
             token_m1_p0 = self._tokenize_mp(k, m1, p0)
             token_m1_p1 = self._tokenize_mp(k, m1, p1)
             
-            k.emit(f'uint token_m0_p0 = (pfiz_m{m0}_p{p0} & 0x0000ffffu) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m0_p0};')
-            k.emit(f'uint token_m0_p1 = (pfiz_m{m0}_p{p1} & 0x0000ffffu) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m0_p1};')
-            k.emit(f'uint token_m1_p0 = (pfiz_m{m0}_p{p0} & 0xffff0000u) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m1_p0};')
-            k.emit(f'uint token_m1_p1 = (pfiz_m{m0}_p{p1} & 0xffff0000u) | ((threadIdx.x << 1) & ~(Dcore-1)) | {token_m1_p1};')
+            k.emit(f'uint token_m0_p0 = (pfiz_m{m0}_p{p0} & 0x0000ffffu) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m0_p0};')
+            k.emit(f'uint token_m0_p1 = (pfiz_m{m0}_p{p1} & 0x0000ffffu) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m0_p1};')
+            k.emit(f'uint token_m1_p0 = (pfiz_m{m0}_p{p0} & 0xffff0000u) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m1_p0};')
+            k.emit(f'uint token_m1_p1 = (pfiz_m{m0}_p{p1} & 0xffff0000u) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m1_p1};')
             
             self.pf_output.apply_inner(k, pfu0, [ f'token_m{m0}_p{p0}', f'token_m{m0}_p{p1}' ])
             self.pf_output.apply_inner(k, pfu1, [ f'token_m{m1}_p{p0}', f'token_m{m1}_p{p1}' ])
@@ -1071,6 +1096,12 @@ class PfOutput2:
         self.L = utils.integer_log2(Dout)
         self.SW = dtype.simd_width
         self.dt32 = dtype.simd32
+
+        # Assumed in this placeholder version of PfOutput2, but may change in the future.
+        # If it does change, then changes should be reflected in PeakFindingKernelParams2::validate()
+        # and in code that makes random unit tests.
+        assert utils.is_power_of_two(Dout)
+        assert self.SW <= Dout <= 32
 
         self.test_kernel_name = f'pf_output2_test_fp{32//self.SW}_Dout{Dout}'
         self.test_kernel_basename = self.test_kernel_name + '.cu'
