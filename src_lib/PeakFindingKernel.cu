@@ -649,13 +649,15 @@ ReferencePeakFindingKernel2::ReferencePeakFindingKernel2(const PeakFindingKernel
     params.validate();
 
     const PeakFindingKernelParams2 &p = params;
+    long B = p.beams_per_batch;
+    long D = p.ndm_out;
     long M = p.fs.M;
     long W = p.max_kernel_width;
 
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
     this->Dout = xdiv(p.nt_in, p.nt_out);
-    this->tpad = max(2*W, 4);
+    this->tpad = max(2*W, 4L);
     this->pstate = Array<float> ({p.total_beams, p.ndm_out, p.fs.M, tpad}, af_uhost | af_zero); 
     this->num_levels = max(integer_log2(W), 1);
 
@@ -686,7 +688,7 @@ ReferencePeakFindingKernel2::ReferencePeakFindingKernel2(const PeakFindingKernel
     }
 
     // Currently assumed by wraparound code in _init_tmp_arrays().
-    xassert_ge(Tin, tpad);
+    xassert_ge(p.nt_in, tpad);
 }
 
 
@@ -716,7 +718,7 @@ void ReferencePeakFindingKernel2::apply(
 }
 
 
-void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in)
+void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long ibatch)
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
@@ -733,8 +735,8 @@ void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in)
         for (long d = 0; d < D; d++) {
             for (long m = 0; m < M; m++) {
                 float *dst = &tmp_arr[0].at({b,d,m,0});  // length (Tin+tpad)
-                float *src = &in.at({b,d,m,0});          // length (Tin)
                 float *ps = &pstate.at({b0+b,d,m,0});    // length (tpad)
+                const float *src = &in.at({b,d,m,0});          // length (Tin)
 
                 for (long t = 0; t < tpad; t++)
                     dst[t] = ps[t];
@@ -785,6 +787,8 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
     long B = params.beams_per_batch;
     long D = params.ndm_out;
     long M = params.fs.M;
+    long F = params.fs.F;
+    long P = nprofiles;
     long Wds = xdiv(params.ndm_out, params.ndm_wt);  // downsampling factor ndm_out -> ndm_wt
     long Tds = xdiv(params.nt_out, params.nt_wt);    // downsampling factor nt_out -> nt_wt
     long nt_out = params.nt_out;
@@ -839,15 +843,15 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
 
                             if (P > 1) {
                                 _update_pf2(maxval, argmax, w1 * (x2 + x3), token1);
-                                _update_pf2(maxval, argmax, w2 * (0.5f*x1 + x2 + 0.5f*x3) token2);
+                                _update_pf2(maxval, argmax, w2 * (0.5f*x1 + x2 + 0.5f*x3), token2);
                                 _update_pf2(maxval, argmax, w3 * (0.5f*x0 + x1 + x2 + 0.5f*x3), token3);
                             }
                         }
                     }
                 }
 
-                out_max.at({b,d,t}) = maxval;
-                out_argmax.at({b,d,t}) = argmax;
+                out_max.at({b,d,tout}) = maxval;
+                out_argmax.at({b,d,tout}) = argmax;
             }
         }
     }
@@ -867,7 +871,7 @@ void ReferencePeakFindingKernel2::_eval_tokens(Array<float> &out_max, const Arra
     long nt_out = params.nt_out;
 
     xassert_shape_eq(out_max, ({B,D,nt_out}));
-    xassert_shape_eq(out_argmax, ({B,D,nt_out}));
+    xassert_shape_eq(in_tokens, ({B,D,nt_out}));
     xassert_shape_eq(wt, ({B, params.ndm_wt, params.nt_wt, P, F}));
     xassert(wt.get_ncontig() >= 2);  // (p,f) must be contiguous
 
