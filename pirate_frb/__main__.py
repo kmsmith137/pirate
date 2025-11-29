@@ -102,17 +102,17 @@ def parse_time(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
     parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (only for time_cpu_downsample)")
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
-    parser.add_argument('--cd', action='store_true', help='Runs time_cpu_downsample()')
-    parser.add_argument('--gd', action='store_true', help='Runs time_gpu_downsample()')
-    parser.add_argument('--gt', action='store_true', help='Runs time_gpu_transpose()')
+    # parser.add_argument('--cd', action='store_true', help='Runs time_cpu_downsample()')
+    # parser.add_argument('--gd', action='store_true', help='Runs time_gpu_downsample()')
+    # parser.add_argument('--gt', action='store_true', help='Runs time_gpu_transpose()')
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
     parser.add_argument('--gpfk', action='store_true', help='Runs time_gpu_peak_finding_kernels()')
-    parser.add_argument('--casm', action='store_true', help='Time casm beamformer')
-    
+    parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
+    parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
     
 def time(args):
-    timing_flags = [ 'cd', 'gd', 'gt', 'gldk', 'gddk', 'gpfk', 'casm' ]
+    timing_flags = [ 'gldk', 'gddk', 'gpfk', 'casm', 'zomb' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -125,12 +125,6 @@ def time(args):
     ksgpu.set_cuda_device(args.gpu)
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
         
-    if run_all_timings or args.cd:
-        pirate_pybind11.time_cpu_downsample(nthreads)
-    if run_all_timings or args.gd:
-        pirate_pybind11.time_gpu_downsample()
-    if run_all_timings or args.gt:
-        pirate_pybind11.time_gpu_transpose()
     if run_all_timings or args.gldk:
         pirate_pybind11.time_gpu_lagged_downsampling_kernels()
     if run_all_timings or args.gddk:
@@ -139,6 +133,10 @@ def time(args):
         pirate_pybind11.time_gpu_peak_finding_kernels()
     if run_all_timings or args.casm:
         pirate_pybind11.CasmBeamformer.run_timings(args.ncu)
+    if run_all_timings or args.zomb:
+        pirate_pybind11.time_cpu_downsample(nthreads)
+        pirate_pybind11.time_gpu_downsample()
+        pirate_pybind11.time_gpu_transpose()
 
 
 #####################################   show_hardware command  #####################################

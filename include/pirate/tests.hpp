@@ -38,13 +38,6 @@ extern void test_gpu_tree_gridding_kernel();
 extern void test_dedisperser(const DedispersionConfig &config, int nchunks);
 extern void test_dedisperser();
 
-// "Zombie" tests (code that I wrote during protoyping that may never get used)
-extern void test_avx2_m64_outbuf();
-extern void test_cpu_downsampler();
-extern void test_gpu_downsample();
-extern void test_gpu_transpose();
-extern void test_gpu_reduce2();
-
 
 }  // namespace pirate
 

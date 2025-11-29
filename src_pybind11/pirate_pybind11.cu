@@ -18,6 +18,9 @@
 #include "../include/pirate/timing.hpp"
 #include "../include/pirate/utils.hpp"  // show_kernels()
 
+#include "../include/pirate/loose_ends/tests.hpp"
+#include "../include/pirate/loose_ends/timing.hpp"
+
 using namespace std;
 using namespace ksgpu;
 using namespace pirate;

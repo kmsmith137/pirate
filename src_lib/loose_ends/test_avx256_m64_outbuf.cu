@@ -1,10 +1,10 @@
 #include <iostream>
 #include <ksgpu/Array.hpp>
 
-#include "../include/pirate/loose_ends/m64_outbuf.hpp"
-#include "../include/pirate/loose_ends/avx256_downsample.hpp"
-#include "../include/pirate/loose_ends/bitvec.hpp"
-#include "../include/pirate/tests.hpp"
+#include "../../include/pirate/loose_ends/m64_outbuf.hpp"
+#include "../../include/pirate/loose_ends/avx256_downsample.hpp"
+#include "../../include/pirate/loose_ends/bitvec.hpp"
+#include "../../include/pirate/loose_ends/tests.hpp"
 
 using namespace std;
 using namespace ksgpu;

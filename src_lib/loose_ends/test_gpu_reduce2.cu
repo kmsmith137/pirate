@@ -1,8 +1,8 @@
 #include <iostream>
 #include <ksgpu.hpp>
 
-#include "../include/pirate/loose_ends/reduce2.hpp"
-#include "../include/pirate/tests.hpp"
+#include "../../include/pirate/loose_ends/reduce2.hpp"
+#include "../../include/pirate/loose_ends/tests.hpp"
 
 using namespace std;
 using namespace ksgpu;

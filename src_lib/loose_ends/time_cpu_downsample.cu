@@ -7,8 +7,8 @@
 #include <ksgpu/time_utils.hpp>
 #include <ksgpu/xassert.hpp>
 
-#include "../include/pirate/timing.hpp"
-#include "../include/pirate/loose_ends/cpu_downsample.hpp"
+#include "../../include/pirate/loose_ends/timing.hpp"
+#include "../../include/pirate/loose_ends/cpu_downsample.hpp"
 
 using namespace std;
 using namespace ksgpu;
