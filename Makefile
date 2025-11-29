@@ -113,7 +113,6 @@ LIB_SRCFILES = \
   src_lib/system_utils.cu \
   src_lib/test_dedisperser.cu \
   src_lib/test_dedispersion_basics.cu \
-  src_lib/test_gpu_dedispersion_kernels.cu \
   src_lib/test_gpu_lagged_downsampler.cu \
   src_lib/test_gpu_peak_finding_kernel.cu \
   src_lib/test_gpu_ringbuf_copy_kernel.cu \

@@ -22,9 +22,6 @@ extern void test_dedispersion_basics();
 // test_gpu_lagged_downsampler.cu
 extern void test_gpu_lagged_downsampling_kernel();
 
-// test_gpu_dedispersion_kernels.cu
-extern void test_gpu_dedispersion_kernels();
-
 // test_gpu_ringbuf_copy_kernel.cu
 extern void test_gpu_ringbuf_copy_kernel();
 

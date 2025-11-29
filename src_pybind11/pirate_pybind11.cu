@@ -11,6 +11,7 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/CasmBeamformer.hpp"
+#include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
@@ -129,13 +130,16 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def("stop", &FakeServer::stop)
     ;
 
+    py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
+          .def_static("test", &GpuDedispersionKernel::test)
+    ;
+
     py::class_<GpuPeakFindingKernel2>(m, "GpuPeakFindingKernel")
           .def_static("test", &GpuPeakFindingKernel2::test, py::arg("short_circuit") = false)
     ;
 
     m.def("test_dedispersion_basics", &test_dedispersion_basics);
     m.def("test_gpu_lagged_downsampling_kernel", &test_gpu_lagged_downsampling_kernel);
-    m.def("test_gpu_dedispersion_kernels", &test_gpu_dedispersion_kernels);
     m.def("test_gpu_peak_finding_kernel", &test_gpu_peak_finding_kernel, py::arg("reduce_only"));
     m.def("test_gpu_ringbuf_copy_kernel", &test_gpu_ringbuf_copy_kernel);
     m.def("test_gpu_tree_gridding_kernel", &test_gpu_tree_gridding_kernel);

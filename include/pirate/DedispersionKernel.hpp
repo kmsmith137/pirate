@@ -335,6 +335,9 @@ public:
 
     // Static member function to access registry.
     static Registry &registry();
+
+    // Static member function: runs one randomized test iteration.
+    static void test();
 };
 
 

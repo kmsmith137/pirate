@@ -96,6 +96,41 @@ namespace pirate {
 - Document array shapes in comments: `// shape (B, D, M, T)`
 - Keep lines under ~120 characters when reasonable
 
+## Testing Pattern
+
+GPU kernel classes have a static `test()` method:
+```cpp
+// In header (DedispersionKernel.hpp)
+class GpuDedispersionKernel {
+    static void test();
+};
+
+// In implementation (GpuDedispersionKernel.cu)
+namespace {  // anonymous namespace for test helpers
+    struct TestHelper { ... };
+    static void run_test(...) { ... }
+}
+
+void GpuDedispersionKernel::test() {
+    TestHelper t;
+    t.randomize();
+    run_test(t);
+}
+```
+
+Test helpers go in anonymous namespace to avoid cluttering headers.
+
+## Python Interface (pybind11)
+
+Classes are exported in `src_pybind11/pirate_pybind11.cu`:
+```cpp
+py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
+    .def_static("test", &GpuDedispersionKernel::test);
+```
+
+Python CLI: `python -m pirate_frb test --gddk` runs `GpuDedispersionKernel.test()`.
+The `--help` flag shows all available test flags.
+
 ## What to do, and not to do
 
 - Please feel free to ask me questions in the slack if my instructions are incomplete
