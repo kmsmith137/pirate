@@ -208,6 +208,7 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::Re
 // FIXME relocate this to a different .hpp?
 struct FrequencySubbands
 {
+    FrequencySubbands() { }
     FrequencySubbands(const std::vector<long> &subband_counts);
 
     // Length-(rank+1) vector, containing number of frequency subbands at each level.
@@ -332,13 +333,25 @@ struct ReferencePeakFindingKernel2
     // The reference kernel uses float32, regardless of what dtype is specified.
     void apply(ksgpu::Array<float> &out_max,     // shape (beams_per_batch, ndm_out, nt_out)
                ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-               const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, M, nt_in)
-               const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F)
+               const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, params.fs.M, nt_in)
+               const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
                long ibatch);
-    
+
+    void eval_tokens(ksgpu::Array<float> &out_max,  // shape (beams_per_batch, ndm_out, nt_out)
+        const ksgpu::Array<uint> &in_tokens,        // shape (beams_per_batch. ndm_out, params.fs.M, nt_out)
+        const ksgpu::Array<float> &wt);             // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
+
+    // Make a mean-zero input array for testing.
+    // Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
+    ksgpu::Array<float> make_random_input_array();
+
+    // Make an interesting weights array for testing.
+    // Returns shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
+    ksgpu::Array<float> make_random_weights();
+
+    // FIXME absorb these into apply()
     void _init_tmp_arrays(const ksgpu::Array<float> &in, long ibatch);
     void _peak_find(ksgpu::Array<float> &out_max, ksgpu::Array<uint> &out_argmax, const ksgpu::Array<float> &wt);
-    void _eval_tokens(ksgpu::Array<float> &out_max, const ksgpu::Array<uint> &in_tokens, const ksgpu::Array<float> &wt);
 
     // At "level" l (where 0 <= l < log2(E)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).
@@ -401,7 +414,9 @@ struct GpuPeakFindingKernel2
                 const ksgpu::Array<void> &wt,     // from GpuPfWeightLayout::to_gpu()
                 long ibatch,                      // 0 <= ibatch < nbatches
                 cudaStream_t stream);             // NULL stream is allowed, but is not the default);
-    
+
+    static void test(bool short_circuit=false);
+
     // ------------------------  Members  ------------------------
 
     PeakFindingKernelParams2 params;
@@ -423,8 +438,6 @@ struct GpuPeakFindingKernel2
     ksgpu::Array<uint> persistent_state;  // shape (total_beams, ndm_out, registry_value.PW32)
     bool is_allocated = false;
     long expected_ibatch = 0;
-
-    static void test();
 
     // -------------------- Internals start here --------------------
 

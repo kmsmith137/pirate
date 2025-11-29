@@ -26,7 +26,7 @@ def parse_test(subparsers):
     parser.add_argument('--pfom', action='store_true', help='Runs test_pf_output_microkernel()')
     parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel()')
     parser.add_argument('--gddk', action='store_true', help='Runs test_gpu_dedispersion_kernels()')
-    parser.add_argument('--gpfk', action='store_true', help='Runs test_gpu_peak_finding_kernel()')
+    parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test()')
     parser.add_argument('--grck', action='store_true', help='Runs test_gpu_ringbuf_copy_kernel()')
     parser.add_argument('--gtgk', action='store_true', help='Runs test_gpu_tree_gridding_kernel()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
@@ -65,7 +65,7 @@ def test(args):
             # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
             # runs every kernel a few times. Currently there are 66 precompiled kernels.
             for _ in range(5):
-                pirate_pybind11.test_gpu_peak_finding_kernel(reduce_only=False)
+                pirate_pybind11.GpuPeakFindingKernel.test(short_circuit=True)
         
         if run_all_tests or args.grck:
             pirate_pybind11.test_gpu_ringbuf_copy_kernel()

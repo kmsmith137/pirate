@@ -872,7 +872,7 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
 
 
 // Note that an 'in' array is not an argument -- this function uses the contents of 'tmp_arr'.
-void ReferencePeakFindingKernel2::_eval_tokens(Array<float> &out_max, const Array<uint> &in_tokens, const Array<float> &wt)
+void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array<uint> &in_tokens, const Array<float> &wt)
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
@@ -950,6 +950,64 @@ void ReferencePeakFindingKernel2::_eval_tokens(Array<float> &out_max, const Arra
             }
         }
     }
+}
+
+// Make a mean-zero input array for testing.
+// Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
+Array<float> ReferencePeakFindingKernel2::make_random_input_array()
+{
+    long B = params.beams_per_batch;
+    long D = params.ndm_out;
+    long M = params.fs.M;
+    long T = params.nt_in;
+
+    Array<float> ret({B,D,M,T}, af_rhost);
+    for (long i = 0; i < ret.size; i++)
+        ret.data[i] = rand_uniform(-1.0f, 1.0f);
+
+    return ret;
+}
+
+// Make an "interesting" weights array for testing.
+// Returned array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F).
+Array<float> ReferencePeakFindingKernel2::make_random_weights()
+{
+    long B = params.beams_per_batch;
+    long D = params.ndm_wt;
+    long T = params.nt_wt;
+    long F = params.fs.F;
+    long P = nprofiles;
+    xassert_eq(P, 3*(P/3)+1);
+
+    vector<float> var_p(P);
+    vector<float> irms_fp(F*P);  // shape (F,P)
+    Array<float> ret({B,D,T,F,P}, af_rhost);
+
+    var_p[0] = 1.0f;
+    for (long l = 0; l < (P/3); l++) {
+        var_p[3*l+1] = 2.0f * pow2(l);
+        var_p[3*l+2] = 1.5f * pow2(l);
+        var_p[3*l+3] = 2.5f * pow2(l);
+    }
+
+    for (long f = 0; f < F; f++) {
+        long ilo = params.fs.f_to_ilo[f];
+        long ihi = params.fs.f_to_ihi[f];
+
+        for (long p = 0; p < P; p++)
+            irms_fp[f*P+p] = rsqrtf((ihi-ilo) * var_p[p]);
+    }
+
+    long nouter = B*D*T;
+    long ninner = F*P;
+
+    for (long i = 0; i < nouter; i++) {
+        float p0 = 1.0f;  // rand_uniform();  FIXME setting p0=1
+        for (long j = 0; j < ninner; j++)
+            ret.data[i*ninner + j] = (rand_uniform() < p0) ? (irms_fp[j] * rand_uniform()) : 0.0f;
+    }
+
+    return ret;
 }
 
 
@@ -1058,13 +1116,12 @@ void GpuPeakFindingKernel2::launch(
     xassert(ibatch == expected_ibatch);
     expected_ibatch = (ibatch + 1) % nbatches;
 
+    // FIXME using 1 warp/threadblock for now! Not totally trivial to fix.
     uint nwarps = p.beams_per_batch * p.ndm_out;
-    xassert_divisible(nwarps, 4);  // FIXME temporary restriction
+    dim3 nblocks = { nwarps, 1, 1 };
+    dim3 nthreads = { 32, 1, 1 };
 
-    dim3 nblocks = { nwarps/4, 1, 1 };
-    dim3 nthreads = { 32, 4, 1 };
-
-    // FIXME these kernel arguments are a confusing parameterization.
+    // FIXME this parameterization is confusing.
     long WDd = xdiv(p.ndm_out, p.ndm_wt) << params.fs.pf_rank;
     long WDt = xdiv(p.nt_in, p.nt_wt);
 
@@ -1072,6 +1129,93 @@ void GpuPeakFindingKernel2::launch(
        (in.data, out_max.data, out_argmax.data, wt.data, pstate, p.nt_in, WDd, WDt);
 
     CUDA_PEEK("pf kernel launch");    
+}
+
+
+// Static member function
+void GpuPeakFindingKernel2::test(bool short_circuit)
+{
+    RegistryKey key = registry().get_random_key();
+    long simd_width = xdiv(32, key.dtype.nbits);
+    long Tinner = key.Tinner;
+
+    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : (32 * simd_width * rand_int(1,5));
+    long nt_in = max(32*simd_width, nt_in_per_wt) * rand_int(1,5);
+    long nchunks = 1;  // FIXME
+    // FIXME use chunks and increase nt!
+
+    PeakFindingKernelParams2 params;
+    params.fs = FrequencySubbands(key.subband_counts);
+    params.dtype = key.dtype;
+    params.max_kernel_width = key.E;
+    params.beams_per_batch = 1;  // FIXME using 1 beam for now!
+    params.total_beams = 1;      // FIXME using 1 beam for now!
+    params.ndm_out = 1;          // FIXME using 1 DM for now!
+    params.ndm_wt = 1;           // FIXME using 1 DM for now!
+    params.nt_in = nt_in;
+    params.nt_out = xdiv(nt_in, key.Dout);
+    params.nt_wt = xdiv(nt_in, nt_in_per_wt);
+    params.validate();
+
+    // Output arrays have shape (B,D,T)
+    Dtype dtype = params.dtype;
+    long B = params.beams_per_batch;
+    long D = params.ndm_out;
+    long T = params.nt_out;
+
+    GpuPeakFindingKernel2 gpu_kernel(params);   // just test constructor for now
+    ReferencePeakFindingKernel2 ref_kernel(params, gpu_kernel.Dcore);
+
+    // Not all params are listed, to avoid this line being too long!
+    cout << "GpuPeakFindingKernel2::test():"
+         << " dtype=" << params.dtype.str() 
+         << ", subbands=" << ksgpu::tuple_str(key.subband_counts)
+         << ", W=" << params.max_kernel_width
+         << ", Dcore=" << gpu_kernel.Dcore
+         << ", Dout=" << key.Dout
+         << ", ndm_out=" << params.ndm_out
+         << ", ndm_wt=" << params.ndm_wt
+         << ", nt_in=" << nt_in
+         << ", nt_out=" << params.nt_out
+         << ", nt_wt=" << params.nt_wt
+         << endl;
+    
+    for (long ichunk = 0; ichunk < nchunks; ichunk++) {
+        for (long ibatch = 0; ibatch < ref_kernel.nbatches; ibatch++) {
+            Array<float> cpu_in = ref_kernel.make_random_input_array();
+            Array<float> cpu_wt = ref_kernel.make_random_weights();
+
+            Array<float> cpu_out_max({B,D,T}, af_rhost | af_zero);
+            Array<uint> cpu_out_argmax({B,D,T}, af_rhost | af_zero);
+            ref_kernel.apply(cpu_out_max, cpu_out_argmax, cpu_in, cpu_wt, ibatch);
+
+            // This is a nontrivial test of the reference peak-finder,
+            // but does not test the GPU peak-finder.
+            Array<float> cpu_out_max2({B,D,T}, af_rhost | af_zero);
+            ref_kernel.eval_tokens(cpu_out_max2, cpu_out_argmax, cpu_wt);
+            assert_arrays_equal(cpu_out_max, cpu_out_max2, "cpu_out_max", "cpu_out_max2", {"b","d","t"});
+
+            if (short_circuit) {
+                cout << "XXX short-circuiting!!" << endl;
+                continue;
+            }
+            
+            Array<void> gpu_in = cpu_in.convert(params.dtype);
+            gpu_in = gpu_in.to_gpu();
+
+            Array<void> gpu_wt = cpu_wt.convert(params.dtype);
+            gpu_wt = gpu_wt.to_gpu();
+
+            Array<void> gpu_out_max(dtype, {B,D,T}, af_gpu | af_zero | af_guard);
+            Array<uint> gpu_out_argmax({B,D,T}, af_gpu | af_zero | af_guard);
+            gpu_kernel.launch(gpu_out_max, gpu_out_argmax, gpu_in, gpu_wt, ibatch, NULL);
+
+            gpu_out_argmax = gpu_out_argmax.to_host();
+            Array<float> gpu_out_max2({B,D,T}, af_rhost | af_zero);
+            ref_kernel.eval_tokens(gpu_out_max2, gpu_out_argmax, cpu_wt);
+            assert_arrays_equal(cpu_out_max, gpu_out_max2, "cpu_out_max", "gpu_out_max2", {"b","d","t"});
+        }
+    }
 }
 
 

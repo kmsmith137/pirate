@@ -126,6 +126,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def("stop", &FakeServer::stop)
     ;
 
+    py::class_<GpuPeakFindingKernel2>(m, "GpuPeakFindingKernel")
+          .def_static("test", &GpuPeakFindingKernel2::test, py::arg("short_circuit") = false)
+    ;
+
     m.def("test_dedispersion_basics", &test_dedispersion_basics);
     m.def("test_gpu_lagged_downsampling_kernel", &test_gpu_lagged_downsampling_kernel);
     m.def("test_gpu_dedispersion_kernels", &test_gpu_dedispersion_kernels);
