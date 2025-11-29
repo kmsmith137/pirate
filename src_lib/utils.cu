@@ -279,14 +279,17 @@ void dedisperse_non_incremental(Array<float> &arr, long nspec)
 // FIXME: put this somewhere else?
 void show_kernels()
 {
+    cout << "\nUnit-testing the PfOutput microkernel:\n";
+    TestPfOutput2::registry().show();
+
     cout << "Dedispersion kernel registry:\n";
     GpuDedispersionKernel::registry().show();
 
     cout << "\nPeak-finding kernel registry:\n";
     GpuPeakFindingKernel::registry().show();
 
-    cout << "\nFor unit-testing the PfOutput microkernel:\n";
-    TestPfOutput2::registry().show();
+    cout << "\nPeak-finding kernel registry, part 2:\n";
+    GpuPeakFindingKernel2::registry().show();
 }
 
 

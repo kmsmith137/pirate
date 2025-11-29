@@ -421,10 +421,10 @@ struct GpuPeakFindingKernel2
 
         void (*cuda_kernel)(const void *, void *, uint *, const void *, void *, uint, uint, uint) = nullptr;
 
-        int Dcore = 0;   // internal downsampling factor (see discussion above)
-
         // Layout of peak-finding weights in GPU memory, expected by the kernel.
         GpuPfWeightLayout pf_weight_layout;
+
+        int Dcore = 0;   // internal downsampling factor (see discussion above)
     };
 
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;
