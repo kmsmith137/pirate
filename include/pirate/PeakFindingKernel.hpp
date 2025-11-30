@@ -208,7 +208,6 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::Re
 // FIXME relocate this to a different .hpp?
 struct FrequencySubbands
 {
-    FrequencySubbands() { }
     FrequencySubbands(const std::vector<long> &subband_counts);
 
     // Length-(rank+1) vector, containing number of frequency subbands at each level.
@@ -231,6 +230,8 @@ struct FrequencySubbands
     std::unordered_map<uint,long> token_to_m;          // (token & token_m_mask) -> m
 
     static constexpr uint token_m_mask = 0xffffc000u;  // selects (d,f0,f1) part of token
+
+    static void validate_subband_counts(const std::vector<long> &subband_counts);
 };
 
 
@@ -292,7 +293,7 @@ struct GpuPfWeightLayout
 
 struct PeakFindingKernelParams2
 {
-    FrequencySubbands fs;  // includes pf_rank, F, M
+    std::vector<long> subband_counts;   // same meaning as FrequencySubbands.subband_counts
     ksgpu::Dtype dtype;
 
     long max_kernel_width = 0;
@@ -316,8 +317,8 @@ struct PeakFindingKernelParams2
 struct ReferencePeakFindingKernel2
 {
     // Parameters specified at construction.
-    // params include: beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt, fs.F, fs.M  
-    PeakFindingKernelParams2 params;
+    PeakFindingKernelParams2 params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
+    FrequencySubbands fs;             // pf_rank, F, M
     long Dcore = 0;
 
     // Derived parameters, computed in constructor.
@@ -419,7 +420,8 @@ struct GpuPeakFindingKernel2
 
     // ------------------------  Members  ------------------------
 
-    PeakFindingKernelParams2 params;
+    PeakFindingKernelParams2 params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
+    FrequencySubbands fs;             // pf_rank, F, M
 
     // Derived parameters chosen by the kernel.
     GpuPfWeightLayout pf_weight_layout;     // layout of peak-finding weights in GPU memory

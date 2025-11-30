@@ -466,24 +466,13 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryValue &v)
 FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
     subband_counts(subband_counts_)
 {
+    validate_subband_counts(subband_counts);
+
     this->pf_rank = subband_counts.size() - 1;
     this->F = 0;
     this->M = 0;
     
-    xassert_ge(subband_counts.size(), 1);
-    xassert_eq(subband_counts.at(pf_rank), 1);  // must search full band
-
-    // Currently, pf_rank=4 is max value supported by the peak-finding kernel,
-    // so a larger value would indicate a bug (such as using the total tree rank
-    // instead of the peak-finding rank).
-    xassert_le(pf_rank, 4);
-
     for (long level = 0; level <= pf_rank; level++) {
-        // Level 0 is special (non-overlapping bands).
-        long max_bands = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
-        xassert_ge(subband_counts.at(level), 0);
-        xassert_le(subband_counts.at(level), max_bands);
-
         for (long b = 0; b < subband_counts.at(level); b++) {
             long s = pow2(max(level-1,0L));   // spacing between bands
             long f = this->F;                 // current value
@@ -517,6 +506,29 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
         this->m_to_token.push_back(token);
         this->token_to_m[token] = m;
     }
+}
+
+
+// Static member function
+void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband_counts)
+{
+    long pf_rank = subband_counts.size() - 1;
+
+    xassert(subband_counts.size() > 0);
+    xassert_eq(subband_counts.at(pf_rank), 1);  // must search full band
+    
+    // Currently, pf_rank=4 is max value supported by the peak-finding kernel,
+    // so a larger value would indicate a bug (such as using the total tree rank
+    // instead of the peak-finding rank).
+    if (pf_rank > 4)
+        throw std::runtime_error("FrequencySubbands: max allowed pf_rank is 4. This may change in the future.");
+    
+    for (long level = 0; level <= pf_rank; level++) {
+        // Level 0 is special (non-overlapping bands).
+        long max_bands = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
+        xassert_ge(subband_counts.at(level), 0);
+        xassert_le(subband_counts.at(level), max_bands);
+    }        
 }
 
 
@@ -618,8 +630,9 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
 
 void PeakFindingKernelParams2::validate() const
 {
+    FrequencySubbands::validate_subband_counts(subband_counts);
+    
     // Check that everything is initialized.
-    xassert(fs.subband_counts.size() > 0);
     xassert(max_kernel_width > 0);
     xassert(beams_per_batch > 0);
     xassert(total_beams > 0);
@@ -656,21 +669,21 @@ void PeakFindingKernelParams2::validate() const
 
 
 ReferencePeakFindingKernel2::ReferencePeakFindingKernel2(const PeakFindingKernelParams2 &params_, long Dcore_) :
-    params(params_), Dcore(Dcore_)
+    params(params_), fs(params_.subband_counts), Dcore(Dcore_)
 {
     params.validate();
 
     const PeakFindingKernelParams2 &p = params;
     long B = p.beams_per_batch;
     long D = p.ndm_out;
-    long M = p.fs.M;
     long W = p.max_kernel_width;
+    long M = fs.M;
 
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
     this->Dout = xdiv(p.nt_in, p.nt_out);
     this->tpad = max(2*W, 4L);
-    this->pstate = Array<float> ({p.total_beams, p.ndm_out, p.fs.M, tpad}, af_uhost | af_zero); 
+    this->pstate = Array<float> ({p.total_beams, p.ndm_out, fs.M, tpad}, af_uhost | af_zero); 
     this->num_levels = max(integer_log2(W), 1);
 
     xassert(Dcore > 0);
@@ -714,8 +727,8 @@ void ReferencePeakFindingKernel2::apply(
     const PeakFindingKernelParams2 &p = params;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
-    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, p.fs.M, p.nt_in}));
-    xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, p.fs.F}));
+    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, p.nt_in}));
+    xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, fs.F}));
     // contiguity requirements are checked in _init_tmp_arrays() and _peak_find().
  
     xassert(out_max.on_host());
@@ -733,11 +746,11 @@ void ReferencePeakFindingKernel2::apply(
 
 void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long ibatch)
 {
+    long nt_in = params.nt_in;
     long B = params.beams_per_batch;
     long D = params.ndm_out;
-    long M = params.fs.M;
-    long nt_in = params.nt_in;
-    long b0 = ibatch * params.beams_per_batch;
+    long b0 = ibatch * B;
+    long M = fs.M;
 
     xassert_shape_eq(in, ({B,D,M,nt_in}));
     xassert(in.get_ncontig() >= 1);
@@ -799,16 +812,17 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
-    long M = params.fs.M;
-    long F = params.fs.F;
     long P = nprofiles;
+    long M = fs.M;
+    long F = fs.F;
+
     long Wds = xdiv(params.ndm_out, params.ndm_wt);  // downsampling factor ndm_out -> ndm_wt
     long Tds = xdiv(params.nt_out, params.nt_wt);    // downsampling factor nt_out -> nt_wt
     long nt_out = params.nt_out;
 
     xassert_shape_eq(out_max, ({B,D,nt_out}));
     xassert_shape_eq(out_argmax, ({B,D,nt_out}));
-    xassert_shape_eq(wt, ({B, params.ndm_wt, params.nt_wt, nprofiles, params.fs.F}));
+    xassert_shape_eq(wt, ({B, params.ndm_wt, params.nt_wt, nprofiles, fs.F}));
     xassert(wt.get_ncontig() >= 2);  // (p,f) must be contiguous
 
     for (long b = 0; b < B; b++) {
@@ -831,7 +845,7 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
                     int I = tmp_iout[l];    // base
 
                     for (int m = 0; m < M; m++) {
-                        int f = params.fs.m_to_f[m];
+                        int f = fs.m_to_f[m];
                         float w0 = l ? 0.0f : wp[f];      // p = 0 (only for l=0)
                         float w1 = wp[(3*l+1)*F + f];     // p = (3*l+1)
                         float w2 = wp[(3*l+2)*F + f];     // p = (3*l+2)
@@ -846,7 +860,7 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
                             float x2 = in[I + tout*N + n - S];
                             float x3 = in[I + tout*N + n];
 
-                            uint token0 = params.fs.m_to_token[m] | (n*dt);  // includes (m,n) but not p
+                            uint token0 = fs.m_to_token[m] | (n*dt);  // includes (m,n) but not p
                             uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
                             uint token2 = token0 | ((3*l+2) << 8);    // include p=3*l+2
                             uint token3 = token0 | ((3*l+3) << 8);    // include p=3*l+3
@@ -876,8 +890,8 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
-    long M = params.fs.M;
-    long F = params.fs.F;
+    long M = fs.M;
+    long F = fs.F;
     long P = nprofiles;
     long Wds = xdiv(params.ndm_out, params.ndm_wt);  // downsampling factor ndm_out -> ndm_wt
     long Tds = xdiv(params.nt_out, params.nt_wt);    // downsampling factor nt_out -> nt_wt
@@ -897,8 +911,8 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 // Token parsing starts here.
                 // Reminder: token = (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26)
 
-                auto it = params.fs.token_to_m.find(token & FrequencySubbands::token_m_mask);
-                if (it == params.fs.token_to_m.end())
+                auto it = fs.token_to_m.find(token & FrequencySubbands::token_m_mask);
+                if (it == fs.token_to_m.end())
                     throw runtime_error("ReferencePeakFindingKernel2::_eval_tokens(): bad token (m-value)");
 
                 long m = it->second;
@@ -925,7 +939,7 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
 
                 // Token parsing (token -> (m,n,p)) ends here!
 
-                long f = params.fs.m_to_f.at(m);
+                long f = fs.m_to_f.at(m);
                 long w = wt.at({b, d/Wds, tout/Tds, p, f});
 
                 int N = tmp_nout[l];       // count
@@ -953,14 +967,13 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
 }
 
 // Make a mean-zero input array for testing.
-// Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
+// Returns shape (nbeams_per_batch, ndm_out, fs.M, nt_in)
 Array<float> ReferencePeakFindingKernel2::make_random_input_array()
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
-    long M = params.fs.M;
     long T = params.nt_in;
-
+    long M = fs.M;
     Array<float> ret({B,D,M,T}, af_rhost);
     for (long i = 0; i < ret.size; i++)
         ret.data[i] = rand_uniform(-1.0f, 1.0f);
@@ -975,8 +988,8 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
     long B = params.beams_per_batch;
     long D = params.ndm_wt;
     long T = params.nt_wt;
-    long F = params.fs.F;
     long P = nprofiles;
+    long F = fs.F;
     xassert_eq(P, 3*(P/3)+1);
 
     vector<float> var_p(P);
@@ -991,8 +1004,8 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
     }
 
     for (long f = 0; f < F; f++) {
-        long ilo = params.fs.f_to_ilo[f];
-        long ihi = params.fs.f_to_ihi[f];
+        long ilo = fs.f_to_ilo[f];
+        long ihi = fs.f_to_ihi[f];
 
         for (long p = 0; p < P; p++)
             irms_fp[f*P+p] = rsqrtf((ihi-ilo) * var_p[p]);
@@ -1017,12 +1030,12 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
 
 
 GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &params_) :
-    params(params_)
+    params(params_), fs(params_.subband_counts)
 {
     params.validate();
 
     registry_key.dtype = params.dtype;
-    registry_key.subband_counts = params.fs.subband_counts;
+    registry_key.subband_counts = fs.subband_counts;
     registry_key.Dout = xdiv(params.nt_in, params.nt_out);
     registry_key.E = params.max_kernel_width;
 
@@ -1085,7 +1098,7 @@ void GpuPeakFindingKernel2::launch(
 
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
-    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, p.fs.M, p.nt_in}));
+    xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, p.nt_in}));
 
     if (!wt.shape_equals(expected_wt_shape)) {
         stringstream ss;
@@ -1122,7 +1135,7 @@ void GpuPeakFindingKernel2::launch(
     dim3 nthreads = { 32, 1, 1 };
 
     // FIXME this parameterization is confusing.
-    long WDd = xdiv(p.ndm_out, p.ndm_wt) << params.fs.pf_rank;
+    long WDd = xdiv(p.ndm_out, p.ndm_wt) << fs.pf_rank;
     long WDt = xdiv(p.nt_in, p.nt_wt);
 
     registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>> 
@@ -1145,7 +1158,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     // FIXME use chunks and increase nt!
 
     PeakFindingKernelParams2 params;
-    params.fs = FrequencySubbands(key.subband_counts);
+    params.subband_counts = key.subband_counts;
     params.dtype = key.dtype;
     params.max_kernel_width = key.E;
     params.beams_per_batch = 1;  // FIXME using 1 beam for now!
