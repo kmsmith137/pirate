@@ -254,6 +254,7 @@ ostream &operator<<(ostream &os, const GpuDedispersionKernel::RegistryValue &v)
 // GpuDedispersionKernel::test()
 //
 // Helpers are in anonymous namespace to avoid cluttering the header.
+// FIXME code below really needs cleanup.
 
 
 namespace {
@@ -401,7 +402,7 @@ struct DedispTestInstance
         this->gpu_ostrides = in_place ? gpu_istrides : ksgpu::make_random_strides(small_shape, 2, nalign);
     }
 
-
+#if 0
     void set_contiguous_strides()
     {
         // Dedispersion buffer strides (note that ringbufs are always contiguous).
@@ -413,6 +414,7 @@ struct DedispTestInstance
         this->cpu_ostrides = strides;
         this->gpu_ostrides = strides;
     }
+#endif
 };
 
 
