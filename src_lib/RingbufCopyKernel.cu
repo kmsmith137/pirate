@@ -228,6 +228,7 @@ void GpuRingbufCopyKernel::launch(ksgpu::Array<void> &ringbuf, long ibatch, long
 // -------------------------------------------------------------------------------------------------
 //
 // GpuRingbufCopyKernel::test()
+// FIXME could use a little cleanup
 //
 // Test helpers are in anonymous namespace to avoid cluttering header.
 
@@ -305,7 +306,7 @@ static Array<uint> make_location_array(const vector<TestLocationPair> &v, bool p
 
 void GpuRingbufCopyKernel::test()
 {
-    cout << "test_gpu_ringbuf_copy_kernel()" << endl;
+    cout << "GpuRingbufCopyKernel::test()" << endl;
 
     long nbatches = rand_int(1,5);
     long beams_per_batch = rand_int(1,5);

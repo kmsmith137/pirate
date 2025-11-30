@@ -493,7 +493,7 @@ static void run_test(const DedispTestInstance &tp)
     const DedispersionKernelParams &p = tp.params;
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
 
-    cout << "\nTest GpuDedispersionKernel\n";
+    cout << "\nGpuDedispersionKernel::test()\n";
     tp.params.print("    ti.params.");
     
     cout << "    ti.nchunks = " << tp.nchunks << ";\n"

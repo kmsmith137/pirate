@@ -552,6 +552,7 @@ shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const shared
 // -------------------------------------------------------------------------------------------------
 //
 // ReferenceDedisperserBase::test_dedispersion_basics()
+// FIXME could use a little cleanup
 //
 // Tests dedisperse_non_incremental(), ReferenceLagbuf, ReferenceTree, and tree recursion.
 // Test helpers are in anonymous namespace to avoid cluttering header.

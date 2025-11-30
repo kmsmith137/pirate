@@ -194,13 +194,13 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
 // -------------------------------------------------------------------------------------------------
 //
 // GpuDedisperser::test()
-
+// FIXME could use a little cleanup
 
 namespace {
 
 static void run_test(const DedispersionConfig &config, int nchunks)
 {
-    cout << "\n" << "test_dedisperser" << endl;
+    cout << "\n" << "GpuDedisperser::test()" << endl;
     config.print(cout, 4);
     print_kv("nchunks", nchunks, cout, 4);
     

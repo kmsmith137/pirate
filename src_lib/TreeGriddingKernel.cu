@@ -280,7 +280,7 @@ void GpuTreeGriddingKernel::test()
     params.nchan = N;
     params.ntime = T;
 
-    cout << "test_gpu_tree_gridding_kernel()\n"
+    cout << "TreeGriddingKernel::test()\n"
          << "    dtype = " << params.dtype << "\n"
          << "    beams_per_batch = " << B << "\n"
          << "    nfreq = " << F << "\n"
