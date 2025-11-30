@@ -1232,12 +1232,11 @@ void GpuPeakFindingKernel2::launch(
     dim3 nblocks = { nwarps, 1, 1 };
     dim3 nthreads = { 32, 1, 1 };
 
-    // FIXME this parameterization is confusing.
-    long WDd = xdiv(p.ndm_out, p.ndm_wt) << fs.pf_rank;
-    long WDt = xdiv(p.nt_in, p.nt_wt);
+    long ndm_out_per_wt = xdiv(p.ndm_out, p.ndm_wt);
+    long nt_in_per_wt = xdiv(p.nt_in, p.nt_wt);
 
     registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>> 
-       (in.data, out_max.data, out_argmax.data, wt.data, pstate, p.nt_in, WDd, WDt);
+       (in.data, out_max.data, out_argmax.data, wt.data, pstate, p.nt_in, ndm_out_per_wt, nt_in_per_wt);
 
     CUDA_PEEK("pf kernel launch");    
 }
@@ -1517,23 +1516,23 @@ void TestPfWeightReader::test()
     int Tinner = key.Tinner;
     
     // XXX revisit
-    // Choose WDt, nt_in.
-    // If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
-    // If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.
+    // Choose nt_in_per_wt, nt_in.
+    // If Tinner > 1, then nt_in_per_wt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
+    // If Tinner == 1, then nt_in_per_wt must be a multiple of (32*SW), and Tin must be a multiple of nt_in_per_wt.
     
     auto v = ksgpu::random_integers_with_bounded_product(2, 20);
-    int WDt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
-    int nt_in = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (WDt*v[1]);  // number of tree samples (not used for anything)
+    int nt_in_per_wt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
+    int nt_in = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (nt_in_per_wt*v[1]);  // number of tree samples (not used for anything)
 
     cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
          << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
          << ", Dcore=" << key.Dcore
          << ", P=" << key.P
          << ", Tinner=" << Tinner
-         << ", WDt=" << WDt
+         << ", nt_in_per_wt=" << nt_in_per_wt
          << ", nt_in=" << nt_in << endl;
     
-    int Tw = xdiv(nt_in, WDt);     // number of time samples in weights array (input array to test kernel)
+    int Tw = xdiv(nt_in, nt_in_per_wt);     // number of time samples in weights array (input array to test kernel)
     int Tout = xdiv(nt_in, Dcore);   // number of time samples in output array of test kernel
     int Tspec = xdiv(Tout, Tw);  // number of "spectator" time samples in test kernel
     int Mpad = val.Mouter * val.Minner;
@@ -1565,7 +1564,7 @@ void TestPfWeightReader::test()
 
     // Run kernel on GPU.
     Array<void> out_gpu(dtype, {Tout,Mpad,Ppad}, af_gpu | af_zero | af_guard);
-    val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, nt_in, WDt);
+    val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, nt_in, nt_in_per_wt);
     CUDA_PEEK("pf_weight_reader");
 
     // Compare.
