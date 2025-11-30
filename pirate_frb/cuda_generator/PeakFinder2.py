@@ -186,18 +186,18 @@ class PeakFinder2:
         nt_out32 = self._idiv('nt_in', Dout*SW)
 
         k.emit(f'// FIXME could optimize out integer divisions')
-        k.emit(f'uint wb = blockIdx.x * blockDim.x + threadIdx.y;')
-        k.emit(f'uint dw = wb / ndm_out_per_wt;         // dm index in weight array')
+        k.emit(f'uint warp = blockIdx.x * blockDim.x + threadIdx.y;')
+        k.emit(f'uint dm_w = warp / ndm_out_per_wt;         // dm index in weight array')
         k.emit(f'uint Touter = nt_in / (Tinner * nt_in_per_wt);  // see PfWeightLayout')
         k.emit(f'{dt32} pf_a = {self.dtype.from_float("0.5f")};')
         k.emit()
         
         k.emit(f'// Add per-warp pointer offsets, but not per-lane offsets')
-        k.emit(f'in += wb * M * {nt_in32};                    // shape (B*W, M, nt_in)')
-        k.emit(f'out_max += wb * {nt_out32};                  // shape (B*W, nt_in/Dout)')
-        k.emit(f'out_argmax += wb * {nt_out};                 // shape (B*W, nt_in/Dout)')
-        k.emit(f'wt += dw * Touter * wt_touter_stride32;  // shape (Dw,Touter,...)')
-        k.emit(f'pstate += wb * PW32;                       // shape (B*W, PW32)')        
+        k.emit(f'in += warp * M * {nt_in32};                    // shape (B*W, M, nt_in)')
+        k.emit(f'out_max += warp * {nt_out32};                  // shape (B*W, nt_in/Dout)')
+        k.emit(f'out_argmax += warp * {nt_out};                 // shape (B*W, nt_in/Dout)')
+        k.emit(f'wt += dm_w * Touter * wt_touter_stride32;  // shape (Dw,Touter,...)')
+        k.emit(f'pstate += warp * PW32;                       // shape (B*W, PW32)')        
         k.emit()
 
         # PfWeightReader.top() is currently a placeholder that does not emit any code.
