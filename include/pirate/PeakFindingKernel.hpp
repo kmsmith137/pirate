@@ -231,7 +231,11 @@ struct FrequencySubbands
 
     static constexpr uint token_m_mask = 0xffffc000u;  // selects (d,f0,f1) part of token
 
+    // For debugging/testing.
     static void validate_subband_counts(const std::vector<long> &subband_counts);
+    
+    void show_token(uint token, std::ostream &os = std::cout) const;
+    void show(std::ostream &os = std::cout) const;
 };
 
 

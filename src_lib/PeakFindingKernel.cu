@@ -4,6 +4,7 @@
 
 #include <mutex>
 #include <sstream>
+#include <iomanip>
 #include <unordered_map>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
@@ -493,9 +494,6 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
     xassert_eq(m_to_f.size(), uint(M));
     xassert_eq(f_to_ilo.size(), uint(F));
 
-    this->m_to_token.resize(M);
-    this->token_to_m.reserve(M);
-
     for (long m = 0; m < M; m++) {
         long f = m_to_f.at(m);
         long d = m_to_d.at(m);
@@ -529,6 +527,58 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
         xassert_ge(subband_counts.at(level), 0);
         xassert_le(subband_counts.at(level), max_bands);
     }        
+}
+
+
+void FrequencySubbands::show_token(uint token, ostream &os) const
+{
+    // (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26)
+    uint t = (token) & 0xffu;
+    uint p = (token >> 8) & 0x3fu;
+    uint d = (token >> 14) & 0x3fu;
+    uint f0 = (token >> 20) & 0x3fu;
+    uint f1 = (token >> 26) & 0x3fu;
+
+    os << "token[0x";
+
+    auto flags = os.flags();
+    auto fill = os.fill();
+    os << hex << setfill('0') << setw(8) << token;
+    os.flags(flags);
+    os.fill(fill);
+
+    os << " -> (t=" << t << ", p=" << p << ", d=" << d << ", f0=" << f0 << ", f1=" << f1 << ")";
+
+    auto it = token_to_m.find(token & FrequencySubbands::token_m_mask);
+    if (it == token_to_m.end())
+        os << " -> BAD M-VALUE]";
+    else {
+        long m = it->second;
+        os << " -> m=" << m << "]";
+    }
+}
+
+
+void FrequencySubbands::show(ostream &os) const
+{
+    os << "FrequencySubbands(subband_counts=" << ksgpu::tuple_str(subband_counts) << ")\n"
+       << "    " << "pf_rank=" << pf_rank << ", F=" << F << ", M=" << M << "\n";
+
+    for (long m = 0; m < M; m++) {
+        long f = m_to_f.at(m);
+        long d = m_to_d.at(m);
+        long f0 = f_to_ilo.at(f);
+        long f1 = f_to_ihi.at(f);
+        os << "    m=" << m << ": d=" << d << ", f0=" << f0 << ", f1=" << f1;
+
+        auto flags = os.flags();
+        auto fill = os.fill();
+        os << ", m_to_token=0x" << hex << setfill('0') << setw(8) << m_to_token.at(m);
+        os.flags(flags);
+        os.fill(fill);
+
+        os << "\n";
+    }
 }
 
 
@@ -914,18 +964,18 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
 
                 auto it = fs.token_to_m.find(token & FrequencySubbands::token_m_mask);
                 if (it == fs.token_to_m.end())
-                    throw runtime_error("ReferencePeakFindingKernel2::_eval_tokens(): bad token (m-value)");
+                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (m-value)");
 
                 long m = it->second;
                 long p = (token >> 8) & 0x3fu;
                 long t = (token & 0xffu);
 
                 if ((m < 0) || (m >= M))
-                    throw runtime_error("ReferencePeakFindingKernel2::_eval_tokens(): bad token (m out of range, this should never happen)");
+                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (m out of range, this should never happen)");
                 if ((p < 0) || (p >= P))
-                    throw runtime_error("ReferencePeakFindingKernel2::_eval_tokens(): bad token (p out of range)");
+                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (p out of range)");
                 if ((t < 0) || (t >= Dout))
-                    throw runtime_error("ReferencePeakFindingKernel2::_eval_tokens(): bad token (t out of range)");
+                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (t out of range)");
 
                 // p = 3*l+q, where l is the "level".
                 long l = p ? ((p-1)/3) : 0;
@@ -936,7 +986,7 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 long n = t / dt;
 
                 if (t != n*dt)
-                    throw runtime_error("ReferencePeakFindingKernel2::_eval_tokens(): bad token (t is not divisible by dt)");
+                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (t is not divisible by dt)");
 
                 // Token parsing (token -> (m,n,p)) ends here!
 
@@ -961,7 +1011,7 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 else if (q == 3)
                     out_max.at({b,d,tout}) = w * (0.5f*x0 + x1 + x2 + 0.5f*x3);
                 else
-                    throw runtime_error("ReferencePeakFindingKernel2::_eval_tokens(): bad value of q, this should never happen");
+                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad value of q, this should never happen");
             }
         }
     }
