@@ -155,6 +155,9 @@ class Ringbuf:
         
         assert self.advance_outer_called
         
+        if self.nreg == 0:
+            return
+        
         laneId = k.get_tmp_rname()
         k.emit(f'const int {laneId} = (threadIdx.x & 0x1f);  // laneId')
 
@@ -176,6 +179,9 @@ class Ringbuf:
     def finalize(self, k, pwarp_rname):
         assert self.advance_outer_called
         
+        if self.nreg == 0:
+            return
+            
         laneId = k.get_tmp_rname()
         k.emit(f'const int {laneId} = (threadIdx.x & 0x1f);  // laneId')
 
@@ -236,7 +242,7 @@ class Ringbuf:
         assert src_rname1 != src_rname2
 
         if nelts == 32:
-            self.kernel.emit(f'{dst_rname} = {src_rname2};')
+            k.emit(f'{dst_rname} = {src_rname2};')
             return
         
         if self.lflag_nelts != nelts:

@@ -112,6 +112,17 @@ class FrequencySubbands:
             raise RuntimeError(f"FrequencySubbands.from_fstr(): couldn't parse fstr='{fstr}'")
         subband_counts = [int(x) for x in re.findall(r'\d+', fstr) ]
         return cls(subband_counts = subband_counts)
+
+
+    @classmethod
+    def make_random_subband_counts(cls, pf_rank=None):
+        randi = lambda *args: int(np.random.randint(*args))
+
+        if pf_rank is None:
+            pf_rank = randi(1,5)
+
+        assert 1 <= pf_rank <= 4
+        return tuple([ randi(2**pf_rank) ] + [ randi(2**(pf_rank-l+1)-1) for l in range(1,pf_rank) ] + [ 1 ])
     
     
     def max_bands_at_level(self, level):

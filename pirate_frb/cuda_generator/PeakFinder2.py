@@ -189,7 +189,6 @@ class PeakFinder2:
         k.emit(f'uint warp = blockIdx.x * blockDim.x + threadIdx.y;')
         k.emit(f'uint dm_w = warp / ndm_out_per_wt;         // dm index in weight array')
         k.emit(f'uint Touter = nt_in / (Tinner * nt_in_per_wt);  // see PfWeightLayout')
-        k.emit(f'{dt32} pf_a = {self.dtype.from_float("0.5f")};')
         k.emit()
         
         k.emit(f'// Add per-warp pointer offsets, but not per-lane offsets')
@@ -197,8 +196,12 @@ class PeakFinder2:
         k.emit(f'out_max += warp * {nt_out32};                  // shape (B*W, nt_in/Dout)')
         k.emit(f'out_argmax += warp * {nt_out};                 // shape (B*W, nt_in/Dout)')
         k.emit(f'wt += dm_w * Touter * wt_touter_stride32;  // shape (ndm_wt,Touter,...)')
-        k.emit(f'pstate += warp * PW32;                       // shape (B*W, PW32)')        
+        k.emit(f'pstate += warp * PW32;                       // shape (B*W, PW32)')    
         k.emit()
+
+        if self.E > 1:
+            k.emit(f'{dt32} pf_a = {self.dtype.from_float("0.5f")};')
+            k.emit()
 
         # PfWeightReader.top() is currently a placeholder that does not emit any code.
         self.pf_weight_reader.top(k, 'wt')
