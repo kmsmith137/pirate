@@ -762,7 +762,7 @@ void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long 
             for (long m = 0; m < M; m++) {
                 float *dst = &tmp_arr[0].at({b,d,m,0});  // length (Tin+tpad)
                 float *ps = &pstate.at({b0+b,d,m,0});    // length (tpad)
-                const float *src = &in.at({b,d,m,0});          // length (Tin)
+                const float *src = &in.at({b,d,m,0});    // length (Tin)
 
                 for (long t = 0; t < tpad; t++)
                     dst[t] = ps[t];
@@ -780,8 +780,9 @@ void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long 
         long nsrc = tmp_nt.at(l);
         long ndst = tmp_nt.at(l+1);
         long r = xdiv(tmp_dt[l+1], tmp_dt[l]);  // ratio of step sizes
+        long s = xdiv(pow2(l), tmp_dt[l]);      // spacing between logically contiguous samples in source
 
-        xassert_eq(r*(ndst-1) + 2, nsrc);
+        xassert_eq(r*(ndst-1) + s, nsrc-1);
         
         for (long b = 0; b < B; b++) {
             for (long d = 0; d < D; d++) {
@@ -790,7 +791,7 @@ void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long 
                     float *src = &tmp_arr.at(l).at({b,d,m,0});
                     
                     for (long t = 0; t < ndst; t++)
-                        dst[t] = src[r*t] + src[r*t+1];
+                        dst[t] = src[r*t] + src[r*t + s];
                 }
             }
         }
@@ -993,8 +994,8 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
     xassert_eq(P, 3*(P/3)+1);
 
     vector<float> var_p(P);
-    vector<float> irms_fp(F*P);  // shape (F,P)
-    Array<float> ret({B,D,T,F,P}, af_rhost);
+    vector<float> irms_pf(P*F);  // shape (P,F)
+    Array<float> ret({B,D,T,P,F}, af_rhost);
 
     var_p[0] = 1.0f;
     for (long l = 0; l < (P/3); l++) {
@@ -1003,12 +1004,12 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
         var_p[3*l+3] = 2.5f * pow2(l);
     }
 
-    for (long f = 0; f < F; f++) {
-        long ilo = fs.f_to_ilo[f];
-        long ihi = fs.f_to_ihi[f];
-
-        for (long p = 0; p < P; p++)
-            irms_fp[f*P+p] = rsqrtf((ihi-ilo) * var_p[p]);
+    for (long p = 0; p < P; p++) {
+        for (long f = 0; f < F; f++) {
+            long ilo = fs.f_to_ilo[f];
+            long ihi = fs.f_to_ihi[f];
+            irms_pf[p*F+f] = rsqrtf((ihi-ilo) * var_p[p]);
+        }
     }
 
     long nouter = B*D*T;
@@ -1017,7 +1018,7 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
     for (long i = 0; i < nouter; i++) {
         float p0 = 1.0f;  // rand_uniform();  FIXME setting p0=1
         for (long j = 0; j < ninner; j++)
-            ret.data[i*ninner + j] = (rand_uniform() < p0) ? (irms_fp[j] * rand_uniform()) : 0.0f;
+            ret.data[i*ninner + j] = (rand_uniform() < p0) ? (irms_pf[j] * rand_uniform()) : 0.0f;
     }
 
     return ret;
@@ -1152,7 +1153,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     long simd_width = xdiv(32, key.dtype.nbits);
     long Tinner = key.Tinner;
 
-    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : (32 * simd_width * rand_int(1,5));
+    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in = max(32*simd_width, nt_in_per_wt) * rand_int(1,5);
     long nchunks = 1;  // FIXME
     // FIXME use chunks and increase nt!
