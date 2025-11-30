@@ -458,6 +458,7 @@ struct GpuPeakFindingKernel2
 
     struct RegistryValue
     {
+        // XXX revisit
         // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint Tin, uint WDd, uint WDt)
         //
         // in: shape (B*W, M, Tin)
@@ -517,6 +518,7 @@ struct TestPfWeightReader
 
     struct RegistryValue
     {
+        // XXX revisit
         // The test kernel is called as (32 threads, 1 threadblock):
         //   void kernel(void *out, const void *in, uint Tin, uint WDt);
         //
@@ -562,6 +564,7 @@ struct TestPfOutput2
 
     struct RegistryValue
     {
+        // XXX revisit
         // The test kernel is called as (32 threads, 1 threadblock):
         //   void kernel(void *zout, uint *aout, void *zin, uint *ain, uint Tin);
         //

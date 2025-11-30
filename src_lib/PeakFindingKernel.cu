@@ -810,9 +810,9 @@ void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long 
     for (long b = 0; b < B; b++) {
         for (long d = 0; d < D; d++) {
             for (long m = 0; m < M; m++) {
-                float *dst = &tmp_arr[0].at({b,d,m,0});  // length (Tin+tpad)
+                float *dst = &tmp_arr[0].at({b,d,m,0});  // length (nt_in+tpad)
                 float *ps = &pstate.at({b0+b,d,m,0});    // length (tpad)
-                const float *src = &in.at({b,d,m,0});    // length (Tin)
+                const float *src = &in.at({b,d,m,0});    // length (nt_in)
 
                 for (long t = 0; t < tpad; t++)
                     dst[t] = ps[t];
@@ -1136,6 +1136,7 @@ GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &par
     registry_key.Dout = xdiv(params.nt_in, params.nt_out);
     registry_key.E = params.max_kernel_width;
 
+    // XXX revisit
     // Recall the definition of Tinner (from cuda_generator.PfWeightLayout):
     //
     //    Tinner = "number of W-array time samples per iteration of GPU tin-loop"
@@ -1515,13 +1516,14 @@ void TestPfWeightReader::test()
     int Dcore = key.Dcore;
     int Tinner = key.Tinner;
     
-    // Choose WDt, Tin.
+    // XXX revisit
+    // Choose WDt, nt_in.
     // If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
     // If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.
     
     auto v = ksgpu::random_integers_with_bounded_product(2, 20);
     int WDt = (Tinner > 1) ? xdiv(32*SW,Tinner) : (32*SW*v[0]);
-    int Tin = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (WDt*v[1]);  // number of tree samples (not used for anything)
+    int nt_in = (Tinner > 1) ? (32*SW*v[0]*v[1]) : (WDt*v[1]);  // number of tree samples (not used for anything)
 
     cout << "test_pf_weight_reader_microkernel: dtype=" << dtype
          << ", subband_counts=" << ksgpu::tuple_str(key.subband_counts)
@@ -1529,10 +1531,10 @@ void TestPfWeightReader::test()
          << ", P=" << key.P
          << ", Tinner=" << Tinner
          << ", WDt=" << WDt
-         << ", Tin=" << Tin << endl;
+         << ", nt_in=" << nt_in << endl;
     
-    int Tw = xdiv(Tin, WDt);     // number of time samples in weights array (input array to test kernel)
-    int Tout = xdiv(Tin, Dcore);   // number of time samples in output array of test kernel
+    int Tw = xdiv(nt_in, WDt);     // number of time samples in weights array (input array to test kernel)
+    int Tout = xdiv(nt_in, Dcore);   // number of time samples in output array of test kernel
     int Tspec = xdiv(Tout, Tw);  // number of "spectator" time samples in test kernel
     int Mpad = val.Mouter * val.Minner;
     int Ppad = wl.Pouter * wl.Pinner;    
@@ -1563,7 +1565,7 @@ void TestPfWeightReader::test()
 
     // Run kernel on GPU.
     Array<void> out_gpu(dtype, {Tout,Mpad,Ppad}, af_gpu | af_zero | af_guard);
-    val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, Tin, WDt);
+    val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, nt_in, WDt);
     CUDA_PEEK("pf_weight_reader");
 
     // Compare.
@@ -1634,14 +1636,14 @@ void TestPfOutput2::test()
     
     Dtype dtype = key.dtype;
     uint Dout = key.Dout;
-    uint Tin = xdiv(1024, dtype.nbits) * rand_int(1, 100);
-    uint Tout = xdiv(Tin, Dout);
+    uint nt_in = xdiv(1024, dtype.nbits) * rand_int(1, 100);
+    uint Tout = xdiv(nt_in, Dout);
     
-    cout << "test_pf_output2_microkernel: dtype=" << dtype << ", Dout=" << Dout << ", Tin=" << Tin << endl;
+    cout << "test_pf_output2_microkernel: dtype=" << dtype << ", Dout=" << Dout << ", nt_in=" << nt_in << endl;
 
-    Array<float> zin_cpu({4,Tin}, af_uhost | af_random);
+    Array<float> zin_cpu({4,nt_in}, af_uhost | af_random);
     Array<float> zout_cpu({Tout}, af_uhost);
-    Array<uint> ain_cpu({4,Tin}, af_uhost);
+    Array<uint> ain_cpu({4,nt_in}, af_uhost);
 
     // Each (s,tin) pair gets a random uint token.
     //   - token_mapping: (token) -> (s,tin)
@@ -1650,7 +1652,7 @@ void TestPfOutput2::test()
     std::unordered_map<uint, std::pair<uint,uint>> token_mapping;
 
     for (uint s = 0; s < 4; s++) {
-        for (uint tin = 0; tin < Tin; tin++) {
+        for (uint tin = 0; tin < nt_in; tin++) {
             for (;;) {
                 uint token = ksgpu::default_rng();
                 if (token_mapping.find(token) == token_mapping.end()) {
@@ -1679,10 +1681,10 @@ void TestPfOutput2::test()
     Array<void> zout_gpu(dtype, {Tout}, af_gpu | af_guard);
     Array<uint> aout_gpu({Tout}, af_gpu | af_guard);
 
-    // void kernel(void *zout, uint *aout, void *zin, uint *ain, uint Tin);
+    // void kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in);
     auto kernel = TestPfOutput2::registry().get(key).cuda_kernel;
 
-    kernel<<<1,32>>> (zout_gpu.data, aout_gpu.data, zin_gpu.data, ain_gpu.data, Tin);
+    kernel<<<1,32>>> (zout_gpu.data, aout_gpu.data, zin_gpu.data, ain_gpu.data, nt_in);
     CUDA_PEEK("pf_output2_test_kernel");
 
     zout_gpu = zout_gpu.to_host();

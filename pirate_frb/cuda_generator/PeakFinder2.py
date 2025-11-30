@@ -28,6 +28,7 @@ from .FrequencySubbands import FrequencySubbands
 # Constraints:
 #
 #   - All of these must be a power of two, except nt_in
+#   - nt_in is a multiple of nt_in_per_wt
 #   - nt_in is a multiple of (32*SW), where SW = 32/sizeof(dtype) is the simd width
 #   - nt_in_per_wt must be a multiple of Dout (= nt_in_per_out)   (*)
 #   - SW <= Dcore <= Dout <= 32
@@ -55,7 +56,7 @@ from .FrequencySubbands import FrequencySubbands
 
 ####################################################################################################
 
-        
+
 class PeakFinder2:
     def __init__(self, dtype, frequency_subbands, E, Dcore, Dout, Tinner):
         self.dtype = dtype = Dtype(dtype)
@@ -135,24 +136,25 @@ class PeakFinder2:
         k.emit()
         k.emit('namespace pirate {')
         k.emit()
-        k.emit('// Each warp processes a shape (M,Tin) input array ("one pf_rank")')
+        k.emit('// Each warp processes a shape (M,nt_in) input array ("one pf_rank")')
         k.emit('// Launch with B blocks, {32,W,1} threads.')
         k.emit('//')
-        k.emit('// in: shape (B*W, M, Tin)')
-        k.emit('// out_max: shape (B*W, Tin/Dout)')
-        k.emit('// out_argmax: shape (B*W, Tin/Dout)')
-        k.emit('// wt: complicated format (see class PfWeightLayout), Dw=(B*W*2^pf_rank/WDd), Tw=(Tin/WDt)')
+        k.emit('// in: shape (B*W, M, nt_in)')
+        k.emit('// out_max: shape (B*W, nt_in/Dout)')
+        k.emit('// out_argmax: shape (B*W, nt_in/Dout)')
+        k.emit('// wt: complicated format (see class PfWeightLayout)')
         k.emit('// pstate: (B*W, PW32) where PW32 = pstate 32-bit registers per warp')
         k.emit('//')
+        k.emit('// nt_in: number of input time samples')
         k.emit('// WDd, WDt: coarse-graining factors for weight array.')
         k.emit('// WDd must be a multiple of 2**pf_rank.')
-        k.emit('// If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).')
-        k.emit('// If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.')
+        k.emit('// If Tinner > 1, then WDt must equal (32*SW)/Tinner, and nt_in must be a multiple of (32*SW).')
+        k.emit('// If Tinner == 1, then WDt must be a multiple of (32*SW), and nt_in must be a multiple of WDt.')
         k.emit('// Here, SW = (128/sizeof(dtype)) is the simd width.')
         k.emit()
-        k.emit('// FIXME assuming 4 warps/threadblock and 6 threadblocks/SM for now')
-        k.emit('__global__ void __launch_bounds__(4,6)')
-        k.emit(f'{self.kernel_name}(const void *in_, void *out_max_, uint *out_argmax, const void *wt_, void *pstate_, uint Tin, uint WDd, uint WDt)')
+        k.emit('// FIXME assuming 32 threads/block and 16 threadblocks/SM for now')
+        k.emit('__global__ void __launch_bounds__(32,16)')
+        k.emit(f'{self.kernel_name}(const void *in_, void *out_max_, uint *out_argmax, const void *wt_, void *pstate_, uint nt_in, uint WDd, uint WDt)')
         k.emit('{')
         k.emit(f'constexpr int M = {self.M};')
         k.emit(f'constexpr int Dout = {self.Dout};')
@@ -171,21 +173,21 @@ class PeakFinder2:
         k.emit(f'{dt32} *pstate = ({dt32} *) pstate_;')
         k.emit()
 
-        Tout = self._idiv('Tin', Dout)
-        Tin32 = self._idiv('Tin', SW)
-        Tout32 = self._idiv('Tin', Dout*SW)
+        Tout = self._idiv('nt_in', Dout)
+        nt_in32 = self._idiv('nt_in', SW)
+        Tout32 = self._idiv('nt_in', Dout*SW)
 
         k.emit(f'// FIXME could optimize out integer divisions')
         k.emit(f'uint wb = blockIdx.x * blockDim.x + threadIdx.y;')
         k.emit(f'uint dw = wb / (WDd >> pf_rank);   // dw index in weight array')
-        k.emit(f'uint Touter = Tin / (Tinner * WDt);  // see PfWeightLayout')
+        k.emit(f'uint Touter = nt_in / (Tinner * WDt);  // see PfWeightLayout')
         k.emit(f'{dt32} pf_a = {self.dtype.from_float("0.5f")};')
         k.emit()
         
         k.emit(f'// Add per-warp pointer offsets, but not per-lane offsets')
-        k.emit(f'in += wb * M * {Tin32};                    // shape (B*W, M, Tin)')
-        k.emit(f'out_max += wb * {Tout32};                  // shape (B*W, Tin/Dout)')
-        k.emit(f'out_argmax += wb * {Tout};                 // shape (B*W, Tin/Dout)')
+        k.emit(f'in += wb * M * {nt_in32};                    // shape (B*W, M, nt_in)')
+        k.emit(f'out_max += wb * {Tout32};                  // shape (B*W, nt_in/Dout)')
+        k.emit(f'out_argmax += wb * {Tout};                 // shape (B*W, nt_in/Dout)')
         k.emit(f'wt += dw * Touter * wt_touter_stride32;  // shape (Dw,Touter,...)')
         k.emit(f'pstate += wb * PW32;                       // shape (B*W, PW32)')        
         k.emit()
@@ -197,10 +199,10 @@ class PeakFinder2:
         self.kps = k.splice()
 
         k.emit()
-        k.emit(f'for (uint tin = 0; tin < Tin; tin += {32*SW}) {{')
+        k.emit(f'for (uint tin = 0; tin < nt_in; tin += {32*SW}) {{')
 
         for m in range(M):
-            t = f'({m} * {Tin32})' if (m > 1) else Tin32
+            t = f'({m} * {nt_in32})' if (m > 1) else nt_in32
             t = f'in[{t} + threadIdx.x]' if (m > 0) else 'in[threadIdx.x]'
 
             k.emit()
@@ -208,7 +210,7 @@ class PeakFinder2:
             self.process_pf_input(k, t, m)
 
         # Bottom of tin-loop 1: process pf_output.
-        self.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'tin', 'Tin')
+        self.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'tin', 'nt_in')
 
         # bottom of tin-loop 2: advance weight_reader.
         self.pf_weight_reader.bottom(k, 'tin', 'WDt')
@@ -799,7 +801,7 @@ class PfWeightReader:
           pfw_reader.top('wp');
         
           // Loop over t-values is not supplied by PfOutput2.
-          for (uint tin = 0; tin < Tin; t += 32*SW) {
+          for (uint tin = 0; tin < nt_in; t += 32*SW) {
 
               // Outer "unrolled" loop over 0 <= mouter < Mouter.
               // Inner "unrolled" loop over 0 <= pouter < Pouter.
@@ -809,7 +811,7 @@ class PfWeightReader:
               w = pfw_reader.read_weights(f'pfw_m{Minner*(Mouter-1)}_p{Pouter-1}',
                                           mouter=Mouter-1, pouter=Pouter-1)
         
-              pfw_reader.bottom('tin', 'Tin')
+              pfw_reader.bottom('tin', 'nt_in')
           }
         """
 
@@ -1027,23 +1029,23 @@ class PfWeightReader:
         k.emit('namespace pirate {')
         k.emit()
 
-        k.emit(f'// out.shape == (Tin/Dcore, Mouter*Minner, Pouter*Pinner)')
-        k.emit(f'// in.shape == (Tin/(WDt*Tinner), Pouter, F, Tinner, Pinner)')
+        k.emit(f'// out.shape == (nt_in/Dcore, Mouter*Minner, Pouter*Pinner)')
+        k.emit(f'// in.shape == (nt_in/(WDt*Tinner), Pouter, F, Tinner, Pinner)')
         k.emit(f'//')
         k.emit(f'// The test kernel does the following (schematically):')
         k.emit(f'//')
-        k.emit(f'//   for (int tin = 0; tin < tin; tin += 32*SW)')
+        k.emit(f'//   for (int tin = 0; tin < nt_in; tin += 32*SW)')
         k.emit(f'//       for (int mouter = 0; mouter < Mouter; mouter++)')
         k.emit(f'//           for (int Pouter = 0; pouter < Pouter; pouter++)')
         k.emit(f'//               call read_weights(), and write to out[]')
         k.emit(f"//")
-        k.emit(f'// If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).')
-        k.emit(f'// If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.')
+        k.emit(f'// If Tinner > 1, then WDt must equal (32*SW)/Tinner, and nt_in must be a multiple of (32*SW).')
+        k.emit(f'// If Tinner == 1, then WDt must be a multiple of (32*SW), and nt_in must be a multiple of WDt.')
         k.emit(f"//")
         k.emit(f'// Launch with 32 threads, 1 block.')
         k.emit()
         
-        k.emit(f'__global__ void {self.test_kernel_name}(void *out_, const void *in_, uint Tin, uint WDt)')
+        k.emit(f'__global__ void {self.test_kernel_name}(void *out_, const void *in_, uint nt_in, uint WDt)')
         k.emit(f'{{')
         k.emit(f'constexpr int Dcore = {self.Dcore};')
         k.emit(f'constexpr int Pouter = {self.Pouter};')
@@ -1062,7 +1064,7 @@ class PfWeightReader:
         self.top(k, 'in')
 
         k.emit()
-        k.emit(f'for (uint tin = 0; tin < Tin; tin += {32*SW}) {{')
+        k.emit(f'for (uint tin = 0; tin < nt_in; tin += {32*SW}) {{')
 
         for mouter in range(self.Mouter):
             for pouter in range(self.Pouter):
@@ -1175,7 +1177,7 @@ class PfOutput2:
           [float16]  simd <-> s(0)    lane <-> s(1,L) tout(0,6-L)
 
         Output: as an "outer" t-loop is iterated, the Z_{st} array gets reduced over
-        spectator indices, and two length Tout=(Tin/Dout) array gets incrementally
+        spectator indices, and two length Tout=(nt_in/Dout) array gets incrementally
         written to global memory (see below).
 
         Generated code looks like this:
@@ -1183,11 +1185,11 @@ class PfOutput2:
           constexpr int SW = 128 / sizeof(dtype);  // simd width
         
           // Initialization of output pointers is not supplied by PfOutput2.
-          T32 *zp = ...;   // per-warp output pointer, points to length (Tin/(Dout*SW))
-          uint *ap = ...;  // per-warp "argmax" pointer, points to length (Tin/(Dout*SW))
+          T32 *zp = ...;   // per-warp output pointer, points to length (nt_in/(Dout*SW))
+          uint *ap = ...;  // per-warp "argmax" pointer, points to length (nt_in/(Dout*SW))
           
           // Loop over t-values is not supplied by PfOutput2.
-          for (uint tin = 0; tin < Tin; t += 32*SW) {
+          for (uint tin = 0; tin < nt_in; t += 32*SW) {
         
               // Multiple calls to PfOutput2.apply_inner().
         
@@ -1201,7 +1203,7 @@ class PfOutput2:
               // the PfOutput2 class, and these pointers will be incremented, as data
               // gets written to global memory.
 
-              pf_output2.apply_outer(k, 'zp', 'ap', 'tin', 'Tin');
+              pf_output2.apply_outer(k, 'zp', 'ap', 'tin', 'nt_in');
           }
         """
         
@@ -1266,11 +1268,11 @@ class PfOutput2:
             raise RuntimeError('should never get here')
 
     
-    def apply_outer(self, k, zout, aout, tin, Tin):
+    def apply_outer(self, k, zout, aout, tin, nt_in):
         """
         The 'zout' arg is a per-warp (dt32 *) varname.
         The 'aout' arg is a per-warp (uint *) varname.
-        The 'tin' and 'Tin' args are uint varnames.
+        The 'tin' and 'nt_in' args are uint varnames.
 
         NOTE: The'zout' and 'aout' pointers are "owned" by the PfOutput2 class, and these
         pointers will be incremented, as data gets written to global memory.
@@ -1283,8 +1285,8 @@ class PfOutput2:
         self.apply_outer_called = True
         
         k.emit()
-        k.emit(f'// PfOutput2.apply_outer() called: {zout=}, {aout}, {tin=}, {Tin=}')
-        k.emit(f'// In this placeholder implementation, we ignore values of tin/Tin,')
+        k.emit(f'// PfOutput2.apply_outer() called: {zout=}, {aout}, {tin=}, {nt_in=}')
+        k.emit(f'// In this placeholder implementation, we ignore values of tin/nt_in,')
         k.emit(f'// and do partial writes directly to global memory. (FIXME suboptimal)')
         k.emit(f'// Starting point is zinner, {srange("ainner",SW,sep=", ")}, with register assignemnt')
 
@@ -1405,11 +1407,11 @@ class PfOutput2:
         k.emit(f'// Call with 32 threads, and 1 threadblock.')
         k.emit(f'// Use 4 calls to apply_inner() inside t-loop.')
         k.emit(f'// Thus, the number of reduced spectator indices is 4*Dout = 4*{Dout} = {4*Dout}')
-        k.emit(f'// zout.shape == aout.shape == (Tin//Dout) == (Tin//{Dout})')
-        k.emit(f'// zin.shape == ain.shape == (4, Tin)')
+        k.emit(f'// zout.shape == aout.shape == (nt_in//Dout) == (nt_in//{Dout})')
+        k.emit(f'// zin.shape == ain.shape == (4, nt_in)')
         k.emit()
 
-        k.emit(f'__global__ void {pf_output.test_kernel_name}(void *zout_, uint *aout32, void *zin_, uint *ain32, uint Tin)')
+        k.emit(f'__global__ void {pf_output.test_kernel_name}(void *zout_, uint *aout32, void *zin_, uint *ain32, uint nt_in)')
         k.emit(f'{{')
 
         if dtype.scalar == 'float':
@@ -1422,16 +1424,16 @@ class PfOutput2:
         else:
             raise RuntimeError('should never get here')
 
-        k.emit(f'\nfor (uint tin = 0; tin < Tin; tin += {32*SW}) {{')
+        k.emit(f'\nfor (uint tin = 0; tin < nt_in; tin += {32*SW}) {{')
         
         for s in range(4):
             if dtype.scalar == 'float':
-                p = f'{s}*Tin + ' if (s > 0) else ''
+                p = f'{s}*nt_in + ' if (s > 0) else ''
                 k.emit(f'float z{s} = zin32[{p}threadIdx.x];')
                 k.emit(f'uint a{s} = ain32[{p}threadIdx.x];')
                 pf_output.apply_inner(k, f'z{s}', [f'a{s}'])
             elif dtype.scalar == '__half':
-                p = f'{s}*(Tin>>1) + ' if (s > 0) else ''
+                p = f'{s}*(nt_in>>1) + ' if (s > 0) else ''
                 k.emit(f'__half2 z{s} = zin32[{p}threadIdx.x];')
                 k.emit(f'uint2 a{s} = ain64[{p}threadIdx.x];')
                 pf_output.apply_inner(k, f'z{s}', [f'a{s}.x', f'a{s}.y'])
@@ -1445,7 +1447,7 @@ class PfOutput2:
         k.emit(f'ain{32*dtype.simd_width} += 32;')  # either 'ain32' or 'ain64'
         k.emit()
 
-        pf_output.apply_outer(k, 'zout32', 'aout32', 'tin', 'Tin')
+        pf_output.apply_outer(k, 'zout32', 'aout32', 'tin', 'nt_in')
         
         k.emit('}   // end of tin loop')
         k.emit('}   // end of cuda kernel')
