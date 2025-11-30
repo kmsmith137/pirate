@@ -906,23 +906,44 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
                         // tmp[l] array, or (dt) time samples in the original input array.
 
                         for (int n = 0; n < N; n++) {
-                            float x0 = in[I + tout*N + n - 3*S];
-                            float x1 = in[I + tout*N + n - 2*S];
-                            float x2 = in[I + tout*N + n - S];
-                            float x3 = in[I + tout*N + n];
+                            float x0 = in[m*mstr + I + tout*N + n - 3*S];
+                            float x1 = in[m*mstr + I + tout*N + n - 2*S];
+                            float x2 = in[m*mstr + I + tout*N + n - S];
+                            float x3 = in[m*mstr + I + tout*N + n];
 
                             uint token0 = fs.m_to_token[m] | (n*dt);  // includes (m,n) but not p
                             uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
                             uint token2 = token0 | ((3*l+2) << 8);    // include p=3*l+2
                             uint token3 = token0 | ((3*l+3) << 8);    // include p=3*l+3
 
+                            float y0 = w0 * x3;
+                            float y1 = w1 * (x2 + x3);
+                            float y2 = w2 * (0.5f*x1 + x2 + 0.5f*x3);
+                            float y3 = w3 * (0.5f*x0 + x1 + x2 + 0.5f*x3);
+
+#if 0
+                            if ((b == 0) && (d==0) && (tout==1) && (token3 ==  0x1000cc0f)) {
+                                float w = w3;
+                                float y = y3;
+
+                                cout << "apply(): got it! " << "(b=" << b << ", d=" << d << ", tout=" << tout << ")"
+                                      << " -> (w=" << w << ", x0=" << x0 << ", x1=" << x1 << ", x2=" << x2 << ", x3=" << x3 << ")"
+                                      << " -> (y=" << y << ")" << endl;
+
+                                for (int i = 0; i < 4; i++)
+                                    cout << "  tmp_arr.at(" << l << ").at(" << b << "," << d << "," << m << "," << (I + tout*N + n + (i-3)*S) << ")"
+                                         << " = " << tmp_arr.at(l).at({b, d, m, I + tout*N + n + (i-3)*S}) << endl;
+
+                                cout << "    at level l: tpad=" << tpad << ", dt=" << tmp_dt.at(l) << ", N=" << N << ", S=" << S << ", I=" << I << endl;
+                            }
+#endif
                             if (l == 0)
-                                _update_pf2(maxval, argmax, w0 * x3, token0);
+                                _update_pf2(maxval, argmax, y0, token0);
 
                             if (P > 1) {
-                                _update_pf2(maxval, argmax, w1 * (x2 + x3), token1);
-                                _update_pf2(maxval, argmax, w2 * (0.5f*x1 + x2 + 0.5f*x3), token2);
-                                _update_pf2(maxval, argmax, w3 * (0.5f*x0 + x1 + x2 + 0.5f*x3), token3);
+                                _update_pf2(maxval, argmax, y1, token1);
+                                _update_pf2(maxval, argmax, y2, token2);
+                                _update_pf2(maxval, argmax, y3, token3);
                             }
                         }
                     }
@@ -991,7 +1012,7 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 // Token parsing (token -> (m,n,p)) ends here!
 
                 long f = fs.m_to_f.at(m);
-                long w = wt.at({b, d/Wds, tout/Tds, p, f});
+                float w = wt.at({b, d/Wds, tout/Tds, p, f});
 
                 int N = tmp_nout[l];       // count
                 int S = tmp_sout[l];       // spacing
@@ -1012,6 +1033,31 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                     out_max.at({b,d,tout}) = w * (0.5f*x0 + x1 + x2 + 0.5f*x3);
                 else
                     throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad value of q, this should never happen");
+
+#if 0
+                if ((b==0) && (d==0) && (tout==1)) {
+                    cout << "\neval_tokens(): (b=" << b << ", d=" << d << ", tout=" << tout << ")";
+
+                    auto flags = cout.flags();
+                    auto fill = cout.fill();
+                    cout << " -> 0x" << hex << setfill('0') << setw(8) << token;
+                    cout.flags(flags);
+                    cout.fill(fill);
+
+                    cout << " -> (m=" << m << ", p=" << p << ", t=" << t << ", l=" << l << ", q=" << q << ")"
+                         << " -> (w=" << w << ", x0=" << x0 << ", x1=" << x1 << ", x2=" << x2 << ", x3=" << x3 << ")"
+                         << " -> " << out_max.at({b,d,tout}) << endl;
+
+                    cout << "  wt.at(" << b << "," << (d/Wds) << "," << (tout/Tds) << "," << p << "," << f << ")"
+                         << " = " << wt.at({b,d/Wds,tout/Tds,p,f}) << endl;
+
+                    for (int i = 0; i < 4; i++)
+                        cout << "  tmp_arr.at(" << l << ").at(" << b << "," << d << "," << m << "," << (I + tout*N + n + (i-3)*S) << ")"
+                             << " = " << tmp_arr.at(l).at({b, d, m, I + tout*N + n + (i-3)*S}) << endl;
+
+                    cout << "    at level l: tpad=" << tpad << ", dt=" << tmp_dt.at(l) << ", N=" << N << ", S=" << S << ", I=" << I << endl;
+                }
+#endif
             }
         }
     }
@@ -1247,7 +1293,13 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < ref_kernel.nbatches; ibatch++) {
             Array<float> cpu_in = ref_kernel.make_random_input_array();
-            Array<float> cpu_wt = ref_kernel.make_random_weights();
+            // Array<float> cpu_wt = ref_kernel.make_random_weights();  // shape (B, ndm_wt, nt_wt, P, F)
+            // FIXME use make_random_weights()
+            long ndm_wt = params.ndm_wt;
+            long nt_wt = params.nt_wt;
+            long P = ref_kernel.nprofiles;
+            long F = ref_kernel.fs.F;
+            Array<float> cpu_wt({B,ndm_wt,nt_wt,P,F}, af_rhost | af_random);
 
             Array<float> cpu_out_max({B,D,T}, af_rhost | af_zero);
             Array<uint> cpu_out_argmax({B,D,T}, af_rhost | af_zero);
