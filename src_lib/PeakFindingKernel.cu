@@ -1533,16 +1533,16 @@ void TestPfWeightReader::test()
          << ", nt_in=" << nt_in << endl;
     
     int Tw = xdiv(nt_in, nt_in_per_wt);     // number of time samples in weights array (input array to test kernel)
-    int Tout = xdiv(nt_in, Dcore);   // number of time samples in output array of test kernel
-    int Tspec = xdiv(Tout, Tw);  // number of "spectator" time samples in test kernel
+    int nt_out = xdiv(nt_in, Dcore);   // number of time samples in output array of test kernel
+    int Tspec = xdiv(nt_out, Tw);  // number of "spectator" time samples in test kernel
     int Mpad = val.Mouter * val.Minner;
     int Ppad = wl.Pouter * wl.Pinner;    
     
     // Input array: (1,1,Tw,P,F), where the length-1 axes are beams and DMs.
     Array<float> in_cpu({1,1,Tw,P,F}, af_rhost | af_random);
 
-    // Output array: (Tout, Mouter*Minner, Pouter*Pinner)
-    Array<float> out_cpu({Tout,Mpad,Ppad}, af_rhost | af_zero);
+    // Output array: (nt_out, Mouter*Minner, Pouter*Pinner)
+    Array<float> out_cpu({nt_out,Mpad,Ppad}, af_rhost | af_zero);
 
     // Emulate PfWeightReader kernel on the CPU.
     for (int tw = 0; tw < Tw; tw++) {
@@ -1563,7 +1563,7 @@ void TestPfWeightReader::test()
     Array<void> in_gpu = val.pf_weight_layout.to_gpu(in_cpu);
 
     // Run kernel on GPU.
-    Array<void> out_gpu(dtype, {Tout,Mpad,Ppad}, af_gpu | af_zero | af_guard);
+    Array<void> out_gpu(dtype, {nt_out,Mpad,Ppad}, af_gpu | af_zero | af_guard);
     val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, nt_in, nt_in_per_wt);
     CUDA_PEEK("pf_weight_reader");
 
@@ -1636,12 +1636,12 @@ void TestPfOutput2::test()
     Dtype dtype = key.dtype;
     uint Dout = key.Dout;
     uint nt_in = xdiv(1024, dtype.nbits) * rand_int(1, 100);
-    uint Tout = xdiv(nt_in, Dout);
+    uint nt_out = xdiv(nt_in, Dout);
     
     cout << "test_pf_output2_microkernel: dtype=" << dtype << ", Dout=" << Dout << ", nt_in=" << nt_in << endl;
 
     Array<float> zin_cpu({4,nt_in}, af_uhost | af_random);
-    Array<float> zout_cpu({Tout}, af_uhost);
+    Array<float> zout_cpu({nt_out}, af_uhost);
     Array<uint> ain_cpu({4,nt_in}, af_uhost);
 
     // Each (s,tin) pair gets a random uint token.
@@ -1665,7 +1665,7 @@ void TestPfOutput2::test()
 
     // Compute 'zout_cpu' (reference CPU implementation).
 
-    for (uint tout = 0; tout < Tout; tout++) {
+    for (uint tout = 0; tout < nt_out; tout++) {
         float zmax = -1.0e10f;
         for (uint s = 0; s < 4; s++)
             for (uint tin = tout*Dout; tin < (tout+1)*Dout; tin++)
@@ -1677,8 +1677,8 @@ void TestPfOutput2::test()
 
     Array<void> zin_gpu = zin_cpu.convert(dtype).to_gpu();
     Array<uint> ain_gpu = ain_cpu.to_gpu();
-    Array<void> zout_gpu(dtype, {Tout}, af_gpu | af_guard);
-    Array<uint> aout_gpu({Tout}, af_gpu | af_guard);
+    Array<void> zout_gpu(dtype, {nt_out}, af_gpu | af_guard);
+    Array<uint> aout_gpu({nt_out}, af_gpu | af_guard);
 
     // void kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in);
     auto kernel = TestPfOutput2::registry().get(key).cuda_kernel;
@@ -1696,9 +1696,9 @@ void TestPfOutput2::test()
     // agrees with 'zout_cpu' (within roundoff error), then the 'aout_gpu' array is
     // correct.
 
-    Array<float> za_gpu({Tout}, af_uhost);
+    Array<float> za_gpu({nt_out}, af_uhost);
 
-    for (uint tout = 0; tout < Tout; tout++) {
+    for (uint tout = 0; tout < nt_out; tout++) {
         uint token = aout_gpu.at({tout});
         
         auto it = token_mapping.find(token);

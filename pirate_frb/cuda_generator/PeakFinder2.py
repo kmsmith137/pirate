@@ -147,10 +147,20 @@ class PeakFinder2:
         k.emit('// ndm_out_per_wt: dm downsampling factor for weight array (relative to *output*)')
         k.emit('// nt_in_per_wt: time downsampling factor for weight array (relative to *input*)')
         k.emit('//')
-        k.emit('// If Tinner > 1, then nt_in_per_wt must equal (32*SW)/Tinner, and nt_in must be a multiple of (32*SW).')
-        k.emit('// If Tinner == 1, then nt_in_per_wt must be a multiple of (32*SW), and nt_in must be a multiple of nt_in_per_wt.')
-        k.emit('// Here, SW = (128/sizeof(dtype)) is the simd width.')
-        k.emit()
+        k.emit('// Caller is responsible for checking:')
+        k.emit('//   - ndm_out_per_wt and nt_in_per_wt are powers of two')
+        k.emit('//   - If Tinner == 1, then nt_in_per_wt >= (32 * simd_width)')
+        k.emit('//   - If Tinner > 1, then nt_in_per_wt == (32 * simd_width) / Tinner')
+        k.emit('//   - nt_in is a mutliple of nt_in_per_wt')
+        k.emit('//   - nt_in is a multiple of (32 * simd_width)')
+        k.emit('//   - total warps (B*W) is a multiple of ndm_out_per_wt')
+        k.emit('//')
+        k.emit('// Note: the PfWeightLayout parameters (Dw,Tw,P,F) are given by:')
+        k.emit('//   - Dw = (B*W) / ndm_out_per_wt')
+        k.emit('//   - Tw = nt_in / nt_in_pwer_wt')
+        k.emit('//   - P = 3*log2(E) + 1')
+        k.emit('//   - F = frequency_subbands.F')
+        k.emit('//')
         k.emit('// FIXME assuming 32 threads/block and 16 threadblocks/SM for now')
         k.emit('__global__ void __launch_bounds__(32,16)')
         k.emit(f'{self.kernel_name}(const void *in_, void *out_max_, uint *out_argmax, const void *wt_, void *pstate_, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)')
@@ -171,9 +181,9 @@ class PeakFinder2:
         k.emit(f'{dt32} *pstate = ({dt32} *) pstate_;')
         k.emit()
 
-        Tout = self._idiv('nt_in', Dout)
+        nt_out = self._idiv('nt_in', Dout)
         nt_in32 = self._idiv('nt_in', SW)
-        Tout32 = self._idiv('nt_in', Dout*SW)
+        nt_out32 = self._idiv('nt_in', Dout*SW)
 
         k.emit(f'// FIXME could optimize out integer divisions')
         k.emit(f'uint wb = blockIdx.x * blockDim.x + threadIdx.y;')
@@ -184,8 +194,8 @@ class PeakFinder2:
         
         k.emit(f'// Add per-warp pointer offsets, but not per-lane offsets')
         k.emit(f'in += wb * M * {nt_in32};                    // shape (B*W, M, nt_in)')
-        k.emit(f'out_max += wb * {Tout32};                  // shape (B*W, nt_in/Dout)')
-        k.emit(f'out_argmax += wb * {Tout};                 // shape (B*W, nt_in/Dout)')
+        k.emit(f'out_max += wb * {nt_out32};                  // shape (B*W, nt_in/Dout)')
+        k.emit(f'out_argmax += wb * {nt_out};                 // shape (B*W, nt_in/Dout)')
         k.emit(f'wt += dw * Touter * wt_touter_stride32;  // shape (Dw,Touter,...)')
         k.emit(f'pstate += wb * PW32;                       // shape (B*W, PW32)')        
         k.emit()
@@ -1169,7 +1179,7 @@ class PfOutput2:
           [float16]  simd <-> s(0)    lane <-> s(1,L) tout(0,6-L)
 
         Output: as an "outer" t-loop is iterated, the Z_{st} array gets reduced over
-        spectator indices, and two length Tout=(nt_in/Dout) array gets incrementally
+        spectator indices, and two length nt_out=(nt_in/Dout) array gets incrementally
         written to global memory (see below).
 
         Generated code looks like this:
