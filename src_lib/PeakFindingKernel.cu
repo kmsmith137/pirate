@@ -825,7 +825,7 @@ void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long 
                 for (long t = 0; t < t0; t++)
                     ps[t] = ps[t + nt_in];
                 for (long t = 0; t < t1; t++)
-                    ps[t + t0] = dst[t + nt_in - t1];
+                    ps[t + t0] = src[t + nt_in - t1];
             }
         }
     }
