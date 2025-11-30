@@ -1255,14 +1255,14 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
 
     long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
+    long ndm_wt = 1 << rand_int(0,3);
+    long ndm_out = ndm_wt << rand_int(0,3);
 
-    auto v = ksgpu::random_integers_with_bounded_product(6, 100000/nt_in_divisor);
+    auto v = ksgpu::random_integers_with_bounded_product(4, 100000 / (nt_in_divisor * ndm_out));
     long nchunks = v[0];
-    long nt_in_per_chunk = v[1];
-    long ndm_wt = v[2];
-    long ndm_out = v[2] * v[3];
-    long beams_per_batch = v[4];
-    long total_beams = v[4] * v[5];
+    long nt_in_per_chunk = v[1] * nt_in_divisor;
+    long beams_per_batch = v[2];
+    long total_beams = v[2] * v[3];
 
     long nt_out_per_chunk = xdiv(nt_in_per_chunk, key.Dout);
     long nt_wt_per_chunk = xdiv(nt_in_per_chunk, nt_in_per_wt);
