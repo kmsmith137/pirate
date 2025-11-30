@@ -604,17 +604,17 @@ void GpuPfWeightLayout::validate() const
 }
 
 
-vector<long> GpuPfWeightLayout::get_shape(long nbeams, long Dw, long Tw) const
+vector<long> GpuPfWeightLayout::get_shape(long nbeams, long ndm_wt, long nt_wt) const
 {
-    long Touter = xdiv(Tw, Tinner);   // must divide evenly
-    return { nbeams, Dw, Touter, Pouter, F, Tinner, Pinner };
+    long Touter = xdiv(nt_wt, Tinner);   // must divide evenly
+    return { nbeams, ndm_wt, Touter, Pouter, F, Tinner, Pinner };
 }
 
-vector<long> GpuPfWeightLayout::get_strides(long nbeams, long Dw, long Tw) const
+vector<long> GpuPfWeightLayout::get_strides(long nbeams, long ndm_wt, long nt_wt) const
 {
-    long Touter = xdiv(Tw, Tinner);   // must divide evenly
+    long Touter = xdiv(nt_wt, Tinner);   // must divide evenly
     long S = xdiv(touter_byte_stride * 8, dtype.nbits);
-    return { Dw*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
+    return { ndm_wt*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
 }
 
 Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
@@ -623,7 +623,7 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     
     if (src.ndim != 5) {
         stringstream ss;
-        ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, Dw, Tw, P, F), got " << src.shape_str();
+        ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, ndm_wt, nt_wt, P, F), got " << src.shape_str();
         throw runtime_error(ss.str());
     }
 
@@ -631,12 +631,12 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     xassert_eq(src.shape[4], F);
 
     long nbeams = src.shape[0];
-    long Dw = src.shape[1];
-    long Tw = src.shape[2];
-    long Touter = xdiv(Tw, Tinner);   // must divide evenly
+    long ndm_wt = src.shape[1];
+    long nt_wt = src.shape[2];
+    long Touter = xdiv(nt_wt, Tinner);   // must divide evenly
     
-    vector<long> shape = get_shape(nbeams, Dw, Tw);
-    vector<long> strides = get_strides(nbeams, Dw, Tw);
+    vector<long> shape = get_shape(nbeams, ndm_wt, nt_wt);
+    vector<long> strides = get_strides(nbeams, ndm_wt, nt_wt);
 
     // Note: code below is poorly optimized! (Intended for unit tests.)
 
@@ -644,7 +644,7 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     Array<float> tmp(shape, af_rhost | af_zero);
 
     for (long b = 0; b < nbeams; b++) {
-        for (long dw = 0; dw < Dw; dw++) {
+        for (long dw = 0; dw < ndm_wt; dw++) {
             for (long touter = 0; touter < Touter; touter++) {
                 for (long pouter = 0; pouter < Pouter; pouter++) {
                     for (long f = 0; f < F; f++) {
@@ -1143,7 +1143,7 @@ GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &par
     //           = max(32*SW/Dt, 1)
     //
     //  where SW = (4/sizeof(dtype)) is simd width
-    //        Dt = (Tin/Tw) is time downsampling factor (tree) -> (weights)
+    //        Dt = (Tin/nt_wt) is time downsampling factor (tree) -> (weights)
 
     long SW = xdiv(32, params.dtype.nbits);      // simd width
     long Dt = xdiv(params.nt_in, params.nt_wt);  // downsampling factor tree -> weights
@@ -1532,20 +1532,20 @@ void TestPfWeightReader::test()
          << ", nt_in_per_wt=" << nt_in_per_wt
          << ", nt_in=" << nt_in << endl;
     
-    int Tw = xdiv(nt_in, nt_in_per_wt);     // number of time samples in weights array (input array to test kernel)
+    int nt_wt = xdiv(nt_in, nt_in_per_wt);     // number of time samples in weights array (input array to test kernel)
     int nt_out = xdiv(nt_in, Dcore);   // number of time samples in output array of test kernel
-    int Tspec = xdiv(nt_out, Tw);  // number of "spectator" time samples in test kernel
+    int Tspec = xdiv(nt_out, nt_wt);  // number of "spectator" time samples in test kernel
     int Mpad = val.Mouter * val.Minner;
     int Ppad = wl.Pouter * wl.Pinner;    
     
-    // Input array: (1,1,Tw,P,F), where the length-1 axes are beams and DMs.
-    Array<float> in_cpu({1,1,Tw,P,F}, af_rhost | af_random);
+    // Input array: (1,1,nt_wt,P,F), where the length-1 axes are beams and DMs.
+    Array<float> in_cpu({1,1,nt_wt,P,F}, af_rhost | af_random);
 
     // Output array: (nt_out, Mouter*Minner, Pouter*Pinner)
     Array<float> out_cpu({nt_out,Mpad,Ppad}, af_rhost | af_zero);
 
     // Emulate PfWeightReader kernel on the CPU.
-    for (int tw = 0; tw < Tw; tw++) {
+    for (int tw = 0; tw < nt_wt; tw++) {
         for (int tout = tw*Tspec; tout < (tw+1)*Tspec; tout++) {
             for (int mpad = 0; mpad < Mpad; mpad++) {
                 int m = min(mpad, M-1);

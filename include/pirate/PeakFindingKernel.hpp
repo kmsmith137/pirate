@@ -243,12 +243,12 @@ struct FrequencySubbands
 //
 // Peak-finding weights are logically a 5-d array with shape:
 //
-//   (nbeams, Dw, Tw, P, F)        (*)
+//   (nbeams, ndm_wt, nt_wt, P, F)        (*)
 //
 // where:
 //
-//  - Dw = number of DMs in weights array (downsampled relative to tree)
-//  - Tw = number of time samples in weights array (downsampled relative to tree)
+//  - ndm_wt = number of DMs in weights array (downsampled relative to tree)
+//  - nt_wt = number of time samples in weights array (downsampled relative to tree)
 //  - P = number of peak-finding profiles
 //  - F = number of frequency subbands F
 //
@@ -276,11 +276,11 @@ struct GpuPfWeightLayout
     long Tinner = 0;
     long touter_byte_stride = 0;
 
-    std::vector<long> get_shape(long nbeams, long Dw, long Tw) const;
-    std::vector<long> get_strides(long nbeams, long Dw, long Tw) const;
+    std::vector<long> get_shape(long nbeams, long ndm_wt, long nt_wt) const;
+    std::vector<long> get_strides(long nbeams, long ndm_wt, long nt_wt) const;
 
     // Copies weights array from host to GPU (also converts fp32 -> fp16 if needed).
-    // The source array has the straightforward layout (nbeams, Dw, Tw, P, F).
+    // The source array has the straightforward layout (nbeams, ndm_wt, nt_wt, P, F).
     // The destination array has the complicated layout assumed by the GPU kernel.
     // This function is intended to help hide details of the GPU layout.
     // Note: poorly optimized! (Intended for unit tests.)
@@ -464,7 +464,7 @@ struct GpuPeakFindingKernel2
         // in: shape (B*W, M, Tin)
         // out_max: shape (B*W, Tin/Dout)
         // out_argmax: shape (B*W, Tin/Dout)
-        // wt: complicated format (see class PfWeightLayout), Dw=(B*W*2^pf_rank/WDd), Tw=(Tin/WDt)
+        // wt: complicated format (see class PfWeightLayout), ndm_wt=(B*W*2^pf_rank/WDd), nt_wt=(Tin/WDt)
         // pstate: (B*W, PW32) where PW32 = pstate 32-bit registers per warp
         //
         // WDd, WDt: coarse-graining factors for weight array.

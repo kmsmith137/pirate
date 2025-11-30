@@ -155,9 +155,9 @@ class PeakFinder2:
         k.emit('//   - nt_in is a multiple of (32 * simd_width)')
         k.emit('//   - total warps (B*W) is a multiple of ndm_out_per_wt')
         k.emit('//')
-        k.emit('// Note: the PfWeightLayout parameters (Dw,Tw,P,F) are given by:')
-        k.emit('//   - Dw = (B*W) / ndm_out_per_wt')
-        k.emit('//   - Tw = nt_in / nt_in_pwer_wt')
+        k.emit('// Note: the PfWeightLayout parameters (ndm_wt,nt_wt,P,F) are given by:')
+        k.emit('//   - ndm_wt = (B*W) / ndm_out_per_wt')
+        k.emit('//   - nt_wt = nt_in / nt_in_pwer_wt')
         k.emit('//   - P = 3*log2(E) + 1')
         k.emit('//   - F = frequency_subbands.F')
         k.emit('//')
@@ -196,7 +196,7 @@ class PeakFinder2:
         k.emit(f'in += warp * M * {nt_in32};                    // shape (B*W, M, nt_in)')
         k.emit(f'out_max += warp * {nt_out32};                  // shape (B*W, nt_in/Dout)')
         k.emit(f'out_argmax += warp * {nt_out};                 // shape (B*W, nt_in/Dout)')
-        k.emit(f'wt += dm_w * Touter * wt_touter_stride32;  // shape (Dw,Touter,...)')
+        k.emit(f'wt += dm_w * Touter * wt_touter_stride32;  // shape (ndm_wt,Touter,...)')
         k.emit(f'pstate += warp * PW32;                       // shape (B*W, PW32)')        
         k.emit()
 
@@ -709,10 +709,10 @@ class PfWeightLayout:
         The W-array in global memory
         ----------------------------
         
-        The W-array is a logical 4-d array with shape (Dw,Tw,P,F) parameterized by:
+        The W-array is a logical 4-d array with shape (ndm_wt,nt_wt,P,F) parameterized by:
         
-          - Dw = number of coarse DMs in weights array
-          - Tw = number of coarse time samples in weights array
+          - ndm_wt = number of coarse DMs in weights array
+          - nt_wt = number of coarse time samples in weights array
           - P = number of peak-finding profiles
           - F = number of frequency subbands F
 
@@ -722,15 +722,15 @@ class PfWeightLayout:
           Tinner = max(32*SW/nt_in_per_wt, 1)   see (*) below
           Pinner = SW                  see (**) below
 
-        Then, we split P,Tw into "outer" and "inner" parts:
+        Then, we split P,nt_wt into "outer" and "inner" parts:
         
           Pouter = ceil(P / Pinner)   where Pinner = SW (**)
-          Touter = Tw / Tinner
+          Touter = nt_wt / Tinner
 
         The W-array global memory layout can be described as either a 6-d or a 5-d array:
         
-           dtype          W[Dw,Touter,Pouter,F,Tinner,Pinner]
-           dtype*Pinnner  W[Dw,Touter,Pouter,F,Tinner]
+           dtype          W[ndm_wt,Touter,Pouter,F,Tinner,Pinner]
+           dtype*Pinnner  W[ndm_wt,Touter,Pouter,F,Tinner]
 
         Important note: we always pad so that the 'Touter' stride is 128-byte aligned!
         (See "self.touter_stride" below.)
