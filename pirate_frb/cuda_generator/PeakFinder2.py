@@ -141,7 +141,7 @@ class PeakFinder2:
         k.emit('// in: shape (B*W, M, nt_in)')
         k.emit('// out_max: shape (B*W, nt_in/Dout)')
         k.emit('// out_argmax: shape (B*W, nt_in/Dout)')
-        k.emit('// wt: complicated format (see class PfWeightLayout)')
+        k.emit('// wt: complicated format (from class PfWeightLayout, see below)')
         k.emit('// pstate: (B*W, PW32) where PW32 = pstate 32-bit registers per warp')
         k.emit('// nt_in: number of input time samples')
         k.emit('// ndm_out_per_wt: dm downsampling factor for weight array (relative to *output*)')
@@ -782,12 +782,6 @@ class PfWeightLayout:
 class PfWeightReader:
     def __init__(self, frequency_subbands, dtype, Dcore, P, Tinner):
         """
-        The read_weights() method
-        -------------------------
-
-        Each call to read_weights() reads 
-        
-        
         Generated code looks like this
         ------------------------------
 
@@ -1031,20 +1025,26 @@ class PfWeightReader:
         k.emit('namespace pirate {')
         k.emit()
 
-        k.emit(f'// out.shape == (nt_in/Dcore, Mouter*Minner, Pouter*Pinner)')
-        k.emit(f'// in.shape == (nt_in/(nt_in_per_wt*Tinner), Pouter, F, Tinner, Pinner)')
-        k.emit(f'//')
-        k.emit(f'// The test kernel does the following (schematically):')
-        k.emit(f'//')
-        k.emit(f'//   for (int tin = 0; tin < nt_in; tin += 32*SW)')
-        k.emit(f'//       for (int mouter = 0; mouter < Mouter; mouter++)')
-        k.emit(f'//           for (int Pouter = 0; pouter < Pouter; pouter++)')
-        k.emit(f'//               call read_weights(), and write to out[]')
-        k.emit(f"//")
-        k.emit(f'// If Tinner > 1, then nt_in_per_wt must equal (32*SW)/Tinner, and nt_in must be a multiple of (32*SW).')
-        k.emit(f'// If Tinner == 1, then nt_in_per_wt must be a multiple of (32*SW), and nt_in must be a multiple of nt_in_per_wt.')
-        k.emit(f"//")
-        k.emit(f'// Launch with 32 threads, 1 block.')
+        k.emit('// The test kernel does the following (schematically):')
+        k.emit('//')
+        k.emit('//   for (int tin = 0; tin < nt_in; tin += 32*SW)')
+        k.emit('//       for (int mouter = 0; mouter < Mouter; mouter++)')
+        k.emit('//           for (int Pouter = 0; pouter < Pouter; pouter++)')
+        k.emit('//               call read_weights(), and write to out[]')
+        k.emit('//')
+        k.emit('// out: shape (nt_in/Dcore, Mouter*Minner, Pouter*Pinner)')
+        k.emit('// in: shape (nt_in/(nt_in_per_wt*Tinner), Pouter, F, Tinner, Pinner)')
+        k.emit('// nt_in: number of input time samples')
+        k.emit('// nt_in_per_wt: time downsampling factor for weight array')
+        k.emit('//')
+        k.emit('// Caller is responsible for checking:')
+        k.emit('//   - nt_in_per_wt is a power of two')
+        k.emit('//   - If Tinner == 1, then nt_in_per_wt >= (32 * simd_width)')
+        k.emit('//   - If Tinner > 1, then nt_in_per_wt == (32 * simd_width) / Tinner')
+        k.emit('//   - nt_in is a mutliple of nt_in_per_wt')
+        k.emit('//   - nt_in is a multiple of (32 * simd_width)')
+        k.emit('//')
+        k.emit('// Launch with 32 threads, 1 block.')
         k.emit()
         
         k.emit(f'__global__ void {self.test_kernel_name}(void *out_, const void *in_, uint nt_in, uint nt_in_per_wt)')
@@ -1406,12 +1406,19 @@ class PfOutput2:
         k.emit('namespace pirate {')
         k.emit()
 
-        k.emit(f'// Call with 32 threads, and 1 threadblock.')
         k.emit(f'// Use 4 calls to apply_inner() inside t-loop.')
         k.emit(f'// Thus, the number of reduced spectator indices is 4*Dout = 4*{Dout} = {4*Dout}')
-        k.emit(f'// zout.shape == aout.shape == (nt_in//Dout) == (nt_in//{Dout})')
-        k.emit(f'// zin.shape == ain.shape == (4, nt_in)')
+        k.emit(f'//')
+        k.emit(f'// zout: shape (nt_in//Dout) == (nt_in//{Dout})')
+        k.emit(f'// aout32: shape (nt_in//Dout) == (nt_in//{Dout})')
+        k.emit(f'// zin: shape (4, nt_in)')
+        k.emit(f'// ain32: shape (4, nt_in)')
+        k.emit(f'// nt_in: number of input time samples')
+        k.emit('//')
+        k.emit('// Caller is responsible for checking:')
+        k.emit('//   - nt_in is a multiple of (32 * simd_width)')
         k.emit()
+        k.emit(f'// Call with 32 threads, and 1 threadblock.')
 
         k.emit(f'__global__ void {pf_output.test_kernel_name}(void *zout_, uint *aout32, void *zin_, uint *ain32, uint nt_in)')
         k.emit(f'{{')

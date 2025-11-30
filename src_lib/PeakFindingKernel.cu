@@ -644,7 +644,7 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
     Array<float> tmp(shape, af_rhost | af_zero);
 
     for (long b = 0; b < nbeams; b++) {
-        for (long dw = 0; dw < ndm_wt; dw++) {
+        for (long dm_wt = 0; dm_wt < ndm_wt; dm_wt++) {
             for (long touter = 0; touter < Touter; touter++) {
                 for (long pouter = 0; pouter < Pouter; pouter++) {
                     for (long f = 0; f < F; f++) {
@@ -653,8 +653,8 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
                                 long tw = touter*Tinner + tinner;
                                 long p = min(pouter*Pinner + pinner, P-1);
 
-                                float w = src.at({b,dw,tw,p,f});
-                                tmp.at({b,dw,touter,pouter,f,tinner,pinner}) = w;
+                                float w = src.at({b,dm_wt,tw,p,f});
+                                tmp.at({b,dm_wt,touter,pouter,f,tinner,pinner}) = w;
                             }
                         }
                     }
@@ -693,23 +693,26 @@ void PeakFindingKernelParams2::validate() const
     xassert(nt_wt > 0);
 
     xassert(is_power_of_two(max_kernel_width));
+    xassert(is_power_of_two(ndm_out));
+    xassert(is_power_of_two(ndm_wt));
+
     xassert_divisible(total_beams, beams_per_batch);
+    xassert_divisible(ndm_out, ndm_wt);
     xassert_divisible(nt_in, nt_out);
     xassert_divisible(nt_out, nt_wt);
-    xassert_divisible(ndm_out, ndm_wt);
+
+    // The nt_* members don't need to be powers of two, but the downsampling
+    // factors which relate them do need to be power of two.
+
+    xassert(is_power_of_two(xdiv(ndm_out, ndm_wt)));
+    xassert(is_power_of_two(xdiv(nt_in, nt_out)));
+    xassert(is_power_of_two(xdiv(nt_out, nt_wt)));
+
+    // Kernels currently assume that the input spans an integer number
+    // of GPU cache lines.
 
     long simd_width = xdiv(32, dtype.nbits);
-    long time_downsampling_factor = xdiv(nt_in, nt_out);
-
-    // Currently assumed in GPU kernels.
-    xassert(is_power_of_two(time_downsampling_factor));
-    xassert(time_downsampling_factor >= simd_width);
-    xassert(time_downsampling_factor <= 32);
-    xassert(max_kernel_width <= 32);
-
-    // I don't remember whether I'm currently assuming these!
-    xassert(is_power_of_two(xdiv(ndm_out, ndm_wt)));
-    xassert(is_power_of_two(xdiv(nt_out, nt_wt)));
+    xassert_divisible(nt_in, 32 * simd_width);
 }
 
 
@@ -1071,6 +1074,7 @@ Array<float> ReferencePeakFindingKernel2::make_random_input_array()
     long D = params.ndm_out;
     long T = params.nt_in;
     long M = fs.M;
+
     Array<float> ret({B,D,M,T}, af_rhost);
     for (long i = 0; i < ret.size; i++)
         ret.data[i] = rand_uniform(-1.0f, 1.0f);
@@ -1136,18 +1140,14 @@ GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &par
     registry_key.Dout = xdiv(params.nt_in, params.nt_out);
     registry_key.E = params.max_kernel_width;
 
-    // XXX revisit
-    // Recall the definition of Tinner (from cuda_generator.PfWeightLayout):
+    // Recall the definition of Tinner (used for weight layout, see comments in
+    // cuda_generator.PeakFinder2.y):
     //
-    //    Tinner = "number of W-array time samples per iteration of GPU tin-loop"
-    //           = max(32*SW/Dt, 1)
-    //
-    //  where SW = (4/sizeof(dtype)) is simd width
-    //        Dt = (Tin/nt_wt) is time downsampling factor (tree) -> (weights)
+    //   Tinner = max(32*SW/nt_in_per_wt, 1)  
 
     long SW = xdiv(32, params.dtype.nbits);      // simd width
-    long Dt = xdiv(params.nt_in, params.nt_wt);  // downsampling factor tree -> weights
-    registry_key.Tinner = (Dt < 32*SW) ? xdiv(32*SW, Dt) : 1;
+    long nt_in_per_wt = xdiv(params.nt_in, params.nt_wt);
+    registry_key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
 
     registry_value = registry().get(registry_key);
     
@@ -1235,6 +1235,7 @@ void GpuPeakFindingKernel2::launch(
     long ndm_out_per_wt = xdiv(p.ndm_out, p.ndm_wt);
     long nt_in_per_wt = xdiv(p.nt_in, p.nt_wt);
 
+    // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)
     registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>> 
        (in.data, out_max.data, out_argmax.data, wt.data, pstate, p.nt_in, ndm_out_per_wt, nt_in_per_wt);
 
@@ -1515,7 +1516,6 @@ void TestPfWeightReader::test()
     int Dcore = key.Dcore;
     int Tinner = key.Tinner;
     
-    // XXX revisit
     // Choose nt_in_per_wt, nt_in.
     // If Tinner > 1, then nt_in_per_wt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
     // If Tinner == 1, then nt_in_per_wt must be a multiple of (32*SW), and Tin must be a multiple of nt_in_per_wt.
@@ -1563,6 +1563,7 @@ void TestPfWeightReader::test()
     Array<void> in_gpu = val.pf_weight_layout.to_gpu(in_cpu);
 
     // Run kernel on GPU.
+    // cuda_kernel(void *out, const void *in, uint nt_in, uint nt_in_per_wt)
     Array<void> out_gpu(dtype, {nt_out,Mpad,Ppad}, af_gpu | af_zero | af_guard);
     val.cuda_kernel <<<1,32>>> (out_gpu.data, in_gpu.data, nt_in, nt_in_per_wt);
     CUDA_PEEK("pf_weight_reader");
@@ -1674,13 +1675,12 @@ void TestPfOutput2::test()
     }
 
     // Run GPU kernel.
-
     Array<void> zin_gpu = zin_cpu.convert(dtype).to_gpu();
     Array<uint> ain_gpu = ain_cpu.to_gpu();
     Array<void> zout_gpu(dtype, {nt_out}, af_gpu | af_guard);
     Array<uint> aout_gpu({nt_out}, af_gpu | af_guard);
 
-    // void kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in);
+    // cuda_kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in)
     auto kernel = TestPfOutput2::registry().get(key).cuda_kernel;
 
     kernel<<<1,32>>> (zout_gpu.data, aout_gpu.data, zin_gpu.data, ain_gpu.data, nt_in);

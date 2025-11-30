@@ -458,27 +458,34 @@ struct GpuPeakFindingKernel2
 
     struct RegistryValue
     {
-        // XXX revisit
-        // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint Tin, uint WDd, uint WDt)
+        // cuda_kernel(const void *in, void *out_max, uint *out_argmax, const void *wt, void *pstate, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)
         //
-        // in: shape (B*W, M, Tin)
-        // out_max: shape (B*W, Tin/Dout)
-        // out_argmax: shape (B*W, Tin/Dout)
-        // wt: complicated format (see class PfWeightLayout), ndm_wt=(B*W*2^pf_rank/WDd), nt_wt=(Tin/WDt)
+        // in: shape (B*W, M, nt_in)
+        // out_max: shape (B*W, nt_in/Dout)
+        // out_argmax: shape (B*W, nt_in/Dout)
+        // wt: complicated format (from class PfWeightLayout, see below)
         // pstate: (B*W, PW32) where PW32 = pstate 32-bit registers per warp
+        // nt_in: number of input time samples
+        // ndm_out_per_wt: dm downsampling factor for weight array (relative to *output*)
+        // nt_in_per_wt: time downsampling factor for weight array (relative to *input*)
         //
-        // WDd, WDt: coarse-graining factors for weight array.
-        // WDd must be a multiple of 2**pf_rank.
-        // If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
-        // If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.
-        // Here, SW = (128/sizeof(dtype)) is the simd width.
+        // Caller is responsible for checking:
+        //   - ndm_out_per_wt and nt_in_per_wt are powers of two
+        //   - If Tinner == 1, then nt_in_per_wt >= (32 * simd_width)
+        //   - If Tinner > 1, then nt_in_per_wt == (32 * simd_width) / Tinner
+        //   - nt_in is a mutliple of nt_in_per_wt
+        //   - nt_in is a multiple of (32 * simd_width)
+        //   - total warps (B*W) is a multiple of ndm_out_per_wt
+        //
+        // Launch with {32,W,1} threads/block and {B,1,1} threadblocks.
 
         void (*cuda_kernel)(const void *, void *, uint *, const void *, void *, uint, uint, uint) = nullptr;
 
         // Layout of peak-finding weights in GPU memory, expected by the kernel.
         GpuPfWeightLayout pf_weight_layout;
 
-        long Dcore = 0;   // internal downsampling factor (see discussion above)
+        long Dcore = 0;   // internal downsamplingq
+        //  factor (see discussion above)
         long PW32 = -1;   // number of 32-bit registers per warp (= "one pf_rank")
     };
 
@@ -518,15 +525,21 @@ struct TestPfWeightReader
 
     struct RegistryValue
     {
-        // XXX revisit
-        // The test kernel is called as (32 threads, 1 threadblock):
-        //   void kernel(void *out, const void *in, uint Tin, uint WDt);
+        // cuda_kernel(void *out, const void *in, uint nt_in, uint nt_in_per_wt)
         //
-        // where 'out' has shape (Tin/Dcore, Mouter * Minner, Pouter * Pinner)
-        // and 'in' is managed by 'struct GpuPfWeightLayout' (see above).
+        // out: shape (nt_in/Dcore, Mouter*Minner, Pouter*Pinner)
+        // in: shape (nt_in/(nt_in_per_wt*Tinner), Pouter, F, Tinner, Pinner)
+        // nt_in: number of input time samples
+        // nt_in_per_wt: time downsampling factor for weight array
         //
-        // If Tinner > 1, then WDt must equal (32*SW)/Tinner, and Tin must be a multiple of (32*SW).
-        // If Tinner == 1, then WDt must be a multiple of (32*SW), and Tin must be a multiple of WDt.
+        // Caller is responsible for checking:
+        //   - nt_in_per_wt is a power of two
+        //   - If Tinner == 1, then nt_in_per_wt >= (32 * simd_width)
+        //   - If Tinner > 1, then nt_in_per_wt == (32 * simd_width) / Tinner
+        //   - nt_in is a mutliple of nt_in_per_wt
+        //   - nt_in is a multiple of (32 * simd_width)
+        //
+        // Launch with 32 threads, 1 block.
         
         void (*cuda_kernel)(void *, const void *, uint, uint) = nullptr;
 
@@ -564,13 +577,16 @@ struct TestPfOutput2
 
     struct RegistryValue
     {
-        // XXX revisit
-        // The test kernel is called as (32 threads, 1 threadblock):
-        //   void kernel(void *zout, uint *aout, void *zin, uint *ain, uint Tin);
+        // cuda_kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in)
         //
-        // where 'zout' and 'zin' have type RegistryKey::dtype, and:
-        //   zout.shape == aout.shape == (Tin//Dout)
-        //   zin.shape == ain.shape == (4, Tin)
+        // zout: shape (nt_in//Dout) == (nt_in//4)
+        // aout: shape (nt_in//Dout) == (nt_in//4)
+        // zin: shape (4, nt_in)
+        // ain: shape (4, nt_in)
+        // nt_in: number of input time samples
+        //
+        // Caller is responsible for checking:
+        //   - nt_in is a multiple of (32 * simd_width)
 
         void (*cuda_kernel) (void *, uint *, void *, uint *, uint) = nullptr;
     };
