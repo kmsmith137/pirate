@@ -496,10 +496,6 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel2::R
 // Unit tests of peak-finding "microkernels".
 
 
-extern void test_pf_weight_reader_microkernel();
-extern void test_pf_output_microkernel();
-
-
 // Everything after this point is KernelRegistry boilerplate.
 // First, a registry for test_pf_weight_reader kernels.
 struct TestPfWeightReader
@@ -536,7 +532,10 @@ struct TestPfWeightReader
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;
 
     // Static member function to access registry.
-    static Registry &registry();        
+    static Registry &registry();
+
+    // Static member function: runs one randomized test iteration.
+    static void test();
 };
 
 // Defined in GpuPeakFindingKernel.cu
@@ -570,7 +569,10 @@ struct TestPfOutput2
     using Registry = KernelRegistry<RegistryKey, RegistryValue>;
 
     // Static member function to access registry.
-    static Registry &registry();    
+    static Registry &registry();
+
+    // Static member function: runs one randomized test iteration.
+    static void test();
 };
 
 // Defined in GpuPeakFindingKernel.cu

@@ -116,6 +116,9 @@ public:
     // Shape (total_beams, state_nelts_per_beam).
     ksgpu::Array<void> persistent_state;
 
+    // Static member function: runs one randomized test iteration.
+    static void test();
+
 protected:
     // Constructor is protected -- use GpuLaggedDownsamplingKernel::make() instead.
     GpuLaggedDownsamplingKernel(const LaggedDownsamplingKernelParams &params);

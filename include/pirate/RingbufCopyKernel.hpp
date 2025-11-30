@@ -61,6 +61,9 @@ struct GpuRingbufCopyKernel
     // Bandwidth per call to GpuRingbufCopyKernel::launch().
     // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
     BandwidthTracker bw_per_launch;
+
+    // Static member function: runs one randomized test iteration.
+    static void test();
 };
 
 

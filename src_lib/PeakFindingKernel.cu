@@ -1382,7 +1382,7 @@ ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryValue &v)
 }
 
 
-void test_pf_weight_reader_microkernel()
+void TestPfWeightReader::test()
 {
     TestPfWeightReader::RegistryKey key = TestPfWeightReader::registry().get_random_key();
     TestPfWeightReader::RegistryValue val = TestPfWeightReader::registry().get(key);
@@ -1512,7 +1512,7 @@ ostream &operator<<(ostream &os, const TestPfOutput2::RegistryValue &v)
 }
 
 
-void test_pf_output_microkernel()
+void TestPfOutput2::test()
 {
     TestPfOutput2::RegistryKey key = TestPfOutput2::registry().get_random_key();
     

@@ -86,6 +86,9 @@ struct GpuDedisperser
     // FIXME interface will evolve over time (e.g. cudaEvents).
     
     void launch(long ibatch, long it_chunk, long istream, cudaStream_t stream);
+
+    // Static member function: runs one randomized test iteration.
+    static void test();
 };
 
 
@@ -151,6 +154,9 @@ struct ReferenceDedisperserBase
     // Helper methods called by subclass constructors.
     void _init_iobufs(ksgpu::Array<float> &in, std::vector<ksgpu::Array<float>> &out);
     void _init_iobufs(ksgpu::Array<void> &in, std::vector<ksgpu::Array<void>> &out);
+
+    // Static member function: runs one randomized test iteration (tests ReferenceTree, ReferenceLagbuf, etc.)
+    static void test_dedispersion_basics();
 };
 
 

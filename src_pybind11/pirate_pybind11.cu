@@ -11,10 +11,14 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/CasmBeamformer.hpp"
+#include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
+#include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
+#include "../include/pirate/RingbufCopyKernel.hpp"
+#include "../include/pirate/TreeGriddingKernel.hpp"
 #include "../include/pirate/tests.hpp"
 #include "../include/pirate/timing.hpp"
 #include "../include/pirate/utils.hpp"  // show_kernels()
@@ -134,18 +138,39 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test", &GpuDedispersionKernel::test)
     ;
 
+    py::class_<GpuDedisperser>(m, "GpuDedisperser")
+          .def_static("test", &GpuDedisperser::test)
+    ;
+
+    py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")
+          .def_static("test", &GpuLaggedDownsamplingKernel::test)
+    ;
+
     py::class_<GpuPeakFindingKernel2>(m, "GpuPeakFindingKernel")
           .def_static("test", &GpuPeakFindingKernel2::test, py::arg("short_circuit") = false)
     ;
 
-    m.def("test_dedispersion_basics", &test_dedispersion_basics);
-    m.def("test_gpu_lagged_downsampling_kernel", &test_gpu_lagged_downsampling_kernel);
+    py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")
+          .def_static("test", &GpuRingbufCopyKernel::test)
+    ;
+
+    py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel")
+          .def_static("test", &GpuTreeGriddingKernel::test)
+    ;
+
+    py::class_<ReferenceDedisperserBase>(m, "ReferenceDedisperser")
+          .def_static("test_dedispersion_basics", &ReferenceDedisperserBase::test_dedispersion_basics)
+    ;
+
+    py::class_<TestPfWeightReader>(m, "TestPfWeightReader")
+          .def_static("test", &TestPfWeightReader::test)
+    ;
+
+    py::class_<TestPfOutput2>(m, "TestPfOutput2")
+          .def_static("test", &TestPfOutput2::test)
+    ;
+
     m.def("test_gpu_peak_finding_kernel", &test_gpu_peak_finding_kernel, py::arg("reduce_only"));
-    m.def("test_gpu_ringbuf_copy_kernel", &test_gpu_ringbuf_copy_kernel);
-    m.def("test_gpu_tree_gridding_kernel", &test_gpu_tree_gridding_kernel);
-    m.def("test_dedisperser", static_cast<void (*)()> (&test_dedisperser));
-    m.def("test_pf_output_microkernel", &test_pf_output_microkernel);
-    m.def("test_pf_weight_reader_microkernel", &test_pf_weight_reader_microkernel);
 
     m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));
     m.def("time_gpu_dedispersion_kernels", &time_gpu_dedispersion_kernels);

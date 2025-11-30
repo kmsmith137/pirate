@@ -21,17 +21,17 @@ def parse_test(subparsers):
     parser = subparsers.add_parser("test", help="Run unit tests (by default, all tests are run)")
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
-    parser.add_argument('--ddb', action='store_true', help='Runs test_dedispersion_basics()')
-    parser.add_argument('--pfwr', action='store_true', help='Runs test_pf_weight_reader_microkernel()')
-    parser.add_argument('--pfom', action='store_true', help='Runs test_pf_output_microkernel()')
-    parser.add_argument('--gldk', action='store_true', help='Runs test_gpu_lagged_downsampling_kernel()')
+    parser.add_argument('--ddb', action='store_true', help='Runs ReferenceDedisperser.test_dedispersion_basics()')
+    parser.add_argument('--pfwr', action='store_true', help='Runs TestPfWeightReader.test()')
+    parser.add_argument('--pfom', action='store_true', help='Runs TestPfOutput2.test()')
+    parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test()')
     parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.test()')
     parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test()')
-    parser.add_argument('--grck', action='store_true', help='Runs test_gpu_ringbuf_copy_kernel()')
-    parser.add_argument('--gtgk', action='store_true', help='Runs test_gpu_tree_gridding_kernel()')
+    parser.add_argument('--grck', action='store_true', help='Runs GpuRingbufCopyKernel.test()')
+    parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.test()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
-    parser.add_argument('--dd', action='store_true', help='Runs test_dedisperser()')
+    parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
 
     
 def test(args):
@@ -44,16 +44,16 @@ def test(args):
         print(f'\nIteration {i+1}/{args.niter}\n')
         
         if run_all_tests or args.ddb:
-            pirate_pybind11.test_dedispersion_basics()
+            pirate_pybind11.ReferenceDedisperser.test_dedispersion_basics()
         
         if run_all_tests or args.pfwr:
-            pirate_pybind11.test_pf_weight_reader_microkernel()
+            pirate_pybind11.TestPfWeightReader.test()
         
         if run_all_tests or args.pfom:
-            pirate_pybind11.test_pf_output_microkernel()
+            pirate_pybind11.TestPfOutput2.test()
         
         if run_all_tests or args.gldk:
-            pirate_pybind11.test_gpu_lagged_downsampling_kernel()
+            pirate_pybind11.GpuLaggedDownsamplingKernel.test()
         
         if run_all_tests or args.gddk:
             # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
@@ -68,10 +68,10 @@ def test(args):
                 pirate_pybind11.GpuPeakFindingKernel.test(short_circuit=True)
         
         if run_all_tests or args.grck:
-            pirate_pybind11.test_gpu_ringbuf_copy_kernel()
+            pirate_pybind11.GpuRingbufCopyKernel.test()
         
         if run_all_tests or args.gtgk:
-            pirate_pybind11.test_gpu_tree_gridding_kernel()
+            pirate_pybind11.GpuTreeGriddingKernel.test()
         
         if run_all_tests or args.casm:
             print()
@@ -91,7 +91,7 @@ def test(args):
             pirate_pybind11.test_gpu_reduce2()
             
         if run_all_tests or args.dd:
-            pirate_pybind11.test_dedisperser()
+            pirate_pybind11.GpuDedisperser.test()
             
 
 #########################################   time command  ##########################################
@@ -341,7 +341,7 @@ def test_node(args):
 
 
 def parse_send(subparsers):
-    parser = subparsers.add_parser("send", help='Send data to test server (his is the "other half" of "python -m pirate_frb test_node")')
+    parser = subparsers.add_parser("send", help='Send data to test server (this is the "other half" of "python -m pirate_frb test_node")')
     parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
     parser.add_argument('-b', '--bufsize', type=int, default=65536, help="Send bufsize (default 65536)")
     parser.add_argument('ip_addrs', nargs='*', help="list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2")
