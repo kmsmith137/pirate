@@ -11,6 +11,48 @@ from .Ringbuf import Ringbuf
 from .FrequencySubbands import FrequencySubbands
 
 
+# Peak-finding kernel parameterization:
+#
+#  - frequency_subbands  (compile-time)
+#  - Dcore               (compile-time)
+#  - Dout                (compile-time, also denoted nt_in_per_out)
+#  - E                   (compile-time)
+#  - frequency_subbands  (compile-time)
+#  - nt_in               (runtime)
+#  - ndm_out_per_wt      (runtime)
+#  - nt_in_per_wt        (combination, see below)
+#
+# Note that there is no 'ndm_in_per_out' parameter, since the "uncoalesced"
+# peak-finding kernel doesn't care about input DMs.
+#
+# Constraints:
+#
+#   - All of these must be a power of two, except nt_in
+#   - nt_in is a multiple of (32*SW), where SW = 32/sizeof(dtype) is the simd width
+#   - nt_in_per_wt must be a multiple of Dout (= nt_in_per_out)   (*)
+#   - SW <= Dcore <= Dout <= 32
+#   - E <= 32
+#
+# There is also a compile-time parameter 'Tinner' which is derived from 'nt_in_per_wt':
+#
+#   Tinner = max(32*SW/nt_in_per_wt, 1)             (**)
+#
+# (In the kernel, Tinner = "number of tw-samples per 128-byte cache line".)
+#
+# From the perspective of the kernel, 'Tinner' is a compile-time parameter, and the
+# caller passes 'nt_in_per_wt' at runtime. If Tinner > 1, then the value of 'nt_in_per_wt'
+# is ignored. If Tinner==1, then 'nt_in_per_wt' must divide (32*SW).
+#
+# From the perspective of the host C++ code, 'nt_in_per_wt' is the only parameter.
+# The host derives Tinner using (*) and loads the appropriate kernel from the registry.
+# At runtime, the value of 'nt_in_per_wt' is passed to the kernel. (This is redundant
+# if nt_in_per_wt < 32*SW, but the host doesn't need to know that.)
+#
+# Note that the runtime constraints (*) and (**) imply the compile-time constraint:
+#
+#   Dout * Tinner <= (32*SW)       (***)
+
+
 ####################################################################################################
 
         
@@ -22,7 +64,22 @@ class PeakFinder2:
         self.Dcore = Dcore
         self.Dout = Dout
         self.E = E
-        
+
+        self.dt32 = dtype.simd32
+        self.SW = dtype.simd_width
+
+        # See constraints above
+        assert utils.is_power_of_two(E)
+        assert utils.is_power_of_two(Dout)
+        assert utils.is_power_of_two(Dcore)
+        assert utils.is_power_of_two(Tinner)
+
+        assert E <= 32
+        assert Dout <= 32
+        assert Dcore <= Dout
+        assert self.SW <= Dcore
+        assert Dout*Tinner <= (32 * self.SW)    # see (***) above
+
         self.P = 3 * utils.integer_log2(E) + 1   # number of peak-finding profiles
         self.weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         self.weight_layout = self.weight_reader.weight_layout
@@ -35,8 +92,6 @@ class PeakFinder2:
         self.Pinner = self.weight_layout.Pinner
         self.wt_touter_byte_stride = self.weight_layout.touter_byte_stride
 
-        self.dt32 = dtype.simd32
-        self.SW = dtype.simd_width
         self.pf_rank = frequency_subbands.pf_rank
         self.pfx_nb = utils.integer_log2(self.SW)
         self.pfx_nl = utils.integer_log2(self.Dcore) - self.pfx_nb
