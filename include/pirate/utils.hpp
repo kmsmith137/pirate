@@ -73,10 +73,6 @@ extern void dedisperse_non_incremental(ksgpu::Array<float> &arr, long nspec);
 
 extern int mean_bytes_per_unaligned_chunk(int nbytes);
 
-// show_kernels(): called by 'python -m pirate_frb show_kernels'
-// FIXME put this somewhere else?
-extern void show_kernels();
-
 extern std::string hex_str(uint x);
 
 

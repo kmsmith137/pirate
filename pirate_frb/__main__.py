@@ -157,7 +157,17 @@ def parse_show_kernels(subparsers):
     subparsers.add_parser("show_kernels", help="Show all registered cuda kernels")
     
 def show_kernels(args):
-    pirate_pybind11.show_kernels()  # note: defined in src_lib/utils.cu
+    print("PfOutput microkernel registry:")
+    pirate_pybind11.PfOutputMicrokernel.show_registry()
+    
+    print("\nDedispersion kernel registry:")
+    pirate_pybind11.GpuDedispersionKernel.show_registry()
+    
+    print("\nPeak-finding kernel registry (old):")
+    pirate_pybind11.GpuPeakFindingKernelOld.show_registry()
+    
+    print("\nPeak-finding kernel registry:")
+    pirate_pybind11.GpuPeakFindingKernel.show_registry()
 
 
 ######################################   show_subbands command  #####################################

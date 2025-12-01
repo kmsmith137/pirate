@@ -2,10 +2,6 @@
 #include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
 
-// For show_kernels().
-#include "../include/pirate/DedispersionKernel.hpp"
-#include "../include/pirate/PeakFindingKernel.hpp"
-
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
@@ -273,24 +269,6 @@ void dedisperse_non_incremental(Array<float> &arr, long nspec)
             }
         }
     }
-}
-
-
-// show_kernels(): called by 'python -m pirate_frb show_kernels'
-// FIXME: put this somewhere else?
-void show_kernels()
-{
-    cout << "PfOutput microkernel registry:\n";
-    PfOutputMicrokernel::registry().show();
-
-    cout << "\nDedispersion kernel registry:\n";
-    GpuDedispersionKernel::registry().show();
-
-    cout << "\nPeak-finding kernel registry:\n";
-    GpuPeakFindingKernel::registry().show();
-
-    cout << "\nPeak-finding kernel registry, part 2:\n";
-    GpuPeakFindingKernel2::registry().show();
 }
 
 

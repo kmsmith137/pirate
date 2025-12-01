@@ -336,6 +336,10 @@ public:
     // Static member function to access registry.
     static Registry &registry();
 
+    // Static member functions to query registry.
+    static long registry_size() { return registry().size(); }
+    static void show_registry() { registry().show(); }
+
     // Static member function: runs one randomized test iteration.
     static void test();
 };

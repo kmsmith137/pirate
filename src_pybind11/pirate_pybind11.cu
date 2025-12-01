@@ -21,7 +21,6 @@
 #include "../include/pirate/TreeGriddingKernel.hpp"
 #include "../include/pirate/tests.hpp"
 #include "../include/pirate/timing.hpp"
-#include "../include/pirate/utils.hpp"  // show_kernels()
 
 #include "../include/pirate/loose_ends/tests.hpp"
 #include "../include/pirate/loose_ends/timing.hpp"
@@ -136,6 +135,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
           .def_static("test", &GpuDedispersionKernel::test)
+          .def_static("registry_size", &GpuDedispersionKernel::registry_size)
+          .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
 
     py::class_<GpuDedisperser>(m, "GpuDedisperser")
@@ -146,8 +147,15 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test", &GpuLaggedDownsamplingKernel::test)
     ;
 
+    py::class_<GpuPeakFindingKernel>(m, "GpuPeakFindingKernelOld")
+          .def_static("registry_size", &GpuPeakFindingKernel::registry_size)
+          .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
+    ;
+
     py::class_<GpuPeakFindingKernel2>(m, "GpuPeakFindingKernel")
           .def_static("test", &GpuPeakFindingKernel2::test, py::arg("short_circuit") = false)
+          .def_static("registry_size", &GpuPeakFindingKernel2::registry_size)
+          .def_static("show_registry", &GpuPeakFindingKernel2::show_registry)
     ;
 
     py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")
@@ -164,10 +172,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")
           .def_static("test", &PfWeightReaderMicrokernel::test)
+          .def_static("registry_size", &PfWeightReaderMicrokernel::registry_size)
+          .def_static("show_registry", &PfWeightReaderMicrokernel::show_registry)
     ;
 
     py::class_<PfOutputMicrokernel>(m, "PfOutputMicrokernel")
           .def_static("test", &PfOutputMicrokernel::test)
+          .def_static("registry_size", &PfOutputMicrokernel::registry_size)
+          .def_static("show_registry", &PfOutputMicrokernel::show_registry)
     ;
 
     m.def("test_gpu_peak_finding_kernel", &test_gpu_peak_finding_kernel, py::arg("reduce_only"));
@@ -186,5 +198,4 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     m.def("test_gpu_transpose", &test_gpu_transpose);
     m.def("test_gpu_reduce2", &test_gpu_reduce2);
 
-    m.def("show_kernels", &show_kernels);
 }

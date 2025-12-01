@@ -193,6 +193,10 @@ struct GpuPeakFindingKernel : PeakFindingKernel
 
     // Static member function to access registry.
     static Registry &registry();
+
+    // Static member functions to query registry.
+    static long registry_size() { return registry().size(); }
+    static void show_registry() { registry().show(); }
 };
 
 
@@ -496,6 +500,10 @@ struct GpuPeakFindingKernel2
 
     // Static member function to access registry.
     static Registry &registry();
+
+    // Static member functions to query registry.
+    static long registry_size() { return registry().size(); }
+    static void show_registry() { registry().show(); }
 };
 
 // Defined in PeakFindingKernel.cu
@@ -554,6 +562,10 @@ struct PfWeightReaderMicrokernel
     // Static member function to access registry.
     static Registry &registry();
 
+    // Static member functions to query registry.
+    static long registry_size() { return registry().size(); }
+    static void show_registry() { registry().show(); }
+
     // Static member function: runs one randomized test iteration.
     static void test();
 };
@@ -594,6 +606,10 @@ struct PfOutputMicrokernel
 
     // Static member function to access registry.
     static Registry &registry();
+
+    // Static member functions to query registry.
+    static long registry_size() { return registry().size(); }
+    static void show_registry() { registry().show(); }
 
     // Static member function: runs one randomized test iteration.
     static void test();
