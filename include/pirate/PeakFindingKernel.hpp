@@ -335,7 +335,8 @@ struct ReferencePeakFindingKernel2
                ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
                const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, params.fs.M, nt_in)
                const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
-               long ibatch);
+               long ibatch,                      // 0 <= ibatch < nbatches
+               bool debug = false);              // enables verbose debugging output
 
     void eval_tokens(ksgpu::Array<float> &out_max,  // shape (beams_per_batch, ndm_out, nt_out)
         const ksgpu::Array<uint> &in_tokens,        // shape (beams_per_batch. ndm_out, params.fs.M, nt_out)
@@ -351,7 +352,7 @@ struct ReferencePeakFindingKernel2
 
     // FIXME absorb these into apply()
     void _init_tmp_arrays(const ksgpu::Array<float> &in, long ibatch);
-    void _peak_find(ksgpu::Array<float> &out_max, ksgpu::Array<uint> &out_argmax, const ksgpu::Array<float> &wt);
+    void _peak_find(ksgpu::Array<float> &out_max, ksgpu::Array<uint> &out_argmax, const ksgpu::Array<float> &wt, bool debug);
 
     // At "level" l (where 0 <= l < log2(E)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).

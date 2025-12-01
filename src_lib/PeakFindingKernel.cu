@@ -725,7 +725,7 @@ ReferencePeakFindingKernel2::ReferencePeakFindingKernel2(const PeakFindingKernel
     this->tmp_arr.resize(num_levels);
     
     for (long l = 0; l < num_levels; l++) {
-        long dt = (l > 0) ? min(Dcore, pow2(l-1)) : 1;
+        long dt = min(Dcore, pow2(l));
         long nt = xdiv(p.nt_in + tpad - pow2(l), dt) + 1;
 
         tmp_dt[l] = dt;
@@ -746,7 +746,7 @@ void ReferencePeakFindingKernel2::apply(
     ksgpu::Array<uint> &out_argmax,    // shape (beams_per_batch, ndm_out, nt_out)
     const ksgpu::Array<float> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
     const ksgpu::Array<float> &wt,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F)
-    long ibatch)
+    long ibatch, bool debug)
 {
     const PeakFindingKernelParams2 &p = params;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
@@ -764,7 +764,7 @@ void ReferencePeakFindingKernel2::apply(
     expected_ibatch = (ibatch + 1) % nbatches;
 
     _init_tmp_arrays(in, ibatch);
-    _peak_find(out_max, out_argmax, wt);
+    _peak_find(out_max, out_argmax, wt, debug);
 }
 
 
@@ -839,7 +839,7 @@ static inline void _update_pf2(float &maxval, uint &argmax, float val, uint toke
 
 // out_*: shape (beams_per_batch, ndm_out, nt_out)
 // wt: shape (beams_per_batch, ndm_wt, nt_wt, P, F)
-void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> &out_argmax, const Array<float> &wt)
+void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> &out_argmax, const Array<float> &wt, bool debug)
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
@@ -896,34 +896,32 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
                             uint token2 = token0 | ((3*l+2) << 8);    // include p=3*l+2
                             uint token3 = token0 | ((3*l+3) << 8);    // include p=3*l+3
 
-                            float y0 = w0 * x3;
-                            float y1 = w1 * (x2 + x3);
-                            float y2 = w2 * (0.5f*x1 + x2 + 0.5f*x3);
-                            float y3 = w3 * (0.5f*x0 + x1 + x2 + 0.5f*x3);
+                            float y0 = x3;
+                            float y1 = (x2 + x3);
+                            float y2 = (0.5f*x1 + x2 + 0.5f*x3);
+                            float y3 = (0.5f*x0 + x1 + x2 + 0.5f*x3);
 
-#if 0
-                            if ((b == 0) && (d==0) && (tout==1) && (token3 ==  0x1000cc0f)) {
-                                float w = w3;
-                                float y = y3;
-
-                                cout << "apply(): got it! " << "(b=" << b << ", d=" << d << ", tout=" << tout << ")"
-                                      << " -> (w=" << w << ", x0=" << x0 << ", x1=" << x1 << ", x2=" << x2 << ", x3=" << x3 << ")"
-                                      << " -> (y=" << y << ")" << endl;
-
-                                for (int i = 0; i < 4; i++)
-                                    cout << "  tmp_arr.at(" << l << ").at(" << b << "," << d << "," << m << "," << (I + tout*N + n + (i-3)*S) << ")"
-                                         << " = " << tmp_arr.at(l).at({b, d, m, I + tout*N + n + (i-3)*S}) << endl;
-
-                                cout << "    at level l: tpad=" << tpad << ", dt=" << tmp_dt.at(l) << ", N=" << N << ", S=" << S << ", I=" << I << endl;
-                            }
-#endif
                             if (l == 0)
-                                _update_pf2(maxval, argmax, y0, token0);
+                                _update_pf2(maxval, argmax, w0*y0, token0);
 
                             if (P > 1) {
-                                _update_pf2(maxval, argmax, y1, token1);
-                                _update_pf2(maxval, argmax, y2, token2);
-                                _update_pf2(maxval, argmax, y3, token3);
+                                _update_pf2(maxval, argmax, w1*y1, token1);
+                                _update_pf2(maxval, argmax, w2*y2, token2);
+                                _update_pf2(maxval, argmax, w3*y3, token3);
+                            }
+
+                            if (debug && (b == 0) && (d==0) && (tout==1)) {
+                                cout << "cpu peak-finder: b=" << b << ", d=" << d << ", tout=" << tout 
+                                     << ", level=" << l << ", m=" << m << ", n=" << n << "\n";
+
+                                if (l == 0)
+                                    cout << "   p=0" << " -> (w=" << w0 << ", y=" << y0 << ", w*y=" << (w0*y0) << endl;
+                                
+                                if (P > 1) {
+                                    cout << "   p=" << (3*l+1) << " -> (w=" << w1 << ", y=" << y1 << ", w*y=" << (w1*y1) << endl;
+                                    cout << "   p=" << (3*l+2) << " -> (w=" << w2 << ", y=" << y2 << ", w*y=" << (w2*y2) << endl;
+                                    cout << "   p=" << (3*l+3) << " -> (w=" << w3 << ", y=" << y3 << ", w*y=" << (w3*y3) << endl;
+                                }
                             }
                         }
                     }
@@ -1012,15 +1010,9 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
 
 #if 0
                 if ((b==0) && (d==0) && (tout==1)) {
-                    cout << "\neval_tokens(): (b=" << b << ", d=" << d << ", tout=" << tout << ")";
-
-                    auto flags = cout.flags();
-                    auto fill = cout.fill();
-                    cout << " -> 0x" << hex << setfill('0') << setw(8) << token;
-                    cout.flags(flags);
-                    cout.fill(fill);
-
-                    cout << " -> (m=" << m << ", p=" << p << ", t=" << t << ", l=" << l << ", q=" << q << ")"
+                    cout << "\neval_tokens(): (b=" << b << ", d=" << d << ", tout=" << tout << ")"
+                         << " -> " << hex_str(token)
+                         << " -> (m=" << m << ", p=" << p << ", t=" << t << ", l=" << l << ", q=" << q << ")"
                          << " -> (w=" << w << ", x0=" << x0 << ", x1=" << x1 << ", x2=" << x2 << ", x3=" << x3 << ")"
                          << " -> " << out_max.at({b,d,tout}) << endl;
 
