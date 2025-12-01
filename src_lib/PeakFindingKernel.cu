@@ -1254,7 +1254,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
 
     auto v = ksgpu::random_integers_with_bounded_product(4, 100000 / (nt_in_divisor * ndm_out));
     long nchunks = v[0];
-    long nt_in_per_chunk = v[1] * nt_in_divisor;
+    long nt_in_per_chunk = nt_in_divisor * v[1]
     long beams_per_batch = v[2];
     long total_beams = v[2] * v[3];
 
@@ -1324,7 +1324,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     // This is a nontrivial test of the reference peak-finder.
     Array<float> cpu_out2_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     ref_kernel_large.eval_tokens(cpu_out2_large, cpu_argmax_large, cpu_wt_large);
-    assert_arrays_equal(cpu_out_large, cpu_out2_large, "cpu_out_large", "cpu_out2_large", {"b","d","t"});
+    assert_arrays_equal(cpu_out_large, cpu_out2_large, "cpu_out_large", "cpu_out2_large", {"b","d","tout"});
 
     gpu_kernel.allocate();
 
@@ -1354,11 +1354,11 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
 
             Array<float> cpu_out2_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             ref_kernel_small.eval_tokens(cpu_out2_small, cpu_argmax_small, cpu_wt_small);
-            assert_arrays_equal(cpu_out_small, cpu_out2_small, "cpu_out_small", "cpu_out2_small", {"b","d","t"});
+            assert_arrays_equal(cpu_out_small, cpu_out2_small, "cpu_out_small", "cpu_out2_small", {"b","d","tout"});
 
             Array<float> cpu_out3_small = cpu_out_large.slice(0, b0, b1);
             cpu_out3_small = cpu_out3_small.slice(2, tout0, tout1);
-            assert_arrays_equal(cpu_out_small, cpu_out3_small, "cpu_out_small", "cpu_out3_small", {"b","d","t"});
+            assert_arrays_equal(cpu_out_small, cpu_out3_small, "cpu_out_small", "cpu_out3_small", {"b","d","tout"});
 
             if (short_circuit) {
                 cout << "XXX short-circuiting!!" << endl;
@@ -1374,12 +1374,12 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
             Array<uint> gpu_argmax({beams_per_batch, ndm_out, nt_out_per_chunk}, af_gpu | af_zero);
             gpu_kernel.launch(gpu_out, gpu_argmax, gpu_in, gpu_wt, ibatch, NULL);
 
-            assert_arrays_equal(cpu_out_small, gpu_out, "cpu_out_small", "gpu_out", {"b","d","t"});
+            assert_arrays_equal(cpu_out_small, gpu_out, "cpu_out_small", "gpu_out", {"b","d","tout"});
 
             gpu_argmax = gpu_argmax.to_host();
             Array<float> gpu_out2({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             ref_kernel_small.eval_tokens(gpu_out2, gpu_argmax, cpu_wt_small);
-            assert_arrays_equal(cpu_out_small, gpu_out2, "cpu_out_small", "gpu_out2", {"b","d","t"});
+            assert_arrays_equal(cpu_out_small, gpu_out2, "cpu_out_small", "gpu_out2", {"b","d","tout"});
         }
     }
 }
