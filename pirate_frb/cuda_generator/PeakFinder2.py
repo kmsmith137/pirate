@@ -474,18 +474,16 @@ class PeakFinder2:
         assert (m % Dcore) == 0
         
         if self.dtype == 'float':
-            assert Pinner == 1
             assert Dcore == Minner
             mouter = utils.xdiv(m, Minner)
             self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', mouter, p)
         
         elif self.dtype == '__half' and ((p % 2) == 0):
-            assert Pinner == 2
             assert Dcore == 2*Minner
             mouter = utils.xdiv(m, Minner)
             pouter = utils.xdiv(p, Pinner)
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', mouter, pouter)
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m+Minner}_p{p}', mouter+1, pouter)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', mouter, p)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m+Minner}_p{p}', mouter+1, p)
                 
         elif self.dtype != '__half':
             raise RuntimeError('should never get here')
@@ -872,20 +870,20 @@ class PfWeightReader:
         self.wp = wp
 
     
-    def read_weights(self, k, dst, mouter, pouter, declare_dst=True):
-        wp, F, Minner, Tinner = self.wp, self.F, self.Minner, self.Tinner
-        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): start.')
+    def read_weights(self, k, dst, mouter, p, declare_dst=True):
+        wp, F, Minner, Pinner, Tinner = self.wp, self.F, self.Minner, self.Pinner, self.Tinner
+        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {p=}): start.')
 
-        if pouter == 0:
+        if p == 0:
             self._init_pfI(k, mouter)
 
         pfI = f'pfI_m{mouter}'
-        dI = pouter * F * Tinner
+        dI = (p//Pinner) * F * Tinner
         Istr = f'{pfI} + {dI}' if (dI > 0) else pfI
 
         # Very important assert -- our algorithm depends on this!
-        Imin = min(self._get_I(mouter*Minner+dm, pouter, 0) for dm in range(Minner))
-        Imax = max(self._get_I(mouter*Minner+dm, pouter, Tinner-1) for dm in range(Minner))
+        Imin = min(self._get_I(mouter*Minner+dm, p, 0) for dm in range(Minner))
+        Imax = max(self._get_I(mouter*Minner+dm, p, Tinner-1) for dm in range(Minner))
         assert np.all(Imax < Imin + 32)
 
         k.emit(f'// We want to load {wp}[{Istr}] on each thread, where {Imin} <= ({Istr}) <= {Imax}.')
@@ -900,10 +898,10 @@ class PfWeightReader:
 
         decl = f'{self.dt32} ' if declare_dst else ''
         k.emit(f'{decl}{dst} = __shfl_sync(~0u, {wcl}, {Istr});')
-        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): end')
+        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {p=}): end')
 
 
-    def _get_I(self, m, pouter, tinner):
+    def _get_I(self, m, p, tinner):
         """
         Throughout 'class PfWeightReader', a capitalized index 0 <= I < Pouter*F*Tinner
         denotes a "flattened" index triple (pouter, f, tinner). Such an index I can be
@@ -913,7 +911,7 @@ class PfWeightReader:
 
         m = min(m, self.M-1)
         f = self.frequency_subbands.m_to_fd[m][0]
-        return (pouter * self.F * self.Tinner) + (f * self.Tinner) + tinner
+        return ((p//self.Pinner) * self.F * self.Tinner) + (f * self.Tinner) + tinner
 
 
     def _get_wcl(self, k, I):
@@ -1057,7 +1055,7 @@ class PfWeightReader:
         for mouter in range(self.Mouter):
             for pouter in range(self.Pouter):
                 w = f'pfw_m{mouter}_p{pouter}'
-                self.read_weights(k, w, mouter, pouter)
+                self.read_weights(k, w, mouter, pouter * self.Pinner)
                 k.emit()
                 k.emit(f'// (mouter, pouter) = ({mouter}, {pouter})')
                 k.emit(f'out[({mouter} * Minner * Pouter) + {pouter}] = {w};')
