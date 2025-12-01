@@ -1224,11 +1224,11 @@ void GpuPeakFindingKernel2::launch(
     xassert(in.on_gpu());
     xassert(wt.on_gpu());
 
-    // Get 'pstate' pointer before incrementing ibatch.
-    void *pstate = (nprofiles > 1) ? &persistent_state.at({ibatch * p.beams_per_batch, 0, 0}) : nullptr;
-
     xassert(ibatch == expected_ibatch);
     expected_ibatch = (ibatch + 1) % nbatches;
+
+    long s = (nprofiles > 0) ? (ibatch * p.beams_per_batch * persistent_state.strides[0]) : 0;
+    uint *pstate = persistent_state.data + s;
 
     // FIXME using 1 warp/threadblock for now! Not totally trivial to fix.
     uint nwarps = p.beams_per_batch * p.ndm_out;
@@ -1242,7 +1242,7 @@ void GpuPeakFindingKernel2::launch(
     registry_value.cuda_kernel <<< nblocks, nthreads, 0, stream >>> 
        (in.data, out_max.data, out_argmax.data, wt.data, pstate, p.nt_in, ndm_out_per_wt, nt_in_per_wt);
 
-    CUDA_PEEK("pf kernel launch");    
+    CUDA_PEEK("pf kernel launch");
 }
 
 
@@ -1370,7 +1370,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
                 cout << "XXX short-circuiting!!" << endl;
                 continue;
             }
-            
+
             Array<void> gpu_in = cpu_in_small.convert(key.dtype);
             gpu_in = gpu_in.to_gpu();
 
