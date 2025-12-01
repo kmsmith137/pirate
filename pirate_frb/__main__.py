@@ -65,7 +65,7 @@ def test(args):
             # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
             # runs every kernel a few times. Currently there are 66 precompiled kernels.
             for _ in range(5):
-                pirate_pybind11.GpuPeakFindingKernel.test(short_circuit=True)
+                pirate_pybind11.GpuPeakFindingKernel.test()
         
         if run_all_tests or args.grck:
             pirate_pybind11.GpuRingbufCopyKernel.test()

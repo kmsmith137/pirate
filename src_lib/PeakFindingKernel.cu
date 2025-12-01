@@ -1155,8 +1155,8 @@ GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &par
     registry_value = registry().get(registry_key);
     
     pf_weight_layout = registry_value.pf_weight_layout;
-    expected_wt_shape = pf_weight_layout.get_shape(params.beams_per_batch, params.ndm_out, params.nt_out);
-    expected_wt_strides = pf_weight_layout.get_strides(params.beams_per_batch, params.ndm_out, params.nt_out);
+    expected_wt_shape = pf_weight_layout.get_shape(params.beams_per_batch, params.ndm_wt, params.nt_wt);
+    expected_wt_strides = pf_weight_layout.get_strides(params.beams_per_batch, params.ndm_wt, params.nt_wt);
     Dcore = registry_value.Dcore;
 
     dtype = params.dtype;
@@ -1225,7 +1225,7 @@ void GpuPeakFindingKernel2::launch(
     xassert(wt.on_gpu());
 
     // Get 'pstate' pointer before incrementing ibatch.
-    void *pstate = &persistent_state.at({ibatch * p.beams_per_batch, 0, 0});
+    void *pstate = (nprofiles > 1) ? &persistent_state.at({ibatch * p.beams_per_batch, 0, 0}) : nullptr;
 
     xassert(ibatch == expected_ibatch);
     expected_ibatch = (ibatch + 1) % nbatches;
@@ -1332,6 +1332,8 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     ref_kernel_large.eval_tokens(cpu_out2_large, cpu_argmax_large, cpu_wt_large);
     assert_arrays_equal(cpu_out_large, cpu_out2_large, "cpu_out_large", "cpu_out2_large", {"b","d","t"});
 
+    gpu_kernel.allocate();
+
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         long tin0 = (ichunk) * nt_in_per_chunk;
         long tin1 = (ichunk+1) * nt_in_per_chunk;
@@ -1372,11 +1374,10 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
             Array<void> gpu_in = cpu_in_small.convert(key.dtype);
             gpu_in = gpu_in.to_gpu();
 
-            Array<void> gpu_wt = cpu_wt_small.convert(key.dtype);
-            gpu_wt = gpu_wt.to_gpu();
+            Array<void> gpu_wt = gpu_kernel.pf_weight_layout.to_gpu(cpu_wt_small);
 
-            Array<void> gpu_out(key.dtype, {beams_per_batch, ndm_out, nt_out_per_chunk}, af_gpu | af_zero | af_guard);
-            Array<uint> gpu_argmax({beams_per_batch, ndm_out, nt_out_per_chunk}, af_gpu | af_zero | af_guard);
+            Array<void> gpu_out(key.dtype, {beams_per_batch, ndm_out, nt_out_per_chunk}, af_gpu | af_zero);
+            Array<uint> gpu_argmax({beams_per_batch, ndm_out, nt_out_per_chunk}, af_gpu | af_zero);
             gpu_kernel.launch(gpu_out, gpu_argmax, gpu_in, gpu_wt, ibatch, NULL);
 
             assert_arrays_equal(cpu_out_small, gpu_out, "cpu_out_small", "gpu_out", {"b","d","t"});
