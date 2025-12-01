@@ -588,22 +588,6 @@ class PeakFinder2:
                 self._absorb_pfz(k, tmp2, m, 3*lgW+3, tend-t0)
             self.pfz_register_ready(k, m, 3*lgW+3)
 
-
-    def _tokenize_mp(self, k, m, p):
-        """
-        Recall that tokens are formatted as (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26).
-        This function returns everything after the (t), as an immediate (not a varname).
-        """
-
-        # Token = (t) | (p << 8) | (d << 14) | (flo << 20) | (fhi << 26);
-        mm = min(m, self.M-1)
-        f_ix, d = self.frequency_subbands.m_to_fd[mm]
-        f_lo, f_hi = self.frequency_subbands.f_to_irange[f_ix]
-        token = (p << 8) | (d << 14) | (f_lo << 20) | (f_hi << 26)
-        token = f'0x{token:x}U'
-        k.emit(f'// Note: ({m=},{p=}) tokenizes to {token}')
-        return token
-
     
     def pfz_register_ready(self, k, m, p):
         """
@@ -614,30 +598,38 @@ class PeakFinder2:
           - pfiz_m{m}_p{p}: store "mini-tokens" 0 <= t < Dcore.
             Mini-tokens are always declared 'uint', but are secretly either u32 or u16x2.
 
-        Register assignment here is:
+        Register assignment here is (where K = log2(Minner) and L=log2(Dcore))
         
-           simd <->  (m0 or None)                        float16 or float32
-           Minner lanes <-> m_{0 or 1} ... m_{K-1}       K = log2(Minner)
-           32/Minner lanes <-> t_K t_{K+1} ...           note: coarse-grained over Dcore times
+           simd <->  (m_K or None)                       float16 or float32
+           Minner lanes <-> m_0 ... m_{K-1}              K = log2(Minner)
+           32/Minner lanes <-> t_L t_{L+1} ...           note: coarse-grained over Dcore times
 
         Thus, each call to pfz_register_ready() processes (32*SW) times, (Dcore) m-values,
         and 1 p-value.
 
-        Recall that tokens are formatted as (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26).
+        Recall that tokens are formatted as (t) | (p << 8) | (m << 16).
         To convert a minitoken to a token, we do something like this:
 
-            token = minitoken | (threadIdx.x & (Dout-Dcore)) | _tokenize_mp(k,m,p);
+            tfull = minitoken | ((threadIdx.x * simd_width) & (Dout-Dcore));
+            mfull = m | (threadIdx.x & (Minner-1));
+            mfull = min(m, M-1);   // may be needed on some threads
+            assert (p < P);      // p is the same on all threads
+            token = tfull | (p << 8) | (mfull << 16);
         """
 
-        Minner, P = self.Minner, self.P
+        Dcore, M, Minner, P = self.Dcore, self.M, self.Minner, self.P
         
         k.emit()
         k.emit(f'// pfz_register_ready({m=}, {p=}) called.')
 
         if self.dtype == 'float':
             k.emit(f'pfz_m{m}_p{p} *= pfw_m{m}_p{p};')
-            token_mp = self._tokenize_mp(k, m, p)
-            k.emit(f'uint token_m{m}_p{p} = pfiz_m{m}_p{p} | (threadIdx.x & (Dout-Dcore)) | {token_mp};')
+            tfull = f'pfiz_m{m}_p{p} | (threadIdx.x & (Dout-Dcore))'
+            mfull = f'{m} | (threadIdx.x & Dcore)'
+            if m + Dcore >= M:
+                mfull = f'min({mfull}, {M-1})'
+
+            k.emit(f'uint token_m{m}_p{p} = ({tfull}) | ({p} << 8) | ({mfull} << 16);')
             self.pf_output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
 
         elif (self.dtype == '__half') and ((p % 2) == 0) and (p < (P-1)):
@@ -651,6 +643,8 @@ class PeakFinder2:
             self.pfz_register_ready(k, m, P)
 
         elif (self.dtype == '__half') and (p % 2):
+            raise RuntimeError('bitrotted')
+
             m0, m1 = m, (m+Minner)
             p0, p1 = (p-1), p
             pfz0, pfz1 = f'pfz_m{m0}_p{p0}', f'pfz_m{m0}_p{p1}'
@@ -681,7 +675,7 @@ class PeakFinder2:
         else:
             raise RuntimeError('should never get here')
         
-    
+
     @classmethod
     def write_kernel(cls, filename):
         """Called from 'autogenerate_kernel.py' in the toplevel pirate directory."""

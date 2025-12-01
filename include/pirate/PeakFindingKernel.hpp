@@ -224,12 +224,7 @@ struct FrequencySubbands
     std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
 
     // These members are used in the peak-finding kernel, whose 'out_argmax' array consists
-    // of "tokens" of the form (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26).
-
-    std::vector<uint> m_to_token;                      // (d,f0,f1) part of token only
-    std::unordered_map<uint,long> token_to_m;          // (token & token_m_mask) -> m
-
-    static constexpr uint token_m_mask = 0xffffc000u;  // selects (d,f0,f1) part of token
+    // of "tokens" of the form (t) | (p << 8) | (m << 16).
 
     // For debugging/testing.
     static void validate_subband_counts(const std::vector<long> &subband_counts);

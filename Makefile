@@ -171,6 +171,7 @@ HFILES = \
   include/pirate/FakeServer.hpp \
   include/pirate/KernelRegistry.hpp \
   include/pirate/LaggedDownsamplingKernel.hpp \
+  include/pirate/PeakFindingKernel.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
   include/pirate/RingbufCopyKernel.hpp \

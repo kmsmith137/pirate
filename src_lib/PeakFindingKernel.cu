@@ -493,17 +493,6 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
 
     xassert_eq(m_to_f.size(), uint(M));
     xassert_eq(f_to_ilo.size(), uint(F));
-
-    for (long m = 0; m < M; m++) {
-        long f = m_to_f.at(m);
-        long d = m_to_d.at(m);
-        long i0 = f_to_ilo.at(f);
-        long i1 = f_to_ihi.at(f);
-        uint token = (d << 14) | (i0 << 20) | (i1 << 26);  // "m" part only
-
-        this->m_to_token.push_back(token);
-        this->token_to_m[token] = m;
-    }
 }
 
 
@@ -532,30 +521,23 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
 
 void FrequencySubbands::show_token(uint token, ostream &os) const
 {
-    // (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26)
+    // (t) | (p << 8) | (m << 16)
     uint t = (token) & 0xffu;
-    uint p = (token >> 8) & 0x3fu;
-    uint d = (token >> 14) & 0x3fu;
-    uint f0 = (token >> 20) & 0x3fu;
-    uint f1 = (token >> 26) & 0x3fu;
+    uint p = (token >> 8) & 0xffu;
+    uint m = (token >> 16);
 
-    os << "token[0x";
+    os << " -> (t=" << t << ", p=" << p << ", m=" << m << ")";
 
-    auto flags = os.flags();
-    auto fill = os.fill();
-    os << hex << setfill('0') << setw(8) << token;
-    os.flags(flags);
-    os.fill(fill);
-
-    os << " -> (t=" << t << ", p=" << p << ", d=" << d << ", f0=" << f0 << ", f1=" << f1 << ")";
-
-    auto it = token_to_m.find(token & FrequencySubbands::token_m_mask);
-    if (it == token_to_m.end())
-        os << " -> BAD M-VALUE]";
-    else {
-        long m = it->second;
-        os << " -> m=" << m << "]";
+    if (m < M) {
+        os << " -> BAD M-VALUE";
+        return;
     }
+
+    long f = m_to_f.at(m);
+    long d = m_to_d.at(m);
+    long f0 = f_to_ilo.at(f);
+    long f1 = f_to_ihi.at(f);
+    os << " -> (f0=" << f0 << ", f1=" << f1 << ", d=" << d << ")";
 }
 
 
@@ -569,15 +551,7 @@ void FrequencySubbands::show(ostream &os) const
         long d = m_to_d.at(m);
         long f0 = f_to_ilo.at(f);
         long f1 = f_to_ihi.at(f);
-        os << "    m=" << m << ": d=" << d << ", f0=" << f0 << ", f1=" << f1;
-
-        auto flags = os.flags();
-        auto fill = os.fill();
-        os << ", m_to_token=0x" << hex << setfill('0') << setw(8) << m_to_token.at(m);
-        os.flags(flags);
-        os.fill(fill);
-
-        os << "\n";
+        os << "    m=" << m << ": d=" << d << ", f0=" << f0 << ", f1=" << f1 << "\n";
     }
 }
 
@@ -917,7 +891,7 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
                             float x2 = in[m*mstr + I + tout*N + n - S];
                             float x3 = in[m*mstr + I + tout*N + n];
 
-                            uint token0 = fs.m_to_token[m] | (n*dt);  // includes (m,n) but not p
+                            uint token0 = (m << 16)| (n*dt);  // includes (m,n) but not p
                             uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
                             uint token2 = token0 | ((3*l+2) << 8);    // include p=3*l+2
                             uint token3 = token0 | ((3*l+3) << 8);    // include p=3*l+3
@@ -987,18 +961,14 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 uint token = in_tokens.at({b,d,tout});
 
                 // Token parsing starts here.
-                // Reminder: token = (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26)
+                // Reminder: token = (t) | (p << 8) | (m << 16).
 
-                auto it = fs.token_to_m.find(token & FrequencySubbands::token_m_mask);
-                if (it == fs.token_to_m.end())
-                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (m-value)");
-
-                long m = it->second;
-                long p = (token >> 8) & 0x3fu;
+                long m = (token >> 16) & 0xffu;
+                long p = (token >> 8) & 0xffu;
                 long t = (token & 0xffu);
 
                 if ((m < 0) || (m >= M))
-                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (m out of range, this should never happen)");
+                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (m out of range)");
                 if ((p < 0) || (p >= P))
                     throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (p out of range)");
                 if ((t < 0) || (t >= Dout))
