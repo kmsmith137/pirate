@@ -807,13 +807,11 @@ class PfWeightReader:
           // Loop over t-values is not supplied by PfOutput2.
           for (uint tin = 0; tin < nt_in; t += 32*SW) {
 
-              // Outer "unrolled" loop over 0 <= mouter < Mouter.
-              // Inner "unrolled" loop over 0 <= pouter < Pouter.
-              w = pfw_reader.read_weights('pfw_m0_p0', mouter=0, pouter=0)
-              w = pfw_reader.read_weights('pfw_m0_p1, mouter=0, pouter=1)
-                // ...
-              w = pfw_reader.read_weights(f'pfw_m{Minner*(Mouter-1)}_p{Pouter-1}',
-                                          mouter=Mouter-1, pouter=Pouter-1)
+              # for-loops in code generator, "unrolled" in code
+              for m0 in range(0, M, Dcore):
+                  for pouter in range(0, P, SW):                  # SW = 32/sizeof(dtype) "simd width"
+                      for m in range(m0, m0+Dcore, Minner):   # Minner = Dcore/SW
+                          pfw_reader.read_weights(dst, m0, p)
         
               pfw_reader.bottom('tin', 'nt_in')
           }
@@ -865,30 +863,14 @@ class PfWeightReader:
         self.pf_Imin = np.min(self.pf_I0, axis=1)
         self.pf_Imax = np.max(self.pf_I0, axis=1) + (Tinner - 1)
 
-        # Dict (cache line index I>>5) -> (wcl string varname).
-        # This gets populated as read_weights() is called.
-        self.wcl_cache = { }
+        # As weights are read from global memory, they populate registers named 'pf_wcl_I{I}',
+        # where (I % 32) == 0. This set keeps track of which I-values have been read.
+        self.wcl_cache = set()   # set of integers divisible by 32.
 
         self.top_called = False
         self.expected_mouter = 0
         self.expected_pouter = 0
         self.bottom_called = False
-        
-        # FIXME 1: shared memory
-        #  - less global memory bandwidth
-        #  - faster than warp shuffle, if 64-bit loads are used, on some architectures
-        #  - Pinner may change to (2 * simd_width)
-        #  - API change: read_weights() can now return two T32s
-        #
-        # FIXME 2: register limit
-        #  - Use Belady's algorithm
-        #
-        # FIXME 3: if Tinner=1 then test whether re-reading is really necessary
-        #
-        # The optimal interface would specify a register limit, a shared memory limit,
-        # and let the constructor choose the strategy!
-        #
-        # FIXME 4: dynamic programming
         
         
     def top(self, k, wp):
@@ -897,18 +879,6 @@ class PfWeightReader:
         assert not self.top_called
         self.top_called = True
         self.wp = wp
-
-
-    def _read_wcl(self, k, Icl):
-        if Icl in self.wcl_cache:
-            w = self.wcl_cache[Icl]
-            k.emit(f"// At this point in the code, '{w}' contains {self.wp}[{32*Icl}:{32*Icl+32}]")
-            return w
-
-        wcl = k.get_name('pf_wcl')
-        k.emit(f"{self.dt32} {wcl} = {self.wp}[{32*Icl} + (threadIdx.x & 0x1f)]; // {self.wp}[{32*Icl}:{32*Icl+32}]")
-        self.wcl_cache[Icl] = wcl
-        return wcl
 
     
     def read_weights(self, k, dst, mouter, pouter, declare_dst=True):
@@ -936,10 +906,10 @@ class PfWeightReader:
         assert np.all(Imax < Imin + 32)
 
         k.emit(f'// We want to load {wp}[{Istr}] on each thread, where {Imin} <= ({Istr}) <= {Imax}.')
-        wcl = self._read_wcl(k, Imin >> 5)
+        wcl = self._get_wcl(k, Imin & ~0x1f)
 
-        if (Imin >> 5) != (Imax >> 5):
-            wcl2 = self._read_wcl(k, Imax >> 5)
+        if (Imin & ~0x1f) != (Imax & ~0x1f):
+            wcl2 = self._get_wcl(k, Imax & ~0x1f)
             wrap = k.get_name('wrap')
             k.emit(f'// Wrapped {wp}[{Imin}:{Imin+32}]')
             k.emit(f'{self.dt32} {wrap} = ((threadIdx.x & 0x1f) >= {Imin & 0x1f}) ? {wcl} : {wcl2};')
@@ -950,6 +920,20 @@ class PfWeightReader:
         k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): end')
 
 
+
+    def _get_wcl(self, k, I):
+        """Helper for read_weights()."""
+        assert 0 <= I < (self.Pouter * self.F * self.Tinner)
+        assert (I % 32) == 0
+        wcl = f'pf_wcl_I{I}'
+
+        if I not in self.wcl_cache:
+            k.emit(f'{self.dt32} {wcl} = {self.wp}[{I} + (threadIdx.x & 0x1f)];')
+            self.wcl_cache.add(I)
+
+        return wcl
+
+    
     def _init_pf_I(self, k, mouter):
         """Helper called by read_weights()."""
         
