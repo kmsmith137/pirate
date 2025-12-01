@@ -33,7 +33,23 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
 
+
+def rrange(registry_class):
+    """
+    This function is used to iterate over a kernel registry, for an appropriate number
+    of iterations, so that every kernel is tested a few times. See usage in test() below.
+    """
+
+    n = registry_class.registry_size()
+
+    if n == 0:
+        print(f'!!! {registry_class.__name__}: no kernels were registered !!!')
+        return
     
+    for i in range((n+9)//10):
+        yield i
+
+
 def test(args):
     test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'zomb', 'dd' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
@@ -47,24 +63,22 @@ def test(args):
             pirate_pybind11.ReferenceDedisperser.test_dedispersion_basics()
         
         if run_all_tests or args.pfwr:
-            pirate_pybind11.PfWeightReaderMicrokernel.test()
+            for _ in rrange(pirate_pybind11.PfWeightReaderMicrokernel):
+                pirate_pybind11.PfWeightReaderMicrokernel.test()
         
         if run_all_tests or args.pfom:
-            pirate_pybind11.PfOutputMicrokernel.test()
+            for _ in rrange(pirate_pybind11.PfOutputMicrokernel):
+                pirate_pybind11.PfOutputMicrokernel.test()
         
         if run_all_tests or args.gldk:
             pirate_pybind11.GpuLaggedDownsamplingKernel.test()
         
         if run_all_tests or args.gddk:
-            # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
-            # runs every kernel a few times. Currently there are 80 precompiled kernels.
-            for _ in range(5):
+            for _ in rrange(pirate_pybind11.GpuDedispersionKernel):
                 pirate_pybind11.GpuDedispersionKernel.test()
         
         if run_all_tests or args.gpfk:
-            # We include this extra factor of 5, to guarantee that 'python -m pirate_frb test'
-            # runs every kernel a few times. Currently there are 66 precompiled kernels.
-            for _ in range(5):
+            for _ in rrange(pirate_pybind11.GpuPeakFindingKernel):
                 pirate_pybind11.GpuPeakFindingKernel.test()
         
         if run_all_tests or args.grck:
@@ -102,9 +116,6 @@ def parse_time(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
     parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (only for time_cpu_downsample)")
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
-    # parser.add_argument('--cd', action='store_true', help='Runs time_cpu_downsample()')
-    # parser.add_argument('--gd', action='store_true', help='Runs time_gpu_downsample()')
-    # parser.add_argument('--gt', action='store_true', help='Runs time_gpu_transpose()')
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
     parser.add_argument('--gpfk', action='store_true', help='Runs time_gpu_peak_finding_kernels()')
@@ -157,16 +168,24 @@ def parse_show_kernels(subparsers):
     subparsers.add_parser("show_kernels", help="Show all registered cuda kernels")
     
 def show_kernels(args):
-    print("PfOutput microkernel registry:")
+    n = pirate_pybind11.PfOutputMicrokernel.registry_size()
+    print(f"PfOutput microkernel registry ({n} entries):", flush=True)
     pirate_pybind11.PfOutputMicrokernel.show_registry()
-    
-    print("\nDedispersion kernel registry:")
+
+    n = pirate_pybind11.PfWeightReaderMicrokernel.registry_size()
+    print(f"\nPfWeightReader microkernel registry ({n} entries):", flush=True)
+    pirate_pybind11.PfWeightReaderMicrokernel.show_registry()
+
+    n = pirate_pybind11.GpuDedispersionKernel.registry_size()
+    print(f"\nDedispersion kernel registry ({n} entries):", flush=True)
     pirate_pybind11.GpuDedispersionKernel.show_registry()
     
-    print("\nPeak-finding kernel registry (old):")
+    n = pirate_pybind11.GpuPeakFindingKernelOld.registry_size()
+    print(f"\nPeak-finding kernel registry (old) ({n} entries):", flush=True)
     pirate_pybind11.GpuPeakFindingKernelOld.show_registry()
     
-    print("\nPeak-finding kernel registry:")
+    n = pirate_pybind11.GpuPeakFindingKernel.registry_size()
+    print(f"\nPeak-finding kernel registry ({n} entries):", flush=True)
     pirate_pybind11.GpuPeakFindingKernel.show_registry()
 
 

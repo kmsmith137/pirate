@@ -175,6 +175,8 @@ struct KernelRegistry
             if (!s.empty())
                 os << "        " << entries[i].val << "\n";
         }
+
+        os << std::flush;
     }
 };
 
