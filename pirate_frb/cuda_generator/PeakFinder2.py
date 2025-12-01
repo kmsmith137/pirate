@@ -625,11 +625,11 @@ class PeakFinder2:
         if self.dtype == 'float':
             k.emit(f'pfz_m{m}_p{p} *= pfw_m{m}_p{p};')
             tfull = f'pfiz_m{m}_p{p} | (threadIdx.x & (Dout-Dcore))'
-            mfull = f'{m} | (threadIdx.x & Dcore)'
+            mfull = f'{m} | (threadIdx.x & (Dcore-1))'
             if m + Dcore >= M:
                 mfull = f'min({mfull}, {M-1})'
 
-            k.emit(f'uint token_m{m}_p{p} = ({tfull}) | ({p} << 8) | ({mfull} << 16);')
+            k.emit(f'uint token_m{m}_p{p} = ({tfull}) | ({p} << 8) | (({mfull}) << 16);')
             self.pf_output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
 
         elif (self.dtype == '__half') and ((p % 2) == 0) and (p < (P-1)):

@@ -8,6 +8,7 @@
 
 #include <sstream>
 #include <stdexcept>
+#include <iomanip>
 
 #include <ksgpu/xassert.hpp>
 
@@ -290,6 +291,14 @@ void show_kernels()
 
     cout << "\nPeak-finding kernel registry, part 2:\n";
     GpuPeakFindingKernel2::registry().show();
+}
+
+
+string hex_str(uint x)
+{
+    stringstream ss;
+    ss << std::hex << "0x" << x;
+    return ss.str();
 }
 
 

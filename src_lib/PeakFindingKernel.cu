@@ -968,11 +968,11 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 long t = (token & 0xffu);
 
                 if ((m < 0) || (m >= M))
-                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (m out of range)");
+                    throw _bad_token(token, "m out of range");
                 if ((p < 0) || (p >= P))
-                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (p out of range)");
+                    throw _bad_token(token, "p out of range");
                 if ((t < 0) || (t >= Dout))
-                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (t out of range)");
+                    throw _bad_token(token, "t out of range");
 
                 // p = 3*l+q, where l is the "level".
                 long l = p ? ((p-1)/3) : 0;
@@ -983,7 +983,7 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 long n = t / dt;
 
                 if (t != n*dt)
-                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad token (t is not divisible by dt)");
+                    throw _bad_token(token, "t is not divisible by dt");
 
                 // Token parsing (token -> (m,n,p)) ends here!
 
@@ -1008,7 +1008,7 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
                 else if (q == 3)
                     out_max.at({b,d,tout}) = w * (0.5f*x0 + x1 + x2 + 0.5f*x3);
                 else
-                    throw runtime_error("ReferencePeakFindingKernel2::eval_tokens(): bad value of q, this should never happen");
+                    throw _bad_token(token, "bad value of q, this should never happen");
 
 #if 0
                 if ((b==0) && (d==0) && (tout==1)) {
@@ -1038,6 +1038,15 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
         }
     }
 }
+
+
+std::runtime_error ReferencePeakFindingKernel2::_bad_token(uint token, const char *why)
+{
+    stringstream ss;
+    ss << "ReferencePeakFindingKernel2:: eval_tokens(): bad token " << hex_str(token) << " (" << why << ")";
+    return runtime_error(ss.str());
+}
+
 
 // Make a mean-zero input array for testing.
 // Returns shape (nbeams_per_batch, ndm_out, fs.M, nt_in)

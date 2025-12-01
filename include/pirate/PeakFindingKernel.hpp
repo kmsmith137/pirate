@@ -399,6 +399,9 @@ struct ReferencePeakFindingKernel2
     // allocate() method). We just save the last (tpad) samples from the previous chunk.
 
     ksgpu::Array<float> pstate;  // shape (total_beams, A, M, tpad)
+
+    // Helper for eval_tokens()
+    static std::runtime_error _bad_token(uint token, const char *why);
 };
 
 
