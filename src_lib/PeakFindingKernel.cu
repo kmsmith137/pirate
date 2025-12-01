@@ -1254,7 +1254,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
 
     auto v = ksgpu::random_integers_with_bounded_product(4, 100000 / (nt_in_divisor * ndm_out));
     long nchunks = v[0];
-    long nt_in_per_chunk = nt_in_divisor * v[1]
+    long nt_in_per_chunk = nt_in_divisor * v[1];
     long beams_per_batch = v[2];
     long total_beams = v[2] * v[3];
 
