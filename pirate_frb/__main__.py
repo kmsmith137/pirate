@@ -22,8 +22,8 @@ def parse_test(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
     parser.add_argument('--ddb', action='store_true', help='Runs ReferenceDedisperser.test_dedispersion_basics()')
-    parser.add_argument('--pfwr', action='store_true', help='Runs TestPfWeightReader.test()')
-    parser.add_argument('--pfom', action='store_true', help='Runs TestPfOutput2.test()')
+    parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test()')
+    parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test()')
     parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test()')
     parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.test()')
     parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test()')
@@ -47,10 +47,10 @@ def test(args):
             pirate_pybind11.ReferenceDedisperser.test_dedispersion_basics()
         
         if run_all_tests or args.pfwr:
-            pirate_pybind11.TestPfWeightReader.test()
+            pirate_pybind11.PfWeightReaderMicrokernel.test()
         
         if run_all_tests or args.pfom:
-            pirate_pybind11.TestPfOutput2.test()
+            pirate_pybind11.PfOutputMicrokernel.test()
         
         if run_all_tests or args.gldk:
             pirate_pybind11.GpuLaggedDownsamplingKernel.test()

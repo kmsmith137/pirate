@@ -396,7 +396,7 @@ struct ReferencePeakFindingKernel2
     std::vector<long> tmp_sout;
     std::vector<ksgpu::Array<float>> tmp_arr;   // shape (B, D, M, tmp_nt[l])
 
-    // The reference kernel allocates persistent state in the constructor (not a separate
+    // The reference rl allocates persistent state in the constructor (not a separate
     // allocate() method). We just save the last (tpad) samples from the previous chunk.
 
     ksgpu::Array<float> pstate;  // shape (total_beams, A, M, tpad)
@@ -511,7 +511,7 @@ extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel2::R
 
 // Everything after this point is KernelRegistry boilerplate.
 // First, a registry for test_pf_weight_reader kernels.
-struct TestPfWeightReader
+struct PfWeightReaderMicrokernel
 {
     struct RegistryKey
     {
@@ -559,13 +559,13 @@ struct TestPfWeightReader
 };
 
 // Defined in GpuPeakFindingKernel.cu
-extern bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightReader::RegistryKey &k2);
-extern std::ostream &operator<<(std::ostream &os, const TestPfWeightReader::RegistryKey &k);
-extern std::ostream &operator<<(std::ostream &os, const TestPfWeightReader::RegistryValue &v);
+extern bool operator==(const PfWeightReaderMicrokernel::RegistryKey &k1, const PfWeightReaderMicrokernel::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k);
+extern std::ostream &operator<<(std::ostream &os, const PfWeightReaderMicrokernel::RegistryValue &v);
 
 
 // Registry for test_pf_output kernels.
-struct TestPfOutput2
+struct PfOutputMicrokernel
 {
     
     struct RegistryKey
@@ -600,9 +600,9 @@ struct TestPfOutput2
 };
 
 // Defined in GpuPeakFindingKernel.cu
-extern bool operator==(const TestPfOutput2::RegistryKey &k1, const TestPfOutput2::RegistryKey &k2);
-extern std::ostream &operator<<(std::ostream &os, const TestPfOutput2::RegistryKey &k);
-extern std::ostream &operator<<(std::ostream &os, const TestPfOutput2::RegistryValue &v);
+extern bool operator==(const PfOutputMicrokernel::RegistryKey &k1, const PfOutputMicrokernel::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::RegistryKey &k);
+extern std::ostream &operator<<(std::ostream &os, const PfOutputMicrokernel::RegistryValue &v);
 
 
 }  // namespace pirate

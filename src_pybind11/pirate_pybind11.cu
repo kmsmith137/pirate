@@ -162,12 +162,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test_dedispersion_basics", &ReferenceDedisperserBase::test_dedispersion_basics)
     ;
 
-    py::class_<TestPfWeightReader>(m, "TestPfWeightReader")
-          .def_static("test", &TestPfWeightReader::test)
+    py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")
+          .def_static("test", &PfWeightReaderMicrokernel::test)
     ;
 
-    py::class_<TestPfOutput2>(m, "TestPfOutput2")
-          .def_static("test", &TestPfOutput2::test)
+    py::class_<PfOutputMicrokernel>(m, "PfOutputMicrokernel")
+          .def_static("test", &PfOutputMicrokernel::test)
     ;
 
     m.def("test_gpu_peak_finding_kernel", &test_gpu_peak_finding_kernel, py::arg("reduce_only"));

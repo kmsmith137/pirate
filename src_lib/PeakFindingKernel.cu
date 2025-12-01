@@ -1440,13 +1440,13 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryValue &v)
 
 // -------------------------------------------------------------------------------------------------
 //
-// TestPfWeightReader
+// PfWeightReaderMicrokernel
 
 
-struct TestPfWeightReaderRegistry : public TestPfWeightReader::Registry
+struct PfWeightReaderMicrokernelRegistry : public PfWeightReaderMicrokernel::Registry
 {
-    using Key = TestPfWeightReader::RegistryKey;
-    using Val = TestPfWeightReader::RegistryValue;
+    using Key = PfWeightReaderMicrokernel::RegistryKey;
+    using Val = PfWeightReaderMicrokernel::RegistryValue;
 
     virtual void add(const Key &key, const Val &val, bool debug) override
     {
@@ -1466,28 +1466,28 @@ struct TestPfWeightReaderRegistry : public TestPfWeightReader::Registry
         val.pf_weight_layout.validate();
         
         // Call add() in base class.
-        TestPfWeightReader::Registry::add(key, val, debug);
+        PfWeightReaderMicrokernel::Registry::add(key, val, debug);
     }
 };
 
 
 // Static member function
-TestPfWeightReader::Registry &TestPfWeightReader::registry()
+PfWeightReaderMicrokernel::Registry &PfWeightReaderMicrokernel::registry()
 {
     // Instead of declaring the registry as a static global variable, we declare it as a
-    // static local variable in the static member function TestPfWeightReader::registry().
-    // The registry will be initialized the first time that TestPfWeightReader::registry()
+    // static local variable in the static member function PfWeightReaderMicrokernel::registry().
+    // The registry will be initialized the first time that PfWeightReaderMicrokernel::registry()
     // is called.
     //
     // This kludge is necessary because the registry is accessed at library initialization
     // time, by callers in other source files, and source files are executed in an
     // arbitrary order.
     
-    static TestPfWeightReaderRegistry reg;
+    static PfWeightReaderMicrokernelRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
 
-bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightReader::RegistryKey &k2)
+bool operator==(const PfWeightReaderMicrokernel::RegistryKey &k1, const PfWeightReaderMicrokernel::RegistryKey &k2)
 {
     return (k1.dtype == k2.dtype)
         && (k1.subband_counts == k2.subband_counts)
@@ -1496,11 +1496,11 @@ bool operator==(const TestPfWeightReader::RegistryKey &k1, const TestPfWeightRea
         && (k1.P == k2.P);
 }
 
-ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryKey &k)
+ostream &operator<<(ostream &os, const PfWeightReaderMicrokernel::RegistryKey &k)
 {
     FrequencySubbands fs(k.subband_counts);
     
-    os << "TestPfWeightReader(dtype=" << k.dtype
+    os << "PfWeightReaderMicrokernel(dtype=" << k.dtype
        << ", rank=" << fs.pf_rank
        << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
        << ", Dcore=" << k.Dcore
@@ -1513,16 +1513,16 @@ ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryKey &k)
     return os;
 }
 
-ostream &operator<<(ostream &os, const TestPfWeightReader::RegistryValue &v)
+ostream &operator<<(ostream &os, const PfWeightReaderMicrokernel::RegistryValue &v)
 {
     return os;
 }
 
 
-void TestPfWeightReader::test()
+void PfWeightReaderMicrokernel::test()
 {
-    TestPfWeightReader::RegistryKey key = TestPfWeightReader::registry().get_random_key();
-    TestPfWeightReader::RegistryValue val = TestPfWeightReader::registry().get(key);
+    PfWeightReaderMicrokernel::RegistryKey key = PfWeightReaderMicrokernel::registry().get_random_key();
+    PfWeightReaderMicrokernel::RegistryValue val = PfWeightReaderMicrokernel::registry().get(key);
 
     FrequencySubbands fs(key.subband_counts);
     GpuPfWeightLayout &wl = val.pf_weight_layout;
@@ -1595,13 +1595,13 @@ void TestPfWeightReader::test()
 
 // -------------------------------------------------------------------------------------------------
 //
-// TestPfOutput2
+// PfOutputMicrokernel
 
 
-struct TestPfOutput2Registry : public TestPfOutput2::Registry
+struct PfOutputMicrokernelRegistry : public PfOutputMicrokernel::Registry
 {
-    using Key = TestPfOutput2::RegistryKey;
-    using Val = TestPfOutput2::RegistryValue;
+    using Key = PfOutputMicrokernel::RegistryKey;
+    using Val = PfOutputMicrokernel::RegistryValue;
 
     virtual void add(const Key &key, const Val &val, bool debug) override
     {
@@ -1613,46 +1613,46 @@ struct TestPfOutput2Registry : public TestPfOutput2::Registry
         xassert(val.cuda_kernel != nullptr);
 
         // Call add() in base class.
-        TestPfOutput2::Registry::add(key, val, debug);
+        PfOutputMicrokernel::Registry::add(key, val, debug);
     }
 };
 
 // Static member function
-TestPfOutput2::Registry &TestPfOutput2::registry()
+PfOutputMicrokernel::Registry &PfOutputMicrokernel::registry()
 {
     // Instead of declaring the registry as a static global variable, we declare it as a
-    // static local variable in the static member function TestPfOutput2::registry().
-    // The registry will be initialized the first time that TestPfOutput2::registry()
+    // static local variable in the static member function PfOutputMicrokernel::registry().
+    // The registry will be initialized the first time that PfOutputMicrokernel::registry()
     // is called.
     //
     // This kludge is necessary because the registry is accessed at library initialization
     // time, by callers in other source files, and source files are executed in an
     // arbitrary order.
     
-    static TestPfOutput2Registry reg;
+    static PfOutputMicrokernelRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
 
-bool operator==(const TestPfOutput2::RegistryKey &k1, const TestPfOutput2::RegistryKey &k2)
+bool operator==(const PfOutputMicrokernel::RegistryKey &k1, const PfOutputMicrokernel::RegistryKey &k2)
 {
     return (k1.dtype == k2.dtype) && (k1.Dout == k2.Dout);
 }
 
-ostream &operator<<(ostream &os, const TestPfOutput2::RegistryKey &k)
+ostream &operator<<(ostream &os, const PfOutputMicrokernel::RegistryKey &k)
 {
-    os << "TestPfOutput2(dtype=" << k.dtype << ", Dout=" << k.Dout << ")";
+    os << "PfOutputMicrokernel(dtype=" << k.dtype << ", Dout=" << k.Dout << ")";
     return os;
 }
 
-ostream &operator<<(ostream &os, const TestPfOutput2::RegistryValue &v)
+ostream &operator<<(ostream &os, const PfOutputMicrokernel::RegistryValue &v)
 {
     return os;
 }
 
 
-void TestPfOutput2::test()
+void PfOutputMicrokernel::test()
 {
-    TestPfOutput2::RegistryKey key = TestPfOutput2::registry().get_random_key();
+    PfOutputMicrokernel::RegistryKey key = PfOutputMicrokernel::registry().get_random_key();
     
     Dtype dtype = key.dtype;
     uint Dout = key.Dout;
@@ -1701,7 +1701,7 @@ void TestPfOutput2::test()
     Array<uint> aout_gpu({nt_out}, af_gpu | af_guard);
 
     // cuda_kernel(void *zout, uint *aout, void *zin, uint *ain, uint nt_in)
-    auto kernel = TestPfOutput2::registry().get(key).cuda_kernel;
+    auto kernel = PfOutputMicrokernel::registry().get(key).cuda_kernel;
 
     kernel<<<1,32>>> (zout_gpu.data, aout_gpu.data, zin_gpu.data, ain_gpu.data, nt_in);
     CUDA_PEEK("pf_output2_test_kernel");
