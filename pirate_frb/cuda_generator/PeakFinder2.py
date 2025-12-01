@@ -878,7 +878,7 @@ class PfWeightReader:
             self._init_pfI(k, mouter)
 
         pfI = f'pfI_m{mouter}'
-        dI = (p//Pinner) * F * Tinner
+        dI = utils.xdiv(p,Pinner) * F * Tinner
         Istr = f'{pfI} + {dI}' if (dI > 0) else pfI
 
         # Very important assert -- our algorithm depends on this!
@@ -911,7 +911,8 @@ class PfWeightReader:
 
         m = min(m, self.M-1)
         f = self.frequency_subbands.m_to_fd[m][0]
-        return ((p//self.Pinner) * self.F * self.Tinner) + (f * self.Tinner) + tinner
+        pouter = utils.xdiv(p, self.Pinner)
+        return (pouter * self.F * self.Tinner) + (f * self.Tinner) + tinner
 
 
     def _get_wcl(self, k, I):
