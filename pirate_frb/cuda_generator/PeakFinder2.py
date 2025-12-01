@@ -162,6 +162,8 @@ class PeakFinder2:
         k.emit('//   - F = frequency_subbands.F')
         k.emit('//')
         k.emit('// FIXME assuming 32 threads/block and 16 threadblocks/SM for now')
+        k.emit()
+
         k.emit('__global__ void __launch_bounds__(32,16)')
         k.emit(f'{self.kernel_name}(const void *in_, void *out_max_, uint *out_argmax, const void *wt_, void *pstate_, uint nt_in, uint ndm_out_per_wt, uint nt_in_per_wt)')
         k.emit('{')
@@ -186,7 +188,7 @@ class PeakFinder2:
         nt_out32 = self._idiv('nt_in', Dout*SW)
 
         k.emit(f'// FIXME could optimize out integer divisions')
-        k.emit(f'uint warp = blockIdx.x * blockDim.x + threadIdx.y;')
+        k.emit(f'uint warp = blockIdx.x * blockDim.y + threadIdx.y;')
         k.emit(f'uint dm_w = warp / ndm_out_per_wt;         // dm index in weight array')
         k.emit(f'uint Touter = nt_in / (Tinner * nt_in_per_wt);  // see PfWeightLayout')
         k.emit()
