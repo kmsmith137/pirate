@@ -790,31 +790,47 @@ class PfWeightLayout:
 class PfWeightReader:
     def __init__(self, frequency_subbands, dtype, Dcore, P, Tinner):
         """
-        Generated code looks like this
-        ------------------------------
+        The PfWeightReader is parameterized by Dcore, but the more important quantity is
 
-          constexpr int SW = 128 / sizeof(dtype);  // simd width
-        
-          // Initialization of input pointer is not supplied by PfWeightReader.
-          // 'wp' is a per-warp pointer to shape (Touter,Pouter,F,Tinner,Pinner/SW),
-          // where the 'touter' stride is 128-byte aligned. The pointer is "owned"
-          // by the PfWeightReader class, and will be incremented as data is read
-          // from global memory.
-        
-          T32 *wp = ...;
-          pfw_reader.top('wp');
-        
-          // Loop over t-values is not supplied by PfOutput2.
-          for (uint tin = 0; tin < nt_in; t += 32*SW) {
+            Minner = Dcore / SW        where SW = 32/sizeof(dtype) = simd_width.
 
-              # for-loops in code generator, "unrolled" in code
-              for m0 in range(0, M, Dcore):
-                  for pouter in range(0, P, SW):                  # SW = 32/sizeof(dtype) "simd width"
-                      for m in range(m0, m0+Dcore, Minner):   # Minner = Dcore/SW
-                          pfw_reader.read_weights(dst, m0, p)
+        The PfWeightReader's purpose in life is to define
         
+           read_weights(mouter, pouter)  -> one register per thread
+
+        which reads elements of the weights array with register assignment:
+
+           simd                      <-> (pinner or None)
+           Minner lanes              <-> (minner)
+           32/(Minner*Tinner) lanes  <-> spectators
+           Tinner lanes              <-> time index of weights array
+
+         Generated code looks like this
+         ------------------------------
+
+           // Initialization of input pointer is not supplied by PfWeightReader.
+           // 'wp' is a per-warp pointer to shape (Touter,Pouter,F,Tinner,Pinner/SW),
+           // where the 'touter' stride is 128-byte aligned. The pointer is "owned"
+           // where the 'touter' stride is 128-byte aligned. The pointer is "owned"
+           // by the PfWeightReader class, and will be incremented as data is read
+           // from global memory.
+
+           // Loop over t-values is not supplied by PfOutput2.
+           for (uint tin = 0; tin < nt_in; t += 32*SW) {
+
+              // Calls to read_weights() can be arbitrarily ordered.
+              // This may change in the future, since it's a receipe for running
+              // out of registers or shared memory! But it's convenient for now.
+
+              pfw_reader.read_weights(mouter, pouter)
+              pfw_reader.read_weights(mouter, pouter+1)
+
+              // One call to bottom(), near end of tin-loop.
               pfw_reader.bottom('tin', 'nt_in')
-          }
+           }
+
+        FIXME: this placeholder implementation uses a lot of registers -- not sure yet
+        if this will create practical difficulties.
         """
 
         self.dtype = dtype = Dtype(dtype)
@@ -852,8 +868,8 @@ class PfWeightReader:
         # corresponds to a cache line.
 
         # 'pf_I0' is the mapping (mouter,minner) -> I, for pouter=tinner=0.
-        self.pf_I0 = np.zeros((Mouter,Minner), dtype=int)
-        for mouter in range(Mouter):
+        self.pf_I0 = np.zeros((Mouter+1,Minner), dtype=int)
+        for mouter in range(Mouter+1):
             for minner in range(Minner):
                 m = min(mouter*Minner + minner, self.M-1)
                 f = frequency_subbands.m_to_fd[m][0]
@@ -866,31 +882,15 @@ class PfWeightReader:
         # As weights are read from global memory, they populate registers named 'pf_wcl_I{I}',
         # where (I % 32) == 0. This set keeps track of which I-values have been read.
         self.wcl_cache = set()   # set of integers divisible by 32.
-
-        self.top_called = False
-        self.expected_mouter = 0
-        self.expected_pouter = 0
-        self.bottom_called = False
         
         
     def top(self, k, wp):
         """Placeholder for future expansion."""
         
-        assert not self.top_called
-        self.top_called = True
         self.wp = wp
 
     
     def read_weights(self, k, dst, mouter, pouter, declare_dst=True):
-        assert self.top_called
-        assert not self.bottom_called
-
-        if (mouter, pouter) != (self.expected_mouter, self.expected_pouter):
-            raise RuntimeError(f'PfWeightReader.read_weights(): {(mouter,pouter)=}, expected={(self.expected_mouter,self.expected_pouter)}')
-
-        self.expected_mouter = (mouter) if (pouter < self.Pouter-1) else (mouter+1)
-        self.expected_pouter = (pouter+1) if (pouter < self.Pouter-1) else 0
-        
         wp, F, Tinner = self.wp, self.F, self.Tinner
         k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): start.')
 
@@ -975,10 +975,6 @@ class PfWeightReader:
     def bottom(self, k, tin, nt_in_per_wt):
         """The 'tin', 'nt_in_per_wt' args are string varnames."""
         
-        assert self.top_called
-        assert not self.bottom_called
-        assert (self.expected_mouter, self.expected_pouter) == (self.Mouter, 0)
-        self.bottom_called = True
  
         nelts = self.Pouter * self.F * self.Tinner * self.Pinner
         us = self.weight_layout.unpadded_byte_stride
