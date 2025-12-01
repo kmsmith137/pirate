@@ -1085,7 +1085,8 @@ Array<float> ReferencePeakFindingKernel2::make_random_input_array()
     return ret;
 }
 
-// Make an "interesting" weights array for testing.
+// This weird procedure for making a random weights array is intended to
+// expose corner cases in the peak-finding kernel.
 // Returned array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F).
 Array<float> ReferencePeakFindingKernel2::make_random_weights()
 {
@@ -1094,34 +1095,27 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
     long T = params.nt_wt;
     long P = nprofiles;
     long F = fs.F;
+
     xassert_eq(P, 3*(P/3)+1);
 
-    vector<float> var_p(P);
-    vector<float> irms_pf(P*F);  // shape (P,F)
     Array<float> ret({B,D,T,P,F}, af_rhost);
-
-    var_p[0] = 1.0f;
-    for (long l = 0; l < (P/3); l++) {
-        var_p[3*l+1] = 2.0f * pow2(l);
-        var_p[3*l+2] = 1.5f * pow2(l);
-        var_p[3*l+3] = 2.5f * pow2(l);
-    }
-
-    for (long p = 0; p < P; p++) {
-        for (long f = 0; f < F; f++) {
-            long ilo = fs.f_to_ilo[f];
-            long ihi = fs.f_to_ihi[f];
-            irms_pf[p*F+f] = rsqrtf((ihi-ilo) * var_p[p]);
-        }
-    }
+    vector<float> wp(P);
 
     long nouter = B*D*T;
-    long ninner = F*P;
 
     for (long i = 0; i < nouter; i++) {
-        float p0 = 1.0f;  // rand_uniform();  FIXME setting p0=1
-        for (long j = 0; j < ninner; j++)
-            ret.data[i*ninner + j] = (rand_uniform() < p0) ? (irms_pf[j] * rand_uniform()) : 0.0f;
+        float p0 = rand_uniform(1.0f, 2.0f);
+
+        wp[0] = (rand_uniform() < p0) ? rand_uniform() : 0.0f;
+        for (long l = 0; l < (P/3); l++) {
+            wp[3*l+1] = (rand_uniform() < p0) ? (rand_uniform() * rsqrtf(2.0f * pow2(l))) : 0.0f;
+            wp[3*l+2] = (rand_uniform() < p0) ? (rand_uniform() * rsqrtf(1.5f * pow2(l))) : 0.0f;
+            wp[3*l+3] = (rand_uniform() < p0) ? (rand_uniform() * rsqrtf(2.5f * pow2(l))) : 0.0f;
+        }
+
+        for (long p = 0; p < P; p++)
+            for (long f = 0; f < F; f++)
+                ret.data[i*P*F + p*F + f] = rand_uniform(1.0f, 2.0f) * wp[p];
     }
 
     return ret;
@@ -1468,7 +1462,7 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryKey &k)
 
 ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryValue &v)
 {
-    os << "Dcore=" << v.Dcore;
+    os << "Dcore=" << v.Dcore << ", pstate_32_bit_registers_per_warp=" << v.PW32;
     return os;
 }
 
