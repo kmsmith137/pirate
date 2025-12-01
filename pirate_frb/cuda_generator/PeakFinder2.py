@@ -805,8 +805,8 @@ class PfWeightReader:
            32/(Minner*Tinner) lanes  <-> spectators
            Tinner lanes              <-> time index of weights array
 
-         Generated code looks like this
-         ------------------------------
+         Usage (in the form of schematic generated code)
+         -----------------------------------------------
 
            // Initialization of input pointer is not supplied by PfWeightReader.
            // 'wp' is a per-warp pointer to shape (Touter,Pouter,F,Tinner,Pinner/SW),
@@ -862,23 +862,6 @@ class PfWeightReader:
         self.test_kernel_name = f'pf_weight_reader_test_{dtype.fname}_{frequency_subbands.fstr}_Dcore{Dcore}_P{P}_Tinner{Tinner}'
         self.test_kernel_basename = self.test_kernel_name + '.cu'
 
-        # Throughout 'class PfWeightReader', a capitalized index 0 <= I < Pouter*F*Tinner
-        # denotes a "flattened" index triple (pouter, f, tinner). Such an index I can be
-        # viewed as an offset relative to the 'wp' pointer (see docstring), and (I >> 5)
-        # corresponds to a cache line.
-
-        # 'pf_I0' is the mapping (mouter,minner) -> I, for pouter=tinner=0.
-        self.pf_I0 = np.zeros((Mouter+1,Minner), dtype=int)
-        for mouter in range(Mouter+1):
-            for minner in range(Minner):
-                m = min(mouter*Minner + minner, self.M-1)
-                f = frequency_subbands.m_to_fd[m][0]
-                self.pf_I0[mouter, minner] = f * Tinner
-
-        # pf_Imin = min(pf_I0) over all lanes, i.e. all (minner,tinner) pairs.
-        self.pf_Imin = np.min(self.pf_I0, axis=1)
-        self.pf_Imax = np.max(self.pf_I0, axis=1) + (Tinner - 1)
-
         # As weights are read from global memory, they populate registers named 'pf_wcl_I{I}',
         # where (I % 32) == 0. This set keeps track of which I-values have been read.
         self.wcl_cache = set()   # set of integers divisible by 32.
@@ -886,25 +869,23 @@ class PfWeightReader:
         
     def top(self, k, wp):
         """Placeholder for future expansion."""
-        
         self.wp = wp
 
     
     def read_weights(self, k, dst, mouter, pouter, declare_dst=True):
-        wp, F, Tinner = self.wp, self.F, self.Tinner
+        wp, F, Minner, Tinner = self.wp, self.F, self.Minner, self.Tinner
         k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): start.')
 
         if pouter == 0:
             self._init_pfI(k, mouter)
-        
-        dI = pouter * F * Tinner
-        Imin = int(self.pf_Imin[mouter]) + dI
-        Imax = int(self.pf_Imax[mouter]) + dI
 
         pfI = f'pfI_m{mouter}'
+        dI = pouter * F * Tinner
         Istr = f'{pfI} + {dI}' if (dI > 0) else pfI
 
         # Very important assert -- our algorithm depends on this!
+        Imin = min(self._get_I(mouter*Minner+dm, pouter, 0) for dm in range(Minner))
+        Imax = max(self._get_I(mouter*Minner+dm, pouter, Tinner-1) for dm in range(Minner))
         assert np.all(Imax < Imin + 32)
 
         k.emit(f'// We want to load {wp}[{Istr}] on each thread, where {Imin} <= ({Istr}) <= {Imax}.')
@@ -922,9 +903,22 @@ class PfWeightReader:
         k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): end')
 
 
+    def _get_I(self, m, pouter, tinner):
+        """
+        Throughout 'class PfWeightReader', a capitalized index 0 <= I < Pouter*F*Tinner
+        denotes a "flattened" index triple (pouter, f, tinner). Such an index I can be
+        viewed as an offset relative to the 'wp' pointer (see docstring), and (I >> 5)
+        corresponds to a cache line.
+        """
+
+        m = min(m, self.M-1)
+        f = self.frequency_subbands.m_to_fd[m][0]
+        return (pouter * self.F * self.Tinner) + (f * self.Tinner) + tinner
+
 
     def _get_wcl(self, k, I):
         """Helper for read_weights()."""
+
         assert 0 <= I < (self.Pouter * self.F * self.Tinner)
         assert (I % 32) == 0
         wcl = f'pf_wcl_I{I}'
@@ -947,6 +941,7 @@ class PfWeightReader:
         tinner = f'((threadIdx.x & 0x1f) >> {5-Tbits})' if (Tinner > 1) else '0'
 
         pfI = f'pfI_m{mouter}'
+        Ilist = [ self._get_I(mouter*Minner+m,0,0) for m in range(Minner) ]
 
         k.emit()
         k.emit(f'// In this part, we have {Minner=}, {Tinner=}, and the following mapping between')
@@ -959,15 +954,15 @@ class PfWeightReader:
         k.emit(f'//')
         k.emit(f'// Compute {pfI}: the I-index for (mouter,pouter)=({mouter},0), and (minner,tinner)')
         k.emit(f'// defined by the laneId. For tinner=0, this is described by the following lookup')
-        k.emit(f'// table (minner) -> (pfI): {list(map(int,self.pf_I0[mouter,:]))}')
+        k.emit(f'// table (minner) -> (pfI): {Ilist}')
         k.emit('//')
         k.emit('// FIXME: placeholder algorithm for computing pfI (dynamic programming is best!).')
 
-        k.emit(f'int {pfI} = {int(self.pf_I0[mouter,0])};')
+        k.emit(f'int {pfI} = {Ilist[0]};')
 
         for m in range(1, Minner):
-            if self.pf_I0[mouter,m] != self.pf_I0[mouter,m-1]:
-                k.emit(f'{pfI} = ({minner} < {m}) ? {pfI} : {int(self.pf_I0[mouter,m])};')
+            if Ilist[m] != Ilist[m-1]:
+                k.emit(f'{pfI} = ({minner} < {m}) ? {pfI} : {Ilist[m]};')
 
         if Tinner != 1:
             k.emit(f'{pfI} += {tinner};')
