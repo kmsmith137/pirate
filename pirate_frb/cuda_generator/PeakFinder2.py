@@ -614,6 +614,15 @@ class PeakFinder2:
           - pfiz_m{m}_p{p}: store "mini-tokens" 0 <= t < Dcore.
             Mini-tokens are always declared 'uint', but are secretly either u32 or u16x2.
 
+        Register assignment here is:
+        
+           simd <->  (m0 or None)                        float16 or float32
+           Minner lanes <-> m_{0 or 1} ... m_{K-1}       K = log2(Minner)
+           32/Minner lanes <-> t_K t_{K+1} ...           note: coarse-grained over Dcore times
+
+        Thus, each call to pfz_register_ready() processes (32*SW) times, (Dcore) m-values,
+        and 1 p-value.
+
         Recall that tokens are formatted as (t) | (p << 8) | (d << 14) | (f0 << 20) | (f1 << 26).
         To convert a minitoken to a token, we do something like this:
 
