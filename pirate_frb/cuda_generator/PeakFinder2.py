@@ -895,12 +895,14 @@ class PfWeightReader:
         k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {pouter=}): start.')
 
         if pouter == 0:
-            self._init_pf_I(k, mouter)
-
+            self._init_pfI(k, mouter)
+        
         dI = pouter * F * Tinner
         Imin = int(self.pf_Imin[mouter]) + dI
         Imax = int(self.pf_Imax[mouter]) + dI
-        Istr = f'pf_I + {dI}' if (dI > 0) else 'pf_I'
+
+        pfI = f'pfI_m{mouter}'
+        Istr = f'{pfI} + {dI}' if (dI > 0) else pfI
 
         # Very important assert -- our algorithm depends on this!
         assert np.all(Imax < Imin + 32)
@@ -934,7 +936,7 @@ class PfWeightReader:
         return wcl
 
     
-    def _init_pf_I(self, k, mouter):
+    def _init_pfI(self, k, mouter):
         """Helper called by read_weights()."""
         
         Minner, Tinner = self.Minner, self.Tinner
@@ -943,7 +945,9 @@ class PfWeightReader:
         Tbits = utils.integer_log2(Tinner)
         minner = f'(threadIdx.x & {Minner-1})' if (Minner > 1) else '0'
         tinner = f'((threadIdx.x & 0x1f) >> {5-Tbits})' if (Tinner > 1) else '0'
-        
+
+        pfI = f'pfI_m{mouter}'
+
         k.emit()
         k.emit(f'// In this part, we have {Minner=}, {Tinner=}, and the following mapping between')
         k.emit(f'// lanes and (minner,tinner) pairs:')
@@ -953,23 +957,22 @@ class PfWeightReader:
         k.emit(f'//')
         k.emit(f'// Therefore, {minner = } and {tinner = }')
         k.emit(f'//')
-        k.emit(f'// Compute pf_I: the I-index for (mouter,pouter)=({mouter},0), and (minner,tinner)')
+        k.emit(f'// Compute {pfI}: the I-index for (mouter,pouter)=({mouter},0), and (minner,tinner)')
         k.emit(f'// defined by the laneId. For tinner=0, this is described by the following lookup')
-        k.emit(f'// table (minner) -> (pf_I): {list(map(int,self.pf_I0[mouter,:]))}')
+        k.emit(f'// table (minner) -> (pfI): {list(map(int,self.pf_I0[mouter,:]))}')
         k.emit('//')
-        k.emit('// FIXME: placeholder algorithm for computing pf_I (dynamic programming is best!).')
+        k.emit('// FIXME: placeholder algorithm for computing pfI (dynamic programming is best!).')
 
-        decl = 'int ' if (mouter == 0) else ''
-        k.emit(f'{decl}pf_I = {int(self.pf_I0[mouter,0])};')
+        k.emit(f'int {pfI} = {int(self.pf_I0[mouter,0])};')
 
         for m in range(1, Minner):
             if self.pf_I0[mouter,m] != self.pf_I0[mouter,m-1]:
-                k.emit(f'pf_I = ({minner} < {m}) ? pf_I : {int(self.pf_I0[mouter,m])};')
+                k.emit(f'{pfI} = ({minner} < {m}) ? {pfI} : {int(self.pf_I0[mouter,m])};')
 
         if Tinner != 1:
-            k.emit(f'pf_I += {tinner};')
+            k.emit(f'{pfI} += {tinner};')
         else:
-            k.emit(f'// since Tinner=1, no need for "pf_I += tinner;"')
+            k.emit(f'// since Tinner=1, no need for "{pfI} += tinner;"')
 
     
     def bottom(self, k, tin, nt_in_per_wt):
