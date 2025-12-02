@@ -181,7 +181,6 @@ HFILES = \
   include/pirate/inlines.hpp \
   include/pirate/network_utils.hpp \
   include/pirate/system_utils.hpp \
-  include/pirate/tests.hpp \
   include/pirate/timing.hpp \
   include/pirate/trackers.hpp \
   include/pirate/utils.hpp \
