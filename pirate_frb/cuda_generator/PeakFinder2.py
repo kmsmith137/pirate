@@ -656,7 +656,7 @@ class PeakFinder2:
         elif (self.dtype == '__half') and (p % 2):
             m0, m1 = m, (m+Minner)
             p0, p1 = (p-1), p
-            
+
             pfz0, pfz1 = f'pfz_m{m0}_p{p0}', f'pfz_m{m0}_p{p1}'
             pfu0, pfu1 = f'pfu_m{m0}_p{p0}', f'pfu_m{m1}_p{p0}'
 
@@ -666,8 +666,8 @@ class PeakFinder2:
             k.emit(f'__half2 {pfu0} = __lows2half2({pfz0}, {pfz1});')
             k.emit(f'__half2 {pfu1} = __highs2half2({pfz0}, {pfz1});')
 
-            k.emit(f'{pfu0} *= pfw_m{m0}_p{p};')
-            k.emit(f'{pfu1} *= pfw_m{m1}_p{p};')
+            k.emit(f'{pfu0} *= pfw_m{m0}_p{p0};')
+            k.emit(f'{pfu1} *= pfw_m{m1}_p{p0};')
 
             k.emit(f'uint token_m{m0}_p{p0} = token_m{m0}_base | ({p0} << 8) | (pfiz_m{m0}_p{p0} & 0xff);')
             k.emit(f'uint token_m{m0}_p{p1} = token_m{m0}_base | ({p1} << 8) | (pfiz_m{m0}_p{p1} & 0xff);')
