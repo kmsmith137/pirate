@@ -872,18 +872,19 @@ class PfWeightReader:
     
     def read_weights(self, k, dst, mouter, p, declare_dst=True):
         wp, F, Minner, Pinner, Tinner = self.wp, self.F, self.Minner, self.Pinner, self.Tinner
-        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {p=}): start.')
+        m = mouter * Minner
+        k.emit(f'// PfWeightReader.read_weights({dst=}, {m=}, {p=}): start.')
 
         if p == 0:
-            self._init_pfI(k, mouter*Minner)
+            self._init_pfI(k, m)
 
-        pfI = f'pfI_m{mouter*Minner}'
+        pfI = f'pfI_m{m}'
         dI = utils.xdiv(p,Pinner) * F * Tinner
         Istr = f'{pfI} + {dI}' if (dI > 0) else pfI
 
         # Very important assert -- our algorithm depends on this!
-        Imin = min(self._get_I(mouter*Minner+dm, p, 0) for dm in range(Minner))
-        Imax = max(self._get_I(mouter*Minner+dm, p, Tinner-1) for dm in range(Minner))
+        Imin = min(self._get_I(m+mi, p, 0) for mi in range(Minner))
+        Imax = max(self._get_I(m+mi, p, Tinner-1) for mi in range(Minner))
         assert np.all(Imax < Imin + 32)
 
         k.emit(f'// We want to load {wp}[{Istr}] on each thread, where {Imin} <= ({Istr}) <= {Imax}.')
@@ -898,7 +899,7 @@ class PfWeightReader:
 
         decl = f'{self.dt32} ' if declare_dst else ''
         k.emit(f'{decl}{dst} = __shfl_sync(~0u, {wcl}, {Istr});')
-        k.emit(f'// PfWeightReader.read_weights({dst=}, {mouter=}, {p=}): end')
+        k.emit(f'// PfWeightReader.read_weights({dst=}, {m=}, {p=}): end')
 
 
     def _get_I(self, m, p, tinner):
