@@ -170,6 +170,7 @@ class PeakFinder2:
         k.emit(f'constexpr int M = {self.M};')
         k.emit(f'constexpr int Dout = {self.Dout};')
         k.emit(f'constexpr int Dcore = {self.Dcore};')
+        k.emit(f'constexpr int Minner = {self.Minner};')
         k.emit(f'constexpr int Tinner = {self.Tinner};')
         k.emit(f'constexpr int wt_touter_stride32 = {utils.xdiv(self.wt_touter_byte_stride,4)};')
 
@@ -613,18 +614,33 @@ class PeakFinder2:
         """
 
         Dcore, M, Minner, P = self.Dcore, self.M, self.Minner, self.P
+        assert (m % Dcore) == 0
         
         k.emit()
         k.emit(f'// pfz_register_ready({m=}, {p=}) called.')
 
+        # "Base" registers (p == 0).
+
+        if (self.dtype == 'float') and (p == 0):
+            k.emit(f'// token_m{m}_base = (m << 16) | (t & (Dout-Dcore))')
+            k.emit(f'uint token_m{m}_base = {m} | (threadIdx.x & (Minner-1));  // m + mi')
+            if m + Minner >= M:
+                k.emit(f'token_m{m}_base = min(token_m{m}_base, M-1);')
+            k.emit(f'token_m{m}_base = (token_m{m}_base << 16) | (threadIdx.x & (Dout-Dcore));')     
+        
+        elif (self.dtype == '__half') and (p == 1):
+            for mm in [ m, (m+Minner) ]:
+                k.emit(f'// token_m{mm}_base = (m << 16) | (t & (Dout-Dcore))')
+                k.emit(f'uint token_m{mm}_base = {mm} | (threadIdx.x & (Minner-1));  // m + mi')
+                if mm + Minner >= M:
+                    k.emit(f'token_m{mm}_base = min(token_m{mm}_base, M-1);')
+                k.emit(f'token_m{mm}_base = (token_m{mm}_base << 16) | ((threadIdx.x << 1) & (Dout-Dcore));')
+
+        # Now the update code (p >= 0).
+
         if self.dtype == 'float':
             k.emit(f'pfz_m{m}_p{p} *= pfw_m{m}_p{p};')
-            tfull = f'pfiz_m{m}_p{p} | (threadIdx.x & (Dout-Dcore))'
-            mfull = f'{m} | (threadIdx.x & (Dcore-1))'
-            if m + Dcore >= M:
-                mfull = f'min({mfull}, {M-1})'
-
-            k.emit(f'uint token_m{m}_p{p} = ({tfull}) | ({p} << 8) | (({mfull}) << 16);')
+            k.emit(f'uint token_m{m}_p{p} = token_m{m}_base | ({p} << 8) | pfiz_m{m}_p{p};')
             self.pf_output.apply_inner(k, f'pfz_m{m}_p{p}', [ f'token_m{m}_p{p}' ])
 
         elif (self.dtype == '__half') and ((p % 2) == 0) and (p < (P-1)):
@@ -638,10 +654,9 @@ class PeakFinder2:
             self.pfz_register_ready(k, m, P)
 
         elif (self.dtype == '__half') and (p % 2):
-            raise RuntimeError('bitrotted')
-
             m0, m1 = m, (m+Minner)
             p0, p1 = (p-1), p
+            
             pfz0, pfz1 = f'pfz_m{m0}_p{p0}', f'pfz_m{m0}_p{p1}'
             pfu0, pfu1 = f'pfu_m{m0}_p{p0}', f'pfu_m{m1}_p{p0}'
 
@@ -653,16 +668,11 @@ class PeakFinder2:
 
             k.emit(f'{pfu0} *= pfw_m{m0}_p{p};')
             k.emit(f'{pfu1} *= pfw_m{m1}_p{p};')
-                    
-            token_m0_p0 = self._tokenize_mp(k, m0, p0)
-            token_m0_p1 = self._tokenize_mp(k, m0, p1)
-            token_m1_p0 = self._tokenize_mp(k, m1, p0)
-            token_m1_p1 = self._tokenize_mp(k, m1, p1)
-            
-            k.emit(f'uint token_m0_p0 = (pfiz_m{m0}_p{p0} & 0x0000ffffu) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m0_p0};')
-            k.emit(f'uint token_m0_p1 = (pfiz_m{m0}_p{p1} & 0x0000ffffu) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m0_p1};')
-            k.emit(f'uint token_m1_p0 = (pfiz_m{m0}_p{p0} & 0xffff0000u) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m1_p0};')
-            k.emit(f'uint token_m1_p1 = (pfiz_m{m0}_p{p1} & 0xffff0000u) | ((threadIdx.x << 1) & (Dout-Dcore)) | {token_m1_p1};')
+
+            k.emit(f'uint token_m{m0}_p{p0} = token_m{m0}_base | ({p0} << 8) | (pfiz_m{m0}_p{p0} & 0xff);')
+            k.emit(f'uint token_m{m0}_p{p1} = token_m{m0}_base | ({p1} << 8) | (pfiz_m{m0}_p{p1} & 0xff);')
+            k.emit(f'uint token_m{m1}_p{p0} = token_m{m1}_base | ({p0} << 8) | ((pfiz_m{m0}_p{p0} >> 16) & 0xff);')
+            k.emit(f'uint token_m{m1}_p{p1} = token_m{m1}_base | ({p1} << 8) | ((pfiz_m{m0}_p{p1} >> 16) & 0xff);')
             
             self.pf_output.apply_inner(k, pfu0, [ f'token_m{m0}_p{p0}', f'token_m{m0}_p{p1}' ])
             self.pf_output.apply_inner(k, pfu1, [ f'token_m{m1}_p{p0}', f'token_m{m1}_p{p1}' ])
