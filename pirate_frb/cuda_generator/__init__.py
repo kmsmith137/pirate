@@ -13,8 +13,8 @@ from .Dedisperser import \
     Dedisperser, \
     make_dd_file
 
-from .PeakFinder2 import \
-    PeakFinder2, \
+from .PeakFinder import \
+    PeakFinder, \
     PfWeightLayout, \
     PfWeightReader, \
-    PfOutput2
+    PfOutput

@@ -211,10 +211,10 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
 
 // -------------------------------------------------------------------------------------------------
 //
-// PeakFindingKernelParams2
+// PeakFindingKernelParams
 
 
-void PeakFindingKernelParams2::validate() const
+void PeakFindingKernelParams::validate() const
 {
     FrequencySubbands::validate_subband_counts(subband_counts);
     
@@ -254,15 +254,15 @@ void PeakFindingKernelParams2::validate() const
 
 // -------------------------------------------------------------------------------------------------
 //
-// ReferencePeakFindingKernel2
+// ReferencePeakFindingKernel
 
 
-ReferencePeakFindingKernel2::ReferencePeakFindingKernel2(const PeakFindingKernelParams2 &params_, long Dcore_) :
+ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelParams &params_, long Dcore_) :
     params(params_), fs(params_.subband_counts), Dcore(Dcore_)
 {
     params.validate();
 
-    const PeakFindingKernelParams2 &p = params;
+    const PeakFindingKernelParams &p = params;
     long B = p.beams_per_batch;
     long D = p.ndm_out;
     long W = p.max_kernel_width;
@@ -303,14 +303,14 @@ ReferencePeakFindingKernel2::ReferencePeakFindingKernel2(const PeakFindingKernel
 }
 
 
-void ReferencePeakFindingKernel2::apply(
+void ReferencePeakFindingKernel::apply(
     ksgpu::Array<float> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,    // shape (beams_per_batch, ndm_out, nt_out)
     const ksgpu::Array<float> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
     const ksgpu::Array<float> &wt,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F)
     long ibatch, bool debug)
 {
-    const PeakFindingKernelParams2 &p = params;
+    const PeakFindingKernelParams &p = params;
     xassert_shape_eq(out_max, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, p.nt_in}));
@@ -330,7 +330,7 @@ void ReferencePeakFindingKernel2::apply(
 }
 
 
-void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long ibatch)
+void ReferencePeakFindingKernel::_init_tmp_arrays(const Array<float> &in, long ibatch)
 {
     long nt_in = params.nt_in;
     long B = params.beams_per_batch;
@@ -391,8 +391,8 @@ void ReferencePeakFindingKernel2::_init_tmp_arrays(const Array<float> &in, long 
 }
 
 
-// helper for ReferencePeakFindingKernel2::_peak_find()
-static inline void _update_pf2(float &maxval, uint &argmax, float val, uint token)
+// helper for ReferencePeakFindingKernel::_peak_find()
+static inline void _update_pf(float &maxval, uint &argmax, float val, uint token)
 {
     argmax = (val > maxval) ? token : argmax;
     maxval = std::max(maxval, val);
@@ -401,7 +401,7 @@ static inline void _update_pf2(float &maxval, uint &argmax, float val, uint toke
 
 // out_*: shape (beams_per_batch, ndm_out, nt_out)
 // wt: shape (beams_per_batch, ndm_wt, nt_wt, P, F)
-void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> &out_argmax, const Array<float> &wt, bool debug)
+void ReferencePeakFindingKernel::_peak_find(Array<float> &out_max, Array<uint> &out_argmax, const Array<float> &wt, bool debug)
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
@@ -464,12 +464,12 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
                             float y3 = (0.5f*x0 + x1 + x2 + 0.5f*x3);
 
                             if (l == 0)
-                                _update_pf2(maxval, argmax, w0*y0, token0);
+                                _update_pf(maxval, argmax, w0*y0, token0);
 
                             if (P > 1) {
-                                _update_pf2(maxval, argmax, w1*y1, token1);
-                                _update_pf2(maxval, argmax, w2*y2, token2);
-                                _update_pf2(maxval, argmax, w3*y3, token3);
+                                _update_pf(maxval, argmax, w1*y1, token1);
+                                _update_pf(maxval, argmax, w2*y2, token2);
+                                _update_pf(maxval, argmax, w3*y3, token3);
                             }
 
                             if (debug && (b == 0) && (d==0) && (tout==2)) {
@@ -498,7 +498,7 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
 
 
 // Note that an 'in' array is not an argument -- this function uses the contents of 'tmp_arr'.
-void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array<uint> &in_tokens, const Array<float> &wt)
+void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<uint> &in_tokens, const Array<float> &wt)
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
@@ -594,17 +594,17 @@ void ReferencePeakFindingKernel2::eval_tokens(Array<float> &out_max, const Array
 }
 
 
-std::runtime_error ReferencePeakFindingKernel2::_bad_token(uint token, const char *why)
+std::runtime_error ReferencePeakFindingKernel::_bad_token(uint token, const char *why)
 {
     stringstream ss;
-    ss << "ReferencePeakFindingKernel2:: eval_tokens(): bad token " << hex_str(token) << " (" << why << ")";
+    ss << "ReferencePeakFindingKernel::eval_tokens(): bad token " << hex_str(token) << " (" << why << ")";
     return runtime_error(ss.str());
 }
 
 
 // Make a mean-zero input array for testing.
 // Returns shape (nbeams_per_batch, ndm_out, fs.M, nt_in)
-Array<float> ReferencePeakFindingKernel2::make_random_input_array()
+Array<float> ReferencePeakFindingKernel::make_random_input_array()
 {
     long B = params.beams_per_batch;
     long D = params.ndm_out;
@@ -621,7 +621,7 @@ Array<float> ReferencePeakFindingKernel2::make_random_input_array()
 // This weird procedure for making a random weights array is intended to
 // expose corner cases in the peak-finding kernel.
 // Returned array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F).
-Array<float> ReferencePeakFindingKernel2::make_random_weights()
+Array<float> ReferencePeakFindingKernel::make_random_weights()
 {
     long B = params.beams_per_batch;
     long D = params.ndm_wt;
@@ -657,10 +657,10 @@ Array<float> ReferencePeakFindingKernel2::make_random_weights()
 
 // -------------------------------------------------------------------------------------------------
 //
-// GpuPeakFindingKernel2
+// GpuPeakFindingKernel
 
 
-GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &params_) :
+GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params_) :
     params(params_), fs(params_.subband_counts)
 {
     params.validate();
@@ -671,7 +671,7 @@ GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &par
     registry_key.E = params.max_kernel_width;
 
     // Recall the definition of Tinner (used for weight layout, see comments in
-    // cuda_generator.PeakFinder2.y):
+    // cuda_generator.PeakFinder.py):
     //
     //   Tinner = max(32*SW/nt_in_per_wt, 1)  
 
@@ -697,10 +697,10 @@ GpuPeakFindingKernel2::GpuPeakFindingKernel2(const PeakFindingKernelParams2 &par
 }
 
 
-void GpuPeakFindingKernel2::allocate()
+void GpuPeakFindingKernel::allocate()
 {
     if (is_allocated)
-        throw runtime_error("GpuPeakFindingKernel2: double call to allocate()");
+        throw runtime_error("GpuPeakFindingKernel: double call to allocate()");
 
     // Allocate persistent_state. Note 'af_zero' flag here.
     std::initializer_list<long> shape = { params.total_beams, params.ndm_out, registry_value.PW32 };
@@ -709,7 +709,7 @@ void GpuPeakFindingKernel2::allocate()
 }
 
 
-void GpuPeakFindingKernel2::launch(
+void GpuPeakFindingKernel::launch(
     ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
     const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
@@ -717,7 +717,7 @@ void GpuPeakFindingKernel2::launch(
     long ibatch,                      // 0 <= ibatch < nbatches
     cudaStream_t stream)              // NULL stream is allowed, but is not the default);
 {
-    const PeakFindingKernelParams2 &p = params;
+    const PeakFindingKernelParams &p = params;
 
     xassert(this->is_allocated);
     xassert(out_max.dtype == dtype);
@@ -730,14 +730,14 @@ void GpuPeakFindingKernel2::launch(
 
     if (!wt.shape_equals(expected_wt_shape)) {
         stringstream ss;
-        ss << "GpuPeakFindingKernel2::launch(): wt.shape=" << wt.shape_str()
+        ss << "GpuPeakFindingKernel::launch(): wt.shape=" << wt.shape_str()
            << ", expected_wt_shape=" << ksgpu::tuple_str(expected_wt_shape);
         throw runtime_error(ss.str());
     }
 
     if (!wt.strides_equal(expected_wt_strides)) {
         stringstream ss;
-        ss << "GpuPeakFindingKernel2::launch(): wt.strides=" << wt.stride_str()
+        ss << "GpuPeakFindingKernel::launch(): wt.strides=" << wt.stride_str()
            << ", expected_wt_strides=" << ksgpu::tuple_str(expected_wt_strides);
         throw runtime_error(ss.str());
     }
@@ -774,7 +774,7 @@ void GpuPeakFindingKernel2::launch(
 
 
 // Static member function
-void GpuPeakFindingKernel2::test(bool short_circuit)
+void GpuPeakFindingKernel::test(bool short_circuit)
 {
     RegistryKey key = registry().get_random_key();
     long simd_width = xdiv(32, key.dtype.nbits);
@@ -794,7 +794,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     long nt_out_per_chunk = xdiv(nt_in_per_chunk, key.Dout);
     long nt_wt_per_chunk = xdiv(nt_in_per_chunk, nt_in_per_wt);
 
-    PeakFindingKernelParams2 params_small;
+    PeakFindingKernelParams params_small;
     params_small.subband_counts = key.subband_counts;
     params_small.dtype = key.dtype;
     params_small.max_kernel_width = key.E;
@@ -807,7 +807,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     params_small.nt_wt = nt_wt_per_chunk;
     params_small.validate();
 
-    PeakFindingKernelParams2 params_large;
+    PeakFindingKernelParams params_large;
     params_large.subband_counts = key.subband_counts;
     params_large.dtype = key.dtype;
     params_large.max_kernel_width = key.E;
@@ -820,11 +820,11 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
     params_large.nt_wt = nchunks * nt_wt_per_chunk;
     params_large.validate();
 
-    GpuPeakFindingKernel2 gpu_kernel(params_small);   // just test constructor for now
-    ReferencePeakFindingKernel2 ref_kernel_small(params_small, gpu_kernel.Dcore);
-    ReferencePeakFindingKernel2 ref_kernel_large(params_large, gpu_kernel.Dcore);
+    GpuPeakFindingKernel gpu_kernel(params_small);   // just test constructor for now
+    ReferencePeakFindingKernel ref_kernel_small(params_small, gpu_kernel.Dcore);
+    ReferencePeakFindingKernel ref_kernel_large(params_large, gpu_kernel.Dcore);
 
-    cout << "GpuPeakFindingKernel2::test():"
+    cout << "GpuPeakFindingKernel::test():"
          << " dtype=" << key.dtype.str() 
          << ", subbands=" << ksgpu::tuple_str(key.subband_counts)
          << ", W=" << key.E
@@ -927,10 +927,10 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
 // Kernel registry.
 
 
-struct GpuPf2Registry : public GpuPeakFindingKernel2::Registry
+struct GpuPfRegistry : public GpuPeakFindingKernel::Registry
 {
-    using Key = GpuPeakFindingKernel2::RegistryKey;
-    using Val = GpuPeakFindingKernel2::RegistryValue;
+    using Key = GpuPeakFindingKernel::RegistryKey;
+    using Val = GpuPeakFindingKernel::RegistryValue;
 
     virtual void add(const Key &key, const Val &val, bool debug) override
     {
@@ -950,28 +950,28 @@ struct GpuPf2Registry : public GpuPeakFindingKernel2::Registry
         val.pf_weight_layout.validate();
         
         // Call add() in base class.
-        GpuPeakFindingKernel2::Registry::add(key, val, debug);
+        GpuPeakFindingKernel::Registry::add(key, val, debug);
     }
 };
 
 
 // Static member function
-GpuPeakFindingKernel2::Registry &GpuPeakFindingKernel2::registry()
+GpuPeakFindingKernel::Registry &GpuPeakFindingKernel::registry()
 {
     // Instead of declaring the registry as a static global variable, we declare it as a
-    // static local variable in the static member function GpuPeakFindingKernel2::registry().
-    // The registry will be initialized the first time that GpuPeakFindingKernel2::registry()
+    // static local variable in the static member function GpuPeakFindingKernel::registry().
+    // The registry will be initialized the first time that GpuPeakFindingKernel::registry()
     // is called.
     //
     // This kludge is necessary because the registry is accessed at library initialization
     // time, by callers in other source files, and source files are executed in an
     // arbitrary order.
     
-    static GpuPf2Registry reg;
+    static GpuPfRegistry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
 
-bool operator==(const GpuPeakFindingKernel2::RegistryKey &k1, const GpuPeakFindingKernel2::RegistryKey &k2)
+bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindingKernel::RegistryKey &k2)
 {
     return (k1.dtype == k2.dtype)
         && (k1.subband_counts == k2.subband_counts)
@@ -980,11 +980,11 @@ bool operator==(const GpuPeakFindingKernel2::RegistryKey &k1, const GpuPeakFindi
         && (k1.E == k2.E);
 }
 
-ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryKey &k)
+ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
 {
     FrequencySubbands fs(k.subband_counts);
     
-    os << "GpuPeakFindingKernel2(dtype=" << k.dtype
+    os << "GpuPeakFindingKernel(dtype=" << k.dtype
        << ", rank=" << fs.pf_rank
        << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
        << ", Tinner=" << k.Tinner
@@ -997,7 +997,7 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryKey &k)
     return os;
 }
 
-ostream &operator<<(ostream &os, const GpuPeakFindingKernel2::RegistryValue &v)
+ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryValue &v)
 {
     os << "Dcore=" << v.Dcore << ", pstate_32_bit_registers_per_warp=" << v.PW32;
     return os;
@@ -1225,7 +1225,7 @@ void PfOutputMicrokernel::test()
     uint nt_in = xdiv(1024, dtype.nbits) * rand_int(1, 100);
     uint nt_out = xdiv(nt_in, Dout);
     
-    cout << "test_pf_output2_microkernel: dtype=" << dtype << ", Dout=" << Dout << ", nt_in=" << nt_in << endl;
+    cout << "test_pf_output_microkernel: dtype=" << dtype << ", Dout=" << Dout << ", nt_in=" << nt_in << endl;
 
     Array<float> zin_cpu({4,nt_in}, af_uhost | af_random);
     Array<float> zout_cpu({nt_out}, af_uhost);
@@ -1270,7 +1270,7 @@ void PfOutputMicrokernel::test()
     auto kernel = PfOutputMicrokernel::registry().get(key).cuda_kernel;
 
     kernel<<<1,32>>> (zout_gpu.data, aout_gpu.data, zin_gpu.data, ain_gpu.data, nt_in);
-    CUDA_PEEK("pf_output2_test_kernel");
+    CUDA_PEEK("pf_output_test_kernel");
 
     zout_gpu = zout_gpu.to_host();
     aout_gpu = aout_gpu.to_host();

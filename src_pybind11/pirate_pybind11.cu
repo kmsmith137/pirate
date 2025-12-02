@@ -147,10 +147,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test", &GpuLaggedDownsamplingKernel::test)
     ;
 
-    py::class_<GpuPeakFindingKernel2>(m, "GpuPeakFindingKernel")
-          .def_static("test", &GpuPeakFindingKernel2::test, py::arg("short_circuit") = false)
-          .def_static("registry_size", &GpuPeakFindingKernel2::registry_size)
-          .def_static("show_registry", &GpuPeakFindingKernel2::show_registry)
+    py::class_<GpuPeakFindingKernel>(m, "GpuPeakFindingKernel")
+          .def_static("test", &GpuPeakFindingKernel::test, py::arg("short_circuit") = false)
+          .def_static("registry_size", &GpuPeakFindingKernel::registry_size)
+          .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
     ;
 
     py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")

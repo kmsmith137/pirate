@@ -57,7 +57,7 @@ from .FrequencySubbands import FrequencySubbands
 ####################################################################################################
 
 
-class PeakFinder2:
+class PeakFinder:
     def __init__(self, dtype, frequency_subbands, E, Dcore, Dout, Tinner):
         self.dtype = dtype = Dtype(dtype)
         self.frequency_subbands = frequency_subbands                                            
@@ -84,7 +84,7 @@ class PeakFinder2:
         self.P = 3 * utils.integer_log2(E) + 1   # number of peak-finding profiles
         self.weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         self.weight_layout = self.weight_reader.weight_layout
-        self.output = PfOutput2(dtype, Dout)
+        self.output = PfOutput(dtype, Dout)
         
         self.M = self.weight_reader.M
         self.Mouter = self.weight_reader.Mouter
@@ -99,11 +99,11 @@ class PeakFinder2:
         self.pfz_decl = set()
 
         self.rb = Ringbuf(self.dt32)
-        self.pf_output = PfOutput2(dtype, Dout)
+        self.pf_output = PfOutput(dtype, Dout)
         self.pf_weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         
-        # Typical kernel name: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1
-        self.kernel_name = f'pf2_{dtype.fname}_{frequency_subbands.fstr}_E{E}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
+        # Typical kernel name: pf_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1
+        self.kernel_name = f'pf_{dtype.fname}_{frequency_subbands.fstr}_E{E}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
         self.kernel_basename = self.kernel_name + '.cu'
 
         # For testing: if a peak-finding kernel is precompiled, we also precompile unit tests
@@ -251,7 +251,7 @@ class PeakFinder2:
         k.emit('}  // end of cuda kernel')
         k.emit()
 
-        # Emit registration boilerplate for GpuPeakFindingKernel2.
+        # Emit registration boilerplate for GpuPeakFindingKernel.
         self._emit_registration_boilerplate(k)
 
 
@@ -270,14 +270,14 @@ class PeakFinder2:
         k.emit('namespace {')
         k.emit('struct register_hack {')
         k.emit('register_hack() {')
-        k.emit('GpuPeakFindingKernel2::RegistryKey k;')
+        k.emit('GpuPeakFindingKernel::RegistryKey k;')
         k.emit(f'k.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
         k.emit(f'k.subband_counts = {{ {sb_counts} }};')
         k.emit(f'k.Tinner = {self.Tinner};')
         k.emit(f'k.Dout = {self.Dout};')
         k.emit(f'k.E = {self.E};')
         k.emit()
-        k.emit('GpuPeakFindingKernel2::RegistryValue v;')
+        k.emit('GpuPeakFindingKernel::RegistryValue v;')
         k.emit(f'v.cuda_kernel = {self.kernel_name};')
         k.emit(f'v.Dcore = {self.Dcore};')
         k.emit(f'v.PW32 = {self.PW32};')
@@ -301,7 +301,7 @@ class PeakFinder2:
         k.emit(f'xassert(vec_equal(fs.f_to_ihi, {{ {f_to_ihi} }}));')
         k.emit()
         k.emit('bool debug = false;')
-        k.emit('GpuPeakFindingKernel2::registry().add(k, v, debug);')
+        k.emit('GpuPeakFindingKernel::registry().add(k, v, debug);')
         k.emit('} // register_hack constructor')
         k.emit('}; // struct register_hack')
         k.emit('register_hack hack;')
@@ -691,8 +691,8 @@ class PeakFinder2:
         
         basename = os.path.basename(filename)
 
-        # Typical basename: pf2_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1.cu
-        m = re.fullmatch(r'pf2_(fp\d+)_((?:f\d+_)*f\d+)_E(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
+        # Typical basename: pf_fp32_f11_f6_f3_f1_E16_Dcore8_Dout16_Tinner1.cu
+        m = re.fullmatch(r'pf_(fp\d+)_((?:f\d+_)*f\d+)_E(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
         if not m:
             raise RuntimeError(f"Couldn't match filename '{filename}'")
         
@@ -824,7 +824,7 @@ class PfWeightReader:
            // by the PfWeightReader class, and will be incremented as data is read
            // from global memory.
 
-           // Loop over t-values is not supplied by PfOutput2.
+           // Loop over t-values is not supplied by PfOutput.
            for (uint tin = 0; tin < nt_in; t += 32*SW) {
 
               // Calls to read_weights() can be arbitrarily ordered.
@@ -1166,11 +1166,11 @@ class PfWeightReader:
 ####################################################################################################
 
 
-class PfOutput2:
+class PfOutput:
     def __init__(self, dtype, Dout):
         """
         Input: partially reduced Z_{st} array, with associated 32-bit argmax values.
-        Here, "s" is a spectator index (from the perspective of the PfOutput2 microkernel).
+        Here, "s" is a spectator index (from the perspective of the PfOutput microkernel).
         In the larger kernel, "s" is a combination of (m,p,tlo). The register assignment is:
          
           [float32]  lane <-> s(0,L) tout(0,5-L)
@@ -1184,26 +1184,26 @@ class PfOutput2:
 
           constexpr int SW = 128 / sizeof(dtype);  // simd width
         
-          // Initialization of output pointers is not supplied by PfOutput2.
+          // Initialization of output pointers is not supplied by PfOutput.
           T32 *zp = ...;   // per-warp output pointer, points to length (nt_in/(Dout*SW))
           uint *ap = ...;  // per-warp "argmax" pointer, points to length (nt_in/(Dout*SW))
           
-          // Loop over t-values is not supplied by PfOutput2.
+          // Loop over t-values is not supplied by PfOutput.
           for (uint tin = 0; tin < nt_in; t += 32*SW) {
         
-              // Multiple calls to PfOutput2.apply_inner().
+              // Multiple calls to PfOutput.apply_inner().
         
-              pf_output2.apply_inner(k, zname1, amax_names1);
+              pf_output.apply_inner(k, zname1, amax_names1);
                 // ...
-              pf_output2.apply_inner(k, zname2, amax_names2);
+              pf_output.apply_inner(k, zname2, amax_names2);
                 // ...
 
-              // One call to PfOutput2.apply_outer(), at bottom of t-loop, to write
+              // One call to PfOutput.apply_outer(), at bottom of t-loop, to write
               // output incrementally. The'zout' and 'aout' pointers are "owned" by
-              // the PfOutput2 class, and these pointers will be incremented, as data
+              // the PfOutput class, and these pointers will be incremented, as data
               // gets written to global memory.
 
-              pf_output2.apply_outer(k, 'zp', 'ap', 'tin', 'nt_in');
+              pf_output.apply_outer(k, 'zp', 'ap', 'tin', 'nt_in');
           }
         """
         
@@ -1213,13 +1213,13 @@ class PfOutput2:
         self.SW = dtype.simd_width
         self.dt32 = dtype.simd32
 
-        # Assumed in this placeholder version of PfOutput2, but may change in the future.
-        # If it does change, then changes should be reflected in PeakFindingKernelParams2::validate()
+        # Assumed in this placeholder version of PfOutput, but may change in the future.
+        # If it does change, then changes should be reflected in PeakFindingKernelParams::validate()
         # and in code that makes random unit tests.
         assert utils.is_power_of_two(Dout)
         assert self.SW <= Dout <= 32
 
-        self.test_kernel_name = f'pf_output2_test_fp{32//self.SW}_Dout{Dout}'
+        self.test_kernel_name = f'pf_output_test_fp{32//self.SW}_Dout{Dout}'
         self.test_kernel_basename = self.test_kernel_name + '.cu'
         self.apply_inner_called = False
         self.apply_outer_called = False
@@ -1229,7 +1229,7 @@ class PfOutput2:
         """
         The 'z' arg is the name of a variable containing Z-values to be reduced (dtype=dt32).
         The 'alist' arg is a list of varnames for corresponding argmax values (length 1,2 for fp32,fp16).
-        Contents of the 'alist' registers are opaque "tokens" in class PfOutput2.
+        Contents of the 'alist' registers are opaque "tokens" in class PfOutput.
         """
 
         dtype, dt32, L, SW = self.dtype, self.dt32, self.L, self.SW
@@ -1238,7 +1238,7 @@ class PfOutput2:
         assert len(alist) == SW
 
         k.emit()
-        k.emit(f'// PfOutput2.apply_inner() called: {z=}, {alist=}')
+        k.emit(f'// PfOutput.apply_inner() called: {z=}, {alist=}')
         k.emit('// These represent partially reduced Z-values, with associated 32-bit argmax values')
         k.emit('// Register assignment is:')
 
@@ -1274,7 +1274,7 @@ class PfOutput2:
         The 'aout' arg is a per-warp (uint *) varname.
         The 'tin' and 'nt_in' args are uint varnames.
 
-        NOTE: The'zout' and 'aout' pointers are "owned" by the PfOutput2 class, and these
+        NOTE: The'zout' and 'aout' pointers are "owned" by the PfOutput class, and these
         pointers will be incremented, as data gets written to global memory.
         """
         
@@ -1285,7 +1285,7 @@ class PfOutput2:
         self.apply_outer_called = True
         
         k.emit()
-        k.emit(f'// PfOutput2.apply_outer() called: {zout=}, {aout}, {tin=}, {nt_in=}')
+        k.emit(f'// PfOutput.apply_outer() called: {zout=}, {aout}, {tin=}, {nt_in=}')
         k.emit(f'// In this placeholder implementation, we ignore values of tin/nt_in,')
         k.emit(f'// and do partial writes directly to global memory. (FIXME suboptimal)')
         k.emit(f'// Starting point is zinner, {srange("ainner",SW,sep=", ")}, with register assignemnt')
@@ -1356,7 +1356,7 @@ class PfOutput2:
         k.emit(f'{zout} += {nz};')
         k.emit(f'{aout} += {na};')
         
-        k.emit(f'\n// PfOutput2.apply_outer() ends here')
+        k.emit(f'\n// PfOutput.apply_outer() ends here')
         
     
     def _emit_za_register_assignment(self, k):
@@ -1379,14 +1379,14 @@ class PfOutput2:
         
         basename = os.path.basename(filename)
         
-        m = re.fullmatch(r'pf_output2_test_(fp\d+)_Dout(\d+)\.cu', basename)
+        m = re.fullmatch(r'pf_output_test_(fp\d+)_Dout(\d+)\.cu', basename)
         if not m:
             raise RuntimeError(f"Couldn't match filename '{filename}'")
 
         dtype = Dtype(m.group(1))
         Dout = int(m.group(2))
 
-        pf_output = PfOutput2(dtype, Dout)
+        pf_output = PfOutput(dtype, Dout)
         assert pf_output.test_kernel_basename == basename
 
         k = Kernel()

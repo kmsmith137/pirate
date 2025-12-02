@@ -106,7 +106,7 @@ struct GpuPfWeightLayout
 // -------------------------------------------------------------------------------------------------
 
 
-struct PeakFindingKernelParams2
+struct PeakFindingKernelParams
 {
     std::vector<long> subband_counts;   // same meaning as FrequencySubbands.subband_counts
     ksgpu::Dtype dtype;
@@ -129,10 +129,10 @@ struct PeakFindingKernelParams2
 };
 
 
-struct ReferencePeakFindingKernel2
+struct ReferencePeakFindingKernel
 {
     // Parameters specified at construction.
-    PeakFindingKernelParams2 params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
+    PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
     FrequencySubbands fs;             // pf_rank, F, M
     long Dcore = 0;
 
@@ -144,7 +144,7 @@ struct ReferencePeakFindingKernel2
     // Note that the reference kernel uses float32, regardless of what dtype is specified.
     // All arrays must be fully contiguous (this could be changed if needed).
     
-    ReferencePeakFindingKernel2(const PeakFindingKernelParams2 &params, long Dcore);
+    ReferencePeakFindingKernel(const PeakFindingKernelParams &params, long Dcore);
 
     // The reference kernel uses float32, regardless of what dtype is specified.
     void apply(ksgpu::Array<float> &out_max,     // shape (beams_per_batch, ndm_out, nt_out)
@@ -222,9 +222,9 @@ struct ReferencePeakFindingKernel2
 };
 
 
-struct GpuPeakFindingKernel2
+struct GpuPeakFindingKernel
 {
-    GpuPeakFindingKernel2(const PeakFindingKernelParams2 &params);
+    GpuPeakFindingKernel(const PeakFindingKernelParams &params);
 
     void allocate();
 
@@ -239,7 +239,7 @@ struct GpuPeakFindingKernel2
 
     // ------------------------  Members  ------------------------
 
-    PeakFindingKernelParams2 params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
+    PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
     FrequencySubbands fs;             // pf_rank, F, M
 
     // Derived parameters chosen by the kernel.
@@ -319,9 +319,9 @@ struct GpuPeakFindingKernel2
 };
 
 // Defined in PeakFindingKernel.cu
-extern bool operator==(const GpuPeakFindingKernel2::RegistryKey &k1, const GpuPeakFindingKernel2::RegistryKey &k2);
-extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel2::RegistryKey &k);
-extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel2::RegistryValue &v);
+extern bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindingKernel::RegistryKey &k2);
+extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::RegistryKey &k);
+extern std::ostream &operator<<(std::ostream &os, const GpuPeakFindingKernel::RegistryValue &v);
 
 
 // -------------------------------------------------------------------------------------------------
