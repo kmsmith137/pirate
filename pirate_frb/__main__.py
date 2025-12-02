@@ -162,24 +162,48 @@ def show_hardware(args):
 
 
 def parse_show_kernels(subparsers):
-    subparsers.add_parser("show_kernels", help="Show all registered cuda kernels")
+    parser = subparsers.add_parser("show_kernels", help="Show registered cuda kernels (by default, all registries are shown)")
+    parser.add_argument('--pfom', action='store_true', help='Show PfOutputMicrokernel registry')
+    parser.add_argument('--pfwr', action='store_true', help='Show PfWeightReaderMicrokernel registry')
+    parser.add_argument('--gddk', action='store_true', help='Show GpuDedispersionKernel registry')
+    parser.add_argument('--gpfk', action='store_true', help='Show GpuPeakFindingKernel registry')
     
 def show_kernels(args):
-    n = pirate_pybind11.PfOutputMicrokernel.registry_size()
-    print(f"PfOutput microkernel registry ({n} entries):", flush=True)
-    pirate_pybind11.PfOutputMicrokernel.show_registry()
+    show_flags = [ 'pfom', 'pfwr', 'gddk', 'gpfk' ]
+    show_all = not any(getattr(args, x) for x in show_flags)
+    first = True
 
-    n = pirate_pybind11.PfWeightReaderMicrokernel.registry_size()
-    print(f"\nPfWeightReader microkernel registry ({n} entries):", flush=True)
-    pirate_pybind11.PfWeightReaderMicrokernel.show_registry()
+    if show_all or args.pfom:
+        if not first:
+            print()
+        first = False
+        n = pirate_pybind11.PfOutputMicrokernel.registry_size()
+        print(f"PfOutput microkernel registry ({n} entries):", flush=True)
+        pirate_pybind11.PfOutputMicrokernel.show_registry()
 
-    n = pirate_pybind11.GpuDedispersionKernel.registry_size()
-    print(f"\nDedispersion kernel registry ({n} entries):", flush=True)
-    pirate_pybind11.GpuDedispersionKernel.show_registry()
+    if show_all or args.pfwr:
+        if not first:
+            print()
+        first = False
+        n = pirate_pybind11.PfWeightReaderMicrokernel.registry_size()
+        print(f"PfWeightReader microkernel registry ({n} entries):", flush=True)
+        pirate_pybind11.PfWeightReaderMicrokernel.show_registry()
+
+    if show_all or args.gddk:
+        if not first:
+            print()
+        first = False
+        n = pirate_pybind11.GpuDedispersionKernel.registry_size()
+        print(f"Dedispersion kernel registry ({n} entries):", flush=True)
+        pirate_pybind11.GpuDedispersionKernel.show_registry()
     
-    n = pirate_pybind11.GpuPeakFindingKernel.registry_size()
-    print(f"\nPeak-finding kernel registry ({n} entries):", flush=True)
-    pirate_pybind11.GpuPeakFindingKernel.show_registry()
+    if show_all or args.gpfk:
+        if not first:
+            print()
+        first = False
+        n = pirate_pybind11.GpuPeakFindingKernel.registry_size()
+        print(f"Peak-finding kernel registry ({n} entries):", flush=True)
+        pirate_pybind11.GpuPeakFindingKernel.show_registry()
 
 
 ######################################   show_subbands command  #####################################
