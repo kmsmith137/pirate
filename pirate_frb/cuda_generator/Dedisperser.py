@@ -10,49 +10,43 @@ from .Ringbuf import Ringbuf
 ####################################################################################################
 
 
-class DedisperserParams:
-    def __init__(self, dtype, rank, apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf, nspec):
+class MultiDedisperser:
+    """
+    Represents multiple dedispersion kernels in the same .cu file.
+    
+    This is similar to how 'class PeakFinder' represents a single peak-finding kernel.
+    The API includes a 'kernel_basename' member and a classmethod 'write_kernel()'.
+    """
+    
+    def __init__(self, dtype, apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf, nspec):
         """
-        The 'rank' arg can either be an integer (representing a single kernel),
-        or a list of integers (representing a file containing multiple kernels).
+        Constructor takes individual parameters (no 'rank' argument).
+        The rank_list is computed internally in emit_kernel().
         """
-
         dtype = Dtype(dtype)
+        
         assert 1 <= nspec <= (512 // dtype.nbits)
         assert utils.is_power_of_two(nspec)
         assert not (input_is_ringbuf and output_is_ringbuf)
         
-        max_rank = self.max_rank(dtype.nbits, nspec)
-
-        if isinstance(rank, int):
-            assert 1 <= rank <= max_rank
-        elif isinstance(rank, list):
-            assert len(rank) > 0
-            assert all(isinstance(r,int) for r in rank)
-            assert all(1 <= r <= max_rank for r in rank)
-        else:
-            raise RuntimeError("Expected 'rank' to be an integer, or list of integers")            
-        
         self.dtype = dtype
-        self.rank = rank
         self.apply_input_residual_lags = apply_input_residual_lags
         self.input_is_ringbuf = input_is_ringbuf
         self.output_is_ringbuf = output_is_ringbuf
         self.nspec = nspec
-
-
-    @classmethod
-    def max_rank(cls, nbits, nspec):
+        
+        self.kernel_basename = self._make_filename()
+    
+    @staticmethod
+    def max_rank(nbits, nspec):
+        """Compute the maximum rank for given nbits and nspec."""
         # This expression for the max rank derives from the requirement that shared
         # memory lags must be at most 255 32-bit registers.
         max_rank = 13 - utils.integer_log2(nbits * nspec)
         return min(max_rank, 8)
 
-    
-    @property
-    def filename(self):
-        """Note: the rank is ignored (see from_filename() below)."""
-        
+    def _make_filename(self):
+        """Construct the kernel filename from parameters."""
         if (not self.input_is_ringbuf) and (not self.output_is_ringbuf):
             rb = 'norb'
         elif (self.input_is_ringbuf) and (not self.output_is_ringbuf):
@@ -65,16 +59,16 @@ class DedisperserParams:
         lag = 'rlag' if self.apply_input_residual_lags else 'nolag'
         return f'dd_{self.dtype.fname}_{rb}_{lag}_s{self.nspec}.cu'
 
-
     @classmethod
     def from_filename(cls, filename):
         """
+        Parse a filename and construct a MultiDedisperser.
+        
         Example filename: 'dd_fp32_norb_nolag_s1.cu'.
         
         The filename can include an optional leading directory and a trailing '.cu'.
         For example, /path/to/dd_fp16_inrb_rlag_s8.cu matches.
         """
-
         rb_dict = { 'norb': (False,False), 'inrb': (True,False), 'outrb': (False,True) }   # (in_rb, out_rb)
         lag_dict = { 'nolag': False, 'rlag': True}   # rlag
 
@@ -86,47 +80,22 @@ class DedisperserParams:
             rlag = lag_dict[m.group(3)]
             nspec = int(m.group(4))
         except:
-            raise RuntimeError(f"cuda_generator.DedisperserParams: couldn't parse {filename=}")
+            raise RuntimeError(f"cuda_generator.MultiDedisperser: couldn't parse {filename=}")
 
-        # We generate all kernels up to the max rank.
-        max_rank = cls.max_rank(dtype.nbits, nspec)
-        rank_list = list(range(1, max_rank+1))
-        
         return cls(
             dtype = dtype,
-            rank = rank_list,
             apply_input_residual_lags = rlag,
             input_is_ringbuf = irb,
             output_is_ringbuf = orb,
             nspec = nspec
         )
 
-    
-####################################################################################################
-
-
-class MultiDedisperser:
-    """
-    Represents multiple dedispersion kernels in the same .cu file.
-    
-    This is similar to how 'class PeakFinder' represents a single peak-finding kernel.
-    The API includes a 'kernel_basename' member and a classmethod 'write_kernel()'.
-    """
-    
-    def __init__(self, params):
-        """
-        Constructor takes a DedisperserParams with a list of ranks.
-        """
-        assert isinstance(params, DedisperserParams)
-        assert isinstance(params.rank, list)
-        
-        self.params = params
-        self.kernel_basename = params.filename
-    
     def emit_kernel(self, k):
         """Emit kernel code to the given Kernel object."""
         
-        params = self.params
+        # Compute the rank_list (all ranks from 1 to max_rank)
+        max_rank = self.max_rank(self.dtype.nbits, self.nspec)
+        rank_list = list(range(1, max_rank + 1))
         
         k.emit('// Autogenerated by pirate_frb.cuda_generator')
         k.emit()
@@ -143,14 +112,14 @@ class MultiDedisperser:
 
         k_code = k.splice()
 
-        for rank in params.rank:
+        for rank in rank_list:
             dd = Dedisperser(
-                dtype = params.dtype,
+                dtype = self.dtype,
                 rank = rank,
-                apply_input_residual_lags = params.apply_input_residual_lags,
-                input_is_ringbuf = params.input_is_ringbuf,
-                output_is_ringbuf = params.output_is_ringbuf,
-                nspec = params.nspec
+                apply_input_residual_lags = self.apply_input_residual_lags,
+                input_is_ringbuf = self.input_is_ringbuf,
+                output_is_ringbuf = self.output_is_ringbuf,
+                nspec = self.nspec
             )
             dd.emit_global(k_code)
             k_code.emit()
@@ -164,12 +133,12 @@ class MultiDedisperser:
             k.emit()
 
             k.emit('GpuDedispersionKernel::RegistryKey k;')
-            k.emit(f'k.dtype = ksgpu::Dtype::native<{params.dtype.scalar}>();')
+            k.emit(f'k.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
             k.emit(f'k.rank = {rank};')
-            k.emit(f'k.nspec = {params.nspec};')
-            k.emit(f'k.input_is_ringbuf = {utils.tf(params.input_is_ringbuf)};')
-            k.emit(f'k.output_is_ringbuf = {utils.tf(params.output_is_ringbuf)};')
-            k.emit(f'k.apply_input_residual_lags = {utils.tf(params.apply_input_residual_lags)};')
+            k.emit(f'k.nspec = {self.nspec};')
+            k.emit(f'k.input_is_ringbuf = {utils.tf(self.input_is_ringbuf)};')
+            k.emit(f'k.output_is_ringbuf = {utils.tf(self.output_is_ringbuf)};')
+            k.emit(f'k.apply_input_residual_lags = {utils.tf(self.apply_input_residual_lags)};')
             k.emit()
             
             k.emit('GpuDedispersionKernel::RegistryValue v;')
@@ -178,11 +147,11 @@ class MultiDedisperser:
             k.emit(f'v.pstate32_per_small_tree = {dd.pstate32_per_small_tree};')
             k.emit(f'v.nt_per_segment = {dd.nt_per_segment};')
 
-            if (not params.input_is_ringbuf) and (not params.output_is_ringbuf):
+            if (not self.input_is_ringbuf) and (not self.output_is_ringbuf):
                 k.emit(f'v.cuda_kernel_no_rb = {dd.kernel_name};')
-            elif (params.input_is_ringbuf) and (not params.output_is_ringbuf):
+            elif (self.input_is_ringbuf) and (not self.output_is_ringbuf):
                 k.emit(f'v.cuda_kernel_in_rb = {dd.kernel_name};')
-            elif (not params.input_is_ringbuf) and (params.output_is_ringbuf):
+            elif (not self.input_is_ringbuf) and (self.output_is_ringbuf):
                 k.emit(f'v.cuda_kernel_out_rb = {dd.kernel_name};')
             else:
                 raise RuntimeError('Error: input_is_ringbuf == output_is_ringbuf == True')
@@ -208,8 +177,7 @@ class MultiDedisperser:
         import os
         basename = os.path.basename(filename)
         
-        params = DedisperserParams.from_filename(basename)
-        multi_dd = cls(params)
+        multi_dd = cls.from_filename(basename)
         
         if multi_dd.kernel_basename != basename:
             raise RuntimeError("MultiDedisperser.write_kernel(): internal error: expected "

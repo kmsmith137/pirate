@@ -9,7 +9,6 @@ from .Ringbuf import Ringbuf, Ringbuf16
 from .FrequencySubbands import FrequencySubbands
 
 from .Dedisperser import \
-    DedisperserParams, \
     Dedisperser, \
     MultiDedisperser
 
