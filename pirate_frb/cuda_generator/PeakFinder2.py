@@ -475,12 +475,12 @@ class PeakFinder2:
         
         if self.dtype == 'float':
             assert Dcore == Minner
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', m, p)
+            self.pf_weight_reader.read_weights(k, m, p)
         
         elif self.dtype == '__half' and ((p % 2) == 0):
             assert Dcore == 2*Minner
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', m, p)
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m+Minner}_p{p}', m+Minner, p)
+            self.pf_weight_reader.read_weights(k, m, p)
+            self.pf_weight_reader.read_weights(k, m+Minner, p)
                 
         elif self.dtype != '__half':
             raise RuntimeError('should never get here')
@@ -867,8 +867,10 @@ class PfWeightReader:
         self.wp = wp
 
     
-    def read_weights(self, k, dst, m, p, declare_dst=True):
-        k.emit(f'// PfWeightReader.read_weights({dst=}, {m=}, {p=}): start.')
+    def read_weights(self, k, m, p):
+        """After calling this function, weights are available with variable name 'pfw_m{m}_p{p}'."""
+
+        k.emit(f'// PfWeightReader.read_weights({m=}, {p=}): start.')
         wp, F, Minner, Pinner, Tinner = self.wp, self.F, self.Minner, self.Pinner, self.Tinner
 
         if p == 0:
@@ -893,9 +895,8 @@ class PfWeightReader:
             k.emit(f'{self.dt32} {wrap} = ((threadIdx.x & 0x1f) >= {Imin & 0x1f}) ? {wcl} : {wcl2};')
             wcl = wrap
 
-        decl = f'{self.dt32} ' if declare_dst else ''
-        k.emit(f'{decl}{dst} = __shfl_sync(~0u, {wcl}, {Istr});')
-        k.emit(f'// PfWeightReader.read_weights({dst=}, {m=}, {p=}): end')
+        k.emit(f'{self.dt32} pfw_m{m}_p{p} = __shfl_sync(~0u, {wcl}, {Istr});')
+        k.emit(f'// PfWeightReader.read_weights({m=}, {p=}): end')
 
 
     def _get_I(self, m, p, tinner):
@@ -1050,13 +1051,14 @@ class PfWeightReader:
         k.emit()
         k.emit(f'for (uint tin = 0; tin < nt_in; tin += {32*SW}) {{')
 
-        for mouter in range(self.Mouter):
-            for pouter in range(self.Pouter):
-                w = f'pfw_m{mouter}_p{pouter}'
-                self.read_weights(k, w, mouter * self.Minner, pouter * self.Pinner)
+        for m in range(0, self.M, self.Minner):
+            for p in range(0, self.P, self.Pinner):
+                self.read_weights(k, m, p)
+                pouter = utils.xdiv(p, self.Pinner)
+
                 k.emit()
-                k.emit(f'// (mouter, pouter) = ({mouter}, {pouter})')
-                k.emit(f'out[({mouter} * Minner * Pouter) + {pouter}] = {w};')
+                k.emit(f'// (m, p) = ({m}, {p})')
+                k.emit(f'out[({m} * Pouter) + {pouter}] = pfw_m{m}_p{p};')
                 k.emit()
         
         k.emit(f'// Advance output pointer by ({32*SW}/Dcore) time samples')
