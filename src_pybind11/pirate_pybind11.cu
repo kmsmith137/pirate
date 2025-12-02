@@ -19,7 +19,6 @@
 #include "../include/pirate/PeakFindingKernel.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
-#include "../include/pirate/tests.hpp"
 #include "../include/pirate/timing.hpp"
 
 #include "../include/pirate/loose_ends/tests.hpp"
