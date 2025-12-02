@@ -6,6 +6,7 @@
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
 
+#include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
@@ -19,35 +20,6 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 //
 // All classes below are defined in src_lib/PeakFindingKernel.cu.
-
-
-// FIXME relocate this to a different .hpp?
-struct FrequencySubbands
-{
-    FrequencySubbands(const std::vector<long> &subband_counts);
-
-    // Length-(rank+1) vector, containing number of frequency subbands at each level.
-    // This vector is used as an "identifier" for frequency subbands in low-level code.
-    std::vector<long> subband_counts;   
-
-    long pf_rank = -1;  // = subband_counts.size() - 1
-    long F = 0;  // number of distinct frequency subbands
-    long M = 0;  // number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
-
-    std::vector<long> m_to_f;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
-    std::vector<long> m_to_d;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
-    std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
-    std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
-
-    // These members are used in the peak-finding kernel, whose 'out_argmax' array consists
-    // of "tokens" of the form (t) | (p << 8) | (m << 16).
-
-    // For debugging/testing.
-    static void validate_subband_counts(const std::vector<long> &subband_counts);
-    
-    void show_token(uint token, std::ostream &os = std::cout) const;
-    void show(std::ostream &os = std::cout) const;
-};
 
 
 // GpuPfWeightLayout: describes the layout of peak-finding weights on the GPU.
