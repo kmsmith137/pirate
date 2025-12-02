@@ -1,5 +1,4 @@
 import re
-import copy
 
 from . import utils
 
@@ -145,10 +144,14 @@ class MultiDedisperser:
         k_code = k.splice()
 
         for rank in params.rank:
-            params2 = copy.copy(params)
-            params2.rank = rank
-            
-            dd = Dedisperser(params2)
+            dd = Dedisperser(
+                dtype = params.dtype,
+                rank = rank,
+                apply_input_residual_lags = params.apply_input_residual_lags,
+                input_is_ringbuf = params.input_is_ringbuf,
+                output_is_ringbuf = params.output_is_ringbuf,
+                nspec = params.nspec
+            )
             dd.emit_global(k_code)
             k_code.emit()
 
@@ -224,44 +227,43 @@ class MultiDedisperser:
 
 
 class Dedisperser:
-    def __init__(self, params):
+    def __init__(self, dtype, rank, apply_input_residual_lags, input_is_ringbuf, output_is_ringbuf, nspec):
         """
         We distinguish notationally between three ring buffers:
-           - grb: global ring buffer, used if params.{input,output}_is_ringbuf == True
+           - grb: global ring buffer, used if {input,output}_is_ringbuf == True
            - srb: shared memory ring buffer, used if self.two_stage == True
            - rrb: per-warp register ring buffer (always used).
         """
         
-        assert isinstance(params, DedisperserParams)
-        assert isinstance(params.rank, int)
+        dtype = Dtype(dtype)
+        assert isinstance(rank, int)
         
-        self.params = params
-        self.dtype = params.dtype
-        self.dt32 = params.dtype.simd32
-        self.nbits = params.dtype.nbits
-        self.rank = params.rank
-        self.apply_input_residual_lags = params.apply_input_residual_lags
-        self.input_is_ringbuf = params.input_is_ringbuf
-        self.output_is_ringbuf = params.output_is_ringbuf
-        self.nt_per_segment = utils.xdiv(1024, self.nbits * params.nspec)
-        self.nspec = params.nspec
+        self.dtype = dtype
+        self.dt32 = dtype.simd32
+        self.nbits = dtype.nbits
+        self.rank = rank
+        self.apply_input_residual_lags = apply_input_residual_lags
+        self.input_is_ringbuf = input_is_ringbuf
+        self.output_is_ringbuf = output_is_ringbuf
+        self.nt_per_segment = utils.xdiv(1024, self.nbits * nspec)
+        self.nspec = nspec
         
         self.kernel_name = f'dd_fp{self.nbits}'
-        self.kernel_name += f'_r{params.rank}'
-        self.kernel_name += f'_ilag{int(params.apply_input_residual_lags)}'
-        self.kernel_name += f'_irb{int(params.input_is_ringbuf)}'
-        self.kernel_name += f'_orb{int(params.output_is_ringbuf)}'
-        self.kernel_name += f'_s{params.nspec}'
+        self.kernel_name += f'_r{rank}'
+        self.kernel_name += f'_ilag{int(apply_input_residual_lags)}'
+        self.kernel_name += f'_irb{int(input_is_ringbuf)}'
+        self.kernel_name += f'_orb{int(output_is_ringbuf)}'
+        self.kernel_name += f'_s{nspec}'
         
         self.rrb = Ringbuf(self.dt32)   # simd dtype, not scalar dtype
 
         # This simple rule works and gives good performance, for a reasonable
         # range of 'nspec' values.
-        self.two_stage = (params.rank >= 3)
+        self.two_stage = (rank >= 3)
 
         if self.two_stage:
-            self.rank0 = (params.rank // 2)
-            self.rank1 = params.rank - self.rank0
+            self.rank0 = (rank // 2)
+            self.rank1 = rank - self.rank0
             self.warps_per_threadblock = 2**self.rank0
             self.shmem_nbytes = 4 * self.srb_base(2**self.rank0, 0)
             self.ndd = 2**(self.rank1)   # dedispersion "data" registers per thread
