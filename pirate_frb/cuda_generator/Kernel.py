@@ -1,6 +1,8 @@
 import io
 import sys
 
+from . import utils
+
 
 class Kernel:
     def __init__(self):
@@ -26,13 +28,24 @@ class Kernel:
 
     
     def write(self, f):
-        """Suggest taking 'f' to be the return value from utils.clang_formatter()."""
+        """Write kernel to a file handle. For internal use; prefer write_file()."""
         
         for s,k in self.splices:
             print(s.getvalue(), file=f)
             k.write(f)
         
         print(self.active_buffer.getvalue(), file=f)
+
+
+    def write_file(self, filename, clang_format=True):
+        """Write kernel to a file, optionally running clang-format."""
+        
+        with open(filename, 'w') as f:
+            if clang_format:
+                with utils.clang_formatter(f) as ff:
+                    self.write(ff)
+            else:
+                self.write(f)
 
 
     def get_name(self, stem, n=None):

@@ -709,10 +709,7 @@ class PeakFinder:
         k = Kernel()
         pf_kernel.emit_kernel(k)
 
-        with open(filename,'w') as f:
-            with utils.clang_formatter(f) as ff:
-                k.write(ff)
-
+        k.write_file(filename)
         
 
 ####################################################################################################
@@ -1157,10 +1154,7 @@ class PfWeightReader:
         
         k = Kernel()
         pf_weight_reader.emit_test_kernel(k)
-
-        with open(filename,'w') as f:
-            with utils.clang_formatter(f) as ff:
-                k.write(ff)
+        k.write_file(filename)
 
 
 ####################################################################################################
@@ -1479,7 +1473,4 @@ class PfOutput:
         k.emit()
         
         k.emit('}   // namespace pirate')
-
-        with open(filename,'w') as f:
-            with utils.clang_formatter(f) as ff:
-                k.write(ff)
+        k.write_file(filename)
