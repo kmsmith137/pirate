@@ -510,9 +510,13 @@ class PeakFinder2:
         
         elif self.dtype == '__half':
             cmp1, cmp2 = k.get_name('cmp', 2)
+            tmp_lo = k.get_name('tmp_lo')
+            tmp_hi = k.get_name('tmp_hi')
             k.emit(f'__half2 {cmp1} = __hle2({pfz}, {var});')
             k.emit(f'uint {cmp2} = *reinterpret_cast<uint*>(&{cmp1});  // __half2 -> uint')
-            k.emit(f'{pfiz} = ({cmp2} & 0x{(t|(t<<16)):0x}) | (~{cmp2} & {pfiz});  // compiles to lop3')
+            k.emit(f'uint {tmp_lo} = ({cmp2} & 0xffffu) ? ({t}) : {pfiz};')
+            k.emit(f'uint {tmp_hi} = ({cmp2} & ~0xffffu) ? ({t} << 16) : {pfiz};')
+            k.emit(f'{pfiz} = ({tmp_lo} & 0xffffu) | ({tmp_hi} & ~0xffffu);')
             k.emit(f'{pfz} = __hmax2({pfz}, {var});')
         
         else:
@@ -669,10 +673,10 @@ class PeakFinder2:
             k.emit(f'{pfu0} *= pfw_m{m0}_p{p0};')
             k.emit(f'{pfu1} *= pfw_m{m1}_p{p0};')
 
-            k.emit(f'uint token_m{m0}_p{p0} = token_m{m0}_base | ({p0} << 8) | (pfiz_m{m0}_p{p0} & 0xff);')
-            k.emit(f'uint token_m{m0}_p{p1} = token_m{m0}_base | ({p1} << 8) | (pfiz_m{m0}_p{p1} & 0xff);')
-            k.emit(f'uint token_m{m1}_p{p0} = token_m{m1}_base | ({p0} << 8) | ((pfiz_m{m0}_p{p0} >> 16) & 0xff);')
-            k.emit(f'uint token_m{m1}_p{p1} = token_m{m1}_base | ({p1} << 8) | ((pfiz_m{m0}_p{p1} >> 16) & 0xff);')
+            k.emit(f'uint token_m{m0}_p{p0} = token_m{m0}_base | ({min(p0,P-1)} << 8) | (pfiz_m{m0}_p{p0} & 0xff);')
+            k.emit(f'uint token_m{m0}_p{p1} = token_m{m0}_base | ({min(p1,P-1)} << 8) | (pfiz_m{m0}_p{p1} & 0xff);')
+            k.emit(f'uint token_m{m1}_p{p0} = token_m{m1}_base | ({min(p0,P-1)} << 8) | ((pfiz_m{m0}_p{p0} >> 16) & 0xff);')
+            k.emit(f'uint token_m{m1}_p{p1} = token_m{m1}_base | ({min(p1,P-1)} << 8) | ((pfiz_m{m0}_p{p1} >> 16) & 0xff);')
             
             self.pf_output.apply_inner(k, pfu0, [ f'token_m{m0}_p{p0}', f'token_m{m0}_p{p1}' ])
             self.pf_output.apply_inner(k, pfu1, [ f'token_m{m1}_p{p0}', f'token_m{m1}_p{p1}' ])

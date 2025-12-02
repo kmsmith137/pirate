@@ -910,7 +910,7 @@ void ReferencePeakFindingKernel2::_peak_find(Array<float> &out_max, Array<uint> 
                                 _update_pf2(maxval, argmax, w3*y3, token3);
                             }
 
-                            if (debug && (b == 0) && (d==0) && (tout==1)) {
+                            if (debug && (b == 0) && (d==0) && (tout==2)) {
                                 cout << "cpu peak-finder: b=" << b << ", d=" << d << ", tout=" << tout 
                                      << ", level=" << l << ", m=" << m << ", n=" << n << "\n";
 
@@ -1268,6 +1268,8 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
          << ", W=" << key.E
          << ", Dcore=" << gpu_kernel.Dcore
          << ", Dout=" << key.Dout
+         << ", Tinner=" << key.Tinner
+         << ", M=" << gpu_kernel.fs.M
          << ", beams_per_batch=" << beams_per_batch
          << ", total_beams=" << total_beams
          << ", ndm_out=" << ndm_out
@@ -1332,7 +1334,7 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
             assert_arrays_equal(cpu_out_small, cpu_out3_small, "cpu_out_small", "cpu_out3_small", {"b","d","tout"});
 
             if (short_circuit) {
-                cout << "XXX short-circuiting!!" << endl;
+                cout << "!!! short-circuiting !!!" << endl;
                 continue;
             }
 
@@ -1350,7 +1352,9 @@ void GpuPeakFindingKernel2::test(bool short_circuit)
             gpu_argmax = gpu_argmax.to_host();
             Array<float> gpu_out2({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             ref_kernel_small.eval_tokens(gpu_out2, gpu_argmax, cpu_wt_small);
-            assert_arrays_equal(cpu_out_small, gpu_out2, "cpu_out_small", "gpu_out2", {"b","d","tout"});
+
+            double eps = 10.0 * key.dtype.precision();
+            assert_arrays_equal(cpu_out_small, gpu_out2, "cpu_out_small", "gpu_out2", {"b","d","tout"}, eps, eps);
         }
     }
 }
