@@ -7,8 +7,7 @@ namespace pirate {
 #endif
 
 
-// test_gpu_peak_finding_kernel.cu
-extern void test_gpu_peak_finding_kernel(bool reduce_only);
+// Currently empty -- tests are now static methods on their respective classes.
 
 
 }  // namespace pirate

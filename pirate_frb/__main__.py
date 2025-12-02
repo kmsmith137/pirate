@@ -118,12 +118,11 @@ def parse_time(subparsers):
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
-    parser.add_argument('--gpfk', action='store_true', help='Runs time_gpu_peak_finding_kernels()')
     parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
     
 def time(args):
-    timing_flags = [ 'gldk', 'gddk', 'gpfk', 'casm', 'zomb' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -140,8 +139,6 @@ def time(args):
         pirate_pybind11.time_gpu_lagged_downsampling_kernels()
     if run_all_timings or args.gddk:
         pirate_pybind11.time_gpu_dedispersion_kernels()
-    if run_all_timings or args.gpfk:
-        pirate_pybind11.time_gpu_peak_finding_kernels()
     if run_all_timings or args.casm:
         pirate_pybind11.CasmBeamformer.run_timings(args.ncu)
     if run_all_timings or args.zomb:
@@ -179,10 +176,6 @@ def show_kernels(args):
     n = pirate_pybind11.GpuDedispersionKernel.registry_size()
     print(f"\nDedispersion kernel registry ({n} entries):", flush=True)
     pirate_pybind11.GpuDedispersionKernel.show_registry()
-    
-    n = pirate_pybind11.GpuPeakFindingKernelOld.registry_size()
-    print(f"\nPeak-finding kernel registry (old) ({n} entries):", flush=True)
-    pirate_pybind11.GpuPeakFindingKernelOld.show_registry()
     
     n = pirate_pybind11.GpuPeakFindingKernel.registry_size()
     print(f"\nPeak-finding kernel registry ({n} entries):", flush=True)

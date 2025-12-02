@@ -147,11 +147,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test", &GpuLaggedDownsamplingKernel::test)
     ;
 
-    py::class_<GpuPeakFindingKernel>(m, "GpuPeakFindingKernelOld")
-          .def_static("registry_size", &GpuPeakFindingKernel::registry_size)
-          .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
-    ;
-
     py::class_<GpuPeakFindingKernel2>(m, "GpuPeakFindingKernel")
           .def_static("test", &GpuPeakFindingKernel2::test, py::arg("short_circuit") = false)
           .def_static("registry_size", &GpuPeakFindingKernel2::registry_size)
@@ -182,13 +177,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("show_registry", &PfOutputMicrokernel::show_registry)
     ;
 
-    m.def("test_gpu_peak_finding_kernel", &test_gpu_peak_finding_kernel, py::arg("reduce_only"));
-
     m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));
     m.def("time_gpu_dedispersion_kernels", &time_gpu_dedispersion_kernels);
     m.def("time_gpu_downsample", &time_gpu_downsample);
     m.def("time_gpu_lagged_downsampling_kernels", &time_gpu_lagged_downsampling_kernels);
-    m.def("time_gpu_peak_finding_kernels", &time_gpu_peak_finding_kernels);
     m.def("time_gpu_transpose", &time_gpu_transpose);
     
     // "Zombie" tests (code that I wrote during protoyping that may never get used)

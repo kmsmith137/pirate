@@ -13,15 +13,6 @@ from .Dedisperser import \
     Dedisperser, \
     make_dd_file
 
-from .PeakFinder import \
-    PeakFindingParams, \
-    PeakFinder, \
-    PfTransposeLayer, \
-    PfInitialTranspose16Layer, \
-    PfCore, \
-    PfReducer, \
-    make_pf_file
-
 from .PeakFinder2 import \
     PeakFinder2, \
     PfWeightLayout, \
