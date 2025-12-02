@@ -2,6 +2,7 @@ import io
 import sys
 import math
 import subprocess
+import contextlib
 
 
 def xdiv(num, den):
@@ -50,7 +51,18 @@ def tf(x):
     return "true" if x else "false"
 
 
+@contextlib.contextmanager
 def clang_formatter(f = sys.stdout):
+    """Context manager that pipes output through clang-format.
+    
+    Properly waits for clang-format to finish before returning,
+    avoiding truncated output when used with parallel builds.
+    """
     cmd = ['clang-format', '-style={ColumnLimit: 0, IndentWidth: 4}']
-    proc = subprocess.Popen(cmd, stdin = subprocess.PIPE, stdout = f)
-    return io.TextIOWrapper(proc.stdin, encoding="utf-8", line_buffering=True)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=f)
+    wrapper = io.TextIOWrapper(proc.stdin, encoding="utf-8", line_buffering=True)
+    try:
+        yield wrapper
+    finally:
+        wrapper.close()  # Close stdin, signaling EOF to clang-format
+        proc.wait()      # Wait for clang-format to finish writing output
