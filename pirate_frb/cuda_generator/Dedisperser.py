@@ -811,9 +811,9 @@ class MultiDedisperser:
                 output_is_ringbuf = self.output_is_ringbuf,
                 nspec = self.nspec
             )
+
             dd.emit_global(k_code)
             k_code.emit()
-
             k_code.reset_names()
             
             k.emit(f'// Boilerplate to register the rank={rank} kernel when the library is loaded.')

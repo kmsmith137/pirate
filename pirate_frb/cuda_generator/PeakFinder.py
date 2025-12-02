@@ -110,8 +110,8 @@ class PeakFinder:
         # for the associated 'weight_reader' and 'output' microkernels.
         self.all_kernel_basenames = [
             self.kernel_basename,
-            self.weight_reader.test_kernel_basename,
-            self.output.test_kernel_basename
+            self.weight_reader.kernel_basename,
+            self.output.kernel_basename
         ]
 
 
@@ -703,7 +703,7 @@ class PeakFinder:
         pf_kernel = cls(dtype, frequency_subbands, E, Dcore, Dout, Tinner)
 
         if pf_kernel.kernel_basename != basename:
-            raise RuntimeError("PfKernel2.write_test_kernel(): internal error: expected "
+            raise RuntimeError("PfKernel2.write_kernel(): internal error: expected "
                                + f" {pf_kernel.kernel_basename=} and {basename=} to be equal")
                 
         k = Kernel()
@@ -864,9 +864,9 @@ class PfWeightReader:
         self.Minner = Minner = utils.xdiv(Dcore, self.SW)
         self.Mouter = Mouter = (self.M + Minner - 1) // Minner
 
-        # Typical kernel name: pf_weight_reader_test_fp32_f11_f6_f3_f1_Dcore8_P13_Tinner2
-        self.test_kernel_name = f'pf_weight_reader_test_{dtype.fname}_{frequency_subbands.fstr}_Dcore{Dcore}_P{P}_Tinner{Tinner}'
-        self.test_kernel_basename = self.test_kernel_name + '.cu'
+        # Typical kernel name: pf_weight_reader_fp32_f11_f6_f3_f1_Dcore8_P13_Tinner2
+        self.kernel_name = f'pf_weight_reader_{dtype.fname}_{frequency_subbands.fstr}_Dcore{Dcore}_P{P}_Tinner{Tinner}'
+        self.kernel_basename = self.kernel_name + '.cu'
 
         # As weights are read from global memory, they populate registers named 'pf_wcl_I{I}',
         # where (I % 32) == 0. This set keeps track of which I-values have been read.
@@ -1001,7 +1001,7 @@ class PfWeightReader:
         k.emit(f"{self.wp} += {ps};")
         
 
-    def emit_test_kernel(self, k):
+    def emit_kernel(self, k):
         dt32, SW = self.dtype.simd32, self.dtype.simd_width
         assert self.Pinner == SW  # assumed below
         
@@ -1041,7 +1041,7 @@ class PfWeightReader:
         k.emit('// Launch with 32 threads, 1 block.')
         k.emit()
         
-        k.emit(f'__global__ void {self.test_kernel_name}(void *out_, const void *in_, uint nt_in, uint nt_in_per_wt)')
+        k.emit(f'__global__ void {self.kernel_name}(void *out_, const void *in_, uint nt_in, uint nt_in_per_wt)')
         k.emit(f'{{')
         k.emit(f'constexpr int Dcore = {self.Dcore};')
         k.emit(f'constexpr int Pouter = {self.Pouter};')
@@ -1099,7 +1099,7 @@ class PfWeightReader:
         k.emit(f'k.P = {self.P};')
         k.emit()
         k.emit('PfWeightReaderMicrokernel::RegistryValue v;')
-        k.emit(f'v.cuda_kernel = {self.test_kernel_name};')
+        k.emit(f'v.cuda_kernel = {self.kernel_name};')
         k.emit(f'v.Mouter = {self.Mouter};')
         k.emit(f'v.Minner = {self.Minner};')
         k.emit()
@@ -1132,13 +1132,13 @@ class PfWeightReader:
 
         
     @classmethod
-    def write_test_kernel(cls, filename):
+    def write_kernel(cls, filename):
         """Called from 'autogenerate_kernel.py' in the toplevel pirate directory."""
         
         basename = os.path.basename(filename)
 
-        # Typical basename: pf_weight_reader_test_fp32_f11_f6_f3_f1_Dcore8_P13_Tinner2.cu
-        m = re.fullmatch(r'pf_weight_reader_test_(fp\d+)_((?:f\d+_)*f\d+)_Dcore(\d+)_P(\d+)_Tinner(\d+)\.cu', basename)
+        # Typical basename: pf_weight_reader_fp32_f11_f6_f3_f1_Dcore8_P13_Tinner2.cu
+        m = re.fullmatch(r'pf_weight_reader_(fp\d+)_((?:f\d+_)*f\d+)_Dcore(\d+)_P(\d+)_Tinner(\d+)\.cu', basename)
         if not m:
             raise RuntimeError(f"Couldn't match filename '{filename}'")
 
@@ -1148,12 +1148,12 @@ class PfWeightReader:
         
         pf_weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, P, Tinner)
 
-        if pf_weight_reader.test_kernel_basename != basename:
-            raise RuntimeError("PfWeightReader.write_test_kernel(): internal error: expected "
-                               + f" {pf_weight_reader.test_kernel_basename=} and {basename=} to be equal")
+        if pf_weight_reader.kernel_basename != basename:
+            raise RuntimeError("PfWeightReader.write_kernel(): internal error: expected "
+                               + f" {pf_weight_reader.kernel_basename=} and {basename=} to be equal")
         
         k = Kernel()
-        pf_weight_reader.emit_test_kernel(k)
+        pf_weight_reader.emit_kernel(k)
         k.write_file(filename)
 
 
@@ -1213,8 +1213,8 @@ class PfOutput:
         assert utils.is_power_of_two(Dout)
         assert self.SW <= Dout <= 32
 
-        self.test_kernel_name = f'pf_output_test_fp{32//self.SW}_Dout{Dout}'
-        self.test_kernel_basename = self.test_kernel_name + '.cu'
+        self.kernel_name = f'pf_output_fp{32//self.SW}_Dout{Dout}'
+        self.kernel_basename = self.kernel_name + '.cu'
         self.apply_inner_called = False
         self.apply_outer_called = False
         
@@ -1368,12 +1368,12 @@ class PfOutput:
 
         
     @classmethod
-    def write_test_kernel(cls, filename):
+    def write_kernel(cls, filename):
         """Called from 'autogenerate_kernel.py' in the toplevel pirate directory."""
         
         basename = os.path.basename(filename)
         
-        m = re.fullmatch(r'pf_output_test_(fp\d+)_Dout(\d+)\.cu', basename)
+        m = re.fullmatch(r'pf_output_(fp\d+)_Dout(\d+)\.cu', basename)
         if not m:
             raise RuntimeError(f"Couldn't match filename '{filename}'")
 
@@ -1381,7 +1381,7 @@ class PfOutput:
         Dout = int(m.group(2))
 
         pf_output = PfOutput(dtype, Dout)
-        assert pf_output.test_kernel_basename == basename
+        assert pf_output.kernel_basename == basename
 
         k = Kernel()
         SW = pf_output.SW
@@ -1412,7 +1412,7 @@ class PfOutput:
         k.emit()
         k.emit(f'// Call with 32 threads, and 1 threadblock.')
 
-        k.emit(f'__global__ void {pf_output.test_kernel_name}(void *zout_, uint *aout32, void *zin_, uint *ain32, uint nt_in)')
+        k.emit(f'__global__ void {pf_output.kernel_name}(void *zout_, uint *aout32, void *zin_, uint *ain32, uint nt_in)')
         k.emit(f'{{')
 
         if dtype.scalar == 'float':
@@ -1462,7 +1462,7 @@ class PfOutput:
         k.emit(f'k.Dout = {pf_output.Dout};')
         k.emit()
         k.emit('PfOutputMicrokernel::RegistryValue v;')
-        k.emit(f'v.cuda_kernel = {pf_output.test_kernel_name};')
+        k.emit(f'v.cuda_kernel = {pf_output.kernel_name};')
         k.emit()
         k.emit('bool debug = false;')
         k.emit('PfOutputMicrokernel::registry().add(k, v, debug);')
