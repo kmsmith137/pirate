@@ -5,7 +5,7 @@ from . import utils
 
 from .Dtype import Dtype
 from .Kernel import Kernel
-from .Ringbuf import Ringbuf, Ringbuf16
+from .Ringbuf import Ringbuf
 from .FrequencySubbands import FrequencySubbands
 
 from .Dedisperser import \

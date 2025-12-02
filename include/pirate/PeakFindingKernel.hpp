@@ -138,10 +138,6 @@ struct ReferencePeakFindingKernel
     // Returns shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
     ksgpu::Array<float> make_random_weights();
 
-    // FIXME absorb these into apply()
-    void _init_tmp_arrays(const ksgpu::Array<float> &in, long ibatch);
-    void _peak_find(ksgpu::Array<float> &out_max, ksgpu::Array<uint> &out_argmax, const ksgpu::Array<float> &wt, bool debug);
-
     // At "level" l (where 0 <= l < log2(E)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).
     //

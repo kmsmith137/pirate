@@ -203,6 +203,14 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
 }
 
 
+// helper for ReferencePeakFindingKernel::apply()
+static inline void _update_pf(float &maxval, uint &argmax, float val, uint token)
+{
+    argmax = (val > maxval) ? token : argmax;
+    maxval = std::max(maxval, val);
+}
+
+
 void ReferencePeakFindingKernel::apply(
     ksgpu::Array<float> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,    // shape (beams_per_batch, ndm_out, nt_out)
@@ -215,7 +223,6 @@ void ReferencePeakFindingKernel::apply(
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, p.nt_in}));
     xassert_shape_eq(wt, ({p.beams_per_batch, p.ndm_wt, p.nt_wt, nprofiles, fs.F}));
-    // contiguity requirements are checked in _init_tmp_arrays() and _peak_find().
  
     xassert(out_max.on_host());
     xassert(out_argmax.on_host());
@@ -225,13 +232,8 @@ void ReferencePeakFindingKernel::apply(
     xassert_eq(ibatch, expected_ibatch);
     expected_ibatch = (ibatch + 1) % nbatches;
 
-    _init_tmp_arrays(in, ibatch);
-    _peak_find(out_max, out_argmax, wt, debug);
-}
+    // ---- _init_tmp_arrays() logic starts here ----
 
-
-void ReferencePeakFindingKernel::_init_tmp_arrays(const Array<float> &in, long ibatch)
-{
     long nt_in = params.nt_in;
     long B = params.beams_per_batch;
     long D = params.ndm_out;
@@ -288,25 +290,10 @@ void ReferencePeakFindingKernel::_init_tmp_arrays(const Array<float> &in, long i
             }
         }
     }
-}
 
+    // ---- _peak_find() logic starts here ----
 
-// helper for ReferencePeakFindingKernel::_peak_find()
-static inline void _update_pf(float &maxval, uint &argmax, float val, uint token)
-{
-    argmax = (val > maxval) ? token : argmax;
-    maxval = std::max(maxval, val);
-}
-
-
-// out_*: shape (beams_per_batch, ndm_out, nt_out)
-// wt: shape (beams_per_batch, ndm_wt, nt_wt, P, F)
-void ReferencePeakFindingKernel::_peak_find(Array<float> &out_max, Array<uint> &out_argmax, const Array<float> &wt, bool debug)
-{
-    long B = params.beams_per_batch;
-    long D = params.ndm_out;
     long P = nprofiles;
-    long M = fs.M;
     long F = fs.F;
 
     long Wds = xdiv(params.ndm_out, params.ndm_wt);  // downsampling factor ndm_out -> ndm_wt
@@ -330,7 +317,7 @@ void ReferencePeakFindingKernel::_peak_find(Array<float> &out_max, Array<uint> &
                 uint argmax = ~0u;  // token
 
                 for (long l = 0; l < num_levels; l++) {
-                    float *in = &tmp_arr.at(l).at({b,d,0,0});
+                    float *tmp_in = &tmp_arr.at(l).at({b,d,0,0});
                     int mstr = tmp_nt[l];   // m-stride of input array
                     int dt = tmp_dt[l];     // used below when computing tokens
                     int N = tmp_nout[l];    // count
@@ -348,10 +335,10 @@ void ReferencePeakFindingKernel::_peak_find(Array<float> &out_max, Array<uint> &
                         // tmp[l] array, or (dt) time samples in the original input array.
 
                         for (int n = 0; n < N; n++) {
-                            float x0 = in[m*mstr + I + tout*N + n - 3*S];
-                            float x1 = in[m*mstr + I + tout*N + n - 2*S];
-                            float x2 = in[m*mstr + I + tout*N + n - S];
-                            float x3 = in[m*mstr + I + tout*N + n];
+                            float x0 = tmp_in[m*mstr + I + tout*N + n - 3*S];
+                            float x1 = tmp_in[m*mstr + I + tout*N + n - 2*S];
+                            float x2 = tmp_in[m*mstr + I + tout*N + n - S];
+                            float x3 = tmp_in[m*mstr + I + tout*N + n];
 
                             uint token0 = (m << 16)| (n*dt);  // includes (m,n) but not p
                             uint token1 = token0 | ((3*l+1) << 8);    // include p=3*l+1
