@@ -11,7 +11,7 @@ from .FrequencySubbands import FrequencySubbands
 from .Dedisperser import \
     DedisperserParams, \
     Dedisperser, \
-    make_dd_file
+    MultiDedisperser
 
 from .PeakFinder import \
     PeakFinder, \
