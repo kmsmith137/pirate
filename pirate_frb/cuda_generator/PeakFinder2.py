@@ -475,15 +475,12 @@ class PeakFinder2:
         
         if self.dtype == 'float':
             assert Dcore == Minner
-            mouter = utils.xdiv(m, Minner)
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', mouter, p)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', m, p)
         
         elif self.dtype == '__half' and ((p % 2) == 0):
             assert Dcore == 2*Minner
-            mouter = utils.xdiv(m, Minner)
-            pouter = utils.xdiv(p, Pinner)
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', mouter, p)
-            self.pf_weight_reader.read_weights(k, f'pfw_m{m+Minner}_p{p}', mouter+1, p)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m}_p{p}', m, p)
+            self.pf_weight_reader.read_weights(k, f'pfw_m{m+Minner}_p{p}', m+Minner, p)
                 
         elif self.dtype != '__half':
             raise RuntimeError('should never get here')
@@ -870,10 +867,9 @@ class PfWeightReader:
         self.wp = wp
 
     
-    def read_weights(self, k, dst, mouter, p, declare_dst=True):
-        wp, F, Minner, Pinner, Tinner = self.wp, self.F, self.Minner, self.Pinner, self.Tinner
-        m = mouter * Minner
+    def read_weights(self, k, dst, m, p, declare_dst=True):
         k.emit(f'// PfWeightReader.read_weights({dst=}, {m=}, {p=}): start.')
+        wp, F, Minner, Pinner, Tinner = self.wp, self.F, self.Minner, self.Pinner, self.Tinner
 
         if p == 0:
             self._init_pfI(k, m)
@@ -1057,7 +1053,7 @@ class PfWeightReader:
         for mouter in range(self.Mouter):
             for pouter in range(self.Pouter):
                 w = f'pfw_m{mouter}_p{pouter}'
-                self.read_weights(k, w, mouter, pouter * self.Pinner)
+                self.read_weights(k, w, mouter * self.Minner, pouter * self.Pinner)
                 k.emit()
                 k.emit(f'// (mouter, pouter) = ({mouter}, {pouter})')
                 k.emit(f'out[({mouter} * Minner * Pouter) + {pouter}] = {w};')
