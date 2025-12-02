@@ -18,6 +18,50 @@ namespace pirate {
 #endif
 
 
+
+// -------------------------------------------------------------------------------------------------
+//
+// PeakFindingKernelParams
+
+
+void PeakFindingKernelParams::validate() const
+{
+    FrequencySubbands::validate_subband_counts(subband_counts);
+    
+    // Check that everything is initialized.
+    xassert(max_kernel_width > 0);
+    xassert(beams_per_batch > 0);
+    xassert(total_beams > 0);
+    xassert(ndm_out > 0);
+    xassert(ndm_wt > 0);
+    xassert(nt_out > 0);
+    xassert(nt_in > 0);
+    xassert(nt_wt > 0);
+
+    xassert(is_power_of_two(max_kernel_width));
+    xassert(is_power_of_two(ndm_out));
+    xassert(is_power_of_two(ndm_wt));
+
+    xassert_divisible(total_beams, beams_per_batch);
+    xassert_divisible(ndm_out, ndm_wt);
+    xassert_divisible(nt_in, nt_out);
+    xassert_divisible(nt_out, nt_wt);
+
+    // The nt_* members don't need to be powers of two, but the downsampling
+    // factors which relate them do need to be power of two.
+
+    xassert(is_power_of_two(xdiv(ndm_out, ndm_wt)));
+    xassert(is_power_of_two(xdiv(nt_in, nt_out)));
+    xassert(is_power_of_two(xdiv(nt_out, nt_wt)));
+
+    // Kernels currently assume that the input spans an integer number
+    // of GPU cache lines.
+
+    long simd_width = xdiv(32, dtype.nbits);
+    xassert_divisible(nt_in, 32 * simd_width);
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // GpuPfWeightLayout
@@ -106,49 +150,6 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
 
     dst.fill(tmp2);  // copy CPU->GPU
     return dst;
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// PeakFindingKernelParams
-
-
-void PeakFindingKernelParams::validate() const
-{
-    FrequencySubbands::validate_subband_counts(subband_counts);
-    
-    // Check that everything is initialized.
-    xassert(max_kernel_width > 0);
-    xassert(beams_per_batch > 0);
-    xassert(total_beams > 0);
-    xassert(ndm_out > 0);
-    xassert(ndm_wt > 0);
-    xassert(nt_out > 0);
-    xassert(nt_in > 0);
-    xassert(nt_wt > 0);
-
-    xassert(is_power_of_two(max_kernel_width));
-    xassert(is_power_of_two(ndm_out));
-    xassert(is_power_of_two(ndm_wt));
-
-    xassert_divisible(total_beams, beams_per_batch);
-    xassert_divisible(ndm_out, ndm_wt);
-    xassert_divisible(nt_in, nt_out);
-    xassert_divisible(nt_out, nt_wt);
-
-    // The nt_* members don't need to be powers of two, but the downsampling
-    // factors which relate them do need to be power of two.
-
-    xassert(is_power_of_two(xdiv(ndm_out, ndm_wt)));
-    xassert(is_power_of_two(xdiv(nt_in, nt_out)));
-    xassert(is_power_of_two(xdiv(nt_out, nt_wt)));
-
-    // Kernels currently assume that the input spans an integer number
-    // of GPU cache lines.
-
-    long simd_width = xdiv(32, dtype.nbits);
-    xassert_divisible(nt_in, 32 * simd_width);
 }
 
 
