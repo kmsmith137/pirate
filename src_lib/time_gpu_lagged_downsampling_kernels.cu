@@ -1,6 +1,6 @@
 #include <iostream>
 #include <ksgpu/Array.hpp>
-#include <ksgpu/CudaStreamPool.hpp>
+#include <ksgpu/KernelTimer.hpp>
 
 #include "../include/pirate/timing.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2()
@@ -46,8 +46,8 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
     long nb_tot = params.total_beams;
     long nb_batch = params.beams_per_batch;
     long nstreams = xdiv(nb_tot, nb_batch);
-    long ncallbacks = 10;
-    long niter = 20;
+    long nouter = 10;
+    long ninner = 20;
     
     long ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
     shared_ptr<GpuLaggedDownsamplingKernel> kernel = GpuLaggedDownsamplingKernel::make(params);
@@ -63,8 +63,8 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
     long footprint_nbytes = nstreams * footprint_nelts_per_stream * ST;
 
     // All global memory bandwidths are in GB
-    double gmem_buf = 1.0e-9 * niter * buf_nelts_per_stream * ST;
-    double gmem_pstate = 2.0e-9 * niter * pstate_nelts_per_stream * ST;  // note factor 2 here
+    double gmem_buf = 1.0e-9 * ninner * buf_nelts_per_stream * ST;
+    double gmem_pstate = 2.0e-9 * ninner * pstate_nelts_per_stream * ST;  // note factor 2 here
     double gmem_tot = gmem_buf + gmem_pstate;
     double pstate_overhead_percentage = 100. * gmem_pstate / gmem_tot;
     
@@ -76,23 +76,26 @@ static void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelPa
                 << ", num_downsampling_levels=" << params.num_downsampling_levels
                 << ", pstate_overhead = " << pstate_overhead_percentage << "%"
                 << ")";
+    string name = kernel_name.str();
 
-    cout << "\n" << kernel_name.str() << "\n";
+    cout << "\n" << name << "\n";
     kernel->print(cout, 4);  // indent=4
 
-    cout << "    niter = " << niter << endl
+    cout << "    ninner = " << ninner << endl
          << "    gpu memory footprint = " << ksgpu::nbytes_to_str(footprint_nbytes) << endl;
 
-    auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
-        {
-            DedispersionBuffer &buf = bufs.at(istream);
-            for (int i = 0; i < niter; i++)
-                kernel->launch(buf, istream, i, stream);
-        };
-    
-    CudaStreamPool pool(callback, ncallbacks, nstreams, kernel_name.str());
-    pool.monitor_throughput("global memory (GB/s)", gmem_tot);
-    pool.run();
+    KernelTimer kt(nstreams);
+
+    for (int i = 0; i < nouter; i++) {
+        DedispersionBuffer &buf = bufs.at(kt.istream);
+        for (int j = 0; j < ninner; j++)
+            kernel->launch(buf, kt.istream, j, kt.stream);
+
+        if (kt.advance()) {
+            double gb_per_sec = gmem_tot / kt.dt;
+            cout << name << " global memory (GB/s): " << gb_per_sec << endl;
+        }
+    }
 }
 
 

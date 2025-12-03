@@ -1,6 +1,6 @@
 #include <iostream>
 #include <ksgpu/Array.hpp>
-#include <ksgpu/CudaStreamPool.hpp>
+#include <ksgpu/KernelTimer.hpp>
 
 #include "../../include/pirate/loose_ends/timing.hpp"
 #include "../../include/pirate/loose_ends/gpu_transpose.hpp"
@@ -19,10 +19,10 @@ void time_gpu_transpose()
     int nx = 2048;
     int ny = 2048;
     int nz = 64;
-    int niter = 100;
-    int num_callbacks = 20;
+    int ninner = 100;
+    int nouter = 20;
     int nstreams = 4;
-    double gmem_gb = nx * ny * nz * double(niter) * 8. / pow(2,30.);
+    double gmem_gb = 8. * nx*ny*nz * double(ninner) / pow(2,30.);
     
     vector<Array<float>> src(nstreams);
     vector<Array<float>> dst(nstreams);
@@ -32,15 +32,17 @@ void time_gpu_transpose()
         dst[istream] = Array<float> ({nz,nx,ny}, af_gpu | af_zero);
     }
 
-    auto callback = [&](const CudaStreamPool &pool, cudaStream_t stream, int istream)
-        {
-            for (int i = 0; i < niter; i++)
-                launch_transpose(dst[istream], src[istream], stream);
-        };
+    KernelTimer kt(nstreams);
 
-    CudaStreamPool pool(callback, num_callbacks, nstreams, "gpu_transpose");
-    pool.monitor_throughput("global memory (GB/s)", 8. * nx*ny*nz * double(niter) / pow(2,30.));
-    pool.run();
+    for (int i = 0; i < nouter; i++) {
+        for (int j = 0; j < ninner; j++)
+            launch_transpose(dst[kt.istream], src[kt.istream], kt.stream);
+
+        if (kt.advance()) {
+            double gb_per_sec = gmem_gb / kt.dt;
+            cout << "gpu_transpose global memory (GB/s): " << gb_per_sec << endl;
+        }
+    }
 }
 
 
