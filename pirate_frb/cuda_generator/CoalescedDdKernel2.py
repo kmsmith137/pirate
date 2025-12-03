@@ -56,9 +56,17 @@ class CoalescedDdKernel2:
         assert dtype == Dtype('float')   # for now
         assert frequency_subbands.pf_rank == self.dd.rank1
         assert all(n==0 for n in frequency_subbands.subband_counts[:-1])
-
+        
+        # From Dedisperser
         self.warps_per_threadblock = self.dd.warps_per_threadblock
         self.shmem_nbytes = self.dd.shmem_nbytes
+        self.pstate32_per_small_tree = 0  # self.dd.pstate32_per_small_tree
+        self.nt_per_segment = self.dd.nt_per_segment
+
+        # From PeakFinder
+        self.P = self.pf.P
+        self.M = self.pf.M
+        self.weight_layout = self.pf.weight_layout
 
         # Typical kernel name: cdd2_fp32_r7_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1
         self.kernel_name = f'cdd2_{dtype.fname}_r{dd_rank}_{frequency_subbands.fstr}_W{W}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
