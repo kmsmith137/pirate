@@ -77,7 +77,7 @@ struct ReferencePeakFindingKernel
     // Returns shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
     ksgpu::Array<float> make_random_weights();
 
-    // At "level" l (where 0 <= l < log2(E)), we have an array 'tmp_arr' containing input
+    // At "level" l (where 0 <= l < log2(W)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).
     //
     //  - tmp_dt[l]: step size (in time) of temp array
@@ -228,7 +228,7 @@ struct GpuPeakFindingKernel
         std::vector<long> subband_counts;  // length (rank+1)
         long Tinner = 0;      // for weights
         long Dout = 0;
-        long E = 0;
+        long W = 0;
     };
 
     struct RegistryValue
