@@ -172,11 +172,60 @@ void CoalescedDdKernel2::launch(
 // Static member function: runs one randomized test iteration.
 void CoalescedDdKernel2::test()
 {
+#if 1
     cout << "CoalescedDdKernel2::test() placeholder" << endl;
+#else
+    RegistryKey key = registry().get_random_key();
+
+    long simd_width = xdiv(32, key.dtype.nbits);
+    long pf_rank = key.subband_counts.size() - 1;
+    long dd_rank = key.dd_rank;
+    long Tinner = key.Tinner;
+
+    long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
+    long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
+
+    auto v = ksgpu::random_integers_with_bounded_product(5, 200000 / pow2(dd_rank));
+    long nchunks = v[0];
+    long nt_in_per_chunk = nt_in_divisor * v[1];
+    long beams_per_batch = v[2];
+    long total_beams = v[2] * v[3];
+    long amb_rank = long(log2(v[4] + 0.5));
+    long lg_ndm_out = amb_rank + dd_rank - pf_rank;
+
+    DedispersionKernelParams dd_params;
+    dd_params.dtype = key.dtype;
+    dd_params.dd_rank = key.dd_rank;
+    dd_params.amb_rank = amb_rank
+    dd_params.beams_per_batch = beams_per_batch;
+    dd_params.total_beams = total_beams;
+    dd_params.ntime = nt_in_per_chunk;
+    dd_params.nspec = 1;
+    dd_params.input_is_ringbuf = true;
+    dd_params.output_is_ringbuf = false;
+    dd_params.apply_input_residual_lags = true;
+    dd_params.input_is_downsampled_tree = rand_bool();
+    dd_params.nt_per_segment = xdiv(1024, dtype.nbits);
+
+    // How to make a random ringbuf???
+    dd.ringbuf_locations = xx;
+    dd.ringbuf_nseg = xx;
+    
+    PeakFindingKernelParams pf_params;
+    pf_params.subband_counts = key.subband_counts;
+    pf_params.dtype = key.dtype;
+    pf_params.max_kernel_width = key.W;
+    pf_params.beams_per_batch = beams_per_batch;
+    pf_params.total_beams = total_beams;
+    pf_params.ndm_out = pow2(lg_ndm_out);
+    pf_params.ndm_wt = pow2(rand_int(0, lg_ndm_out+1));
+    pf_params.nt_out = xdiv(nt_in_per_chunk, key.Dout);
+    pf_params.nt_in = nt_in_per_chunk;
+    pf_params.nt_wt = xidv(nt_in_per_chunk, nt_in_per_wt);
+#endif
 }
 
 
-// Static member function: run timing for representative kernels.
 void CoalescedDdKernel2::time()
 {
     cout << "CoalescedDdKernel2::time() placeholder" << endl;

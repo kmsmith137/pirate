@@ -50,7 +50,7 @@ int bit_reverse_slow(int i, int nbits)
 }
 
 
-extern int integer_log2(long n)
+int integer_log2(long n)
 {
     float f = (n > 0) ? (1.414f * n) : 1.0f;
     int p = log2f(f);
@@ -60,7 +60,6 @@ extern int integer_log2(long n)
 
     return p;
 }
-
 
 int rb_lag(int i, int j, int rank0, int rank1, bool uflag)
 {
