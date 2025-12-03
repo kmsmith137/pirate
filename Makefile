@@ -119,8 +119,6 @@ LIB_SRCFILES = \
   src_lib/file_utils.cu \
   src_lib/network_utils.cu \
   src_lib/system_utils.cu \
-  src_lib/time_gpu_dedispersion_kernels.cu \
-  src_lib/time_gpu_lagged_downsampling_kernels.cu \
   src_lib/utils.cu \
   src_lib/loose_ends/cpu_downsample.cu \
   src_lib/loose_ends/gpu_downsample.cu \
@@ -188,7 +186,6 @@ HFILES = \
   include/pirate/inlines.hpp \
   include/pirate/network_utils.hpp \
   include/pirate/system_utils.hpp \
-  include/pirate/timing.hpp \
   include/pirate/trackers.hpp \
   include/pirate/utils.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \

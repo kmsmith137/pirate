@@ -342,6 +342,9 @@ public:
 
     // Static member function: runs one randomized test iteration.
     static void test();
+
+    // Static member function: run timing for representative kernels.
+    static void time();
 };
 
 

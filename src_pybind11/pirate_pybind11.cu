@@ -19,7 +19,6 @@
 #include "../include/pirate/PeakFindingKernel.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
-#include "../include/pirate/timing.hpp"
 
 #include "../include/pirate/loose_ends/tests.hpp"
 #include "../include/pirate/loose_ends/timing.hpp"
@@ -134,6 +133,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
           .def_static("test", &GpuDedispersionKernel::test)
+          .def_static("time", &GpuDedispersionKernel::time)
           .def_static("registry_size", &GpuDedispersionKernel::registry_size)
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
@@ -144,6 +144,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")
           .def_static("test", &GpuLaggedDownsamplingKernel::test)
+          .def_static("time", &GpuLaggedDownsamplingKernel::time)
     ;
 
     py::class_<GpuPeakFindingKernel>(m, "GpuPeakFindingKernel")
@@ -177,9 +178,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));
-    m.def("time_gpu_dedispersion_kernels", &time_gpu_dedispersion_kernels);
     m.def("time_gpu_downsample", &time_gpu_downsample);
-    m.def("time_gpu_lagged_downsampling_kernels", &time_gpu_lagged_downsampling_kernels);
     m.def("time_gpu_transpose", &time_gpu_transpose);
     
     // "Zombie" tests (code that I wrote during protoyping that may never get used)

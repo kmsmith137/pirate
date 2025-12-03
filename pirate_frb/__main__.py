@@ -136,9 +136,9 @@ def time(args):
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
         
     if run_all_timings or args.gldk:
-        pirate_pybind11.time_gpu_lagged_downsampling_kernels()
+        pirate_pybind11.GpuLaggedDownsamplingKernel.time()
     if run_all_timings or args.gddk:
-        pirate_pybind11.time_gpu_dedispersion_kernels()
+        pirate_pybind11.GpuDedispersionKernel.time()
     if run_all_timings or args.casm:
         pirate_pybind11.CasmBeamformer.run_timings(args.ncu)
     if run_all_timings or args.zomb:
