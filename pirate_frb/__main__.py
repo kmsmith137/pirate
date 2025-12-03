@@ -32,6 +32,7 @@ def parse_test(subparsers):
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
+    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test()')
 
 
 def rrange(registry_class):
@@ -51,7 +52,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'zomb', 'dd' ]
+    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'zomb', 'dd', 'cdd2' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -106,6 +107,10 @@ def test(args):
             
         if run_all_tests or args.dd:
             pirate_pybind11.GpuDedisperser.test()
+
+        if run_all_tests or args.cdd2:
+            for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
+                pirate_pybind11.CoalescedDdKernel2.test()
             
 
 #########################################   time command  ##########################################
@@ -120,9 +125,10 @@ def parse_time(subparsers):
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
     parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
+    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time()')
     
 def time(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -145,6 +151,8 @@ def time(args):
         pirate_pybind11.time_cpu_downsample(nthreads)
         pirate_pybind11.time_gpu_downsample()
         pirate_pybind11.time_gpu_transpose()
+    if run_all_timings or args.cdd2:
+        pirate_pybind11.CoalescedDdKernel2.time()
 
 
 #####################################   show_hardware command  #####################################
@@ -167,11 +175,20 @@ def parse_show_kernels(subparsers):
     parser.add_argument('--pfwr', action='store_true', help='Show PfWeightReaderMicrokernel registry')
     parser.add_argument('--gddk', action='store_true', help='Show GpuDedispersionKernel registry')
     parser.add_argument('--gpfk', action='store_true', help='Show GpuPeakFindingKernel registry')
+    parser.add_argument('--cdd2', action='store_true', help='Show CoalescedDdKernel2 registry')
     
 def show_kernels(args):
-    show_flags = [ 'pfom', 'pfwr', 'gddk', 'gpfk' ]
+    show_flags = [ 'pfom', 'pfwr', 'gddk', 'gpfk', 'cdd2' ]
     show_all = not any(getattr(args, x) for x in show_flags)
     first = True
+
+    if show_all or args.cdd2:
+        if not first:
+            print()
+        first = False
+        n = pirate_pybind11.CoalescedDdKernel2.registry_size()
+        print(f"CoalescedDdKernel2 registry ({n} entries):", flush=True)
+        pirate_pybind11.CoalescedDdKernel2.show_registry()
 
     if show_all or args.pfom:
         if not first:

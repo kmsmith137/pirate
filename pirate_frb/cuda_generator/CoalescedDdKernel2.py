@@ -77,9 +77,28 @@ class CoalescedDdKernel2:
         self.all_kernel_basenames = [ self.kernel_basename ] + self.pf.all_kernel_basenames
 
 
-    def emit_global(self, k):
+    def emit_kernel(self, k):
+        """Emits the complete kernel, including prologue, body, and registry registration."""
+        
         assert isinstance(k, Kernel)
 
+        # ---------------  Prologue  ---------------
+        
+        k.emit('#include "../../include/pirate/CoalescedDdKernel2.hpp"')
+        k.emit('#include "../../include/pirate/FrequencySubbands.hpp"')
+        k.emit('#include "../../include/pirate/inlines.hpp"')
+        k.emit()
+        k.emit('using namespace std;')
+        k.emit('using namespace ksgpu;')
+        k.emit()
+        k.emit('namespace pirate {')
+        k.emit('#if 0')
+        k.emit('}  // editor auto-indent')
+        k.emit('#endif')
+        k.emit()
+
+        # ---------------  CUDA kernel  ---------------
+        
         # launch_bounds
         lb_warps = self.warps_per_threadblock
         lb_blocks = utils.xdiv(16, lb_warps)
@@ -100,6 +119,63 @@ class CoalescedDdKernel2:
         k.emit('{')
         k.emit('    // placeholder')
         k.emit('}  // end of cuda kernel')
+        
+        # ---------------  Registry registration  ---------------
+        
+        fs = self.frequency_subbands
+        wl = self.weight_layout
+        sb_counts = ', '.join(str(int(x)) for x in fs.subband_counts)
+        m_to_f = ', '.join(str(int(f)) for f,d in fs.m_to_fd)
+        m_to_d = ', '.join(str(int(d)) for f,d in fs.m_to_fd)
+        f_to_ilo = ', '.join(str(int(ilo)) for ilo,ihi in fs.f_to_irange)
+        f_to_ihi = ', '.join(str(int(ihi)) for ilo,ihi in fs.f_to_irange)
+
+        k.emit('\n// Boilerplate to register the kernel when the library is loaded.')
+        k.emit('namespace {')
+        k.emit('struct register_hack {')
+        k.emit('register_hack() {')
+        k.emit('CoalescedDdKernel2::RegistryKey k;')
+        k.emit(f'k.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
+        k.emit(f'k.dd_rank = {self.dd_rank};')
+        k.emit(f'k.subband_counts = {{ {sb_counts} }};')
+        k.emit(f'k.Tinner = {self.Tinner};')
+        k.emit(f'k.Dout = {self.Dout};')
+        k.emit(f'k.W = {self.W};')
+        k.emit()
+        k.emit('CoalescedDdKernel2::RegistryValue v;')
+        k.emit(f'v.cuda_kernel = {self.kernel_name};')
+        k.emit(f'v.Dcore = {self.Dcore};')
+        k.emit(f'v.shmem_nbytes = {self.shmem_nbytes};')
+        k.emit(f'v.warps_per_threadblock = {self.warps_per_threadblock};')
+        k.emit(f'v.pstate32_per_small_tree = {self.pstate32_per_small_tree};')
+        k.emit(f'v.nt_per_segment = {self.nt_per_segment};')
+        k.emit()
+        k.emit(f'v.pf_weight_layout.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
+        k.emit(f'v.pf_weight_layout.F = {fs.F};')
+        k.emit(f'v.pf_weight_layout.P = {self.P};')
+        k.emit(f'v.pf_weight_layout.Pouter = {wl.Pouter};')
+        k.emit(f'v.pf_weight_layout.Pinner = {wl.Pinner};')
+        k.emit(f'v.pf_weight_layout.Tinner = {self.Tinner};')
+        k.emit(f'v.pf_weight_layout.touter_byte_stride = {wl.touter_byte_stride};')
+        k.emit(f'v.pf_weight_layout.validate();  // throws an exception if anything is wrong')
+        k.emit()
+        k.emit('// Checks consistency of python/C++ FrequencySubbands')
+        k.emit(f'FrequencySubbands fs({{ {sb_counts} }});')
+        k.emit(f'xassert_eq(fs.F, {fs.F});')
+        k.emit(f'xassert_eq(fs.M, {fs.M});')
+        k.emit(f'xassert(vec_equal(fs.m_to_f, {{ {m_to_f} }}));')
+        k.emit(f'xassert(vec_equal(fs.m_to_d, {{ {m_to_d} }}));')
+        k.emit(f'xassert(vec_equal(fs.f_to_ilo, {{ {f_to_ilo} }}));')
+        k.emit(f'xassert(vec_equal(fs.f_to_ihi, {{ {f_to_ihi} }}));')
+        k.emit()
+        k.emit('bool debug = false;')
+        k.emit('CoalescedDdKernel2::registry().add(k, v, debug);')
+        k.emit('} // register_hack constructor')
+        k.emit('}; // struct register_hack')
+        k.emit('register_hack hack;')
+        k.emit('} // anonymous namespace')
+        k.emit()
+        k.emit('}   // namespace pirate')
 
 
     @classmethod
@@ -125,7 +201,7 @@ class CoalescedDdKernel2:
                                + f" {cdd2_kernel.kernel_basename=} and {basename=} to be equal")
                 
         k = Kernel()
-        cdd2_kernel.emit_global(k)
+        cdd2_kernel.emit_kernel(k)
 
         k.write_file(filename)
         

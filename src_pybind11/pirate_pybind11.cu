@@ -11,6 +11,7 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/CasmBeamformer.hpp"
+#include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
@@ -129,6 +130,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def("show_stats", &FakeServer::show_stats)
         .def("start", &FakeServer::start)
         .def("stop", &FakeServer::stop)
+    ;
+
+    py::class_<CoalescedDdKernel2>(m, "CoalescedDdKernel2")
+          .def_static("test", &CoalescedDdKernel2::test)
+          .def_static("time", &CoalescedDdKernel2::time)
+          .def_static("registry_size", &CoalescedDdKernel2::registry_size)
+          .def_static("show_registry", &CoalescedDdKernel2::show_registry)
     ;
 
     py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")

@@ -141,7 +141,7 @@ struct CoalescedDdKernel2
     static Registry &registry();
 };
 
-// Defined in PeakFindingKernel.cu
+// Defined in CoalescedDdKernel2.cu
 extern bool operator==(const CoalescedDdKernel2::RegistryKey &k1, const CoalescedDdKernel2::RegistryKey &k2);
 extern std::ostream &operator<<(std::ostream &os, const CoalescedDdKernel2::RegistryKey &k);
 extern std::ostream &operator<<(std::ostream &os, const CoalescedDdKernel2::RegistryValue &v);

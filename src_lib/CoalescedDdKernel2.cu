@@ -183,4 +183,64 @@ void CoalescedDdKernel2::time()
 }
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// Registry and related functions
+
+
+CoalescedDdKernel2::Registry &CoalescedDdKernel2::registry()
+{
+    // This kludge implements "construct on first use". It's necessary because the
+    // registry is accessed at library initialization time (when kernel .cu files
+    // call CoalescedDdKernel2::registry().add() to register themselves).
+    //
+    // Using a static variable in this way (instead of a global variable) ensures
+    // that the registry is constructed before CoalescedDdKernel2::registry().add()
+    // is called.
+    //
+    // This kludge is necessary because the registry is accessed at library initialization
+    // time, by callers in other source files, and source files are executed in an
+    // arbitrary order.
+    
+    static CoalescedDdKernel2::Registry reg;
+    return reg;  // note: thread-safe (as of c++11)
+}
+
+bool operator==(const CoalescedDdKernel2::RegistryKey &k1, const CoalescedDdKernel2::RegistryKey &k2)
+{
+    return (k1.dtype == k2.dtype)
+        && (k1.dd_rank == k2.dd_rank)
+        && (k1.subband_counts == k2.subband_counts)
+        && (k1.Tinner == k2.Tinner)
+        && (k1.Dout == k2.Dout)
+        && (k1.W == k2.W);
+}
+
+ostream &operator<<(ostream &os, const CoalescedDdKernel2::RegistryKey &k)
+{
+    FrequencySubbands fs(k.subband_counts);
+    os << "CoalescedDdKernel2(dtype=" << k.dtype.str()
+       << ", dd_rank=" << k.dd_rank
+       << ", subbands=" << tuple_str(k.subband_counts)
+       << ", Tinner=" << k.Tinner
+       << ", Dout=" << k.Dout
+       << ", W=" << k.W
+       << ", F=" << fs.F
+       << ", M=" << fs.M
+       << ")";
+    return os;
+}
+
+ostream &operator<<(ostream &os, const CoalescedDdKernel2::RegistryValue &v)
+{
+    os << "(Dcore=" << v.Dcore
+       << ", shmem=" << v.shmem_nbytes
+       << ", warps=" << v.warps_per_threadblock
+       << ", pstate32=" << v.pstate32_per_small_tree
+       << ", nt_seg=" << v.nt_per_segment
+       << ")";
+    return os;
+}
+
+
 }  // namespace pirate
