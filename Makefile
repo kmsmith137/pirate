@@ -97,6 +97,7 @@ LIB_SRCFILES = \
   src_lib/BandwidthTracker.cu \
   src_lib/CasmBeamformer.cu \
   src_lib/ChimeDedisperser.cu \
+  src_lib/CoalescedDdKernel2.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
   src_lib/DedispersionKernelParams.cu \
@@ -168,6 +169,7 @@ CUDAGEN_PYFILES = \
 # (Otherwise they won't show up in 'pip install' or pypi.)
 HFILES = \
   include/pirate/CasmBeamformer.hpp \
+  include/pirate/CoalescedDdKernel2.hpp \
   include/pirate/Dedisperser.hpp \
   include/pirate/DedispersionBuffer.hpp \
   include/pirate/DedispersionConfig.hpp \

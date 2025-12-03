@@ -133,7 +133,7 @@ struct ReferencePeakFindingKernel
 //
 // Peak-finding weights are logically a 5-d array with shape:
 //
-//   (nbeams, ndm_wt, nt_wt, P, F)        (*)
+//   (beams_per_batch, ndm_wt, nt_wt, P, F)        (*)
 //
 // where:
 //
@@ -188,10 +188,14 @@ struct GpuPeakFindingKernel
 
     void allocate();
 
+    // The 'weights' array has logical shape (beams_per_batch, ndm_wt, nt_wt, P, F),
+    // but is passed to the gpu kernel in a complicated, non-contiguous layout. To put
+    // an array into the proper layout, call GpuPfWeightLayout::to_gpu().
+
     void launch(ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
                 ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
                 const ksgpu::Array<void> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
-                const ksgpu::Array<void> &wt,     // from GpuPfWeightLayout::to_gpu()
+                const ksgpu::Array<void> &wt,     // see comment above
                 long ibatch,                      // 0 <= ibatch < nbatches
                 cudaStream_t stream);             // NULL stream is allowed, but is not the default);
 

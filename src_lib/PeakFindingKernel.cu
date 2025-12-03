@@ -616,6 +616,8 @@ void GpuPeakFindingKernel::launch(
     xassert_shape_eq(out_argmax, ({p.beams_per_batch, p.ndm_out, p.nt_out}));
     xassert_shape_eq(in, ({p.beams_per_batch, p.ndm_out, fs.M, p.nt_in}));
 
+    // Validate 'wt' array. These checks will pass if 'wt' is the output of GpuPfWeightLayout::to_gpu().
+
     if (!wt.shape_equals(expected_wt_shape)) {
         stringstream ss;
         ss << "GpuPeakFindingKernel::launch(): wt.shape=" << wt.shape_str()
@@ -633,6 +635,7 @@ void GpuPeakFindingKernel::launch(
     xassert(out_max.is_fully_contiguous());
     xassert(out_argmax.is_fully_contiguous());
     xassert(in.is_fully_contiguous());
+    // Weights array is not fully contiguous -- see above.
 
     xassert(out_max.on_gpu());
     xassert(out_argmax.on_gpu());
