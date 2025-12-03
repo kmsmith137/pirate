@@ -1,7 +1,6 @@
 #include <iostream>
 #include <ksgpu/Array.hpp>
-#include <ksgpu/cuda_utils.hpp>   // CUDA_CALL(), CudaStreamWrapper
-#include <ksgpu/time_utils.hpp>   // get_time(), time_diff()
+#include <ksgpu/KernelTimer.hpp>
 
 #include "../include/pirate/timing.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2()
@@ -23,8 +22,6 @@ static void time_gpu_dedispersion_kernel(const DedispersionKernelParams &params,
     params.print();
     
     long nbatches = xdiv(params.total_beams, params.beams_per_batch);
-    vector<ksgpu::CudaStreamWrapper> streams(nbatches);   // creates one stream per batch
-    vector<struct timeval> tv(nchunks * nbatches);
 
     shared_ptr<GpuDedispersionKernel> kernel = make_shared<GpuDedispersionKernel> (params);
     kernel->allocate();
@@ -36,14 +33,12 @@ static void time_gpu_dedispersion_kernel(const DedispersionKernelParams &params,
 
     Array<void> in_big(params.dtype, in_shape, af_gpu | af_zero);
     Array<void> out_big(params.dtype, out_shape, af_gpu | af_zero);
-    double gb = 1.0e-9 * kernel->bw_per_launch.nbytes_gmem;
+    double gb_per_launch = 1.0e-9 * kernel->bw_per_launch.nbytes_gmem;
+
+    KernelTimer kt(nbatches);   // one stream per batch
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < nbatches; ibatch++) {
-            long k = ichunk*nbatches + ibatch;
-            CUDA_CALL(cudaStreamSynchronize(streams[ibatch]));
-            tv[k] = ksgpu::get_time();
-
             Array<void> in_slice = in_big;
             Array<void> out_slice = out_big;
 
@@ -52,18 +47,14 @@ static void time_gpu_dedispersion_kernel(const DedispersionKernelParams &params,
             if (!params.output_is_ringbuf)
                 out_slice = out_big.slice(0, ibatch * params.beams_per_batch, (ibatch+1) * params.beams_per_batch);
 
-            kernel->launch(in_slice, out_slice, ibatch, ichunk, streams[ibatch]);
+            kernel->launch(in_slice, out_slice, ibatch, ichunk, kt.stream);
 
-            if ((ichunk % 4) != 3)
-                continue;
-            
-            int j = k - (k/(2*nbatches))*nbatches;
-            if (j < k)
-                cout << "    " << ((k-j) * gb / ksgpu::time_diff(tv[j],tv[k])) << " GB/s\n";
+            if (kt.advance() && (ichunk % 2))
+                cout << "   [ " << (gb_per_launch/kt.dt) << " GB/s ]\n";
         }
     }
 
-    CUDA_CALL(cudaDeviceSynchronize());
+    cout << endl;
 }
 
 
