@@ -60,7 +60,6 @@ class CoalescedDdKernel2:
         # From Dedisperser
         self.warps_per_threadblock = self.dd.warps_per_threadblock
         self.shmem_nbytes = self.dd.shmem_nbytes
-        self.pstate32_per_small_tree = 0  # self.dd.pstate32_per_small_tree
         self.nt_per_segment = self.dd.nt_per_segment
 
         # From PeakFinder
@@ -174,7 +173,7 @@ class CoalescedDdKernel2:
         k.emit('}   // outer time loop')
 
         # Now that 'self.rrb' has been finalized, we can sort out the pstate.
-        self.dd._lay_out_pstate(k_pstate)    # initializes some members, including self.pstate32_per_small_tree
+        self.dd._lay_out_pstate(k_pstate)    # initializes some members, including self.dd.pstate32_per_small_tree
         self.dd._load_pstate(k_pstate)
         self.dd._save_pstate(k)
 
@@ -208,7 +207,7 @@ class CoalescedDdKernel2:
         k.emit(f'v.Dcore = {self.Dcore};')
         k.emit(f'v.shmem_nbytes = {self.shmem_nbytes};')
         k.emit(f'v.warps_per_threadblock = {self.warps_per_threadblock};')
-        k.emit(f'v.pstate32_per_small_tree = {self.pstate32_per_small_tree};')
+        k.emit(f'v.pstate32_per_small_tree = {self.dd.pstate32_per_small_tree};')
         k.emit(f'v.nt_per_segment = {self.nt_per_segment};')
         k.emit()
         k.emit(f'v.pf_weight_layout.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
