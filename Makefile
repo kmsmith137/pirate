@@ -100,18 +100,16 @@ LIB_SRCFILES = \
   src_lib/CoalescedDdKernel2.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
-  src_lib/DedispersionKernelParams.cu \
+  src_lib/DedispersionKernel.cu \
   src_lib/DedispersionPlan.cu \
   src_lib/FakeCorrelator.cu \
   src_lib/FakeServer.cu \
-  src_lib/GpuDedisperser.cu \
-  src_lib/GpuDedispersionKernel.cu \
   src_lib/FrequencySubbands.cu \
+  src_lib/GpuDedisperser.cu \
   src_lib/GpuLaggedDownsamplingKernel.cu \
   src_lib/LaggedDownsamplingKernelParams.cu \
   src_lib/PeakFindingKernel.cu \
   src_lib/ReferenceDedisperser.cu \
-  src_lib/ReferenceDedispersionKernel.cu \
   src_lib/ReferenceLagbuf.cu \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
   src_lib/ReferenceTree.cu \
