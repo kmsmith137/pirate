@@ -58,7 +58,7 @@ from .FrequencySubbands import FrequencySubbands
 
 
 class PeakFinder:
-    def __init__(self, dtype, frequency_subbands, W, Dcore, Dout, Tinner):
+    def __init__(self, dtype, frequency_subbands, W, Dcore, Dout, Tinner, ringbuf=None):
         self.dtype = dtype = Dtype(dtype)
         self.frequency_subbands = frequency_subbands                                            
         self.Tinner = Tinner
@@ -98,7 +98,7 @@ class PeakFinder:
         self.pfys_held = set()
         self.pfz_decl = set()
 
-        self.rb = Ringbuf(self.dt32)
+        self.rb = ringbuf if (ringbuf) is not None else Ringbuf(self.dt32)
         self.pf_output = PfOutput(dtype, Dout)
         self.pf_weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         

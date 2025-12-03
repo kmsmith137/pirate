@@ -17,3 +17,5 @@ from .PeakFinder import \
     PfWeightLayout, \
     PfWeightReader, \
     PfOutput
+
+from .CoalescedDdKernel2 import CoalescedDdKernel2
