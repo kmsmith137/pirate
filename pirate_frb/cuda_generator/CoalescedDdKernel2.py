@@ -66,6 +66,7 @@ class CoalescedDdKernel2:
         # From PeakFinder
         self.P = self.pf.P
         self.M = self.pf.M
+        self.Minner = self.pf.Minner
         self.weight_layout = self.pf.weight_layout
 
         # Typical kernel name: cdd2_fp32_r7_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1
@@ -81,6 +82,7 @@ class CoalescedDdKernel2:
         """Emits the complete kernel, including prologue, body, and registry registration."""
         
         assert isinstance(k, Kernel)
+
 
         # ---------------  Prologue  ---------------
         
@@ -117,11 +119,70 @@ class CoalescedDdKernel2:
         k.emit(f'    ulong nt_cumul, bool is_downsampled_tree,              // dedisperser')
         k.emit(f'    uint ndm_out_per_wt, uint nt_in_per_wt)                // peak-finder')
         k.emit('{')
+        k.emit(f'constexpr int M = {self.M};')
+        k.emit(f'constexpr int Dout = {self.Dout};')
+        k.emit(f'constexpr int Dcore = {self.Dcore};')
+        k.emit(f'constexpr int Minner = {self.Minner};')
+        k.emit(f'constexpr int Tinner = {self.Tinner};')
+        k.emit(f'constexpr int wt_touter_stride32 = {utils.xdiv(self.pf.wt_touter_byte_stride,4)};')
+        k.emit()
+
+        self.dd._apply_inbuf_offsets(k)    # operates on grb* pointers, since self.dd.input_is_ringbuf == True
+
+        # No call to self.dd._apply_outbuf_offsets() in coalesced kernel,
+        # Instead, call self._apply_pfout_offsets(), which operates on out_max, out_argmax, wt pointers.
+        self._apply_pfout_offsets(k)
+
+        # No-ops if self.two_stage == False.
+        self.dd._init_srb(k)
+
+        # PfWeightReader.top() is currently a placeholder that does not emit any code.
+        self.pf.pf_weight_reader.top(k, 'wt')
+
+        # Save splice, for code to load pstate.
+        # This code must be emitted near the end, after the ring buffer layout is finalized.
+        # Note that pstate is managed by the dedispersion kernel.
+        k_pstate = k.splice()
+
+        k.emit(f'for (int itime = 0; itime < ntime; itime += {self.nt_per_segment}) {{')
+
+        self.dd._load_input_data(k)              # behaves differently, depending on self.input_is_ringbuf
+        self.dd._apply_input_residual_lags(k)    # no-ops if (self.apply_input_residual_lags) is False
+        self.dd._dedispersion_core(k)            # behaves differently, depending on self.two_stage
+
+        k.emit()
+        k.emit('// Here is the handoff from the dd kernel to the pf kernel!!!!!')
+        k.emit()
+
+        assert self.dd.ndd == self.pf.M
+        lgM = utils.integer_log2(self.pf.M)
+
+        for m in range(self.pf.M):
+            mbr = utils.bit_reverse(m, lgM)
+            self.pf.process_pf_input(k, f'dd{mbr}', m)
+
+        # No call to self.dd._save_output_data() in coalesced kernel.
+        # Instead, call self.pf.process_pf_outputs()
+        self.pf.pf_output.apply_outer(k, 'out_max', 'out_argmax', 'itime', 'ntime')
+        self.pf.pf_weight_reader.bottom(k, 'itime', 'nt_in_per_wt')
+
+        self.dd._advance_rrb(k)
+        self.dd._advance_srb(k)      # no-ops if (self.two_stage) is False
+        self.dd._advance_inbuf(k)    # behaves differently, depending on self.input_is_ringbuf
+        # No call to self.dd._advance_outbuf() in coalesced kernel.
+        
+        k.emit('}   // outer time loop')
+
+        # Now that 'self.rrb' has been finalized, we can sort out the pstate.
+        self.dd._lay_out_pstate(k_pstate)    # initializes some members, including self.pstate32_per_small_tree
+        self.dd._load_pstate(k_pstate)
+        self.dd._save_pstate(k)
+
         k.emit('    // placeholder')
         k.emit('}  // end of cuda kernel')
         
-        # ---------------  Registry registration  ---------------
-        
+
+    def emit_registration(self, k):
         fs = self.frequency_subbands
         wl = self.weight_layout
         sb_counts = ', '.join(str(int(x)) for x in fs.subband_counts)
@@ -179,6 +240,46 @@ class CoalescedDdKernel2:
 
 
     @classmethod
+    def _idiv(cls, var, n):
+        """Helper for _apply_pfout_offsets()."""
+        return f'({var} >> {utils.integer_log2(n)})' if (n != 1) else var
+
+
+    def _apply_pfout_offsets(self, k):
+        dt32, SW, Dout = self.dt32, self.dtype.simd_width, self.Dout
+
+        k.emit(f'// CoalescedDdKernel2._apply_outbuf_offsets() starts here.')
+        k.emit(f"// Add per-warp pointer offsets (but not per-lane offsets) to 'out_max, 'out_argmax', and 'wt'.")
+        k.emit(f'// This is tricky because the block/warp indices correspond to bit-reversed DMs, but the output')
+        k.emit(f'// arrays are not bit-reversed.')
+        k.emit()
+
+        k.emit(f'const {dt32} *wt = (const {dt32} *) wt_;')
+        k.emit(f'{dt32} *out_max = ({dt32} *) out_max_;')
+
+        nt_out = self._idiv('ntime', Dout)
+        nt_out32 = self._idiv('ntime', Dout*SW)
+
+        k.emit(f'// FIXME could optimize out integer divisions')
+        k.emit(f'uint ndm_out = blockDim.x * gridDim.x;')
+        k.emit(f'uint lg2_ndm_out = __ffs(ndm_out) - 1;')
+        k.emit(f'uint pf_beam = blockIdx.y;  // beam index is not bit-reversed')
+        k.emit(f'uint dm_out_brev = threadIdx.y * gridDim.x + blockIdx.x;  // dm is bit-reversed')
+        k.emit(f'uint dm_out = __brev(dm_out_brev) >> (32 - lg2_ndm_out);')
+        k.emit(f'uint bd_out = pf_beam * ndm_out + dm_out;       // combined (beam,dm) index in out_max + out_argmax arrays')
+        k.emit(f'uint bd_wt = bd_out / ndm_out_per_wt;           // combined (beam,dm) index in weight array')
+        k.emit(f'uint Touter = ntime / (Tinner * nt_in_per_wt);  // see PfWeightLayout')
+        k.emit()
+        
+        k.emit(f"// Add per-warp pointer offsets (but not per-lane offsets) to 'out_max, 'out_argmax', and 'wt'.")
+        k.emit(f'out_max += bd_out * {nt_out32};                  // shape (beams, dm_out, ntime/Dout)')
+        k.emit(f'out_argmax += bd_out * {nt_out};                 // shape (beams, dm_out, ntime/Dout)')
+        k.emit(f'wt += bd_wt * Touter * wt_touter_stride32;     // shape (beams, ndm_wt, Touter,...)') 
+        k.emit(f'// CoalescedDdKernel2._apply_outbuf_offsets() ends here.')
+        k.emit()
+
+
+    @classmethod
     def write_kernel(cls, filename):
         """Called from 'autogenerate_kernel.py' in the toplevel pirate directory."""
         
@@ -202,6 +303,7 @@ class CoalescedDdKernel2:
                 
         k = Kernel()
         cdd2_kernel.emit_kernel(k)
+        cdd2_kernel.emit_registration(k)
 
         k.write_file(filename)
         

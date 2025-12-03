@@ -348,21 +348,25 @@ class Dedisperser:
         
 
     def _apply_inbuf_offsets(self, k):
+        k.emit('// Dedisperser._apply_inbuf_offsets() starts here.')
+        
         if self.input_is_ringbuf:
             wshift = self.rank1 if self.two_stage else self.rank
             self._apply_grb_offsets(k, wshift)
-            return
+
+        else:
+            # Non-ringbuf case
+            k.emit(f'// Apply per-thread offsets to inbuf (including laneId offset).')
+            k.emit(f'{self.dt32} *inbuf = ({self.dt32} *) inbuf_;')
+            k.emit(f'inbuf += long(beam_istride32) * long(blockIdx.y);   // beam = blockIdx.y')
+            k.emit(f'inbuf += long(amb_istride32) * long(blockIdx.x);    // ambient = blockIdx.x')
         
-        # Non-ringbuf case follows.
-        k.emit(f'// Apply per-thread offsets to inbuf (including laneId offset).')
-        k.emit(f'{self.dt32} *inbuf = ({self.dt32} *) inbuf_;')
-        k.emit(f'inbuf += long(beam_istride32) * long(blockIdx.y);   // beam = blockIdx.y')
-        k.emit(f'inbuf += long(amb_istride32) * long(blockIdx.x);    // ambient = blockIdx.x')
-        
-        if self.two_stage:
-            k.emit(f'inbuf += {2**self.rank1} * long(act_istride32) * long(threadIdx.y);   // warpId = threadIdx.y')
+            if self.two_stage:
+                k.emit(f'inbuf += {2**self.rank1} * long(act_istride32) * long(threadIdx.y);   // warpId = threadIdx.y')
             
-        k.emit(f'inbuf += threadIdx.x;   // laneId')
+            k.emit(f'inbuf += threadIdx.x;   // laneId')
+
+        k.emit('// Dedisperser._apply_inbuf_offsets() ends here.')
         k.emit()
 
 
@@ -396,16 +400,17 @@ class Dedisperser:
         k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // dm_amb = blockIdx.x')
         k.emit(f'grb_loc += threadIdx.y{wshift};   // warpId')
         k.emit(f'grb_pos += blockIdx.y;    // beam = blockIdx.y')
-        k.emit()
 
     
     def _init_srb(self, k):
         if not self.two_stage:
+            k.emit('// Dedisperser._init_srb() called, but is a no-op, since two_stage == False.')
             return
         
         rank0, rank1 = self.rank0, self.rank1
         B = self.nspec * self.nbits
         
+        k.emit('// Dedisperser._init_srb() starts here.')
         k.emit('// Init control words for two-stage kernel.')
         k.emit('// A ring buffer "control word" consists of:')
         k.emit('//')
@@ -495,6 +500,7 @@ class Dedisperser:
         k.emit(f'{srb_pos} += ({first_pass} ? 0 : 32);   // srb_pos: add reader/writer offset')
         k.emit(f'{srb_pos} %= ({srb_lag} + 32U);         // srb_pos: mod (srb_lag + 32)')
         k.emit(f'uint control_word = {srb_base} | ({srb_pos} << 15) | ({srb_lag} << 24);')
+        k.emit('// Dedisperser._init_srb() ends here.')
         k.emit()
 
 
