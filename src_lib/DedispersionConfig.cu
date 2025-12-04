@@ -250,7 +250,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 
 
 // static member function
-DedispersionConfig DedispersionConfig::make_random()
+DedispersionConfig DedispersionConfig::make_random(bool allow_early_triggers)
 {
     DedispersionConfig ret;
     ret.num_downsampling_levels = ksgpu::rand_int(1, 5);
@@ -272,39 +272,37 @@ DedispersionConfig DedispersionConfig::make_random()
     double rlog = ksgpu::rand_uniform(0, log(rmax+1));
     ret.time_samples_per_chunk = min_nt_chunk * int(exp(rlog));
 
-    cout << "XXX early triggers temporarily disabled in DedispersionConfig::make_random() XXX" << endl;
-#if 0
-    // Early triggers
-    for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
-        // FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
-        // as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
-        int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
-        int min_et_rank = (rank/2) + 1;
-        int max_et_rank = rank-1;
+    if (allow_early_triggers) {
+        for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
+            // FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
+            // as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
+            int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
+            int min_et_rank = (rank/2) + 1;
+            int max_et_rank = rank-1;
         
-        // Use at most 4 early triggers per downsampling level (arbitrary cutoff)
-        int num_candidates = max_et_rank - min_et_rank + 1;
-        int max_triggers = std::min(num_candidates, 4);
+            // Use at most 4 early triggers per downsampling level (arbitrary cutoff)
+            int num_candidates = max_et_rank - min_et_rank + 1;
+            int max_triggers = std::min(num_candidates, 4);
 
-        if (max_triggers <= 0)
-            continue;
+            if (max_triggers <= 0)
+                continue;
 
-        // Randomly choose a trigger count, but bias toward a low number.
-        double y = ksgpu::rand_uniform(-1.0, log(max_triggers+0.5));
-        int num_triggers = int(exp(y));
+            // Randomly choose a trigger count, but bias toward a low number.
+            double y = ksgpu::rand_uniform(-1.0, log(max_triggers+0.5));
+            int num_triggers = int(exp(y));
 
-        vector<int> et_ranks(num_candidates);
-        for (int i = 0; i < num_candidates; i++)
-            et_ranks[i] = min_et_rank + i;
+            vector<int> et_ranks(num_candidates);
+            for (int i = 0; i < num_candidates; i++)
+                et_ranks[i] = min_et_rank + i;
 
-        ksgpu::randomly_permute(et_ranks);
-        et_ranks.resize(num_triggers);
-        std::sort(et_ranks.begin(), et_ranks.end());
+            ksgpu::randomly_permute(et_ranks);
+            et_ranks.resize(num_triggers);
+            std::sort(et_ranks.begin(), et_ranks.end());
 
-        for (int et_rank: et_ranks)
-            ret.add_early_trigger(ds_level, et_rank);
+            for (int et_rank: et_ranks)
+                ret.add_early_trigger(ds_level, et_rank);
+        }
     }
-#endif
 
     int nbatches = ksgpu::rand_int(1,6);
     ret.beams_per_batch = ksgpu::rand_int(1,4);
