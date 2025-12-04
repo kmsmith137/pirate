@@ -279,4 +279,11 @@ string hex_str(uint x)
 }
 
 
+// Called by 'python -m pirate_frb scratch'. Intended for quick throwaway tests.
+void scratch()
+{
+    cout << "pirate::scratch() called -- edit src_lib/utils.cu to add code here" << endl;
+}
+
+
 }  // namespace pirate

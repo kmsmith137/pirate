@@ -21,6 +21,8 @@
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
 
+#include "../include/pirate/utils.hpp"
+
 #include "../include/pirate/loose_ends/tests.hpp"
 #include "../include/pirate/loose_ends/timing.hpp"
 
@@ -195,5 +197,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     m.def("test_gpu_downsample", &test_gpu_downsample);
     m.def("test_gpu_transpose", &test_gpu_transpose);
     m.def("test_gpu_reduce2", &test_gpu_reduce2);
+
+    // Called by 'python -m pirate_frb scratch'. Defined in src_lib/utils.cu.
+    m.def("scratch", &scratch);
 
 }

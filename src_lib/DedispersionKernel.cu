@@ -388,7 +388,6 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
 
 
 
-
 GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     params(params_)
 {

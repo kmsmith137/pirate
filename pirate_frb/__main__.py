@@ -445,6 +445,18 @@ def send(args):
     correlator.run()
 
 
+######################################   scratch command  #######################################
+
+
+def parse_scratch(subparsers):
+    # The scratch() function is defined in src_lib/utils.cu.
+    subparsers.add_parser("scratch", help="Run scratch code (defined in src_lib/utils.cu)")
+
+def scratch(args):
+    # The scratch() function is defined in src_lib/utils.cu.
+    pirate_pybind11.scratch()
+
+
 ####################################################################################################
 
 
@@ -459,6 +471,7 @@ if __name__ == '__main__':
     parse_show_subbands(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
+    parse_scratch(subparsers)
 
     args = parser.parse_args()
 
@@ -476,6 +489,8 @@ if __name__ == '__main__':
         test_node(args)
     elif args.command == "send":
         send(args)
+    elif args.command == "scratch":
+        scratch(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
