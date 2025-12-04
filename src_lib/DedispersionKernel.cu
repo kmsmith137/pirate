@@ -992,10 +992,9 @@ void GpuDedispersionKernel::test()
 // GpuDedispersionKernel::time() implementation
 
 
-namespace {
-
+// Static member function.
 // Uses one stream per "beam batch".
-void time_gpu_dedispersion_kernel(const DedispersionKernelParams &params, long nchunks=24)
+void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long nchunks)
 {
     cout << "\nTime GPU dedispersion kernel\n";
     params.print();
@@ -1035,8 +1034,6 @@ void time_gpu_dedispersion_kernel(const DedispersionKernelParams &params, long n
 
     cout << endl;
 }
-
-}  // anonymous namespace
 
 
 // static
@@ -1105,7 +1102,7 @@ void GpuDedispersionKernel::time()
                     }
                 }
 
-                time_gpu_dedispersion_kernel(params);
+               GpuDedispersionKernel::_time(params);
             }
         }
     }

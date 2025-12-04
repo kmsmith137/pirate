@@ -152,7 +152,6 @@ struct DedispersionKernelParams
 //   Ring: 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
 
 
-// Currently defined in DedispersionKernelParams.cu (FIXME reorganize)
 struct DedispersionKernelIobuf
 {
     DedispersionKernelIobuf(const DedispersionKernelParams &params,
@@ -255,6 +254,19 @@ public:
     // To get bandwidth per time chunk, multiply by 'nbatches'.
     BandwidthTracker bw_per_launch;
 
+    // Static member functions to query registry.
+    static long registry_size() { return registry().size(); }
+    static void show_registry() { registry().show(); }
+
+    // Static member function: runs one randomized test iteration.
+    // Called by 'python -m pirate_frb test --gddk'.
+    static void test();
+
+    // Static member function: run timing for representative kernels.
+    // Called by 'python -m pirate_frb time --gddk'.
+    static void time();
+    static void _time(const DedispersionKernelParams &params, long nchunks=24);
+
     // -------------------- Internals start here --------------------
 
     // The 'persistent_state' and 'gpu_ringbuf_locations' arrays are
@@ -335,16 +347,6 @@ public:
 
     // Static member function to access registry.
     static Registry &registry();
-
-    // Static member functions to query registry.
-    static long registry_size() { return registry().size(); }
-    static void show_registry() { registry().show(); }
-
-    // Static member function: runs one randomized test iteration.
-    static void test();
-
-    // Static member function: run timing for representative kernels.
-    static void time();
 };
 
 

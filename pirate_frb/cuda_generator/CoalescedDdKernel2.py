@@ -150,7 +150,9 @@ class CoalescedDdKernel2:
         self.dd._dedispersion_core(k)            # behaves differently, depending on self.two_stage
 
         k.emit()
-        k.emit('// Here is the handoff from the dd kernel to the pf kernel!!!!!')
+        k.emit("// Here is the handoff from the dd kernel to the pf kernel!!!!!")
+        k.emit("// FIXME I'm a bit worried that this way of doing it will lead to register pressure")
+        k.emit("// I made a note to revisit this later.")
         k.emit()
 
         assert self.dd.ndd == self.pf.M
