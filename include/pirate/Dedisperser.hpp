@@ -89,6 +89,9 @@ struct GpuDedisperser
 
     // Static member function: runs one randomized test iteration.
     static void test();
+
+    // Static member function: runs one test iteration with specified configuration.
+    static void test_one(const DedispersionConfig &config, int nchunks);
 };
 
 

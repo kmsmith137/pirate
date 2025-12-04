@@ -196,9 +196,9 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
 // GpuDedisperser::test()
 // FIXME could use a little cleanup
 
-namespace {
 
-static void run_test(const DedispersionConfig &config, int nchunks)
+// Static member function.
+void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.print(cout, 4);
@@ -269,9 +269,7 @@ static void run_test(const DedispersionConfig &config, int nchunks)
     cout << endl;
 }
 
-}  // anonymous namespace
-
-
+// Static member function.
 void GpuDedisperser::test()
 {
     auto config = DedispersionConfig::make_random();
@@ -284,7 +282,7 @@ void GpuDedisperser::test()
     int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
     int nchunks = ksgpu::rand_int(1, max_nchunks+1);
     
-    run_test(config, nchunks);
+    GpuDedisperser::test_one(config, nchunks);
 }
 
 
