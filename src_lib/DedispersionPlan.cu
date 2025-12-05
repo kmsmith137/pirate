@@ -460,6 +460,20 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     assert_arrays_equal(mega_ringbuf->g2g_octuples, g2g_rb_locs, "new_g2g", "old_g2g", {"i","j"});
     assert_arrays_equal(mega_ringbuf->h2h_octuples, h2h_rb_locs, "new_h2h", "old_h2h", {"i","j"});
 
+    // XXX more hackery
+    xassert(mega_ringbuf->producer_quadruples.size() == stage1_trees.size());
+    xassert(mega_ringbuf->consumer_quadruples.size() == stage2_trees.size());
+    for (uint i = 0; i < mega_ringbuf->producer_quadruples.size(); i++) {
+        long pos = stage1_trees.at(i).base_segment;
+        long nseg = stage1_trees.at(i).segments_per_beam;
+        assert_arrays_equal(mega_ringbuf->producer_quadruples.at(i), stage1_rb_locs.slice(0, pos, pos + nseg), "new_pq", "old_pq", {"i","j"});
+    }
+    for (uint i = 0; i < mega_ringbuf->consumer_quadruples.size(); i++) {
+        long pos = stage2_trees.at(i).base_segment;
+        long nseg = stage2_trees.at(i).segments_per_beam;
+        assert_arrays_equal(mega_ringbuf->consumer_quadruples.at(i), stage2_rb_locs.slice(0, pos, pos + nseg), "new_cq", "old_cq", {"i","j"});
+    }
+
     // Part 6: initialize all "params" members:
     //
     //   DedispersionBufferParams stage1_dd_buf_params;
@@ -562,15 +576,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     g2g_copy_kernel_params.validate();
     h2h_copy_kernel_params.validate();
 
-    // XXX more hackery
-    xassert(mega_ringbuf->producer_quadruples.size() == stage1_dd_kernel_params.size());
-    xassert(mega_ringbuf->consumer_quadruples.size() == stage2_dd_kernel_params.size());
-    for (uint i = 0; i < mega_ringbuf->producer_quadruples.size(); i++) {
-        assert_arrays_equal(mega_ringbuf->producer_quadruples.at(i), stage1_dd_kernel_params.at(i).ringbuf_locations, "new_pq", "old_pq", {"i","j"});
-    }
-    for (uint i = 0; i < mega_ringbuf->consumer_quadruples.size(); i++) {
-        assert_arrays_equal(mega_ringbuf->consumer_quadruples.at(i), stage2_dd_kernel_params.at(i).ringbuf_locations, "new_cq", "old_cq", {"i","j"});
-    }
     cout << "MegaRingbuf agrees with old code" << endl;
 }
 
