@@ -93,7 +93,7 @@ struct DedispersionPlan
     long stage1_total_segments_per_beam = 0;
     long stage2_total_segments_per_beam = 0;
 
-#if 1
+#if 0
     int max_clag = 0;
     int max_gpu_clag = 0;
     

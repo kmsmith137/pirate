@@ -175,6 +175,28 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //  - Allocate 'segmap', which maps iseg0 -> (list of (clag,iseg1) pairs).
     //    (This is a temporary object that will be used "locally" in this function.)
     
+    // XXX more hackery
+#if 1
+    int max_clag = 0;
+    int max_gpu_clag = 0;
+    long gmem_ringbuf_nseg = 0;    // total size (gpu_ringbufs + xfer_ringbufs + et_gpu_ringbuf)
+    long hmem_ringbuf_nseg = 0;    // total size (host_ringbufs + et_host_ringbuf)
+    
+    std::vector<Ringbuf> gpu_ringbufs;    // rb_len = (clag*BT + BA), on GPU
+    std::vector<Ringbuf> host_ringbufs;   // rb_len = (clag*BT + BA), on host
+    std::vector<Ringbuf> xfer_ringbufs;   // rb_len = (2*BA), on GPU
+
+    Ringbuf et_host_ringbuf;  // rb_len = BA, on host (send buffer)
+    Ringbuf et_gpu_ringbuf;   // rb_len = BA, on GPU (recv buffer)
+
+    ksgpu::Array<uint> stage1_rb_locs;   // shape (stage1_total_segments_per_beam, 4)
+    ksgpu::Array<uint> stage2_rb_locs;   // shape (stage2_total_segments_per_beam, 4)
+
+    // Only needed if early triggers are used.    
+    ksgpu::Array<uint> g2g_rb_locs;      // copy from gpu_ringbufs to xfer_ringbufs
+    ksgpu::Array<uint> h2h_rb_locs;      // copy from host_ringbufs to et_host_ringbuf
+#endif
+
     int nseg0 = this->stage1_total_segments_per_beam;
     int nseg1 = this->stage2_total_segments_per_beam;
 
@@ -182,7 +204,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     Array<uint> segmap_clag({nseg0,max_n1}, af_uhost | af_zero);
     Array<uint> segmap_iseg1({nseg0,max_n1}, af_uhost | af_zero);
     
-    this->max_clag = 0;
+    max_clag = 0;
     
     // XXX hack
 
@@ -260,7 +282,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
                         xassert(segmap_clag.data[iseg0*max_n1 + n1-1] <= uint(clag));
 
                     // Update max_clag.
-                    this->max_clag = max(max_clag, clag);
+                    max_clag = max(max_clag, clag);
                 }
             }
         }
@@ -329,9 +351,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     }
     
     
-    this->max_gpu_clag = int(max_clag * config.gpu_clag_maxfrac + 0.5);
-    this->max_gpu_clag = min(max_gpu_clag, max_clag);
-    this->max_gpu_clag = max(max_gpu_clag, 0);
+    max_gpu_clag = int(max_clag * config.gpu_clag_maxfrac + 0.5);
+    max_gpu_clag = min(max_gpu_clag, max_clag);
+    max_gpu_clag = max(max_gpu_clag, 0);
 
     // Part 3:
     //  - allocate ringbufs
@@ -341,18 +363,18 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     const int BB = this->config.beams_per_batch;          // beams per batch
     const int BA = this->config.num_active_batches * BB;  // active beams
 
-    this->gpu_ringbufs.resize(max_clag + 1);
-    this->host_ringbufs.resize(max_clag + 1);
-    this->xfer_ringbufs.resize(max_clag + 1);
+    gpu_ringbufs.resize(max_clag + 1);
+    host_ringbufs.resize(max_clag + 1);
+    xfer_ringbufs.resize(max_clag + 1);
     
     for (int clag = 0; clag <= max_clag; clag++) {
-        this->gpu_ringbufs.at(clag).rb_len = clag*BT + BA;
-        this->host_ringbufs.at(clag).rb_len = clag*BT + BA;
-        this->xfer_ringbufs.at(clag).rb_len = 2*BA;
+        gpu_ringbufs.at(clag).rb_len = clag*BT + BA;
+        host_ringbufs.at(clag).rb_len = clag*BT + BA;
+        xfer_ringbufs.at(clag).rb_len = 2*BA;
     }
 
-    this->et_host_ringbuf.rb_len = BA;
-    this->et_gpu_ringbuf.rb_len = BA;
+    et_host_ringbuf.rb_len = BA;
+    et_gpu_ringbuf.rb_len = BA;
 
     // Part 4:
     //
@@ -392,9 +414,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         // but only if there are early triggers.
         xassert(goes_to_host_ringbuf || goes_to_gpu_ringbuf);
         
-        Ringbuf *gpu_rb = goes_to_gpu_ringbuf ? &this->gpu_ringbufs.at(gpu_clag) : nullptr;
-        Ringbuf *host_rb = goes_to_host_ringbuf ? &this->host_ringbufs.at(host_clag) : nullptr;
-        Ringbuf *xfer_rb = goes_to_host_ringbuf ? &this->xfer_ringbufs.at(host_clag) : nullptr;
+        Ringbuf *gpu_rb = goes_to_gpu_ringbuf ? &gpu_ringbufs.at(gpu_clag) : nullptr;
+        Ringbuf *host_rb = goes_to_host_ringbuf ? &host_ringbufs.at(host_clag) : nullptr;
+        Ringbuf *xfer_rb = goes_to_host_ringbuf ? &xfer_ringbufs.at(host_clag) : nullptr;
         
         long gpu_iseg = goes_to_gpu_ringbuf ? (gpu_rb->nseg_per_beam++) : (-1);
         long host_iseg = goes_to_host_ringbuf ? (host_rb->nseg_per_beam++) : (-1);
@@ -432,7 +454,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             }
             else {
                 // early trigger: get segment from et ringbuf
-                long et_iseg = this->et_host_ringbuf.nseg_per_beam++;
+                long et_iseg = et_host_ringbuf.nseg_per_beam++;
                 stage2_entries[iseg1] = RingbufEntry(&et_gpu_ringbuf, 0, et_iseg);
                 RingbufEntry h2h_src(host_rb, (clag-gpu_clag) * BT, host_iseg);
                 RingbufEntry h2h_dst(&et_host_ringbuf, 0, et_iseg);
@@ -446,9 +468,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // (host, gpu, et_host), but not others (xfer, et_gpu). Tie up this loose end.
 
     for (int clag = 0; clag <= max_clag; clag++)
-        this->xfer_ringbufs.at(clag).nseg_per_beam = this->host_ringbufs.at(clag).nseg_per_beam;
+        xfer_ringbufs.at(clag).nseg_per_beam = host_ringbufs.at(clag).nseg_per_beam;
 
-    this->et_gpu_ringbuf.nseg_per_beam = this->et_host_ringbuf.nseg_per_beam;
+    et_gpu_ringbuf.nseg_per_beam = et_host_ringbuf.nseg_per_beam;
 
     
     // Part 5:
@@ -462,25 +484,25 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //      - DedispersionPlan::{g2g,h2h}_rb_locs
 
     
-    this->gmem_ringbuf_nseg = 0;
-    this->hmem_ringbuf_nseg = 0;
+    gmem_ringbuf_nseg = 0;
+    hmem_ringbuf_nseg = 0;
 
     for (int clag = 0; clag <= max_clag; clag++)
-        lay_out_ringbuf(gpu_ringbufs.at(clag), this->gmem_ringbuf_nseg);
+        lay_out_ringbuf(gpu_ringbufs.at(clag), gmem_ringbuf_nseg);
     
     for (int clag = 0; clag <= max_clag; clag++)
-        lay_out_ringbuf(host_ringbufs.at(clag), this->hmem_ringbuf_nseg);
+        lay_out_ringbuf(host_ringbufs.at(clag), hmem_ringbuf_nseg);
     
     for (int clag = 0; clag <= max_clag; clag++)
-        lay_out_ringbuf(xfer_ringbufs.at(clag), this->gmem_ringbuf_nseg);
+        lay_out_ringbuf(xfer_ringbufs.at(clag), gmem_ringbuf_nseg);
 
-    lay_out_ringbuf(et_host_ringbuf, this->hmem_ringbuf_nseg);
-    lay_out_ringbuf(et_gpu_ringbuf, this->gmem_ringbuf_nseg);
+    lay_out_ringbuf(et_host_ringbuf, hmem_ringbuf_nseg);
+    lay_out_ringbuf(et_gpu_ringbuf, gmem_ringbuf_nseg);
 
-    this->stage1_rb_locs = rb_locs_from_entries(stage1_entries);
-    this->stage2_rb_locs = rb_locs_from_entries(stage2_entries);
-    this->g2g_rb_locs = rb_locs_from_entries(g2g_entries);
-    this->h2h_rb_locs = rb_locs_from_entries(h2h_entries);
+    stage1_rb_locs = rb_locs_from_entries(stage1_entries);
+    stage2_rb_locs = rb_locs_from_entries(stage2_entries);
+    g2g_rb_locs = rb_locs_from_entries(g2g_entries);
+    h2h_rb_locs = rb_locs_from_entries(h2h_entries);
 
     // XXX hackery starts here
     // Check that MegaRingbuf (new code) agrees with old code.
@@ -522,8 +544,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // XXX more hackery
     xassert(mega_ringbuf->producer_quadruples.size() == stage1_trees.size());
     xassert(mega_ringbuf->consumer_quadruples.size() == stage2_trees.size());
-    xassert(mega_ringbuf->gpu_giant_nseg == this->gmem_ringbuf_nseg);
-    xassert(mega_ringbuf->host_giant_nseg == this->hmem_ringbuf_nseg);
+    xassert(mega_ringbuf->gpu_giant_nseg == gmem_ringbuf_nseg);
+    xassert(mega_ringbuf->host_giant_nseg == hmem_ringbuf_nseg);
     for (uint i = 0; i < mega_ringbuf->producer_quadruples.size(); i++) {
         long pos = stage1_trees.at(i).base_segment;
         long nseg = stage1_trees.at(i).segments_per_beam;
@@ -652,7 +674,6 @@ void DedispersionPlan::print(ostream &os, int indent) const
     
     print_kv("nelts_per_segment", nelts_per_segment, os, indent);
     print_kv("nbytes_per_segment", nbytes_per_segment, os, indent);
-    print_kv("max_clag", max_clag, os, indent);
 
     os << Indent(indent) << "Stage1Trees" << endl;
 
