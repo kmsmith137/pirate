@@ -463,6 +463,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // XXX more hackery
     xassert(mega_ringbuf->producer_quadruples.size() == stage1_trees.size());
     xassert(mega_ringbuf->consumer_quadruples.size() == stage2_trees.size());
+    xassert(mega_ringbuf->gpu_giant_nseg == this->gmem_ringbuf_nseg);
+    xassert(mega_ringbuf->host_giant_nseg == this->hmem_ringbuf_nseg);
     for (uint i = 0; i < mega_ringbuf->producer_quadruples.size(); i++) {
         long pos = stage1_trees.at(i).base_segment;
         long nseg = stage1_trees.at(i).segments_per_beam;
@@ -491,9 +493,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     stage1_dd_buf_params.beams_per_batch = config.beams_per_batch;
     stage1_dd_buf_params.nbuf = stage1_ntrees;
 
-    for (Stage1Tree &st1: stage1_trees) {
-        long pos = st1.base_segment;
-        long nseg = st1.segments_per_beam;
+    for (uint itree1 = 0; itree1 < stage1_trees.size(); itree1++) {
+        const Stage1Tree &st1 = stage1_trees.at(itree1);
 
         DedispersionKernelParams kparams;
         kparams.dtype = config.dtype;
@@ -508,8 +509,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.apply_input_residual_lags = false;
         kparams.input_is_downsampled_tree = (st1.ds_level > 0);
         kparams.nt_per_segment = this->nelts_per_segment;
-        kparams.ringbuf_locations = this->stage1_rb_locs.slice(0, pos, pos + nseg);
-        kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
+        kparams.ringbuf_locations = mega_ringbuf->producer_quadruples.at(itree1);
+        kparams.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
         kparams.validate();
         
         stage1_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1);
@@ -521,9 +522,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     stage2_dd_buf_params.beams_per_batch = config.beams_per_batch;
     stage2_dd_buf_params.nbuf = stage2_ntrees;
 
-    for (Stage2Tree &st2: stage2_trees) {
-        long pos = st2.base_segment;
-        long nseg = st2.segments_per_beam;
+    for (uint itree2 = 0; itree2 < stage2_trees.size(); itree2++) {
+        const Stage2Tree &st2 = stage2_trees.at(itree2);
         long ds_level = st2.ds_level;
 
         xassert(st2.nt_ds == xdiv(config.time_samples_per_chunk, pow2(ds_level)));
@@ -541,8 +541,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.apply_input_residual_lags = true;
         kparams.input_is_downsampled_tree = (ds_level > 0);
         kparams.nt_per_segment = this->nelts_per_segment;
-        kparams.ringbuf_locations = this->stage2_rb_locs.slice(0, pos, pos + nseg);
-        kparams.ringbuf_nseg = this->gmem_ringbuf_nseg;
+        kparams.ringbuf_locations = mega_ringbuf->consumer_quadruples.at(itree2);
+        kparams.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
         kparams.validate();
 
         stage2_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);
@@ -563,12 +563,12 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     g2g_copy_kernel_params.total_beams = config.beams_per_gpu;
     g2g_copy_kernel_params.beams_per_batch = config.beams_per_batch;
     g2g_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
-    g2g_copy_kernel_params.locations = g2g_rb_locs;
+    g2g_copy_kernel_params.locations = mega_ringbuf->g2g_octuples;
     
     h2h_copy_kernel_params.total_beams = config.beams_per_gpu;
     h2h_copy_kernel_params.beams_per_batch = config.beams_per_batch;
     h2h_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
-    h2h_copy_kernel_params.locations = h2h_rb_locs;
+    h2h_copy_kernel_params.locations = mega_ringbuf->h2h_octuples;
     
     lds_params.validate();
     stage1_dd_buf_params.validate();
