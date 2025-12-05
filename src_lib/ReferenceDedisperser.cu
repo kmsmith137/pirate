@@ -488,32 +488,33 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
     //
     // Step 4: copy host <-> xfer
     //
-           
-    xassert(plan->host_ringbufs.size() == uint(plan->max_clag+1));
-    xassert(plan->xfer_ringbufs.size() == uint(plan->max_clag+1));
+    
+    long max_clag = plan->mega_ringbuf->max_clag;
+    xassert(plan->mega_ringbuf->host_zones.size() == uint(max_clag+1));
+    xassert(plan->mega_ringbuf->xfer_zones.size() == uint(max_clag+1));
     xassert_divisible(BT, BB);   // assert that length-BB copies don't "wrap"
     
-    for (int clag = 0; clag <= plan->max_clag; clag++) {
-        DedispersionPlan::Ringbuf &rb_host = plan->host_ringbufs.at(clag);
-        DedispersionPlan::Ringbuf &rb_xfer = plan->xfer_ringbufs.at(clag);
+    for (int clag = 0; clag <= max_clag; clag++) {
+        MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
+        MegaRingbuf::Zone &xfer_zone = plan->mega_ringbuf->xfer_zones.at(clag);
+     
+        xassert(host_zone.segments_per_frame == xfer_zone.segments_per_frame);
+        xassert(host_zone.num_frames == clag*BT + BA);
+        xassert(xfer_zone.num_frames == 2*BA);
 
-        xassert(rb_host.nseg_per_beam == rb_xfer.nseg_per_beam);
-        xassert(rb_host.rb_len == clag*BT + BA);
-        xassert(rb_xfer.rb_len == 2*BA);
-
-        if (rb_host.nseg_per_beam == 0)
+        if (host_zone.segments_per_frame == 0)
             continue;
         
-        float *hp = this->host_ringbuf.data + (rb_host.base_segment * S);
-        float *xp = this->gpu_ringbuf.data + (rb_xfer.base_segment * S);
-            
-        long hsrc = (iframe + BA) % rb_host.rb_len;  // host src phase
-        long hdst = (iframe) % rb_host.rb_len;       // host dst phase
-        long xsrc = (iframe) % rb_xfer.rb_len;       // xfer src phase
-        long xdst = (iframe + BA) % rb_xfer.rb_len;  // xfer dst phase
+        float *hp = this->host_ringbuf.data + (host_zone.giant_segment_offset * S);
+        float *xp = this->gpu_ringbuf.data + (xfer_zone.giant_segment_offset * S);
         
-        long m = rb_host.nseg_per_beam * S;   // nelts per beam (=frame)
-        long n = BB * m * sizeof(float);      // nbytes to copy
+        long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
+        long hdst = (iframe) % host_zone.num_frames;       // host dst phase
+        long xsrc = (iframe) % xfer_zone.num_frames;       // xfer src phase
+        long xdst = (iframe + BA) % xfer_zone.num_frames;  // xfer dst phase
+        
+        long m = host_zone.segments_per_frame * S;   // nelts per beam (=frame)
+        long n = BB * m * sizeof(float);             // nbytes to copy
 
         // Ordering of memcopies is arbitrary. (On the GPU they happen in parallel.)
         memcpy(xp + xdst*m, hp + hsrc*m, n);
