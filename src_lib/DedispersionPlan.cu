@@ -205,6 +205,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     this->mega_ringbuf0 = std::make_shared<MegaRingbuf>(mrb0_params);
     this->mega_ringbuf = std::make_shared<MegaRingbuf>(mrb_params);
 
+    // XXX this loop will eventually be deleted.
     for (int itree2 = 0; itree2 < stage2_ntrees; itree2++) {
         const Stage2Tree &st2 = this->stage2_trees.at(itree2);
 
@@ -247,11 +248,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
                     // XXX hack
                     // add_segment(producer_id, producer_iview, consumer_id, consumer_iview, chunk_lag)
                     mega_ringbuf0->add_segment(0, iseg0, 0, iseg1, clag);
-                    int iview0 = (s0 * pow2(st1.rank1)) + i1;
-                    iview0 = (iview0 * pow2(st1.rank0)) + i0;
-                    int iview1 = (s1 * nchan0) + i0;
-                    iview1 = (iview1 * nchan1) + i1;
-                    mega_ringbuf->add_segment(itree1, iview0, itree2, iview1, clag);
 
                     // Add (clag, iseg1) to segmap[iseg0].
                     int n1 = segmap_n1.data[iseg0]++;
@@ -269,6 +265,56 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             }
         }
     }
+
+
+    for (int itree2 = 0; itree2 < stage2_ntrees; itree2++) {
+        const Stage2Tree &st2 = this->stage2_trees.at(itree2);
+
+        int itree1 = st2.ds_level;
+        const Stage1Tree &st1 = this->stage1_trees.at(itree1);
+
+        // Some truly paranoid asserts.
+        xassert(st1.nt_ds == st2.nt_ds);
+        xassert(st1.rank0 == st2.rank0);
+        xassert(st1.ds_level == st2.ds_level);
+        xassert(st1.rank1 == st2.rank1_ambient);
+
+        int nchan0 = pow2(st2.rank0);
+        int nchan1 = pow2(st2.rank1_trigger);  // not rank1_ambient
+        int ns = xdiv(st2.nt_ds, this->nelts_per_segment);
+        bool is_downsampled = (st2.ds_level > 0);
+        
+        for (int i0 = 0; i0 < nchan0; i0++) {
+            for (int i1 = 0; i1 < nchan1; i1++) {
+                int lag = rb_lag(i1, i0, st2.rank0, st2.rank1_trigger, is_downsampled);
+                int slag = lag / nelts_per_segment;  // round down
+                
+                for (int s0 = 0; s0 < ns; s0++) {
+                    int clag = (s0 + slag) / ns;
+                    int s1 = (s0 + slag) - (clag * ns);
+                    xassert((s1 >= 0) && (s1 < ns));
+
+                    // iseg0 -> (s,i1,i0)
+                    int iseg0 = (s0 * pow2(st1.rank1)) + i1;
+                    iseg0 = (iseg0 * pow2(st1.rank0)) + i0;
+                    xassert((iseg0 >= 0) && (iseg0 < nseg0));
+
+                    // iseg1 -> (s,i0,i1)
+                    int iseg1 = (s1 * nchan0) + i0;
+                    iseg1 = (iseg1 * nchan1) + i1;
+                    xassert((iseg1 >= 0) && (iseg1 < nseg1));
+
+                    // add_segment(producer_id, producer_iview, consumer_id, consumer_iview, chunk_lag)
+                    int iview0 = (s0 * pow2(st1.rank1)) + i1;
+                    iview0 = (iview0 * pow2(st1.rank0)) + i0;
+                    int iview1 = (s1 * nchan0) + i0;
+                    iview1 = (iview1 * nchan1) + i1;
+                    mega_ringbuf->add_segment(itree1, iview0, itree2, iview1, clag);
+                }
+            }
+        }
+    }
+    
     
     this->max_gpu_clag = int(max_clag * config.gpu_clag_maxfrac + 0.5);
     this->max_gpu_clag = min(max_gpu_clag, max_clag);
