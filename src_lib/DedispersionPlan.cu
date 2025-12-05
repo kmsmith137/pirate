@@ -266,6 +266,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         }
     }
 
+    // This loop sets up the MegaRingbuf, to apply segment lags between the
+    // stage1 and stage2 trees.
 
     for (int itree2 = 0; itree2 < stage2_ntrees; itree2++) {
         const Stage2Tree &st2 = this->stage2_trees.at(itree2);
@@ -279,37 +281,48 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         xassert(st1.ds_level == st2.ds_level);
         xassert(st1.rank1 == st2.rank1_ambient);
 
-        int nchan0 = pow2(st2.rank0);
-        int nchan1 = pow2(st2.rank1_trigger);  // not rank1_ambient
+        // For the stage1 -> stage2 intermediate array, we use variable names
+        //   0 <= freq_c < nfreq     (= pow2(st2.rank1_trigger))
+        //   0 <= dm_brev < ndm      (= pow2(st2.rank0))
+        //
+        // From the perspective of the stage1 tree, 'dm_brev' is the active dedispersion
+        // index, and 'freq_c' is the ambient spectator index. This is reversed for the
+        // stage2 tree.
+
+        int ndm = pow2(st2.rank0);
+        int nfreq_tr = pow2(st2.rank1_trigger);
+        int nfreq_amb = pow2(st2.rank1_ambient);
+        
         int ns = xdiv(st2.nt_ds, this->nelts_per_segment);
         bool is_downsampled = (st2.ds_level > 0);
         
-        for (int i0 = 0; i0 < nchan0; i0++) {
-            for (int i1 = 0; i1 < nchan1; i1++) {
-                int lag = rb_lag(i1, i0, st2.rank0, st2.rank1_trigger, is_downsampled);
-                int slag = lag / nelts_per_segment;  // round down
+        for (int dm_brev = 0; dm_brev < ndm; dm_brev++) {
+            for (int freq = 0; freq < nfreq_tr; freq++) {
+                int lag = rb_lag(freq, dm_brev, st2.rank0, st2.rank1_trigger, is_downsampled);
+                int slag = lag / nelts_per_segment;  // segment lag (round down)
                 
-                for (int s0 = 0; s0 < ns; s0++) {
-                    int clag = (s0 + slag) / ns;
-                    int s1 = (s0 + slag) - (clag * ns);
-                    xassert((s1 >= 0) && (s1 < ns));
+                for (int ssrc = 0; ssrc < ns; ssrc++) {
+                    int clag = (ssrc + slag) / ns;   // chunk lag (see MegaRingbuf)
+                    int sdst = (ssrc + slag) - (clag * ns);
+                    xassert((sdst >= 0) && (sdst < ns));
 
-                    // iseg0 -> (s,i1,i0)
-                    int iseg0 = (s0 * pow2(st1.rank1)) + i1;
-                    iseg0 = (iseg0 * pow2(st1.rank0)) + i0;
-                    xassert((iseg0 >= 0) && (iseg0 < nseg0));
+                    // The stage1 dedispersion kernel (or "producer") uses the following ordering 
+                    // (or "view") of the MegaRingbuf quadruples:
+                    //      (nt_ds / nelts_per_segment, freq, dm_brev)
+                    //
+                    // The stage2 dedispersion kernel (or "consumer") uses the following ordering:
+                    //      (nt_ds / nelts<per_segment, dm_brev, freq)
+                    //
+                    // (Note that in both cases, the active dedipsersion index is fastest varying.)
 
-                    // iseg1 -> (s,i0,i1)
-                    int iseg1 = (s1 * nchan0) + i0;
-                    iseg1 = (iseg1 * nchan1) + i1;
-                    xassert((iseg1 >= 0) && (iseg1 < nseg1));
+                    long producer_id = itree1;
+                    long producer_iview = (ssrc * nfreq_amb * ndm) + (freq * ndm) + dm_brev;
 
-                    // add_segment(producer_id, producer_iview, consumer_id, consumer_iview, chunk_lag)
-                    int iview0 = (s0 * pow2(st1.rank1)) + i1;
-                    iview0 = (iview0 * pow2(st1.rank0)) + i0;
-                    int iview1 = (s1 * nchan0) + i0;
-                    iview1 = (iview1 * nchan1) + i1;
-                    mega_ringbuf->add_segment(itree1, iview0, itree2, iview1, clag);
+                    long consumer_id = itree2;
+                    long consumer_iview = (sdst * ndm * nfreq_tr) + (dm_brev * nfreq_tr) + freq;
+
+                    // mega_ringbuf->add_segment(itree1, iview0, itree2, iview1, clag);
+                    mega_ringbuf->add_segment(producer_id, producer_iview, consumer_id, consumer_iview, clag);
                 }
             }
         }
