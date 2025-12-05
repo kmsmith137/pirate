@@ -75,14 +75,6 @@ struct DedispersionPlan
         int base_segment = 0;        // cumulative (over all Stage2Trees) segment count
     };
 
-    struct Ringbuf
-    {
-        long rb_len = 0;           // number of (time chunk, beam) pairs, see below
-        long nseg_per_beam = 0;    // size (in segments) per (time chunk, beam) pair
-        long base_segment = -1;    // offset (in segments) relative to base memory address on either GPU or CPU
-    };
-    
-    // --------------------  Members  --------------------
 
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
     int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
@@ -93,45 +85,6 @@ struct DedispersionPlan
     long stage1_total_segments_per_beam = 0;
     long stage2_total_segments_per_beam = 0;
 
-#if 0
-    int max_clag = 0;
-    int max_gpu_clag = 0;
-    
-    long gmem_ringbuf_nseg = 0;    // total size (gpu_ringbufs + xfer_ringbufs + et_gpu_ringbuf)
-    long hmem_ringbuf_nseg = 0;    // total size (host_ringbufs + et_host_ringbuf)
-
-    // All vector<Ringbuf> objects have length (max_clag + 1).
-    // BT = total beams, BA = active beams, BB = beams per batch.
-    
-    std::vector<Ringbuf> gpu_ringbufs;    // rb_len = (clag*BT + BA), on GPU
-    std::vector<Ringbuf> host_ringbufs;   // rb_len = (clag*BT + BA), on host
-    std::vector<Ringbuf> xfer_ringbufs;   // rb_len = (2*BA), on GPU
-
-    // If early triggers are used, need one more pair of buffers.
-    Ringbuf et_host_ringbuf;  // rb_len = BA, on host (send buffer)
-    Ringbuf et_gpu_ringbuf;   // rb_len = BA, on GPU (recv buffer)
-
-    // stage1_output_rb_locs, stage2_input_rb_locs: used in dedispersion kernels.
-    //
-    // These arrays contain GPU ringbuf locations, represented as four uint32s:
-    //  uint rb_offset;  // in segments, not bytes
-    //  uint rb_phase;   // index of (time chunk, beam) pair, relative to current pair
-    //  uint rb_len;     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
-    //  uint rb_nseg;    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
-    //
-    // The arrays are indexed by:
-    //  iseg0 -> (time/nelts_per_segment, 2^rank1, 2^rank0)
-    //  iseg1 -> (time/nelts_per_segment, 2^rank0, 2^rank1)   note transpose
-
-    ksgpu::Array<uint> stage1_rb_locs;   // shape (stage1_total_segments_per_beam, 4)
-    ksgpu::Array<uint> stage2_rb_locs;   // shape (stage2_total_segments_per_beam, 4)
-
-    // Only needed if early triggers are used.    
-    ksgpu::Array<uint> g2g_rb_locs;      // copy from gpu_ringbufs to xfer_ringbufs
-    ksgpu::Array<uint> h2h_rb_locs;      // copy from host_ringbufs to et_host_ringbuf
-#endif
-
-    std::shared_ptr<MegaRingbuf> mega_ringbuf0;  // one producer, one consumer
     std::shared_ptr<MegaRingbuf> mega_ringbuf;
 };
 
