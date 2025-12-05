@@ -20,6 +20,7 @@ Please complain if you can't see it.
 - Build with: `make -j 32` (or `make -j 32 lib` for just the library)
 - Single source file: `make src_lib/Foo.o`
 - Compile time for the whole project is high (a few minutes with 32 threads), so suggest building specific targets.
+- The file `sdist_files.txt` is a Makefile target, and is a list of all source files (in any language). Here is a convenient way to search all source files for symbol FOO: `make sdist_files.txt; cat sdist_files.txt | xargs grep FOO`.
 
 ## File Structure
 
