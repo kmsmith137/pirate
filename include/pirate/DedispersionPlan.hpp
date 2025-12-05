@@ -17,6 +17,9 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+// Defined in MegaRingbuf.hpp.
+struct MegaRingbuf;
+
 
 struct DedispersionPlan
 {
@@ -125,6 +128,8 @@ struct DedispersionPlan
     // Only needed if early triggers are used.    
     ksgpu::Array<uint> g2g_rb_locs;      // copy from gpu_ringbufs to xfer_ringbufs
     ksgpu::Array<uint> h2h_rb_locs;      // copy from host_ringbufs to et_host_ringbuf
+
+    std::shared_ptr<MegaRingbuf> mega_ringbuf;
 };
 
 

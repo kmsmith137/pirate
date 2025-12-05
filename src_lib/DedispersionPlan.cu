@@ -1,4 +1,5 @@
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
 #include "../include/pirate/utils.hpp"    // bit_reverse_slow(), rb_lag(), rstate_len(), mean_bytes_per_unaligned_chunk()
@@ -183,6 +184,17 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     
     this->max_clag = 0;
     
+    // XXX hack
+
+    MegaRingbuf::Params mrb_params;
+    mrb_params.total_beams = config.beams_per_gpu;
+    mrb_params.active_beams = config.num_active_batches * config.beams_per_batch;
+    mrb_params.gpu_clag_maxfrac = config.gpu_clag_maxfrac;
+    mrb_params.producer_nviews = { nseg0 };  // treat as single producer
+    mrb_params.consumer_nviews = { nseg1 };  // treat as single consumer
+
+    this->mega_ringbuf = std::make_shared<MegaRingbuf>(mrb_params);
+
     for (const Stage2Tree &st2: this->stage2_trees) {
         const Stage1Tree &st1 = this->stage1_trees.at(st2.ds_level);
 
@@ -218,6 +230,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
                     iseg1 = (iseg1 * nchan1) + i1;
                     iseg1 += st2.base_segment;
                     xassert((iseg1 >= 0) && (iseg1 < nseg1));
+
+                    // XXX hack
+                    // add_segment(producer_id, producer_iview, consumer_id, consumer_iview, chunk_lag)
+                    mega_ringbuf->add_segment(0, iseg0, 0, iseg1, clag);
 
                     // Add (clag, iseg1) to segmap[iseg0].
                     int n1 = segmap_n1.data[iseg0]++;
@@ -389,7 +405,31 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     this->g2g_rb_locs = rb_locs_from_entries(g2g_entries);
     this->h2h_rb_locs = rb_locs_from_entries(h2h_entries);
 
+    // XXX hackery starts here
+    // Check that MegaRingbuf (new code) agrees with old code.
+
+    mega_ringbuf->finalize(false);  // delete_internals=false
+
+    xassert_eq(mega_ringbuf->max_clag, max_clag);
+    xassert_eq(mega_ringbuf->max_gpu_clag, max_gpu_clag);
     
+    for (int i = 0; i < max_clag+1; i++) {
+        xassert(mega_ringbuf->gpu_zones.at(i).segments_per_frame == gpu_ringbufs.at(i).nseg_per_beam);
+        xassert(mega_ringbuf->host_zones.at(i).segments_per_frame == host_ringbufs.at(i).nseg_per_beam);
+        xassert(mega_ringbuf->xfer_zones.at(i).segments_per_frame == xfer_ringbufs.at(i).nseg_per_beam);
+    }
+
+    xassert_eq(mega_ringbuf->et_gpu_zone.segments_per_frame, et_gpu_ringbuf.nseg_per_beam);
+    xassert_eq(mega_ringbuf->et_host_zone.segments_per_frame, et_host_ringbuf.nseg_per_beam);
+
+    xassert(mega_ringbuf->producer_quadruples.size() == 1);
+    xassert(mega_ringbuf->consumer_quadruples.size() == 1);
+    assert_arrays_equal(mega_ringbuf->producer_quadruples.at(0), stage1_rb_locs, "new_pq", "old_pq", {"i","j"});
+    assert_arrays_equal(mega_ringbuf->consumer_quadruples.at(0), stage2_rb_locs, "new_cq", "old_cq", {"i","j"});
+    assert_arrays_equal(mega_ringbuf->g2g_octuples, g2g_rb_locs, "new_g2g", "old_g2g", {"i","j"});
+    assert_arrays_equal(mega_ringbuf->h2h_octuples, h2h_rb_locs, "new_h2h", "old_h2h", {"i","j"});
+    cout << "MegaRingbuf agrees with old code" << endl;
+
     // Part 6: initialize all "params" members:
     //
     //   DedispersionBufferParams stage1_dd_buf_params;

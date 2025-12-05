@@ -134,18 +134,19 @@ namespace pirate {
 //
 // Future features:
 //
-//   - Constructor arguments to select between different strategies. (For example,
-//     is it better to do GPU->CPU copies as one big coalesced transfer, or a
-//     small transfer for each host_lag? (We currently do the latter). The answer
-//     depends on whether PCIe bandwidth or host memory bandwidth is a larger
-//     bottleneck.
+//   - Constructor arguments to select between different strategies, which trade off
+//     resources (GPU memory bandwidth, host memory bandwidth, PICe bandwidth).
 //
 //   - Constructor args to limit GPU memory usage.
 //
 //   - Some form of beam "batching" (this batch size can be independent of the
 //     batch size used for compute!).
 //
-//   - Update-in-place (memory optimization).
+//   - Memory optimization: if a kernel is both a consumer and a producer, then there
+//     should be a way for it to update segments of the ring buffer "in-place".
+//
+//   - Standalone (i.e. not dedispersion-specific) end-to-end unit test of the 
+//     MegaRingbuf.
 
 
 

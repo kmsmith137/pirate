@@ -1,6 +1,8 @@
 #include "../include/pirate/utils.hpp"
 #include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
+#include "../include/pirate/DedispersionConfig.hpp"  // DedispersionConfig::make_random()
+#include "../include/pirate/DedispersionPlan.hpp"  // DedispersionPlan()
 
 #include <sstream>
 #include <stdexcept>
@@ -282,6 +284,15 @@ string hex_str(uint x)
 // Called by 'python -m pirate_frb scratch'. Intended for quick throwaway tests.
 void scratch()
 {
+    for (int i = 0; i < 100; i++) {
+        cout << "Starting iteration " << i << endl;
+        DedispersionConfig config = DedispersionConfig::make_random(true);  // allow_early_triggers=true
+        config.print(cout, 4);
+        DedispersionPlan plan(config);
+        cout << endl;
+        // plan.print(cout, 4);
+    }
+
     cout << "pirate::scratch() called -- edit src_lib/utils.cu to add code here" << endl;
 }
 

@@ -163,16 +163,11 @@ void MegaRingbuf::finalize(bool delete_internals)
 
             long gpu_iseg = (ngpu > 0) ? (gpu_zone->segments_per_frame++) : (-1);
             long host_iseg = (ncpu > 0) ? (host_zone->segments_per_frame++) : (-1);
-            long et_iseg = (ncpu > 1) ? (et_host_zone.segments_per_frame++) : (-1);
 
             // Keep xfer_zone->segments_per_frame in sync with host_zone->segments_per_frame.
             if (ncpu > 0)
                 xfer_zone->segments_per_frame++;
 
-            // Keep et_gpu_zone.segments_per_frame in sync with et_host_zone.segments_per_frame.
-            if (ncpu > 1)
-                et_gpu_zone.segments_per_frame++;
-            
             // Now we're ready to implement steps 1 and 2 above.
 
             Triple &producer = producer_triples.at(producer_id).at(producer_iview);
@@ -206,12 +201,16 @@ void MegaRingbuf::finalize(bool delete_internals)
                 if (c < ngpu)
                     // gpu_zone -> consumer
                     _set_triple(consumer, gpu_zone, chunk_lag * BT, gpu_iseg);
-                else if (c == s.num_consumers-1)
-                    // xfer_zone -> last consumer
+                else if (chunk_lag == gpu_clag + host_clag)
+                    // xfer_zone -> consumer
                     _set_triple(consumer, xfer_zone, BA, host_iseg);
                 else {
                     // host_zone -> et_host_zone
                     // et_gpu_zone -> consumer
+                    long et_iseg = et_host_zone.segments_per_frame;
+                    et_host_zone.segments_per_frame++;
+                    et_gpu_zone.segments_per_frame++;
+
                     _push_triple(h2h_triples, host_zone, (chunk_lag-gpu_clag) * BT, host_iseg);  // h2h src
                     _push_triple(h2h_triples, &et_host_zone, 0, et_iseg);                        // h2h dst
                     _set_triple(consumer, &et_gpu_zone, 0, et_iseg);
