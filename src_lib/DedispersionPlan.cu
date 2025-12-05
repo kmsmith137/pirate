@@ -166,7 +166,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         }
     }
     
-    mega_ringbuf->finalize(true);
+    mega_ringbuf->finalize();
 
     // Part 3: initialize all "params" members:
     //
