@@ -93,6 +93,7 @@ struct DedispersionPlan
     long stage1_total_segments_per_beam = 0;
     long stage2_total_segments_per_beam = 0;
 
+#if 1
     int max_clag = 0;
     int max_gpu_clag = 0;
     
@@ -128,6 +129,7 @@ struct DedispersionPlan
     // Only needed if early triggers are used.    
     ksgpu::Array<uint> g2g_rb_locs;      // copy from gpu_ringbufs to xfer_ringbufs
     ksgpu::Array<uint> h2h_rb_locs;      // copy from host_ringbufs to et_host_ringbuf
+#endif
 
     std::shared_ptr<MegaRingbuf> mega_ringbuf0;  // one producer, one consumer
     std::shared_ptr<MegaRingbuf> mega_ringbuf;

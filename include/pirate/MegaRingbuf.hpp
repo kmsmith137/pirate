@@ -224,6 +224,12 @@ struct MegaRingbuf {
     // Zones are created in finalize().
     struct Zone
     {
+        // Formerly:
+        // struct Ringbuf {
+        // long rb_len = 0;           // number of (time chunk, beam) pairs, see below
+        // long nseg_per_beam = 0;    // size (in segments) per (time chunk, beam) pair
+        // long base_segment = -1;    // offset (in segments) relative to base memory address on either GPU or CPU
+        // };
         long num_frames = 0;
         long segments_per_frame = 0;
         long giant_segment_offset = -1;

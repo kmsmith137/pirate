@@ -4,6 +4,7 @@
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/ReferenceTree.hpp"
 #include "../include/pirate/ReferenceLagbuf.hpp"
+#include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"  // dedisperse_non_incremental(), lag_non_incremental()
@@ -421,9 +422,9 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
 
-    this->gpu_ringbuf_nelts = plan->gmem_ringbuf_nseg * plan->nelts_per_segment;
-    this->host_ringbuf_nelts = plan->hmem_ringbuf_nseg * plan->nelts_per_segment;
-        
+    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment;
+    this->host_ringbuf_nelts = plan->mega_ringbuf->host_giant_nseg * plan->nelts_per_segment;
+    
     this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero);
     this->host_ringbuf = Array<float>({ host_ringbuf_nelts }, af_uhost | af_zero);
     
@@ -468,17 +469,17 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 
     // Step 3: extra copying steps needed for early triggers.
 
-    DedispersionPlan::Ringbuf &rb_eth = plan->et_host_ringbuf;
-    DedispersionPlan::Ringbuf &rb_etg = plan->et_gpu_ringbuf;
+    MegaRingbuf::Zone &eth_zone = plan->mega_ringbuf->et_host_zone;
+    MegaRingbuf::Zone &etg_zone = plan->mega_ringbuf->et_gpu_zone;
     
-    xassert(rb_eth.nseg_per_beam == rb_etg.nseg_per_beam);
-    xassert(rb_eth.rb_len == BA);
-    xassert(rb_etg.rb_len == BA);
+    xassert(eth_zone.segments_per_frame == etg_zone.segments_per_frame);
+    xassert(eth_zone.num_frames == BA);
+    xassert(etg_zone.num_frames == BA);
 
-    long et_off = (iframe % rb_eth.rb_len) * rb_eth.nseg_per_beam;
-    float *et_src = this->host_ringbuf.data + (rb_eth.base_segment * S) + et_off;
-    float *et_dst = this->gpu_ringbuf.data + (rb_etg.base_segment * S) + et_off;
-    long et_nbytes = BB * rb_eth.nseg_per_beam * S * sizeof(float);
+    long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
+    float *et_src = this->host_ringbuf.data + (eth_zone.giant_segment_offset * S) + et_off;
+    float *et_dst = this->gpu_ringbuf.data + (etg_zone.giant_segment_offset * S) + et_off;
+    long et_nbytes = BB * eth_zone.segments_per_frame * S * sizeof(float);
     
     this->g2g_copy_kernel->apply(this->gpu_ringbuf, ibatch, it_chunk);     // gpu -> xfer
     this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, it_chunk);    // host -> et_host
