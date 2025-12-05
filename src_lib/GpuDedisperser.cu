@@ -149,31 +149,32 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
     // This is terrible for performance, but I'm just testing correctness for now.
     
     shared_ptr<MegaRingbuf> mega_ringbuf = plan->mega_ringbuf;
-    xassert(plan->host_ringbufs.size() == uint(plan->max_clag+1));
-    xassert(plan->xfer_ringbufs.size() == uint(plan->max_clag+1));
+    long max_clag = mega_ringbuf->max_clag;
+    xassert(mega_ringbuf->host_zones.size() == uint(max_clag+1));
+    xassert(mega_ringbuf->xfer_zones.size() == uint(max_clag+1));
     xassert_divisible(BT, BB);   // assert that length-BB copies don't "wrap"
     
-    for (int clag = 0; clag <= plan->max_clag; clag++) {
-        DedispersionPlan::Ringbuf &rb_host = plan->host_ringbufs.at(clag);
-        DedispersionPlan::Ringbuf &rb_xfer = plan->xfer_ringbufs.at(clag);
+    for (int clag = 0; clag <= max_clag; clag++) {
+        MegaRingbuf::Zone &host_zone = mega_ringbuf->host_zones.at(clag);
+        MegaRingbuf::Zone &xfer_zone = mega_ringbuf->xfer_zones.at(clag);
 
-        xassert(rb_host.nseg_per_beam == rb_xfer.nseg_per_beam);
-        xassert(rb_host.rb_len == clag*BT + BA);
-        xassert(rb_xfer.rb_len == 2*BA);
+        xassert(host_zone.segments_per_frame == xfer_zone.segments_per_frame);
+        xassert(host_zone.num_frames == clag*BT + BA);
+        xassert(xfer_zone.num_frames == 2*BA);
 
-        if (rb_host.nseg_per_beam == 0)
+        if (host_zone.segments_per_frame == 0)
             continue;
         
-        char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (rb_host.base_segment * SB);
-        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (rb_xfer.base_segment * SB);
+        char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.giant_segment_offset * SB);
+        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (xfer_zone.giant_segment_offset * SB);
         
-        long hsrc = (iframe + BA) % rb_host.rb_len;  // host src phase
-        long hdst = (iframe) % rb_host.rb_len;       // host dst phase
-        long xsrc = (iframe) % rb_xfer.rb_len;       // xfer src phase
-        long xdst = (iframe + BA) % rb_xfer.rb_len;  // xfer dst phase
+        long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
+        long hdst = (iframe) % host_zone.num_frames;       // host dst phase
+        long xsrc = (iframe) % xfer_zone.num_frames;       // xfer src phase
+        long xdst = (iframe + BA) % xfer_zone.num_frames;  // xfer dst phase
         
-        long m = rb_host.nseg_per_beam * SB;  // nbytes per frame
-        long n = BB * m;                      // nbytes to copy
+        long m = host_zone.segments_per_frame * SB;  // nbytes per frame
+        long n = BB * m;                             // nbytes to copy
         
         CUDA_CALL(cudaMemcpyAsync(xp + xdst*m, hp + hsrc*m, n, cudaMemcpyHostToDevice, stream));
         CUDA_CALL(cudaMemcpyAsync(hp + hdst*m, xp + xsrc*m, n, cudaMemcpyDeviceToHost, stream));
