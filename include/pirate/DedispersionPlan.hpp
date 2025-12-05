@@ -129,6 +129,7 @@ struct DedispersionPlan
     ksgpu::Array<uint> g2g_rb_locs;      // copy from gpu_ringbufs to xfer_ringbufs
     ksgpu::Array<uint> h2h_rb_locs;      // copy from host_ringbufs to et_host_ringbuf
 
+    std::shared_ptr<MegaRingbuf> mega_ringbuf0;  // one producer, one consumer
     std::shared_ptr<MegaRingbuf> mega_ringbuf;
 };
 
