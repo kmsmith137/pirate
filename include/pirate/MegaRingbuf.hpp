@@ -140,10 +140,13 @@ namespace pirate {
 //     depends on whether PCIe bandwidth or host memory bandwidth is a larger
 //     bottleneck.
 //
+//   - Constructor args to limit GPU memory usage.
+//
 //   - Some form of beam "batching" (this batch size can be independent of the
 //     batch size used for compute!).
 //
 //   - Update-in-place (memory optimization).
+
 
 
 struct MegaRingbuf {
@@ -162,7 +165,6 @@ struct MegaRingbuf {
         double gpu_clag_maxfrac = 1.0;   // set to 1 to disable (default)
     };
 
-    
     MegaRingbuf(const Params &params);
 
     // After constructing the MegaRingbuf, the caller calls add_segment() many
@@ -171,20 +173,34 @@ struct MegaRingbuf {
 
     void add_segment(long producer_id, long producer_iview, long consumer_id, long consumer_iview, long chunk_lag);
     void finalize(bool delete_internals=true);
-    void allocate(bool hugepages);  // allocate memory on both CPU and GPU
 
+    // Usually, 'nelts_per_segment' will be (1024/dtype.nbits), but may be different
+    // in some unit-testing situations.
+    void allocate(ksgpu::Dtype dtype, int nelts_per_segment, bool hugepages);
+
+    Params params;
     long num_producers = 0;
     long num_consumers = 0;
 
-    // These arrays are created in finalize().
-    // (producer_id) -> (array of shape (producer_num_views[producer_id],4))
-    // (consumer_id) -> (array of shape (consumer_num_views[consumer_id],4))
-    std::vector<ksgpu::Array<uint>> producer quadruples;
-    std::vector<ksgpu::Array<uint>> consumer_quadruples;
-
     // "Giant" buffers are created in allocate(), and contain all zones.
-    ksgpu::Array<void> cpu_giant_buffer;
+    ksgpu::Array<void> host_giant_buffer;
     ksgpu::Array<void> gpu_giant_buffer;
+    bool is_allocated = false;
+
+    // Quadruples/octuples (see above).
+    //
+    // These arrays are created in finalize(), and are always on the host.
+    // The MegaRingbuf does not contain code to copy them to the GPU.
+    // Instead, they get copied to the GPU in the individual compute kernels.
+    //
+    // (producer_id) -> (array of shape (producer_num_views[producer_id], 4))
+    // (consumer_id) -> (array of shape (consumer_num_views[consumer_id], 4))
+    
+    std::vector<ksgpu::Array<uint>> producer_quadruples;
+    std::vector<ksgpu::Array<uint>> consumer_quadruples;
+    ksgpu::Array<uint> g2g_octuples;   // shape (segments_to_copy, 8)
+    ksgpu::Array<uint> h2h_octuples;   // shape (segments_to_copy, 8)
+    bool is_finalized = false;
 
     // ------------------------------------------------------------------------
     //
@@ -194,21 +210,22 @@ struct MegaRingbuf {
     struct Segment
     {
         long num_consumers = 0;
+        long consumer_ids[max_consumers_per_producer];
         long consumer_iviews[max_consumers_per_producer];
         long chunk_lags[max_consumers_per_producer];
     };
 
-    // (producer_id) -> (producer_iview) -> (consumer ids, iviews)
+    // These members are updated in add_segment(), and used in finalize().
+    // segments[producer_id][producer_iview] = (Segment containing consumer ids/iviews/lags)
     std::vector<std::vector<Segment>> segments;
-    int max_clag = 0;
-
+    long max_clag = 0;
 
     // Zones are created in finalize().
     struct Zone
     {
         long num_frames = 0;
         long segments_per_frame = 0;
-        long giant_segment_offset = 0;
+        long giant_segment_offset = -1;
     };
 
     // All vector<Zone> objects have length (max_clag + 1).
@@ -220,7 +237,43 @@ struct MegaRingbuf {
 
     Zone et_host_zone;  // rb_len = BA, on host (send buffer)
     Zone et_gpu_zone;   // rb_len = BA, on GPU (recv buffer)
+
+    long max_gpu_clag = 0;
+    long host_giant_nseg = 0;
+    long gpu_giant_nseg = 0;
+
+    // Triples are used temporarily in finalize().
+    struct Triple
+    {
+        // Formerly:
+        // struct RingbufEntry
+        // {
+        //    Ringbuf *rb = nullptr;
+        //    long xlag = 0;   // lag of (time chunk, beam) pair (usually clag * total beams)
+        //    long iseg = 0;   // ring buffer segment index, within (time chunk, beam) pair.
+        // }
+        Zone *zone = nullptr;
+        long frame_lag = 0;
+        long segment_within_frame = 0;
+    };
+
+
+    std::vector< std::vector<Triple> > producer_triples;
+    std::vector< std::vector<Triple> > consumer_triples;
+    std::vector<Triple> g2g_triples;   // (src,dst) pairs
+    std::vector<Triple> h2h_triples;   // (src,dst) pairs
+
+    // Helpers for _finalize().
+    void _set_triple(Triple &t, Zone *zp, long frame_lag, long segment_within_frame);
+    void _push_triple(std::vector<Triple> &triples, Zone *zp, long frame_lag, long segment_within_frame);
+    void _lay_out_zones(std::vector<Zone> &zones, bool on_gpu);
+    void _lay_out_zone(Zone &z, bool on_gpu);
+
+    ksgpu::Array<uint> _triples_to_quadruples(const std::vector<Triple> &triples);
+    std::vector<ksgpu::Array<uint>> _triples_to_quadruples(const std::vector<std::vector<Triple>> &triples);
 };
 
+
+} // namespace pirate
 
 #endif // _PIRATE_MEGA_RINGBUF_HPP

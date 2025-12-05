@@ -108,6 +108,7 @@ LIB_SRCFILES = \
   src_lib/GpuDedisperser.cu \
   src_lib/GpuLaggedDownsamplingKernel.cu \
   src_lib/LaggedDownsamplingKernelParams.cu \
+  src_lib/MegaRingbuf.cu \
   src_lib/PeakFindingKernel.cu \
   src_lib/ReferenceDedisperser.cu \
   src_lib/ReferenceLagbuf.cu \
@@ -177,6 +178,7 @@ HFILES = \
   include/pirate/FakeServer.hpp \
   include/pirate/KernelRegistry.hpp \
   include/pirate/LaggedDownsamplingKernel.hpp \
+  include/pirate/MegaRingbuf.hpp \
   include/pirate/PeakFindingKernel.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
