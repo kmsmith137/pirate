@@ -1,6 +1,7 @@
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
+#include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
 
@@ -31,8 +32,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     config(deref(plan_)->config)
 {
     // Some features are not implemented yet.
-    xassert(plan->g2g_rb_locs.size == 0);
-    xassert(plan->h2h_rb_locs.size == 0);
+    xassert(plan->mega_ringbuf->g2g_octuples.size == 0);
+    xassert(plan->mega_ringbuf->h2h_octuples.size == 0);
 
     // There's some cut-and-paste between this constructor and the ReferenceDedisperser
     // constructor, but not enough to bother defining a common base class.
@@ -42,8 +43,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     this->input_ntime = config.time_samples_per_chunk;
     this->total_beams = config.beams_per_gpu;
     this->beams_per_batch = config.beams_per_batch;
-    this->gpu_ringbuf_nelts = plan->gmem_ringbuf_nseg * plan->nelts_per_segment;
-    this->host_ringbuf_nelts = plan->hmem_ringbuf_nseg * plan->nelts_per_segment;
+    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment;
+    this->host_ringbuf_nelts = plan->mega_ringbuf->host_giant_nseg * plan->nelts_per_segment;
     this->nbatches = xdiv(total_beams, beams_per_batch);
     this->nstreams = config.num_active_batches;
 
@@ -146,7 +147,8 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
     // There is some cut-and-paste with ReferenceDedisperser, but not enough to bother refactoring.
     // FIXME: currently putting copies on the compute stream!
     // This is terrible for performance, but I'm just testing correctness for now.
-           
+    
+    shared_ptr<MegaRingbuf> mega_ringbuf = plan->mega_ringbuf;
     xassert(plan->host_ringbufs.size() == uint(plan->max_clag+1));
     xassert(plan->xfer_ringbufs.size() == uint(plan->max_clag+1));
     xassert_divisible(BT, BB);   // assert that length-BB copies don't "wrap"
@@ -205,8 +207,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks)
     print_kv("nchunks", nchunks, cout, 4);
     
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    print_kv("max_clag", plan->max_clag, cout, 4);
-    print_kv("max_gpu_clag", plan->max_gpu_clag, cout, 4);
+    print_kv("max_clag", plan->mega_ringbuf->max_clag, cout, 4);
+    print_kv("max_gpu_clag", plan->mega_ringbuf->max_gpu_clag, cout, 4);
     
     int nfreq = pow2(config.tree_rank);
     int nt_chunk = config.time_samples_per_chunk;
