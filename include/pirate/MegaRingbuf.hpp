@@ -265,8 +265,8 @@ struct MegaRingbuf {
     std::vector<Triple> h2h_triples;   // (src,dst) pairs
 
     // Helpers for _finalize().
-    void _set_triple(Triple &t, Zone *zp, long frame_lag, long segment_within_frame);
-    void _push_triple(std::vector<Triple> &triples, Zone *zp, long frame_lag, long segment_within_frame);
+    void _set_triple(Triple &t, Zone *zp, long frame_lag);
+    void _push_triple(std::vector<Triple> &triples, Zone *zp, long frame_lag);
     void _lay_out_zones(std::vector<Zone> &zones, bool on_gpu);
     void _lay_out_zone(Zone &z, bool on_gpu);
 

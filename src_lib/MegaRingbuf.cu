@@ -161,29 +161,30 @@ void MegaRingbuf::finalize(bool delete_internals)
             Zone *host_zone = (ncpu > 0) ? &host_zones.at(host_clag) : nullptr;
             Zone *xfer_zone = (ncpu > 0) ? &xfer_zones.at(host_clag) : nullptr;
 
-            long gpu_iseg = (ngpu > 0) ? (gpu_zone->segments_per_frame++) : (-1);
-            long host_iseg = (ncpu > 0) ? (host_zone->segments_per_frame++) : (-1);
-
-            // Keep xfer_zone->segments_per_frame in sync with host_zone->segments_per_frame.
-            if (ncpu > 0)
-                xfer_zone->segments_per_frame++;
-
             // Now we're ready to implement steps 1 and 2 above.
 
             Triple &producer = producer_triples.at(producer_id).at(producer_iview);
             xassert(producer.zone == nullptr);   // paranoid
 
-            if (ncpu == 0)
+            if (ncpu == 0) {
                 // producer -> gpu_zone
-                _set_triple(producer, gpu_zone, 0, gpu_iseg);
-            else if (ngpu == 0)
+                gpu_zone->segments_per_frame++;  // see comment just above _set_triple()
+                _set_triple(producer, gpu_zone, 0);
+            }
+            else if (ngpu == 0) {
                 // producer -> xfer_zone
-                _set_triple(producer, xfer_zone, 0, host_iseg);
+                host_zone->segments_per_frame++;
+                xfer_zone->segments_per_frame++;
+                _set_triple(producer, xfer_zone, 0);
+            }
             else {
                 // producer -> gpu_zone -> xfer zone 
-                _set_triple(producer, gpu_zone, 0, gpu_iseg);
-                _push_triple(g2g_triples, gpu_zone, gpu_clag * BT, gpu_iseg);  // g2g src
-                _push_triple(g2g_triples, xfer_zone, 0, host_iseg);            // g2g dst
+                gpu_zone->segments_per_frame++; 
+                host_zone->segments_per_frame++;
+                xfer_zone->segments_per_frame++;
+                _set_triple(producer, gpu_zone, 0);
+                _push_triple(g2g_triples, gpu_zone, gpu_clag * BT);  // g2g src
+                _push_triple(g2g_triples, xfer_zone, 0);            // g2g dst
             }
 
             // Inner loop over consumers. This implements steps 4 and 5 above.
@@ -200,20 +201,18 @@ void MegaRingbuf::finalize(bool delete_internals)
 
                 if (c < ngpu)
                     // gpu_zone -> consumer
-                    _set_triple(consumer, gpu_zone, chunk_lag * BT, gpu_iseg);
+                    _set_triple(consumer, gpu_zone, chunk_lag * BT);
                 else if (chunk_lag == gpu_clag + host_clag)
                     // xfer_zone -> consumer
-                    _set_triple(consumer, xfer_zone, BA, host_iseg);
+                    _set_triple(consumer, xfer_zone, BA);
                 else {
                     // host_zone -> et_host_zone
                     // et_gpu_zone -> consumer
-                    long et_iseg = et_host_zone.segments_per_frame;
                     et_host_zone.segments_per_frame++;
                     et_gpu_zone.segments_per_frame++;
-
-                    _push_triple(h2h_triples, host_zone, (chunk_lag-gpu_clag) * BT, host_iseg);  // h2h src
-                    _push_triple(h2h_triples, &et_host_zone, 0, et_iseg);                        // h2h dst
-                    _set_triple(consumer, &et_gpu_zone, 0, et_iseg);
+                    _push_triple(h2h_triples, host_zone, (chunk_lag-gpu_clag) * BT);  // h2h src
+                    _push_triple(h2h_triples, &et_host_zone, 0);                      // h2h dst
+                    _set_triple(consumer, &et_gpu_zone, 0);
                 }
             }
         }
@@ -275,23 +274,25 @@ void MegaRingbuf::allocate(Dtype dtype, int nelts_per_segment, bool hugepages)
     this->is_allocated = true;
 }
 
-
-void MegaRingbuf::_set_triple(Triple &t, Zone *zp, long frame_lag, long segment_within_frame)
+// Note: no 'segment_within_frame' arg!
+// Instead, we set t.segment_within_frame to point to the last segment in the zone 'zp'.
+// Caller is responsible for incrementing zp->segments_per_frame if needed.
+void MegaRingbuf::_set_triple(Triple &t, Zone *zp, long frame_lag)
 {
     xassert(zp != nullptr);
+    xassert(zp->segments_per_frame > 0);
     xassert((frame_lag >= 0) && (frame_lag < zp->num_frames));
-    xassert(segment_within_frame == zp->segments_per_frame-1);  // hmmm
     xassert(t.zone == nullptr);
 
     t.zone = zp;
     t.frame_lag = frame_lag;
-    t.segment_within_frame = segment_within_frame;
+    t.segment_within_frame = zp->segments_per_frame - 1;  // last segment in zone
 }
 
-void MegaRingbuf::_push_triple(std::vector<Triple> &triples, Zone *zp, long frame_lag, long segment_within_frame)
+void MegaRingbuf::_push_triple(std::vector<Triple> &triples, Zone *zp, long frame_lag)
 {
     Triple t;
-    _set_triple(t, zp, frame_lag, segment_within_frame);
+    _set_triple(t, zp, frame_lag);
     triples.push_back(t);
 }
 
