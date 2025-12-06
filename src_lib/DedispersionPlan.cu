@@ -26,10 +26,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     // Part 1:
     //   - Initialize stage1_trees, stage2_trees.
-    //   - Initialize max_n1 (max number of Stage2Trees, per Stage1Tree).
     //   - Initialize stage1_ntrees, stage2_ntrees.
-
-    int max_n1 = 0;
     
     for (int ids = 0; ids < config.num_downsampling_levels; ids++) {
         
@@ -54,8 +51,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         st1.rank0 = st1_rank0;
         st1.rank1 = st1_rank - st1.rank0;
         st1.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
-        st1.segments_per_beam = pow2(st1_rank) * xdiv(st1.nt_ds, nelts_per_segment);
-        st1.base_segment = this->stage1_total_segments_per_beam;
 
         // FIXME should replace hardcoded 7,8 by something more descriptive
         // (GpuDedispersionKernel::max_rank?)
@@ -64,7 +59,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         xassert(st1.nt_ds > 0);
         
         this->stage1_trees.push_back(st1);
-        this->stage1_total_segments_per_beam += st1.segments_per_beam;
 
         for (int trigger_rank: trigger_ranks) {
             Stage2Tree st2;
@@ -73,17 +67,12 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             st2.rank1_ambient = st1.rank1;
             st2.rank1_trigger = trigger_rank - st2.rank0;
             st2.nt_ds = st1.nt_ds;
-            st2.segments_per_beam = pow2(trigger_rank) * xdiv(st2.nt_ds, nelts_per_segment);
-            st2.base_segment = this->stage2_total_segments_per_beam;
 
             xassert((st2.rank1_trigger >= 0) && (st2.rank1_trigger <= 8));
             xassert(st2.rank1_trigger <= st2.rank1_ambient);
                      
             this->stage2_trees.push_back(st2);
-            this->stage2_total_segments_per_beam += st2.segments_per_beam;
         }
-
-        max_n1 = max(max_n1, int(trigger_ranks.size()));
     }
 
     this->stage1_ntrees = stage1_trees.size();
@@ -99,10 +88,14 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     mrb_params.active_beams = config.num_active_batches * config.beams_per_batch;
     mrb_params.gpu_clag_maxfrac = config.gpu_clag_maxfrac;
 
-    for (const Stage1Tree &st1: this->stage1_trees)
-        mrb_params.producer_nviews.push_back(st1.segments_per_beam);
-    for (const Stage2Tree &st2: this->stage2_trees)
-        mrb_params.consumer_nviews.push_back(st2.segments_per_beam);
+    for (const Stage1Tree &st1: this->stage1_trees) {
+        long nviews = pow2(st1.rank0 + st1.rank1) * xdiv(st1.nt_ds, nelts_per_segment);
+        mrb_params.producer_nviews.push_back(nviews);
+    }
+    for (const Stage2Tree &st2: this->stage2_trees) {
+        long nviews = pow2(st2.rank0 + st2.rank1_trigger) * xdiv(st2.nt_ds, nelts_per_segment);
+        mrb_params.consumer_nviews.push_back(nviews);
+    }
 
     this->mega_ringbuf = std::make_shared<MegaRingbuf>(mrb_params);
 

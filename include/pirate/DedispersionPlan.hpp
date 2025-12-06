@@ -52,15 +52,11 @@ struct DedispersionPlan
     
     struct Stage1Tree
     {
-        // Note: total tree rank (rank0 + rank1) is equal to (config.tree_rank - (ds_level ? 1 : 0)).
-        
+        // Note: total tree rank (rank0 + rank1) is equal to (config.tree_rank - (ds_level ? 1 : 0)).        
         int ds_level = -1;  // downsampling level (downsampling "factor" is 2^level)
         int rank0 = 0;      // rank of Stage1Tree
         int rank1 = 0;      // rank of subsequent Stage2Tree (if no early trigger)
         int nt_ds = 0;      // downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
-        
-        int segments_per_beam = 0;   // equal to pow2(rank0+rank1) * (nt_ds / nelts_per_segment)
-        int base_segment = 0;        // cumulative (over all Stage1Trees) segment count
     };
 
     struct Stage2Tree
@@ -70,20 +66,13 @@ struct DedispersionPlan
         int rank1_ambient = 0;   // Same as Stage1Tree::rank1
         int rank1_trigger = 0;   // Can be smaller than rank1_ambient, for early trigger
         int nt_ds = 0;           // Same as Stage1Tree::nt_ds
-                
-        int segments_per_beam = 0;   // equal to pow2(rank0 + rank1_trigger) * (nt_ds / nelts_per_segment)
-        int base_segment = 0;        // cumulative (over all Stage2Trees) segment count
     };
-
 
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
     int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
     
     std::vector<Stage1Tree> stage1_trees;  // length stage1_ntrees
     std::vector<Stage2Tree> stage2_trees;  // length stage2_ntrees
-
-    long stage1_total_segments_per_beam = 0;
-    long stage2_total_segments_per_beam = 0;
 
     std::shared_ptr<MegaRingbuf> mega_ringbuf;
 };
