@@ -147,7 +147,9 @@ namespace pirate {
 //
 //   - Standalone (i.e. not dedispersion-specific) end-to-end unit test of the 
 //     MegaRingbuf.
-
+//
+//   - Better ability to inspect the MegaRingbuf -- for example, how well is
+//     it coalescing GPU<->CPU copies?
 
 
 struct MegaRingbuf {
@@ -175,18 +177,11 @@ struct MegaRingbuf {
     void add_segment(long producer_id, long producer_iview, long consumer_id, long consumer_iview, long chunk_lag);
     void finalize(bool delete_internals=true);
 
-    // Usually, 'nelts_per_segment' will be (1024/dtype.nbits), but may be different
-    // in some unit-testing situations.
-    void allocate(ksgpu::Dtype dtype, int nelts_per_segment, bool hugepages);
-
+    // Initialized in constructor.
     Params params;
     long num_producers = 0;
     long num_consumers = 0;
-
-    // "Giant" buffers are created in allocate(), and contain all zones.
-    ksgpu::Array<void> host_giant_buffer;
-    ksgpu::Array<void> gpu_giant_buffer;
-    bool is_allocated = false;
+    bool is_finalized = false;
 
     // Quadruples/octuples (see above).
     //
@@ -201,7 +196,14 @@ struct MegaRingbuf {
     std::vector<ksgpu::Array<uint>> consumer_quadruples;
     ksgpu::Array<uint> g2g_octuples;   // shape (segments_to_copy, 8)
     ksgpu::Array<uint> h2h_octuples;   // shape (segments_to_copy, 8)
-    bool is_finalized = false;
+
+    // Size of "giant" ring buffers on CPU and GPU, in "segments" not bytes.
+    // (Usually, a segment is 128 bytes, but there are some testing contexts
+    // where this isn't true, and it's more accurate to use segments here.)
+    
+    long host_giant_nseg = 0;
+    long gpu_giant_nseg = 0;
+
 
     // ------------------------------------------------------------------------
     //
@@ -216,10 +218,12 @@ struct MegaRingbuf {
         long chunk_lags[max_consumers_per_producer];
     };
 
-    // These members are updated in add_segment(), and used in finalize().
+    // Segments are updated in add_segment(), and used in finalize().
     // segments[producer_id][producer_iview] = (Segment containing consumer ids/iviews/lags)
     std::vector<std::vector<Segment>> segments;
-    long max_clag = 0;
+
+    long max_clag = 0;      // updated in add_segment()
+    long max_gpu_clag = 0;  // initialized in finalize()
 
     // Zones are created in finalize().
     struct Zone
@@ -232,16 +236,12 @@ struct MegaRingbuf {
     // All vector<Zone> objects have length (max_clag + 1).
     // BT = total beams, BA = active beams, BB = beams per batch.
     
-    std::vector<Zone> gpu_zones;    // rb_len = (clag*BT + BA), on GPU
-    std::vector<Zone> host_zones;   // rb_len = (clag*BT + BA), on host
-    std::vector<Zone> xfer_zones;   // rb_len = (2*BA), on GPU
+    std::vector<Zone> gpu_zones;    // frames_in_zone = (clag*BT + BA), on GPU
+    std::vector<Zone> host_zones;   // frames_in_zone = (clag*BT + BA), on host
+    std::vector<Zone> xfer_zones;   // frames_in_zone = (2*BA), on GPU
 
-    Zone et_host_zone;  // rb_len = BA, on host (send buffer)
-    Zone et_gpu_zone;   // rb_len = BA, on GPU (recv buffer)
-
-    long max_gpu_clag = 0;
-    long host_giant_nseg = 0;
-    long gpu_giant_nseg = 0;
+    Zone et_host_zone;  // frames_in_zone = BA, on host (send buffer)
+    Zone et_gpu_zone;   // frames_in_zone = BA, on GPU (recv buffer)
 
     // Triples are used temporarily in finalize().
     struct Triple

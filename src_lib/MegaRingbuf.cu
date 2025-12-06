@@ -259,21 +259,6 @@ void MegaRingbuf::finalize(bool delete_internals)
 }
 
 
-void MegaRingbuf::allocate(Dtype dtype, int nelts_per_segment, bool hugepages)
-{
-    if (!is_finalized)
-        throw runtime_error("MegaRingbuf::allocate() called before finalize()");
-    if (is_allocated)
-        throw runtime_error("double call to MegaRingbuf::allocate()");
-
-    xassert(nelts_per_segment > 0);
-    uint host_aflags = af_rhost | af_zero | (hugepages ? af_mmap_huge : 0);
-
-    this->host_giant_buffer = Array<void> (dtype, {host_giant_nseg, nelts_per_segment}, host_aflags);
-    this->gpu_giant_buffer = Array<void> (dtype, {gpu_giant_nseg, nelts_per_segment}, af_gpu | af_zero);
-    this->is_allocated = true;
-}
-
 // Note: no 'segment_within_frame' arg!
 // Instead, we set t.segment_within_frame to point to the last segment in the zone 'zp'.
 // Caller is responsible for incrementing zp->segments_per_frame if needed.
