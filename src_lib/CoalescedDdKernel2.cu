@@ -62,7 +62,7 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     this->registry_key.Tinner = (nt_in_per_wt < 32*SW) ? xdiv(32*SW, nt_in_per_wt) : 1;
 
     // Call static member function CoalescedDdKernel2::registry().
-    // this->registry_value = registry().get(registry_key);
+    this->registry_value = registry().get(registry_key);
 
     // Derived parameters chosen by the kernel.
     this->pf_weight_layout = registry_value.pf_weight_layout;
@@ -180,10 +180,8 @@ void CoalescedDdKernel2::launch(
 // Static member function: runs one randomized test iteration.
 void CoalescedDdKernel2::test()
 {
-#if 1
-    cout << "CoalescedDdKernel2::test() placeholder" << endl;
-#else
     RegistryKey key = registry().get_random_key();
+    Dtype dtype = key.dtype;
 
     long simd_width = xdiv(32, key.dtype.nbits);
     long pf_rank = key.subband_counts.size() - 1;
@@ -197,14 +195,15 @@ void CoalescedDdKernel2::test()
     long nchunks = v[0];
     long nt_in_per_chunk = nt_in_divisor * v[1];
     long beams_per_batch = v[2];
-    long total_beams = v[2] * v[3];
-    long amb_rank = long(log2(v[4] + 0.5));
+    long num_batches = v[3];
+    long total_beams = beams_per_batch * num_batches;
+    long amb_rank = max(8L, long(log2(v[4] + 0.5)));
     long lg_ndm_out = amb_rank + dd_rank - pf_rank;
 
     DedispersionKernelParams dd_params;
-    dd_params.dtype = key.dtype;
+    dd_params.dtype = dtype;
     dd_params.dd_rank = key.dd_rank;
-    dd_params.amb_rank = amb_rank
+    dd_params.amb_rank = amb_rank;
     dd_params.beams_per_batch = beams_per_batch;
     dd_params.total_beams = total_beams;
     dd_params.ntime = nt_in_per_chunk;
@@ -215,12 +214,13 @@ void CoalescedDdKernel2::test()
     dd_params.input_is_downsampled_tree = rand_bool();
     dd_params.nt_per_segment = xdiv(1024, dtype.nbits);
 
-    // How to make a random ringbuf???
-    dd_params.mega_ringbuf = xx;
+    long nviews = pow2(key.dd_rank + amb_rank) * xdiv(nt_in_per_chunk, dd_params.nt_per_segment);
+    dd_params.mega_ringbuf = MegaRingbuf::make_random_simplified(total_beams, beams_per_batch, nchunks, nviews);
+    dd_params.consumer_id = 0;
     
     PeakFindingKernelParams pf_params;
     pf_params.subband_counts = key.subband_counts;
-    pf_params.dtype = key.dtype;
+    pf_params.dtype = dtype;
     pf_params.max_kernel_width = key.W;
     pf_params.beams_per_batch = beams_per_batch;
     pf_params.total_beams = total_beams;
@@ -228,8 +228,142 @@ void CoalescedDdKernel2::test()
     pf_params.ndm_wt = pow2(rand_int(0, lg_ndm_out+1));
     pf_params.nt_out = xdiv(nt_in_per_chunk, key.Dout);
     pf_params.nt_in = nt_in_per_chunk;
-    pf_params.nt_wt = xidv(nt_in_per_chunk, nt_in_per_wt);
-#endif
+    pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
+
+    CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
+    cdd2_kernel.allocate();
+
+    ReferenceDedispersionKernel ref_dd_kernel(dd_params);
+    ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
+
+    FrequencySubbands &fs = cdd2_kernel.fs;
+    GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;
+
+    // Print this monstrosity.
+    cout << "CoalescedDdKernel2::test()\n"
+         << "    dtype=" << dtype.str() << "\n"
+         << "    dd_rank=" << dd_params.dd_rank << "\n"
+         << "    amb_rank=" << dd_params.amb_rank << "\n"
+         << "    pf_rank=" << pf_rank << "\n"
+         << "    subbands=" << ksgpu::tuple_str(key.subband_counts) << "\n"
+         << "    W=" << key.W << "\n"
+         << "    Dcore=" << cdd2_kernel.Dcore << "\n"
+         << "    Dout=" << key.Dout << "\n"
+         << "    Tinner=" << key.Tinner << "\n"
+         << "    M=" << fs.M << "\n"
+         << "    beams_per_batch=" << beams_per_batch << "\n"
+         << "    total_beams=" << total_beams << "\n"
+         << "    ndm_out=" << pf_params.ndm_out << "\n"
+         << "    ndm_wt=" << pf_params.ndm_wt << "\n"
+         << "    nt_in_per_chunk=" << nt_in_per_chunk << "\n"
+         << "    nt_out_per_chunk=" << pf_params.nt_out << "\n"
+         << "    nt_wt_per_chunk=" << pf_params.nt_wt << "\n"
+         << "    nchunks=" << nchunks << "\n" 
+         << endl;
+
+    // No subbands for now!
+    xassert(fs.pf_rank == pf_rank);
+    xassert(fs.F == 1);
+    xassert(fs.M == pow2(pf_rank));
+    xassert(fs.f_to_ilo[0] == 0);
+    xassert(fs.f_to_ihi[0] == pow2(pf_rank));
+    for (int m = 0; m < fs.M; m++) {
+        xassert(fs.m_to_f[m] == 0);
+        xassert(fs.m_to_d[m] == m);
+    }
+
+    long rb_nseg = dd_params.mega_ringbuf->gpu_giant_nseg;
+    long rb_nelts = rb_nseg * dd_params.nt_per_segment;
+    Array<float> in_cpu({rb_nelts}, af_rhost);
+
+    // Fill input ring buffer with fixed random data.
+    // Some data may be "replayed" across multiple time chunks, but that's okay.
+    for (long i = 0; i < rb_nelts; i++)
+        in_cpu.data[i] = rand_uniform(-1.0f, 1.0f);
+
+    // Copy to GPU (converting dtype if necessary)
+    Array<void> in_gpu = in_cpu.to_gpu(dtype);
+
+    // Set up tmp/output buffers
+    long B = dd_params.beams_per_batch;
+    long A = pow2(dd_params.amb_rank);
+    long T = nt_in_per_chunk;
+    long D = pow2(dd_params.dd_rank);
+    long M = fs.M;
+    long Dout = pow2(lg_ndm_out);
+    long Tout = pf_params.nt_out;
+
+    // Output buffer for ref dedispersion kernel, shape (beams_per_batch, pow2(pf.amb_rank), pow2(pf.dd_rank), nt_in)
+    Array<float> tmp_cpu({B,A,D,T}, af_uhost);
+
+    // Input buffer for ref peak-finding kernel, shape beams_per_batch, pf.ndm_out, M, nt_in)
+    Array<float> tmp2_cpu({B,Dout,M,T}, af_uhost);
+    xassert(Dout*M == A*D);
+
+    Array<float> max_cpu({B,Dout,Tout}, af_uhost | af_zero);
+    Array<uint> argmax_cpu({B,Dout,Tout}, af_uhost | af_zero);
+
+    Array<void> max_gpu(dtype, {B,Dout,Tout}, af_gpu | af_zero);
+    Array<uint> argmax_gpu({B,Dout,Tout}, af_gpu | af_zero);
+
+    // Tmp buffer for comparing "argmax" arrays, see below.
+    Array<float> max_x({B,Dout,Tout}, af_uhost | af_zero);
+
+    for (long ichunk = 0; ichunk < nchunks; ichunk++) {
+        for (long ibatch = 0; ibatch < num_batches; ibatch++) {
+            ref_dd_kernel.apply(in_cpu, tmp_cpu, ibatch, ichunk);
+
+            //  -------- FIXME ad hoc shuffling operation tmp_cpu -> tmp2_cpu starts here ------
+
+            for (long dm = 0; dm < A*D; dm++) {
+                // Convert "flattened" DM index -> (indices (a,d) in tmp array)
+                // The index 0 <= a < A represents a bit-reversed coarse DM.
+                // The index 0 <= d < D represents a bit-reversed fine DM.
+
+                long dm_brev = bit_reverse_slow(dm, dd_params.amb_rank + dd_params.dd_rank);
+                long a = dm_brev & (A-1);
+                long d = dm_brev >> dd_params.amb_rank;
+
+                float *src = &tmp_cpu.at({0,a,d,0});
+                long sstride = tmp_cpu.strides[0];
+
+                // Convert "flattened" DM index -> (indices dout,m) in tmp2 array)
+
+                long dout = dm >> pf_rank;
+                long m = dm & (M-1);
+
+                float *dst = &tmp2_cpu.at({0,dout,m,0});
+                long dstride = tmp2_cpu.strides[0];
+
+                // Copy tmp -> tmp2
+                for (long b = 0; b < B; b++)
+                    for (long t = 0; t < T; t++)
+                        dst[b*dstride + t] = src[b*sstride + t];
+            }
+
+            //  -------- FIXME ad hoc shuffling operation tmp_cpu -> tmp2_cpu ends here ------
+
+            // FIXME revisit ReferencePeakFindingKernel::make_random_weights() with subbands.
+            Array<float> wt_cpu = ref_pf_kernel.make_random_weights();
+            ref_pf_kernel.apply(max_cpu, argmax_cpu, tmp2_cpu, wt_cpu, ibatch);
+
+            // CPU kernel done! Now run the GPU kernel.
+            Array<void> wt_gpu = wl.to_gpu(wt_cpu);
+            cdd2_kernel.launch(max_gpu, argmax_gpu, in_gpu, wt_gpu, ibatch, ichunk, NULL);
+
+            // The "max" arrays can be compared straightforwardly.
+            assert_arrays_equal(max_cpu, max_gpu, "max_cpu", "max_gpu", {"b","d","tout"});
+
+            // For the "argmax" arrays, we have to do something weird.
+            // On the CPU, evaluate triggers at the "argmax_gpu" values.
+            Array<uint> argmax_x = argmax_gpu.to_host();
+            ref_pf_kernel.eval_tokens(max_x, argmax_x, wt_cpu);
+
+            // Then compare to "max_cpu", possibly at reduced precision.
+            double eps = 10 * dtype.precision();
+            assert_arrays_equal(max_cpu, max_x, "max_cpu", "max_x", {"b","d","tout"}, eps);
+        }
+    }
 }
 
 
