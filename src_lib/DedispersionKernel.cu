@@ -333,7 +333,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
     const uint *qp = quadruples.data;
     const float *dd = in.data;
     float *ringbuf = out.data;
-    
+
     // Loop over segments in tree.
     for (long s = 0; s < ns; s++) {
         for (long a = 0; a < A; a++) {
@@ -789,7 +789,9 @@ void GpuDedispersionKernel::test()
         params.producer_id = params.output_is_ringbuf ? 0 : -1;
         params.consumer_id = params.input_is_ringbuf ? 0 : -1;
         params.ringbuf_nseg = params.mega_ringbuf->gpu_giant_nseg;
-        params.ringbuf_locations = params.mega_ringbuf->producer_quadruples.at(0);
+
+        xassert(!params.input_is_ringbuf || !params.output_is_ringbuf);
+        params.ringbuf_locations = params.output_is_ringbuf ? params.mega_ringbuf->producer_quadruples.at(0) : params.mega_ringbuf->consumer_quadruples.at(0);
     }
 
     // Randomize strides.
