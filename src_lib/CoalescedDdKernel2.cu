@@ -190,7 +190,7 @@ void CoalescedDdKernel2::test()
     long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
 
-    auto v = ksgpu::random_integers_with_bounded_product(5, 200000 / pow2(dd_rank));
+    auto v = ksgpu::random_integers_with_bounded_product(5, 50000 / pow2(dd_rank));
     long nchunks = v[0];
     long nt_in_per_chunk = nt_in_divisor * v[1];
     long beams_per_batch = v[2];
@@ -200,14 +200,16 @@ void CoalescedDdKernel2::test()
     long lg_ndm_out = amb_rank + dd_rank - pf_rank;
 
     // Uncomment one or more lines below, to make the test instance smaller.
-    nchunks = 1;
-    nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : (32 * simd_width);
-    nt_in_per_chunk = max(32*simd_width, nt_in_per_wt);
-    beams_per_batch = 1;
-    num_batches = 1;
-    total_beams = beams_per_batch * num_batches;
-    amb_rank = 0;
-    lg_ndm_out = amb_rank + dd_rank - pf_rank;
+    // nchunks = 1;
+    // nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : (32 * simd_width);
+    // nt_in_per_chunk = max(32*simd_width, nt_in_per_wt);
+    // beams_per_batch = 1;
+    // num_batches = 1;
+    // amb_rank = 0;
+    //
+    // *** YOU MUST ALSO UNCOMMENT THE NEXT TWO LINES ***
+    // total_beams = beams_per_batch * num_batches;
+    // lg_ndm_out = amb_rank + dd_rank - pf_rank;
 
     DedispersionKernelParams dd_params;
     dd_params.dtype = dtype;
