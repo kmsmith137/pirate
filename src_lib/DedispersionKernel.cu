@@ -695,7 +695,8 @@ struct TestArrays
         const DedispersionKernelParams &p = tp.params;
         int aflags = (on_gpu ? af_gpu : af_rhost) | af_zero;
         
-        vector<long> rb_shape = { p.ringbuf_nseg * p.nt_per_segment * p.nspec };
+        long rb_nseg = p.mega_ringbuf ? p.mega_ringbuf->gpu_giant_nseg : 0;
+        vector<long> rb_shape = { rb_nseg * p.nt_per_segment * p.nspec };
         vector<long> big_dshape = { p.total_beams, pow2(p.amb_rank), pow2(p.dd_rank), tp.nchunks * p.ntime, p.nspec };
         vector<long> big_ishape = p.input_is_ringbuf ? rb_shape : big_dshape;
         vector<long> big_oshape = p.output_is_ringbuf ? rb_shape : big_dshape;
@@ -891,8 +892,9 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
     shared_ptr<GpuDedispersionKernel> kernel = make_shared<GpuDedispersionKernel> (params);
     kernel->allocate();
     
+    long rb_nseg = params.mega_ringbuf ? params.mega_ringbuf->gpu_giant_nseg : 0;
     vector<long> dd_shape = { params.total_beams, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime, params.nspec };
-    vector<long> rb_shape = { params.ringbuf_nseg * params.nt_per_segment * params.nspec };
+    vector<long> rb_shape = { rb_nseg * params.nt_per_segment * params.nspec };
     vector<long> in_shape = params.input_is_ringbuf ? rb_shape : dd_shape;
     vector<long> out_shape = params.output_is_ringbuf ? rb_shape : dd_shape;
 
