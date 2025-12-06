@@ -134,8 +134,9 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
     // (Check on act_stride is nontrivial, since it gets multiplied by a small integer in the kernel.)
     
     if (is_ringbuf) {
-        // Case 1: ringbuf, 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
-        xassert_shape_eq(arr, ({ params.ringbuf_nseg * params.nt_per_segment * params.nspec }));
+        // Case 1: ringbuf, 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+        xassert(params.mega_ringbuf);
+        xassert_shape_eq(arr, ({ params.mega_ringbuf->gpu_giant_nseg * params.nt_per_segment * params.nspec }));
         xassert(arr.get_ncontig() == 1);  // fully contiguous
         return;
     }

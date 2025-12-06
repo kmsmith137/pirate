@@ -125,7 +125,6 @@ struct DedispersionKernelParams
     //       nsegments_per_tree = pow2(dd_rank + amb_rank) * xdiv(ntime,nt_per_segment)
     //
     //    - See DedispersionPlan.hpp for more info on array contents.
-    
     ksgpu::Array<uint> ringbuf_locations;
     long ringbuf_nseg = 0;
 
