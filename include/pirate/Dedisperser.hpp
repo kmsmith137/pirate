@@ -63,6 +63,9 @@ struct GpuDedisperser
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
+    std::shared_ptr<GpuRingbufCopyKernel> g2g_copy_kernel;
+    std::shared_ptr<CpuRingbufCopyKernel> h2h_copy_kernel;
+
     bool is_allocated = false;
 
     // Bandwidth per call to GpuDedisperser::launch().

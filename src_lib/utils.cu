@@ -295,7 +295,7 @@ void scratch()
 
         int max_nchunks = 8192 / config.time_samples_per_chunk;  // round down
         int nchunks = ksgpu::rand_int(1, max_nchunks+1);
-        GpuDedisperser::test_one(config, nchunks, true);  // host_only=true
+        GpuDedisperser::test_one(config, nchunks, false);  // host_only=false
         // plan.print(cout, 4);
     }
 

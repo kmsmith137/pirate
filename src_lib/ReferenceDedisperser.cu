@@ -446,10 +446,10 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
 
 void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 {
-    const int BT = this->config.beams_per_gpu;            // total beams
-    const int BB = this->config.beams_per_batch;          // beams per batch
-    const int BA = this->config.num_active_batches * BB;  // active beams
-    const int S = plan->nelts_per_segment;
+    const long BT = this->config.beams_per_gpu;            // total beams
+    const long BB = this->config.beams_per_batch;          // beams per batch
+    const long BA = this->config.num_active_batches * BB;  // active beams
+    const long S = plan->nelts_per_segment;
 
     long iframe = (it_chunk * BT) + (ibatch * BB);
 
@@ -477,8 +477,8 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
     xassert(etg_zone.num_frames == BA);
 
     long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
-    float *et_src = this->host_ringbuf.data + (eth_zone.giant_segment_offset * S) + et_off;
-    float *et_dst = this->gpu_ringbuf.data + (etg_zone.giant_segment_offset * S) + et_off;
+    float *et_src = this->host_ringbuf.data + (eth_zone.giant_segment_offset + et_off) * S;
+    float *et_dst = this->gpu_ringbuf.data + (etg_zone.giant_segment_offset + et_off) * S;
     long et_nbytes = BB * eth_zone.segments_per_frame * S * sizeof(float);
     
     this->g2g_copy_kernel->apply(this->gpu_ringbuf, ibatch, it_chunk);     // gpu -> xfer

@@ -1,6 +1,7 @@
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
+#include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
@@ -31,10 +32,6 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     plan(plan_),
     config(deref(plan_)->config)
 {
-    // Some features are not implemented yet.
-    xassert(plan->mega_ringbuf->g2g_octuples.size == 0);
-    xassert(plan->mega_ringbuf->h2h_octuples.size == 0);
-
     // There's some cut-and-paste between this constructor and the ReferenceDedisperser
     // constructor, but not enough to bother defining a common base class.
     
@@ -83,6 +80,9 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     }
 
     this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);
+    this->g2g_copy_kernel = make_shared<GpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
+    this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
+
     this->bw_per_launch += lds_kernel->bw_per_launch;
 }
 
@@ -106,7 +106,9 @@ void GpuDedisperser::allocate()
 
     this->gpu_ringbuf = Array<void>(dtype, { gpu_ringbuf_nelts }, af_gpu | af_zero);
     this->host_ringbuf = Array<void>(dtype, { host_ringbuf_nelts }, af_rhost | af_zero);    
+
     this->lds_kernel->allocate();
+    this->g2g_copy_kernel->allocate();
 
     this->is_allocated = true;
 }
@@ -114,10 +116,10 @@ void GpuDedisperser::allocate()
 
 void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream_t stream)
 {
-    const int BT = this->config.beams_per_gpu;            // total beams
-    const int BB = this->config.beams_per_batch;          // beams per batch
-    const int BA = this->config.num_active_batches * BB;  // active beams
-    const int SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
+    const long BT = this->config.beams_per_gpu;            // total beams
+    const long BB = this->config.beams_per_batch;          // beams per batch
+    const long BA = this->config.num_active_batches * BB;  // active beams
+    const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
 
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert((istream >= 0) && (istream < nstreams));
@@ -141,7 +143,27 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
     }
 
     // Step 3: extra copying steps needed for early triggers.
-    // Placeholder: not implemented yet.
+
+    MegaRingbuf::Zone &eth_zone = plan->mega_ringbuf->et_host_zone;
+    MegaRingbuf::Zone &etg_zone = plan->mega_ringbuf->et_gpu_zone;
+    
+    xassert(eth_zone.segments_per_frame == etg_zone.segments_per_frame);
+    xassert(eth_zone.num_frames == BA);
+    xassert(etg_zone.num_frames == BA);
+
+    long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
+    char *et_src = (char *) this->host_ringbuf.data + (eth_zone.giant_segment_offset + et_off) * SB;
+    char *et_dst = (char *) this->gpu_ringbuf.data + (etg_zone.giant_segment_offset + et_off) * SB;
+    long et_nbytes = BB * eth_zone.segments_per_frame * SB;
+    
+    // copy gpu -> xfer
+    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ibatch, it_chunk, stream);
+
+    // copy host -> et_host
+    this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, it_chunk);
+
+     // copy et_host -> et_gpu (must come after h2h_copy_kernel)
+    CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, stream)); 
 
     // Step 4: copy host <-> xfer
     // There is some cut-and-paste with ReferenceDedisperser, but not enough to bother refactoring.
