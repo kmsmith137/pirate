@@ -173,7 +173,6 @@ void CoalescedDdKernel2::launch(
          ndm_out_per_wt, nt_in_per_wt);                  // uint ndm_out_per_wt, uint nt_in_per_wt
 
     CUDA_PEEK("coalesced_dd_kernel2 launch");
-    throw runtime_error("CoalescedDdKernel2::launch() not implemented");
 }
 
 
@@ -199,6 +198,16 @@ void CoalescedDdKernel2::test()
     long total_beams = beams_per_batch * num_batches;
     long amb_rank = max(8L, long(log2(v[4] + 0.5)));
     long lg_ndm_out = amb_rank + dd_rank - pf_rank;
+
+    // Uncomment one or more lines below, to make the test instance smaller.
+    nchunks = 1;
+    nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : (32 * simd_width);
+    nt_in_per_chunk = max(32*simd_width, nt_in_per_wt);
+    beams_per_batch = 1;
+    num_batches = 1;
+    total_beams = beams_per_batch * num_batches;
+    amb_rank = 0;
+    lg_ndm_out = amb_rank + dd_rank - pf_rank;
 
     DedispersionKernelParams dd_params;
     dd_params.dtype = dtype;
@@ -241,24 +250,24 @@ void CoalescedDdKernel2::test()
 
     // Print this monstrosity.
     cout << "CoalescedDdKernel2::test()\n"
-         << "    dtype=" << dtype.str() << "\n"
-         << "    dd_rank=" << dd_params.dd_rank << "\n"
-         << "    amb_rank=" << dd_params.amb_rank << "\n"
-         << "    pf_rank=" << pf_rank << "\n"
-         << "    subbands=" << ksgpu::tuple_str(key.subband_counts) << "\n"
-         << "    W=" << key.W << "\n"
-         << "    Dcore=" << cdd2_kernel.Dcore << "\n"
-         << "    Dout=" << key.Dout << "\n"
-         << "    Tinner=" << key.Tinner << "\n"
-         << "    M=" << fs.M << "\n"
-         << "    beams_per_batch=" << beams_per_batch << "\n"
-         << "    total_beams=" << total_beams << "\n"
-         << "    ndm_out=" << pf_params.ndm_out << "\n"
-         << "    ndm_wt=" << pf_params.ndm_wt << "\n"
-         << "    nt_in_per_chunk=" << nt_in_per_chunk << "\n"
-         << "    nt_out_per_chunk=" << pf_params.nt_out << "\n"
-         << "    nt_wt_per_chunk=" << pf_params.nt_wt << "\n"
-         << "    nchunks=" << nchunks << "\n" 
+         << "    dtype = " << dtype.str() << "\n"
+         << "    dd_rank = " << dd_params.dd_rank << "\n"
+         << "    amb_rank = " << dd_params.amb_rank << "\n"
+         << "    pf_rank = " << pf_rank << "\n"
+         << "    subbands = " << ksgpu::tuple_str(key.subband_counts) << "\n"
+         << "    W = " << key.W << "\n"
+         << "    Dcore = " << cdd2_kernel.Dcore << "\n"
+         << "    Dout = " << key.Dout << "\n"
+         << "    Tinner = " << key.Tinner << "\n"
+         << "    M = " << fs.M << "\n"
+         << "    beams_per_batch = " << beams_per_batch << "\n"
+         << "    total_beams = " << total_beams << "\n"
+         << "    ndm_out = " << pf_params.ndm_out << "\n"
+         << "    ndm_wt = "  << pf_params.ndm_wt << "\n"
+         << "    nt_in_per_chunk = " << nt_in_per_chunk << "\n"
+         << "    nt_out_per_chunk = " << pf_params.nt_out << "\n"
+         << "    nt_wt_per_chunk = " << pf_params.nt_wt << "\n"
+         << "    nchunks = " << nchunks << "\n" 
          << endl;
 
     // No subbands for now!

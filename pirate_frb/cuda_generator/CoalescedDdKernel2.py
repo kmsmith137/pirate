@@ -262,7 +262,7 @@ class CoalescedDdKernel2:
         nt_out32 = self._idiv('ntime', Dout*SW)
 
         k.emit(f'// FIXME could optimize out integer divisions')
-        k.emit(f'uint ndm_out = blockDim.x * gridDim.x;')
+        k.emit(f'uint ndm_out = blockDim.y * gridDim.x;')
         k.emit(f'uint lg2_ndm_out = __ffs(ndm_out) - 1;')
         k.emit(f'uint pf_beam = blockIdx.y;  // beam index is not bit-reversed')
         k.emit(f'uint dm_out_brev = threadIdx.y * gridDim.x + blockIdx.x;  // dm is bit-reversed')
