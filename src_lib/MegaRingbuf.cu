@@ -382,23 +382,27 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_random_simplified(long total_beams, lo
 
     for (long i = 0; i < nviews; i++) {
         long izone = rand_int(0, num_zones);
-        long num_frames = ret->gpu_zones.at(izone).num_frames;
+        Zone *zone = &ret->gpu_zones.at(izone);
+
+        long num_frames = zone->num_frames;
         long producer_frame_lag = rand_int(0, num_frames - 2*active_beams + 1);
         long consumer_frame_lag = rand_int(producer_frame_lag + active_beams, num_frames - active_beams + 1);
-        ret->_push_triple(ret->producer_triples.at(0), &ret->gpu_zones.at(izone), producer_frame_lag);
-        ret->_push_triple(ret->consumer_triples.at(0), &ret->gpu_zones.at(izone), consumer_frame_lag);
+
+        zone->segments_per_frame++;
+        ret->_push_triple(ret->producer_triples.at(0), zone, producer_frame_lag);
+        ret->_push_triple(ret->consumer_triples.at(0), zone, consumer_frame_lag);
     }
 
     ksgpu::randomly_permute(ret->producer_triples[0]);
     ksgpu::randomly_permute(ret->consumer_triples[0]);
 
+    ret->_lay_out_zones(ret->gpu_zones, true);
     ret->producer_quadruples = ret->_triples_to_quadruples(ret->producer_triples);
     ret->consumer_quadruples = ret->_triples_to_quadruples(ret->consumer_triples);
 
-    ret->_lay_out_zones(ret->gpu_zones, true);
     ret->_delete_internals();
-
     ret->is_finalized = true;
+    
     return ret;
 }
 

@@ -1,6 +1,7 @@
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/ReferenceTree.hpp"
+#include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"   // pow2(), is_aligned(), simd_type
 #include "../include/pirate/utils.hpp"     // bit_reverse_slow(
@@ -638,10 +639,7 @@ struct DedispTestInstance
     bool in_place = false;
     
     // Ring buffer (only used if params.input_is_ringbuf || params.output_is_ringbuf)
-    long rb_nzones = 0;
-    vector<long> rb_zone_len;   // length rb_nzones
-    vector<long> rb_zone_nseg;  // length rb_nzones
-    vector<long> rb_zone_base_seg;  // length rb_nzones
+    shared_ptr<MegaRingbuf> mega_ringbuf;
     
     // Strides for input/output arrays.
     // Reminder: arrays have shape (params.beams_per_batch, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime).
@@ -703,58 +701,18 @@ struct DedispTestInstance
 
     void randomize_ringbuf()
     {
-        // Now a sequence of steps to initialize:
-        //
+        // Initializes
+        //   mega_ringbuf;
         //   params.ringbuf_locations;
         //   params.ringbuf_nseg;
-        //   this->rb_nzones;
-        //   this->rb_zone_len;
-        //   this->rb_zone_nseg;
-        //   this->rb_zone_base_seg;
-
-        this->rb_nzones = rand_int(1, 11);
-        this->rb_zone_len = vector<long> (rb_nzones, 0);
-        this->rb_zone_nseg = vector<long> (rb_nzones, 0);
-        this->rb_zone_base_seg = vector<long> (rb_nzones, 0);
-        
-        for (long z = 0; z < rb_nzones; z++) {
-            long lmin = params.beams_per_batch;   // assumes that GPU does not run multiple batches in parallel
-            long lmax = params.total_beams * nchunks;
-            rb_zone_len[z] = rand_int(lmin, lmax+1);
-        }
 
         long nchan = pow2(params.dd_rank);
-        long nseg = nchan * pow2(params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
-        vector<pair<long,long>> pairs(nseg);   // map segment -> (rb_zone, rb_seg)
-        
-        for (long iseg = 0; iseg < nseg; iseg++) {
-            long z = rand_int(0, rb_nzones);
-            long n = rb_zone_nseg[z]++;
-            pairs[iseg] = {z,n};
-        }
-        
-        ksgpu::randomly_permute(pairs);
+        long nviews = nchan * pow2(params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
 
-        params.ringbuf_nseg = 0;
-        for (long z = 0; z < rb_nzones; z++) {
-            this->rb_zone_base_seg[z] = params.ringbuf_nseg;
-            params.ringbuf_nseg += rb_zone_len[z] * rb_zone_nseg[z];
-        }
-        
-        params.ringbuf_locations = Array<uint> ({nseg,4}, af_rhost | af_zero);
-        uint *rb_loc = params.ringbuf_locations.data;
-        
-        for (long iseg = 0; iseg < nseg; iseg++) {
-            long z = pairs[iseg].first;
-            long n = pairs[iseg].second;
-            long s = rb_zone_nseg[z];
-            long l = rb_zone_len[z];
-            
-            rb_loc[4*iseg] = rb_zone_base_seg[z] + n;    // giant_segment_offset (in segments, not bytes)
-            rb_loc[4*iseg+1] = rand_int(0, 2*l+1);        // frame_offset_within_zone
-            rb_loc[4*iseg+2] = l;                         // frames_in_zone
-            rb_loc[4*iseg+3] = s;                         // segments_per_frame
-        }
+        mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, this->nchunks, nviews);
+
+        params.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
+        params.ringbuf_locations = mega_ringbuf->producer_quadruples.at(0);  // just use producer_quadruples for now
     }
 
 
