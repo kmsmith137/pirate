@@ -281,8 +281,10 @@ public:
     // where ninner = cuda_kernel.pstate_32_per_small_tree * (32/nbits)
     ksgpu::Array<void> persistent_state;
 
+    // MegaRingbuf quadruples.
     // FIXME should add run-time check that current cuda device is consistent.
-    ksgpu::Array<uint> gpu_ringbuf_quadruples;
+    ksgpu::Array<uint> gpu_input_quadruples;   // iff (params.consumer_id >= 0)
+    ksgpu::Array<uint> gpu_output_quadruples;  // iff (params.producer_id >= 0)
 
     struct RegistryKey
     {

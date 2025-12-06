@@ -457,14 +457,22 @@ void GpuDedispersionKernel::allocate()
     std::initializer_list<long> shape = { params.total_beams, pow2(params.amb_rank), ninner };
     this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
 
-    // Copy host -> GPU.
-    if (params.input_is_ringbuf || params.output_is_ringbuf) {
-        this->gpu_ringbuf_quadruples = params.ringbuf_locations.to_gpu();
+    long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment);
 
-        long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment);
-        xassert_shape_eq(gpu_ringbuf_quadruples, ({nrb,4}));
-        xassert(gpu_ringbuf_quadruples.is_fully_contiguous());
-        xassert(gpu_ringbuf_quadruples.on_gpu());
+    // Copy quadruples from host to GPU.
+
+    if (params.input_is_ringbuf) {
+        this->gpu_input_quadruples = params.mega_ringbuf->consumer_quadruples.at(params.consumer_id).to_gpu();
+        xassert_shape_eq(gpu_input_quadruples, ({nrb,4}));
+        xassert(gpu_input_quadruples.is_fully_contiguous());
+        xassert(gpu_input_quadruples.on_gpu());
+    }
+
+    if (params.output_is_ringbuf) {
+        this->gpu_output_quadruples = params.mega_ringbuf->producer_quadruples.at(params.producer_id).to_gpu();
+        xassert_shape_eq(gpu_output_quadruples, ({nrb,4}));
+        xassert(gpu_output_quadruples.is_fully_contiguous());
+        xassert(gpu_output_quadruples.on_gpu());
     }
 
     this->is_allocated = true;
@@ -509,7 +517,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
         xassert(cuda_kernel != nullptr);
         
         cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-            (in.buf, gpu_ringbuf_quadruples.data, rb_pos,
+            (in.buf, gpu_input_quadruples.data, rb_pos,
              out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
              pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }   
@@ -520,7 +528,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
             
         cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
             (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
-             out.buf, gpu_ringbuf_quadruples.data, rb_pos,
+             out.buf, gpu_output_quadruples.data, rb_pos,
              pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }
     else
