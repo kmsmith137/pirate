@@ -402,7 +402,41 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_random_simplified(long total_beams, lo
 
     ret->_delete_internals();
     ret->is_finalized = true;
-    
+
+    return ret;
+}
+
+
+shared_ptr<MegaRingbuf> MegaRingbuf::make_trivial(long total_beams, long nviews)
+{
+    Params params;
+    params.total_beams = total_beams;
+    params.active_beams = total_beams;
+    params.producer_nviews = { nviews };
+    params.consumer_nviews = { nviews };
+
+    shared_ptr<MegaRingbuf> ret = make_shared<MegaRingbuf> (params);
+
+    ret->gpu_zones.resize(1);
+    ret->producer_triples.resize(1);
+    ret->consumer_triples.resize(1);
+
+    Zone *z = &ret->gpu_zones.at(0);
+    z->num_frames = 2 * total_beams;
+
+    for (long i = 0; i < nviews; i++) {
+        z->segments_per_frame++;
+        ret->_push_triple(ret->producer_triples.at(0), z, 0);
+        ret->_push_triple(ret->consumer_triples.at(0), z, total_beams);
+    }
+
+    ret->_lay_out_zones(ret->gpu_zones, true);
+    ret->producer_quadruples = ret->_triples_to_quadruples(ret->producer_triples);
+    ret->consumer_quadruples = ret->_triples_to_quadruples(ret->consumer_triples);
+
+    ret->_delete_internals();
+    ret->is_finalized = true;
+
     return ret;
 }
 

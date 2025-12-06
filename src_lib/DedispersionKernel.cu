@@ -944,24 +944,14 @@ void GpuDedispersionKernel::time()
                 params.nt_per_segment = xdiv(1024, dtype.nbits * nspec);
 
                 if (params.input_is_ringbuf || params.output_is_ringbuf) {
-                    // Make some nominal ringbuf locations.
-                    // The details shouldn't affect the timing much.
+                    long nseg_per_tree = pow2(params.dd_rank + params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
+                    
+                    params.mega_ringbuf = MegaRingbuf::make_trivial(params.total_beams, nseg_per_tree);
+                    params.producer_id = params.output_is_ringbuf ? 0 : -1;
+                    params.consumer_id = params.input_is_ringbuf ? 0 : -1;
 
-                    long frames_in_zone = 2 * params.total_beams;
-                    long nrows_per_tree = pow2(params.dd_rank + params.amb_rank);
-                    long nseg_per_row = xdiv(params.ntime, params.nt_per_segment);
-                    long nseg_per_tree = nrows_per_tree * nseg_per_row;
-
-                    params.ringbuf_nseg = frames_in_zone * nseg_per_tree;
-                    params.ringbuf_locations = Array<uint> ({nseg_per_tree,4}, af_rhost | af_zero);
-                    uint *rp = params.ringbuf_locations.data;
-
-                    for (long iseg = 0; iseg < nseg_per_tree; iseg++) {
-                        rp[4*iseg] = iseg;             // giant_segment_offset
-                        rp[4*iseg+1] = 0;              // frame_offset_within_zone
-                        rp[4*iseg+2] = frames_in_zone;         // frames_in_zone
-                        rp[4*iseg+3] = nseg_per_tree;  // segments_per_frame
-                    }
+                    params.ringbuf_nseg = params.mega_ringbuf->gpu_giant_nseg;
+                    params.ringbuf_locations = params.mega_ringbuf->producer_quadruples.at(0);
                 }
 
                GpuDedispersionKernel::_time(params);
