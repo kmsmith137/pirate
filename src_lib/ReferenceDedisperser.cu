@@ -402,8 +402,8 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     DedispersionBuffer stage1_dd_buf;
     DedispersionBuffer stage2_dd_buf;
 
-    long gpu_ringbuf_nelts = 0;    // = (plan->gmem_ringbuf_nseg * plan->nelts_per_segment)
-    long host_ringbuf_nelts = 0;   // = (plan->hmem_ringbuf_nseg * plan->nelts_per_segment)
+    long gpu_ringbuf_nelts = 0;    // = (mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment)
+    long host_ringbuf_nelts = 0;   // = (mega_ringbuf->host_giant_nseg * plan->nelts_per_segment)
     
     Array<float> gpu_ringbuf;
     Array<float> host_ringbuf;

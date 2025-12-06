@@ -65,25 +65,6 @@ void DedispersionKernelParams::validate() const
         xassert(mega_ringbuf);
         xassert_shape_eq(mega_ringbuf->producer_quadruples.at(producer_id), ({nsegments_per_beam,4}));
     }
-
-    // XXX to be deleted soon
-    if (input_is_ringbuf || output_is_ringbuf) {
-        long nsegments_per_tree = pow2(dd_rank+amb_rank) * xdiv(ntime,nt_per_segment);
-        xassert_shape_eq(ringbuf_locations, ({ nsegments_per_beam, 4 }));
-        xassert(ringbuf_locations.is_fully_contiguous());
-        xassert(ringbuf_nseg > 0);
-        xassert(ringbuf_nseg <= UINT_MAX);
-        xassert(ringbuf_locations.on_host());
-        
-        for (long iseg = 0; iseg < nsegments_per_tree; iseg++) {
-            const uint *rb_locs = ringbuf_locations.data + (4*iseg);
-            long giant_segment_offset = rb_locs[0];  // in segments, not bytes
-            // long frame_offset_within_zone = rb_locs[1];   // index of (time chunk, beam) pair, relative to current pair
-            long frames_in_zone = rb_locs[2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
-            long segments_per_frame = rb_locs[3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
-            xassert(giant_segment_offset + (frames_in_zone-1)*segments_per_frame < ringbuf_nseg);
-        }
-    }
 }
 
 
@@ -798,10 +779,6 @@ void GpuDedispersionKernel::test()
         params.mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, ti.nchunks, nviews);
         params.producer_id = params.output_is_ringbuf ? 0 : -1;
         params.consumer_id = params.input_is_ringbuf ? 0 : -1;
-        params.ringbuf_nseg = params.mega_ringbuf->gpu_giant_nseg;
-
-        xassert(!params.input_is_ringbuf || !params.output_is_ringbuf);
-        params.ringbuf_locations = params.output_is_ringbuf ? params.mega_ringbuf->producer_quadruples.at(0) : params.mega_ringbuf->consumer_quadruples.at(0);
     }
 
     // Randomize strides.
@@ -972,13 +949,9 @@ void GpuDedispersionKernel::time()
 
                 if (params.input_is_ringbuf || params.output_is_ringbuf) {
                     long nseg_per_tree = pow2(params.dd_rank + params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
-
                     params.mega_ringbuf = MegaRingbuf::make_trivial(params.total_beams, nseg_per_tree);
                     params.producer_id = params.output_is_ringbuf ? 0 : -1;
                     params.consumer_id = params.input_is_ringbuf ? 0 : -1;
-
-                    params.ringbuf_nseg = params.mega_ringbuf->gpu_giant_nseg;
-                    params.ringbuf_locations = params.mega_ringbuf->producer_quadruples.at(0);
                 }
 
                GpuDedispersionKernel::_time(params);

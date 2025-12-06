@@ -113,21 +113,6 @@ struct DedispersionKernelParams
     
     int nt_per_segment = 0;
 
-    // XXX to be deleted soon
-    // Notes on the DedispersionKernelParams::ringbuf_locations array:
-    //
-    //    - Only used if (input_is_ringbuf || output_is_ringbuf).
-    //
-    //    - Always on the host (even for a GPU kernel). The copy from host to GPU
-    //      happens in GpuDedispersionKernel::allocate().
-    //
-    //    - Shape is (nsegments_per_tree, 4), where:
-    //       nsegments_per_tree = pow2(dd_rank + amb_rank) * xdiv(ntime,nt_per_segment)
-    //
-    //    - See DedispersionPlan.hpp for more info on array contents.
-    ksgpu::Array<uint> ringbuf_locations;
-    long ringbuf_nseg = 0;
-
     // Ringbuf info (only used if (input_is_ringbuf || output_is_ringbuf)
     std::shared_ptr<MegaRingbuf> mega_ringbuf;  // used if (input_is_ringbuf || output_is_ringbuf)
     long producer_id = -1;                      // used if (output_is_ringbuf)
@@ -153,7 +138,7 @@ struct DedispersionKernelParams
 //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
 //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
 //
-//   Ring: 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
+//   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
 
 
 struct DedispersionKernelIobuf
@@ -283,8 +268,8 @@ public:
 
     // MegaRingbuf quadruples.
     // FIXME should add run-time check that current cuda device is consistent.
-    ksgpu::Array<uint> gpu_input_quadruples;   // iff (params.consumer_id >= 0)
-    ksgpu::Array<uint> gpu_output_quadruples;  // iff (params.producer_id >= 0)
+    ksgpu::Array<uint> gpu_input_quadruples;   // iff (params.input_is_ringbuf)
+    ksgpu::Array<uint> gpu_output_quadruples;  // iff (params.output_is_ringbuf)
 
     struct RegistryKey
     {

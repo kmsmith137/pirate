@@ -200,8 +200,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.apply_input_residual_lags = false;
         kparams.input_is_downsampled_tree = (st1.ds_level > 0);
         kparams.nt_per_segment = this->nelts_per_segment;
-        kparams.ringbuf_locations = mega_ringbuf->producer_quadruples.at(itree1);
-        kparams.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
         kparams.mega_ringbuf = mega_ringbuf;
         kparams.producer_id = itree1;
         kparams.validate();
@@ -234,8 +232,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.apply_input_residual_lags = true;
         kparams.input_is_downsampled_tree = (ds_level > 0);
         kparams.nt_per_segment = this->nelts_per_segment;
-        kparams.ringbuf_locations = mega_ringbuf->consumer_quadruples.at(itree2);
-        kparams.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
         kparams.mega_ringbuf = mega_ringbuf;
         kparams.consumer_id = itree2;
         kparams.validate();
