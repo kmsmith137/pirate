@@ -224,12 +224,6 @@ struct MegaRingbuf {
     // Zones are created in finalize().
     struct Zone
     {
-        // Formerly:
-        // struct Ringbuf {
-        // long rb_len = 0;           // number of (time chunk, beam) pairs, see below
-        // long nseg_per_beam = 0;    // size (in segments) per (time chunk, beam) pair
-        // long base_segment = -1;    // offset (in segments) relative to base memory address on either GPU or CPU
-        // };
         long num_frames = 0;
         long segments_per_frame = 0;
         long giant_segment_offset = -1;
@@ -252,13 +246,6 @@ struct MegaRingbuf {
     // Triples are used temporarily in finalize().
     struct Triple
     {
-        // Formerly:
-        // struct RingbufEntry
-        // {
-        //    Ringbuf *rb = nullptr;
-        //    long xlag = 0;   // lag of (time chunk, beam) pair (usually clag * total beams)
-        //    long iseg = 0;   // ring buffer segment index, within (time chunk, beam) pair.
-        // }
         Zone *zone = nullptr;
         long frame_lag = 0;
         long segment_within_frame = 0;

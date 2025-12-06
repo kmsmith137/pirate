@@ -1,8 +1,11 @@
 #include "../include/pirate/utils.hpp"
 #include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
+
+// For scratch()
 #include "../include/pirate/DedispersionConfig.hpp"  // DedispersionConfig::make_random()
-#include "../include/pirate/DedispersionPlan.hpp"  // DedispersionPlan()
+#include "../include/pirate/DedispersionPlan.hpp"    // DedispersionPlan()
+#include "../include/pirate/Dedisperser.hpp"      // GpuDedisperser::test_one()
 
 #include <sstream>
 #include <stdexcept>
@@ -287,9 +290,12 @@ void scratch()
     for (int i = 0; i < 100; i++) {
         cout << "Starting iteration " << i << endl;
         DedispersionConfig config = DedispersionConfig::make_random(true);  // allow_early_triggers=true
-        config.print(cout, 4);
+        config.num_active_batches = 1;   // FIXME currently we only support nstreams==1
         DedispersionPlan plan(config);
-        cout << endl;
+
+        int max_nchunks = 8192 / config.time_samples_per_chunk;  // round down
+        int nchunks = ksgpu::rand_int(1, max_nchunks+1);
+        GpuDedisperser::test_one(config, nchunks, true);  // host_only=true
         // plan.print(cout, 4);
     }
 

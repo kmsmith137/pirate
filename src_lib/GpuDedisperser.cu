@@ -201,7 +201,7 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
 
 
 // Static member function.
-void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks)
+void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, bool host_only)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.print(cout, 4);
@@ -210,6 +210,9 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks)
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
     print_kv("max_clag", plan->mega_ringbuf->max_clag, cout, 4);
     print_kv("max_gpu_clag", plan->mega_ringbuf->max_gpu_clag, cout, 4);
+
+    if (host_only)
+        cout << "!!! Host-only test, GPU code will not be run !!!" << endl;
     
     int nfreq = pow2(config.tree_rank);
     int nt_chunk = config.time_samples_per_chunk;
@@ -227,8 +230,12 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks)
     shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);
     shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, 2);
     
-    shared_ptr<GpuDedisperser> gdd = make_shared<GpuDedisperser> (plan);
-    gdd->allocate();
+    shared_ptr<GpuDedisperser> gdd;
+
+    if (!host_only) {
+        gdd = make_shared<GpuDedisperser> (plan);
+        gdd->allocate();
+    }
 
     // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
     double epsrel_r = 6 * Dtype::native<float>().precision();   // reference
@@ -251,20 +258,25 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks)
             rdd2->input_array.fill(arr);
             rdd2->dedisperse(b, c);
 
-            Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
-            gdd_inbuf.fill(arr.convert(config.dtype));
-            gdd->launch(b, c, 0, nullptr);  // (ibatch, it_chunk, istream, stream)
+            if (!host_only) {
+                Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
+                gdd_inbuf.fill(arr.convert(config.dtype));
+                gdd->launch(b, c, 0, nullptr);  // (ibatch, it_chunk, istream, stream)
+            }
             
             for (int iout = 0; iout < nout; iout++) {
                 const Array<float> &rdd0_out = rdd0->output_arrays.at(iout);
                 const Array<float> &rdd1_out = rdd1->output_arrays.at(iout);
                 const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
-                const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
-
+                
                 // Last two arguments are (epsabs, epsrel).
                 assert_arrays_equal(rdd0_out, rdd1_out, "soph0", "soph1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
                 assert_arrays_equal(rdd0_out, rdd2_out, "soph0", "soph2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
-                assert_arrays_equal(rdd0_out, gdd_out, "soph0", "gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
+
+                if (!host_only) {
+                    const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
+                    assert_arrays_equal(rdd0_out, gdd_out, "soph0", "gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
+                }
             }
         }
     }
