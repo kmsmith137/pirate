@@ -68,7 +68,7 @@ static void _cpu_copy(void *ringbuf, const uint *locations, long nlocations, int
     for (long i = 0; i < nlocations; i++) {
         uint src_offset = locations[8*i];     // in segments, not bytes
         uint src_phase = locations[8*i+1];    // index of (time chunk, beam) pair, relative to current pair
-        uint src_len = locations[8*i+2];      // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::rb_len)
+        uint src_len = locations[8*i+2];      // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
         uint src_nseg = locations[8*i+3];     // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
         
         uint dst_offset = locations[8*i+4];
