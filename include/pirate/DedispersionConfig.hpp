@@ -77,7 +77,7 @@ struct DedispersionConfig
     int get_nelts_per_segment() const;
 
     // make_random(): used for unit tests.
-    static DedispersionConfig make_random(bool allow_early_triggers=false);
+    static DedispersionConfig make_random(bool allow_early_triggers=true);
 };
 
 extern bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);

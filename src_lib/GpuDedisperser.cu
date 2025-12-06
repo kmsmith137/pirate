@@ -219,7 +219,6 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
 // -------------------------------------------------------------------------------------------------
 //
 // GpuDedisperser::test()
-// FIXME could use a little cleanup
 
 
 // Static member function.
