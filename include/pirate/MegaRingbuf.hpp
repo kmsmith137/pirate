@@ -187,7 +187,8 @@ struct MegaRingbuf {
     //
     // These arrays are created in finalize(), and are always on the host.
     // The MegaRingbuf does not contain code to copy them to the GPU.
-    // Instead, they get copied to the GPU in the individual compute kernels.
+    // Instead, they get copied to the GPU in the individual compute kernels
+    // (for example, GpuDedispersionKernel::allocate()).
     //
     // (producer_id) -> (array of shape (producer_num_views[producer_id], 4))
     // (consumer_id) -> (array of shape (consumer_num_views[consumer_id], 4))
@@ -203,6 +204,11 @@ struct MegaRingbuf {
     
     long host_giant_nseg = 0;
     long gpu_giant_nseg = 0;
+
+    // Make a random "simplified" (pure-gpu) MegaRingbuf, intended for standalone
+    // testing of dedispersion kernels. See MegaRingbuf.cu for more info.
+
+    static std::shared_ptr<MegaRingbuf> make_random_simplified(long total_beams, long active_beams, long nchunks, long nviews);
 
 
     // ------------------------------------------------------------------------
@@ -262,6 +268,7 @@ struct MegaRingbuf {
     void _push_triple(std::vector<Triple> &triples, Zone *zp, long frame_lag);
     void _lay_out_zones(std::vector<Zone> &zones, bool on_gpu);
     void _lay_out_zone(Zone &z, bool on_gpu);
+    void _delete_internals();
 
     ksgpu::Array<uint> _triples_to_quadruples(const std::vector<Triple> &triples);
     std::vector<ksgpu::Array<uint>> _triples_to_quadruples(const std::vector<std::vector<Triple>> &triples);

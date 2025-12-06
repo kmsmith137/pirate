@@ -246,14 +246,8 @@ void MegaRingbuf::finalize(bool delete_internals)
 
     // Part 5: clean up.
 
-    if (delete_internals) {
-        this->segments.clear();
-        this->producer_triples.clear();
-        this->consumer_triples.clear();
-        this->g2g_triples.clear();
-        this->h2h_triples.clear();
-        // Zones can stay, since they don't take up much memory.
-    }
+    if (delete_internals)
+        this->_delete_internals();
 
     this->is_finalized = true;
 }
@@ -346,5 +340,67 @@ std::vector<ksgpu::Array<uint>> MegaRingbuf::_triples_to_quadruples(const std::v
 
     return ret;
 }
+
+void MegaRingbuf::_delete_internals()
+{
+    this->segments.clear();
+    this->producer_triples.clear();
+    this->consumer_triples.clear();
+    this->g2g_triples.clear();
+    this->h2h_triples.clear();
+    // Zones can stay, since they don't take up much memory.
+}
+
+// This static member function makes a random simplified MegaRingbuf as follows:
+//
+//   - num_consumers == num_producers == 1.
+//   - "pure gpu", i.e. no host_zones, xfer_zones, et_*_zones.
+//   - for each zone, frames_in_zone is random (i.e. unrelated to zone index)
+//   - segment assignment is random (i.e. unrelated to dedispersion)
+//
+// This is intended for standalone testing of (uncoalseced or coalesced) dedispersion
+// kernels, but is probably not useful for much else.
+
+shared_ptr<MegaRingbuf> MegaRingbuf::make_random_simplified(long total_beams, long active_beams, long nchunks, long nviews)
+{
+    Params params;
+    params.total_beams = total_beams;
+    params.active_beams = active_beams;
+    params.producer_nviews = { nviews };
+    params.consumer_nviews = { nviews };
+
+    shared_ptr<MegaRingbuf> ret = make_shared<MegaRingbuf> (params);
+
+    long num_zones = rand_int(1, 11);
+    ret->gpu_zones.resize(num_zones);
+
+    for (long i = 0; i < num_zones; i++)
+        ret->gpu_zones.at(i).num_frames = rand_int(2*active_beams, nchunks*total_beams + active_beams + 1);
+
+    ret->producer_triples.resize(1);
+    ret->consumer_triples.resize(1);
+
+    for (long i = 0; i < nviews; i++) {
+        long izone = rand_int(0, num_zones);
+        long num_frames = ret->gpu_zones.at(izone).num_frames;
+        long producer_frame_lag = rand_int(0, num_frames - 2*active_beams + 1);
+        long consumer_frame_lag = rand_int(producer_frame_lag + active_beams, num_frames - active_beams + 1);
+        ret->_push_triple(ret->producer_triples.at(0), &ret->gpu_zones.at(izone), producer_frame_lag);
+        ret->_push_triple(ret->consumer_triples.at(0), &ret->gpu_zones.at(izone), consumer_frame_lag);
+    }
+
+    ksgpu::randomly_permute(ret->producer_triples[0]);
+    ksgpu::randomly_permute(ret->consumer_triples[0]);
+
+    ret->producer_quadruples = ret->_triples_to_quadruples(ret->producer_triples);
+    ret->consumer_quadruples = ret->_triples_to_quadruples(ret->consumer_triples);
+
+    ret->_lay_out_zones(ret->gpu_zones, true);
+    ret->_delete_internals();
+
+    ret->is_finalized = true;
+    return ret;
+}
+
 
 }  // namespace pirate
