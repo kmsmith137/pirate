@@ -227,7 +227,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.print(cout, 4);
     print_kv("nchunks", nchunks, cout, 4);
-    
+
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
     print_kv("max_clag", plan->mega_ringbuf->max_clag, cout, 4);
     print_kv("max_gpu_clag", plan->mega_ringbuf->max_gpu_clag, cout, 4);
@@ -250,7 +250,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, 0);
     shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);
     shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, 2);
-    
+
     shared_ptr<GpuDedisperser> gdd;
 
     if (!host_only) {

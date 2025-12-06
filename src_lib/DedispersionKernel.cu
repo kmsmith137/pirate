@@ -303,27 +303,34 @@ void ReferenceDedispersionKernel::_init_rlags()
 // Helper function called by apply().
 void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
+    xassert(params.mega_ringbuf);
+    xassert(params.producer_id >= 0);
+
     long B = params.beams_per_batch;
     long A = pow2(params.amb_rank);
     long N = pow2(params.dd_rank);
     long T = params.ntime;
     long S = params.nspec;
-    long R = params.ringbuf_nseg;
+    long R = params.mega_ringbuf->gpu_giant_nseg;
     long RS = params.nt_per_segment * params.nspec;
     long ns = xdiv(T, params.nt_per_segment);
 
     xassert_shape_eq(in, ({B,A,N,T*S}));  // dedispersion buffer (4-d assumed)
     xassert_shape_eq(out, ({R*RS}));      // ringbuf
-    xassert_shape_eq(params.ringbuf_locations, ({ns*A*N,4}));
 
     xassert(in.get_ncontig() >= 1);
     xassert(out.is_fully_contiguous());
+
+    const ksgpu::Array<uint> &quadruples = params.mega_ringbuf->producer_quadruples.at(params.producer_id);
+    xassert_shape_eq(quadruples, ({ns*A*N,4}));
+    xassert(quadruples.is_fully_contiguous());
+    xassert(quadruples.on_host());
 
     long dd_bstride = in.strides[0];
     long dd_astride = in.strides[1];
     long dd_nstride = in.strides[2];
 
-    const uint *rb_loc = params.ringbuf_locations.data;
+    const uint *qp = quadruples.data;
     const float *dd = in.data;
     float *ringbuf = out.data;
     
@@ -334,10 +341,10 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
                 long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
                 const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*RS;  // address in dedispersion buf (at beam 0)
 
-                uint giant_segment_offset = rb_loc[4*iseg];    // in segments, not bytes
-                uint frame_offset_within_zone = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
-                uint frames_in_zone = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
-                uint segments_per_frame = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+                uint giant_segment_offset = qp[4*iseg];         // in segments, not bytes
+                uint frame_offset_within_zone = qp[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
+                uint frames_in_zone = qp[4*iseg+2];             // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
+                uint segments_per_frame = qp[4*iseg+3];         // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
                 
                 for (long b = 0; b < B; b++) {
                     uint i = (rb_pos + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
@@ -353,23 +360,30 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
 // Helper function called by apply().
 void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
 {
+    xassert(params.mega_ringbuf);
+    xassert(params.consumer_id >= 0);
+
     long B = params.beams_per_batch;
     long A = pow2(params.amb_rank);
     long N = pow2(params.dd_rank);
     long T = params.ntime;
     long S = params.nspec;
-    long R = params.ringbuf_nseg;
+    long R = params.mega_ringbuf->gpu_giant_nseg;
     long RS = params.nt_per_segment * params.nspec;
     long ns = xdiv(T, params.nt_per_segment);
 
     xassert_shape_eq(in, ({R*RS}));        // ringbuf
     xassert_shape_eq(out, ({B,A,N,T*S}));  // dedispersion buffer (4-d assumed)
-    xassert_shape_eq(params.ringbuf_locations, ({ns*A*N,4}));
     
     xassert(in.is_fully_contiguous());
     xassert(out.get_ncontig() >= 1);
 
-    const uint *rb_loc = params.ringbuf_locations.data;
+    const ksgpu::Array<uint> &quadruples = params.mega_ringbuf->consumer_quadruples.at(params.consumer_id);
+    xassert_shape_eq(quadruples, ({ns*A*N,4}));
+    xassert(quadruples.is_fully_contiguous());
+    xassert(quadruples.on_host());
+
+    const uint *qp = quadruples.data;
     const float *ringbuf = in.data;
     float *dd = out.data;
     
@@ -385,10 +399,10 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
                 long iseg = s*A*N + a*N + n;         // index in rb_loc array (same for all beams)
                 float *dd0 = dd + n*dd_nstride + a*dd_astride + s*RS; // address in dedispersion buf (at beam 0)
                 
-                uint giant_segment_offset = rb_loc[4*iseg];    // in segments, not bytes
-                uint frame_offset_within_zone = rb_loc[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
-                uint frames_in_zone = rb_loc[4*iseg+2];     // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
-                uint segments_per_frame = rb_loc[4*iseg+3];    // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+                uint giant_segment_offset = qp[4*iseg];         // in segments, not bytes
+                uint frame_offset_within_zone = qp[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
+                uint frames_in_zone = qp[4*iseg+2];             // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
+                uint segments_per_frame = qp[4*iseg+3];         // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
                 
                 for (long b = 0; b < B; b++) {
                     uint i = (rb_pos + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
@@ -945,7 +959,7 @@ void GpuDedispersionKernel::time()
 
                 if (params.input_is_ringbuf || params.output_is_ringbuf) {
                     long nseg_per_tree = pow2(params.dd_rank + params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
-                    
+
                     params.mega_ringbuf = MegaRingbuf::make_trivial(params.total_beams, nseg_per_tree);
                     params.producer_id = params.output_is_ringbuf ? 0 : -1;
                     params.consumer_id = params.input_is_ringbuf ? 0 : -1;

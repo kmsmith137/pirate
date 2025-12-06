@@ -287,12 +287,14 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     for (const DedispersionKernelParams &kparams_: plan->stage1_dd_kernel_params) {
         DedispersionKernelParams kparams = kparams_;
         kparams.output_is_ringbuf = false;  // in ReferenceDedisperer1, ringbufs are disabled.
+        kparams.producer_id = -1;
         this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
     }
 
     for (const DedispersionKernelParams &kparams_: plan->stage2_dd_kernel_params) {
         DedispersionKernelParams kparams = kparams_;
         kparams.input_is_ringbuf = false;   // in ReferenceDeidsperser1, ringbufs are disabled.
+        kparams.consumer_id = -1;
         this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
     }
     

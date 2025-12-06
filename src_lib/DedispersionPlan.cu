@@ -205,7 +205,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.mega_ringbuf = mega_ringbuf;
         kparams.producer_id = itree1;
         kparams.validate();
-        
+
         stage1_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1);
         stage1_dd_buf_params.buf_ntime.push_back(st1.nt_ds);
         stage1_dd_kernel_params.push_back(kparams);
@@ -239,7 +239,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.mega_ringbuf = mega_ringbuf;
         kparams.consumer_id = itree2;
         kparams.validate();
-
+        
         stage2_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);
         stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
         stage2_dd_kernel_params.push_back(kparams);
