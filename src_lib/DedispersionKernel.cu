@@ -623,17 +623,17 @@ ostream &operator<<(ostream &os, const GpuDedispersionKernel::RegistryValue &v)
 // GpuDedispersionKernel::test()
 //
 // TestArrays helper class is in anonymous namespace to avoid cluttering the header.
+// FIXME this could still use a little cleanup, but it's better than it used to be :)
 
 
 namespace {
 
-// DedispTestInstance: plain data struct used by TestArrays.
-struct DedispTestInstance
+// TestInstance: plain data struct used by TestArrays.
+struct TestInstance
 {
     DedispersionKernelParams params;
     long nchunks = 0;
     bool in_place = false;
-    shared_ptr<MegaRingbuf> mega_ringbuf;
     vector<long> gpu_istrides;
     vector<long> gpu_ostrides;
     vector<long> cpu_istrides;
@@ -644,7 +644,7 @@ struct DedispTestInstance
 // Another helper class.
 struct TestArrays
 {
-    DedispTestInstance tp;
+    TestInstance tp;
     long nbatches;
     
     Array<void> big_inbuf;      // either a "big" ddbuf (nchunks), or a ringbuf
@@ -652,7 +652,7 @@ struct TestArrays
     Array<void> active_inbuf;   // either a "small" ddbuf (1 chunk), or a reference to 'big_inbuf'
     Array<void> active_outbuf;  // either a "small" ddbuf (1 chunk), or a reference to 'big_outbuf'
     
-    TestArrays(const DedispTestInstance &tp_, const Dtype &dtype, bool on_gpu) :
+    TestArrays(const TestInstance &tp_, const Dtype &dtype, bool on_gpu) :
         tp(tp_),
         nbatches(xdiv(tp.params.total_beams, tp.params.beams_per_batch))
     {
@@ -724,7 +724,7 @@ void GpuDedispersionKernel::test()
     auto rkey = GpuDedispersionKernel::registry().get_random_key();
     auto rval = GpuDedispersionKernel::registry().get(rkey);
 
-    DedispTestInstance ti;
+    TestInstance ti;
     DedispersionKernelParams &params = ti.params;
     
     params.dtype = rkey.dtype;
@@ -758,9 +758,9 @@ void GpuDedispersionKernel::test()
     // Randomize ringbuf (if needed).
     if (params.input_is_ringbuf || params.output_is_ringbuf) {
         long nviews = nchan * pow2(params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
-        ti.mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, ti.nchunks, nviews);
-        params.ringbuf_nseg = ti.mega_ringbuf->gpu_giant_nseg;
-        params.ringbuf_locations = ti.mega_ringbuf->producer_quadruples.at(0);
+        shared_ptr<MegaRingbuf> mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, ti.nchunks, nviews);
+        params.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
+        params.ringbuf_locations = mega_ringbuf->producer_quadruples.at(0);
     }
 
     // Randomize strides.
