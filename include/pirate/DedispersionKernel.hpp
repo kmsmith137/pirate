@@ -13,7 +13,7 @@ namespace pirate {
 
 struct ReferenceTree;    // defined in ReferenceTree.hpp
 struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
-
+struct MegaRingbuf;      // defined in MegaRingbuf.hpp
 
 // Dedispersion kernels have two ranks:
 //
@@ -113,6 +113,7 @@ struct DedispersionKernelParams
     
     int nt_per_segment = 0;
 
+    // XXX to be deleted soon
     // Notes on the DedispersionKernelParams::ringbuf_locations array:
     //
     //    - Only used if (input_is_ringbuf || output_is_ringbuf).
@@ -127,9 +128,13 @@ struct DedispersionKernelParams
     
     ksgpu::Array<uint> ringbuf_locations;
     long ringbuf_nseg = 0;
+
+    // Ringbuf info (only used if (input_is_ringbuf || output_is_ringbuf)
+    std::shared_ptr<MegaRingbuf> mega_ringbuf;  // used if (input_is_ringbuf || output_is_ringbuf)
+    long producer_id = -1;                      // used if (output_is_ringbuf)
+    long consumer_id = -1;                      // used if (input_is_ringbuf)
     
-    // Throws an exception if anything is wrong.
-    // Warning: validate() can be a "heavyweight" operation, since it error-checks the ringbuf_locations.
+    // Throws an exception if anything is wrong.ples.
     void validate() const;
 
     // Intended for test/timing programs.
@@ -182,7 +187,7 @@ struct DedispersionKernelIobuf
 struct ReferenceDedispersionKernel
 {
     using Params = DedispersionKernelParams;
-    Params params;  // reminder: contains 'ringbuf_locations' array
+    Params params;  // reminder: contains shared_ptr<MegaRingbuf>
 
     ReferenceDedispersionKernel(const Params &params);
     
@@ -193,7 +198,8 @@ struct ReferenceDedispersionKernel
     //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
     //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
     //
-    //   Ring: 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
+    //   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+    //   !!! Note that we use the "GPU" part of the mega_ringbuf, not the "host" part!!!
 
     void apply(ksgpu::Array<void> &in, ksgpu::Array<void> &out, long ibatch, long it_chunk);
 
@@ -223,7 +229,7 @@ class GpuDedispersionKernel
 public:
     GpuDedispersionKernel(const Params &params);
     
-    Params params;   // reminder: contains 'ringbuf_locations' array on host (not GPU!)
+    Params params;   // reminder: contains shared_ptr<MegaRingbuf>
     bool is_allocated = false;
     
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
@@ -238,8 +244,8 @@ public:
     //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
     //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
     //
-    //   Ring: 1-d array of length (ringbuf_nseg * nt_per_segment * nspec).
-    
+    //   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+
     void launch(
         ksgpu::Array<void> &in,
         ksgpu::Array<void> &out,
@@ -269,7 +275,7 @@ public:
 
     // -------------------- Internals start here --------------------
 
-    // The 'persistent_state' and 'gpu_ringbuf_locations' arrays are
+    // The 'persistent_state' and 'gpu_ringbuf_quadruples' arrays are
     // allocated in GpuDedipsersionKernel::allocate(), not the constructor.
     
     // Shape (total_beams, pow2(params.amb_rank), ninner)
@@ -277,7 +283,7 @@ public:
     ksgpu::Array<void> persistent_state;
 
     // FIXME should add run-time check that current cuda device is consistent.
-    ksgpu::Array<uint> gpu_ringbuf_locations;
+    ksgpu::Array<uint> gpu_ringbuf_quadruples;
 
     struct RegistryKey
     {

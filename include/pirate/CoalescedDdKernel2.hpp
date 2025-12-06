@@ -35,7 +35,7 @@ struct CoalescedDdKernel2
     void launch(
         ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
         ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-        const ksgpu::Array<void> &in,     // shape (ringbuf_nseg * nt_per_segment * nspec,)
+        const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec,)
         const ksgpu::Array<void> &wt,     // see comment above
         long ibatch,                      // 0 <= ibatch < nbatches
         long it_chunk,                    // time-chunk index 0, 1, ...
@@ -55,9 +55,9 @@ struct CoalescedDdKernel2
 
     // ------------------------  Members  ------------------------
 
-    DedispersionKernelParams dd_params;
-    PeakFindingKernelParams pf_params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
-    FrequencySubbands fs;               // pf_rank, F, M
+    DedispersionKernelParams dd_params;  // dd_rank, amb_rank, total_beams, beams_per_batch, ntime, mega_ringbuf
+    PeakFindingKernelParams pf_params;   // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
+    FrequencySubbands fs;                // pf_rank, F, M
 
     bool is_allocated = false;
 
@@ -79,7 +79,7 @@ struct CoalescedDdKernel2
 
     // -------------------- Internals start here --------------------
 
-    // The 'persistent_state' and 'gpu_ringbuf_locations' arrays are
+    // The 'persistent_state' and 'gpu_ringbuf_quadruples' arrays are
     // allocated in CoalescedDdKernel2::allocate(), not the constructor.
 
     // Shape (total_beams, pow2(params.amb_rank), ninner)
@@ -87,7 +87,7 @@ struct CoalescedDdKernel2
     ksgpu::Array<void> persistent_state;
 
     // FIXME should add run-time check that current cuda device is consistent.
-    ksgpu::Array<uint> gpu_ringbuf_locations;
+    ksgpu::Array<uint> gpu_ringbuf_quadruples;
 
 
     struct RegistryKey

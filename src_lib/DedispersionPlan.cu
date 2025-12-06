@@ -15,7 +15,6 @@ namespace pirate {
 #endif
 
 
-
 DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     config(config_)
 {
@@ -203,6 +202,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.nt_per_segment = this->nelts_per_segment;
         kparams.ringbuf_locations = mega_ringbuf->producer_quadruples.at(itree1);
         kparams.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
+        kparams.mega_ringbuf = mega_ringbuf;
+        kparams.producer_id = itree1;
         kparams.validate();
         
         stage1_dd_buf_params.buf_rank.push_back(st1.rank0 + st1.rank1);
@@ -235,6 +236,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.nt_per_segment = this->nelts_per_segment;
         kparams.ringbuf_locations = mega_ringbuf->consumer_quadruples.at(itree2);
         kparams.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
+        kparams.mega_ringbuf = mega_ringbuf;
+        kparams.consumer_id = itree2;
         kparams.validate();
 
         stage2_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);

@@ -1,4 +1,5 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
+#include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
 
@@ -29,6 +30,12 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     xassert(dd_params.apply_input_residual_lags);
     xassert(dd_params.input_is_ringbuf);
     xassert(!dd_params.output_is_ringbuf);
+    xassert(dd_params.mega_ringbuf);
+    xassert(dd_params.consumer_id >= 0);
+    xassert(dd_params.consumer_id < dd_params.mega_ringbuf->num_consumers);
+
+    long nsegments_per_beam = pow2(dd_params.dd_rank+dd_params.amb_rank) * xdiv(dd_params.ntime,dd_params.nt_per_segment);
+    xassert_shape_eq(dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id), ({nsegments_per_beam,4}));
 
     xassert_eq(pf_params.dtype, dd_params.dtype);
     xassert_eq(pf_params.beams_per_batch, dd_params.beams_per_batch);
@@ -80,13 +87,13 @@ void CoalescedDdKernel2::allocate()
     this->persistent_state = Array<void> (dd_params.dtype, shape, af_zero | af_gpu);
 
     // Copy host -> GPU.
-    this->gpu_ringbuf_locations = dd_params.ringbuf_locations.to_gpu();
+    this->gpu_ringbuf_quadruples = dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id).to_gpu();
 
-    // Shape/stride check.
-    long nrb = pow2(dd_params.amb_rank + dd_params.dd_rank) * xdiv(dd_params.ntime, dd_params.nt_per_segment);
-    xassert_shape_eq(gpu_ringbuf_locations, ({nrb,4}));
-    xassert(gpu_ringbuf_locations.is_fully_contiguous());
-    xassert(gpu_ringbuf_locations.on_gpu());
+    // Shape/stride check (paranoid).
+    long nsegments_per_beam = pow2(dd_params.dd_rank+dd_params.amb_rank) * xdiv(dd_params.ntime,dd_params.nt_per_segment);
+    xassert_shape_eq(gpu_ringbuf_quadruples, ({nsegments_per_beam,4}));
+    xassert(gpu_ringbuf_quadruples.is_fully_contiguous());
+    xassert(gpu_ringbuf_quadruples.on_gpu());
 
     this->is_allocated = true;
 }
@@ -95,7 +102,7 @@ void CoalescedDdKernel2::allocate()
 void CoalescedDdKernel2::launch(
     ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-    const ksgpu::Array<void> &in,     // shape (ringbuf_nseg * nt_per_segment * nspec,)
+    const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec,)
     const ksgpu::Array<void> &wt,     // from GpuPfWeightLayout::to_gpu()
     long ibatch,                      // 0 <= ibatch < nbatches
     long it_chunk,                    // time-chunk index 0, 1, ...
@@ -109,8 +116,9 @@ void CoalescedDdKernel2::launch(
     xassert(in.dtype == dtype);
     xassert(wt.dtype == dtype);
 
-    // Validate 'in' array: shape (ringbuf_nseg * nt_per_segment * nspec,)
-    xassert_shape_eq(in, ({ dd_params.ringbuf_nseg * dd_params.nt_per_segment * dd_params.nspec }));
+    // Validate 'in' array: shape (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec,)
+    long giant_nseg = dd_params.mega_ringbuf->gpu_giant_nseg;
+    xassert_shape_eq(in, ({ giant_nseg * dd_params.nt_per_segment * dd_params.nspec }));
 
     // Validate 'out' and 'out_argmax' arrays: shape (beams_per_batch, ndm_out, nt_out)
     xassert_shape_eq(out_max, ({ pf_params.beams_per_batch, pf_params.ndm_out, pf_params.nt_out }));
@@ -158,7 +166,7 @@ void CoalescedDdKernel2::launch(
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
 
     registry_value.cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-        (in.data, gpu_ringbuf_locations.data, rb_pos,    // void *grb_base_, uint *grb_loc_, long grb_pos,
+        (in.data, gpu_ringbuf_quadruples.data, rb_pos,   // void *grb_base_, uint *grb_loc_, long grb_pos,
          out_max.data, out_argmax.data, wt.data,         // void *out_max_, uint *out_argmax, const void *wt_,
          pstate.data, dd_params.ntime,                   // void *pstate_, int ntime,
          nt_cumul, dd_params.input_is_downsampled_tree,  // ulong nt_cumul, bool input_is_downsampled_tree,
@@ -208,8 +216,7 @@ void CoalescedDdKernel2::test()
     dd_params.nt_per_segment = xdiv(1024, dtype.nbits);
 
     // How to make a random ringbuf???
-    dd.ringbuf_locations = xx;
-    dd.ringbuf_nseg = xx;
+    dd_params.mega_ringbuf = xx;
     
     PeakFindingKernelParams pf_params;
     pf_params.subband_counts = key.subband_counts;

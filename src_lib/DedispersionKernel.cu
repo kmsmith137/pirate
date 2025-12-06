@@ -46,15 +46,30 @@ void DedispersionKernelParams::validate() const
     xassert((dtype == Dtype::native<float>()) || (dtype == Dtype::native<__half>()));
     xassert_divisible(ntime, nt_per_segment);
 
-    // (ringbuf -> ringbuf) doesn't make sense.
+    // The case (input_is_ringbuf && output_is_ringbuf) isn't currently implemented.
     xassert(!input_is_ringbuf || !output_is_ringbuf);
+    xassert_iff(input_is_ringbuf, consumer_id >= 0);
+    xassert_iff(output_is_ringbuf, producer_id >= 0);
     
     // Currently assumed throughout the pirate code.
     xassert_divisible(total_beams, beams_per_batch);
-    
+
+    long nsegments_per_beam = pow2(dd_rank+amb_rank) * xdiv(ntime,nt_per_segment);
+
+    if (input_is_ringbuf) {
+        xassert(mega_ringbuf);
+        xassert_shape_eq(mega_ringbuf->consumer_quadruples.at(consumer_id), ({nsegments_per_beam,4}));
+    }
+
+    if (output_is_ringbuf) {
+        xassert(mega_ringbuf);
+        xassert_shape_eq(mega_ringbuf->producer_quadruples.at(producer_id), ({nsegments_per_beam,4}));
+    }
+
+    // XXX to be deleted soon
     if (input_is_ringbuf || output_is_ringbuf) {
         long nsegments_per_tree = pow2(dd_rank+amb_rank) * xdiv(ntime,nt_per_segment);
-        xassert_shape_eq(ringbuf_locations, ({ nsegments_per_tree, 4 }));
+        xassert_shape_eq(ringbuf_locations, ({ nsegments_per_beam, 4 }));
         xassert(ringbuf_locations.is_fully_contiguous());
         xassert(ringbuf_nseg > 0);
         xassert(ringbuf_nseg <= UINT_MAX);
@@ -103,10 +118,8 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
     this->is_ringbuf = is_ringbuf_;
     this->on_gpu = on_gpu_;
 
-    // Note: we don't call params.validate(), since it can be a "heavyweight" operation
-    // (since ringbuf_locations are checked), and the DedispersionKernelIobuf constructor
-    // needs to be "lightweight" (since called on every kernel launch).
-    
+    // We assume that params.validate() has already been called. Asserts in this function
+    // just test for consistency between the array and the params.
     xassert_eq(arr.dtype, params.dtype);
     
     // Check alignment. Not strictly necessary, but failure would be unintentional and indicate a bug somewhere.
@@ -412,7 +425,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     this->bw_per_launch.kernel_launches = 1;
     this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
     this->bw_per_launch.nbytes_gmem += 8 * params.beams_per_batch * pow2(params.amb_rank) * registry_value.pstate32_per_small_tree;
-    // FIXME(?) not currently including ringbuf_locations.
+    // FIXME(?) not currently including ringbuf_quadruples.
 
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(params.nt_per_segment, registry_value.nt_per_segment);
@@ -431,12 +444,12 @@ void GpuDedispersionKernel::allocate()
 
     // Copy host -> GPU.
     if (params.input_is_ringbuf || params.output_is_ringbuf) {
-        this->gpu_ringbuf_locations = params.ringbuf_locations.to_gpu();
+        this->gpu_ringbuf_quadruples = params.ringbuf_locations.to_gpu();
 
         long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment);
-        xassert_shape_eq(gpu_ringbuf_locations, ({nrb,4}));
-        xassert(gpu_ringbuf_locations.is_fully_contiguous());
-        xassert(gpu_ringbuf_locations.on_gpu());
+        xassert_shape_eq(gpu_ringbuf_quadruples, ({nrb,4}));
+        xassert(gpu_ringbuf_quadruples.is_fully_contiguous());
+        xassert(gpu_ringbuf_quadruples.on_gpu());
     }
 
     this->is_allocated = true;
@@ -481,7 +494,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
         xassert(cuda_kernel != nullptr);
         
         cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-            (in.buf, gpu_ringbuf_locations.data, rb_pos,
+            (in.buf, gpu_ringbuf_quadruples.data, rb_pos,
              out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
              pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }   
@@ -492,7 +505,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
             
         cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
             (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
-             out.buf, gpu_ringbuf_locations.data, rb_pos,
+             out.buf, gpu_ringbuf_quadruples.data, rb_pos,
              pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }
     else
@@ -758,9 +771,11 @@ void GpuDedispersionKernel::test()
     // Randomize ringbuf (if needed).
     if (params.input_is_ringbuf || params.output_is_ringbuf) {
         long nviews = nchan * pow2(params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
-        shared_ptr<MegaRingbuf> mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, ti.nchunks, nviews);
-        params.ringbuf_nseg = mega_ringbuf->gpu_giant_nseg;
-        params.ringbuf_locations = mega_ringbuf->producer_quadruples.at(0);
+        params.mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, ti.nchunks, nviews);
+        params.producer_id = params.output_is_ringbuf ? 0 : -1;
+        params.consumer_id = params.input_is_ringbuf ? 0 : -1;
+        params.ringbuf_nseg = params.mega_ringbuf->gpu_giant_nseg;
+        params.ringbuf_locations = params.mega_ringbuf->producer_quadruples.at(0);
     }
 
     // Randomize strides.
