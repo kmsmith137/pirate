@@ -209,7 +209,8 @@ struct MegaRingbuf {
     // testing of dedispersion kernels. See MegaRingbuf.cu for more info.
     static std::shared_ptr<MegaRingbuf> make_random_simplified(long total_beams, long active_beams, long nchunks, long nviews);
 
-    // Make a "trivial" MegaRingbuf, intended for standalone timing of dedispersion kernels.
+    // Create the simplest possible MegaRingbuf, for standalone timing of dedispersion kernels.
+    // FIXME I might implement something more realistic later.
     static std::shared_ptr<MegaRingbuf> make_trivial(long total_beams, long nviews);
 
 
