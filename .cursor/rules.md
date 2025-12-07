@@ -21,6 +21,7 @@ Please complain if you can't see it.
 - Single source file: `make src_lib/Foo.o`
 - Compile time for the whole project is high (a few minutes with 32 threads), so suggest building specific targets.
 - The file `sdist_files.txt` is a Makefile target, and is a list of all source files (in any language). Here is a convenient way to search all source files for symbol FOO: `make sdist_files.txt; cat sdist_files.txt | xargs grep FOO`.
+- If you add a new source file, see comments near the top of `Makefile` for instructions on how to modify the makefile.
 
 ## File Structure
 

@@ -2,11 +2,6 @@
 #include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
 
-// For scratch()
-#include "../include/pirate/DedispersionConfig.hpp"  // DedispersionConfig::make_random()
-#include "../include/pirate/DedispersionPlan.hpp"    // DedispersionPlan()
-#include "../include/pirate/Dedisperser.hpp"      // GpuDedisperser::test_one()
-
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
@@ -287,19 +282,22 @@ string hex_str(uint x)
 // Called by 'python -m pirate_frb scratch'. Intended for quick throwaway tests.
 void scratch()
 {
-    for (int i = 0; i < 100; i++) {
-        cout << "Starting iteration " << i << endl;
-        DedispersionConfig config = DedispersionConfig::make_random(true);  // allow_early_triggers=true
-        config.num_active_batches = 1;   // FIXME currently we only support nstreams==1
-        DedispersionPlan plan(config);
+    cout << "pirate::scratch() called -- this is a place for quick throwaway tests" << endl;
 
-        int max_nchunks = 8192 / config.time_samples_per_chunk;  // round down
-        int nchunks = ksgpu::rand_int(1, max_nchunks+1);
-        GpuDedisperser::test_one(config, nchunks, false);  // host_only=false
-        // plan.print(cout, 4);
-    }
+    // Constructing an int4 ksgpu::Array is no problem...
+    Dtype dt_int4 = Dtype::from_str("int4");
+    Array<void> arr(dt_int4, {3,3,7}, af_rhost | af_zero);
 
-    cout << "pirate::scratch() called -- edit src_lib/utils.cu to add code here" << endl;
+    // ... but currently, no helpful accessors are implemented, so in order to get/set
+    // array elements, we need to reinterpret_cast a bare pointer. For example, to set
+    // arr[0,0,5]=3, one would need to do something like this:
+
+    unsigned char *p8 = (unsigned char *) arr.data;
+    p8[2] = 0x30;  // arr[0,0,5] = 3
+
+    // This also works.
+    uint *p32 = (uint *) arr.data;
+    p32[0] = 0x300000;  // arr[0,0,5] = 3
 }
 
 

@@ -16,6 +16,7 @@
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
+#include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
@@ -169,6 +170,11 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel")
           .def_static("test", &GpuTreeGriddingKernel::test)
+    ;
+
+    py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel")
+          .def_static("test", &GpuDequantizationKernel::test)
+          .def_static("time", &GpuDequantizationKernel::time)
     ;
 
     py::class_<ReferenceDedisperserBase>(m, "ReferenceDedisperser")

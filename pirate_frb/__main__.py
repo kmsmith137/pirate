@@ -29,6 +29,7 @@ def parse_test(subparsers):
     parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test()')
     parser.add_argument('--grck', action='store_true', help='Runs GpuRingbufCopyKernel.test()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.test()')
+    parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.test()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
@@ -52,7 +53,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'casm', 'zomb', 'dd', 'cdd2' ]
+    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'casm', 'zomb', 'dd', 'cdd2' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -87,6 +88,9 @@ def test(args):
         
         if run_all_tests or args.gtgk:
             pirate_pybind11.GpuTreeGriddingKernel.test()
+        
+        if run_all_tests or args.gdqk:
+            pirate_pybind11.GpuDequantizationKernel.test()
         
         if run_all_tests or args.casm:
             print()
@@ -126,9 +130,10 @@ def parse_time(subparsers):
     parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time()')
+    parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time()')
     
 def time(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2', 'gdqk' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -153,6 +158,8 @@ def time(args):
         pirate_pybind11.time_gpu_transpose()
     if run_all_timings or args.cdd2:
         pirate_pybind11.CoalescedDdKernel2.time()
+    if run_all_timings or args.gdqk:
+        pirate_pybind11.GpuDequantizationKernel.time()
 
 
 #####################################   show_hardware command  #####################################

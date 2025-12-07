@@ -106,6 +106,7 @@ LIB_SRCFILES = \
   src_lib/FakeServer.cu \
   src_lib/FrequencySubbands.cu \
   src_lib/GpuDedisperser.cu \
+  src_lib/GpuDequantizationKernel.cu \
   src_lib/GpuLaggedDownsamplingKernel.cu \
   src_lib/LaggedDownsamplingKernelParams.cu \
   src_lib/MegaRingbuf.cu \
@@ -176,6 +177,7 @@ HFILES = \
   include/pirate/DedispersionPlan.hpp \
   include/pirate/FakeCorrelator.hpp \
   include/pirate/FakeServer.hpp \
+  include/pirate/GpuDequantizationKernel.hpp \
   include/pirate/KernelRegistry.hpp \
   include/pirate/LaggedDownsamplingKernel.hpp \
   include/pirate/MegaRingbuf.hpp \
