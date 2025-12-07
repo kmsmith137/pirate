@@ -354,8 +354,8 @@ void CoalescedDdKernel2::test()
 
             //  -------- FIXME ad hoc shuffling operation tmp_cpu -> tmp2_cpu ends here ------
 
-            // FIXME revisit ReferencePeakFindingKernel::make_random_weights() with subbands.
-            Array<float> wt_cpu = ref_pf_kernel.make_random_weights();
+            long rank_hack = dd_params.dd_rank;  // see comments in ReferencePeakFindingKernel::make_random_weights()
+            Array<float> wt_cpu = ref_pf_kernel.make_random_weights(rank_hack);
             ref_pf_kernel.apply(max_cpu, argmax_cpu, tmp2_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.

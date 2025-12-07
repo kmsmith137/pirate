@@ -75,7 +75,8 @@ struct ReferencePeakFindingKernel
 
     // Make an interesting weights array for testing.
     // Returns shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
-    ksgpu::Array<float> make_random_weights();
+    // See PeakFindingKernel.cu for an explanation of 'rank_hack'.
+    ksgpu::Array<float> make_random_weights(long rank_hack);
 
     // At "level" l (where 0 <= l < log2(W)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).

@@ -20,7 +20,7 @@ struct FrequencySubbands
 {
     FrequencySubbands(const std::vector<long> &subband_counts);
 
-    // Length-(rank+1) vector, containing number of frequency subbands at each level.
+    // Length-(pf_rank+1) vector, containing number of frequency subbands at each level.
     // This vector is used as an "identifier" for frequency subbands in low-level code.
     std::vector<long> subband_counts;   
 
@@ -30,8 +30,8 @@ struct FrequencySubbands
 
     std::vector<long> m_to_f;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
     std::vector<long> m_to_d;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
-    std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
-    std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
+    std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
+    std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
 
     // These members are used in the peak-finding kernel, whose 'out_argmax' array consists
     // of "tokens" of the form (t) | (p << 8) | (m << 16).

@@ -53,7 +53,6 @@ class CoalescedDdKernel2:
 
         # FIXME temporary cdd2 restrictions that will be relaxed later
         assert self.dd.two_stage
-        assert dtype == Dtype('float')   # for now
         assert frequency_subbands.pf_rank == self.dd.rank1
         assert all(n==0 for n in frequency_subbands.subband_counts[:-1])
         
@@ -88,6 +87,7 @@ class CoalescedDdKernel2:
         k.emit('#include "../../include/pirate/CoalescedDdKernel2.hpp"')
         k.emit('#include "../../include/pirate/FrequencySubbands.hpp"')
         k.emit('#include "../../include/pirate/inlines.hpp"')
+        k.emit('#include <ksgpu/device_transposes.hpp>   // f16_perm(), f16_align()')
         k.emit()
         k.emit('using namespace std;')
         k.emit('using namespace ksgpu;')
