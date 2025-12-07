@@ -27,23 +27,28 @@ namespace pirate {
 
 
 // Float32 kernel: 2 shuffles, 2 × 128-bit write transactions using float4
+// Block dims: (32, 8, 1) - threadIdx.y runs over frequency for better occupancy
 __global__ void gpu_dequantize_fp32_kernel(
     float4 *out,
     const uint32_t *in,
     long out_stride,   // stride between (beam,freq) rows in output (in float4 units)
-    long in_stride)    // stride between (beam,freq) rows in input (in uint32 units)
+    long in_stride,    // stride between (beam,freq) rows in input (in uint32 units)
+    int nfreq)         // total number of frequencies (for bounds checking)
 {
-    // Grid mapping: blockIdx = (freq, time_chunk, beam)
-    // Note: freq is in blockIdx.x since it can be large (gridDim.x limit is 2^31-1)
-    int freq = blockIdx.x;
+    // Grid mapping: blockIdx = (freq/8, time_chunk, beam), threadIdx.y = freq%8
+    int freq = blockIdx.x * 8 + threadIdx.y;
     int time_chunk = blockIdx.y;
     int beam = blockIdx.z;
     int thread_id = threadIdx.x;  // 0-31
     
+    // Bounds check: nfreq may not be a multiple of 8
+    if (freq >= nfreq)
+        return;
+    
     // Pointers to this warp's data
     // Input: 32 uint32 values = 128 bytes = 256 int4 values
     // Output: 64 float4 values = 256 float32 values
-    long bf_idx = long(beam) * gridDim.x + freq;
+    long bf_idx = long(beam) * nfreq + freq;
     const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
     float4 *outp = out + bf_idx * out_stride + time_chunk * 64;
     
@@ -93,23 +98,28 @@ __global__ void gpu_dequantize_fp32_kernel(
 
 // Float16 kernel: 0 shuffles, 1 × 128-bit write transaction using uint4
 // Thread t already has elements [8t, 8t+7] after the read - no shuffle needed!
+// Block dims: (32, 8, 1) - threadIdx.y runs over frequency for better occupancy
 __global__ void gpu_dequantize_fp16_kernel(
     uint4 *out,
     const uint32_t *in,
     long out_stride,   // stride between (beam,freq) rows in output (in uint4 units)
-    long in_stride)    // stride between (beam,freq) rows in input (in uint32 units)
+    long in_stride,    // stride between (beam,freq) rows in input (in uint32 units)
+    int nfreq)         // total number of frequencies (for bounds checking)
 {
-    // Grid mapping: blockIdx = (freq, time_chunk, beam)
-    // Note: freq is in blockIdx.x since it can be large (gridDim.x limit is 2^31-1)
-    int freq = blockIdx.x;
+    // Grid mapping: blockIdx = (freq/8, time_chunk, beam), threadIdx.y = freq%8
+    int freq = blockIdx.x * 8 + threadIdx.y;
     int time_chunk = blockIdx.y;
     int beam = blockIdx.z;
     int thread_id = threadIdx.x;  // 0-31
     
+    // Bounds check: nfreq may not be a multiple of 8
+    if (freq >= nfreq)
+        return;
+    
     // Pointers to this warp's data
     // Input: 32 uint32 values = 128 bytes = 256 int4 values
     // Output: 32 uint4 values = 512 bytes = 256 float16 values
-    long bf_idx = long(beam) * gridDim.x + freq;
+    long bf_idx = long(beam) * nfreq + freq;
     const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
     uint4 *outp = out + bf_idx * out_stride + time_chunk * 32;
     
@@ -168,9 +178,10 @@ GpuDequantizationKernel::GpuDequantizationKernel(Dtype dtype_, long nbeams_, lon
     bw_per_launch.nbytes_gmem = bytes_in + bytes_out;
     
     // Kernel config: each warp handles 256 time samples for one (beam, freq)
-    // Grid: (freq, time_chunk, beam) - freq in x since it can be large
-    nthreads = dim3(32, 1, 1);
-    nblocks = dim3(nfreq, ntime / 256, nbeams);
+    // Block: (32, 8, 1) - threadIdx.y runs over frequency for better occupancy
+    // Grid: (ceil(freq/8), time_chunk, beam) - freq in x since it can be large
+    nthreads = dim3(32, 8, 1);
+    nblocks = dim3((nfreq + 7) / 8, ntime / 256, nbeams);
 }
 
 
@@ -250,7 +261,8 @@ void GpuDequantizationKernel::launch(Array<void> &out, const Array<void> &in, cu
             reinterpret_cast<float4 *>(out.data),
             reinterpret_cast<const uint32_t *>(in.data),
             out_stride,
-            in_stride
+            in_stride,
+            nfreq
         );
     }
     else if (dtype == fp16) {
@@ -261,7 +273,8 @@ void GpuDequantizationKernel::launch(Array<void> &out, const Array<void> &in, cu
             reinterpret_cast<uint4 *>(out.data),
             reinterpret_cast<const uint32_t *>(in.data),
             out_stride,
-            in_stride
+            in_stride,
+            nfreq
         );
     }
     else {
