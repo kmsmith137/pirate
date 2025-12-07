@@ -23,14 +23,14 @@ namespace pirate {
 // GPU Kernels
 //
 // Each warp processes 256 consecutive int4 elements for one (beam, freq, time_chunk).
-// We use warp shuffles to transpose the data for coalesced writes.
+// Uses 128-bit (float4/uint4) stores for improved memory bandwidth.
 
 
-// Float32 kernel: 8 shuffles, 8 coalesced write transactions
+// Float32 kernel: 2 shuffles, 2 × 128-bit write transactions using float4
 __global__ void gpu_dequantize_fp32_kernel(
-    float *out,
+    float4 *out,
     const uint32_t *in,
-    long out_stride,   // stride between (beam,freq) rows in output (in float32 units)
+    long out_stride,   // stride between (beam,freq) rows in output (in float4 units)
     long in_stride)    // stride between (beam,freq) rows in input (in uint32 units)
 {
     // Grid mapping: blockIdx = (freq, time_chunk, beam)
@@ -42,44 +42,61 @@ __global__ void gpu_dequantize_fp32_kernel(
     
     // Pointers to this warp's data
     // Input: 32 uint32 values = 128 bytes = 256 int4 values
-    // Output: 256 float32 values
+    // Output: 64 float4 values = 256 float32 values
     long bf_idx = long(beam) * gridDim.x + freq;
     const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
-    float *outp = out + bf_idx * out_stride + time_chunk * 256;
+    float4 *outp = out + bf_idx * out_stride + time_chunk * 64;
     
     // Step 1: Coalesced read (32 threads × 4 bytes = 128 bytes)
     uint32_t packed = inp[thread_id];
     
-    // Step 2: Transpose using 8 shuffles
-    // Thread t needs elements t, t+32, t+64, ..., t+224
-    // Element (t + 32k) is in thread (t/8 + 4k), nibble position (t % 8)
-    int base_src = thread_id / 8;      // source thread base: 0,0,0,0,0,0,0,0,1,1,...
-    int nibble_pos = thread_id % 8;    // which nibble to extract: 0,1,2,3,4,5,6,7,0,1,...
-    int shift = nibble_pos * 4;        // bit shift for nibble extraction
+    // Step 2: Only 2 shuffles needed for 128-bit stores!
+    // Thread t writes elements [4t, 4t+3] and [128+4t, 128+4t+3]
+    // Elements [4t, 4t+3] are 4 consecutive nibbles in thread t/2
+    // Elements [128+4t, 128+4t+3] are 4 consecutive nibbles in thread 16+t/2
+    int src_thread_lo = thread_id / 2;        // 0,0,1,1,2,2,...,15,15
+    int src_thread_hi = 16 + thread_id / 2;   // 16,16,17,17,...,31,31
+    int nibble_base = (thread_id % 2) * 4;    // 0,4,0,4,0,4,...
     
-    float vals[8];
+    uint32_t data_lo = __shfl_sync(FULL_MASK, packed, src_thread_lo);
+    uint32_t data_hi = __shfl_sync(FULL_MASK, packed, src_thread_hi);
     
-    #pragma unroll
-    for (int k = 0; k < 8; k++) {
-        uint32_t shuffled = __shfl_sync(FULL_MASK, packed, base_src + 4*k);
-        int nibble = (shuffled >> shift) & 0xF;
-        int signed_val = (nibble >= 8) ? (nibble - 16) : nibble;
-        vals[k] = (float) signed_val;
-    }
+    // Extract 4 nibbles from data_lo, convert to float4
+    int nib0 = (data_lo >> (nibble_base * 4)) & 0xF;
+    int nib1 = (data_lo >> ((nibble_base + 1) * 4)) & 0xF;
+    int nib2 = (data_lo >> ((nibble_base + 2) * 4)) & 0xF;
+    int nib3 = (data_lo >> ((nibble_base + 3) * 4)) & 0xF;
     
-    // Step 3: Coalesced writes (8 transactions × 32 floats = 256 floats)
-    #pragma unroll
-    for (int k = 0; k < 8; k++) {
-        outp[thread_id + 32*k] = vals[k];
-    }
+    float4 out_lo;
+    out_lo.x = (float)((nib0 >= 8) ? (nib0 - 16) : nib0);
+    out_lo.y = (float)((nib1 >= 8) ? (nib1 - 16) : nib1);
+    out_lo.z = (float)((nib2 >= 8) ? (nib2 - 16) : nib2);
+    out_lo.w = (float)((nib3 >= 8) ? (nib3 - 16) : nib3);
+    
+    // Extract 4 nibbles from data_hi, convert to float4
+    nib0 = (data_hi >> (nibble_base * 4)) & 0xF;
+    nib1 = (data_hi >> ((nibble_base + 1) * 4)) & 0xF;
+    nib2 = (data_hi >> ((nibble_base + 2) * 4)) & 0xF;
+    nib3 = (data_hi >> ((nibble_base + 3) * 4)) & 0xF;
+    
+    float4 out_hi;
+    out_hi.x = (float)((nib0 >= 8) ? (nib0 - 16) : nib0);
+    out_hi.y = (float)((nib1 >= 8) ? (nib1 - 16) : nib1);
+    out_hi.z = (float)((nib2 >= 8) ? (nib2 - 16) : nib2);
+    out_hi.w = (float)((nib3 >= 8) ? (nib3 - 16) : nib3);
+    
+    // Step 3: 128-bit coalesced writes (2 transactions × 512 bytes = 1024 bytes = 256 floats)
+    outp[thread_id] = out_lo;        // elements [4t, 4t+3]
+    outp[32 + thread_id] = out_hi;   // elements [128+4t, 128+4t+3]
 }
 
 
-// Float16 kernel: 4 shuffles, 4 coalesced write transactions using __half2
+// Float16 kernel: 0 shuffles, 1 × 128-bit write transaction using uint4
+// Thread t already has elements [8t, 8t+7] after the read - no shuffle needed!
 __global__ void gpu_dequantize_fp16_kernel(
-    __half2 *out,
+    uint4 *out,
     const uint32_t *in,
-    long out_stride,   // stride between (beam,freq) rows in output (in __half2 units)
+    long out_stride,   // stride between (beam,freq) rows in output (in uint4 units)
     long in_stride)    // stride between (beam,freq) rows in input (in uint32 units)
 {
     // Grid mapping: blockIdx = (freq, time_chunk, beam)
@@ -91,41 +108,40 @@ __global__ void gpu_dequantize_fp16_kernel(
     
     // Pointers to this warp's data
     // Input: 32 uint32 values = 128 bytes = 256 int4 values
-    // Output: 128 __half2 values = 256 float16 values
+    // Output: 32 uint4 values = 512 bytes = 256 float16 values
     long bf_idx = long(beam) * gridDim.x + freq;
     const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
-    __half2 *outp = out + bf_idx * out_stride + time_chunk * 128;
+    uint4 *outp = out + bf_idx * out_stride + time_chunk * 32;
     
     // Step 1: Coalesced read (32 threads × 4 bytes = 128 bytes)
     uint32_t packed = inp[thread_id];
     
-    // Step 2: Transpose using 4 shuffles
-    // Thread t writes __half2 containing elements (64k + 2t) and (64k + 2t + 1) for k=0,1,2,3
-    // Element (64k + 2t) is in thread (8k + t/4), nibble position (2 * (t % 4))
-    int base_src = thread_id / 4;        // source thread base: 0,0,0,0,1,1,1,1,...
-    int pair_nibble = (thread_id % 4) * 2;  // nibble position of pair start: 0,2,4,6,0,2,4,6,...
+    // Step 2: NO shuffles needed! Thread t already has elements [8t, 8t+7]
+    // Extract all 8 nibbles and convert to signed values
+    int n0 = (packed >> 0) & 0xF;   int n1 = (packed >> 4) & 0xF;
+    int n2 = (packed >> 8) & 0xF;   int n3 = (packed >> 12) & 0xF;
+    int n4 = (packed >> 16) & 0xF;  int n5 = (packed >> 20) & 0xF;
+    int n6 = (packed >> 24) & 0xF;  int n7 = (packed >> 28) & 0xF;
     
-    __half2 vals[4];
+    int s0 = (n0 >= 8) ? (n0 - 16) : n0;  int s1 = (n1 >= 8) ? (n1 - 16) : n1;
+    int s2 = (n2 >= 8) ? (n2 - 16) : n2;  int s3 = (n3 >= 8) ? (n3 - 16) : n3;
+    int s4 = (n4 >= 8) ? (n4 - 16) : n4;  int s5 = (n5 >= 8) ? (n5 - 16) : n5;
+    int s6 = (n6 >= 8) ? (n6 - 16) : n6;  int s7 = (n7 >= 8) ? (n7 - 16) : n7;
     
-    #pragma unroll
-    for (int k = 0; k < 4; k++) {
-        uint32_t shuffled = __shfl_sync(FULL_MASK, packed, base_src + 8*k);
-        
-        // Extract two consecutive nibbles
-        int nib0 = (shuffled >> (pair_nibble * 4)) & 0xF;
-        int nib1 = (shuffled >> ((pair_nibble + 1) * 4)) & 0xF;
-        
-        int val0 = (nib0 >= 8) ? (nib0 - 16) : nib0;
-        int val1 = (nib1 >= 8) ? (nib1 - 16) : nib1;
-        
-        vals[k] = __halves2half2(__int2half_rn(val0), __int2half_rn(val1));
-    }
+    // Pack pairs into __half2, then reinterpret as uint32 for uint4
+    __half2 h01 = __halves2half2(__int2half_rn(s0), __int2half_rn(s1));
+    __half2 h23 = __halves2half2(__int2half_rn(s2), __int2half_rn(s3));
+    __half2 h45 = __halves2half2(__int2half_rn(s4), __int2half_rn(s5));
+    __half2 h67 = __halves2half2(__int2half_rn(s6), __int2half_rn(s7));
     
-    // Step 3: Coalesced writes (4 transactions × 32 __half2 = 128 __half2 = 256 float16)
-    #pragma unroll
-    for (int k = 0; k < 4; k++) {
-        outp[thread_id + 32*k] = vals[k];
-    }
+    uint4 out128;
+    out128.x = *reinterpret_cast<uint32_t*>(&h01);
+    out128.y = *reinterpret_cast<uint32_t*>(&h23);
+    out128.z = *reinterpret_cast<uint32_t*>(&h45);
+    out128.w = *reinterpret_cast<uint32_t*>(&h67);
+    
+    // Step 3: Single 128-bit coalesced write (1 transaction × 512 bytes = 256 float16)
+    outp[thread_id] = out128;
 }
 
 
@@ -227,22 +243,22 @@ void GpuDequantizationKernel::launch(Array<void> &out, const Array<void> &in, cu
     long in_stride = ntime / 8;
     
     if (dtype == fp32) {
-        // Output stride in float32 units
-        long out_stride = ntime;
+        // Output stride in float4 units (each float4 holds 4 float32 values)
+        long out_stride = ntime / 4;
         
         gpu_dequantize_fp32_kernel <<< nblocks, nthreads, 0, stream >>> (
-            reinterpret_cast<float *>(out.data),
+            reinterpret_cast<float4 *>(out.data),
             reinterpret_cast<const uint32_t *>(in.data),
             out_stride,
             in_stride
         );
     }
     else if (dtype == fp16) {
-        // Output stride in __half2 units (each __half2 holds 2 float16 values)
-        long out_stride = ntime / 2;
+        // Output stride in uint4 units (each uint4 holds 8 float16 values)
+        long out_stride = ntime / 8;
         
         gpu_dequantize_fp16_kernel <<< nblocks, nthreads, 0, stream >>> (
-            reinterpret_cast<__half2 *>(out.data),
+            reinterpret_cast<uint4 *>(out.data),
             reinterpret_cast<const uint32_t *>(in.data),
             out_stride,
             in_stride
