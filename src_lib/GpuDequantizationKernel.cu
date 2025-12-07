@@ -33,16 +33,17 @@ __global__ void gpu_dequantize_fp32_kernel(
     long out_stride,   // stride between (beam,freq) rows in output (in float32 units)
     long in_stride)    // stride between (beam,freq) rows in input (in uint32 units)
 {
-    // Grid mapping: blockIdx = (time_chunk, freq, beam)
-    int time_chunk = blockIdx.x;
-    int freq = blockIdx.y;
+    // Grid mapping: blockIdx = (freq, time_chunk, beam)
+    // Note: freq is in blockIdx.x since it can be large (gridDim.x limit is 2^31-1)
+    int freq = blockIdx.x;
+    int time_chunk = blockIdx.y;
     int beam = blockIdx.z;
     int thread_id = threadIdx.x;  // 0-31
     
     // Pointers to this warp's data
     // Input: 32 uint32 values = 128 bytes = 256 int4 values
     // Output: 256 float32 values
-    long bf_idx = long(beam) * gridDim.y + freq;
+    long bf_idx = long(beam) * gridDim.x + freq;
     const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
     float *outp = out + bf_idx * out_stride + time_chunk * 256;
     
@@ -81,16 +82,17 @@ __global__ void gpu_dequantize_fp16_kernel(
     long out_stride,   // stride between (beam,freq) rows in output (in __half2 units)
     long in_stride)    // stride between (beam,freq) rows in input (in uint32 units)
 {
-    // Grid mapping: blockIdx = (time_chunk, freq, beam)
-    int time_chunk = blockIdx.x;
-    int freq = blockIdx.y;
+    // Grid mapping: blockIdx = (freq, time_chunk, beam)
+    // Note: freq is in blockIdx.x since it can be large (gridDim.x limit is 2^31-1)
+    int freq = blockIdx.x;
+    int time_chunk = blockIdx.y;
     int beam = blockIdx.z;
     int thread_id = threadIdx.x;  // 0-31
     
     // Pointers to this warp's data
     // Input: 32 uint32 values = 128 bytes = 256 int4 values
     // Output: 128 __half2 values = 256 float16 values
-    long bf_idx = long(beam) * gridDim.y + freq;
+    long bf_idx = long(beam) * gridDim.x + freq;
     const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
     __half2 *outp = out + bf_idx * out_stride + time_chunk * 128;
     
@@ -150,8 +152,9 @@ GpuDequantizationKernel::GpuDequantizationKernel(Dtype dtype_, long nbeams_, lon
     bw_per_launch.nbytes_gmem = bytes_in + bytes_out;
     
     // Kernel config: each warp handles 256 time samples for one (beam, freq)
+    // Grid: (freq, time_chunk, beam) - freq in x since it can be large
     nthreads = dim3(32, 1, 1);
-    nblocks = dim3(ntime / 256, nfreq, nbeams);
+    nblocks = dim3(nfreq, ntime / 256, nbeams);
 }
 
 
