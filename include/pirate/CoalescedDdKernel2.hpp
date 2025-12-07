@@ -124,11 +124,11 @@ struct CoalescedDdKernel2
         // Layout of peak-finding weights in GPU memory, expected by the kernel.
         GpuPfWeightLayout pf_weight_layout;
 
-        int shmem_nbytes = 0;
+        int shmem_nbytes = -1;
         int warps_per_threadblock = 0;
-        int pstate32_per_small_tree = 0;  // see 'persistent_state' array dims above
-        int nt_per_segment = 0;           // value of 'nt_per_segment' assumed by dd-kernel
-        long Dcore = 0;                   // internal downsampling factor, chosen by pf-kernel
+        int pstate32_per_small_tree = -1;  // see 'persistent_state' array dims above
+        int nt_per_segment = 0;            // value of 'nt_per_segment' assumed by dd-kernel
+        long Dcore = 0;                    // internal downsampling factor, chosen by pf-kernel
     };
 
     // Non-static members for interacting with the kernel registry.
