@@ -389,6 +389,55 @@ void CoalescedDdKernel2::time()
 // Registry and related functions
 
 
+struct Cdd2Registry : public CoalescedDdKernel2::Registry
+{
+    using Key = CoalescedDdKernel2::RegistryKey;
+    using Val = CoalescedDdKernel2::RegistryValue;
+
+    virtual void add(const Key &key, const Val &val, bool debug) override
+    {
+        // Just check that all members have been initialized.
+        // (In the future, I may add more argument checking here.)
+        
+        xassert((key.dtype == Dtype::native<float>()) || (key.dtype == Dtype::native<__half>()));
+        xassert_ge(key.subband_counts.size(), 1);
+        xassert(key.dd_rank > 0);
+        xassert(key.Tinner > 0);
+        xassert(key.Dout > 0);
+        xassert(key.W > 0);
+
+        xassert(val.cuda_kernel != nullptr);
+        xassert(val.warps_per_threadblock > 0);
+        xassert(val.pstate32_per_small_tree >= 0);
+        xassert(val.nt_per_segment > 0);
+        xassert(val.Dcore > 0);
+        
+        val.pf_weight_layout.validate();
+        
+        // Call add() in base class.
+        CoalescedDdKernel2::Registry::add(key, val, debug);
+    }
+
+
+    // Setting shared memory size is "deferred" from when the kernel is registered, to when
+    // the kernel is first used. Deferring is important, since cudaFuncSetAttribute() creates
+    // hard-to-debug problems if called at library initialization time, but behaves normally
+    // if deferred. (Here, "hard-to-debug" means that the call appears to succeed, but an
+    // unrelated kernel launch will fail later with error 400 ("invalid resource handle").)
+
+    virtual void deferred_initialization(Val &val) override
+    {
+        if (val.shmem_nbytes > 48*1024) {
+            CUDA_CALL(cudaFuncSetAttribute(
+                val.cuda_kernel,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                val.shmem_nbytes
+            ));
+        }
+    }
+};
+
+
 CoalescedDdKernel2::Registry &CoalescedDdKernel2::registry()
 {
     // This kludge implements "construct on first use". It's necessary because the
@@ -403,7 +452,7 @@ CoalescedDdKernel2::Registry &CoalescedDdKernel2::registry()
     // time, by callers in other source files, and source files are executed in an
     // arbitrary order.
     
-    static CoalescedDdKernel2::Registry reg;
+    static Cdd2Registry reg;
     return reg;  // note: thread-safe (as of c++11)
 }
 
