@@ -6,7 +6,7 @@
 #include <sstream>
 #include <iostream>
 #include <ksgpu/cuda_utils.hpp>          // CUDA_CALL()
-#include <ksgpu/device_transposes.hpp>   // f16_align()
+#include <ksgpu/device_fp16.hpp>         // f16_align()
 #include <ksgpu/rand_utils.hpp>          // rand_int()
 #include <ksgpu/test_utils.hpp>          // assert_arrays_equal()
 #include <ksgpu/string_utils.hpp>        // nbytes_to_str()

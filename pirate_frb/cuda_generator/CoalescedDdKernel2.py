@@ -87,7 +87,7 @@ class CoalescedDdKernel2:
         k.emit('#include "../../include/pirate/CoalescedDdKernel2.hpp"')
         k.emit('#include "../../include/pirate/FrequencySubbands.hpp"')
         k.emit('#include "../../include/pirate/inlines.hpp"')
-        k.emit('#include <ksgpu/device_transposes.hpp>   // f16_perm(), f16_align()')
+        k.emit('#include <ksgpu/device_fp16.hpp>   // f16_perm(), f16_align()')
         k.emit()
         k.emit('using namespace std;')
         k.emit('using namespace ksgpu;')

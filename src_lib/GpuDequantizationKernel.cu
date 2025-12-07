@@ -5,6 +5,7 @@
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/device_basics.hpp>  // FULL_MASK
+#include <ksgpu/device_fp16.hpp>    // half8_store()
 #include <ksgpu/rand_utils.hpp>     // rand_uniform(), rand_int()
 #include <ksgpu/test_utils.hpp>     // assert_arrays_equal()
 #include <ksgpu/KernelTimer.hpp>
@@ -138,20 +139,14 @@ __global__ void gpu_dequantize_fp16_kernel(
     int s4 = (n4 >= 8) ? (n4 - 16) : n4;  int s5 = (n5 >= 8) ? (n5 - 16) : n5;
     int s6 = (n6 >= 8) ? (n6 - 16) : n6;  int s7 = (n7 >= 8) ? (n7 - 16) : n7;
     
-    // Pack pairs into __half2, then reinterpret as uint32 for uint4
+    // Pack pairs into __half2
     __half2 h01 = __halves2half2(__int2half_rn(s0), __int2half_rn(s1));
     __half2 h23 = __halves2half2(__int2half_rn(s2), __int2half_rn(s3));
     __half2 h45 = __halves2half2(__int2half_rn(s4), __int2half_rn(s5));
     __half2 h67 = __halves2half2(__int2half_rn(s6), __int2half_rn(s7));
     
-    uint4 out128;
-    out128.x = *reinterpret_cast<uint32_t*>(&h01);
-    out128.y = *reinterpret_cast<uint32_t*>(&h23);
-    out128.z = *reinterpret_cast<uint32_t*>(&h45);
-    out128.w = *reinterpret_cast<uint32_t*>(&h67);
-    
     // Step 3: Single 128-bit coalesced write (1 transaction × 512 bytes = 256 float16)
-    outp[thread_id] = out128;
+    half8_store(&outp[thread_id], h01, h23, h45, h67);
 }
 
 

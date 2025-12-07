@@ -802,7 +802,7 @@ class MultiDedisperser:
         k.emit()
         k.emit('#include <cstdio>')
         k.emit('#include <cassert>')
-        k.emit('#include <ksgpu/device_transposes.hpp>   // f16_perm(), f16_align()')
+        k.emit('#include <ksgpu/device_fp16.hpp>   // f16_perm(), f16_align()')
         k.emit('#include "../../include/pirate/DedispersionKernel.hpp"')
         k.emit()
         k.emit('namespace pirate {')
