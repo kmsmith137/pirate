@@ -43,9 +43,7 @@ void ChimeDedisperser::initialize()
     this->plan = make_shared<DedispersionPlan> (config);
     this->dedisperser = make_shared<GpuDedisperser> (plan);
     this->dedisperser->allocate();  // note: all buffers are zeroed or initialized
-    
-    for (long i = 0; i < nstreams; i++)
-        this->streams.push_back(ksgpu::CudaStreamWrapper());
+    this->streams = CudaStreamWrapper::create_vector(nstreams);
     
     // FIXME currently, gridding and peak-finding are not implemented.
     // As a kludge, we put in some extra GPU->GPU memcopies with the same bandwidth.

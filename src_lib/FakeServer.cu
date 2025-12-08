@@ -718,7 +718,7 @@ struct MemcpyWorker : public FakeServer::Worker
     shared_ptr<char> pdst;
 
     // Reminder: cudaStream_t is a typedef for (CUstream_st *)
-    shared_ptr<CUstream_st> stream;
+    CudaStreamWrapper stream;
 
     
     MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_) :
@@ -770,7 +770,7 @@ struct MemcpyWorker : public FakeServer::Worker
             int gpu = max(src_device, dst_device);
             int cuda_stream_priority = uses_host ? -1 : 0;  // lower numerical value = higher priority
             CUDA_CALL(cudaSetDevice(gpu));                  // initialize CUDA device in worker thread
-            this->stream = ksgpu::CudaStreamWrapper(cuda_stream_priority).p;  // RAII stream
+            this->stream = CudaStreamWrapper::create(cuda_stream_priority);             // RAII stream
         }
 
         this->psrc = worker_alloc(blocksize, (src_device >= 0));  // last argument is boolean 'on_gpu'
@@ -789,9 +789,9 @@ struct MemcpyWorker : public FakeServer::Worker
             if (!stream)
                 memcpy(pdst.get(), psrc.get(), n);
             else if (use_copy_engine || (src_device < 0) || (dst_device < 0))
-                CUDA_CALL(cudaMemcpyAsync(pdst.get(), psrc.get(), n, cudaMemcpyDefault, stream.get()));
+                CUDA_CALL(cudaMemcpyAsync(pdst.get(), psrc.get(), n, cudaMemcpyDefault, stream));
             else
-                ksgpu::launch_memcpy_kernel(pdst.get(), psrc.get(), n, stream.get());
+                ksgpu::launch_memcpy_kernel(pdst.get(), psrc.get(), n, stream);
         }
 
         Stats stats;
@@ -812,7 +812,7 @@ struct MemcpyWorker : public FakeServer::Worker
             stats.g2h[src_device] += nbytes_per_iteration;
 
         if (stream)
-            CUDA_CALL(cudaStreamSynchronize(stream.get()));
+            CUDA_CALL(cudaStreamSynchronize(stream));
 
         return stats;
     }
