@@ -4,7 +4,6 @@
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>
-#include <ksgpu/device_basics.hpp>   // FULL_MASK
 #include <ksgpu/rand_utils.hpp>
 #include <ksgpu/test_utils.hpp>
 
@@ -163,19 +162,19 @@ __global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *locations, long nloc
 
     // Absorb iframe into phases (only valid on laneId=1 mod 4).
     // Note: currently using 9 __shfl_syncs in this function, optimal number is 7.
-    uint loc_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x1c) + 2);
+    uint loc_len = __shfl_sync(~0u, loc_data, (threadIdx.x & 0x1c) + 2);
     uint loc_phase = (ulong(loc_data) + iframe) % ulong(loc_len);
 
     // "Allgather" src/dst offsets in groups of 8.
-    uint src_offset = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18));
-    uint src_phase = __shfl_sync(FULL_MASK, loc_phase, (threadIdx.x & 0x18) + 1);   // Note loc_phase here
-    uint src_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 2);
-    uint src_nseg = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 3);
+    uint src_offset = __shfl_sync(~0u, loc_data, (threadIdx.x & 0x18));
+    uint src_phase = __shfl_sync(~0u, loc_phase, (threadIdx.x & 0x18) + 1);   // Note loc_phase here
+    uint src_len = __shfl_sync(~0u, loc_data, (threadIdx.x & 0x18) + 2);
+    uint src_nseg = __shfl_sync(~0u, loc_data, (threadIdx.x & 0x18) + 3);
 
-    uint dst_offset = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 4);
-    uint dst_phase = __shfl_sync(FULL_MASK, loc_phase, (threadIdx.x & 0x18) + 5);   // Note loc_phase here
-    uint dst_len = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 6);
-    uint dst_nseg = __shfl_sync(FULL_MASK, loc_data, (threadIdx.x & 0x18) + 7);
+    uint dst_offset = __shfl_sync(~0u, loc_data, (threadIdx.x & 0x18) + 4);
+    uint dst_phase = __shfl_sync(~0u, loc_phase, (threadIdx.x & 0x18) + 5);   // Note loc_phase here
+    uint dst_len = __shfl_sync(~0u, loc_data, (threadIdx.x & 0x18) + 6);
+    uint dst_nseg = __shfl_sync(~0u, loc_data, (threadIdx.x & 0x18) + 7);
     
     for (int b = 0; b < nbeams; b++) {
         ulong s = ulong(src_offset + src_phase * src_nseg) << 3;   // int4 offset

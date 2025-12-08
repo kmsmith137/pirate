@@ -5,7 +5,6 @@
 #include <algorithm>  // std::sort()
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>
-#include <ksgpu/device_basics.hpp>   // FULL_MASK
 #include <ksgpu/rand_utils.hpp>
 #include <ksgpu/test_utils.hpp>
 
@@ -174,8 +173,8 @@ __global__ void gpu_tree_gridding_kernel(
     // be fast enough to be memory bandwidth limited.
     
     for (int m = 0; m < M; m++) {
-        float f0 = __shfl_sync(FULL_MASK, cmap, m);
-        float f1 = __shfl_sync(FULL_MASK, cmap, m+1);
+        float f0 = __shfl_sync(~0u, cmap, m);
+        float f1 = __shfl_sync(~0u, cmap, m+1);
         
         int if0 = max(int(f0), 0);
         int if1 = min(int(f1)+1, nfreq);

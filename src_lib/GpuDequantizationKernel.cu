@@ -4,7 +4,6 @@
 #include <cuda_fp16.h>
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>
-#include <ksgpu/device_basics.hpp>  // FULL_MASK
 #include <ksgpu/device_fp16.hpp>    // half8_store()
 #include <ksgpu/rand_utils.hpp>     // rand_uniform(), rand_int()
 #include <ksgpu/test_utils.hpp>     // assert_arrays_equal()
@@ -64,8 +63,8 @@ __global__ void gpu_dequantize_fp32_kernel(
     int src_thread_hi = 16 + thread_id / 2;   // 16,16,17,17,...,31,31
     int nibble_base = (thread_id % 2) * 4;    // 0,4,0,4,0,4,...
     
-    uint32_t data_lo = __shfl_sync(FULL_MASK, packed, src_thread_lo);
-    uint32_t data_hi = __shfl_sync(FULL_MASK, packed, src_thread_hi);
+    uint32_t data_lo = __shfl_sync(~0u, packed, src_thread_lo);
+    uint32_t data_hi = __shfl_sync(~0u, packed, src_thread_hi);
     
     // Extract 4 nibbles from data_lo, convert to float4
     int nib0 = (data_lo >> (nibble_base * 4)) & 0xF;
