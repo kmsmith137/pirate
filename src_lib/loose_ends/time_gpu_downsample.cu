@@ -43,9 +43,9 @@ static void time_one_gpu_downsample(int Df, int Dt)
     sp_name << "gpu_downsample(Df=" << Df << ",Dt=" << Dt << ",transpose_output=" << transpose_output << ")";
     string name = sp_name.str();
 
-    KernelTimer kt(nstreams);
+    KernelTimer kt(nouter, nstreams);
 
-    for (int i = 0; i < nouter; i++) {
+    while (kt.next()) {
         Array<float> src_i = src_si.slice(0, kt.istream);
         Array<float> src_w = src_sw.slice(0, kt.istream);
         Array<float> dst_i = dst_si.slice(0, kt.istream);
@@ -54,7 +54,7 @@ static void time_one_gpu_downsample(int Df, int Dt)
         for (int j = 0; j < ninner; j++)
             launch_downsample(dst_i, dst_w, src_i, src_w, Df, Dt, transpose_output, kt.stream);
 
-        if (kt.advance()) {
+        if (kt.warmed_up) {
             double gb_per_sec = gmem_gb / kt.dt;
             cout << name << " global memory (GB/s): " << gb_per_sec << endl;
         }

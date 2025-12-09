@@ -879,10 +879,13 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
     Array<void> out_big(params.dtype, out_shape, af_gpu | af_zero);
     double gb_per_launch = 1.0e-9 * kernel->bw_per_launch.nbytes_gmem;
 
-    KernelTimer kt(nbatches);   // one stream per batch
+    KernelTimer kt(nchunks * nbatches, nbatches);   // one stream per batch
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < nbatches; ibatch++) {
+            if (!kt.next())
+                break;
+                
             Array<void> in_slice = in_big;
             Array<void> out_slice = out_big;
 
@@ -893,7 +896,7 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
 
             kernel->launch(in_slice, out_slice, ibatch, ichunk, kt.stream);
 
-            if (kt.advance() && (ichunk % 2))
+            if (kt.warmed_up && (ichunk % 2))
                 cout << "   [ " << (gb_per_launch/kt.dt) << " GB/s ]\n";
         }
     }

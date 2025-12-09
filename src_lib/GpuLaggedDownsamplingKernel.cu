@@ -1134,14 +1134,14 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
     cout << "    ninner = " << ninner << endl
          << "    gpu memory footprint = " << ksgpu::nbytes_to_str(footprint_nbytes) << endl;
 
-    KernelTimer kt(nstreams);
+    KernelTimer kt(nouter, nstreams);
 
-    for (int i = 0; i < nouter; i++) {
+    while (kt.next()) {
         DedispersionBuffer &buf = bufs.at(kt.istream);
         for (int j = 0; j < ninner; j++)
             kernel->launch(buf, kt.istream, j, kt.stream);
 
-        if (kt.advance()) {
+        if (kt.warmed_up) {
             double gb_per_sec = gmem_tot / kt.dt;
             cout << name << " global memory (GB/s): " << gb_per_sec << endl;
         }

@@ -366,17 +366,17 @@ void GpuDequantizationKernel::time()
              << "    bandwidth per launch = " << (kernel.bw_per_launch.nbytes_gmem / 1.0e9) << " GB\n"
              << endl;
         
-        // Use KernelTimer with 2 streams, 500 iterations
+        // Use KernelTimer with 500 iterations, 2 streams
         int niter = 500;
         int print_interval = 50;
-        KernelTimer kt(2);  // 2 streams for latency hiding
+        KernelTimer kt(niter, 2);  // 2 streams for latency hiding
         
-        for (int i = 0; i < niter; i++) {
+        while (kt.next()) {
             kernel.launch(gout, gin, kt.stream);
             
-            if (kt.advance() && ((i+1) % print_interval == 0)) {
+            if (kt.warmed_up && ((kt.curr_iteration+1) % print_interval == 0)) {
                 double bandwidth_gbps = kernel.bw_per_launch.nbytes_gmem / kt.dt / 1.0e9;
-                cout << "    iter " << (i+1) << "/" << niter
+                cout << "    iter " << (kt.curr_iteration+1) << "/" << niter
                      << ": dt = " << (kt.dt * 1.0e3) << " ms"
                      << ", bandwidth = " << bandwidth_gbps << " GB/s" << endl;
             }

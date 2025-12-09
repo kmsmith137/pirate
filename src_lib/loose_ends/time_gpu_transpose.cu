@@ -32,13 +32,13 @@ void time_gpu_transpose()
         dst[istream] = Array<float> ({nz,nx,ny}, af_gpu | af_zero);
     }
 
-    KernelTimer kt(nstreams);
+    KernelTimer kt(nouter, nstreams);
 
-    for (int i = 0; i < nouter; i++) {
+    while (kt.next()) {
         for (int j = 0; j < ninner; j++)
             launch_transpose(dst[kt.istream], src[kt.istream], kt.stream);
 
-        if (kt.advance()) {
+        if (kt.warmed_up) {
             double gb_per_sec = gmem_gb / kt.dt;
             cout << "gpu_transpose global memory (GB/s): " << gb_per_sec << endl;
         }
