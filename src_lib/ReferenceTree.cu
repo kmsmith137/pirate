@@ -438,4 +438,120 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
 }
 
 
+// Static member function
+void ReferenceTreeWithSubbands::test()
+{
+    FrequencySubbands fs = FrequencySubbands::make_random();
+   
+    auto v = ksgpu::random_integers_with_bounded_product(5, 30000/fs.M);
+    long nchunks = v[0];
+    
+    Params params;
+    params.num_beams = v[1];
+    params.amb_rank = int(log2(v[2]) + 0.5);
+    params.dd_rank = fs.pf_rank + int(log2(v[3]) + 0.5);
+    params.ntime = v[4];
+    params.subband_counts = fs.subband_counts;
+
+    cout << "ReferenceTreeWithSubbands::test():"
+         << " num_beams=" << params.num_beams
+         << " amb_rank=" << params.amb_rank
+         << " dd_rank=" << params.dd_rank
+         << " ntime=" << params.ntime
+         << " subband_counts=" << ksgpu::tuple_str(params.subband_counts)
+         << endl;
+
+    long F = fs.F;
+    long M = fs.M;
+    long B = params.num_beams;
+    long T = params.ntime;
+    long A = pow2(params.amb_rank);
+    long Din = pow2(params.dd_rank);
+    long Dpf = pow2(params.dd_rank - fs.pf_rank);
+
+    ReferenceTreeWithSubbands tree_with_subbands(params);
+
+    std::vector<std::shared_ptr<ReferenceTree>> subtrees(fs.F);
+
+    // Initialize subtrees.
+    for (long f = 0; f < F; f++) {
+        long ilo = fs.f_to_ilo.at(f) << (params.dd_rank - fs.pf_rank);
+        long ihi = fs.f_to_ihi.at(f) << (params.dd_rank - fs.pf_rank);
+        long subtree_size = ihi - ilo;
+       
+        std::initializer_list<long> shape = { B, A, subtree_size, T };
+        subtrees[f] = ReferenceTree::make(shape, 1);
+    }
+
+    
+    Array<float> in({B,A,Din,T}, af_uhost | af_zero);
+    Array<float> buf({B,A,Din,T}, af_uhost | af_zero);
+    Array<float> out({B,Dpf,M,T}, af_uhost | af_zero);
+
+    // For subtrees.
+    Array<float> buf2({B,A,Din,T}, af_uhost | af_zero);
+    Array<float> out2({B,Dpf,M,T}, af_uhost | af_zero);
+
+    for (long ichunk = 0; ichunk < nchunks; ichunk++) {
+        in.randomize();
+
+        // Call ReferenceTreeWithSubbands.dedisperse().
+        buf.fill(in);
+        tree_with_subbands.dedisperse(buf, out);
+
+        // Compare the result with running multiple ReferenceTrees.
+        for (long f = 0; f < F; f++) {
+            long ilo = fs.f_to_ilo.at(f) << (params.dd_rank - fs.pf_rank);
+            long ihi = fs.f_to_ihi.at(f) << (params.dd_rank - fs.pf_rank);
+            int pf_level = integer_log2(fs.f_to_ihi.at(f) - fs.f_to_ilo.at(f));
+
+            long subtree_size = ihi - ilo;
+            int subtree_rank = integer_log2(subtree_size);
+
+            // Copy in -> buf2
+            Array<float> dd = buf2.slice(2, 0, subtree_size);
+            Array<float> src = in.slice(2, ilo, ihi);
+            dd.fill(src);
+
+            subtrees[f]->dedisperse(dd);
+
+            // Copy dd -> out2.
+            // The ambient index 'a' is a bit-reversed coarse DM.
+            // The subtree index 'd' is a bit-reversed fine DM.
+            for (long a = 0; a < A; a++) {
+                long dm_c = bit_reverse_slow(a, params.amb_rank);
+
+                for (long d = 0; d < subtree_size; d++) {
+                    long dm_f = bit_reverse_slow(d, subtree_rank);
+
+                    // (dm_c, dm_f) -> (dpf, m)
+                    long dpf = (dm_c << (params.dd_rank - fs.pf_rank)) + (dm_f >> pf_level);
+                    long m = dm_f & (pow2(pf_level)-1);
+
+                    // dd_slice: shape (B, A, subtree_size, T) -> (B, T)
+                    Array<float> dd_slice = dd.slice(1, a);
+                    dd_slice = dd_slice.slice(1, d);
+
+                    // out_slice: shape (B, Dpf, M, T) -> (B, T)
+                    Array<float> out_slice = out2.slice(1, dpf);  // note 'out2' on rhs (not 'out')
+                    out_slice = out_slice.slice(1, m);
+
+                    out_slice.fill(dd_slice);
+                }
+            }
+        }
+
+        // Check that full band is last, so that we can directly compare 'buf' and 'buf2'.
+        xassert(fs.f_to_ilo.at(F-1) == 0);
+        xassert(fs.f_to_ihi.at(F-1) == pow2(fs.pf_rank));
+
+        stringstream ss;
+        ss << "(chunk=" << ichunk << ")";
+
+        assert_arrays_equal(buf, buf2, "buf"+ss.str(), "buf2", {"b","a","dmbr","t"});
+        assert_arrays_equal(out, out2, "out"+ss.str(), "out2", {"b","dpf","m","t"});
+    }
+}
+
+
 }  // namespace pirate

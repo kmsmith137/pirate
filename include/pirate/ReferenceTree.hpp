@@ -89,11 +89,16 @@ struct ReferenceTreeWithSubbands
     // out.shape = { num_beams, 2^(amb_rank + dd_rank - pf_rank), M, ntime }
     void dedisperse(ksgpu::Array<float> &buf, ksgpu::Array<float> &out);
 
+    static void test();
+
     // Helper for dedisperse().
     // buf shape: (pow2(dd_rank), ntime).
     // out shape: (pow2(dd_rank-pf_rank), fs.M, ntime).
     float *dedisperse_2d(float *bufp, long buf_dstride, float *outp, long out_dstride, long out_mstride, float *ps);
 
+    // Helper for dedisperse()
+    // 'dst' and 'src' have shape (2, ntime).
+    // dst==src is okay.
     inline float *dedisperse_1d(float *dst, long ds, float *src, long ss, float *ps, long lag);
 };
 
