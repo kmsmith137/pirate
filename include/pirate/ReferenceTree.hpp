@@ -1,6 +1,8 @@
 #ifndef _PIRATE_REFERENCE_TREE_HPP
 #define _PIRATE_REFERENCE_TREE_HPP
 
+#include "FrequencySubbands.hpp"
+
 #include <vector>
 #include <memory>  // shared_ptr
 #include <ksgpu/Array.hpp>
@@ -53,6 +55,46 @@ protected:
     
     ksgpu::Array<float> pstate;          // can be large
     ksgpu::Array<float> scratch;         // always small (length (ntime+1)*nspec)
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// FIXME: currently, 'struct ReferenceTree' and 'struct ReferenceTreeWithSubbands' are independent
+// classes. They should be combined into one class (or at least share a base class).
+
+
+struct ReferenceTreeWithSubbands
+{
+    struct Params
+    {
+        int num_beams = 0;
+        int amb_rank = 0;
+        int dd_rank = 0;
+        int ntime = 0;
+        std::vector<long> subband_counts;
+    };
+
+    Params params;
+    FrequencySubbands fs;
+
+    ksgpu::Array<float> pstate;
+    ksgpu::Array<float> scratch;
+
+
+    ReferenceTreeWithSubbands(const Params &params_);
+
+    // Dedisperses 'buf' in place, writes subbands to 'out'.
+    // buf.shape = { num_beams, 2^amb_rank, 2^dd_rank, ntime }.
+    // out.shape = { num_beams, 2^(amb_rank + dd_rank - pf_rank), M, ntime }
+    void dedisperse(ksgpu::Array<float> &buf, ksgpu::Array<float> &out);
+
+    // Helper for dedisperse().
+    // buf shape: (pow2(dd_rank), ntime).
+    // out shape: (pow2(dd_rank-pf_rank), fs.M, ntime).
+    float *dedisperse_2d(float *bufp, long buf_dstride, float *outp, long out_dstride, long out_mstride, float *ps);
+
+    inline float *dedisperse_1d(float *dst, long ds, float *src, long ss, float *ps, long lag);
 };
 
 

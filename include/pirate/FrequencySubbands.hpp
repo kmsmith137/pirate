@@ -41,6 +41,9 @@ struct FrequencySubbands
     
     void show_token(uint token, std::ostream &os = std::cout) const;
     void show(std::ostream &os = std::cout) const;
+
+    inline long m_to_ilo(int m) const { long f = m_to_f.at(m); return f_to_ilo.at(f); }
+    inline long m_to_ihi(int m) const { long f = m_to_f.at(m); return f_to_ihi.at(f); }
 };
 
 
