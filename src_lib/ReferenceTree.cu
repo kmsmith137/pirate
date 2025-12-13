@@ -459,7 +459,6 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
 void ReferenceTreeWithSubbands::test()
 {
     FrequencySubbands fs = FrequencySubbands::make_random();
-    // FrequencySubbands fs({1,1});
     auto v = ksgpu::random_integers_with_bounded_product(5, 30000/fs.M);
 
     long nchunks = v[0];
@@ -550,7 +549,7 @@ void ReferenceTreeWithSubbands::test()
 
                     // (dm_c, dm_f) -> (dpf, m)
                     long dpf = (dm_c << (dd_rank - pf_rank)) + (dm_f >> pf_level);
-                    long m = dm_f & (pow2(pf_level)-1);
+                    long m = fs.f_to_mbase.at(f) + (dm_f & (pow2(pf_level)-1));
 
                     // dd_slice: shape (B, A, subtree_size, T) -> (B, T)
                     Array<float> dd_slice = dd.slice(1, a);
