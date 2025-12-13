@@ -3,10 +3,11 @@
 
 #include <stdexcept>
 #include <ksgpu/xassert.hpp>
+#include <ksgpu/rand_utils.hpp>    // rand_int()
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
 using namespace std;
-
+using namespace ksgpu;
 
 namespace pirate {
 #if 0
@@ -34,6 +35,7 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
 
             this->f_to_ilo.push_back(b*s);
             this->f_to_ihi.push_back(b*s + pow2(level));
+            this->f_to_mbase.push_back(M);
                 
             for (long d = 0; d < pow2(level); d++) {
                 this->m_to_f.push_back(f);
@@ -70,6 +72,31 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
         xassert_ge(subband_counts.at(level), 0);
         xassert_le(subband_counts.at(level), max_bands);
     }        
+}
+
+
+// Static member function
+vector<long> FrequencySubbands::make_random_subband_counts()
+{
+    long pf_rank = rand_int(0,5);
+    vector<long> subband_counts(pf_rank+1);
+
+    for (long level = 0; level < pf_rank; level++) {
+        // Level 0 is special (non-overlapping bands).
+        long max_bands = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
+        subband_counts[level] = rand_int(0,max_bands+1);
+    }
+
+    subband_counts[pf_rank] = 1;
+    return subband_counts;
+}
+
+
+// Static member function
+FrequencySubbands FrequencySubbands::make_random()
+{
+    vector<long> subband_counts = make_random_subband_counts();
+    return FrequencySubbands(subband_counts);
 }
 
 

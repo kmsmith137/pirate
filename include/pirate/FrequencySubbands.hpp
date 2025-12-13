@@ -32,13 +32,16 @@ struct FrequencySubbands
     std::vector<long> m_to_d;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
     std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
     std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
+    std::vector<long> f_to_mbase; // mapping (frequency_subband) -> m-index range (mbase : mbase + 2^level)
 
     // These members are used in the peak-finding kernel, whose 'out_argmax' array consists
     // of "tokens" of the form (t) | (p << 8) | (m << 16).
 
     // For debugging/testing.
     static void validate_subband_counts(const std::vector<long> &subband_counts);
-    
+    static std::vector<long> make_random_subband_counts();
+    static FrequencySubbands make_random();
+
     void show_token(uint token, std::ostream &os = std::cout) const;
     void show(std::ostream &os = std::cout) const;
 
