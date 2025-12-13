@@ -19,6 +19,7 @@
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
+#include "../include/pirate/ReferenceTree.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
 
@@ -179,6 +180,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     py::class_<ReferenceDedisperserBase>(m, "ReferenceDedisperser")
           .def_static("test_dedispersion_basics", &ReferenceDedisperserBase::test_dedispersion_basics)
+    ;
+
+    py::class_<ReferenceTreeWithSubbands>(m, "ReferenceTreeWithSubbands")
+          .def_static("test", &ReferenceTreeWithSubbands::test)
     ;
 
     py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")

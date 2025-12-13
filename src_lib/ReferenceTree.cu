@@ -150,9 +150,9 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
         
     xassert(fs.pf_rank <= params.dd_rank);
 
+    long R = params.dd_rank;
     long B = params.num_beams;
     long A = pow2(params.amb_rank);
-    long R = params.dd_rank;
     long Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
 
     long scratch_nelts = params.ntime + 1 + (R ? pow2(R-1) : 0);
@@ -196,11 +196,11 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
     long D = pow2(params.dd_rank);
     long Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
 
-    xassert(buf.shape_equals({B,A,D,T}));
+    xassert_shape_eq(buf, ({B,A,D,T}));
     xassert(buf.get_ncontig() >= 1);
     xassert(buf.on_host());
 
-    xassert(out.shape_equals({B,Dpf,M,T}));
+    xassert_shape_eq(out, ({B,Dpf,M,T}));
     xassert(out.get_ncontig() >= 1);
     xassert(out.on_host());
     
@@ -221,6 +221,8 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
         }
     }
 
+    // cout << " (ps-pstate.data) = " << (ps-pstate.data) << endl;
+    // cout << "  pstate.size = " << pstate.size << endl;
     xassert(ps == pstate.data + pstate.size);
 }
 
@@ -270,7 +272,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
 
             long pf_ns = fs.subband_counts.at(0);
 
-            xassert((pf_ns >= 0) && (pf_ns < pow2(pf_rank)));
+            xassert((pf_ns >= 0) && (pf_ns <= pow2(pf_rank)));
             xassert_eq(nf_in, pow2(pf_rank));
             xassert_eq(ndm_in, pf_ndm);
 
@@ -342,7 +344,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
             long pf_nd2 = 1 << (pf_level - 1);
 
             // Some checks on the above picture.
-            xassert((pf_ns >= 0) && (pf_ns < pow2(pf_rank-pf_level+1)-1));
+            xassert((pf_ns >= 0) && (pf_ns <= pow2(pf_rank-pf_level+1)-1));
             xassert_eq(nf_in, pow2(pf_rank - pf_level + 1));
             xassert_eq(ndm_in, pf_ndm * pf_nd2);
 
@@ -434,7 +436,7 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
         x1 = x0;
     }
 
-    return ps;
+    return ps + (lag+1);
 }
 
 
@@ -442,32 +444,36 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
 void ReferenceTreeWithSubbands::test()
 {
     FrequencySubbands fs = FrequencySubbands::make_random();
-   
     auto v = ksgpu::random_integers_with_bounded_product(5, 30000/fs.M);
+
     long nchunks = v[0];
-    
-    Params params;
-    params.num_beams = v[1];
-    params.amb_rank = int(log2(v[2]) + 0.5);
-    params.dd_rank = fs.pf_rank + int(log2(v[3]) + 0.5);
-    params.ntime = v[4];
-    params.subband_counts = fs.subband_counts;
+    long B = v[1];  // number of beams
+    long T = v[2];  // time samples per chunk
+    long amb_rank = int(log2(v[3]) + 0.5);
+    long dd_rank = fs.pf_rank + int(log2(v[4]) + 0.5);
 
     cout << "ReferenceTreeWithSubbands::test():"
-         << " num_beams=" << params.num_beams
-         << " amb_rank=" << params.amb_rank
-         << " dd_rank=" << params.dd_rank
-         << " ntime=" << params.ntime
-         << " subband_counts=" << ksgpu::tuple_str(params.subband_counts)
+         << " nchunks=" << nchunks
+         << ", num_beams=" << B
+         << ", amb_rank=" << amb_rank
+         << ", dd_rank=" << dd_rank
+         << ", ntime=" << T
+         << ", subband_counts=" << ksgpu::tuple_str(fs.subband_counts)
          << endl;
-
+    
     long F = fs.F;
     long M = fs.M;
-    long B = params.num_beams;
-    long T = params.ntime;
-    long A = pow2(params.amb_rank);
-    long Din = pow2(params.dd_rank);
-    long Dpf = pow2(params.dd_rank - fs.pf_rank);
+    long A = pow2(amb_rank);
+    long Din = pow2(dd_rank);
+    long Dpf = pow2(amb_rank + dd_rank - fs.pf_rank);
+    long pf_rank = fs.pf_rank;
+    
+    Params params;
+    params.num_beams = B;
+    params.amb_rank = amb_rank;
+    params.dd_rank = dd_rank;
+    params.ntime = T;
+    params.subband_counts = fs.subband_counts;
 
     ReferenceTreeWithSubbands tree_with_subbands(params);
 
@@ -475,8 +481,8 @@ void ReferenceTreeWithSubbands::test()
 
     // Initialize subtrees.
     for (long f = 0; f < F; f++) {
-        long ilo = fs.f_to_ilo.at(f) << (params.dd_rank - fs.pf_rank);
-        long ihi = fs.f_to_ihi.at(f) << (params.dd_rank - fs.pf_rank);
+        long ilo = fs.f_to_ilo.at(f) << (dd_rank - pf_rank);
+        long ihi = fs.f_to_ihi.at(f) << (dd_rank - pf_rank);
         long subtree_size = ihi - ilo;
        
         std::initializer_list<long> shape = { B, A, subtree_size, T };
@@ -501,8 +507,8 @@ void ReferenceTreeWithSubbands::test()
 
         // Compare the result with running multiple ReferenceTrees.
         for (long f = 0; f < F; f++) {
-            long ilo = fs.f_to_ilo.at(f) << (params.dd_rank - fs.pf_rank);
-            long ihi = fs.f_to_ihi.at(f) << (params.dd_rank - fs.pf_rank);
+            long ilo = fs.f_to_ilo.at(f) << (dd_rank - pf_rank);
+            long ihi = fs.f_to_ihi.at(f) << (dd_rank - pf_rank);
             int pf_level = integer_log2(fs.f_to_ihi.at(f) - fs.f_to_ilo.at(f));
 
             long subtree_size = ihi - ilo;
@@ -519,13 +525,13 @@ void ReferenceTreeWithSubbands::test()
             // The ambient index 'a' is a bit-reversed coarse DM.
             // The subtree index 'd' is a bit-reversed fine DM.
             for (long a = 0; a < A; a++) {
-                long dm_c = bit_reverse_slow(a, params.amb_rank);
+                long dm_c = bit_reverse_slow(a, amb_rank);
 
                 for (long d = 0; d < subtree_size; d++) {
                     long dm_f = bit_reverse_slow(d, subtree_rank);
 
                     // (dm_c, dm_f) -> (dpf, m)
-                    long dpf = (dm_c << (params.dd_rank - fs.pf_rank)) + (dm_f >> pf_level);
+                    long dpf = (dm_c << (dd_rank - pf_rank)) + (dm_f >> pf_level);
                     long m = dm_f & (pow2(pf_level)-1);
 
                     // dd_slice: shape (B, A, subtree_size, T) -> (B, T)
@@ -543,7 +549,7 @@ void ReferenceTreeWithSubbands::test()
 
         // Check that full band is last, so that we can directly compare 'buf' and 'buf2'.
         xassert(fs.f_to_ilo.at(F-1) == 0);
-        xassert(fs.f_to_ihi.at(F-1) == pow2(fs.pf_rank));
+        xassert(fs.f_to_ihi.at(F-1) == pow2(pf_rank));
 
         stringstream ss;
         ss << "(chunk=" << ichunk << ")";

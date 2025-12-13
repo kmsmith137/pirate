@@ -34,6 +34,7 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test()')
+    parser.add_argument('--rtws', action='store_true', help='Runs ReferenceTreeWithSubbands.test()')
 
 
 def rrange(registry_class):
@@ -53,7 +54,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'casm', 'zomb', 'dd', 'cdd2' ]
+    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'casm', 'zomb', 'dd', 'cdd2', 'rtws' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -115,6 +116,9 @@ def test(args):
         if run_all_tests or args.cdd2:
             for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
                 pirate_pybind11.CoalescedDdKernel2.test()
+
+        if run_all_tests or args.rtws:
+            pirate_pybind11.ReferenceTreeWithSubbands.test()
             
 
 #########################################   time command  ##########################################
