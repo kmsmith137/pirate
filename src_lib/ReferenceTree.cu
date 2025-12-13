@@ -156,6 +156,12 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
     long Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
 
     long scratch_nelts = params.ntime + 1 + (R ? pow2(R-1) : 0);
+    this->scratch = Array<float> ({scratch_nelts}, af_uhost | af_zero);
+
+    // The rest of the constructor is dedicated to computing 'pstate_nelts'.
+    // This computation depends on the details of how dedisperse() is implemented.
+    // If these details change, then the constructor will probably need to be revisited.
+
     long pstate_nelts = 0;
 
     // Dedispersion contibution to pstate_nelts.
@@ -170,20 +176,26 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
     }
 
     // Peak-finding contribution to pstate_nelts.
-    // At each 1 <= level <= pf_rank, the "mini" dedispersion rank is r = (level-1)
-    // and the "mini" contribution to pstate_nelts is 
-    //   N = sum_{0 <= l < 2^r} (l+1)
-    //     = (2^r (2^r+1)) / 2
+    //
+    // At each 1 <= level <= pf_rank, define r = (dd_rank - pf_rank + level - 1).
+    // Each output array element is the sum of 2^{r+1} frequency channels, and the last
+    // step is a (2^r x 2^r) -> 2^{r+1} call to dedisperse_1d(). The contribution to
+    // pstate_nelts is:
+    //
+    //   B * A * subband_counts[level] * N
+    //
+    // where N = sum_{0 <= l < 2^r} (l+1)
+    //         = (2^r (2^r+1)) / 2
 
     for (long level = 1; level <= fs.pf_rank; level++) {
         // This way of writing N makes sense for r=0 (i.e. level=1).
+        long r = params.dd_rank - fs.pf_rank + level - 1;
+        long N = (pow2(r) * (pow2(r)+1)) >> 1;
         long pf_ns = fs.subband_counts.at(level);
-        long N = (pow2(level-1) * (pow2(level-1)+1)) >> 1;
-        pstate_nelts += B * Dpf * pf_ns * N;
+        pstate_nelts += B * A * pf_ns * N;
     }
 
     this->pstate = Array<float> ({pstate_nelts}, af_uhost | af_zero);
-    this->scratch = Array<float> ({scratch_nelts}, af_uhost | af_zero);
 }
 
 
@@ -337,7 +349,10 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
             //   out[pf_dm, pfs, d2, :, :]
             //   in[pfs:pfs+2, pf_dm, d2, :]
             //
-            // are related by dedisperse_1d() with lag=d2.
+            // are related by dedisperse_1d() with:
+            // 
+            //   lag = (pf_dm * pf_nd2) + d2
+            //
             // Note that the input array is indexed with a bit_reverse()!
 
             long pf_ns = fs.subband_counts.at(pf_level);
@@ -376,7 +391,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
                         float *dst = outp + (pf_dm * out_dstride) + (m * out_mstride);
                         long dst_stride = T;
 
-                        ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, d2);  // lag=d2
+                        ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, dm_in);  // lag = dm_in
                     }
                 }
             }
@@ -444,6 +459,7 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
 void ReferenceTreeWithSubbands::test()
 {
     FrequencySubbands fs = FrequencySubbands::make_random();
+    // FrequencySubbands fs({1,1});
     auto v = ksgpu::random_integers_with_bounded_product(5, 30000/fs.M);
 
     long nchunks = v[0];
@@ -500,6 +516,8 @@ void ReferenceTreeWithSubbands::test()
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         in.randomize();
+        // in.set_zero();
+        // in.at({0,0,0,0}) = 1.0f;
 
         // Call ReferenceTreeWithSubbands.dedisperse().
         buf.fill(in);
