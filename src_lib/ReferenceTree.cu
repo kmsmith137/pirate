@@ -259,13 +259,13 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
     long mcurr = 0;   // current position 0 <= m < M
 
     // Note that the loop includes the "senintel" case r=dd_rank at the end.
-    for (int r = 0; r <= dd_rank; r++) {
+    for (long r = 0; r <= dd_rank; r++) {
 
         // In each iteration of the outer loop, we have nf -> (nf/2),
         // ndm -> (2*ndm), and pf_level -> (pf_level+1).
 
-        int nf_in = pow2(dd_rank - r);
-        int ndm_in = pow2(r);
+        long nf_in = pow2(dd_rank - r);
+        long ndm_in = pow2(r);
 
         if (r == (dd_rank - pf_rank)) {
 
@@ -297,17 +297,17 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
 
             // Loop over 0 <= dm_in < ndm_in.
             // Reminder: ndm_in == pf_ndm == 2^r.
-            for (int dm_in = 0; dm_in < ndm_in; dm_in++) {
+            for (long dm_in = 0; dm_in < ndm_in; dm_in++) {
                 long dm_in_brev = bit_reverse_slow(dm_in, r);
 
-                for (int pfs = 0; pfs < pf_ns; pfs++) {
+                for (long pfs = 0; pfs < pf_ns; pfs++) {
                     // Input array at indices (pfs, dm_in_brev, 0).
                     // Output array at indices (dm_in, pfs, 0).
                     long isrc = (pfs * ndm_in) + dm_in_brev;
                     float *src = bufp + (isrc * buf_dstride);
                     float *dst = outp + (dm_in * out_dstride) + (pfs * out_mstride);
 
-                    for (int t = 0; t < T; t++)
+                    for (long t = 0; t < T; t++)
                         dst[t] = src[t];
                 }
             }
@@ -323,7 +323,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
         // This is not the optimal way to do it (it would be better to do even/odd differently),
         // but I'm prioritizing simplicity in this reference implementation.
 
-        int pf_level = r + pf_rank - dd_rank + 1;
+        long pf_level = r + pf_rank - dd_rank + 1;
 
         if (pf_level > 0) {
 
@@ -364,9 +364,9 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
             xassert_eq(ndm_in, pf_ndm * pf_nd2);
 
             // Consistency check on m-indices.
-            for (int pfs = 0; pfs < pf_ns; pfs++) {
-                for (int pfd = 0; pfd < 2*pf_nd2; pfd++) {
-                    int m = mcurr + (pfs * 2*pf_nd2) + pfd;
+            for (long pfs = 0; pfs < pf_ns; pfs++) {
+                for (long pfd = 0; pfd < 2*pf_nd2; pfd++) {
+                    long m = mcurr + (pfs * 2*pf_nd2) + pfd;
                     xassert_eq(fs.m_to_ilo(m), (pfs) * pf_nd2);
                     xassert_eq(fs.m_to_ihi(m), (pfs+2) * pf_nd2);
                     xassert_eq(fs.m_to_d.at(m), pfd);
@@ -374,12 +374,12 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
             }
 
             // Triple loop over (pf_dm, d2, pfs)
-            for (int pf_dm = 0; pf_dm < pf_ndm; pf_dm++) {
-                for (int d2 = 0; d2 < pf_nd2; d2++) {
-                    int dm_in = (pf_dm * pf_nd2) + d2;
-                    int dm_in_brev = bit_reverse_slow(dm_in, r);
+            for (long pf_dm = 0; pf_dm < pf_ndm; pf_dm++) {
+                for (long d2 = 0; d2 < pf_nd2; d2++) {
+                    long dm_in = (pf_dm * pf_nd2) + d2;
+                    long dm_in_brev = bit_reverse_slow(dm_in, r);
 
-                    for (int pfs = 0; pfs < pf_ns; pfs++) {
+                    for (long pfs = 0; pfs < pf_ns; pfs++) {
                         // Input array at indices (pfs:pfs+2, dm_in_brev, 0)
                         long isrc = pfs * ndm_in + dm_in_brev;
                         float *src = bufp + isrc * buf_dstride;
@@ -401,11 +401,11 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
 
         // Dedisperse in-place
 
-        int nf_out = pow2(dd_rank - r - 1);  // = (nf_in / 2)
-        int ndm_out = pow2(r+1);             // = (2 * nf_out)
+        long nf_out = pow2(dd_rank - r - 1);  // = (nf_in / 2)
+        long ndm_out = pow2(r+1);             // = (2 * nf_out)
 
-        for (int fout = 0; fout < nf_out; fout++) {
-            for (int dm_in_brev = 0; dm_in_brev < ndm_in; dm_in_brev++) {
+        for (long fout = 0; fout < nf_out; fout++) {
+            for (long dm_in_brev = 0; dm_in_brev < ndm_in; dm_in_brev++) {
                 long dm_in = bit_reverse_slow(dm_in_brev, r);
                 float *p = bufp + (fout * ndm_out + dm_in_brev) * buf_dstride;
                 long pstride = ndm_in * buf_dstride;
@@ -464,8 +464,8 @@ void ReferenceTreeWithSubbands::test()
     long nchunks = v[0];
     long B = v[1];  // number of beams
     long T = v[2];  // time samples per chunk
-    long amb_rank = int(log2(v[3]) + 0.5);
-    long dd_rank = fs.pf_rank + int(log2(v[4]) + 0.5);
+    long amb_rank = long(log2(v[3]) + 0.5);
+    long dd_rank = fs.pf_rank + long(log2(v[4]) + 0.5);
 
     cout << "ReferenceTreeWithSubbands::test():"
          << " nchunks=" << nchunks
@@ -526,10 +526,10 @@ void ReferenceTreeWithSubbands::test()
         for (long f = 0; f < F; f++) {
             long ilo = fs.f_to_ilo.at(f) << (dd_rank - pf_rank);
             long ihi = fs.f_to_ihi.at(f) << (dd_rank - pf_rank);
-            int pf_level = integer_log2(fs.f_to_ihi.at(f) - fs.f_to_ilo.at(f));
+            long pf_level = integer_log2(fs.f_to_ihi.at(f) - fs.f_to_ilo.at(f));
 
             long subtree_size = ihi - ilo;
-            int subtree_rank = integer_log2(subtree_size);
+            long subtree_rank = integer_log2(subtree_size);
 
             // Copy in -> buf2
             Array<float> dd = buf2.slice(2, 0, subtree_size);

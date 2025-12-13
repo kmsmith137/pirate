@@ -68,10 +68,10 @@ struct ReferenceTreeWithSubbands
 {
     struct Params
     {
-        int num_beams = 0;
-        int amb_rank = 0;
-        int dd_rank = 0;
-        int ntime = 0;
+        long num_beams = 0;
+        long amb_rank = 0;
+        long dd_rank = 0;
+        long ntime = 0;
         std::vector<long> subband_counts;
     };
 
