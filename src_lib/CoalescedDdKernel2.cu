@@ -244,7 +244,8 @@ void CoalescedDdKernel2::test()
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
     cdd2_kernel.allocate();
 
-    ReferenceDedispersionKernel ref_dd_kernel(dd_params);
+    vector<long> subband_counts = {1};  // no subbands yet
+    ReferenceDedispersionKernel ref_dd_kernel(dd_params, subband_counts);
     ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
 
     FrequencySubbands &fs = cdd2_kernel.fs;
@@ -322,7 +323,8 @@ void CoalescedDdKernel2::test()
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < num_batches; ibatch++) {
-            ref_dd_kernel.apply(in_cpu, tmp_cpu, ibatch, ichunk);
+            Array<float> sb_empty;  // no subbands yet
+            ref_dd_kernel.apply(in_cpu, tmp_cpu, sb_empty, ibatch, ichunk);
 
             //  -------- FIXME ad hoc shuffling operation tmp_cpu -> tmp2_cpu starts here ------
 

@@ -280,6 +280,9 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
 ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_) :
     ReferenceDedisperserBase(plan_, 1)
 {
+    // No subbands yet.
+    vector<long> subband_counts = {1};
+
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
     this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
@@ -288,14 +291,14 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
         DedispersionKernelParams kparams = kparams_;
         kparams.output_is_ringbuf = false;  // in ReferenceDedisperer1, ringbufs are disabled.
         kparams.producer_id = -1;
-        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
+        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
     }
 
     for (const DedispersionKernelParams &kparams_: plan->stage2_dd_kernel_params) {
         DedispersionKernelParams kparams = kparams_;
         kparams.input_is_ringbuf = false;   // in ReferenceDeidsperser1, ringbufs are disabled.
         kparams.consumer_id = -1;
-        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
+        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
     }
     
     // Initalize stage2_lagbufs.
@@ -352,7 +355,9 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime }); 
-        kernel->apply(dd_buf, dd_buf, ibatch, it_chunk);
+
+        Array<float> sb_empty;  // no subbands yet
+        kernel->apply(dd_buf, dd_buf, sb_empty, ibatch, it_chunk);
     }
 
     // Step 3: copy stage1 -> stage2
@@ -381,7 +386,9 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
         // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
         dd_buf = dd_buf.transpose({0,2,1,3});
-        kernel->apply(dd_buf, dd_buf, ibatch, it_chunk);
+
+        Array<float> sb_empty;  // no subbands yet
+        kernel->apply(dd_buf, dd_buf, sb_empty, ibatch, it_chunk);
     }
 }
 
@@ -434,11 +441,14 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->g2g_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
     
+    // No subbands yet
+    vector<long> subband_counts = {1};
+
     for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
-        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
+        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
 
     for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params)
-        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams));
+        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
     
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
     // 'input_arrays' and 'output_arrays' in the case class.
@@ -466,7 +476,9 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime }); 
-        kernel->apply(dd_buf, this->gpu_ringbuf, ibatch, it_chunk);
+
+        Array<float> sb_empty;  // no subbands yet
+        kernel->apply(dd_buf, this->gpu_ringbuf, sb_empty, ibatch, it_chunk);
     }
 
     // Step 3: extra copying steps needed for early triggers.
@@ -532,7 +544,9 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
         // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
         dd_buf = dd_buf.transpose({0,2,1,3});
-        kernel->apply(this->gpu_ringbuf, dd_buf, ibatch, it_chunk);
+
+        Array<float> sb_empty;  // no subbands yet
+        kernel->apply(this->gpu_ringbuf, dd_buf, sb_empty, ibatch, it_chunk);
     }
 }
 

@@ -188,11 +188,16 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
 // nelts_per_segment == 32.
 
 
-ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) :
-    params(params_)
+ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_, const vector<long> &subband_counts_) :
+    params(params_), fs(subband_counts_)
 {
+    // The reference kernel uses float32, regardless of what dtype is specified.
     params.dtype = Dtype::native<float>();
     params.validate();
+    
+    // subband_counts are validated by "fs(subband_counts_)" above, but we also want
+    // this compatibility test between 'params' and 'subband_counts'.
+    xassert_ge(params.dd_rank, fs.pf_rank);
     
     ReferenceTreeWithSubbands::Params tree_params;
     tree_params.num_beams = params.beams_per_batch;
@@ -200,8 +205,9 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
     tree_params.dd_rank = params.dd_rank;
     tree_params.ntime = params.ntime;
     tree_params.nspec = params.nspec;
-    tree_params.subband_counts = { 1 };
+    tree_params.subband_counts = subband_counts_;
 
+    this->Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
     this->trees.resize(nbatches);                         
 
@@ -213,7 +219,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 }
 
 
-void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, long ibatch, long it_chunk)
+void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, Array<void> &sb_out_, long ibatch, long it_chunk)
 {
     long B = params.beams_per_batch;
     long A = pow2(params.amb_rank);
@@ -222,22 +228,31 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
     long S = params.nspec;
     
     // Error checking, shape checking.
-    DedispersionKernelIobuf inbuf(params, in_, params.input_is_ringbuf, false);     // on_gpu=false
-    DedispersionKernelIobuf outbuf(params, out_, params.output_is_ringbuf, false);  // on_gpu=false
+    DedispersionKernelIobuf inbuf(params, in_, params.input_is_ringbuf, false);        // on_gpu=false
+    DedispersionKernelIobuf outbuf(params, dd_out_, params.output_is_ringbuf, false);  // on_gpu=false
     
+    _check_sb_out(sb_out_);
+
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(it_chunk >= 0);
 
     // The reference kernel uses float32, regardless of what dtype is specified.
     Array<float> in = in_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'in' array");
-    Array<float> out = out_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'out' array");
+    Array<float> dd_out = dd_out_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'dd_out' array");
+    Array<float> sb_out = sb_out_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'sb_out' array");
 
     // Reshape "simple" bufs to 4-d.
     in = params.input_is_ringbuf ? in : in.reshape({B,A,N,T*S});
-    out = params.output_is_ringbuf ? out : out.reshape({B,A,N,T*S});
+    dd_out = params.output_is_ringbuf ? dd_out : dd_out.reshape({B,A,N,T*S});
+
+    if (sb_out.size != 0)
+        sb_out = sb_out.reshape({B,Dpf,fs.M,T*S});
 
     long rb_pos = it_chunk * params.total_beams + (ibatch * params.beams_per_batch);
-    Array<float> dd = params.output_is_ringbuf ? in : out;
+
+    // Dedisperse in-place. Assumes that either 'in' or 'dd_out' is a simple buf (not a ringbuf).
+    xassert(!params.input_is_ringbuf || !params.output_is_ringbuf);
+    Array<float> dd = params.output_is_ringbuf ? in : dd_out;
 
     if (params.input_is_ringbuf)
         _copy_from_ringbuf(in, dd, rb_pos);
@@ -247,12 +262,12 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &out_, lon
     if (params.apply_input_residual_lags)
         rlag_bufs.at(ibatch)->apply_lags(dd);
 
-    trees.at(ibatch)->dedisperse(dd);
+    trees.at(ibatch)->dedisperse(dd, sb_out);
 
     if (params.output_is_ringbuf)
-        _copy_to_ringbuf(dd, out, rb_pos);
+        _copy_to_ringbuf(dd, dd_out, rb_pos);
     else
-        xassert(out.data == dd.data);   // FIXME in-place assumed
+        xassert(dd_out.data == dd.data);   // FIXME in-place assumed
 }
 
 
@@ -288,6 +303,46 @@ ReferenceDedispersionKernel::_init_rlags(const Params &params)
         ret[n] = make_shared<ReferenceLagbuf> (rlags, T*S);
 
     return ret;
+}
+
+// Helper function called by apply(), to check the 'sb_out' arg.
+void ReferenceDedispersionKernel::_check_sb_out(const ksgpu::Array<void> &sb_out)
+{
+    long B = params.beams_per_batch;
+    long T = params.ntime;
+    long S = params.nspec;
+    long M = fs.M;
+
+    if (sb_out.size == 0) {
+        // If fs.M==1 (no subbands), then the 'sb_out' argument is optional, and
+        // an empty (size-zero) array is allowed.        
+        if (fs.M == 1)
+            return;
+
+        throw runtime_error("ReferenceDedispersionKernel::apply(): if subbands are defined "
+                            "(fs.M > 1), then 'sb_out' must be a nonempty array");
+    }
+
+    xassert(sb_out.dtype == params.dtype);
+    xassert(sb_out.on_host());
+
+    if (sb_out.shape_equals({B,Dpf,M,T,S})) {
+        xassert(sb_out.get_ncontig() >= 2);
+        return;
+    }
+    
+    if (sb_out.shape_equals({B,Dpf,M,T}) && (S==1)) {
+        xassert(sb_out.get_ncontig() >= 1);
+        return;
+    }
+
+    stringstream ss;
+    ss << "ReferenceDedispersionKernel::apply(): expected 'sb_out' to have shape " << ksgpu::tuple_str({B,Dpf,M,T,S});
+    if (S == 1) ss << ", or shape " << ksgpu::tuple_str({B,Dpf,M,T});
+    if (M == 1) ss << ", or empty array";
+    ss << ", got shape " << sb_out.shape_str();
+
+    throw runtime_error(ss.str());
 }
 
 
@@ -815,7 +870,8 @@ void GpuDedispersionKernel::test()
     
     // ---- Run test ----
     
-    shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (params);
+    vector<long> subband_counts = {1};  // no subbands
+    shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (params, subband_counts);
     shared_ptr<GpuDedispersionKernel> gpu_kernel = make_shared<GpuDedispersionKernel> (params);
     gpu_kernel->allocate();
 
@@ -839,8 +895,9 @@ void GpuDedispersionKernel::test()
     for (long ichunk = 0; ichunk < ti.nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < nbatches; ibatch++) {
             // Reference dedispersion.
+            Array<float> sb_empty;  // empty array
             cpu_arrs.copy_input(ichunk, ibatch);
-            ref_kernel->apply(cpu_arrs.active_inbuf, cpu_arrs.active_outbuf, ibatch, ichunk);
+            ref_kernel->apply(cpu_arrs.active_inbuf, cpu_arrs.active_outbuf, sb_empty, ibatch, ichunk);
             cpu_arrs.copy_output(ichunk, ibatch);
             
             // GPU dedipersion.

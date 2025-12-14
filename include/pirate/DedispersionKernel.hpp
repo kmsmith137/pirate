@@ -3,6 +3,7 @@
 
 #include <ksgpu/Array.hpp>
 
+#include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
@@ -76,7 +77,7 @@ struct DedispersionKernelParams
     long beams_per_batch = 0;
     long ntime = 0;       // includes downsampling factor, if any
     long nspec = 0;       // "inner" spectator index
-    
+
     // Input/output buffer types.
     bool input_is_ringbuf = false;
     bool output_is_ringbuf = false;
@@ -171,27 +172,47 @@ struct DedispersionKernelIobuf
 struct ReferenceDedispersionKernel
 {
     using Params = DedispersionKernelParams;
-    Params params;  // reminder: contains shared_ptr<MegaRingbuf>
-
-    ReferenceDedispersionKernel(const Params &params);
     
-    // The 'in' and 'out' arrays are either "simple" buffers or ringbufs, depending on values
+    // See FrequencySubbands.hpp for the meaning of the 'subband_counts' argument.
+    // Set subband_counts={1} if you don't want subbands. (An empty vector is invalid.)
+    ReferenceDedispersionKernel(const Params &params, const std::vector<long> &subband_counts);
+    
+    // The 'in' and 'dd_out' arrays are either "simple" buffers or ringbufs, depending on values
     // of Params::input_is_ringbuf and Params::output_is_ringbuf. Shapes are (where variables
     // beams_per_batch, amb_rank, ... are members of Params):
     //
     //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
-    //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
+    //               or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
     //
     //   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
     //   !!! Note that we use the "GPU" part of the mega_ringbuf, not the "host" part!!!
+    //
+    // The 'sb_out' array has shape:
+    //
+    //    either (beams_per_batch, Dpf, fs.M, ntime, nspec)
+    //        or (beams_per_batch, Dpf, fs.M, ntime)   if nspec==1
+    // 
+    // where Dpf = pow2(amb_rank + dd_rank - pf_rank).
+    //
+    // Note: if fs.M==1 (no subbands), then the 'sb_out' argument is optional, and
+    // an empty (size-zero) array can be passed instead.
 
-    void apply(ksgpu::Array<void> &in, ksgpu::Array<void> &out, long ibatch, long it_chunk);
+    void apply(
+        ksgpu::Array<void> &in,        // either "simple" buf or ringbuf, see above
+        ksgpu::Array<void> &dd_out,    // either "simple" buf or ringbuf, see above
+        ksgpu::Array<void> &sb_out,    // shape (B,Dpf,M,T,S) or (B,Dpf,M,T) or empty, see above
+        long ibatch, long it_chunk);
 
+    Params params;         // reminder: contains shared_ptr<MegaRingbuf>
+    FrequencySubbands fs;  // reminder: contains 'pf_rank' and 'M'.
+
+    long Dpf = 0;          // same as pow2(params.amb_rank + params.dd_rank - fs.pf_rank)
     long nbatches = 0;     // same as (params.total_beams / params.beams_per_batch)
     std::vector<std::shared_ptr<ReferenceTreeWithSubbands>> trees;        // length (nbatches)
     std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;  // length (params.apply_input_residual_lags ? nbatches : 0)
 
     // Used internally
+    void _check_sb_out(const ksgpu::Array<void> &sb_out);
     void _copy_to_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
     void _copy_from_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
 
@@ -204,8 +225,11 @@ struct ReferenceDedispersionKernel
 // -------------------------------------------------------------------------------------------------
 //
 // GpuDedispersionKernel
-
-
+//
+// Currently, the GpuDedispersionKernel does not implement the 'sb_out' argument
+// from the ReferenceDedispersionKernel. (See 'struct CoalescedDdKernel2' for a 
+// more efficient approach.)
+//
 // The GpuDedispersionKernel uses externally-allocated buffers for its inputs/outputs,
 // but internally allocates and manages its persistent state.
 

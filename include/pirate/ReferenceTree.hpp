@@ -85,12 +85,13 @@ struct ReferenceTreeWithSubbands
 
     ReferenceTreeWithSubbands(const Params &params_);
 
-    // Dedisperses 'buf' in place, and does not write subbands.
-    void dedisperse(ksgpu::Array<float> &buf);
-
     // Dedisperses 'buf' in place, and writes subbands to 'out'.
-    // buf.shape = { num_beams, 2^amb_rank, 2^dd_rank, ntime }.
-    // out.shape = { num_beams, 2^(amb_rank + dd_rank - pf_rank), M, ntime }
+    //   buf.shape = { num_beams, 2^amb_rank, 2^dd_rank, ntime * nspec}.
+    //   out.shape = { num_beams, 2^(amb_rank + dd_rank - pf_rank), M, ntime }
+    //
+    // Note: if M=1 (no subbands), then the 'out' argument is optional, and
+    // an empty (size-zero) array can be passed instead.
+
     void dedisperse(ksgpu::Array<float> &buf, ksgpu::Array<float> &out);
 
     static void test();

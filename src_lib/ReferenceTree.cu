@@ -203,32 +203,6 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
 }
 
 
-void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf)
-{
-    long S = params.nspec;
-    long T = params.ntime;
-    long B = params.num_beams;
-    long A = pow2(params.amb_rank);
-    long D = pow2(params.dd_rank);
-
-    xassert_shape_eq(buf, ({B,A,D,T*S}));
-    xassert(buf.get_ncontig() >= 1);
-    xassert(buf.on_host());
-    
-    float *ps = pstate.data;
-
-    for (long b = 0; b < B; b++) {
-        for (long a = 0; a < A; a++) {
-            float *bufp = &buf.at({b,a,0,0});
-            long buf_dstride = buf.strides[2];
-            ps = dedisperse_2d(bufp, buf_dstride, nullptr, 0, 0, ps);
-        }
-    }
-
-    xassert(ps == pstate.data + pstate.size);
-}
-
-
 void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
 {
     long M = fs.M;
@@ -243,9 +217,14 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
     xassert(buf.get_ncontig() >= 1);
     xassert(buf.on_host());
 
-    xassert_shape_eq(out, ({B,Dpf,M,T*S}));
-    xassert(out.get_ncontig() >= 1);
-    xassert(out.on_host());
+    if (out.size != 0) {
+        xassert_shape_eq(out, ({B,Dpf,M,T*S}));
+        xassert(out.get_ncontig() >= 1);
+        xassert(out.on_host());
+    }
+    else if (fs.M != 1)
+        throw runtime_error("ReferenceTreeWithSubbands::dedisperse(): if subbands are "
+                            "defined (M > 1), then 'out' must be a nonempty array");
     
     float *ps = pstate.data;
 
@@ -254,11 +233,17 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
             float *bufp = &buf.at({b,a,0,0});
             long buf_dstride = buf.strides[2];
 
-            // The ambient index 'a' is a bit-reversed coarse DM index.
-            long pfdm = bit_reverse_slow(a, params.amb_rank) << (params.dd_rank - fs.pf_rank);
-            float *outp = &out.at({b,pfdm,0,0});
-            long out_dstride = out.strides[1];
-            long out_mstride = out.strides[2];
+            float *outp = nullptr;
+            long out_dstride = 0;
+            long out_mstride = 0;
+
+            if (out.size != 0) {
+                // The ambient index 'a' is a bit-reversed coarse DM index.
+                long pfdm = bit_reverse_slow(a, params.amb_rank) << (params.dd_rank - fs.pf_rank);
+                outp = &out.at({b,pfdm,0,0});
+                out_dstride = out.strides[1];
+                out_mstride = out.strides[2];
+            }
 
             ps = dedisperse_2d(bufp, buf_dstride, outp, out_dstride, out_mstride, ps);
         }
