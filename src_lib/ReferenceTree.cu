@@ -446,7 +446,8 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
         }
     }
 
-    xassert(mcurr == fs.M);
+    long expected_mcurr = outp ? fs.M : 0;
+    xassert(mcurr == expected_mcurr);
 
     return ps;
 }

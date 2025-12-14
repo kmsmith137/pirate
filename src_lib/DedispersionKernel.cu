@@ -193,18 +193,20 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_) 
 {
     params.dtype = Dtype::native<float>();
     params.validate();
+    
+    ReferenceTreeWithSubbands::Params tree_params;
+    tree_params.num_beams = params.beams_per_batch;
+    tree_params.amb_rank = params.amb_rank;
+    tree_params.dd_rank = params.dd_rank;
+    tree_params.ntime = params.ntime;
+    tree_params.nspec = params.nspec;
+    tree_params.subband_counts = { 1 };
 
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
-    
-    long B = params.beams_per_batch;
-    long A = pow2(params.amb_rank);
-    long F = pow2(params.dd_rank);
-    long T = params.ntime;
-    long S = params.nspec;
-    
     this->trees.resize(nbatches);                         
+
     for (long n = 0; n < nbatches; n++)
-        trees[n] = ReferenceTree::make({B,A,F,T*S}, S);   // (shape, nspec)
+        trees[n] = make_shared<ReferenceTreeWithSubbands> (tree_params);
 
     if (params.apply_input_residual_lags)
         this->rlag_bufs = ReferenceDedispersionKernel::_init_rlags(params);

@@ -11,7 +11,7 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-struct ReferenceTree;    // defined in ReferenceTree.hpp
+struct ReferenceTreeWithSubbands;    // defined in ReferenceTree.hpp
 struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
 struct MegaRingbuf;      // defined in MegaRingbuf.hpp
 
@@ -188,7 +188,7 @@ struct ReferenceDedispersionKernel
     void apply(ksgpu::Array<void> &in, ksgpu::Array<void> &out, long ibatch, long it_chunk);
 
     long nbatches = 0;     // same as (params.total_beams / params.beams_per_batch)
-    std::vector<std::shared_ptr<ReferenceTree>> trees;        // length (nbatches)
+    std::vector<std::shared_ptr<ReferenceTreeWithSubbands>> trees;        // length (nbatches)
     std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;  // length (params.apply_input_residual_lags ? nbatches : 0)
 
     // Used internally
