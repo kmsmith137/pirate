@@ -199,6 +199,31 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
 }
 
 
+void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf)
+{
+    long T = params.ntime;
+    long B = params.num_beams;
+    long A = pow2(params.amb_rank);
+    long D = pow2(params.dd_rank);
+
+    xassert_shape_eq(buf, ({B,A,D,T}));
+    xassert(buf.get_ncontig() >= 1);
+    xassert(buf.on_host());
+    
+    float *ps = pstate.data;
+
+    for (long b = 0; b < B; b++) {
+        for (long a = 0; a < A; a++) {
+            float *bufp = &buf.at({b,a,0,0});
+            long buf_dstride = buf.strides[2];
+            ps = dedisperse_2d(bufp, buf_dstride, nullptr, 0, 0, ps);
+        }
+    }
+
+    xassert(ps == pstate.data + pstate.size);
+}
+
+
 void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
 {
     long M = fs.M;
@@ -250,7 +275,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
     float *ps)
 {
     // Input array shape: (pow2(dd_rank), T)
-    // Output array shape: (pf_ndm, M, T).
+    // Output array shape: (pf_ndm, M, T). Can be NULL.
 
     long dd_rank = params.dd_rank;
     long pf_rank = fs.pf_rank;
@@ -267,7 +292,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
         long nf_in = pow2(dd_rank - r);
         long ndm_in = pow2(r);
 
-        if (r == (dd_rank - pf_rank)) {
+        if (outp && (r == (dd_rank - pf_rank))) {
 
             // Create outputs at pf_level 0. I decided to treat this as a special case,
             // because the bands are "unstaggered" (see comments in FrequencySubbands.cu)
@@ -325,7 +350,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
 
         long pf_level = r + pf_rank - dd_rank + 1;
 
-        if (pf_level > 0) {
+        if (outp && (pf_level > 0)) {
 
             // If we get here, we'll create staggered pf_outputs at level (pf_level).
             // The hard part is keeping all the indexing straight!
@@ -418,6 +443,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
 
     return ps;
 }
+
 
 // 'dst': shape (2,T), where T=params.ntime.
 // 'src': shape (2,T), okay if dst==src.
