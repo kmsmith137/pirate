@@ -54,9 +54,9 @@ struct ReferenceTree
 
     void dedisperse(ksgpu::Array<float> &buf, ksgpu::Array<float> &out);
 
-    static void test();
     static void test_basics();
-
+    static void test_subbands();
+    
     // Helper for dedisperse().
     // buf shape: (pow2(dd_rank), ntime * nspec).
     // out shape: (pow2(dd_rank-pf_rank), fs.M, ntime * nspec). Can be NULL.

@@ -21,7 +21,7 @@ def parse_test(subparsers):
     parser = subparsers.add_parser("test", help="Run unit tests (by default, all tests are run)")
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
-    parser.add_argument('--ddb', action='store_true', help='Runs ReferenceLagbuf.test() and ReferenceTree.test_basics()')
+    parser.add_argument('--rt', action='store_true', help='Runs ReferenceTree and ReferenceLagbuf tests')
     parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test()')
     parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test()')
     parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test()')
@@ -30,11 +30,10 @@ def parse_test(subparsers):
     parser.add_argument('--grck', action='store_true', help='Runs GpuRingbufCopyKernel.test()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.test()')
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.test()')
+    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
-    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test()')
-    parser.add_argument('--rtws', action='store_true', help='Runs ReferenceTree.test()')
 
 
 def rrange(registry_class):
@@ -54,7 +53,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'ddb', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'casm', 'zomb', 'dd', 'cdd2', 'rtws' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'zomb', 'dd' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -62,9 +61,10 @@ def test(args):
     for i in range(args.niter):
         print(f'\nIteration {i+1}/{args.niter}\n')
         
-        if run_all_tests or args.ddb:
+        if run_all_tests or args.rt:
             pirate_pybind11.ReferenceLagbuf.test()
             pirate_pybind11.ReferenceTree.test_basics()
+            pirate_pybind11.ReferenceTree.test_subbands()
         
         if run_all_tests or args.pfwr:
             for _ in rrange(pirate_pybind11.PfWeightReaderMicrokernel):
@@ -93,6 +93,10 @@ def test(args):
         
         if run_all_tests or args.gdqk:
             pirate_pybind11.GpuDequantizationKernel.test()
+
+        if run_all_tests or args.cdd2:
+            for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
+                pirate_pybind11.CoalescedDdKernel2.test()
         
         if run_all_tests or args.casm:
             print()
@@ -113,13 +117,6 @@ def test(args):
             
         if run_all_tests or args.dd:
             pirate_pybind11.GpuDedisperser.test()
-
-        if run_all_tests or args.cdd2:
-            for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
-                pirate_pybind11.CoalescedDdKernel2.test()
-
-        if run_all_tests or args.rtws:
-            pirate_pybind11.ReferenceTree.test()
             
 
 #########################################   time command  ##########################################

@@ -184,8 +184,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     py::class_<ReferenceTree>(m, "ReferenceTree")
-          .def_static("test", &ReferenceTree::test)
           .def_static("test_basics", &ReferenceTree::test_basics)
+          .def_static("test_subbands", &ReferenceTree::test_subbands)
     ;
 
     py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")

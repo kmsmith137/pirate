@@ -349,8 +349,129 @@ inline float *ReferenceTree::dedisperse_1d(
 }
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// ReferenceTree::test_basics()
+
+
 // Static member function
-void ReferenceTree::test()
+void ReferenceTree::test_basics()
+{
+    vector<long> v = ksgpu::random_integers_with_bounded_product(6, 300000);
+
+    long N = v[0];   // number of chunks
+    long B = v[1];   // number of beams
+    long T = v[2];   // number of time samples per chunk
+    long S = v[3];   // number of "inner" spectator indices
+    long amb_rank = long(log2(v[4]) + 0.5);
+    long dd_rank = long(log2(v[5]) + 0.5);
+
+    amb_rank = min(amb_rank, 8L);
+    dd_rank = min(dd_rank, 8L);
+
+    long A = pow2(amb_rank);
+    long D = pow2(dd_rank);
+    vector<long> dd_strides = ksgpu::make_random_strides({B,A,D,T*S}, 1);  // ncontig=2
+
+    cout << "test_reference_tree:"
+         << " nchunks=" << N
+         << ", nbeams=" << B
+         << ", ntime=" << T
+         << ", nspec=" << S
+         << ", amb_rank=" << amb_rank
+         << ", dd_rank=" << dd_rank 
+         << ", dd_strides=" << ksgpu::tuple_str(dd_strides)
+         << endl;
+
+    Array<float> in({B,A,D,N*T*S}, af_uhost | af_random);
+    Array<float> out_dni({B,A,D,N*T*S}, af_uhost | af_zero);     // using dedisperse_non_incremental()
+    Array<float> out_tree({B,A,D,N*T*S}, af_uhost | af_zero);    // using ReferenceTree
+
+    // Temp buffers for dedispersion.
+    Array<float> dd_dni({D,N*T*S}, af_uhost | af_zero);
+    Array<float> dd_tree({B,A,D,T*S}, dd_strides, af_uhost | af_zero);
+    Array<float> dd_bfs({S}, af_uhost | af_zero);                // "bfs" = "brute-force sum"
+
+    // Dedisperse using dedisperse_non_incremental().
+
+    for (long b = 0; b < B; b++) {
+        for (long a = 0; a < A; a++) {
+            Array<float> in_slice = in.slice(0,b);   // shape (A,D,N*T*S)
+            in_slice = in_slice.slice(0,a);          // shape (D,N*T*S)
+
+            dd_dni.fill(in_slice);
+            dedisperse_non_incremental(dd_dni, S);
+
+            Array<float> out_slice = out_dni.slice(0,b);   // shape (A,D,N*T*S)
+            out_slice = out_slice.slice(0,a);              // shape (D,N*T*S)
+
+            out_slice.fill(dd_dni);
+        }
+    }
+
+    // Check a few random entries of 'out_dni', by comparing them to brute-force summation.
+
+    for (int e = 0; e < 10; e++) {
+        long b = rand_int(0,B);
+        long a = rand_int(0,A);
+        long t = rand_int(0,N*T);   // note (N*T), not T
+        long dm_brev = rand_int(0,D);
+
+        Array<float> out_slice = out_dni.slice(0,b);    // (A,D,N*T*S)
+        out_slice = out_slice.slice(0,a);               // (D,N*T*S)
+        out_slice = out_slice.slice(0,dm_brev);         // (N*T*S,)
+        out_slice = out_slice.slice(0,t*S,(t+1)*S);     // (S,)
+
+        Array<float> in_slice = in.slice(0,b);          // (A,D,N*T*S)
+        in_slice = in_slice.slice(0,a);                 // (D,N*T*S)
+        
+        dd_bfs.set_zero();
+
+        for (long f = 0; f < D; f++) {
+            long t0 = t - dedispersion_delay(dd_rank, f, dm_brev);
+            if (t0 < 0)
+                continue;
+            for (long s = 0; s < S; s++)
+                dd_bfs.data[s] += in_slice.data[f*N*T*S + t0*S + s];
+        }
+
+        assert_arrays_equal(out_slice, dd_bfs, "dedisperse_non_incremental", "brute_force_sum", {"s"});
+    }
+
+    // Dedisperse using ReferenceTree.
+
+    ReferenceTree::Params params;
+    params.num_beams = B;
+    params.amb_rank = amb_rank;
+    params.dd_rank = dd_rank;
+    params.ntime = T;
+    params.nspec = S;
+    params.subband_counts = {1};
+
+    ReferenceTree tree(params);
+    Array<float> sb_empty;
+
+    for (long ichunk = 0; ichunk < N; ichunk++) {
+        Array<float> in_chunk = in.slice(3, ichunk*T*S, (ichunk+1)*T*S);   // (B,A,D,N*T*S) -> (B,A,D,T*S)
+        dd_tree.fill(in_chunk);
+
+        tree.dedisperse(dd_tree, sb_empty);
+
+        Array<float> out_chunk = out_tree.slice(3, ichunk*T*S, (ichunk+1)*T*S);   // (B,A,D,N*T*S) -> (B,A,D,T*S)
+        out_chunk.fill(dd_tree);
+    }
+
+    assert_arrays_equal(out_tree, out_dni, "ReferenceTree", "dedisperse_non_incremental", {"b","a","d","ts"});
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// ReferenceTree::test_subbands()
+
+
+// Static member function
+void ReferenceTree::test_subbands()
 {
     FrequencySubbands fs = FrequencySubbands::make_random();
     auto v = ksgpu::random_integers_with_bounded_product(6, 100000/fs.M);
@@ -489,122 +610,5 @@ void ReferenceTree::test()
         assert_arrays_equal(out, out2, "out"+ss.str(), "out2", {"b","dpf","m","ts"});
     }
 }
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// ReferenceTree::test_basics()
-
-
-// Static member function
-void ReferenceTree::test_basics()
-{
-    vector<long> v = ksgpu::random_integers_with_bounded_product(6, 300000);
-
-    long N = v[0];   // number of chunks
-    long B = v[1];   // number of beams
-    long T = v[2];   // number of time samples per chunk
-    long S = v[3];   // number of "inner" spectator indices
-    long amb_rank = long(log2(v[4]) + 0.5);
-    long dd_rank = long(log2(v[5]) + 0.5);
-
-    amb_rank = min(amb_rank, 8L);
-    dd_rank = min(dd_rank, 8L);
-
-    long A = pow2(amb_rank);
-    long D = pow2(dd_rank);
-    vector<long> dd_strides = ksgpu::make_random_strides({B,A,D,T*S}, 1);  // ncontig=2
-
-    cout << "test_reference_tree:"
-         << " nchunks=" << N
-         << ", nbeams=" << B
-         << ", ntime=" << T
-         << ", nspec=" << S
-         << ", amb_rank=" << amb_rank
-         << ", dd_rank=" << dd_rank 
-         << ", dd_strides=" << ksgpu::tuple_str(dd_strides)
-         << endl;
-
-    Array<float> in({B,A,D,N*T*S}, af_uhost | af_random);
-    Array<float> out_dni({B,A,D,N*T*S}, af_uhost | af_zero);     // using dedisperse_non_incremental()
-    Array<float> out_tree({B,A,D,N*T*S}, af_uhost | af_zero);    // using ReferenceTree
-
-    // Temp buffers for dedispersion.
-    Array<float> dd_dni({D,N*T*S}, af_uhost | af_zero);
-    Array<float> dd_tree({B,A,D,T*S}, dd_strides, af_uhost | af_zero);
-    Array<float> dd_bfs({S}, af_uhost | af_zero);                // "bfs" = "brute-force sum"
-
-    // Dedisperse using dedisperse_non_incremental().
-
-    for (long b = 0; b < B; b++) {
-        for (long a = 0; a < A; a++) {
-            Array<float> in_slice = in.slice(0,b);   // shape (A,D,N*T*S)
-            in_slice = in_slice.slice(0,a);          // shape (D,N*T*S)
-
-            dd_dni.fill(in_slice);
-            dedisperse_non_incremental(dd_dni, S);
-
-            Array<float> out_slice = out_dni.slice(0,b);   // shape (A,D,N*T*S)
-            out_slice = out_slice.slice(0,a);              // shape (D,N*T*S)
-
-            out_slice.fill(dd_dni);
-        }
-    }
-
-    // Check a few random entries of 'out_dni', by comparing them to brute-force summation.
-
-    for (int e = 0; e < 10; e++) {
-        long b = rand_int(0,B);
-        long a = rand_int(0,A);
-        long t = rand_int(0,N*T);   // note (N*T), not T
-        long dm_brev = rand_int(0,D);
-
-        Array<float> out_slice = out_dni.slice(0,b);    // (A,D,N*T*S)
-        out_slice = out_slice.slice(0,a);               // (D,N*T*S)
-        out_slice = out_slice.slice(0,dm_brev);         // (N*T*S,)
-        out_slice = out_slice.slice(0,t*S,(t+1)*S);     // (S,)
-
-        Array<float> in_slice = in.slice(0,b);          // (A,D,N*T*S)
-        in_slice = in_slice.slice(0,a);                 // (D,N*T*S)
-        
-        dd_bfs.set_zero();
-
-        for (long f = 0; f < D; f++) {
-            long t0 = t - dedispersion_delay(dd_rank, f, dm_brev);
-            if (t0 < 0)
-                continue;
-            for (long s = 0; s < S; s++)
-                dd_bfs.data[s] += in_slice.data[f*N*T*S + t0*S + s];
-        }
-
-        assert_arrays_equal(out_slice, dd_bfs, "dedisperse_non_incremental", "brute_force_sum", {"s"});
-    }
-
-    // Dedisperse using ReferenceTree.
-
-    ReferenceTree::Params params;
-    params.num_beams = B;
-    params.amb_rank = amb_rank;
-    params.dd_rank = dd_rank;
-    params.ntime = T;
-    params.nspec = S;
-    params.subband_counts = {1};
-
-    ReferenceTree tree(params);
-    Array<float> sb_empty;
-
-    for (long ichunk = 0; ichunk < N; ichunk++) {
-        Array<float> in_chunk = in.slice(3, ichunk*T*S, (ichunk+1)*T*S);   // (B,A,D,N*T*S) -> (B,A,D,T*S)
-        dd_tree.fill(in_chunk);
-
-        tree.dedisperse(dd_tree, sb_empty);
-
-        Array<float> out_chunk = out_tree.slice(3, ichunk*T*S, (ichunk+1)*T*S);   // (B,A,D,N*T*S) -> (B,A,D,T*S)
-        out_chunk.fill(dd_tree);
-    }
-
-    assert_arrays_equal(out_tree, out_dni, "ReferenceTree", "dedisperse_non_incremental", {"b","a","d","ts"});
-}
-
 
 }  // namespace pirate
