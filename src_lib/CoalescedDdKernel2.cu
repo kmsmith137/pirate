@@ -244,8 +244,7 @@ void CoalescedDdKernel2::test()
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
     cdd2_kernel.allocate();
 
-    vector<long> subband_counts = {1};  // no subbands yet
-    ReferenceDedispersionKernel ref_dd_kernel(dd_params, subband_counts);
+    ReferenceDedispersionKernel ref_dd_kernel(dd_params, pf_params.subband_counts);
     ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
 
     FrequencySubbands &fs = cdd2_kernel.fs;
@@ -305,12 +304,9 @@ void CoalescedDdKernel2::test()
     long Dout = pow2(lg_ndm_out);
     long Tout = pf_params.nt_out;
 
-    // Output buffer for ref dedispersion kernel, shape (beams_per_batch, pow2(pf.amb_rank), pow2(pf.dd_rank), nt_in)
-    Array<float> tmp_cpu({B,A,D,T}, af_uhost);
-
-    // Input buffer for ref peak-finding kernel, shape beams_per_batch, pf.ndm_out, M, nt_in)
-    Array<float> tmp2_cpu({B,Dout,M,T}, af_uhost);
-    xassert(Dout*M == A*D);
+    Array<float> dd_cpu({B,A,D,T}, af_uhost);       // 'dd_out' for ref_dd_kernel
+    Array<float> sb_cpu({B,Dout,M,T}, af_uhost);   // 'sb_out' for ref_pf_kernel, input for ref_pf_kernel
+    xassert(Dout == ref_dd_kernel.Dpf);
 
     Array<float> max_cpu({B,Dout,Tout}, af_uhost | af_zero);
     Array<uint> argmax_cpu({B,Dout,Tout}, af_uhost | af_zero);
@@ -323,42 +319,11 @@ void CoalescedDdKernel2::test()
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < num_batches; ibatch++) {
-            Array<float> sb_empty;  // no subbands yet
-            ref_dd_kernel.apply(in_cpu, tmp_cpu, sb_empty, ibatch, ichunk);
-
-            //  -------- FIXME ad hoc shuffling operation tmp_cpu -> tmp2_cpu starts here ------
-
-            for (long dm = 0; dm < A*D; dm++) {
-                // Convert "flattened" DM index -> (indices (a,d) in tmp array)
-                // The index 0 <= a < A represents a bit-reversed coarse DM.
-                // The index 0 <= d < D represents a bit-reversed fine DM.
-
-                long dm_brev = bit_reverse_slow(dm, dd_params.amb_rank + dd_params.dd_rank);
-                long a = dm_brev & (A-1);
-                long d = dm_brev >> dd_params.amb_rank;
-
-                float *src = &tmp_cpu.at({0,a,d,0});
-                long sstride = tmp_cpu.strides[0];
-
-                // Convert "flattened" DM index -> (indices dout,m) in tmp2 array)
-
-                long dout = dm >> pf_rank;
-                long m = dm & (M-1);
-
-                float *dst = &tmp2_cpu.at({0,dout,m,0});
-                long dstride = tmp2_cpu.strides[0];
-
-                // Copy tmp -> tmp2
-                for (long b = 0; b < B; b++)
-                    for (long t = 0; t < T; t++)
-                        dst[b*dstride + t] = src[b*sstride + t];
-            }
-
-            //  -------- FIXME ad hoc shuffling operation tmp_cpu -> tmp2_cpu ends here ------
+            ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ibatch, ichunk);
 
             long rank_hack = dd_params.dd_rank;  // see comments in ReferencePeakFindingKernel::make_random_weights()
             Array<float> wt_cpu = ref_pf_kernel.make_random_weights(rank_hack);
-            ref_pf_kernel.apply(max_cpu, argmax_cpu, tmp2_cpu, wt_cpu, ibatch);
+            ref_pf_kernel.apply(max_cpu, argmax_cpu, sb_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.
             Array<void> wt_gpu = wl.to_gpu(wt_cpu);
