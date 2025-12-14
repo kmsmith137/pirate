@@ -215,7 +215,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_, 
         trees[n] = make_shared<ReferenceTree> (tree_params);
 
     if (params.apply_input_residual_lags)
-        this->rlag_bufs = ReferenceDedispersionKernel::_init_rlags(params);
+        this->_init_rlags();
 }
 
 
@@ -272,9 +272,7 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, 
 
 
 // Helper function called by constructor.
-// Declared 'static', so that it can also be called by ReferenceCddKernel2.
-vector<shared_ptr<ReferenceLagbuf>> 
-ReferenceDedispersionKernel::_init_rlags(const Params &params)
+void ReferenceDedispersionKernel::_init_rlags()
 {
     long B = params.beams_per_batch;
     long A = pow2(params.amb_rank);
@@ -296,13 +294,10 @@ ReferenceDedispersionKernel::_init_rlags(const Params &params)
         }
     }
     
-    long nbatches = xdiv(params.total_beams, params.beams_per_batch);
-    vector<shared_ptr<ReferenceLagbuf>> ret(nbatches);
+    this->rlag_bufs.resize(nbatches);
 
     for (long n = 0; n < nbatches; n++)
-        ret[n] = make_shared<ReferenceLagbuf> (rlags, T*S);
-
-    return ret;
+        this->rlag_bufs[n] = make_shared<ReferenceLagbuf> (rlags, T*S);
 }
 
 // Helper function called by apply(), to check the 'sb_out' arg.

@@ -211,14 +211,11 @@ struct ReferenceDedispersionKernel
     std::vector<std::shared_ptr<ReferenceTree>> trees;        // length (nbatches)
     std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;  // length (params.apply_input_residual_lags ? nbatches : 0)
 
-    // Used internally
+    // Helper functions for either constructor or apply().
+    void _init_rlags();
     void _check_sb_out(const ksgpu::Array<void> &sb_out);
     void _copy_to_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
     void _copy_from_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
-
-    // Helper function for constructor.
-    // Declared 'static', so that it can also be called by ReferenceCddKernel2.
-    static std::vector<std::shared_ptr<ReferenceLagbuf>> _init_rlags(const Params &params);
 };
 
 
