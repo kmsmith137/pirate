@@ -72,6 +72,7 @@ struct ReferenceTreeWithSubbands
         long amb_rank = 0;
         long dd_rank = 0;
         long ntime = 0;
+        long nspec = 0;
         std::vector<long> subband_counts;
     };
 

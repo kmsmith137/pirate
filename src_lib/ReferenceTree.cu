@@ -147,15 +147,18 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
     xassert(params.amb_rank >= 0);
     xassert(params.dd_rank >= 0);
     xassert(params.ntime > 0);
+    xassert(params.nspec > 0);
         
     xassert(fs.pf_rank <= params.dd_rank);
 
+    long T = params.ntime;
+    long S = params.nspec;
     long R = params.dd_rank;
     long B = params.num_beams;
     long A = pow2(params.amb_rank);
     long Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
 
-    long scratch_nelts = params.ntime + 1 + (R ? pow2(R-1) : 0);
+    long scratch_nelts = S * (T + 1 + (R ? pow2(R-1) : 0));
     this->scratch = Array<float> ({scratch_nelts}, af_uhost | af_zero);
 
     // The rest of the constructor is dedicated to computing 'pstate_nelts'.
@@ -172,7 +175,7 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
     for (long r = 0; r < R; r++) {
         // This way of writing N makes sense for R=1 (which implies r=0).
         long N = (pow2(R-1) * (pow2(r)+1)) >> 1;
-        pstate_nelts += B * A * N;
+        pstate_nelts += B * A * N * S;
     }
 
     // Peak-finding contribution to pstate_nelts.
@@ -192,7 +195,7 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
         long r = params.dd_rank - fs.pf_rank + level - 1;
         long N = (pow2(r) * (pow2(r)+1)) >> 1;
         long pf_ns = fs.subband_counts.at(level);
-        pstate_nelts += B * A * pf_ns * N;
+        pstate_nelts += B * A * pf_ns * N * S;
     }
 
     this->pstate = Array<float> ({pstate_nelts}, af_uhost | af_zero);
@@ -201,12 +204,13 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
 
 void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf)
 {
+    long S = params.nspec;
     long T = params.ntime;
     long B = params.num_beams;
     long A = pow2(params.amb_rank);
     long D = pow2(params.dd_rank);
 
-    xassert_shape_eq(buf, ({B,A,D,T}));
+    xassert_shape_eq(buf, ({B,A,D,T*S}));
     xassert(buf.get_ncontig() >= 1);
     xassert(buf.on_host());
     
@@ -228,16 +232,17 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
 {
     long M = fs.M;
     long T = params.ntime;
+    long S = params.nspec;
     long B = params.num_beams;
     long A = pow2(params.amb_rank);
     long D = pow2(params.dd_rank);
     long Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
 
-    xassert_shape_eq(buf, ({B,A,D,T}));
+    xassert_shape_eq(buf, ({B,A,D,T*S}));
     xassert(buf.get_ncontig() >= 1);
     xassert(buf.on_host());
 
-    xassert_shape_eq(out, ({B,Dpf,M,T}));
+    xassert_shape_eq(out, ({B,Dpf,M,T*S}));
     xassert(out.get_ncontig() >= 1);
     xassert(out.on_host());
     
@@ -264,8 +269,8 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
 }
 
 
-// 'bufp': shape (2^dd_rank, ntime), will be dedispersed in place
-// 'outp': shape (pf_ndm, M, ntime)
+// 'bufp': shape (2^dd_rank, ntime * nspec), will be dedispersed in place
+// 'outp': shape (pf_ndm, M, ntime * nspec), can be NULL.
 // 'ps': pointer to current location in persistent_state.
 // Returns pointer to updated location in persistent_state.
 
@@ -274,13 +279,14 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
     float *outp, long out_dstride, long out_mstride, 
     float *ps)
 {
-    // Input array shape: (pow2(dd_rank), T)
-    // Output array shape: (pf_ndm, M, T). Can be NULL.
+    // Input array shape: (pow2(dd_rank), T*S)
+    // Output array shape: (pf_ndm, M, T*S). Can be NULL.
 
+    long T = params.ntime;
+    long S = params.nspec;
     long dd_rank = params.dd_rank;
     long pf_rank = fs.pf_rank;
     long pf_ndm = pow2(dd_rank - pf_rank);
-    long T = params.ntime;
     long mcurr = 0;   // current position 0 <= m < M
 
     // Note that the loop includes the "senintel" case r=dd_rank at the end.
@@ -332,8 +338,8 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
                     float *src = bufp + (isrc * buf_dstride);
                     float *dst = outp + (dm_in * out_dstride) + (pfs * out_mstride);
 
-                    for (long t = 0; t < T; t++)
-                        dst[t] = src[t];
+                    for (long ts = 0; ts < T*S; ts++)
+                        dst[ts] = src[ts];
                 }
             }
 
@@ -411,10 +417,10 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
                         long src_stride = ndm_in * buf_dstride;
 
                         // Output array at "logical" indices (pf_dm, pfs, d2, 0, 0).
-                        // The output_array has "physical" shape (pf_ndm, M, T)
+                        // The output_array has "physical" shape (pf_ndm, M, T*S)
                         long m = mcurr + (pfs * (2*pf_nd2)) + (2*d2);
                         float *dst = outp + (pf_dm * out_dstride) + (m * out_mstride);
-                        long dst_stride = T;
+                        long dst_stride = out_mstride;
 
                         ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, dm_in);  // lag = dm_in
                     }
@@ -445,9 +451,9 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
 }
 
 
-// 'dst': shape (2,T), where T=params.ntime.
-// 'src': shape (2,T), okay if dst==src.
-// 'ps' points to a buffer of length (lag+1).
+// 'dst': shape (2,T*S), where T=params.ntime.
+// 'src': shape (2,T*S), okay if dst==src.
+// 'ps' points to a buffer of length (lag+1)*S.
 // FIXME slow implementation -- may improve after tests pass.
 inline float *ReferenceTreeWithSubbands::dedisperse_1d(
     float *dst, long dstride, 
@@ -455,29 +461,28 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
     float *ps, long lag)
 {
     long T = params.ntime;
+    long S = params.nspec;
     float *tmp = scratch.data;
 
-    // (pstate[:], src[0,:]) -> scratch (length T+lag+1)
-    xassert(scratch.size >= T+lag+1);
-    memcpy(tmp, ps, (lag+1) * sizeof(float));
-    memcpy(tmp + (lag+1), src, T * sizeof(float));
+    // (pstate[:], src[0,:]) -> scratch (length (T+lag+1)*S)
+    xassert(scratch.size >= (T+lag+1) * S);
+    memcpy(tmp, ps, (lag+1) * S * sizeof(float));
+    memcpy(tmp + (lag+1)*S, src, T * S * sizeof(float));
 
     // scratch[(-lag+1):] -> pstate
-    memcpy(ps, tmp + T, (lag+1) * sizeof(float));
+    memcpy(ps, tmp + T*S, (lag+1) * S * sizeof(float));
 
-    float x1 = tmp[T];  // src[0,T-1-lag]
-
-    for (long t = T-1; t >= 0; t--) {
+    for (long ts = T*S-1; ts >= 0; ts--) {
         // At top of loop, x1 = src[0,t-lag]
-        float x0 = tmp[t];  // x0 = src[0,t-lag-1]
-        float y = src[sstride + t];
+        float x0 = tmp[ts];           // x0 = src[0, ts - (lag+1)*S]
+        float x1 = tmp[ts+S];         // x1 = src[0, ts - lag*S]
+        float y = src[sstride + ts];  // y = src[1, ts]
         
-        dst[t] = x1 + y;
-        dst[dstride + t] = x0 + y;
-        x1 = x0;
+        dst[ts] = x1 + y;             // dst[0, ts]
+        dst[dstride + ts] = x0 + y;   // dst[1, ts]
     }
 
-    return ps + (lag+1);
+    return ps + (lag+1)*S;
 }
 
 
@@ -485,13 +490,14 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
 void ReferenceTreeWithSubbands::test()
 {
     FrequencySubbands fs = FrequencySubbands::make_random();
-    auto v = ksgpu::random_integers_with_bounded_product(5, 30000/fs.M);
+    auto v = ksgpu::random_integers_with_bounded_product(6, 100000/fs.M);
 
     long nchunks = v[0];
     long B = v[1];  // number of beams
     long T = v[2];  // time samples per chunk
-    long amb_rank = long(log2(v[3]) + 0.5);
-    long dd_rank = fs.pf_rank + long(log2(v[4]) + 0.5);
+    long S = v[3];  // spectator indices
+    long amb_rank = long(log2(v[4]) + 0.5);
+    long dd_rank = fs.pf_rank + long(log2(v[5]) + 0.5);
 
     cout << "ReferenceTreeWithSubbands::test():"
          << " nchunks=" << nchunks
@@ -499,6 +505,7 @@ void ReferenceTreeWithSubbands::test()
          << ", amb_rank=" << amb_rank
          << ", dd_rank=" << dd_rank
          << ", ntime=" << T
+         << ", nspec=" << S
          << ", subband_counts=" << ksgpu::tuple_str(fs.subband_counts)
          << endl;
     
@@ -514,6 +521,7 @@ void ReferenceTreeWithSubbands::test()
     params.amb_rank = amb_rank;
     params.dd_rank = dd_rank;
     params.ntime = T;
+    params.nspec = S;
     params.subband_counts = fs.subband_counts;
 
     ReferenceTreeWithSubbands tree_with_subbands(params);
@@ -526,18 +534,18 @@ void ReferenceTreeWithSubbands::test()
         long ihi = fs.f_to_ihi.at(f) << (dd_rank - pf_rank);
         long subtree_size = ihi - ilo;
        
-        std::initializer_list<long> shape = { B, A, subtree_size, T };
-        subtrees[f] = ReferenceTree::make(shape, 1);
+        std::initializer_list<long> shape = { B, A, subtree_size, T*S };
+        subtrees[f] = ReferenceTree::make(shape, S);
     }
 
-    
-    Array<float> in({B,A,Din,T}, af_uhost | af_zero);
-    Array<float> buf({B,A,Din,T}, af_uhost | af_zero);
-    Array<float> out({B,Dpf,M,T}, af_uhost | af_zero);
+    // FIXME should test strides! ('buf' and 'out' only)
+    Array<float> in({B,A,Din,T*S}, af_uhost | af_zero);
+    Array<float> buf({B,A,Din,T*S}, af_uhost | af_zero);
+    Array<float> out({B,Dpf,M,T*S}, af_uhost | af_zero);
 
     // For subtrees.
-    Array<float> buf2({B,A,Din,T}, af_uhost | af_zero);
-    Array<float> out2({B,Dpf,M,T}, af_uhost | af_zero);
+    Array<float> buf2({B,A,Din,T*S}, af_uhost | af_zero);
+    Array<float> out2({B,Dpf,M,T*S}, af_uhost | af_zero);
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         in.randomize();
@@ -577,11 +585,11 @@ void ReferenceTreeWithSubbands::test()
                     long dpf = (dm_c << (dd_rank - pf_rank)) + (dm_f >> pf_level);
                     long m = fs.f_to_mbase.at(f) + (dm_f & (pow2(pf_level)-1));
 
-                    // dd_slice: shape (B, A, subtree_size, T) -> (B, T)
+                    // dd_slice: shape (B, A, subtree_size, T*S) -> (B, T)
                     Array<float> dd_slice = dd.slice(1, a);
                     dd_slice = dd_slice.slice(1, d);
 
-                    // out_slice: shape (B, Dpf, M, T) -> (B, T)
+                    // out_slice: shape (B, Dpf, M, T) -> (B, T*S)
                     Array<float> out_slice = out2.slice(1, dpf);  // note 'out2' on rhs (not 'out')
                     out_slice = out_slice.slice(1, m);
 
@@ -597,8 +605,8 @@ void ReferenceTreeWithSubbands::test()
         stringstream ss;
         ss << "(chunk=" << ichunk << ")";
 
-        assert_arrays_equal(buf, buf2, "buf"+ss.str(), "buf2", {"b","a","dmbr","t"});
-        assert_arrays_equal(out, out2, "out"+ss.str(), "out2", {"b","dpf","m","t"});
+        assert_arrays_equal(buf, buf2, "buf"+ss.str(), "buf2", {"b","a","dmbr","ts"});
+        assert_arrays_equal(out, out2, "out"+ss.str(), "out2", {"b","dpf","m","ts"});
     }
 }
 
