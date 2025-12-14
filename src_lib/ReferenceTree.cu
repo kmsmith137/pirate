@@ -4,6 +4,7 @@
 #include "../include/pirate/utils.hpp"    // check_rank()
 
 #include <ksgpu/xassert.hpp>
+#include <ksgpu/test_utils.hpp>           // make_random_strides()
 
 using namespace std;
 using namespace ksgpu;
@@ -499,6 +500,18 @@ void ReferenceTreeWithSubbands::test()
     long amb_rank = long(log2(v[4]) + 0.5);
     long dd_rank = fs.pf_rank + long(log2(v[5]) + 0.5);
 
+    long F = fs.F;
+    long M = fs.M;
+    long A = pow2(amb_rank);
+    long Din = pow2(dd_rank);
+    long Dpf = pow2(amb_rank + dd_rank - fs.pf_rank);
+    long pf_rank = fs.pf_rank;
+
+    // Strides for shape (B,A,Din,T*S) dd array, and shape (B,Dpf,M,T*S) output array.
+    // Reminder: make_random_strides() is defined in ksgpu/test_utils.hpp.
+    vector<long> dd_strides = ksgpu::make_random_strides({B,A,Din,T*S}, 1);   // ncontig=1
+    vector<long> out_strides = ksgpu::make_random_strides({B,Dpf,M,T*S}, 1);  // ncontig=1
+
     cout << "ReferenceTreeWithSubbands::test():"
          << " nchunks=" << nchunks
          << ", num_beams=" << B
@@ -507,14 +520,9 @@ void ReferenceTreeWithSubbands::test()
          << ", ntime=" << T
          << ", nspec=" << S
          << ", subband_counts=" << ksgpu::tuple_str(fs.subband_counts)
+         << ", dd_strides=" << ksgpu::tuple_str(dd_strides)
+         << ", out_strides=" << ksgpu::tuple_str(out_strides)
          << endl;
-    
-    long F = fs.F;
-    long M = fs.M;
-    long A = pow2(amb_rank);
-    long Din = pow2(dd_rank);
-    long Dpf = pow2(amb_rank + dd_rank - fs.pf_rank);
-    long pf_rank = fs.pf_rank;
     
     Params params;
     params.num_beams = B;
@@ -540,8 +548,8 @@ void ReferenceTreeWithSubbands::test()
 
     // FIXME should test strides! ('buf' and 'out' only)
     Array<float> in({B,A,Din,T*S}, af_uhost | af_zero);
-    Array<float> buf({B,A,Din,T*S}, af_uhost | af_zero);
-    Array<float> out({B,Dpf,M,T*S}, af_uhost | af_zero);
+    Array<float> buf({B,A,Din,T*S}, dd_strides, af_uhost | af_zero);
+    Array<float> out({B,Dpf,M,T*S}, out_strides, af_uhost | af_zero);
 
     // For subtrees.
     Array<float> buf2({B,A,Din,T*S}, af_uhost | af_zero);
