@@ -1,5 +1,9 @@
 #include "../include/pirate/ReferenceLagbuf.hpp"
+
 #include <cstring>
+#include <ksgpu/rand_utils.hpp>    // rand_int(), rand_uniform(), random_integers_with_bounded_product()
+#include <ksgpu/string_utils.hpp>  // tuple_str()
+#include <ksgpu/test_utils.hpp>    // make_random_strides(), assert_arrays_equal()
 
 using namespace std;
 using namespace ksgpu;
@@ -109,6 +113,125 @@ void ReferenceLagbuf::apply_lags(ksgpu::Array<float> &arr) const
     
     float *rstate_end = _apply_lags(arr.data, lags.data, rstate.data, scratch.data, arr.ndim, arr.shape, arr.strides, lags.strides);                            
     xassert(rstate_end == rstate.data + rstate.size);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// ReferenceLagbuf::test()
+
+
+// Helper for test(): apply lags non-incrementally (not using ReferenceLagbuf).
+static void lag_non_incremental(Array<float> &arr, const Array<int> &lags)
+{
+    xassert(arr.ndim > 1);
+    xassert(lags.shape_equals(arr.ndim-1, arr.shape));
+    xassert(arr.is_fully_contiguous());
+
+    long nchan = lags.size;
+    long nt = arr.shape[arr.ndim-1];
+    
+    Array<float> arr_2d = arr.reshape({nchan, nt});
+    Array<int> lags_1d = lags.clone();
+    lags_1d = lags_1d.reshape({nchan});
+
+    for (long i = 0; i < nchan; i++) {
+        float *row = arr_2d.data + i*nt;
+        long lag = lags_1d.data[i];
+
+        lag = min(lag, nt);
+        memmove(row+lag, row, (nt-lag) * sizeof(float));
+        memset(row, 0, lag * sizeof(float));
+    }
+}
+
+
+// Helper for test(): run one test iteration with specified parameters.
+static void test_reference_lagbuf(const Array<int> &lags, const vector<long> data_strides, int nt_chunk, int nchunks)
+{
+    cout << "test_reference_lagbuf:"
+         << " lags.shape=" << lags.shape_str()
+         << ", lags.strides=" << lags.stride_str()
+         << ", data_strides=" << tuple_str(data_strides)
+         << ", nt_chunk=" << nt_chunk
+         << ", nchunks=" << nchunks << endl;
+
+    xassert(long(data_strides.size()) == lags.ndim+1);
+    xassert(data_strides[lags.ndim] == 1);
+    
+    int d = lags.ndim;
+    int nt_tot = nt_chunk * nchunks;
+
+    // Creating axis names feels silly, but assert_arrays_equal() requires them.
+    vector<string> axis_names(d+1);
+    for (int i = 0; i < d; i++)
+        axis_names[i] = "ix" + to_string(i);
+    axis_names[d] = "t";
+    
+    vector<long> shape_lg(d+1);
+    vector<long> shape_sm(d+1);
+    
+    for (int i = 0; i < d; i++)
+        shape_lg[i] = shape_sm[i] = lags.shape[i];
+
+    shape_lg[d] = nt_tot;
+    shape_sm[d] = nt_chunk;
+
+    Array<float> arr_lg(shape_lg, af_uhost | af_random);
+    Array<float> arr_lg_ref = arr_lg.clone();
+    lag_non_incremental(arr_lg_ref, lags);
+    
+    Array<float> arr_sm(shape_sm, data_strides, af_uhost | af_zero);  // note strides
+    Array<float> arr_sm_ref(shape_sm, af_uhost | af_zero);
+
+    ReferenceLagbuf rbuf(lags, nt_chunk);
+    
+    for (int c = 0; c < nchunks; c++) {
+        // Extract chunk (arr_lg) -> (arr_sm)
+        Array<float> s = arr_lg.slice(d, c*nt_chunk, (c+1)*nt_chunk);
+        arr_sm.fill(s);
+
+        // Apply lagbuf
+        rbuf.apply_lags(arr_sm);
+
+        // Extract chunk (arr_lg_ref) -> (arr_sm_ref)
+        s = arr_lg_ref.slice(d, c*nt_chunk, (c+1)*nt_chunk);
+        arr_sm_ref.fill(s);
+
+        // Compare arr_sm, arr_sm_ref.
+        ksgpu::assert_arrays_equal(arr_sm, arr_sm_ref, "incremental", "non-incremental", axis_names);
+    }
+}
+
+
+// Static member function
+void ReferenceLagbuf::test()
+{
+    // Number of dimensions in 'lags' array
+    int nd = rand_int(1, 4);
+
+    // lags.shape + (nt_chunk, nchunks)
+    vector<long> v = random_integers_with_bounded_product(nd+2, 10000);
+    int nt_chunk = v[nd];
+    int nchunks = v[nd+1];
+    
+    vector<long> lag_shape(nd);
+    vector<long> data_shape(nd+1);
+    memcpy(&data_shape[0], &v[0], (nd+1) * sizeof(long));
+    memcpy(&lag_shape[0], &v[0], nd * sizeof(long));
+
+    vector<long> lag_strides = make_random_strides(lag_shape);
+    vector<long> data_strides = make_random_strides(data_shape, 1);   // time axis guaranteed continuous
+
+    Array<int> lags(lag_shape, lag_strides, af_uhost | af_zero);
+    double maxlog = log(1.5 * nt_chunk * nchunks);
+    
+    for (auto ix = lags.ix_start(); lags.ix_valid(ix); lags.ix_next(ix)) {
+        double t = rand_uniform(-1.0, maxlog);
+        lags.at(ix) = int(exp(t));
+    }
+
+    test_reference_lagbuf(lags, data_strides, nt_chunk, nchunks);
 }
 
 

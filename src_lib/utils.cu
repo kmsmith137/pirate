@@ -230,6 +230,23 @@ void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
 }
 
 
+long dedispersion_delay(int rank, long freq, long dm_brev)
+{
+    long delay = 0;
+    long delay0 = 0;
+
+    for (int r = 0; r < rank; r++) {
+        long d = (dm_brev & 1) ? (delay0+1) : delay0;
+        delay += ((freq & 1) ? 0 : d);
+        delay0 += d;
+        dm_brev >>= 1;
+        freq >>= 1;
+    }
+
+    return delay;
+}
+
+
 void dedisperse_non_incremental(Array<float> &arr, long nspec)
 {
     xassert(arr.ndim == 2);

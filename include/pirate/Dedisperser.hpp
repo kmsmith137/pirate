@@ -160,9 +160,6 @@ struct ReferenceDedisperserBase
     // Helper methods called by subclass constructors.
     void _init_iobufs(ksgpu::Array<float> &in, std::vector<ksgpu::Array<float>> &out);
     void _init_iobufs(ksgpu::Array<void> &in, std::vector<ksgpu::Array<void>> &out);
-
-    // Static member function: runs one randomized test iteration (tests ReferenceTree, ReferenceLagbuf, etc.)
-    static void test_dedispersion_basics();
 };
 
 

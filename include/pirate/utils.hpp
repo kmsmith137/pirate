@@ -55,6 +55,10 @@ extern void lag_non_incremental(ksgpu::Array<float> &arr, const std::vector<int>
 
 extern void dedisperse_non_incremental(ksgpu::Array<float> &arr, long nspec);
 
+// dedispersion_delay(): returns the dedispersion delay for a given (freq, dm_brev) pair.
+// Used for testing.
+extern long dedispersion_delay(int rank, long freq, long dm_brev);
+
 // Setup for mean_bytes_per_unaligned_chunk():
 //
 // We have a long array in GPU global memory

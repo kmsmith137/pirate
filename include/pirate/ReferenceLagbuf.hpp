@@ -25,6 +25,8 @@ public:
 
     void apply_lags(ksgpu::Array<float> &arr) const;
 
+    static void test();
+
 protected:
     ksgpu::Array<int> lags;     // shape (n_0, ..., n_{d-1})
     ksgpu::Array<float> rstate;
