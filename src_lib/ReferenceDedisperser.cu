@@ -143,7 +143,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // Vector length is (nbatches * nout).
     // Inner shape is (beams_per_batch, 2^weird_rank, input_nt / pow2(ids)).
     
-    vector<shared_ptr<ReferenceTree>> trees;
+    vector<shared_ptr<ReferenceTreeWithSubbands>> trees;
 
     // Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
     // In downsampled trees, we compute twice as many DMs as necessary, then copy the bottom half.
@@ -175,8 +175,17 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
         this->dedispersion_buffers.at(iout) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
         this->output_arrays.at(iout) = Array<float>({ beams_per_batch, pow2(out_rank), out_ntime }, af_uhost | af_zero);
 
-        for (int batch = 0; batch < nbatches; batch++)
-            this->trees.at(batch*output_ntrees + iout) = ReferenceTree::make({beams_per_batch, pow2(dd_rank), out_ntime}, 1);  // nspec=1
+        for (int batch = 0; batch < nbatches; batch++) {
+            ReferenceTreeWithSubbands::Params tree_params;
+            tree_params.num_beams = beams_per_batch;
+            tree_params.amb_rank = 0;
+            tree_params.dd_rank = dd_rank;
+            tree_params.ntime = out_ntime;
+            tree_params.nspec = 1;
+            tree_params.subband_counts = {1};
+
+            this->trees.at(batch*output_ntrees + iout) = make_shared<ReferenceTreeWithSubbands> (tree_params);
+        }
     }
 
     // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
@@ -224,9 +233,12 @@ void ReferenceDedisperser0::dedisperse(long ibatch, long it_chunk)
 
         // Step 3: apply tree dedispersion (one-stage, not two-stage).
         // Vector length is (nbatches * output_ntrees).
-        
+        // Note dd->dd2 reshape: (B,D,T) -> (B,1,D,T).
+
+        Array<float> sb_empty;  // no subbands
+        Array<float> dd2 = dd.reshape({beams_per_batch, 1, pow2(dd_rank), out_ntime});
         auto tree = trees.at(ibatch*output_ntrees + iout);
-        tree->dedisperse(dd);
+        tree->dedisperse(dd2, sb_empty);
         
         // Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
         // In downsampled trees, we compute twice as many DMs as necessary, then copy the bottom half.
@@ -578,70 +590,6 @@ shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const shared
 
 namespace {
 
-// -------------------------------------------------------------------------------------------------
-// Test dedisperse_non_incremental()
-
-
-// This utility function currently isn't used anywhere except test_non_incremental_dedispersion().
-static long dedispersion_delay(int rank, long freq, long dm_brev)
-{
-    long delay = 0;
-    long delay0 = 0;
-
-    for (int r = 0; r < rank; r++) {
-        long d = (dm_brev & 1) ? (delay0+1) : delay0;
-        delay += ((freq & 1) ? 0 : d);
-        delay0 += d;
-        dm_brev >>= 1;
-        freq >>= 1;
-    }
-
-    return delay;
-}
-
-
-static void test_non_incremental_dedispersion(int rank, long ntime, long nspec, long dm_brev, long t0, long s0)
-{
-    cout << "test_non_incremental_dedispersion(rank=" << rank << ", ntime=" << ntime
-         << ", nspec=" << nspec << ", dm_brev=" << dm_brev << ", t0=" << t0
-         << ", s0=" << s0 << ")" << endl;
-    
-    check_rank(rank, "test_non_incremental_dedispersion");
-    xassert((dm_brev >= 0) && (dm_brev < pow2(rank)));
-    xassert((t0 >= 0) && (t0 < ntime));
-    xassert((s0 >= 0) && (s0 < nspec));
-
-    // dedisperse_non_incremental() expects a 2-d array.
-    long nchan = pow2(rank);
-    Array<float> arr({nchan, ntime*nspec}, af_uhost | af_random);
-
-    float x = 0.0;
-    for (int ifreq = 0; ifreq < nchan; ifreq++) {
-        long t = t0 - dedispersion_delay(rank, ifreq, dm_brev);
-        if (t >= 0)
-            x += arr.at({ifreq, t*nspec + s0 });
-    }
-
-    dedisperse_non_incremental(arr, nspec);
-    float y = arr.at({dm_brev, t0*nspec + s0});
-
-    float eps = fabs(x-y) / sqrt(nchan);
-    xassert(eps < 1.0e-5);
-}
-
-
-static void test_non_incremental_dedispersion()
-{
-    int rank = rand_int(0, 9);
-    long ntime = rand_int(1, 100);
-    long nspec = rand_int(1, 10);
-    long dm_brev = rand_int(0, pow2(rank));
-    long t0 = rand_int(0, ntime);
-    long s0 = rand_int(0, nspec);
-    
-    test_non_incremental_dedispersion(rank, ntime, nspec, dm_brev, t0, s0);
-}
-
 
 // -------------------------------------------------------------------------------------------------
 // Test 'class ReferenceLagbuf'
@@ -761,168 +709,141 @@ static void test_reference_lagbuf()
 // -------------------------------------------------------------------------------------------------
 // Test 'class ReferenceTree'
 
-
-static void test_reference_tree(const vector<long> &shape, const vector<long> &strides, long nchunks, long nspec)
+// This utility function currently isn't used anywhere except test_non_incremental_dedispersion().
+static long dedispersion_delay(int rank, long freq, long dm_brev)
 {
-    cout << "test_reference_tree: shape=" << tuple_str(shape)
-         << ", strides=" << tuple_str(strides)
-         << ", nchunks=" << nchunks
-         << ", nspec=" << nspec
-         << endl;
+    long delay = 0;
+    long delay0 = 0;
 
-    int ndim = shape.size();
-    xassert(ndim >= 2);
-    
-    long nfreq = shape.at(ndim-2);
-    long ninner_chunk = shape.at(ndim-1);
-    long ninner_tot = ninner_chunk * nchunks;
-    
-    // Input data (multiple chunks)
-    vector<long> big_shape = shape;
-    big_shape[ndim-1] *= nchunks;
-    Array<float> arr0(big_shape, af_uhost | af_random);
-
-    // Step 1. reshape to (nouter, nfreq, ninner_tot), with precisely one spectator axis.
-
-    long nouter = 1;
-    for (int d = 0; d < ndim-2; d++)
-        nouter *= shape[d];
-    
-    Array<float> arr1 = arr0.clone();  // note deep copy here
-    arr1 = arr1.reshape({nouter, nfreq, ninner_tot});
-
-    // Step 2. loop over outer spectator axis, and call dedisperse_non_incremental().
-    
-    for (long i = 0; i < nouter; i++) {
-        Array<float> view_2d = arr1.slice(0, i);  // shape (nfreq, ninner_tot)
-        dedisperse_non_incremental(view_2d, nspec);
+    for (int r = 0; r < rank; r++) {
+        long d = (dm_brev & 1) ? (delay0+1) : delay0;
+        delay += ((freq & 1) ? 0 : d);
+        delay0 += d;
+        dm_brev >>= 1;
+        freq >>= 1;
     }
 
-    // Step 3. reshape back to original shape.
-    // (This concludes the non-incremental dedispersion.)
-    
-    arr1 = arr1.reshape(big_shape);
-
-    // Now apply incremental dedispersion in chunks, and compare.
-    
-    ReferenceTree rtree(shape, nspec);
-    Array<float> chunk(shape, strides, af_uhost | af_zero);
-
-    // Apply incremental dedispersion to arr0 (in place)
-    for (long c = 0; c < nchunks; c++) {
-        Array<float> slice = arr0.slice(ndim-1, c*ninner_chunk, (c+1)*ninner_chunk);
-        chunk.fill(slice);
-        rtree.dedisperse(chunk);
-        slice.fill(chunk);
-    }
-
-    // Need axis names for assert_arrays_equal().
-    vector<string> axis_names(ndim);
-    for (int d = 0; d < ndim-2; d++)
-        axis_names[d] = "spec" + to_string(d);
-    axis_names[ndim-2] = "dm_brev";
-    axis_names[ndim-1] = "inner";
-    
-    ksgpu::assert_arrays_equal(arr1, arr0, "non-incremental", "incremental", axis_names);
+    return delay;
 }
 
 
 static void test_reference_tree()
 {
-    int rank = rand_int(1, 9);
-    int ndim = rand_int(2, 6);
+    vector<long> v = ksgpu::random_integers_with_bounded_product(6, 300000);
 
-    // v = (spectators) + (ntime,nspec,nchunks)
-    vector<long> v = ksgpu::random_integers_with_bounded_product(ndim+1, 100000 / pow2(rank));
-    long ntime = v[ndim-2];
-    long nspec = v[ndim-1];
-    long nchunks = v[ndim];
+    long N = v[0];   // number of chunks
+    long B = v[1];   // number of beams
+    long T = v[2];   // number of time samples per chunk
+    long S = v[3];   // number of "inner" spectator indices
+    long amb_rank = long(log2(v[4]) + 0.5);
+    long dd_rank = long(log2(v[5]) + 0.5);
 
-    // shape = (spectators) + (2^rank, nspec*nchunks)
-    vector<long> shape(ndim);
-    for (long d = 0; d < ndim-2; d++)
-        shape[d] = v[d];
-    shape[ndim-2] = pow2(rank);
-    shape[ndim-1] = nspec * nchunks;
+    amb_rank = min(amb_rank, 8L);
+    dd_rank = min(dd_rank, 8L);
 
-    vector<long> strides = ksgpu::make_random_strides(shape, 1);  // ncontig=1
-    test_reference_tree(shape, strides, nchunks, nspec);
-}
+    long A = pow2(amb_rank);
+    long D = pow2(dd_rank);
+    vector<long> dd_strides = ksgpu::make_random_strides({B,A,D,T*S}, 1);  // ncontig=2
 
+    cout << "test_reference_tree:"
+         << " nchunks=" << N
+         << ", nbeams=" << B
+         << ", ntime=" << T
+         << ", nspec=" << S
+         << ", amb_rank=" << amb_rank
+         << ", dd_rank=" << dd_rank 
+         << ", dd_strides=" << ksgpu::tuple_str(dd_strides)
+         << endl;
 
-// -------------------------------------------------------------------------------------------------
-// Test tree recursion
+    Array<float> in({B,A,D,N*T*S}, af_uhost | af_random);
+    Array<float> out_dni({B,A,D,N*T*S}, af_uhost | af_zero);     // using dedisperse_non_incremental()
+    Array<float> out_tree({B,A,D,N*T*S}, af_uhost | af_zero);    // using ReferenceTree
 
+    // Temp buffers for dedispersion.
+    Array<float> dd_dni({D,N*T*S}, af_uhost | af_zero);
+    Array<float> dd_tree({B,A,D,T*S}, dd_strides, af_uhost | af_zero);
+    Array<float> dd_bfs({S}, af_uhost | af_zero);                // "bfs" = "brute-force sum"
 
-static void test_tree_recursion(int rank0, int rank1, long nt_chunk, long nchunks)
-{
-    cout << "test_tree_recursion: rank0=" << rank0 << ", rank1=" << rank1
-         << ", nt_chunk=" << nt_chunk << ", nchunks=" << nchunks << endl;
+    // Dedisperse using dedisperse_non_incremental().
 
-    int rank_tot = rank0 + rank1;
-    
-    check_rank(rank0, "test_tree_recursion [rank0]");
-    check_rank(rank1, "test_tree_recursion [rank1]");
-    check_rank(rank_tot, "test_tree_recursion [rank_tot]");
-               
-    long nfreq_tot = pow2(rank_tot);
-    long nfreq0 = pow2(rank0);
-    long nfreq1 = pow2(rank1);
+    for (long b = 0; b < B; b++) {
+        for (long a = 0; a < A; a++) {
+            Array<float> in_slice = in.slice(0,b);   // shape (A,D,N*T*S)
+            in_slice = in_slice.slice(0,a);          // shape (D,N*T*S)
 
-    Array<int> lags({nfreq1,nfreq0}, af_uhost | af_zero);
-    for (long i = 0; i < nfreq1; i++)
-        for (long j = 0; j < nfreq0; j++)
-            lags.at({i,j}) = rb_lag(i, j, rank0, rank1, false);  // uflag=false
+            dd_dni.fill(in_slice);
+            dedisperse_non_incremental(dd_dni, S);
 
-    ReferenceTree big_tree({nfreq_tot, nt_chunk}, 1);    // nspec=1
-    ReferenceTree tree0({nfreq1, nfreq0, nt_chunk}, 1);  // nspec=1
-    ReferenceTree tree1({nfreq0, nfreq1, nt_chunk}, 1);  // nspec=1
-    ReferenceLagbuf lagbuf(lags, nt_chunk);
+            Array<float> out_slice = out_dni.slice(0,b);   // shape (A,D,N*T*S)
+            out_slice = out_slice.slice(0,a);              // shape (D,N*T*S)
 
-    for (long c = 0; c < nchunks; c++) {
-        Array<float> chunk0({nfreq_tot, nt_chunk}, af_uhost | af_random);
-
-        // "Two-step" dedispersion.
-        Array<float> chunk1 = chunk0.clone();
-        chunk1 = chunk1.reshape({nfreq1, nfreq0, nt_chunk});
-        tree0.dedisperse(chunk1);
-        lagbuf.apply_lags(chunk1);
-        chunk1 = chunk1.transpose({1,0,2});
-        tree1.dedisperse(chunk1);
-        chunk1 = chunk1.transpose({1,0,2});
-        chunk1 = chunk1.reshape({nfreq_tot, nt_chunk});
-
-        // "One-step" dedispersion.
-        big_tree.dedisperse(chunk0);
-
-        // Third step: compare chunk0 / chunk1
-        // (arr0, arr1, name0, name1, axis_names)
-        ksgpu::assert_arrays_equal(chunk0, chunk1, "1-step", "2-step", {"dm_brev","t"});
+            out_slice.fill(dd_dni);
+        }
     }
+
+    // Check a few random entries of 'out_dni', by comparing them to brute-force summation.
+
+    for (int e = 0; e < 10; e++) {
+        long b = rand_int(0,B);
+        long a = rand_int(0,A);
+        long t = rand_int(0,N*T);   // note (N*T), not T
+        long dm_brev = rand_int(0,D);
+
+        Array<float> out_slice = out_dni.slice(0,b);    // (A,D,N*T*S)
+        out_slice = out_slice.slice(0,a);               // (D,N*T*S)
+        out_slice = out_slice.slice(0,dm_brev);         // (N*T*S,)
+        out_slice = out_slice.slice(0,t*S,(t+1)*S);     // (S,)
+
+        Array<float> in_slice = in.slice(0,b);          // (A,D,N*T*S)
+        in_slice = in_slice.slice(0,a);                 // (D,N*T*S)
+        
+        dd_bfs.set_zero();
+
+        for (long f = 0; f < D; f++) {
+            long t0 = t - dedispersion_delay(dd_rank, f, dm_brev);
+            if (t0 < 0)
+                continue;
+            for (long s = 0; s < S; s++)
+                dd_bfs.data[s] += in_slice.data[f*N*T*S + t0*S + s];
+        }
+
+        assert_arrays_equal(out_slice, dd_bfs, "dedisperse_non_incremental", "brute_force_sum", {"s"});
+    }
+
+    // Dedisperse using ReferenceTree.
+
+    ReferenceTreeWithSubbands::Params params;
+    params.num_beams = B;
+    params.amb_rank = amb_rank;
+    params.dd_rank = dd_rank;
+    params.ntime = T;
+    params.nspec = S;
+    params.subband_counts = {1};
+
+    ReferenceTreeWithSubbands tree(params);
+    Array<float> sb_empty;
+
+    for (long ichunk = 0; ichunk < N; ichunk++) {
+        Array<float> in_chunk = in.slice(3, ichunk*T*S, (ichunk+1)*T*S);   // (B,A,D,N*T*S) -> (B,A,D,T*S)
+        dd_tree.fill(in_chunk);
+
+        tree.dedisperse(dd_tree, sb_empty);
+
+        Array<float> out_chunk = out_tree.slice(3, ichunk*T*S, (ichunk+1)*T*S);   // (B,A,D,N*T*S) -> (B,A,D,T*S)
+        out_chunk.fill(dd_tree);
+    }
+
+    assert_arrays_equal(out_tree, out_dni, "ReferenceTree", "dedisperse_non_incremental", {"b","a","d","ts"});
 }
 
-
-static void test_tree_recursion()
-{
-    int rank = rand_int(0, 9);
-    int rank0 = rand_int(0, rank+1);
-    int rank1 = rank - rank0;
-    long nt_chunk = rand_int(1, pow2(std::max(rank0,rank1)+1));
-    long maxchunks = std::max(3L, 10000 / (pow2(rank) * nt_chunk));
-    long nchunks = rand_int(1, maxchunks+1);
-    
-    test_tree_recursion(rank0, rank1, nt_chunk, nchunks);
-}
 
 }  // anonymous namespace
 
 
 void ReferenceDedisperserBase::test_dedispersion_basics()
 {
-    test_non_incremental_dedispersion();
     test_reference_lagbuf();
     test_reference_tree();
-    test_tree_recursion();
 }
 
 

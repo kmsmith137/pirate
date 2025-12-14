@@ -87,7 +87,7 @@ struct ReferenceTreeWithSubbands
 
     // Dedisperses 'buf' in place, and writes subbands to 'out'.
     //   buf.shape = { num_beams, 2^amb_rank, 2^dd_rank, ntime * nspec}.
-    //   out.shape = { num_beams, 2^(amb_rank + dd_rank - pf_rank), M, ntime }
+    //   out.shape = { num_beams, 2^(amb_rank + dd_rank - pf_rank), M, ntime * nspec }.
     //
     // Note: if M=1 (no subbands), then the 'out' argument is optional, and
     // an empty (size-zero) array can be passed instead.
@@ -97,12 +97,12 @@ struct ReferenceTreeWithSubbands
     static void test();
 
     // Helper for dedisperse().
-    // buf shape: (pow2(dd_rank), ntime).
-    // out shape: (pow2(dd_rank-pf_rank), fs.M, ntime). Can be NULL.
+    // buf shape: (pow2(dd_rank), ntime * nspec).
+    // out shape: (pow2(dd_rank-pf_rank), fs.M, ntime * nspec). Can be NULL.
     float *dedisperse_2d(float *bufp, long buf_dstride, float *outp, long out_dstride, long out_mstride, float *ps);
 
     // Helper for dedisperse()
-    // 'dst' and 'src' have shape (2, ntime).
+    // 'dst' and 'src' have shape (2, ntime * nspec).
     // dst==src is okay.
     inline float *dedisperse_1d(float *dst, long ds, float *src, long ss, float *ps, long lag);
 };
