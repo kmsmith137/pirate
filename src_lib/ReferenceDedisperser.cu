@@ -143,7 +143,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // Vector length is (nbatches * nout).
     // Inner shape is (beams_per_batch, 2^weird_rank, input_nt / pow2(ids)).
     
-    vector<shared_ptr<ReferenceTreeWithSubbands>> trees;
+    vector<shared_ptr<ReferenceTree>> trees;
 
     // Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
     // In downsampled trees, we compute twice as many DMs as necessary, then copy the bottom half.
@@ -176,7 +176,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
         this->output_arrays.at(iout) = Array<float>({ beams_per_batch, pow2(out_rank), out_ntime }, af_uhost | af_zero);
 
         for (int batch = 0; batch < nbatches; batch++) {
-            ReferenceTreeWithSubbands::Params tree_params;
+            ReferenceTree::Params tree_params;
             tree_params.num_beams = beams_per_batch;
             tree_params.amb_rank = 0;
             tree_params.dd_rank = dd_rank;
@@ -184,7 +184,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
             tree_params.nspec = 1;
             tree_params.subband_counts = {1};
 
-            this->trees.at(batch*output_ntrees + iout) = make_shared<ReferenceTreeWithSubbands> (tree_params);
+            this->trees.at(batch*output_ntrees + iout) = make_shared<ReferenceTree> (tree_params);
         }
     }
 
@@ -812,7 +812,7 @@ static void test_reference_tree()
 
     // Dedisperse using ReferenceTree.
 
-    ReferenceTreeWithSubbands::Params params;
+    ReferenceTree::Params params;
     params.num_beams = B;
     params.amb_rank = amb_rank;
     params.dd_rank = dd_rank;
@@ -820,7 +820,7 @@ static void test_reference_tree()
     params.nspec = S;
     params.subband_counts = {1};
 
-    ReferenceTreeWithSubbands tree(params);
+    ReferenceTree tree(params);
     Array<float> sb_empty;
 
     for (long ichunk = 0; ichunk < N; ichunk++) {

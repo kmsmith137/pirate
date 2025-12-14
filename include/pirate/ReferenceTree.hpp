@@ -24,7 +24,7 @@ namespace pirate {
 // these features.
 
 
-struct ReferenceTreeWithSubbands
+struct ReferenceTree
 {
     struct Params
     {
@@ -43,7 +43,7 @@ struct ReferenceTreeWithSubbands
     ksgpu::Array<float> scratch;
 
 
-    ReferenceTreeWithSubbands(const Params &params_);
+    ReferenceTree(const Params &params_);
 
     // Dedisperses 'buf' in place, and writes subbands to 'out'.
     //   buf.shape = { num_beams, 2^amb_rank, 2^dd_rank, ntime * nspec}.

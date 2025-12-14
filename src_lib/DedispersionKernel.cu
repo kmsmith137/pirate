@@ -199,7 +199,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_, 
     // this compatibility test between 'params' and 'subband_counts'.
     xassert_ge(params.dd_rank, fs.pf_rank);
     
-    ReferenceTreeWithSubbands::Params tree_params;
+    ReferenceTree::Params tree_params;
     tree_params.num_beams = params.beams_per_batch;
     tree_params.amb_rank = params.amb_rank;
     tree_params.dd_rank = params.dd_rank;
@@ -212,7 +212,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_, 
     this->trees.resize(nbatches);                         
 
     for (long n = 0; n < nbatches; n++)
-        trees[n] = make_shared<ReferenceTreeWithSubbands> (tree_params);
+        trees[n] = make_shared<ReferenceTree> (tree_params);
 
     if (params.apply_input_residual_lags)
         this->rlag_bufs = ReferenceDedispersionKernel::_init_rlags(params);

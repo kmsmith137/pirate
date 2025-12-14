@@ -12,7 +12,7 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-struct ReferenceTreeWithSubbands;    // defined in ReferenceTree.hpp
+struct ReferenceTree;    // defined in ReferenceTree.hpp
 struct ReferenceLagbuf;  // defined in ReferenceLagbuf.hpp
 struct MegaRingbuf;      // defined in MegaRingbuf.hpp
 
@@ -208,7 +208,7 @@ struct ReferenceDedispersionKernel
 
     long Dpf = 0;          // same as pow2(params.amb_rank + params.dd_rank - fs.pf_rank)
     long nbatches = 0;     // same as (params.total_beams / params.beams_per_batch)
-    std::vector<std::shared_ptr<ReferenceTreeWithSubbands>> trees;        // length (nbatches)
+    std::vector<std::shared_ptr<ReferenceTree>> trees;        // length (nbatches)
     std::vector<std::shared_ptr<ReferenceLagbuf>> rlag_bufs;  // length (params.apply_input_residual_lags ? nbatches : 0)
 
     // Used internally

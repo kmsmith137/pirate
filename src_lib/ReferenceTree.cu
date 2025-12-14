@@ -15,7 +15,7 @@ namespace pirate {
 #endif
 
 
-ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
+ReferenceTree::ReferenceTree(const Params &params_) :
     params(params_), fs(params_.subband_counts)
 {
     xassert(params.num_beams > 0);
@@ -77,7 +77,7 @@ ReferenceTreeWithSubbands::ReferenceTreeWithSubbands(const Params &params_) :
 }
 
 
-void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
+void ReferenceTree::dedisperse(Array<float> &buf, Array<float> &out)
 {
     long M = fs.M;
     long T = params.ntime;
@@ -97,7 +97,7 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
         xassert(out.on_host());
     }
     else if (fs.M != 1)
-        throw runtime_error("ReferenceTreeWithSubbands::dedisperse(): if subbands are "
+        throw runtime_error("ReferenceTree::dedisperse(): if subbands are "
                             "defined (M > 1), then 'out' must be a nonempty array");
     
     float *ps = pstate.data;
@@ -134,7 +134,7 @@ void ReferenceTreeWithSubbands::dedisperse(Array<float> &buf, Array<float> &out)
 // 'ps': pointer to current location in persistent_state.
 // Returns pointer to updated location in persistent_state.
 
-float *ReferenceTreeWithSubbands::dedisperse_2d(
+float *ReferenceTree::dedisperse_2d(
     float *bufp, long buf_dstride, 
     float *outp, long out_dstride, long out_mstride, 
     float *ps)
@@ -316,7 +316,7 @@ float *ReferenceTreeWithSubbands::dedisperse_2d(
 // 'src': shape (2,T*S), okay if dst==src.
 // 'ps' points to a buffer of length (lag+1)*S.
 // FIXME slow implementation -- may improve after tests pass.
-inline float *ReferenceTreeWithSubbands::dedisperse_1d(
+inline float *ReferenceTree::dedisperse_1d(
     float *dst, long dstride, 
     float *src, long sstride, 
     float *ps, long lag)
@@ -348,7 +348,7 @@ inline float *ReferenceTreeWithSubbands::dedisperse_1d(
 
 
 // Static member function
-void ReferenceTreeWithSubbands::test()
+void ReferenceTree::test()
 {
     FrequencySubbands fs = FrequencySubbands::make_random();
     auto v = ksgpu::random_integers_with_bounded_product(6, 100000/fs.M);
@@ -372,7 +372,7 @@ void ReferenceTreeWithSubbands::test()
     vector<long> dd_strides = ksgpu::make_random_strides({B,A,Din,T*S}, 1);   // ncontig=1
     vector<long> out_strides = ksgpu::make_random_strides({B,Dpf,M,T*S}, 1);  // ncontig=1
 
-    cout << "ReferenceTreeWithSubbands::test():"
+    cout << "ReferenceTree::test():"
          << " nchunks=" << nchunks
          << ", num_beams=" << B
          << ", amb_rank=" << amb_rank
@@ -392,9 +392,9 @@ void ReferenceTreeWithSubbands::test()
     params.nspec = S;
     params.subband_counts = fs.subband_counts;
 
-    ReferenceTreeWithSubbands tree_with_subbands(params);
+    ReferenceTree tree_with_subbands(params);
 
-    std::vector<std::shared_ptr<ReferenceTreeWithSubbands>> subtrees(F);
+    std::vector<std::shared_ptr<ReferenceTree>> subtrees(F);
 
     // Initialize subtrees.
     for (long f = 0; f < F; f++) {
@@ -412,7 +412,7 @@ void ReferenceTreeWithSubbands::test()
         subtree_params.nspec = S;
         subtree_params.subband_counts = {1};
 
-        subtrees[f] = make_shared<ReferenceTreeWithSubbands> (subtree_params);
+        subtrees[f] = make_shared<ReferenceTree> (subtree_params);
     }
 
     // FIXME should test strides! ('buf' and 'out' only)
@@ -430,7 +430,7 @@ void ReferenceTreeWithSubbands::test()
         // in.set_zero();
         // in.at({0,0,0,0}) = 1.0f;
 
-        // Call ReferenceTreeWithSubbands.dedisperse().
+        // Call ReferenceTree.dedisperse().
         buf.fill(in);
         tree_with_subbands.dedisperse(buf, out);
 

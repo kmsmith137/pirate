@@ -34,7 +34,7 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test()')
-    parser.add_argument('--rtws', action='store_true', help='Runs ReferenceTreeWithSubbands.test()')
+    parser.add_argument('--rtws', action='store_true', help='Runs ReferenceTree.test()')
 
 
 def rrange(registry_class):
@@ -118,7 +118,7 @@ def test(args):
                 pirate_pybind11.CoalescedDdKernel2.test()
 
         if run_all_tests or args.rtws:
-            pirate_pybind11.ReferenceTreeWithSubbands.test()
+            pirate_pybind11.ReferenceTree.test()
             
 
 #########################################   time command  ##########################################

@@ -182,8 +182,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test_dedispersion_basics", &ReferenceDedisperserBase::test_dedispersion_basics)
     ;
 
-    py::class_<ReferenceTreeWithSubbands>(m, "ReferenceTreeWithSubbands")
-          .def_static("test", &ReferenceTreeWithSubbands::test)
+    py::class_<ReferenceTree>(m, "ReferenceTree")
+          .def_static("test", &ReferenceTree::test)
     ;
 
     py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")
