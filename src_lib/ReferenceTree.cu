@@ -533,7 +533,11 @@ void ReferenceTree::test_subbands()
         subtree_params.dd_rank = subtree_rank;
         subtree_params.ntime = T;
         subtree_params.nspec = S;
-        subtree_params.subband_counts = {1};
+
+        // For some reason, GCC complains about 'subtree_params.subband_counts = {1};'
+        // so we use push_back() instead. This only happens if 'subtree_params' is
+        // constructed inside the for-loop (?!)
+        subtree_params.subband_counts.push_back(1);
 
         subtrees[f] = make_shared<ReferenceTree> (subtree_params);
     }
@@ -547,7 +551,7 @@ void ReferenceTree::test_subbands()
     Array<float> buf2({B,A,Din,T*S}, af_uhost | af_zero);
     Array<float> out2({B,Dpf,M,T*S}, af_uhost | af_zero);
     Array<float> sb_empty;
-
+    
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         in.randomize();
         // in.set_zero();
