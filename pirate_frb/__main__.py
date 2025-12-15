@@ -45,7 +45,7 @@ def rrange(registry_class):
     n = registry_class.registry_size()
 
     if n == 0:
-        print(f'!!! {registry_class.__name__}: no kernels were registered !!!')
+        print(f'{registry_class.__name__}: no kernels were registered, associated unit test will be skipped.')
         return
     
     for i in range((n+9)//10):
