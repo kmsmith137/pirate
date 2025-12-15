@@ -82,6 +82,7 @@ class PeakFinder:
         assert Dout*Tinner <= (32 * self.SW)    # see (***) above
 
         self.P = 3 * utils.integer_log2(W) + 1   # number of peak-finding profiles
+        self.pf_rank = frequency_subbands.pf_rank
         self.weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         self.weight_layout = self.weight_reader.weight_layout
         self.output = PfOutput(dtype, Dout)

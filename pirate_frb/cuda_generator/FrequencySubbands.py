@@ -141,6 +141,12 @@ class FrequencySubbands:
         return (b*s, b*s + 2**level)  # (ilo, ihi)
 
 
+    def check_m(self, m, expected_ilo, expected_ihi, expected_d):
+        f,d = self.m_to_fd[m]
+        assert self.f_to_irange[f] == (expected_ilo, expected_ihi)
+        assert d == expected_d
+
+
     def show(self):
         print(f'FrequencySubbands(pf_rank={self.pf_rank}, subband_counts={self.subband_counts},'
               + f' fmin={self.fmin}, fmax={self.fmax}, threshold={self.threshold})')

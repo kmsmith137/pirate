@@ -181,11 +181,17 @@ class Dedisperser:
 
     
     def _single_stage_dedispersion_core(self, k):
+        assert not self.two_stage
+
         for i in range(self.rank):
             self._dedispersion_pass(k, i)
 
         
-    def _two_stage_dedispersion_core(self, k):
+    def _two_stage_dedispersion_core(self, k, *, return_early=False):
+        """The 'return_early' arg is a hack for CoalescedDdKernel2."""
+
+        assert self.two_stage
+
         for i in range(self.rank0):
             self._dedispersion_pass(k, i)
 
@@ -211,6 +217,9 @@ class Dedisperser:
         # One-sample lags are needed in the float16 case.
         self._apply_one_sample_lags(k)
         
+        if return_early:
+            return
+
         for i in range(self.rank1):
             self._dedispersion_pass(k, i)
 

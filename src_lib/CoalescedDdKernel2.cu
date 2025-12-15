@@ -249,6 +249,7 @@ void CoalescedDdKernel2::test()
 
     FrequencySubbands &fs = cdd2_kernel.fs;
     GpuPfWeightLayout &wl = cdd2_kernel.pf_weight_layout;
+    xassert(fs.pf_rank == pf_rank);
 
     // Print this monstrosity.
     cout << "CoalescedDdKernel2::test()\n"
@@ -271,17 +272,6 @@ void CoalescedDdKernel2::test()
          << "    nt_wt_per_chunk = " << pf_params.nt_wt << "\n"
          << "    nchunks = " << nchunks << "\n" 
          << endl;
-
-    // No subbands for now!
-    xassert(fs.pf_rank == pf_rank);
-    xassert(fs.F == 1);
-    xassert(fs.M == pow2(pf_rank));
-    xassert(fs.f_to_ilo[0] == 0);
-    xassert(fs.f_to_ihi[0] == pow2(pf_rank));
-    for (int m = 0; m < fs.M; m++) {
-        xassert(fs.m_to_f[m] == 0);
-        xassert(fs.m_to_d[m] == m);
-    }
 
     long rb_nseg = dd_params.mega_ringbuf->gpu_giant_nseg;
     long rb_nelts = rb_nseg * dd_params.nt_per_segment;
