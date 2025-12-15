@@ -63,9 +63,13 @@ struct ReferenceTree
     float *dedisperse_2d(float *bufp, long buf_dstride, float *outp, long out_dstride, long out_mstride, float *ps);
 
     // Helper for dedisperse()
-    // 'dst' and 'src' have shape (2, ntime * nspec).
-    // dst==src is okay.
+    // 'dst' and 'src' have shape (2, ntime * nspec), and dst==src is okay.
+    // Returns a new 'ps' (persistent state) pointer.
     inline float *dedisperse_1d(float *dst, long ds, float *src, long ss, float *ps, long lag);
+
+    // 'dst' and 'src' have shape (ntime * nspec,) and dst==src is allowed.
+    // Returns a new 'ps' (persistent state) poitner.
+    inline float *lag_1d(float *dst, const float *src, float *ps, long lag);
 };
 
 

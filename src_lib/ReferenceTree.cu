@@ -35,7 +35,7 @@ ReferenceTree::ReferenceTree(const Params &params_) :
     long A = pow2(params.amb_rank);
     long Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
 
-    long scratch_nelts = S * (T + 1 + (R ? pow2(R-1) : 0));
+    long scratch_nelts = S * (T + pow2(R) + 1);
     this->scratch = Array<float> ({scratch_nelts}, af_uhost | af_zero);
 
     // The rest of the constructor is dedicated to computing 'pstate_nelts'.
@@ -53,6 +53,19 @@ ReferenceTree::ReferenceTree(const Params &params_) :
         // This way of writing N makes sense for R=1 (which implies r=0).
         long N = (pow2(R-1) * (pow2(r)+1)) >> 1;
         pstate_nelts += B * A * N * S;
+    }
+
+    // Contribution to pstate_nelts from peak-finding at pf_level == 0.
+    // Written in a brain-dead way which "mirrors" ReferenceTree::dedisperse_2d().
+
+    for (long pfs = 0; pfs < fs.subband_counts.at(0); pfs++) {
+        long nf_in = pow2(fs.pf_rank);
+        long ndm_in = pow2(params.dd_rank - fs.pf_rank);
+
+        for (long dm_in = 0; dm_in < ndm_in; dm_in++) {
+            long lag = dm_in * (nf_in-pfs-1);
+            pstate_nelts += B * A * lag * S;
+        }
     }
 
     // Peak-finding contribution to pstate_nelts.
@@ -144,8 +157,6 @@ float *ReferenceTree::dedisperse_2d(
     // Input array shape: (pow2(dd_rank), T*S)
     // Output array shape: (pf_ndm, M, T*S). Can be NULL.
 
-    long T = params.ntime;
-    long S = params.nspec;
     long dd_rank = params.dd_rank;
     long pf_rank = fs.pf_rank;
     long pf_ndm = pow2(dd_rank - pf_rank);
@@ -174,6 +185,7 @@ float *ReferenceTree::dedisperse_2d(
             // We just need to transpose (and slice) the input array, but note that:
             //   (1) the input dm-index 0 <= dm_in < pf_ndm is bit-reversed. 
             //   (2) the output array is a "slice" of a shape (pf_ndm, M, T) array.
+            //   (3) in order to match the GPU kernel, we apply lag (nf_in-pfs-1) * (dm_in).
 
             long pf_ns = fs.subband_counts.at(0);
 
@@ -199,9 +211,9 @@ float *ReferenceTree::dedisperse_2d(
                     long isrc = (pfs * ndm_in) + dm_in_brev;
                     float *src = bufp + (isrc * buf_dstride);
                     float *dst = outp + (dm_in * out_dstride) + (pfs * out_mstride);
-
-                    for (long ts = 0; ts < T*S; ts++)
-                        dst[ts] = src[ts];
+                    
+                    long lag = (nf_in-pfs-1) * dm_in;  // not (pf_ns-pfs-1) * dm_in
+                    ps = lag_1d(dst, src, ps, lag);
                 }
             }
 
@@ -346,6 +358,26 @@ inline float *ReferenceTree::dedisperse_1d(
     }
 
     return ps + (lag+1)*S;
+}
+
+// 'dst' and 'src' have length (T*S), and dst==src is allowed.
+// 'ps' has length (lag*S).
+inline float *ReferenceTree::lag_1d(float *dst, const float *src, float *ps, long lag)
+{
+    long T = params.ntime;
+    long S = params.nspec;
+    float *tmp = scratch.data;
+
+    // (ps, src) -> scratch
+    xassert(scratch.size >= (T+lag) * S);
+    memcpy(tmp, ps, lag * S * sizeof(float));
+    memcpy(tmp + lag*S, src, T*S * sizeof(float));
+
+    // scratch -> (dst, ps)
+    memcpy(dst, tmp, T*S * sizeof(float));
+    memcpy(ps, tmp + T*S, lag*S * sizeof(float));
+
+    return ps + lag*S;
 }
 
 
