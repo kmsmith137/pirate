@@ -190,7 +190,7 @@ void CoalescedDdKernel2::test()
     long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
 
-    auto v = ksgpu::random_integers_with_bounded_product(5, 50000 / pow2(dd_rank));
+    auto v = ksgpu::random_integers_with_bounded_product(5, 20000 / pow2(dd_rank));
     long nchunks = v[0];
     long nt_in_per_chunk = nt_in_divisor * v[1];
     long beams_per_batch = v[2];
@@ -198,11 +198,15 @@ void CoalescedDdKernel2::test()
     long total_beams = beams_per_batch * num_batches;
     long amb_rank = max(8L, long(log2(v[4] + 0.5)));
     long lg_ndm_out = amb_rank + dd_rank - pf_rank;
+    long lg_ndm_wt = rand_int(0, lg_ndm_out+1);
+    bool is_downsampled_tree = rand_bool();
 
     // Uncomment one or more lines below, to make the test instance smaller.
     // nchunks = 1;
-    // nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : (32 * simd_width);
     // nt_in_per_chunk = max(32*simd_width, nt_in_per_wt);
+    // nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : nt_in_per_chunk;
+    // is_downsampled_tree = false;
+    // lg_ndm_wt = 0;
     // beams_per_batch = 1;
     // num_batches = 1;
     // amb_rank = 0;
@@ -222,7 +226,7 @@ void CoalescedDdKernel2::test()
     dd_params.input_is_ringbuf = true;
     dd_params.output_is_ringbuf = false;
     dd_params.apply_input_residual_lags = true;
-    dd_params.input_is_downsampled_tree = rand_bool();
+    dd_params.input_is_downsampled_tree = is_downsampled_tree;
     dd_params.nt_per_segment = xdiv(1024, dtype.nbits);
 
     long nviews = pow2(key.dd_rank + amb_rank) * xdiv(nt_in_per_chunk, dd_params.nt_per_segment);
@@ -236,7 +240,7 @@ void CoalescedDdKernel2::test()
     pf_params.beams_per_batch = beams_per_batch;
     pf_params.total_beams = total_beams;
     pf_params.ndm_out = pow2(lg_ndm_out);
-    pf_params.ndm_wt = pow2(rand_int(0, lg_ndm_out+1));
+    pf_params.ndm_wt = pow2(lg_ndm_wt);
     pf_params.nt_out = xdiv(nt_in_per_chunk, key.Dout);
     pf_params.nt_in = nt_in_per_chunk;
     pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
@@ -257,12 +261,15 @@ void CoalescedDdKernel2::test()
          << "    dd_rank = " << dd_params.dd_rank << "\n"
          << "    amb_rank = " << dd_params.amb_rank << "\n"
          << "    pf_rank = " << pf_rank << "\n"
+         << "    is_downsampled_tree = " << is_downsampled_tree << "\n"
          << "    subbands = " << ksgpu::tuple_str(key.subband_counts) << "\n"
-         << "    W = " << key.W << "\n"
+         << "    Wmax = " << key.W << "\n"
          << "    Dcore = " << cdd2_kernel.Dcore << "\n"
          << "    Dout = " << key.Dout << "\n"
          << "    Tinner = " << key.Tinner << "\n"
          << "    M = " << fs.M << "\n"
+         << "    F = " << fs.F << "\n"
+         << "    num_profiles = " << ref_pf_kernel.nprofiles << "\n"
          << "    beams_per_batch = " << beams_per_batch << "\n"
          << "    total_beams = " << total_beams << "\n"
          << "    ndm_out = " << pf_params.ndm_out << "\n"
@@ -294,7 +301,7 @@ void CoalescedDdKernel2::test()
     long Dout = pow2(lg_ndm_out);
     long Tout = pf_params.nt_out;
 
-    Array<float> dd_cpu({B,A,D,T}, af_uhost);       // 'dd_out' for ref_dd_kernel
+    Array<float> dd_cpu({B,A,D,T}, af_uhost);      // 'dd_out' for ref_dd_kernel
     Array<float> sb_cpu({B,Dout,M,T}, af_uhost);   // 'sb_out' for ref_pf_kernel, input for ref_pf_kernel
     xassert(Dout == ref_dd_kernel.Dpf);
 
@@ -313,6 +320,11 @@ void CoalescedDdKernel2::test()
 
             long rank_hack = dd_params.dd_rank;  // see comments in ReferencePeakFindingKernel::make_random_weights()
             Array<float> wt_cpu = ref_pf_kernel.make_random_weights(rank_hack);
+
+            // Uncomment to use one-hot weights.
+            // wt_cpu = Array<float> ({B, pf_params.ndm_wt, pf_params.nt_wt, ref_pf_kernel.nprofiles, fs.F}, af_rhost | af_zero);
+            // wt_cpu.at({0,0,0,0,0}) = 1.0f;
+
             ref_pf_kernel.apply(max_cpu, argmax_cpu, sb_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.
