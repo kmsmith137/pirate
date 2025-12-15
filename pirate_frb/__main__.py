@@ -466,6 +466,91 @@ def scratch(args):
     pirate_pybind11.scratch()
 
 
+###################################   random_kernels command  ###################################
+
+
+def parse_random_kernels(subparsers):
+    parser = subparsers.add_parser("random_kernels", help="A utility for maintaining makefile_helper.py")
+    parser.add_argument('-n', type=int, default=20, help='Number of random kernels to print (default 20)')
+    parser.add_argument('--pf', action='store_true', help='Print random PeakFinder kernel params')
+    parser.add_argument('--cdd2', action='store_true', help='Print random CoalescedDdKernel2 kernel params')
+    parser.add_argument('--pfwr', action='store_true', help='Print random PfWeightReader kernel params')
+
+
+def random_kernels(args):
+    import numpy
+    
+    flags = [ 'pf', 'cdd2', 'pfwr' ]
+    nflags = sum(1 if getattr(args, x) else 0 for x in flags)
+    
+    if nflags != 1:
+        print("Error: precisely one of --pf, --cdd2, --pfwr must be specified", file=sys.stderr)
+        print("  --pf     Print random PeakFinder kernel params", file=sys.stderr)
+        print("  --cdd2   Print random CoalescedDdKernel2 kernel params", file=sys.stderr)
+        print("  --pfwr   Print random PfWeightReader kernel params", file=sys.stderr)
+        sys.exit(2)
+
+    randi = lambda *a: int(numpy.random.randint(*a))
+
+    if args.pf:
+        print('# (dtype, subband_counts, W, Dcore, Dout, Tinner)')
+
+        for _ in range(args.n):
+            nbits = 32 // randi(1,3)
+            Dcore = 32 // nbits
+            Dout = Dcore
+            Tinner = 1
+
+            for _ in range(5):
+                n = randi(4)
+                if n == 0:
+                    Tinner *= 2
+                if n == 1:
+                    Dcore *= 2
+                if 1 <= n <= 2:
+                    Dout *= 2
+            
+            W = 2**randi(5)
+            subband_counts = FrequencySubbands.make_random_subband_counts()
+            print(f"('fp{nbits}', {subband_counts}, {W}, {Dcore}, {Dout}, {Tinner})")
+
+    if args.cdd2:
+        print('# (dtype, dd_rank, subband_counts, Wmax, Dcore, Dout, Tinner)')
+
+        for _ in range(args.n):
+            nbits = 32 // randi(1,3)
+            dd_rank = randi(3,9)
+            pf_rank = dd_rank - (dd_rank // 2)
+            subband_counts = FrequencySubbands.make_random_subband_counts(pf_rank)
+            Wmax = 2**randi(5)
+            Dcore = 32 // nbits
+            Dout = Dcore
+            Tinner = 1
+
+            for _ in range(5):
+                n = randi(4)
+                if n == 0:
+                    Tinner *= 2
+                if n == 1:
+                    Dcore *= 2
+                if 1 <= n <= 2:
+                    Dout *= 2
+            
+            print(f"('fp{nbits}', {dd_rank}, {subband_counts}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
+
+    if args.pfwr:
+        print('# (dtype, subband_counts, Dcore, P, Tinner)')
+        
+        for _ in range(args.n):
+            nbits = 32 // randi(1,3)
+            rank = randi(2,5)
+            Tinner_log = randi(6)
+            Dcore_log = randi(6-Tinner_log) + (32//nbits) - 1
+            P = randi(1,15)
+            subband_counts = FrequencySubbands.make_random_subband_counts()
+            print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
+
+
 ####################################################################################################
 
 
@@ -481,6 +566,7 @@ if __name__ == '__main__':
     parse_test_node(subparsers)
     parse_send(subparsers)
     parse_scratch(subparsers)
+    parse_random_kernels(subparsers)
 
     args = parser.parse_args()
 
@@ -500,6 +586,8 @@ if __name__ == '__main__':
         send(args)
     elif args.command == "scratch":
         scratch(args)
+    elif args.command == "random_kernels":
+        random_kernels(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
