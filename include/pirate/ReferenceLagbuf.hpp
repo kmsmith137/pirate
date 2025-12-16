@@ -21,6 +21,7 @@ public:
     ReferenceLagbuf(const ksgpu::Array<int> &lags, int ntime);
 
     std::vector<long> expected_shape;  // (n_0, ..., n_{d-1}, T)
+    ksgpu::Array<int> lags;            // shape (n_0, ..., n_{d-1})
     int ntime = 0;
 
     void apply_lags(ksgpu::Array<float> &arr) const;
@@ -28,7 +29,6 @@ public:
     static void test();
 
 protected:
-    ksgpu::Array<int> lags;     // shape (n_0, ..., n_{d-1})
     ksgpu::Array<float> rstate;
     ksgpu::Array<float> scratch;
 };

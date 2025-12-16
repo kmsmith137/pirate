@@ -13,6 +13,9 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+// See ReferenceLagbuf.{hpp,cu}.
+class ReferenceLagbuf;
+
 
 // ReferenceTree: reference implementation of tree dedispersion.
 //
@@ -42,6 +45,7 @@ struct ReferenceTree
     ksgpu::Array<float> pstate;
     ksgpu::Array<float> scratch;
 
+    std::shared_ptr<ReferenceLagbuf> final_lagbuf;
 
     ReferenceTree(const Params &params_);
 
@@ -66,10 +70,6 @@ struct ReferenceTree
     // 'dst' and 'src' have shape (2, ntime * nspec), and dst==src is okay.
     // Returns a new 'ps' (persistent state) pointer.
     inline float *dedisperse_1d(float *dst, long ds, float *src, long ss, float *ps, long lag);
-
-    // 'dst' and 'src' have shape (ntime * nspec,) and dst==src is allowed.
-    // Returns a new 'ps' (persistent state) poitner.
-    inline float *lag_1d(float *dst, const float *src, float *ps, long lag);
 };
 
 

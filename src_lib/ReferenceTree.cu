@@ -29,6 +29,7 @@ ReferenceTree::ReferenceTree(const Params &params_) :
         
     xassert(fs.pf_rank <= params.dd_rank);
 
+    long M = fs.M;
     long T = params.ntime;
     long S = params.nspec;
     long R = params.dd_rank;
@@ -38,6 +39,19 @@ ReferenceTree::ReferenceTree(const Params &params_) :
 
     long scratch_nelts = S * (T + pow2(R) + 1);
     this->scratch = Array<float> ({scratch_nelts}, af_uhost | af_zero);
+
+    Array<int> final_lags({B,Dpf,M}, af_uhost | af_zero);
+    for (long b = 0; b < B; b++) {
+        for (long dpf = 0; dpf < Dpf; dpf++) {
+            for (long m = 0; m < M; m++) {
+                long ff = pow2(fs.pf_rank) - fs.m_to_ihi(m);
+                long dd = dpf & (pow2(params.dd_rank-fs.pf_rank) - 1);
+                final_lags.at({b,dpf,m}) = ff * dd * S;
+            }
+        }
+    }
+
+    this->final_lagbuf = make_shared<ReferenceLagbuf> (final_lags, T*S);    
 
     // The rest of the constructor is dedicated to computing 'pstate_nelts'.
     // This computation depends on the details of how dedisperse() is implemented.
@@ -56,19 +70,6 @@ ReferenceTree::ReferenceTree(const Params &params_) :
         pstate_nelts += B * A * N * S;
     }
 
-    // Contribution to pstate_nelts from peak-finding at pf_level == 0.
-    // Written in a brain-dead way which "mirrors" ReferenceTree::dedisperse_2d().
-
-    for (long pfs = 0; pfs < fs.subband_counts.at(0); pfs++) {
-        long nf_in = pow2(fs.pf_rank);
-        long ndm_in = pow2(params.dd_rank - fs.pf_rank);
-
-        for (long dm_in = 0; dm_in < ndm_in; dm_in++) {
-            long lag = dm_in * (nf_in-pfs-1);
-            pstate_nelts += B * A * lag * S;
-        }
-    }
-
     // Contribution to pstate_nelts from peak-finding at pf_level >= 1.
     // Written in a brain-dead way which "mirrors" ReferenceTree::dedisperse_2d().
 
@@ -82,9 +83,7 @@ ReferenceTree::ReferenceTree(const Params &params_) :
                 for (long d2 = 0; d2 < pf_nd2; d2++) {
                     long dm_in = (pf_dm * pf_nd2) + d2;
                     long dd_lag = dm_in;
-                    long extra_lag = (nf_in-pfs-2) * pow2(pf_level-1) * pf_dm;
                     pstate_nelts += B * A * (dd_lag+1) * S;
-                    pstate_nelts += B * A * (2*extra_lag) * S;
                 }
             }
         }
@@ -140,6 +139,9 @@ void ReferenceTree::dedisperse(Array<float> &buf, Array<float> &out)
         }
     }
 
+    if (out.size != 0)
+        final_lagbuf->apply_lags(out);
+
     // cout << " (ps-pstate.data) = " << (ps-pstate.data) << endl;
     // cout << "  pstate.size = " << pstate.size << endl;
     xassert(ps == pstate.data + pstate.size);
@@ -159,6 +161,8 @@ float *ReferenceTree::dedisperse_2d(
     // Input array shape: (pow2(dd_rank), T*S)
     // Output array shape: (pf_ndm, M, T*S). Can be NULL.
 
+    long T = params.ntime;
+    long S = params.nspec;
     long dd_rank = params.dd_rank;
     long pf_rank = fs.pf_rank;
     long pf_ndm = pow2(dd_rank - pf_rank);
@@ -214,8 +218,8 @@ float *ReferenceTree::dedisperse_2d(
                     float *src = bufp + (isrc * buf_dstride);
                     float *dst = outp + (dm_in * out_dstride) + (pfs * out_mstride);
                     
-                    long lag = (nf_in-pfs-1) * dm_in;  // not (pf_ns-pfs-1) * dm_in
-                    ps = lag_1d(dst, src, ps, lag);
+                    for (long ts = 0; ts < T*S; ts++)
+                        dst[ts] = src[ts];
                 }
             }
 
@@ -301,10 +305,6 @@ float *ReferenceTree::dedisperse_2d(
 
                         long dd_lag = dm_in;
                         ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, dd_lag);
-
-                        long extra_lag = (nf_in-pfs-2) * pow2(pf_level-1) * pf_dm;
-                        ps = lag_1d(dst, dst, ps, extra_lag);
-                        ps = lag_1d(dst + dst_stride, dst + dst_stride, ps, extra_lag);
                     }
                 }
             }
@@ -366,26 +366,6 @@ inline float *ReferenceTree::dedisperse_1d(
     }
 
     return ps + (lag+1)*S;
-}
-
-// 'dst' and 'src' have length (T*S), and dst==src is allowed.
-// 'ps' has length (lag*S).
-inline float *ReferenceTree::lag_1d(float *dst, const float *src, float *ps, long lag)
-{
-    long T = params.ntime;
-    long S = params.nspec;
-    float *tmp = scratch.data;
-
-    // (ps, src) -> scratch
-    xassert(scratch.size >= (T+lag) * S);
-    memcpy(tmp, ps, lag * S * sizeof(float));
-    memcpy(tmp + lag*S, src, T*S * sizeof(float));
-
-    // scratch -> (dst, ps)
-    memcpy(dst, tmp, T*S * sizeof(float));
-    memcpy(ps, tmp + T*S, lag*S * sizeof(float));
-
-    return ps + lag*S;
 }
 
 
@@ -569,8 +549,7 @@ void ReferenceTree::test_subbands()
     params.subband_counts = fs.subband_counts;
 
     ReferenceTree tree_with_subbands(params);
-    std::vector<std::shared_ptr<ReferenceTree>> subtrees(F);
-    std::shared_ptr<ReferenceLagbuf> subtree_lagbuf;
+    vector<shared_ptr<ReferenceTree>> subtrees(F);
 
     // Initialize subtrees.
     for (long f = 0; f < F; f++) {
@@ -594,21 +573,10 @@ void ReferenceTree::test_subbands()
 
         subtrees[f] = make_shared<ReferenceTree> (subtree_params);
     }
-
-    // Initialize subtree_lagbuf.
-
-    Array<int> subtree_lags({B,Dpf,M}, af_uhost | af_zero);
-    for (long b = 0; b < B; b++) {
-        for (long dpf = 0; dpf < Dpf; dpf++) {
-            for (long m = 0; m < M; m++) {
-                long ff = pow2(pf_rank) - fs.m_to_ihi(m);
-                long dd = dpf & (pow2(dd_rank-pf_rank) - 1);
-                subtree_lags.at({b,dpf,m}) = ff * dd * S;
-            }
-        }
-    }
-
-    subtree_lagbuf = make_shared<ReferenceLagbuf> (subtree_lags, T*S);    
+    
+    // Make a "clone" of tree_with_subbands.final_lagbuf (independent persistent_state).
+    shared_ptr<ReferenceLagbuf> lb = tree_with_subbands.final_lagbuf;
+    shared_ptr<ReferenceLagbuf> local_lagbuf = make_shared<ReferenceLagbuf> (lb->lags, lb->ntime);
 
     // FIXME should test strides! ('buf' and 'out' only)
     Array<float> in({B,A,Din,T*S}, af_uhost | af_zero);
@@ -671,7 +639,7 @@ void ReferenceTree::test_subbands()
             }
         }
 
-        subtree_lagbuf->apply_lags(out2);
+        local_lagbuf->apply_lags(out2);
 
         // Check that full band is last, so that we can directly compare 'buf' and 'buf2'.
         xassert(fs.f_to_ilo.at(F-1) == 0);
