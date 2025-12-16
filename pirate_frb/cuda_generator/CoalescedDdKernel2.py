@@ -13,7 +13,7 @@ from .PeakFinder import PeakFinder
 
 
 class CoalescedDdKernel2:
-    def __init__(self, dtype, dd_rank, frequency_subbands, W, Dcore, Dout, Tinner):
+    def __init__(self, dtype, dd_rank, frequency_subbands, Wmax, Dcore, Dout, Tinner):
         """
         Coalesced Dedisperser + PeakFinder.
         We currently assume apply_input_residual_lags == input_is_ringbuf == True.
@@ -25,7 +25,7 @@ class CoalescedDdKernel2:
         self.Tinner = Tinner
         self.Dcore = Dcore
         self.Dout = Dout
-        self.W = W
+        self.Wmax = Wmax
 
         self.dt32 = dtype.simd32
         self.SW = dtype.simd_width
@@ -44,7 +44,7 @@ class CoalescedDdKernel2:
         self.pf = PeakFinder(
             dtype = dtype,
             frequency_subbands = frequency_subbands,
-            W = W,
+            Wmax = Wmax,
             Dcore = Dcore,
             Dout = Dout,
             Tinner = Tinner,
@@ -68,7 +68,7 @@ class CoalescedDdKernel2:
         self.weight_layout = self.pf.weight_layout
 
         # Typical kernel name: cdd2_fp32_r7_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1
-        self.kernel_name = f'cdd2_{dtype.fname}_r{dd_rank}_{frequency_subbands.fstr}_W{W}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
+        self.kernel_name = f'cdd2_{dtype.fname}_r{dd_rank}_{frequency_subbands.fstr}_W{Wmax}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
         self.kernel_basename = self.kernel_name + '.cu'
 
         # For testing: if a peak-finding kernel is precompiled, we also precompile unit tests
@@ -135,7 +135,7 @@ class CoalescedDdKernel2:
         k.emit(f'constexpr int wt_touter_stride32 = {utils.xdiv(self.pf.wt_touter_byte_stride,4)};')
         k.emit()
 
-        if self.W > 1:
+        if self.Wmax > 1:
             k.emit(f'{self.dt32} pf_a = {self.dtype.from_float("0.5f")};')
             k.emit()
 
@@ -282,7 +282,7 @@ class CoalescedDdKernel2:
         k.emit(f'k.subband_counts = {{ {sb_counts} }};')
         k.emit(f'k.Tinner = {self.Tinner};')
         k.emit(f'k.Dout = {self.Dout};')
-        k.emit(f'k.W = {self.W};')
+        k.emit(f'k.Wmax = {self.Wmax};')
         k.emit()
         k.emit('CoalescedDdKernel2::RegistryValue v;')
         k.emit(f'v.cuda_kernel = {self.kernel_name};')
@@ -374,9 +374,9 @@ class CoalescedDdKernel2:
         dtype = Dtype(m.group(1))
         dd_rank = int(m.group(2))
         frequency_subbands = FrequencySubbands.from_fstr(m.group(3))
-        W, Dcore, Dout, Tinner = int(m.group(4)), int(m.group(5)), int(m.group(6)), int(m.group(7))
+        Wmax, Dcore, Dout, Tinner = int(m.group(4)), int(m.group(5)), int(m.group(6)), int(m.group(7))
 
-        cdd2_kernel = cls(dtype, dd_rank, frequency_subbands, W, Dcore, Dout, Tinner)
+        cdd2_kernel = cls(dtype, dd_rank, frequency_subbands, Wmax, Dcore, Dout, Tinner)
 
         if cdd2_kernel.kernel_basename != basename:
             raise RuntimeError("CoalescedDdKernel2.write_kernel(): internal error: expected "

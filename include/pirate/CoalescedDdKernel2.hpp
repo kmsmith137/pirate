@@ -99,7 +99,7 @@ struct CoalescedDdKernel2
         long dd_rank = -1;
         long Tinner = 0;      // for weights
         long Dout = 0;
-        long W = 0;
+        long Wmax = 0;
 
         std::vector<long> subband_counts;  // length (pf_rank+1)
     };

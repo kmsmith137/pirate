@@ -78,7 +78,7 @@ struct ReferencePeakFindingKernel
     // See PeakFindingKernel.cu for an explanation of 'rank_hack'.
     ksgpu::Array<float> make_random_weights(long rank_hack);
 
-    // At "level" l (where 0 <= l < log2(W)), we have an array 'tmp_arr' containing input
+    // At "level" l (where 0 <= l < log2(Wmax)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).
     //
     //  - tmp_dt[l]: step size (in time) of temp array
@@ -233,7 +233,7 @@ struct GpuPeakFindingKernel
         std::vector<long> subband_counts;  // length (rank+1)
         long Tinner = 0;      // for weights
         long Dout = 0;
-        long W = 0;
+        long Wmax = 0;
     };
 
     struct RegistryValue

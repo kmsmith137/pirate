@@ -16,7 +16,7 @@ from .FrequencySubbands import FrequencySubbands
 #  - frequency_subbands  (compile-time)
 #  - Dcore               (compile-time)
 #  - Dout                (compile-time, also denoted nt_in_per_out)
-#  - W                   (compile-time, max kernel width)
+#  - Wmax                (compile-time, max kernel width)
 #  - frequency_subbands  (compile-time)
 #  - nt_in               (runtime)
 #  - ndm_out_per_wt      (runtime)
@@ -32,7 +32,7 @@ from .FrequencySubbands import FrequencySubbands
 #   - nt_in is a multiple of (32*SW), where SW = 32/sizeof(dtype) is the simd width
 #   - nt_in_per_wt must be a multiple of Dout (= nt_in_per_out)   (*)
 #   - SW <= Dcore <= Dout <= 32
-#   - W <= 32
+#   - Wmax <= 32
 #
 # There is also a compile-time parameter 'Tinner' which is derived from 'nt_in_per_wt':
 #
@@ -58,30 +58,30 @@ from .FrequencySubbands import FrequencySubbands
 
 
 class PeakFinder:
-    def __init__(self, dtype, frequency_subbands, W, Dcore, Dout, Tinner, ringbuf=None):
+    def __init__(self, dtype, frequency_subbands, Wmax, Dcore, Dout, Tinner, ringbuf=None):
         self.dtype = dtype = Dtype(dtype)
         self.frequency_subbands = frequency_subbands                                            
         self.Tinner = Tinner
         self.Dcore = Dcore
         self.Dout = Dout
-        self.W = W
+        self.Wmax = Wmax
 
         self.dt32 = dtype.simd32
         self.SW = dtype.simd_width
 
         # See constraints above
-        assert utils.is_power_of_two(W)
+        assert utils.is_power_of_two(Wmax)
         assert utils.is_power_of_two(Dout)
         assert utils.is_power_of_two(Dcore)
         assert utils.is_power_of_two(Tinner)
 
-        assert W <= 32
+        assert Wmax <= 32
         assert Dout <= 32
         assert Dcore <= Dout
         assert self.SW <= Dcore
         assert Dout*Tinner <= (32 * self.SW)    # see (***) above
 
-        self.P = 3 * utils.integer_log2(W) + 1   # number of peak-finding profiles
+        self.P = 3 * utils.integer_log2(Wmax) + 1   # number of peak-finding profiles
         self.pf_rank = frequency_subbands.pf_rank
         self.weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         self.weight_layout = self.weight_reader.weight_layout
@@ -104,7 +104,7 @@ class PeakFinder:
         self.pf_weight_reader = PfWeightReader(frequency_subbands, dtype, Dcore, self.P, Tinner)
         
         # Typical kernel name: pf_fp32_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1
-        self.kernel_name = f'pf_{dtype.fname}_{frequency_subbands.fstr}_W{W}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
+        self.kernel_name = f'pf_{dtype.fname}_{frequency_subbands.fstr}_W{Wmax}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
         self.kernel_basename = self.kernel_name + '.cu'
 
         # For testing: if a peak-finding kernel is precompiled, we also precompile unit tests
@@ -203,7 +203,7 @@ class PeakFinder:
         k.emit(f'pstate += warp * PW32;                       // shape (B*W, PW32)')    
         k.emit()
 
-        if self.W > 1:
+        if self.Wmax > 1:
             k.emit(f'{dt32} pf_a = {self.dtype.from_float("0.5f")};')
             k.emit()
 
@@ -276,7 +276,7 @@ class PeakFinder:
         k.emit(f'k.subband_counts = {{ {sb_counts} }};')
         k.emit(f'k.Tinner = {self.Tinner};')
         k.emit(f'k.Dout = {self.Dout};')
-        k.emit(f'k.W = {self.W};')
+        k.emit(f'k.Wmax = {self.Wmax};')
         k.emit()
         k.emit('GpuPeakFindingKernel::RegistryValue v;')
         k.emit(f'v.cuda_kernel = {self.kernel_name};')
@@ -525,7 +525,7 @@ class PeakFinder:
             
         
     def pfy_registers_ready(self, k, m):
-        dt32, W, Dcore, Minner = self.dt32, self.W, self.Dcore, self.Minner
+        dt32, Wmax, Dcore, Minner = self.dt32, self.Wmax, self.Dcore, self.Minner
         assert m % Dcore == 0
 
         # Convenient shorthand.
@@ -544,8 +544,8 @@ class PeakFinder:
 
         self.pfz_register_ready(k, m, 0)
 
-        # Loop over w = 1, 2, 4, ..., (W//2).
-        for lgw in range(utils.integer_log2(W)):
+        # Loop over w = 1, 2, 4, ..., (Wmax//2).
+        for lgw in range(utils.integer_log2(Wmax)):
             w = 2**lgw
 
             # tends = "we want to process width-w kernels which end at these times"
@@ -699,9 +699,9 @@ class PeakFinder:
         
         dtype = Dtype(m.group(1))
         frequency_subbands = FrequencySubbands.from_fstr(m.group(2))
-        W, Dcore, Dout, Tinner = int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6))
+        Wmax, Dcore, Dout, Tinner = int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6))
 
-        pf_kernel = cls(dtype, frequency_subbands, W, Dcore, Dout, Tinner)
+        pf_kernel = cls(dtype, frequency_subbands, Wmax, Dcore, Dout, Tinner)
 
         if pf_kernel.kernel_basename != basename:
             raise RuntimeError("PfKernel2.write_kernel(): internal error: expected "

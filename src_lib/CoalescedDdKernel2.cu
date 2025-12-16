@@ -59,7 +59,7 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     this->registry_key.dtype = pf_params.dtype;
     this->registry_key.dd_rank = dd_params.dd_rank;
     this->registry_key.Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
-    this->registry_key.W = pf_params.max_kernel_width;
+    this->registry_key.Wmax = pf_params.max_kernel_width;
     this->registry_key.subband_counts = fs.subband_counts;
 
     long SW = xdiv(32, pf_params.dtype.nbits);      // simd width
@@ -254,7 +254,7 @@ void CoalescedDdKernel2::test()
     PeakFindingKernelParams pf_params;
     pf_params.subband_counts = key.subband_counts;
     pf_params.dtype = dtype;
-    pf_params.max_kernel_width = key.W;
+    pf_params.max_kernel_width = key.Wmax;
     pf_params.beams_per_batch = beams_per_batch;
     pf_params.total_beams = total_beams;
     pf_params.ndm_out = pow2(lg_ndm_out);
@@ -281,7 +281,7 @@ void CoalescedDdKernel2::test()
          << "    pf_rank = " << pf_rank << "\n"
          << "    is_downsampled_tree = " << is_downsampled_tree << "\n"
          << "    subbands = " << ksgpu::tuple_str(key.subband_counts) << "\n"
-         << "    Wmax = " << key.W << "\n"
+         << "    Wmax = " << key.Wmax << "\n"
          << "    Dcore = " << cdd2_kernel.Dcore << "\n"
          << "    Dout = " << key.Dout << "\n"
          << "    Tinner = " << key.Tinner << "\n"
@@ -490,7 +490,7 @@ struct Cdd2Registry : public CoalescedDdKernel2::Registry
         xassert(key.dd_rank > 0);
         xassert(key.Tinner > 0);
         xassert(key.Dout > 0);
-        xassert(key.W > 0);
+        xassert(key.Wmax > 0);
 
         xassert(val.cuda_kernel != nullptr);
         xassert(val.warps_per_threadblock > 0);
@@ -549,7 +549,7 @@ bool operator==(const CoalescedDdKernel2::RegistryKey &k1, const CoalescedDdKern
         && (k1.subband_counts == k2.subband_counts)
         && (k1.Tinner == k2.Tinner)
         && (k1.Dout == k2.Dout)
-        && (k1.W == k2.W);
+        && (k1.Wmax == k2.Wmax);
 }
 
 ostream &operator<<(ostream &os, const CoalescedDdKernel2::RegistryKey &k)
@@ -560,7 +560,7 @@ ostream &operator<<(ostream &os, const CoalescedDdKernel2::RegistryKey &k)
        << ", subbands=" << tuple_str(k.subband_counts)
        << ", Tinner=" << k.Tinner
        << ", Dout=" << k.Dout
-       << ", W=" << k.W
+       << ", Wmax=" << k.Wmax
        << ", F=" << fs.F
        << ", M=" << fs.M
        << ")";

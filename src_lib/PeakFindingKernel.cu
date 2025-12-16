@@ -166,15 +166,15 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
     const PeakFindingKernelParams &p = params;
     long B = p.beams_per_batch;
     long D = p.ndm_out;
-    long W = p.max_kernel_width;
+    long Wmax = p.max_kernel_width;
     long M = fs.M;
 
     this->nbatches = xdiv(p.total_beams, p.beams_per_batch);
     this->nprofiles = 3 * integer_log2(p.max_kernel_width) + 1;
     this->Dout = xdiv(p.nt_in, p.nt_out);
-    this->tpad = max(2*W, 4L);
+    this->tpad = max(2*Wmax, 4L);
     this->pstate = Array<float> ({p.total_beams, p.ndm_out, fs.M, tpad}, af_uhost | af_zero); 
-    this->num_levels = max(integer_log2(W), 1);
+    this->num_levels = max(integer_log2(Wmax), 1);
 
     xassert(Dcore > 0);
     xassert(is_power_of_two(Dcore));
@@ -586,7 +586,7 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     registry_key.dtype = params.dtype;
     registry_key.subband_counts = fs.subband_counts;
     registry_key.Dout = xdiv(params.nt_in, params.nt_out);
-    registry_key.W = params.max_kernel_width;
+    registry_key.Wmax = params.max_kernel_width;
 
     // Recall the definition of Tinner (used for weight layout, see comments in
     // cuda_generator.PeakFinder.py):
@@ -718,7 +718,7 @@ void GpuPeakFindingKernel::test(bool short_circuit)
     PeakFindingKernelParams params_small;
     params_small.subband_counts = key.subband_counts;
     params_small.dtype = key.dtype;
-    params_small.max_kernel_width = key.W;
+    params_small.max_kernel_width = key.Wmax;
     params_small.beams_per_batch = beams_per_batch;
     params_small.total_beams = total_beams;
     params_small.ndm_out = ndm_out;
@@ -731,7 +731,7 @@ void GpuPeakFindingKernel::test(bool short_circuit)
     PeakFindingKernelParams params_large;
     params_large.subband_counts = key.subband_counts;
     params_large.dtype = key.dtype;
-    params_large.max_kernel_width = key.W;
+    params_large.max_kernel_width = key.Wmax;
     params_large.beams_per_batch = total_beams;
     params_large.total_beams = total_beams;
     params_large.ndm_out = ndm_out;
@@ -748,7 +748,7 @@ void GpuPeakFindingKernel::test(bool short_circuit)
     cout << "GpuPeakFindingKernel::test():"
          << " dtype=" << key.dtype.str() 
          << ", subbands=" << ksgpu::tuple_str(key.subband_counts)
-         << ", W=" << key.W
+         << ", Wmax=" << key.Wmax
          << ", Dcore=" << gpu_kernel.Dcore
          << ", Dout=" << key.Dout
          << ", Tinner=" << key.Tinner
@@ -863,7 +863,7 @@ struct GpuPfRegistry : public GpuPeakFindingKernel::Registry
         xassert_ge(key.subband_counts.size(), 1);
         xassert(key.Tinner > 0);
         xassert(key.Dout > 0);
-        xassert(key.W > 0);
+        xassert(key.Wmax > 0);
         
         xassert(val.cuda_kernel != nullptr);
         xassert(val.Dcore > 0);
@@ -899,7 +899,7 @@ bool operator==(const GpuPeakFindingKernel::RegistryKey &k1, const GpuPeakFindin
         && (k1.subband_counts == k2.subband_counts)
         && (k1.Tinner == k2.Tinner)
         && (k1.Dout == k2.Dout)
-        && (k1.W == k2.W);
+        && (k1.Wmax == k2.Wmax);
 }
 
 ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
@@ -911,7 +911,7 @@ ostream &operator<<(ostream &os, const GpuPeakFindingKernel::RegistryKey &k)
        << ", subband_counts=" << ksgpu::tuple_str(k.subband_counts)
        << ", Tinner=" << k.Tinner
        << ", Dout=" << k.Dout
-       << ", W=" << k.W
+       << ", Wmax=" << k.Wmax
        << ", F=" << fs.F
        << ", M=" << fs.M
        << ")";

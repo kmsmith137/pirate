@@ -493,7 +493,7 @@ def random_kernels(args):
     randi = lambda *a: int(numpy.random.randint(*a))
 
     if args.pf:
-        print('# (dtype, subband_counts, W, Dcore, Dout, Tinner)')
+        print('# (dtype, subband_counts, Wmax, Dcore, Dout, Tinner)')
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
@@ -510,9 +510,9 @@ def random_kernels(args):
                 if 1 <= n <= 2:
                     Dout *= 2
             
-            W = 2**randi(5)
+            Wmax = 2**randi(5)
             subband_counts = FrequencySubbands.make_random_subband_counts()
-            print(f"('fp{nbits}', {subband_counts}, {W}, {Dcore}, {Dout}, {Tinner})")
+            print(f"('fp{nbits}', {subband_counts}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
         print('# (dtype, dd_rank, subband_counts, Wmax, Dcore, Dout, Tinner)')
