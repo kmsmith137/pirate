@@ -49,7 +49,8 @@ struct CoalescedDdKernel2
     // Static member function: runs one randomized test iteration.
     static void test();
 
-    // Static member function: run timing for representative kernels.
+    // Static member functions: run timing for representative kernels.
+    static void time_one(const std::vector<long> &subband_counts, const std::string &name);
     static void time();
 
 

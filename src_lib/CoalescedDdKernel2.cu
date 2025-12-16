@@ -1,4 +1,6 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
+#include "../include/pirate/DedispersionConfig.hpp"  // used in CoalescedDdKernel2::time()
+#include "../include/pirate/DedispersionPlan.hpp"    // used in CoalescedDdKernel2::time()
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
@@ -7,8 +9,10 @@
 #include <sstream>
 #include <iomanip>
 #include <unordered_map>
+
 #include <ksgpu/Array.hpp>
 #include <ksgpu/cuda_utils.hpp>
+#include <ksgpu/KernelTimer.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -348,9 +352,101 @@ void CoalescedDdKernel2::test()
 }
 
 
+// Static member function
+void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const string &name)
+{
+    for (Dtype dtype : {Dtype::native<float>(), Dtype::native<__half>()}) {
+        long pf_rank = subband_counts.size() - 1;
+        long Dout = pow2(pf_rank);    // downsampling factor for pf output array
+        long Dwt = 64;                // downsampling factor for pf weights array
+
+        DedispersionConfig config;
+        config.dtype = dtype;
+        config.tree_rank = 16;
+        config.num_downsampling_levels = 1;
+        config.time_samples_per_chunk = 2048;
+        config.beams_per_gpu = 4;
+        config.beams_per_batch = 2;
+        config.num_active_batches = 2;
+        config.gpu_clag_maxfrac = 1.0;
+        config.validate();
+
+        PeakFindingKernelParams pf_params;
+        pf_params.dtype = dtype;
+        pf_params.subband_counts = subband_counts;
+        pf_params.max_kernel_width = 16;
+        pf_params.beams_per_batch = config.beams_per_batch;
+        pf_params.total_beams = config.beams_per_gpu;
+        pf_params.ndm_out = pow2(config.tree_rank - pf_rank);
+        pf_params.ndm_wt = xdiv(pow2(config.tree_rank), Dwt);
+        pf_params.nt_out = xdiv(config.time_samples_per_chunk, Dout);
+        pf_params.nt_wt = xdiv(config.time_samples_per_chunk, Dwt);
+        pf_params.nt_in = config.time_samples_per_chunk;
+        pf_params.validate();
+
+        shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
+        xassert(plan->stage2_ntrees == 1);
+
+        const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(0);
+        shared_ptr<CoalescedDdKernel2> cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);        
+        cdd2_kernel->allocate();
+
+        long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
+        long nstreams = config.num_active_batches;
+        long niterations = 100;
+
+        long S = nstreams;
+        long B = config.beams_per_batch;
+        long ndm_out = pow2(config.tree_rank - pf_rank);
+        long nt_out = xdiv(config.time_samples_per_chunk, Dout);
+        long rb_nelts = plan->mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment;
+
+        vector<long> wt_shape = cdd2_kernel->pf_weight_layout.get_shape(B, pf_params.ndm_wt, pf_params.nt_wt);
+        vector<long> wt_strides = cdd2_kernel->pf_weight_layout.get_strides(B, pf_params.ndm_wt, pf_params.nt_wt);
+
+        // Prepend number of streams to 'wt_shape' and 'wt_stride'.
+        wt_shape.insert(wt_shape.begin(), S);
+        wt_strides.insert(wt_strides.begin(), wt_shape[1] * wt_strides[0]);
+
+        Array<void> in_gpu(dtype, {S,rb_nelts}, af_gpu | af_zero);
+        Array<void> wt_gpu(dtype, wt_shape, wt_strides, af_gpu | af_zero);
+        Array<void> max_gpu(dtype, {S,B,ndm_out,nt_out}, af_gpu | af_zero);
+        Array<uint> argmax_gpu({S,B,ndm_out,nt_out}, af_gpu | af_zero);
+
+        KernelTimer kt(niterations, nstreams);
+
+        while (kt.next()) {
+            Array<void> max_gpu_slice = max_gpu.slice(0, kt.istream);
+            Array<uint> argmax_gpu_slice = argmax_gpu.slice(0, kt.istream);
+            Array<void> in_gpu_slice = in_gpu.slice(0, kt.istream);
+            Array<void> wt_gpu_slice = wt_gpu.slice(0, kt.istream);
+            long ichunk = kt.curr_iteration / nbatches;
+            long ibatch = kt.curr_iteration % nbatches;
+
+            cdd2_kernel->launch(
+                max_gpu_slice,
+                argmax_gpu_slice, 
+                in_gpu_slice, 
+                wt_gpu_slice,
+                ibatch, 
+                ichunk, 
+                kt.stream);
+
+            if (kt.warmed_up)
+                cout << "cdd2 " << name << " " << kt.dt << endl;
+        }
+    }
+}
+
+// Static member function
 void CoalescedDdKernel2::time()
 {
-    cout << "CoalescedDdKernel2::time() placeholder" << endl;
+    // From makefile_helper.py
+    time_one({0,0,0,0,1}, "no subbands");
+    time_one({0,0,1,2,1}, "chime-thresh0.3");
+    time_one({0,5,7,3,1}, "chime-thresh0.1");
+    time_one({1,2,2,2,1}, "chord-thresh0.4");
+    time_one({5,9,7,3,1}, "chord-thresh0.1");
 }
 
 
