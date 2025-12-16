@@ -73,14 +73,18 @@ ReferenceTree::ReferenceTree(const Params &params_) :
 
     for (long pf_level = 1; pf_level <= fs.pf_rank; pf_level++) {
         long nf_in = pow2(fs.pf_rank - pf_level + 1);
-        long ndm_in = pow2(params.dd_rank - fs.pf_rank + pf_level - 1);
+        long pf_ndm = pow2(params.dd_rank - fs.pf_rank);
+        long pf_nd2 = pow2(pf_level - 1);
 
         for (long pfs = 0; pfs < fs.subband_counts.at(pf_level); pfs++) {
-            for (long dm_in = 0; dm_in < ndm_in; dm_in++) {
-                long dd_lag = dm_in;
-                long extra_lag = (nf_in-pfs-2) * dm_in;
-                pstate_nelts += B * A * (dd_lag+1) * S;
-                pstate_nelts += B * A * (2*extra_lag) * S;
+            for (long pf_dm = 0; pf_dm < pf_ndm; pf_dm++) {
+                for (long d2 = 0; d2 < pf_nd2; d2++) {
+                    long dm_in = (pf_dm * pf_nd2) + d2;
+                    long dd_lag = dm_in;
+                    long extra_lag = (nf_in-pfs-2) * pow2(pf_level-1) * pf_dm;
+                    pstate_nelts += B * A * (dd_lag+1) * S;
+                    pstate_nelts += B * A * (2*extra_lag) * S;
+                }
             }
         }
     }
@@ -297,7 +301,7 @@ float *ReferenceTree::dedisperse_2d(
                         long dd_lag = dm_in;
                         ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, dd_lag);
 
-                        long extra_lag = (nf_in-pfs-2) * dm_in;
+                        long extra_lag = (nf_in-pfs-2) * pow2(pf_level-1) * pf_dm;
                         ps = lag_1d(dst, dst, ps, extra_lag);
                         ps = lag_1d(dst + dst_stride, dst + dst_stride, ps, extra_lag);
                     }
