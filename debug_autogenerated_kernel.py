@@ -173,9 +173,12 @@ def main():
     
     # Handle existing debug.cu
     if os.path.exists(output_path):
-        backup_path = get_backup_filename(dirname)
-        print(f"Existing debug.cu found, renaming to {os.path.basename(backup_path)}")
-        os.rename(output_path, backup_path)
+        if os.path.getsize(output_path) > 0:
+            backup_path = get_backup_filename(dirname)
+            print(f"Existing debug.cu found, renaming to {os.path.basename(backup_path)}")
+            os.rename(output_path, backup_path)
+        else:
+            print("Existing debug.cu is empty, overwriting...")
     
     # Write output file
     print(f"Writing {output_path}...")
