@@ -68,24 +68,21 @@ ReferenceTree::ReferenceTree(const Params &params_) :
         }
     }
 
-    // Peak-finding contribution to pstate_nelts.
-    //
-    // At each 1 <= level <= pf_rank, define r = (dd_rank - pf_rank + level - 1).
-    // Each output array element is the sum of 2^{r+1} frequency channels, and the last
-    // step is a (2^r x 2^r) -> 2^{r+1} call to dedisperse_1d(). The contribution to
-    // pstate_nelts is:
-    //
-    //   B * A * subband_counts[level] * N
-    //
-    // where N = sum_{0 <= l < 2^r} (l+1)
-    //         = (2^r (2^r+1)) / 2
+    // Contribution to pstate_nelts from peak-finding at pf_level >= 1.
+    // Written in a brain-dead way which "mirrors" ReferenceTree::dedisperse_2d().
 
-    for (long level = 1; level <= fs.pf_rank; level++) {
-        // This way of writing N makes sense for r=0 (i.e. level=1).
-        long r = params.dd_rank - fs.pf_rank + level - 1;
-        long N = (pow2(r) * (pow2(r)+1)) >> 1;
-        long pf_ns = fs.subband_counts.at(level);
-        pstate_nelts += B * A * pf_ns * N * S;
+    for (long pf_level = 1; pf_level <= fs.pf_rank; pf_level++) {
+        long nf_in = pow2(fs.pf_rank - pf_level + 1);
+        long ndm_in = pow2(params.dd_rank - fs.pf_rank + pf_level - 1);
+
+        for (long pfs = 0; pfs < fs.subband_counts.at(pf_level); pfs++) {
+            for (long dm_in = 0; dm_in < ndm_in; dm_in++) {
+                long dd_lag = dm_in;
+                long extra_lag = (nf_in-pfs-2) * dm_in;
+                pstate_nelts += B * A * (dd_lag+1) * S;
+                pstate_nelts += B * A * (2*extra_lag) * S;
+            }
+        }
     }
 
     this->pstate = Array<float> ({pstate_nelts}, af_uhost | af_zero);
@@ -256,7 +253,7 @@ float *ReferenceTree::dedisperse_2d(
             //
             // are related by dedisperse_1d() with:
             // 
-            //   lag = (pf_dm * pf_nd2) + d2
+            //   dedispersion lag = (pf_dm * pf_nd2) + d2
             //
             // Note that the input array is indexed with a bit_reverse()!
 
@@ -266,6 +263,7 @@ float *ReferenceTree::dedisperse_2d(
             // Some checks on the above picture.
             xassert((pf_ns >= 0) && (pf_ns <= pow2(pf_rank-pf_level+1)-1));
             xassert_eq(nf_in, pow2(pf_rank - pf_level + 1));
+            xassert_eq(ndm_in, pow2(dd_rank - pf_rank + pf_level - 1));
             xassert_eq(ndm_in, pf_ndm * pf_nd2);
 
             // Consistency check on m-indices.
@@ -296,7 +294,12 @@ float *ReferenceTree::dedisperse_2d(
                         float *dst = outp + (pf_dm * out_dstride) + (m * out_mstride);
                         long dst_stride = out_mstride;
 
-                        ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, dm_in);  // lag = dm_in
+                        long dd_lag = dm_in;
+                        ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, dd_lag);
+
+                        long extra_lag = (nf_in-pfs-2) * dm_in;
+                        ps = lag_1d(dst, dst, ps, extra_lag);
+                        ps = lag_1d(dst + dst_stride, dst + dst_stride, ps, extra_lag);
                     }
                 }
             }
