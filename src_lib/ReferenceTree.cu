@@ -1,4 +1,5 @@
 #include "../include/pirate/ReferenceTree.hpp"
+#include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2(), bit_reverse_slow()
 #include "../include/pirate/utils.hpp"    // check_rank(), dedispersion_delay(), dedisperse_non_incremental()
@@ -522,19 +523,24 @@ void ReferenceTree::test_subbands()
     long amb_rank = long(log2(v[4]) + 0.5);
     long dd_rank = fs.pf_rank + long(log2(v[5]) + 0.5);
 
-    long F = fs.F;
-    long M = fs.M;
-    long A = pow2(amb_rank);
-    long Din = pow2(dd_rank);
-    long Dpf = pow2(amb_rank + dd_rank - fs.pf_rank);
-    long pf_rank = fs.pf_rank;
-
     // Strides for shape (B,A,Din,T*S) dd array, and shape (B,Dpf,M,T*S) output array.
     // Reminder: make_random_strides() is defined in ksgpu/test_utils.hpp.
-    vector<long> dd_strides = ksgpu::make_random_strides({B,A,Din,T*S}, 1);   // ncontig=1
-    vector<long> out_strides = ksgpu::make_random_strides({B,Dpf,M,T*S}, 1);  // ncontig=1
+    vector<long> dd_strides = ksgpu::make_random_strides({B, pow2(amb_rank), pow2(dd_rank), T*S}, 1);             // ncontig=1
+    vector<long> out_strides = ksgpu::make_random_strides({B, pow2(amb_rank+dd_rank-fs.pf_rank), fs.M, T*S}, 1);  // ncontig=1
 
-    cout << "ReferenceTree::test():"
+    // To simplify the test, uncomment one or more of the following lines.
+    //
+    // nchunks = 1;
+    // B = 1;
+    // amb_rank = 0;
+    // dd_rank = 3;
+    // T = 4;
+    // S = 1;
+    // fs = FrequencySubbands({1,1});
+    // dd_strides = ksgpu::make_contiguous_strides({B, pow2(amb_rank), pow2(dd_rank), T*S});
+    // out_strides = ksgpu::make_contiguous_strides({B, pow2(amb_rank+dd_rank-fs.pf_rank), fs.M, T*S});
+
+    cout << "ReferenceTree::test_subbands():"
          << " nchunks=" << nchunks
          << ", num_beams=" << B
          << ", amb_rank=" << amb_rank
@@ -542,10 +548,18 @@ void ReferenceTree::test_subbands()
          << ", ntime=" << T
          << ", nspec=" << S
          << ", subband_counts=" << ksgpu::tuple_str(fs.subband_counts)
+         << ", M=" << fs.M
          << ", dd_strides=" << ksgpu::tuple_str(dd_strides)
          << ", out_strides=" << ksgpu::tuple_str(out_strides)
          << endl;
-    
+
+    long F = fs.F;
+    long M = fs.M;
+    long A = pow2(amb_rank);
+    long Din = pow2(dd_rank);
+    long Dpf = pow2(amb_rank + dd_rank - fs.pf_rank);
+    long pf_rank = fs.pf_rank;    
+
     Params params;
     params.num_beams = B;
     params.amb_rank = amb_rank;
@@ -555,15 +569,15 @@ void ReferenceTree::test_subbands()
     params.subband_counts = fs.subband_counts;
 
     ReferenceTree tree_with_subbands(params);
-
     std::vector<std::shared_ptr<ReferenceTree>> subtrees(F);
+    std::shared_ptr<ReferenceLagbuf> subtree_lagbuf;
 
     // Initialize subtrees.
     for (long f = 0; f < F; f++) {
-        long ilo = fs.f_to_ilo.at(f) << (dd_rank - pf_rank);
-        long ihi = fs.f_to_ihi.at(f) << (dd_rank - pf_rank);
+        long ilo = fs.f_to_ilo.at(f);
+        long ihi = fs.f_to_ihi.at(f);
 
-        long subtree_size = ihi - ilo;
+        long subtree_size = (ihi - ilo) << (dd_rank - pf_rank);
         long subtree_rank = integer_log2(subtree_size);
        
         Params subtree_params;
@@ -580,6 +594,21 @@ void ReferenceTree::test_subbands()
 
         subtrees[f] = make_shared<ReferenceTree> (subtree_params);
     }
+
+    // Initialize subtree_lagbuf.
+
+    Array<int> subtree_lags({B,Dpf,M}, af_uhost | af_zero);
+    for (long b = 0; b < B; b++) {
+        for (long dpf = 0; dpf < Dpf; dpf++) {
+            for (long m = 0; m < M; m++) {
+                long ff = pow2(pf_rank) - fs.m_to_ihi(m);
+                long dd = dpf & (pow2(dd_rank-pf_rank) - 1);
+                subtree_lags.at({b,dpf,m}) = ff * dd * S;
+            }
+        }
+    }
+
+    subtree_lagbuf = make_shared<ReferenceLagbuf> (subtree_lags, T*S);    
 
     // FIXME should test strides! ('buf' and 'out' only)
     Array<float> in({B,A,Din,T*S}, af_uhost | af_zero);
@@ -634,13 +663,15 @@ void ReferenceTree::test_subbands()
                     dd_slice = dd_slice.slice(1, d);
 
                     // out_slice: shape (B, Dpf, M, T) -> (B, T*S)
-                    Array<float> out_slice = out2.slice(1, dpf);  // note 'out2' on rhs (not 'out')
-                    out_slice = out_slice.slice(1, m);
+                    Array<float> out2_slice = out2.slice(1, dpf); 
+                    out2_slice = out2_slice.slice(1, m);
 
-                    out_slice.fill(dd_slice);
+                    out2_slice.fill(dd_slice);
                 }
             }
         }
+
+        subtree_lagbuf->apply_lags(out2);
 
         // Check that full band is last, so that we can directly compare 'buf' and 'buf2'.
         xassert(fs.f_to_ilo.at(F-1) == 0);

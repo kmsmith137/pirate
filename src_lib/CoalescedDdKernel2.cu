@@ -323,6 +323,7 @@ void CoalescedDdKernel2::test()
 
             // Uncomment to use one-hot weights.
             // wt_cpu = Array<float> ({B, pf_params.ndm_wt, pf_params.nt_wt, ref_pf_kernel.nprofiles, fs.F}, af_rhost | af_zero);
+            // cout << "Debug: wt.shape = " << wt_cpu.shape_str() << endl;
             // wt_cpu.at({0,0,0,0,0}) = 1.0f;
 
             ref_pf_kernel.apply(max_cpu, argmax_cpu, sb_cpu, wt_cpu, ibatch);

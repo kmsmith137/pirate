@@ -108,6 +108,13 @@ static float *_apply_lags(float *data, const int *lags, float *rstate, float *sc
 
 void ReferenceLagbuf::apply_lags(ksgpu::Array<float> &arr) const
 {
+    if (!arr.shape_equals(expected_shape)) {
+        stringstream ss;
+        ss << "ReferenceLagbuf::apply_lags(): arr.shape=" << arr.shape_str()
+           << ", expected_shape=" << ksgpu::tuple_str(expected_shape);
+        throw runtime_error(ss.str());
+    }
+
     xassert(arr.shape_equals(expected_shape));
     xassert((arr.shape[arr.ndim-1] == 1) || (arr.strides[arr.ndim-1] == 1));
     
