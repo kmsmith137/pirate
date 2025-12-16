@@ -29,7 +29,7 @@ public:
     static void test();
 
 protected:
-    ksgpu::Array<float> rstate;
+    ksgpu::Array<float> pstate;
     ksgpu::Array<float> scratch;
 };
 
