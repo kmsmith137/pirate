@@ -160,16 +160,16 @@ class Dedisperser:
     def _grb_ix(self, k, i, dshift):
         """Helper, called by _load_input_data() and _save_output_data()."""
         
-        q, giant_segment_offset, frame_offset_within_zone, frames_in_zone, segments_per_frame, ix = k.get_tmp_rname(6)
+        q, global_segment_offset, frame_offset_within_zone, frames_in_zone, segments_per_frame, ix = k.get_tmp_rname(6)
                 
         k.emit(f'uint4 {q} = grb_loc[{i} << {dshift}];')
-        k.emit(f'uint {giant_segment_offset} = {q}.x;  // giant_segment_offset, in segments not bytes')
+        k.emit(f'uint {global_segment_offset} = {q}.x;  // global_segment_offset, in segments not bytes')
         k.emit(f'uint {frame_offset_within_zone} = {q}.y;   // frame_offset_within_zone: index of (time chunk, beam) pair, relative to current pair')
         k.emit(f'uint {frames_in_zone} = {q}.z;     // frames_in_zone: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)')
         k.emit(f'uint {segments_per_frame} = {q}.w;    // segments_per_frame: number of segments per (time chunk, beam)')
         k.emit(f'{frame_offset_within_zone} = (grb_pos + {frame_offset_within_zone}) % {frames_in_zone};   // updated frame_offset_within_zone')
-        k.emit(f'{giant_segment_offset} += ({frame_offset_within_zone} * {segments_per_frame});      // updated giant_segment_offset')
-        k.emit(f'long {ix} = (long({giant_segment_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
+        k.emit(f'{global_segment_offset} += ({frame_offset_within_zone} * {segments_per_frame});      // updated global_segment_offset')
+        k.emit(f'long {ix} = (long({global_segment_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
         return ix
     
     

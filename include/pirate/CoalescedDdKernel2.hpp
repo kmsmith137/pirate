@@ -35,7 +35,7 @@ struct CoalescedDdKernel2
     void launch(
         ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
         ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-        const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec,)
+        const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec,)
         const ksgpu::Array<void> &wt,     // see comment above
         long ibatch,                      // 0 <= ibatch < nbatches
         long it_chunk,                    // time-chunk index 0, 1, ...

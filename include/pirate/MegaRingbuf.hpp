@@ -103,7 +103,7 @@ namespace pirate {
 //   - "Quadruples". In GPU kernels, ring buffer views (either producer or consumer)
 //      are represented as quadruples:
 //
-//        uint giant_segment_offset;       // segment count
+//        uint global_segment_offset;       // segment count
 //        uint frame_offset_within_zone;   // frame count
 //        uint frames_in_zone;             // frame count
 //        uint segments_per_frame;         // segment count
@@ -113,18 +113,18 @@ namespace pirate {
 //
 //        // Setup
 //        uint quadruple[4];        // see above
-//        char *giant_base = ...;   // "giant" buffer (i.e. all zones) on either CPU or GPU
+//        char *global_base = ...;   // "global" buffer (i.e. all zones) on either CPU or GPU
 //        long frame0 = ...;        // context-dependent frame index
 //        long b = ...;             // context-dependent beam index (just gets added to frame0)
 //
-//        uint giant_segment_offset = quadruple[0];
+//        uint global_segment_offset = quadruple[0];
 //        uint frame_offset_within_zone = quadruple[1];
 //        uint frames_in_zone = quadruple[2];
 //        uint segments_per_frame = quadruple[3];
 //
 //         uint frame = (frame0 + frame_offset_within_zone + b) % frames_in_zone;
-//         long seg = giant_segment_offset + (frame * segments_per_frame);
-//         char *p = giant_base + (128 * seg);   // 128 bytes per segmnet
+//         long seg = global_segment_offset + (frame * segments_per_frame);
+//         char *p = global_base + (128 * seg);   // 128 bytes per segmnet
 //
 //      The point of the quadruple is that it allows segment addresses to be computed
 //      on a single GPU thread, which stores only the uint quadruple[4].
@@ -198,12 +198,12 @@ struct MegaRingbuf {
     ksgpu::Array<uint> g2g_octuples;   // shape (segments_to_copy, 8)
     ksgpu::Array<uint> h2h_octuples;   // shape (segments_to_copy, 8)
 
-    // Size of "giant" ring buffers on CPU and GPU, in "segments" not bytes.
+    // Size of "global" ring buffers on CPU and GPU, in "segments" not bytes.
     // (Usually, a segment is 128 bytes, but there are some testing contexts
     // where this isn't true, and it's more accurate to use segments here.)
     
-    long host_giant_nseg = 0;
-    long gpu_giant_nseg = 0;
+    long host_global_nseg = 0;
+    long gpu_global_nseg = 0;
 
     // Make a random "simplified" (pure-gpu) MegaRingbuf, intended for standalone
     // testing of dedispersion kernels. See MegaRingbuf.cu for more info.
@@ -239,7 +239,7 @@ struct MegaRingbuf {
     {
         long num_frames = 0;
         long segments_per_frame = 0;
-        long giant_segment_offset = -1;
+        long global_segment_offset = -1;
     };
 
     // All vector<Zone> objects have length (max_clag + 1).

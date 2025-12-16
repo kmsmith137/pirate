@@ -46,8 +46,8 @@ struct GpuDedisperser
     long beams_per_batch = 0;     // = (config.beams_per_batch)
     long nstreams = 0;            // = (config.num_active_batches)
     long nbatches = 0;            // = (total_beams / beams_per_batch)
-    long gpu_ringbuf_nelts = 0;   // = (mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment)
-    long host_ringbuf_nelts = 0;  // = (mega_ringbuf->host_giant_nseg * plan->nelts_per_segment)
+    long gpu_ringbuf_nelts = 0;   // = (mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment)
+    long host_ringbuf_nelts = 0;  // = (mega_ringbuf->host_global_nseg * plan->nelts_per_segment)
 
     long output_ntrees = 0;
     std::vector<long> output_rank;      // length output_ntrees

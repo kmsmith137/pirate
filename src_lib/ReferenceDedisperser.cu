@@ -421,8 +421,8 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     DedispersionBuffer stage1_dd_buf;
     DedispersionBuffer stage2_dd_buf;
 
-    long gpu_ringbuf_nelts = 0;    // = (mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment)
-    long host_ringbuf_nelts = 0;   // = (mega_ringbuf->host_giant_nseg * plan->nelts_per_segment)
+    long gpu_ringbuf_nelts = 0;    // = (mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment)
+    long host_ringbuf_nelts = 0;   // = (mega_ringbuf->host_global_nseg * plan->nelts_per_segment)
     
     Array<float> gpu_ringbuf;
     Array<float> host_ringbuf;
@@ -443,8 +443,8 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
 
-    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment;
-    this->host_ringbuf_nelts = plan->mega_ringbuf->host_giant_nseg * plan->nelts_per_segment;
+    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
+    this->host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
     
     this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero);
     this->host_ringbuf = Array<float>({ host_ringbuf_nelts }, af_uhost | af_zero);
@@ -503,8 +503,8 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
     xassert(etg_zone.num_frames == BA);
 
     long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
-    float *et_src = this->host_ringbuf.data + (eth_zone.giant_segment_offset + et_off) * S;
-    float *et_dst = this->gpu_ringbuf.data + (etg_zone.giant_segment_offset + et_off) * S;
+    float *et_src = this->host_ringbuf.data + (eth_zone.global_segment_offset + et_off) * S;
+    float *et_dst = this->gpu_ringbuf.data + (etg_zone.global_segment_offset + et_off) * S;
     long et_nbytes = BB * eth_zone.segments_per_frame * S * sizeof(float);
     
     this->g2g_copy_kernel->apply(this->gpu_ringbuf, ibatch, it_chunk);     // gpu -> xfer
@@ -531,8 +531,8 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
         if (host_zone.segments_per_frame == 0)
             continue;
         
-        float *hp = this->host_ringbuf.data + (host_zone.giant_segment_offset * S);
-        float *xp = this->gpu_ringbuf.data + (xfer_zone.giant_segment_offset * S);
+        float *hp = this->host_ringbuf.data + (host_zone.global_segment_offset * S);
+        float *xp = this->gpu_ringbuf.data + (xfer_zone.global_segment_offset * S);
         
         long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
         long hdst = (iframe) % host_zone.num_frames;       // host dst phase

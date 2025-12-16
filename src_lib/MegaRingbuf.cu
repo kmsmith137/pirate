@@ -69,7 +69,7 @@ void MegaRingbuf::finalize(bool delete_internals)
     //  - Number of zones is determined
     //  - Zone::num_frames is initialized
     //  - Zone::segments_per_frame is not initialized
-    //  - Zone::giant_segment_offset is not initialized
+    //  - Zone::global_segment_offset is not initialized
     
     const int BT = params.total_beams;
     const int BA = params.active_beams;
@@ -92,7 +92,7 @@ void MegaRingbuf::finalize(bool delete_internals)
     //   - Initialize all "triples" (producer_triples, consumer_triples,
     //     g2g_triples, h2h_triples).
     //
-    //   - Initialize Zone::segments_per_beam (but not Zone::giant_segment_offset).
+    //   - Initialize Zone::segments_per_beam (but not Zone::global_segment_offset).
 
     this->producer_triples.resize(num_producers);
     this->consumer_triples.resize(num_consumers);
@@ -284,14 +284,14 @@ void MegaRingbuf::_lay_out_zones(std::vector<Zone> &zones, bool on_gpu)
 
 void MegaRingbuf::_lay_out_zone(Zone &z, bool on_gpu)
 {
-    xassert(z.giant_segment_offset < 0);
+    xassert(z.global_segment_offset < 0);
 
     if (on_gpu) {
-        z.giant_segment_offset = gpu_giant_nseg;
-        gpu_giant_nseg += z.num_frames * z.segments_per_frame;
+        z.global_segment_offset = gpu_global_nseg;
+        gpu_global_nseg += z.num_frames * z.segments_per_frame;
     } else {
-        z.giant_segment_offset = host_giant_nseg;
-        host_giant_nseg += z.num_frames * z.segments_per_frame;
+        z.global_segment_offset = host_global_nseg;
+        host_global_nseg += z.num_frames * z.segments_per_frame;
     }
 }
 
@@ -312,16 +312,16 @@ ksgpu::Array<uint> MegaRingbuf::_triples_to_quadruples(const std::vector<Triple>
         const Triple &t = triples.at(i);
 
         xassert(t.zone != nullptr);
-        xassert(t.zone->giant_segment_offset >= 0);
+        xassert(t.zone->global_segment_offset >= 0);
         xassert(t.frame_lag < t.zone->num_frames);
         xassert(t.segment_within_frame < t.zone->segments_per_frame);
 
-        uint giant_segment_offset = to_uint(t.zone->giant_segment_offset + t.segment_within_frame);
+        uint global_segment_offset = to_uint(t.zone->global_segment_offset + t.segment_within_frame);
         uint frame_offset_within_zone = to_uint(xmod(t.zone->num_frames - t.frame_lag, t.zone->num_frames));
         uint frames_in_zone = to_uint(t.zone->num_frames);
         uint segments_per_frame = to_uint(t.zone->segments_per_frame);
 
-        ret.data[4*i] = giant_segment_offset;
+        ret.data[4*i] = global_segment_offset;
         ret.data[4*i+1] = frame_offset_within_zone;
         ret.data[4*i+2] = frames_in_zone;
         ret.data[4*i+3] = segments_per_frame;

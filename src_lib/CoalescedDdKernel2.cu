@@ -120,7 +120,7 @@ void CoalescedDdKernel2::allocate()
 void CoalescedDdKernel2::launch(
     ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
-    const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec,)
+    const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec,)
     const ksgpu::Array<void> &wt,     // from GpuPfWeightLayout::to_gpu()
     long ibatch,                      // 0 <= ibatch < nbatches
     long it_chunk,                    // time-chunk index 0, 1, ...
@@ -134,9 +134,9 @@ void CoalescedDdKernel2::launch(
     xassert(in.dtype == dtype);
     xassert(wt.dtype == dtype);
 
-    // Validate 'in' array: shape (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec,)
-    long giant_nseg = dd_params.mega_ringbuf->gpu_giant_nseg;
-    xassert_shape_eq(in, ({ giant_nseg * dd_params.nt_per_segment * dd_params.nspec }));
+    // Validate 'in' array: shape (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec,)
+    long global_nseg = dd_params.mega_ringbuf->gpu_global_nseg;
+    xassert_shape_eq(in, ({ global_nseg * dd_params.nt_per_segment * dd_params.nspec }));
 
     // Validate 'out' and 'out_argmax' arrays: shape (beams_per_batch, ndm_out, nt_out)
     xassert_shape_eq(out_max, ({ pf_params.beams_per_batch, pf_params.ndm_out, pf_params.nt_out }));
@@ -298,7 +298,7 @@ void CoalescedDdKernel2::test()
          << "    nchunks = " << nchunks << "\n" 
          << endl;
 
-    long rb_nseg = dd_params.mega_ringbuf->gpu_giant_nseg;
+    long rb_nseg = dd_params.mega_ringbuf->gpu_global_nseg;
     long rb_nelts = rb_nseg * dd_params.nt_per_segment;
     Array<float> in_cpu({rb_nelts}, af_rhost);
 
@@ -413,7 +413,7 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
         long B = config.beams_per_batch;
         long ndm_out = pow2(config.tree_rank - pf_rank);
         long nt_out = xdiv(config.time_samples_per_chunk, Dout);
-        long rb_nelts = plan->mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment;
+        long rb_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
 
         vector<long> wt_shape = cdd2_kernel->pf_weight_layout.get_shape(B, pf_params.ndm_wt, pf_params.nt_wt);
         vector<long> wt_strides = cdd2_kernel->pf_weight_layout.get_strides(B, pf_params.ndm_wt, pf_params.nt_wt);

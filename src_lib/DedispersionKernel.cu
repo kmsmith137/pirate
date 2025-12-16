@@ -100,7 +100,7 @@ void DedispersionKernelParams::print(const char *prefix) const
 //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
 //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
 //
-//   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+//   Ring: 1-d array of length (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec).
 
 
 struct DedispersionKernelIobuf
@@ -142,9 +142,9 @@ DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams 
     // (Check on act_stride is nontrivial, since it gets multiplied by a small integer in the kernel.)
     
     if (is_ringbuf) {
-        // Case 1: ringbuf, 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+        // Case 1: ringbuf, 1-d array of length (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec).
         xassert(params.mega_ringbuf);
-        xassert_shape_eq(arr, ({ params.mega_ringbuf->gpu_giant_nseg * params.nt_per_segment * params.nspec }));
+        xassert_shape_eq(arr, ({ params.mega_ringbuf->gpu_global_nseg * params.nt_per_segment * params.nspec }));
         xassert(arr.get_ncontig() == 1);  // fully contiguous
         return;
     }
@@ -379,7 +379,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
     long N = pow2(params.dd_rank);
     long T = params.ntime;
     long S = params.nspec;
-    long R = params.mega_ringbuf->gpu_giant_nseg;
+    long R = params.mega_ringbuf->gpu_global_nseg;
     long RS = params.nt_per_segment * params.nspec;
     long ns = xdiv(T, params.nt_per_segment);
 
@@ -409,14 +409,14 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
                 long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
                 const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*RS;  // address in dedispersion buf (at beam 0)
 
-                uint giant_segment_offset = qp[4*iseg];         // in segments, not bytes
+                uint global_segment_offset = qp[4*iseg];         // in segments, not bytes
                 uint frame_offset_within_zone = qp[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
                 uint frames_in_zone = qp[4*iseg+2];             // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
                 uint segments_per_frame = qp[4*iseg+3];         // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
                 
                 for (long b = 0; b < B; b++) {
                     uint i = (rb_pos + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
-                    long s = giant_segment_offset + (i * segments_per_frame);         // segment offset, relative to (float *ringbuf)
+                    long s = global_segment_offset + (i * segments_per_frame);         // segment offset, relative to (float *ringbuf)
                     memcpy(ringbuf + s*RS, dd0 + b*dd_bstride, RS * sizeof(float));
                 }
             }
@@ -436,7 +436,7 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
     long N = pow2(params.dd_rank);
     long T = params.ntime;
     long S = params.nspec;
-    long R = params.mega_ringbuf->gpu_giant_nseg;
+    long R = params.mega_ringbuf->gpu_global_nseg;
     long RS = params.nt_per_segment * params.nspec;
     long ns = xdiv(T, params.nt_per_segment);
 
@@ -467,14 +467,14 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
                 long iseg = s*A*N + a*N + n;         // index in rb_loc array (same for all beams)
                 float *dd0 = dd + n*dd_nstride + a*dd_astride + s*RS; // address in dedispersion buf (at beam 0)
                 
-                uint giant_segment_offset = qp[4*iseg];         // in segments, not bytes
+                uint global_segment_offset = qp[4*iseg];         // in segments, not bytes
                 uint frame_offset_within_zone = qp[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
                 uint frames_in_zone = qp[4*iseg+2];             // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
                 uint segments_per_frame = qp[4*iseg+3];         // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
                 
                 for (long b = 0; b < B; b++) {
                     uint i = (rb_pos + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
-                    long s = giant_segment_offset + (i * segments_per_frame);         // segment offset, relative to (float *ringbuf)
+                    long s = global_segment_offset + (i * segments_per_frame);         // segment offset, relative to (float *ringbuf)
                     memcpy(dd0 + b*dd_bstride, ringbuf + s*RS, RS * sizeof(float));
                 }
             }
@@ -762,7 +762,7 @@ struct TestArrays
         const DedispersionKernelParams &p = tp.params;
         int aflags = (on_gpu ? af_gpu : af_rhost) | af_zero;
         
-        long rb_nseg = p.mega_ringbuf ? p.mega_ringbuf->gpu_giant_nseg : 0;
+        long rb_nseg = p.mega_ringbuf ? p.mega_ringbuf->gpu_global_nseg : 0;
         vector<long> rb_shape = { rb_nseg * p.nt_per_segment * p.nspec };
         vector<long> big_dshape = { p.total_beams, pow2(p.amb_rank), pow2(p.dd_rank), tp.nchunks * p.ntime, p.nspec };
         vector<long> big_ishape = p.input_is_ringbuf ? rb_shape : big_dshape;
@@ -957,7 +957,7 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
     shared_ptr<GpuDedispersionKernel> kernel = make_shared<GpuDedispersionKernel> (params);
     kernel->allocate();
     
-    long rb_nseg = params.mega_ringbuf ? params.mega_ringbuf->gpu_giant_nseg : 0;
+    long rb_nseg = params.mega_ringbuf ? params.mega_ringbuf->gpu_global_nseg : 0;
     vector<long> dd_shape = { params.total_beams, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime, params.nspec };
     vector<long> rb_shape = { rb_nseg * params.nt_per_segment * params.nspec };
     vector<long> in_shape = params.input_is_ringbuf ? rb_shape : dd_shape;

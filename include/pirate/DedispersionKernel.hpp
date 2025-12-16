@@ -152,7 +152,7 @@ struct ReferenceDedispersionKernel
     //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
     //               or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
     //
-    //   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+    //   Ring: 1-d array of length (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec).
     //   !!! Note that we use the "GPU" part of the mega_ringbuf, not the "host" part!!!
     //
     // The 'sb_out' array has shape:
@@ -220,7 +220,7 @@ public:
     //   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
     //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
     //
-    //   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+    //   Ring: 1-d array of length (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec).
 
     void launch(
         ksgpu::Array<void> &in,

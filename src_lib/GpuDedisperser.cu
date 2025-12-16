@@ -40,8 +40,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     this->input_ntime = config.time_samples_per_chunk;
     this->total_beams = config.beams_per_gpu;
     this->beams_per_batch = config.beams_per_batch;
-    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_giant_nseg * plan->nelts_per_segment;
-    this->host_ringbuf_nelts = plan->mega_ringbuf->host_giant_nseg * plan->nelts_per_segment;
+    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
+    this->host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
     this->nbatches = xdiv(total_beams, beams_per_batch);
     this->nstreams = config.num_active_batches;
 
@@ -152,8 +152,8 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
     xassert(etg_zone.num_frames == BA);
 
     long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
-    char *et_src = (char *) this->host_ringbuf.data + (eth_zone.giant_segment_offset + et_off) * SB;
-    char *et_dst = (char *) this->gpu_ringbuf.data + (etg_zone.giant_segment_offset + et_off) * SB;
+    char *et_src = (char *) this->host_ringbuf.data + (eth_zone.global_segment_offset + et_off) * SB;
+    char *et_dst = (char *) this->gpu_ringbuf.data + (etg_zone.global_segment_offset + et_off) * SB;
     long et_nbytes = BB * eth_zone.segments_per_frame * SB;
     
     // copy gpu -> xfer
@@ -187,8 +187,8 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
         if (host_zone.segments_per_frame == 0)
             continue;
         
-        char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.giant_segment_offset * SB);
-        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (xfer_zone.giant_segment_offset * SB);
+        char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.global_segment_offset * SB);
+        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (xfer_zone.global_segment_offset * SB);
         
         long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
         long hdst = (iframe) % host_zone.num_frames;       // host dst phase
