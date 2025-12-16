@@ -90,7 +90,34 @@ void DedispersionKernelParams::print(const char *prefix) const
 
 // -------------------------------------------------------------------------------------------------
 //
-// DedispersionKernelIobuf
+// DedispersionKernelIobuf: helper class for ReferenceDedispersionKernel and GpuDedispersionKernel,
+// to process and error-check the input/output arrays.
+//
+// Represents an input/output buffer for a dedispersion kernel, which could be either a
+// "simple" buffer, or a ring buffer. Shapes are (where all variables beams_per_batch,
+// amb_rank, ... are members of 'struct DedispersionKernelParams'):
+//
+//   Simple: either (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec)
+//                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
+//
+//   Ring: 1-d array of length (mega_ringbuf->gpu_giant_nseg * nt_per_segment * nspec).
+
+
+struct DedispersionKernelIobuf
+{
+    DedispersionKernelIobuf(const DedispersionKernelParams &params,
+                            const ksgpu::Array<void> &arr,
+                            bool is_ringbuf_, bool on_gpu_);
+
+    void *buf = nullptr;
+    bool is_ringbuf;
+    bool on_gpu;
+
+    // Convenient for GPU kernel. Only initialized if (is_ringbuf == false).
+    long beam_stride32 = 0;
+    int amb_stride32 = 0;
+    int act_stride32 = 0;
+}; 
 
 
 DedispersionKernelIobuf::DedispersionKernelIobuf(const DedispersionKernelParams &params, const Array<void> &arr, bool is_ringbuf_, bool on_gpu_)
