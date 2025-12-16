@@ -76,7 +76,9 @@ struct CoalescedDdKernel2
 
     // Bandwidth per call to GpuDedispersionKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
-    // BandwidthTracker bw_per_launch;
+
+    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate
+    BandwidthTracker bw_core_per_launch;  // only input/output arrays
 
     // -------------------- Internals start here --------------------
 
@@ -88,8 +90,8 @@ struct CoalescedDdKernel2
     ksgpu::Array<void> persistent_state;
 
     // FIXME should add run-time check that current cuda device is consistent.
-    ksgpu::Array<uint> gpu_ringbuf_quadruples;
-
+    ksgpu::Array<uint> gpu_ringbuf_quadruples;   // shape (nsegments_per_beam, 4)
+    long nsegments_per_beam = 0;
 
     struct RegistryKey
     {

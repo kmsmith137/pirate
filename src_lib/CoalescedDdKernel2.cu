@@ -37,8 +37,9 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     xassert(dd_params.mega_ringbuf);
     xassert(dd_params.consumer_id >= 0);
     xassert(dd_params.consumer_id < dd_params.mega_ringbuf->num_consumers);
+    xassert(dd_params.nspec == 1);
 
-    long nsegments_per_beam = pow2(dd_params.dd_rank+dd_params.amb_rank) * xdiv(dd_params.ntime,dd_params.nt_per_segment);
+    this->nsegments_per_beam = pow2(dd_params.dd_rank+dd_params.amb_rank) * xdiv(dd_params.ntime,dd_params.nt_per_segment);
     xassert_shape_eq(dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id), ({nsegments_per_beam,4}));
 
     xassert_eq(pf_params.dtype, dd_params.dtype);
@@ -77,8 +78,22 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(dd_params.nt_per_segment, registry_value.nt_per_segment);
 
-    // FIXME add bandwidth tracking later.
+    long B = dd_params.beams_per_batch;
+    long A = pow2(dd_params.amb_rank);
+    long D = pow2(dd_params.dd_rank);
+    long nbytes = xdiv(dtype.nbits, 8);
+
+    bw_core_per_launch.nbytes_gmem += B * A * D * dd_params.ntime * nbytes;               // in
+    bw_core_per_launch.nbytes_gmem += B * pf_params.ndm_out * pf_params.nt_out * nbytes;  // out_max
+    bw_core_per_launch.nbytes_gmem += B * pf_params.ndm_out * pf_params.nt_out * 4;       // out_argmax
+    bw_core_per_launch.kernel_launches = 1;
+
+    bw_per_launch = bw_core_per_launch;
+    bw_per_launch.nbytes_gmem += B * A * registry_value.pstate32_per_small_tree * 4;      // pstate
+    bw_per_launch.nbytes_gmem += expected_wt_shape[0] * expected_wt_strides[0] * nbytes;  // weights
+    bw_per_launch.nbytes_gmem += B * nsegments_per_beam * 16;                             // quadruples
 }
+
 
 void CoalescedDdKernel2::allocate()
 {
@@ -94,7 +109,6 @@ void CoalescedDdKernel2::allocate()
     this->gpu_ringbuf_quadruples = dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id).to_gpu();
 
     // Shape/stride check (paranoid).
-    long nsegments_per_beam = pow2(dd_params.dd_rank+dd_params.amb_rank) * xdiv(dd_params.ntime,dd_params.nt_per_segment);
     xassert_shape_eq(gpu_ringbuf_quadruples, ({nsegments_per_beam,4}));
     xassert(gpu_ringbuf_quadruples.is_fully_contiguous());
     xassert(gpu_ringbuf_quadruples.on_gpu());
@@ -413,6 +427,7 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
         Array<void> max_gpu(dtype, {S,B,ndm_out,nt_out}, af_gpu | af_zero);
         Array<uint> argmax_gpu({S,B,ndm_out,nt_out}, af_gpu | af_zero);
 
+        cout << "\nCoalescedDdKernel2::time(): " << name << ", " << dtype.str() << endl;
         KernelTimer kt(niterations, nstreams);
 
         while (kt.next()) {
@@ -432,8 +447,13 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
                 ichunk, 
                 kt.stream);
 
-            if (kt.warmed_up)
-                cout << "cdd2 " << name << " " << kt.dt << endl;
+            if (kt.warmed_up && ((kt.curr_iteration % 10) == 9)) {
+                cout << "   total = "
+                     << (1.0e-9 * cdd2_kernel->bw_per_launch.nbytes_gmem / kt.dt)
+                     << " GB/s, core = "
+                     << (1.0e-9 * cdd2_kernel->bw_core_per_launch.nbytes_gmem / kt.dt)
+                     << " GB/s\n";
+            }
         }
     }
 }
