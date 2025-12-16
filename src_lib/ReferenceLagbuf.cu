@@ -74,6 +74,10 @@ static float *_apply_lags(float *data, const int *lags, float *pstate, float *sc
 {
     if (data_ndim == 1) {
         int lag = *lags;
+
+        if (lag <= 0)
+            return pstate;
+
         int ntime = data_shape[0];
         int n = std::min(lag, ntime);
         
