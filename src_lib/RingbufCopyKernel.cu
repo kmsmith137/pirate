@@ -23,7 +23,7 @@ const RingbufCopyKernelParams &RingbufCopyKernelParams::validate() const
 {
     xassert_gt(total_beams, 0);
     xassert_gt(beams_per_batch, 0);
-    xassert(locations.on_host());
+    xassert(octuples.on_host());
 
     // Currently this is all we need.
     xassert((nelts_per_segment == 32) || (nelts_per_segment == 64));
@@ -32,11 +32,11 @@ const RingbufCopyKernelParams &RingbufCopyKernelParams::validate() const
     xassert_divisible(total_beams, beams_per_batch);
 
     // Locations array can either be size-zero, or shape-(2N,4) contiguous.
-    if (locations.size != 0) {
-        xassert_eq(locations.ndim, 2);
-        xassert_eq(locations.shape[1], 4);
-        xassert_divisible(locations.shape[0], 2);
-        xassert(locations.is_fully_contiguous());
+    if (octuples.size != 0) {
+        xassert_eq(octuples.ndim, 2);
+        xassert_eq(octuples.shape[1], 4);
+        xassert_divisible(octuples.shape[0], 2);
+        xassert(octuples.is_fully_contiguous());
     }
 
     return *this;
@@ -48,11 +48,11 @@ const RingbufCopyKernelParams &RingbufCopyKernelParams::validate() const
 
 CpuRingbufCopyKernel::CpuRingbufCopyKernel(const RingbufCopyKernelParams &params_) :
     params(params_.validate()),
-    nlocations(xdiv(params_.locations.size, 8))
+    noctuples(xdiv(params_.octuples.size, 8))
 {
     // Note: only correct if (nbytes_per_segment == constants::bytes_per_gpu_cache_line).
-    long nbytes_per_location = (2 * params.beams_per_batch * constants::bytes_per_gpu_cache_line) + 8;
-    bw_per_launch.nbytes_hmem = nlocations * nbytes_per_location;
+    long nbytes_per_octuple = (2 * params.beams_per_batch * constants::bytes_per_gpu_cache_line) + 8;
+    bw_per_launch.nbytes_hmem = noctuples * nbytes_per_octuple;
 }
 
 
@@ -60,20 +60,20 @@ CpuRingbufCopyKernel::CpuRingbufCopyKernel(const RingbufCopyKernelParams &params
 // B = bytes per segment
 
 template<int B>
-static void _cpu_copy(void *ringbuf, const uint *locations, long nlocations, int nbeams, ulong iframe)
+static void _cpu_copy(void *ringbuf, const uint *octuples, long noctuples, int nbeams, ulong iframe)
 {
     char *rp = reinterpret_cast<char *> (ringbuf);
     
-    for (long i = 0; i < nlocations; i++) {
-        uint src_offset = locations[8*i];     // in segments, not bytes
-        uint src_phase = locations[8*i+1];    // index of (time chunk, beam) pair, relative to current pair
-        uint src_len = locations[8*i+2];      // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
-        uint src_nseg = locations[8*i+3];     // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
+    for (long i = 0; i < noctuples; i++) {
+        uint src_offset = octuples[8*i];     // in segments, not bytes
+        uint src_phase = octuples[8*i+1];    // index of (time chunk, beam) pair, relative to current pair
+        uint src_len = octuples[8*i+2];      // number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)
+        uint src_nseg = octuples[8*i+3];     // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
         
-        uint dst_offset = locations[8*i+4];
-        uint dst_phase = locations[8*i+5];
-        uint dst_len = locations[8*i+6];
-        uint dst_nseg = locations[8*i+7];
+        uint dst_offset = octuples[8*i+4];
+        uint dst_phase = octuples[8*i+5];
+        uint dst_len = octuples[8*i+6];
+        uint dst_nseg = octuples[8*i+7];
 
         // Absorb iframe into phases. (Note that 'iframe' has ulong type.)
         src_phase = (ulong(src_phase) + iframe) % ulong(src_len);
@@ -109,9 +109,9 @@ void CpuRingbufCopyKernel::apply(ksgpu::Array<void> &ringbuf, long ibatch, long 
 
     // These two cases are all we currently need.
     if (nbits_per_segment == 1024)
-        _cpu_copy<128> (ringbuf.data, params.locations.data, nlocations, params.beams_per_batch, iframe);
+        _cpu_copy<128> (ringbuf.data, params.octuples.data, noctuples, params.beams_per_batch, iframe);
     else if (nbits_per_segment == 2048)
-        _cpu_copy<256> (ringbuf.data, params.locations.data, nlocations, params.beams_per_batch, iframe);
+        _cpu_copy<256> (ringbuf.data, params.octuples.data, noctuples, params.beams_per_batch, iframe);
     else {
         stringstream ss;
         ss << "CpuRingbufCopyKernel: expected nbits_per_segment in {1024,2048}, got "
@@ -127,10 +127,10 @@ void CpuRingbufCopyKernel::apply(ksgpu::Array<void> &ringbuf, long ibatch, long 
 
 GpuRingbufCopyKernel::GpuRingbufCopyKernel(const RingbufCopyKernelParams &params_) :
     params(params_.validate()),
-    nlocations(xdiv(params_.locations.size, 8))
+    noctuples(xdiv(params_.octuples.size, 8))
 {
-    long nbytes_per_location = (2 * params.beams_per_batch * constants::bytes_per_gpu_cache_line) + 8;
-    bw_per_launch.nbytes_gmem = nlocations * nbytes_per_location;
+    long nbytes_per_octuple = (2 * params.beams_per_batch * constants::bytes_per_gpu_cache_line) + 8;
+    bw_per_launch.nbytes_gmem = noctuples * nbytes_per_octuple;
 }
 
 
@@ -140,7 +140,7 @@ void GpuRingbufCopyKernel::allocate()
         throw runtime_error("double call to GpuRingbufCopyKernel::allocate()");
 
     // Copy host -> GPU.
-    this->gpu_locations = params.locations.to_gpu();    
+    this->gpu_octuples = params.octuples.to_gpu();    
     this->is_allocated = true;
 }
 
@@ -148,17 +148,17 @@ void GpuRingbufCopyKernel::allocate()
 // Thread grid: { 32*W, 1, 1 }.
 // Block grid: { B, 1, 1 }.
 
-__global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *locations, long nlocations, int nbeams, ulong iframe)
+__global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *octuples, long noctuples, int nbeams, ulong iframe)
 {
     // Global thread ID
     long tid = long(blockIdx.x) * long(blockDim.x) + threadIdx.x;
 
     // "Regulated" thread ID (avoids out-of-range)
-    long treg = ((nlocations-1) << 3) + (threadIdx.x & 0x7);
+    long treg = ((noctuples-1) << 3) + (threadIdx.x & 0x7);
     treg = min(tid, treg);
 
-    // Each warp reads 4 locations (i.e. 4 src+dst pairs).
-    uint loc_data = locations[treg];
+    // Each warp reads 4 octuples (i.e. 4 src+dst pairs).
+    uint loc_data = octuples[treg];
 
     // Absorb iframe into phases (only valid on laneId=1 mod 4).
     // Note: currently using 9 __shfl_syncs in this function, optimal number is 7.
@@ -205,17 +205,17 @@ void GpuRingbufCopyKernel::launch(ksgpu::Array<void> &ringbuf, long ibatch, long
     xassert_eq(nbits_per_segment, 1024);  // currently assuemd in gpu kernel
     xassert(this->is_allocated);
 
-    if (nlocations == 0)
+    if (noctuples == 0)
         return;
     
     int W = 4;
-    int B = (nlocations + 4*W - 1) / (4*W);  // each block does 4*W locations
+    int B = (noctuples + 4*W - 1) / (4*W);  // each block does 4*W octuples
     ulong iframe = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
     
     gpu_copy_kernel<<< B, 32*W, 0, stream >>> (
         reinterpret_cast<uint4 *> (ringbuf.data),   // uint4 *ringbuf
-        gpu_locations.data,                         // const uint *locations
-        nlocations,                                 // long nlocations
+        gpu_octuples.data,                         // const uint *octuples
+        noctuples,                                 // long noctuples
         params.beams_per_batch,                     // int nbeams
         iframe                                      // ulong iframe
     );
@@ -274,12 +274,12 @@ static vector<TestRingbuf> make_ringbufs(int nbuf, long beams_per_batch)
 }
 
 
-static Array<uint> make_location_array(const vector<TestLocationPair> &v, bool permute)
+static Array<uint> make_octuple_array(const vector<TestLocationPair> &v, bool permute)
 {
     if (permute) {
         vector<TestLocationPair> w = v;        // copy
         randomly_permute(w);
-        return make_location_array(w, false);  // permute=false
+        return make_octuple_array(w, false);  // permute=false
     } 
         
     long n = v.size();
@@ -372,13 +372,13 @@ void GpuRingbufCopyKernel::test()
     hparams.total_beams = total_beams;
     hparams.beams_per_batch = beams_per_batch;
     hparams.nelts_per_segment = nelts_per_segment;
-    hparams.locations = make_location_array(lpairs, true);   // permute=true
+    hparams.octuples = make_octuple_array(lpairs, true);   // permute=true
 
     RingbufCopyKernelParams gparams;
     gparams.total_beams = total_beams;
     gparams.beams_per_batch = beams_per_batch;
     gparams.nelts_per_segment = nelts_per_segment;
-    gparams.locations = make_location_array(lpairs, true);   // permute=true
+    gparams.octuples = make_octuple_array(lpairs, true);   // permute=true
 
     Dtype dtype(df_uint, nbits);
     long nelts_tot = nseg_tot * nelts_per_segment;

@@ -247,12 +247,12 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     g2g_copy_kernel_params.total_beams = config.beams_per_gpu;
     g2g_copy_kernel_params.beams_per_batch = config.beams_per_batch;
     g2g_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
-    g2g_copy_kernel_params.locations = mega_ringbuf->g2g_octuples;
+    g2g_copy_kernel_params.octuples = mega_ringbuf->g2g_octuples;
     
     h2h_copy_kernel_params.total_beams = config.beams_per_gpu;
     h2h_copy_kernel_params.beams_per_batch = config.beams_per_batch;
     h2h_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
-    h2h_copy_kernel_params.locations = mega_ringbuf->h2h_octuples;
+    h2h_copy_kernel_params.octuples = mega_ringbuf->h2h_octuples;
     
     lds_params.validate();
     stage1_dd_buf_params.validate();
