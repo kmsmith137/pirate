@@ -31,6 +31,8 @@ struct CoalescedDdKernel2
     // The 'weights' array has logical shape (beams_per_batch, ndm_wt, nt_wt, P, F),
     // but is passed to the gpu kernel in a complicated, non-contiguous layout. To put
     // an array into the proper layout, call GpuPfWeightLayout::to_gpu().
+    //
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
 
     void launch(
         ksgpu::Array<void> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)

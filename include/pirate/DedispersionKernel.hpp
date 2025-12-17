@@ -164,6 +164,8 @@ struct ReferenceDedispersionKernel
     //
     // Note: if fs.M==1 (no subbands), then the 'sb_out' argument is optional, and
     // an empty (size-zero) array can be passed instead.
+    //
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
 
     void apply(
         ksgpu::Array<void> &in,        // either "simple" buf or ringbuf, see above
@@ -221,6 +223,8 @@ public:
     //                 or (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime)  if nspec==1
     //
     //   Ring: 1-d array of length (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec).
+    //
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
 
     void launch(
         ksgpu::Array<void> &in,

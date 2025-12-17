@@ -86,8 +86,10 @@ struct GpuDedisperser
     //  - launch() returns asynchronously. When 'stream' is synchronized,
     //    the output buffers (stage2_dd_kernels[istream].bufs[:]) will be populated.
     //
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
+    //
     // FIXME interface will evolve over time (e.g. cudaEvents).
-    
+
     void launch(long ichunk, long ibatch, long istream, cudaStream_t stream);
 
     // Static member function: runs one randomized test iteration.
@@ -141,6 +143,7 @@ struct ReferenceDedisperserBase
     std::vector<long> output_ds_level;  // length output_ntrees
     
     // To process multiple chunks, call the dedisperse() method in a loop.
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     virtual void dedisperse(long ichunk, long ibatch) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.

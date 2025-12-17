@@ -29,7 +29,8 @@ struct RingbufCopyKernelParams
 struct CpuRingbufCopyKernel
 {
     CpuRingbufCopyKernel(const RingbufCopyKernelParams &params);
-    
+
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     void apply(ksgpu::Array<void> &ringbuf, long ichunk, long ibatch);
 
     const RingbufCopyKernelParams params;
@@ -49,6 +50,7 @@ struct GpuRingbufCopyKernel
     void allocate();
 
     // launch(): asynchronously launch copy kernel, and return without synchronizing streams.
+    // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     // Note: stream=NULL is allowed, but is not the default.
     void launch(ksgpu::Array<void> &ringbuf, long ichunk, long ibatch, cudaStream_t stream);
 
