@@ -17,7 +17,7 @@ struct RingbufCopyKernelParams
     long beams_per_batch = 0;
     long nelts_per_segment = 0;
 
-    // Octuples array can either be size-zero, or shape-(N,8) contiguous.
+    // Octuples array can either be size-zero, or shape-(2N,4) contiguous.
     ksgpu::Array<uint> octuples;
 
     // Validates params, and returns reference to 'this'.
