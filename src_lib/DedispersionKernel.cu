@@ -246,7 +246,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_, 
 }
 
 
-void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, Array<void> &sb_out_, long ibatch, long ichunk)
+void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, Array<void> &sb_out_, long ichunk, long ibatch)
 {
     long B = params.beams_per_batch;
     long A = pow2(params.amb_rank);
@@ -550,7 +550,7 @@ void GpuDedispersionKernel::allocate()
 }
 
 
-void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long ichunk, cudaStream_t stream)
+void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, long ichunk, long ibatch, cudaStream_t stream)
 {
     xassert(this->is_allocated);
     xassert((ibatch >= 0) && (ibatch < nbatches));
@@ -923,12 +923,12 @@ void GpuDedispersionKernel::test()
             // Reference dedispersion.
             Array<float> sb_empty;  // empty array
             cpu_arrs.copy_input(ichunk, ibatch);
-            ref_kernel->apply(cpu_arrs.active_inbuf, cpu_arrs.active_outbuf, sb_empty, ibatch, ichunk);
+            ref_kernel->apply(cpu_arrs.active_inbuf, cpu_arrs.active_outbuf, sb_empty, ichunk, ibatch);
             cpu_arrs.copy_output(ichunk, ibatch);
             
             // GPU dedipersion.
             gpu_arrs.copy_input(ichunk, ibatch);
-            gpu_kernel->launch(gpu_arrs.active_inbuf, gpu_arrs.active_outbuf, ibatch, ichunk, nullptr);  // stream=nullptr
+            gpu_kernel->launch(gpu_arrs.active_inbuf, gpu_arrs.active_outbuf, ichunk, ibatch, nullptr);  // stream=nullptr
             gpu_arrs.copy_output(ichunk, ibatch);
         }
     }
@@ -986,7 +986,7 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
             if (!params.output_is_ringbuf)
                 out_slice = out_big.slice(0, ibatch * params.beams_per_batch, (ibatch+1) * params.beams_per_batch);
 
-            kernel->launch(in_slice, out_slice, ibatch, ichunk, kt.stream);
+            kernel->launch(in_slice, out_slice, ichunk, ibatch, kt.stream);
 
             if (kt.warmed_up && (ichunk % 2))
                 cout << "   [ " << (gb_per_launch/kt.dt) << " GB/s ]\n";

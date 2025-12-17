@@ -114,7 +114,7 @@ void GpuDedisperser::allocate()
 }
 
 
-void GpuDedisperser::launch(long ibatch, long ichunk, long istream, cudaStream_t stream)
+void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t stream)
 {
     const long BT = this->config.beams_per_gpu;            // total beams
     const long BB = this->config.beams_per_batch;          // beams per batch
@@ -129,7 +129,7 @@ void GpuDedisperser::launch(long ibatch, long ichunk, long istream, cudaStream_t
     long iframe = (ichunk * BT) + (ibatch * BB);
     
     // Step 1: run LaggedDownsampler.
-    lds_kernel->launch(stage1_dd_bufs.at(istream), ibatch, ichunk, stream);
+    lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, stream);
 
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
     for (uint i = 0; i < stage1_dd_kernels.size(); i++) {
@@ -139,7 +139,7 @@ void GpuDedisperser::launch(long ibatch, long ichunk, long istream, cudaStream_t
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime });
-        kernel->launch(dd_buf, this->gpu_ringbuf, ibatch, ichunk, stream);
+        kernel->launch(dd_buf, this->gpu_ringbuf, ichunk, ibatch, stream);
     }
 
     // Step 3: extra copying steps needed for early triggers.
@@ -157,10 +157,10 @@ void GpuDedisperser::launch(long ibatch, long ichunk, long istream, cudaStream_t
     long et_nbytes = BB * eth_zone.segments_per_frame * SB;
     
     // copy gpu -> xfer
-    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ibatch, ichunk, stream);
+    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ichunk, ibatch, stream);
 
     // copy host -> et_host
-    this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, ichunk);
+    this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);
 
      // copy et_host -> et_gpu (must come after h2h_copy_kernel)
     CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, stream)); 
@@ -211,7 +211,7 @@ void GpuDedisperser::launch(long ibatch, long ichunk, long istream, cudaStream_t
         // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
         dd_buf = dd_buf.transpose({0,2,1,3});
-        kernel->launch(this->gpu_ringbuf, dd_buf, ibatch, ichunk, stream);
+        kernel->launch(this->gpu_ringbuf, dd_buf, ichunk, ibatch, stream);
     }
 }
 
@@ -264,25 +264,25 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     double epsabs_r = epsrel_r * pow(1.414, config.tree_rank);  // reference
     double epsabs_g = epsrel_g * pow(1.414, config.tree_rank);  // gpu
 
-    for (int c = 0; c < nchunks; c++) {
-        for (int b = 0; b < nbatches; b++) {
+    for (int ichunk = 0; ichunk < nchunks; ichunk++) {
+        for (int ibatch = 0; ibatch < nbatches; ibatch++) {
             Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost | af_random);
             // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
             // arr.at({0,0}) = 1.0;
 
             rdd0->input_array.fill(arr);
-            rdd0->dedisperse(b, c);
+            rdd0->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
 
             rdd1->input_array.fill(arr);
-            rdd1->dedisperse(b, c);
+            rdd1->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
 
             rdd2->input_array.fill(arr);
-            rdd2->dedisperse(b, c);
+            rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
 
             if (!host_only) {
                 Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
                 gdd_inbuf.fill(arr.convert(config.dtype));
-                gdd->launch(b, c, 0, nullptr);  // (ibatch, ichunk, istream, stream)
+                gdd->launch(ichunk, ibatch, 0, nullptr);  // (ichunk, ibatch, istream, stream)
             }
             
             for (int iout = 0; iout < nout; iout++) {

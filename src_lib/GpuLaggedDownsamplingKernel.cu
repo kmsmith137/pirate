@@ -822,7 +822,7 @@ struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
 {
     DownsamplingKernelImpl(const LaggedDownsamplingKernelParams &params);
     
-    virtual void launch(DedispersionBuffer &buf, long ibatch, long ichunk, cudaStream_t stream) override;
+    virtual void launch(DedispersionBuffer &buf, long ichunk, long ibatch, cudaStream_t stream) override;
 
     using T32 = typename simd32_type<T>::type;    
     cuda_kernel_t<T32> kernel = nullptr;
@@ -854,7 +854,7 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernel
 
 // Overrides GpuLaggedDownsamplingKernel::launch()
 template<typename T>
-void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, long ichunk, cudaStream_t stream)
+void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ichunk, long ibatch, cudaStream_t stream)
 {
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(ichunk >= 0);
@@ -1031,7 +1031,7 @@ static void run_test(const TestInstanceLDS &ti)
 
             // Run GPU and reference kernels.
             ref_kernel->apply(cpu_buf, ibatch);
-            gpu_kernel->launch(gpu_buf, ibatch, ichunk, nullptr);
+            gpu_kernel->launch(gpu_buf, ichunk, ibatch, nullptr);
 
             // Compare results.
             for (int ids = 1; ids < p.num_downsampling_levels; ids++) {

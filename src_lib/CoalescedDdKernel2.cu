@@ -122,8 +122,8 @@ void CoalescedDdKernel2::launch(
     ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
     const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec,)
     const ksgpu::Array<void> &wt,     // from GpuPfWeightLayout::to_gpu()
+    long ichunk,                      // time-chunk index 0, 1, ...
     long ibatch,                      // 0 <= ibatch < nbatches
-    long ichunk,                    // time-chunk index 0, 1, ...
     cudaStream_t stream)              // NULL stream is allowed, but is not the default);
 {
     xassert(this->is_allocated);
@@ -334,7 +334,7 @@ void CoalescedDdKernel2::test()
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < num_batches; ibatch++) {
-            ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ibatch, ichunk);
+            ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ichunk, ibatch);
 
             long rank_hack = dd_params.dd_rank;  // see comments in ReferencePeakFindingKernel::make_random_weights()
             Array<float> wt_cpu = ref_pf_kernel.make_random_weights(rank_hack);
@@ -348,7 +348,7 @@ void CoalescedDdKernel2::test()
 
             // CPU kernel done! Now run the GPU kernel.
             Array<void> wt_gpu = wl.to_gpu(wt_cpu);
-            cdd2_kernel.launch(max_gpu, argmax_gpu, in_gpu, wt_gpu, ibatch, ichunk, NULL);
+            cdd2_kernel.launch(max_gpu, argmax_gpu, in_gpu, wt_gpu, ichunk, ibatch, NULL);
 
             // The "max" arrays can be compared straightforwardly.
             assert_arrays_equal(max_cpu, max_gpu, "max_cpu", "max_gpu", {"b","d","tout"});

@@ -94,7 +94,7 @@ static void _cpu_copy(void *ringbuf, const uint *octuples, long noctuples, int n
 }
 
 
-void CpuRingbufCopyKernel::apply(ksgpu::Array<void> &ringbuf, long ibatch, long ichunk)
+void CpuRingbufCopyKernel::apply(ksgpu::Array<void> &ringbuf, long ichunk, long ibatch)
 {
     xassert(ringbuf.on_host());
     xassert(ringbuf.ndim == 1);
@@ -191,7 +191,7 @@ __global__ void gpu_copy_kernel(uint4 *ringbuf, const uint *octuples, long noctu
 }
 
 
-void GpuRingbufCopyKernel::launch(ksgpu::Array<void> &ringbuf, long ibatch, long ichunk, cudaStream_t stream)
+void GpuRingbufCopyKernel::launch(ksgpu::Array<void> &ringbuf, long ichunk, long ibatch, cudaStream_t stream)
 {
     xassert(ringbuf.on_gpu());
     xassert(ringbuf.ndim == 1);
@@ -315,7 +315,7 @@ void GpuRingbufCopyKernel::test()
     int nbuf_src = rand_int(1, 5);
     int nbuf_dst = rand_int(1, 5);
     
-    long total_beams = nbatches * beams_per_batch;  // only used to convert (ichunk, ibatch) -> iframe
+    long total_beams = nbatches * beams_per_batch;  // only used to convert (ichunk,ibatch) -> iframe
     int nelts_per_segment = 1024 / nbits;
 
     vector<TestRingbuf> src_ringbufs = make_ringbufs(nbuf_src, beams_per_batch);
@@ -395,11 +395,11 @@ void GpuRingbufCopyKernel::test()
     Array<void> gbuf = hbuf.to_gpu();
 
     CpuRingbufCopyKernel hkernel(hparams);
-    hkernel.apply(hbuf, ibatch, ichunk);
+    hkernel.apply(hbuf, ichunk, ibatch);
     
     GpuRingbufCopyKernel gkernel(gparams);
     gkernel.allocate();
-    gkernel.launch(gbuf, ibatch, ichunk, nullptr);   // default stream
+    gkernel.launch(gbuf, ichunk, ibatch, nullptr);   // default stream
     
     assert_arrays_equal(hbuf, gbuf, "hbuf", "gbuf", {"i"});
 }

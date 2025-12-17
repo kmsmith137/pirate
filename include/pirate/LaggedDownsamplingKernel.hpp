@@ -94,7 +94,7 @@ public:
 
     // One call to launch() processes an array of shape (beams_per_batch, pow2(input_total_rank), ntime).
     // The NULL stream is allowed, but is not the default.
-    virtual void launch(DedispersionBuffer &buf, long ibatch, long ichunk, cudaStream_t stream) = 0;
+    virtual void launch(DedispersionBuffer &buf, long ichunk, long ibatch, cudaStream_t stream) = 0;
     
     void print(std::ostream &os=std::cout, int indent=0) const;
     

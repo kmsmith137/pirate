@@ -93,7 +93,7 @@ void ChimeDedisperser::run(long ichunk)
         else
             ksgpu::launch_memcpy_kernel(xdst, xsrc, extra_nbytes_per_batch, s);
         
-        dedisperser->launch(ibatch, ichunk, istream, s);
+        dedisperser->launch(ichunk, ibatch, istream, s);
         istream = (istream + 1) % nstreams;
     }
 }
