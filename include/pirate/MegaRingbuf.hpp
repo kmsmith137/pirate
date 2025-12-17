@@ -78,30 +78,29 @@ namespace pirate {
 //       - stage2 dedispersion (or ccd2) kernel (0 <= j < num_stage2 trees)
 //         has consumer_id == (j + stage1_trees - 1).
 // 
-//   - "Segments" and "views". Each consumer reads "segments" from the ring buffer, 
+//   - "Segments" and "quadruples". Each consumer reads "segments" from the ring buffer, 
 //     where a segment is always 128 bytes (constants::bytes_per_gpu_cache_line). 
 //
 //     The number of ** segments per beam ** that each consumer reads is denoted
 //
-//         long consumer_nviews[num_consumers];
+//         long consumer_nquads[num_consumers];
 //
-//     where a "view" is a logical triple (zone, frame_lag, segment_within_frame).
-//     (Note however that views are usually represented differently as quadruples,
-//     see below).
+//     where a "quadruple" (or "quad") is a logical triple (zone, frame_lag, segment_within_frame),
+//     represented as four uint32 values (see below).
 //
 //     Each consumer (specified by 0 <= consumer_id < num_consumers) indexes its
-//     views by an index:
+//     quadruples by an index:
 //
-//         0 <= iview < consumer_nviews[consumer_id]
+//         0 <= iquad < consumer_nquads[consumer_id]
 //
-//     The consumer can choose whatever ordering is convenient (i.e. the index 'iview'
+//     The consumer can choose whatever ordering is convenient (i.e. the index 'iquad'
 //     is opaque to the MegaRingbuf). For example, the dedispersion kernels use a
-//     different iview-ordering scheme for their input/output buffers.
+//     different iquad-ordering scheme for their input/output buffers.
 //
 //     Producers are similar to consumers, except that the logical frame_lag is zero.
 //
-//   - "Quadruples". In GPU kernels, ring buffer views (either producer or consumer)
-//      are represented as quadruples:
+//   - "Quadruples". In GPU kernels, ring buffer quadruples (either producer or consumer)
+//      are represented as:
 //
 //        uint global_segment_offset;       // segment count
 //        uint frame_offset_within_zone;   // frame count
@@ -160,9 +159,9 @@ struct MegaRingbuf {
         long total_beams = 0;
         long active_beams = 0;
 
-        // Number of segments (or "views", see above) for each producer/consumer.
-        std::vector<long> producer_nviews;  // Length (num_producers)
-        std::vector<long> consumer_nviews;  // Length (num_consumers)
+        // Number of quadruples (see above) for each producer/consumer.
+        std::vector<long> producer_nquads;  // Length (num_producers)
+        std::vector<long> consumer_nquads;  // Length (num_consumers)
 
         // For testing: limit on-gpu ring buffers to (clag) <= (gpu_clag_maxfrac) * (max_clag)
         double gpu_clag_maxfrac = 1.0;   // set to 1 to disable (default)
@@ -174,7 +173,7 @@ struct MegaRingbuf {
     // times, then finalize(). Other member functions generally need to enforce
     // that finalize() has been called (e.g. get_quadruples(), launch_gpu_copy_kernel()).
 
-    void add_segment(long producer_id, long producer_iview, long consumer_id, long consumer_iview, long chunk_lag);
+    void add_segment(long producer_id, long producer_iquad, long consumer_id, long consumer_iquad, long chunk_lag);
     void finalize(bool delete_internals=true);
 
     // Initialized in constructor.
@@ -190,8 +189,8 @@ struct MegaRingbuf {
     // Instead, they get copied to the GPU in the individual compute kernels
     // (for example, GpuDedispersionKernel::allocate()).
     //
-    // (producer_id) -> (array of shape (producer_num_views[producer_id], 4))
-    // (consumer_id) -> (array of shape (consumer_num_views[consumer_id], 4))
+    // (producer_id) -> (array of shape (producer_nquads[producer_id], 4))
+    // (consumer_id) -> (array of shape (consumer_nquads[consumer_id], 4))
     
     std::vector<ksgpu::Array<uint>> producer_quadruples;
     std::vector<ksgpu::Array<uint>> consumer_quadruples;
@@ -207,11 +206,11 @@ struct MegaRingbuf {
 
     // Make a random "simplified" (pure-gpu) MegaRingbuf, intended for standalone
     // testing of dedispersion kernels. See MegaRingbuf.cu for more info.
-    static std::shared_ptr<MegaRingbuf> make_random_simplified(long total_beams, long active_beams, long nchunks, long nviews);
+    static std::shared_ptr<MegaRingbuf> make_random_simplified(long total_beams, long active_beams, long nchunks, long nquads);
 
     // Create the simplest possible MegaRingbuf, for standalone timing of dedispersion kernels.
     // FIXME I might implement something more realistic later.
-    static std::shared_ptr<MegaRingbuf> make_trivial(long total_beams, long nviews);
+    static std::shared_ptr<MegaRingbuf> make_trivial(long total_beams, long nquads);
 
 
     // ------------------------------------------------------------------------
@@ -223,12 +222,12 @@ struct MegaRingbuf {
     {
         long num_consumers = 0;
         long consumer_ids[max_consumers_per_producer];
-        long consumer_iviews[max_consumers_per_producer];
+        long consumer_iquads[max_consumers_per_producer];
         long chunk_lags[max_consumers_per_producer];
     };
 
     // Segments are updated in add_segment(), and used in finalize().
-    // segments[producer_id][producer_iview] = (Segment containing consumer ids/iviews/lags)
+    // segments[producer_id][producer_iquad] = (Segment containing consumer ids/iquads/lags)
     std::vector<std::vector<Segment>> segments;
 
     long max_clag = 0;      // updated in add_segment()

@@ -19,38 +19,38 @@ MegaRingbuf::MegaRingbuf(const Params &params_) :
     xassert(params.active_beams > 0);
     xassert(params.active_beams <= params.total_beams);
 
-    this->num_producers = params.producer_nviews.size();
-    this->num_consumers = params.consumer_nviews.size();
+    this->num_producers = params.producer_nquads.size();
+    this->num_consumers = params.consumer_nquads.size();
     this->segments.resize(num_producers);
 
     for (long producer_id = 0; producer_id < num_producers; producer_id++) {
-        long nviews = params.producer_nviews[producer_id];
-        this->segments[producer_id].resize(nviews);
+        long nquads = params.producer_nquads[producer_id];
+        this->segments[producer_id].resize(nquads);
     }
 }
 
 
-void MegaRingbuf::add_segment(long producer_id, long producer_iview, long consumer_id, long consumer_iview, long chunk_lag)
+void MegaRingbuf::add_segment(long producer_id, long producer_iquad, long consumer_id, long consumer_iquad, long chunk_lag)
 {
     xassert(producer_id >= 0);
     xassert(producer_id < num_producers);
-    xassert(producer_iview >= 0);
-    xassert(producer_iview < params.producer_nviews[producer_id]);
+    xassert(producer_iquad >= 0);
+    xassert(producer_iquad < params.producer_nquads[producer_id]);
 
     xassert(consumer_id >= 0);
     xassert(consumer_id < num_consumers);
-    xassert(consumer_iview >= 0);
-    xassert(consumer_iview < params.consumer_nviews[consumer_id]);
+    xassert(consumer_iquad >= 0);
+    xassert(consumer_iquad < params.consumer_nquads[consumer_id]);
     
     xassert(chunk_lag >= 0);
     this->max_clag = max(max_clag, chunk_lag);
 
-    Segment &s = this->segments[producer_id][producer_iview];
+    Segment &s = this->segments[producer_id][producer_iquad];
     xassert(s.num_consumers < max_consumers_per_producer);
 
     long n = s.num_consumers++;
     s.consumer_ids[n] = consumer_id;
-    s.consumer_iviews[n] = consumer_iview;
+    s.consumer_iquads[n] = consumer_iquad;
     s.chunk_lags[n] = chunk_lag;
 }
 
@@ -98,26 +98,26 @@ void MegaRingbuf::finalize(bool delete_internals)
     this->consumer_triples.resize(num_consumers);
 
     for (long producer_id = 0; producer_id < num_producers; producer_id++) {
-        long producer_nviews = params.producer_nviews.at(producer_id);
-        this->producer_triples.at(producer_id).resize(producer_nviews);
+        long producer_nquads = params.producer_nquads.at(producer_id);
+        this->producer_triples.at(producer_id).resize(producer_nquads);
     }
 
     for (long consumer_id = 0; consumer_id < num_consumers; consumer_id++) {
-        long consumer_nviews = params.consumer_nviews.at(consumer_id);
-        this->consumer_triples.at(consumer_id).resize(consumer_nviews);
+        long consumer_nquads = params.consumer_nquads.at(consumer_id);
+        this->consumer_triples.at(consumer_id).resize(consumer_nquads);
     }
 
     // Outer loop over segments (with associated producer info).
     for (long producer_id = 0; producer_id < num_producers; producer_id++) {
-        long producer_nviews = params.producer_nviews[producer_id];
-        for (long producer_iview = 0; producer_iview < producer_nviews; producer_iview++) {
-            Segment &s = this->segments[producer_id][producer_iview];
+        long producer_nquads = params.producer_nquads[producer_id];
+        for (long producer_iquad = 0; producer_iquad < producer_nquads; producer_iquad++) {
+            Segment &s = this->segments[producer_id][producer_iquad];
 
             // FIXME hmm when writing code in this loop, I had to be careful to
             // distinguish between this->num_consumers and s.num_consumers. I should
             // probably rename things, to avoid a potential source of bugs.
 
-            // Check that every (producer_id, producer_iview) pair has received at
+            // Check that every (producer_id, producer_iquad) pair has received at
             // least one call to add_segment().
             xassert(s.num_consumers > 0);
 
@@ -163,7 +163,7 @@ void MegaRingbuf::finalize(bool delete_internals)
 
             // Now we're ready to implement steps 1 and 2 above.
 
-            Triple &producer = producer_triples.at(producer_id).at(producer_iview);
+            Triple &producer = producer_triples.at(producer_id).at(producer_iquad);
             xassert(producer.zone == nullptr);   // paranoid
 
             if (ncpu == 0) {
@@ -191,12 +191,12 @@ void MegaRingbuf::finalize(bool delete_internals)
 
             for (long c = 0; c < s.num_consumers; c++) {
                 long consumer_id = s.consumer_ids[c];
-                long consumer_iview = s.consumer_iviews[c];
+                long consumer_iquad = s.consumer_iquads[c];
                 long chunk_lag = s.chunk_lags[c];
 
-                // Check that each (consumer_id, consumer_iview) pair has received at
+                // Check that each (consumer_id, consumer_iquad) pair has received at
                 // most one call to add_segment().
-                Triple &consumer = consumer_triples.at(consumer_id).at(consumer_iview);
+                Triple &consumer = consumer_triples.at(consumer_id).at(consumer_iquad);
                 xassert(consumer.zone == nullptr);
 
                 if (c < ngpu)
@@ -218,13 +218,13 @@ void MegaRingbuf::finalize(bool delete_internals)
         }
     }
 
-    // Check that each (consumer_id, consumer_iview) pair has received at
+    // Check that each (consumer_id, consumer_iquad) pair has received at
     // least one call to add_segment().
 
     for (long consumer_id = 0; consumer_id < num_consumers; consumer_id++) {
-        long consumer_nviews = params.consumer_nviews.at(consumer_id);
-        for (long consumer_iview = 0; consumer_iview < consumer_nviews; consumer_iview++) {
-            Triple &consumer = consumer_triples.at(consumer_id).at(consumer_iview);
+        long consumer_nquads = params.consumer_nquads.at(consumer_id);
+        for (long consumer_iquad = 0; consumer_iquad < consumer_nquads; consumer_iquad++) {
+            Triple &consumer = consumer_triples.at(consumer_id).at(consumer_iquad);
             xassert(consumer.zone != nullptr);
         }
     }
@@ -361,13 +361,13 @@ void MegaRingbuf::_delete_internals()
 // This is intended for standalone testing of (uncoalseced or coalesced) dedispersion
 // kernels, but is probably not useful for much else.
 
-shared_ptr<MegaRingbuf> MegaRingbuf::make_random_simplified(long total_beams, long active_beams, long nchunks, long nviews)
+shared_ptr<MegaRingbuf> MegaRingbuf::make_random_simplified(long total_beams, long active_beams, long nchunks, long nquads)
 {
     Params params;
     params.total_beams = total_beams;
     params.active_beams = active_beams;
-    params.producer_nviews = { nviews };
-    params.consumer_nviews = { nviews };
+    params.producer_nquads = { nquads };
+    params.consumer_nquads = { nquads };
 
     shared_ptr<MegaRingbuf> ret = make_shared<MegaRingbuf> (params);
 
@@ -380,7 +380,7 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_random_simplified(long total_beams, lo
     ret->producer_triples.resize(1);
     ret->consumer_triples.resize(1);
 
-    for (long i = 0; i < nviews; i++) {
+    for (long i = 0; i < nquads; i++) {
         long izone = rand_int(0, num_zones);
         Zone *zone = &ret->gpu_zones.at(izone);
 
@@ -407,13 +407,13 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_random_simplified(long total_beams, lo
 }
 
 
-shared_ptr<MegaRingbuf> MegaRingbuf::make_trivial(long total_beams, long nviews)
+shared_ptr<MegaRingbuf> MegaRingbuf::make_trivial(long total_beams, long nquads)
 {
     Params params;
     params.total_beams = total_beams;
     params.active_beams = total_beams;
-    params.producer_nviews = { nviews };
-    params.consumer_nviews = { nviews };
+    params.producer_nquads = { nquads };
+    params.consumer_nquads = { nquads };
 
     shared_ptr<MegaRingbuf> ret = make_shared<MegaRingbuf> (params);
 
@@ -424,7 +424,7 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_trivial(long total_beams, long nviews)
     Zone *z = &ret->gpu_zones.at(0);
     z->num_frames = 2 * total_beams;
 
-    for (long i = 0; i < nviews; i++) {
+    for (long i = 0; i < nquads; i++) {
         z->segments_per_frame++;
         ret->_push_triple(ret->producer_triples.at(0), z, 0);
         ret->_push_triple(ret->consumer_triples.at(0), z, total_beams);

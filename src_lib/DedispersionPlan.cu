@@ -89,12 +89,12 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     mrb_params.gpu_clag_maxfrac = config.gpu_clag_maxfrac;
 
     for (const Stage1Tree &st1: this->stage1_trees) {
-        long nviews = pow2(st1.rank0 + st1.rank1) * xdiv(st1.nt_ds, nelts_per_segment);
-        mrb_params.producer_nviews.push_back(nviews);
+        long nquads = pow2(st1.rank0 + st1.rank1) * xdiv(st1.nt_ds, nelts_per_segment);
+        mrb_params.producer_nquads.push_back(nquads);
     }
     for (const Stage2Tree &st2: this->stage2_trees) {
-        long nviews = pow2(st2.rank0 + st2.rank1_trigger) * xdiv(st2.nt_ds, nelts_per_segment);
-        mrb_params.consumer_nviews.push_back(nviews);
+        long nquads = pow2(st2.rank0 + st2.rank1_trigger) * xdiv(st2.nt_ds, nelts_per_segment);
+        mrb_params.consumer_nquads.push_back(nquads);
     }
 
     this->mega_ringbuf = std::make_shared<MegaRingbuf>(mrb_params);
@@ -136,23 +136,23 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
                     int sdst = (ssrc + slag) - (clag * ns);
                     xassert((sdst >= 0) && (sdst < ns));
 
-                    // The stage1 dedispersion kernel (or "producer") uses the following ordering 
-                    // (or "view") of the MegaRingbuf quadruples:
+                    // Recall that the MegaRingbuf producers/consumers interact with the
+                    // buffer via "quadruples", and are free to choose the quadruple ordering.
+                    // The stage1 dedispersion kernel (or "producer") uses the ordering:
                     //      (nt_ds / nelts_per_segment, freq, dm_brev)
                     //
-                    // The stage2 dedispersion kernel (or "consumer") uses the following ordering:
+                    // The stage2 dedispersion kernel (or "consumer") uses the ordering:
                     //      (nt_ds / nelts<per_segment, dm_brev, freq)
                     //
                     // (Note that in both cases, the active dedipsersion index is fastest varying.)
 
                     long producer_id = itree1;
-                    long producer_iview = (ssrc * nfreq_amb * ndm) + (freq * ndm) + dm_brev;
+                    long producer_iquad = (ssrc * nfreq_amb * ndm) + (freq * ndm) + dm_brev;
 
                     long consumer_id = itree2;
-                    long consumer_iview = (sdst * ndm * nfreq_tr) + (dm_brev * nfreq_tr) + freq;
+                    long consumer_iquad = (sdst * ndm * nfreq_tr) + (dm_brev * nfreq_tr) + freq;
 
-                    // mega_ringbuf->add_segment(itree1, iview0, itree2, iview1, clag);
-                    mega_ringbuf->add_segment(producer_id, producer_iview, consumer_id, consumer_iview, clag);
+                    mega_ringbuf->add_segment(producer_id, producer_iquad, consumer_id, consumer_iquad, clag);
                 }
             }
         }

@@ -247,8 +247,8 @@ void CoalescedDdKernel2::test()
     dd_params.input_is_downsampled_tree = is_downsampled_tree;
     dd_params.nt_per_segment = xdiv(1024, dtype.nbits);
 
-    long nviews = pow2(key.dd_rank + amb_rank) * xdiv(nt_in_per_chunk, dd_params.nt_per_segment);
-    dd_params.mega_ringbuf = MegaRingbuf::make_random_simplified(total_beams, beams_per_batch, nchunks, nviews);
+    long nquads = pow2(key.dd_rank + amb_rank) * xdiv(nt_in_per_chunk, dd_params.nt_per_segment);
+    dd_params.mega_ringbuf = MegaRingbuf::make_random_simplified(total_beams, beams_per_batch, nchunks, nquads);
     dd_params.consumer_id = 0;
     
     PeakFindingKernelParams pf_params;

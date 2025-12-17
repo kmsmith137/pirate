@@ -861,8 +861,8 @@ void GpuDedispersionKernel::test()
 
     // Randomize ringbuf (if needed).
     if (params.input_is_ringbuf || params.output_is_ringbuf) {
-        long nviews = nchan * pow2(params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
-        params.mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, ti.nchunks, nviews);
+        long nquads = nchan * pow2(params.amb_rank) * xdiv(params.ntime, params.nt_per_segment);
+        params.mega_ringbuf = MegaRingbuf::make_random_simplified(params.total_beams, params.beams_per_batch, ti.nchunks, nquads);
         params.producer_id = params.output_is_ringbuf ? 0 : -1;
         params.consumer_id = params.input_is_ringbuf ? 0 : -1;
     }
