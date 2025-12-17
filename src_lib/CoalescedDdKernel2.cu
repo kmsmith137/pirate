@@ -176,7 +176,7 @@ void CoalescedDdKernel2::launch(
     Array<void> pstate = this->persistent_state.slice(0, b0, b1);
 
     ulong nt_cumul = it_chunk * dd_params.ntime;
-    long rb_pos = (it_chunk * dd_params.total_beams) + (ibatch * dd_params.beams_per_batch);
+    long rb_frame0 = (it_chunk * dd_params.total_beams) + (ibatch * dd_params.beams_per_batch);
     long ndm_out_per_wt = xdiv(pf_params.ndm_out, pf_params.ndm_wt);
     long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
 
@@ -184,11 +184,11 @@ void CoalescedDdKernel2::launch(
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
 
     registry_value.cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-        (in.data, gpu_ringbuf_quadruples.data, rb_pos,   // void *grb_base_, uint *grb_loc_, long grb_pos,
-         out_max.data, out_argmax.data, wt.data,         // void *out_max_, uint *out_argmax, const void *wt_,
-         pstate.data, dd_params.ntime,                   // void *pstate_, int ntime,
-         nt_cumul, dd_params.input_is_downsampled_tree,  // ulong nt_cumul, bool input_is_downsampled_tree,
-         ndm_out_per_wt, nt_in_per_wt);                  // uint ndm_out_per_wt, uint nt_in_per_wt
+        (in.data, gpu_ringbuf_quadruples.data, rb_frame0,  // void *grb_base_, uint *grb_quads_, long grb_frame0,
+         out_max.data, out_argmax.data, wt.data,           // void *out_max_, uint *out_argmax, const void *wt_,
+         pstate.data, dd_params.ntime,                     // void *pstate_, int ntime,
+         nt_cumul, dd_params.input_is_downsampled_tree,    // ulong nt_cumul, bool input_is_downsampled_tree,
+         ndm_out_per_wt, nt_in_per_wt);                    // uint ndm_out_per_wt, uint nt_in_per_wt
 
     CUDA_PEEK("coalesced_dd_kernel2 launch");
 }

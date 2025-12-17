@@ -182,8 +182,8 @@ struct ReferenceDedispersionKernel
     // Helper functions for either constructor or apply().
     void _init_rlags();
     void _check_sb_out(const ksgpu::Array<void> &sb_out);
-    void _copy_to_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
-    void _copy_from_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_pos);
+    void _copy_to_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_frame0);
+    void _copy_from_ringbuf(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, long rb_frame0);
 };
 
 
@@ -284,13 +284,13 @@ public:
         //     void *pstate, int ntime, ulong nt_cumul, bool input_is_downsampled_tree);
         //
         // void cuda_kernel_in_rb(
-        //     void *rb_base, uint *rb_loc, long rb_pos,
+        //     void *grb_base, uint *grb_quads, long grb_frame0,
         //     void *outbuf, long beam_ostride32, int amb_ostride32, int act_ostride32,
         //     void *pstate, int ntime, ulong nt_cumul, bool input_is_downsampled_tree);
         //
         // void cuda_kernel_out_rb(
         //     void *inbuf, long beam_istride32, int amb_istride32, int act_istride32,
-        //     void *rb_base, uint *rb_loc, long rb_pos,
+        //     void *grb_base, uint *grb_quads, long grb_frame0,
         //     void *pstate, int ntime, ulong nt_cumul, bool input_is_downsampled_tree);
         //
         // where:
@@ -306,7 +306,9 @@ public:
         //   - 'pstate' is an array of shape (nbeams, namb, pstate32_per_small_tree),
         //     with 32-bit dtype (e.g. __half2 not __half).
         //
-        //   - TODO explain 'rb_base', 'rb_loc', 'rb_pos' and other args here.
+        //   - For kernels involving a ring buffer (input_is_ringbuf || output_is_ringbuf),
+        //     the 'grb_base', 'grb_quads', 'grb_frame0' args parameterize the ring buffer.
+        //     See MegaRingbuf.hpp for details.
         //
         //   - 'input_is_downsampled_tree' has the same meaning as
         //     DedispersionKernelParams::input_is_downsampled_tree.

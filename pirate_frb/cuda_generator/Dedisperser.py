@@ -77,7 +77,7 @@ class Dedisperser:
             self._show_shmem_layout_in_comment(k)
 
         # Kernel args depend on whether input/output is a ring buffer.
-        rb_args = 'void *grb_base_, uint *grb_loc_, long grb_pos'
+        rb_args = 'void *grb_base_, uint *grb_quads_, long grb_frame0'
         in_args = rb_args if self.input_is_ringbuf else 'void *inbuf_, long beam_istride32, int amb_istride32, int act_istride32'
         out_args = rb_args if self.output_is_ringbuf else 'void *outbuf_, long beam_ostride32, int amb_ostride32, int act_ostride32'
         
@@ -120,7 +120,7 @@ class Dedisperser:
     def _load_input_data(self, k):
         if self.input_is_ringbuf:
             k.emit('// Load data from input ringbuf into registers.')
-            k.emit('// Reminder: grb_loc is indexed by (tseg, dm_amb, f)')
+            k.emit('// Reminder: grb_quads is indexed by (tseg, dm_amb, f)')
             k.emit('// FIXME: terrible parallelization in this step (all threads do same computation!)')
 
             for i in range(self.ndd):
@@ -142,7 +142,7 @@ class Dedisperser:
 
         if self.output_is_ringbuf:
             k.emit('\n//Store data from registers to output ringbuf')
-            k.emit('// Reminder: grb_loc is indexed by (tseg, f, dmbr)')
+            k.emit('// Reminder: grb_quads is indexed by (tseg, f, dmbr)')
             k.emit('// FIXME: terrible parallelization in this step (all threads do same computation!)')
 
             for i in range(self.ndd):
@@ -162,12 +162,12 @@ class Dedisperser:
         
         q, global_segment_offset, frame_offset_within_zone, frames_in_zone, segments_per_frame, ix = k.get_tmp_rname(6)
                 
-        k.emit(f'uint4 {q} = grb_loc[{i} << {dshift}];')
+        k.emit(f'uint4 {q} = grb_quads[{i} << {dshift}];')
         k.emit(f'uint {global_segment_offset} = {q}.x;  // global_segment_offset, in segments not bytes')
         k.emit(f'uint {frame_offset_within_zone} = {q}.y;   // frame_offset_within_zone: index of (time chunk, beam) pair, relative to current pair')
         k.emit(f'uint {frames_in_zone} = {q}.z;     // frames_in_zone: number of (time chunk, beam) pairs in ringbuf (same as Ringbuf::frames_in_zone)')
         k.emit(f'uint {segments_per_frame} = {q}.w;    // segments_per_frame: number of segments per (time chunk, beam)')
-        k.emit(f'{frame_offset_within_zone} = (grb_pos + {frame_offset_within_zone}) % {frames_in_zone};   // updated frame_offset_within_zone')
+        k.emit(f'{frame_offset_within_zone} = (grb_frame0 + {frame_offset_within_zone}) % {frames_in_zone};   // updated frame_offset_within_zone')
         k.emit(f'{global_segment_offset} += ({frame_offset_within_zone} * {segments_per_frame});      // updated global_segment_offset')
         k.emit(f'long {ix} = (long({global_segment_offset}) << 5) + threadIdx.x;  // index relative to rb_base')
         return ix
@@ -401,14 +401,14 @@ class Dedisperser:
         wshift = f' << {wshift}' if (wshift > 0) else ''
         
         k.emit(f'// Apply per-thread offsets to global memory ring buffer')
-        k.emit(f'// Note: grb_loc is indexed by (tseg, amb, active_ix)')
+        k.emit(f'// Note: grb_quads is indexed by (tseg, amb, active_ix)')
         k.emit(f'// where active_ix = (freq for input ringbuf, or dmbr for output ringbuf)')
 
         k.emit(f'{self.dt32} *grb_base = ({self.dt32} *) grb_base_;')
-        k.emit(f'uint4 *grb_loc = (uint4 *) (grb_loc_);')
-        k.emit(f'grb_loc += (blockIdx.x << {self.rank});   // dm_amb = blockIdx.x')
-        k.emit(f'grb_loc += threadIdx.y{wshift};   // warpId')
-        k.emit(f'grb_pos += blockIdx.y;    // beam = blockIdx.y')
+        k.emit(f'uint4 *grb_quads = (uint4 *) (grb_quads_);')
+        k.emit(f'grb_quads += (blockIdx.x << {self.rank});   // dm_amb = blockIdx.x')
+        k.emit(f'grb_quads += threadIdx.y{wshift};   // warpId')
+        k.emit(f'grb_frame0 += blockIdx.y;    // beam = blockIdx.y')
 
     
     def _init_srb(self, k):
@@ -564,7 +564,7 @@ class Dedisperser:
     
     def _advance_grb(self, k):
         k.emit('// Advance global memory ring buffer')
-        k.emit(f'grb_loc += (gridDim.x << {self.rank});   // nambient = gridDim.x')
+        k.emit(f'grb_quads += (gridDim.x << {self.rank});   // nambient = gridDim.x')
         k.emit()
         
 

@@ -275,14 +275,14 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, 
     if (sb_out.size != 0)
         sb_out = sb_out.reshape({B,Dpf,fs.M,T*S});
 
-    long rb_pos = it_chunk * params.total_beams + (ibatch * params.beams_per_batch);
+    long rb_frame0 = it_chunk * params.total_beams + (ibatch * params.beams_per_batch);
 
     // Dedisperse in-place. Assumes that either 'in' or 'dd_out' is a simple buf (not a ringbuf).
     xassert(!params.input_is_ringbuf || !params.output_is_ringbuf);
     Array<float> dd = params.output_is_ringbuf ? in : dd_out;
 
     if (params.input_is_ringbuf)
-        _copy_from_ringbuf(in, dd, rb_pos);
+        _copy_from_ringbuf(in, dd, rb_frame0);
     else if (dd.data != in.data)
         dd.fill(in);
         
@@ -292,7 +292,7 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, 
     trees.at(ibatch)->dedisperse(dd, sb_out);
 
     if (params.output_is_ringbuf)
-        _copy_to_ringbuf(dd, dd_out, rb_pos);
+        _copy_to_ringbuf(dd, dd_out, rb_frame0);
     else
         xassert(dd_out.data == dd.data);   // FIXME in-place assumed
 }
@@ -369,7 +369,7 @@ void ReferenceDedispersionKernel::_check_sb_out(const ksgpu::Array<void> &sb_out
 
 
 // Helper function called by apply().
-void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
+void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array<float> &out, long rb_frame0)
 {
     xassert(params.mega_ringbuf);
     xassert(params.producer_id >= 0);
@@ -402,11 +402,13 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
     const float *dd = in.data;
     float *ringbuf = out.data;
 
-    // Loop over segments in tree.
+    // Loop over quadruples, and copy segments from 'in' to the ring buffer.
+    // This code may be cryptic, but it should make sense after reading comments in MegaRingbuf.hpp.
+
     for (long s = 0; s < ns; s++) {
         for (long a = 0; a < A; a++) {
             for (long n = 0; n < N; n++) {
-                long iseg = s*A*N + a*N + n;               // index in rb_loc array (same for all beams)
+                long iseg = s*A*N + a*N + n;                                 // index in quadruples array (same for all beams)
                 const float *dd0 = dd + a*dd_astride + n*dd_nstride + s*RS;  // address in dedispersion buf (at beam 0)
 
                 uint global_segment_offset = qp[4*iseg];         // in segments, not bytes
@@ -415,7 +417,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
                 uint segments_per_frame = qp[4*iseg+3];         // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
                 
                 for (long b = 0; b < B; b++) {
-                    uint i = (rb_pos + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
+                    uint i = (rb_frame0 + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
                     long s = global_segment_offset + (i * segments_per_frame);         // segment offset, relative to (float *ringbuf)
                     memcpy(ringbuf + s*RS, dd0 + b*dd_bstride, RS * sizeof(float));
                 }
@@ -426,7 +428,7 @@ void ReferenceDedispersionKernel::_copy_to_ringbuf(const Array<float> &in, Array
 
 
 // Helper function called by apply().
-void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Array<float> &out, long rb_pos)
+void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Array<float> &out, long rb_frame0)
 {
     xassert(params.mega_ringbuf);
     xassert(params.consumer_id >= 0);
@@ -460,12 +462,14 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
     long dd_nstride = out.strides[2];
     xassert(out.strides[3] == 1);
 
-    // Loop over segments in tree.
+    // Loop over quadruples, and copy segments from the ring buffer to 'out'.
+    // This code may be cryptic, but it should make sense after reading comments in MegaRingbuf.hpp.
+
     for (long s = 0; s < ns; s++) {
         for (long a = 0; a < A; a++) {
             for (long n = 0; n < N; n++) {
-                long iseg = s*A*N + a*N + n;         // index in rb_loc array (same for all beams)
-                float *dd0 = dd + n*dd_nstride + a*dd_astride + s*RS; // address in dedispersion buf (at beam 0)
+                long iseg = s*A*N + a*N + n;                           // index in quadruples array (same for all beams)
+                float *dd0 = dd + n*dd_nstride + a*dd_astride + s*RS;  // address in dedispersion buf (at beam 0)
                 
                 uint global_segment_offset = qp[4*iseg];         // in segments, not bytes
                 uint frame_offset_within_zone = qp[4*iseg+1];   // index of (time chunk, beam) pair, relative to current pair
@@ -473,7 +477,7 @@ void ReferenceDedispersionKernel::_copy_from_ringbuf(const Array<float> &in, Arr
                 uint segments_per_frame = qp[4*iseg+3];         // number of segments per (time chunk, beam) (same as Ringbuf::nseg_per_beam)
                 
                 for (long b = 0; b < B; b++) {
-                    uint i = (rb_pos + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
+                    uint i = (rb_frame0 + frame_offset_within_zone + b) % frames_in_zone;  // note "+b" here
                     long s = global_segment_offset + (i * segments_per_frame);         // segment offset, relative to (float *ringbuf)
                     memcpy(dd0 + b*dd_bstride, ringbuf + s*RS, RS * sizeof(float));
                 }
@@ -562,7 +566,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
     Array<void> pstate = this->persistent_state.slice(0, b0, b1);
     
     // Only used if (params.input_is_ringbuf || params.output_is_ringbuf)
-    long rb_pos = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
+    long rb_frame0 = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
 
     dim3 grid_dims = { uint(pow2(params.amb_rank)), uint(params.beams_per_batch), 1 };
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
@@ -584,7 +588,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
         xassert(cuda_kernel != nullptr);
         
         cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
-            (in.buf, gpu_input_quadruples.data, rb_pos,
+            (in.buf, gpu_input_quadruples.data, rb_frame0,
              out.buf, out.beam_stride32, out.amb_stride32, out.act_stride32,
              pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }   
@@ -595,7 +599,7 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
             
         cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
             (in.buf, in.beam_stride32, in.amb_stride32, in.act_stride32,
-             out.buf, gpu_output_quadruples.data, rb_pos,
+             out.buf, gpu_output_quadruples.data, rb_frame0,
              pstate.data, params.ntime, nt_cumul, params.input_is_downsampled_tree);
     }
     else

@@ -102,7 +102,7 @@ namespace pirate {
 //   - "Quadruples". In GPU kernels, ring buffer quadruples (either producer or consumer)
 //      are represented as:
 //
-//        uint global_segment_offset;       // segment count
+//        uint global_segment_offset;      // segment count
 //        uint frame_offset_within_zone;   // frame count
 //        uint frames_in_zone;             // frame count
 //        uint segments_per_frame;         // segment count
@@ -111,19 +111,19 @@ namespace pirate {
 //     computes the memory address of a segment in the buffer.
 //
 //        // Setup
-//        uint quadruple[4];        // see above
+//        uint quadruple[4];         // see above
 //        char *global_base = ...;   // "global" buffer (i.e. all zones) on either CPU or GPU
-//        long frame0 = ...;        // context-dependent frame index
-//        long b = ...;             // context-dependent beam index (just gets added to frame0)
+//        long frame0 = ...;         // context-dependent frame index
+//        long b = ...;              // context-dependent beam index (just gets added to frame0)
 //
 //        uint global_segment_offset = quadruple[0];
 //        uint frame_offset_within_zone = quadruple[1];
 //        uint frames_in_zone = quadruple[2];
 //        uint segments_per_frame = quadruple[3];
 //
-//         uint frame = (frame0 + frame_offset_within_zone + b) % frames_in_zone;
-//         long seg = global_segment_offset + (frame * segments_per_frame);
-//         char *p = global_base + (128 * seg);   // 128 bytes per segmnet
+//        uint frame = (frame0 + frame_offset_within_zone + b) % frames_in_zone;
+//        long seg = global_segment_offset + (frame * segments_per_frame);
+//        char *p = global_base + (128 * seg);   // 128 bytes per segmnet
 //
 //      The point of the quadruple is that it allows segment addresses to be computed
 //      on a single GPU thread, which stores only the uint quadruple[4].

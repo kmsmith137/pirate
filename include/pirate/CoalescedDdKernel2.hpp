@@ -107,12 +107,15 @@ struct CoalescedDdKernel2
     struct RegistryValue
     {
         // cuda_kernel(
-        //     void *grb_base_, uint *grb_loc_, long grb_pos,     // dedisperser input (ring buffer)
-        //     void *out_max_, uint *out_argmax, const void *wt_, // peak-finder output
-        //     void *pstate_, int ntime,                          // shared between dedisperser and peak-finder
-        //     ulong nt_cumul, bool is_downsampled_tree,          // dedisperser
-        //     uint ndm_out_per_wt, uint nt_in_per_wt             // peak-finder
+        //     void *grb_base_, uint *grb_quads_, long grb_frame0,  // dedisperser input (ring buffer)
+        //     void *out_max_, uint *out_argmax, const void *wt_,   // peak-finder output
+        //     void *pstate_, int ntime,                            // shared between dedisperser and peak-finder
+        //     ulong nt_cumul, bool is_downsampled_tree,            // dedisperser
+        //     uint ndm_out_per_wt, uint nt_in_per_wt               // peak-finder
         // );
+        //
+        // The 'grb_base', 'grb_quads', 'grb_frame0' args parameterize the input ring buffer.
+        // See MegaRingbuf.hpp for details.
         //
         // Launch with {32,W,1} threads/block and {Namb,Nbeams,1} threadblocks.
 
