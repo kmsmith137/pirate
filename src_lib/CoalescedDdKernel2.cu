@@ -123,12 +123,12 @@ void CoalescedDdKernel2::launch(
     const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec,)
     const ksgpu::Array<void> &wt,     // from GpuPfWeightLayout::to_gpu()
     long ibatch,                      // 0 <= ibatch < nbatches
-    long it_chunk,                    // time-chunk index 0, 1, ...
+    long ichunk,                    // time-chunk index 0, 1, ...
     cudaStream_t stream)              // NULL stream is allowed, but is not the default);
 {
     xassert(this->is_allocated);
     xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(it_chunk >= 0);
+    xassert(ichunk >= 0);
 
     xassert(out_max.dtype == dtype);
     xassert(in.dtype == dtype);
@@ -175,8 +175,8 @@ void CoalescedDdKernel2::launch(
     long b1 = (ibatch+1) * dd_params.beams_per_batch;
     Array<void> pstate = this->persistent_state.slice(0, b0, b1);
 
-    ulong nt_cumul = it_chunk * dd_params.ntime;
-    long rb_frame0 = (it_chunk * dd_params.total_beams) + (ibatch * dd_params.beams_per_batch);
+    ulong nt_cumul = ichunk * dd_params.ntime;
+    long rb_frame0 = (ichunk * dd_params.total_beams) + (ibatch * dd_params.beams_per_batch);
     long ndm_out_per_wt = xdiv(pf_params.ndm_out, pf_params.ndm_wt);
     long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
 

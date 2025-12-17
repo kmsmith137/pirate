@@ -88,7 +88,7 @@ struct GpuDedisperser
     //
     // FIXME interface will evolve over time (e.g. cudaEvents).
     
-    void launch(long ibatch, long it_chunk, long istream, cudaStream_t stream);
+    void launch(long ibatch, long ichunk, long istream, cudaStream_t stream);
 
     // Static member function: runs one randomized test iteration.
     static void test();
@@ -141,7 +141,7 @@ struct ReferenceDedisperserBase
     std::vector<long> output_ds_level;  // length output_ntrees
     
     // To process multiple chunks, call the dedisperse() method in a loop.
-    virtual void dedisperse(long ibatch, long it_chunk) = 0;
+    virtual void dedisperse(long ibatch, long ichunk) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
     // Shape is (beams_per_batch, 2^input_rank, input_ntime).

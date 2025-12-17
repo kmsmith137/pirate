@@ -822,7 +822,7 @@ struct DownsamplingKernelImpl : public GpuLaggedDownsamplingKernel
 {
     DownsamplingKernelImpl(const LaggedDownsamplingKernelParams &params);
     
-    virtual void launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream) override;
+    virtual void launch(DedispersionBuffer &buf, long ibatch, long ichunk, cudaStream_t stream) override;
 
     using T32 = typename simd32_type<T>::type;    
     cuda_kernel_t<T32> kernel = nullptr;
@@ -854,10 +854,10 @@ DownsamplingKernelImpl<T>::DownsamplingKernelImpl(const LaggedDownsamplingKernel
 
 // Overrides GpuLaggedDownsamplingKernel::launch()
 template<typename T>
-void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, long it_chunk, cudaStream_t stream)
+void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, long ichunk, cudaStream_t stream)
 {
     xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(it_chunk >= 0);
+    xassert(ichunk >= 0);
     xassert(is_allocated);
     
     buf.params.validate();
@@ -904,7 +904,7 @@ void DownsamplingKernelImpl<T>::launch(DedispersionBuffer &buf, long ibatch, lon
         (reinterpret_cast<const T32 *> (buf.bufs.at(0).data),
          reinterpret_cast<T32 *> (buf.bufs.at(1).data),
          params.ntime,
-         it_chunk * params.ntime,  // ntime_cumulative
+         ichunk * params.ntime,  // ntime_cumulative
          buf.ref.strides[0],       // bstride_in,
          buf.ref.strides[0],       // bstride_out,
          reinterpret_cast<T32 *> (pstate));

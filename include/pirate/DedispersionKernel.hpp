@@ -169,7 +169,7 @@ struct ReferenceDedispersionKernel
         ksgpu::Array<void> &in,        // either "simple" buf or ringbuf, see above
         ksgpu::Array<void> &dd_out,    // either "simple" buf or ringbuf, see above
         ksgpu::Array<void> &sb_out,    // shape (B,Dpf,M,T,S) or (B,Dpf,M,T) or empty, see above
-        long ibatch, long it_chunk);
+        long ibatch, long ichunk);
 
     Params params;         // reminder: contains shared_ptr<MegaRingbuf>
     FrequencySubbands fs;  // reminder: contains 'pf_rank' and 'M'.
@@ -226,7 +226,7 @@ public:
         ksgpu::Array<void> &in,
         ksgpu::Array<void> &out,
         long ibatch,
-        long it_chunk,
+        long ichunk,
         cudaStream_t stream  // NULL stream is allowed, but is not the default
     );
 

@@ -246,7 +246,7 @@ ReferenceDedispersionKernel::ReferenceDedispersionKernel(const Params &params_, 
 }
 
 
-void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, Array<void> &sb_out_, long ibatch, long it_chunk)
+void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, Array<void> &sb_out_, long ibatch, long ichunk)
 {
     long B = params.beams_per_batch;
     long A = pow2(params.amb_rank);
@@ -261,7 +261,7 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, 
     _check_sb_out(sb_out_);
 
     xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(it_chunk >= 0);
+    xassert(ichunk >= 0);
 
     // The reference kernel uses float32, regardless of what dtype is specified.
     Array<float> in = in_.template cast<float> ("ReferenceDedispersionKernel::apply(): 'in' array");
@@ -275,7 +275,7 @@ void ReferenceDedispersionKernel::apply(Array<void> &in_, Array<void> &dd_out_, 
     if (sb_out.size != 0)
         sb_out = sb_out.reshape({B,Dpf,fs.M,T*S});
 
-    long rb_frame0 = it_chunk * params.total_beams + (ibatch * params.beams_per_batch);
+    long rb_frame0 = ichunk * params.total_beams + (ibatch * params.beams_per_batch);
 
     // Dedisperse in-place. Assumes that either 'in' or 'dd_out' is a simple buf (not a ringbuf).
     xassert(!params.input_is_ringbuf || !params.output_is_ringbuf);
@@ -550,11 +550,11 @@ void GpuDedispersionKernel::allocate()
 }
 
 
-void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long it_chunk, cudaStream_t stream)
+void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, long ibatch, long ichunk, cudaStream_t stream)
 {
     xassert(this->is_allocated);
     xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(it_chunk >= 0);
+    xassert(ichunk >= 0);
 
     DedispersionKernelIobuf in(params, in_arr, params.input_is_ringbuf, true);     // on_gpu=true
     DedispersionKernelIobuf out(params, out_arr, params.output_is_ringbuf, true);  // on_gpu=true
@@ -566,11 +566,11 @@ void GpuDedispersionKernel::launch(Array<void> &in_arr, Array<void> &out_arr, lo
     Array<void> pstate = this->persistent_state.slice(0, b0, b1);
     
     // Only used if (params.input_is_ringbuf || params.output_is_ringbuf)
-    long rb_frame0 = (it_chunk * params.total_beams) + (ibatch * params.beams_per_batch);
+    long rb_frame0 = (ichunk * params.total_beams) + (ibatch * params.beams_per_batch);
 
     dim3 grid_dims = { uint(pow2(params.amb_rank)), uint(params.beams_per_batch), 1 };
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
-    ulong nt_cumul = it_chunk * params.ntime;
+    ulong nt_cumul = ichunk * params.ntime;
 
     if (!params.input_is_ringbuf && !params.output_is_ringbuf) {
         // Case 1: neither input nor output are ringbufs.

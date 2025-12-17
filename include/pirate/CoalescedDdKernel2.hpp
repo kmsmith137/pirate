@@ -38,7 +38,7 @@ struct CoalescedDdKernel2
         const ksgpu::Array<void> &in,     // shape (mega_ringbuf->gpu_global_nseg * nt_per_segment * nspec,)
         const ksgpu::Array<void> &wt,     // see comment above
         long ibatch,                      // 0 <= ibatch < nbatches
-        long it_chunk,                    // time-chunk index 0, 1, ...
+        long ichunk,                    // time-chunk index 0, 1, ...
         cudaStream_t stream               // NULL stream is allowed, but is not the default);
     );
 

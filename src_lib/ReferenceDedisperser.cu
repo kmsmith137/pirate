@@ -195,7 +195,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 
 
 // virtual override
-void ReferenceDedisperser0::dedisperse(long ibatch, long it_chunk)
+void ReferenceDedisperser0::dedisperse(long ibatch, long ichunk)
 {
     long nds = config.num_downsampling_levels;
     
@@ -285,7 +285,7 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
     
-    virtual void dedisperse(long ibatch, long it_chunk) override;
+    virtual void dedisperse(long ibatch, long ichunk) override;
 };
 
 
@@ -354,7 +354,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
 
 
 // virtual override
-void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
+void ReferenceDedisperser1::dedisperse(long ibatch, long ichunk)
 {
     // Step 1: run LaggedDownsampler.    
     lds_kernel->apply(stage1_dd_buf, ibatch);
@@ -369,7 +369,7 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime }); 
 
         Array<float> sb_empty;  // no subbands yet
-        kernel->apply(dd_buf, dd_buf, sb_empty, ibatch, it_chunk);
+        kernel->apply(dd_buf, dd_buf, sb_empty, ibatch, ichunk);
     }
 
     // Step 3: copy stage1 -> stage2
@@ -400,7 +400,7 @@ void ReferenceDedisperser1::dedisperse(long ibatch, long it_chunk)
         dd_buf = dd_buf.transpose({0,2,1,3});
 
         Array<float> sb_empty;  // no subbands yet
-        kernel->apply(dd_buf, dd_buf, sb_empty, ibatch, it_chunk);
+        kernel->apply(dd_buf, dd_buf, sb_empty, ibatch, ichunk);
     }
 }
 
@@ -433,7 +433,7 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     shared_ptr<CpuRingbufCopyKernel> g2g_copy_kernel;
     shared_ptr<CpuRingbufCopyKernel> h2h_copy_kernel;
     
-    virtual void dedisperse(long ibatch, long it_chunk) override;
+    virtual void dedisperse(long ibatch, long ichunk) override;
 };
 
 
@@ -468,14 +468,14 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
 }
 
 
-void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
+void ReferenceDedisperser2::dedisperse(long ibatch, long ichunk)
 {
     const long BT = this->config.beams_per_gpu;            // total beams
     const long BB = this->config.beams_per_batch;          // beams per batch
     const long BA = this->config.num_active_batches * BB;  // active beams
     const long S = plan->nelts_per_segment;
 
-    long iframe = (it_chunk * BT) + (ibatch * BB);
+    long iframe = (ichunk * BT) + (ibatch * BB);
 
     // Step 1: run LaggedDownsampler.
     lds_kernel->apply(stage1_dd_buf, ibatch);
@@ -490,7 +490,7 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime }); 
 
         Array<float> sb_empty;  // no subbands yet
-        kernel->apply(dd_buf, this->gpu_ringbuf, sb_empty, ibatch, it_chunk);
+        kernel->apply(dd_buf, this->gpu_ringbuf, sb_empty, ibatch, ichunk);
     }
 
     // Step 3: extra copying steps needed for early triggers.
@@ -507,8 +507,8 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
     float *et_dst = this->gpu_ringbuf.data + (etg_zone.global_segment_offset + et_off) * S;
     long et_nbytes = BB * eth_zone.segments_per_frame * S * sizeof(float);
     
-    this->g2g_copy_kernel->apply(this->gpu_ringbuf, ibatch, it_chunk);     // gpu -> xfer
-    this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, it_chunk);    // host -> et_host
+    this->g2g_copy_kernel->apply(this->gpu_ringbuf, ibatch, ichunk);     // gpu -> xfer
+    this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, ichunk);    // host -> et_host
     memcpy(et_dst, et_src, et_nbytes);  // et_host -> et_gpu (must come after h2h_copy_kernel)
     
     //
@@ -558,7 +558,7 @@ void ReferenceDedisperser2::dedisperse(long ibatch, long it_chunk)
         dd_buf = dd_buf.transpose({0,2,1,3});
 
         Array<float> sb_empty;  // no subbands yet
-        kernel->apply(this->gpu_ringbuf, dd_buf, sb_empty, ibatch, it_chunk);
+        kernel->apply(this->gpu_ringbuf, dd_buf, sb_empty, ibatch, ichunk);
     }
 }
 

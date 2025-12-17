@@ -114,7 +114,7 @@ void GpuDedisperser::allocate()
 }
 
 
-void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream_t stream)
+void GpuDedisperser::launch(long ibatch, long ichunk, long istream, cudaStream_t stream)
 {
     const long BT = this->config.beams_per_gpu;            // total beams
     const long BB = this->config.beams_per_batch;          // beams per batch
@@ -123,13 +123,13 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
 
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert((istream >= 0) && (istream < nstreams));
-    xassert(it_chunk >= 0);
+    xassert(ichunk >= 0);
     xassert(is_allocated);
     
-    long iframe = (it_chunk * BT) + (ibatch * BB);
+    long iframe = (ichunk * BT) + (ibatch * BB);
     
     // Step 1: run LaggedDownsampler.
-    lds_kernel->launch(stage1_dd_bufs.at(istream), ibatch, it_chunk, stream);
+    lds_kernel->launch(stage1_dd_bufs.at(istream), ibatch, ichunk, stream);
 
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
     for (uint i = 0; i < stage1_dd_kernels.size(); i++) {
@@ -139,7 +139,7 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime });
-        kernel->launch(dd_buf, this->gpu_ringbuf, ibatch, it_chunk, stream);
+        kernel->launch(dd_buf, this->gpu_ringbuf, ibatch, ichunk, stream);
     }
 
     // Step 3: extra copying steps needed for early triggers.
@@ -157,10 +157,10 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
     long et_nbytes = BB * eth_zone.segments_per_frame * SB;
     
     // copy gpu -> xfer
-    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ibatch, it_chunk, stream);
+    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ibatch, ichunk, stream);
 
     // copy host -> et_host
-    this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, it_chunk);
+    this->h2h_copy_kernel->apply(this->host_ringbuf, ibatch, ichunk);
 
      // copy et_host -> et_gpu (must come after h2h_copy_kernel)
     CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, stream)); 
@@ -211,7 +211,7 @@ void GpuDedisperser::launch(long ibatch, long it_chunk, long istream, cudaStream
         // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
         dd_buf = dd_buf.transpose({0,2,1,3});
-        kernel->launch(this->gpu_ringbuf, dd_buf, ibatch, it_chunk, stream);
+        kernel->launch(this->gpu_ringbuf, dd_buf, ibatch, ichunk, stream);
     }
 }
 
@@ -282,7 +282,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
             if (!host_only) {
                 Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
                 gdd_inbuf.fill(arr.convert(config.dtype));
-                gdd->launch(b, c, 0, nullptr);  // (ibatch, it_chunk, istream, stream)
+                gdd->launch(b, c, 0, nullptr);  // (ibatch, ichunk, istream, stream)
             }
             
             for (int iout = 0; iout < nout; iout++) {
