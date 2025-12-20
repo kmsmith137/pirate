@@ -10,10 +10,11 @@
 #include <ksgpu/string_utils.hpp>  // ksgpu::tuple_str()
 
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/utils.hpp"       // check_rank(), is_empty_string()
-#include "../include/pirate/inlines.hpp"     // xdiv(), pow2(), print_kv()
-#include "../include/pirate/file_utils.hpp"  // File
+#include "../include/pirate/utils.hpp"           // check_rank(), is_empty_string()
+#include "../include/pirate/inlines.hpp"         // xdiv(), pow2(), print_kv(), is_power_of_two()
+#include "../include/pirate/file_utils.hpp"      // File
 #include "../include/pirate/YamlFile.hpp"
+#include "../include/pirate/FrequencySubbands.hpp"  // FrequencySubbands::validate_subband_counts()
 
 #include <yaml-cpp/emitter.h>
 
@@ -205,6 +206,32 @@ void DedispersionConfig::validate() const
         xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
         xassert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
     }
+
+    // Validate frequency_subband_counts.
+    FrequencySubbands::validate_subband_counts(frequency_subband_counts);
+
+    // Validate peak_finding_params.
+    xassert(long(peak_finding_params.size()) == num_downsampling_levels);
+    
+    for (const PeakFindingParams &pfp: peak_finding_params) {
+        xassert(pfp.max_width > 0);
+        xassert(is_power_of_two(pfp.max_width));
+        xassert(pfp.wt_dm_downsampling > 0);
+        xassert(is_power_of_two(pfp.wt_dm_downsampling));
+        xassert(pfp.wt_time_downsampling > 0);
+        xassert(is_power_of_two(pfp.wt_time_downsampling));
+        
+        // dm_downsampling and time_downsampling are optional (can be zero).
+        // If specified, they must be powers of two and <= wt_* counterparts.
+        if (pfp.dm_downsampling > 0) {
+            xassert(is_power_of_two(pfp.dm_downsampling));
+            xassert(pfp.wt_dm_downsampling >= pfp.dm_downsampling);
+        }
+        if (pfp.time_downsampling > 0) {
+            xassert(is_power_of_two(pfp.time_downsampling));
+            xassert(pfp.wt_time_downsampling >= pfp.time_downsampling);
+        }
+    }
 }
 
 
@@ -262,6 +289,30 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
             << YAML::EndMap;
     }
     
+    emitter
+        << YAML::EndSeq
+        << YAML::Key << "frequency_subband_counts"
+        << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (long n: frequency_subband_counts)
+        emitter << n;
+    emitter
+        << YAML::EndSeq
+        << YAML::Key << "peak_finding_params"
+        << YAML::Value
+        << YAML::BeginSeq;
+    
+    for (const auto &pfp: this->peak_finding_params) {
+        emitter
+            << YAML::Flow
+            << YAML::BeginMap
+            << YAML::Key << "max_width" << YAML::Value << pfp.max_width
+            << YAML::Key << "dm_downsampling" << YAML::Value << pfp.dm_downsampling
+            << YAML::Key << "time_downsampling" << YAML::Value << pfp.time_downsampling
+            << YAML::Key << "wt_dm_downsampling" << YAML::Value << pfp.wt_dm_downsampling
+            << YAML::Key << "wt_time_downsampling" << YAML::Value << pfp.wt_time_downsampling
+            << YAML::EndMap;
+    }
+
     emitter
         << YAML::EndSeq
         << YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu
@@ -324,7 +375,23 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
         long tree_rank = et.get_scalar<long> ("tree_rank");
         ret.add_early_trigger(ds_level, tree_rank);
         et.check_for_invalid_keys();
-    }   
+    }
+
+    ret.frequency_subband_counts = f.get_vector<long> ("frequency_subband_counts");
+
+    YamlFile pfps = f["peak_finding_params"];
+
+    for (long i = 0; i < pfps.size(); i++) {
+        YamlFile p = pfps[i];
+        PeakFindingParams pfp;
+        pfp.max_width = p.get_scalar<long> ("max_width");
+        pfp.dm_downsampling = p.get_scalar<long> ("dm_downsampling", 0L);
+        pfp.time_downsampling = p.get_scalar<long> ("time_downsampling", 0L);
+        pfp.wt_dm_downsampling = p.get_scalar<long> ("wt_dm_downsampling");
+        pfp.wt_time_downsampling = p.get_scalar<long> ("wt_time_downsampling");
+        ret.peak_finding_params.push_back(pfp);
+        p.check_for_invalid_keys();
+    }
     
     f.check_for_invalid_keys();
     
@@ -400,6 +467,16 @@ DedispersionConfig DedispersionConfig::make_random(bool allow_early_triggers)
 
     ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
     ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
+
+    // Placeholder values for frequency_subband_counts and peak_finding_params.
+    ret.frequency_subband_counts = { 1 };
+    
+    ret.peak_finding_params.resize(ret.num_downsampling_levels);
+    for (int i = 0; i < ret.num_downsampling_levels; i++) {
+        ret.peak_finding_params[i].max_width = 16;
+        ret.peak_finding_params[i].wt_dm_downsampling = 64;
+        ret.peak_finding_params[i].wt_time_downsampling = 64;
+    }
         
     ret.validate();
     return ret;

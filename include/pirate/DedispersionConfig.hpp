@@ -30,8 +30,13 @@ struct DedispersionConfig
     std::vector<double> zone_freq_edges;  // length (nzones+1), monotone increasing.
 
     // Core dedispersion parameters.
+    // The number of "tree" channels is ntree = 2^tree_rank.
+    // The first tree searches to dispersion delay given by 2^tree_rank time samples.
+    // Downsampled trees (0 < ids < num_downsampling_levels) downsample in time by 2^ids,
+    // then search delay range 2^(tree_rank+ids-1) <= delay <= 2^(tree_rank+ids).
+
     long tree_rank = -1;
-    long num_downsampling_levels = -1;
+    long num_downsampling_levels = 0;
     long time_samples_per_chunk = 0;
 
     // For now, there is only one dtype, which can be either float32 or float16.
@@ -39,11 +44,45 @@ struct DedispersionConfig
     // dtypes (e.g. float8, int7).
 
     ksgpu::Dtype dtype;
-    
+
+    // Defines frequency sub-bands for search. This can improve SNR for bursts that don't
+    // span the full frequency range. For documentation, see FrequencySubbands.hpp.
+    // To disable subbands (and search only the full band), set to {1}.
+
+    std::vector<long> frequency_subband_counts;
+
+    // Each downsampling level has its own PeakFindingParams.
+    // All members must be powers of two.
+    //   max_width: max width of peak-finding kernel, in "tree" time samples
+    //   {dm,time}_downsampling: downsampling factors of coarse-grained array, relative to tree
+    //   wt_{dm,downsampling}: downsampling factors of weights array, relative to tree.
+
+    struct PeakFindingParams
+    {
+        long max_width = 0;             // required
+        long dm_downsampling = 0;       // optional (default = "2^ceil(tree_rank/4)")
+        long time_downsampling = 0;     // optional (default = "use value of dm_downsampling")
+        long wt_dm_downsampling = 0;    // required (must be >= dm_downsampling)
+        long wt_time_downsampling = 0;  // required (must be >= time_downsampling)
+    };
+
+    std::vector<PeakFindingParams> peak_finding_params;  // length (num_downsampling_levels)
+
+    // Early triggers: search a subset [fmid,fmax] of the full frequency range [flo,fhi]
+    // at reduced latency. Each downsampling level has an independent set of early triggers.
+    //
+    // Early triggers are parameterized by EarlyTrigger::tree_rank, which must be less 
+    // than the rank of the main (i.e. non-early) dedispersion tree. The rank of the main 
+    // tree is (DedispersionConfig::tree_rank - S), where S=0 at ds_level=0, and S=1 for
+    // ds_level > 0. (Detail: the downsampled trees have one lower rank because they search
+    // a DM range which does not start at zero, see above.)
+    //
+    // Early triggers are optional (i.e. 'early_triggers' can be an empty vector).
+
     struct EarlyTrigger
     {
-        long ds_level = -1;
-        long tree_rank = 0;
+        long ds_level = -1;  // 0 <= ds_level < num_downsampling_levels
+        long tree_rank = 0;  // defines frequency range of early trigger
     };
 
     // Sorted (by ds_level first, then tree_rank).
@@ -55,7 +94,8 @@ struct DedispersionConfig
     long num_active_batches = 0;
 
     // For testing: limit on-gpu ring buffers to (clag) <= (gpu_clag_maxfrac) * (max_clag)
-    double gpu_clag_maxfrac = 1.0;   // set to 1 to disable (default)
+    // Set to 1.0 to disable (this is the default).
+    double gpu_clag_maxfrac = 1.0;
     
     void validate() const;
 
