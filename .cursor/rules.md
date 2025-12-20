@@ -86,6 +86,7 @@ namespace pirate {
 ## Style Guidelines
 
 - Prefer explicit types over `auto` (except for iterators and complex template types)
+- Prefer private (or static) functions over anonymous scopes `{ ... }`.
 - Use `//` comments, not `/* */`
 - Document array shapes in comments: `// shape (B, D, M, T)`
 - Keep lines under ~120 characters when reasonable
@@ -142,4 +143,4 @@ The `--help` flag shows all available test flags.
 - Don't refactor unrelated code
 - Don't create documentation files unless asked
 - Don't use `using namespace std` in headers
-
+- When asked to modify `rules.md`, add new rules, but don't delete existing content.
