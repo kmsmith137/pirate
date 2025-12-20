@@ -48,6 +48,9 @@ struct DedispersionPlan
 
     void print(std::ostream &os=std::cout, int indent=0) const;
 
+    // Helper called by constructor.
+    void _init_tree_gridding_kernel_params();
+    
     // Members after this should not be needed "from the outside".
     // FIXME: reorganize code to reflect this?
     

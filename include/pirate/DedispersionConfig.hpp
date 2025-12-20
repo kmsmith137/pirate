@@ -23,11 +23,11 @@ struct DedispersionConfig
     // Within each zone, all frequency channels have the same width, but the 
     // channel width may differ between zones. For example:
     //
-    //   nfreq = {N}      freq_edges={400,800}      one zone, channel width (400/N)
-    //   nfreq = {2*N,N}  freq_edges={400,600,800}  width (100/N), (200/N) in lower/upper band
+    //   zone_nfreq = {N}      zone_freq_edges={400,800}      one zone, channel width (400/N)
+    //   zone_nfreq = {2*N,N}  zone_freq_edges={400,600,800}  width (100/N), (200/N) in lower/upper band
 
-    std::vector<long> nfreq;         // length (nzones)
-    std::vector<double> freq_edges;  // length (nzones+1), monotone increasing.
+    std::vector<long> zone_nfreq;         // length (nzones)
+    std::vector<double> zone_freq_edges;  // length (nzones+1), monotone increasing.
 
     // Core dedispersion parameters.
     long tree_rank = -1;
@@ -87,10 +87,13 @@ struct DedispersionConfig
     int get_nelts_per_segment() const;
 
     // Returns the fractional frequency channel corresponding to frequency f.
-    // E.g. if f=freq_edges[i], then return value is sum_{j<i} nfreq[j].
+    // E.g. if f=zone_freq_edges[i], then return value is sum_{j<i} zone_nfreq[j].
     // Throws an exception if f is out-of-range (but allows a little roundoff error).
     // Uses linear search (not binary search) since the number of zones is assumed small.
     float get_frequency_index(float f) const;
+
+    // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
+    long get_total_nfreq() const;
 
     // make_random(): used for unit tests.
     static DedispersionConfig make_random(bool allow_early_triggers=true);

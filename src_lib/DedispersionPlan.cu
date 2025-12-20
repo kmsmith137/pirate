@@ -174,47 +174,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //   RingbufCopyKernelParams g2g_copy_kernel_params;
     //   RingbufCopyKernelParams h2h_copy_kernel_params;
     
-    // Initialize tree_gridding_kernel_params from config.{nfreq,freq_edges}, as follows.
-    //
-    // The full frequency band is flo <= f <= fhi, where flo=freq_edges[0] and f=freq_edges[nfreq].
-    // We change variables to a "delay" d = f^(-2), with a shift/scale so that d=0 corresponds
-    // to f=fhi, and d=ntree corresponds to f=flo. Here, ntree=pow2(config.tree_rank).
-    //
-    // Then, to compute tree_gridding_kernel[n], we convert delay d=n to a frequency f, then
-    // convert f to a fractional index by calling config.get_frequency_index().
+    this->_init_tree_gridding_kernel_params();
 
-    {
-        long nchan = pow2(config.tree_rank);
-        long tot_nfreq = 0;
-        for (long n: config.nfreq)
-            tot_nfreq += n;
-        
-        float flo = config.freq_edges.front();
-        float fhi = config.freq_edges.back();
-        
-        // d = scale * (1/f^2 - 1/fhi^2), where d=0 at f=fhi, d=nchan at f=flo.
-        float scale = nchan / (1.0f/(flo*flo) - 1.0f/(fhi*fhi));
-        float inv_fhi_sq = 1.0f / (fhi * fhi);
-        
-        // channel_map has length (nchan+1), must be monotonically decreasing.
-        tree_gridding_kernel_params.channel_map = Array<float> ({nchan+1}, af_rhost);
-        
-        for (long n = 0; n <= nchan; n++) {
-            // Convert delay d=n to frequency f.
-            float f = 1.0f / sqrtf(n/scale + inv_fhi_sq);
-            // Convert frequency to fractional channel index.
-            tree_gridding_kernel_params.channel_map.data[n] = config.get_frequency_index(f);
-        }
-        
-        tree_gridding_kernel_params.dtype = config.dtype;
-        tree_gridding_kernel_params.nfreq = tot_nfreq;
-        tree_gridding_kernel_params.nchan = nchan;
-        tree_gridding_kernel_params.ntime = config.time_samples_per_chunk;
-        tree_gridding_kernel_params.beams_per_batch = config.beams_per_batch;
-        tree_gridding_kernel_params.validate();
-    }
-
-    // Initialize remaining 'paramns' members.
+    // Initialize remaining 'params' members.
     
     stage1_dd_buf_params.dtype = config.dtype;
     stage1_dd_buf_params.beams_per_batch = config.beams_per_batch;
@@ -302,6 +264,49 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     stage2_dd_buf_params.validate();
     g2g_copy_kernel_params.validate();
     h2h_copy_kernel_params.validate();
+}
+
+
+// ------------------------------------------------------------------------------------------------
+
+
+// Initialize tree_gridding_kernel_params from config.{zone_nfreq,zone_freq_edges}, as follows.
+//
+// The full frequency band is flo <= f <= fhi, where flo=zone_freq_edges[0] and fhi=zone_freq_edges.back().
+// We change variables to a "delay" d = f^(-2), with a shift/scale so that d=0 corresponds
+// to f=fhi, and d=ntree corresponds to f=flo. Here, ntree=pow2(config.tree_rank).
+//
+// Then, to compute tree_gridding_kernel_params.channel_map[n], we convert delay d=n to a frequency f,
+// then convert f to a fractional index by calling config.get_frequency_index().
+
+void DedispersionPlan::_init_tree_gridding_kernel_params()
+{
+    long nchan = pow2(config.tree_rank);
+    long tot_nfreq = config.get_total_nfreq();
+    
+    float flo = config.zone_freq_edges.front();
+    float fhi = config.zone_freq_edges.back();
+    
+    // d = scale * (1/f^2 - 1/fhi^2), where d=0 at f=fhi, d=nchan at f=flo.
+    float scale = nchan / (1.0f/(flo*flo) - 1.0f/(fhi*fhi));
+    float inv_fhi_sq = 1.0f / (fhi * fhi);
+    
+    // channel_map has length (nchan+1), must be monotonically decreasing.
+    tree_gridding_kernel_params.channel_map = Array<float> ({nchan+1}, af_rhost);
+    
+    for (long n = 0; n <= nchan; n++) {
+        // Convert delay d=n to frequency f.
+        float f = 1.0f / sqrtf(n/scale + inv_fhi_sq);
+        // Convert frequency to fractional channel index.
+        tree_gridding_kernel_params.channel_map.data[n] = config.get_frequency_index(f);
+    }
+    
+    tree_gridding_kernel_params.dtype = config.dtype;
+    tree_gridding_kernel_params.nfreq = tot_nfreq;
+    tree_gridding_kernel_params.nchan = nchan;
+    tree_gridding_kernel_params.ntime = config.time_samples_per_chunk;
+    tree_gridding_kernel_params.beams_per_batch = config.beams_per_batch;
+    tree_gridding_kernel_params.validate();
 }
 
 

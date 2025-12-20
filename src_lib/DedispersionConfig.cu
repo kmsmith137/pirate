@@ -2,7 +2,6 @@
 
 #include <cstring>                 // strlen()
 #include <algorithm>               // std::sort()
-#include <numeric>                 // std::accumulate()
 
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/xassert.hpp>
@@ -73,11 +72,20 @@ int DedispersionConfig::get_nelts_per_segment() const
 }
 
 
+long DedispersionConfig::get_total_nfreq() const
+{
+    long ret = 0;
+    for (long n: zone_nfreq)
+        ret += n;
+    return ret;
+}
+
+
 float DedispersionConfig::get_frequency_index(float f) const
 {
     // Allow small roundoff error at band edges.
-    float fmin = freq_edges.front();
-    float fmax = freq_edges.back();
+    float fmin = zone_freq_edges.front();
+    float fmax = zone_freq_edges.back();
     float eps = 1.0e-6f * (fmax - fmin);
     
     if ((f < fmin - eps) || (f > fmax + eps)) {
@@ -93,21 +101,21 @@ float DedispersionConfig::get_frequency_index(float f) const
     
     // Linear search through zones.
     float channel_offset = 0;
-    for (size_t i = 0; i < nfreq.size(); i++) {
-        float f0 = freq_edges[i];
-        float f1 = freq_edges[i+1];
+    for (size_t i = 0; i < zone_nfreq.size(); i++) {
+        float f0 = zone_freq_edges[i];
+        float f1 = zone_freq_edges[i+1];
         
         if (f <= f1) {
             // Frequency is in zone i.
             float frac = (f - f0) / (f1 - f0);
-            channel_offset += frac * nfreq[i];
+            channel_offset += frac * zone_nfreq[i];
             break;
         }
         
-        channel_offset += nfreq[i];
+        channel_offset += zone_nfreq[i];
     }
     
-    float tot_nfreq = std::accumulate(nfreq.begin(), nfreq.end(), 0.0f);
+    float tot_nfreq = this->get_total_nfreq();
 
     // Clamp channel_offset to [0, tot_nfreq]. (Mostly redundant with
     // previous clamping logic, but roundoff error may spill slightly
@@ -156,16 +164,16 @@ void DedispersionConfig::validate() const
     xassert(beams_per_batch > 0);
     xassert(num_active_batches > 0);
 
-    // Validate nfreq and freq_edges.
-    xassert(nfreq.size() > 0);
-    xassert(freq_edges.size() == nfreq.size() + 1);
+    // Validate zone_nfreq and zone_freq_edges.
+    xassert(zone_nfreq.size() > 0);
+    xassert(zone_freq_edges.size() == zone_nfreq.size() + 1);
     
-    for (size_t i = 0; i < nfreq.size(); i++)
-        xassert(nfreq[i] > 0);
+    for (size_t i = 0; i < zone_nfreq.size(); i++)
+        xassert(zone_nfreq[i] > 0);
     
-    for (size_t i = 0; i+1 < freq_edges.size(); i++) {
-        xassert(freq_edges[i] > 0.0f);
-        xassert(freq_edges[i] < freq_edges[i+1]);
+    for (size_t i = 0; i+1 < zone_freq_edges.size(); i++) {
+        xassert(zone_freq_edges[i] > 0.0f);
+        xassert(zone_freq_edges[i] < zone_freq_edges[i+1]);
     }
 
     int min_rank = (num_downsampling_levels > 1) ? 1 : 0;
@@ -202,8 +210,8 @@ void DedispersionConfig::validate() const
 
 void DedispersionConfig::print(ostream &os, int indent) const
 {
-    print_kv("nfreq", ksgpu::tuple_str(nfreq), os, indent);
-    print_kv("freq_edges", ksgpu::tuple_str(freq_edges), os, indent);
+    print_kv("zone_nfreq", ksgpu::tuple_str(zone_nfreq), os, indent);
+    print_kv("zone_freq_edges", ksgpu::tuple_str(zone_freq_edges), os, indent);
     print_kv("tree_rank", tree_rank, os, indent);
     print_kv("num_downsampling_levels", num_downsampling_levels, os, indent);
     print_kv("time_samples_per_chunk", time_samples_per_chunk, os, indent);
@@ -225,15 +233,15 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
     
     emitter
         << YAML::BeginMap
-        << YAML::Key << "nfreq"
+        << YAML::Key << "zone_nfreq"
         << YAML::Value << YAML::Flow << YAML::BeginSeq;
-    for (long n: nfreq)
+    for (long n: zone_nfreq)
         emitter << n;
     emitter
         << YAML::EndSeq
-        << YAML::Key << "freq_edges"
+        << YAML::Key << "zone_freq_edges"
         << YAML::Value << YAML::Flow << YAML::BeginSeq;
-    for (double f: freq_edges)
+    for (double f: zone_freq_edges)
         emitter << f;
     emitter
         << YAML::EndSeq
@@ -298,8 +306,8 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 {
     DedispersionConfig ret;
 
-    ret.nfreq = f.get_vector<long> ("nfreq");
-    ret.freq_edges = f.get_vector<double> ("freq_edges");
+    ret.zone_nfreq = f.get_vector<long> ("zone_nfreq");
+    ret.zone_freq_edges = f.get_vector<double> ("zone_freq_edges");
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
     ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
@@ -340,10 +348,10 @@ DedispersionConfig DedispersionConfig::make_random(bool allow_early_triggers)
     double x = ksgpu::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
     ret.tree_rank = int(sqrt(x));
 
-    // Frequency band: single zone [400,800] with nfreq = pow2(tree_rank).
+    // Frequency band: single zone [400,800] with zone_nfreq = pow2(tree_rank).
     // (Placeholder for more complex logic later.)
-    ret.nfreq = { pow2(ret.tree_rank) };
-    ret.freq_edges = { 400.0, 800.0 };
+    ret.zone_nfreq = { pow2(ret.tree_rank) };
+    ret.zone_freq_edges = { 400.0, 800.0 };
 
     // Randomly choose nt_chunk, but bias toward a low number.
     // Note: call ret.get_nelts_per_segment() after setting ret.dtype
