@@ -10,16 +10,18 @@ namespace pirate {
 #endif
 
 
-// Defined in TreeGriddingKernel.cu
 struct TreeGriddingKernelParams
 {
     ksgpu::Dtype dtype;
-    long nfreq = 0;
-    long nchan = 0;   // number of tree channels
+    long nfreq = 0;   // number of input frequency channels
+    long nchan = 0;   // number of output tree channels
     long ntime = 0;
     long beams_per_batch = 0;
-    
-    // Length (nchan+1), values are in [0,nfreq].
+
+    // Length (nchan+1), values are in [0,nfreq], stored in CPU memory.
+    // Defines the mapping between output "tree" channels and frequency channels.
+    // Given tree channel 0 <= itree < ntree, the values of channel_map[itree] and
+    // channel_map[itree+1] define the edges of the tree channel in frequency space.
     ksgpu::Array<float> channel_map;
 
     // Validates params, and returns reference to 'this'.
@@ -27,11 +29,21 @@ struct TreeGriddingKernelParams
 };
 
 
-// Defined in TreeGriddingKernel.cu
 struct ReferenceTreeGriddingKernel
 {
     ReferenceTreeGriddingKernel(const TreeGriddingKernelParams &params);
 
+    // Rebins input frequency channels into output "tree" channels, using weighted sums.
+    //
+    // For each tree channel n (0 <= n < nchan), the channel_map defines floating-point
+    // boundaries [f0, f1) = [channel_map[n], channel_map[n+1]). The output is computed as:
+    //
+    //   out[b,n,t] = sum_f w[n,f] * in[b,f,t]
+    //
+    // where w[n,f] is the fractional overlap between the tree channel [f0,f1) and the
+    // frequency bin [f, f+1). That is, w = max(min(f1,f+1) - max(f0,f), 0). This gives
+    // weight 1 for fully contained frequency channels, and fractional weights at edges.
+    //
     // Note: params.dtype is ignored in reference kernel (dtype of apply() is always float).
     // Output array shape is (beams_per_batch, nchan, ntime), and inner two indices must be contiguous.
     // Input array shape is (beams_per_batch, nfreq, ntime), and inner two indices must be contiguous.
@@ -41,21 +53,22 @@ struct ReferenceTreeGriddingKernel
 };
 
 
-// Defined in TreeGriddingKernel.cu
 struct GpuTreeGriddingKernel
 {
     GpuTreeGriddingKernel(const TreeGriddingKernelParams &params);
 
     void allocate();
 
-    // launch(): asynchronously launch kernel, and return without synchronizing streams.
+    // launch(): asynchronously launch kernel, and return without synchronizing stream.
     // Note: stream=NULL is allowed, but is not the default.
     void launch(ksgpu::Array<void> &out, const ksgpu::Array<void> &in, cudaStream_t stream);
 
+    // Reminder: contains 'channel_map', which lives in host memory.
     const TreeGriddingKernelParams params;
 
-    bool is_allocated = false;
+    // If is_allocated=true, then 'gpu_channel_map' is a copy of 'channel_map' in GPU memory.
     ksgpu::Array<float> gpu_channel_map;
+    bool is_allocated = false;
     
     // Bandwidth per call to GpuTreeGriddingKernel::launch().
     // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
