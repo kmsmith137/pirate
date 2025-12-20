@@ -20,8 +20,12 @@ struct TreeGriddingKernelParams
 
     // Length (nchan+1), values are in [0,nfreq], stored in CPU memory.
     // Defines the mapping between output "tree" channels and frequency channels.
-    // Given tree channel 0 <= itree < ntree, the values of channel_map[itree] and
-    // channel_map[itree+1] define the edges of the tree channel in frequency space.
+    // The array must be monotonically decreasing (channel_map[i] > channel_map[i+1]).
+    //
+    // Given tree channel 0 <= itree < ntree, the values of channel_map[itree+1] and
+    // channel_map[itree] define the edges of the tree channel in frequency space
+    // (i.e., the interval [channel_map[itree+1], channel_map[itree])).
+    
     ksgpu::Array<float> channel_map;
 
     // Validates params, and returns reference to 'this'.
@@ -36,7 +40,8 @@ struct ReferenceTreeGriddingKernel
     // Rebins input frequency channels into output "tree" channels, using weighted sums.
     //
     // For each tree channel n (0 <= n < nchan), the channel_map defines floating-point
-    // boundaries [f0, f1) = [channel_map[n], channel_map[n+1]). The output is computed as:
+    // boundaries [f0, f1) = [channel_map[n+1], channel_map[n]). Note that channel_map
+    // is monotonically decreasing, so channel_map[n+1] < channel_map[n]. The output is:
     //
     //   out[b,n,t] = sum_f w[n,f] * in[b,f,t]
     //

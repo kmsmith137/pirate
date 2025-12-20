@@ -70,8 +70,10 @@ void ReferenceTreeGriddingKernel::apply(Array<float> &out, const Array<float> &i
         memset(outp, 0, N * T * sizeof(float));
                
         for (long n = 0; n < N; n++) {
-            float f0 = params.channel_map.data[n];
-            float f1 = params.channel_map.data[n+1];
+            // channel_map is monotonically decreasing, so channel_map[n+1] < channel_map[n].
+            // f0 is the lower bound, f1 is the upper bound.
+            float f0 = params.channel_map.data[n+1];
+            float f1 = params.channel_map.data[n];
 
             long if0 = max(long(f0), 0L);
             long if1 = min(long(f1)+1, F);
@@ -173,8 +175,10 @@ __global__ void gpu_tree_gridding_kernel(
     // be fast enough to be memory bandwidth limited.
     
     for (int m = 0; m < M; m++) {
-        float f0 = __shfl_sync(~0u, cmap, m);
-        float f1 = __shfl_sync(~0u, cmap, m+1);
+        // channel_map is monotonically decreasing, so channel_map[n+1] < channel_map[n].
+        // f0 is the lower bound, f1 is the upper bound.
+        float f0 = __shfl_sync(~0u, cmap, m+1);
+        float f1 = __shfl_sync(~0u, cmap, m);
         
         int if0 = max(int(f0), 0);
         int if1 = min(int(f1)+1, nfreq);
@@ -290,13 +294,14 @@ void GpuTreeGriddingKernel::test()
          << "    gpu_src_beam_stride = " << gs_in << "\n"
          << "    gpu_dst_beam_stride = " << gs_out << endl;
     
+    // Generate a monotonically decreasing channel_map: cvec[0]=F, cvec[N]=0.
     vector<float> cvec(N+1);
-    cvec[0] = 0;
-    cvec[N] = F;
+    cvec[0] = F;
+    cvec[N] = 0;
     for (int i = 1; i < N; i++)
         cvec[i] = rand_uniform(0, F);
 
-    std::sort(cvec.begin(), cvec.end());
+    std::sort(cvec.begin(), cvec.end(), std::greater<float>());
 
     params.channel_map = Array<float> ({N+1}, af_rhost | af_zero);
     memcpy(params.channel_map.data, &cvec[0], (N+1) * sizeof(float));
