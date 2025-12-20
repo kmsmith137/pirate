@@ -472,12 +472,12 @@ def scratch(args):
 def parse_show_dedisperser(subparsers):
     parser = subparsers.add_parser("show_dedisperser", help="Parse a dedisperser config file and write YAML to stdout")
     parser.add_argument('config_file', help="Path to YAML config file")
-    parser.add_argument('-v', '--verbosity', type=int, default=0, help="Verbosity level (0=quiet, 1=show defaults, 2=show all)")
+    parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
 
 
 def show_dedisperser(args):
-    config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file, args.verbosity)
-    print(config.to_yaml_string())
+    config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file)
+    print(config.to_yaml_string(args.verbose))
 
 
 ###################################   random_kernels command  ###################################

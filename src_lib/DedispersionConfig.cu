@@ -254,31 +254,82 @@ void DedispersionConfig::print(ostream &os, int indent) const
 }
 
 
-void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
+void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
 {
     this->validate();
-    
-    emitter
-        << YAML::BeginMap
-        << YAML::Key << "zone_nfreq"
-        << YAML::Value << YAML::Flow << YAML::BeginSeq;
+
+    emitter << YAML::BeginMap;
+
+    // ---- Frequency channels ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Comment(
+            "Frequency channels. The observed frequency band is divided into \"zones\".\n"
+            "Within each zone, all frequency channels have the same width, but the\n"
+            "channel width may differ between zones. For example:\n"
+            "  zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N)\n"
+            "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) in lower/upper band"
+        ) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "zone_nfreq"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
     for (long n: zone_nfreq)
         emitter << n;
-    emitter
-        << YAML::EndSeq
-        << YAML::Key << "zone_freq_edges"
-        << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    emitter << YAML::EndSeq;
+
+    if (verbose)
+        emitter << YAML::Newline;
+
+    emitter << YAML::Key << "zone_freq_edges"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
     for (double f: zone_freq_edges)
         emitter << f;
-    emitter
-        << YAML::EndSeq
-        << YAML::Key << "tree_rank" << YAML::Value << tree_rank
-        << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels
-        << YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk
-        << YAML::Key << "dtype" << YAML::Value << dtype.str()
-        << YAML::Key << "early_triggers"
-        << YAML::Value 
-        << YAML::BeginSeq;
+    emitter << YAML::EndSeq;
+
+    // ---- Core dedispersion parameters ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Core dedispersion parameters.\n"
+            "The number of \"tree\" channels is ntree = 2^tree_rank.\n"
+            "The first tree searches to dispersion delay given by 2^tree_rank time samples.\n"
+            "Downsampled trees (0 < ds < num_downsampling_levels) downsample in time by 2^ds,\n"
+            "then search delay range 2^(tree_rank+ds-1) <= delay <= 2^(tree_rank+ds)."
+        ) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "tree_rank" << YAML::Value << tree_rank;
+
+    if (verbose)
+        emitter << YAML::Newline;
+
+    emitter << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels;
+
+    if (verbose)
+        emitter << YAML::Newline;
+
+    emitter << YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk;
+
+    if (verbose)
+        emitter << YAML::Newline << YAML::Comment("dtype: can be either float32 or float16.");
+
+    emitter << YAML::Key << "dtype" << YAML::Value << dtype.str();
+
+    // ---- Early triggers ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Early triggers: search a subset [fmid,fmax] of the full frequency range [flo,fhi]\n"
+            "at reduced latency. Each downsampling level has an independent set of early triggers.\n"
+            "Early triggers are optional (this can be an empty list).\n"
+            "Syntax: list of {ds_level, tree_rank} pairs, sorted by ds_level then tree_rank."
+        ) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "early_triggers"
+            << YAML::Value 
+            << YAML::BeginSeq;
 
     for (const auto &early_trigger: this->early_triggers) {
         emitter
@@ -289,17 +340,43 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
             << YAML::EndMap;
     }
     
-    emitter
-        << YAML::EndSeq
-        << YAML::Key << "frequency_subband_counts"
-        << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    emitter << YAML::EndSeq;
+
+    // ---- Frequency subbands ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
+            "This is a length-(pf_rank+1) vector containing the number of frequency subbands at each level.\n"
+            "Must satisfy subband_counts[pf_rank] = 1.\n"
+            "To disable subbands and only search the full frequency band, set to [1].\n"
+            "For more info, see 'python -m pirate_frb show_subbands --help'."
+        ) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "frequency_subband_counts"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
     for (long n: frequency_subband_counts)
         emitter << n;
-    emitter
-        << YAML::EndSeq
-        << YAML::Key << "peak_finding_params"
-        << YAML::Value
-        << YAML::BeginSeq;
+    emitter << YAML::EndSeq;
+
+    // ---- Peak finding params ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Peak finding params: one entry per downsampling level.\n"
+            "All values must be powers of two.\n"
+            "  max_width: max width of peak-finding kernel, in \"tree\" time samples (required)\n"
+            "  dm_downsampling: downsampling factor of coarse-grained array, relative to tree (optional, default=2^ceil(tree_rank/4))\n"
+            "  time_downsampling: downsampling factor of coarse-grained array (optional, default=dm_downsampling)\n"
+            "  wt_dm_downsampling: downsampling factor of weights array (required, must be >= dm_downsampling)\n"
+            "  wt_time_downsampling: downsampling factor of weights array (required, must be >= time_downsampling)"
+        ) << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "peak_finding_params"
+            << YAML::Value
+            << YAML::BeginSeq;
     
     for (const auto &pfp: this->peak_finding_params) {
         emitter
@@ -313,27 +390,40 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
             << YAML::EndMap;
     }
 
-    emitter
-        << YAML::EndSeq
-        << YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu
-        << YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch
-        << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
-        << YAML::EndMap;
+    emitter << YAML::EndSeq;
+
+    // ---- GPU configuration ----
+
+    if (verbose)
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment("GPU configuration.") << YAML::Newline;
+
+    emitter << YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu;
+
+    if (verbose)
+        emitter << YAML::Newline;
+
+    emitter << YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch;
+
+    if (verbose)
+        emitter << YAML::Newline;
+
+    emitter << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
+            << YAML::EndMap;
 }
 
 
-string DedispersionConfig::to_yaml_string() const
+string DedispersionConfig::to_yaml_string(bool verbose) const
 {
     YAML::Emitter emitter;
-    this->to_yaml(emitter);
+    this->to_yaml(emitter, verbose);
     return emitter.c_str();
 }
 
 
-void DedispersionConfig::to_yaml(const std::string &filename) const
+void DedispersionConfig::to_yaml(const std::string &filename, bool verbose) const
 {
     YAML::Emitter emitter;
-    this->to_yaml(emitter);
+    this->to_yaml(emitter, verbose);
     const char *s = emitter.c_str();
 
     File f(filename, O_WRONLY | O_CREAT | O_TRUNC);
@@ -345,9 +435,9 @@ void DedispersionConfig::to_yaml(const std::string &filename) const
 
 
 // static member function
-DedispersionConfig DedispersionConfig::from_yaml(const string &filename, int verbosity)
+DedispersionConfig DedispersionConfig::from_yaml(const string &filename)
 {
-    YamlFile f(filename, verbosity);
+    YamlFile f(filename);
     return DedispersionConfig::from_yaml(f);
 }
 

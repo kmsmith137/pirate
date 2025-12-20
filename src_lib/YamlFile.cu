@@ -20,13 +20,13 @@ static YAML::Node load_yaml(const string &filename)
 }
 
 
-YamlFile::YamlFile(const string &filename, int verbosity_) :
-    YamlFile(filename, load_yaml(filename), verbosity_)
+YamlFile::YamlFile(const string &filename) :
+    YamlFile(filename, load_yaml(filename))
 { }
 
 
-YamlFile::YamlFile(const string &name_, const YAML::Node &node_, int verbosity_) :
-    name(name_), node(node_), verbosity(verbosity_)
+YamlFile::YamlFile(const string &name_, const YAML::Node &node_) :
+    name(name_), node(node_)
 { }
 
 
@@ -54,7 +54,7 @@ YamlFile YamlFile::operator[](long ix) const
     stringstream ss;
     ss << name << "[" << ix << "]";
 
-    YamlFile child(ss.str(), node[ix], verbosity);
+    YamlFile child(ss.str(), node[ix]);
     xassert(child.node);  // should never fail
 
     return child;
@@ -68,7 +68,7 @@ YamlFile YamlFile::_get_child(const string &k) const
     stringstream ss;
     ss << name << "[" << k << "]";
     
-    YamlFile child(ss.str(), node[k], verbosity);
+    YamlFile child(ss.str(), node[k]);
 
     if (child.node)
         this->requested_keys.insert(k);

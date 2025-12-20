@@ -104,17 +104,13 @@ struct DedispersionConfig
     void print(std::ostream &os = std::cout, int indent=0) const;
 
     // Write in YAML format.
-    void to_yaml(YAML::Emitter &emitter) const;
-    void to_yaml(const std::string &filename) const;    
-    std::string to_yaml_string() const;
+    // If 'verbose' is true, include comments explaining the meaning of each field.
+    void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
+    void to_yaml(const std::string &filename, bool verbose = false) const;    
+    std::string to_yaml_string(bool verbose = false) const;
 
     // Construct from YAML file.
-    // The 'verbosity' argument has the following meaning:
-    //   0 = quiet
-    //   1 = announce default values for all unspecified parameters
-    //   2 = announce all parameters
-
-    static DedispersionConfig from_yaml(const std::string &filename, int verbosity=0);
+    static DedispersionConfig from_yaml(const std::string &filename);
     static DedispersionConfig from_yaml(const YamlFile &file);
     
     // Helper functions for constructing DedispersionConfig instances.

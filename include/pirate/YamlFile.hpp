@@ -50,17 +50,11 @@ struct YamlFile {
     // Allowed values: { Type::Undefined, Type::Null, Type::Scalar, Type::Sequence, Type::Map }
     using Type = YAML::NodeType::value;
     
-    YamlFile(const std::string &filename, int verbosity=0);
-    YamlFile(const std::string &name, const YAML::Node &node, int verbosity=0);
-
-    // The 'verbosity' constructor argument has the following meaning (for maps only):
-    //   0 = quiet
-    //   1 = announce default values for all unspecified parameters
-    //   2 = announce all parameters
+    YamlFile(const std::string &filename);
+    YamlFile(const std::string &name, const YAML::Node &node);
     
     std::string name;
     YAML::Node node;
-    int verbosity;
 
     mutable std::unordered_set<std::string> requested_keys;
 
@@ -120,9 +114,6 @@ inline T YamlFile::as_scalar() const
     if (!_yaml_node_to_scalar<T> (node, ret))
         throw std::runtime_error(name + ": parse failure (expected type " + ksgpu::type_name<T>() + ")");
 
-    if (verbosity >= 2)
-        std::cout << name << " = " << ret << std::endl;
-
     return ret;
 }
 
@@ -141,9 +132,6 @@ inline std::vector<T> YamlFile::as_vector() const
         if (!child_node.IsScalar() || !_yaml_node_to_scalar<T> (child_node, ret[i]))
             throw std::runtime_error(name + ": parse failure (expected type vector<" + ksgpu::type_name<T>() + ">)");
     }
-    
-    if (verbosity >= 2)
-        std::cout << name << " = " << ksgpu::tuple_str(ret) << std::endl;
 
     return ret;
 }
@@ -163,9 +151,6 @@ inline T YamlFile::get_scalar(const std::string &k, const T &default_value) cons
 
     if (child.node)
         return child.as_scalar<T> ();
-        
-    if (verbosity >= 1)
-        std::cout << child.name << " = " << default_value << " (using default value)" << std::endl;
 
     return default_value;
 }
@@ -185,9 +170,6 @@ inline std::vector<T> YamlFile::get_vector(const std::string &k, const std::vect
 
     if (child.node)
         return child.as_vector<T> ();
-        
-    if (verbosity >= 1)
-        std::cout << child.name << " = " << ksgpu::tuple_str(default_value) << " (using default value)" << std::endl;
 
     return default_value;
 }
