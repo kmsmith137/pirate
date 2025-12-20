@@ -1,6 +1,7 @@
 #include "../include/pirate/utils.hpp"
 #include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
+#include "../include/pirate/Dedisperser.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -301,20 +302,8 @@ void scratch()
 {
     cout << "pirate::scratch() called -- this is a place for quick throwaway tests" << endl;
 
-    // Constructing an int4 ksgpu::Array is no problem...
-    Dtype dt_int4 = Dtype::from_str("int4");
-    Array<void> arr(dt_int4, {3,3,7}, af_rhost | af_zero);
-
-    // ... but currently, no helpful accessors are implemented, so in order to get/set
-    // array elements, we need to reinterpret_cast a bare pointer. For example, to set
-    // arr[0,0,5]=3, one would need to do something like this:
-
-    unsigned char *p8 = (unsigned char *) arr.data;
-    p8[2] = 0x30;  // arr[0,0,5] = 3
-
-    // This also works.
-    uint *p32 = (uint *) arr.data;
-    p32[0] = 0x300000;  // arr[0,0,5] = 3
+    ChimeDedisperser d(100, 2, 2, false);
+    d.config.to_yaml("configs/dedispersion/chime.yml");
 }
 
 

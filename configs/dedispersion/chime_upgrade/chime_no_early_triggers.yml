@@ -1,9 +1,0 @@
-tree_rank: 15
-num_downsampling_levels: 4
-time_samples_per_chunk: 2048
-dtype: float16
-early_triggers: []
-beams_per_gpu: 256
-beams_per_batch: 2
-num_active_batches: 2
-gmem_nbytes_per_gpu: 34359738368  # 32 GB

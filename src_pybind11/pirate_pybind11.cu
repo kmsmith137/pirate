@@ -13,6 +13,7 @@
 #include "../include/pirate/CasmBeamformer.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/Dedisperser.hpp"
+#include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
@@ -198,6 +199,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test", &PfOutputMicrokernel::test)
           .def_static("registry_size", &PfOutputMicrokernel::registry_size)
           .def_static("show_registry", &PfOutputMicrokernel::show_registry)
+    ;
+
+    py::class_<DedispersionConfig>(m, "DedispersionConfig")
+          .def_static("from_yaml", static_cast<DedispersionConfig (*)(const std::string &, int)>(&DedispersionConfig::from_yaml),
+                      py::arg("filename"), py::arg("verbosity") = 0)
+          .def("to_yaml_string", &DedispersionConfig::to_yaml_string)
     ;
 
     m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));

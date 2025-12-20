@@ -466,6 +466,20 @@ def scratch(args):
     pirate_pybind11.scratch()
 
 
+###################################   show_dedisperser command  ###################################
+
+
+def parse_show_dedisperser(subparsers):
+    parser = subparsers.add_parser("show_dedisperser", help="Parse a dedisperser config file and write YAML to stdout")
+    parser.add_argument('config_file', help="Path to YAML config file")
+    parser.add_argument('-v', '--verbosity', type=int, default=0, help="Verbosity level (0=quiet, 1=show defaults, 2=show all)")
+
+
+def show_dedisperser(args):
+    config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file, args.verbosity)
+    print(config.to_yaml_string())
+
+
 ###################################   random_kernels command  ###################################
 
 
@@ -563,6 +577,7 @@ if __name__ == '__main__':
     parse_show_hardware(subparsers)
     parse_show_kernels(subparsers)
     parse_show_subbands(subparsers)
+    parse_show_dedisperser(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
     parse_scratch(subparsers)
@@ -580,6 +595,8 @@ if __name__ == '__main__':
         show_kernels(args)
     elif args.command == "show_subbands":
         show_subbands(args)
+    elif args.command == "show_dedisperser":
+        show_dedisperser(args)
     elif args.command == "test_node":
         test_node(args)
     elif args.command == "send":

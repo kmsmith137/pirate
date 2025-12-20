@@ -59,7 +59,7 @@ struct DedispersionConfig
 
     struct PeakFindingParams
     {
-        long max_width = 0;             // required
+        long max_width = 0;             // requiredEa
         long dm_downsampling = 0;       // optional (default = "2^ceil(tree_rank/4)")
         long time_downsampling = 0;     // optional (default = "use value of dm_downsampling")
         long wt_dm_downsampling = 0;    // required (must be >= dm_downsampling)

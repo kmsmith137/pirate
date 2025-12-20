@@ -27,6 +27,22 @@ ChimeDedisperser::ChimeDedisperser(int beams_per_gpu_, int num_active_batches_, 
     config.beams_per_gpu = beams_per_gpu_;
     config.beams_per_batch = beams_per_batch_;
     config.num_active_batches = num_active_batches_;
+
+    // Frequency band: CHIME [400,800] MHz
+    config.zone_nfreq = { nfreq };
+    config.zone_freq_edges = { 400.0, 800.0 };
+
+    // Disable frequency subbands (search only full band)
+    config.frequency_subband_counts = { 1 };
+
+    // Peak finding params: one per downsampling level
+    config.peak_finding_params.resize(config.num_downsampling_levels);
+    for (int i = 0; i < config.num_downsampling_levels; i++) {
+        config.peak_finding_params[i].max_width = 16;
+        config.peak_finding_params[i].wt_dm_downsampling = 64;
+        config.peak_finding_params[i].wt_time_downsampling = 64;
+    }
+
     // No early triggers
     config.validate();
 }
