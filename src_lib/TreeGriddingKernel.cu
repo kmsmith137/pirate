@@ -36,6 +36,14 @@ const TreeGriddingKernelParams &TreeGriddingKernelParams::validate() const
     xassert_shape_eq(channel_map, ({nchan+1}));
     xassert(channel_map.is_fully_contiguous());
 
+    // Check that channel_map values are in-range and monotonically decreasing.
+    for (long i = 0; i <= nchan; i++) {
+	    float c = channel_map.data[i];
+	    xassert((c >= 0) && (c <= nfreq));
+	    if (i > 0)
+	        xassert(channel_map.data[i-1] > c);
+    }
+    
     return *this;
 }
 

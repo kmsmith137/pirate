@@ -15,7 +15,7 @@ struct TreeGriddingKernelParams
     ksgpu::Dtype dtype;
     long nfreq = 0;   // number of input frequency channels
     long nchan = 0;   // number of output tree channels
-    long ntime = 0;
+    long ntime = 0;   // time samples per chunk
     long beams_per_batch = 0;
 
     // Length (nchan+1), values are in [0,nfreq], stored in CPU memory.

@@ -2,6 +2,7 @@
 
 #include <cstring>                 // strlen()
 #include <algorithm>               // std::sort()
+#include <numeric>                 // std::accumulate()
 
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/xassert.hpp>
@@ -71,6 +72,53 @@ int DedispersionConfig::get_nelts_per_segment() const
     throw runtime_error("DedispersionConfig: invalid dtype: " + dtype.str());
 }
 
+
+float DedispersionConfig::get_frequency_index(float f) const
+{
+    // Allow small roundoff error at band edges.
+    float fmin = freq_edges.front();
+    float fmax = freq_edges.back();
+    float eps = 1.0e-6f * (fmax - fmin);
+    
+    if ((f < fmin - eps) || (f > fmax + eps)) {
+        stringstream ss;
+        ss << "DedispersionConfig::get_frequency_index(): frequency " << f
+           << " is out of range [" << fmin << ", " << fmax << "]";
+        throw runtime_error(ss.str());
+    }
+    
+    // Clamp to band edges (in case of small roundoff error).
+    f = std::max(f, fmin);
+    f = std::min(f, fmax);
+    
+    // Linear search through zones.
+    float channel_offset = 0;
+    for (size_t i = 0; i < nfreq.size(); i++) {
+        float f0 = freq_edges[i];
+        float f1 = freq_edges[i+1];
+        
+        if (f <= f1) {
+            // Frequency is in zone i.
+            float frac = (f - f0) / (f1 - f0);
+            channel_offset += frac * nfreq[i];
+            break;
+        }
+        
+        channel_offset += nfreq[i];
+    }
+    
+    float tot_nfreq = std::accumulate(nfreq.begin(), nfreq.end(), 0.0f);
+
+    // Clamp channel_offset to [0, tot_nfreq]. (Mostly redundant with
+    // previous clamping logic, but roundoff error may spill slightly
+    // outside the range.)
+    
+    channel_offset = std::max(channel_offset, 0.0f);
+    channel_offset = std::min(channel_offset, tot_nfreq);
+    return channel_offset;
+}
+
+
 void DedispersionConfig::add_early_trigger(long ds_level, long tree_rank)
 {
     EarlyTrigger e;
@@ -108,6 +156,18 @@ void DedispersionConfig::validate() const
     xassert(beams_per_batch > 0);
     xassert(num_active_batches > 0);
 
+    // Validate nfreq and freq_edges.
+    xassert(nfreq.size() > 0);
+    xassert(freq_edges.size() == nfreq.size() + 1);
+    
+    for (size_t i = 0; i < nfreq.size(); i++)
+        xassert(nfreq[i] > 0);
+    
+    for (size_t i = 0; i+1 < freq_edges.size(); i++) {
+        xassert(freq_edges[i] > 0.0f);
+        xassert(freq_edges[i] < freq_edges[i+1]);
+    }
+
     int min_rank = (num_downsampling_levels > 1) ? 1 : 0;
     check_rank(tree_rank, "DedispersionConfig", min_rank);
 
@@ -142,6 +202,8 @@ void DedispersionConfig::validate() const
 
 void DedispersionConfig::print(ostream &os, int indent) const
 {
+    print_kv("nfreq", ksgpu::tuple_str(nfreq), os, indent);
+    print_kv("freq_edges", ksgpu::tuple_str(freq_edges), os, indent);
     print_kv("tree_rank", tree_rank, os, indent);
     print_kv("num_downsampling_levels", num_downsampling_levels, os, indent);
     print_kv("time_samples_per_chunk", time_samples_per_chunk, os, indent);
@@ -163,6 +225,18 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter) const
     
     emitter
         << YAML::BeginMap
+        << YAML::Key << "nfreq"
+        << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (long n: nfreq)
+        emitter << n;
+    emitter
+        << YAML::EndSeq
+        << YAML::Key << "freq_edges"
+        << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (double f: freq_edges)
+        emitter << f;
+    emitter
+        << YAML::EndSeq
         << YAML::Key << "tree_rank" << YAML::Value << tree_rank
         << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels
         << YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk
@@ -224,6 +298,8 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 {
     DedispersionConfig ret;
 
+    ret.nfreq = f.get_vector<long> ("nfreq");
+    ret.freq_edges = f.get_vector<double> ("freq_edges");
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
     ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
@@ -263,6 +339,11 @@ DedispersionConfig DedispersionConfig::make_random(bool allow_early_triggers)
     int min_rank = (ret.num_downsampling_levels > 1) ? 3 : 2;
     double x = ksgpu::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
     ret.tree_rank = int(sqrt(x));
+
+    // Frequency band: single zone [400,800] with nfreq = pow2(tree_rank).
+    // (Placeholder for more complex logic later.)
+    ret.nfreq = { pow2(ret.tree_rank) };
+    ret.freq_edges = { 400.0, 800.0 };
 
     // Randomly choose nt_chunk, but bias toward a low number.
     // Note: call ret.get_nelts_per_segment() after setting ret.dtype

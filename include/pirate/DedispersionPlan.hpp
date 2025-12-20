@@ -6,6 +6,7 @@
 #include "DedispersionKernel.hpp"        // struct DedispersionKernelParams
 #include "LaggedDownsamplingKernel.hpp"  // struct LaggedDownsamplingKernelParams
 #include "RingbufCopyKernel.hpp"         // struct RingbufCopyKernelParams
+#include "TreeGriddingKernel.hpp"        // struct TreeGriddingKernelParams
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -29,6 +30,8 @@ struct DedispersionPlan
 
     long stage1_ntrees = 0;  // same as config.num_downsampling_levels
     long stage2_ntrees = 0;
+    
+    TreeGriddingKernelParams tree_gridding_kernel_params;
     
     DedispersionBufferParams stage1_dd_buf_params;  // (number of buffers) = stage1_ntrees
     DedispersionBufferParams stage2_dd_buf_params;  // (number of buffers) = stage2_ntrees
