@@ -17,6 +17,7 @@
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
+#include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
 #include "../include/pirate/PeakFindingKernel.hpp"
@@ -201,11 +202,62 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("show_registry", &PfOutputMicrokernel::show_registry)
     ;
 
+    // DedispersionConfig::PeakFindingConfig (nested struct)
+    py::class_<DedispersionConfig::PeakFindingConfig>(m, "PeakFindingConfig")
+          .def_readonly("max_width", &DedispersionConfig::PeakFindingConfig::max_width)
+          .def_readonly("dm_downsampling", &DedispersionConfig::PeakFindingConfig::dm_downsampling)
+          .def_readonly("time_downsampling", &DedispersionConfig::PeakFindingConfig::time_downsampling)
+          .def_readonly("wt_dm_downsampling", &DedispersionConfig::PeakFindingConfig::wt_dm_downsampling)
+          .def_readonly("wt_time_downsampling", &DedispersionConfig::PeakFindingConfig::wt_time_downsampling)
+    ;
+
+    // DedispersionConfig::EarlyTrigger (nested struct)
+    py::class_<DedispersionConfig::EarlyTrigger>(m, "EarlyTrigger")
+          .def_readonly("ds_level", &DedispersionConfig::EarlyTrigger::ds_level)
+          .def_readonly("tree_rank", &DedispersionConfig::EarlyTrigger::tree_rank)
+    ;
+    
     py::class_<DedispersionConfig>(m, "DedispersionConfig")
           .def_static("from_yaml", static_cast<DedispersionConfig (*)(const std::string &)>(&DedispersionConfig::from_yaml),
                       py::arg("filename"))
+          .def_static("make_random", &DedispersionConfig::make_random,
+                      py::arg("allow_early_triggers") = true)
           .def("to_yaml_string", &DedispersionConfig::to_yaml_string,
                py::arg("verbose") = false)
+          .def("validate", &DedispersionConfig::validate)
+          .def("add_early_trigger", &DedispersionConfig::add_early_trigger,
+               py::arg("ds_level"), py::arg("tree_rank"))
+          .def("get_nelts_per_segment", &DedispersionConfig::get_nelts_per_segment)
+          .def("get_frequency_index", &DedispersionConfig::get_frequency_index, py::arg("f"))
+          .def("get_total_nfreq", &DedispersionConfig::get_total_nfreq)
+          // dtype: exposed via getter/setter using ksgpu::Dtype::str() / ksgpu::Dtype::from_str()
+          .def_property("dtype",
+               [](const DedispersionConfig &self) { return self.dtype.str(); },
+               [](DedispersionConfig &self, const std::string &s) { self.dtype = ksgpu::Dtype::from_str(s); })
+          // Frequency channel configuration
+          .def_readonly("zone_nfreq", &DedispersionConfig::zone_nfreq)
+          .def_readonly("zone_freq_edges", &DedispersionConfig::zone_freq_edges)
+          // Core dedispersion parameters
+          .def_readonly("tree_rank", &DedispersionConfig::tree_rank)
+          .def_readonly("num_downsampling_levels", &DedispersionConfig::num_downsampling_levels)
+          .def_readonly("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk)
+          // Frequency sub-band configuration
+          .def_readonly("frequency_subband_counts", &DedispersionConfig::frequency_subband_counts)
+          // Peak-finding parameters (one per downsampling level)
+          .def_readonly("peak_finding_params", &DedispersionConfig::peak_finding_params)
+          // Early triggers
+          .def_readonly("early_triggers", &DedispersionConfig::early_triggers)
+          // GPU configuration
+          .def_readonly("beams_per_gpu", &DedispersionConfig::beams_per_gpu)
+          .def_readonly("beams_per_batch", &DedispersionConfig::beams_per_batch)
+          .def_readonly("num_active_batches", &DedispersionConfig::num_active_batches)
+          // Testing parameter
+          .def_readonly("gpu_clag_maxfrac", &DedispersionConfig::gpu_clag_maxfrac)
+    ;
+
+    py::class_<FrequencySubbands>(m, "FrequencySubbands")
+          .def(py::init<const std::vector<long> &>(), py::arg("subband_counts"))
+          .def("to_string", &FrequencySubbands::to_string)
     ;
 
     m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));

@@ -51,22 +51,22 @@ struct DedispersionConfig
 
     std::vector<long> frequency_subband_counts;
 
-    // Each downsampling level has its own PeakFindingParams.
+    // Each downsampling level has its own PeakFindingConfig.
     // All members must be powers of two.
     //   max_width: max width of peak-finding kernel, in "tree" time samples
     //   {dm,time}_downsampling: downsampling factors of coarse-grained array, relative to tree
     //   wt_{dm,downsampling}: downsampling factors of weights array, relative to tree.
 
-    struct PeakFindingParams
+    struct PeakFindingConfig
     {
-        long max_width = 0;             // requiredEa
+        long max_width = 0;             // required
         long dm_downsampling = 0;       // optional (default = "2^ceil(tree_rank/4)")
         long time_downsampling = 0;     // optional (default = "use value of dm_downsampling")
         long wt_dm_downsampling = 0;    // required (must be >= dm_downsampling)
         long wt_time_downsampling = 0;  // required (must be >= time_downsampling)
     };
 
-    std::vector<PeakFindingParams> peak_finding_params;  // length (num_downsampling_levels)
+    std::vector<PeakFindingConfig> peak_finding_params;  // length (num_downsampling_levels)
 
     // Early triggers: search a subset [fmid,fmax] of the full frequency range [flo,fhi]
     // at reduced latency. Each downsampling level has an independent set of early triggers.

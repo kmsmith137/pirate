@@ -473,11 +473,20 @@ def parse_show_dedisperser(subparsers):
     parser = subparsers.add_parser("show_dedisperser", help="Parse a dedisperser config file and write YAML to stdout")
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
+    parser.add_argument('--subbands', action='store_true', help="Show FrequencySubbands info at the end")
 
 
 def show_dedisperser(args):
     config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file)
     print(config.to_yaml_string(args.verbose))
+    
+    if args.subbands:
+        subband_counts = config.frequency_subband_counts
+        fedges = config.zone_freq_edges
+        fs = FrequencySubbands(subband_counts=subband_counts, fmin=fedges[0], fmax=fedges[-1])
+        print()
+        print('Frequency subband info starts here')
+        fs.show()
 
 
 ###################################   random_kernels command  ###################################

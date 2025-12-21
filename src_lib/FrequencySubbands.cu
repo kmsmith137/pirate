@@ -1,5 +1,6 @@
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2()
+#include "../include/pirate/utils.hpp"    // integer_log2()
 
 #include <stdexcept>
 #include <ksgpu/xassert.hpp>
@@ -124,16 +125,30 @@ void FrequencySubbands::show_token(uint token, ostream &os) const
 
 void FrequencySubbands::show(ostream &os) const
 {
-    os << "FrequencySubbands(subband_counts=" << ksgpu::tuple_str(subband_counts) << ")\n"
-       << "    " << "pf_rank=" << pf_rank << ", F=" << F << ", M=" << M << "\n";
+    os << "FrequencySubbands(pf_rank=" << pf_rank
+       << ", subband_counts=" << ksgpu::tuple_str(subband_counts) << ")\n";
 
-    for (long m = 0; m < M; m++) {
-        long f = m_to_f.at(m);
-        long d = m_to_d.at(m);
-        long f0 = f_to_ilo.at(f);
-        long f1 = f_to_ihi.at(f);
-        os << "    m=" << m << ": d=" << d << ", f0=" << f0 << ", f1=" << f1 << "\n";
+    for (long f = 0; f < F; f++) {
+        long ilo = f_to_ilo.at(f);
+        long ihi = f_to_ihi.at(f);
+        long mlo = f_to_mbase.at(f);
+        long mhi = mlo + (ihi - ilo);
+        long level = integer_log2(ihi - ilo);
+        os << "  f=" << f << ": level=" << level
+           << "  (mlo,mhi)=(" << mlo << "," << mhi << ")"
+           << "  (ilo,ihi)=(" << ilo << "," << ihi << ")\n";
     }
+
+    os << "F=" << F << "  # number of distinct frequency subbands\n";
+    os << "M=" << M << "  # number of \"multiplets\", i.e. (frequency_subband, fine_grained_dm) pairs\n";
+}
+
+
+string FrequencySubbands::to_string() const
+{
+    stringstream ss;
+    this->show(ss);
+    return ss.str();
 }
 
 

@@ -213,7 +213,7 @@ void DedispersionConfig::validate() const
     // Validate peak_finding_params.
     xassert(long(peak_finding_params.size()) == num_downsampling_levels);
     
-    for (const PeakFindingParams &pfp: peak_finding_params) {
+    for (const PeakFindingConfig &pfp: peak_finding_params) {
         xassert(pfp.max_width > 0);
         xassert(is_power_of_two(pfp.max_width));
         xassert(pfp.wt_dm_downsampling > 0);
@@ -473,7 +473,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 
     for (long i = 0; i < pfps.size(); i++) {
         YamlFile p = pfps[i];
-        PeakFindingParams pfp;
+        PeakFindingConfig pfp;
         pfp.max_width = p.get_scalar<long> ("max_width");
         pfp.dm_downsampling = p.get_scalar<long> ("dm_downsampling", 0L);
         pfp.time_downsampling = p.get_scalar<long> ("time_downsampling", 0L);
