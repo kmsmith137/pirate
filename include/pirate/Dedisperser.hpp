@@ -22,6 +22,8 @@ struct GpuDedispersionKernel;         // defined in DedispersionKernel.hpp
 struct GpuLaggedDownsamplingKernel;   // defined in LaggedDownsamplingKernel.hpp
 struct CpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
 struct GpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
+struct ReferenceTreeGriddingKernel;   // defined in TreeGriddingKernel.hpp
+struct GpuTreeGriddingKernel;         // defined in TreeGriddingKernel.hpp
 
 
 // -------------------------------------------------------------------------------------------------
@@ -40,6 +42,7 @@ struct GpuDedisperser
     const DedispersionConfig config;   // same as plan->config
 
     ksgpu::Dtype dtype;           // = (config.dtype)
+    long nfreq = 0;               // = (config.get_total_nfreq())
     long input_rank = 0;          // = (config.tree_rank)
     long input_ntime = 0;         // = (config.time_samples_per_chunk)
     long total_beams = 0;         // = (config.beams_per_gpu)
@@ -54,12 +57,17 @@ struct GpuDedisperser
     std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level[:]))
     std::vector<long> output_ds_level;  // length output_ntrees
 
+    // "outer" vector has length nstreams
+    // "inner" array has shape (beams_per_batch, nfreq, ntime), uses config.dtype
+    std::vector<ksgpu::Array<void>> input_arrays;
+    
     std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
     std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
     
     ksgpu::Array<void> gpu_ringbuf;
     ksgpu::Array<void> host_ringbuf;
 
+    std::shared_ptr<GpuTreeGriddingKernel> tree_gridding_kernel;
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
@@ -131,6 +139,7 @@ struct ReferenceDedisperserBase
     const DedispersionConfig config;   // same as plan->config
     const int sophistication;          // see above
     
+    long nfreq = 0;               // same as config.get_total_nfreq()
     long input_rank = 0;          // same as config.tree_rank
     long input_ntime = 0;         // same as config.time_samples_per_chunk
     long total_beams = 0;         // same as config.beams_per_gpu
@@ -147,22 +156,24 @@ struct ReferenceDedisperserBase
     virtual void dedisperse(long ichunk, long ibatch) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
-    // Shape is (beams_per_batch, 2^input_rank, input_ntime).
+    // Shape is (beams_per_batch, nfreq, input_ntime) -- frequency-space array.
     // 
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
     // output_arrays[i] has shape (beams_per_batch, 2^output_rank[i], output_ntime[i])
     //
-    // Warning: dedisperse() may modify 'input_array'!
+    // Warning: dedisperse() may modify 'input_array' and 'dd_array'!
     
-    ksgpu::Array<float> input_array;
+    std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
+    ksgpu::Array<float> input_array;   // frequency-space: shape (beams_per_batch, nfreq, input_ntime)
+    ksgpu::Array<float> dd_array;      // tree-space: shape (beams_per_batch, 2^input_rank, input_ntime)
     std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
 
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
 
     // Helper methods called by subclass constructors.
-    void _init_iobufs(ksgpu::Array<float> &in, std::vector<ksgpu::Array<float>> &out);
-    void _init_iobufs(ksgpu::Array<void> &in, std::vector<ksgpu::Array<void>> &out);
+    void _init_iobufs(ksgpu::Array<float> &in, ksgpu::Array<float> &dd, std::vector<ksgpu::Array<float>> &out);
+    void _init_iobufs(ksgpu::Array<void> &in, ksgpu::Array<void> &dd, std::vector<ksgpu::Array<void>> &out);
 };
 
 

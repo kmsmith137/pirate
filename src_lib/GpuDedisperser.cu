@@ -2,6 +2,7 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
+#include "../include/pirate/TreeGriddingKernel.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
@@ -36,6 +37,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     // constructor, but not enough to bother defining a common base class.
     
     this->dtype = config.dtype;
+    this->nfreq = config.get_total_nfreq();
     this->input_rank = config.tree_rank;
     this->input_ntime = config.time_samples_per_chunk;
     this->total_beams = config.beams_per_gpu;
@@ -56,8 +58,10 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     
     // Construct, but do not allocate, the following members:
     //
+    //   std::vector<ksgpu::Array<void>> input_arrays;    // length nstreams
     //   std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
     //   std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
+    //   std::shared_ptr<GpuTreeGriddingKernel> tree_gridding_kernel;
     //   std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
     //   std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
     //   std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
@@ -66,6 +70,10 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         stage1_dd_bufs.push_back(DedispersionBuffer(plan->stage1_dd_buf_params));
         stage2_dd_bufs.push_back(DedispersionBuffer(plan->stage2_dd_buf_params));
     }
+
+    // Create tree gridding kernel using plan parameters.
+    this->tree_gridding_kernel = make_shared<GpuTreeGriddingKernel> (plan->tree_gridding_kernel_params);
+    this->bw_per_launch += tree_gridding_kernel->bw_per_launch;
 
     for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
         auto kernel = make_shared<GpuDedispersionKernel> (kparams);
@@ -92,11 +100,17 @@ void GpuDedisperser::allocate()
     if (this->is_allocated)
         throw runtime_error("double call to GpuDedisperser::allocate()");
 
+    // Allocate input_arrays (frequency-space, shape (beams_per_batch, nfreq, ntime)).
+    for (long i = 0; i < nstreams; i++)
+        input_arrays.push_back(Array<void>(dtype, {beams_per_batch, nfreq, input_ntime}, af_gpu | af_zero));
+
     for (auto &buf: stage1_dd_bufs)
         buf.allocate(af_zero | af_gpu);
     
     for (auto &buf: stage2_dd_bufs)
         buf.allocate(af_zero | af_gpu);
+
+    this->tree_gridding_kernel->allocate();
     
     for (auto &kernel: this->stage1_dd_kernels)
         kernel->allocate();
@@ -127,6 +141,10 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
     xassert(is_allocated);
     
     long iframe = (ichunk * BT) + (ibatch * BB);
+    
+    // Step 0: Run tree gridding kernel (input_arrays[istream] -> stage1_dd_bufs[istream].bufs[0]).
+    Array<void> &dd_buf0 = stage1_dd_bufs.at(istream).bufs.at(0);
+    tree_gridding_kernel->launch(dd_buf0, input_arrays.at(istream), stream);
     
     // Step 1: run LaggedDownsampler.
     lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, stream);
@@ -238,7 +256,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     // I decided that this was the least awkward place to call DedispersionConfig::test().
     config.test();
 
-    int nfreq = pow2(config.tree_rank);
+    long nfreq = config.get_total_nfreq();
     int nt_chunk = config.time_samples_per_chunk;
     int beams_per_batch = config.beams_per_batch;
     int nbatches = xdiv(config.beams_per_gpu, beams_per_batch);
@@ -262,16 +280,24 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     }
 
     // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
-    double epsrel_r = 6 * Dtype::native<float>().precision();   // reference
-    double epsrel_g = 6 * config.dtype.precision();             // gpu
-    double epsabs_r = epsrel_r * pow(1.414, config.tree_rank);  // reference
-    double epsabs_g = epsrel_g * pow(1.414, config.tree_rank);  // gpu
+    // Note: epsilon accounts for both tree gridding (accumulates nfreq/nchan values on average)
+    // and dedispersion (factor of pow(1.414, tree_rank)).
+    double tree_gridding_factor = sqrt(double(nfreq) / pow2(config.tree_rank)) + 1.0;
+    double dedispersion_factor = pow(1.414, config.tree_rank);
+    double epsrel_r = 6 * Dtype::native<float>().precision();                      // reference
+    double epsrel_g = 6 * config.dtype.precision();                                // gpu
+    double epsabs_r = epsrel_r * tree_gridding_factor * dedispersion_factor;       // reference
+    double epsabs_g = epsrel_g * tree_gridding_factor * dedispersion_factor;       // gpu
 
     for (int ichunk = 0; ichunk < nchunks; ichunk++) {
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
-            Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost | af_random);
-            // Array<float> arr({nfreq,nt_chunk}, af_uhost | af_zero);
-            // arr.at({0,0}) = 1.0;
+            // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
+            // Random values uniform over [-1.0, 1.0].
+            Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost);
+            long nelts = beams_per_batch * nfreq * nt_chunk;
+            float *p = arr.data;
+            for (long i = 0; i < nelts; i++)
+                p[i] = ksgpu::rand_uniform(-1.0, 1.0);
 
             rdd0->input_array.fill(arr);
             rdd0->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
@@ -283,8 +309,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
             rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
 
             if (!host_only) {
-                Array<void> &gdd_inbuf = gdd->stage1_dd_bufs.at(0).bufs.at(0);  // (istream,itree) = (0,0)
-                gdd_inbuf.fill(arr.convert(config.dtype));
+                gdd->input_arrays.at(0).fill(arr.convert(config.dtype));  // istream=0
                 gdd->launch(ichunk, ibatch, 0, nullptr);  // (ichunk, ibatch, istream, stream)
             }
             
