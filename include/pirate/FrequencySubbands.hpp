@@ -16,8 +16,8 @@ namespace pirate {
 // FrequencySubbands: defines frequency sub-bands for the FRB search. 
 // This can improve SNR for bursts that don't span the full frequency range.
 //
-// Note: there is a similar python class (pirate_frb.cuda_generator.FrequencySubbands), so changes
-// made here should also be reflected there.
+// Note: there is a similar python class (pirate_frb.cuda_generator.FrequencySubbands), 
+// so changes made here should also be reflected there.
 
 struct FrequencySubbands
 {
@@ -47,6 +47,11 @@ struct FrequencySubbands
     //
     //   - The commands 'python -m pirate_frb show_subbands' and 'python -m pirate_frb show_config --subbands'
     //     may be useful for constructing new subband_counts, or displaying subband_counts verbosely. 
+    //
+    // In the larger peak-finding kernel, each frequency subband is associated with 2^pf_level
+    // "fine-grained" DMs. We define a "multiplet" to be a (frequency_subband, fine_grained_dm)
+    // pair. The total number of multiplets M is obtained by summing (2^pf_level) over all
+    // subbands. See comments in PeakFinding.hpp for more context.
 
     std::vector<long> subband_counts;   
 

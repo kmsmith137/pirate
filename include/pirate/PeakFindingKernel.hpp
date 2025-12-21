@@ -16,6 +16,70 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+// The peak-finding kernel is the last step in the dedispersion transform.
+// Its output is a pair of 2-d arrays (out_max, out_argmax), and it has an auxiliary
+// input 'weights' array. These inputs and outputs are nontrivial to explain, hence
+// this long comment.
+//
+// The 'out_max' array is a 2-d "SNR map" indexed by (coarse-grained dm, coarse-grained time).
+// The array shape is (ndm_out, nt_out), where ndm_out and nt_out are members of 
+// struct PeakFindingKernelParams.
+//
+// Each element of the 'out_max' array is a detection significance in "sigmas". Conceptually,
+// it is obtained by taking a maximum over a 4-D "trial array" indexed by (frequency subband, 
+// fine-grained DM, fine-grained arrival time, peak-finding profile). The purpose of
+// searching over trial frequency subbands is to increase SNR for FRBs that do not span
+// the full frequency range.
+// 
+// The 'out_argmax' array has the same shape (ndm_out, nt_out). Each element of the
+// out_argmax array is an uint32 "token" which indicates which element of the 4-d trial
+// array (from the previous paragraph) is responsible for the maximum SNR. 
+// The tokens are defined as follows:
+//
+//   token = (t) | (p << 8) | (m << 16);   // 8+8+16 bits
+//
+//     where  0 <= t < (nt_in / nt_out)  indexes a fine-grained arrival time
+//            0 <= p < P                 indexes a peak-finding profile (see below)
+//            0 <= m < M                 indexes a "multiplet" (see below)
+//
+// It's convenient to combine the (frequency_subband, fine-grained DM) axes into
+// a single axis, indexed by a "multiplet" 0 <= m < M. The FrequencySubband helper
+// class contains information about the frequency subband scheme. In particular:
+//
+//   FrequencySubband::F = number of distinct frequency subbands
+//   FrequencySubband::M = number of distinct multiplets (freq_subband, fine_dm)
+//
+// The peak-finding profile 0 <= p < P indexes a trial profile (in time) which is
+// used to implement a (roughly) matched filter for a range of pulse widths. The
+// details of these profiles will be described later (FIXME), but for now we note
+// that the total number of profiles P is given by:
+//
+//   P = 1 + 3 * log2(max_kernel_width)
+//
+// where max_kernel_width is specified in DedispersionConfig, and is also a member
+// of 'struct PeakFindingKernelParams'.
+//
+// Now we have fully described the 'out_max' and 'out_argmax' arrays.
+// Next, we describe the weights array 'wt', which is an argument to the peak-finder.
+//
+// For each set of trial parameters, we compute an "unnormalized" peak-finding output
+// in whatever normalization is convenient for the GPU kernel. The 'wt' array contains
+// the multiplier which converts to detection significants in "sigmas". We make the
+// approximation that the normalization only depends on the multiplet 0 <= m < M
+// (see above) through its frequency subband 0 <= f < F. Then, the 'wt' array is
+// a logical 4-d array (for each beam) with shape:
+//
+//   (ndm_wt, nt_wt, P, F)    (*)
+//
+// where (ndm_wt, nt_wt) are obtained by applying downsampling factors to (ndm_in, nt_in).
+// These "weights" downsampling factors are independent of the downsampling factors used
+// to obtain (ndm_out, nt_in), and are specified in DedispersionConfig.
+//
+// On the CPU, the weights array is represented as a 4-d array with shape (*), but
+// on the GPU we use a complicated, non-contiguous representation which is convenient
+// for the GPU kernel. The helper class 'GpuPfWeightLayout' is intended to hide the
+// details of the GPU memory layout, by providing helper functions to convert from (*).
+
 
 struct PeakFindingKernelParams
 {
@@ -182,6 +246,11 @@ struct GpuPfWeightLayout
     void validate() const;
 };
 
+
+// Note that the GpuPeakFindingKernel is not actually used in the GpuDedisperser!
+// Instead, the GpuDedisperser uses a coalesced kernel (CoalescedDdKernel2) which
+// combines the second half of the dedispersion transform and peak-finding, without
+// a global memory read-write cycle in between.
 
 struct GpuPeakFindingKernel
 {
