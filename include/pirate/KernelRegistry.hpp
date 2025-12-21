@@ -150,6 +150,18 @@ struct KernelRegistry
     }
 
 
+    std::vector<Key> get_all_keys()
+    {
+        std::unique_lock<std::mutex> lk(this->lock);
+        std::vector<Key> ret;
+        ret.reserve(entries.size());
+        for (const Entry &e: entries)
+            ret.push_back(e.key);
+        lk.unlock();
+        return ret;
+    }
+
+
     long size()
     {
         std::unique_lock<std::mutex> lk(this->lock);
