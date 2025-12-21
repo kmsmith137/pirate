@@ -6,6 +6,7 @@
 #include <iostream>
 
 #include <ksgpu/Dtype.hpp>
+#include <ksgpu/Array.hpp>
 
 namespace YAML { class Emitter; }      // #include <yaml-cpp/yaml.h>
 namespace pirate { struct YamlFile; }  // #include <pirate/internals/YamlFile.hpp>
@@ -122,22 +123,39 @@ struct DedispersionConfig
     // DedispersionPlan (not DedispersionConfig) member 'nelts_per_segment'.
     int get_nelts_per_segment() const;
 
+    // Converts between frequency and (fractional) frequency channel.
     // Returns the fractional frequency channel corresponding to frequency f.
-    // E.g. if f=zone_freq_edges[i], then return value is sum_{j<i} zone_nfreq[j].
-    // Throws an exception if f is out-of-range (but allows a little roundoff error).
+    // E.g. f=zone_freq_edges[i] corresponds to index = sum_{j<i} zone_nfreq[j].
+    // Throws an exception if out-of-range (but allows a little roundoff error).
     // Uses linear search (not binary search) since the number of zones is assumed small.
     float frequency_to_index(float f) const;
-
-    // Returns the frequency corresponding to a fractional channel index.
-    // Inverse of frequency_to_index().
-    // Throws an exception if index is out-of-range (but allows a little roundoff error).
     float index_to_frequency(float index) const;
+
+    // Converts between frequency and "delay" (a scaled version of f^(-2)).
+    // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo,
+    // where flo=zone_freq_edges.front(), fhi=zone_freq_edges.back(), and ntree=2^tree_rank.
+    // Valid delay range is [0, 2^tree_rank], valid frequency range is [flo, fhi].
+    float delay_to_frequency(float delay) const;
+    float frequency_to_delay(float f) const;
 
     // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
     long get_total_nfreq() const;
 
+    // Returns channel_map array of length (2^tree_rank + 1), stored in CPU memory.
+    // The channel_map defines the mapping between "tree" channels and frequency channels.
+    // Given tree channel 0 <= n < ntree, the values (channel_map[n+1], channel_map[n])
+    // define the edges of the tree channel in frequency space. (Note: channel_map is
+    // monotonically decreasing, so channel_map[n+1] < channel_map[n].)
+    ksgpu::Array<float> make_channel_map() const;
+
     // make_random(): used for unit tests.
     static DedispersionConfig make_random(bool allow_early_triggers=true);
+
+    // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
+    // are inverses of each other, by sampling random values and checking endpoints.
+    // Called by 'python -m pirate_frb test --dd' -> GpuDedisperser::test() -> DedispersionConfig::test().
+    // Also called by 'python -m pirate_frb show_dedisperser ...'.
+    void test() const;
 };
 
 extern bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);

@@ -478,9 +478,9 @@ def parse_show_dedisperser(subparsers):
 
 
 def show_dedisperser(args):
-    import math
-    
     config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file)
+    config.test()   # I decided to run the unit tests here, since they're very fast!
+    
     print(config.to_yaml_string(args.verbose))
     
     if args.subbands:
@@ -492,21 +492,12 @@ def show_dedisperser(args):
         fs.show()
 
     if args.channel_map:
-        # Compute channel_map using the same algorithm as DedispersionPlan::_init_tree_gridding_kernel_params()
-        nchan = 2 ** config.tree_rank
-        flo = config.zone_freq_edges[0]
-        fhi = config.zone_freq_edges[-1]
-        scale = nchan / (1.0/(flo*flo) - 1.0/(fhi*fhi))
-        inv_fhi_sq = 1.0 / (fhi * fhi)
+        channel_map = config.make_channel_map()
         
         print()
         print('Channel map (tree_index -> freq_index -> frequency)')
-        for i in range(nchan + 1):
-            # Convert delay d=i to frequency f
-            f_delay = 1.0 / math.sqrt(i/scale + inv_fhi_sq)
-            # Convert frequency to fractional channel index
-            freq_index = config.frequency_to_index(f_delay)
-            # Convert index back to frequency (for display)
+        for i in range(len(channel_map)):
+            freq_index = channel_map[i]
             freq = config.index_to_frequency(freq_index)
             print(f'  tree_index={i}  freq_index={freq_index:.4f}  freq={freq:.2f}')
 

@@ -234,7 +234,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 
     if (host_only)
         cout << "!!! Host-only test, GPU code will not be run !!!" << endl;
-    
+
+    // I decided that this was the least awkward place to call DedispersionConfig::test().
+    config.test();
+
     int nfreq = pow2(config.tree_rank);
     int nt_chunk = config.time_samples_per_chunk;
     int beams_per_batch = config.beams_per_batch;

@@ -165,6 +165,139 @@ float DedispersionConfig::index_to_frequency(float index) const
 }
 
 
+float DedispersionConfig::delay_to_frequency(float delay) const
+{
+    // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo.
+    // Formula: f = 1 / sqrt(d/scale + 1/fhi^2), where scale = ntree / (1/flo^2 - 1/fhi^2).
+    
+    float flo = zone_freq_edges.front();
+    float fhi = zone_freq_edges.back();
+    float ntree = pow2(tree_rank);
+    float eps = 1.0e-6f * ntree;
+    
+    if ((delay < -eps) || (delay > ntree + eps)) {
+        stringstream ss;
+        ss << "DedispersionConfig::delay_to_frequency(): delay " << delay
+           << " is out of range [0, " << ntree << "]";
+        throw runtime_error(ss.str());
+    }
+    
+    // Clamp to valid range (in case of small roundoff error).
+    delay = std::max(delay, 0.0f);
+    delay = std::min(delay, ntree);
+    
+    float scale = ntree / (1.0f/(flo*flo) - 1.0f/(fhi*fhi));
+    float inv_fhi_sq = 1.0f / (fhi * fhi);
+    float f = 1.0f / sqrtf(delay/scale + inv_fhi_sq);
+    
+    return f;
+}
+
+
+float DedispersionConfig::frequency_to_delay(float f) const
+{
+    // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo.
+    // Formula: d = scale * (1/f^2 - 1/fhi^2), where scale = ntree / (1/flo^2 - 1/fhi^2).
+    
+    float flo = zone_freq_edges.front();
+    float fhi = zone_freq_edges.back();
+    float ntree = pow2(tree_rank);
+    float eps = 1.0e-6f * (fhi - flo);
+    
+    if ((f < flo - eps) || (f > fhi + eps)) {
+        stringstream ss;
+        ss << "DedispersionConfig::frequency_to_delay(): frequency " << f
+           << " is out of range [" << flo << ", " << fhi << "]";
+        throw runtime_error(ss.str());
+    }
+    
+    // Clamp to valid range (in case of small roundoff error).
+    f = std::max(f, flo);
+    f = std::min(f, fhi);
+    
+    // Delays before rescaling.
+    float d = 1.0f / (f*f);
+    float dlo = 1.0f / (flo*flo);
+    float dhi = 1.0f / (fhi*fhi);
+
+    // Return rescaled delay.
+    // FIXME ntree or (ntree-1) here?
+    return ntree * (d-dhi) / (dlo-dhi);
+}
+
+
+ksgpu::Array<float> DedispersionConfig::make_channel_map() const
+{
+    long nchan = pow2(tree_rank);
+    ksgpu::Array<float> channel_map({nchan+1}, ksgpu::af_rhost);
+    
+    for (long n = 0; n <= nchan; n++) {
+        float f = this->delay_to_frequency(n);
+        channel_map.data[n] = this->frequency_to_index(f);
+    }
+    
+    return channel_map;
+}
+
+
+void DedispersionConfig::test() const
+{
+    this->validate();
+    
+    float flo = zone_freq_edges.front();
+    float fhi = zone_freq_edges.back();
+    float tot_nfreq = this->get_total_nfreq();
+    float ntree = pow2(tree_rank);
+    
+    // Test frequency_to_index / index_to_frequency at all zone boundaries.
+    // E.g. if f=zone_freq_edges[i], then index = sum_{j<i} zone_nfreq[j].
+    float expected_index = 0;
+    for (size_t i = 0; i < zone_freq_edges.size(); i++) {
+        float f = zone_freq_edges[i];
+        float index = frequency_to_index(f);
+        xassert(fabsf(index - expected_index) < 1.0e-4f * tot_nfreq);
+        
+        float f2 = index_to_frequency(expected_index);
+        xassert(fabsf(f - f2) < 1.0e-4f * fhi);
+        
+        if (i < zone_nfreq.size())
+            expected_index += zone_nfreq[i];
+    }
+    
+    // Test delay_to_frequency / frequency_to_delay at endpoints.
+    xassert(fabsf(delay_to_frequency(0.0f) - fhi) < 1.0e-4f * fhi);
+    xassert(fabsf(delay_to_frequency(ntree) - flo) < 1.0e-4f * fhi);
+    xassert(fabsf(frequency_to_delay(fhi)) < 1.0e-4f * ntree);
+    xassert(fabsf(frequency_to_delay(flo) - ntree) < 1.0e-4f * ntree);
+    
+    // Test that frequency_to_index and index_to_frequency are inverses.
+    for (int i = 0; i < 10; i++) {
+        float index = ksgpu::rand_uniform(0, tot_nfreq);
+        float f = index_to_frequency(index);
+        float index2 = frequency_to_index(f);
+        xassert(fabsf(index - index2) < 1.0e-4f * tot_nfreq);
+        
+        f = ksgpu::rand_uniform(flo, fhi);
+        index = frequency_to_index(f);
+        float f2 = index_to_frequency(index);
+        xassert(fabsf(f - f2) < 1.0e-4f * fhi);
+    }
+    
+    // Test that delay_to_frequency and frequency_to_delay are inverses.
+    for (int i = 0; i < 10; i++) {
+        float delay = ksgpu::rand_uniform(0, ntree);
+        float f = delay_to_frequency(delay);
+        float delay2 = frequency_to_delay(f);
+        xassert(fabsf(delay - delay2) < 1.0e-4f * ntree);
+        
+        f = ksgpu::rand_uniform(flo, fhi);
+        delay = frequency_to_delay(f);
+        float f2 = delay_to_frequency(delay);
+        xassert(fabsf(f - f2) < 1.0e-4f * fhi);
+    }
+}
+
+
 void DedispersionConfig::add_early_trigger(long ds_level, long tree_rank)
 {
     EarlyTrigger e;
@@ -306,7 +439,18 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "channel width may differ between zones. For example:\n"
             "  zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N)\n"
             "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) in lower/upper band"
-        ) << YAML::Newline;
+        );
+
+        stringstream ss;
+        ss << "In this config, we have:\n";
+        ss << "  Total frequency channels: " << get_total_nfreq() << "\n";
+        ss << "  Channel widths (MHz): [ ";
+        for (size_t i = 0; i < zone_nfreq.size(); i++) {
+            double width = (zone_freq_edges[i+1] - zone_freq_edges[i]) / zone_nfreq[i];
+            ss << (i ? ", " : "") << width;
+        }
+        ss << " ]";
+        emitter << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 
     emitter << YAML::Key << "zone_nfreq"
@@ -549,11 +693,6 @@ DedispersionConfig DedispersionConfig::make_random(bool allow_early_triggers)
     ret.zone_nfreq = ksgpu::rand_int_vec(nzones, zone_nfreq_min, zone_nfreq_max);
     ret.zone_freq_edges = ksgpu::rand_uniform_vec(nzones+1, 200.0, 2000.0);
     std::sort(ret.zone_freq_edges.begin(), ret.zone_freq_edges.end());
-
-    // Frequency band: single zone [400,800] with zone_nfreq = pow2(tree_rank).
-    // (Placeholder for more complex logic later.)
-    ret.zone_nfreq = { pow2(ret.tree_rank) };
-    ret.zone_freq_edges = { 400.0, 800.0 };
 
     // Randomly choose nt_chunk, but bias toward a low number.
     // Note: call ret.get_nelts_per_segment() after setting ret.dtype
