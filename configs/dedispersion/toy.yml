@@ -1,0 +1,23 @@
+# Artificial!
+zone_nfreq: [10,10,10]
+zone_freq_edges: [400, 410, 510, 800]
+
+tree_rank: 6
+num_downsampling_levels: 4
+time_samples_per_chunk: 2048
+dtype: float16
+
+# No early triggers or frequency subbands.
+early_triggers: []
+frequency_subband_counts: [0,0,0,0,1]
+
+# FIXME peak_finding_params are not quite right (same params at each level)
+peak_finding_params:
+  - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+
+beams_per_gpu: 10
+beams_per_batch: 2
+num_active_batches: 2

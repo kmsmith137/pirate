@@ -82,7 +82,7 @@ long DedispersionConfig::get_total_nfreq() const
 }
 
 
-float DedispersionConfig::get_frequency_index(float f) const
+float DedispersionConfig::frequency_to_index(float f) const
 {
     // Allow small roundoff error at band edges.
     float fmin = zone_freq_edges.front();
@@ -91,7 +91,7 @@ float DedispersionConfig::get_frequency_index(float f) const
     
     if ((f < fmin - eps) || (f > fmax + eps)) {
         stringstream ss;
-        ss << "DedispersionConfig::get_frequency_index(): frequency " << f
+        ss << "DedispersionConfig::frequency_to_index(): frequency " << f
            << " is out of range [" << fmin << ", " << fmax << "]";
         throw runtime_error(ss.str());
     }
@@ -125,6 +125,43 @@ float DedispersionConfig::get_frequency_index(float f) const
     channel_offset = std::max(channel_offset, 0.0f);
     channel_offset = std::min(channel_offset, tot_nfreq);
     return channel_offset;
+}
+
+
+float DedispersionConfig::index_to_frequency(float index) const
+{
+    float tot_nfreq = this->get_total_nfreq();
+    float eps = 1.0e-6f * tot_nfreq;
+    
+    if ((index < -eps) || (index > tot_nfreq + eps)) {
+        stringstream ss;
+        ss << "DedispersionConfig::index_to_frequency(): index " << index
+           << " is out of range [0, " << tot_nfreq << "]";
+        throw runtime_error(ss.str());
+    }
+    
+    // Clamp to valid range (in case of small roundoff error).
+    index = std::max(index, 0.0f);
+    index = std::min(index, tot_nfreq);
+    
+    // Linear search through zones.
+    float channel_offset = 0;
+    for (size_t i = 0; i < zone_nfreq.size(); i++) {
+        float next_offset = channel_offset + zone_nfreq[i];
+        
+        if (index <= next_offset) {
+            // Index is in zone i.
+            float frac = (index - channel_offset) / zone_nfreq[i];
+            float f0 = zone_freq_edges[i];
+            float f1 = zone_freq_edges[i+1];
+            return f0 + frac * (f1 - f0);
+        }
+        
+        channel_offset = next_offset;
+    }
+    
+    // Should only reach here if index == tot_nfreq (after clamping).
+    return zone_freq_edges.back();
 }
 
 
@@ -504,6 +541,14 @@ DedispersionConfig DedispersionConfig::make_random(bool allow_early_triggers)
     int min_rank = (ret.num_downsampling_levels > 1) ? 3 : 2;
     double x = ksgpu::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
     ret.tree_rank = int(sqrt(x));
+
+    // Frequency zones.
+    long nzones = ksgpu::rand_int(1,6);
+    long zone_nfreq_min = max(pow2(ret.tree_rank)/4, 1L);
+    long zone_nfreq_max = pow2(ret.tree_rank);
+    ret.zone_nfreq = ksgpu::rand_int_vec(nzones, zone_nfreq_min, zone_nfreq_max);
+    ret.zone_freq_edges = ksgpu::rand_uniform_vec(nzones+1, 200.0, 2000.0);
+    std::sort(ret.zone_freq_edges.begin(), ret.zone_freq_edges.end());
 
     // Frequency band: single zone [400,800] with zone_nfreq = pow2(tree_rank).
     // (Placeholder for more complex logic later.)

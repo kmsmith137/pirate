@@ -298,7 +298,7 @@ void DedispersionPlan::_init_tree_gridding_kernel_params()
         // Convert delay d=n to frequency f.
         float f = 1.0f / sqrtf(n/scale + inv_fhi_sq);
         // Convert frequency to fractional channel index.
-        tree_gridding_kernel_params.channel_map.data[n] = config.get_frequency_index(f);
+        tree_gridding_kernel_params.channel_map.data[n] = config.frequency_to_index(f);
     }
     
     tree_gridding_kernel_params.dtype = config.dtype;

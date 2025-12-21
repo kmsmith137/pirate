@@ -228,7 +228,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def("add_early_trigger", &DedispersionConfig::add_early_trigger,
                py::arg("ds_level"), py::arg("tree_rank"))
           .def("get_nelts_per_segment", &DedispersionConfig::get_nelts_per_segment)
-          .def("get_frequency_index", &DedispersionConfig::get_frequency_index, py::arg("f"))
+          .def("frequency_to_index", &DedispersionConfig::frequency_to_index, py::arg("f"))
+          .def("index_to_frequency", &DedispersionConfig::index_to_frequency, py::arg("index"))
           .def("get_total_nfreq", &DedispersionConfig::get_total_nfreq)
           // dtype: exposed via getter/setter using ksgpu::Dtype::str() / ksgpu::Dtype::from_str()
           .def_property("dtype",

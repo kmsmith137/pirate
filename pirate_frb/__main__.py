@@ -474,9 +474,12 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('--subbands', action='store_true', help="Show FrequencySubbands info at the end")
+    parser.add_argument('--channel-map', action='store_true', help="Show channel map tree->freq (warning: produces long output!)")
 
 
 def show_dedisperser(args):
+    import math
+    
     config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file)
     print(config.to_yaml_string(args.verbose))
     
@@ -487,6 +490,25 @@ def show_dedisperser(args):
         print()
         print('Frequency subband info starts here')
         fs.show()
+
+    if args.channel_map:
+        # Compute channel_map using the same algorithm as DedispersionPlan::_init_tree_gridding_kernel_params()
+        nchan = 2 ** config.tree_rank
+        flo = config.zone_freq_edges[0]
+        fhi = config.zone_freq_edges[-1]
+        scale = nchan / (1.0/(flo*flo) - 1.0/(fhi*fhi))
+        inv_fhi_sq = 1.0 / (fhi * fhi)
+        
+        print()
+        print('Channel map (tree_index -> freq_index -> frequency)')
+        for i in range(nchan + 1):
+            # Convert delay d=i to frequency f
+            f_delay = 1.0 / math.sqrt(i/scale + inv_fhi_sq)
+            # Convert frequency to fractional channel index
+            freq_index = config.frequency_to_index(f_delay)
+            # Convert index back to frequency (for display)
+            freq = config.index_to_frequency(freq_index)
+            print(f'  tree_index={i}  freq_index={freq_index:.4f}  freq={freq:.2f}')
 
 
 ###################################   random_kernels command  ###################################

@@ -126,7 +126,12 @@ struct DedispersionConfig
     // E.g. if f=zone_freq_edges[i], then return value is sum_{j<i} zone_nfreq[j].
     // Throws an exception if f is out-of-range (but allows a little roundoff error).
     // Uses linear search (not binary search) since the number of zones is assumed small.
-    float get_frequency_index(float f) const;
+    float frequency_to_index(float f) const;
+
+    // Returns the frequency corresponding to a fractional channel index.
+    // Inverse of frequency_to_index().
+    // Throws an exception if index is out-of-range (but allows a little roundoff error).
+    float index_to_frequency(float index) const;
 
     // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
     long get_total_nfreq() const;
