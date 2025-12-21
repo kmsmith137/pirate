@@ -156,12 +156,10 @@ struct ReferenceDedisperserBase
     virtual void dedisperse(long ichunk, long ibatch) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
-    // Shape is (beams_per_batch, nfreq, input_ntime) -- frequency-space array.
+    // Shape is (beams_per_batch, nfreq, input_ntime).
     // 
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
     // output_arrays[i] has shape (beams_per_batch, 2^output_rank[i], output_ntime[i])
-    //
-    // Warning: dedisperse() may modify 'input_array' and 'dd_array'!
     
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
     ksgpu::Array<float> input_array;   // frequency-space: shape (beams_per_batch, nfreq, input_ntime)

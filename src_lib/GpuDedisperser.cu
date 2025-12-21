@@ -58,7 +58,6 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     
     // Construct, but do not allocate, the following members:
     //
-    //   std::vector<ksgpu::Array<void>> input_arrays;    // length nstreams
     //   std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
     //   std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
     //   std::shared_ptr<GpuTreeGriddingKernel> tree_gridding_kernel;
@@ -294,10 +293,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
             // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
             // Random values uniform over [-1.0, 1.0].
             Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost);
-            long nelts = beams_per_batch * nfreq * nt_chunk;
-            float *p = arr.data;
-            for (long i = 0; i < nelts; i++)
-                p[i] = ksgpu::rand_uniform(-1.0, 1.0);
+            for (long i = 0; i < arr.size; i++)
+                arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
 
             rdd0->input_array.fill(arr);
             rdd0->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
