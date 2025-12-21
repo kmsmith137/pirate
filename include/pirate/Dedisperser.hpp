@@ -170,8 +170,8 @@ struct ReferenceDedisperserBase
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
 
     // Helper methods called by subclass constructors.
-    void _init_iobufs(ksgpu::Array<float> &in, ksgpu::Array<float> &dd, std::vector<ksgpu::Array<float>> &out);
-    void _init_iobufs(ksgpu::Array<void> &in, ksgpu::Array<void> &dd, std::vector<ksgpu::Array<void>> &out);
+    void _init_iobufs(ksgpu::Array<float> &dd, std::vector<ksgpu::Array<float>> &out);
+    void _init_iobufs(ksgpu::Array<void> &dd, std::vector<ksgpu::Array<void>> &out);
 };
 
 
