@@ -2,7 +2,6 @@
 #define _PIRATE_YAML_FILE_HPP
 
 #include <string>
-#include <iostream>
 #include <stdexcept>
 #include <unordered_set>
 #include <yaml-cpp/yaml.h>
@@ -41,9 +40,7 @@ namespace pirate {
 //   int x = f.get_scalar<int>("x");
 //   vector<int> y = f.get_vector<int>("y");
 //
-//   f.assert_all_keys_requested();
-//
-// FIXME to do: implement YamlFile::assert_all_keys_requested().
+//   f.check_for_invalid_keys();
 
 
 struct YamlFile {
@@ -56,6 +53,8 @@ struct YamlFile {
     std::string name;
     YAML::Node node;
 
+    // Tracks which keys have been accessed (for check_for_invalid_keys()).
+    // Note: mutable and modified in const methods, so not thread-safe.
     mutable std::unordered_set<std::string> requested_keys;
 
     // Throws exception if (type() != Map), or if key 'k' is absent.
@@ -64,6 +63,11 @@ struct YamlFile {
     // Throws exception if (type() != Sequence), or if index 'ix' is out of range.
     YamlFile operator[](long ix) const;
 
+    // Returns true if key 'k' exists in a Map node. Throws exception if (type() != Map).
+    bool has_key(const std::string &k) const;
+
+    // Returns the number of elements (for Sequence) or key-value pairs (for Map).
+    // Returns 0 for Scalar, Null, or Undefined nodes.
     long size() const { return node.size(); }
     Type type() const { return node.Type(); }
 
@@ -74,6 +78,9 @@ struct YamlFile {
     template<typename T> inline T get_scalar(const std::string &k, const T &default_value) const;
     
     template<typename T> inline std::vector<T> get_vector(const std::string &k) const;
+
+    // Returns default_value only if key is absent. If key is present but maps to an
+    // empty sequence, returns an empty vector (not default_value).
     template<typename T> inline std::vector<T> get_vector(const std::string &k, const std::vector<T> &default_value) const;
 
     // If these asserts fail, they will throw a "verbose" exception, intended to facilitate error-checking.
@@ -129,8 +136,10 @@ inline std::vector<T> YamlFile::as_vector() const
     for (long i = 0; i < n; i++) {
         YAML::Node child_node = node[i];
 
-        if (!child_node.IsScalar() || !_yaml_node_to_scalar<T> (child_node, ret[i]))
-            throw std::runtime_error(name + ": parse failure (expected type vector<" + ksgpu::type_name<T>() + ">)");
+        if (!child_node.IsScalar() || !_yaml_node_to_scalar<T> (child_node, ret[i])) {
+            throw std::runtime_error(name + "[" + std::to_string(i) + "]: parse failure (expected type "
+                                     + ksgpu::type_name<T>() + ")");
+        }
     }
 
     return ret;

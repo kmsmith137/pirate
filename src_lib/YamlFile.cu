@@ -1,6 +1,7 @@
 #include "../include/pirate/YamlFile.hpp"
 #include "../include/pirate/file_utils.hpp"  // file_exists()
 
+#include <sstream>
 #include <ksgpu/xassert.hpp>
 
 using namespace std;
@@ -58,6 +59,13 @@ YamlFile YamlFile::operator[](long ix) const
     xassert(child.node);  // should never fail
 
     return child;
+}
+
+
+bool YamlFile::has_key(const string &k) const
+{
+    this->assert_type_is(Type::Map);
+    return node[k] ? true : false;
 }
 
 
