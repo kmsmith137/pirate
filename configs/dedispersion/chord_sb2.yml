@@ -1,13 +1,18 @@
-zone_nfreq: [16384]
-zone_freq_edges: [400, 800]
-tree_rank: 15
+# A simple frequency upchannelization scheme, will revisit later (28160 freq channels total).
+zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+zone_nfreq: [ 8192, 8192, 6144, 2048, 3584 ]   # U = 32,16,8,4,1
+
+# Let's try to use rank=16 in CHORD.
+tree_rank: 16
 num_downsampling_levels: 4
 time_samples_per_chunk: 2048
 dtype: float16
 
-# No early triggers or frequency subbands.
+# No early triggers.
 early_triggers: []
-frequency_subband_counts: [0,0,0,0,1]
+
+# python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.1
+frequency_subband_counts: [5,9,7,3,1]
 
 # FIXME peak_finding_params are not quite right (same params at each level)
 peak_finding_params:
@@ -16,7 +21,7 @@ peak_finding_params:
   - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
   - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
 
-# FIXME placeholder: only 10 beams/GPU.
-beams_per_gpu: 10
+# FIXME placeholder: only 6 beams/GPU.
+beams_per_gpu: 6
 beams_per_batch: 2
 num_active_batches: 2

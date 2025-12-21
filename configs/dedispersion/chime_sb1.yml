@@ -5,9 +5,11 @@ num_downsampling_levels: 4
 time_samples_per_chunk: 2048
 dtype: float16
 
-# No early triggers or frequency subbands.
+# No early triggers.
 early_triggers: []
-frequency_subband_counts: [0,0,0,0,1]
+
+# python -m pirate_frb show_subbands --rank=4 --fmin=400 --fmax=800 --threshold=0.3
+frequency_subband_counts: [0,0,1,2,1]
 
 # FIXME peak_finding_params are not quite right (same params at each level)
 peak_finding_params:
