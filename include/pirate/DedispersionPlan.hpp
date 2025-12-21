@@ -7,6 +7,7 @@
 #include "LaggedDownsamplingKernel.hpp"  // struct LaggedDownsamplingKernelParams
 #include "RingbufCopyKernel.hpp"         // struct RingbufCopyKernelParams
 #include "TreeGriddingKernel.hpp"        // struct TreeGriddingKernelParams
+#include "PeakFindingKernel.hpp"         // struct PeakFindingKernelParams
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -28,9 +29,18 @@ struct DedispersionPlan
     
     const DedispersionConfig config;
 
+    // Dedispersion is a two-stage process. In the first stage, there is one tree for each
+    // downsampling level. In the second stage, each downsampling level has a "primary" tree,
+    // plus one "early" tree for each EarlyTrigger (see DedispersionConfig.hpp). Thus,
+    // there is a many-to-one mapping from stage2 trees to stage1 trees.
+
     long stage1_ntrees = 0;  // same as config.num_downsampling_levels
     long stage2_ntrees = 0;
-    
+
+    // Defines the mapping from stage2 trees to stage1 trees.
+    // Length (stage2_ntrees), each element is an index 0 <= ds_level < stage1_ntrees.
+    std::vector<long> stage2_ds_level;
+
     TreeGriddingKernelParams tree_gridding_kernel_params;
     
     DedispersionBufferParams stage1_dd_buf_params;  // (number of buffers) = stage1_ntrees
@@ -38,7 +48,7 @@ struct DedispersionPlan
     
     std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length stage1_ntrees
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
-    std::vector<long> stage2_ds_level;  // length stage2_ntrees
+    std::vector<PeakFindingKernelParams> stage2_pf_params;          // length stage2_ntrees
     
     LaggedDownsamplingKernelParams lds_params;
 
