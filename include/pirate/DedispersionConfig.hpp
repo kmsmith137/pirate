@@ -158,7 +158,7 @@ struct DedispersionConfig
 
     struct RandomArgs 
     {
-        int max_rank = 11;
+        int max_rank = 10;
         int max_early_triggers = 5;  // set to zero to disable early triggers
         bool gpu_valid = true;
         bool verbose = false;

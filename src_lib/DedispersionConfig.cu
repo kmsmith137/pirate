@@ -89,7 +89,7 @@ float DedispersionConfig::frequency_to_index(float f) const
     // Allow small roundoff error at band edges.
     float fmin = zone_freq_edges.front();
     float fmax = zone_freq_edges.back();
-    float eps = 1.0e-6f * (fmax - fmin);
+    float eps = 1.0e-5f * (fmax - fmin);
     
     if ((f < fmin - eps) || (f > fmax + eps)) {
         stringstream ss;
@@ -133,7 +133,7 @@ float DedispersionConfig::frequency_to_index(float f) const
 float DedispersionConfig::index_to_frequency(float index) const
 {
     float tot_nfreq = this->get_total_nfreq();
-    float eps = 1.0e-6f * tot_nfreq;
+    float eps = 1.0e-5f * tot_nfreq;
     
     if ((index < -eps) || (index > tot_nfreq + eps)) {
         stringstream ss;
@@ -175,7 +175,7 @@ float DedispersionConfig::delay_to_frequency(float delay) const
     float flo = zone_freq_edges.front();
     float fhi = zone_freq_edges.back();
     float ntree = pow2(tree_rank);
-    float eps = 1.0e-6f * ntree;
+    float eps = 1.0e-5f * ntree;
     
     if ((delay < -eps) || (delay > ntree + eps)) {
         stringstream ss;
@@ -204,7 +204,7 @@ float DedispersionConfig::frequency_to_delay(float f) const
     float flo = zone_freq_edges.front();
     float fhi = zone_freq_edges.back();
     float ntree = pow2(tree_rank);
-    float eps = 1.0e-6f * (fhi - flo);
+    float eps = 1.0e-5f * (fhi - flo);
     
     if ((f < flo - eps) || (f > fhi + eps)) {
         stringstream ss;
@@ -867,10 +867,10 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         long stage2_dd_rank = tot_rank - stage1_dd_rank;
 
         // Min/max log2(PeakFindingConfig::wt_time_downsampling).
-        long max_wtds1 = xdiv(nt_divisor, pow2(ds_level));        // used if Tinner==1
-        long max_wtds2 = xdiv(1024, k.Tinner * ret.dtype.nbits);  // used if Tinner==2
-        long min_lg2_wtds = integer_log2(k.Dout);
-        long max_lg2_wtds = integer_log2((k.Tinner == 1) ? max_wtds1 : max_wtds2);
+        long nt_ds = xdiv(nt_divisor, pow2(ds_level)); 
+        long min_wtds = xdiv(1024, k.Tinner * ret.dtype.nbits);
+        long min_lg2_wtds = integer_log2(min_wtds);
+        long max_lg2_wtds = (k.Tinner == 1) ? integer_log2(nt_ds) : min_lg2_wtds;
 
         // Min/max log2(PeakFindingConfig::wt_dm_downsampling).
         // FIXME: assuming default DM downsampling (PeakFindingConfig::dm_downsampling == 0) for now.

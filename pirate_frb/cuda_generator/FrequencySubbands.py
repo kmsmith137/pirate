@@ -123,6 +123,80 @@ class FrequencySubbands:
 
         assert 1 <= pf_rank <= 4
         return tuple([ randi(2**pf_rank) ] + [ randi(2**(pf_rank-l+1)-1) for l in range(1,pf_rank) ] + [ 1 ])
+
+
+    @staticmethod
+    def validate_subband_counts(subband_counts):
+        """Validates subband_counts, raising an exception if invalid."""
+        
+        if len(subband_counts) == 0:
+            raise RuntimeError("FrequencySubbands: subband_counts must be non-empty")
+        
+        pf_rank = len(subband_counts) - 1
+        
+        if subband_counts[pf_rank] != 1:
+            raise RuntimeError("FrequencySubbands: last element of subband_counts must be 1 (must search full band)")
+        
+        # Currently, pf_rank=4 is max value supported by the peak-finding kernel,
+        # so a larger value would indicate a bug (such as using the total tree rank
+        # instead of the peak-finding rank).
+        if pf_rank > 4:
+            raise RuntimeError("FrequencySubbands: max allowed pf_rank is 4. This may change in the future.")
+        
+        for level in range(pf_rank + 1):
+            # Level 0 is special (non-overlapping bands).
+            max_bands = (2**(pf_rank+1-level) - 1) if (level > 0) else 2**pf_rank
+            if not (0 <= subband_counts[level] <= max_bands):
+                raise RuntimeError(f"FrequencySubbands: subband_counts[{level}]={subband_counts[level]} out of range [0,{max_bands}]")
+
+
+    @classmethod
+    def rerank_subband_counts(cls, src_counts, dst_rank):
+        if dst_rank <= 0:
+            raise RuntimeError("FrequencySubbands.rerank_subband_counts: dst_rank must be > 0")
+        
+        cls.validate_subband_counts(src_counts)
+        src_rank = len(src_counts) - 1
+        
+        dst_counts = [0] * (dst_rank + 1)
+        dst_counts[dst_rank] = 1
+        
+        for pf_level in range(dst_rank):
+            src_level = pf_level - dst_rank + src_rank
+            
+            # Some awkward logic here, to account for pf_level==0 being "special".
+            if (src_level < 0) or (src_counts[src_level] == 0):
+                dst_counts[pf_level] = 0
+            elif (src_level == 0) and (pf_level > 0):
+                dst_counts[pf_level] = 2 * src_counts[src_level] - 1
+            elif (src_level > 0) and (pf_level == 0):
+                dst_counts[pf_level] = src_counts[src_level] // 2 + 1
+            else:
+                dst_counts[pf_level] = src_counts[src_level]
+        
+        cls.validate_subband_counts(dst_counts)
+        return dst_counts
+
+
+    @classmethod
+    def early_subband_counts(cls, subband_counts, delta_rank):
+        if delta_rank < 0:
+            raise RuntimeError("FrequencySubbands.early_subband_counts: delta_rank must be >= 0")
+        
+        cls.validate_subband_counts(subband_counts)
+        
+        src_rank = len(subband_counts) - 1
+        dst_rank = max(src_rank - delta_rank, 0)
+        
+        dst_counts = [0] * (dst_rank + 1)
+        dst_counts[dst_rank] = 1
+        
+        for pf_level in range(dst_rank):
+            max_count = (2**(dst_rank+1-pf_level) - 1) if (pf_level > 0) else 2**dst_rank
+            dst_counts[pf_level] = min(subband_counts[pf_level], max_count)
+        
+        cls.validate_subband_counts(dst_counts)
+        return dst_counts
     
     
     def max_bands_at_level(self, level):
