@@ -337,12 +337,13 @@ void GpuDedisperser::test()
     config.num_active_batches = 1;   // FIXME currently we only support nstreams==1
     config.validate();
     
-    int max_nt = 8192;
-    xassert(config.time_samples_per_chunk <= max_nt);
-    
-    int max_nchunks = max_nt / config.time_samples_per_chunk;  // round down
-    int nchunks = ksgpu::rand_int(1, max_nchunks+1);
-    
+    long ntree = pow2(config.tree_rank);
+    long nt_chunk = config.time_samples_per_chunk;
+    long min_nchunks = (ntree / nt_chunk) + 2;
+    long max_nchunks = (1024*1024) / (ntree * nt_chunk * config.beams_per_gpu);
+    max_nchunks = max(min_nchunks, max_nchunks);
+
+    long nchunks = ksgpu::rand_int(1, max_nchunks+1);    
     GpuDedisperser::test_one(config, nchunks);
 }
 

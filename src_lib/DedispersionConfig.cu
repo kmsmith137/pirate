@@ -785,16 +785,6 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.zone_freq_edges = rand_uniform_vec(nzones+1, 200.0, 2000.0);
     std::sort(ret.zone_freq_edges.begin(), ret.zone_freq_edges.end());
 
-    // Beam configuration.
-    auto v = ksgpu::random_integers_with_bounded_product(2, 16);
-    ret.beams_per_batch = v[0];
-    ret.beams_per_gpu = v[0] * v[1];
-    ret.num_active_batches = rand_int(1,v[1]+1);
-
-    // GPU configuration.
-    ret.gpu_clag_maxfrac = rand_uniform(0, 1.5);
-    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
-
     // Choose ret.num_downsampling_levels and my_keys[1:].
 
     long ds_stage2_dd_rank = ret.tree_rank / 2;
@@ -832,18 +822,25 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         }
     }
 
-    // Randomly choose time_samples_per_chunk.
+    // Time_samples_per_chunk, beam configuration.
 
-    long nt_divisor = xdiv(1024,ret.dtype.nbits) * pow2(ret.num_downsampling_levels-1);
-    long nt_multiplier = rand_int(1, xdiv(1024,nt_divisor));
-    ret.time_samples_per_chunk = nt_divisor * nt_multiplier;
+    long nt_divisor = ret.get_nelts_per_segment() * pow2(ret.num_downsampling_levels-1);
+    long n = xdiv(8192, nt_divisor);
+    auto v = ksgpu::random_integers_with_bounded_product(3, n);
+
+    ret.time_samples_per_chunk = v[0] * nt_divisor;
+    ret.beams_per_batch = v[1];
+    ret.beams_per_gpu = v[1] * v[2];
+    ret.num_active_batches = rand_int(1,v[2]+1);
+
+    // GPU configuration.
+    ret.gpu_clag_maxfrac = rand_uniform(0, 1.5);
+    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
 
     // For later convenience: set nt_divisor to the largest power of 2
     // which divides time_samples_per_chunk.
-    while ((nt_multiplier % 2) == 0) {
+    while ((xdiv(ret.time_samples_per_chunk,nt_divisor) % 2) == 0)
         nt_divisor *= 2;
-        nt_multiplier /= 2;
-    }
 
     if (args.verbose) {
         for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++)
