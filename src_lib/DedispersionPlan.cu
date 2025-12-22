@@ -263,9 +263,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         long ndm_in_per_wt = pfc.wt_dm_downsampling;
         long nt_in_per_wt = pfc.wt_time_downsampling;
 
-        xassert(ndm_in_per_wt <= pow2(tot_rank));
-        xassert(nt_in_per_out <= st2.nt_ds);
-        xassert(nt_in_per_wt <= st2.nt_ds);
+        xassert_le(ndm_in_per_wt, pow2(tot_rank));
+        xassert_le(nt_in_per_out, nt_in_per_wt);
+        xassert_le(nt_in_per_wt, st2.nt_ds);
 
         PeakFindingKernelParams pf_params;
         pf_params.subband_counts = subband_counts;  // not config.frequency_subband_counts

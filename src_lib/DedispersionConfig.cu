@@ -845,6 +845,16 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         nt_multiplier /= 2;
     }
 
+    if (args.verbose) {
+        for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++)
+            cout << "DedispersionConfig::make_random(): key[" << ds_level << "]"
+                 << " = " << my_keys.at(ds_level) << endl;
+
+        cout << "DedispersionConfig::make_random(): "
+             << "time_samples_per_chunk=" << ret.time_samples_per_chunk << ", "
+             << "nt_divisor=" << nt_divisor << endl;
+    }
+
     // Loop over stage1 trees. Assign peak-finding params and early trigger candidates.
 
     vector<EarlyTrigger> et_candidates;
@@ -856,22 +866,27 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         long stage1_dd_rank = tot_rank / 2;
         long stage2_dd_rank = tot_rank - stage1_dd_rank;
 
-        // Min/max log2(wt_{dm,time}_downsampling).
+        // Min/max log2(PeakFindingConfig::wt_time_downsampling).
+        long max_wtds1 = xdiv(nt_divisor, pow2(ds_level));        // used if Tinner==1
+        long max_wtds2 = xdiv(1024, k.Tinner * ret.dtype.nbits);  // used if Tinner==2
+        long min_lg2_wtds = integer_log2(k.Dout);
+        long max_lg2_wtds = integer_log2((k.Tinner == 1) ? max_wtds1 : max_wtds2);
+
+        // Min/max log2(PeakFindingConfig::wt_dm_downsampling).
+        // FIXME: assuming default DM downsampling (PeakFindingConfig::dm_downsampling == 0) for now.
         long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // same as pf_rank
         long max_lg2_wdds = tot_rank;
-        long min_lg2_wtds = xdiv(1024, k.Tinner * ret.dtype.nbits);
-        long max_lg2_wtds = (k.Tinner > 1) ? min_lg2_wtds : integer_log2(nt_divisor);
 
-        xassert(k.dd_rank == stage2_dd_rank);
-        xassert(min_lg2_wdds <= max_lg2_wdds);
-        xassert(min_lg2_wtds <= max_lg2_wtds);
+        xassert_eq(k.dd_rank, stage2_dd_rank);
+        xassert_le(min_lg2_wdds, max_lg2_wdds);
+        xassert_le(min_lg2_wtds, max_lg2_wtds);
 
         // FIXME using default dm/time downsampling factors for now.
 
         PeakFindingConfig pfc;
         pfc.max_width = k.Wmax;
         pfc.dm_downsampling = 0;    // see above
-        pfc.time_downsampling = 0;  // see above
+        pfc.time_downsampling = k.Dout;
         pfc.wt_dm_downsampling = pow2(rand_int(min_lg2_wdds, max_lg2_wdds+1));
         pfc.wt_time_downsampling = pow2(rand_int(min_lg2_wtds, max_lg2_wtds+1));
         ret.peak_finding_params.push_back(pfc);
