@@ -75,23 +75,78 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
     }        
 }
 
+// Static member function
+vector<long> FrequencySubbands::rerank_subband_counts(const vector<long> &src_counts, long dst_rank)
+{
+    xassert(dst_rank > 0);
+    validate_subband_counts(src_counts);
+    long src_rank = src_counts.size() - 1;
+
+    vector<long> dst_counts(dst_rank+1);
+    dst_counts[dst_rank] = 1;
+
+    for (long pf_level = 0; pf_level < dst_rank; pf_level++) {
+        long src_level = pf_level - dst_rank + src_rank;
+
+        // Some awkward logic here, to account for pf_level==0 being "special".
+
+        if ((src_level < 0) || (src_counts.at(src_level) == 0))
+            dst_counts.at(pf_level) = 0;
+        else if ((src_level == 0) && (pf_level > 0))
+            dst_counts.at(pf_level) = 2 * src_counts.at(src_level) - 1;
+        else if ((src_level > 0) && (pf_level == 0))
+            dst_counts.at(pf_level) = src_counts.at(src_level)/2 + 1;
+        else
+            dst_counts.at(pf_level) = src_counts.at(src_level);
+    }
+
+    validate_subband_counts(dst_counts);
+    return dst_counts;
+}
 
 // Static member function
-vector<long> FrequencySubbands::make_random_subband_counts()
+vector<long> FrequencySubbands::early_subband_counts(const vector<long> &subband_counts, long delta_rank)
 {
-    long pf_rank = rand_int(0,5);
+    xassert(delta_rank >= 0);
+    validate_subband_counts(subband_counts);
+
+    long src_rank = subband_counts.size() - 1;
+    long dst_rank = max(src_rank - delta_rank, 0L);
+
+    vector<long> dst_counts(dst_rank+1);
+    dst_counts[dst_rank] = 1;
+
+    for (long pf_level = 0; pf_level < dst_rank; pf_level++) {
+        long max_count = (pf_level > 0) ? (pow2(dst_rank+1-pf_level)-1) : pow2(dst_rank);
+        dst_counts.at(pf_level) = min(subband_counts.at(pf_level), max_count);
+    }
+
+    validate_subband_counts(dst_counts);
+    return dst_counts;
+}
+
+// Static member function
+vector<long> FrequencySubbands::make_random_subband_counts(long pf_rank)
+{
+    xassert(pf_rank >= 0);
     vector<long> subband_counts(pf_rank+1);
 
     for (long level = 0; level < pf_rank; level++) {
         // Level 0 is special (non-overlapping bands).
-        long max_bands = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
-        subband_counts[level] = rand_int(0,max_bands+1);
+        long max_count = (level > 0) ? (pow2(pf_rank+1-level)-1) : pow2(pf_rank);
+        subband_counts[level] = rand_int(0,max_count+1);
     }
 
     subband_counts[pf_rank] = 1;
     return subband_counts;
 }
 
+// Static member function
+vector<long> FrequencySubbands::make_random_subband_counts()
+{
+    long pf_rank = rand_int(0,5);
+    return make_random_subband_counts(pf_rank);
+}
 
 // Static member function
 FrequencySubbands FrequencySubbands::make_random()

@@ -1,7 +1,6 @@
 #include "../include/pirate/utils.hpp"
 #include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
-#include "../include/pirate/Dedisperser.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -294,16 +293,6 @@ string hex_str(uint x)
     stringstream ss;
     ss << std::hex << "0x" << x;
     return ss.str();
-}
-
-
-// Called by 'python -m pirate_frb scratch'. Intended for quick throwaway tests.
-void scratch()
-{
-    cout << "pirate::scratch() called -- this is a place for quick throwaway tests" << endl;
-
-    ChimeDedisperser d(100, 2, 2, false);
-    d.config.to_yaml("configs/dedispersion/chime.yml");
 }
 
 

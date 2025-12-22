@@ -120,6 +120,7 @@ LIB_SRCFILES = \
   src_lib/YamlFile.cu \
   src_lib/file_utils.cu \
   src_lib/network_utils.cu \
+  src_lib/scratch.cu \
   src_lib/system_utils.cu \
   src_lib/utils.cu \
   src_lib/loose_ends/cpu_downsample.cu \

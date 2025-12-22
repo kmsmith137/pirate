@@ -26,8 +26,6 @@
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
 
-#include "../include/pirate/utils.hpp"
-
 #include "../include/pirate/loose_ends/tests.hpp"
 #include "../include/pirate/loose_ends/timing.hpp"
 
@@ -35,6 +33,9 @@ using namespace std;
 using namespace ksgpu;
 using namespace pirate;
 namespace py = pybind11;
+
+// Declared extern here, defined in src_lib/scratch.cu.
+namespace pirate { extern void scratch(); }
 
 
 PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate_pybind11.so
@@ -220,8 +221,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<DedispersionConfig>(m, "DedispersionConfig")
           .def_static("from_yaml", static_cast<DedispersionConfig (*)(const std::string &)>(&DedispersionConfig::from_yaml),
                       py::arg("filename"))
-          .def_static("make_random", &DedispersionConfig::make_random,
-                      py::arg("allow_early_triggers") = true)
           .def("to_yaml_string", &DedispersionConfig::to_yaml_string,
                py::arg("verbose") = false)
           .def("validate", &DedispersionConfig::validate)

@@ -148,14 +148,24 @@ struct DedispersionConfig
     // monotonically decreasing, so channel_map[n+1] < channel_map[n].)
     ksgpu::Array<float> make_channel_map() const;
 
-    // make_random(): used for unit tests.
-    static DedispersionConfig make_random(bool allow_early_triggers=true);
-
     // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
     // are inverses of each other, by sampling random values and checking endpoints.
     // Called by 'python -m pirate_frb test --dd' -> GpuDedisperser::test() -> DedispersionConfig::test().
     // Also called by 'python -m pirate_frb show_dedisperser ...'.
     void test() const;
+
+    // make_random(): used for unit tests.
+
+    struct RandomArgs 
+    {
+        int max_rank = 11;
+        int max_early_triggers = 5;  // set to zero to disable early triggers
+        bool gpu_valid = true;
+        bool verbose = false;
+    };
+    
+    static DedispersionConfig make_random(const RandomArgs &args);
+    static DedispersionConfig make_random() { return make_random(RandomArgs()); }
 };
 
 extern bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);

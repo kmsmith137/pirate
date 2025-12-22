@@ -135,6 +135,12 @@ struct KernelRegistry
         return ret;
     }
 
+    bool has_key(const Key &key)
+    {
+        std::unique_lock<std::mutex> lk(this->lock);
+        Entry *e = this->_get_locked(key);
+        return (e != nullptr);
+    }
 
     Key get_random_key()
     {

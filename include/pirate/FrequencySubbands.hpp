@@ -70,6 +70,10 @@ struct FrequencySubbands
 
     // For debugging/testing.
     static void validate_subband_counts(const std::vector<long> &subband_counts);
+    static std::vector<long> rerank_subband_counts(const std::vector<long> &subband_counts, long new_pf_rank);
+    static std::vector<long> early_subband_counts(const std::vector<long> &subband_counts, long delta_rank);
+
+    static std::vector<long> make_random_subband_counts(long pf_rank);
     static std::vector<long> make_random_subband_counts();
     static FrequencySubbands make_random();
 

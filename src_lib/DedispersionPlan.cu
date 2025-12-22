@@ -245,6 +245,42 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
         stage2_dd_kernel_params.push_back(kparams);
         stage2_ds_level.push_back(ds_level);
+
+        // The rest of the loop body initializes PeakFindingKernelParams for this stage2 tree.
+        const DedispersionConfig::PeakFindingConfig &pfc = config.peak_finding_params.at(ds_level);
+        long tot_rank = st2.rank0 + st2.rank1_trigger;
+        long delta_rank = st2.rank1_ambient - st2.rank1_trigger;
+        long pf_rank = (st2.rank1_trigger + 1) / 2;
+
+        // Modify the subband_counts for the stage2 tree.
+        // (Accounts for early triggering, downsampling.)
+        vector<long> subband_counts = FrequencySubbands::early_subband_counts(config.frequency_subband_counts, delta_rank);
+        subband_counts = FrequencySubbands::rerank_subband_counts(subband_counts, pf_rank);
+
+        // Downsampling factors.
+        long ndm_in_per_out = pfc.dm_downsampling ? pfc.dm_downsampling : pow2(pf_rank);
+        long nt_in_per_out = pfc.time_downsampling ? pfc.time_downsampling : ndm_in_per_out;
+        long ndm_in_per_wt = pfc.wt_dm_downsampling;
+        long nt_in_per_wt = pfc.wt_time_downsampling;
+
+        xassert(ndm_in_per_wt <= pow2(tot_rank));
+        xassert(nt_in_per_out <= st2.nt_ds);
+        xassert(nt_in_per_wt <= st2.nt_ds);
+
+        PeakFindingKernelParams pf_params;
+        pf_params.subband_counts = subband_counts;  // not config.frequency_subband_counts
+        pf_params.dtype = config.dtype;
+        pf_params.max_kernel_width = pfc.max_width;
+        pf_params.beams_per_batch = config.beams_per_batch;
+        pf_params.total_beams = config.beams_per_gpu;
+        pf_params.ndm_out = xdiv(pow2(tot_rank), ndm_in_per_out);
+        pf_params.ndm_wt = xdiv(pow2(tot_rank), ndm_in_per_wt);
+        pf_params.nt_in = st2.nt_ds;
+        pf_params.nt_out = xdiv(pf_params.nt_in, nt_in_per_out);
+        pf_params.nt_wt = xdiv(pf_params.nt_in, nt_in_per_wt);
+        pf_params.validate();
+
+        stage2_pf_params.push_back(pf_params);
     }
 
     // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.

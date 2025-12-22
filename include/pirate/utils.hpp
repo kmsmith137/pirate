@@ -79,9 +79,6 @@ extern int mean_bytes_per_unaligned_chunk(int nbytes);
 
 extern std::string hex_str(uint x);
 
-// Called by 'python -m pirate_frb scratch'. Intended for quick throwaway tests.
-extern void scratch();
-
 
 }  // namespace pirate
 

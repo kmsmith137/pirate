@@ -14,11 +14,13 @@
 #include "../include/pirate/inlines.hpp"         // xdiv(), pow2(), print_kv(), is_power_of_two()
 #include "../include/pirate/file_utils.hpp"      // File
 #include "../include/pirate/YamlFile.hpp"
-#include "../include/pirate/FrequencySubbands.hpp"  // FrequencySubbands::validate_subband_counts()
+#include "../include/pirate/FrequencySubbands.hpp"
+#include "../include/pirate/CoalescedDdKernel2.hpp"
 
 #include <yaml-cpp/emitter.h>
 
 using namespace std;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0
@@ -226,10 +228,10 @@ float DedispersionConfig::frequency_to_delay(float f) const
 }
 
 
-ksgpu::Array<float> DedispersionConfig::make_channel_map() const
+Array<float> DedispersionConfig::make_channel_map() const
 {
     long nchan = pow2(tree_rank);
-    ksgpu::Array<float> channel_map({nchan+1}, ksgpu::af_rhost);
+    Array<float> channel_map({nchan+1}, af_rhost);
     
     for (long n = 0; n <= nchan; n++) {
         float f = this->delay_to_frequency(n);
@@ -272,12 +274,12 @@ void DedispersionConfig::test() const
     
     // Test that frequency_to_index and index_to_frequency are inverses.
     for (int i = 0; i < 10; i++) {
-        float index = ksgpu::rand_uniform(0, tot_nfreq);
+        float index = rand_uniform(0, tot_nfreq);
         float f = index_to_frequency(index);
         float index2 = frequency_to_index(f);
         xassert(fabsf(index - index2) < 1.0e-4f * tot_nfreq);
         
-        f = ksgpu::rand_uniform(flo, fhi);
+        f = rand_uniform(flo, fhi);
         index = frequency_to_index(f);
         float f2 = index_to_frequency(index);
         xassert(fabsf(f - f2) < 1.0e-4f * fhi);
@@ -285,12 +287,12 @@ void DedispersionConfig::test() const
     
     // Test that delay_to_frequency and frequency_to_delay are inverses.
     for (int i = 0; i < 10; i++) {
-        float delay = ksgpu::rand_uniform(0, ntree);
+        float delay = rand_uniform(0, ntree);
         float f = delay_to_frequency(delay);
         float delay2 = frequency_to_delay(f);
         xassert(fabsf(delay - delay2) < 1.0e-4f * ntree);
         
-        f = ksgpu::rand_uniform(flo, fhi);
+        f = rand_uniform(flo, fhi);
         delay = frequency_to_delay(f);
         float f2 = delay_to_frequency(delay);
         xassert(fabsf(f - f2) < 1.0e-4f * fhi);
@@ -327,7 +329,7 @@ void DedispersionConfig::add_early_triggers(long ds_level, std::initializer_list
 void DedispersionConfig::validate() const
 {
     // Check that all members have been initialized.
-    xassert(tree_rank >= 0);
+    xassert(tree_rank > 0);
     xassert(num_downsampling_levels > 0);
     xassert(time_samples_per_chunk > 0);
     xassert(is_sorted(early_triggers));
@@ -346,9 +348,6 @@ void DedispersionConfig::validate() const
         xassert(zone_freq_edges[i] > 0.0f);
         xassert(zone_freq_edges[i] < zone_freq_edges[i+1]);
     }
-
-    int min_rank = (num_downsampling_levels > 1) ? 1 : 0;
-    check_rank(tree_rank, "DedispersionConfig", min_rank);
 
     // Note: calling get_nelts_per_segment() checks 'dtype' for validity.
     int nelts_per_segment = this->get_nelts_per_segment();
@@ -383,20 +382,38 @@ void DedispersionConfig::validate() const
     // Validate peak_finding_params.
     xassert(long(peak_finding_params.size()) == num_downsampling_levels);
     
-    for (const PeakFindingConfig &pfp: peak_finding_params) {
+    for (long ds_level = 0; ds_level < num_downsampling_levels; ds_level++) {
+        const PeakFindingConfig &pfp = peak_finding_params.at(ds_level);
+
         xassert(pfp.max_width > 0);
-        xassert(is_power_of_two(pfp.max_width));
         xassert(pfp.wt_dm_downsampling > 0);
-        xassert(is_power_of_two(pfp.wt_dm_downsampling));
         xassert(pfp.wt_time_downsampling > 0);
+
+        xassert(is_power_of_two(pfp.max_width));
+        xassert(is_power_of_two(pfp.wt_dm_downsampling));
         xassert(is_power_of_two(pfp.wt_time_downsampling));
+
+        long min_rank = ds_level ? (tree_rank-1) : (tree_rank);
+        for (const EarlyTrigger &et: early_triggers)
+            if (et.ds_level == ds_level)
+                min_rank = std::min(min_rank, et.tree_rank);
         
+        if (pfp.wt_dm_downsampling > pow2(min_rank)) {
+            stringstream ss;
+            ss << "DedispersionConfig: wt_dm_downsampling[" << ds_level << "]=" << pfp.wt_dm_downsampling
+               << " must be <= " << pow2(min_rank) << ". This upper bound is set by the max rank of"
+               << " all trees at ds_level=" << ds_level << ", including early triggers.";
+            throw runtime_error(ss.str());
+        }
+
         // dm_downsampling and time_downsampling are optional (can be zero).
         // If specified, they must be powers of two and <= wt_* counterparts.
+
         if (pfp.dm_downsampling > 0) {
             xassert(is_power_of_two(pfp.dm_downsampling));
             xassert(pfp.wt_dm_downsampling >= pfp.dm_downsampling);
         }
+
         if (pfp.time_downsampling > 0) {
             xassert(is_power_of_two(pfp.time_downsampling));
             xassert(pfp.wt_time_downsampling >= pfp.time_downsampling);
@@ -421,7 +438,29 @@ void DedispersionConfig::print(ostream &os, int indent) const
 
     if (gpu_clag_maxfrac < 1.0)
         print_kv("gpu_clag_maxfrac", gpu_clag_maxfrac, os, indent);
+
+    // Print DedispersionConfig::PeakFindingConfig members.
+    // This part is a little awkward!
+
+    vector<long> max_width;
+    vector<long> dm_downsampling;
+    vector<long> time_downsampling;
+    vector<long> wt_dm_downsampling;
+    vector<long> wt_time_downsampling;
+    for (const PeakFindingConfig &pfp: peak_finding_params) {
+        max_width.push_back(pfp.max_width);
+        dm_downsampling.push_back(pfp.dm_downsampling);
+        time_downsampling.push_back(pfp.time_downsampling);
+        wt_dm_downsampling.push_back(pfp.wt_dm_downsampling);
+        wt_time_downsampling.push_back(pfp.wt_time_downsampling);
+    }
+    print_kv("max_width", ksgpu::tuple_str(max_width), os, indent);
+    print_kv("dm_downsampling", ksgpu::tuple_str(dm_downsampling), os, indent);
+    print_kv("time_downsampling", ksgpu::tuple_str(time_downsampling), os, indent);
+    print_kv("wt_dm_downsampling", ksgpu::tuple_str(wt_dm_downsampling), os, indent);
+    print_kv("wt_time_downsampling", ksgpu::tuple_str(wt_time_downsampling), os, indent);
 }
+
 
 
 void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
@@ -633,7 +672,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
     ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
-    ret.dtype = ksgpu::Dtype::from_str(f.get_scalar<string> ("dtype"));
+    ret.dtype = Dtype::from_str(f.get_scalar<string> ("dtype"));
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
     ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
@@ -671,87 +710,218 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 }
 
 
-// static member function
-DedispersionConfig DedispersionConfig::make_random(bool allow_early_triggers)
+// Helper function for DedispersionConfig::make_random().
+static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long dd_rank)
 {
+    CoalescedDdKernel2::RegistryKey ret;
+
+    ret.dtype = dtype;
+    ret.dd_rank = dd_rank;
+    ret.Wmax = pow2(rand_int(0,6));
+
+    long i = rand_int(0,6);
+    long j = rand_int(0,6-i);
+    ret.Tinner = pow2(j);
+    ret.Dout = pow2(i) * xdiv(32,dtype.nbits);
+
+    long pf_rank = (dd_rank+1) / 2;
+    ret.subband_counts = FrequencySubbands::make_random_subband_counts(pf_rank);
+
+    return ret;
+}
+
+// static member function
+DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
+{
+    xassert(args.max_rank >= 2);
+    xassert(args.max_early_triggers >= 0);
+    long max_stage2_rank = (args.max_rank + 1) / 2;
+
+    using Key2 = CoalescedDdKernel2::RegistryKey;  // (dtype, dd_rank, Tinner, Dout, Wmax)
+    vector<Key2> all_keys = CoalescedDdKernel2::registry().get_all_keys();
+    vector<Key2> my_keys;
+
+    // Choose my_keys[0] ("primary" key).
+
+    if (args.gpu_valid) {
+        vector<Key2> valid_keys;
+        for (const Key2 &k: all_keys)
+            if (k.dd_rank <= max_stage2_rank)
+                valid_keys.push_back(k);
+        
+        if (valid_keys.size() == 0) {
+            stringstream ss;
+            ss << "DedispersionConfig::make_random(): no precompiled cdd2 kernel is available "
+               << "(max_rank=" << args.max_rank << ", max_stage2_rank=" << max_stage2_rank << ")";
+            throw runtime_error(ss.str());
+        }
+
+        long ix = rand_int(0, valid_keys.size());
+        my_keys.push_back(valid_keys.at(ix));
+    }
+    else {
+        Dtype dtype = rand_bool() ? Dtype::from_str("float32") : Dtype::from_str("float16");
+        long dd_rank = rand_int(1, max_stage2_rank + 1);
+
+        Key2 primary_key = _make_random_cdd2_key(dtype, dd_rank);
+        my_keys.push_back(primary_key);
+    }
+
+    // Primary key -> (dtype, subband_counts).
     DedispersionConfig ret;
-    ret.num_downsampling_levels = ksgpu::rand_int(1, 5);
-    ret.dtype = (ksgpu::rand_uniform() < 0.5) ? ksgpu::Dtype::native<float>() : ksgpu::Dtype::native<__half>();
-    
-    // Randomly choose a tree rank, but bias toward a high number.
-    // FIXME min_rank should be (ret.num_downsampling_levels > 1) ? 1 : 0
-    // I'm using a larger value as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
-    int max_rank = 10;
-    int min_rank = (ret.num_downsampling_levels > 1) ? 3 : 2;
-    double x = ksgpu::rand_uniform(min_rank*min_rank, (max_rank+1)*(max_rank+1));
-    ret.tree_rank = int(sqrt(x));
+    ret.dtype = my_keys.at(0).dtype;
+    ret.frequency_subband_counts = my_keys.at(0).subband_counts;
+
+    // Tree rank.
+    long min_tree_rank = max(2 * my_keys.at(0).dd_rank - 1, 2L);
+    long max_tree_rank = (2 * my_keys.at(0).dd_rank);
+    ret.tree_rank = rand_int(min_tree_rank, max_tree_rank+1);
 
     // Frequency zones.
-    long nzones = ksgpu::rand_int(1,6);
+    long nzones = rand_int(1,6);
     long zone_nfreq_min = max(pow2(ret.tree_rank)/4, 1L);
     long zone_nfreq_max = pow2(ret.tree_rank);
-    ret.zone_nfreq = ksgpu::rand_int_vec(nzones, zone_nfreq_min, zone_nfreq_max);
-    ret.zone_freq_edges = ksgpu::rand_uniform_vec(nzones+1, 200.0, 2000.0);
+    ret.zone_nfreq = rand_int_vec(nzones, zone_nfreq_min, zone_nfreq_max);
+    ret.zone_freq_edges = rand_uniform_vec(nzones+1, 200.0, 2000.0);
     std::sort(ret.zone_freq_edges.begin(), ret.zone_freq_edges.end());
 
-    // Randomly choose nt_chunk, but bias toward a low number.
-    // Note: call ret.get_nelts_per_segment() after setting ret.dtype
-    long min_nt_chunk = ret.get_nelts_per_segment() * pow2(ret.num_downsampling_levels-1);
-    long max_nt_chunk = max(2 * pow2(ret.tree_rank), 2 * min_nt_chunk);
-    long rmax = xdiv(max_nt_chunk, min_nt_chunk);  // r = nt_chunk / min_nt_chunk
-    double rlog = ksgpu::rand_uniform(0, log(rmax+1));
-    ret.time_samples_per_chunk = min_nt_chunk * int(exp(rlog));
+    // Beam configuration.
+    auto v = ksgpu::random_integers_with_bounded_product(2, 16);
+    ret.beams_per_batch = v[0];
+    ret.beams_per_gpu = v[0] * v[1];
+    ret.num_active_batches = rand_int(1,v[1]+1);
 
-    if (allow_early_triggers) {
-        for (int ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
-            // FIXME min_et_rank should be (rank/2). I'm currently using (rank/2+1)
-            // as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
-            int rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
-            int min_et_rank = (rank/2) + 1;
-            int max_et_rank = rank-1;
-        
-            // Use at most 4 early triggers per downsampling level (arbitrary cutoff)
-            int num_candidates = max_et_rank - min_et_rank + 1;
-            int max_triggers = std::min(num_candidates, 4);
+    // GPU configuration.
+    ret.gpu_clag_maxfrac = rand_uniform(0, 1.5);
+    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
 
-            if (max_triggers <= 0)
-                continue;
+    // Choose ret.num_downsampling_levels and my_keys[1:].
 
-            // Randomly choose a trigger count, but bias toward a low number.
-            double y = ksgpu::rand_uniform(-1.0, log(max_triggers+0.5));
-            int num_triggers = int(exp(y));
+    long ds_stage2_dd_rank = ret.tree_rank / 2;
+    long ds_pf_rank = (ds_stage2_dd_rank + 1) / 2;
+    vector<long> ds_subband_counts = FrequencySubbands::rerank_subband_counts(ret.frequency_subband_counts, ds_pf_rank);
 
-            vector<int> et_ranks(num_candidates);
-            for (int i = 0; i < num_candidates; i++)
-                et_ranks[i] = min_et_rank + i;
+    // May be overridden shortly.
+    ret.num_downsampling_levels = 1;
 
-            ksgpu::randomly_permute(et_ranks);
-            et_ranks.resize(num_triggers);
-            std::sort(et_ranks.begin(), et_ranks.end());
+    if (args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
+        // All keys with correct (dtype, dd_rank, subband_counts).
+        vector<Key2> valid_keys;
+        for (const Key2 &k: all_keys)
+            if ((k.dtype == ret.dtype) && (k.dd_rank == ds_stage2_dd_rank) && (k.subband_counts == ds_subband_counts))
+                valid_keys.push_back(k);
 
-            for (int et_rank: et_ranks)
-                ret.add_early_trigger(ds_level, et_rank);
+        if (valid_keys.size() > 0) {
+            ret.num_downsampling_levels = rand_int(1,5);
+            for (int ds_level = 1; ds_level < ret.num_downsampling_levels; ds_level++) {
+                // For each downsampling level, we choose independent (Dout, Tinner, Wmax).
+                // This is artificial, but does a good job of exercising kernels.
+                long ix = rand_int(0, valid_keys.size());
+                my_keys.push_back(valid_keys.at(ix));
+            }
+        }
+    }
+    else if (!args.gpu_valid && (ds_stage2_dd_rank >= 1)) {
+        ret.num_downsampling_levels = rand_int(1,5);
+
+        for (int ds_level = 1; ds_level < ret.num_downsampling_levels; ds_level++) {
+            // For each downsampling level, we choose independent (Dout, Tinner, Wmax).   
+            Key2 ds_key = _make_random_cdd2_key(ret.dtype, ds_stage2_dd_rank);
+            ds_key.subband_counts = ds_subband_counts;  // clobber
+            my_keys.push_back(ds_key);
         }
     }
 
-    int nbatches = ksgpu::rand_int(1,6);
-    ret.beams_per_batch = ksgpu::rand_int(1,4);
-    ret.beams_per_gpu = ret.beams_per_batch * nbatches;
-    ret.num_active_batches = ksgpu::rand_int(1,nbatches+1);
+    // Randomly choose time_samples_per_chunk.
 
-    ret.gpu_clag_maxfrac = ksgpu::rand_uniform(0, 1.1);
-    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
+    long nt_divisor = xdiv(1024,ret.dtype.nbits) * pow2(ret.num_downsampling_levels-1);
+    long nt_multiplier = rand_int(1, xdiv(1024,nt_divisor));
+    ret.time_samples_per_chunk = nt_divisor * nt_multiplier;
 
-    // Placeholder values for frequency_subband_counts and peak_finding_params.
-    ret.frequency_subband_counts = { 1 };
-    
-    ret.peak_finding_params.resize(ret.num_downsampling_levels);
-    for (int i = 0; i < ret.num_downsampling_levels; i++) {
-        ret.peak_finding_params[i].max_width = 16;
-        ret.peak_finding_params[i].wt_dm_downsampling = 64;
-        ret.peak_finding_params[i].wt_time_downsampling = 64;
+    // For later convenience: set nt_divisor to the largest power of 2
+    // which divides time_samples_per_chunk.
+    while ((nt_multiplier % 2) == 0) {
+        nt_divisor *= 2;
+        nt_multiplier /= 2;
     }
-        
+
+    // Loop over stage1 trees. Assign peak-finding params and early trigger candidates.
+
+    vector<EarlyTrigger> et_candidates;
+
+    for (long ds_level = 0; ds_level < ret.num_downsampling_levels; ds_level++) {
+        const Key2 &k = my_keys.at(ds_level);
+
+        long tot_rank = ds_level ? (ret.tree_rank-1) : ret.tree_rank;
+        long stage1_dd_rank = tot_rank / 2;
+        long stage2_dd_rank = tot_rank - stage1_dd_rank;
+
+        // Min/max log2(wt_{dm,time}_downsampling).
+        long min_lg2_wdds = (stage2_dd_rank + 1) / 2;  // same as pf_rank
+        long max_lg2_wdds = tot_rank;
+        long min_lg2_wtds = xdiv(1024, k.Tinner * ret.dtype.nbits);
+        long max_lg2_wtds = (k.Tinner > 1) ? min_lg2_wtds : integer_log2(nt_divisor);
+
+        xassert(k.dd_rank == stage2_dd_rank);
+        xassert(min_lg2_wdds <= max_lg2_wdds);
+        xassert(min_lg2_wtds <= max_lg2_wtds);
+
+        // FIXME using default dm/time downsampling factors for now.
+
+        PeakFindingConfig pfc;
+        pfc.max_width = k.Wmax;
+        pfc.dm_downsampling = 0;    // see above
+        pfc.time_downsampling = 0;  // see above
+        pfc.wt_dm_downsampling = pow2(rand_int(min_lg2_wdds, max_lg2_wdds+1));
+        pfc.wt_time_downsampling = pow2(rand_int(min_lg2_wtds, max_lg2_wtds+1));
+        ret.peak_finding_params.push_back(pfc);
+
+        // FIXME min_et_rank should be (stage1_dd_rank). I'm currently using (stage1_dd_rank + 1)
+        // as a kludge, since my GpuDedispersionKernel doesn't support dd_rank=0.
+
+        int min_et_rank = stage1_dd_rank + 1;
+        int max_et_rank = tot_rank - 1;
+
+        // The early trigger tree size can't be less than the wt_dm downsampling factor.
+        min_et_rank = max(min_et_rank, integer_log2(pfc.wt_dm_downsampling));
+
+        for (long et_rank = min_et_rank; et_rank <= max_et_rank; et_rank++) {
+            if (args.gpu_valid) {
+                Key2 ds_key = k;
+                ds_key.dd_rank = et_rank - stage1_dd_rank;
+
+                // Mimics the logic used in the DedispersionPlan constructor, 
+                // to modify the subband_counts for the stage2 tree.
+                long delta_rank = tot_rank - et_rank;
+                long pf_rank = (ds_key.dd_rank + 1) / 2;
+                ds_key.subband_counts = FrequencySubbands::early_subband_counts(ret.frequency_subband_counts, delta_rank);
+                ds_key.subband_counts = FrequencySubbands::rerank_subband_counts(ds_key.subband_counts, pf_rank);
+
+                // If there is no kernel in the registry for this (dd_rank, subband_counts),
+                // then this et_rank is not an early trigger candidate.
+                if (!CoalescedDdKernel2::registry().has_key(ds_key))
+                    continue;
+            }
+
+            EarlyTrigger et;
+            et.ds_level = ds_level;
+            et.tree_rank = et_rank;
+            et_candidates.push_back(et);
+        }
+    }
+
+    // Choose early triggers (from et_candidates).
+
+    ksgpu::randomly_permute(et_candidates);
+
+    int max_et = min(int(et_candidates.size()), args.max_early_triggers);
+    int num_et = rand_int(0, max_et+1);
+
+    for (int i = 0; i < num_et; i++) {
+        const EarlyTrigger &et = et_candidates.at(i);
+        ret.add_early_trigger(et.ds_level, et.tree_rank);
+    }
+
     ret.validate();
     return ret;
 }
