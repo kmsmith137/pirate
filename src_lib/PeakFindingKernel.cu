@@ -694,7 +694,9 @@ void GpuPeakFindingKernel::launch(
 }
 
 
-// Static member function
+// Static member function.
+// If short_circuit=true, then we run some ReferencePeakFindingKernel tests, 
+// but don't test the GPU peak-finder.
 void GpuPeakFindingKernel::test(bool short_circuit)
 {
     RegistryKey key = registry().get_random_key();
@@ -778,7 +780,8 @@ void GpuPeakFindingKernel::test(bool short_circuit)
     Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     ref_kernel_large.apply(cpu_out_large, cpu_argmax_large, cpu_in_large, cpu_wt_large, 0);
 
-    // This is a nontrivial test of the reference peak-finder.
+    // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
+    // (We haven't compared the reference and GPU peak-finders yet.)
     Array<float> cpu_out2_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     ref_kernel_large.eval_tokens(cpu_out2_large, cpu_argmax_large, cpu_wt_large);
     assert_arrays_equal(cpu_out_large, cpu_out2_large, "cpu_out_large", "cpu_out2_large", {"b","d","tout"});
@@ -809,6 +812,8 @@ void GpuPeakFindingKernel::test(bool short_circuit)
             Array<uint> cpu_argmax_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             ref_kernel_small.apply(cpu_out_small, cpu_argmax_small, cpu_in_small, cpu_wt_small, ibatch);
 
+            // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
+            // (We haven't compared the reference and GPU peak-finders yet.)
             Array<float> cpu_out2_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             ref_kernel_small.eval_tokens(cpu_out2_small, cpu_argmax_small, cpu_wt_small);
             assert_arrays_equal(cpu_out_small, cpu_out2_small, "cpu_out_small", "cpu_out2_small", {"b","d","tout"});
@@ -831,7 +836,16 @@ void GpuPeakFindingKernel::test(bool short_circuit)
             Array<uint> gpu_argmax({beams_per_batch, ndm_out, nt_out_per_chunk}, af_gpu | af_zero);
             gpu_kernel.launch(gpu_out, gpu_argmax, gpu_in, gpu_wt, ibatch, NULL);
 
+            // Now we can test the GPU peak-finder, by comparing to the reference peak-finder.
+            // The 'out_max' arrays can be compared directly.
             assert_arrays_equal(cpu_out_small, gpu_out, "cpu_out_small", "gpu_out", {"b","d","tout"});
+
+            // We can't compare argmax arrays directly -- they can disagree due to near-ties and
+            // roundoff error. Instead, we use the following two-step procedure (see more discussion
+            // in PeakFindingKernel.hpp):
+            //
+            //    eval_tokens(gpu_argmax) -> gpu_out2  (temp array)
+            //    assert_arrays_equal(cpu_out, gpu_out2)
 
             gpu_argmax = gpu_argmax.to_host();
             Array<float> gpu_out2({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);

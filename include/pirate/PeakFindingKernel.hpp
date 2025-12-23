@@ -129,9 +129,41 @@ struct ReferencePeakFindingKernel
                long ibatch,                      // 0 <= ibatch < nbatches
                bool debug = false);              // enables verbose debugging output
 
-    void eval_tokens(ksgpu::Array<float> &out_max,  // shape (beams_per_batch, ndm_out, nt_out)
-        const ksgpu::Array<uint> &in_tokens,        // shape (beams_per_batch. ndm_out, params.fs.M, nt_out)
-        const ksgpu::Array<float> &wt);             // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
+    // eval_tokens() is used in testing, and takes some time to explain!
+    // 
+    // Inputs:
+    //   - 'wt' array (same meaning as apply())
+    //   - 'in_tokens' array (integer-valued, same format as 'out_argmax' in apply())
+    //
+    // Output:
+    //   - 'out' array (same shape as 'out' in apply())
+    //
+    // The output array is computed by rerunning the peak-finding computation, but
+    // instead of taking the "max" over the 4-d trials array, we take a single
+    // trial (per output array element) specified by the 'in_tokens'.
+    //
+    // This is useful in a testing context as follows.
+    // Suppose that we want to compute the reference/gpu peak-finding kernels.
+    // We run both kernels, obtaining four arrays:
+    //  (cpu_max, cpu_argmax, gpu_max, gpu_argmax)
+    //
+    // The 'cpu_max' and 'gpu_max' arrays should agree, and can be compared directly.
+    // However, because of near-ties and roundoff error, the argmax arrays won't
+    // necessarily be equal, and can't be compared exactly. However, the following
+    // procedure is a complete test of 'gpu_argmax'.
+    //
+    //    eval_tokens(gpu_argmax) -> tmp
+    //    assert_arrays_equal(tmp, cpu_max)
+    //
+    // For an example, see GpuPeakFindingKernel::test() in PeakFindingKernel.cu.
+    //
+    // Note: eval_tokens() reads temp arrays, which are computed in apply() and stored
+    // in the ReferencePeakFinder. You'll notice that eval_tokens() doesn't take an 'in'
+    // array -- the input data comes from the most recent call to apply().
+
+    void eval_tokens(ksgpu::Array<float> &out,  // output array, shape (beams_per_batch, ndm_out, nt_out)
+        const ksgpu::Array<uint> &in_tokens,    // input array, shape (beams_per_batch, ndm_out, params.fs.M, nt_out)
+        const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
 
     // Make a mean-zero input array for testing.
     // Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
@@ -269,6 +301,8 @@ struct GpuPeakFindingKernel
                 long ibatch,                      // 0 <= ibatch < nbatches
                 cudaStream_t stream);             // NULL stream is allowed, but is not the default);
 
+    // If short_circuit=true, then we run some ReferencePeakFindingKernel tests, 
+    // but don't test the GPU peak-finder.
     static void test(bool short_circuit=false);
 
     // ------------------------  Members  ------------------------
