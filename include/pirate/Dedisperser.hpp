@@ -150,7 +150,9 @@ struct ReferenceDedisperserBase
     std::vector<long> output_rank;      // length output_ntrees
     std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level[:]))
     std::vector<long> output_ds_level;  // length output_ntrees
-    
+
+    std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
+
     // To process multiple chunks, call the dedisperse() method in a loop.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     virtual void dedisperse(long ichunk, long ibatch) = 0;
@@ -161,17 +163,15 @@ struct ReferenceDedisperserBase
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
     // output_arrays[i] has shape (beams_per_batch, 2^output_rank[i], output_ntime[i])
     
-    std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
     ksgpu::Array<float> input_array;   // frequency-space: shape (beams_per_batch, nfreq, input_ntime)
-    ksgpu::Array<float> dd_array;      // tree-space: shape (beams_per_batch, 2^input_rank, input_ntime)
     std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
 
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
 
     // Helper methods called by subclass constructors.
-    void _init_iobufs(ksgpu::Array<float> &dd, std::vector<ksgpu::Array<float>> &out);
-    void _init_iobufs(ksgpu::Array<void> &dd, std::vector<ksgpu::Array<void>> &out);
+    void _init_output_arrays(std::vector<ksgpu::Array<float>> &out);
+    void _init_output_arrays(std::vector<ksgpu::Array<void>> &out);
 };
 
 

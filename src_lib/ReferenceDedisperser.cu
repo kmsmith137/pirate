@@ -89,17 +89,15 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
         xassert(output_ntime[i] == xdiv(input_ntime, pow2(output_ds_level[i])));
     }
     
-    // Note: 'input_array', 'dd_array', and 'output_arrays' are members of ReferenceDedisperserBase,
-    // but are initialized by the subclass constructor.
+    // Note: 'output_arrays' is a member of ReferenceDedisperserBase,
+    // but is initialized by the subclass constructor.
 }
 
 
-void ReferenceDedisperserBase::_init_iobufs(Array<float> &dd, vector<Array<float>> &out)
+void ReferenceDedisperserBase::_init_output_arrays(vector<Array<float>> &out)
 {
-    this->dd_array = dd;
     this->output_arrays = out;
     
-    xassert_shape_eq(dd_array, ({ beams_per_batch, pow2(input_rank), input_ntime }));
     xassert_eq(long(output_arrays.size()), output_ntrees);
 
     for (long i = 0; i < output_ntrees; i++)
@@ -107,15 +105,13 @@ void ReferenceDedisperserBase::_init_iobufs(Array<float> &dd, vector<Array<float
 }
 
 
-void ReferenceDedisperserBase::_init_iobufs(Array<void> &dd_, vector<Array<void>> &out_)
+void ReferenceDedisperserBase::_init_output_arrays(vector<Array<void>> &out_)
 {
-    Array<float> dd = dd_.template cast<float> ("ReferenceDedisperser::_init_iobufs(): 'dd' array");
-
     vector<Array<float>> out;
     for (ulong i = 0; i < out_.size(); i++)
-        out.push_back(out_.at(i).template cast<float> ("ReferenceDedisperser::_init_iobufs(): 'out' array"));
+        out.push_back(out_.at(i).template cast<float> ("ReferenceDedisperser::_init_output_arrays(): 'out' array"));
 
-    this->_init_iobufs(dd, out);
+    this->_init_output_arrays(out);
 }
 
 
@@ -196,10 +192,9 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
         }
     }
 
-    // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
-    // 'dd_array' and 'output_arrays' in the base class. (The base class initializes 'input_array'.)
-    // downsampled_inputs.at(0) is the tree-space dd_array.
-    this->_init_iobufs(downsampled_inputs.at(0), output_arrays);
+    // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
+    // 'output_arrays' in the base class. 
+    this->_init_output_arrays(output_arrays);
 }
 
 
@@ -208,9 +203,8 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
 {
     long nds = config.num_downsampling_levels;
     
-    // Step 0: Run tree gridding kernel (input_array -> dd_array).
-    // Reminder: dd_array is an alias for downsampled_inputs[0].
-    tree_gridding_kernel->apply(dd_array, input_array);
+    // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
+    tree_gridding_kernel->apply(downsampled_inputs.at(0), input_array);
     
     for (int ids = 1; ids < nds; ids++) {
         
@@ -363,19 +357,18 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
             stage2_lagbufs.at(b*output_ntrees + iout) = make_shared<ReferenceLagbuf> (lags, ntime);
     }
     
-    // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
-    // 'dd_array' and 'output_arrays' in the base class. (The base class initializes 'input_array'.)
-    // stage1_dd_buf.bufs.at(0) is the tree-space dd_array.
-    this->_init_iobufs(stage1_dd_buf.bufs.at(0), stage2_dd_buf.bufs);
+    // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
+    // 'output_arrays' in the base class. 
+    this->_init_output_arrays(stage2_dd_buf.bufs);
 }
 
 
 // virtual override
 void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 {
-    // Step 0: Run tree gridding kernel (input_array -> dd_array).
-    // Reminder: dd_array is an alias for stage1_dd_buf.bufs.at(0).
-    tree_gridding_kernel->apply(dd_array, input_array);
+    // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
+    Array<float> dd = stage1_dd_buf.bufs.at(0).template cast<float> ();
+    tree_gridding_kernel->apply(dd, input_array);
     
     // Step 1: run LaggedDownsampler.    
     lds_kernel->apply(stage1_dd_buf, ibatch);
@@ -483,10 +476,9 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params)
         this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
     
-    // Reminder: subclass constructor is responsible for calling _init_iobufs(), to initialize
-    // 'dd_array' and 'output_arrays' in the base class. (The base class initializes 'input_array'.)
-    // stage1_dd_buf.bufs.at(0) is the tree-space dd_array.
-    this->_init_iobufs(stage1_dd_buf.bufs.at(0), stage2_dd_buf.bufs);
+    // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
+    // 'output_arrays' in the base class. 
+    this->_init_output_arrays(stage2_dd_buf.bufs);
 }
 
 
@@ -499,9 +491,9 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
     long iframe = (ichunk * BT) + (ibatch * BB);
 
-    // Step 0: Run tree gridding kernel (input_array -> dd_array).
-    // Reminder: dd_array is an alias for stage1_dd_buf.bufs.at(0).
-    tree_gridding_kernel->apply(dd_array, input_array);
+    // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
+    Array<float> dd = stage1_dd_buf.bufs.at(0).template cast<float> ();
+    tree_gridding_kernel->apply(dd, input_array);
     
     // Step 1: run LaggedDownsampler.
     lds_kernel->apply(stage1_dd_buf, ibatch);
