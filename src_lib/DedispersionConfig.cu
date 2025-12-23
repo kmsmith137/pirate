@@ -370,10 +370,10 @@ void DedispersionConfig::validate() const
     // Check validity of early triggers.
     for (const EarlyTrigger &et: early_triggers) {
         long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
-        long ds_rank0 = ds_rank / 2;
+        long ds_stage1_rank = ds_rank / 2;
         
         xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
-        xassert((et.tree_rank >= ds_rank0) && (et.tree_rank < ds_rank));
+        xassert((et.tree_rank >= ds_stage1_rank) && (et.tree_rank < ds_rank));
     }
 
     // Validate frequency_subband_counts.
