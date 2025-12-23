@@ -20,14 +20,6 @@ extern int bit_reverse_slow(int i, int nbits);
 // If n is not a power of 2, throws an exception.
 extern int integer_log2(long n);
 
-// Returns total ring buffer size needed for tree of given rank (assuming no padding).
-extern long rstate_len(int rank);
-
-// Returns total ring buffer size needed by the tree downsampler. (The
-// "tree downsampler" operates on 2^(output_rank+1) input channels, and
-// outputs 2^(output_rank) output channels.)
-extern long rstate_ds_len(int output_rank);
-
 // rb_lag(): returns lag needed for two-stage dedispersion.
 // The index 0 <= i < pow2(rank1) represents a coarse frequency.
 // The index 0 <= j < pow2(rank0) represents a **bit-reversed** delay.
@@ -43,10 +35,6 @@ extern void reference_downsample_time(const ksgpu::Array<float> &in, ksgpu::Arra
 // FIXME if I ever implement Array<float>::slice() with strides, then this would be a special case.
 extern void reference_extract_odd_channels(const ksgpu::Array<float> &in, ksgpu::Array<float> &out);
 
-// lag_non_incremental() is only used for testing the ReferenceLagbuf.
-// Lagging is done in place.
-extern void lag_non_incremental(ksgpu::Array<float> &arr, const std::vector<int> &lags);
-
 // dedisperse_non_incremental(): currently only used for testing the ReferenceTree,
 // but I could imagine this being useful elsewhere some day. Dedispersion is done in
 // place -- output index is a bit-reversed delay.
@@ -58,24 +46,6 @@ extern void dedisperse_non_incremental(ksgpu::Array<float> &arr, long nspec);
 // dedispersion_delay(): returns the dedispersion delay for a given (freq, dm_brev) pair.
 // Used for testing.
 extern long dedispersion_delay(int rank, long freq, long dm_brev);
-
-// Setup for mean_bytes_per_unaligned_chunk():
-//
-// We have a long array in GPU global memory
-//
-//   arr[nouter][nbytes];
-//
-// where:
-//
-//   nouter >> 1
-//   0 < nbytes <= constants::bytes_per_gpu_cache_line
-//   base address of 'arr' is aligned
-//
-// Suppose we read one "chunk" of the form arr[i,:]. Depending on the (assumed random) value
-// of i, the memory controller will read either one or two cache lines. This function returns
-// the expectation value (expressed as byte count, not cache line count).
-
-extern int mean_bytes_per_unaligned_chunk(int nbytes);
 
 extern std::string hex_str(uint x);
 

@@ -115,7 +115,7 @@ namespace pirate {
 //
 //   W = blockDim.y * blockDim.z
 //
-// For convenience when saving/restoring state, we append in shared memory the 'rstate' (ring buffer
+// For convenience when saving/restoring state, we append in shared memory the 'pstate' (ring buffer
 // register state), with shape (W,2*D). Thus, the total shared memory footprint is:
 //
 //    shared memory nbytes SB = align_up(W * D * (S+2) * 4, 128)

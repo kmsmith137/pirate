@@ -85,67 +85,6 @@ int rb_lag(int i, int j, int rank0, int rank1, bool uflag)
 }
 
 
-long rstate_len(int rk)
-{
-    check_rank(rk, "rstate_len");
-    
-    if (rk <= 1)
-        return rk;  // Covers cases rk=0, rk=1.
-    
-    return pow2(2*rk-2) + (rk-1) * pow2(rk-2);
-}
-
-
-// FIXME needs unit test.
-long rstate_ds_len(int rk)
-{
-    check_rank(rk, "rstate_ds_len");
-    
-    int nchan = pow2(rk);
-    return (nchan*(nchan+1))/2;
-}
-
-
-// Only used in mean_bytes_per_unaligned_chunk().
-int gcd(int m, int n)
-{
-    xassert(m > 0);
-    xassert(n > 0);
-
-    if (m > n)
-        std::swap(m, n);
-
-    while (m > 0) {
-        int mold = m;
-        m = n % m;
-        n = mold;
-    }
-
-    return n;
-}
-
-
-int mean_bytes_per_unaligned_chunk(int nbytes)
-{
-    xassert(nbytes > 0);
-    xassert(nbytes <= constants::bytes_per_gpu_cache_line);
-
-    int g = gcd(nbytes, constants::bytes_per_gpu_cache_line);
-    
-    // int n = xdiv(constants::bytes_per_gpu_cache_line, g);
-    // int m = xdiv(nbytes, g);
-    //
-    // n possible alignments
-    //   (n-m+1) alignments produce 1 cache line
-    //   (m-1) alignments produce 2 cache lines
-    //
-    // Expected number of cache lines = (n+m-1)/n
-    // Expected number of bytes = (n+m-1)/n * (n*g) = (n*g + m*g - g)
-
-    return constants::bytes_per_gpu_cache_line + nbytes - g;  // (n*g + m*g - g)
-}
-
-
 void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool normalize)
 {
     xassert(out.ndim == 2);
@@ -208,27 +147,6 @@ void reference_extract_odd_channels(const Array<float> &in, Array<float> &out)
                nt * sizeof(float));
     }
 }
-
-
-void lag_non_incremental(Array<float> &arr, const vector<int> &lags)
-{
-    xassert(arr.ndim == 2);
-    xassert(arr.shape[0] == long(lags.size()));
-    xassert(arr.strides[1] == 1);
-
-    int nchan = arr.shape[0];
-    int ntime = arr.shape[1];
-        
-    for (int c = 0; c < nchan; c++) {
-        xassert(lags[c] >= 0);
-        int lag = std::min(lags[c], ntime);
-        
-        float *row = arr.data + c*arr.strides[0];
-        memmove(row+lag, row, (ntime-lag) * sizeof(float));
-        memset(row, 0, lag * sizeof(float));
-    }
-}
-
 
 long dedispersion_delay(int rank, long freq, long dm_brev)
 {

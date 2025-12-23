@@ -8,7 +8,7 @@
 #include "../include/pirate/TreeGriddingKernel.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"
-#include "../include/pirate/utils.hpp"  // dedisperse_non_incremental(), lag_non_incremental()
+#include "../include/pirate/utils.hpp"  // dedisperse_non_incremental()
 
 #include <ksgpu/rand_utils.hpp>    // rand_int()
 #include <ksgpu/string_utils.hpp>  // tuple_str()
