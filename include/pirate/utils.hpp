@@ -10,9 +10,6 @@ namespace pirate {
 #endif
 
 
-// Throws exception if rank is invalid (otherwise returns 'rank').
-extern int check_rank(int rank, const char *where=nullptr, int min_rank=0);
-
 // Arguments must satisfy 0 <= i < pow2(nbits).
 extern int bit_reverse_slow(int i, int nbits);
 

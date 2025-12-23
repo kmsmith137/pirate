@@ -2,7 +2,7 @@
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"  // pow2(), bit_reverse_slow()
-#include "../include/pirate/utils.hpp"    // check_rank(), dedispersion_delay(), dedisperse_non_incremental()
+#include "../include/pirate/utils.hpp"    // dedispersion_delay(), dedisperse_non_incremental()
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/rand_utils.hpp>           // rand_int(), random_integers_with_bounded_product()

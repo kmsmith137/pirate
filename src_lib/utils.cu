@@ -17,22 +17,6 @@ namespace pirate {
 #endif
 
 
-int check_rank(int rank, const char *where, int min_rank)
-{
-    if ((rank >= min_rank) && (rank <= constants::max_tree_rank))
-        return rank;
-
-    if (!where)
-        where = "check_rank";
-            
-    stringstream ss;
-    ss << where << ": rank=" << rank << " is out-of-range (min_rank=" << min_rank
-       << ", max_rank=" << constants::max_tree_rank << ")";
-    
-    throw runtime_error(ss.str());
-}
-
-
 int bit_reverse_slow(int i, int nbits)
 {
     xassert((nbits >= 0) && (nbits <= 30));

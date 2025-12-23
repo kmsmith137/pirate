@@ -10,7 +10,7 @@
 #include <ksgpu/string_utils.hpp>  // ksgpu::tuple_str()
 
 #include "../include/pirate/constants.hpp"
-#include "../include/pirate/utils.hpp"           // check_rank(), is_empty_string()
+#include "../include/pirate/utils.hpp"           // integer_log2()
 #include "../include/pirate/inlines.hpp"         // xdiv(), pow2(), print_kv(), is_power_of_two()
 #include "../include/pirate/file_utils.hpp"      // File
 #include "../include/pirate/YamlFile.hpp"
