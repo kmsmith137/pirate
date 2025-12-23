@@ -18,10 +18,10 @@ extern int bit_reverse_slow(int i, int nbits);
 extern int integer_log2(long n);
 
 // rb_lag(): returns lag needed for two-stage dedispersion.
-// The index 0 <= i < pow2(rank1) represents a coarse frequency.
-// The index 0 <= j < pow2(rank0) represents a **bit-reversed** delay.
-// If uflag=true, then we're computing the upper half of a (rank0+rank1+1) tree.
-extern int rb_lag(int i, int j, int rank0, int rank1, bool uflag=false);
+// The index 0 <= freq_coarse < pow2(stage2_rank) represents a coarse frequency.
+// The index 0 <= dm_brev < pow2(stage1_rank) represents a **bit-reversed** delay.
+// If uflag=true, then we're computing the upper half of a (stage1_rank+stage2_rank+1) tree.
+extern int rb_lag(int freq_coarse, int dm_brev, int stage1_rank, int stage2_rank, bool uflag=false);
 
 // Downsamples (freq,time) array by a factor 2 along either frequency or time axis.
 // Each pair of elements will be averaged/summed, depending on whether the 'normalize' flag is true/false.

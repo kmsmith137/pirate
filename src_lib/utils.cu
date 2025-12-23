@@ -45,24 +45,24 @@ int integer_log2(long n)
     return p;
 }
 
-int rb_lag(int i, int j, int rank0, int rank1, bool uflag)
+int rb_lag(int freq_coarse, int dm_brev, int stage1_rank, int stage2_rank, bool uflag)
 {
-    xassert(rank0 >= 0);
-    xassert(rank1 >= 0);
-    xassert((rank0+rank1) <= constants::max_tree_rank);
+    xassert(stage1_rank >= 0);
+    xassert(stage2_rank >= 0);
+    xassert_le(stage1_rank+stage2_rank, constants::max_tree_rank);
 
-    int n0 = 1 << rank0;
-    int n1 = 1 << rank1;
+    int ndm = (1 << stage1_rank);
+    int nfreq = (1 << stage2_rank);
     
-    xassert((i >= 0) && (i < n1));
-    xassert((j >= 0) && (j < n0));
+    xassert((freq_coarse >= 0) && (freq_coarse < nfreq));
+    xassert((dm_brev >= 0) && (dm_brev < ndm));
 
-    int dm = bit_reverse_slow(j, rank0);
+    int dm = bit_reverse_slow(dm_brev, stage1_rank);
     
     if (uflag)
-        dm += n0;
+        dm += ndm;
 
-    int lag = (n1-1-i) * dm;
+    int lag = (nfreq-1-freq_coarse) * dm;
     xassert(lag >= 0);
 
     return lag;
