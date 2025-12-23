@@ -66,19 +66,19 @@ struct DedispersionPlan
     struct Stage1Tree
     {
         // Note: total tree rank (dd_rank + amb_rank) is equal to (config.tree_rank - (ds_level ? 1 : 0)).        
-        int ds_level = -1;  // downsampling level (downsampling "factor" is 2^level)
-        int dd_rank = 0;    // "active" dedispersion rank of Stage1Tree 
-        int amb_rank = 0;   // "ambient" rank of Stage1Tree (= number of coarse freq channels)
-        int nt_ds = 0;      // downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
+        int ds_level = -1;  // Downsampling level (downsampling "factor" is 2^level)
+        int dd_rank = 0;    // "Active" dedispersion rank of Stage1Tree 
+        int amb_rank = 0;   // "Ambient" rank of Stage1Tree (= number of coarse freq channels)
+        int nt_ds = 0;      // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
     };
 
     struct Stage2Tree
     {
-        int ds_level = -1;       // Same as Stage1Tree::ds_level
-        int rank0 = 0;           // Same as Stage1Tree::dd_rank
-        int rank1_ambient = 0;   // Same as Stage1Tree::amb_rank
-        int rank1_trigger = 0;   // Can be smaller than rank1_ambient, for early trigger
-        int nt_ds = 0;           // Same as Stage1Tree::nt_ds
+        int ds_level = -1;       // Downsampling level, also identifies associated Stage1Tree.
+        int amb_rank = 0;        // Ambient rank of Stage2Tree (= dd_rank of associated Stage1Tree)
+        int pri_dd_rank = 0;     // Active rank of primary Stage2Tree (= amb_rank of associated Stage1Tree)
+        int early_dd_rank = 0;   // Active rank of this Stage2Tree (always <= pri_dd_rank)
+        int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
     };
 
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)

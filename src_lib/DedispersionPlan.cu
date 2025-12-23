@@ -63,13 +63,13 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         for (int trigger_rank: trigger_ranks) {
             Stage2Tree st2;
             st2.ds_level = ids;
-            st2.rank0 = st1.dd_rank;
-            st2.rank1_ambient = st1.amb_rank;
-            st2.rank1_trigger = trigger_rank - st2.rank0;
+            st2.amb_rank = st1.dd_rank;
+            st2.pri_dd_rank = st1.amb_rank;
+            st2.early_dd_rank = trigger_rank - st2.amb_rank;
             st2.nt_ds = st1.nt_ds;
 
-            xassert((st2.rank1_trigger >= 0) && (st2.rank1_trigger <= 8));
-            xassert(st2.rank1_trigger <= st2.rank1_ambient);
+            xassert((st2.early_dd_rank >= 0) && (st2.early_dd_rank <= 8));
+            xassert(st2.early_dd_rank <= st2.pri_dd_rank);
                      
             this->stage2_trees.push_back(st2);
         }
@@ -93,7 +93,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         mrb_params.producer_nquads.push_back(nquads);
     }
     for (const Stage2Tree &st2: this->stage2_trees) {
-        long nquads = pow2(st2.rank0 + st2.rank1_trigger) * xdiv(st2.nt_ds, nelts_per_segment);
+        long nquads = pow2(st2.amb_rank + st2.early_dd_rank) * xdiv(st2.nt_ds, nelts_per_segment);
         mrb_params.consumer_nquads.push_back(nquads);
     }
 
@@ -107,28 +107,28 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
         // Some truly paranoid asserts.
         xassert(st1.nt_ds == st2.nt_ds);
-        xassert(st1.dd_rank == st2.rank0);
+        xassert(st1.dd_rank == st2.amb_rank);
         xassert(st1.ds_level == st2.ds_level);
-        xassert(st1.amb_rank == st2.rank1_ambient);
+        xassert(st1.amb_rank == st2.pri_dd_rank);
 
         // For the stage1 -> stage2 intermediate array, we use variable names
-        //   0 <= freq_c < nfreq     (= pow2(st2.rank1_trigger))
-        //   0 <= dm_brev < ndm      (= pow2(st2.rank0))
+        //   0 <= freq_c < nfreq     (= pow2(st2.early_dd_rank))
+        //   0 <= dm_brev < ndm      (= pow2(st2.amb_rank))
         //
         // From the perspective of the stage1 tree, 'dm_brev' is the active dedispersion
         // index, and 'freq_c' is the ambient spectator index. This is reversed for the
         // stage2 tree.
 
-        int ndm = pow2(st2.rank0);
-        int nfreq_tr = pow2(st2.rank1_trigger);
-        int nfreq_amb = pow2(st2.rank1_ambient);
+        int ndm = pow2(st2.amb_rank);
+        int nfreq_tr = pow2(st2.early_dd_rank);
+        int nfreq_amb = pow2(st2.pri_dd_rank);
         
         int ns = xdiv(st2.nt_ds, this->nelts_per_segment);
         bool is_downsampled = (st2.ds_level > 0);
         
         for (int dm_brev = 0; dm_brev < ndm; dm_brev++) {
             for (int freq = 0; freq < nfreq_tr; freq++) {
-                int lag = rb_lag(freq, dm_brev, st2.rank0, st2.rank1_trigger, is_downsampled);
+                int lag = rb_lag(freq, dm_brev, st2.amb_rank, st2.early_dd_rank, is_downsampled);
                 int slag = lag / nelts_per_segment;  // segment lag (round down)
                 
                 for (int ssrc = 0; ssrc < ns; ssrc++) {
@@ -226,8 +226,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
         DedispersionKernelParams kparams;
         kparams.dtype = config.dtype;
-        kparams.dd_rank = st2.rank1_trigger;
-        kparams.amb_rank = st2.rank0;
+        kparams.dd_rank = st2.early_dd_rank;
+        kparams.amb_rank = st2.amb_rank;
         kparams.total_beams = config.beams_per_gpu;
         kparams.beams_per_batch = config.beams_per_batch;
         kparams.ntime = st2.nt_ds;
@@ -241,16 +241,16 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.consumer_id = itree2;
         kparams.validate();
         
-        stage2_dd_buf_params.buf_rank.push_back(st2.rank0 + st2.rank1_trigger);
+        stage2_dd_buf_params.buf_rank.push_back(st2.amb_rank + st2.early_dd_rank);
         stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
         stage2_dd_kernel_params.push_back(kparams);
         stage2_ds_level.push_back(ds_level);
 
         // The rest of the loop body initializes PeakFindingKernelParams for this stage2 tree.
         const DedispersionConfig::PeakFindingConfig &pfc = config.peak_finding_params.at(ds_level);
-        long tot_rank = st2.rank0 + st2.rank1_trigger;
-        long delta_rank = st2.rank1_ambient - st2.rank1_trigger;
-        long pf_rank = (st2.rank1_trigger + 1) / 2;
+        long tot_rank = st2.amb_rank + st2.early_dd_rank;
+        long delta_rank = st2.pri_dd_rank - st2.early_dd_rank;
+        long pf_rank = (st2.early_dd_rank + 1) / 2;
 
         // Modify the subband_counts for the stage2 tree.
         // (Accounts for early triggering, downsampling.)
@@ -344,9 +344,9 @@ void DedispersionPlan::print(ostream &os, int indent) const
         
         os << Indent(indent+4) << i
            << ": ds_level=" << st2.ds_level
-           << ", rank0=" << st2.rank0
-           << ", rank1_amb=" << st2.rank1_ambient
-           << ", rank1_tri=" << st2.rank1_trigger
+           << ", rank0=" << st2.amb_rank
+           << ", rank1_amb=" << st2.pri_dd_rank
+           << ", rank1_tri=" << st2.early_dd_rank
            << ", nt_ds=" << st2.nt_ds
            << endl;
     }

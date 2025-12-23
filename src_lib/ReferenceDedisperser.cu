@@ -339,8 +339,8 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
         
         // Hmm, getting rank0/rank1 split from current data structures is awkward.
         const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-        long rank0 = st2.rank0;
-        long rank1 = st2.rank1_trigger;
+        long rank0 = st2.amb_rank;
+        long rank1 = st2.early_dd_rank;
         xassert(rank == rank0+rank1);
 
         Array<int> lags({ beams_per_batch, pow2(rank) }, af_uhost);
