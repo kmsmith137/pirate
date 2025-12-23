@@ -368,12 +368,17 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 }
 
                 // Compare peak-finding 'out_max'.
+                assert_arrays_equal(rdd0->out_max.at(iout), rdd1->out_max.at(iout), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
                 assert_arrays_equal(rdd1->out_max.at(iout), rdd2->out_max.at(iout), "pfmax_ref1", "pfmax_ref2", {"beam","pfdm","pft"});
 
                 // To check 'out_argmax', we need to jump through some hoops.
-                shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd1->pf_kernels.at(iout);
-                pf_kernel->eval_tokens(pf_tmp.at(iout), rdd2->out_argmax.at(iout), rdd1->wt_arrays.at(iout));
-                assert_arrays_equal(rdd1->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref1", "pftmp_ref2", {"beam","pfdm","pft"});
+                shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd0->pf_kernels.at(iout);
+
+                pf_kernel->eval_tokens(pf_tmp.at(iout), rdd1->out_argmax.at(iout), rdd0->wt_arrays.at(iout));
+                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_ref1", {"beam","pfdm","pft"});
+
+                pf_kernel->eval_tokens(pf_tmp.at(iout), rdd2->out_argmax.at(iout), rdd0->wt_arrays.at(iout));
+                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_ref2", {"beam","pfdm","pft"});
             }
         }
     }
