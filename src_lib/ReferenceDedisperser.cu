@@ -168,6 +168,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 
     virtual void dedisperse(long itime, long ibeam) override;
 
+    // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
     // Outer length is nds, inner shape is (beams_per_batch, 2^input_rank, input_nt / pow2(ids)).
     
@@ -316,6 +317,7 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
 {
     ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_);
 
+    // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
     // Step 1: run LaggedDownsampler.
     // Step 2: run stage1 dedispersion kernels 
     // Step 3: copy stage1 -> stage2
@@ -474,7 +476,7 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 
         Array<float> sb_buf = stage2_subband_bufs.at(i);
         dd_kernel->apply(dd_buf, dd_buf, sb_buf, ichunk, ibatch);
-        pf_kernel->apply(out_max.at(i), out_argmax.at(i), sb_buf, wt_arrays.at(i), ibatch);           // 0 <= ibatch < nbatches)
+        pf_kernel->apply(out_max.at(i), out_argmax.at(i), sb_buf, wt_arrays.at(i), ibatch);
     }
 }
 
@@ -488,12 +490,20 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 {
     ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan, const vector<long> &Dcore);
     
+    // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
     // Step 1: run LaggedDownsampler.
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
-    // Step 3: run stage2 dedispersion kernels (input from ringbuf)
+    // Step 3: extra copying steps needed for early triggers.
+    // Step 4: copy host <-> xfer
+    // Step 5: run stage2 dedispersion kernels (input from ringbuf)
+    // Step 6: run peak-finding kernels.
 
     DedispersionBuffer stage1_dd_buf;
     DedispersionBuffer stage2_dd_buf;
+
+    // Dedispersion output in subbands ('sb_out' arg to ReferenceDedispersionKernel::apply())
+    // Shape (beams_per_batch, ndm_out, M, nt_in)
+    vector<Array<float>> stage2_subband_bufs;
 
     long gpu_ringbuf_nelts = 0;    // = (mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment)
     long host_ringbuf_nelts = 0;   // = (mega_ringbuf->host_global_nseg * plan->nelts_per_segment)
@@ -527,14 +537,25 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->g2g_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
     
-    // No subbands yet
-    vector<long> subband_counts = {1};
+    this->stage2_subband_bufs.resize(output_ntrees);
 
-    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params)
+    for (long iout = 0; iout < output_ntrees; iout++) {
+        long ndm_out = plan->stage2_pf_params.at(iout).ndm_out;
+        long nt_in = plan->stage2_pf_params.at(iout).nt_in;
+        long M = plan->stage2_trees.at(iout).nmultiplets;
+        stage2_subband_bufs.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
+    }
+
+    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
+        vector<long> subband_counts = { 1 };  // no subbands needed in stage1 kernels
         this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
-
-    for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params)
-        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
+    }
+    
+    for (long iout = 0; iout < plan->stage2_ntrees; iout++) {
+        const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(iout);
+        vector<long> subband_counts = plan->stage2_pf_params.at(iout).subband_counts;
+        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
+    }
     
     // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
     // 'output_arrays' in the base class. 
@@ -589,9 +610,7 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
     this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);    // host -> et_host
     memcpy(et_dst, et_src, et_nbytes);  // et_host -> et_gpu (must come after h2h_copy_kernel)
     
-    //
     // Step 4: copy host <-> xfer
-    //
     
     long max_clag = plan->mega_ringbuf->max_clag;
     xassert(plan->mega_ringbuf->host_zones.size() == uint(max_clag+1));
@@ -625,18 +644,22 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
         memcpy(hp + hdst*m, xp + xsrc*m, n);
     }
     
-    // Step 5: run stage2 dedispersion kernels (input from ringbuf).    
+    // Step 5: run stage2 dedispersion kernels (input from ringbuf). 
+    // Step 6: run peak-finding kernels.
+
     for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
-        shared_ptr<ReferenceDedispersionKernel> kernel = stage2_dd_kernels.at(i);
-        const DedispersionKernelParams &kp = kernel->params;
-        Array<void> dd_buf = stage2_dd_buf.bufs.at(i);
+        shared_ptr<ReferenceDedispersionKernel> dd_kernel = stage2_dd_kernels.at(i);
+        shared_ptr<ReferencePeakFindingKernel> pf_kernel = pf_kernels.at(i);
+        const DedispersionKernelParams &kp = dd_kernel->params;
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
+        Array<void> dd_buf = stage2_dd_buf.bufs.at(i);
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
         dd_buf = dd_buf.transpose({0,2,1,3});
 
-        Array<float> sb_empty;  // no subbands yet
-        kernel->apply(this->gpu_ringbuf, dd_buf, sb_empty, ichunk, ibatch);
+        Array<float> sb_buf = stage2_subband_bufs.at(i);
+        dd_kernel->apply(this->gpu_ringbuf, dd_buf, sb_buf, ichunk, ibatch);
+        pf_kernel->apply(out_max.at(i), out_argmax.at(i), sb_buf, wt_arrays.at(i), ibatch);
     }
 }
 
