@@ -125,7 +125,7 @@ struct ReferencePeakFindingKernel
     void apply(ksgpu::Array<float> &out_max,     // shape (beams_per_batch, ndm_out, nt_out)
                ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
                const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, params.fs.M, nt_in)
-               const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
+               const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
                long ibatch,                      // 0 <= ibatch < nbatches
                bool debug = false);              // enables verbose debugging output
 
@@ -163,16 +163,16 @@ struct ReferencePeakFindingKernel
 
     void eval_tokens(ksgpu::Array<float> &out,  // output array, shape (beams_per_batch, ndm_out, nt_out)
         const ksgpu::Array<uint> &in_tokens,    // input array, shape (beams_per_batch, ndm_out, params.fs.M, nt_out)
-        const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
+        const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
 
     // Make a mean-zero input array for testing.
     // Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
     ksgpu::Array<float> make_random_input_array();
 
     // Make an interesting weights array for testing.
-    // Returns shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
+    // Returns shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
     //
-    // The 'subband_variance' array has shape (params.fs.F,) and is an estimate for
+    // The 'subband_variance' array has shape (fs.F,) and is an estimate for
     // the variance of the peak-finder input, in frequency subband 0 <= f < F. 
     ksgpu::Array<float> make_random_weights(const ksgpu::Array<float> &subband_variances);
 

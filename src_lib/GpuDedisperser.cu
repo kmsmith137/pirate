@@ -267,12 +267,38 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     // freely mix operations such as Array::to_gpu() which use the default stream.
     xassert(nstreams == 1);
     
-    // Placeholder logic to initialize Dcore.
+    // Some initializations:
+    //   ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
+    //   pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
+
     vector<long> Dcore(plan->stage2_ntrees);
+    vector<Array<float>> pf_tmp(plan->stage2_ntrees);
+    vector<Array<float>> subband_variances(plan->stage2_ntrees);
+    vector<shared_ptr<ReferencePeakFindingKernel>> ref_kernels_for_weights(plan->stage2_ntrees);
+
     for (long i = 0; i < plan->stage2_ntrees; i++) {
+        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(i);
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(i);
         long Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
+
+        // Logic to initialize Dcore is currently a placeholder.
         Dcore.at(i) = Dout;
+        ref_kernels_for_weights.at(i) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(i));
+        pf_tmp.at(i) = Array<float> ({beams_per_batch, pf_params.ndm_out, pf_params.nt_out}, af_uhost | af_zero);
+
+        // s = (conversion between FrequencySubbands::{ilo,ihi} and sample delay)
+        FrequencySubbands fs(pf_params.subband_counts);
+        long s = pow2(st2.amb_rank + st2.early_dd_rank - fs.pf_rank);
+
+        // Init subband_variances (used in ReferencePeakFindingKernel::make_random_weights()).
+        subband_variances.at(i) = Array<float> ({fs.F}, af_uhost | af_zero);
+        for (long f = 0; f < fs.F; f++) {
+            long ilo = fs.f_to_ilo.at(f);
+            long ihi = fs.f_to_ihi.at(f);
+            double flo = config.delay_to_frequency(s * ihi);  // note ihi here
+            double fhi = config.delay_to_frequency(s * ilo);  // note ilo here
+            subband_variances.at(i).at({f}) = fhi - flo;      // frequency range of subband
+        }
     }
 
     shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, Dcore, 0);
@@ -298,6 +324,15 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 
     for (int ichunk = 0; ichunk < nchunks; ichunk++) {
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
+            // Randomly initialize weights.
+            for (int itree = 0; itree < plan->stage2_ntrees; itree++) {
+                Array<float> sbv = subband_variances.at(itree);
+                Array<float> wt_cpu = ref_kernels_for_weights.at(itree)->make_random_weights(sbv);
+                rdd0->wt_arrays.at(itree).fill(wt_cpu);
+                rdd1->wt_arrays.at(itree).fill(wt_cpu);
+                rdd2->wt_arrays.at(itree).fill(wt_cpu);
+            }
+
             // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
             // Random values uniform over [-1.0, 1.0].
             Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost);
@@ -324,13 +359,21 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
                 
                 // Last two arguments are (epsabs, epsrel).
-                assert_arrays_equal(rdd0_out, rdd1_out, "soph0", "soph1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
-                assert_arrays_equal(rdd0_out, rdd2_out, "soph0", "soph2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
+                assert_arrays_equal(rdd0_out, rdd1_out, "dd_ref0", "dd_ref1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
+                assert_arrays_equal(rdd0_out, rdd2_out, "dd_ref0", "dd_ref2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
 
                 if (!host_only) {
                     const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
-                    assert_arrays_equal(rdd0_out, gdd_out, "soph0", "gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
+                    assert_arrays_equal(rdd0_out, gdd_out, "dd_ref0", "dd_gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
                 }
+
+                // Compare peak-finding 'out_max'.
+                assert_arrays_equal(rdd1->out_max.at(iout), rdd2->out_max.at(iout), "pfmax_ref1", "pfmax_ref2", {"beam","pfdm","pft"});
+
+                // To check 'out_argmax', we need to jump through some hoops.
+                shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd1->pf_kernels.at(iout);
+                pf_kernel->eval_tokens(pf_tmp.at(iout), rdd2->out_argmax.at(iout), rdd1->wt_arrays.at(iout));
+                assert_arrays_equal(rdd1->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref1", "pftmp_ref2", {"beam","pfdm","pft"});
             }
         }
     }
