@@ -166,7 +166,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
     // Outer length is nds, inner shape is (beams_per_batch, 2^input_rank, input_nt / pow2(ids)).
     
-    vector<Array<float>> downsampled_inputs;
+    vector<Array<float>> downsampled_inputs;   // length plan->stage1_ntrees
 
     // Step 2: copy from 'downsampled_inputs' to 'dedispersion_buffers'.
     // In downsampled trees, we compute twice as many DMs as necessary, then drop the bottom half.
@@ -174,17 +174,19 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // Outer vector length is nout, inner shape is (beams_per_batch, 2^weird_rank, input_nt / pow2(ids)).
     //   where weird_rank = stage1_dd_rank + early_stage2_dd_rank + (is_downsampled ? 1 : 0)
     
-    vector<Array<float>> dedispersion_buffers;
+    vector<Array<float>> dedispersion_buffers;  // length plan->stage2_ntrees
 
     // Step 3: apply tree dedispersion (one-stage, not two-stage).
-    // Vector length is (nbatches * nout).
-    // Inner shape is (beams_per_batch, 2^weird_rank, input_nt / pow2(ids)).
     
-    vector<shared_ptr<ReferenceTree>> trees;
+    vector<shared_ptr<ReferenceTree>> trees;    // length (nbatches * plan->stage2_ntrees)
+    vector<Array<float>> subband_buffers;       // length (plan->stage2_ntrees)
 
     // Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
     // In downsampled trees, we compute twice as many DMs as necessary, then copy the bottom half.
     // Reminder: 'output_arrays' is a member of ReferenceDedisperserBase.
+
+    // Step 5: run peak-finding kernel.
+    // In downsampled trees, we just run on the upper half of 'subband_buffers'.
 };
 
 
@@ -195,7 +197,8 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
     
     this->downsampled_inputs.resize(nds);
     this->dedispersion_buffers.resize(output_ntrees);
-    this->trees.resize(nbatches * output_ntrees);    
+    this->trees.resize(nbatches * output_ntrees);
+    this->subband_buffers.resize(output_ntrees);
     this->output_arrays.resize(output_ntrees);
 
     for (long ids = 0; ids < nds; ids++) {
@@ -223,6 +226,20 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 
             this->trees.at(batch*output_ntrees + iout) = make_shared<ReferenceTree> (tree_params);
         }
+
+        // Make a copy of the peak-finding params, so that we can double 'ndm_out' 
+        // and 'ndm_wt' for downsampled trees.
+
+        PeakFindingKernelParams pf_params = plan->stage2_pf_params.at(iout);
+        pf_params.ndm_out *= (is_downsampled ? 2 : 1);
+        pf_params.ndm_wt *= (is_downsampled ? 2 : 1);
+
+        // { num_beams, 2^(amb_rank + dd_rank - pf_rank), M, ntime * nspec }.
+        long M = plan->stage2_trees.at(iout).nmultiplets;
+
+        this->subband_buffers.at(iout) = Array<float> (
+            {beams_per_batch, pf_params.ndm_out, M, pf_params.nt_in}, 
+            af_uhost | af_zero);
     }
 
     // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
