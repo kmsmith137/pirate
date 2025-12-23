@@ -72,18 +72,29 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     this->output_ntime = out_params.buf_ntime;
     this->output_ds_level = plan->stage2_ds_level;
 
+    // Some paranoid asserts.
+    xassert_eq(long(output_rank.size()), output_ntrees);
+    xassert_eq(long(output_ntime.size()), output_ntrees);
+    xassert_eq(long(output_ds_level.size()), output_ntrees);
+    xassert_eq(plan->stage2_ntrees, output_ntrees);
+
     // Create tree gridding kernel using plan parameters.
     this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
 
     // Allocate frequency-space input array.
     this->input_array = Array<float>({beams_per_batch, nfreq, input_ntime}, af_uhost | af_zero);
-
-    // Some paranoid asserts follow.
     
-    xassert(long(output_rank.size()) == output_ntrees);
-    xassert(long(output_ntime.size()) == output_ntrees);
-    xassert(long(output_ds_level.size()) == output_ntrees);
+    // Allocate weights arrays.
+    this->wt_arrays.resize(output_ntrees);
+    for (long i = 0; i < output_ntrees; i++) {
+        long ndm_wt = plan->stage2_pf_params.at(i).ndm_wt;
+        long nt_wt = plan->stage2_pf_params.at(i).nt_wt;
+        long P = plan->stage2_trees.at(i).nprofiles;
+        long F = plan->stage2_trees.at(i).nsubbands;        
+        this->wt_arrays[i] = Array<float>({beams_per_batch, ndm_wt, nt_wt, P, F}, af_uhost | af_zero);
+    }
 
+    // More paranoid asserts.
     for (long i = 0; i < output_ntrees; i++) {
         xassert((output_ds_level[i] >= 0) && (output_ds_level[i] < config.num_downsampling_levels));
         xassert(output_ntime[i] == xdiv(input_ntime, pow2(output_ds_level[i])));

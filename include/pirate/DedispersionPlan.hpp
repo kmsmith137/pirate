@@ -59,11 +59,17 @@ struct DedispersionPlan
 
     struct Stage2Tree
     {
+        // Note: for most purposes, you want 'early_dd_rank', not 'pri_dd_rank'.
         int ds_level = -1;       // Downsampling level, also identifies associated Stage1Tree.
         int amb_rank = 0;        // Ambient rank of Stage2Tree (= dd_rank of associated Stage1Tree)
         int pri_dd_rank = 0;     // Active rank of primary Stage2Tree (= amb_rank of associated Stage1Tree)
         int early_dd_rank = 0;   // Active rank of this Stage2Tree (always <= pri_dd_rank)
         int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
+
+        // It's convenient to put some peak-finding info here.
+        // More peak-finding info is in DeispersionPlan::stage2_pf_params (Wmax, ndm_{out,wt}, nt_{in,out,wt})
+        long nprofiles = 0;      // same as PeakFindingKernel::nprofiles, equal to 1 + 3*log2(Wmax)
+        long nsubbands = 0;      // same as FrequencySubbands::F
     };
     
     std::vector<Stage1Tree> stage1_trees;  // length stage1_ntrees

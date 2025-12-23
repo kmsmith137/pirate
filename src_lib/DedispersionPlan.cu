@@ -25,8 +25,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     this->nbytes_per_segment = constants::bytes_per_gpu_cache_line;
 
     // Part 1:
-    //   - Initialize stage1_trees, stage2_trees.
-    //   - Initialize stage1_ntrees, stage2_ntrees.
+    //   - Initialize stage1_trees, stage1_trees.
+    //   - Initialize stage1_ntrees, stage2_ntrees 
+    //      (except for peak-finding info, which is initialized in part 3)
     
     for (int ids = 0; ids < config.num_downsampling_levels; ids++) {
         
@@ -72,8 +73,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     xassert(stage1_ntrees == config.num_downsampling_levels);
     
     // Part 2:
-    //
     // Set up the MegaRingbuf, a central data structure that buffers data between kernels.
+    // See MegaRingbuf.hpp for more info.
 
     MegaRingbuf::Params mrb_params;
     mrb_params.total_beams = config.beams_per_gpu;
@@ -152,7 +153,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     
     mega_ringbuf->finalize();
 
-    // Part 3: initialize all "params" members:
+    // Part 3: initialize low-level kernel data (*_params members).
+    // Also a loose end from part 1: initialize peak-finding info in Stage2Tree.
     //
     //   TreeGriddingKernelParams tree_gridding_kernel_params;
     //   DedispersionBufferParams stage1_dd_buf_params;
@@ -211,7 +213,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     stage2_dd_buf_params.nbuf = stage2_ntrees;
 
     for (uint itree2 = 0; itree2 < stage2_trees.size(); itree2++) {
-        const Stage2Tree &st2 = stage2_trees.at(itree2);
+        Stage2Tree &st2 = stage2_trees.at(itree2);
         long ds_level = st2.ds_level;
 
         xassert(st2.nt_ds == xdiv(config.time_samples_per_chunk, pow2(ds_level)));
@@ -273,6 +275,11 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         pf_params.validate();
 
         stage2_pf_params.push_back(pf_params);
+
+        // Loose end from part 1: initialize peak-finding info in Stage2Tree.
+        FrequencySubbands fs(subband_counts);  // not config.frequency_subband_counts
+        st2.nprofiles = 1 + 3 * integer_log2(pfc.max_width);
+        st2.nsubbands = fs.F;
     }
 
     // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.

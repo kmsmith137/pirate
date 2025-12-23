@@ -146,7 +146,7 @@ struct ReferenceDedisperserBase
     long beams_per_batch = 0;     // same as config.beams_per_batch
     long nbatches = 0;            // = (total_beams / beams_per_batch)
 
-    long output_ntrees = 0;
+    long output_ntrees = 0;             // same as plan->stage2_ntrees
     std::vector<long> output_rank;      // length output_ntrees
     std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level[:]))
     std::vector<long> output_ds_level;  // length output_ntrees
@@ -159,13 +159,18 @@ struct ReferenceDedisperserBase
 
     // Before calling dedisperse(), caller should fill 'input_array'.
     // Shape is (beams_per_batch, nfreq, input_ntime).
-    // 
+    ksgpu::Array<float> input_array;
+
+    // Befre calling dedisperse(), caller should fill 'wt_arrays' (peak-finding weights).
+    // Shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, nsubbands)
+    //   where (ndm_wt, nt_wt) can be found in plan->stage2_pf_params[itree].
+    //   and (nprofiles, nsubbands) can be found in plan->stage2_trees[itree].
+    std::vector<ksgpu::Array<float>> wt_arrays;    // length output_ntrees
+
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
     // output_arrays[i] has shape (beams_per_batch, 2^output_rank[i], output_ntime[i])
-    
-    ksgpu::Array<float> input_array;   // frequency-space: shape (beams_per_batch, nfreq, input_ntime)
     std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
-
+   
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
 
