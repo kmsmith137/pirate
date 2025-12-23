@@ -89,13 +89,6 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
     // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
 
-    // Peak-finding kernels.
-    for (long i = 0; i < output_ntrees; i++) {
-        const PeakFindingKernelParams &params = plan->stage2_pf_params.at(i);
-        auto pf = make_shared<ReferencePeakFindingKernel> (params, Dcore.at(i));
-        this->pf_kernels.push_back(pf);
-    }
-
     // Allocate frequency-space input array.
     this->input_array = Array<float>({beams_per_batch, nfreq, input_ntime}, af_uhost | af_zero);
     
@@ -167,6 +160,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan, const vector<long> &Dcore);
 
     virtual void dedisperse(long itime, long ibeam) override;
+    virtual shared_ptr<ReferencePeakFindingKernel> get_pf_kernel(long itree) override;
 
     // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
@@ -303,6 +297,13 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
     }
 }
 
+// virtual override
+shared_ptr<ReferencePeakFindingKernel> ReferenceDedisperser0::get_pf_kernel(long itree)
+{
+    throw runtime_error("ReferenceDedisperser::get_pf_kernel() is not implemented"
+        " for sophistication==0. See note in Dedisperser.hpp");
+}
+
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -336,8 +337,10 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
     shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
+    vector<shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
     
     virtual void dedisperse(long ichunk, long ibatch) override;
+    virtual shared_ptr<ReferencePeakFindingKernel> get_pf_kernel(long itree) override;
 };
 
 
@@ -357,13 +360,20 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
         this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
     }
 
+    // Dedispersion and peak-finding kernels.
     for (long iout = 0; iout < plan->stage2_ntrees; iout++) {
-        DedispersionKernelParams dd_params = plan->stage2_dd_kernel_params.at(iout);  // make copy
+        // Make a copy of the dedispersion params, in order to disable the ringbuf.
+        DedispersionKernelParams dd_params = plan->stage2_dd_kernel_params.at(iout);
         dd_params.input_is_ringbuf = false;   // in ReferenceDeidsperser1, ringbufs are disabled.
         dd_params.consumer_id = -1;
 
-        vector<long> subband_counts = plan->stage2_pf_params.at(iout).subband_counts;
-        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
+        PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(iout);
+
+        auto dd = make_shared<ReferenceDedispersionKernel> (dd_params, pf_params.subband_counts);
+        this->stage2_dd_kernels.push_back(dd);
+
+        auto pf = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(iout));
+        this->pf_kernels.push_back(pf);
     }
     
     // Initalize stage2_lagbufs.
@@ -480,6 +490,12 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
     }
 }
 
+// virtual override
+shared_ptr<ReferencePeakFindingKernel> ReferenceDedisperser1::get_pf_kernel(long itree)
+{
+    xassert((itree >= 0) && (itree < plan->stage2_ntrees));
+    return pf_kernels.at(itree);
+}
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -514,10 +530,12 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     shared_ptr<ReferenceLaggedDownsamplingKernel> lds_kernel;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage1_dd_kernels;
     vector<shared_ptr<ReferenceDedispersionKernel>> stage2_dd_kernels;
+    vector<shared_ptr<ReferencePeakFindingKernel>> pf_kernels;
     shared_ptr<CpuRingbufCopyKernel> g2g_copy_kernel;
     shared_ptr<CpuRingbufCopyKernel> h2h_copy_kernel;
     
     virtual void dedisperse(long ichunk, long ibatch) override;
+    virtual shared_ptr<ReferencePeakFindingKernel> get_pf_kernel(long itree) override;
 };
 
 
@@ -553,8 +571,13 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     
     for (long iout = 0; iout < plan->stage2_ntrees; iout++) {
         const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(iout);
-        vector<long> subband_counts = plan->stage2_pf_params.at(iout).subband_counts;
-        this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
+        PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(iout);
+
+        auto dd = make_shared<ReferenceDedispersionKernel> (dd_params, pf_params.subband_counts);
+        this->stage2_dd_kernels.push_back(dd);
+
+        auto pf = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(iout));
+        this->pf_kernels.push_back(pf);
     }
     
     // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
@@ -661,6 +684,14 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
         dd_kernel->apply(this->gpu_ringbuf, dd_buf, sb_buf, ichunk, ibatch);
         pf_kernel->apply(out_max.at(i), out_argmax.at(i), sb_buf, wt_arrays.at(i), ibatch);
     }
+}
+
+
+// virtual override
+shared_ptr<ReferencePeakFindingKernel> ReferenceDedisperser2::get_pf_kernel(long itree)
+{
+    xassert((itree >= 0) && (itree < plan->stage2_ntrees));
+    return pf_kernels.at(itree);
 }
 
 

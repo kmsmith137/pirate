@@ -161,11 +161,16 @@ struct ReferenceDedisperserBase
     std::vector<long> output_ds_level;  // length output_ntrees
 
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
-    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;  // length output_ntrees
 
     // To process multiple chunks, call the dedisperse() method in a loop.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     virtual void dedisperse(long ichunk, long ibatch) = 0;
+
+    // Retrieves the peak-finding kernel for the i-th tree.
+    // Implemented for sophistication=1 or 2, throws an exception if sophistication=0.
+    // (This is because the sophistication=0 kernel uses different tree sizes.)
+    // This is a little awkward, but I think it's the least awkward approach.
+    virtual std::shared_ptr<ReferencePeakFindingKernel> get_pf_kernel(long itree) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
     // Shape is (beams_per_batch, nfreq, input_ntime).
