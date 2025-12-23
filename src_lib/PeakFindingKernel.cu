@@ -543,7 +543,7 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(long rank_hack)
     long nouter = B*D*T;
 
     for (long i = 0; i < nouter; i++) {
-        float p0 = rand_uniform(1.0f, 2.0f);
+        float p0 = rand_uniform(0.01f, 1.1f);
 
         for (long f = 0; f < F; f++) {
             if (rank_hack <= 0) {
