@@ -70,6 +70,7 @@ struct DedispersionPlan
         // More peak-finding info is in DeispersionPlan::stage2_pf_params (Wmax, ndm_{out,wt}, nt_{in,out,wt})
         long nprofiles = 0;      // same as PeakFindingKernel::nprofiles, equal to 1 + 3*log2(Wmax)
         long nsubbands = 0;      // same as FrequencySubbands::F
+        long nmultiplets = 0;    // same as FrequencySubbands::M
     };
     
     std::vector<Stage1Tree> stage1_trees;  // length stage1_ntrees

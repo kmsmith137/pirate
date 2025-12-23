@@ -181,6 +181,12 @@ struct ReferenceDedisperserBase
     // output_arrays[i] has shape (beams_per_batch, 2^output_rank[i], output_ntime[i])
     std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
    
+    // After dedisperse() completes, peak-finding output is stored in 'out_max', 'out_argmax'.
+    // Shape is (beams_per_batch, ndm_out, nt_out)
+    //   where (ndm_out, nt_out) can be found in plan->stage2_pf_params[itree]
+    std::vector<ksgpu::Array<float>> out_max;     // length output_ntrees
+    std::vector<ksgpu::Array<uint>> out_argmax;   // length output_ntrees
+
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(
         const std::shared_ptr<DedispersionPlan> &plan,

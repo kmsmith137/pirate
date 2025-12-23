@@ -280,6 +280,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         FrequencySubbands fs(subband_counts);  // not config.frequency_subband_counts
         st2.nprofiles = 1 + 3 * integer_log2(pfc.max_width);
         st2.nsubbands = fs.F;
+        st2.nmultiplets = fs.M;
     }
 
     // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.
