@@ -28,13 +28,13 @@ struct MegaRingbuf;      // defined in MegaRingbuf.hpp
 //
 //   (beams_per_batch, pow2(amb_rank), pow2(dd_rank), ntime, nspec).
 //
-// The buffer is not assumed contiguous -- this detail is important, since the
-// amb/dd axes may be swapped (relative to contiguous ordering). To explain this in
-// more detail, consider two-stage tree dedispersion with total rank (rank1 + rank2):
+// The buffer is not assumed contiguous -- this detail is important, since the amb/dd
+// axes may be swapped (relative to contiguous ordering). To explain this in more detail,
+// consider two-stage tree dedispersion with total rank (stage1_rank + stage2_rank):
 //
 //  - Let's "reshape" the dedispersion buffer to a 4-d array
 //
-//      (nbeams, pow2(rank2), pow2(rank1), ntime * nspec)
+//      (nbeams, pow2(stage2_rank), pow2(stage1_rank), ntime * nspec)
 //
 //    This 4-d shape will be preserved throughout the two-stage dedispersion, but
 //    the meaning of the axes will be different at different stages.

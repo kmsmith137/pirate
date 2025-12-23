@@ -39,7 +39,7 @@ struct LaggedDownsamplingKernelParams
     
     ksgpu::Dtype dtype;                 // same as DedispersionConfig::dtype
     long input_total_rank = -1;         // same as DedispersionConfig::tree_rank;
-    long output_dd_rank = -1;           // same as DedispersionPlan::stage1_trees[1].rank0
+    long output_dd_rank = -1;           // same as DedispersionPlan::stage1_trees[1].dd_rank
     long num_downsampling_levels = -1;  // same as DedispersionConfig::num_downsampling_levels
     long total_beams = 0;               // same as DedispersionConfig::beams_per_gpu
     long beams_per_batch = 0;           // same as DedispersionConfig::beams_per_batch

@@ -143,7 +143,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // In downsampled trees, we compute twice as many DMs as necessary, then drop the bottom half.
     // Each early trigger is computed in an independent tree, by disregarding some input channels.
     // Outer vector length is nout, inner shape is (beams_per_batch, 2^weird_rank, input_nt / pow2(ids)).
-    //   where weird_rank = rank0 + rank1_trigger + (is_downsampled ? 1 : 0)
+    //   where weird_rank = stage1_dd_rank + early_stage2_dd_rank + (is_downsampled ? 1 : 0)
     
     vector<Array<float>> dedispersion_buffers;
 
