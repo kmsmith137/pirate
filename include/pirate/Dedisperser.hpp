@@ -24,6 +24,7 @@ struct CpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
 struct GpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
 struct ReferenceTreeGriddingKernel;   // defined in TreeGriddingKernel.hpp
 struct GpuTreeGriddingKernel;         // defined in TreeGriddingKernel.hpp
+struct ReferencePeakFindingKernel;    // defined in PeakFindingKernel.hpp
 
 
 // -------------------------------------------------------------------------------------------------
@@ -127,17 +128,25 @@ struct GpuDedisperser
 // Sophistication == 2:
 //
 //   - As close to GPU implementation as possible!
-
+//
+// Note on Dcore: in order for the ReferenceDedisperser to perfectly mimic the GPU kernel, we
+// need a constructor argument 'Dcore' which contains Dcore values from the GpuPeakFindingKernels.
+// See PeakFindingKernel.hpp for the meaning of Dcore, and GpuDedisperser.cu for example code
+// to initialize the Dcore vector.
 
 struct ReferenceDedisperserBase
 {
     // Constructor not intended to be called directly -- use make() below.
-    ReferenceDedisperserBase(const std::shared_ptr<DedispersionPlan> &plan, int sophistication_);
+    ReferenceDedisperserBase(
+        const std::shared_ptr<DedispersionPlan> &plan, 
+        const std::vector<long> &Dcore,
+        int sophistication
+    );
     
     std::shared_ptr<DedispersionPlan> plan;
-    
-    const DedispersionConfig config;   // same as plan->config
-    const int sophistication;          // see above
+    const DedispersionConfig config;     // same as plan->config
+    const std::vector<long> Dcore;       // see above
+    const int sophistication;            // see above
     
     long nfreq = 0;               // same as config.get_total_nfreq()
     long input_rank = 0;          // same as config.tree_rank
@@ -152,6 +161,7 @@ struct ReferenceDedisperserBase
     std::vector<long> output_ds_level;  // length output_ntrees
 
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
+    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;  // length output_ntrees
 
     // To process multiple chunks, call the dedisperse() method in a loop.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
@@ -172,7 +182,11 @@ struct ReferenceDedisperserBase
     std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
    
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
-    static std::shared_ptr<ReferenceDedisperserBase> make(const std::shared_ptr<DedispersionPlan> &plan_, int sophistication);
+    static std::shared_ptr<ReferenceDedisperserBase> make(
+        const std::shared_ptr<DedispersionPlan> &plan,
+        const std::vector<long> &Dcore,
+        int sophistication
+    );
 
     // Helper methods called by subclass constructors.
     void _init_output_arrays(std::vector<ksgpu::Array<float>> &out);

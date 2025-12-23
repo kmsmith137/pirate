@@ -6,9 +6,10 @@
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
+#include "../include/pirate/PeakFindingKernel.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"
-#include "../include/pirate/utils.hpp"  // dedisperse_non_incremental()
+#include "../include/pirate/utils.hpp"
 
 #include <ksgpu/rand_utils.hpp>    // rand_int()
 #include <ksgpu/string_utils.hpp>  // tuple_str()
@@ -54,11 +55,18 @@ static DedispersionPlan *deref(const shared_ptr<DedispersionPlan> &p)
 }
 
 
-ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<DedispersionPlan> &plan_, int sophistication_) :
+ReferenceDedisperserBase::ReferenceDedisperserBase(
+    const shared_ptr<DedispersionPlan> &plan_, 
+    const vector<long> &Dcore_,
+    int sophistication_
+) :
     plan(plan_),
     config(deref(plan_)->config),
+    Dcore(Dcore_),
     sophistication(sophistication_)
 {
+    xassert_eq(long(Dcore.size()), plan->stage2_ntrees);
+
     this->nfreq = config.get_total_nfreq();
     this->input_rank = config.tree_rank;
     this->input_ntime = config.time_samples_per_chunk;
@@ -78,8 +86,15 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     xassert_eq(long(output_ds_level.size()), output_ntrees);
     xassert_eq(plan->stage2_ntrees, output_ntrees);
 
-    // Create tree gridding kernel using plan parameters.
+    // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
+
+    // Peak-finding kernels.
+    for (long i = 0; i < output_ntrees; i++) {
+        const PeakFindingKernelParams &params = plan->stage2_pf_params.at(i);
+        auto pf = make_shared<ReferencePeakFindingKernel> (params, Dcore.at(i));
+        this->pf_kernels.push_back(pf);
+    }
 
     // Allocate frequency-space input array.
     this->input_array = Array<float>({beams_per_batch, nfreq, input_ntime}, af_uhost | af_zero);
@@ -137,7 +152,7 @@ void ReferenceDedisperserBase::_init_output_arrays(vector<Array<void>> &out_)
 
 struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 {
-    ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan);
+    ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan, const vector<long> &Dcore);
 
     virtual void dedisperse(long itime, long ibeam) override;
 
@@ -166,8 +181,8 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 };
 
 
-ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan_) :
-    ReferenceDedisperserBase(plan_, 0)
+ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
+    ReferenceDedisperserBase(plan_, Dcore_, 0)
 {
     long nds = config.num_downsampling_levels;
     
@@ -287,7 +302,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
 
 struct ReferenceDedisperser1 : public ReferenceDedisperserBase
 {
-    ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_);
+    ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_);
 
     // Step 1: run LaggedDownsampler.
     // Step 2: run stage1 dedispersion kernels 
@@ -307,8 +322,8 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
 };
 
 
-ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_) :
-    ReferenceDedisperserBase(plan_, 1)
+ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
+    ReferenceDedisperserBase(plan_, Dcore_, 1)
 {
     // No subbands yet.
     vector<long> subband_counts = {1};
@@ -437,7 +452,7 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 
 struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 {
-    ReferenceDedisperser2(const std::shared_ptr<DedispersionPlan> &plan);
+    ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan, const vector<long> &Dcore);
     
     // Step 1: run LaggedDownsampler.
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
@@ -462,8 +477,8 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 };
 
 
-ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan_) :
-    ReferenceDedisperserBase(plan_, 2)
+ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
+    ReferenceDedisperserBase(plan_, Dcore_, 2)
 {
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
@@ -596,14 +611,17 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
 
 // Static member function
-shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const shared_ptr<DedispersionPlan> &plan_, int sophistication)
+shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(
+    const shared_ptr<DedispersionPlan> &plan_, 
+    const vector<long> &Dcore_,
+    int sophistication_)
 {
-    if (sophistication == 0)
-        return make_shared<ReferenceDedisperser0> (plan_);
-    else if (sophistication == 1)
-        return make_shared<ReferenceDedisperser1> (plan_);
-    else if (sophistication == 2)
-        return make_shared<ReferenceDedisperser2> (plan_);
+    if (sophistication_ == 0)
+        return make_shared<ReferenceDedisperser0> (plan_, Dcore_);
+    else if (sophistication_ == 1)
+        return make_shared<ReferenceDedisperser1> (plan_, Dcore_);
+    else if (sophistication_ == 2)
+        return make_shared<ReferenceDedisperser2> (plan_, Dcore_);
     throw runtime_error("ReferenceDedisperserBase::make(): invalid value of 'sophistication' parameter");
 }
 

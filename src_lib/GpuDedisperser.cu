@@ -267,9 +267,17 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     // freely mix operations such as Array::to_gpu() which use the default stream.
     xassert(nstreams == 1);
     
-    shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, 0);
-    shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, 1);
-    shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, 2);
+    // Placeholder logic to initialize Dcore.
+    vector<long> Dcore(plan->stage2_ntrees);
+    for (long i = 0; i < plan->stage2_ntrees; i++) {
+        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(i);
+        long Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
+        Dcore.at(i) = Dout;
+    }
+
+    shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, Dcore, 0);
+    shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, Dcore, 1);
+    shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, Dcore, 2);
 
     shared_ptr<GpuDedisperser> gdd;
 
