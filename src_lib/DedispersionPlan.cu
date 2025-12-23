@@ -34,43 +34,35 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         // non-downsampled tree, but is the same for different downsampled trees.
         // This property is necessary in order for the LaggedDownsampler to work later.
         
-        int st1_rank = ids ? (config.tree_rank - 1) : config.tree_rank;
-        int st1_rank0 = st1_rank/2;
+        int total_rank = ids ? (config.tree_rank - 1) : config.tree_rank;
+        int stage1_dd_rank = (total_rank / 2);
+        int stage2_dd_rank = (total_rank - stage1_dd_rank);
+
         vector<int> trigger_ranks;
-        
-        for (const DedispersionConfig::EarlyTrigger &et: config.early_triggers) {
+        for (const DedispersionConfig::EarlyTrigger &et: config.early_triggers)
             if (et.ds_level == ids)
                 trigger_ranks.push_back(et.tree_rank);
-        }
 
-        trigger_ranks.push_back(st1_rank);
+        trigger_ranks.push_back(total_rank);
         xassert(is_sorted(trigger_ranks));
 
         Stage1Tree st1;
         st1.ds_level = ids;
-        st1.dd_rank = st1_rank0;
-        st1.amb_rank = st1_rank - st1.dd_rank;
-        st1.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
-
-        // FIXME should replace hardcoded 7,8 by something more descriptive
-        // (GpuDedispersionKernel::max_rank?)
-        int max_rank = ids ? 7 : 8;
-        xassert((st1.dd_rank >= 0) && (st1.dd_rank <= max_rank));
-        xassert(st1.nt_ds > 0);
-        
+        st1.dd_rank = stage1_dd_rank;
+        st1.amb_rank = stage2_dd_rank;
+        st1.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));        
         this->stage1_trees.push_back(st1);
 
         for (int trigger_rank: trigger_ranks) {
             Stage2Tree st2;
             st2.ds_level = ids;
-            st2.amb_rank = st1.dd_rank;
-            st2.pri_dd_rank = st1.amb_rank;
-            st2.early_dd_rank = trigger_rank - st2.amb_rank;
+            st2.amb_rank = stage1_dd_rank;
+            st2.pri_dd_rank = stage2_dd_rank;
+            st2.early_dd_rank = trigger_rank - stage1_dd_rank;
             st2.nt_ds = st1.nt_ds;
 
-            xassert((st2.early_dd_rank >= 0) && (st2.early_dd_rank <= 8));
-            xassert(st2.early_dd_rank <= st2.pri_dd_rank);
-                     
+            xassert_ge(st2.early_dd_rank, 1);
+            xassert_le(st2.early_dd_rank, st2.pri_dd_rank);
             this->stage2_trees.push_back(st2);
         }
     }
@@ -331,8 +323,8 @@ void DedispersionPlan::print(ostream &os, int indent) const
         
         os << Indent(indent+4) << i
            << ": ds_level=" << st1.ds_level
-           << ", rank0=" << st1.dd_rank
-           << ", rank1=" << st1.amb_rank
+           << ", dd_rank=" << st1.dd_rank
+           << ", amb_rank=" << st1.amb_rank
            << ", nt_ds=" << st1.nt_ds
            << endl;
     }
@@ -344,9 +336,9 @@ void DedispersionPlan::print(ostream &os, int indent) const
         
         os << Indent(indent+4) << i
            << ": ds_level=" << st2.ds_level
-           << ", rank0=" << st2.amb_rank
-           << ", rank1_amb=" << st2.pri_dd_rank
-           << ", rank1_tri=" << st2.early_dd_rank
+           << ", amb_rank=" << st2.amb_rank
+           << ", pri_dd_rank=" << st2.pri_dd_rank
+           << ", early_dd_rank=" << st2.early_dd_rank
            << ", nt_ds=" << st2.nt_ds
            << endl;
     }

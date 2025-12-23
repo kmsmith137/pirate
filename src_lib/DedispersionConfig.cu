@@ -332,10 +332,12 @@ void DedispersionConfig::validate() const
     xassert(tree_rank > 0);
     xassert(num_downsampling_levels > 0);
     xassert(time_samples_per_chunk > 0);
-    xassert(is_sorted(early_triggers));
     xassert(beams_per_gpu > 0);
     xassert(beams_per_batch > 0);
     xassert(num_active_batches > 0);
+
+    xassert_le(tree_rank, constants::max_tree_rank);
+    xassert_le(num_downsampling_levels, constants::max_downsampling_level);
 
     // Validate zone_nfreq and zone_freq_edges.
     xassert(zone_nfreq.size() > 0);
@@ -368,6 +370,7 @@ void DedispersionConfig::validate() const
     xassert_le(gpu_clag_maxfrac, 1.0);
 
     // Check validity of early triggers.
+    xassert(is_sorted(early_triggers));
     for (const EarlyTrigger &et: early_triggers) {
         long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
         long ds_stage1_rank = ds_rank / 2;
