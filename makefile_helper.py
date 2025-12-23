@@ -15,11 +15,12 @@
 # These global boolean variables are used to control which kernels are procedurally generated.
 # This is a tradeoff between coverage and compile time.
 #
-# By default, we set production_kernels=True, and debug_*_kernels=False.
-# When debugging, it's sometimes useful to disable production kernels, and/or enable debug kernels.
-# I try to avoid git commits with non-default settings of these flags.
+# In "production" builds, I set production_kernels=True, and debug_*_kernels=False.
+# When developing, I usually set all flags to False, so that compile times are short.
+# If I'm debugging something specific, then I'll set a debug flag.
+# For a long CI-style test run, I'll set all flags to true (high compile time!)
 
-production_kernels = True     # "production" CHIME/CHORD kernels (default True)
+production_kernels = False    # "production" CHIME/CHORD kernels (default True)
 debug_dd_kernels = False      # debug dedispersion kernels (default False)
 debug_pf_kernels = False      # debug peak-finding kernels (default False)
 debug_pfo_kernels = False     # debug peak-finding output microkernel (default False)

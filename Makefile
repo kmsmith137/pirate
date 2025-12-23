@@ -40,6 +40,8 @@ all: lib build_wheel build_sdist
 # For now, if you want to change the defaults, just edit the Makfile.
 
 PYTHON ?= python3
+
+# To time nvcc invocations, prepend: time -f "   %e seconds"
 NVCC ?= nvcc -std=c++17 -m64 -O3 -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
 
 # If using a conda env, add -I$(CONDA_PREFIX)/include to nvcc flags.
