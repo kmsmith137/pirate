@@ -335,20 +335,23 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     for (long iout = 0; iout < output_ntrees; iout++) {
         long rank = output_rank.at(iout);
         long ntime = output_ntime.at(iout);
-        bool is_downsampled = (output_ds_level.at(iout) > 0);
+        long ds_level = output_ds_level.at(iout);
+        bool is_downsampled = (ds_level > 0);
         
-        // Hmm, getting rank0/rank1 split from current data structures is awkward.
         const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
-        long rank0 = st2.amb_rank;
-        long rank1 = st2.early_dd_rank;
-        xassert(rank == rank0+rank1);
+        long stage2_amb_rank = st2.amb_rank;
+        long stage2_dd_rank = st2.early_dd_rank;
+
+        xassert_eq(rank, stage2_amb_rank + stage2_dd_rank);
+        xassert_eq(ds_level, st2.ds_level);
+        xassert_eq(ntime, st2.nt_ds);
 
         Array<int> lags({ beams_per_batch, pow2(rank) }, af_uhost);
 
-        for (long i1 = 0; i1 < pow2(rank1); i1++) {
-            for (long i0 = 0; i0 < pow2(rank0); i0++) {
-                long row = i1 * pow2(rank0) + i0;
-                long lag = rb_lag(i1, i0, rank0, rank1, is_downsampled);
+        for (long freq_coarse = 0; freq_coarse < pow2(stage2_dd_rank); freq_coarse++) {
+            for (long dm_brev = 0; dm_brev < pow2(stage2_amb_rank); dm_brev++) {
+                long row = freq_coarse * pow2(stage2_amb_rank) + dm_brev;
+                long lag = rb_lag(freq_coarse, dm_brev, stage2_amb_rank, stage2_dd_rank, is_downsampled);
                 long segment_lag = lag / S;   // round down
 
                 for (long b = 0; b < beams_per_batch; b++)
