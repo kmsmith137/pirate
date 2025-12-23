@@ -315,9 +315,19 @@ void CoalescedDdKernel2::test()
     long A = pow2(dd_params.amb_rank);
     long T = nt_in_per_chunk;
     long D = pow2(dd_params.dd_rank);
+    long F = fs.F;
     long M = fs.M;
     long Dout = pow2(lg_ndm_out);
     long Tout = pf_params.nt_out;
+
+    // subband_variances are for make_random_weights()
+    Array<float> subband_variances({F}, af_uhost);
+    for (long f = 0; f < F; f++) {
+        long ilo = fs.f_to_ilo.at(f);
+        long ihi = fs.f_to_ihi.at(f);
+        long df = (ihi-ilo) << (dd_params.dd_rank - fs.pf_rank);  // width of frequency band
+        subband_variances.at({f}) = df;
+    }
 
     Array<float> dd_cpu({B,A,D,T}, af_uhost);      // 'dd_out' for ref_dd_kernel
     Array<float> sb_cpu({B,Dout,M,T}, af_uhost);   // 'sb_out' for ref_pf_kernel, input for ref_pf_kernel
@@ -336,8 +346,7 @@ void CoalescedDdKernel2::test()
         for (long ibatch = 0; ibatch < num_batches; ibatch++) {
             ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ichunk, ibatch);
 
-            long rank_hack = dd_params.dd_rank;  // see comments in ReferencePeakFindingKernel::make_random_weights()
-            Array<float> wt_cpu = ref_pf_kernel.make_random_weights(rank_hack);
+            Array<float> wt_cpu = ref_pf_kernel.make_random_weights(subband_variances);
 
             // Uncomment to use one-hot weights.
             // wt_cpu = Array<float> ({B, pf_params.ndm_wt, pf_params.nt_wt, ref_pf_kernel.nprofiles, fs.F}, af_rhost | af_zero);

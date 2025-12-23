@@ -512,18 +512,9 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
 // We also scale each weight so that the variance of the pf-kernel output 
 // is of order 1. This is crucial for unit-testing fp16 kernels.
 //
-// The rank_hack argument needs some explanation. If calling make_random_weights()
-// from GpuPeakFinder::test(), then you should take rank_hack < 0. If calling from
-// CoalescedDdKernel2::test(), then use DedispersionKernelParams::dd_rank.
-// This is used to normalize the weights as described in the previous paragraph.
-//
-// FIXME: rank_hack is not a good long-term solution. A better interface would be 
-// to have the caller pass a precomputed pf-kernel variance array, and define some 
-// helper functions for doing this precomputation.
-//
 // Returned array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F).
 
-Array<float> ReferencePeakFindingKernel::make_random_weights(long rank_hack)
+Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> &subband_variances)
 {
     long B = params.beams_per_batch;
     long D = params.ndm_wt;
@@ -532,9 +523,15 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(long rank_hack)
     long F = fs.F;
 
     xassert_eq(P, 3*(P/3)+1);
+    xassert_shape_eq(subband_variances, ({F,}));
+    xassert(subband_variances.on_host());
 
-    if (rank_hack >= 0)
-        xassert(rank_hack >= fs.pf_rank);
+    vector<float> w0(F);
+    for (long f = 0; f < F; f++) {
+        float var = subband_variances.at({f});
+        xassert(var > 0.0f);
+        w0[f] = rsqrtf(var);
+    }
 
     Array<float> ret({B,D,T,P,F}, af_rhost);
     vector<float> wp(P);
@@ -543,19 +540,10 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(long rank_hack)
     long nouter = B*D*T;
 
     for (long i = 0; i < nouter; i++) {
-        float p0 = rand_uniform(0.01f, 1.1f);
-
-        for (long f = 0; f < F; f++) {
-            if (rank_hack <= 0) {
-                wf[f] = 1.0f;
-                continue;
-            }
-
-            long ilo = fs.f_to_ilo[f];
-            long ihi = fs.f_to_ihi[f];
-            long df = (ihi-ilo) << (rank_hack - fs.pf_rank);  // width of frequency band
-            wf[f] = (rand_uniform() < p0) ? (rand_uniform() * rsqrtf(df)) : 0.0f;
-        }
+        float p0 = rand_uniform(0.1f, 1.1f);
+        
+        for (long f = 0; f < F; f++)
+            wf[f] = (rand_uniform() < p0) ? (rand_uniform() * w0[f]) : 0.0f;
         
         wp[0] = (rand_uniform() < p0) ? rand_uniform() : 0.0f;
         for (long l = 0; l < (P/3); l++) {
@@ -769,11 +757,15 @@ void GpuPeakFindingKernel::test(bool short_circuit)
     long F = gpu_kernel.fs.F;
     long M = gpu_kernel.fs.M;
 
+    // subband_variances are for make_random_weights()
+    Array<float> subband_variances({F}, af_uhost);
+    for (long f = 0; f < F; f++)
+        subband_variances.at({f}) = 1.0f;
+
     Array<float> cpu_in_large = ref_kernel_large.make_random_input_array();
     xassert_shape_eq(cpu_in_large, ({total_beams, ndm_out, M, nchunks * nt_in_per_chunk}));
 
-    long rank_hack = -1;  // see comments in ReferencePeakFindingKernel::make_random_weights()
-    Array<float> cpu_wt_large = ref_kernel_large.make_random_weights(rank_hack);
+    Array<float> cpu_wt_large = ref_kernel_large.make_random_weights(subband_variances);
     xassert_shape_eq(cpu_wt_large, ({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, F}));
 
     Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);

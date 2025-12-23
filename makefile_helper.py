@@ -22,7 +22,7 @@
 
 production_kernels = False    # "production" CHIME/CHORD kernels (default True)
 debug_dd_kernels = False      # debug dedispersion kernels (default False)
-debug_pf_kernels = False      # debug peak-finding kernels (default False)
+debug_pf_kernels = True       # debug peak-finding kernels (default False)
 debug_pfo_kernels = False     # debug peak-finding output microkernel (default False)
 debug_pfwr_kernels = False    # debug peak-finding weight reader kernels (default False)
 debug_cdd2_kernels = False    # debug coalesced dedispersion-pf kernels (default False)

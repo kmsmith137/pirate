@@ -171,8 +171,10 @@ struct ReferencePeakFindingKernel
 
     // Make an interesting weights array for testing.
     // Returns shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, params.fs.F)
-    // See PeakFindingKernel.cu for an explanation of 'rank_hack'.
-    ksgpu::Array<float> make_random_weights(long rank_hack);
+    //
+    // The 'subband_variance' array has shape (params.fs.F,) and is an estimate for
+    // the variance of the peak-finder input, in frequency subband 0 <= f < F. 
+    ksgpu::Array<float> make_random_weights(const ksgpu::Array<float> &subband_variances);
 
     // At "level" l (where 0 <= l < log2(Wmax)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).
