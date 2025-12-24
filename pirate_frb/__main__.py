@@ -3,6 +3,7 @@ import sys
 import textwrap
 import argparse
 
+import argcomplete
 import ksgpu
 
 from . import pirate_pybind11
@@ -590,7 +591,7 @@ def random_kernels(args):
 ####################################################################################################
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description="pirate_frb command-line driver (use --help for more info)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -605,6 +606,7 @@ if __name__ == '__main__':
     parse_scratch(subparsers)
     parse_random_kernels(subparsers)
 
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
     if args.command == "test":
@@ -630,3 +632,7 @@ if __name__ == '__main__':
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
+
+
+if __name__ == '__main__':
+    main()

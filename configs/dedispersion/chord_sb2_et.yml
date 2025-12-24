@@ -9,7 +9,7 @@ num_downsampling_levels: 4
 time_samples_per_chunk: 2048
 dtype: float16
 
-# Early triggers
+# Early triggers starting at ~60 sec dedispersion delay.
 early_triggers:
   - {ds_level: 1, tree_rank: 14}
   - {ds_level: 2, tree_rank: 13}

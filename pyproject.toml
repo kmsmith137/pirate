@@ -1,15 +1,18 @@
 [project]
 name = 'pirate_frb'
 version = '1.0.0'
-dependencies = [ 'pybind11', 'numpy', 'editables', 'ksgpu >= 1.1.0' ]
+dependencies = [ 'pybind11', 'numpy', 'editables', 'ksgpu >= 1.1.0', 'argcomplete' ]
 description = 'Perimeter Institute RAdio Transient Engine'
 requires-python = '>=3.8'
 # readme = 'README.md'
 # license = {file = 'LICENSE.txt'}
 # authors = [ {name = 'Kendrick Smith', email = 'kmsmith@perimeterinstitute.ca'} ]
 
+[project.scripts]
+pirate_frb = "pirate_frb.__main__:main"
+
 [build-system]
 build-backend = 'pipmake'
-requires = [ 'pipmake >= 0.0.2', 'pybind11', 'numpy', 'editables', 'ksgpu >= 1.1.0' ]
+requires = [ 'pipmake >= 0.0.3', 'pybind11', 'numpy', 'editables', 'ksgpu >= 1.1.0' ]
 
 # NOTE: cupy is not a dependency, but may be in the future.
