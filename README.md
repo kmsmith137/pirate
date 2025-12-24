@@ -36,9 +36,9 @@ or C++ builds with `make`. Here's what I recommend:
     python -m pirate_frb test -n 1
 
     # Step 3 (optional): If everything looks good, build an editable pip install.
+    # This will let you import 'pirate' outside the build dir, and run with the
+    # syntax 'pirate_frb CMD ARGS' instead of 'python -m pirate_frb CMD ARGS'
     # This only needs to be done once per conda env (or virtualenv).
-    # You can skip this step if you're content to import 'pirate'
-    # directly from the build directory (this is what I do!)
     
     pip install pipmake
     pip install --no-build-isolation -v -e .    # -e for "editable" install

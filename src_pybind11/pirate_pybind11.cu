@@ -14,6 +14,7 @@
 #include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
+#include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionKernel.hpp"
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/FakeServer.hpp"
@@ -257,6 +258,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("num_active_batches", &DedispersionConfig::num_active_batches)
           // Testing parameter
           .def_readonly("gpu_clag_maxfrac", &DedispersionConfig::gpu_clag_maxfrac)
+    ;
+
+    // DedispersionPlan: construct via shared_ptr
+    py::class_<DedispersionPlan, std::shared_ptr<DedispersionPlan>>(m, "DedispersionPlan")
+          .def(py::init<const DedispersionConfig &>(), py::arg("config"))
+          .def("to_yaml_string", &DedispersionPlan::to_yaml_string, py::arg("verbose") = false)
     ;
 
     py::class_<FrequencySubbands>(m, "FrequencySubbands")

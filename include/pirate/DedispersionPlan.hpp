@@ -2,6 +2,8 @@
 #define _PIRATE_DEDISPERSION_PLAN_HPP
 
 #include "DedispersionConfig.hpp"
+
+namespace YAML { class Emitter; }  // #include <yaml-cpp/yaml.h>
 #include "DedispersionBuffer.hpp"        // struct DedispersionBufferParams
 #include "DedispersionKernel.hpp"        // struct DedispersionKernelParams
 #include "LaggedDownsamplingKernel.hpp"  // struct LaggedDownsamplingKernelParams
@@ -43,6 +45,10 @@ struct DedispersionPlan
     int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
 
     void print(std::ostream &os=std::cout, int indent=0) const;
+
+    // Write in YAML format.
+    void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
+    std::string to_yaml_string(bool verbose = false) const;
 
     // -------------------------------------------------------------------------------------------------
     //

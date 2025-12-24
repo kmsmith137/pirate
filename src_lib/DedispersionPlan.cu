@@ -5,6 +5,7 @@
 #include "../include/pirate/utils.hpp"    // bit_reverse_slow(), rb_lag()
 
 #include <ksgpu/xassert.hpp>
+#include <yaml-cpp/emitter.h>
 
 using namespace std;
 using namespace ksgpu;
@@ -367,6 +368,36 @@ void DedispersionPlan::print(ostream &os, int indent) const
            << ", nt_ds=" << st2.nt_ds
            << endl;
     }
+}
+
+
+void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
+{
+    emitter << YAML::BeginMap;
+
+    emitter << YAML::Key << "trees"
+            << YAML::Value
+            << YAML::BeginSeq;
+
+    for (const Stage2Tree &st2: this->stage2_trees) {
+        long delta_et = st2.pri_dd_rank - st2.early_dd_rank;
+        emitter
+            << YAML::BeginMap
+            << YAML::Key << "ds_level" << YAML::Value << st2.ds_level
+            << YAML::Key << "delta_et" << YAML::Value << delta_et
+            << YAML::EndMap;
+    }
+
+    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+}
+
+
+string DedispersionPlan::to_yaml_string(bool verbose) const
+{
+    YAML::Emitter emitter;
+    this->to_yaml(emitter, verbose);
+    return emitter.c_str();
 }
 
 

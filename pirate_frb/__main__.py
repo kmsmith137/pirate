@@ -470,11 +470,17 @@ def scratch(args):
 ###################################   show_dedisperser command  ###################################
 
 
+def print_separator(label):
+    t = '-' * (40 - len(label)//2)
+    print(f'\n{t}  {label}  {t}\n')
+    sys.stdout.flush()
+
+
 def parse_show_dedisperser(subparsers):
     parser = subparsers.add_parser("show_dedisperser", help="Parse a dedisperser config file and write YAML to stdout")
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
-    parser.add_argument('--subbands', action='store_true', help="Show FrequencySubbands info at the end")
+    parser.add_argument('-c', '--config-only', action='store_true', help="Print config only (skip plan)")
     parser.add_argument('--channel-map', action='store_true', help="Show channel map tree->freq (warning: produces long output!)")
 
 
@@ -484,15 +490,13 @@ def show_dedisperser(args):
     
     print(config.to_yaml_string(args.verbose))
     
-    if args.subbands:
-        subband_counts = config.frequency_subband_counts
-        fedges = config.zone_freq_edges
-        fs = FrequencySubbands(subband_counts=subband_counts, fmin=fedges[0], fmax=fedges[-1])
-        print()
-        print('Frequency subband info starts here')
-        fs.show()
+    if not args.config_only:
+        print_separator('DedispersionPlan starts here')
+        plan = pirate_pybind11.DedispersionPlan(config)
+        print(plan.to_yaml_string(args.verbose))
 
     if args.channel_map:
+        print_separator('Channel map starts here')
         channel_map = config.make_channel_map()
         
         print()

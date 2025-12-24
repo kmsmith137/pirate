@@ -500,18 +500,15 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     // ---- Frequency channels ----
 
     if (verbose) {
-        emitter << YAML::Newline << YAML::Comment(
-            "Frequency channels. The observed frequency band is divided into \"zones\".\n"
-            "Within each zone, all frequency channels have the same width, but the\n"
-            "channel width may differ between zones.\n"
-            "  zone_nfreq: number of frequency channels in each zone.\n"
-            "  zone_freq_edges: frequency band edges in MHz.\n"
-            "For example:\n"
-            "  zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz\n"
-            "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band"
-        );
-
         stringstream ss;
+        ss << "Frequency channels. The observed frequency band is divided into \"zones\".\n";
+        ss << "Within each zone, all frequency channels have the same width, but the\n";
+        ss << "channel width may differ between zones.\n";
+        ss << "  zone_nfreq: number of frequency channels in each zone.\n";
+        ss << "  zone_freq_edges: frequency band edges in MHz.\n";
+        ss << "For example:\n";
+        ss << "  zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz\n";
+        ss << "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band";
         ss << "In this config, we have:\n";
         ss << "  Total frequency channels: " << get_total_nfreq() << "\n";
         ss << "  Channel widths (MHz): [ ";
@@ -520,7 +517,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             ss << (i ? ", " : "") << width;
         }
         ss << " ]";
-        emitter << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
+        emitter << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 
     emitter << YAML::Key << "zone_nfreq"
@@ -550,7 +547,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         ss << "Core dedispersion parameters.\n";
         ss << "The number of \"tree\" channels is ntree = 2^tree_rank.\n";
         ss << "The first tree (ds=0) searches delay range [0, 2^tree_rank] time samples.\n";
-        ss << "Downsampled trees (ds > 0) downsample in time by 2^ds, to search beyond the diagonal DM\n";
+        ss << "Downsampled trees (ds > 0) downsample in time by 2^ds, to search beyond the diagonal DM.\n";
         ss << "In this config, the following DM ranges are searched at each downsampling level:";
         
         for (long ds = 0; ds < num_downsampling_levels; ds++) {
@@ -558,13 +555,15 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             long delay_hi = pow2(tree_rank + ds);
             double dm_lo = delay_lo * dm_per_delay;
             double dm_hi = delay_hi * dm_per_delay;
-            ss << "\n  ds=" << ds << ": DM in [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
+            double dt = time_sample_ms * pow2(ds);
+            ss << "\n   ds=" << ds << ": " << dt << " ms samples, "
+               << "DM range [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
         }
         
-        emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline;
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 
-    emitter << YAML::Newline << YAML::Key << "tree_rank" << YAML::Value << tree_rank
+    emitter << YAML::Key << "tree_rank" << YAML::Value << tree_rank
             << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels;
 
     if (verbose)
@@ -572,10 +571,9 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     emitter << YAML::Key << "time_samples_per_chunk" << YAML::Value << time_samples_per_chunk;
 
-    if (verbose)
-        emitter << YAML::Newline << YAML::Comment("dtype: can be either float32 or float16.");
-
     emitter << YAML::Key << "dtype" << YAML::Value << dtype.str();
+    if (verbose)
+        emitter << YAML::Comment("can be either float32 or float16");
 
     // ---- Early triggers ----
 
@@ -585,7 +583,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "at reduced latency. Each downsampling level has an independent set of early triggers.\n"
             "Early triggers are optional (this can be an empty list).\n"
             "Syntax: list of {ds_level, tree_rank} pairs, sorted by ds_level then tree_rank."
-        ) << YAML::Newline;
+        ) << YAML::Newline << YAML::Newline;
     }
 
     emitter << YAML::Key << "early_triggers"
@@ -618,6 +616,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
            << "In this config, " << fs.F << " frequency subband(s) are searched:";
 
         long curr_level = -1;
+        int bands_on_line = 0;
 
         for (long f = 0; f < fs.F; f++) {
             long ilo = fs.f_to_ilo.at(f);
@@ -628,18 +627,24 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             float freq_lo = this->delay_to_frequency(delay_hi);  // note delay_hi here
             float freq_hi = this->delay_to_frequency(delay_lo);  // note delay_lo here
 
-            if (level != curr_level)
+            if (level != curr_level) {
                 ss << "\n  pf_level=" << level << ": ";
-            else
+                bands_on_line = 0;
+            }
+            else if (bands_on_line >= 5) {
+                ss << ",\n              ";  // align with first band after "pf_level=N: "
+                bands_on_line = 0;
+            }
+            else {
                 ss << ", ";
+            }
 
             ss << "[" << fixed << setprecision(1) << freq_lo << "," << freq_hi << "]";
             curr_level = level;
+            bands_on_line++;
         }
 
-        // ss << "\nF=" << fs.F << "  # number of distinct frequency subbands";
-        // ss << "\nM=" << fs.M << "  # number of \"multiplets\", i.e. (frequency_subband, fine_grained_dm) pairs";
-        emitter << YAML::Newline << YAML::Comment(ss.str());
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
 
     emitter << YAML::Key << "frequency_subband_counts"
@@ -659,7 +664,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "  time_downsampling: downsampling factor of coarse-grained array (optional, default=dm_downsampling)\n"
             "  wt_dm_downsampling: downsampling factor of weights array (required, must be >= dm_downsampling)\n"
             "  wt_time_downsampling: downsampling factor of weights array (required, must be >= time_downsampling)"
-        ) << YAML::Newline;
+        ) << YAML::Newline << YAML::Newline;
     }
 
     emitter << YAML::Key << "peak_finding_params"
