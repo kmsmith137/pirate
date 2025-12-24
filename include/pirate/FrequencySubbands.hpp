@@ -21,7 +21,9 @@ namespace pirate {
 
 struct FrequencySubbands
 {
+    FrequencySubbands();  // default constructor, equivalent to subband_counts={1}
     FrequencySubbands(const std::vector<long> &subband_counts);
+    FrequencySubbands(const std::vector<long> &subband_counts, double fmin, double fmax);
 
     // subband_counts: length-(pf_rank+1) vector, containing number of frequency subbands 
     // at each level. This vector fully parameterizes the frequency subbands as follows.
@@ -64,6 +66,12 @@ struct FrequencySubbands
     std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
     std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
     std::vector<long> f_to_mbase; // mapping (frequency_subband) -> m-index range (mbase : mbase + 2^level)
+
+    // i_to_f: mapping (0 <= index <= 2^pf_rank) -> (frequency)
+    // Only defined if fmin/fmax are specified in the constructor; otherwise empty.
+    std::vector<double> i_to_f;
+    double fmin = 0.0;
+    double fmax = 0.0;
 
     // These members are used in the peak-finding kernel, whose 'out_argmax' array consists
     // of "tokens" of the form (t) | (p << 8) | (m << 16).

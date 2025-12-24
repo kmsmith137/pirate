@@ -2,6 +2,7 @@
 #include "../include/pirate/inlines.hpp"  // pow2()
 #include "../include/pirate/utils.hpp"    // integer_log2()
 
+#include <cmath>
 #include <stdexcept>
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/rand_utils.hpp>    // rand_int()
@@ -18,6 +19,12 @@ namespace pirate {
 
 // Note: there is a similar python class (pirate_frb.cuda_generator.FrequencySubbands), so changes
 // made here should also be reflected there.
+
+
+// Default constructor, equivalent to subband_counts={1}
+FrequencySubbands::FrequencySubbands() :
+    FrequencySubbands(vector<long>({1}))
+{ }
 
 
 FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
@@ -50,6 +57,31 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_) :
 
     xassert_eq(m_to_f.size(), uint(M));
     xassert_eq(f_to_ilo.size(), uint(F));
+}
+
+
+FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_, double fmin_, double fmax_) :
+    FrequencySubbands(subband_counts_)
+{
+    this->fmin = fmin_;
+    this->fmax = fmax_;
+    
+    // Initialize i_to_f: mapping (0 <= index <= 2^pf_rank) -> (frequency)
+    // Following Python logic: np.linspace(fmax**(-2), fmin**(-2), 2**pf_rank + 1)**(-0.5)
+
+    xassert(fmin > 0);
+    xassert(fmax > fmin);
+
+    long n = pow2(pf_rank) + 1;
+    double start = pow(fmax, -2.0);
+    double end = pow(fmin, -2.0);
+
+    this->i_to_f.resize(n);
+    for (long i = 0; i < n; i++) {
+        double t = double(i) / double(n-1);
+        double val = start + t * (end - start);
+        this->i_to_f[i] = pow(val, -0.5);
+    }
 }
 
 
