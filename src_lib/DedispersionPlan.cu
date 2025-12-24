@@ -27,7 +27,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // Part 1:
     //   - Initialize stage1_trees, stage1_trees.
     //   - Initialize stage1_ntrees, stage2_ntrees 
-    //      (except for peak-finding info, which is initialized in part 3)
     
     for (int ids = 0; ids < config.num_downsampling_levels; ids++) {
         
@@ -51,7 +50,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         st1.ds_level = ids;
         st1.dd_rank = stage1_dd_rank;
         st1.amb_rank = stage2_dd_rank;
-        st1.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));        
+        st1.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));    
         this->stage1_trees.push_back(st1);
 
         for (int trigger_rank: trigger_ranks) {
@@ -64,6 +63,51 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
             xassert_ge(st2.early_dd_rank, 1);
             xassert_le(st2.early_dd_rank, st2.pri_dd_rank);
+
+            long tot_rank = st2.amb_rank + st2.early_dd_rank;
+            long delta_rank = st2.pri_dd_rank - st2.early_dd_rank;
+            long pf_rank = (st2.early_dd_rank + 1) / 2;
+
+            // Frequency range searched by tree, accounting for early trigger.
+            long dmax = pow2(config.tree_rank - delta_rank);
+            double fmin = config.delay_to_frequency(dmax);
+            double fmax = config.zone_freq_edges.back();
+
+            // Modify the subband_counts for the stage2 tree.
+            // (Accounts for early triggering, downsampling.)
+            vector<long> sc;
+            sc = FrequencySubbands::early_subband_counts(config.frequency_subband_counts, delta_rank);
+            sc = FrequencySubbands::rerank_subband_counts(sc, pf_rank);
+            st2.frequency_subbands = FrequencySubbands(sc, fmin, fmax);
+
+            st2.pf.max_width = config.peak_finding_params.at(ids).max_width;
+            st2.pf.dm_downsampling = config.peak_finding_params.at(ids).dm_downsampling;
+            st2.pf.time_downsampling = config.peak_finding_params.at(ids).time_downsampling;
+            st2.pf.wt_dm_downsampling = config.peak_finding_params.at(ids).wt_dm_downsampling;
+            st2.pf.wt_time_downsampling = config.peak_finding_params.at(ids).wt_time_downsampling;
+
+            if (st2.pf.dm_downsampling == 0)
+                st2.pf.dm_downsampling = pow2(pf_rank);
+
+            if (st2.pf.time_downsampling == 0)
+                st2.pf.time_downsampling = st2.pf.dm_downsampling;
+
+            xassert_le(st2.pf.dm_downsampling, st2.pf.wt_dm_downsampling);
+            xassert_le(st2.pf.wt_dm_downsampling, pow2(tot_rank));
+            xassert_le(st2.pf.time_downsampling, st2.pf.wt_time_downsampling);
+            xassert_le(st2.pf.wt_time_downsampling, st2.nt_ds);
+
+            st2.nprofiles = 1 + 3 * integer_log2(st2.pf.max_width);
+            st2.ndm_out = xdiv(pow2(tot_rank), st2.pf.dm_downsampling);
+            st2.ndm_wt = xdiv(pow2(tot_rank), st2.pf.wt_dm_downsampling);
+            st2.nt_out = xdiv(st2.nt_ds, st2.pf.time_downsampling);
+            st2.nt_wt = xdiv(st2.nt_ds, st2.pf.wt_time_downsampling);
+
+            double dm0 = config.dm_per_unit_delay() * pow2(config.tree_rank);
+            st2.dm_min = dm0 * ((ids > 0) ? pow2(ids-1) : 0);
+            st2.dm_max = dm0 * pow2(ids);
+            st2.trigger_frequency = fmin;
+
             this->stage2_trees.push_back(st2);
         }
     }
@@ -85,6 +129,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         long nquads = pow2(st1.dd_rank + st1.amb_rank) * xdiv(st1.nt_ds, nelts_per_segment);
         mrb_params.producer_nquads.push_back(nquads);
     }
+
     for (const Stage2Tree &st2: this->stage2_trees) {
         long nquads = pow2(st2.amb_rank + st2.early_dd_rank) * xdiv(st2.nt_ds, nelts_per_segment);
         mrb_params.consumer_nquads.push_back(nquads);
@@ -154,7 +199,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     mega_ringbuf->finalize();
 
     // Part 3: initialize low-level kernel data (*_params members).
-    // Also a loose end from part 1: initialize peak-finding info in Stage2Tree.
     //
     //   TreeGriddingKernelParams tree_gridding_kernel_params;
     //   DedispersionBufferParams stage1_dd_buf_params;
@@ -240,47 +284,20 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         stage2_dd_kernel_params.push_back(kparams);
         stage2_ds_level.push_back(ds_level);
 
-        // The rest of the loop body initializes PeakFindingKernelParams for this stage2 tree.
-        const DedispersionConfig::PeakFindingConfig &pfc = config.peak_finding_params.at(ds_level);
-        long tot_rank = st2.amb_rank + st2.early_dd_rank;
-        long delta_rank = st2.pri_dd_rank - st2.early_dd_rank;
-        long pf_rank = (st2.early_dd_rank + 1) / 2;
-
-        // Modify the subband_counts for the stage2 tree.
-        // (Accounts for early triggering, downsampling.)
-        vector<long> subband_counts = FrequencySubbands::early_subband_counts(config.frequency_subband_counts, delta_rank);
-        subband_counts = FrequencySubbands::rerank_subband_counts(subband_counts, pf_rank);
-
-        // Downsampling factors.
-        long ndm_in_per_out = pfc.dm_downsampling ? pfc.dm_downsampling : pow2(pf_rank);
-        long nt_in_per_out = pfc.time_downsampling ? pfc.time_downsampling : ndm_in_per_out;
-        long ndm_in_per_wt = pfc.wt_dm_downsampling;
-        long nt_in_per_wt = pfc.wt_time_downsampling;
-
-        xassert_le(ndm_in_per_wt, pow2(tot_rank));
-        xassert_le(nt_in_per_out, nt_in_per_wt);
-        xassert_le(nt_in_per_wt, st2.nt_ds);
-
         PeakFindingKernelParams pf_params;
-        pf_params.subband_counts = subband_counts;  // not config.frequency_subband_counts
+        pf_params.subband_counts = st2.frequency_subbands.subband_counts;  // not config.frequency_subband_counts
         pf_params.dtype = config.dtype;
-        pf_params.max_kernel_width = pfc.max_width;
+        pf_params.max_kernel_width = st2.pf.max_width;
         pf_params.beams_per_batch = config.beams_per_batch;
         pf_params.total_beams = config.beams_per_gpu;
-        pf_params.ndm_out = xdiv(pow2(tot_rank), ndm_in_per_out);
-        pf_params.ndm_wt = xdiv(pow2(tot_rank), ndm_in_per_wt);
+        pf_params.ndm_out = st2.ndm_out;
+        pf_params.ndm_wt = st2.ndm_wt;
+        pf_params.nt_out = st2.nt_out;
+        pf_params.nt_wt = st2.nt_wt;
         pf_params.nt_in = st2.nt_ds;
-        pf_params.nt_out = xdiv(pf_params.nt_in, nt_in_per_out);
-        pf_params.nt_wt = xdiv(pf_params.nt_in, nt_in_per_wt);
         pf_params.validate();
 
         stage2_pf_params.push_back(pf_params);
-
-        // Loose end from part 1: initialize peak-finding info in Stage2Tree.
-        FrequencySubbands fs(subband_counts);  // not config.frequency_subband_counts
-        st2.nprofiles = 1 + 3 * integer_log2(pfc.max_width);
-        st2.nsubbands = fs.F;
-        st2.nmultiplets = fs.M;
     }
 
     // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.

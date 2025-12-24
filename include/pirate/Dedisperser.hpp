@@ -172,9 +172,8 @@ struct ReferenceDedisperserBase
     ksgpu::Array<float> input_array;
 
     // Befre calling dedisperse(), caller should fill 'wt_arrays' (peak-finding weights).
-    // Shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, nsubbands)
-    //   where (ndm_wt, nt_wt) can be found in plan->stage2_pf_params[itree].
-    //   and (nprofiles, nsubbands) can be found in plan->stage2_trees[itree].
+    // Shape is (beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.F)
+    //   where t = plan->stage2_trees.at(itree).
     std::vector<ksgpu::Array<float>> wt_arrays;    // length output_ntrees
 
     // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
@@ -182,8 +181,8 @@ struct ReferenceDedisperserBase
     std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
    
     // After dedisperse() completes, peak-finding output is stored in 'out_max', 'out_argmax'.
-    // Shape is (beams_per_batch, ndm_out, nt_out)
-    //   where (ndm_out, nt_out) can be found in plan->stage2_pf_params[itree]
+    // Shape is (beams_per_batch, t.ndm_out, t.nt_out)
+    //   where t = plan->stage2_trees.at(itree).
     std::vector<ksgpu::Array<float>> out_max;     // length output_ntrees
     std::vector<ksgpu::Array<uint>> out_argmax;   // length output_ntrees
 

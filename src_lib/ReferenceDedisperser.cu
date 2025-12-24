@@ -105,7 +105,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
         long ndm_wt = plan->stage2_pf_params.at(i).ndm_wt;
         long nt_wt = plan->stage2_pf_params.at(i).nt_wt;
         long P = plan->stage2_trees.at(i).nprofiles;
-        long F = plan->stage2_trees.at(i).nsubbands;        
+        long F = plan->stage2_trees.at(i).frequency_subbands.F;        
         this->wt_arrays[i] = Array<float>({beams_per_batch, ndm_wt, nt_wt, P, F}, af_uhost | af_zero);
     }
 
@@ -220,7 +220,7 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
         bool is_downsampled = (output_ds_level[iout] > 0);
         long dd_rank = out_rank + (is_downsampled ? 1 : 0);
         long ndm_out = pf_params.ndm_out * (is_downsampled ? 2 : 1);
-        long M = plan->stage2_trees.at(iout).nmultiplets;
+        long M = plan->stage2_trees.at(iout).frequency_subbands.M;
 
         this->dedispersion_buffers.at(iout) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
         this->output_arrays.at(iout) = Array<float>({ beams_per_batch, pow2(out_rank), out_ntime }, af_uhost | af_zero);
@@ -429,7 +429,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     for (long iout = 0; iout < output_ntrees; iout++) {
         long ndm_out = plan->stage2_pf_params.at(iout).ndm_out;
         long nt_in = plan->stage2_pf_params.at(iout).nt_in;
-        long M = plan->stage2_trees.at(iout).nmultiplets;
+        long M = plan->stage2_trees.at(iout).frequency_subbands.M;
         stage2_subband_bufs.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
     }
 
@@ -560,7 +560,7 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     for (long iout = 0; iout < output_ntrees; iout++) {
         long ndm_out = plan->stage2_pf_params.at(iout).ndm_out;
         long nt_in = plan->stage2_pf_params.at(iout).nt_in;
-        long M = plan->stage2_trees.at(iout).nmultiplets;
+        long M = plan->stage2_trees.at(iout).frequency_subbands.M;
         stage2_subband_bufs.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
     }
 

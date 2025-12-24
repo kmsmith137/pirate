@@ -66,11 +66,29 @@ struct DedispersionPlan
         int early_dd_rank = 0;   // Active rank of this Stage2Tree (always <= pri_dd_rank)
         int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
 
-        // It's convenient to put some peak-finding info here.
-        // More peak-finding info is in DeispersionPlan::stage2_pf_params (Wmax, ndm_{out,wt}, nt_{in,out,wt})
-        long nprofiles = 0;      // same as PeakFindingKernel::nprofiles, equal to 1 + 3*log2(Wmax)
-        long nsubbands = 0;      // same as FrequencySubbands::F
-        long nmultiplets = 0;    // same as FrequencySubbands::M
+        // Subbands searched in this tree.
+        // Can differ from DedispersionConfig::frequency_subbands, due to early triggers and downsampling.
+        FrequencySubbands frequency_subbands;
+        
+        // Contains members: max_width, {dm,time}_downsampling, wt_{dm,time}_downsampling.
+        // Note that {dm,time}_downsampling can be 0 in the config, but are filled with nonzero values here.
+        DedispersionConfig::PeakFindingConfig pf;
+
+        // Number of time profiles used in peak-finder. (Equal to 1 + 3*log2(pf.max_width).)
+        long nprofiles = 0;
+
+        // For peak-finding array shapes.
+        // 'wt' array shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, frequency_subbands.F).
+        // 'out_max', 'out_argmax' shapes are (beams_per_batch, ndm_out, nt_out).
+        long ndm_out = 0;
+        long ndm_wt = 0;
+        long nt_out = 0;
+        long nt_wt = 0;
+
+        // Currently, these informational members are just used in print-statements.
+        double dm_min = 0.0;
+        double dm_max = 0.0;
+        double trigger_frequency = 0.0f;
     };
     
     std::vector<Stage1Tree> stage1_trees;  // length stage1_ntrees
