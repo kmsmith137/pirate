@@ -905,10 +905,10 @@ void GpuDedispersionKernel::test()
     TestArrays gpu_arrs(ti, params.dtype, true);             // on_gpu=true
 
     // Randomize (cpu_arrs.big_inbuf).
-    // FIXME ksgpu should contain a function to randomize an array.
-    Array<void> &arr = cpu_arrs.big_inbuf;
+    Array<float> arr = cpu_arrs.big_inbuf.template cast<float>();
     xassert(arr.is_fully_contiguous());
-    ksgpu::_randomize(arr.dtype, arr.data, arr.size);
+    for (long i = 0; i < arr.size; i++)
+        arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
 
     // Copy (cpu_arrs.big_inbuf) -> (gpu_arrs.big_inbuf), converting dtype if necessary.
     // FIXME ksgpu should contain a function for this.
