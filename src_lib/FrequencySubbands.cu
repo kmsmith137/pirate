@@ -3,6 +3,7 @@
 #include "../include/pirate/utils.hpp"    // integer_log2()
 
 #include <cmath>
+#include <iomanip>    // std::fixed, std::setprecision
 #include <stdexcept>
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/rand_utils.hpp>    // rand_int()
@@ -236,6 +237,40 @@ string FrequencySubbands::to_string() const
     stringstream ss;
     this->show(ss);
     return ss.str();
+}
+
+
+void FrequencySubbands::show_compact(stringstream &ss) const
+{
+    if (i_to_f.size() == 0)
+        throw runtime_error("FrequencySubbands::show_compact(): fmin/fmax must be specified at construction");
+
+    long curr_level = -1;
+    int bands_on_line = 0;
+
+    for (long f = 0; f < F; f++) {
+        long ilo = f_to_ilo.at(f);
+        long ihi = f_to_ihi.at(f);
+        long level = integer_log2(ihi-ilo);
+        double freq_lo = i_to_f.at(ihi);  // note ihi here
+        double freq_hi = i_to_f.at(ilo);  // note ilo here
+
+        if (level != curr_level) {
+            ss << "\n  pf_level=" << level << ": ";
+            bands_on_line = 0;
+        }
+        else if (bands_on_line >= 5) {
+            ss << ",\n              ";  // align with first band after "pf_level=N: "
+            bands_on_line = 0;
+        }
+        else {
+            ss << ", ";
+        }
+
+        ss << "[" << fixed << setprecision(1) << freq_lo << "," << freq_hi << "]";
+        curr_level = level;
+        bands_on_line++;
+    }
 }
 
 

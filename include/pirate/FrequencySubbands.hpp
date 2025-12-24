@@ -87,6 +87,7 @@ struct FrequencySubbands
 
     void show_token(uint token, std::ostream &os = std::cout) const;
     void show(std::ostream &os = std::cout) const;
+    void show_compact(std::stringstream &ss) const;  // requires fmin/fmax specified at construction
     std::string to_string() const;
 
     inline long m_to_ilo(int m) const { long f = m_to_f.at(m); return f_to_ilo.at(f); }

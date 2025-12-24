@@ -4,6 +4,7 @@
 #include "../include/pirate/inlines.hpp"  // align_up(), pow2(), print_kv(), Indent
 #include "../include/pirate/utils.hpp"    // bit_reverse_slow(), rb_lag()
 
+#include <sstream>
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/emitter.h>
 
@@ -379,13 +380,39 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
             << YAML::Value
             << YAML::BeginSeq;
 
-    for (const Stage2Tree &st2: this->stage2_trees) {
+    for (long tree_index = 0; tree_index < stage2_ntrees; tree_index++) {
+        const Stage2Tree &st2 = this->stage2_trees.at(tree_index);
         long delta_et = st2.pri_dd_rank - st2.early_dd_rank;
+
+        emitter << YAML::Newline;
         emitter
             << YAML::BeginMap
+            << YAML::Key << "tree_index" << YAML::Value << tree_index
             << YAML::Key << "ds_level" << YAML::Value << st2.ds_level
             << YAML::Key << "delta_et" << YAML::Value << delta_et
-            << YAML::EndMap;
+            << YAML::Key << "max_width" << YAML::Value << st2.pf.max_width
+            << YAML::Key << "dm_downsampling" << YAML::Value << st2.pf.dm_downsampling
+            << YAML::Key << "time_downsampling" << YAML::Value << st2.pf.time_downsampling
+            << YAML::Key << "wt_dm_downsampling" << YAML::Value << st2.pf.wt_dm_downsampling
+            << YAML::Key << "wt_time_downsampling" << YAML::Value << st2.pf.wt_time_downsampling;
+
+        if (verbose) {
+            const FrequencySubbands &fs = st2.frequency_subbands;
+            
+            stringstream ss;
+            ss << "At tree_index=" << tree_index << ", " << fs.F << " frequency subband(s) are searched:\n";
+            fs.show_compact(ss);
+            emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) 
+                    << YAML::Newline << YAML::Newline;
+        }
+
+        emitter << YAML::Key << "frequency_subband_counts"
+                << YAML::Value << YAML::Flow << YAML::BeginSeq;
+        for (long n: st2.frequency_subbands.subband_counts)
+            emitter << n;
+        emitter << YAML::EndSeq;
+
+        emitter << YAML::EndMap;
     }
 
     emitter << YAML::EndSeq;

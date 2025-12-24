@@ -604,9 +604,10 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     // ---- Frequency subbands ----
 
     if (verbose) {
-        // Show list of frequency subbands, similar to FrequencySubbands::show()
-        // but without mlo,mhi,ilo,ihi info.
-        FrequencySubbands fs(frequency_subband_counts);
+        double flo = zone_freq_edges.front();
+        double fhi = zone_freq_edges.back();
+
+        FrequencySubbands fs(frequency_subband_counts, flo, fhi);
         stringstream ss;
 
         ss << "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
@@ -615,34 +616,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
            << "For a tool for composing frequency_subband_counts, see 'python -m pirate_frb show_subbands --help'.\n"
            << "In this config, " << fs.F << " frequency subband(s) are searched:";
 
-        long curr_level = -1;
-        int bands_on_line = 0;
-
-        for (long f = 0; f < fs.F; f++) {
-            long ilo = fs.f_to_ilo.at(f);
-            long ihi = fs.f_to_ihi.at(f);
-            long level = integer_log2(ihi-ilo);
-            long delay_lo = pow2(tree_rank - fs.pf_rank) * ilo;
-            long delay_hi = pow2(tree_rank - fs.pf_rank) * ihi;
-            float freq_lo = this->delay_to_frequency(delay_hi);  // note delay_hi here
-            float freq_hi = this->delay_to_frequency(delay_lo);  // note delay_lo here
-
-            if (level != curr_level) {
-                ss << "\n  pf_level=" << level << ": ";
-                bands_on_line = 0;
-            }
-            else if (bands_on_line >= 5) {
-                ss << ",\n              ";  // align with first band after "pf_level=N: "
-                bands_on_line = 0;
-            }
-            else {
-                ss << ", ";
-            }
-
-            ss << "[" << fixed << setprecision(1) << freq_lo << "," << freq_hi << "]";
-            curr_level = level;
-            bands_on_line++;
-        }
+        fs.show_compact(ss);
 
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline << YAML::Newline;
     }
