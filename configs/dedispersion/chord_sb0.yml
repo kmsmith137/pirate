@@ -1,6 +1,7 @@
 # A simple frequency upchannelization scheme, will revisit later (28160 freq channels total).
 zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 zone_nfreq: [ 8192, 8192, 6144, 2048, 3584 ]   # U = 32,16,8,4,1
+time_sample_ms: 1.0
 
 # Let's try to use rank=16 in CHORD.
 tree_rank: 16

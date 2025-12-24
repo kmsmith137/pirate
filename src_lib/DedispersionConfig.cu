@@ -2,6 +2,7 @@
 
 #include <cstring>                 // strlen()
 #include <algorithm>               // std::sort()
+#include <iomanip>                 // std::fixed, std::setprecision
 
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/xassert.hpp>
@@ -227,6 +228,28 @@ float DedispersionConfig::frequency_to_delay(float f) const
     return ntree * (d-dhi) / (dlo-dhi);
 }
 
+double DedispersionConfig::dm_per_unit_delay() const
+{
+    // Returns the DM (in pc cm^{-3}) whose dispersion delay across the full band
+    // equals one time sample.
+    
+    xassert(zone_freq_edges.size() >= 2);
+
+    double f_lo = zone_freq_edges.front();  // MHz
+    double f_hi = zone_freq_edges.back();   // MHz
+
+    xassert(f_lo > 0.0);
+    xassert(f_lo < f_hi);
+    
+    double inv_f_lo_sq = 1.0 / (f_lo * f_lo);
+    double inv_f_hi_sq = 1.0 / (f_hi * f_hi);
+
+    // Delay = K_DM * DM * (f_lo^{-2} - f_hi^{-2})
+    // where K_DM = 4.148808 ms MHz^2 (with DM in pc cm^{-3})
+    double K_DM = 4.148808e6;
+    return time_sample_ms / (K_DM * (inv_f_lo_sq - inv_f_hi_sq));
+}
+
 
 Array<float> DedispersionConfig::make_channel_map() const
 {
@@ -332,6 +355,7 @@ void DedispersionConfig::validate() const
     xassert(tree_rank > 0);
     xassert(num_downsampling_levels > 0);
     xassert(time_samples_per_chunk > 0);
+    xassert(time_sample_ms > 0);
     xassert(beams_per_gpu > 0);
     xassert(beams_per_batch > 0);
     xassert(num_active_batches > 0);
@@ -429,6 +453,7 @@ void DedispersionConfig::print(ostream &os, int indent) const
 {
     print_kv("zone_nfreq", ksgpu::tuple_str(zone_nfreq), os, indent);
     print_kv("zone_freq_edges", ksgpu::tuple_str(zone_freq_edges), os, indent);
+    print_kv("time_sample_ms", time_sample_ms, os, indent);
     print_kv("tree_rank", tree_rank, os, indent);
     print_kv("num_downsampling_levels", num_downsampling_levels, os, indent);
     print_kv("time_samples_per_chunk", time_samples_per_chunk, os, indent);
@@ -478,9 +503,12 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         emitter << YAML::Newline << YAML::Comment(
             "Frequency channels. The observed frequency band is divided into \"zones\".\n"
             "Within each zone, all frequency channels have the same width, but the\n"
-            "channel width may differ between zones. For example:\n"
-            "  zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N)\n"
-            "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) in lower/upper band"
+            "channel width may differ between zones.\n"
+            "  zone_nfreq: number of frequency channels in each zone.\n"
+            "  zone_freq_edges: frequency band edges in MHz.\n"
+            "For example:\n"
+            "  zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz\n"
+            "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band"
         );
 
         stringstream ss;
@@ -501,8 +529,6 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         emitter << n;
     emitter << YAML::EndSeq;
 
-    if (verbose)
-        emitter << YAML::Newline;
 
     emitter << YAML::Key << "zone_freq_edges"
             << YAML::Value << YAML::Flow << YAML::BeginSeq;
@@ -510,24 +536,36 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         emitter << f;
     emitter << YAML::EndSeq;
 
+    if (verbose)
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment("Time sample length in milliseconds.");
+
+    emitter << YAML::Key << "time_sample_ms" << YAML::Value << time_sample_ms;
+
     // ---- Core dedispersion parameters ----
 
     if (verbose) {
-        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "Core dedispersion parameters.\n"
-            "The number of \"tree\" channels is ntree = 2^tree_rank.\n"
-            "The first tree searches to dispersion delay given by 2^tree_rank time samples.\n"
-            "Downsampled trees (0 < ds < num_downsampling_levels) downsample in time by 2^ds,\n"
-            "then search delay range 2^(tree_rank+ds-1) <= delay <= 2^(tree_rank+ds)."
-        ) << YAML::Newline;
+        double dm_per_delay = this->dm_per_unit_delay();
+        
+        stringstream ss;
+        ss << "Core dedispersion parameters.\n";
+        ss << "The number of \"tree\" channels is ntree = 2^tree_rank.\n";
+        ss << "The first tree (ds=0) searches delay range [0, 2^tree_rank] time samples.\n";
+        ss << "Downsampled trees (ds > 0) downsample in time by 2^ds, to search beyond the diagonal DM\n";
+        ss << "In this config, the following DM ranges are searched at each downsampling level:";
+        
+        for (long ds = 0; ds < num_downsampling_levels; ds++) {
+            long delay_lo = (ds == 0) ? 0 : pow2(tree_rank + ds - 1);
+            long delay_hi = pow2(tree_rank + ds);
+            double dm_lo = delay_lo * dm_per_delay;
+            double dm_hi = delay_hi * dm_per_delay;
+            ss << "\n  ds=" << ds << ": DM in [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
+        }
+        
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) << YAML::Newline;
     }
 
-    emitter << YAML::Key << "tree_rank" << YAML::Value << tree_rank;
-
-    if (verbose)
-        emitter << YAML::Newline;
-
-    emitter << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels;
+    emitter << YAML::Newline << YAML::Key << "tree_rank" << YAML::Value << tree_rank
+            << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels;
 
     if (verbose)
         emitter << YAML::Newline;
@@ -568,13 +606,40 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     // ---- Frequency subbands ----
 
     if (verbose) {
-        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
-            "This is a length-(pf_rank+1) vector containing the number of frequency subbands at each level.\n"
-            "Must satisfy subband_counts[pf_rank] = 1.\n"
-            "To disable subbands and only search the full frequency band, set to [1].\n"
-            "For more info, see 'python -m pirate_frb show_subbands --help'."
-        ) << YAML::Newline;
+        // Show list of frequency subbands, similar to FrequencySubbands::show()
+        // but without mlo,mhi,ilo,ihi info.
+        FrequencySubbands fs(frequency_subband_counts);
+        stringstream ss;
+
+        ss << "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
+           << "This is a length-(pf_rank+1) vector containing the number of frequency subbands at each level.\n"
+           << "To disable subbands and only search the full frequency band, set to [1].\n"
+           << "For a tool for composing frequency_subband_counts, see 'python -m pirate_frb show_subbands --help'.\n"
+           << "In this config, " << fs.F << " frequency subband(s) are searched:";
+
+        long curr_level = -1;
+
+        for (long f = 0; f < fs.F; f++) {
+            long ilo = fs.f_to_ilo.at(f);
+            long ihi = fs.f_to_ihi.at(f);
+            long level = integer_log2(ihi-ilo);
+            long delay_lo = pow2(tree_rank - fs.pf_rank) * ilo;
+            long delay_hi = pow2(tree_rank - fs.pf_rank) * ihi;
+            float freq_lo = this->delay_to_frequency(delay_hi);  // note delay_hi here
+            float freq_hi = this->delay_to_frequency(delay_lo);  // note delay_lo here
+
+            if (level != curr_level)
+                ss << "\n  pf_level=" << level << ": ";
+            else
+                ss << ", ";
+
+            ss << "[" << fixed << setprecision(1) << freq_lo << "," << freq_hi << "]";
+            curr_level = level;
+        }
+
+        // ss << "\nF=" << fs.F << "  # number of distinct frequency subbands";
+        // ss << "\nM=" << fs.M << "  # number of \"multiplets\", i.e. (frequency_subband, fine_grained_dm) pairs";
+        emitter << YAML::Newline << YAML::Comment(ss.str());
     }
 
     emitter << YAML::Key << "frequency_subband_counts"
@@ -672,6 +737,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 
     ret.zone_nfreq = f.get_vector<long> ("zone_nfreq");
     ret.zone_freq_edges = f.get_vector<double> ("zone_freq_edges");
+    ret.time_sample_ms = f.get_scalar<float> ("time_sample_ms");
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
     ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
@@ -787,6 +853,9 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.zone_nfreq = rand_int_vec(nzones, zone_nfreq_min, zone_nfreq_max);
     ret.zone_freq_edges = rand_uniform_vec(nzones+1, 200.0, 2000.0);
     std::sort(ret.zone_freq_edges.begin(), ret.zone_freq_edges.end());
+
+    // Sample time.
+    ret.time_sample_ms = rand_uniform(1.0, 10.0);
 
     // Choose ret.num_downsampling_levels and my_keys[1:].
 

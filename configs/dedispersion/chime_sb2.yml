@@ -1,5 +1,6 @@
 zone_nfreq: [16384]
 zone_freq_edges: [400, 800]
+time_sample_ms: 1.0
 tree_rank: 15
 num_downsampling_levels: 4
 time_samples_per_chunk: 2048

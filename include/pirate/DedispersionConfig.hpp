@@ -28,7 +28,10 @@ struct DedispersionConfig
     //   zone_nfreq = {2*N,N}  zone_freq_edges={400,600,800}  width (100/N), (200/N) in lower/upper band
 
     std::vector<long> zone_nfreq;         // length (nzones)
-    std::vector<double> zone_freq_edges;  // length (nzones+1), monotone increasing.
+    std::vector<double> zone_freq_edges;  // length (nzones+1), monotone increasing, in MHz.
+
+    // Time sample length in milliseconds.
+    float time_sample_ms = 0.0f;
 
     // Core dedispersion parameters.
     // The number of "tree" channels is ntree = 2^tree_rank.
@@ -137,6 +140,11 @@ struct DedispersionConfig
     // Valid delay range is [0, 2^tree_rank], valid frequency range is [flo, fhi].
     float delay_to_frequency(float delay) const;
     float frequency_to_delay(float f) const;
+
+    // Returns the DM (in standard units, pc cm^{-3}) of an FRB whose dispersion delay
+    // across the full band (zone_freq_edges.front() < f < zone_freq_edges.back()) is
+    // equal to one time sample.
+    double dm_per_unit_delay() const;
 
     // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
     long get_total_nfreq() const;
