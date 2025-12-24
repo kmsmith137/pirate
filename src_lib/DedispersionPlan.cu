@@ -383,22 +383,71 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
     for (long tree_index = 0; tree_index < stage2_ntrees; tree_index++) {
         const Stage2Tree &st2 = this->stage2_trees.at(tree_index);
         long delta_et = st2.pri_dd_rank - st2.early_dd_rank;
+        double time_sample_ms = config.time_sample_ms;
+        double ds_factor = pow2(st2.ds_level);
 
         emitter << YAML::Newline;
-        emitter
-            << YAML::BeginMap
-            << YAML::Key << "tree_index" << YAML::Value << tree_index
-            << YAML::Key << "ds_level" << YAML::Value << st2.ds_level
-            << YAML::Key << "delta_et" << YAML::Value << delta_et
-            << YAML::Key << "max_width" << YAML::Value << st2.pf.max_width
-            << YAML::Key << "dm_downsampling" << YAML::Value << st2.pf.dm_downsampling
-            << YAML::Key << "time_downsampling" << YAML::Value << st2.pf.time_downsampling
-            << YAML::Key << "wt_dm_downsampling" << YAML::Value << st2.pf.wt_dm_downsampling
-            << YAML::Key << "wt_time_downsampling" << YAML::Value << st2.pf.wt_time_downsampling;
+        emitter << YAML::BeginMap;
+
+        emitter << YAML::Key << "tree_index" << YAML::Value << tree_index;
+
+        emitter << YAML::Key << "ds_level" << YAML::Value << st2.ds_level;
+        if (verbose) {
+            stringstream ss;
+            ss << "sample_ms = " << (time_sample_ms * ds_factor)
+               << ", DM range [" << st2.dm_min << ", " << st2.dm_max << "]";
+            emitter << YAML::Comment(ss.str());
+        }
+
+        emitter << YAML::Key << "delta_et" << YAML::Value << delta_et;
+        if (verbose) {
+            stringstream ss;
+            ss << (delta_et > 0 ? "early" : "non-early")
+               << " trigger at " << st2.trigger_frequency << " MHz";
+            emitter << YAML::Comment(ss.str());
+        }
+
+        emitter << YAML::Key << "max_width" << YAML::Value << st2.pf.max_width;
+        if (verbose) {
+            stringstream ss;
+            ss << (st2.pf.max_width * ds_factor * time_sample_ms) << " ms";
+            emitter << YAML::Comment(ss.str());
+        }
+
+        emitter << YAML::Key << "dm_downsampling" << YAML::Value << st2.pf.dm_downsampling;
+        if (verbose && (st2.ds_level > 0)) {
+            stringstream ss;
+            ss << (st2.pf.dm_downsampling * ds_factor) << " before downsampling";
+            emitter << YAML::Comment(ss.str());
+        }
+
+        emitter << YAML::Key << "time_downsampling" << YAML::Value << st2.pf.time_downsampling;
+        if (verbose && (st2.ds_level > 0)) {
+            stringstream ss;
+            ss << (st2.pf.time_downsampling * ds_factor) << " before downsampling";
+            emitter << YAML::Comment(ss.str());
+        }
+
+        emitter << YAML::Key << "wt_dm_downsampling" << YAML::Value << st2.pf.wt_dm_downsampling;
+        if (verbose && (st2.ds_level > 0)) {
+            stringstream ss;
+            ss << (st2.pf.wt_dm_downsampling * ds_factor) << " before downsampling";
+            emitter << YAML::Comment(ss.str());
+        }
+
+        emitter << YAML::Key << "wt_time_downsampling" << YAML::Value << st2.pf.wt_time_downsampling;
+        if (verbose && (st2.ds_level > 0)) {
+            stringstream ss;
+            ss << (st2.pf.wt_time_downsampling * ds_factor) << " before downsampling";
+            emitter << YAML::Comment(ss.str());
+        }
 
         if (verbose) {
             const FrequencySubbands &fs = st2.frequency_subbands;
             
+            // Note: the multiline comment starting with "# At tree_index=..." is indented
+            // by a Python post-processing hack in pirate_frb/__main__.py (show_dedisperser).
+            // If you change the format of this comment, update the Python code accordingly!
             stringstream ss;
             ss << "At tree_index=" << tree_index << ", " << fs.F << " frequency subband(s) are searched:\n";
             fs.show_compact(ss);

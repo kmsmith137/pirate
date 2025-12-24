@@ -476,6 +476,28 @@ def print_separator(label):
     sys.stdout.flush()
 
 
+def indent_multiline_comments(yaml_str):
+    """
+    Hack to indent multiline comments in YAML output from DedispersionPlan::to_yaml().
+    
+    yaml-cpp doesn't support indented comments, so we post-process the output to indent
+    multiline comments that start with "# At tree_index=..." by 4 spaces.
+    """
+    import re
+    
+    def indent_comment_block(match):
+        # Indent each line of the comment block by 4 spaces
+        lines = match.group(0).split('\n')
+        indented = '\n'.join('    ' + line for line in lines)
+        return indented
+    
+    # Match multiline comments starting with "# At tree_index=" and continuing until
+    # a non-comment line (or end of string). Each line in the block starts with "#".
+    pattern = r'^# At tree_index=.*?(?=\n[^#\n]|\n\n|\Z)'
+    
+    return re.sub(pattern, indent_comment_block, yaml_str, flags=re.MULTILINE | re.DOTALL)
+
+
 def parse_show_dedisperser(subparsers):
     parser = subparsers.add_parser("show_dedisperser", help="Parse a dedisperser config file and write YAML to stdout")
     parser.add_argument('config_file', help="Path to YAML config file")
@@ -493,7 +515,10 @@ def show_dedisperser(args):
     if not args.config_only:
         print_separator('DedispersionPlan starts here')
         plan = pirate_pybind11.DedispersionPlan(config)
-        print(plan.to_yaml_string(args.verbose))
+        plan_yaml = plan.to_yaml_string(args.verbose)
+        if args.verbose:
+            plan_yaml = indent_multiline_comments(plan_yaml)
+        print(plan_yaml)
 
     if args.channel_map:
         print_separator('Channel map starts here')
