@@ -1,6 +1,7 @@
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
+#include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
@@ -26,6 +27,21 @@ static DedispersionPlan *deref(const shared_ptr<DedispersionPlan> &p)
     if (!p)
         throw runtime_error("GpuDedisperser constructor called with empty shared_ptr");
     return p.get();
+}
+
+// Helper for GpuDedisperser constructor.
+// Concatenate scalar + vector.
+template<typename T>
+static inline vector<T> svcat(const T &s, const vector<T> &v)
+{
+    long n = v.size();
+    vector<T> ret(n+1);
+
+    ret[0] = s;
+    for (long i = 0; i < n; i++)
+        ret[i+1] = v[i];
+
+    return ret;
 }
 
 
@@ -56,19 +72,9 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     long nbits_per_segment = plan->nelts_per_segment * dtype.nbits;
     xassert_eq(nbits_per_segment, 8 * constants::bytes_per_gpu_cache_line);  // currently assumed in a few places
     
-    // Construct, but do not allocate, the following members:
-    //
-    //   std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
-    //   std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
-    //   std::shared_ptr<GpuTreeGriddingKernel> tree_gridding_kernel;
-    //   std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
-    //   std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
-    //   std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
     
-    for (long i = 0; i < nstreams; i++) {
+    for (long i = 0; i < nstreams; i++)
         stage1_dd_bufs.push_back(DedispersionBuffer(plan->stage1_dd_buf_params));
-        stage2_dd_bufs.push_back(DedispersionBuffer(plan->stage2_dd_buf_params));
-    }
 
     // Create tree gridding kernel using plan parameters.
     this->tree_gridding_kernel = make_shared<GpuTreeGriddingKernel> (plan->tree_gridding_kernel_params);
@@ -80,15 +86,26 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         this->bw_per_launch += kernel->bw_per_launch;
     }
 
-    for (const DedispersionKernelParams &kparams: plan->stage2_dd_kernel_params) {
-        auto kernel = make_shared<GpuDedispersionKernel> (kparams);
-        this->stage2_dd_kernels.push_back(kernel);
-        this->bw_per_launch += kernel->bw_per_launch;
+    for (long itree = 0; itree < output_ntrees; itree++) {
+        const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(itree);
+        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
+        auto cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
+        this->cdd2_kernels.push_back(cdd2_kernel);
+        // this->bw_per_launch += cdd2_kernel->bw_per_launch;
     }
 
     this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);
     this->g2g_copy_kernel = make_shared<GpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
+
+    for (long itree = 0; itree < output_ntrees; itree++) {
+        const vector<long> &shape = cdd2_kernels.at(itree)->expected_wt_shape;
+        const vector<long> &strides = cdd2_kernels.at(itree)->expected_wt_strides;
+
+        // "Extended" shapes with a stream axis added.
+        this->extended_wt_shapes.push_back(svcat(nstreams, shape));
+        this->extended_wt_strides.push_back(svcat(shape[0] * strides[0], strides));
+    }
 
     this->bw_per_launch += lds_kernel->bw_per_launch;
 }
@@ -105,16 +122,28 @@ void GpuDedisperser::allocate()
 
     for (auto &buf: stage1_dd_bufs)
         buf.allocate(af_zero | af_gpu);
-    
-    for (auto &buf: stage2_dd_bufs)
-        buf.allocate(af_zero | af_gpu);
+
+    // wt_arrays
+    for (long itree = 0; itree < output_ntrees; itree++) {
+        const vector<long> &shape = extended_wt_shapes.at(itree);
+        const vector<long> &strides = extended_wt_strides.at(itree);
+        wt_arrays.push_back(Array<void> (dtype, shape, strides, af_gpu | af_zero));
+    }
+
+    // out_max, out_argmax
+    for (long itree = 0; itree < output_ntrees; itree++) {
+        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(itree);
+        std::initializer_list<long> shape = { nstreams, beams_per_batch, st2.ndm_out, st2.nt_out };
+        out_max.push_back(Array<void> (dtype, shape, af_gpu | af_zero));
+        out_argmax.push_back(Array<uint> (shape, af_gpu | af_zero));
+    }
 
     this->tree_gridding_kernel->allocate();
     
     for (auto &kernel: this->stage1_dd_kernels)
         kernel->allocate();
     
-    for (auto &kernel: this->stage2_dd_kernels)
+    for (auto &kernel: this->cdd2_kernels)
         kernel->allocate();
 
     this->gpu_ringbuf = Array<void>(dtype, { gpu_ringbuf_nelts }, af_gpu | af_zero);
@@ -219,16 +248,14 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
         CUDA_CALL(cudaMemcpyAsync(hp + hdst*m, xp + xsrc*m, n, cudaMemcpyDeviceToHost, stream));
     }
     
-    // Step 5: run stage2 dedispersion kernels (input from ringbuf)
-    for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
-        shared_ptr<GpuDedispersionKernel> kernel = stage2_dd_kernels.at(i);
-        const DedispersionKernelParams &kp = kernel->params;
-        Array<void> dd_buf = stage2_dd_bufs.at(istream).bufs.at(i);
+    // Step 5: run cdd2 kernels (input from ringbuf)
+    for (long itree = 0; itree < output_ntrees; itree++) {
+        Array<void> slice_max = out_max.at(itree).slice(0,istream);
+        Array<uint> slice_argmax = out_argmax.at(itree).slice(0,istream);
+        Array<void> slice_wt = wt_arrays.at(itree).slice(0,istream);
 
-        // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
-        dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
-        dd_buf = dd_buf.transpose({0,2,1,3});
-        kernel->launch(this->gpu_ringbuf, dd_buf, ichunk, ibatch, stream);
+        shared_ptr<CoalescedDdKernel2> cdd2_kernel = cdd2_kernels.at(itree);
+        cdd2_kernel->launch(slice_max, slice_argmax, this->gpu_ringbuf, slice_wt, ichunk, ibatch, stream);
     }
 }
 
@@ -287,7 +314,15 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     // freely mix operations such as Array::to_gpu() which use the default stream.
     xassert(nstreams == 1);
     
+    shared_ptr<GpuDedisperser> gdd;
+
+    if (!host_only) {
+        gdd = make_shared<GpuDedisperser> (plan);
+        gdd->allocate();
+    }
+
     // Some initializations:
+    //   Dcore: taken from GPU kernel, passed to reference kernel
     //   pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
     //   subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
     //   ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
@@ -302,29 +337,18 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
         long F = st2.frequency_subbands.F;
 
-        // Logic to initialize Dcore is currently a placeholder.
-        Dcore.at(itree) = st2.pf.time_downsampling;  // Dout
-
+        Dcore.at(itree) = host_only ? st2.pf.time_downsampling : gdd->cdd2_kernels.at(itree)->Dcore;
         pf_tmp.at(itree) = Array<float> ({beams_per_batch, pf_params.ndm_out, pf_params.nt_out}, af_uhost | af_zero);
-
-        // Init subband_variances (used in ReferencePeakFindingKernel::make_random_weights()).
+        ref_kernels_for_weights.at(itree) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
         subband_variances.at(itree) = Array<float> ({F}, af_uhost | af_zero);
+
         for (long f = 0; f < F; f++)
             subband_variances.at(itree).at({f}) = variance_upper_bound(plan, itree, f);
-
-        ref_kernels_for_weights.at(itree) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
     }
 
     shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, Dcore, 0);
     shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, Dcore, 1);
     shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, Dcore, 2);
-
-    shared_ptr<GpuDedisperser> gdd;
-
-    if (!host_only) {
-        gdd = make_shared<GpuDedisperser> (plan);
-        gdd->allocate();
-    }
 
     for (int ichunk = 0; ichunk < nchunks; ichunk++) {
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
@@ -378,14 +402,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 assert_arrays_equal(rdd0_out, rdd1_out, "dd_ref0", "dd_ref1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
                 assert_arrays_equal(rdd0_out, rdd2_out, "dd_ref0", "dd_ref2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
 
-                if (!host_only) {
-                    const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
-                    assert_arrays_equal(rdd0_out, gdd_out, "dd_ref0", "dd_gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
-                }
-
                 // Compare peak-finding 'out_max'.
                 assert_arrays_equal(rdd0->out_max.at(iout), rdd1->out_max.at(iout), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
-                assert_arrays_equal(rdd1->out_max.at(iout), rdd2->out_max.at(iout), "pfmax_ref1", "pfmax_ref2", {"beam","pfdm","pft"});
+                assert_arrays_equal(rdd0->out_max.at(iout), rdd2->out_max.at(iout), "pfmax_ref0", "pfmax_ref2", {"beam","pfdm","pft"});
+                assert_arrays_equal(rdd0->out_max.at(iout), gdd->out_max.at(iout), "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
 
                 // To check 'out_argmax', we need to jump through some hoops.
                 shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd0->pf_kernels.at(iout);
@@ -395,6 +415,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 
                 pf_kernel->eval_tokens(pf_tmp.at(iout), rdd2->out_argmax.at(iout), rdd0->wt_arrays.at(iout));
                 assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_ref2", {"beam","pfdm","pft"});
+
+                Array<uint> gpu_tokens = gdd->out_argmax.at(iout).to_host();
+                pf_kernel->eval_tokens(pf_tmp.at(iout), gpu_tokens, rdd0->wt_arrays.at(iout));
+                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"});
             }
         }
     }

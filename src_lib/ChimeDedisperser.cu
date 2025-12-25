@@ -67,7 +67,7 @@ void ChimeDedisperser::initialize()
     // Total (i.e. src+dst) extra elements (not bytes) per batch.
     long extra_nelts = config.beams_per_batch * nfreq * config.time_samples_per_chunk;
     extra_nelts += dedisperser->stage1_dd_bufs[0].get_nelts();  // includes factor 'beams_per_batch'
-    extra_nelts += dedisperser->stage2_dd_bufs[0].get_nelts();  // includes factor 'beams_per_batch'
+    // extra_nelts += dedisperser->stage2_dd_bufs[0].get_nelts();  // includes factor 'beams_per_batch'
 
     // "One-sided" (i.e. src or dst only) extra bytes (not elements) per batch
     this->extra_nbytes_per_batch = align_up((extra_nelts * config.dtype.nbits) / (2*8), 256);

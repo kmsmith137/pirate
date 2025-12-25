@@ -402,6 +402,10 @@ void ReferencePeakFindingKernel::eval_tokens(Array<float> &out_max, const Array<
     xassert_shape_eq(wt, ({B, params.ndm_wt, params.nt_wt, P, F}));
     xassert(wt.get_ncontig() >= 2);  // (p,f) must be contiguous
 
+    xassert(out_max.on_host());
+    xassert(in_tokens.on_host());
+    xassert(wt.on_host());
+
     // Loop are over elements of (b,d,tout) of the 'out_max' and 'in_tokens' arrays.
     for (long b = 0; b < B; b++) {
         for (long d = 0; d < D; d++) {

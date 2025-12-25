@@ -25,6 +25,7 @@ struct GpuRingbufCopyKernel;          // defined in RingbufCopyKernel.hpp
 struct ReferenceTreeGriddingKernel;   // defined in TreeGriddingKernel.hpp
 struct GpuTreeGriddingKernel;         // defined in TreeGriddingKernel.hpp
 struct ReferencePeakFindingKernel;    // defined in PeakFindingKernel.hpp
+struct CoalescedDdKernel2;            // defined in CoalescedDdKernel2.hpp
 
 
 // -------------------------------------------------------------------------------------------------
@@ -59,23 +60,40 @@ struct GpuDedisperser
     std::vector<long> output_ds_level;  // length output_ntrees
 
     // "outer" vector has length nstreams
-    // "inner" array has shape (beams_per_batch, nfreq, ntime), uses config.dtype
-    std::vector<ksgpu::Array<void>> input_arrays;
-    
+    // "inner" array shape (beams_per_batch, nfreq, ntime)
+    std::vector<ksgpu::Array<void>> input_arrays;    // config.dtype
+
+    // "outer" vector has length ntrees
+    // "inner" array shape = this->extended_wt_shapes[itree], see below
+    std::vector<ksgpu::Array<void>> wt_arrays;
+
+    // "outer" vector has length ntrees
+    // "inner" array shape (nstreams, beams_per_batch, t.ndm_out, t.nt_out)
+    //    where t= plan->stage2_trees.at(itree)
+    std::vector<ksgpu::Array<void>> out_max;     // config.dtype
+    std::vector<ksgpu::Array<uint>> out_argmax;  // uint dtype
+
     std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
-    std::vector<DedispersionBuffer> stage2_dd_bufs;  // length nstreams
     
     ksgpu::Array<void> gpu_ringbuf;
     ksgpu::Array<void> host_ringbuf;
 
     std::shared_ptr<GpuTreeGriddingKernel> tree_gridding_kernel;
     std::vector<std::shared_ptr<GpuDedispersionKernel>> stage1_dd_kernels;
-    std::vector<std::shared_ptr<GpuDedispersionKernel>> stage2_dd_kernels;
+    std::vector<std::shared_ptr<CoalescedDdKernel2>> cdd2_kernels;
     std::shared_ptr<GpuLaggedDownsamplingKernel> lds_kernel;
     std::shared_ptr<GpuRingbufCopyKernel> g2g_copy_kernel;
     std::shared_ptr<CpuRingbufCopyKernel> h2h_copy_kernel;
 
     bool is_allocated = false;
+
+    // Peak-finding weights use a complicated GPU memory layout.
+    // The helper class 'GpuPfWeightLayout' is intended to hide the details.
+    // We have one GpuPfWeightLayout per output tree: cdd2_kernels[itree]->pf_weight_layout.
+    // The shape for one beam batch is here: cdd2_kernels[itree]->expected_wt_shape.
+    // The "extended" shapes below adds an outer length-nstreams index.
+    std::vector<std::vector<long>> extended_wt_shapes;   // length output_ntrees
+    std::vector<std::vector<long>> extended_wt_strides;  // length output_ntrees
 
     // Bandwidth per call to GpuDedisperser::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
@@ -182,7 +200,7 @@ struct ReferenceDedisperserBase
    
     // After dedisperse() completes, peak-finding output is stored in 'out_max', 'out_argmax'.
     // Shape is (beams_per_batch, t.ndm_out, t.nt_out)
-    //   where t = plan->stage2_trees.at(itree).
+    //   where t = plan->stage2_trees.at(itree)
     std::vector<ksgpu::Array<float>> out_max;     // length output_ntrees
     std::vector<ksgpu::Array<uint>> out_argmax;   // length output_ntrees
 
