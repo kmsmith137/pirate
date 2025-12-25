@@ -498,6 +498,63 @@ def indent_multiline_comments(yaml_str):
     return re.sub(pattern, indent_comment_block, yaml_str, flags=re.MULTILINE | re.DOTALL)
 
 
+def align_inline_comments(yaml_str):
+    """
+    Horizontally align inline comments within blocks of consecutive lines.
+    
+    A "block" is a sequence of consecutive lines where each line contains both
+    non-comment text AND an inline comment. Empty lines, lines that are entirely
+    comments (no preceding text), or lines without comments start a new block.
+    
+    Within each block, comments are padded to align at the same column.
+    """
+    import re
+    
+    lines = yaml_str.split('\n')
+    result = []
+    
+    # Pattern to match a line with non-comment text followed by a comment
+    # Captures: (text before comment, comment including #)
+    inline_comment_pattern = re.compile(r'^([^#\n]+?)\s*(#.*)$')
+    
+    i = 0
+    while i < len(lines):
+        # Try to collect a block of lines with inline comments
+        block = []
+        block_indices = []
+        
+        while i < len(lines):
+            line = lines[i]
+            match = inline_comment_pattern.match(line)
+            
+            if match:
+                # Line has non-comment text + inline comment
+                text_part = match.group(1).rstrip()
+                comment_part = match.group(2)
+                block.append((text_part, comment_part))
+                block_indices.append(i)
+                i += 1
+            else:
+                # Line doesn't match pattern - ends the block
+                break
+        
+        if len(block) > 0:
+            # Align comments in this block
+            max_text_len = max(len(text) for text, _ in block)
+            
+            for idx, (text, comment) in zip(block_indices, block):
+                # Pad text to align comments, with 2 spaces before comment
+                padded_line = text.ljust(max_text_len) + '  ' + comment
+                result.append(padded_line)
+        
+        # Add the non-matching line (if any) that ended the block
+        if i < len(lines):
+            result.append(lines[i])
+            i += 1
+    
+    return '\n'.join(result)
+
+
 def parse_show_dedisperser(subparsers):
     parser = subparsers.add_parser("show_dedisperser", help="Parse a dedisperser config file and write YAML to stdout")
     parser.add_argument('config_file', help="Path to YAML config file")
@@ -510,7 +567,10 @@ def show_dedisperser(args):
     config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file)
     config.test()   # I decided to run the unit tests here, since they're very fast!
     
-    print(config.to_yaml_string(args.verbose))
+    config_yaml = config.to_yaml_string(args.verbose)
+    if args.verbose:
+        config_yaml = align_inline_comments(config_yaml)
+    print(config_yaml)
     
     if not args.config_only:
         print_separator('DedispersionPlan starts here')
@@ -518,6 +578,7 @@ def show_dedisperser(args):
         plan_yaml = plan.to_yaml_string(args.verbose)
         if args.verbose:
             plan_yaml = indent_multiline_comments(plan_yaml)
+            plan_yaml = align_inline_comments(plan_yaml)
         print(plan_yaml)
 
     if args.channel_map:
