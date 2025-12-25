@@ -97,7 +97,7 @@ vector<long> GpuPfWeightLayout::get_strides(long nbeams, long ndm_wt, long nt_wt
     return { ndm_wt*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
 }
 
-Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src)
+Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
 {
     this->validate();
     

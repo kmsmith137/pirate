@@ -356,9 +356,19 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
             for (int itree = 0; itree < plan->stage2_ntrees; itree++) {
                 Array<float> sbv = subband_variances.at(itree);
                 Array<float> wt_cpu = ref_kernels_for_weights.at(itree)->make_random_weights(sbv);
+
                 rdd0->wt_arrays.at(itree).fill(wt_cpu);
                 rdd1->wt_arrays.at(itree).fill(wt_cpu);
                 rdd2->wt_arrays.at(itree).fill(wt_cpu);
+
+                if (!host_only) {
+                    const GpuPfWeightLayout &wl = gdd->cdd2_kernels.at(itree)->pf_weight_layout;
+                    Array<void> wt_gpu = gdd->wt_arrays.at(itree).slice(0,0);  // FIXME istream=0 assumed
+
+                    // FIXME extra copy here (+ another extra copy "hidden" in GpuPfWeightLayout::to_gpu())
+                    Array<void> tmp = wl.to_gpu(wt_cpu);
+                    wt_gpu.fill(tmp);
+                }
             }
 
             // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
@@ -403,9 +413,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 assert_arrays_equal(rdd0_out, rdd2_out, "dd_ref0", "dd_ref2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
 
                 // Compare peak-finding 'out_max'.
+                Array<void> gdd_max = gdd->out_max.at(iout).slice(0,0);  // FIXME istream=0 assumed
                 assert_arrays_equal(rdd0->out_max.at(iout), rdd1->out_max.at(iout), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
                 assert_arrays_equal(rdd0->out_max.at(iout), rdd2->out_max.at(iout), "pfmax_ref0", "pfmax_ref2", {"beam","pfdm","pft"});
-                assert_arrays_equal(rdd0->out_max.at(iout), gdd->out_max.at(iout), "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
+                assert_arrays_equal(rdd0->out_max.at(iout), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
 
                 // To check 'out_argmax', we need to jump through some hoops.
                 shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd0->pf_kernels.at(iout);
@@ -416,9 +427,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 pf_kernel->eval_tokens(pf_tmp.at(iout), rdd2->out_argmax.at(iout), rdd0->wt_arrays.at(iout));
                 assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_ref2", {"beam","pfdm","pft"});
 
-                Array<uint> gpu_tokens = gdd->out_argmax.at(iout).to_host();
+                double eps = 5.0 * config.dtype.precision();
+                Array<uint> gpu_tokens = gdd->out_argmax.at(iout).slice(0,0).to_host();  // FIXME istream=0 assumed 
                 pf_kernel->eval_tokens(pf_tmp.at(iout), gpu_tokens, rdd0->wt_arrays.at(iout));
-                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"});
+                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
             }
         }
     }

@@ -274,7 +274,7 @@ struct GpuPfWeightLayout
     // This function is intended to help hide details of the GPU layout.
     // Note: poorly optimized! (Intended for unit tests.)
     
-    ksgpu::Array<void> to_gpu(const ksgpu::Array<float> &src);
+    ksgpu::Array<void> to_gpu(const ksgpu::Array<float> &src) const;
 
     // Throws an exception if anything is wrong.
     void validate() const;

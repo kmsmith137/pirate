@@ -368,7 +368,7 @@ void CoalescedDdKernel2::test()
             ref_pf_kernel.eval_tokens(max_x, argmax_x, wt_cpu);
 
             // Then compare to "max_cpu", possibly at reduced precision.
-            double eps = 10 * dtype.precision();
+            double eps = 5.0 * dtype.precision();
             assert_arrays_equal(max_cpu, max_x, "max_cpu", "max_x", {"b","d","tout"}, eps);
         }
     }
