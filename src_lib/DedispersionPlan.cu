@@ -394,7 +394,7 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
         emitter << YAML::Key << "ds_level" << YAML::Value << st2.ds_level;
         if (verbose) {
             stringstream ss;
-            ss << "sample_ms = " << (time_sample_ms * ds_factor)
+            ss << (time_sample_ms * ds_factor) << " ms samples"
                << ", DM range [" << st2.dm_min << ", " << st2.dm_max << "]";
             emitter << YAML::Comment(ss.str());
         }

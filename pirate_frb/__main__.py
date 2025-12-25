@@ -483,19 +483,24 @@ def indent_multiline_comments(yaml_str):
     yaml-cpp doesn't support indented comments, so we post-process the output to indent
     multiline comments that start with "# At tree_index=..." by 4 spaces.
     """
-    import re
+    lines = yaml_str.split('\n')
+    result = []
+    in_block = False
     
-    def indent_comment_block(match):
-        # Indent each line of the comment block by 4 spaces
-        lines = match.group(0).split('\n')
-        indented = '\n'.join('    ' + line for line in lines)
-        return indented
+    for line in lines:
+        if line.startswith('# At tree_index='):
+            # Start of a multiline comment block
+            in_block = True
+            result.append('    ' + line)
+        elif in_block and line.startswith('#'):
+            # Continuation of the multiline comment block
+            result.append('    ' + line)
+        else:
+            # Not in a comment block, or end of block
+            in_block = False
+            result.append(line)
     
-    # Match multiline comments starting with "# At tree_index=" and continuing until
-    # a non-comment line (or end of string). Each line in the block starts with "#".
-    pattern = r'^# At tree_index=.*?(?=\n[^#\n]|\n\n|\Z)'
-    
-    return re.sub(pattern, indent_comment_block, yaml_str, flags=re.MULTILINE | re.DOTALL)
+    return '\n'.join(result)
 
 
 def align_inline_comments(yaml_str):
@@ -504,7 +509,7 @@ def align_inline_comments(yaml_str):
     
     A "block" is a sequence of consecutive lines where each line contains both
     non-comment text AND an inline comment. Empty lines, lines that are entirely
-    comments (no preceding text), or lines without comments start a new block.
+    comments (no preceding non-whitespace text), or lines without comments start a new block.
     
     Within each block, comments are padded to align at the same column.
     """
@@ -513,9 +518,10 @@ def align_inline_comments(yaml_str):
     lines = yaml_str.split('\n')
     result = []
     
-    # Pattern to match a line with non-comment text followed by a comment
+    # Pattern to match a line with non-whitespace, non-comment text followed by a comment.
+    # The text part must contain at least one non-whitespace character before the comment.
     # Captures: (text before comment, comment including #)
-    inline_comment_pattern = re.compile(r'^([^#\n]+?)\s*(#.*)$')
+    inline_comment_pattern = re.compile(r'^(\s*\S[^#]*?)\s*(#.*)$')
     
     i = 0
     while i < len(lines):
