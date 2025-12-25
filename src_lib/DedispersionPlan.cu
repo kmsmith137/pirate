@@ -22,8 +22,15 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 {
     config.validate();
 
-    // 'nelts_per_segment' is always (constants::bytes_per_gpu_cache_line / sizeof(dtype)).
+    this->dtype = config.dtype;
+    this->nfreq = config.get_total_nfreq();
+    this->nt_in = config.time_samples_per_chunk;
     this->num_downsampling_levels = config.num_downsampling_levels;
+    this->beams_per_gpu = config.beams_per_gpu;
+    this->beams_per_batch = config.beams_per_batch;
+    this->num_active_batches = config.num_active_batches;
+
+    // 'nelts_per_segment' is always (constants::bytes_per_gpu_cache_line / sizeof(dtype)).
     this->nelts_per_segment = config.get_nelts_per_segment();
     this->nbytes_per_segment = constants::bytes_per_gpu_cache_line;
 
@@ -61,7 +68,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             tree.amb_rank = st1_dd_rank;       // note amb <-> dd swap
             tree.pri_dd_rank = st1_amb_rank;   // note amb <-> dd swap
             tree.early_dd_rank = trigger_rank - st1_dd_rank;
-            tree.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
+            tree.nt_ds = xdiv(nt_in, pow2(ids));
 
             xassert_ge(tree.early_dd_rank, 1);
             xassert_le(tree.early_dd_rank, tree.pri_dd_rank);
@@ -82,11 +89,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             sc = FrequencySubbands::rerank_subband_counts(sc, pf_rank);
             tree.frequency_subbands = FrequencySubbands(sc, fmin, fmax);
 
-            tree.pf.max_width = config.peak_finding_params.at(ids).max_width;
-            tree.pf.dm_downsampling = config.peak_finding_params.at(ids).dm_downsampling;
-            tree.pf.time_downsampling = config.peak_finding_params.at(ids).time_downsampling;
-            tree.pf.wt_dm_downsampling = config.peak_finding_params.at(ids).wt_dm_downsampling;
-            tree.pf.wt_time_downsampling = config.peak_finding_params.at(ids).wt_time_downsampling;
+            tree.pf = config.peak_finding_params.at(ids);
 
             if (tree.pf.dm_downsampling == 0)
                 tree.pf.dm_downsampling = pow2(pf_rank);
@@ -121,13 +124,13 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // See MegaRingbuf.hpp for more info.
 
     MegaRingbuf::Params mrb_params;
-    mrb_params.total_beams = config.beams_per_gpu;
-    mrb_params.active_beams = config.num_active_batches * config.beams_per_batch;
+    mrb_params.total_beams = beams_per_gpu;
+    mrb_params.active_beams = num_active_batches * beams_per_batch;
     mrb_params.gpu_clag_maxfrac = config.gpu_clag_maxfrac;
 
     for (long ids = 0; ids < num_downsampling_levels; ids++) {
         long tot_rank = stage1_dd_rank.at(ids) + stage1_amb_rank.at(ids);
-        long nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
+        long nt_ds = xdiv(nt_in, pow2(ids));
         long nquads = pow2(tot_rank) * xdiv(nt_ds, nelts_per_segment);
         mrb_params.producer_nquads.push_back(nquads);
     }
@@ -147,7 +150,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         // Some truly paranoid asserts.
         xassert(tree.amb_rank == stage1_dd_rank.at(tree.ds_level));
         xassert(tree.pri_dd_rank == stage1_amb_rank.at(tree.ds_level));
-        xassert(tree.nt_ds == xdiv(config.time_samples_per_chunk, pow2(tree.ds_level)));
+        xassert(tree.nt_ds == xdiv(nt_in, pow2(tree.ds_level)));
 
         // For the stage1 -> stage2 intermediate array, we use variable names
         //   0 <= freq_c < nfreq     (= pow2(tree.early_dd_rank))
@@ -213,31 +216,31 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     
     // Initialize tree_gridding_kernel_params.
     tree_gridding_kernel_params.channel_map = config.make_channel_map();
-    tree_gridding_kernel_params.dtype = config.dtype;
-    tree_gridding_kernel_params.nfreq = config.get_total_nfreq();
+    tree_gridding_kernel_params.dtype = dtype;
+    tree_gridding_kernel_params.nfreq = nfreq;
     tree_gridding_kernel_params.nchan = pow2(config.tree_rank);
-    tree_gridding_kernel_params.ntime = config.time_samples_per_chunk;
-    tree_gridding_kernel_params.beams_per_batch = config.beams_per_batch;
+    tree_gridding_kernel_params.ntime = nt_in;
+    tree_gridding_kernel_params.beams_per_batch = beams_per_batch;
     tree_gridding_kernel_params.validate();
 
     // Initialize remaining 'params' members.
     
-    stage1_dd_buf_params.dtype = config.dtype;
-    stage1_dd_buf_params.beams_per_batch = config.beams_per_batch;
+    stage1_dd_buf_params.dtype = dtype;
+    stage1_dd_buf_params.beams_per_batch = beams_per_batch;
     stage1_dd_buf_params.nbuf = num_downsampling_levels;
 
     for (long ids = 0; ids < num_downsampling_levels; ids++) {
         long dd_rank = stage1_dd_rank.at(ids);
         long amb_rank = stage1_amb_rank.at(ids);
-        long nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
+        long nt_ds = xdiv(nt_in, pow2(ids));
 
         DedispersionKernelParams kparams;
-        kparams.dtype = config.dtype;
+        kparams.dtype = dtype;
         kparams.dd_rank = dd_rank;
         kparams.amb_rank = amb_rank;
-        kparams.total_beams = config.beams_per_gpu;
-        kparams.beams_per_batch = config.beams_per_batch;
-        kparams.ntime = xdiv(config.time_samples_per_chunk, pow2(ids));
+        kparams.total_beams = beams_per_gpu;
+        kparams.beams_per_batch = beams_per_batch;
+        kparams.ntime = xdiv(nt_in, pow2(ids));
         kparams.nspec = 1;
         kparams.input_is_ringbuf = false;
         kparams.output_is_ringbuf = true;   // note output_is_ringbuf = true
@@ -253,8 +256,8 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         stage1_dd_kernel_params.push_back(kparams);
     }
 
-    stage2_dd_buf_params.dtype = config.dtype;
-    stage2_dd_buf_params.beams_per_batch = config.beams_per_batch;
+    stage2_dd_buf_params.dtype = dtype;
+    stage2_dd_buf_params.beams_per_batch = beams_per_batch;
     stage2_dd_buf_params.nbuf = ntrees;
 
     for (uint itree = 0; itree < ntrees; itree++) {
@@ -262,11 +265,11 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         long ds_level = tree.ds_level;
 
         DedispersionKernelParams kparams;
-        kparams.dtype = config.dtype;
+        kparams.dtype = dtype;
         kparams.dd_rank = tree.early_dd_rank;
         kparams.amb_rank = tree.amb_rank;
-        kparams.total_beams = config.beams_per_gpu;
-        kparams.beams_per_batch = config.beams_per_batch;
+        kparams.total_beams = beams_per_gpu;
+        kparams.beams_per_batch = beams_per_batch;
         kparams.ntime = tree.nt_ds;
         kparams.nspec = 1;
         kparams.input_is_ringbuf = true;   // note input_is_ringbuf = true
@@ -284,10 +287,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
         PeakFindingKernelParams pf_params;
         pf_params.subband_counts = tree.frequency_subbands.subband_counts;  // not config.frequency_subband_counts
-        pf_params.dtype = config.dtype;
+        pf_params.dtype = dtype;
         pf_params.max_kernel_width = tree.pf.max_width;
-        pf_params.beams_per_batch = config.beams_per_batch;
-        pf_params.total_beams = config.beams_per_gpu;
+        pf_params.beams_per_batch = beams_per_batch;
+        pf_params.total_beams = beams_per_gpu;
         pf_params.ndm_out = tree.ndm_out;
         pf_params.ndm_wt = tree.ndm_wt;
         pf_params.nt_out = tree.nt_out;
@@ -299,21 +302,21 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     }
 
     // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.
-    lds_params.dtype = config.dtype;
+    lds_params.dtype = dtype;
     lds_params.input_total_rank = config.tree_rank;
-    lds_params.output_dd_rank = (config.num_downsampling_levels > 1) ? stage1_dd_rank.at(1) : 0;
-    lds_params.num_downsampling_levels = config.num_downsampling_levels;
-    lds_params.total_beams = config.beams_per_gpu;
-    lds_params.beams_per_batch = config.beams_per_batch;
-    lds_params.ntime = config.time_samples_per_chunk;
+    lds_params.output_dd_rank = (num_downsampling_levels > 1) ? stage1_dd_rank.at(1) : 0;
+    lds_params.num_downsampling_levels = num_downsampling_levels;
+    lds_params.total_beams = beams_per_gpu;
+    lds_params.beams_per_batch = beams_per_batch;
+    lds_params.ntime = nt_in;
 
-    g2g_copy_kernel_params.total_beams = config.beams_per_gpu;
-    g2g_copy_kernel_params.beams_per_batch = config.beams_per_batch;
+    g2g_copy_kernel_params.total_beams = beams_per_gpu;
+    g2g_copy_kernel_params.beams_per_batch = beams_per_batch;
     g2g_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
     g2g_copy_kernel_params.octuples = mega_ringbuf->g2g_octuples;
     
-    h2h_copy_kernel_params.total_beams = config.beams_per_gpu;
-    h2h_copy_kernel_params.beams_per_batch = config.beams_per_batch;
+    h2h_copy_kernel_params.total_beams = beams_per_gpu;
+    h2h_copy_kernel_params.beams_per_batch = beams_per_batch;
     h2h_copy_kernel_params.nelts_per_segment = this->nelts_per_segment;
     h2h_copy_kernel_params.octuples = mega_ringbuf->h2h_octuples;
     

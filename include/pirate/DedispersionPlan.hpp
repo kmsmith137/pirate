@@ -24,43 +24,52 @@ namespace pirate {
 #endif
 
 
+// Dedispersion is a two-stage process. In the first stage, there is one tree for each
+// downsampling level. In the second stage, each downsampling level has a "primary" tree,
+// plus one "early" tree for each EarlyTrigger (see DedispersionConfig.hpp). Thus,
+// there is a many-to-one mapping from stage2 trees to stage1 trees.
+
 struct DedispersionPlan
 {
     DedispersionPlan(const DedispersionConfig &config);
     
     const DedispersionConfig config;
 
-    // Dedispersion is a two-stage process. In the first stage, there is one tree for each
-    // downsampling level. In the second stage, each downsampling level has a "primary" tree,
-    // plus one "early" tree for each EarlyTrigger (see DedispersionConfig.hpp). Thus,
-    // there is a many-to-one mapping from stage2 trees to stage1 trees.
+    // Some key members of DedispersionConfig, copied into DedispersionPlan for convenience.
+    ksgpu::Dtype dtype;                  // same as config.dtype
+    long nfreq = 0;                      // same as config.get_total_nfreq()
+    long nt_in = 0;                      // same as config.time_samples_per_chumk
+    long num_downsampling_levels = 0;    // same as config.num_downsampling_levels
+    long beams_per_gpu = 0;              // same as config.beams_per_gpu
+    long beams_per_batch = 0;            // same as config.beams_per_batch
+    long num_active_batches = 0;         // same as config.num_active_batches
 
-    long num_downsampling_levels = 0;  // = (config.num_downsampling_levels)
-    long ntrees = 0;  // = (config.num_downsampling_levels + total number of early triggers)
-
-    int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
-    int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
-
-    void print(std::ostream &os=std::cout, int indent=0) const;
-
-    // Write in YAML format.
-    void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
-    std::string to_yaml_string(bool verbose = false) const;
-
-    // -------------------------------------------------------------------------------------------------
-
-
-    // Stage1 tree info (vectors have length == num_downsampling_levels).
-    // Note: total tree rank (dd_rank + amb_rank) is equal to (config.tree_rank - (ds_level ? 1 : 0)).     
+    // Stage1 trees. These trees are "internal" to dedispersion, and can probably be ignored "from outside".
+    // Total tree rank (dd_rank + amb_rank) is equal to (config.tree_rank - (ds_level ? 1 : 0)).
+    // Both vectors have length (num_downsampling levels).
     std::vector<long> stage1_dd_rank;    // "Active" dedispersion rank of each stage1 tree.
     std::vector<long> stage1_amb_rank;   // "Ambient" rank of each stage1 tree (= number of coarse freq channels)
 
+    // Stage2 trees. These trees contain the output of the dedispersion, and are useful "from outside".
+    // There is a lot of per-tree data, so I defined a helper class 'DedispersionTree'.
+    // The number of trees is (config.num_downsampling_levels + total number of early triggers).
+    long ntrees = 0;
     std::vector<DedispersionTree> trees;  // length ntrees
+
+    void print(std::ostream &os=std::cout, int indent=0) const;
+
+    void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
+    std::string to_yaml_string(bool verbose = false) const;
+
 
     // -------------------------------------------------------------------------------------------------
     //
     // Low-level data needed for compute kernels.
 
+
+    int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
+    int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
+    
     // MegaRingbuf: this data structure is the "nerve center" of the real-time FRB search.
     // I have written a short novel explaining how it works, in MegaRingbuf.hpp.
     std::shared_ptr<MegaRingbuf> mega_ringbuf;
