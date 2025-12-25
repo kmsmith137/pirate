@@ -28,7 +28,7 @@ namespace pirate {
 //   ntime = config.time_samples_per_chunk / 2^ids.
 //
 // In the second ("stage2") instance, arrays are indexed by a "stage2 tree index"
-// 0 <= i < DedispersionPlan::stage2_ntrees, and the values of (rank, ntime) are
+// 0 <= i < DedispersionPlan::ntrees, and the values of (rank, ntime) are
 // determined by the DedispersionPlan.
 //
 // In DedispersionBuffer::allocate(), we use a specific memory layout for

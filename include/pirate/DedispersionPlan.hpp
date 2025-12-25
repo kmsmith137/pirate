@@ -4,6 +4,7 @@
 #include "DedispersionConfig.hpp"
 
 namespace YAML { class Emitter; }  // #include <yaml-cpp/yaml.h>
+#include "DedispersionTree.hpp"           // struct DedispersionTree
 #include "DedispersionBuffer.hpp"        // struct DedispersionBufferParams
 #include "DedispersionKernel.hpp"        // struct DedispersionKernelParams
 #include "LaggedDownsamplingKernel.hpp"  // struct LaggedDownsamplingKernelParams
@@ -35,7 +36,7 @@ struct DedispersionPlan
     // there is a many-to-one mapping from stage2 trees to stage1 trees.
 
     long num_downsampling_levels = 0;  // = (config.num_downsampling_levels)
-    long stage2_ntrees = 0;  // = (config.num_downsampling_levels + total number of early triggers)
+    long ntrees = 0;  // = (config.num_downsampling_levels + total number of early triggers)
 
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
     int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
@@ -54,41 +55,7 @@ struct DedispersionPlan
     std::vector<long> stage1_dd_rank;    // "Active" dedispersion rank of each stage1 tree.
     std::vector<long> stage1_amb_rank;   // "Ambient" rank of each stage1 tree (= number of coarse freq channels)
 
-    struct Stage2Tree
-    {
-        // Note: for most purposes, you want 'early_dd_rank', not 'pri_dd_rank'.
-        int ds_level = -1;       // Downsampling level, also identifies associated stage1 tree.
-        int amb_rank = 0;        // Ambient rank of Stage2Tree (= dd_rank of associated stage1 tree)
-        int pri_dd_rank = 0;     // Active rank of primary Stage2Tree (= amb_rank of associated stage1 tree)
-        int early_dd_rank = 0;   // Active rank of this Stage2Tree (always <= pri_dd_rank)
-        int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
-
-        // Subbands searched in this tree.
-        // Can differ from DedispersionConfig::frequency_subbands, due to early triggers and downsampling.
-        FrequencySubbands frequency_subbands;
-        
-        // Contains members: max_width, {dm,time}_downsampling, wt_{dm,time}_downsampling.
-        // Note that {dm,time}_downsampling can be 0 in the config, but are filled with nonzero values here.
-        DedispersionConfig::PeakFindingConfig pf;
-
-        // Number of time profiles used in peak-finder. (Equal to 1 + 3*log2(pf.max_width).)
-        long nprofiles = 0;
-
-        // For peak-finding array shapes.
-        // 'wt' array shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, frequency_subbands.F).
-        // 'out_max', 'out_argmax' shapes are (beams_per_batch, ndm_out, nt_out).
-        long ndm_out = 0;
-        long ndm_wt = 0;
-        long nt_out = 0;
-        long nt_wt = 0;
-
-        // Currently, these informational members are just used in print-statements.
-        double dm_min = 0.0;
-        double dm_max = 0.0;
-        double trigger_frequency = 0.0f;
-    };
-    
-    std::vector<Stage2Tree> stage2_trees;  // length stage2_ntrees
+    std::vector<DedispersionTree> trees;  // length ntrees
 
     // -------------------------------------------------------------------------------------------------
     //
@@ -102,11 +69,11 @@ struct DedispersionPlan
     LaggedDownsamplingKernelParams lds_params;
 
     DedispersionBufferParams stage1_dd_buf_params;  // (number of buffers) = num_downsampling_levels
-    DedispersionBufferParams stage2_dd_buf_params;  // (number of buffers) = stage2_ntrees
+    DedispersionBufferParams stage2_dd_buf_params;  // (number of buffers) = ntrees
     
     std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length num_downsampling_levels
-    std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
-    std::vector<PeakFindingKernelParams> stage2_pf_params;          // length stage2_ntrees
+    std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
+    std::vector<PeakFindingKernelParams> stage2_pf_params;          // length ntrees
 
     // Only needed if early triggers are used.
     RingbufCopyKernelParams g2g_copy_kernel_params;

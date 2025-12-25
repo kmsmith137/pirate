@@ -29,7 +29,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     // Part 1:
     //   - Initialize stage1_dd_rank, stage1_amb_rank.
-    //   - Initialize stage2_trees, stage_ntrees.
+    //   - Initialize trees, ntrees.
     
     this->stage1_dd_rank.resize(num_downsampling_levels);
     this->stage1_amb_rank.resize(num_downsampling_levels);
@@ -56,19 +56,19 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         this->stage1_amb_rank.at(ids) = st1_amb_rank;
 
         for (int trigger_rank: trigger_ranks) {
-            Stage2Tree st2;
-            st2.ds_level = ids;
-            st2.amb_rank = st1_dd_rank;       // note amb <-> dd swap
-            st2.pri_dd_rank = st1_amb_rank;   // note amb <-> dd swap
-            st2.early_dd_rank = trigger_rank - st1_dd_rank;
-            st2.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
+            DedispersionTree tree;
+            tree.ds_level = ids;
+            tree.amb_rank = st1_dd_rank;       // note amb <-> dd swap
+            tree.pri_dd_rank = st1_amb_rank;   // note amb <-> dd swap
+            tree.early_dd_rank = trigger_rank - st1_dd_rank;
+            tree.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
 
-            xassert_ge(st2.early_dd_rank, 1);
-            xassert_le(st2.early_dd_rank, st2.pri_dd_rank);
+            xassert_ge(tree.early_dd_rank, 1);
+            xassert_le(tree.early_dd_rank, tree.pri_dd_rank);
 
-            long tot_rank = st2.amb_rank + st2.early_dd_rank;
-            long delta_rank = st2.pri_dd_rank - st2.early_dd_rank;
-            long pf_rank = (st2.early_dd_rank + 1) / 2;
+            long tot_rank = tree.amb_rank + tree.early_dd_rank;
+            long delta_rank = tree.pri_dd_rank - tree.early_dd_rank;
+            long pf_rank = (tree.early_dd_rank + 1) / 2;
 
             // Frequency range searched by tree, accounting for early trigger.
             long dmax = pow2(config.tree_rank - delta_rank);
@@ -80,41 +80,41 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             vector<long> sc;
             sc = FrequencySubbands::early_subband_counts(config.frequency_subband_counts, delta_rank);
             sc = FrequencySubbands::rerank_subband_counts(sc, pf_rank);
-            st2.frequency_subbands = FrequencySubbands(sc, fmin, fmax);
+            tree.frequency_subbands = FrequencySubbands(sc, fmin, fmax);
 
-            st2.pf.max_width = config.peak_finding_params.at(ids).max_width;
-            st2.pf.dm_downsampling = config.peak_finding_params.at(ids).dm_downsampling;
-            st2.pf.time_downsampling = config.peak_finding_params.at(ids).time_downsampling;
-            st2.pf.wt_dm_downsampling = config.peak_finding_params.at(ids).wt_dm_downsampling;
-            st2.pf.wt_time_downsampling = config.peak_finding_params.at(ids).wt_time_downsampling;
+            tree.pf.max_width = config.peak_finding_params.at(ids).max_width;
+            tree.pf.dm_downsampling = config.peak_finding_params.at(ids).dm_downsampling;
+            tree.pf.time_downsampling = config.peak_finding_params.at(ids).time_downsampling;
+            tree.pf.wt_dm_downsampling = config.peak_finding_params.at(ids).wt_dm_downsampling;
+            tree.pf.wt_time_downsampling = config.peak_finding_params.at(ids).wt_time_downsampling;
 
-            if (st2.pf.dm_downsampling == 0)
-                st2.pf.dm_downsampling = pow2(pf_rank);
+            if (tree.pf.dm_downsampling == 0)
+                tree.pf.dm_downsampling = pow2(pf_rank);
 
-            if (st2.pf.time_downsampling == 0)
-                st2.pf.time_downsampling = st2.pf.dm_downsampling;
+            if (tree.pf.time_downsampling == 0)
+                tree.pf.time_downsampling = tree.pf.dm_downsampling;
 
-            xassert_le(st2.pf.dm_downsampling, st2.pf.wt_dm_downsampling);
-            xassert_le(st2.pf.wt_dm_downsampling, pow2(tot_rank));
-            xassert_le(st2.pf.time_downsampling, st2.pf.wt_time_downsampling);
-            xassert_le(st2.pf.wt_time_downsampling, st2.nt_ds);
+            xassert_le(tree.pf.dm_downsampling, tree.pf.wt_dm_downsampling);
+            xassert_le(tree.pf.wt_dm_downsampling, pow2(tot_rank));
+            xassert_le(tree.pf.time_downsampling, tree.pf.wt_time_downsampling);
+            xassert_le(tree.pf.wt_time_downsampling, tree.nt_ds);
 
-            st2.nprofiles = 1 + 3 * integer_log2(st2.pf.max_width);
-            st2.ndm_out = xdiv(pow2(tot_rank), st2.pf.dm_downsampling);
-            st2.ndm_wt = xdiv(pow2(tot_rank), st2.pf.wt_dm_downsampling);
-            st2.nt_out = xdiv(st2.nt_ds, st2.pf.time_downsampling);
-            st2.nt_wt = xdiv(st2.nt_ds, st2.pf.wt_time_downsampling);
+            tree.nprofiles = 1 + 3 * integer_log2(tree.pf.max_width);
+            tree.ndm_out = xdiv(pow2(tot_rank), tree.pf.dm_downsampling);
+            tree.ndm_wt = xdiv(pow2(tot_rank), tree.pf.wt_dm_downsampling);
+            tree.nt_out = xdiv(tree.nt_ds, tree.pf.time_downsampling);
+            tree.nt_wt = xdiv(tree.nt_ds, tree.pf.wt_time_downsampling);
 
             double dm0 = config.dm_per_unit_delay() * pow2(config.tree_rank);
-            st2.dm_min = dm0 * ((ids > 0) ? pow2(ids-1) : 0);
-            st2.dm_max = dm0 * pow2(ids);
-            st2.trigger_frequency = fmin;
+            tree.dm_min = dm0 * ((ids > 0) ? pow2(ids-1) : 0);
+            tree.dm_max = dm0 * pow2(ids);
+            tree.trigger_frequency = fmin;
 
-            this->stage2_trees.push_back(st2);
+            this->trees.push_back(tree);
         }
     }
 
-    this->stage2_ntrees = stage2_trees.size();
+    this->ntrees = trees.size();
     
     // Part 2:
     // Set up the MegaRingbuf, a central data structure that buffers data between kernels.
@@ -132,41 +132,41 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         mrb_params.producer_nquads.push_back(nquads);
     }
 
-    for (long itree = 0; itree < stage2_ntrees; itree++) {
-        const Stage2Tree &st2 = stage2_trees.at(itree);
-        long tot_rank = st2.amb_rank + st2.early_dd_rank;  // not primary_dd_rank
-        long nquads = pow2(tot_rank) * xdiv(st2.nt_ds, nelts_per_segment);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
+        long tot_rank = tree.amb_rank + tree.early_dd_rank;  // not primary_dd_rank
+        long nquads = pow2(tot_rank) * xdiv(tree.nt_ds, nelts_per_segment);
         mrb_params.consumer_nquads.push_back(nquads);
     }
 
     this->mega_ringbuf = std::make_shared<MegaRingbuf>(mrb_params);
 
-    for (int itree2 = 0; itree2 < stage2_ntrees; itree2++) {
-        const Stage2Tree &st2 = this->stage2_trees.at(itree2);
+    for (int itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = this->trees.at(itree);
 
         // Some truly paranoid asserts.
-        xassert(st2.amb_rank == stage1_dd_rank.at(st2.ds_level));
-        xassert(st2.pri_dd_rank == stage1_amb_rank.at(st2.ds_level));
-        xassert(st2.nt_ds == xdiv(config.time_samples_per_chunk, pow2(st2.ds_level)));
+        xassert(tree.amb_rank == stage1_dd_rank.at(tree.ds_level));
+        xassert(tree.pri_dd_rank == stage1_amb_rank.at(tree.ds_level));
+        xassert(tree.nt_ds == xdiv(config.time_samples_per_chunk, pow2(tree.ds_level)));
 
         // For the stage1 -> stage2 intermediate array, we use variable names
-        //   0 <= freq_c < nfreq     (= pow2(st2.early_dd_rank))
-        //   0 <= dm_brev < ndm      (= pow2(st2.amb_rank))
+        //   0 <= freq_c < nfreq     (= pow2(tree.early_dd_rank))
+        //   0 <= dm_brev < ndm      (= pow2(tree.amb_rank))
         //
         // From the perspective of the stage1 tree, 'dm_brev' is the active dedispersion
         // index, and 'freq_c' is the ambient spectator index. This is reversed for the
         // stage2 tree.
 
-        int ndm = pow2(st2.amb_rank);
-        int nfreq_tr = pow2(st2.early_dd_rank);
-        int nfreq_amb = pow2(st2.pri_dd_rank);
+        int ndm = pow2(tree.amb_rank);
+        int nfreq_tr = pow2(tree.early_dd_rank);
+        int nfreq_amb = pow2(tree.pri_dd_rank);
         
-        int ns = xdiv(st2.nt_ds, this->nelts_per_segment);
-        bool is_downsampled = (st2.ds_level > 0);
+        int ns = xdiv(tree.nt_ds, this->nelts_per_segment);
+        bool is_downsampled = (tree.ds_level > 0);
         
         for (int dm_brev = 0; dm_brev < ndm; dm_brev++) {
             for (int freq = 0; freq < nfreq_tr; freq++) {
-                int lag = rb_lag(freq, dm_brev, st2.amb_rank, st2.early_dd_rank, is_downsampled);
+                int lag = rb_lag(freq, dm_brev, tree.amb_rank, tree.early_dd_rank, is_downsampled);
                 int slag = lag / nelts_per_segment;  // segment lag (round down)
                 
                 for (int ssrc = 0; ssrc < ns; ssrc++) {
@@ -184,10 +184,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
                     //
                     // (Note that in both cases, the active dedipsersion index is fastest varying.)
 
-                    long producer_id = st2.ds_level;
+                    long producer_id = tree.ds_level;
                     long producer_iquad = (ssrc * nfreq_amb * ndm) + (freq * ndm) + dm_brev;
 
-                    long consumer_id = itree2;
+                    long consumer_id = itree;
                     long consumer_iquad = (sdst * ndm * nfreq_tr) + (dm_brev * nfreq_tr) + freq;
 
                     mega_ringbuf->add_segment(producer_id, producer_iquad, consumer_id, consumer_iquad, clag);
@@ -205,7 +205,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //   DedispersionBufferParams stage2_dd_buf_params;
     //
     //   std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length num_downsampling_levels
-    //   std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
+    //   std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length ntrees
     //
     //   LaggedDownsamplingKernelParams lds_params;
     //   RingbufCopyKernelParams g2g_copy_kernel_params;
@@ -255,19 +255,19 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
     stage2_dd_buf_params.dtype = config.dtype;
     stage2_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    stage2_dd_buf_params.nbuf = stage2_ntrees;
+    stage2_dd_buf_params.nbuf = ntrees;
 
-    for (uint itree2 = 0; itree2 < stage2_ntrees; itree2++) {
-        Stage2Tree &st2 = stage2_trees.at(itree2);
-        long ds_level = st2.ds_level;
+    for (uint itree = 0; itree < ntrees; itree++) {
+        DedispersionTree &tree = trees.at(itree);
+        long ds_level = tree.ds_level;
 
         DedispersionKernelParams kparams;
         kparams.dtype = config.dtype;
-        kparams.dd_rank = st2.early_dd_rank;
-        kparams.amb_rank = st2.amb_rank;
+        kparams.dd_rank = tree.early_dd_rank;
+        kparams.amb_rank = tree.amb_rank;
         kparams.total_beams = config.beams_per_gpu;
         kparams.beams_per_batch = config.beams_per_batch;
-        kparams.ntime = st2.nt_ds;
+        kparams.ntime = tree.nt_ds;
         kparams.nspec = 1;
         kparams.input_is_ringbuf = true;   // note input_is_ringbuf = true
         kparams.output_is_ringbuf = false;
@@ -275,24 +275,24 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         kparams.input_is_downsampled_tree = (ds_level > 0);
         kparams.nt_per_segment = this->nelts_per_segment;
         kparams.mega_ringbuf = mega_ringbuf;
-        kparams.consumer_id = itree2;
+        kparams.consumer_id = itree;
         kparams.validate();
         
-        stage2_dd_buf_params.buf_rank.push_back(st2.amb_rank + st2.early_dd_rank);
-        stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
+        stage2_dd_buf_params.buf_rank.push_back(tree.amb_rank + tree.early_dd_rank);
+        stage2_dd_buf_params.buf_ntime.push_back(tree.nt_ds);
         stage2_dd_kernel_params.push_back(kparams);
 
         PeakFindingKernelParams pf_params;
-        pf_params.subband_counts = st2.frequency_subbands.subband_counts;  // not config.frequency_subband_counts
+        pf_params.subband_counts = tree.frequency_subbands.subband_counts;  // not config.frequency_subband_counts
         pf_params.dtype = config.dtype;
-        pf_params.max_kernel_width = st2.pf.max_width;
+        pf_params.max_kernel_width = tree.pf.max_width;
         pf_params.beams_per_batch = config.beams_per_batch;
         pf_params.total_beams = config.beams_per_gpu;
-        pf_params.ndm_out = st2.ndm_out;
-        pf_params.ndm_wt = st2.ndm_wt;
-        pf_params.nt_out = st2.nt_out;
-        pf_params.nt_wt = st2.nt_wt;
-        pf_params.nt_in = st2.nt_ds;
+        pf_params.ndm_out = tree.ndm_out;
+        pf_params.ndm_wt = tree.ndm_wt;
+        pf_params.nt_out = tree.nt_out;
+        pf_params.nt_wt = tree.nt_wt;
+        pf_params.nt_in = tree.nt_ds;
         pf_params.validate();
 
         stage2_pf_params.push_back(pf_params);
@@ -338,17 +338,17 @@ void DedispersionPlan::print(ostream &os, int indent) const
     print_kv("stage1_dd_rank", ksgpu::tuple_str(stage1_dd_rank), os, indent);
     print_kv("stage1_amb_rank", ksgpu::tuple_str(stage1_amb_rank), os, indent);
     
-    os << Indent(indent) << "Stage2Trees" << endl;
+    os << Indent(indent) << "DedispersionTrees" << endl;
 
-    for (long i = 0; i < stage2_ntrees; i++) {
-        const Stage2Tree &st2 = stage2_trees.at(i);
+    for (long i = 0; i < ntrees; i++) {
+        const DedispersionTree &tree = trees.at(i);
         
         os << Indent(indent+4) << i
-           << ": ds_level=" << st2.ds_level
-           << ", amb_rank=" << st2.amb_rank
-           << ", pri_dd_rank=" << st2.pri_dd_rank
-           << ", early_dd_rank=" << st2.early_dd_rank
-           << ", nt_ds=" << st2.nt_ds
+           << ": ds_level=" << tree.ds_level
+           << ", amb_rank=" << tree.amb_rank
+           << ", pri_dd_rank=" << tree.pri_dd_rank
+           << ", early_dd_rank=" << tree.early_dd_rank
+           << ", nt_ds=" << tree.nt_ds
            << endl;
     }
 }
@@ -362,22 +362,22 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
             << YAML::Value
             << YAML::BeginSeq;
 
-    for (long tree_index = 0; tree_index < stage2_ntrees; tree_index++) {
-        const Stage2Tree &st2 = this->stage2_trees.at(tree_index);
-        long delta_et = st2.pri_dd_rank - st2.early_dd_rank;
+    for (long tree_index = 0; tree_index < ntrees; tree_index++) {
+        const DedispersionTree &tree = this->trees.at(tree_index);
+        long delta_et = tree.pri_dd_rank - tree.early_dd_rank;
         double time_sample_ms = config.time_sample_ms;
-        double ds_factor = pow2(st2.ds_level);
+        double ds_factor = pow2(tree.ds_level);
 
         emitter << YAML::Newline;
         emitter << YAML::BeginMap;
 
         emitter << YAML::Key << "tree_index" << YAML::Value << tree_index;
 
-        emitter << YAML::Key << "ds_level" << YAML::Value << st2.ds_level;
+        emitter << YAML::Key << "ds_level" << YAML::Value << tree.ds_level;
         if (verbose) {
             stringstream ss;
             ss << (time_sample_ms * ds_factor) << " ms samples"
-               << ", DM range [" << st2.dm_min << ", " << st2.dm_max << "]";
+               << ", DM range [" << tree.dm_min << ", " << tree.dm_max << "]";
             emitter << YAML::Comment(ss.str());
         }
 
@@ -385,47 +385,47 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
         if (verbose) {
             stringstream ss;
             ss << (delta_et > 0 ? "early" : "non-early")
-               << " trigger at " << st2.trigger_frequency << " MHz";
+               << " trigger at " << tree.trigger_frequency << " MHz";
             emitter << YAML::Comment(ss.str());
         }
 
-        emitter << YAML::Key << "max_width" << YAML::Value << st2.pf.max_width;
+        emitter << YAML::Key << "max_width" << YAML::Value << tree.pf.max_width;
         if (verbose) {
             stringstream ss;
-            ss << (st2.pf.max_width * ds_factor * time_sample_ms) << " ms";
+            ss << (tree.pf.max_width * ds_factor * time_sample_ms) << " ms";
             emitter << YAML::Comment(ss.str());
         }
 
-        emitter << YAML::Key << "dm_downsampling" << YAML::Value << st2.pf.dm_downsampling;
-        if (verbose && (st2.ds_level > 0)) {
+        emitter << YAML::Key << "dm_downsampling" << YAML::Value << tree.pf.dm_downsampling;
+        if (verbose && (tree.ds_level > 0)) {
             stringstream ss;
-            ss << (st2.pf.dm_downsampling * ds_factor) << " before downsampling";
+            ss << (tree.pf.dm_downsampling * ds_factor) << " before downsampling";
             emitter << YAML::Comment(ss.str());
         }
 
-        emitter << YAML::Key << "time_downsampling" << YAML::Value << st2.pf.time_downsampling;
-        if (verbose && (st2.ds_level > 0)) {
+        emitter << YAML::Key << "time_downsampling" << YAML::Value << tree.pf.time_downsampling;
+        if (verbose && (tree.ds_level > 0)) {
             stringstream ss;
-            ss << (st2.pf.time_downsampling * ds_factor) << " before downsampling";
+            ss << (tree.pf.time_downsampling * ds_factor) << " before downsampling";
             emitter << YAML::Comment(ss.str());
         }
 
-        emitter << YAML::Key << "wt_dm_downsampling" << YAML::Value << st2.pf.wt_dm_downsampling;
-        if (verbose && (st2.ds_level > 0)) {
+        emitter << YAML::Key << "wt_dm_downsampling" << YAML::Value << tree.pf.wt_dm_downsampling;
+        if (verbose && (tree.ds_level > 0)) {
             stringstream ss;
-            ss << (st2.pf.wt_dm_downsampling * ds_factor) << " before downsampling";
+            ss << (tree.pf.wt_dm_downsampling * ds_factor) << " before downsampling";
             emitter << YAML::Comment(ss.str());
         }
 
-        emitter << YAML::Key << "wt_time_downsampling" << YAML::Value << st2.pf.wt_time_downsampling;
-        if (verbose && (st2.ds_level > 0)) {
+        emitter << YAML::Key << "wt_time_downsampling" << YAML::Value << tree.pf.wt_time_downsampling;
+        if (verbose && (tree.ds_level > 0)) {
             stringstream ss;
-            ss << (st2.pf.wt_time_downsampling * ds_factor) << " before downsampling";
+            ss << (tree.pf.wt_time_downsampling * ds_factor) << " before downsampling";
             emitter << YAML::Comment(ss.str());
         }
 
         if (verbose) {
-            const FrequencySubbands &fs = st2.frequency_subbands;
+            const FrequencySubbands &fs = tree.frequency_subbands;
             
             // Note: the multiline comment starting with "# At tree_index=..." is indented
             // by a Python post-processing hack in pirate_frb/__main__.py (show_dedisperser).
@@ -439,7 +439,7 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
         emitter << YAML::Key << "frequency_subband_counts"
                 << YAML::Value << YAML::Flow << YAML::BeginSeq;
-        for (long n: st2.frequency_subbands.subband_counts)
+        for (long n: tree.frequency_subbands.subband_counts)
             emitter << n;
         emitter << YAML::EndSeq;
 

@@ -26,13 +26,13 @@ void scratch()
         config.print(cout, 4);
 
         auto plan = make_shared<DedispersionPlan> (config);
-        xassert_eq(long(plan->stage2_dd_kernel_params.size()), plan->stage2_ntrees);
-        xassert_eq(long(plan->stage2_pf_params.size()), plan->stage2_ntrees);
+        xassert_eq(long(plan->stage2_dd_kernel_params.size()), plan->ntrees);
+        xassert_eq(long(plan->stage2_pf_params.size()), plan->ntrees);
 
         if (!args.gpu_valid)
             continue;
 
-        for (long i = 0; i < plan->stage2_ntrees; i++) {
+        for (long i = 0; i < plan->ntrees; i++) {
             // Check that we can construct the cdd2 kernel without failing an assert.
             CoalescedDdKernel2 cdd2(
                 plan->stage2_dd_kernel_params.at(i),

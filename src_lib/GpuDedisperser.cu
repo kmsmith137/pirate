@@ -131,8 +131,8 @@ void GpuDedisperser::allocate()
 
     // out_max, out_argmax
     for (long itree = 0; itree < output_ntrees; itree++) {
-        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(itree);
-        std::initializer_list<long> shape = { nstreams, beams_per_batch, st2.ndm_out, st2.nt_out };
+        const DedispersionTree &tree = plan->trees.at(itree);
+        std::initializer_list<long> shape = { nstreams, beams_per_batch, tree.ndm_out, tree.nt_out };
         out_max.push_back(Array<void> (dtype, shape, af_gpu | af_zero));
         out_argmax.push_back(Array<uint> (shape, af_gpu | af_zero));
     }
@@ -266,8 +266,8 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
 
 static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, long itree, long f)
 {
-    const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(itree);
-    const FrequencySubbands &fs = st2.frequency_subbands;
+    const DedispersionTree &tree = plan->trees.at(itree);
+    const FrequencySubbands &fs = tree.frequency_subbands;
 
     long ilo = fs.f_to_ilo.at(f);
     long ihi = fs.f_to_ihi.at(f);
@@ -280,7 +280,7 @@ static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, lon
     double filo = plan->config.frequency_to_index(flo);
     double fihi = plan->config.frequency_to_index(fhi);
 
-    return (fihi - filo) * pow2(st2.ds_level) / 3.0;
+    return (fihi - filo) * pow2(tree.ds_level) / 3.0;
 }
 
 
@@ -306,7 +306,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     int beams_per_batch = config.beams_per_batch;
     int nbatches = xdiv(config.beams_per_gpu, beams_per_batch);
     int nstreams = config.num_active_batches;
-    int nout = plan->stage2_trees.size();
+    int nout = plan->trees.size();
 
     // FIXME test multi-stream logic in the future.
     // For now, we use the default cuda stream, which simplifies things since we can
@@ -326,17 +326,17 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     //   subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
     //   ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
 
-    vector<long> Dcore(plan->stage2_ntrees);
-    vector<Array<float>> pf_tmp(plan->stage2_ntrees);
-    vector<Array<float>> subband_variances(plan->stage2_ntrees);
-    vector<shared_ptr<ReferencePeakFindingKernel>> ref_kernels_for_weights(plan->stage2_ntrees);
+    vector<long> Dcore(plan->ntrees);
+    vector<Array<float>> pf_tmp(plan->ntrees);
+    vector<Array<float>> subband_variances(plan->ntrees);
+    vector<shared_ptr<ReferencePeakFindingKernel>> ref_kernels_for_weights(plan->ntrees);
 
-    for (long itree = 0; itree < plan->stage2_ntrees; itree++) {
-        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(itree);
+    for (long itree = 0; itree < plan->ntrees; itree++) {
+        const DedispersionTree &tree = plan->trees.at(itree);
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
-        long F = st2.frequency_subbands.F;
+        long F = tree.frequency_subbands.F;
 
-        Dcore.at(itree) = host_only ? st2.pf.time_downsampling : gdd->cdd2_kernels.at(itree)->Dcore;
+        Dcore.at(itree) = host_only ? tree.pf.time_downsampling : gdd->cdd2_kernels.at(itree)->Dcore;
         pf_tmp.at(itree) = Array<float> ({beams_per_batch, pf_params.ndm_out, pf_params.nt_out}, af_uhost | af_zero);
         ref_kernels_for_weights.at(itree) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
         subband_variances.at(itree) = Array<float> ({F}, af_uhost | af_zero);
@@ -352,7 +352,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     for (int ichunk = 0; ichunk < nchunks; ichunk++) {
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
             // Randomly initialize weights.
-            for (int itree = 0; itree < plan->stage2_ntrees; itree++) {
+            for (int itree = 0; itree < plan->ntrees; itree++) {
                 Array<float> sbv = subband_variances.at(itree);
                 Array<float> wt_cpu = ref_kernels_for_weights.at(itree)->make_random_weights(sbv);
 
@@ -394,7 +394,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 const Array<float> &rdd0_out = rdd0->output_arrays.at(iout);
                 const Array<float> &rdd1_out = rdd1->output_arrays.at(iout);
                 const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
-                long ds_level = plan->stage2_trees.at(iout).ds_level;
+                long ds_level = plan->trees.at(iout).ds_level;
 
                 // Compute epsabs, epsrel for host and gpu
                 Array<float> sbv = subband_variances.at(iout);

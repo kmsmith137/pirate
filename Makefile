@@ -179,6 +179,7 @@ HFILES = \
   include/pirate/DedispersionConfig.hpp \
   include/pirate/DedispersionKernel.hpp \
   include/pirate/DedispersionPlan.hpp \
+  include/pirate/DedispersionTree.hpp \
   include/pirate/FakeCorrelator.hpp \
   include/pirate/FakeServer.hpp \
   include/pirate/GpuDequantizationKernel.hpp \

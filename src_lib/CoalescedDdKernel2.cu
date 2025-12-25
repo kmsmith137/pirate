@@ -407,10 +407,10 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
         pf_params.nt_in = config.time_samples_per_chunk;
         pf_params.validate();
 
-        shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-        xassert(plan->stage2_ntrees == 1);
+    shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
+    xassert(plan->ntrees == 1);
 
-        const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(0);
+    const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(0);
         shared_ptr<CoalescedDdKernel2> cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);        
         cdd2_kernel->allocate();
 
