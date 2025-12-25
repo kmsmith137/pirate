@@ -208,7 +208,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //
     //   std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length stage1_ntrees
     //   std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
-    //   std::vector<long> stage2_ds_level;                              // length stage2_ntrees
     //
     //   LaggedDownsamplingKernelParams lds_params;
     //   RingbufCopyKernelParams g2g_copy_kernel_params;
@@ -284,7 +283,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         stage2_dd_buf_params.buf_rank.push_back(st2.amb_rank + st2.early_dd_rank);
         stage2_dd_buf_params.buf_ntime.push_back(st2.nt_ds);
         stage2_dd_kernel_params.push_back(kparams);
-        stage2_ds_level.push_back(ds_level);
 
         PeakFindingKernelParams pf_params;
         pf_params.subband_counts = st2.frequency_subbands.subband_counts;  // not config.frequency_subband_counts

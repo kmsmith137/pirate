@@ -37,10 +37,6 @@ struct DedispersionPlan
     long stage1_ntrees = 0;  // = (config.num_downsampling_levels)
     long stage2_ntrees = 0;  // = (config.num_downsampling_levels + total number of early triggers)
 
-    // Defines the mapping from stage2 trees to stage1 trees.
-    // Length (stage2_ntrees), each element is an index 0 <= ds_level < stage1_ntrees.
-    std::vector<long> stage2_ds_level;
-
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
     int nbytes_per_segment = 0;  // currently always constants::bytes_per_gpu_cache_line
 

@@ -56,8 +56,7 @@ struct GpuDedisperser
 
     long output_ntrees = 0;
     std::vector<long> output_rank;      // length output_ntrees
-    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level[:]))
-    std::vector<long> output_ds_level;  // length output_ntrees
+    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(ds_level))
 
     // "outer" vector has length nstreams
     // "inner" array shape (beams_per_batch, nfreq, ntime)
@@ -175,8 +174,7 @@ struct ReferenceDedisperserBase
 
     long output_ntrees = 0;             // same as plan->stage2_ntrees
     std::vector<long> output_rank;      // length output_ntrees
-    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(output_ds_level[:]))
-    std::vector<long> output_ds_level;  // length output_ntrees
+    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(ds_level))
 
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
     std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;  // length output_ntrees

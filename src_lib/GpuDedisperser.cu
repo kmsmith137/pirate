@@ -67,7 +67,6 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     this->output_ntrees = out_params.nbuf;
     this->output_rank = out_params.buf_rank;
     this->output_ntime = out_params.buf_ntime;
-    this->output_ds_level = plan->stage2_ds_level;
 
     long nbits_per_segment = plan->nelts_per_segment * dtype.nbits;
     xassert_eq(nbits_per_segment, 8 * constants::bytes_per_gpu_cache_line);  // currently assumed in a few places

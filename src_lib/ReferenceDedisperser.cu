@@ -78,12 +78,10 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
     this->output_ntrees = out_params.nbuf;
     this->output_rank = out_params.buf_rank;
     this->output_ntime = out_params.buf_ntime;
-    this->output_ds_level = plan->stage2_ds_level;
 
     // Some paranoid asserts.
     xassert_eq(long(output_rank.size()), output_ntrees);
     xassert_eq(long(output_ntime.size()), output_ntrees);
-    xassert_eq(long(output_ds_level.size()), output_ntrees);
     xassert_eq(plan->stage2_ntrees, output_ntrees);
 
     // Tree gridding kernel.
@@ -119,12 +117,6 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
         long nt_out = plan->stage2_pf_params.at(i).nt_out;
         this->out_max[i] = Array<float>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
         this->out_argmax[i] = Array<uint>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
-    }
-
-    // More paranoid asserts.
-    for (long i = 0; i < output_ntrees; i++) {
-        xassert((output_ds_level[i] >= 0) && (output_ds_level[i] < config.num_downsampling_levels));
-        xassert(output_ntime[i] == xdiv(input_ntime, pow2(output_ds_level[i])));
     }
     
     // Note: 'output_arrays' is a member of ReferenceDedisperserBase,
@@ -213,14 +205,15 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
     }
     
     for (long iout = 0; iout < output_ntrees; iout++) {
+        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(iout);
 
         long out_rank = output_rank.at(iout);
         long out_ntime = output_ntime.at(iout);
-        bool is_downsampled = (output_ds_level[iout] > 0);
+        bool is_downsampled = (st2.ds_level > 0);
         long dd_rank = out_rank + (is_downsampled ? 1 : 0);
         long ndm_out = pf_params.ndm_out * (is_downsampled ? 2 : 1);
-        long M = plan->stage2_trees.at(iout).frequency_subbands.M;
+        long M = st2.frequency_subbands.M;
 
         this->dedispersion_buffers.at(iout) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
         this->output_arrays.at(iout) = Array<float>({ beams_per_batch, pow2(out_rank), out_ntime }, af_uhost | af_zero);
@@ -271,9 +264,11 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
     }
 
     for (int iout = 0; iout < output_ntrees; iout++) {
+        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
+
         long out_rank = output_rank.at(iout);
         long out_ntime = output_ntime.at(iout);
-        long ids = output_ds_level.at(iout);
+        long ids = st2.ds_level;
         bool is_downsampled = (ids > 0);
         long dd_rank = out_rank + (is_downsampled ? 1 : 0);
         
@@ -391,12 +386,12 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     this->stage2_lagbufs.resize(nbatches * output_ntrees);
 
     for (long iout = 0; iout < output_ntrees; iout++) {
+        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
+
         long rank = output_rank.at(iout);
         long ntime = output_ntime.at(iout);
-        long ds_level = output_ds_level.at(iout);
+        long ds_level = st2.ds_level;
         bool is_downsampled = (ds_level > 0);
-        
-        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
         long stage2_amb_rank = st2.amb_rank;
         long stage2_dd_rank = st2.early_dd_rank;
 
@@ -465,8 +460,10 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
     // Step 3: copy stage1 -> stage2
     // Step 4: apply lags
     for (int iout = 0; iout < output_ntrees; iout++) {
+        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(iout);
+
         long rank = output_rank.at(iout);
-        long ds_level = output_ds_level.at(iout);
+        long ds_level = st2.ds_level;
         
         Array<void> src = stage1_dd_buf.bufs.at(ds_level);  // shape (beams_per_batch, 2^rank_ambient, ntime)
         src = src.slice(1, 0, pow2(rank));                  // shape (beams_per_batch, 2^rank, ntime)
