@@ -238,6 +238,26 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
 // GpuDedisperser::test()
 
 
+static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, long itree, long f)
+{
+    const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(itree);
+    const FrequencySubbands &fs = st2.frequency_subbands;
+
+    long ilo = fs.f_to_ilo.at(f);
+    long ihi = fs.f_to_ihi.at(f);
+
+    // Frequency range in MHz (note lo/hi swap)
+    double flo = fs.i_to_f.at(ihi);
+    double fhi = fs.i_to_f.at(ilo);
+
+    // Frequency index range
+    double filo = plan->config.frequency_to_index(flo);
+    double fihi = plan->config.frequency_to_index(fhi);
+
+    return (fihi - filo) * pow2(st2.ds_level) / 3.0;
+}
+
+
 // Static member function.
 void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, bool host_only)
 {
@@ -268,41 +288,31 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     xassert(nstreams == 1);
     
     // Some initializations:
-    //   ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
     //   pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
+    //   subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
+    //   ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
 
     vector<long> Dcore(plan->stage2_ntrees);
     vector<Array<float>> pf_tmp(plan->stage2_ntrees);
     vector<Array<float>> subband_variances(plan->stage2_ntrees);
     vector<shared_ptr<ReferencePeakFindingKernel>> ref_kernels_for_weights(plan->stage2_ntrees);
 
-    for (long i = 0; i < plan->stage2_ntrees; i++) {
-        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(i);
-        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(i);
-        long Dout = xdiv(pf_params.nt_in, pf_params.nt_out);
+    for (long itree = 0; itree < plan->stage2_ntrees; itree++) {
+        const DedispersionPlan::Stage2Tree &st2 = plan->stage2_trees.at(itree);
+        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
+        long F = st2.frequency_subbands.F;
 
         // Logic to initialize Dcore is currently a placeholder.
-        Dcore.at(i) = Dout;
-        ref_kernels_for_weights.at(i) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(i));
-        pf_tmp.at(i) = Array<float> ({beams_per_batch, pf_params.ndm_out, pf_params.nt_out}, af_uhost | af_zero);
+        Dcore.at(itree) = st2.pf.time_downsampling;  // Dout
 
-        // s = (conversion between FrequencySubbands::{ilo,ihi} and sample delay)
-        FrequencySubbands fs(pf_params.subband_counts);
-        long s = pow2(st2.amb_rank + st2.early_dd_rank - fs.pf_rank);
+        pf_tmp.at(itree) = Array<float> ({beams_per_batch, pf_params.ndm_out, pf_params.nt_out}, af_uhost | af_zero);
 
         // Init subband_variances (used in ReferencePeakFindingKernel::make_random_weights()).
-        subband_variances.at(i) = Array<float> ({fs.F}, af_uhost | af_zero);
-        for (long f = 0; f < fs.F; f++) {
-            // Delay indices
-            long ilo = fs.f_to_ilo.at(f);
-            long ihi = fs.f_to_ihi.at(f);
-            // Frequency indices
-            double iflo = config.frequency_to_index(config.delay_to_frequency(s * ihi));  // note ihi here
-            double ifhi = config.frequency_to_index(config.delay_to_frequency(s * ilo));  // note ilo here
-            subband_variances.at(i).at({f}) = (ifhi - iflo) * pow2(st2.ds_level) / 3.0;
-            if (f == fs.F-1)
-                cout << "AAA itree=" << i << " (ifhi-iflo)=" << (ifhi-iflo) << endl;
-        }
+        subband_variances.at(itree) = Array<float> ({F}, af_uhost | af_zero);
+        for (long f = 0; f < F; f++)
+            subband_variances.at(itree).at({f}) = variance_upper_bound(plan, itree, f);
+
+        ref_kernels_for_weights.at(itree) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
     }
 
     shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, Dcore, 0);
@@ -315,18 +325,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
         gdd = make_shared<GpuDedisperser> (plan);
         gdd->allocate();
     }
-
-#if 0
-    // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
-    // Note: epsilon accounts for both tree gridding (accumulates nfreq/nchan values on average)
-    // and dedispersion (factor of pow(1.414, tree_rank)).
-    double tree_gridding_factor = sqrt(double(nfreq) / pow2(config.tree_rank)) + 1.0;
-    double dedispersion_factor = pow(1.414, config.tree_rank);
-    double epsrel_r = 6 * Dtype::native<float>().precision();                      // reference
-    double epsrel_g = 6 * config.dtype.precision();                                // gpu
-    double epsabs_r = epsrel_r * tree_gridding_factor * dedispersion_factor;       // reference
-    double epsabs_g = epsrel_g * tree_gridding_factor * dedispersion_factor;       // gpu
-#endif
 
     for (int ichunk = 0; ichunk < nchunks; ichunk++) {
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
@@ -363,32 +361,18 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 const Array<float> &rdd0_out = rdd0->output_arrays.at(iout);
                 const Array<float> &rdd1_out = rdd1->output_arrays.at(iout);
                 const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
+                long ds_level = plan->stage2_trees.at(iout).ds_level;
 
                 // Compute epsabs, epsrel for host and gpu
-                // FIXME revisit this if we change the normalization of the dedispersion transform.
-                long ds_level = plan->stage2_trees.at(iout).ds_level;
-                float rms = sqrt(nfreq * pow2(ds_level) / 3.0);
-                float efrac = sqrt(config.tree_rank + ds_level + 2);
                 Array<float> sbv = subband_variances.at(iout);
-                float sbrms = sqrt(sbv.at({sbv.size-1}));
-                cout << "BBB itree=" << iout << " nfreq=" << nfreq << endl;
+                float rms = sqrt(sbv.at({sbv.size-1}));
+                float emult = sqrt(config.tree_rank + ds_level + 1);
 
                 Dtype fp32 = Dtype::from_str("float32");
-                double epsrel_g = 6 * config.dtype.precision() * efrac;
-                double epsabs_g = 6 * config.dtype.precision() * efrac * rms;
-                double epsrel_r = 6 * fp32.precision() * efrac;
-                double epsabs_r = 6 * fp32.precision() * efrac * rms;
-
-#if 1
-                // Compare estimated to actual RMS.
-                double sum = 0.0;
-                xassert(rdd0_out.is_fully_contiguous());
-                for (long i = 0; i < rdd0_out.size; i++)
-                    sum += rdd0_out.data[i] * rdd0_out.data[i];
-                double actual_rms = sqrt(sum/rdd0_out.size);
-                cout << "XXX ds_level=" << ds_level << " epsabs_g=" << epsabs_g << " rms=" << rms 
-                     << " sbrms=" << sbrms << " actual_rms=" << actual_rms << endl;
-#endif
+                double epsrel_g = 3 * config.dtype.precision() * emult;
+                double epsabs_g = 3 * config.dtype.precision() * emult * rms;
+                double epsrel_r = 3 * fp32.precision() * emult;
+                double epsabs_r = 3 * fp32.precision() * emult * rms;
 
                 // Last two arguments are (epsabs, epsrel).
                 assert_arrays_equal(rdd0_out, rdd1_out, "dd_ref0", "dd_ref1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
@@ -398,8 +382,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                     const Array<void> &gdd_out = gdd->stage2_dd_bufs.at(0).bufs.at(iout);  // (istream,itree) = (0,iout)
                     assert_arrays_equal(rdd0_out, gdd_out, "dd_ref0", "dd_gpu", {"beam","dm_brev","t"}, epsabs_g, epsrel_g);
                 }
-
-                continue;
 
                 // Compare peak-finding 'out_max'.
                 assert_arrays_equal(rdd0->out_max.at(iout), rdd1->out_max.at(iout), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
