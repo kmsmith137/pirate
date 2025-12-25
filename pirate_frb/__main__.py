@@ -118,7 +118,8 @@ def test(args):
             pirate_pybind11.test_gpu_reduce2()
             
         if run_all_tests or args.dd:
-            pirate_pybind11.GpuDedisperser.test()
+            for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
+                pirate_pybind11.GpuDedisperser.test()
             
 
 #########################################   time command  ##########################################

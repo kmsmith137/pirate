@@ -847,7 +847,7 @@ void GpuPeakFindingKernel::test(bool short_circuit)
             Array<float> gpu_out2({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             ref_kernel_small.eval_tokens(gpu_out2, gpu_argmax, cpu_wt_small);
 
-            double eps = 10.0 * key.dtype.precision();
+            double eps = 5.0 * key.dtype.precision();
             assert_arrays_equal(cpu_out_small, gpu_out2, "cpu_out_small", "gpu_out2", {"b","d","tout"}, eps, eps);
         }
     }
