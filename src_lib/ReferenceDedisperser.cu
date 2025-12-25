@@ -164,7 +164,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
     // Outer length is nds, inner shape is (beams_per_batch, 2^input_rank, input_nt / pow2(ids)).
     
-    vector<Array<float>> downsampled_inputs;   // length plan->stage1_ntrees
+    vector<Array<float>> downsampled_inputs;   // length num_downsampling_levels
 
     // Step 2: copy from 'downsampled_inputs' to 'dedispersion_buffers'.
     // In downsampled trees, we compute twice as many DMs as necessary, then drop the bottom half.

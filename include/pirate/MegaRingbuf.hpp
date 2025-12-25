@@ -62,21 +62,21 @@ namespace pirate {
 // 
 //     Currently, we use the following scheme:
 //
-//       - stage 1 dedispersion kernel (0 <= i < num_stage1_trees)
-//         has producer_id == i
+//       - stage 1 dedispersion kernel (0 <= ids < num_downsampling_levels)
+//         has producer_id == ids
 //
-//       - stage 2 dedispersion (or cdd2) kernel (0 <= j < num_stage2_trees)
-//         has consumer_id == j
+//       - stage 2 dedispersion (or cdd2) kernel (0 <= itree < num_trees)
+//         has consumer_id == itree
 // 
-//     In the future, when kernels are more coalesced, we'll use a scheme like this:
+//     In the future, when kernels are more coalesced, we might use a scheme like this:
 //
 //       - cdd1 kernel has producer_id == 0
 //
-//       - stage1 downsampled dedispersion kernel (1 <= i < num_stage1_trees)
-//         has producer_id == i, and consumer_id == (i-1)
+//       - stage1 downsampled dedispersion kernel (1 <= ids < num_downsampling_levels
+//         has producer_id == ids, and consumer_id == (ids-1)
 //
-//       - stage2 dedispersion (or ccd2) kernel (0 <= j < num_stage2 trees)
-//         has consumer_id == (j + stage1_trees - 1).
+//       - stage2 dedispersion (or ccd2) kernel (0 <= itree < num_trees)
+//         has consumer_id == (itree + num_downsampling_levels - 1).
 // 
 //   - "Segments" and "quadruples". Each consumer reads "segments" from the ring buffer, 
 //     where a segment is always 128 bytes (constants::bytes_per_gpu_cache_line). 

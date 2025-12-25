@@ -23,22 +23,26 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     config.validate();
 
     // 'nelts_per_segment' is always (constants::bytes_per_gpu_cache_line / sizeof(dtype)).
+    this->num_downsampling_levels = config.num_downsampling_levels;
     this->nelts_per_segment = config.get_nelts_per_segment();
     this->nbytes_per_segment = constants::bytes_per_gpu_cache_line;
 
     // Part 1:
-    //   - Initialize stage1_trees, stage1_trees.
-    //   - Initialize stage1_ntrees, stage2_ntrees 
+    //   - Initialize stage1_dd_rank, stage1_amb_rank.
+    //   - Initialize stage2_trees, stage_ntrees.
     
-    for (int ids = 0; ids < config.num_downsampling_levels; ids++) {
+    this->stage1_dd_rank.resize(num_downsampling_levels);
+    this->stage1_amb_rank.resize(num_downsampling_levels);
+
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
         
-        // Note that Stage1Tree::dd_rank can be different for downsampled trees vs the
+        // Note that stage1_dd_rank can be different for downsampled trees vs the
         // non-downsampled tree, but is the same for different downsampled trees.
         // This property is necessary in order for the LaggedDownsampler to work later.
         
         int total_rank = ids ? (config.tree_rank - 1) : config.tree_rank;
-        int stage1_dd_rank = (total_rank / 2);
-        int stage2_dd_rank = (total_rank - stage1_dd_rank);
+        int st1_dd_rank = (total_rank / 2);
+        int st1_amb_rank = (total_rank - st1_dd_rank);
 
         vector<int> trigger_ranks;
         for (const DedispersionConfig::EarlyTrigger &et: config.early_triggers)
@@ -48,20 +52,16 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         trigger_ranks.push_back(total_rank);
         xassert(is_sorted(trigger_ranks));
 
-        Stage1Tree st1;
-        st1.ds_level = ids;
-        st1.dd_rank = stage1_dd_rank;
-        st1.amb_rank = stage2_dd_rank;
-        st1.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));    
-        this->stage1_trees.push_back(st1);
+        this->stage1_dd_rank.at(ids) = st1_dd_rank;
+        this->stage1_amb_rank.at(ids) = st1_amb_rank;
 
         for (int trigger_rank: trigger_ranks) {
             Stage2Tree st2;
             st2.ds_level = ids;
-            st2.amb_rank = stage1_dd_rank;
-            st2.pri_dd_rank = stage2_dd_rank;
-            st2.early_dd_rank = trigger_rank - stage1_dd_rank;
-            st2.nt_ds = st1.nt_ds;
+            st2.amb_rank = st1_dd_rank;       // note amb <-> dd swap
+            st2.pri_dd_rank = st1_amb_rank;   // note amb <-> dd swap
+            st2.early_dd_rank = trigger_rank - st1_dd_rank;
+            st2.nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
 
             xassert_ge(st2.early_dd_rank, 1);
             xassert_le(st2.early_dd_rank, st2.pri_dd_rank);
@@ -114,9 +114,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
         }
     }
 
-    this->stage1_ntrees = stage1_trees.size();
     this->stage2_ntrees = stage2_trees.size();
-    xassert(stage1_ntrees == config.num_downsampling_levels);
     
     // Part 2:
     // Set up the MegaRingbuf, a central data structure that buffers data between kernels.
@@ -127,13 +125,17 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     mrb_params.active_beams = config.num_active_batches * config.beams_per_batch;
     mrb_params.gpu_clag_maxfrac = config.gpu_clag_maxfrac;
 
-    for (const Stage1Tree &st1: this->stage1_trees) {
-        long nquads = pow2(st1.dd_rank + st1.amb_rank) * xdiv(st1.nt_ds, nelts_per_segment);
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
+        long tot_rank = stage1_dd_rank.at(ids) + stage1_amb_rank.at(ids);
+        long nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
+        long nquads = pow2(tot_rank) * xdiv(nt_ds, nelts_per_segment);
         mrb_params.producer_nquads.push_back(nquads);
     }
 
-    for (const Stage2Tree &st2: this->stage2_trees) {
-        long nquads = pow2(st2.amb_rank + st2.early_dd_rank) * xdiv(st2.nt_ds, nelts_per_segment);
+    for (long itree = 0; itree < stage2_ntrees; itree++) {
+        const Stage2Tree &st2 = stage2_trees.at(itree);
+        long tot_rank = st2.amb_rank + st2.early_dd_rank;  // not primary_dd_rank
+        long nquads = pow2(tot_rank) * xdiv(st2.nt_ds, nelts_per_segment);
         mrb_params.consumer_nquads.push_back(nquads);
     }
 
@@ -142,14 +144,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     for (int itree2 = 0; itree2 < stage2_ntrees; itree2++) {
         const Stage2Tree &st2 = this->stage2_trees.at(itree2);
 
-        int itree1 = st2.ds_level;
-        const Stage1Tree &st1 = this->stage1_trees.at(itree1);
-
         // Some truly paranoid asserts.
-        xassert(st1.nt_ds == st2.nt_ds);
-        xassert(st1.dd_rank == st2.amb_rank);
-        xassert(st1.ds_level == st2.ds_level);
-        xassert(st1.amb_rank == st2.pri_dd_rank);
+        xassert(st2.amb_rank == stage1_dd_rank.at(st2.ds_level));
+        xassert(st2.pri_dd_rank == stage1_amb_rank.at(st2.ds_level));
+        xassert(st2.nt_ds == xdiv(config.time_samples_per_chunk, pow2(st2.ds_level)));
 
         // For the stage1 -> stage2 intermediate array, we use variable names
         //   0 <= freq_c < nfreq     (= pow2(st2.early_dd_rank))
@@ -186,7 +184,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
                     //
                     // (Note that in both cases, the active dedipsersion index is fastest varying.)
 
-                    long producer_id = itree1;
+                    long producer_id = st2.ds_level;
                     long producer_iquad = (ssrc * nfreq_amb * ndm) + (freq * ndm) + dm_brev;
 
                     long consumer_id = itree2;
@@ -206,7 +204,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     //   DedispersionBufferParams stage1_dd_buf_params;
     //   DedispersionBufferParams stage2_dd_buf_params;
     //
-    //   std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length stage1_ntrees
+    //   std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length num_downsampling_levels
     //   std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
     //
     //   LaggedDownsamplingKernelParams lds_params;
@@ -226,30 +224,32 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     
     stage1_dd_buf_params.dtype = config.dtype;
     stage1_dd_buf_params.beams_per_batch = config.beams_per_batch;
-    stage1_dd_buf_params.nbuf = stage1_ntrees;
+    stage1_dd_buf_params.nbuf = num_downsampling_levels;
 
-    for (uint itree1 = 0; itree1 < stage1_trees.size(); itree1++) {
-        const Stage1Tree &st1 = stage1_trees.at(itree1);
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
+        long dd_rank = stage1_dd_rank.at(ids);
+        long amb_rank = stage1_amb_rank.at(ids);
+        long nt_ds = xdiv(config.time_samples_per_chunk, pow2(ids));
 
         DedispersionKernelParams kparams;
         kparams.dtype = config.dtype;
-        kparams.dd_rank = st1.dd_rank;
-        kparams.amb_rank = st1.amb_rank;
+        kparams.dd_rank = dd_rank;
+        kparams.amb_rank = amb_rank;
         kparams.total_beams = config.beams_per_gpu;
         kparams.beams_per_batch = config.beams_per_batch;
-        kparams.ntime = st1.nt_ds;
+        kparams.ntime = xdiv(config.time_samples_per_chunk, pow2(ids));
         kparams.nspec = 1;
         kparams.input_is_ringbuf = false;
         kparams.output_is_ringbuf = true;   // note output_is_ringbuf = true
         kparams.apply_input_residual_lags = false;
-        kparams.input_is_downsampled_tree = (st1.ds_level > 0);
+        kparams.input_is_downsampled_tree = (ids > 0);
         kparams.nt_per_segment = this->nelts_per_segment;
         kparams.mega_ringbuf = mega_ringbuf;
-        kparams.producer_id = itree1;
+        kparams.producer_id = ids;
         kparams.validate();
 
-        stage1_dd_buf_params.buf_rank.push_back(st1.dd_rank + st1.amb_rank);
-        stage1_dd_buf_params.buf_ntime.push_back(st1.nt_ds);
+        stage1_dd_buf_params.buf_rank.push_back(dd_rank + amb_rank);
+        stage1_dd_buf_params.buf_ntime.push_back(nt_ds);
         stage1_dd_kernel_params.push_back(kparams);
     }
 
@@ -257,11 +257,9 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     stage2_dd_buf_params.beams_per_batch = config.beams_per_batch;
     stage2_dd_buf_params.nbuf = stage2_ntrees;
 
-    for (uint itree2 = 0; itree2 < stage2_trees.size(); itree2++) {
+    for (uint itree2 = 0; itree2 < stage2_ntrees; itree2++) {
         Stage2Tree &st2 = stage2_trees.at(itree2);
         long ds_level = st2.ds_level;
-
-        xassert(st2.nt_ds == xdiv(config.time_samples_per_chunk, pow2(ds_level)));
 
         DedispersionKernelParams kparams;
         kparams.dtype = config.dtype;
@@ -303,7 +301,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     // Note that 'output_dd_rank' is guaranteed to be the same for all downsampled trees.
     lds_params.dtype = config.dtype;
     lds_params.input_total_rank = config.tree_rank;
-    lds_params.output_dd_rank = (stage1_ntrees > 1) ? stage1_trees.at(1).dd_rank : 0;
+    lds_params.output_dd_rank = (config.num_downsampling_levels > 1) ? stage1_dd_rank.at(1) : 0;
     lds_params.num_downsampling_levels = config.num_downsampling_levels;
     lds_params.total_beams = config.beams_per_gpu;
     lds_params.beams_per_batch = config.beams_per_batch;
@@ -331,28 +329,14 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
 
 void DedispersionPlan::print(ostream &os, int indent) const
-{
-    xassert(long(stage1_trees.size()) == stage1_ntrees);
-    xassert(long(stage2_trees.size()) == stage2_ntrees);
-    
+{    
     os << Indent(indent) << "DedispersionPlan" << endl;
     this->config.print(os, indent+4);
     
     print_kv("nelts_per_segment", nelts_per_segment, os, indent);
     print_kv("nbytes_per_segment", nbytes_per_segment, os, indent);
-
-    os << Indent(indent) << "Stage1Trees" << endl;
-
-    for (long i = 0; i < stage1_ntrees; i++) {
-        const Stage1Tree &st1 = stage1_trees.at(i);
-        
-        os << Indent(indent+4) << i
-           << ": ds_level=" << st1.ds_level
-           << ", dd_rank=" << st1.dd_rank
-           << ", amb_rank=" << st1.amb_rank
-           << ", nt_ds=" << st1.nt_ds
-           << endl;
-    }
+    print_kv("stage1_dd_rank", ksgpu::tuple_str(stage1_dd_rank), os, indent);
+    print_kv("stage1_amb_rank", ksgpu::tuple_str(stage1_amb_rank), os, indent);
     
     os << Indent(indent) << "Stage2Trees" << endl;
 

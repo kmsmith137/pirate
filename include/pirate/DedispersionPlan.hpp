@@ -34,7 +34,7 @@ struct DedispersionPlan
     // plus one "early" tree for each EarlyTrigger (see DedispersionConfig.hpp). Thus,
     // there is a many-to-one mapping from stage2 trees to stage1 trees.
 
-    long stage1_ntrees = 0;  // = (config.num_downsampling_levels)
+    long num_downsampling_levels = 0;  // = (config.num_downsampling_levels)
     long stage2_ntrees = 0;  // = (config.num_downsampling_levels + total number of early triggers)
 
     int nelts_per_segment = 0;   // currently always constants::bytes_per_gpu_cache_line / (sizeof config dtype)
@@ -47,24 +47,19 @@ struct DedispersionPlan
     std::string to_yaml_string(bool verbose = false) const;
 
     // -------------------------------------------------------------------------------------------------
-    //
-    // Stage1Trees, Stage2Trees.
 
-    struct Stage1Tree
-    {
-        // Note: total tree rank (dd_rank + amb_rank) is equal to (config.tree_rank - (ds_level ? 1 : 0)).        
-        int ds_level = -1;  // Downsampling level (downsampling "factor" is 2^level)
-        int dd_rank = 0;    // "Active" dedispersion rank of Stage1Tree 
-        int amb_rank = 0;   // "Ambient" rank of Stage1Tree (= number of coarse freq channels)
-        int nt_ds = 0;      // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
-    };
+
+    // Stage1 tree info (vectors have length == num_downsampling_levels).
+    // Note: total tree rank (dd_rank + amb_rank) is equal to (config.tree_rank - (ds_level ? 1 : 0)).     
+    std::vector<long> stage1_dd_rank;    // "Active" dedispersion rank of each stage1 tree.
+    std::vector<long> stage1_amb_rank;   // "Ambient" rank of each stage1 tree (= number of coarse freq channels)
 
     struct Stage2Tree
     {
         // Note: for most purposes, you want 'early_dd_rank', not 'pri_dd_rank'.
-        int ds_level = -1;       // Downsampling level, also identifies associated Stage1Tree.
-        int amb_rank = 0;        // Ambient rank of Stage2Tree (= dd_rank of associated Stage1Tree)
-        int pri_dd_rank = 0;     // Active rank of primary Stage2Tree (= amb_rank of associated Stage1Tree)
+        int ds_level = -1;       // Downsampling level, also identifies associated stage1 tree.
+        int amb_rank = 0;        // Ambient rank of Stage2Tree (= dd_rank of associated stage1 tree)
+        int pri_dd_rank = 0;     // Active rank of primary Stage2Tree (= amb_rank of associated stage1 tree)
         int early_dd_rank = 0;   // Active rank of this Stage2Tree (always <= pri_dd_rank)
         int nt_ds = 0;           // Downsampled time samples per chunk (= config.time_samples_per_chunk / pow2(ds_level))
 
@@ -93,7 +88,6 @@ struct DedispersionPlan
         double trigger_frequency = 0.0f;
     };
     
-    std::vector<Stage1Tree> stage1_trees;  // length stage1_ntrees
     std::vector<Stage2Tree> stage2_trees;  // length stage2_ntrees
 
     // -------------------------------------------------------------------------------------------------
@@ -107,10 +101,10 @@ struct DedispersionPlan
     TreeGriddingKernelParams tree_gridding_kernel_params;
     LaggedDownsamplingKernelParams lds_params;
 
-    DedispersionBufferParams stage1_dd_buf_params;  // (number of buffers) = stage1_ntrees
+    DedispersionBufferParams stage1_dd_buf_params;  // (number of buffers) = num_downsampling_levels
     DedispersionBufferParams stage2_dd_buf_params;  // (number of buffers) = stage2_ntrees
     
-    std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length stage1_ntrees
+    std::vector<DedispersionKernelParams> stage1_dd_kernel_params;  // length num_downsampling_levels
     std::vector<DedispersionKernelParams> stage2_dd_kernel_params;  // length stage2_ntrees
     std::vector<PeakFindingKernelParams> stage2_pf_params;          // length stage2_ntrees
 
