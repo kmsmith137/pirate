@@ -87,10 +87,6 @@ struct BumpAllocator
     long capacity = -1;      // -1 means dummy mode
     std::shared_ptr<void> base;
 
-    // Helper: computes required nbytes for array with given dtype/shape/strides.
-    // Also validates shape/strides and throws if invalid.
-    static long _compute_array_nbytes(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides);
-
     // Helper: allocates array, used by all allocate_array() overloads.
     // Handles both normal mode and dummy mode.
     ksgpu::Array<void> _allocate_array_internal(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides);

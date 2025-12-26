@@ -26,7 +26,7 @@ debug_pf_kernels = False      # debug peak-finding kernels
 debug_pfo_kernels = False     # debug peak-finding output microkernel
 debug_pfwr_kernels = False    # debug peak-finding weight reader kernels
 debug_cdd2_kernels = False    # debug coalesced dedispersion-pf kernels
-debug_gpu_dd = True           # end-to-end test of gpu dedisperser
+debug_gpu_dd = False          # end-to-end test of gpu dedisperser
 
 
 ####################################################################################################

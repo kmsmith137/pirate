@@ -77,7 +77,7 @@ struct DedispersionBuffer
     std::vector<ksgpu::Array<void>> bufs;
     bool is_allocated = false;
 
-    void allocate(int aflags);    
+    void allocate(int aflags);
     bool on_host() const;  // throws exception if unallocated
     bool on_gpu() const;   // throws exception if unallocated
 
