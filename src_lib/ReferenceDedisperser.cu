@@ -58,6 +58,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     this->nt_in = plan->nt_in;
     this->total_beams = plan->beams_per_gpu;
     this->beams_per_batch = plan->beams_per_batch;
+    this->num_downsampling_levels = plan->num_downsampling_levels;
     this->nbatches = xdiv(total_beams, beams_per_batch);
     this->ntrees = plan->ntrees;
     this->trees = plan->trees;
@@ -145,12 +146,12 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
     ReferenceDedisperserBase(plan_, Dcore_, 0)
 {   
-    this->downsampled_inputs.resize(plan->num_downsampling_levels);
+    this->downsampled_inputs.resize(num_downsampling_levels);
     this->dedispersion_buffers.resize(ntrees);
     this->reference_trees.resize(nbatches * ntrees);
     this->subband_buffers.resize(ntrees);
 
-    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
         long nt_ds = xdiv(nt_in, pow2(ids));
         downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(config.tree_rank), nt_ds}, af_uhost | af_zero);
     }
@@ -189,7 +190,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
     // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
     tree_gridding_kernel->apply(downsampled_inputs.at(0), input_array);
     
-    for (int ids = 1; ids < plan->num_downsampling_levels; ids++) {
+    for (int ids = 1; ids < num_downsampling_levels; ids++) {
         
         // Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
         // Outer length is num_downsampling_levels.
@@ -289,7 +290,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
     this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
 
-    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
         // In ReferenceDedisperser1, ringbufs are disabled, so make a copy of the dd_params.
         DedispersionKernelParams dd_params = plan->stage1_dd_kernel_params.at(ids);
         dd_params.output_is_ringbuf = false;
@@ -305,7 +306,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
         dd_params.input_is_ringbuf = false;   // in ReferenceDeidsperser1, ringbufs are disabled.
         dd_params.consumer_id = -1;
 
-        vector<long> subband_counts = plan->stage2_pf_params.at(itree).subband_counts;
+        vector<long> subband_counts = trees.at(itree).frequency_subbands.subband_counts;
         this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
     }
     
@@ -372,7 +373,7 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
     lds_kernel->apply(stage1_dd_buf, ibatch);
 
     // Step 2: run stage1 dedispersion kernels.
-    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
         shared_ptr<ReferenceDedispersionKernel> kernel = stage1_dd_kernels.at(ids);
         const DedispersionKernelParams &kp = kernel->params;
         Array<void> dd_buf = stage1_dd_buf.bufs.at(ids);
@@ -486,7 +487,7 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
         stage2_subband_bufs.at(itree) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
     }
 
-    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
         const DedispersionKernelParams &dd_params = plan->stage1_dd_kernel_params.at(ids);
         vector<long> subband_counts = { 1 };  // no subbands needed in stage1 kernels
         this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
@@ -494,7 +495,7 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(itree);
-        vector<long> subband_counts = plan->stage2_pf_params.at(itree).subband_counts;
+        vector<long> subband_counts = trees.at(itree).frequency_subbands.subband_counts;
         this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
     }
 }
@@ -517,7 +518,7 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
     lds_kernel->apply(stage1_dd_buf, ibatch);
 
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
-    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+    for (long ids = 0; ids < num_downsampling_levels; ids++) {
         shared_ptr<ReferenceDedispersionKernel> kernel = stage1_dd_kernels.at(ids);
         const DedispersionKernelParams &kp = kernel->params;
         Array<void> dd_buf = stage1_dd_buf.bufs.at(ids);
