@@ -985,7 +985,8 @@ static DedispersionBuffer make_buffer(const LaggedDownsamplingKernelParams &lds_
     dd_params.validate();
     
     DedispersionBuffer buf(dd_params);
-    buf.allocate(aflags);
+    BumpAllocator allocator(aflags, -1);  // dummy allocator
+    buf.allocate(allocator);
     return buf;
 }
 
@@ -1001,8 +1002,8 @@ static void run_test(const TestInstanceLDS &ti)
     BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
     gpu_kernel->allocate(allocator);
     
-    DedispersionBuffer cpu_buf = make_buffer(ref_kernel->params, af_uhost);
-    DedispersionBuffer gpu_buf = make_buffer(gpu_kernel->params, af_gpu);
+    DedispersionBuffer cpu_buf = make_buffer(ref_kernel->params, af_uhost | af_zero);
+    DedispersionBuffer gpu_buf = make_buffer(gpu_kernel->params, af_gpu | af_zero);
     
     long nbatches = xdiv(p.total_beams, p.beams_per_batch);
     long nb = p.beams_per_batch;
@@ -1074,7 +1075,8 @@ DedispersionBuffer make_lds_timing_buffer(const LaggedDownsamplingKernelParams &
     dd_params.validate();
     
     DedispersionBuffer buf(dd_params);
-    buf.allocate(aflags);
+    BumpAllocator allocator(aflags, -1);  // dummy allocator
+    buf.allocate(allocator);
     return buf;
 }
 
@@ -1085,8 +1087,8 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
     long nb_tot = params.total_beams;
     long nb_batch = params.beams_per_batch;
     long nstreams = xdiv(nb_tot, nb_batch);
-    long nouter = 10;
-    long ninner = 20;
+    int niter = 500;
+    int print_interval = 50;
     
     long ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
     shared_ptr<GpuLaggedDownsamplingKernel> kernel = GpuLaggedDownsamplingKernel::make(params);
@@ -1100,8 +1102,8 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
     // All global memory bandwidths are in GB
     long buf_nelts_per_stream = bufs[0].ref.size;
     long pstate_nelts_per_stream = nb_batch * kernel->state_nelts_per_beam;
-    double gmem_buf = 1.0e-9 * ninner * buf_nelts_per_stream * ST;
-    double gmem_pstate = 2.0e-9 * ninner * pstate_nelts_per_stream * ST;  // note factor 2 here
+    double gmem_buf = 1.0e-9 * buf_nelts_per_stream * ST;
+    double gmem_pstate = 2.0e-9 * pstate_nelts_per_stream * ST;  // note factor 2 here
     double gmem_tot = gmem_buf + gmem_pstate;
     double pstate_overhead_percentage = 100. * gmem_pstate / gmem_tot;
     
@@ -1115,14 +1117,16 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
                 << ")";
     string name = kernel_name.str();
 
-    KernelTimer kt(nouter, nstreams);
+    KernelTimer kt(niter, nstreams);
 
     while (kt.next()) {
         DedispersionBuffer &buf = bufs.at(kt.istream);
-        for (int j = 0; j < ninner; j++)
-            kernel->launch(buf, kt.istream, j, kt.stream);
 
-        if (kt.warmed_up) {
+        long ichunk = kt.curr_iteration / nstreams;
+        long ibatch = kt.curr_iteration % nstreams;
+        kernel->launch(buf, ichunk, ibatch, kt.stream);
+
+        if (kt.warmed_up && ((kt.curr_iteration+1) % print_interval == 0)) {
             double gb_per_sec = gmem_tot / kt.dt;
             cout << name << " global memory (GB/s): " << gb_per_sec << endl;
         }

@@ -59,12 +59,16 @@ DedispersionBuffer::DedispersionBuffer(const DedispersionBufferParams &params_)
 }
 
 
-void DedispersionBuffer::allocate(int aflags)
+void DedispersionBuffer::allocate(BumpAllocator &allocator)
 {
     params.validate(); // paranoid
     
     if (is_allocated)
         throw runtime_error("double call to DedispersionBuffer::allocate()");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("DedispersionBuffer::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
 
     long nb = params.beams_per_batch;
     long nbuf = params.nbuf;
@@ -78,7 +82,7 @@ void DedispersionBuffer::allocate(int aflags)
     for (long i = 0; i < nbuf; i++)
         bstride += pow2(params.buf_rank[i]) * params.buf_ntime[i];
 
-    this->ref = Array<void> (params.dtype, {nb,bstride}, aflags);
+    this->ref = allocator.allocate_array<void> (params.dtype, {nb,bstride});
     this->bufs.resize(nbuf);
 
     long j = 0;
@@ -89,6 +93,9 @@ void DedispersionBuffer::allocate(int aflags)
         this->bufs[i] = a.reshape({ nb, nr, nt });
         j += nr*nt;
     }
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "DedispersionBuffer: " << nbytes_allocated << " bytes allocated" << endl;
 
     xassert(bstride == j);
     this->is_allocated = true;

@@ -36,7 +36,8 @@ static DedispersionBuffer _make_dd_buffer(const DedispersionBufferParams &params
     params.dtype = Dtype::native<float> ();
     
     DedispersionBuffer buf(params);
-    buf.allocate(af_uhost);
+    BumpAllocator allocator(af_uhost | af_zero, -1);  // dummy allocator
+    buf.allocate(allocator);
     return buf;
 }
 

@@ -368,7 +368,7 @@ void GpuTreeGriddingKernel::time()
     //   beams_per_batch: 2
     //   time_sample_ms: 1.0
 
-    // Construct a throwaway DedispersionConfig to get channel_map via make_channel_map().
+    // Construct a throwaway (CHORD-like) DedispersionConfig to get channel_map via make_channel_map().
     DedispersionConfig dconfig;
     dconfig.zone_freq_edges = { 300, 350, 450, 600, 800, 1500 };
     dconfig.zone_nfreq = { 8192, 8192, 6144, 2048, 3584 };
@@ -377,7 +377,7 @@ void GpuTreeGriddingKernel::time()
     dconfig.num_downsampling_levels = 4;
     dconfig.time_samples_per_chunk = 2048;
     dconfig.dtype = fp16;  // doesn't matter for channel_map, just for validation
-    dconfig.beams_per_gpu = 6;
+    dconfig.beams_per_gpu = 4;
     dconfig.beams_per_batch = 2;
     dconfig.num_active_batches = 2;
     dconfig.frequency_subband_counts = { 0, 0, 0, 0, 1 };

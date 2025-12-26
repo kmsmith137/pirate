@@ -399,6 +399,7 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
         DedispersionConfig config;
         config.dtype = dtype;
         config.tree_rank = 16;
+        config.time_sample_ms = 1.0;
         config.num_downsampling_levels = 1;
         config.time_samples_per_chunk = 2048;
         config.beams_per_gpu = 4;

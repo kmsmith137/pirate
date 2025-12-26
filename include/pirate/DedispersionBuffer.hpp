@@ -8,6 +8,8 @@
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
 
+#include "BumpAllocator.hpp"
+
 
 namespace pirate {
 #if 0
@@ -77,7 +79,7 @@ struct DedispersionBuffer
     std::vector<ksgpu::Array<void>> bufs;
     bool is_allocated = false;
 
-    void allocate(int aflags);
+    void allocate(BumpAllocator &allocator);
     bool on_host() const;  // throws exception if unallocated
     bool on_gpu() const;   // throws exception if unallocated
 

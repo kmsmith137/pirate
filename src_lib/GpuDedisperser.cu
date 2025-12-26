@@ -112,7 +112,7 @@ void GpuDedisperser::allocate(BumpAllocator &allocator)
     input_arrays = allocator.allocate_array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in});
 
     for (DedispersionBuffer &buf: stage1_dd_bufs)
-        buf.allocate(af_zero | af_gpu);
+        buf.allocate(allocator);
 
     // wt_arrays
     for (long itree = 0; itree < ntrees; itree++) {
