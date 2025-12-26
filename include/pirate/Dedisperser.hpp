@@ -42,19 +42,15 @@ struct GpuDedisperser
     
     std::shared_ptr<DedispersionPlan> plan;
     
-    const DedispersionConfig config;   // same as plan->config
-
-    ksgpu::Dtype dtype;           // = (config.dtype)
-    long nfreq = 0;               // = (config.get_total_nfreq())
-    long input_rank = 0;          // = (config.tree_rank)
-    long input_ntime = 0;         // = (config.time_samples_per_chunk)
-    long total_beams = 0;         // = (config.beams_per_gpu)
-    long beams_per_batch = 0;     // = (config.beams_per_batch)
-    long nstreams = 0;            // = (config.num_active_batches)
-    long nbatches = 0;            // = (total_beams / beams_per_batch)
-    long gpu_ringbuf_nelts = 0;   // = (mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment)
-    long host_ringbuf_nelts = 0;  // = (mega_ringbuf->host_global_nseg * plan->nelts_per_segment)
-
+    // Some key members of DedispersionPlan, copied into GpuDedisperser for convenience.
+    DedispersionConfig config;             // same as plan->config
+    ksgpu::Dtype dtype;                    // same as plan->dtype
+    long nfreq = 0;                        // same as plan->freq
+    long nt_in = 0;                        // same as plan->nt_in
+    long total_beams = 0;                  // same as plan->beams_per_gpu
+    long beams_per_batch = 0;              // same as plan->beams_per_batch
+    long nstreams = 0;                     // same as plan->num_active_batches
+    long nbatches = 0;                     // = (total_beams / beams_per_batch)
     long ntrees = 0;                       // same as plan->ntrees
     std::vector<DedispersionTree> trees;   // same as plan->trees
 
@@ -161,17 +157,17 @@ struct ReferenceDedisperserBase
     );
     
     std::shared_ptr<DedispersionPlan> plan;
-    const DedispersionConfig config;     // same as plan->config
-    const std::vector<long> Dcore;       // see above
-    const int sophistication;            // see above
-    
-    long nfreq = 0;               // same as config.get_total_nfreq()
-    long input_rank = 0;          // same as config.tree_rank
-    long input_ntime = 0;         // same as config.time_samples_per_chunk
-    long total_beams = 0;         // same as config.beams_per_gpu
-    long beams_per_batch = 0;     // same as config.beams_per_batch
-    long nbatches = 0;            // = (total_beams / beams_per_batch)
+    std::vector<long> Dcore;       // see above
+    int sophistication;            // see above
 
+    // Some key members of DedispersionPlan, copied into ReferenceD
+    DedispersionConfig config;             // same as plan->config
+    ksgpu::Dtype dtype;                    // same as plan->dtype
+    long nfreq = 0;                        // same as plan->nfreq
+    long nt_in = 0;                        // same as plan->nt_in
+    long total_beams = 0;                  // same as plan->beams_per_gpu
+    long beams_per_batch = 0;              // same as plan->beams_per_batch
+    long nbatches = 0;                     // = (total_beams / beams_per_batch)
     long ntrees = 0;                       // same as plan->ntrees
     std::vector<DedispersionTree> trees;   // same as plan->trees
 
@@ -183,7 +179,7 @@ struct ReferenceDedisperserBase
     virtual void dedisperse(long ichunk, long ibatch) = 0;
 
     // Before calling dedisperse(), caller should fill 'input_array'.
-    // Shape is (beams_per_batch, nfreq, input_ntime).
+    // Shape is (beams_per_batch, nfreq, nt_in).
     ksgpu::Array<float> input_array;
 
     // Befre calling dedisperse(), caller should fill 'wt_arrays' (peak-finding weights).

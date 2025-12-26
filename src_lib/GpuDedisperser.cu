@@ -21,15 +21,6 @@ namespace pirate {
 
 
 // Helper for GpuDedisperser constructor.
-// Prevents constructor from segfaulting, if invoked with empty shared_ptr.
-static DedispersionPlan *deref(const shared_ptr<DedispersionPlan> &p)
-{
-    if (!p)
-        throw runtime_error("GpuDedisperser constructor called with empty shared_ptr");
-    return p.get();
-}
-
-// Helper for GpuDedisperser constructor.
 // Concatenate scalar + vector.
 template<typename T>
 static inline vector<T> svcat(const T &s, const vector<T> &v)
@@ -46,23 +37,21 @@ static inline vector<T> svcat(const T &s, const vector<T> &v)
 
 
 GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
-    plan(plan_),
-    config(deref(plan_)->config)
+    plan(plan_)
 {
+    xassert(plan);
+
     // There's some cut-and-paste between this constructor and the ReferenceDedisperser
     // constructor, but not enough to bother defining a common base class.
-    
-    this->dtype = config.dtype;
-    this->nfreq = config.get_total_nfreq();
-    this->input_rank = config.tree_rank;
-    this->input_ntime = config.time_samples_per_chunk;
-    this->total_beams = config.beams_per_gpu;
-    this->beams_per_batch = config.beams_per_batch;
-    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
-    this->host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
-    this->nbatches = xdiv(total_beams, beams_per_batch);
-    this->nstreams = config.num_active_batches;
 
+    this->config = plan->config;
+    this->dtype = plan->dtype;
+    this->nfreq = plan->nfreq;
+    this->nt_in = plan->nt_in;
+    this->total_beams = plan->beams_per_gpu;
+    this->beams_per_batch = plan->beams_per_batch;
+    this->nstreams = plan->num_active_batches;
+    this->nbatches = xdiv(total_beams, beams_per_batch);
     this->ntrees = plan->ntrees;
     this->trees = plan->trees;
 
@@ -113,9 +102,9 @@ void GpuDedisperser::allocate()
     if (this->is_allocated)
         throw runtime_error("double call to GpuDedisperser::allocate()");
 
-    // Allocate input_arrays (frequency-space, shape (beams_per_batch, nfreq, ntime)).
+    // Allocate input_arrays (frequency-space, shape (beams_per_batch, nfreq, nt_in)).
     for (long i = 0; i < nstreams; i++)
-        input_arrays.push_back(Array<void>(dtype, {beams_per_batch, nfreq, input_ntime}, af_gpu | af_zero));
+        input_arrays.push_back(Array<void>(dtype, {beams_per_batch, nfreq, nt_in}, af_gpu | af_zero));
 
     for (auto &buf: stage1_dd_bufs)
         buf.allocate(af_zero | af_gpu);
@@ -143,6 +132,8 @@ void GpuDedisperser::allocate()
     for (auto &kernel: this->cdd2_kernels)
         kernel->allocate();
 
+    long gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
+    long host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
     this->gpu_ringbuf = Array<void>(dtype, { gpu_ringbuf_nelts }, af_gpu | af_zero);
     this->host_ringbuf = Array<void>(dtype, { host_ringbuf_nelts }, af_rhost | af_zero);    
 

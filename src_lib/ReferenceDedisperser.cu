@@ -46,35 +46,19 @@ static DedispersionBuffer _make_dd_buffer(const DedispersionBufferParams &params
 // ReferenceDedisperserBase
 
 
-// Helper for ReferenceDedisperserBase constructor.
-// Prevents constructor from segfaulting, if invoked with empty shared_ptr.
-static DedispersionPlan *deref(const shared_ptr<DedispersionPlan> &p)
+ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_, int sophistication_) :
+    plan(plan_), Dcore(Dcore_), sophistication(sophistication_)
 {
-    if (!p)
-        throw runtime_error("ReferenceDedisperser constructor called with empty shared_ptr");
-    return p.get();
-}
-
-
-ReferenceDedisperserBase::ReferenceDedisperserBase(
-    const shared_ptr<DedispersionPlan> &plan_, 
-    const vector<long> &Dcore_,
-    int sophistication_
-) :
-    plan(plan_),
-    config(deref(plan_)->config),
-    Dcore(Dcore_),
-    sophistication(sophistication_)
-{
+    xassert(plan);
     xassert_eq(long(Dcore.size()), plan->ntrees);
 
-    this->nfreq = config.get_total_nfreq();
-    this->input_rank = config.tree_rank;
-    this->input_ntime = config.time_samples_per_chunk;
-    this->total_beams = config.beams_per_gpu;
-    this->beams_per_batch = config.beams_per_batch;
+    this->config = plan->config;
+    this->dtype = plan->dtype;
+    this->nfreq = plan->nfreq;
+    this->nt_in = plan->nt_in;
+    this->total_beams = plan->beams_per_gpu;
+    this->beams_per_batch = plan->beams_per_batch;
     this->nbatches = xdiv(total_beams, beams_per_batch);
-
     this->ntrees = plan->ntrees;
     this->trees = plan->trees;
 
@@ -89,7 +73,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
     }
 
     // Allocate frequency-space input array.
-    this->input_array = Array<float>({beams_per_batch, nfreq, input_ntime}, af_uhost | af_zero);
+    this->input_array = Array<float>({beams_per_batch, nfreq, nt_in}, af_uhost | af_zero);
     
     // Allocate weights arrays.
     this->wt_arrays.resize(ntrees);
@@ -132,7 +116,7 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 
     // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
     // Step 1: downsample input array (straightforward downsample, not "lagged" downsample!)
-    // Outer length is nds, inner shape is (beams_per_batch, 2^input_rank, input_nt / pow2(ids)).
+    // Outer length is nds, inner shape is (beams_per_batch, 2^config.tree_rank, input_nt / pow2(ids)).
     
     vector<Array<float>> downsampled_inputs;   // length num_downsampling_levels
 
@@ -166,8 +150,8 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
     this->subband_buffers.resize(ntrees);
 
     for (long ids = 0; ids < nds; ids++) {
-        long nt_ds = xdiv(input_ntime, pow2(ids));
-        downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(input_rank), nt_ds}, af_uhost | af_zero);
+        long nt_ds = xdiv(nt_in, pow2(ids));
+        downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(config.tree_rank), nt_ds}, af_uhost | af_zero);
     }
     
     for (long iout = 0; iout < ntrees; iout++) {
@@ -210,7 +194,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
     for (int ids = 1; ids < nds; ids++) {
         
         // Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
-        // Outer length is nds, inner shape is (beams_per_batch, 2^input_rank, input_nt / pow2(ids)).
+        // Outer length is nds, inner shape is (beams_per_batch, 2^config.tree_rank, input_nt / pow2(ids)).
         // Reminder: 'input_array' is an alias for downsampled_inputs[0].
 
         Array<float> src = downsampled_inputs.at(ids-1);
