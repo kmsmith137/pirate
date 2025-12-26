@@ -40,7 +40,7 @@ const TreeGriddingKernelParams &TreeGriddingKernelParams::validate() const
 
     // Check that channel_map values are in-range and monotonically decreasing.
     for (long i = 0; i <= nchan; i++) {
-	    float c = channel_map.data[i];
+	    double c = channel_map.data[i];
 	    xassert((c >= 0) && (c <= nfreq));
 	    if (i > 0)
 	        xassert(channel_map.data[i-1] > c);
@@ -82,19 +82,19 @@ void ReferenceTreeGriddingKernel::apply(Array<float> &out, const Array<float> &i
         for (long n = 0; n < N; n++) {
             // channel_map is monotonically decreasing, so channel_map[n+1] < channel_map[n].
             // f0 is the lower bound, f1 is the upper bound.
-            float f0 = params.channel_map.data[n+1];
-            float f1 = params.channel_map.data[n];
+            double f0 = params.channel_map.data[n+1];
+            double f1 = params.channel_map.data[n];
 
             long if0 = max(long(f0), 0L);
             long if1 = min(long(f1)+1, F);
 
             for (long f = if0; f < if1; f++) {
-                float flo = max(f0, float(f));
-                float fhi = min(f1, float(f)+1);
-                float w = max(fhi-flo, 0.0f);
+                double flo = max(f0, double(f));
+                double fhi = min(f1, double(f)+1);
+                double w = max(fhi-flo, 0.0);
                 
                 for (long t = 0; t < T; t++)
-                    outp[n*T + t] += w * inp[f*T + t];
+                    outp[n*T + t] += float(w) * inp[f*T + t];
             }
         }
     }
@@ -136,8 +136,8 @@ void GpuTreeGriddingKernel::allocate()
 inline __device__ void _set_zero(float &x) { x = 0.0f; }
 inline __device__ void _set_zero(__half2 &x) { x = __float2half2_rn(0.0f); }
 
-inline __device__ float _mult(float x, float y) { return x*y; }
-inline __device__ __half2 _mult(float x, __half2 y) { return __float2half2_rn(x) * y; }
+inline __device__ float _mult(double w, float y) { return float(w) * y; }
+inline __device__ __half2 _mult(double w, __half2 y) { return __float2half2_rn(float(w)) * y; }
 
 
 // cuda kernel supports a flexible thread/block mapping:
@@ -145,12 +145,14 @@ inline __device__ __half2 _mult(float x, __half2 y) { return __float2half2_rn(x)
 //   threadIdx.x = blockIdx.x = time index  (0 <= t < T)
 //   threadIdx.y = blockIdx.y = tree channel index  (0 <= n < N/Nbs)
 //   threadIdx.z = blockIdx.z = beam index  (0 <= b < B)
+//
+// FIXME: using double precision in a GPU kernel!! This is a temporary kludge.
 
 template<typename T32>
 __global__ void gpu_tree_gridding_kernel(
     T32 *out,
     const T32 *in,
-    const float *channel_map,
+    const double *channel_map,
     long out_bstride32,
     long in_bstride32,
     int nchan_per_thread,   // must be <= 31
@@ -179,7 +181,7 @@ __global__ void gpu_tree_gridding_kernel(
 
     // Read channel_map[n:(n+M+1)]
     int ix = min(threadIdx.x & 0x1f, M);
-    float cmap = channel_map[n + ix];
+    double cmap = channel_map[n + ix];
 
     // Code optimization is imperfect here, but should still
     // be fast enough to be memory bandwidth limited.
@@ -187,8 +189,8 @@ __global__ void gpu_tree_gridding_kernel(
     for (int m = 0; m < M; m++) {
         // channel_map is monotonically decreasing, so channel_map[n+1] < channel_map[n].
         // f0 is the lower bound, f1 is the upper bound.
-        float f0 = __shfl_sync(~0u, cmap, m+1);
-        float f1 = __shfl_sync(~0u, cmap, m);
+        double f0 = __shfl_sync(~0u, cmap, m+1);
+        double f1 = __shfl_sync(~0u, cmap, m);
         
         int if0 = max(int(f0), 0);
         int if1 = min(int(f1)+1, nfreq);
@@ -197,9 +199,9 @@ __global__ void gpu_tree_gridding_kernel(
         _set_zero(t);
 
         for (int f = if0; f < if1; f++) {
-            float flo = max(f0, float(f));
-            float fhi = min(f1, float(f)+1);
-            float w = fhi - flo;
+            double flo = max(f0, double(f));
+            double fhi = min(f1, double(f)+1);
+            double w = fhi - flo;
             t += _mult(w, in[f*ntime32]);
         }
 
@@ -219,7 +221,7 @@ static void _launch(const GpuTreeGriddingKernel &k, Array<void> &out, const Arra
         <<< k.nblocks, k.nthreads, 0, stream >>>
         (reinterpret_cast<T32 *> (out.data),       // T32 *out,
          reinterpret_cast<const T32 *> (in.data),  // const T32 *in,
-         k.gpu_channel_map.data,                   // const float *channel_map,
+         k.gpu_channel_map.data,                   // const double *channel_map,
          xdiv(out.strides[0], s),                  // long out_bstride32,
          xdiv(in.strides[0], s),                   // long in_bstride32,
          k.nchan_per_thread,                       // int nchan_per_thread
@@ -305,16 +307,16 @@ void GpuTreeGriddingKernel::test()
          << "    gpu_dst_beam_stride = " << gs_out << endl;
     
     // Generate a monotonically decreasing channel_map: cvec[0]=F, cvec[N]=0.
-    vector<float> cvec(N+1);
+    vector<double> cvec(N+1);
     cvec[0] = F;
     cvec[N] = 0;
     for (int i = 1; i < N; i++)
         cvec[i] = rand_uniform(0, F);
 
-    std::sort(cvec.begin(), cvec.end(), std::greater<float>());
+    std::sort(cvec.begin(), cvec.end(), std::greater<double>());
 
-    params.channel_map = Array<float> ({N+1}, af_rhost | af_zero);
-    memcpy(params.channel_map.data, &cvec[0], (N+1) * sizeof(float));
+    params.channel_map = Array<double> ({N+1}, af_rhost | af_zero);
+    memcpy(params.channel_map.data, &cvec[0], (N+1) * sizeof(double));
     
     Array<float> hsrc({B,F,T}, {hs_in,T,1}, af_uhost | af_random | af_guard);
     Array<float> hdst({B,N,T}, {hs_out,T,1}, af_uhost | af_zero | af_guard);
@@ -373,7 +375,7 @@ void GpuTreeGriddingKernel::time()
     };
     
     // Generate channel_map (stored in CPU memory).
-    Array<float> channel_map = dconfig.make_channel_map();
+    Array<double> channel_map = dconfig.make_channel_map();
     
     long nfreq = dconfig.get_total_nfreq();  // 28160
     long nchan = pow2(dconfig.tree_rank);    // 65536

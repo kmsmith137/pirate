@@ -247,13 +247,13 @@ double DedispersionConfig::dm_per_unit_delay() const
 }
 
 
-Array<float> DedispersionConfig::make_channel_map() const
+Array<double> DedispersionConfig::make_channel_map() const
 {
     long nchan = pow2(tree_rank);
-    Array<float> channel_map({nchan+1}, af_rhost);
+    Array<double> channel_map({nchan+1}, af_rhost);
     
     for (long n = 0; n <= nchan; n++) {
-        float f = this->delay_to_frequency(n);
+        double f = this->delay_to_frequency(n);
         channel_map.data[n] = this->frequency_to_index(f);
     }
     

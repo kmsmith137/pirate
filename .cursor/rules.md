@@ -18,7 +18,7 @@ Please complain if you can't see it.
 - Uses pipmake, a tiny build system which is pip-compatible, but just forwards pip commands to a Makefile (e.g. pip install forwards to make wheel).
 - The Makefile runs the script makefile_helper.py, which contains miscellaneous logic that's more convenient to write in python than in Makefile language. (For example, figuring out which directory the numpy *.h files are in.) The output of this script is a file makefile_helper.out, containing variable declarations in Makefile language.
 - You can freely mix invokations of pip and make, which is convenient but can be confusing. See README.md for a recommendation.
-- Compile time for the whole project is fairly high, so suggest building specific targets when developing/debugging.
+- Compile time for the whole project is fairly high, so suggest building specific targets when developing/debugging, and build with `make -j 32`.
 - The file `sdist_files.txt` is a Makefile target, and is a list of all source files (in any language). Here is a convenient way to search all source files for symbol FOO: `make sdist_files.txt; cat sdist_files.txt | xargs grep FOO`.
 - If you add a new source file, see comments near the top of `Makefile` for instructions on how to modify the makefile.
 

@@ -25,8 +25,11 @@ struct TreeGriddingKernelParams
     // Given tree channel 0 <= itree < ntree, the values of channel_map[itree+1] and
     // channel_map[itree] define the edges of the tree channel in frequency space
     // (i.e., the interval [channel_map[itree+1], channel_map[itree])).
-    
-    ksgpu::Array<float> channel_map;
+    //
+    // NOTE: we use double precision, since weights are computed by differencing
+    // (channel_map[i+1] - channel_map[i]), which loses a lot of relative precision.
+
+    ksgpu::Array<double> channel_map;
 
     // Validates params, and returns reference to 'this'.
     const TreeGriddingKernelParams &validate() const;
@@ -72,7 +75,8 @@ struct GpuTreeGriddingKernel
     const TreeGriddingKernelParams params;
 
     // If is_allocated=true, then 'gpu_channel_map' is a copy of 'channel_map' in GPU memory.
-    ksgpu::Array<float> gpu_channel_map;
+    // FIXME: using double precision in a GPU kernel!! This is a temporary kludge.
+    ksgpu::Array<double> gpu_channel_map;
     bool is_allocated = false;
     
     // Bandwidth per call to GpuTreeGriddingKernel::launch().

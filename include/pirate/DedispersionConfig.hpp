@@ -154,7 +154,11 @@ struct DedispersionConfig
     // Given tree channel 0 <= n < ntree, the values (channel_map[n+1], channel_map[n])
     // define the edges of the tree channel in frequency space. (Note: channel_map is
     // monotonically decreasing, so channel_map[n+1] < channel_map[n].)
-    ksgpu::Array<float> make_channel_map() const;
+    //
+    // NOTE: we use double precision, since weights are computed by differencing
+    // (channel_map[i+1] - channel_map[i]), which loses a lot of relative precision.
+
+    ksgpu::Array<double> make_channel_map() const;
 
     // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
     // are inverses of each other, by sampling random values and checking endpoints.
