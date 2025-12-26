@@ -66,10 +66,10 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
 
     // Peak-finding kernels.
-    for (long i = 0; i < ntrees; i++) {
-        const PeakFindingKernelParams &params = plan->stage2_pf_params.at(i);
-        auto pf = make_shared<ReferencePeakFindingKernel> (params, Dcore.at(i));
-        this->pf_kernels.push_back(pf);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
+        auto pf_kernel = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
+        this->pf_kernels.push_back(pf_kernel);
     }
 
     // Allocate frequency-space input array.
@@ -77,12 +77,13 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     
     // Allocate weights arrays.
     this->wt_arrays.resize(ntrees);
-    for (long i = 0; i < ntrees; i++) {
-        long ndm_wt = plan->stage2_pf_params.at(i).ndm_wt;
-        long nt_wt = plan->stage2_pf_params.at(i).nt_wt;
-        long P = plan->trees.at(i).nprofiles;
-        long F = plan->trees.at(i).frequency_subbands.F;        
-        this->wt_arrays[i] = Array<float>({beams_per_batch, ndm_wt, nt_wt, P, F}, af_uhost | af_zero);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
+        long F = tree.frequency_subbands.F;
+        long ndm_wt = tree.ndm_wt;
+        long nt_wt = tree.nt_wt;
+        long P = tree.nprofiles;
+        this->wt_arrays[itree] = Array<float>({beams_per_batch, ndm_wt, nt_wt, P, F}, af_uhost | af_zero);
     }
 
     // Alllocate out_max, out_argmax arrays.
@@ -90,11 +91,13 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     this->out_max.resize(ntrees);
     this->out_argmax.resize(ntrees);
 
-    for (long i = 0; i < ntrees; i++) {
-        long ndm_out = plan->stage2_pf_params.at(i).ndm_out;
-        long nt_out = plan->stage2_pf_params.at(i).nt_out;
-        this->out_max[i] = Array<float>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
-        this->out_argmax[i] = Array<uint>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
+        long ndm_out = tree.ndm_out;
+        long nt_out = tree.nt_out;
+
+        this->out_max[itree] = Array<float>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
+        this->out_argmax[itree] = Array<uint>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
     }
 }
 
@@ -126,13 +129,13 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     // Outer vector length is nout, inner shape is (beams_per_batch, 2^weird_rank, input_nt / pow2(ids)).
     //   where weird_rank = stage1_dd_rank + early_stage2_dd_rank + (is_downsampled ? 1 : 0)
     
-    vector<Array<float>> dedispersion_buffers;  // length plan->ntrees
+    vector<Array<float>> dedispersion_buffers;  // length ntrees
 
     // Step 3: apply tree dedispersion (one-stage, not two-stage).
 
     // Warning: don't confuse 'reference_trees' with 'trees' (inherited from base class!)
-    vector<shared_ptr<ReferenceTree>> reference_trees;  // length (nbatches * plan->ntrees)
-    vector<Array<float>> subband_buffers;               // length (plan->ntrees)
+    vector<shared_ptr<ReferenceTree>> reference_trees;  // length (nbatches * ntrees)
+    vector<Array<float>> subband_buffers;               // length (ntrees)
 
     // Step 4: run peak-finding kernel.
     // In downsampled trees, we just run on the upper half of 'subband_buffers'.
@@ -141,43 +144,40 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 
 ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
     ReferenceDedisperserBase(plan_, Dcore_, 0)
-{
-    long nds = config.num_downsampling_levels;
-    
-    this->downsampled_inputs.resize(nds);
+{   
+    this->downsampled_inputs.resize(plan->num_downsampling_levels);
     this->dedispersion_buffers.resize(ntrees);
     this->reference_trees.resize(nbatches * ntrees);
     this->subband_buffers.resize(ntrees);
 
-    for (long ids = 0; ids < nds; ids++) {
+    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
         long nt_ds = xdiv(nt_in, pow2(ids));
         downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(config.tree_rank), nt_ds}, af_uhost | af_zero);
     }
     
-    for (long iout = 0; iout < ntrees; iout++) {
-        const DedispersionTree &tree = trees.at(iout);
-        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(iout);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
 
         long out_rank = tree.amb_rank + tree.early_dd_rank;
         long out_ntime = tree.nt_ds;
         bool is_downsampled = (tree.ds_level > 0);
         long dd_rank = out_rank + (is_downsampled ? 1 : 0);
-        long ndm_out = pf_params.ndm_out * (is_downsampled ? 2 : 1);
+        long ndm_out = tree.ndm_out * (is_downsampled ? 2 : 1);
         long M = tree.frequency_subbands.M;
 
-        this->dedispersion_buffers.at(iout) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
-        this->subband_buffers.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, pf_params.nt_in}, af_uhost | af_zero);
+        this->dedispersion_buffers.at(itree) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
+        this->subband_buffers.at(itree) = Array<float> ({beams_per_batch, ndm_out, M, tree.nt_ds}, af_uhost | af_zero);
 
-        for (int batch = 0; batch < nbatches; batch++) {
+        for (int ibatch = 0; ibatch < nbatches; ibatch++) {
             ReferenceTree::Params tree_params;
             tree_params.num_beams = beams_per_batch;
             tree_params.amb_rank = 0;
             tree_params.dd_rank = dd_rank;
             tree_params.ntime = out_ntime;
             tree_params.nspec = 1;
-            tree_params.subband_counts = pf_params.subband_counts;
+            tree_params.subband_counts = tree.frequency_subbands.subband_counts;
 
-            this->reference_trees.at(batch*ntrees + iout) = make_shared<ReferenceTree> (tree_params);
+            this->reference_trees.at(ibatch*ntrees + itree) = make_shared<ReferenceTree> (tree_params);
         }
     }
 }
@@ -186,15 +186,14 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
 // virtual override
 void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
 {
-    long nds = config.num_downsampling_levels;
-    
     // Step 0: Run tree gridding kernel (input_array -> downsampled_inputs.at(0)).
     tree_gridding_kernel->apply(downsampled_inputs.at(0), input_array);
     
-    for (int ids = 1; ids < nds; ids++) {
+    for (int ids = 1; ids < plan->num_downsampling_levels; ids++) {
         
         // Step 1: downsample input array (straightforward downsample, not "lagged" downsample).
-        // Outer length is nds, inner shape is (beams_per_batch, 2^config.tree_rank, input_nt / pow2(ids)).
+        // Outer length is num_downsampling_levels.
+        // Inner shape is (beams_per_batch, 2^config.tree_rank, input_nt / pow2(ids)).
         // Reminder: 'input_array' is an alias for downsampled_inputs[0].
 
         Array<float> src = downsampled_inputs.at(ids-1);
@@ -208,8 +207,8 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         }
     }
 
-    for (int iout = 0; iout < ntrees; iout++) {
-        const DedispersionTree &tree = plan->trees.at(iout);
+    for (int itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
 
         long out_rank = tree.amb_rank + tree.early_dd_rank;
         long out_ntime = tree.nt_ds;
@@ -218,7 +217,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         long dd_rank = out_rank + (is_downsampled ? 1 : 0);
         
         Array<float> in = downsampled_inputs.at(ids).slice(1, 0, pow2(dd_rank));
-        Array<float> dd = dedispersion_buffers.at(iout);
+        Array<float> dd = dedispersion_buffers.at(itree);
         
         // Step 2: copy from 'downsampled_inputs' to 'dedispersion_buffers'.
         
@@ -229,19 +228,19 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         // Note dd->dd2 reshape: (B,D,T) -> (B,1,D,T).
 
         Array<float> dd2 = dd.reshape({beams_per_batch, 1, pow2(dd_rank), out_ntime});
-        shared_ptr<ReferenceTree> t = reference_trees.at(ibatch*ntrees + iout);
-        t->dedisperse(dd2, subband_buffers.at(iout));
+        shared_ptr<ReferenceTree> t = reference_trees.at(ibatch*ntrees + itree);
+        t->dedisperse(dd2, subband_buffers.at(itree));
 
         // Step 4: run peak-finding kernel.
         // In downsampled trees, we just run on the upper half of 'subband_buffers'.
 
-        Array<float> sb = subband_buffers.at(iout);
+        Array<float> sb = subband_buffers.at(itree);
 
         if (is_downsampled)
             sb = sb.slice(1, sb.shape[1]/2, sb.shape[1]);
 
-        auto pf_kernel = pf_kernels.at(iout);
-        pf_kernel->apply(out_max.at(iout), out_argmax.at(iout), sb, wt_arrays.at(iout), ibatch);
+        auto pf_kernel = pf_kernels.at(itree);
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), sb, wt_arrays.at(itree), ibatch);
     }
 }
 
@@ -290,21 +289,23 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
     this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
 
-    for (const DedispersionKernelParams &kparams_: plan->stage1_dd_kernel_params) {
-        DedispersionKernelParams kparams = kparams_;
-        kparams.output_is_ringbuf = false;  // in ReferenceDedisperer1, ringbufs are disabled.
-        kparams.producer_id = -1;
+    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+        // In ReferenceDedisperser1, ringbufs are disabled, so make a copy of the dd_params.
+        DedispersionKernelParams dd_params = plan->stage1_dd_kernel_params.at(ids);
+        dd_params.output_is_ringbuf = false;
+        dd_params.producer_id = -1;
 
         vector<long> subband_counts = { 1 };  // no subband_counts needed in stage1 kernels
-        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
+        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
     }
 
-    for (long iout = 0; iout < plan->ntrees; iout++) {
-        DedispersionKernelParams dd_params = plan->stage2_dd_kernel_params.at(iout);  // make copy
+    for (long itree = 0; itree < ntrees; itree++) {
+        // In ReferenceDedisperser1, ringbufs are disabled, so make a copy of the dd_params.
+        DedispersionKernelParams dd_params = plan->stage2_dd_kernel_params.at(itree);  // make copy
         dd_params.input_is_ringbuf = false;   // in ReferenceDeidsperser1, ringbufs are disabled.
         dd_params.consumer_id = -1;
 
-        vector<long> subband_counts = plan->stage2_pf_params.at(iout).subband_counts;
+        vector<long> subband_counts = plan->stage2_pf_params.at(itree).subband_counts;
         this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
     }
     
@@ -314,8 +315,8 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     long S = plan->nelts_per_segment;
     this->stage2_lagbufs.resize(nbatches * ntrees);
 
-    for (long iout = 0; iout < ntrees; iout++) {
-        const DedispersionTree &tree = plan->trees.at(iout);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
 
         long rank = tree.amb_rank + tree.early_dd_rank;
         long ntime = tree.nt_ds;
@@ -342,7 +343,7 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
         }
 
         for (long b = 0; b < nbatches; b++)
-            stage2_lagbufs.at(b*ntrees + iout) = make_shared<ReferenceLagbuf> (lags, ntime);
+            stage2_lagbufs.at(b*ntrees + itree) = make_shared<ReferenceLagbuf> (lags, ntime);
     }
     
     // Initialize stage2_subband_bufs.
@@ -350,11 +351,12 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
 
     this->stage2_subband_bufs.resize(ntrees);
 
-    for (long iout = 0; iout < ntrees; iout++) {
-        long ndm_out = plan->stage2_pf_params.at(iout).ndm_out;
-        long nt_in = plan->stage2_pf_params.at(iout).nt_in;
-        long M = plan->trees.at(iout).frequency_subbands.M;
-        stage2_subband_bufs.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
+        long ndm_out = tree.ndm_out;
+        long nt_in = tree.nt_ds;
+        long M = tree.frequency_subbands.M;
+        stage2_subband_bufs.at(itree) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
     }
 }
 
@@ -370,10 +372,10 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
     lds_kernel->apply(stage1_dd_buf, ibatch);
 
     // Step 2: run stage1 dedispersion kernels.
-    for (uint i = 0; i < stage1_dd_kernels.size(); i++) {
-        shared_ptr<ReferenceDedispersionKernel> kernel = stage1_dd_kernels.at(i);
+    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+        shared_ptr<ReferenceDedispersionKernel> kernel = stage1_dd_kernels.at(ids);
         const DedispersionKernelParams &kp = kernel->params;
-        Array<void> dd_buf = stage1_dd_buf.bufs.at(i);
+        Array<void> dd_buf = stage1_dd_buf.bufs.at(ids);
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime }); 
@@ -384,8 +386,8 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 
     // Step 3: copy stage1 -> stage2
     // Step 4: apply lags
-    for (int iout = 0; iout < ntrees; iout++) {
-        const DedispersionTree &tree = plan->trees.at(iout);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
 
         long rank = tree.amb_rank + tree.early_dd_rank;
         long ds_level = tree.ds_level;
@@ -393,30 +395,30 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
         Array<void> src = stage1_dd_buf.bufs.at(ds_level);  // shape (beams_per_batch, 2^rank_ambient, ntime)
         src = src.slice(1, 0, pow2(rank));                  // shape (beams_per_batch, 2^rank, ntime)
 
-        Array<void> dst_ = stage2_dd_buf.bufs.at(iout);
+        Array<void> dst_ = stage2_dd_buf.bufs.at(itree);
         Array<float> dst = dst_.template cast<float> ();
         dst.fill(src);
 
-        auto lagbuf = stage2_lagbufs.at(ibatch*ntrees + iout);
+        auto lagbuf = stage2_lagbufs.at(ibatch*ntrees + itree);
         lagbuf->apply_lags(dst);
     }
 
     // Step 5: run stage2 dedispersion kernels (in-place).
     // Step 6: run peak-finding kernels.
 
-    for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
-        shared_ptr<ReferenceDedispersionKernel> dd_kernel = stage2_dd_kernels.at(i);
-        shared_ptr<ReferencePeakFindingKernel> pf_kernel = pf_kernels.at(i);
+    for (long itree = 0; itree < ntrees; itree++) {
+        shared_ptr<ReferenceDedispersionKernel> dd_kernel = stage2_dd_kernels.at(itree);
+        shared_ptr<ReferencePeakFindingKernel> pf_kernel = pf_kernels.at(itree);
         const DedispersionKernelParams &kp = dd_kernel->params;
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
-        Array<void> dd_buf = stage2_dd_buf.bufs.at(i);
+        Array<void> dd_buf = stage2_dd_buf.bufs.at(itree);
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
         dd_buf = dd_buf.transpose({0,2,1,3});
 
-        Array<float> sb_buf = stage2_subband_bufs.at(i);
+        Array<float> sb_buf = stage2_subband_bufs.at(itree);
         dd_kernel->apply(dd_buf, dd_buf, sb_buf, ichunk, ibatch);
-        pf_kernel->apply(out_max.at(i), out_argmax.at(i), sb_buf, wt_arrays.at(i), ibatch);
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), sb_buf, wt_arrays.at(itree), ibatch);
     }
 }
 
@@ -444,9 +446,6 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
     // Dedispersion output in subbands ('sb_out' arg to ReferenceDedispersionKernel::apply())
     // Shape (beams_per_batch, ndm_out, M, nt_in)
     vector<Array<float>> stage2_subband_bufs;
-
-    long gpu_ringbuf_nelts = 0;    // = (mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment)
-    long host_ringbuf_nelts = 0;   // = (mega_ringbuf->host_global_nseg * plan->nelts_per_segment)
     
     Array<float> gpu_ringbuf;
     Array<float> host_ringbuf;
@@ -467,8 +466,8 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
 
-    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
-    this->host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
+    long gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
+    long host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
     
     this->gpu_ringbuf = Array<float>({ gpu_ringbuf_nelts }, af_uhost | af_zero);
     this->host_ringbuf = Array<float>({ host_ringbuf_nelts }, af_uhost | af_zero);
@@ -479,21 +478,23 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     
     this->stage2_subband_bufs.resize(ntrees);
 
-    for (long iout = 0; iout < ntrees; iout++) {
-        long ndm_out = plan->stage2_pf_params.at(iout).ndm_out;
-        long nt_in = plan->stage2_pf_params.at(iout).nt_in;
-        long M = plan->trees.at(iout).frequency_subbands.M;
-        stage2_subband_bufs.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
+        long nt_in = tree.nt_ds;
+        long ndm_out = tree.ndm_out;
+        long M = tree.frequency_subbands.M;
+        stage2_subband_bufs.at(itree) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
     }
 
-    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
+    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+        const DedispersionKernelParams &dd_params = plan->stage1_dd_kernel_params.at(ids);
         vector<long> subband_counts = { 1 };  // no subbands needed in stage1 kernels
-        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
+        this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
     }
     
-    for (long iout = 0; iout < ntrees; iout++) {
-        const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(iout);
-        vector<long> subband_counts = plan->stage2_pf_params.at(iout).subband_counts;
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(itree);
+        vector<long> subband_counts = plan->stage2_pf_params.at(itree).subband_counts;
         this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
     }
 }
@@ -516,10 +517,10 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
     lds_kernel->apply(stage1_dd_buf, ibatch);
 
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
-    for (uint i = 0; i < stage1_dd_kernels.size(); i++) {
-        shared_ptr<ReferenceDedispersionKernel> kernel = stage1_dd_kernels.at(i);
+    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+        shared_ptr<ReferenceDedispersionKernel> kernel = stage1_dd_kernels.at(ids);
         const DedispersionKernelParams &kp = kernel->params;
-        Array<void> dd_buf = stage1_dd_buf.bufs.at(i);
+        Array<void> dd_buf = stage1_dd_buf.bufs.at(ids);
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime }); 
@@ -583,19 +584,19 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
     // Step 5: run stage2 dedispersion kernels (input from ringbuf). 
     // Step 6: run peak-finding kernels.
 
-    for (uint i = 0; i < stage2_dd_kernels.size(); i++) {
-        shared_ptr<ReferenceDedispersionKernel> dd_kernel = stage2_dd_kernels.at(i);
-        shared_ptr<ReferencePeakFindingKernel> pf_kernel = pf_kernels.at(i);
+    for (long itree = 0; itree < ntrees; itree++) {
+        shared_ptr<ReferenceDedispersionKernel> dd_kernel = stage2_dd_kernels.at(itree);
+        shared_ptr<ReferencePeakFindingKernel> pf_kernel = pf_kernels.at(itree);
         const DedispersionKernelParams &kp = dd_kernel->params;
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape/transpose operation.
-        Array<void> dd_buf = stage2_dd_buf.bufs.at(i);
+        Array<void> dd_buf = stage2_dd_buf.bufs.at(itree);
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.dd_rank), pow2(kp.amb_rank), kp.ntime });
         dd_buf = dd_buf.transpose({0,2,1,3});
 
-        Array<float> sb_buf = stage2_subband_bufs.at(i);
+        Array<float> sb_buf = stage2_subband_bufs.at(itree);
         dd_kernel->apply(this->gpu_ringbuf, dd_buf, sb_buf, ichunk, ibatch);
-        pf_kernel->apply(out_max.at(i), out_argmax.at(i), sb_buf, wt_arrays.at(i), ibatch);
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), sb_buf, wt_arrays.at(itree), ibatch);
     }
 }
 
