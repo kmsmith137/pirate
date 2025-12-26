@@ -16,14 +16,16 @@ void scratch()
     cout << "pirate::scratch() called -- this is a place for quick throwaway tests" << endl;
 
     for (int i = 0; i < 200; i++) {
-        cout << "\n    *** iteration " << i << " ***\n\n";
+        cout << "\n\n    *** iteration " << i << " ***\n";
+
         DedispersionConfig::RandomArgs args;
         args.max_rank = 16;
         args.gpu_valid = true;
         args.verbose = true;
 
         DedispersionConfig config = DedispersionConfig::make_random(args);
-        config.print(cout, 4);
+        cout << endl;
+        config.emit_cpp();
 
         auto plan = make_shared<DedispersionPlan> (config);
         xassert_eq(long(plan->stage2_dd_kernel_params.size()), plan->ntrees);

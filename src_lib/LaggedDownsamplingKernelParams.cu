@@ -14,18 +14,6 @@ namespace pirate {
 #endif
 
 
-void LaggedDownsamplingKernelParams::print(std::ostream &os, int indent) const
-{
-    print_kv("dtype", this->dtype, os, indent);
-    print_kv("input_total_rank", this->input_total_rank, os, indent);
-    print_kv("output_dd_rank", this->output_dd_rank, os, indent);
-    print_kv("num_downsampling_levels", this->num_downsampling_levels, os, indent);
-    print_kv("total_beams", this->total_beams, os, indent);
-    print_kv("beams_per_batch", this->beams_per_batch, os, indent);
-    print_kv("ntime", this->ntime, os, indent);
-}
-
-
 void LaggedDownsamplingKernelParams::validate() const
 {
     xassert(!dtype.is_empty());
@@ -44,6 +32,23 @@ void LaggedDownsamplingKernelParams::validate() const
     
     if ((dtype != Dtype::native<float>()) && (dtype != Dtype::native<__half>()))
         throw runtime_error("LaggedDownsamplingKernelParams: unsupported dtype: " + dtype.str());    
+}
+
+void LaggedDownsamplingKernelParams::emit_cpp(ostream &os, const char *name, int indent)
+{
+    stringstream ss;
+    for (int i = 0; i < indent; i++)
+        ss << " ";
+    ss << name << ".";
+    string s = ss.str();
+
+    os << s << "dtype = Dtype::from_str(" << dtype.str() << ");\n"
+       << s << "input_total_rank = " << input_total_rank << ";\n"
+       << s << "output_dd_rank = " << output_dd_rank << ";\n"
+       << s << "num_downsampling_levels = " << num_downsampling_levels << ";\n"
+       << s << "total_beams = " << total_beams << ";\n"
+       << s << "beams_per_batch = " << beams_per_batch << ";\n"
+       << s << "ntime = " << ntime << ";\n";
 }
 
 

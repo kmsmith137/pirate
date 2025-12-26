@@ -56,12 +56,6 @@ bool operator<(const DedispersionConfig::EarlyTrigger &x, const DedispersionConf
     return y > x;
 }
 
-ostream &operator<<(ostream &os, const DedispersionConfig::EarlyTrigger &et)
-{
-    os << "(ds_level=" << et.ds_level << ",delta_rk=" << et.delta_rank << ")";
-    return os;
-};
-
 
 // -------------------------------------------------------------------------------------------------
 
@@ -456,48 +450,6 @@ void DedispersionConfig::validate() const
 }
 
 
-void DedispersionConfig::print(ostream &os, int indent) const
-{
-    print_kv("zone_nfreq", ksgpu::tuple_str(zone_nfreq), os, indent);
-    print_kv("zone_freq_edges", ksgpu::tuple_str(zone_freq_edges), os, indent);
-    print_kv("time_sample_ms", time_sample_ms, os, indent);
-    print_kv("tree_rank", tree_rank, os, indent);
-    print_kv("num_downsampling_levels", num_downsampling_levels, os, indent);
-    print_kv("time_samples_per_chunk", time_samples_per_chunk, os, indent);
-    print_kv("dtype", dtype.str(), os, indent);
-    print_kv("early_triggers", ksgpu::tuple_str(early_triggers, " "), os, indent);
-    
-    print_kv("beams_per_gpu", beams_per_gpu, os, indent);
-    print_kv("beams_per_batch", beams_per_batch, os, indent);
-    print_kv("num_active_batches", num_active_batches, os, indent);
-
-    if (gpu_clag_maxfrac < 1.0)
-        print_kv("gpu_clag_maxfrac", gpu_clag_maxfrac, os, indent);
-
-    // Print DedispersionConfig::PeakFindingConfig members.
-    // This part is a little awkward!
-
-    vector<long> max_width;
-    vector<long> dm_downsampling;
-    vector<long> time_downsampling;
-    vector<long> wt_dm_downsampling;
-    vector<long> wt_time_downsampling;
-    for (const PeakFindingConfig &pfp: peak_finding_params) {
-        max_width.push_back(pfp.max_width);
-        dm_downsampling.push_back(pfp.dm_downsampling);
-        time_downsampling.push_back(pfp.time_downsampling);
-        wt_dm_downsampling.push_back(pfp.wt_dm_downsampling);
-        wt_time_downsampling.push_back(pfp.wt_time_downsampling);
-    }
-    print_kv("max_width", ksgpu::tuple_str(max_width), os, indent);
-    print_kv("dm_downsampling", ksgpu::tuple_str(dm_downsampling), os, indent);
-    print_kv("time_downsampling", ksgpu::tuple_str(time_downsampling), os, indent);
-    print_kv("wt_dm_downsampling", ksgpu::tuple_str(wt_dm_downsampling), os, indent);
-    print_kv("wt_time_downsampling", ksgpu::tuple_str(wt_time_downsampling), os, indent);
-}
-
-
-
 void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
 {
     this->validate();
@@ -778,6 +730,55 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     
     ret.validate();
     return ret;
+}
+
+// Helper for DedispersionConfig::emit_cpp()
+ostream &operator<<(ostream &os, const DedispersionConfig::EarlyTrigger &et)
+{
+    os << "{" << et.ds_level << "," << et.delta_rank << "}";
+    return os;
+}
+
+// Helper for DedispersionConfig::emit_cpp()
+ostream &operator<<(ostream &os, const DedispersionConfig::PeakFindingConfig &pfc)
+{
+    os << "{"
+       << pfc.max_width << ","
+       << pfc.dm_downsampling << ","
+       << pfc.time_downsampling << ","
+       << pfc.wt_dm_downsampling << ","
+       << pfc.wt_time_downsampling 
+       << "}";
+
+    return os;
+}
+
+// Emit C++ code to initialize this DedispersionConfig.
+// (Sometimes convenient in unit tests.)
+void DedispersionConfig::emit_cpp(ostream &os, const char *name, int indent) const
+{
+    stringstream ss;
+    for (int i = 0; i < indent; i++)
+        ss << " ";
+    ss << name << ".";
+    string s = ss.str();
+
+    os << s << "zone_nfreq = " << ksgpu::brace_str(zone_nfreq) << ";\n"
+       << s << "zone_freq_edges = " << ksgpu::brace_str(zone_freq_edges) << ";\n"
+       << s << "time_sample_ms = " << time_sample_ms << ";\n"
+       << s << "tree_rank = " << tree_rank << ";\n"
+       << s << "num_downsampling_levels = " << num_downsampling_levels << ";\n"
+       << s << "time_samples_per_chunk = " << time_samples_per_chunk << ";\n"
+       << s << "dtype = Dtype::from_str(" << dtype.str() << ");\n"
+       << s << "frequency_subband_counts = " << ksgpu::brace_str(frequency_subband_counts) << ";\n"
+       << s << "peak_finding_params = " << ksgpu::brace_str(peak_finding_params) << ";\n"
+       << s << "early_triggers = " << ksgpu::brace_str(early_triggers) << ";\n"
+       << s << "beams_per_gpu = " << beams_per_gpu << ";\n"
+       << s << "beams_per_batch = " << beams_per_batch << ";\n"
+       << s << "num_active_batches = " << num_active_batches << ";\n";
+
+    if (gpu_clag_maxfrac < 1.0)
+        os << s << "gpu_clag_maxfrac = " << gpu_clag_maxfrac << ";\n";
 }
 
 

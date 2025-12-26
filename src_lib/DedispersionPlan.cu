@@ -330,32 +330,6 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 // ------------------------------------------------------------------------------------------------
 
 
-void DedispersionPlan::print(ostream &os, int indent) const
-{    
-    os << Indent(indent) << "DedispersionPlan" << endl;
-    this->config.print(os, indent+4);
-    
-    print_kv("nelts_per_segment", nelts_per_segment, os, indent);
-    print_kv("nbytes_per_segment", nbytes_per_segment, os, indent);
-    print_kv("stage1_dd_rank", ksgpu::tuple_str(stage1_dd_rank), os, indent);
-    print_kv("stage1_amb_rank", ksgpu::tuple_str(stage1_amb_rank), os, indent);
-    
-    os << Indent(indent) << "DedispersionTrees" << endl;
-
-    for (long itree = 0; itree < ntrees; itree++) {
-        const DedispersionTree &tree = trees.at(itree);
-        
-        os << Indent(indent+4) << itree
-           << ": ds_level=" << tree.ds_level
-           << ", amb_rank=" << tree.amb_rank
-           << ", pri_dd_rank=" << tree.pri_dd_rank
-           << ", early_dd_rank=" << tree.early_dd_rank
-           << ", nt_ds=" << tree.nt_ds
-           << endl;
-    }
-}
-
-
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
 {
     emitter << YAML::BeginMap;

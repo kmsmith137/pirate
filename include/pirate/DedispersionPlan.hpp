@@ -56,8 +56,6 @@ struct DedispersionPlan
     long ntrees = 0;
     std::vector<DedispersionTree> trees;  // length ntrees
 
-    void print(std::ostream &os=std::cout, int indent=0) const;
-
     void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
     std::string to_yaml_string(bool verbose = false) const;
 

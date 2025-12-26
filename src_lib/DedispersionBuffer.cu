@@ -14,16 +14,6 @@ namespace pirate {
 #endif
 
 
-void DedispersionBufferParams::print(std::ostream &os, int indent) const
-{
-    print_kv("dtype", this->dtype, os, indent);
-    print_kv("beams_per_batch", this->beams_per_batch, os, indent);
-    print_kv("nbuf", this->nbuf, os, indent);
-    print_kv("buf_rank", ksgpu::tuple_str(this->buf_rank), os, indent);
-    print_kv("buf_ntime", ksgpu::tuple_str(this->buf_ntime), os, indent);
-}
-
-
 long DedispersionBufferParams::get_nelts() const
 {
     xassert_eq((long)buf_rank.size(), nbuf);

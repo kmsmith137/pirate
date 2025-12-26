@@ -51,7 +51,6 @@ struct DedispersionBufferParams
     DedispersionBufferParams() { }
     DedispersionBufferParams(const DedispersionBufferParams &) = default;
 
-    void print(std::ostream &os=std::cout, int indent=0) const;
     void validate() const;    // throws an exception if anything is wrong
 
     // Total number of array elements (not bytes), for one batch of beams.

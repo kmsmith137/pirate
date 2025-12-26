@@ -277,18 +277,18 @@ static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, lon
 void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, bool host_only)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
-    config.print(cout, 4);
-    print_kv("nchunks", nchunks, cout, 4);
+    config.emit_cpp();
+
+    cout << "    nchunks = " << nchunks << ";\n"
+         << "    host_only = " << host_only << ";" << endl;
+    
+    if (host_only)
+         cout << "    !!! Host-only test, GPU code will not be run !!!" << endl;
 
     // I decided that this was the least awkward place to call DedispersionConfig::test().    
     config.test();   // calls DedispersionConfig::validate()
 
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    print_kv("max_clag", plan->mega_ringbuf->max_clag, cout, 4);
-    print_kv("max_gpu_clag", plan->mega_ringbuf->max_gpu_clag, cout, 4);
-
-    if (host_only)
-        cout << "!!! Host-only test, GPU code will not be run !!!" << endl;
 
     long ntrees = plan->ntrees;
     long beams_per_batch = plan->beams_per_batch;

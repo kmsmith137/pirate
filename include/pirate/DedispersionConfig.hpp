@@ -107,10 +107,6 @@ struct DedispersionConfig
     
     void validate() const;
 
-    // Write in informal text format (e.g. for log files)
-    // FIXME I might phase this out, in favor of yaml everywhere.
-    void print(std::ostream &os = std::cout, int indent=0) const;
-
     // Write in YAML format.
     // If 'verbose' is true, include comments explaining the meaning of each field.
     void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
@@ -165,6 +161,10 @@ struct DedispersionConfig
     // Called by 'python -m pirate_frb test --dd' -> GpuDedisperser::test() -> DedispersionConfig::test().
     // Also called by 'python -m pirate_frb show_dedisperser ...'.
     void test() const;
+
+    // Emit C++ code to initialize this DedispersionConfig.
+    // (Sometimes convenient in unit tests.)
+    void emit_cpp(std::ostream &os=std::cout, const char *name="config", int indent=4) const;
 
     // make_random(): used for unit tests.
 

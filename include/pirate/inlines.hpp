@@ -108,55 +108,6 @@ inline bool vec_equal(const std::vector<T1> &v, const std::initializer_list<T2> 
 {
     return (v.size() == w.size()) && std::equal(v.begin(), v.end(), w.begin());
 }
-                       
-
-// -------------------------------------------------------------------------------------------------
-//
-// FIXME make new source file (io_utils.hpp?) for these functions?
-
-
-struct Indent
-{
-    const int n;
-    Indent(int n_) : n(n_) { }
-};
-
-inline std::ostream &operator<<(std::ostream &os, const Indent &ind)
-{
-    for (int i = 0; i < ind.n; i++)
-        os << " ";
-    return os;
-}
-
-
-template<typename T>
-inline void print_kv(const char *key, T val, std::ostream &os, int indent, const char *units = nullptr)
-{
-    os << Indent(indent) << key << " = " << val;
-
-    if (units != nullptr)
-        os << " " << units;
-    
-    os << std::endl;
-}
-
-// Specialization print_kv<bool>()
-template<>
-inline void print_kv(const char *key, bool val, std::ostream &os, int indent, const char *units)
-{
-    print_kv(key, (val ? "true" : "false"), os, indent, units);
-}
-
-
-inline void print_kv_nbytes(const char *key, long nbytes, std::ostream &os, int indent)
-{
-    os << Indent(indent) << key;
-    
-    if (nbytes >= 1024)
-        os << " = " << nbytes;
-
-    os << " = " << ksgpu::nbytes_to_str(nbytes) << std::endl;
-}
 
 
 // -------------------------------------------------------------------------------------------------

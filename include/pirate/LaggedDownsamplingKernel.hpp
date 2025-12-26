@@ -48,7 +48,10 @@ struct LaggedDownsamplingKernelParams
     LaggedDownsamplingKernelParams() { }
     LaggedDownsamplingKernelParams(const LaggedDownsamplingKernelParams &) = default;
 
-    void print(std::ostream &os=std::cout, int indent=0) const;
+    // Emit C++ code to initialize this LaggedDownsamplingKernelParams.
+    // (Sometimes convenient in unit tests.)
+    void emit_cpp(std::ostream &os=std::cout, const char *name="params", int indent=4);
+
     void validate() const;  // throws an exception if anything is wrong
 };
 
@@ -96,8 +99,6 @@ public:
     // The NULL stream is allowed, but is not the default.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     virtual void launch(DedispersionBuffer &buf, long ichunk, long ibatch, cudaStream_t stream) = 0;
-    
-    void print(std::ostream &os=std::cout, int indent=0) const;
     
     // Parameters computed in constructor.
     int shmem_nbytes_per_threadblock = 0;
