@@ -54,9 +54,8 @@ struct GpuDedisperser
     long ntrees = 0;                       // same as plan->ntrees
     std::vector<DedispersionTree> trees;   // same as plan->trees
 
-    // "outer" vector has length nstreams
-    // "inner" array shape (beams_per_batch, nfreq, ntime)
-    std::vector<ksgpu::Array<void>> input_arrays;    // config.dtype
+    // "inner" array shape (nstreams, beams_per_batch, nfreq, ntime).
+    ksgpu::Array<void> input_arrays;       // config.dtype
 
     // "outer" vector has length ntrees
     // "inner" array shape = this->extended_wt_shapes[itree], see below

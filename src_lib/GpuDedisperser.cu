@@ -102,9 +102,7 @@ void GpuDedisperser::allocate()
     if (this->is_allocated)
         throw runtime_error("double call to GpuDedisperser::allocate()");
 
-    // Allocate input_arrays (frequency-space, shape (beams_per_batch, nfreq, nt_in)).
-    for (long i = 0; i < nstreams; i++)
-        input_arrays.push_back(Array<void>(dtype, {beams_per_batch, nfreq, nt_in}, af_gpu | af_zero));
+    input_arrays = Array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in}, af_gpu | af_zero);
 
     for (DedispersionBuffer &buf: stage1_dd_bufs)
         buf.allocate(af_zero | af_gpu);
@@ -158,9 +156,9 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
     
     long iframe = (ichunk * BT) + (ibatch * BB);
     
-    // Step 0: Run tree gridding kernel (input_arrays[istream] -> stage1_dd_bufs[istream].bufs[0]).
+    // Step 0: Run tree gridding kernel (input_arrays[istream,:,:,:] -> stage1_dd_bufs[istream].bufs[0]).
     Array<void> &dd_buf0 = stage1_dd_bufs.at(istream).bufs.at(0);
-    tree_gridding_kernel->launch(dd_buf0, input_arrays.at(istream), stream);
+    tree_gridding_kernel->launch(dd_buf0, input_arrays.slice(0,istream), stream);
     
     // Step 1: run LaggedDownsampler.
     lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, stream);
@@ -378,7 +376,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
             rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
 
             if (!host_only) {
-                gdd->input_arrays.at(0).fill(arr.convert(config.dtype));  // istream=0
+                gdd->input_arrays.slice(0,0).fill(arr.convert(config.dtype));  // istream=0
                 gdd->launch(ichunk, ibatch, 0, nullptr);  // (ichunk, ibatch, istream, stream)
             }
             
