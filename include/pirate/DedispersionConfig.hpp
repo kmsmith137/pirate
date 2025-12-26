@@ -52,6 +52,10 @@ struct DedispersionConfig
     // Defines frequency sub-bands for search. This can improve SNR for bursts that don't
     // span the full frequency range. For documentation, see FrequencySubbands.hpp.
     // To disable subbands (and search only the full band), set to {1}.
+    //
+    // Note: these are the 'top-level' frequency subbands; fewer subbands may be searched in 
+    // individual trees. To see which subbands are searched in which trees, use the command
+    // 'python -m pirate_frb show_dedisperser --verbose <config.yml>'.
 
     std::vector<long> frequency_subband_counts;
 
