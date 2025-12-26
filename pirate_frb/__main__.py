@@ -136,9 +136,10 @@ def parse_time(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time()')
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time()')
+    parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time()')
     
 def time(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2', 'gdqk' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2', 'gdqk', 'gtgk' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -165,6 +166,8 @@ def time(args):
         pirate_pybind11.CoalescedDdKernel2.time()
     if run_all_timings or args.gdqk:
         pirate_pybind11.GpuDequantizationKernel.time()
+    if run_all_timings or args.gtgk:
+        pirate_pybind11.GpuTreeGriddingKernel.time()
 
 
 #####################################   show_hardware command  #####################################

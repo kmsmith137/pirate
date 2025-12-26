@@ -1,5 +1,6 @@
 #include "../include/pirate/TreeGriddingKernel.hpp" 
-#include "../include/pirate/inlines.hpp"   // xdiv(), align_up()
+#include "../include/pirate/inlines.hpp"   // xdiv(), align_up(), pow2()
+#include "../include/pirate/DedispersionConfig.hpp"  // for make_channel_map()
 
 #include <cuda_fp16.h>
 #include <algorithm>  // std::sort()
@@ -7,6 +8,7 @@
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/rand_utils.hpp>
 #include <ksgpu/test_utils.hpp>
+#include <ksgpu/KernelTimer.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -329,6 +331,109 @@ void GpuTreeGriddingKernel::test()
     gkernel.launch(gdst, gsrc, nullptr);   // null stream
     
     assert_arrays_equal(hdst, gdst, "hdst", "gdst", {"b","n","t"});
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// GpuTreeGriddingKernel::time()
+
+
+void GpuTreeGriddingKernel::time()
+{
+    Dtype fp16(df_float, 16);
+    Dtype fp32(df_float, 32);
+
+    // Parameters modelled on configs/dedispersion/chord_sb0.yml:
+    //   zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+    //   zone_nfreq: [8192, 8192, 6144, 2048, 3584]   # total = 28160
+    //   tree_rank: 16
+    //   time_samples_per_chunk: 2048
+    //   beams_per_batch: 2
+    //   time_sample_ms: 1.0
+
+    // Construct a throwaway DedispersionConfig to get channel_map via make_channel_map().
+    DedispersionConfig dconfig;
+    dconfig.zone_freq_edges = { 300, 350, 450, 600, 800, 1500 };
+    dconfig.zone_nfreq = { 8192, 8192, 6144, 2048, 3584 };
+    dconfig.tree_rank = 16;
+    dconfig.time_sample_ms = 1.0;
+    dconfig.num_downsampling_levels = 4;
+    dconfig.time_samples_per_chunk = 2048;
+    dconfig.dtype = fp16;  // doesn't matter for channel_map, just for validation
+    dconfig.beams_per_gpu = 6;
+    dconfig.beams_per_batch = 2;
+    dconfig.num_active_batches = 2;
+    dconfig.frequency_subband_counts = { 0, 0, 0, 0, 1 };
+    dconfig.peak_finding_params = {
+        { 16, 0, 0, 64, 64 },
+        { 16, 0, 0, 64, 64 },
+        { 16, 0, 0, 64, 64 },
+        { 16, 0, 0, 64, 64 }
+    };
+    
+    // Generate channel_map (stored in CPU memory).
+    Array<float> channel_map = dconfig.make_channel_map();
+    
+    long nfreq = dconfig.get_total_nfreq();  // 28160
+    long nchan = pow2(dconfig.tree_rank);    // 65536
+    long ntime = 2048;
+    long beams_per_batch = 4;
+    long nstreams = 2;  // for latency hiding
+
+    // Time both float32 and float16.
+    for (int pass = 0; pass < 2; pass++) {
+        Dtype dtype = (pass == 0) ? fp32 : fp16;
+        
+        TreeGriddingKernelParams params;
+        params.dtype = dtype;
+        params.nfreq = nfreq;
+        params.nchan = nchan;
+        params.ntime = ntime;
+        params.beams_per_batch = beams_per_batch;
+        params.channel_map = channel_map;
+        
+        GpuTreeGriddingKernel kernel(params);
+        kernel.allocate();
+        
+        // Allocate GPU arrays.
+        Array<void> gsrc(dtype, {nstreams, beams_per_batch, nfreq, ntime}, af_gpu | af_zero);
+        Array<void> gdst(dtype, {nstreams, beams_per_batch, nchan, ntime}, af_gpu | af_zero);
+        
+        // Print header.
+        double input_gb = double(beams_per_batch) * nfreq * ntime * (dtype.nbits / 8) / 1.0e9;
+        double output_gb = double(beams_per_batch) * nchan * ntime * (dtype.nbits / 8) / 1.0e9;
+
+        cout << "\nGpuTreeGriddingKernel::time()\n"
+             << "    dtype = " << dtype << "\n"
+             << "    nfreq = " << nfreq << "\n"
+             << "    nchan = " << nchan << "\n"
+             << "    ntime = " << ntime << "\n"
+             << "    beams_per_batch = " << beams_per_batch << "\n"
+             << "    input size per batch = " << input_gb << " GB\n"
+             << "    output size per batch = " << output_gb << " GB\n"
+             << "    bandwidth per launch = " << (kernel.bw_per_launch.nbytes_gmem / 1.0e9) << " GB\n"
+             << endl;
+        
+        // Use KernelTimer with 500 iterations, 2 streams.
+        int niter = 500;
+        int print_interval = 50;
+        KernelTimer kt(niter, nstreams);
+        
+        while (kt.next()) {
+            Array<void> s = gsrc.slice(0, kt.istream);
+            Array<void> d = gdst.slice(0, kt.istream);
+
+            kernel.launch(d, s, kt.stream);
+            
+            if (kt.warmed_up && ((kt.curr_iteration+1) % print_interval == 0)) {
+                double bandwidth_gbps = kernel.bw_per_launch.nbytes_gmem / kt.dt / 1.0e9;
+                cout << "    iter " << (kt.curr_iteration+1) << "/" << niter
+                     << ": dt = " << (kt.dt * 1.0e3) << " ms"
+                     << ", bandwidth = " << bandwidth_gbps << " GB/s" << endl;
+            }
+        }
+    }
 }
 
 

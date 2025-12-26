@@ -381,11 +381,6 @@ void GpuDequantizationKernel::time()
                      << ", bandwidth = " << bandwidth_gbps << " GB/s" << endl;
             }
         }
-        
-        // Final result
-        double bandwidth_gbps = kernel.bw_per_launch.nbytes_gmem / kt.dt / 1.0e9;
-        cout << "\n    Final: bandwidth = " << bandwidth_gbps << " GB/s"
-             << " (theoretical ~900 GB/s A100, ~2000 GB/s H100)\n";
     }
 }
 

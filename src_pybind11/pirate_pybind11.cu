@@ -176,6 +176,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
 
     py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel")
           .def_static("test", &GpuTreeGriddingKernel::test)
+          .def_static("time", &GpuTreeGriddingKernel::time)
     ;
 
     py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel")

@@ -84,8 +84,8 @@ struct GpuTreeGriddingKernel
     dim3 nthreads;
     int nchan_per_thread;
 
-    // Static member function: runs one randomized test iteration.
-    static void test();
+    static void test();  // runs one randomized test iteration
+    static void time();  // does a timing run with chord-like parameters
 };
 
 
