@@ -236,6 +236,7 @@ public:
     );
 
     long nbatches = 0;   // = (total_beams / beams_per_batch)
+    long gmem_footprint_nbytes = 0;
     
     // Bandwidth per call to GpuDedispersionKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
