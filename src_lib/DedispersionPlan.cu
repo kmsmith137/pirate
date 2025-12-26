@@ -334,7 +334,52 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
 {
     emitter << YAML::BeginMap;
 
-    emitter << YAML::Key << "trees"
+    emitter << YAML::Key << "dtype" << YAML::Value << dtype.str();
+    if (verbose)
+        emitter << YAML::Comment("Data type for dedispersion computations");
+
+    emitter << YAML::Key << "nfreq" << YAML::Value << nfreq;
+    if (verbose)
+        emitter << YAML::Comment("Total number of frequency channels across all zones");
+
+    emitter << YAML::Key << "nt_in" << YAML::Value << nt_in;
+    if (verbose)
+        emitter << YAML::Comment("Number of time samples per input chunk");
+
+    emitter << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels;
+    if (verbose)
+        emitter << YAML::Comment("Number of downsampling levels");
+
+    emitter << YAML::Key << "beams_per_gpu" << YAML::Value << beams_per_gpu;
+    if (verbose)
+        emitter << YAML::Comment("Number of beams processed per GPU");
+
+    emitter << YAML::Key << "beams_per_batch" << YAML::Value << beams_per_batch;
+    if (verbose)
+        emitter << YAML::Comment("Number of beams per batch");
+
+    emitter << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches;
+    if (verbose)
+        emitter << YAML::Comment("Number of active batches");
+
+    emitter << YAML::Key << "stage1_dd_rank"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (long r: stage1_dd_rank)
+        emitter << r;
+    emitter << YAML::EndSeq;
+    if (verbose)
+        emitter << YAML::Comment("Active dedispersion rank of each stage1 tree");
+
+    emitter << YAML::Key << "stage1_amb_rank"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (long r: stage1_amb_rank)
+        emitter << r;
+    emitter << YAML::EndSeq;
+    if (verbose)
+        emitter << YAML::Comment("Ambient rank of each stage1 tree (= number of coarse freq channels)");
+
+    emitter << YAML::Newline << YAML::Newline
+            << YAML::Key << "trees"
             << YAML::Value
             << YAML::BeginSeq;
 
