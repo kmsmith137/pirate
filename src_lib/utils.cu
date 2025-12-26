@@ -114,24 +114,6 @@ void reference_downsample_time(const Array<float> &in, Array<float> &out, bool n
 }
 
 
-void reference_extract_odd_channels(const Array<float> &in, Array<float> &out)
-{
-    xassert(out.ndim == 2);
-    xassert(out.strides[1] == 1);
-
-    xassert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
-    xassert(in.strides[1] == 1);
-
-    int nchan_out = out.shape[0];
-    int nt = out.shape[1];
-
-    for (int c = 0; c < nchan_out; c++) {
-        memcpy(out.data + c * out.strides[0],
-               in.data + (2*c+1) * in.strides[0],
-               nt * sizeof(float));
-    }
-}
-
 long dedispersion_delay(int rank, long freq, long dm_brev)
 {
     long delay = 0;

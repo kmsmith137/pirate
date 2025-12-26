@@ -28,10 +28,6 @@ extern int rb_lag(int freq_coarse, int dm_brev, int stage1_rank, int stage2_rank
 extern void reference_downsample_freq(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, bool normalize);
 extern void reference_downsample_time(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, bool normalize);
 
-// Reduces (dm_brev, time) array by a factor 2, by keeping only odd (dm_brev)-indices.
-// FIXME if I ever implement Array<float>::slice() with strides, then this would be a special case.
-extern void reference_extract_odd_channels(const ksgpu::Array<float> &in, ksgpu::Array<float> &out);
-
 // dedisperse_non_incremental(): currently only used for testing the ReferenceTree,
 // but I could imagine this being useful elsewhere some day. Dedispersion is done in
 // place -- output index is a bit-reversed delay.
