@@ -70,6 +70,8 @@ struct GpuDedisperser
 
     std::vector<DedispersionBuffer> stage1_dd_bufs;  // length nstreams
     
+    long gpu_ringbuf_nelts = 0;
+    long host_ringbuf_nelts = 0;
     ksgpu::Array<void> gpu_ringbuf;
     ksgpu::Array<void> host_ringbuf;
 

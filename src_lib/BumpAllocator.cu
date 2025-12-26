@@ -81,13 +81,14 @@ void *BumpAllocator::allocate_bytes(long nbytes)
 }
 
 
+// Note: caller has checked 'dtype'.
 ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides)
 {
     ksgpu::Array<void> ret;
     
-    // Initialize all Array members except 'data' and 'base'.
-    // Returns element count needed for allocation.
-    long nalloc = ksgpu::_array_init_noalloc_prechecked_dtype(ret, dtype, ndim, shape, strides, aflags);
+    // _array_init_dchecked(..., allocate=false) initializes all Array members 
+    // except 'data' and 'base', and returns element count needed for allocation.
+    long nalloc = ksgpu::_array_init_dchecked(ret, dtype, ndim, shape, strides, aflags, false);
     long nbytes = nalloc * (dtype.nbits / 8);
     
     if (ret.size > 0) {

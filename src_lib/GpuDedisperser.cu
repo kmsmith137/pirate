@@ -90,8 +90,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     }
 
     // MegaRingbuf.
-    long gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
-    long host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
+    this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
+    this->host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
     this->gmem_footprint_nbytes += align_up(gpu_ringbuf_nelts * bytes_per_elt, BumpAllocator::nalign);
     this->hmem_footprint_nbytes += align_up(host_ringbuf_nelts * bytes_per_elt, BumpAllocator::nalign);
 
@@ -176,8 +176,6 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
     for (auto &kernel: this->cdd2_kernels)
         kernel->allocate(gpu_allocator);
 
-    long gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
-    long host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
     this->gpu_ringbuf = gpu_allocator.allocate_array<void>(dtype, { gpu_ringbuf_nelts });
     this->host_ringbuf = host_allocator.allocate_array<void>(dtype, { host_ringbuf_nelts });    
 
