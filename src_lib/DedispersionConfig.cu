@@ -404,6 +404,8 @@ void DedispersionConfig::validate() const
     }
 
     // Validate frequency_subband_counts.
+    // FIXME add check that pf_rank is not too large for tree_index=0.
+    // (Not sure yet what the exact constraint will be, after dust settles on all code.)
     FrequencySubbands::validate_subband_counts(frequency_subband_counts);
 
     // Validate peak_finding_params.
@@ -613,8 +615,9 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         ss << "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
            << "This is a length-(pf_rank+1) vector containing the number of frequency subbands at each level.\n"
            << "To disable subbands and only search the full frequency band, set to [1].\n"
-           << "For a tool for composing frequency_subband_counts, see 'python -m pirate_frb show_subbands --help'.\n"
-           << "In this config, " << fs.F << " frequency subband(s) are searched:";
+           << "For a tool for creating frequency_subband_counts, see 'python -m pirate_frb show_subbands --help'.\n"
+           << "Note: these are the 'top-level' frequency subbands; fewer subbands may be searched in individual trees.\n"
+           << "In this config, there are " << fs.F << " top-level frequency subband(s):";
 
         fs.show_compact(ss);
 
