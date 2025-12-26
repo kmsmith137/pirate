@@ -59,8 +59,11 @@ void ChimeDedisperser::initialize()
 
     this->plan = make_shared<DedispersionPlan> (config);
     this->dedisperser = make_shared<GpuDedisperser> (plan);
-    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
-    this->dedisperser->allocate(allocator);  // note: all buffers are zeroed or initialized
+
+    BumpAllocator gpu_allocator(af_gpu | af_zero, -1);     // dummy allocator
+    BumpAllocator host_allocator(af_rhost | af_zero, -1);  // dummy allocator
+
+    this->dedisperser->allocate(gpu_allocator, host_allocator);  // note: all buffers are zeroed or initialized
     this->streams = CudaStreamWrapper::create_vector(nstreams);
     
     // FIXME currently, gridding and peak-finding are not implemented.

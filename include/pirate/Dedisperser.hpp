@@ -95,7 +95,7 @@ struct GpuDedisperser
     BandwidthTracker bw_per_launch;
 
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
-    void allocate(BumpAllocator &allocator);
+    void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
     // launch() interface needs some explanation:
     //
