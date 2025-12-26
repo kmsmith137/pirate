@@ -1,7 +1,8 @@
 #include "../include/pirate/Dedisperser.hpp"
 
-#include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
+#include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/DedispersionTree.hpp"
 #include "../include/pirate/ReferenceTree.hpp"
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
@@ -74,21 +75,14 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
     this->beams_per_batch = config.beams_per_batch;
     this->nbatches = xdiv(total_beams, beams_per_batch);
 
-    const DedispersionBufferParams &out_params = plan->stage2_dd_buf_params;
-    this->output_ntrees = out_params.nbuf;
-    this->output_rank = out_params.buf_rank;
-    this->output_ntime = out_params.buf_ntime;
-
-    // Some paranoid asserts.
-    xassert_eq(long(output_rank.size()), output_ntrees);
-    xassert_eq(long(output_ntime.size()), output_ntrees);
-    xassert_eq(plan->ntrees, output_ntrees);
+    this->ntrees = plan->ntrees;
+    this->trees = plan->trees;
 
     // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<ReferenceTreeGriddingKernel> (plan->tree_gridding_kernel_params);
 
     // Peak-finding kernels.
-    for (long i = 0; i < output_ntrees; i++) {
+    for (long i = 0; i < ntrees; i++) {
         const PeakFindingKernelParams &params = plan->stage2_pf_params.at(i);
         auto pf = make_shared<ReferencePeakFindingKernel> (params, Dcore.at(i));
         this->pf_kernels.push_back(pf);
@@ -98,8 +92,8 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
     this->input_array = Array<float>({beams_per_batch, nfreq, input_ntime}, af_uhost | af_zero);
     
     // Allocate weights arrays.
-    this->wt_arrays.resize(output_ntrees);
-    for (long i = 0; i < output_ntrees; i++) {
+    this->wt_arrays.resize(ntrees);
+    for (long i = 0; i < ntrees; i++) {
         long ndm_wt = plan->stage2_pf_params.at(i).ndm_wt;
         long nt_wt = plan->stage2_pf_params.at(i).nt_wt;
         long P = plan->trees.at(i).nprofiles;
@@ -109,39 +103,15 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(
 
     // Alllocate out_max, out_argmax arrays.
 
-    this->out_max.resize(output_ntrees);
-    this->out_argmax.resize(output_ntrees);
+    this->out_max.resize(ntrees);
+    this->out_argmax.resize(ntrees);
 
-    for (long i = 0; i < output_ntrees; i++) {
+    for (long i = 0; i < ntrees; i++) {
         long ndm_out = plan->stage2_pf_params.at(i).ndm_out;
         long nt_out = plan->stage2_pf_params.at(i).nt_out;
         this->out_max[i] = Array<float>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
         this->out_argmax[i] = Array<uint>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
     }
-    
-    // Note: 'output_arrays' is a member of ReferenceDedisperserBase,
-    // but is initialized by the subclass constructor.
-}
-
-
-void ReferenceDedisperserBase::_init_output_arrays(vector<Array<float>> &out)
-{
-    this->output_arrays = out;
-    
-    xassert_eq(long(output_arrays.size()), output_ntrees);
-
-    for (long i = 0; i < output_ntrees; i++)
-        xassert_shape_eq(output_arrays.at(i), ({ beams_per_batch, pow2(output_rank.at(i)), output_ntime.at(i) }));
-}
-
-
-void ReferenceDedisperserBase::_init_output_arrays(vector<Array<void>> &out_)
-{
-    vector<Array<float>> out;
-    for (ulong i = 0; i < out_.size(); i++)
-        out.push_back(out_.at(i).template cast<float> ("ReferenceDedisperser::_init_output_arrays(): 'out' array"));
-
-    this->_init_output_arrays(out);
 }
 
 
@@ -175,15 +145,12 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
     vector<Array<float>> dedispersion_buffers;  // length plan->ntrees
 
     // Step 3: apply tree dedispersion (one-stage, not two-stage).
-    
-    vector<shared_ptr<ReferenceTree>> trees;    // length (nbatches * plan->ntrees)
-    vector<Array<float>> subband_buffers;       // length (plan->ntrees)
 
-    // Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
-    // In downsampled trees, we compute twice as many DMs as necessary, then copy the bottom half.
-    // Reminder: 'output_arrays' is a member of ReferenceDedisperserBase.
+    // Warning: don't confuse 'reference_trees' with 'trees' (inherited from base class!)
+    vector<shared_ptr<ReferenceTree>> reference_trees;  // length (nbatches * plan->ntrees)
+    vector<Array<float>> subband_buffers;               // length (plan->ntrees)
 
-    // Step 5: run peak-finding kernel.
+    // Step 4: run peak-finding kernel.
     // In downsampled trees, we just run on the upper half of 'subband_buffers'.
 };
 
@@ -194,29 +161,27 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
     long nds = config.num_downsampling_levels;
     
     this->downsampled_inputs.resize(nds);
-    this->dedispersion_buffers.resize(output_ntrees);
-    this->trees.resize(nbatches * output_ntrees);
-    this->subband_buffers.resize(output_ntrees);
-    this->output_arrays.resize(output_ntrees);
+    this->dedispersion_buffers.resize(ntrees);
+    this->reference_trees.resize(nbatches * ntrees);
+    this->subband_buffers.resize(ntrees);
 
     for (long ids = 0; ids < nds; ids++) {
         long nt_ds = xdiv(input_ntime, pow2(ids));
         downsampled_inputs.at(ids) = Array<float> ({beams_per_batch, pow2(input_rank), nt_ds}, af_uhost | af_zero);
     }
     
-    for (long iout = 0; iout < output_ntrees; iout++) {
-        const DedispersionTree &tree = plan->trees.at(iout);
+    for (long iout = 0; iout < ntrees; iout++) {
+        const DedispersionTree &tree = trees.at(iout);
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(iout);
 
-        long out_rank = output_rank.at(iout);
-        long out_ntime = output_ntime.at(iout);
+        long out_rank = tree.amb_rank + tree.early_dd_rank;
+        long out_ntime = tree.nt_ds;
         bool is_downsampled = (tree.ds_level > 0);
         long dd_rank = out_rank + (is_downsampled ? 1 : 0);
         long ndm_out = pf_params.ndm_out * (is_downsampled ? 2 : 1);
         long M = tree.frequency_subbands.M;
 
         this->dedispersion_buffers.at(iout) = Array<float> ({ beams_per_batch, pow2(dd_rank), out_ntime }, af_uhost | af_zero);
-        this->output_arrays.at(iout) = Array<float>({ beams_per_batch, pow2(out_rank), out_ntime }, af_uhost | af_zero);
         this->subband_buffers.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, pf_params.nt_in}, af_uhost | af_zero);
 
         for (int batch = 0; batch < nbatches; batch++) {
@@ -228,13 +193,9 @@ ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> 
             tree_params.nspec = 1;
             tree_params.subband_counts = pf_params.subband_counts;
 
-            this->trees.at(batch*output_ntrees + iout) = make_shared<ReferenceTree> (tree_params);
+            this->reference_trees.at(batch*ntrees + iout) = make_shared<ReferenceTree> (tree_params);
         }
     }
-
-    // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
-    // 'output_arrays' in the base class. 
-    this->_init_output_arrays(output_arrays);
 }
 
 
@@ -263,47 +224,31 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         }
     }
 
-    for (int iout = 0; iout < output_ntrees; iout++) {
+    for (int iout = 0; iout < ntrees; iout++) {
         const DedispersionTree &tree = plan->trees.at(iout);
 
-        long out_rank = output_rank.at(iout);
-        long out_ntime = output_ntime.at(iout);
+        long out_rank = tree.amb_rank + tree.early_dd_rank;
+        long out_ntime = tree.nt_ds;
         long ids = tree.ds_level;
         bool is_downsampled = (ids > 0);
         long dd_rank = out_rank + (is_downsampled ? 1 : 0);
         
         Array<float> in = downsampled_inputs.at(ids).slice(1, 0, pow2(dd_rank));
         Array<float> dd = dedispersion_buffers.at(iout);
-        Array<float> out = output_arrays.at(iout);
         
         // Step 2: copy from 'downsampled_inputs' to 'dedispersion_buffers'.
         
         dd.fill(in);
 
         // Step 3: apply tree dedispersion (one-stage, not two-stage).
-        // Vector length is (nbatches * output_ntrees).
+        // Vector length is (nbatches * ntrees).
         // Note dd->dd2 reshape: (B,D,T) -> (B,1,D,T).
 
         Array<float> dd2 = dd.reshape({beams_per_batch, 1, pow2(dd_rank), out_ntime});
-        auto t = trees.at(ibatch*output_ntrees + iout);
+        shared_ptr<ReferenceTree> t = reference_trees.at(ibatch*ntrees + iout);
         t->dedisperse(dd2, subband_buffers.at(iout));
-        
-        // Step 4: copy from 'dedispersion_buffers' to 'output_arrays'.
-        // In downsampled trees, we compute twice as many DMs as necessary, then copy the bottom half.
-        
-        if (!is_downsampled)
-            out.fill(dd);
-        else {
-            // FIXME refence_extract_odd_channels() should operate on N-dimensional array.
-            // reference_extract_odd_channels(dd, out);
-            for (long b = 0; b < beams_per_batch; b++) {
-                Array<float> src2 = dd.slice(0,b);
-                Array<float> dst2 = out.slice(0,b);
-                reference_extract_odd_channels(src2, dst2);
-            }
-        }
 
-        // Step 5: run peak-finding kernel.
+        // Step 4: run peak-finding kernel.
         // In downsampled trees, we just run on the upper half of 'subband_buffers'.
 
         Array<float> sb = subband_buffers.at(iout);
@@ -340,7 +285,7 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
     
     DedispersionBuffer stage1_dd_buf;
     DedispersionBuffer stage2_dd_buf;
-    vector<shared_ptr<ReferenceLagbuf>> stage2_lagbufs;  // length (nbatches * output_ntrees)
+    vector<shared_ptr<ReferenceLagbuf>> stage2_lagbufs;  // length (nbatches * ntrees)
 
     // Dedispersion output in subbands ('sb_out' arg to ReferenceDedispersionKernel::apply())
     // Shape (beams_per_batch, ndm_out, M, nt_in)
@@ -383,13 +328,13 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
     // (Note that these lagbufs are used in ReferenceDedisperser1, but not ReferenceDedisperser2.)
     
     long S = plan->nelts_per_segment;
-    this->stage2_lagbufs.resize(nbatches * output_ntrees);
+    this->stage2_lagbufs.resize(nbatches * ntrees);
 
-    for (long iout = 0; iout < output_ntrees; iout++) {
+    for (long iout = 0; iout < ntrees; iout++) {
         const DedispersionTree &tree = plan->trees.at(iout);
 
-        long rank = output_rank.at(iout);
-        long ntime = output_ntime.at(iout);
+        long rank = tree.amb_rank + tree.early_dd_rank;
+        long ntime = tree.nt_ds;
         long ds_level = tree.ds_level;
         bool is_downsampled = (ds_level > 0);
         long stage2_amb_rank = tree.amb_rank;
@@ -413,24 +358,20 @@ ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> 
         }
 
         for (long b = 0; b < nbatches; b++)
-            stage2_lagbufs.at(b*output_ntrees + iout) = make_shared<ReferenceLagbuf> (lags, ntime);
+            stage2_lagbufs.at(b*ntrees + iout) = make_shared<ReferenceLagbuf> (lags, ntime);
     }
     
     // Initialize stage2_subband_bufs.
     // Shape (beams_per_batch, ndm_out, M, nt_in)
 
-    this->stage2_subband_bufs.resize(output_ntrees);
+    this->stage2_subband_bufs.resize(ntrees);
 
-    for (long iout = 0; iout < output_ntrees; iout++) {
+    for (long iout = 0; iout < ntrees; iout++) {
         long ndm_out = plan->stage2_pf_params.at(iout).ndm_out;
         long nt_in = plan->stage2_pf_params.at(iout).nt_in;
         long M = plan->trees.at(iout).frequency_subbands.M;
         stage2_subband_bufs.at(iout) = Array<float> ({beams_per_batch, ndm_out, M, nt_in}, af_uhost | af_zero);
     }
-
-    // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
-    // 'output_arrays' in the base class. 
-    this->_init_output_arrays(stage2_dd_buf.bufs);
 }
 
 
@@ -459,10 +400,10 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 
     // Step 3: copy stage1 -> stage2
     // Step 4: apply lags
-    for (int iout = 0; iout < output_ntrees; iout++) {
+    for (int iout = 0; iout < ntrees; iout++) {
         const DedispersionTree &tree = plan->trees.at(iout);
 
-        long rank = output_rank.at(iout);
+        long rank = tree.amb_rank + tree.early_dd_rank;
         long ds_level = tree.ds_level;
         
         Array<void> src = stage1_dd_buf.bufs.at(ds_level);  // shape (beams_per_batch, 2^rank_ambient, ntime)
@@ -472,7 +413,7 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
         Array<float> dst = dst_.template cast<float> ();
         dst.fill(src);
 
-        auto lagbuf = stage2_lagbufs.at(ibatch*output_ntrees + iout);
+        auto lagbuf = stage2_lagbufs.at(ibatch*ntrees + iout);
         lagbuf->apply_lags(dst);
     }
 
@@ -552,9 +493,9 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
     this->g2g_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
     
-    this->stage2_subband_bufs.resize(output_ntrees);
+    this->stage2_subband_bufs.resize(ntrees);
 
-    for (long iout = 0; iout < output_ntrees; iout++) {
+    for (long iout = 0; iout < ntrees; iout++) {
         long ndm_out = plan->stage2_pf_params.at(iout).ndm_out;
         long nt_in = plan->stage2_pf_params.at(iout).nt_in;
         long M = plan->trees.at(iout).frequency_subbands.M;
@@ -566,15 +507,11 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
         this->stage1_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (kparams, subband_counts));
     }
     
-    for (long iout = 0; iout < plan->ntrees; iout++) {
+    for (long iout = 0; iout < ntrees; iout++) {
         const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(iout);
         vector<long> subband_counts = plan->stage2_pf_params.at(iout).subband_counts;
         this->stage2_dd_kernels.push_back(make_shared<ReferenceDedispersionKernel> (dd_params, subband_counts));
     }
-    
-    // Reminder: subclass constructor is responsible for calling _init_output_arrays(), to initialize
-    // 'output_arrays' in the base class. 
-    this->_init_output_arrays(stage2_dd_buf.bufs);
 }
 
 

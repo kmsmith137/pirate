@@ -3,6 +3,7 @@
 
 #include "DedispersionConfig.hpp"
 #include "DedispersionBuffer.hpp"
+#include "DedispersionTree.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 #include <vector>
@@ -54,9 +55,8 @@ struct GpuDedisperser
     long gpu_ringbuf_nelts = 0;   // = (mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment)
     long host_ringbuf_nelts = 0;  // = (mega_ringbuf->host_global_nseg * plan->nelts_per_segment)
 
-    long output_ntrees = 0;
-    std::vector<long> output_rank;      // length output_ntrees
-    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(ds_level))
+    long ntrees = 0;                       // same as plan->ntrees
+    std::vector<DedispersionTree> trees;   // same as plan->trees
 
     // "outer" vector has length nstreams
     // "inner" array shape (beams_per_batch, nfreq, ntime)
@@ -91,8 +91,8 @@ struct GpuDedisperser
     // We have one GpuPfWeightLayout per output tree: cdd2_kernels[itree]->pf_weight_layout.
     // The shape for one beam batch is here: cdd2_kernels[itree]->expected_wt_shape.
     // The "extended" shapes below adds an outer length-nstreams index.
-    std::vector<std::vector<long>> extended_wt_shapes;   // length output_ntrees
-    std::vector<std::vector<long>> extended_wt_strides;  // length output_ntrees
+    std::vector<std::vector<long>> extended_wt_shapes;   // length ntrees
+    std::vector<std::vector<long>> extended_wt_strides;  // length ntrees
 
     // Bandwidth per call to GpuDedisperser::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
@@ -172,12 +172,11 @@ struct ReferenceDedisperserBase
     long beams_per_batch = 0;     // same as config.beams_per_batch
     long nbatches = 0;            // = (total_beams / beams_per_batch)
 
-    long output_ntrees = 0;             // same as plan->ntrees
-    std::vector<long> output_rank;      // length output_ntrees
-    std::vector<long> output_ntime;     // length output_ntrees, equal to (input_time / pow2(ds_level))
+    long ntrees = 0;                       // same as plan->ntrees
+    std::vector<DedispersionTree> trees;   // same as plan->trees
 
     std::shared_ptr<ReferenceTreeGriddingKernel> tree_gridding_kernel;
-    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;  // length output_ntrees
+    std::vector<std::shared_ptr<ReferencePeakFindingKernel>> pf_kernels;  // length ntrees
 
     // To process multiple chunks, call the dedisperse() method in a loop.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
@@ -190,17 +189,13 @@ struct ReferenceDedisperserBase
     // Befre calling dedisperse(), caller should fill 'wt_arrays' (peak-finding weights).
     // Shape is (beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.F)
     //   where t = plan->trees.at(itree).
-    std::vector<ksgpu::Array<float>> wt_arrays;    // length output_ntrees
+    std::vector<ksgpu::Array<float>> wt_arrays;    // length ntrees
 
-    // After dedisperse() completes, dedispersion output is stored in 'output_arrays'.
-    // output_arrays[i] has shape (beams_per_batch, 2^output_rank[i], output_ntime[i])
-    std::vector<ksgpu::Array<float>> output_arrays;   // length output_ntrees
-   
     // After dedisperse() completes, peak-finding output is stored in 'out_max', 'out_argmax'.
     // Shape is (beams_per_batch, t.ndm_out, t.nt_out)
     //   where t = plan->trees.at(itree)
-    std::vector<ksgpu::Array<float>> out_max;     // length output_ntrees
-    std::vector<ksgpu::Array<uint>> out_argmax;   // length output_ntrees
+    std::vector<ksgpu::Array<float>> out_max;     // length ntrees
+    std::vector<ksgpu::Array<uint>> out_argmax;   // length ntrees
 
     // Factory function -- constructs ReferenceDedisperser of specified sophistication.
     static std::shared_ptr<ReferenceDedisperserBase> make(
@@ -208,10 +203,6 @@ struct ReferenceDedisperserBase
         const std::vector<long> &Dcore,
         int sophistication
     );
-
-    // Helper methods called by subclass constructors.
-    void _init_output_arrays(std::vector<ksgpu::Array<float>> &out);
-    void _init_output_arrays(std::vector<ksgpu::Array<void>> &out);
 };
 
 

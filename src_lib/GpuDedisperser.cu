@@ -63,10 +63,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     this->nbatches = xdiv(total_beams, beams_per_batch);
     this->nstreams = config.num_active_batches;
 
-    const DedispersionBufferParams &out_params = plan->stage2_dd_buf_params;
-    this->output_ntrees = out_params.nbuf;
-    this->output_rank = out_params.buf_rank;
-    this->output_ntime = out_params.buf_ntime;
+    this->ntrees = plan->ntrees;
+    this->trees = plan->trees;
 
     long nbits_per_segment = plan->nelts_per_segment * dtype.nbits;
     xassert_eq(nbits_per_segment, 8 * constants::bytes_per_gpu_cache_line);  // currently assumed in a few places
@@ -85,7 +83,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         this->bw_per_launch += kernel->bw_per_launch;
     }
 
-    for (long itree = 0; itree < output_ntrees; itree++) {
+    for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(itree);
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
         auto cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
@@ -97,7 +95,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     this->g2g_copy_kernel = make_shared<GpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
 
-    for (long itree = 0; itree < output_ntrees; itree++) {
+    for (long itree = 0; itree < ntrees; itree++) {
         const vector<long> &shape = cdd2_kernels.at(itree)->expected_wt_shape;
         const vector<long> &strides = cdd2_kernels.at(itree)->expected_wt_strides;
 
@@ -123,14 +121,14 @@ void GpuDedisperser::allocate()
         buf.allocate(af_zero | af_gpu);
 
     // wt_arrays
-    for (long itree = 0; itree < output_ntrees; itree++) {
+    for (long itree = 0; itree < ntrees; itree++) {
         const vector<long> &shape = extended_wt_shapes.at(itree);
         const vector<long> &strides = extended_wt_strides.at(itree);
         wt_arrays.push_back(Array<void> (dtype, shape, strides, af_gpu | af_zero));
     }
 
     // out_max, out_argmax
-    for (long itree = 0; itree < output_ntrees; itree++) {
+    for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = plan->trees.at(itree);
         std::initializer_list<long> shape = { nstreams, beams_per_batch, tree.ndm_out, tree.nt_out };
         out_max.push_back(Array<void> (dtype, shape, af_gpu | af_zero));
@@ -248,7 +246,7 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
     }
     
     // Step 5: run cdd2 kernels (input from ringbuf)
-    for (long itree = 0; itree < output_ntrees; itree++) {
+    for (long itree = 0; itree < ntrees; itree++) {
         Array<void> slice_max = out_max.at(itree).slice(0,istream);
         Array<uint> slice_argmax = out_argmax.at(itree).slice(0,istream);
         Array<void> slice_wt = wt_arrays.at(itree).slice(0,istream);
@@ -391,26 +389,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
             }
             
             for (int iout = 0; iout < nout; iout++) {
-                const Array<float> &rdd0_out = rdd0->output_arrays.at(iout);
-                const Array<float> &rdd1_out = rdd1->output_arrays.at(iout);
-                const Array<float> &rdd2_out = rdd2->output_arrays.at(iout);
-                long ds_level = plan->trees.at(iout).ds_level;
-
-                // Compute epsabs, epsrel for host and gpu
-                Array<float> sbv = subband_variances.at(iout);
-                float rms = sqrt(sbv.at({sbv.size-1}));
-                float emult = sqrt(config.tree_rank + ds_level + 1);
-
-                Dtype fp32 = Dtype::from_str("float32");
-                double epsrel_g = 3 * config.dtype.precision() * emult;
-                double epsabs_g = 3 * config.dtype.precision() * emult * rms;
-                double epsrel_r = 3 * fp32.precision() * emult;
-                double epsabs_r = 3 * fp32.precision() * emult * rms;
-
-                // Last two arguments are (epsabs, epsrel).
-                assert_arrays_equal(rdd0_out, rdd1_out, "dd_ref0", "dd_ref1", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
-                assert_arrays_equal(rdd0_out, rdd2_out, "dd_ref0", "dd_ref2", {"beam","dm_brev","t"}, epsabs_r, epsrel_r);
-
                 // Compare peak-finding 'out_max'.
                 Array<void> gdd_max = gdd->out_max.at(iout).slice(0,0);  // FIXME istream=0 assumed
                 assert_arrays_equal(rdd0->out_max.at(iout), rdd1->out_max.at(iout), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
