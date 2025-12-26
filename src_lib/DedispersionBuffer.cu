@@ -103,7 +103,7 @@ void DedispersionBuffer::allocate(BumpAllocator &allocator)
     }
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
-    cout << "DedispersionBuffer: " << nbytes_allocated << " bytes allocated" << endl;
+    // cout << "DedispersionBuffer: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, this->footprint_nbytes);
 
     xassert(bstride == j);
