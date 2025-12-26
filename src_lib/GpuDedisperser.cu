@@ -58,18 +58,18 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     long nbits_per_segment = plan->nelts_per_segment * dtype.nbits;
     xassert_eq(nbits_per_segment, 8 * constants::bytes_per_gpu_cache_line);  // currently assumed in a few places
     
-    
-    for (long i = 0; i < nstreams; i++)
+    for (long istream = 0; istream < nstreams; istream++)
         stage1_dd_bufs.push_back(DedispersionBuffer(plan->stage1_dd_buf_params));
 
     // Create tree gridding kernel using plan parameters.
     this->tree_gridding_kernel = make_shared<GpuTreeGriddingKernel> (plan->tree_gridding_kernel_params);
     this->bw_per_launch += tree_gridding_kernel->bw_per_launch;
 
-    for (const DedispersionKernelParams &kparams: plan->stage1_dd_kernel_params) {
-        auto kernel = make_shared<GpuDedispersionKernel> (kparams);
-        this->stage1_dd_kernels.push_back(kernel);
-        this->bw_per_launch += kernel->bw_per_launch;
+    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+        const DedispersionKernelParams &dd_params = plan->stage1_dd_kernel_params.at(ids);
+        auto dd_kernel = make_shared<GpuDedispersionKernel> (dd_params);
+        this->stage1_dd_kernels.push_back(dd_kernel);
+        this->bw_per_launch += dd_kernel->bw_per_launch;
     }
 
     for (long itree = 0; itree < ntrees; itree++) {
@@ -106,7 +106,7 @@ void GpuDedisperser::allocate()
     for (long i = 0; i < nstreams; i++)
         input_arrays.push_back(Array<void>(dtype, {beams_per_batch, nfreq, nt_in}, af_gpu | af_zero));
 
-    for (auto &buf: stage1_dd_bufs)
+    for (DedispersionBuffer &buf: stage1_dd_bufs)
         buf.allocate(af_zero | af_gpu);
 
     // wt_arrays
@@ -118,7 +118,7 @@ void GpuDedisperser::allocate()
 
     // out_max, out_argmax
     for (long itree = 0; itree < ntrees; itree++) {
-        const DedispersionTree &tree = plan->trees.at(itree);
+        const DedispersionTree &tree = trees.at(itree);
         std::initializer_list<long> shape = { nstreams, beams_per_batch, tree.ndm_out, tree.nt_out };
         out_max.push_back(Array<void> (dtype, shape, af_gpu | af_zero));
         out_argmax.push_back(Array<uint> (shape, af_gpu | af_zero));
@@ -166,10 +166,10 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
     lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, stream);
 
     // Step 2: run stage1 dedispersion kernels (output to ringbuf)
-    for (uint i = 0; i < stage1_dd_kernels.size(); i++) {
-        shared_ptr<GpuDedispersionKernel> kernel = stage1_dd_kernels.at(i);
+    for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
+        shared_ptr<GpuDedispersionKernel> kernel = stage1_dd_kernels.at(ids);
         const DedispersionKernelParams &kp = kernel->params;
-        Array<void> dd_buf = stage1_dd_bufs.at(istream).bufs.at(i);
+        Array<void> dd_buf = stage1_dd_bufs.at(istream).bufs.at(ids);
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime });
@@ -280,6 +280,9 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     config.print(cout, 4);
     print_kv("nchunks", nchunks, cout, 4);
 
+    // I decided that this was the least awkward place to call DedispersionConfig::test().    
+    config.test();   // calls DedispersionConfig::validate()
+
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
     print_kv("max_clag", plan->mega_ringbuf->max_clag, cout, 4);
     print_kv("max_gpu_clag", plan->mega_ringbuf->max_gpu_clag, cout, 4);
@@ -287,15 +290,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     if (host_only)
         cout << "!!! Host-only test, GPU code will not be run !!!" << endl;
 
-    // I decided that this was the least awkward place to call DedispersionConfig::test().
-    config.test();
-
-    long nfreq = config.get_total_nfreq();
-    int nt_chunk = config.time_samples_per_chunk;
-    int beams_per_batch = config.beams_per_batch;
-    int nbatches = xdiv(config.beams_per_gpu, beams_per_batch);
-    int nstreams = config.num_active_batches;
-    int nout = plan->trees.size();
+    long ntrees = plan->ntrees;
+    long beams_per_batch = plan->beams_per_batch;
+    long nbatches = xdiv(plan->beams_per_gpu, plan->beams_per_batch);
+    long nstreams = plan->num_active_batches;
 
     // FIXME test multi-stream logic in the future.
     // For now, we use the default cuda stream, which simplifies things since we can
@@ -309,31 +307,37 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
         gdd->allocate();
     }
 
-    // Some initializations:
-    //   Dcore: taken from GPU kernel, passed to reference kernel
-    //   pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
-    //   subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
-    //   ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
-
-    vector<long> Dcore(plan->ntrees);
-    vector<Array<float>> pf_tmp(plan->ntrees);
-    vector<Array<float>> subband_variances(plan->ntrees);
-    vector<shared_ptr<ReferencePeakFindingKernel>> ref_kernels_for_weights(plan->ntrees);
-
-    for (long itree = 0; itree < plan->ntrees; itree++) {
+    // Dcore: taken from GPU kernel, passed to reference kernel
+    vector<long> Dcore(ntrees);
+    for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = plan->trees.at(itree);
-        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
-        long F = tree.frequency_subbands.F;
-
         Dcore.at(itree) = host_only ? tree.pf.time_downsampling : gdd->cdd2_kernels.at(itree)->Dcore;
-        pf_tmp.at(itree) = Array<float> ({beams_per_batch, pf_params.ndm_out, pf_params.nt_out}, af_uhost | af_zero);
-        ref_kernels_for_weights.at(itree) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
-        subband_variances.at(itree) = Array<float> ({F}, af_uhost | af_zero);
+    }
 
+    // pf_tmp: used to store output from ReferencePeakFindingKernel::eval_tokens().
+    vector<Array<float>> pf_tmp(ntrees);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = plan->trees.at(itree);
+        pf_tmp.at(itree) = Array<float> ({beams_per_batch, tree.ndm_out, tree.nt_out}, af_uhost | af_zero);
+    }
+
+    // subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
+    vector<Array<float>> subband_variances(ntrees);
+    for (long itree = 0; itree < ntrees; itree++) {
+        long F = plan->trees.at(itree).frequency_subbands.F;
+        subband_variances.at(itree) = Array<float> ({F}, af_uhost | af_zero);
         for (long f = 0; f < F; f++)
             subband_variances.at(itree).at({f}) = variance_upper_bound(plan, itree, f);
     }
 
+    // ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
+    vector<shared_ptr<ReferencePeakFindingKernel>> ref_kernels_for_weights(ntrees);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
+        ref_kernels_for_weights.at(itree) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
+    }
+
+    // Create ReferenceDedispersers (must come after Dcore initialization)
     shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, Dcore, 0);
     shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, Dcore, 1);
     shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, Dcore, 2);
@@ -341,7 +345,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     for (int ichunk = 0; ichunk < nchunks; ichunk++) {
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
             // Randomly initialize weights.
-            for (int itree = 0; itree < plan->ntrees; itree++) {
+            for (int itree = 0; itree < ntrees; itree++) {
                 Array<float> sbv = subband_variances.at(itree);
                 Array<float> wt_cpu = ref_kernels_for_weights.at(itree)->make_random_weights(sbv);
 
@@ -352,7 +356,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 if (!host_only) {
                     const GpuPfWeightLayout &wl = gdd->cdd2_kernels.at(itree)->pf_weight_layout;
                     Array<void> wt_gpu = gdd->wt_arrays.at(itree).slice(0,0);  // FIXME istream=0 assumed
-
                     // FIXME extra copy here (+ another extra copy "hidden" in GpuPfWeightLayout::to_gpu())
                     Array<void> tmp = wl.to_gpu(wt_cpu);
                     wt_gpu.fill(tmp);
@@ -361,7 +364,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 
             // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
             // Random values uniform over [-1.0, 1.0].
-            Array<float> arr({beams_per_batch, nfreq, nt_chunk}, af_uhost);
+            Array<float> arr({beams_per_batch, plan->nfreq, plan->nt_in}, af_uhost);
             for (long i = 0; i < arr.size; i++)
                 arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
 
@@ -379,26 +382,26 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 gdd->launch(ichunk, ibatch, 0, nullptr);  // (ichunk, ibatch, istream, stream)
             }
             
-            for (int iout = 0; iout < nout; iout++) {
+            for (int itree = 0; itree < ntrees; itree++) {
                 // Compare peak-finding 'out_max'.
-                Array<void> gdd_max = gdd->out_max.at(iout).slice(0,0);  // FIXME istream=0 assumed
-                assert_arrays_equal(rdd0->out_max.at(iout), rdd1->out_max.at(iout), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
-                assert_arrays_equal(rdd0->out_max.at(iout), rdd2->out_max.at(iout), "pfmax_ref0", "pfmax_ref2", {"beam","pfdm","pft"});
-                assert_arrays_equal(rdd0->out_max.at(iout), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
+                Array<void> gdd_max = gdd->out_max.at(itree).slice(0,0);  // FIXME istream=0 assumed
+                assert_arrays_equal(rdd0->out_max.at(itree), rdd1->out_max.at(itree), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
+                assert_arrays_equal(rdd0->out_max.at(itree), rdd2->out_max.at(itree), "pfmax_ref0", "pfmax_ref2", {"beam","pfdm","pft"});
+                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
 
                 // To check 'out_argmax', we need to jump through some hoops.
-                shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd0->pf_kernels.at(iout);
+                shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd0->pf_kernels.at(itree);
 
-                pf_kernel->eval_tokens(pf_tmp.at(iout), rdd1->out_argmax.at(iout), rdd0->wt_arrays.at(iout));
-                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_ref1", {"beam","pfdm","pft"});
+                pf_kernel->eval_tokens(pf_tmp.at(itree), rdd1->out_argmax.at(itree), rdd0->wt_arrays.at(itree));
+                assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_ref1", {"beam","pfdm","pft"});
 
-                pf_kernel->eval_tokens(pf_tmp.at(iout), rdd2->out_argmax.at(iout), rdd0->wt_arrays.at(iout));
-                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_ref2", {"beam","pfdm","pft"});
+                pf_kernel->eval_tokens(pf_tmp.at(itree), rdd2->out_argmax.at(itree), rdd0->wt_arrays.at(itree));
+                assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_ref2", {"beam","pfdm","pft"});
 
                 double eps = 5.0 * config.dtype.precision();
-                Array<uint> gpu_tokens = gdd->out_argmax.at(iout).slice(0,0).to_host();  // FIXME istream=0 assumed 
-                pf_kernel->eval_tokens(pf_tmp.at(iout), gpu_tokens, rdd0->wt_arrays.at(iout));
-                assert_arrays_equal(rdd0->out_max.at(iout), pf_tmp.at(iout), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
+                Array<uint> gpu_tokens = gdd->out_argmax.at(itree).slice(0,0).to_host();  // FIXME istream=0 assumed 
+                pf_kernel->eval_tokens(pf_tmp.at(itree), gpu_tokens, rdd0->wt_arrays.at(itree));
+                assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
             }
         }
     }

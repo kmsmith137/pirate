@@ -260,7 +260,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     stage2_dd_buf_params.beams_per_batch = beams_per_batch;
     stage2_dd_buf_params.nbuf = ntrees;
 
-    for (uint itree = 0; itree < ntrees; itree++) {
+    for (long itree = 0; itree < ntrees; itree++) {
         DedispersionTree &tree = trees.at(itree);
         long ds_level = tree.ds_level;
 
@@ -343,10 +343,10 @@ void DedispersionPlan::print(ostream &os, int indent) const
     
     os << Indent(indent) << "DedispersionTrees" << endl;
 
-    for (long i = 0; i < ntrees; i++) {
-        const DedispersionTree &tree = trees.at(i);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
         
-        os << Indent(indent+4) << i
+        os << Indent(indent+4) << itree
            << ": ds_level=" << tree.ds_level
            << ", amb_rank=" << tree.amb_rank
            << ", pri_dd_rank=" << tree.pri_dd_rank
