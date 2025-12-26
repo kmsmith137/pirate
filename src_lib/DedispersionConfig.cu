@@ -31,7 +31,7 @@ namespace pirate {
 
 bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y)
 {
-    return (x.ds_level == y.ds_level) && (x.tree_rank == y.tree_rank);
+    return (x.ds_level == y.ds_level) && (x.delta_rank == y.delta_rank);
 }
 
 bool operator>(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y)
@@ -41,9 +41,11 @@ bool operator>(const DedispersionConfig::EarlyTrigger &x, const DedispersionConf
     if (x.ds_level < y.ds_level)
         return false;
     
-    if (x.tree_rank > y.tree_rank)
+    // Note reversed inequalities here, so that std::sort() is first by increasing ds_level, 
+    // and second by decreasing delta_rank.
+    if (x.delta_rank < y.delta_rank)
         return true;
-    if (x.tree_rank < y.tree_rank)
+    if (x.delta_rank > y.delta_rank)
         return false;
     
     return false;  // equal
@@ -56,7 +58,7 @@ bool operator<(const DedispersionConfig::EarlyTrigger &x, const DedispersionConf
 
 ostream &operator<<(ostream &os, const DedispersionConfig::EarlyTrigger &et)
 {
-    os << "(ds=" << et.ds_level << ",rk=" << et.tree_rank << ")";
+    os << "(ds_level=" << et.ds_level << ",delta_rk=" << et.delta_rank << ")";
     return os;
 };
 
@@ -323,11 +325,11 @@ void DedispersionConfig::test() const
 }
 
 
-void DedispersionConfig::add_early_trigger(long ds_level, long tree_rank)
+void DedispersionConfig::add_early_trigger(long ds_level, long delta_rank)
 {
     EarlyTrigger e;
     e.ds_level = ds_level;
-    e.tree_rank = tree_rank;
+    e.delta_rank = delta_rank;
     this->early_triggers.push_back(e);
     
     // Incredibly lazy -- add and re-sort
@@ -335,12 +337,12 @@ void DedispersionConfig::add_early_trigger(long ds_level, long tree_rank)
 }
 
 
-void DedispersionConfig::add_early_triggers(long ds_level, std::initializer_list<long> tree_ranks)
+void DedispersionConfig::add_early_triggers(long ds_level, std::initializer_list<long> delta_ranks)
 {
-    for (long tree_rank: tree_ranks) {
+    for (long delta_rank: delta_ranks) {
         EarlyTrigger e;
         e.ds_level = ds_level;
-        e.tree_rank = tree_rank;
+        e.delta_rank = delta_rank;
         this->early_triggers.push_back(e);
     }
     
@@ -393,16 +395,19 @@ void DedispersionConfig::validate() const
     xassert_ge(gpu_clag_maxfrac, 0.0);
     xassert_le(gpu_clag_maxfrac, 1.0);
 
-    // Check validity of early triggers.
-    xassert(is_sorted(early_triggers));
     for (const EarlyTrigger &et: early_triggers) {
         long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
         long ds_stage1_rank = ds_rank / 2;
         
         xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
-        xassert((et.tree_rank >= ds_stage1_rank) && (et.tree_rank < ds_rank));
+        xassert((et.delta_rank > 0) && (et.delta_rank < ds_stage1_rank));
     }
 
+    // Check validity of early triggers.
+    if (!is_sorted(early_triggers))
+        throw runtime_error("DedispersionConfig: early triggers must be sorted first by"
+                            " increasing ds_level, then second by decreasing delta_rank");
+        
     // Validate frequency_subband_counts.
     // FIXME add check that pf_rank is not too large for tree_index=0.
     // (Not sure yet what the exact constraint will be, after dust settles on all code.)
@@ -425,7 +430,7 @@ void DedispersionConfig::validate() const
         long min_rank = ds_level ? (tree_rank-1) : (tree_rank);
         for (const EarlyTrigger &et: early_triggers)
             if (et.ds_level == ds_level)
-                min_rank = std::min(min_rank, et.tree_rank);
+                min_rank = std::min(min_rank, min_rank - et.delta_rank);
         
         if (pfp.wt_dm_downsampling > pow2(min_rank)) {
             stringstream ss;
@@ -543,8 +548,6 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     // ---- Core dedispersion parameters ----
 
     if (verbose) {
-        double dm_per_delay = this->dm_per_unit_delay();
-        
         stringstream ss;
         ss << "Core dedispersion parameters.\n";
         ss << "The number of \"tree\" channels is ntree = 2^tree_rank.\n";
@@ -555,10 +558,13 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         for (long ds = 0; ds < num_downsampling_levels; ds++) {
             long delay_lo = (ds == 0) ? 0 : pow2(tree_rank + ds - 1);
             long delay_hi = pow2(tree_rank + ds);
-            double dm_lo = delay_lo * dm_per_delay;
-            double dm_hi = delay_hi * dm_per_delay;
+            double dm_lo = delay_lo * this->dm_per_unit_delay();
+            double dm_hi = delay_hi * this->dm_per_unit_delay();
             double dt = time_sample_ms * pow2(ds);
-            ss << "\n   ds=" << ds << ": " << dt << " ms samples, "
+            
+            ss << fixed << setprecision(1)
+               << "\n   ds=" << ds << ": " << dt << " ms samples, "
+               << "max delay " << (1.0e-3 * delay_hi * time_sample_ms) << " seconds, "
                << "DM range [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
         }
         
@@ -584,7 +590,8 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             "Early triggers: search a subset [fmid,fmax] of the full frequency range [flo,fhi]\n"
             "at reduced latency. Each downsampling level has an independent set of early triggers.\n"
             "Early triggers are optional (this can be an empty list).\n"
-            "Syntax: list of {ds_level, tree_rank} pairs, sorted by ds_level then tree_rank."
+            "Syntax: list of {ds_level, delta_rank} pairs.\n"
+            "Here, delta_rank > 0 controls 'early-ness' of the trigger."
         ) << YAML::Newline << YAML::Newline;
     }
 
@@ -593,12 +600,25 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
             << YAML::BeginSeq;
 
     for (const auto &early_trigger: this->early_triggers) {
+        long ds = early_trigger.ds_level;
+        double dm_lo = this->dm_per_unit_delay() * ((ds == 0) ? 0 : pow2(tree_rank + ds - 1));
+        double dm_hi = this->dm_per_unit_delay() * pow2(tree_rank + ds);
+        double max_delay = 1.0e-3 * time_sample_ms * pow2(tree_rank + ds - early_trigger.delta_rank);
+        double f = this->delay_to_frequency(pow2(tree_rank - early_trigger.delta_rank));
+       
+        stringstream ss;
+        ss << fixed << setprecision(1)
+           << "triggers at " << f << " MHz, "
+           << "max delay " << max_delay << " seconds, "
+           << "DM range [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
+
         emitter
             << YAML::Flow
             << YAML::BeginMap
             << YAML::Key << "ds_level" << YAML::Value << early_trigger.ds_level
-            << YAML::Key << "tree_rank" << YAML::Value << early_trigger.tree_rank
-            << YAML::EndMap;
+            << YAML::Key << "delta_rank" << YAML::Value << early_trigger.delta_rank
+            << YAML::EndMap
+            << YAML::Comment(ss.str());
     }
     
     emitter << YAML::EndSeq;
@@ -733,8 +753,8 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     for (long i = 0; i < ets.size(); i++) {
         YamlFile et = ets[i];
         long ds_level = et.get_scalar<long> ("ds_level");
-        long tree_rank = et.get_scalar<long> ("tree_rank");
-        ret.add_early_trigger(ds_level, tree_rank);
+        long delta_rank = et.get_scalar<long> ("delta_rank");
+        ret.add_early_trigger(ds_level, delta_rank);
         et.check_for_invalid_keys();
     }
 
@@ -971,7 +991,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
             EarlyTrigger et;
             et.ds_level = ds_level;
-            et.tree_rank = et_rank;
+            et.delta_rank = tot_rank - et_rank;
             et_candidates.push_back(et);
         }
     }
@@ -985,7 +1005,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     for (int i = 0; i < num_et; i++) {
         const EarlyTrigger &et = et_candidates.at(i);
-        ret.add_early_trigger(et.ds_level, et.tree_rank);
+        ret.add_early_trigger(et.ds_level, et.delta_rank);
     }
 
     ret.validate();

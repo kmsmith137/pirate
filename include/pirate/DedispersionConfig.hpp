@@ -85,11 +85,11 @@ struct DedispersionConfig
 
     struct EarlyTrigger
     {
-        long ds_level = -1;  // 0 <= ds_level < num_downsampling_levels
-        long tree_rank = 0;  // defines frequency range of early trigger
+        long ds_level = -1;    // 0 <= ds_level < num_downsampling_levels
+        long delta_rank = 0;   // must be > 0, specifies "early-ness" of trigger
     };
 
-    // Sorted (by ds_level first, then tree_rank).
+    // Sorted first by increasing ds_level, second by decreasing delta_rank.
     std::vector<EarlyTrigger> early_triggers;
 
     // GPU configuration.

@@ -216,7 +216,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // DedispersionConfig::EarlyTrigger (nested struct)
     py::class_<DedispersionConfig::EarlyTrigger>(m, "EarlyTrigger")
           .def_readonly("ds_level", &DedispersionConfig::EarlyTrigger::ds_level)
-          .def_readonly("tree_rank", &DedispersionConfig::EarlyTrigger::tree_rank)
+          .def_readonly("delta", &DedispersionConfig::EarlyTrigger::delta_rank)
     ;
     
     py::class_<DedispersionConfig>(m, "DedispersionConfig")

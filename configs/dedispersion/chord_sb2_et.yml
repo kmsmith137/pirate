@@ -11,12 +11,12 @@ dtype: float16
 
 # Early triggers starting at ~60 sec dedispersion delay.
 early_triggers:
-  - {ds_level: 1, tree_rank: 14}
-  - {ds_level: 2, tree_rank: 13}
-  - {ds_level: 2, tree_rank: 14}
-  - {ds_level: 3, tree_rank: 12}
-  - {ds_level: 3, tree_rank: 13}
-  - {ds_level: 3, tree_rank: 14}
+  - {ds_level: 1, delta_rank: 1}
+  - {ds_level: 2, delta_rank: 2}
+  - {ds_level: 2, delta_rank: 1}
+  - {ds_level: 3, delta_rank: 3}
+  - {ds_level: 3, delta_rank: 2}
+  - {ds_level: 3, delta_rank: 1}
 
 # python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.1
 frequency_subband_counts: [5,9,7,3,1]

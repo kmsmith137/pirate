@@ -77,20 +77,19 @@ inline bool is_empty_string(const std::string &s)
 }
 
 template<typename T>
-inline bool is_sorted(const std::vector<T> &v, int min_length=0, bool allow_duplicates=false)
+inline bool is_sorted(const std::vector<T> &v, bool reversed=false)
 {
-    xassert((int)v.size() >= min_length);
-
     for (unsigned int i = 1; i < v.size(); i++) {
-        if (v[i-1] > v[i])
+        if (v[i-1] == v[i])
             return false;
-        if ((v[i-1] == v[i]) && !allow_duplicates)
+        if (!reversed && (v[i-1] > v[i]))
+            return false;
+        if (reversed && (v[i-1] < v[i]))
             return false;
     }
 
     return true;
 }
-
 
 inline bool is_aligned(const void *ptr, int nalign, bool allow_null=false)
 {
