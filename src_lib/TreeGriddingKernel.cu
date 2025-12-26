@@ -119,6 +119,10 @@ GpuTreeGriddingKernel::GpuTreeGriddingKernel(const TreeGriddingKernelParams &par
 
     long ny = (N + nchan_per_thread - 1) / nchan_per_thread;
     ksgpu::assign_kernel_dims(this->nblocks, this->nthreads, T, ny, B);
+
+    // Compute GPU memory footprint, reflecting logic in allocate().
+    long channel_map_nbytes = (params.nchan + 1) * sizeof(double);
+    this->gmem_footprint_nbytes = align_up(channel_map_nbytes, BumpAllocator::nalign);
 }
 
 
@@ -139,7 +143,8 @@ void GpuTreeGriddingKernel::allocate(BumpAllocator &allocator)
     this->gpu_channel_map.fill(params.channel_map);
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
-    cout << "GpuTreeGriddingKernel: " << nbytes_allocated << " bytes allocated" << endl;
+    // cout << "GpuTreeGriddingKernel: " << nbytes_allocated << " bytes allocated" << endl;
+    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
 
     this->is_allocated = true;
 }

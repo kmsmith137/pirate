@@ -79,6 +79,9 @@ struct GpuTreeGriddingKernel
     // FIXME: using double precision in a GPU kernel!! This is a temporary kludge.
     ksgpu::Array<double> gpu_channel_map;
     bool is_allocated = false;
+
+    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
+    long gmem_footprint_nbytes = 0;
     
     // Bandwidth per call to GpuTreeGriddingKernel::launch().
     // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).

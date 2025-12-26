@@ -60,6 +60,9 @@ struct GpuRingbufCopyKernel
 
     bool is_allocated = false;
     ksgpu::Array<uint> gpu_octuples;
+
+    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
+    long gmem_footprint_nbytes = 0;
     
     // Bandwidth per call to GpuRingbufCopyKernel::launch().
     // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).

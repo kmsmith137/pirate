@@ -94,6 +94,60 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     }
 
     this->bw_per_launch += lds_kernel->bw_per_launch;
+
+    // ---- Compute memory footprints, reflecting logic in allocate(). ----
+    
+    long bytes_per_elt = xdiv(dtype.nbits, 8);
+
+    // input_arrays: shape (nstreams, beams_per_batch, nfreq, nt_in)
+    long input_nbytes = nstreams * beams_per_batch * nfreq * nt_in * bytes_per_elt;
+    this->gmem_footprint_nbytes += align_up(input_nbytes, BumpAllocator::nalign);
+
+    // stage1_dd_bufs (length nstreams)
+    for (const DedispersionBuffer &buf : stage1_dd_bufs)
+        this->gmem_footprint_nbytes += buf.footprint_nbytes;
+
+    // wt_arrays (length ntrees)
+    for (long itree = 0; itree < ntrees; itree++) {
+        // wt_arrays use non-trivial strides: nbytes = shape[0] * strides[0] * bytes_per_elt
+        const vector<long> &shape = extended_wt_shapes.at(itree);
+        const vector<long> &strides = extended_wt_strides.at(itree);
+        long wt_nbytes = shape.at(0) * strides.at(0) * bytes_per_elt;
+        this->gmem_footprint_nbytes += align_up(wt_nbytes, BumpAllocator::nalign);
+    }
+
+    // out_max, out_argmax (length ntrees each)
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &tree = trees.at(itree);
+        long shape_size = nstreams * beams_per_batch * tree.ndm_out * tree.nt_out;
+        this->gmem_footprint_nbytes += align_up(shape_size * bytes_per_elt, BumpAllocator::nalign);  // out_max
+        this->gmem_footprint_nbytes += align_up(shape_size * 4, BumpAllocator::nalign);  // out_argmax (uint = 4 bytes)
+    }
+
+    // tree_gridding_kernel
+    this->gmem_footprint_nbytes += tree_gridding_kernel->gmem_footprint_nbytes;
+
+    // stage1_dd_kernels
+    for (const auto &kernel : stage1_dd_kernels)
+        this->gmem_footprint_nbytes += kernel->gmem_footprint_nbytes;
+
+    // cdd2_kernels
+    for (const auto &kernel : cdd2_kernels)
+        this->gmem_footprint_nbytes += kernel->gmem_footprint_nbytes;
+
+    // gpu_ringbuf
+    long gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
+    this->gmem_footprint_nbytes += align_up(gpu_ringbuf_nelts * bytes_per_elt, BumpAllocator::nalign);
+
+    // lds_kernel
+    this->gmem_footprint_nbytes += lds_kernel->gmem_footprint_nbytes;
+
+    // g2g_copy_kernel
+    this->gmem_footprint_nbytes += g2g_copy_kernel->gmem_footprint_nbytes;
+
+    // host_ringbuf
+    long host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
+    this->hmem_footprint_nbytes += align_up(host_ringbuf_nelts * bytes_per_elt, BumpAllocator::nalign);
 }
 
 
@@ -155,6 +209,8 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
     long host_nbytes_allocated = host_allocator.nbytes_allocated.load() - host_nbytes_before;
     cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
     cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
+    xassert_eq(gpu_nbytes_allocated, this->gmem_footprint_nbytes);
+    xassert_eq(host_nbytes_allocated, this->hmem_footprint_nbytes);
 
     this->is_allocated = true;
 }

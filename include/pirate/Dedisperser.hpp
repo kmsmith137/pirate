@@ -82,6 +82,10 @@ struct GpuDedisperser
 
     bool is_allocated = false;
 
+    // Memory footprints (in bytes), computed in constructor, checked in allocate().
+    long gmem_footprint_nbytes = 0;
+    long hmem_footprint_nbytes = 0;
+
     // Peak-finding weights use a complicated GPU memory layout.
     // The helper class 'GpuPfWeightLayout' is intended to hide the details.
     // We have one GpuPfWeightLayout per output tree: cdd2_kernels[itree]->pf_weight_layout.

@@ -65,6 +65,9 @@ struct CoalescedDdKernel2
 
     bool is_allocated = false;
 
+    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
+    long gmem_footprint_nbytes = 0;
+
     // Derived parameters chosen by the kernel.
     GpuPfWeightLayout pf_weight_layout;     // layout of peak-finding weights in GPU memory
     std::vector<long> expected_wt_shape;    // from pf_weight_layout.get_shape()

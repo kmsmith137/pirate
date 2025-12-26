@@ -92,6 +92,13 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     bw_per_launch.nbytes_gmem += B * A * registry_value.pstate32_per_small_tree * 4;      // pstate
     bw_per_launch.nbytes_gmem += expected_wt_shape[0] * expected_wt_strides[0] * nbytes;  // weights
     bw_per_launch.nbytes_gmem += B * nsegments_per_beam * 16;                             // quadruples
+
+    // Compute GPU memory footprint, reflecting logic in allocate().
+    long ninner = registry_value.pstate32_per_small_tree * xdiv(32, dd_params.dtype.nbits);
+    long pstate_nbytes = dd_params.total_beams * A * ninner * nbytes;
+    long quads_nbytes = nsegments_per_beam * 4 * 4;
+    this->gmem_footprint_nbytes = align_up(pstate_nbytes, BumpAllocator::nalign);
+    this->gmem_footprint_nbytes += align_up(quads_nbytes, BumpAllocator::nalign);
 }
 
 
@@ -123,7 +130,8 @@ void CoalescedDdKernel2::allocate(BumpAllocator &allocator)
     xassert(gpu_ringbuf_quadruples.on_gpu());
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
-    cout << "CoalescedDdKernel2: " << nbytes_allocated << " bytes allocated" << endl;
+    // cout << "CoalescedDdKernel2: " << nbytes_allocated << " bytes allocated" << endl;
+    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
 
     this->is_allocated = true;
 }

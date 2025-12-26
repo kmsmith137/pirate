@@ -119,6 +119,9 @@ public:
     // Shape (total_beams, state_nelts_per_beam).
     ksgpu::Array<void> persistent_state;
 
+    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
+    long gmem_footprint_nbytes = 0;
+
     // Static member function: runs one randomized test iteration.
     static void test();
 

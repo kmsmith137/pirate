@@ -56,6 +56,14 @@ DedispersionBuffer::DedispersionBuffer(const DedispersionBufferParams &params_)
     : params(params_)
 {
     params.validate();
+
+    // Compute memory footprint, reflecting logic in allocate().
+    long bstride = 0;
+    for (long i = 0; i < params.nbuf; i++)
+        bstride += pow2(params.buf_rank[i]) * params.buf_ntime[i];
+
+    long nbytes = params.beams_per_batch * bstride * xdiv(params.dtype.nbits, 8);
+    this->footprint_nbytes = align_up(nbytes, BumpAllocator::nalign);
 }
 
 
@@ -96,6 +104,7 @@ void DedispersionBuffer::allocate(BumpAllocator &allocator)
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
     cout << "DedispersionBuffer: " << nbytes_allocated << " bytes allocated" << endl;
+    xassert_eq(nbytes_allocated, this->footprint_nbytes);
 
     xassert(bstride == j);
     this->is_allocated = true;

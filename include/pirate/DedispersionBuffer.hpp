@@ -79,6 +79,10 @@ struct DedispersionBuffer
     std::vector<ksgpu::Array<void>> bufs;
     bool is_allocated = false;
 
+    // Memory footprint (in bytes), computed in constructor, checked in allocate().
+    // Note: can be either GPU or host memory, depending on BumpAllocator::aflags.
+    long footprint_nbytes = 0;
+
     void allocate(BumpAllocator &allocator);
     bool on_host() const;  // throws exception if unallocated
     bool on_gpu() const;   // throws exception if unallocated

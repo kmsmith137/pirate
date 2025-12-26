@@ -337,6 +337,9 @@ struct GpuPeakFindingKernel
     bool is_allocated = false;
     long expected_ibatch = 0;
 
+    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
+    long gmem_footprint_nbytes = 0;
+
     // -------------------- Internals start here --------------------
 
     struct RegistryKey

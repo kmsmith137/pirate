@@ -605,6 +605,10 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
     // FIXME add bandwidth tracking later.
     // this->bw_per_launch.nbytes_gmem = params.beams_per_batch * n * xdiv(params.dtype.nbits,8);
     // this->bw_per_launch.kernel_launches = 1;
+
+    // Compute GPU memory footprint, reflecting logic in allocate().
+    long pstate_nbytes = params.total_beams * params.ndm_out * registry_value.PW32 * 4;
+    this->gmem_footprint_nbytes = align_up(pstate_nbytes, BumpAllocator::nalign);
 }
 
 
@@ -625,7 +629,8 @@ void GpuPeakFindingKernel::allocate(BumpAllocator &allocator)
     this->persistent_state = allocator.allocate_array<uint>(shape);
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
-    cout << "GpuPeakFindingKernel: " << nbytes_allocated << " bytes allocated" << endl;
+    // cout << "GpuPeakFindingKernel: " << nbytes_allocated << " bytes allocated" << endl;
+    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
 
     this->is_allocated = true;
 }
