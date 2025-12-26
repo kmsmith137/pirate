@@ -97,6 +97,7 @@ PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 # These get compiled into lib/libpirate.so.
 LIB_SRCFILES = \
   src_lib/BandwidthTracker.cu \
+  src_lib/BumpAllocator.cu \
   src_lib/CasmBeamformer.cu \
   src_lib/ChimeDedisperser.cu \
   src_lib/CoalescedDdKernel2.cu \
@@ -172,6 +173,7 @@ CUDAGEN_PYFILES = \
 # Must list all header files here.
 # (Otherwise they won't show up in 'pip install' or pypi.)
 HFILES = \
+  include/pirate/BumpAllocator.hpp \
   include/pirate/CasmBeamformer.hpp \
   include/pirate/CoalescedDdKernel2.hpp \
   include/pirate/Dedisperser.hpp \
