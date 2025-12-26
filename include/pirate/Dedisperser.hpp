@@ -1,6 +1,7 @@
 #ifndef _PIRATE_DEDISPERSER_HPP
 #define _PIRATE_DEDISPERSER_HPP
 
+#include "BumpAllocator.hpp"
 #include "DedispersionConfig.hpp"
 #include "DedispersionBuffer.hpp"
 #include "DedispersionTree.hpp"
@@ -94,7 +95,7 @@ struct GpuDedisperser
     BandwidthTracker bw_per_launch;
 
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
-    void allocate();
+    void allocate(BumpAllocator &allocator);
 
     // launch() interface needs some explanation:
     //

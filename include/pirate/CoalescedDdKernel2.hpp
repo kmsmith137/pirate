@@ -6,6 +6,7 @@
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
 
+#include "BumpAllocator.hpp"
 #include "DedispersionKernel.hpp"
 #include "PeakFindingKernel.hpp"
 #include "FrequencySubbands.hpp"
@@ -26,7 +27,7 @@ struct CoalescedDdKernel2
         const PeakFindingKernelParams &pf_params     // peak-finding
     );
 
-    void allocate();
+    void allocate(BumpAllocator &allocator);
 
     // The 'weights' array has logical shape (beams_per_batch, ndm_wt, nt_wt, P, F),
     // but is passed to the gpu kernel in a complicated, non-contiguous layout. To put

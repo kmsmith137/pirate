@@ -1,4 +1,5 @@
 #include "../include/pirate/DedispersionKernel.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/ReferenceLagbuf.hpp"
 #include "../include/pirate/ReferenceTree.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
@@ -518,33 +519,47 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 }
 
 
-void GpuDedispersionKernel::allocate()
+void GpuDedispersionKernel::allocate(BumpAllocator &allocator)
 {
     if (is_allocated)
         throw runtime_error("double call to GpuDedispersionKernel::allocate()");
     
-    // Note 'af_zero' flag here.
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("GpuDedispersionKernel::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("GpuDedispersionKernel::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
+
+    // Allocate persistent_state.
     long ninner = registry_value.pstate32_per_small_tree * xdiv(32, params.dtype.nbits);
     std::initializer_list<long> shape = { params.total_beams, pow2(params.amb_rank), ninner };
-    this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
+    this->persistent_state = allocator.allocate_array<void>(params.dtype, shape);
 
     long nrb = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment);
 
     // Copy quadruples from host to GPU.
 
     if (params.input_is_ringbuf) {
-        this->gpu_input_quadruples = params.mega_ringbuf->consumer_quadruples.at(params.consumer_id).to_gpu();
+        const Array<uint> &src = params.mega_ringbuf->consumer_quadruples.at(params.consumer_id);
+        this->gpu_input_quadruples = allocator.allocate_array<uint>({nrb, 4});
+        this->gpu_input_quadruples.fill(src);
         xassert_shape_eq(gpu_input_quadruples, ({nrb,4}));
         xassert(gpu_input_quadruples.is_fully_contiguous());
         xassert(gpu_input_quadruples.on_gpu());
     }
 
     if (params.output_is_ringbuf) {
-        this->gpu_output_quadruples = params.mega_ringbuf->producer_quadruples.at(params.producer_id).to_gpu();
+        const Array<uint> &src = params.mega_ringbuf->producer_quadruples.at(params.producer_id);
+        this->gpu_output_quadruples = allocator.allocate_array<uint>({nrb, 4});
+        this->gpu_output_quadruples.fill(src);
         xassert_shape_eq(gpu_output_quadruples, ({nrb,4}));
         xassert(gpu_output_quadruples.is_fully_contiguous());
         xassert(gpu_output_quadruples.on_gpu());
     }
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "GpuDedispersionKernel: " << nbytes_allocated << " bytes allocated" << endl;
 
     this->is_allocated = true;
 }
@@ -899,7 +914,8 @@ void GpuDedispersionKernel::test()
     vector<long> subband_counts = {1};  // no subbands
     shared_ptr<ReferenceDedispersionKernel> ref_kernel = make_shared<ReferenceDedispersionKernel> (params, subband_counts);
     shared_ptr<GpuDedispersionKernel> gpu_kernel = make_shared<GpuDedispersionKernel> (params);
-    gpu_kernel->allocate();
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    gpu_kernel->allocate(allocator);
 
     TestArrays cpu_arrs(ti, Dtype::native<float>(), false);  // on_gpu=false
     TestArrays gpu_arrs(ti, params.dtype, true);             // on_gpu=true
@@ -959,7 +975,8 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
     long nbatches = xdiv(params.total_beams, params.beams_per_batch);
 
     shared_ptr<GpuDedispersionKernel> kernel = make_shared<GpuDedispersionKernel> (params);
-    kernel->allocate();
+    BumpAllocator time_allocator(af_gpu | af_zero, -1);  // dummy allocator
+    kernel->allocate(time_allocator);
     
     long rb_nseg = params.mega_ringbuf ? params.mega_ringbuf->gpu_global_nseg : 0;
     vector<long> dd_shape = { params.total_beams, pow2(params.amb_rank), pow2(params.dd_rank), params.ntime, params.nspec };

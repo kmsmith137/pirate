@@ -1,6 +1,7 @@
 #include <ksgpu/memcpy_kernels.hpp>
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
 
 using namespace std;
@@ -58,7 +59,8 @@ void ChimeDedisperser::initialize()
 
     this->plan = make_shared<DedispersionPlan> (config);
     this->dedisperser = make_shared<GpuDedisperser> (plan);
-    this->dedisperser->allocate();  // note: all buffers are zeroed or initialized
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    this->dedisperser->allocate(allocator);  // note: all buffers are zeroed or initialized
     this->streams = CudaStreamWrapper::create_vector(nstreams);
     
     // FIXME currently, gridding and peak-finding are not implemented.

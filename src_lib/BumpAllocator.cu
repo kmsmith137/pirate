@@ -24,7 +24,7 @@ BumpAllocator::BumpAllocator(int aflags_, long capacity_)
 
     if (capacity >= 0) {
         // Round capacity up to alignment boundary.
-        capacity = align_up(capacity, constants::bytes_per_gpu_cache_line);
+        capacity = align_up(capacity, nalign);
         
         // Allocate base region.
         // We use nelts=capacity with dtype that has 1 byte per element.
@@ -32,7 +32,7 @@ BumpAllocator::BumpAllocator(int aflags_, long capacity_)
         
         // Verify that returned pointer is aligned.
         uintptr_t p = reinterpret_cast<uintptr_t>(base.get());
-        xassert((p % constants::bytes_per_gpu_cache_line) == 0);
+        xassert((p % nalign) == 0);
     }
 }
 
@@ -60,7 +60,7 @@ void *BumpAllocator::allocate_bytes(long nbytes)
         return nullptr;
 
     // Round up to alignment boundary.
-    long aligned_nbytes = align_up(nbytes, constants::bytes_per_gpu_cache_line);
+    long aligned_nbytes = align_up(nbytes, nalign);
     
     // Atomically claim space from the buffer.
     long old_offset = nbytes_allocated.fetch_add(aligned_nbytes);
@@ -95,7 +95,7 @@ ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, i
             // In dummy mode, allocate a fresh array with af_alloc().
             ret.base = ksgpu::_af_alloc(dtype, nalloc, aflags);
             ret.data = ret.base.get();
-            nbytes_allocated.fetch_add(align_up(nbytes, constants::bytes_per_gpu_cache_line));
+            nbytes_allocated.fetch_add(align_up(nbytes, nalign));
         }
         else {
             // Normal mode: allocate from bump allocator.

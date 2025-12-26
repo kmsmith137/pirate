@@ -2,6 +2,7 @@
 #define _PIRATE_RINGBUF_COPY_KERNEL_HPP
 
 #include <ksgpu/Array.hpp>
+#include "BumpAllocator.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 namespace pirate {
@@ -47,7 +48,7 @@ struct GpuRingbufCopyKernel
 {
     GpuRingbufCopyKernel(const RingbufCopyKernelParams &params);
 
-    void allocate();
+    void allocate(BumpAllocator &allocator);
 
     // launch(): asynchronously launch copy kernel, and return without synchronizing streams.
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.

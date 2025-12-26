@@ -1,4 +1,5 @@
 #include "../include/pirate/LaggedDownsamplingKernel.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/DedispersionBuffer.hpp"
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/inlines.hpp"   // pow2(), simd32_type
@@ -769,14 +770,25 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
 }
 
 
-void GpuLaggedDownsamplingKernel::allocate()
+void GpuLaggedDownsamplingKernel::allocate(BumpAllocator &allocator)
 {
     if (is_allocated)
         throw runtime_error("GpuLaggedDownsamplingKernel: double call to allocate()");
 
-    // Note 'af_zero' flag here.
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("GpuLaggedDownsamplingKernel::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("GpuLaggedDownsamplingKernel::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
+
+    // Allocate persistent_state.
     std::initializer_list<long> shape = { params.total_beams, state_nelts_per_beam };
-    this->persistent_state = Array<void> (params.dtype, shape, af_zero | af_gpu);
+    this->persistent_state = allocator.allocate_array<void>(params.dtype, shape);
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "GpuLaggedDownsamplingKernel: " << nbytes_allocated << " bytes allocated" << endl;
+
     this->is_allocated = true;
 }
 
@@ -986,7 +998,8 @@ static void run_test(const TestInstanceLDS &ti)
     LaggedDownsamplingKernelParams p = ti.params;
     auto ref_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (p);
     auto gpu_kernel = GpuLaggedDownsamplingKernel::make(p);
-    gpu_kernel->allocate();
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    gpu_kernel->allocate(allocator);
     
     DedispersionBuffer cpu_buf = make_buffer(ref_kernel->params, af_uhost);
     DedispersionBuffer gpu_buf = make_buffer(gpu_kernel->params, af_gpu);
@@ -1077,7 +1090,8 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
     
     long ST = xdiv(params.dtype.nbits, 8);  // sizeof(T)
     shared_ptr<GpuLaggedDownsamplingKernel> kernel = GpuLaggedDownsamplingKernel::make(params);
-    kernel->allocate();
+    BumpAllocator time_allocator(af_gpu | af_zero, -1);  // dummy allocator
+    kernel->allocate(time_allocator);
     
     vector<DedispersionBuffer> bufs;
     for (long s = 0; s < nstreams; s++)

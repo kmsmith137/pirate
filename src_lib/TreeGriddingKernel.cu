@@ -1,4 +1,5 @@
-#include "../include/pirate/TreeGriddingKernel.hpp" 
+#include "../include/pirate/TreeGriddingKernel.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/inlines.hpp"   // xdiv(), align_up(), pow2()
 #include "../include/pirate/DedispersionConfig.hpp"  // for make_channel_map()
 
@@ -121,13 +122,25 @@ GpuTreeGriddingKernel::GpuTreeGriddingKernel(const TreeGriddingKernelParams &par
 }
 
 
-void GpuTreeGriddingKernel::allocate()
+void GpuTreeGriddingKernel::allocate(BumpAllocator &allocator)
 {
     if (is_allocated)
         throw runtime_error("double call to GpuTreeGriddingKernel::allocate()");
 
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("GpuTreeGriddingKernel::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("GpuTreeGriddingKernel::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
+
     // Copy host -> GPU.
-    this->gpu_channel_map = params.channel_map.to_gpu();
+    this->gpu_channel_map = allocator.allocate_array<double>({params.nchan + 1});
+    this->gpu_channel_map.fill(params.channel_map);
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "GpuTreeGriddingKernel: " << nbytes_allocated << " bytes allocated" << endl;
+
     this->is_allocated = true;
 }
 
@@ -329,7 +342,8 @@ void GpuTreeGriddingKernel::test()
     hkernel.apply(hdst, hsrc);
 
     GpuTreeGriddingKernel gkernel(params);
-    gkernel.allocate();
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    gkernel.allocate(allocator);
     gkernel.launch(gdst, gsrc, nullptr);   // null stream
     
     assert_arrays_equal(hdst, gdst, "hdst", "gdst", {"b","n","t"});
@@ -396,7 +410,8 @@ void GpuTreeGriddingKernel::time()
         params.channel_map = channel_map;
         
         GpuTreeGriddingKernel kernel(params);
-        kernel.allocate();
+        BumpAllocator time_allocator(af_gpu | af_zero, -1);  // dummy allocator
+        kernel.allocate(time_allocator);
         
         // Allocate GPU arrays.
         Array<void> gsrc(dtype, {nstreams, beams_per_batch, nfreq, ntime}, af_gpu | af_zero);

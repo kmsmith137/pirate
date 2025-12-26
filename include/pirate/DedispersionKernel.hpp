@@ -3,6 +3,7 @@
 
 #include <ksgpu/Array.hpp>
 
+#include "BumpAllocator.hpp"
 #include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
 #include "trackers.hpp"  // BandwidthTracker
@@ -211,7 +212,7 @@ public:
     bool is_allocated = false;
     
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
-    void allocate();
+    void allocate(BumpAllocator &allocator);
     
     // launch(): asynchronously launch dedispersion kernel, and return without synchronizing stream.
     //

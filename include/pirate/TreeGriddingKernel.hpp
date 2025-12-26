@@ -2,6 +2,7 @@
 #define _PIRATE_TREE_GRIDDING_KERNEL_HPP
 
 #include <ksgpu/Array.hpp>
+#include "BumpAllocator.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 namespace pirate {
@@ -65,7 +66,7 @@ struct GpuTreeGriddingKernel
 {
     GpuTreeGriddingKernel(const TreeGriddingKernelParams &params);
 
-    void allocate();
+    void allocate(BumpAllocator &allocator);
 
     // launch(): asynchronously launch kernel, and return without synchronizing stream.
     // Note: stream=NULL is allowed, but is not the default.

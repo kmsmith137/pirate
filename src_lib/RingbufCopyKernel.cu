@@ -1,4 +1,5 @@
-#include "../include/pirate/RingbufCopyKernel.hpp" 
+#include "../include/pirate/RingbufCopyKernel.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/constants.hpp"  // bytes_per_gpu_cache_line
 #include "../include/pirate/inlines.hpp"    // xdiv()
 
@@ -134,13 +135,25 @@ GpuRingbufCopyKernel::GpuRingbufCopyKernel(const RingbufCopyKernelParams &params
 }
 
 
-void GpuRingbufCopyKernel::allocate()
+void GpuRingbufCopyKernel::allocate(BumpAllocator &allocator)
 {
     if (is_allocated)
         throw runtime_error("double call to GpuRingbufCopyKernel::allocate()");
 
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("GpuRingbufCopyKernel::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("GpuRingbufCopyKernel::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
+
     // Copy host -> GPU.
-    this->gpu_octuples = params.octuples.to_gpu();    
+    this->gpu_octuples = allocator.allocate_array<uint>({params.octuples.shape[0], params.octuples.shape[1]});
+    this->gpu_octuples.fill(params.octuples);
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "GpuRingbufCopyKernel: " << nbytes_allocated << " bytes allocated" << endl;
+
     this->is_allocated = true;
 }
 
@@ -398,7 +411,8 @@ void GpuRingbufCopyKernel::test()
     hkernel.apply(hbuf, ichunk, ibatch);
     
     GpuRingbufCopyKernel gkernel(gparams);
-    gkernel.allocate();
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    gkernel.allocate(allocator);
     gkernel.launch(gbuf, ichunk, ibatch, nullptr);   // default stream
     
     assert_arrays_equal(hbuf, gbuf, "hbuf", "gbuf", {"i"});

@@ -97,12 +97,19 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
 }
 
 
-void GpuDedisperser::allocate()
+void GpuDedisperser::allocate(BumpAllocator &allocator)
 {
     if (this->is_allocated)
         throw runtime_error("double call to GpuDedisperser::allocate()");
 
-    input_arrays = Array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in}, af_gpu | af_zero);
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("GpuDedisperser::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("GpuDedisperser::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
+
+    input_arrays = allocator.allocate_array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in});
 
     for (DedispersionBuffer &buf: stage1_dd_bufs)
         buf.allocate(af_zero | af_gpu);
@@ -111,32 +118,35 @@ void GpuDedisperser::allocate()
     for (long itree = 0; itree < ntrees; itree++) {
         const vector<long> &shape = extended_wt_shapes.at(itree);
         const vector<long> &strides = extended_wt_strides.at(itree);
-        wt_arrays.push_back(Array<void> (dtype, shape, strides, af_gpu | af_zero));
+        wt_arrays.push_back(allocator.allocate_array<void>(dtype, shape, strides));
     }
 
     // out_max, out_argmax
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
         std::initializer_list<long> shape = { nstreams, beams_per_batch, tree.ndm_out, tree.nt_out };
-        out_max.push_back(Array<void> (dtype, shape, af_gpu | af_zero));
-        out_argmax.push_back(Array<uint> (shape, af_gpu | af_zero));
+        out_max.push_back(allocator.allocate_array<void>(dtype, shape));
+        out_argmax.push_back(allocator.allocate_array<uint>(shape));
     }
 
-    this->tree_gridding_kernel->allocate();
+    this->tree_gridding_kernel->allocate(allocator);
     
     for (auto &kernel: this->stage1_dd_kernels)
-        kernel->allocate();
+        kernel->allocate(allocator);
     
     for (auto &kernel: this->cdd2_kernels)
-        kernel->allocate();
+        kernel->allocate(allocator);
 
     long gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
     long host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
-    this->gpu_ringbuf = Array<void>(dtype, { gpu_ringbuf_nelts }, af_gpu | af_zero);
+    this->gpu_ringbuf = allocator.allocate_array<void>(dtype, { gpu_ringbuf_nelts });
     this->host_ringbuf = Array<void>(dtype, { host_ringbuf_nelts }, af_rhost | af_zero);    
 
-    this->lds_kernel->allocate();
-    this->g2g_copy_kernel->allocate();
+    this->lds_kernel->allocate(allocator);
+    this->g2g_copy_kernel->allocate(allocator);
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "GpuDedisperser: " << nbytes_allocated << " bytes allocated" << endl;
 
     this->is_allocated = true;
 }
@@ -302,7 +312,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 
     if (!host_only) {
         gdd = make_shared<GpuDedisperser> (plan);
-        gdd->allocate();
+        BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+        gdd->allocate(allocator);
     }
 
     // Dcore: taken from GPU kernel, passed to reference kernel

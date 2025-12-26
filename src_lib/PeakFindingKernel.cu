@@ -1,4 +1,5 @@
 #include "../include/pirate/PeakFindingKernel.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
 
@@ -607,14 +608,25 @@ GpuPeakFindingKernel::GpuPeakFindingKernel(const PeakFindingKernelParams &params
 }
 
 
-void GpuPeakFindingKernel::allocate()
+void GpuPeakFindingKernel::allocate(BumpAllocator &allocator)
 {
     if (is_allocated)
         throw runtime_error("GpuPeakFindingKernel: double call to allocate()");
 
-    // Allocate persistent_state. Note 'af_zero' flag here.
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("GpuPeakFindingKernel::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("GpuPeakFindingKernel::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
+
+    // Allocate persistent_state.
     std::initializer_list<long> shape = { params.total_beams, params.ndm_out, registry_value.PW32 };
-    this->persistent_state = Array<uint> (shape, af_zero | af_gpu);
+    this->persistent_state = allocator.allocate_array<uint>(shape);
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "GpuPeakFindingKernel: " << nbytes_allocated << " bytes allocated" << endl;
+
     this->is_allocated = true;
 }
 
@@ -782,7 +794,8 @@ void GpuPeakFindingKernel::test(bool short_circuit)
     ref_kernel_large.eval_tokens(cpu_out2_large, cpu_argmax_large, cpu_wt_large);
     assert_arrays_equal(cpu_out_large, cpu_out2_large, "cpu_out_large", "cpu_out2_large", {"b","d","tout"});
 
-    gpu_kernel.allocate();
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    gpu_kernel.allocate(allocator);
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         long tin0 = (ichunk) * nt_in_per_chunk;

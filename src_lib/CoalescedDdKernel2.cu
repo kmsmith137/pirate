@@ -95,23 +95,35 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
 }
 
 
-void CoalescedDdKernel2::allocate()
+void CoalescedDdKernel2::allocate(BumpAllocator &allocator)
 {
     if (is_allocated)
         throw runtime_error("double call to CoalescedDdKernel2::allocate()");
 
-    // Note 'af_zero' flag here.
+    if (!(allocator.aflags & af_gpu))
+        throw runtime_error("CoalescedDdKernel2::allocate(): allocator.aflags must contain af_gpu");
+    if (!(allocator.aflags & af_zero))
+        throw runtime_error("CoalescedDdKernel2::allocate(): allocator.aflags must contain af_zero");
+
+    long nbytes_before = allocator.nbytes_allocated.load();
+
+    // Allocate persistent_state.
     long ninner = registry_value.pstate32_per_small_tree * xdiv(32, dd_params.dtype.nbits);
     std::initializer_list<long> shape = { dd_params.total_beams, pow2(dd_params.amb_rank), ninner };
-    this->persistent_state = Array<void> (dd_params.dtype, shape, af_zero | af_gpu);
+    this->persistent_state = allocator.allocate_array<void>(dd_params.dtype, shape);
 
     // Copy host -> GPU.
-    this->gpu_ringbuf_quadruples = dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id).to_gpu();
+    const Array<uint> &src = dd_params.mega_ringbuf->consumer_quadruples.at(dd_params.consumer_id);
+    this->gpu_ringbuf_quadruples = allocator.allocate_array<uint>({nsegments_per_beam, 4});
+    this->gpu_ringbuf_quadruples.fill(src);
 
     // Shape/stride check (paranoid).
     xassert_shape_eq(gpu_ringbuf_quadruples, ({nsegments_per_beam,4}));
     xassert(gpu_ringbuf_quadruples.is_fully_contiguous());
     xassert(gpu_ringbuf_quadruples.on_gpu());
+
+    long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
+    cout << "CoalescedDdKernel2: " << nbytes_allocated << " bytes allocated" << endl;
 
     this->is_allocated = true;
 }
@@ -264,7 +276,8 @@ void CoalescedDdKernel2::test()
     pf_params.nt_wt = xdiv(nt_in_per_chunk, nt_in_per_wt);
 
     CoalescedDdKernel2 cdd2_kernel(dd_params, pf_params);
-    cdd2_kernel.allocate();
+    BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+    cdd2_kernel.allocate(allocator);
 
     ReferenceDedispersionKernel ref_dd_kernel(dd_params, pf_params.subband_counts);
     ReferencePeakFindingKernel ref_pf_kernel(pf_params, cdd2_kernel.Dcore);
@@ -412,7 +425,8 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
 
     const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(0);
         shared_ptr<CoalescedDdKernel2> cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);        
-        cdd2_kernel->allocate();
+        BumpAllocator time_allocator(af_gpu | af_zero, -1);  // dummy allocator
+        cdd2_kernel->allocate(time_allocator);
 
         long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
         long nstreams = config.num_active_batches;

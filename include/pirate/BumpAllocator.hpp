@@ -39,6 +39,8 @@ namespace pirate {
 
 struct BumpAllocator
 {
+    static constexpr int nalign = constants::bytes_per_gpu_cache_line;
+
     // Constructor. The 'aflags' are memory allocation flags from ksgpu/mem_utils.hpp.
     // If capacity >= 0, allocates a base memory region of 'capacity' bytes.
     // If capacity < 0, operates in "dummy" mode (see class comment above).

@@ -8,6 +8,7 @@
 #include <ksgpu/Dtype.hpp>
 #include <ksgpu/Array.hpp>
 
+#include "BumpAllocator.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 
@@ -93,7 +94,7 @@ public:
     static std::shared_ptr<GpuLaggedDownsamplingKernel> make(const LaggedDownsamplingKernelParams &params);
 
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
-    void allocate();
+    void allocate(BumpAllocator &allocator);
 
     // One call to launch() processes an array of shape (beams_per_batch, pow2(input_total_rank), ntime).
     // The NULL stream is allowed, but is not the default.
