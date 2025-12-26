@@ -360,33 +360,8 @@ void GpuTreeGriddingKernel::time()
     Dtype fp16(df_float, 16);
     Dtype fp32(df_float, 32);
 
-    // Parameters modelled on configs/dedispersion/chord_sb0.yml:
-    //   zone_freq_edges: [300, 350, 450, 600, 800, 1500]
-    //   zone_nfreq: [8192, 8192, 6144, 2048, 3584]   # total = 28160
-    //   tree_rank: 16
-    //   time_samples_per_chunk: 2048
-    //   beams_per_batch: 2
-    //   time_sample_ms: 1.0
-
     // Construct a throwaway (CHORD-like) DedispersionConfig to get channel_map via make_channel_map().
-    DedispersionConfig dconfig;
-    dconfig.zone_freq_edges = { 300, 350, 450, 600, 800, 1500 };
-    dconfig.zone_nfreq = { 8192, 8192, 6144, 2048, 3584 };
-    dconfig.tree_rank = 16;
-    dconfig.time_sample_ms = 1.0;
-    dconfig.num_downsampling_levels = 4;
-    dconfig.time_samples_per_chunk = 2048;
-    dconfig.dtype = fp16;  // doesn't matter for channel_map, just for validation
-    dconfig.beams_per_gpu = 4;
-    dconfig.beams_per_batch = 2;
-    dconfig.num_active_batches = 2;
-    dconfig.frequency_subband_counts = { 0, 0, 0, 0, 1 };
-    dconfig.peak_finding_params = {
-        { 16, 0, 0, 64, 64 },
-        { 16, 0, 0, 64, 64 },
-        { 16, 0, 0, 64, 64 },
-        { 16, 0, 0, 64, 64 }
-    };
+    DedispersionConfig dconfig = DedispersionConfig::make_mini_chord(fp16);  // dtype doesn't matter for channel_map
     
     // Generate channel_map (stored in CPU memory).
     Array<double> channel_map = dconfig.make_channel_map();

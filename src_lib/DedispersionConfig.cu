@@ -1015,4 +1015,39 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 }
 
 
+// static member function
+DedispersionConfig DedispersionConfig::make_mini_chord(Dtype dtype)
+{
+    // Parameters modelled on configs/dedispersion/chord_sb0.yml:
+    //   zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+    //   zone_nfreq: [8192, 8192, 6144, 2048, 3584]   # total = 28160
+    //   tree_rank: 16
+    //   time_samples_per_chunk: 2048
+    //   beams_per_batch: 2
+    //   time_sample_ms: 1.0
+
+    DedispersionConfig ret;
+    ret.zone_freq_edges = { 300, 350, 450, 600, 800, 1500 };
+    ret.zone_nfreq = { 8192, 8192, 6144, 2048, 3584 };
+    ret.tree_rank = 16;
+    ret.time_sample_ms = 1.0;
+    ret.num_downsampling_levels = 4;
+    ret.time_samples_per_chunk = 2048;
+    ret.dtype = dtype;
+    ret.beams_per_gpu = 4;
+    ret.beams_per_batch = 2;
+    ret.num_active_batches = 2;
+    ret.frequency_subband_counts = { 0, 0, 0, 0, 1 };
+    ret.peak_finding_params = {
+        { 16, 0, 0, 64, 64 },
+        { 16, 0, 0, 64, 64 },
+        { 16, 0, 0, 64, 64 },
+        { 16, 0, 0, 64, 64 }
+    };
+
+    ret.validate();
+    return ret;
+}
+
+
 }  // namespace pirate

@@ -182,6 +182,10 @@ struct DedispersionConfig
     
     static DedispersionConfig make_random(const RandomArgs &args);
     static DedispersionConfig make_random() { return make_random(RandomArgs()); }
+
+    // make_mini_chord(): returns a "throwaway" CHORD-like DedispersionConfig.
+    // Useful for testing and timing kernels that need a valid config.
+    static DedispersionConfig make_mini_chord(ksgpu::Dtype dtype);
 };
 
 extern bool operator==(const DedispersionConfig::EarlyTrigger &x, const DedispersionConfig::EarlyTrigger &y);

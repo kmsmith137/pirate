@@ -392,42 +392,15 @@ void CoalescedDdKernel2::test()
 void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const string &name)
 {
     for (Dtype dtype : {Dtype::native<float>(), Dtype::native<__half>()}) {
-        long pf_rank = subband_counts.size() - 1;
-        long Dout = pow2(pf_rank);    // downsampling factor for pf output array
-        long Dwt = 64;                // downsampling factor for pf weights array
+        DedispersionConfig config = DedispersionConfig::make_mini_chord(dtype);
+        shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
 
-        DedispersionConfig config;
-        config.dtype = dtype;
-        config.tree_rank = 16;
-        config.time_sample_ms = 1.0;
-        config.num_downsampling_levels = 1;
-        config.time_samples_per_chunk = 2048;
-        config.beams_per_gpu = 4;
-        config.beams_per_batch = 2;
-        config.num_active_batches = 2;
-        config.gpu_clag_maxfrac = 1.0;
-        config.validate();
-
-        PeakFindingKernelParams pf_params;
-        pf_params.dtype = dtype;
-        pf_params.subband_counts = subband_counts;
-        pf_params.max_kernel_width = 16;
-        pf_params.beams_per_batch = config.beams_per_batch;
-        pf_params.total_beams = config.beams_per_gpu;
-        pf_params.ndm_out = pow2(config.tree_rank - pf_rank);
-        pf_params.ndm_wt = xdiv(pow2(config.tree_rank), Dwt);
-        pf_params.nt_out = xdiv(config.time_samples_per_chunk, Dout);
-        pf_params.nt_wt = xdiv(config.time_samples_per_chunk, Dwt);
-        pf_params.nt_in = config.time_samples_per_chunk;
-        pf_params.validate();
-
-    shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-    xassert(plan->ntrees == 1);
-
-    const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(0);
+        const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(0);
+        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(0);
         shared_ptr<CoalescedDdKernel2> cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);        
-        BumpAllocator time_allocator(af_gpu | af_zero, -1);  // dummy allocator
-        cdd2_kernel->allocate(time_allocator);
+
+        BumpAllocator allocator(af_gpu | af_zero, -1);  // dummy allocator
+        cdd2_kernel->allocate(allocator);
 
         long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
         long nstreams = config.num_active_batches;
@@ -435,8 +408,8 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
 
         long S = nstreams;
         long B = config.beams_per_batch;
-        long ndm_out = pow2(config.tree_rank - pf_rank);
-        long nt_out = xdiv(config.time_samples_per_chunk, Dout);
+        long ndm_out = pf_params.ndm_out;
+        long nt_out = pf_params.nt_out;
         long rb_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
 
         vector<long> wt_shape = cdd2_kernel->pf_weight_layout.get_shape(B, pf_params.ndm_wt, pf_params.nt_wt);
