@@ -421,10 +421,11 @@ void DedispersionConfig::validate() const
         xassert(is_power_of_two(pfp.wt_dm_downsampling));
         xassert(is_power_of_two(pfp.wt_time_downsampling));
 
-        long min_rank = ds_level ? (tree_rank-1) : (tree_rank);
+        long ds_rank = ds_level ? (tree_rank-1) : (tree_rank);
+        long min_rank = ds_rank;
         for (const EarlyTrigger &et: early_triggers)
             if (et.ds_level == ds_level)
-                min_rank = std::min(min_rank, min_rank - et.delta_rank);
+                min_rank = std::min(min_rank, ds_rank - et.delta_rank);
         
         if (pfp.wt_dm_downsampling > pow2(min_rank)) {
             stringstream ss;
