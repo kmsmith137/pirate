@@ -118,6 +118,7 @@ LIB_SRCFILES = \
   src_lib/ReferenceLagbuf.cu \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
   src_lib/ReferenceTree.cu \
+  src_lib/CudaStreamPool.cu \
   src_lib/RingbufCopyKernel.cu \
   src_lib/TreeGriddingKernel.cu \
   src_lib/YamlFile.cu \
@@ -191,6 +192,7 @@ HFILES = \
   include/pirate/PeakFindingKernel.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
+  include/pirate/CudaStreamPool.hpp \
   include/pirate/RingbufCopyKernel.hpp \
   include/pirate/TreeGriddingKernel.hpp \
   include/pirate/YamlFile.hpp \
