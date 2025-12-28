@@ -40,10 +40,16 @@ struct ResourceTracker
     void add_memcpy_g2h(const std::string &key, long nbytes);  // no-op if nbytes==0
 
     // These methods update a single Dict.
+    // If align=true, then 'nbytes' is aligned to BumpAllocator::nalign.
     void add_gmem_bw(const std::string &key, long gmem_bw_nbytes);
     void add_hmem_bw(const std::string &key, long hmem_bw_nbytes);
-    void add_gmem_footprint(const std::string &key, long gmem_footprint_nbytes);
-    void add_hmem_footprint(const std::string &key, long hmem_footprint_nbytes);
+    void add_gmem_footprint(const std::string &key, long gmem_footprint_nbytes, bool align=false);
+    void add_hmem_footprint(const std::string &key, long hmem_footprint_nbytes, bool align=false);
+
+    // Throws an exception if key is not found.
+    long get_gmem_bw(const std::string &key) const;
+    long get_gmem_footprint(const std::string &key) const;
+    long get_hmem_footprint(const std::string &key) const;
 
     // Used to accumulate "child" ResourceTrackers into their parent.
     ResourceTracker &operator+=(const ResourceTracker &);

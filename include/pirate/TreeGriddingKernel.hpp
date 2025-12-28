@@ -3,7 +3,7 @@
 
 #include <ksgpu/Array.hpp>
 #include "BumpAllocator.hpp"
-#include "trackers.hpp"  // BandwidthTracker
+#include "ResourceTracker.hpp"
 
 namespace pirate {
 #if 0
@@ -80,12 +80,8 @@ struct GpuTreeGriddingKernel
     ksgpu::Array<double> gpu_channel_map;
     bool is_allocated = false;
 
-    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
-    long gmem_footprint_nbytes = 0;
-    
-    // Bandwidth per call to GpuTreeGriddingKernel::launch().
-    // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
-    BandwidthTracker bw_per_launch;
+    // All rates are "per call to launch()".
+    ResourceTracker resource_tracker;
 
     // For kernel launch.
     dim3 nblocks;

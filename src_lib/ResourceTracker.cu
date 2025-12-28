@@ -1,6 +1,9 @@
 #include "../include/pirate/ResourceTracker.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
+#include "../include/pirate/inlines.hpp"
 
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 #include <algorithm>
 
@@ -66,15 +69,46 @@ void ResourceTracker::add_hmem_bw(const std::string &key, long nbytes)
 }
 
 
-void ResourceTracker::add_gmem_footprint(const std::string &key, long nbytes)
+void ResourceTracker::add_gmem_footprint(const std::string &key, long nbytes, bool align)
 {
+    if (align)
+        nbytes = align_up(nbytes, BumpAllocator::nalign);
     _update_dict(gmem_footprint_nbytes, key, nbytes);
 }
 
 
-void ResourceTracker::add_hmem_footprint(const std::string &key, long nbytes)
+void ResourceTracker::add_hmem_footprint(const std::string &key, long nbytes, bool align)
 {
+    if (align)
+        nbytes = align_up(nbytes, BumpAllocator::nalign);
     _update_dict(hmem_footprint_nbytes, key, nbytes);
+}
+
+
+long ResourceTracker::get_gmem_bw(const std::string &key) const
+{
+    auto it = gmem_bw_nbytes.find(key);
+    if (it == gmem_bw_nbytes.end())
+        throw std::runtime_error("ResourceTracker::get_gmem_bw: key not found: " + key);
+    return it->second;
+}
+
+
+long ResourceTracker::get_gmem_footprint(const std::string &key) const
+{
+    auto it = gmem_footprint_nbytes.find(key);
+    if (it == gmem_footprint_nbytes.end())
+        throw std::runtime_error("ResourceTracker::get_gmem_footprint: key not found: " + key);
+    return it->second;
+}
+
+
+long ResourceTracker::get_hmem_footprint(const std::string &key) const
+{
+    auto it = hmem_footprint_nbytes.find(key);
+    if (it == hmem_footprint_nbytes.end())
+        throw std::runtime_error("ResourceTracker::get_hmem_footprint: key not found: " + key);
+    return it->second;
 }
 
 

@@ -113,17 +113,13 @@ GpuTreeGriddingKernel::GpuTreeGriddingKernel(const TreeGriddingKernelParams &par
     long N = params.nchan;
     long F = params.nfreq;
     long T = params.ntime;
-    
-    this->bw_per_launch.nbytes_gmem = B * (N+F) * T * S;
-    this->bw_per_launch.kernel_launches = 1;
-    this->nchan_per_thread = 4;   // reasonable default (?)
 
+    resource_tracker.add_kernel("tree_gridding", B * (N+F+1) * T * S);
+    resource_tracker.add_gmem_footprint("channel_map", (N+1) * sizeof(double), true);
+
+    this->nchan_per_thread = 4;   // reasonable default (?)
     long ny = (N + nchan_per_thread - 1) / nchan_per_thread;
     ksgpu::assign_kernel_dims(this->nblocks, this->nthreads, T, ny, B);
-
-    // Compute GPU memory footprint, reflecting logic in allocate().
-    long channel_map_nbytes = (params.nchan + 1) * sizeof(double);
-    this->gmem_footprint_nbytes = align_up(channel_map_nbytes, BumpAllocator::nalign);
 }
 
 
@@ -144,7 +140,7 @@ void GpuTreeGriddingKernel::allocate(BumpAllocator &allocator)
     this->gpu_channel_map.fill(params.channel_map);
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
-    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
+    xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint("channel_map"));
 
     this->is_allocated = true;
 }
@@ -400,6 +396,7 @@ void GpuTreeGriddingKernel::time()
         // Print header.
         double input_gb = double(beams_per_batch) * nfreq * ntime * (dtype.nbits / 8) / 1.0e9;
         double output_gb = double(beams_per_batch) * nchan * ntime * (dtype.nbits / 8) / 1.0e9;
+        double bw_per_launch = 1.0e-9 * kernel.resource_tracker.get_gmem_bw("tree_gridding");
 
         cout << "\nGpuTreeGriddingKernel::time()\n"
              << "    dtype = " << dtype << "\n"
@@ -409,7 +406,7 @@ void GpuTreeGriddingKernel::time()
              << "    beams_per_batch = " << beams_per_batch << "\n"
              << "    input size per batch = " << input_gb << " GB\n"
              << "    output size per batch = " << output_gb << " GB\n"
-             << "    bandwidth per launch = " << (kernel.bw_per_launch.nbytes_gmem / 1.0e9) << " GB\n"
+             << "    bandwidth per launch = " << bw_per_launch << " GB\n"
              << endl;
         
         // Use KernelTimer with 500 iterations, 2 streams.
@@ -424,10 +421,9 @@ void GpuTreeGriddingKernel::time()
             kernel.launch(d, s, kt.stream);
             
             if (kt.warmed_up && ((kt.curr_iteration+1) % print_interval == 0)) {
-                double bandwidth_gbps = kernel.bw_per_launch.nbytes_gmem / kt.dt / 1.0e9;
                 cout << "    iter " << (kt.curr_iteration+1) << "/" << niter
                      << ": dt = " << (kt.dt * 1.0e3) << " ms"
-                     << ", bandwidth = " << bandwidth_gbps << " GB/s" << endl;
+                     << ", bandwidth = " << (bw_per_launch / kt.dt) << " GB/s" << endl;
             }
         }
     }
