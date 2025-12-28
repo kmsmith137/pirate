@@ -63,6 +63,29 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     long input_nbytes = nstreams * beams_per_batch * nfreq * nt_in * bytes_per_elt;
     this->gmem_footprint_nbytes += align_up(input_nbytes, BumpAllocator::nalign);
 
+    // Before we create any kernels, put "non-kernel" bandwidth in BandwidthTrackers.
+
+    // et_host -> et_gpu (note that host -> et_host will be included in h2h kernel.)
+    long SB = constants::bytes_per_gpu_cache_line;
+    long et_nbytes = beams_per_batch * plan->mega_ringbuf->et_host_zone.segments_per_frame * SB;
+    this->bw_core_per_launch.nbytes_h2g += et_nbytes;
+    this->bw_core_per_launch.nbytes_gmem += et_nbytes;
+    this->bw_core_per_launch.nbytes_hmem += et_nbytes; // no factor 3 here
+    this->bw_core_per_launch.memcpy_h2g_calls += 1;
+
+    // xfer -> host -> xfer
+    for (const MegaRingbuf::Zone &host_zone: plan->mega_ringbuf->host_zones) {
+        long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
+        if (nbytes > 0) {
+            this->bw_core_per_launch.nbytes_gmem += 2*nbytes;
+            this->bw_core_per_launch.nbytes_hmem += 2*nbytes;
+            this->bw_core_per_launch.memcpy_h2g_calls += 1;
+            this->bw_core_per_launch.memcpy_g2h_calls += 1;
+        }
+    }
+
+    this->bw_per_launch = bw_core_per_launch;
+
     // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<GpuTreeGriddingKernel> (plan->tree_gridding_kernel_params);
     this->gmem_footprint_nbytes += tree_gridding_kernel->gmem_footprint_nbytes;
@@ -71,6 +94,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     // Lagged downsampler.
     this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);
     this->gmem_footprint_nbytes += lds_kernel->gmem_footprint_nbytes;
+    this->bw_core_per_launch += lds_kernel->bw_core_per_launch;
     this->bw_per_launch += lds_kernel->bw_per_launch;
 
     // Stage1 dedispersion buffers.
@@ -86,6 +110,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         auto dd_kernel = make_shared<GpuDedispersionKernel> (dd_params);
         this->stage1_dd_kernels.push_back(dd_kernel);
         this->gmem_footprint_nbytes += dd_kernel->gmem_footprint_nbytes;
+        this->bw_core_per_launch += dd_kernel->bw_core_per_launch;
         this->bw_per_launch += dd_kernel->bw_per_launch;
     }
 
@@ -99,6 +124,10 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     this->g2g_copy_kernel = make_shared<GpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
     this->gmem_footprint_nbytes += g2g_copy_kernel->gmem_footprint_nbytes;
+    this->bw_core_per_launch += g2g_copy_kernel->bw_core_per_launch;
+    this->bw_core_per_launch += h2h_copy_kernel->bw_core_per_launch;
+    this->bw_per_launch += g2g_copy_kernel->bw_per_launch;
+    this->bw_per_launch += h2h_copy_kernel->bw_per_launch;
 
     // cdd2 kernels.
     for (long itree = 0; itree < ntrees; itree++) {
@@ -107,7 +136,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         auto cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
         this->cdd2_kernels.push_back(cdd2_kernel);
         this->gmem_footprint_nbytes += cdd2_kernel->gmem_footprint_nbytes;
-        // this->bw_per_launch += cdd2_kernel->bw_per_launch;
+        this->bw_core_per_launch += cdd2_kernel->bw_core_per_launch;
+        this->bw_per_launch += cdd2_kernel->bw_per_launch;
     }
 
     // Peak-finding weight/output arrays.
@@ -237,15 +267,19 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
     long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
     char *et_src = (char *) this->host_ringbuf.data + (eth_zone.global_segment_offset + et_off) * SB;
     char *et_dst = (char *) this->gpu_ringbuf.data + (etg_zone.global_segment_offset + et_off) * SB;
-    long et_nbytes = BB * eth_zone.segments_per_frame * SB;
+    long et_nbytes = BB * eth_zone.segments_per_frame * SB;  // in constructor
     
     // copy gpu -> xfer
     this->g2g_copy_kernel->launch(this->gpu_ringbuf, ichunk, ibatch, stream);
 
     // copy host -> et_host
+    // FIXME: in principle this is a bug: running copy kernel without synchronizing
+    // wiuth gpu->host copy that produces its input data, or host->gpu copy that
+    // consumes its output data. The current unit tests don't detect this!
     this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);
 
-     // copy et_host -> et_gpu (must come after h2h_copy_kernel)
+    // copy et_host -> et_gpu (must come after h2h_copy_kernel)
+    // Note: keep this in sync with constructor logic to compute bw_per_launch
     CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, stream)); 
 
     // Step 4: copy host <-> xfer

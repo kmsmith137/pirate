@@ -51,9 +51,11 @@ CpuRingbufCopyKernel::CpuRingbufCopyKernel(const RingbufCopyKernelParams &params
     params(params_.validate()),
     noctuples(xdiv(params_.octuples.size, 8))
 {
-    // Note: only correct if (nbytes_per_segment == constants::bytes_per_gpu_cache_line).
-    long nbytes_per_octuple = (2 * params.beams_per_batch * constants::bytes_per_gpu_cache_line) + 8;
-    bw_per_launch.nbytes_hmem = noctuples * nbytes_per_octuple;
+    long B = params.beams_per_batch;
+    bw_core_per_launch.nbytes_gmem = B * noctuples * 2 * 128;  // includes factor 2 from h->h    
+
+    bw_per_launch = bw_core_per_launch;
+    bw_per_launch.nbytes_gmem += B * noctuples * 32;
 }
 
 
@@ -130,12 +132,16 @@ GpuRingbufCopyKernel::GpuRingbufCopyKernel(const RingbufCopyKernelParams &params
     params(params_.validate()),
     noctuples(xdiv(params_.octuples.size, 8))
 {
-    long nbytes_per_octuple = (2 * params.beams_per_batch * constants::bytes_per_gpu_cache_line) + 8;
-    bw_per_launch.nbytes_gmem = noctuples * nbytes_per_octuple;
+    long B = params.beams_per_batch;
+
+    bw_core_per_launch.nbytes_gmem = B * noctuples * 2 * 128;  // includes factor 2 from g->g
+    bw_core_per_launch.kernel_launches = 1;
+
+    bw_per_launch = bw_core_per_launch;
+    bw_per_launch.nbytes_gmem += B * noctuples * 32;
 
     // Compute GPU memory footprint, reflecting logic in allocate().
-    long octuples_nbytes = params.octuples.shape[0] * params.octuples.shape[1] * 4;
-    this->gmem_footprint_nbytes = align_up(octuples_nbytes, BumpAllocator::nalign);
+    this->gmem_footprint_nbytes = align_up(noctuples * 32, BumpAllocator::nalign);
 }
 
 

@@ -98,7 +98,8 @@ struct GpuDedisperser
 
     // Bandwidth per call to GpuDedisperser::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
-    BandwidthTracker bw_per_launch;
+    BandwidthTracker bw_core_per_launch;  // only input/output arrays
+    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate/wts
 
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);

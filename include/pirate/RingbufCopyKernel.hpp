@@ -39,7 +39,8 @@ struct CpuRingbufCopyKernel
     
     // Bandwidth per call to CpuRingbufCopyKernel::launch().
     // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
-    BandwidthTracker bw_per_launch;
+    BandwidthTracker bw_per_launch;       // all arrays including octuples
+    BandwidthTracker bw_core_per_launch;  // only input/output arrays
 };
 
 
@@ -66,7 +67,8 @@ struct GpuRingbufCopyKernel
     
     // Bandwidth per call to GpuRingbufCopyKernel::launch().
     // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
-    BandwidthTracker bw_per_launch;
+    BandwidthTracker bw_per_launch;       // all gpu arrays including octuples
+    BandwidthTracker bw_core_per_launch;  // only input/output arrays
 
     // Static member function: runs one randomized test iteration.
     static void test();
