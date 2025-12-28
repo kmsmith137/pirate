@@ -15,7 +15,6 @@ BandwidthTracker &BandwidthTracker::operator+=(const BandwidthTracker &x)
     kernel_launches += x.kernel_launches;
     memcpy_h2g_calls += x.memcpy_h2g_calls;
     memcpy_g2h_calls += x.memcpy_g2h_calls;
-    memcpy_g2g_calls += x.memcpy_g2g_calls;
     
     return *this;
 }
@@ -30,7 +29,6 @@ BandwidthTracker &BandwidthTracker::operator*=(long x)
     kernel_launches *= x;
     memcpy_h2g_calls *= x;
     memcpy_g2h_calls *= x;
-    memcpy_g2g_calls *= x;
 
     return *this;
 }

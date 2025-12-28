@@ -9,14 +9,13 @@ namespace pirate {
 
 struct BandwidthTracker
 {
-    long nbytes_gmem = 0;  // GPU memory bandwidth
-    long nbytes_hmem = 0;  // Host memory bandwidth
+    long nbytes_gmem = 0;  // GPU memory bandwidth, including PCIe transfers
+    long nbytes_hmem = 0;  // Host memory bandwidth, including PCIe transfers
     long nbytes_h2g = 0;   // PCIe bandwidth, (host -> GPU) direction
     long nbytes_g2h = 0;   // PCIe bandwidth, (GPU -> host) direction
     long kernel_launches = 0;
-    long memcpy_h2g_calls = 0;
-    long memcpy_g2h_calls = 0;
-    long memcpy_g2g_calls = 0;
+    long memcpy_h2g_calls = 0;  // calls to cudaMemcpy() host to device
+    long memcpy_g2h_calls = 0;  // calls to cudaMemcpy() device to host
 
     BandwidthTracker &operator+=(const BandwidthTracker &);
     BandwidthTracker &operator*=(long);

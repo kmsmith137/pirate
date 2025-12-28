@@ -1,4 +1,4 @@
-#include <pirate/CudaStreamPool.hpp>
+#include "../include/pirate/CudaStreamPool.hpp"
 
 #include <atomic>
 #include <stdexcept>

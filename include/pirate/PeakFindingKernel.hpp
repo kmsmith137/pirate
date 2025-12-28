@@ -9,7 +9,6 @@
 #include "BumpAllocator.hpp"
 #include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
-#include "trackers.hpp"  // BandwidthTracker
 
 
 namespace pirate {

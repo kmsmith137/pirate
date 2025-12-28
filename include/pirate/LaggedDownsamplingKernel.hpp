@@ -49,11 +49,11 @@ struct LaggedDownsamplingKernelParams
     LaggedDownsamplingKernelParams() { }
     LaggedDownsamplingKernelParams(const LaggedDownsamplingKernelParams &) = default;
 
+    void validate() const;  // throws an exception if anything is wrong
+
     // Emit C++ code to initialize this LaggedDownsamplingKernelParams.
     // (Sometimes convenient in unit tests.)
     void emit_cpp(std::ostream &os=std::cout, const char *name="params", int indent=4);
-
-    void validate() const;  // throws an exception if anything is wrong
 };
 
 
@@ -107,8 +107,9 @@ public:
 
     // Bandwidth per call to GpuLaggedDownsamplingKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
-    BandwidthTracker bw_per_launch;
-    
+    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate
+    BandwidthTracker bw_core_per_launch;  // only input/output arrays
+
     // These parameters (also computed in constructor) determine how the kernel is divided
     // into threadblocks. See GpuLaggedDownsamplingKernel.cu for more info.
     int M_W = 0;

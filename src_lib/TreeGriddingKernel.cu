@@ -115,6 +115,7 @@ GpuTreeGriddingKernel::GpuTreeGriddingKernel(const TreeGriddingKernelParams &par
     long T = params.ntime;
     
     this->bw_per_launch.nbytes_gmem = B * (N+F) * T * S;
+    this->bw_per_launch.kernel_launches = 1;
     this->nchan_per_thread = 4;   // reasonable default (?)
 
     long ny = (N + nchan_per_thread - 1) / nchan_per_thread;
@@ -143,7 +144,6 @@ void GpuTreeGriddingKernel::allocate(BumpAllocator &allocator)
     this->gpu_channel_map.fill(params.channel_map);
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
-    // cout << "GpuTreeGriddingKernel: " << nbytes_allocated << " bytes allocated" << endl;
     xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
 
     this->is_allocated = true;

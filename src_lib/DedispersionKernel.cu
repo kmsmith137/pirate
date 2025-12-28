@@ -505,30 +505,27 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 
     // Call static member function GpuDedispersionKernel::registry().
     this->registry_value = registry().get(key);
-    
     this->nbatches = xdiv(params.total_beams, params.beams_per_batch);
-
-    // Compute GPU memory footprint, reflecting logic in allocate().
-    long ps_ninner = registry_value.pstate32_per_small_tree * 4;
-    long ps_nbytes = params.total_beams * pow2(params.amb_rank) * ps_ninner;
-    this->gmem_footprint_nbytes += align_up(ps_nbytes, BumpAllocator::nalign);
-
-    long rb_nbytes = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment) * 16;
-    if (params.input_is_ringbuf)
-        this->gmem_footprint_nbytes += align_up(rb_nbytes, BumpAllocator::nalign);
-    if (params.output_is_ringbuf)
-        this->gmem_footprint_nbytes += align_up(rb_nbytes, BumpAllocator::nalign);
-
-    // FIXME(?) not currently including ringbuf_quadruples.
-
-    int ST = xdiv(params.dtype.nbits, 8);    
-    this->bw_per_launch.kernel_launches = 1;
-    this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
-    this->bw_per_launch.nbytes_gmem += 8 * params.beams_per_batch * pow2(params.amb_rank) * registry_value.pstate32_per_small_tree;
-    // FIXME(?) not currently including ringbuf_quadruples.
 
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(params.nt_per_segment, registry_value.nt_per_segment);
+
+    // Compute GPU memory footprint, reflecting logic in allocate().
+    long ps_nbytes_per_beam = pow2(params.amb_rank) * registry_value.pstate32_per_small_tree * 4;
+    this->gmem_footprint_nbytes += align_up(params.total_beams * ps_nbytes_per_beam, BumpAllocator::nalign);
+
+    long rb_quad_nbytes = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment) * 16;
+    long rb_count = (params.input_is_ringbuf ? 1 : 0) + (params.output_is_ringbuf ? 1 : 0);
+    this->gmem_footprint_nbytes += rb_count * align_up(rb_quad_nbytes, BumpAllocator::nalign);
+
+    long ST = xdiv(params.dtype.nbits, 8);    
+    long iobuf_nbytes = params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
+    this->bw_core_per_launch.nbytes_gmem = 2 * iobuf_nbytes;
+    this->bw_core_per_launch.kernel_launches = 1;
+    
+    this->bw_per_launch = bw_core_per_launch;
+    this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * ps_nbytes_per_beam;
+    this->bw_per_launch.nbytes_gmem += rb_count * rb_quad_nbytes;
 }
 
 

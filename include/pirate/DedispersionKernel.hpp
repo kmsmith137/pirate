@@ -240,7 +240,8 @@ public:
     
     // Bandwidth per call to GpuDedispersionKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.
-    BandwidthTracker bw_per_launch;
+    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate, quadruples
+    BandwidthTracker bw_core_per_launch;  // only input/output arrays
 
     // Static member functions to query registry.
     static long registry_size() { return registry().size(); }

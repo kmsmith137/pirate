@@ -84,9 +84,7 @@ void ChimeDedisperser::initialize()
     this->bw_per_run_call = nbatches * dedisperser->bw_per_launch;
     this->bw_per_run_call.nbytes_gmem += 2 * nbatches * extra_nbytes_per_batch;  // factor 2 is from {dst,src}.
 
-    if (use_copy_engine)
-        this->bw_per_run_call.memcpy_g2g_calls += nbatches;
-    else
+    if (!use_copy_engine)
         this->bw_per_run_call.kernel_launches += nbatches;
 }
 
