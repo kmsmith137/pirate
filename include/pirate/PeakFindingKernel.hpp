@@ -9,6 +9,7 @@
 #include "BumpAllocator.hpp"
 #include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
+#include "ResourceTracker.hpp"
 
 
 namespace pirate {
@@ -336,8 +337,8 @@ struct GpuPeakFindingKernel
     bool is_allocated = false;
     long expected_ibatch = 0;
 
-    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
-    long gmem_footprint_nbytes = 0;
+    // Memory footprint, computed in constructor, checked in allocate().
+    ResourceTracker resource_tracker;
 
     // -------------------- Internals start here --------------------
 

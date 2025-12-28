@@ -9,6 +9,7 @@
 #include <ksgpu/Array.hpp>
 
 #include "BumpAllocator.hpp"
+#include "ResourceTracker.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 
@@ -120,8 +121,8 @@ public:
     // Shape (total_beams, state_nelts_per_beam).
     ksgpu::Array<void> persistent_state;
 
-    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
-    long gmem_footprint_nbytes = 0;
+    // Memory footprint, computed in constructor, checked in allocate().
+    ResourceTracker resource_tracker;
 
     // Static member function: runs one randomized test iteration.
     static void test();

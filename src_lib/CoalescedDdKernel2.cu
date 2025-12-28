@@ -91,8 +91,8 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     // Compute GPU memory footprint, reflecting logic in allocate().
     long quads_nbytes = nsegments_per_beam * 4 * 4;
     long pstate_nbytes_per_beam = A * registry_value.pstate32_per_small_tree * 4;
-    this->gmem_footprint_nbytes = align_up(dd_params.total_beams * pstate_nbytes_per_beam, BumpAllocator::nalign);
-    this->gmem_footprint_nbytes += align_up(quads_nbytes, BumpAllocator::nalign);
+    resource_tracker.add_gmem_footprint("persistent_state", dd_params.total_beams * pstate_nbytes_per_beam, true);
+    resource_tracker.add_gmem_footprint("quadruples", quads_nbytes, true);
 
     bw_per_launch = bw_core_per_launch;
     bw_per_launch.nbytes_gmem += B * quads_nbytes;                                        // quadruples
@@ -130,7 +130,7 @@ void CoalescedDdKernel2::allocate(BumpAllocator &allocator)
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
     // cout << "CoalescedDdKernel2: " << nbytes_allocated << " bytes allocated" << endl;
-    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
+    xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 
     this->is_allocated = true;
 }

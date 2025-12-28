@@ -5,6 +5,7 @@
 #include "DedispersionConfig.hpp"
 #include "DedispersionBuffer.hpp"
 #include "DedispersionTree.hpp"
+#include "ResourceTracker.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 #include <vector>
@@ -84,9 +85,8 @@ struct GpuDedisperser
 
     bool is_allocated = false;
 
-    // Memory footprints (in bytes), computed in constructor, checked in allocate().
-    long gmem_footprint_nbytes = 0;
-    long hmem_footprint_nbytes = 0;
+    // Memory footprints, computed in constructor, checked in allocate().
+    ResourceTracker resource_tracker;
 
     // Peak-finding weights use a complicated GPU memory layout.
     // The helper class 'GpuPfWeightLayout' is intended to hide the details.

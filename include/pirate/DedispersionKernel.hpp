@@ -6,6 +6,7 @@
 #include "BumpAllocator.hpp"
 #include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
+#include "ResourceTracker.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 namespace pirate {
@@ -236,7 +237,7 @@ public:
     );
 
     long nbatches = 0;   // = (total_beams / beams_per_batch)
-    long gmem_footprint_nbytes = 0;
+    ResourceTracker resource_tracker;
     
     // Bandwidth per call to GpuDedispersionKernel::launch().
     // To get bandwidth per time chunk, multiply by 'nbatches'.

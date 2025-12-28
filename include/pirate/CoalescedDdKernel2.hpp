@@ -11,6 +11,7 @@
 #include "PeakFindingKernel.hpp"
 #include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
+#include "ResourceTracker.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 
@@ -65,8 +66,8 @@ struct CoalescedDdKernel2
 
     bool is_allocated = false;
 
-    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
-    long gmem_footprint_nbytes = 0;
+    // All rates are "per call to launch()".
+    ResourceTracker resource_tracker;
 
     // Derived parameters chosen by the kernel.
     GpuPfWeightLayout pf_weight_layout;     // layout of peak-finding weights in GPU memory

@@ -61,7 +61,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     
     // input_arrays: shape (nstreams, beams_per_batch, nfreq, nt_in).
     long input_nbytes = nstreams * beams_per_batch * nfreq * nt_in * bytes_per_elt;
-    this->gmem_footprint_nbytes += align_up(input_nbytes, BumpAllocator::nalign);
+    resource_tracker.add_gmem_footprint("input_arrays", input_nbytes, true);
 
     // Before we create any kernels, put "non-kernel" bandwidth in BandwidthTrackers.
 
@@ -88,12 +88,12 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
 
     // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<GpuTreeGriddingKernel> (plan->tree_gridding_kernel_params);
-    this->gmem_footprint_nbytes += tree_gridding_kernel->resource_tracker.get_gmem_footprint();
+    resource_tracker.add_gmem_footprint("tree_gridding", tree_gridding_kernel->resource_tracker.get_gmem_footprint());
     // this->bw_per_launch += tree_gridding_kernel->bw_per_launch;
 
     // Lagged downsampler.
     this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);
-    this->gmem_footprint_nbytes += lds_kernel->gmem_footprint_nbytes;
+    resource_tracker.add_gmem_footprint("lagged_downsampler", lds_kernel->resource_tracker.get_gmem_footprint());
     this->bw_core_per_launch += lds_kernel->bw_core_per_launch;
     this->bw_per_launch += lds_kernel->bw_per_launch;
 
@@ -101,7 +101,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     for (long istream = 0; istream < nstreams; istream++) {
         DedispersionBuffer buf(plan->stage1_dd_buf_params);
         stage1_dd_bufs.push_back(buf);
-        this->gmem_footprint_nbytes += buf.footprint_nbytes;
+        resource_tracker.add_gmem_footprint("stage1_dd_bufs", buf.footprint_nbytes);
     }
 
     // Stage1 dedispersion kernels.
@@ -109,7 +109,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         const DedispersionKernelParams &dd_params = plan->stage1_dd_kernel_params.at(ids);
         auto dd_kernel = make_shared<GpuDedispersionKernel> (dd_params);
         this->stage1_dd_kernels.push_back(dd_kernel);
-        this->gmem_footprint_nbytes += dd_kernel->gmem_footprint_nbytes;
+        resource_tracker.add_gmem_footprint("stage1_dd_kernels", dd_kernel->resource_tracker.get_gmem_footprint());
         this->bw_core_per_launch += dd_kernel->bw_core_per_launch;
         this->bw_per_launch += dd_kernel->bw_per_launch;
     }
@@ -117,13 +117,13 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     // MegaRingbuf.
     this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
     this->host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
-    this->gmem_footprint_nbytes += align_up(gpu_ringbuf_nelts * bytes_per_elt, BumpAllocator::nalign);
-    this->hmem_footprint_nbytes += align_up(host_ringbuf_nelts * bytes_per_elt, BumpAllocator::nalign);
+    resource_tracker.add_gmem_footprint("gpu_ringbuf", gpu_ringbuf_nelts * bytes_per_elt, true);
+    resource_tracker.add_hmem_footprint("host_ringbuf", host_ringbuf_nelts * bytes_per_elt, true);
 
     // MegaRingbuf copy kernels.
     this->g2g_copy_kernel = make_shared<GpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
-    this->gmem_footprint_nbytes += g2g_copy_kernel->gmem_footprint_nbytes;
+    resource_tracker.add_gmem_footprint("g2g_copy_kernel", g2g_copy_kernel->resource_tracker.get_gmem_footprint());
     this->bw_core_per_launch += g2g_copy_kernel->bw_core_per_launch;
     this->bw_core_per_launch += h2h_copy_kernel->bw_core_per_launch;
     this->bw_per_launch += g2g_copy_kernel->bw_per_launch;
@@ -135,7 +135,7 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
         auto cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
         this->cdd2_kernels.push_back(cdd2_kernel);
-        this->gmem_footprint_nbytes += cdd2_kernel->gmem_footprint_nbytes;
+        resource_tracker.add_gmem_footprint("cdd2_kernels", cdd2_kernel->resource_tracker.get_gmem_footprint());
         this->bw_core_per_launch += cdd2_kernel->bw_core_per_launch;
         this->bw_per_launch += cdd2_kernel->bw_per_launch;
     }
@@ -151,11 +151,11 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         this->extended_wt_strides.push_back(svcat(wt_shape[0] * wt_strides[0], wt_strides));
 
         long wt_nbytes = nstreams * wt_shape[0] * wt_strides[0] * bytes_per_elt;
-        this->gmem_footprint_nbytes += align_up(wt_nbytes, BumpAllocator::nalign);
+        resource_tracker.add_gmem_footprint("wt_arrays", wt_nbytes, true);
 
         long out_nelts = nstreams * beams_per_batch * tree.ndm_out * tree.nt_out;
-        this->gmem_footprint_nbytes += align_up(out_nelts * bytes_per_elt, BumpAllocator::nalign);  // out_max
-        this->gmem_footprint_nbytes += align_up(out_nelts * 4, BumpAllocator::nalign);              // out_argmax (uint = 4 bytes)
+        resource_tracker.add_gmem_footprint("out_max", out_nelts * bytes_per_elt, true);
+        resource_tracker.add_gmem_footprint("out_argmax", out_nelts * 4, true);  // uint = 4 bytes
     }
 }
 
@@ -216,8 +216,8 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
     long host_nbytes_allocated = host_allocator.nbytes_allocated.load() - host_nbytes_before;
     // cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
     // cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
-    xassert_eq(gpu_nbytes_allocated, this->gmem_footprint_nbytes);
-    xassert_eq(host_nbytes_allocated, this->hmem_footprint_nbytes);
+    xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
+    xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
 
     this->is_allocated = true;
 }

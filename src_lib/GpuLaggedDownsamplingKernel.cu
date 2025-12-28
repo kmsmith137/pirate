@@ -770,7 +770,7 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
 
     // Compute GPU memory footprint, reflecting logic in allocate().
     long pstate_nbytes_per_beam = state_nelts_per_beam * ST;
-    this->gmem_footprint_nbytes = align_up(params.total_beams * pstate_nbytes_per_beam, BumpAllocator::nalign);
+    resource_tracker.add_gmem_footprint("persistent_state", params.total_beams * pstate_nbytes_per_beam, true);
     this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pstate_nbytes_per_beam;
 }
 
@@ -793,7 +793,7 @@ void GpuLaggedDownsamplingKernel::allocate(BumpAllocator &allocator)
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
     // cout << "GpuLaggedDownsamplingKernel: " << nbytes_allocated << " bytes allocated" << endl;
-    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
+    xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 
     this->is_allocated = true;
 }

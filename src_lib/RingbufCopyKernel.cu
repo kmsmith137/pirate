@@ -141,7 +141,7 @@ GpuRingbufCopyKernel::GpuRingbufCopyKernel(const RingbufCopyKernelParams &params
     bw_per_launch.nbytes_gmem += B * noctuples * 32;
 
     // Compute GPU memory footprint, reflecting logic in allocate().
-    this->gmem_footprint_nbytes = align_up(noctuples * 32, BumpAllocator::nalign);
+    resource_tracker.add_gmem_footprint("octuples", noctuples * 32, true);
 }
 
 
@@ -163,7 +163,7 @@ void GpuRingbufCopyKernel::allocate(BumpAllocator &allocator)
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
     // cout << "GpuRingbufCopyKernel: " << nbytes_allocated << " bytes allocated" << endl;
-    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
+    xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 
     this->is_allocated = true;
 }

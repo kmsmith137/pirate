@@ -3,6 +3,7 @@
 
 #include <ksgpu/Array.hpp>
 #include "BumpAllocator.hpp"
+#include "ResourceTracker.hpp"
 #include "trackers.hpp"  // BandwidthTracker
 
 namespace pirate {
@@ -62,8 +63,8 @@ struct GpuRingbufCopyKernel
     bool is_allocated = false;
     ksgpu::Array<uint> gpu_octuples;
 
-    // GPU memory footprint (in bytes), computed in constructor, checked in allocate().
-    long gmem_footprint_nbytes = 0;
+    // Memory footprint, computed in constructor, checked in allocate().
+    ResourceTracker resource_tracker;
     
     // Bandwidth per call to GpuRingbufCopyKernel::launch().
     // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).

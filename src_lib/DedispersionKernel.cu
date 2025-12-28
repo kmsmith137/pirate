@@ -512,11 +512,14 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
 
     // Compute GPU memory footprint, reflecting logic in allocate().
     long ps_nbytes_per_beam = pow2(params.amb_rank) * registry_value.pstate32_per_small_tree * 4;
-    this->gmem_footprint_nbytes += align_up(params.total_beams * ps_nbytes_per_beam, BumpAllocator::nalign);
+    resource_tracker.add_gmem_footprint("persistent_state", params.total_beams * ps_nbytes_per_beam, true);
 
     long rb_quad_nbytes = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment) * 16;
     long rb_count = (params.input_is_ringbuf ? 1 : 0) + (params.output_is_ringbuf ? 1 : 0);
-    this->gmem_footprint_nbytes += rb_count * align_up(rb_quad_nbytes, BumpAllocator::nalign);
+    if (params.input_is_ringbuf)
+        resource_tracker.add_gmem_footprint("input_quadruples", rb_quad_nbytes, true);
+    if (params.output_is_ringbuf)
+        resource_tracker.add_gmem_footprint("output_quadruples", rb_quad_nbytes, true);
 
     long ST = xdiv(params.dtype.nbits, 8);    
     long iobuf_nbytes = params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
@@ -570,7 +573,7 @@ void GpuDedispersionKernel::allocate(BumpAllocator &allocator)
 
     long nbytes_allocated = allocator.nbytes_allocated.load() - nbytes_before;
     // cout << "GpuDedispersionKernel: " << nbytes_allocated << " bytes allocated" << endl;
-    xassert_eq(nbytes_allocated, this->gmem_footprint_nbytes);
+    xassert_eq(nbytes_allocated, resource_tracker.get_gmem_footprint());
 
     this->is_allocated = true;
 }
