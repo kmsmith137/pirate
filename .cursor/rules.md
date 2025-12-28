@@ -92,6 +92,7 @@ namespace pirate {
 - Keep lines under ~120 characters when reasonable
 - Use `long` for sizes and indices, not `int` or `size_t`
 - Use `uint` (not `unsigned int`) for 32-bit unsigned values
+- Use spaces, not tabs.
 
 ## Testing Pattern
 
