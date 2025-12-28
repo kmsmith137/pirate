@@ -88,8 +88,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
 
     // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<GpuTreeGriddingKernel> (plan->tree_gridding_kernel_params);
-    this->gmem_footprint_nbytes += tree_gridding_kernel->gmem_footprint_nbytes;
-    this->bw_per_launch += tree_gridding_kernel->bw_per_launch;
+    this->gmem_footprint_nbytes += tree_gridding_kernel->resource_tracker.get_gmem_footprint();
+    // this->bw_per_launch += tree_gridding_kernel->bw_per_launch;
 
     // Lagged downsampler.
     this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);

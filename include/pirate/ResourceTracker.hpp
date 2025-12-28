@@ -21,6 +21,7 @@ struct ResourceTracker
 {
     using Dict = std::unordered_map<std::string, long>;
 
+    // Bandwidth tracking.
     Dict gmem_bw_nbytes;       // GPU memory bandwidth, including PCIe transfers
     Dict hmem_bw_nbytes;       // Host memory bandwidth, including PCIe transfers
     Dict h2g_bw_nbytes;        // PCIe bandwidth, (host -> GPU) direction
@@ -29,6 +30,7 @@ struct ResourceTracker
     Dict memcpy_g2h_calls;     // calls to cudaMemcpy() in (GPU -> host) direction
     Dict kernel_launches;      // user-defined kernels
 
+    // Footprint tracking.
     Dict gmem_footprint_nbytes;  // total GPU memory consumption
     Dict hmem_footprint_nbytes;  // total host memory consumption
 
@@ -46,10 +48,11 @@ struct ResourceTracker
     void add_gmem_footprint(const std::string &key, long gmem_footprint_nbytes, bool align=false);
     void add_hmem_footprint(const std::string &key, long hmem_footprint_nbytes, bool align=false);
 
-    // Throws an exception if key is not found.
-    long get_gmem_bw(const std::string &key) const;
-    long get_gmem_footprint(const std::string &key) const;
-    long get_hmem_footprint(const std::string &key) const;
+    // If key is non-empty, returns value for that key (throws exception if not found).
+    // If key is empty, returns sum over all keys.
+    long get_gmem_bw(const std::string &key = "") const;
+    long get_gmem_footprint(const std::string &key = "") const;
+    long get_hmem_footprint(const std::string &key = "") const;
 
     // Used to accumulate "child" ResourceTrackers into their parent.
     ResourceTracker &operator+=(const ResourceTracker &);
@@ -79,7 +82,8 @@ struct ResourceTracker
     void to_yaml(YAML::Emitter &emitter, double multiplier, bool fine_grained) const;
     std::string to_yaml_string(double multiplier, bool fine_grained) const;
 
-    // Called internally by add_*() methods and operator+=(). No-op if value==0
+    // Called internally by add_*() methods and operator+=(). No-op if value==0.
+    // Throws an exception if key is empty.
     static void _update_dict(Dict &d, const std::string &key, long value);
 };
 

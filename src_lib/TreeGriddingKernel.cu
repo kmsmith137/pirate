@@ -396,7 +396,7 @@ void GpuTreeGriddingKernel::time()
         // Print header.
         double input_gb = double(beams_per_batch) * nfreq * ntime * (dtype.nbits / 8) / 1.0e9;
         double output_gb = double(beams_per_batch) * nchan * ntime * (dtype.nbits / 8) / 1.0e9;
-        double bw_per_launch = 1.0e-9 * kernel.resource_tracker.get_gmem_bw("tree_gridding");
+        double bw_per_launch = 1.0e-9 * kernel.resource_tracker.get_gmem_bw();
 
         cout << "\nGpuTreeGriddingKernel::time()\n"
              << "    dtype = " << dtype << "\n"

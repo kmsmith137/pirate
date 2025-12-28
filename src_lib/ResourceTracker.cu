@@ -17,6 +17,8 @@ void ResourceTracker::_update_dict(Dict &d, const std::string &key, long value)
 {
     if (value == 0)
         return;
+    if (key.empty())
+        throw std::runtime_error("ResourceTracker::_update_dict: key is empty");
 
     auto it = d.find(key);
     if (it != d.end())
@@ -87,6 +89,12 @@ void ResourceTracker::add_hmem_footprint(const std::string &key, long nbytes, bo
 
 long ResourceTracker::get_gmem_bw(const std::string &key) const
 {
+    if (key.empty()) {
+        long total = 0;
+        for (const auto &p : gmem_bw_nbytes)
+            total += p.second;
+        return total;
+    }
     auto it = gmem_bw_nbytes.find(key);
     if (it == gmem_bw_nbytes.end())
         throw std::runtime_error("ResourceTracker::get_gmem_bw: key not found: " + key);
@@ -96,6 +104,12 @@ long ResourceTracker::get_gmem_bw(const std::string &key) const
 
 long ResourceTracker::get_gmem_footprint(const std::string &key) const
 {
+    if (key.empty()) {
+        long total = 0;
+        for (const auto &p : gmem_footprint_nbytes)
+            total += p.second;
+        return total;
+    }
     auto it = gmem_footprint_nbytes.find(key);
     if (it == gmem_footprint_nbytes.end())
         throw std::runtime_error("ResourceTracker::get_gmem_footprint: key not found: " + key);
@@ -105,6 +119,12 @@ long ResourceTracker::get_gmem_footprint(const std::string &key) const
 
 long ResourceTracker::get_hmem_footprint(const std::string &key) const
 {
+    if (key.empty()) {
+        long total = 0;
+        for (const auto &p : hmem_footprint_nbytes)
+            total += p.second;
+        return total;
+    }
     auto it = hmem_footprint_nbytes.find(key);
     if (it == hmem_footprint_nbytes.end())
         throw std::runtime_error("ResourceTracker::get_hmem_footprint: key not found: " + key);
