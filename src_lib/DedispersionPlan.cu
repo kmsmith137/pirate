@@ -489,60 +489,63 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
     double et_h2h_gbps = (mega_ringbuf->h2h_octuples.size / 8) * 2.0 * 128.0 * beams_per_gpu / T / 1.0e9;
 
     emitter << YAML::Newline << YAML::Newline
-            << YAML::Key << "megaringbuf"
-            << YAML::Value << YAML::BeginSeq;
+            << YAML::Key << "mega_ringbuf"
+            << YAML::Value << YAML::BeginMap;
 
     {
         stringstream ss;
         ss << fixed << setprecision(2) << host_mb << " MB";
-        emitter << YAML::BeginMap
-                << YAML::Key << "host" << YAML::Value << ss.str()
-                << YAML::EndMap;
+        emitter << YAML::Key << "host" << YAML::Value << ss.str();
     }
     {
         stringstream ss;
         ss << fixed << setprecision(2) << gpu_mb << " MB";
-        emitter << YAML::BeginMap
-                << YAML::Key << "gpu" << YAML::Value << ss.str()
-                << YAML::EndMap;
+        emitter << YAML::Key << "gpu" << YAML::Value << ss.str();
     }
     {
         stringstream ss;
         ss << fixed << setprecision(3) << host_to_gpu_gbps << " GB/s";
-        emitter << YAML::BeginMap
-                << YAML::Key << "host->gpu" << YAML::Value << ss.str();
+        emitter << YAML::Key << "host->gpu" << YAML::Value << ss.str();
         if (verbose) {
             stringstream cs;
             cs << "plus raw data: " << fixed << setprecision(3) << (nsamp / T * 0.5 / 1.0e9)
                << " GB/s if 4-bit, " << (nsamp / T / 1.0e9) << " GB/s if 8-bit";
             emitter << YAML::Comment(cs.str());
         }
-        emitter << YAML::EndMap;
     }
     {
         stringstream ss;
         ss << fixed << setprecision(3) << gpu_to_host_gbps << " GB/s";
-        emitter << YAML::BeginMap
-                << YAML::Key << "gpu->host" << YAML::Value << ss.str()
-                << YAML::EndMap;
+        emitter << YAML::Key << "gpu->host" << YAML::Value << ss.str();
     }
     {
         stringstream ss;
         ss << fixed << setprecision(3) << et_h2h_gbps << " GB/s";
-        emitter << YAML::BeginMap
-                << YAML::Key << "et host->host" << YAML::Value << ss.str()
-                << YAML::EndMap;
+        emitter << YAML::Key << "et host->host" << YAML::Value << ss.str();
     }
 
     if (mega_ringbuf->et_h2h_headroom > 0) {
         stringstream ss;
         ss << fixed << setprecision(2) << (mega_ringbuf->et_h2h_headroom * T) << " seconds";
-        emitter << YAML::BeginMap
-                << YAML::Key << "et headroom" << YAML::Value << ss.str()
-                << YAML::EndMap;
+        emitter << YAML::Key << "et headroom" << YAML::Value << ss.str();
     }
 
-    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+
+    // Compute dedispersion output bandwidth
+    long dd_out_N = 0;
+    for (const DedispersionTree &t: trees)
+        dd_out_N += t.ndm_out * t.nt_out;
+    dd_out_N *= beams_per_gpu;
+    double dd_out_gbps = 1.0e-9 * dd_out_N * (4 + dtype.nbits/8) / T;
+    
+    {
+        stringstream ss;
+        ss << fixed << setprecision(3) << dd_out_gbps << " GB/s";
+        emitter << YAML::Newline << YAML::Newline
+                << YAML::Key << "dedispersion_outputs" << YAML::Value << ss.str();
+    }
+
     emitter << YAML::EndMap;
 }
 
