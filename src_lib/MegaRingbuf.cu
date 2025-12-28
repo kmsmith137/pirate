@@ -213,6 +213,12 @@ void MegaRingbuf::finalize(bool delete_internals)
                     _push_triple(h2h_triples, host_zone, (chunk_lag-gpu_clag) * BT);  // h2h src
                     _push_triple(h2h_triples, &et_host_zone, 0);                      // h2h dst
                     _set_triple(consumer, &et_gpu_zone, 0);
+
+                    long headroom = gpu_clag + host_clag - chunk_lag;
+                    xassert(headroom > 0);
+
+                    if ((et_h2h_headroom < 0) || (et_h2h_headroom > headroom))
+                        this->et_h2h_headroom = headroom;
                 }
             }
         }

@@ -212,6 +212,12 @@ struct MegaRingbuf {
     // FIXME I might implement something more realistic later.
     static std::shared_ptr<MegaRingbuf> make_trivial(long total_beams, long nquads);
 
+    // The 'et_h2h_headroom' member is only used in informational print-statements.
+    // It quantifies the amount of "headroom" that the et_h2h thread gets, before the
+    // end of the host-side ring buffer. (Reminder: in situations where a segment is
+    // copied N times from host to GPU, because of early triggers, the et_h2h thread
+    // sets up the first (N-1) copies.)
+    long et_h2h_headroom = -1;  // in chunks
 
     // ------------------------------------------------------------------------
     //

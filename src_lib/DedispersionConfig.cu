@@ -650,8 +650,19 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     if (verbose)
         emitter << YAML::Newline;
 
-    emitter << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches
-            << YAML::EndMap;
+    emitter << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches;
+
+    if (gpu_clag_maxfrac < 1.0) {
+        if (verbose)
+            emitter << YAML::Newline;
+        stringstream ss;
+        ss << fixed << setprecision(3) << gpu_clag_maxfrac;
+        emitter << YAML::Key << "gpu_clag_maxfrac" << YAML::Value << ss.str();
+        if (verbose)
+            emitter << YAML::Comment("for testing: limit on-gpu ring buffers (default 1.0 = disabled)");
+    }
+
+    emitter << YAML::EndMap;
 }
 
 
@@ -700,6 +711,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
     ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
+    ret.gpu_clag_maxfrac = f.get_scalar<double> ("gpu_clag_maxfrac", 1.0);
 
     YamlFile ets = f["early_triggers"];
 
