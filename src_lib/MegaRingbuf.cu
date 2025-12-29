@@ -78,12 +78,14 @@ void MegaRingbuf::finalize(bool delete_internals)
 
     this->gpu_zones.resize(max_clag + 1);
     this->host_zones.resize(max_clag + 1);
-    this->xfer_zones.resize(max_clag + 1);
-    
+    this->g2h_zones.resize(max_clag + 1);
+    this->h2g_zones.resize(max_clag + 1);
+
     for (int clag = 0; clag <= max_clag; clag++) {
         this->gpu_zones.at(clag).num_frames = clag*BT + BA;
         this->host_zones.at(clag).num_frames = clag*BT + BA;
-        this->xfer_zones.at(clag).num_frames = 2*BA;
+        this->g2h_zones.at(clag).num_frames = BA;
+        this->h2g_zones.at(clag).num_frames = BA;
     }
 
     this->et_host_zone.num_frames = BA;
@@ -134,15 +136,15 @@ void MegaRingbuf::finalize(bool delete_internals)
             // In the general case (ngpu >= 1) and (ncpu >= 2), we have the following steps:
             //
             //  1. goes to a gpu_zone for the first (ngpu) consumers
-            //  2. gets copied (GPU->GPU) from a gpu_zone to an xfer_zone (using g2g_triple_pairs)
-            //  3. gets copied (GPU->CPU) from an xfer_zone to a host_zone
+            //  2. gets copied (GPU->GPU) from a gpu_zone to a g2g_zone (using g2g_triple_pairs)
+            //  3. gets copied (GPU->CPU) from a g2h_zone to a host_zone
             //  4. for (ncpu-1) consumers
             //      - gets copied (CPU->CPU) from a host_zone to the et_host_zone
             //      - gets copied (CPU->GPU) from the et_host_zone to the et_gpu_zone
             //  5. for the last consumer
-            //      - gets copied (GPU->CPU) from a host_zone to an xfer_zone
+            //      - gets copied (GPU->CPU) from a host_zone to an h2g_zone
             //
-            // If (ngpu == 0), then copy directly to xfer_zone (i.e. skip step 1).
+            // If (ngpu == 0), then copy directly to g2h_zone (i.e. skip step 1).
             // If (ncpu == 0), then skip steps 2-5.
             // If (ncpu <= 1), then skip step 4.
 
@@ -161,7 +163,8 @@ void MegaRingbuf::finalize(bool delete_internals)
 
             Zone *gpu_zone = (ngpu > 0) ? &gpu_zones.at(gpu_clag) : nullptr;
             Zone *host_zone = (ncpu > 0) ? &host_zones.at(host_clag) : nullptr;
-            Zone *xfer_zone = (ncpu > 0) ? &xfer_zones.at(host_clag) : nullptr;
+            Zone *g2h_zone = (ncpu > 0) ? &g2h_zones.at(host_clag) : nullptr;
+            Zone *h2g_zone = (ncpu > 0) ? &h2g_zones.at(host_clag) : nullptr;
 
             // Now we're ready to implement steps 1 and 2 above.
 
@@ -174,19 +177,21 @@ void MegaRingbuf::finalize(bool delete_internals)
                 _set_triple(producer, gpu_zone, 0);
             }
             else if (ngpu == 0) {
-                // producer -> xfer_zone
+                // producer -> g2h_zone
                 host_zone->segments_per_frame++;
-                xfer_zone->segments_per_frame++;
-                _set_triple(producer, xfer_zone, 0);
+                g2h_zone->segments_per_frame++;
+                h2g_zone->segments_per_frame++;
+                _set_triple(producer, g2h_zone, 0);
             }
             else {
-                // producer -> gpu_zone -> xfer zone 
+                // producer -> gpu_zone -> g2h_zone 
                 gpu_zone->segments_per_frame++; 
                 host_zone->segments_per_frame++;
-                xfer_zone->segments_per_frame++;
+                g2h_zone->segments_per_frame++;
+                h2g_zone->segments_per_frame++;
                 _set_triple(producer, gpu_zone, 0);
                 _push_triple(g2g_triples, gpu_zone, gpu_clag * BT);  // g2g src
-                _push_triple(g2g_triples, xfer_zone, 0);            // g2g dst
+                _push_triple(g2g_triples, g2h_zone, 0);              // g2g dst
             }
 
             // Inner loop over consumers. This implements steps 4 and 5 above.
@@ -205,8 +210,8 @@ void MegaRingbuf::finalize(bool delete_internals)
                     // gpu_zone -> consumer
                     _set_triple(consumer, gpu_zone, chunk_lag * BT);
                 else if (chunk_lag == gpu_clag + host_clag)
-                    // xfer_zone -> consumer
-                    _set_triple(consumer, xfer_zone, BA);
+                    // h2g_zone -> consumer
+                    _set_triple(consumer, h2g_zone, 0);
                 else {
                     // host_zone -> et_host_zone
                     // et_gpu_zone -> consumer
@@ -241,7 +246,8 @@ void MegaRingbuf::finalize(bool delete_internals)
 
     _lay_out_zones(gpu_zones, true);
     _lay_out_zones(host_zones, false);
-    _lay_out_zones(xfer_zones, true);
+    _lay_out_zones(g2h_zones, true);
+    _lay_out_zones(h2g_zones, true);
     _lay_out_zone(et_host_zone, false);
     _lay_out_zone(et_gpu_zone, true);
 
@@ -362,7 +368,7 @@ void MegaRingbuf::_delete_internals()
 // This static member function makes a random simplified MegaRingbuf as follows:
 //
 //   - num_consumers == num_producers == 1.
-//   - "pure gpu", i.e. no host_zones, xfer_zones, et_*_zones.
+//   - "pure gpu", i.e. no host_zones, g2h_zones, h2g_zones, et_*_zones.
 //   - for each zone, frames_in_zone is random (i.e. unrelated to zone index)
 //   - segment assignment is random (i.e. unrelated to dedispersion)
 //
@@ -510,9 +516,8 @@ void MegaRingbuf::to_yaml(YAML::Emitter &emitter, double frames_per_second, long
     double T = beams_per_gpu / frames_per_second;
     
     long xseg = 0;
-    for (const Zone &z: xfer_zones)
+    for (const Zone &z: g2h_zones)
         xseg += z.segments_per_frame;
-    xseg /= 2;
     
     long etseg = et_gpu_zone.segments_per_frame;
     double nsamp = double(beams_per_gpu) * nfreq * time_samples_per_chunk;

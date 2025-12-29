@@ -141,7 +141,8 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     shared_ptr<MegaRingbuf> mega_ringbuf = plan->mega_ringbuf;
     long max_clag = mega_ringbuf->max_clag;
     xassert(mega_ringbuf->host_zones.size() == uint(max_clag+1));
-    xassert(mega_ringbuf->xfer_zones.size() == uint(max_clag+1));
+    xassert(mega_ringbuf->h2g_zones.size() == uint(max_clag+1));
+    xassert(mega_ringbuf->g2h_zones.size() == uint(max_clag+1));
     xassert_divisible(config.beams_per_gpu, config.beams_per_batch);   // assert that length-BB copies don't "wrap"
 }
 
@@ -296,20 +297,20 @@ void GpuDedisperser::_launch_g2h(long ichunk, long ibatch)
 
     for (int clag = 0; clag <= max_clag; clag++) {
         MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
-        MegaRingbuf::Zone &xfer_zone = plan->mega_ringbuf->xfer_zones.at(clag);
+        MegaRingbuf::Zone &g2h_zone = plan->mega_ringbuf->g2h_zones.at(clag);
 
-        xassert(host_zone.segments_per_frame == xfer_zone.segments_per_frame);
+        xassert(host_zone.segments_per_frame == g2h_zone.segments_per_frame);
         xassert(host_zone.num_frames == clag*BT + BA);
-        xassert(xfer_zone.num_frames == 2*BA);
+        xassert(g2h_zone.num_frames == BA);
 
         if (host_zone.segments_per_frame == 0)
             continue;
         
         char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.global_segment_offset * SB);
-        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (xfer_zone.global_segment_offset * SB);
+        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (g2h_zone.global_segment_offset * SB);
         
         long hdst = (iframe) % host_zone.num_frames;       // host dst phase
-        long xsrc = (iframe) % xfer_zone.num_frames;       // xfer src phase
+        long xsrc = (iframe) % g2h_zone.num_frames;        // g2h src phase
         
         long m = host_zone.segments_per_frame * SB;  // nbytes per frame
         long n = BB * m;                             // nbytes to copy
@@ -331,20 +332,20 @@ void GpuDedisperser::_launch_h2g(long ichunk, long ibatch)
 
     for (int clag = 0; clag <= max_clag; clag++) {
         MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
-        MegaRingbuf::Zone &xfer_zone = plan->mega_ringbuf->xfer_zones.at(clag);
+        MegaRingbuf::Zone &h2g_zone = plan->mega_ringbuf->h2g_zones.at(clag);
 
-        xassert(host_zone.segments_per_frame == xfer_zone.segments_per_frame);
+        xassert(host_zone.segments_per_frame == h2g_zone.segments_per_frame);
         xassert(host_zone.num_frames == clag*BT + BA);
-        xassert(xfer_zone.num_frames == 2*BA);
+        xassert(h2g_zone.num_frames == BA);
 
         if (host_zone.segments_per_frame == 0)
             continue;
         
         char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.global_segment_offset * SB);
-        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (xfer_zone.global_segment_offset * SB);
+        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (h2g_zone.global_segment_offset * SB);
         
         long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
-        long xdst = (iframe + BA) % xfer_zone.num_frames;  // xfer dst phase
+        long xdst = (iframe) % h2g_zone.num_frames;        // h2g dst phase
         
         long m = host_zone.segments_per_frame * SB;  // nbytes per frame
         long n = BB * m;                             // nbytes to copy

@@ -258,7 +258,8 @@ struct MegaRingbuf {
     
     std::vector<Zone> gpu_zones;    // frames_in_zone = (clag*BT + BA), on GPU
     std::vector<Zone> host_zones;   // frames_in_zone = (clag*BT + BA), on host
-    std::vector<Zone> xfer_zones;   // frames_in_zone = (2*BA), on GPU
+    std::vector<Zone> g2h_zones;    // frames_in_zone = (BA), on GPU
+    std::vector<Zone> h2g_zones;    // frames_in_zone = (BA), on GPU
 
     Zone et_host_zone;  // frames_in_zone = BA, on host (send buffer)
     Zone et_gpu_zone;   // frames_in_zone = BA, on GPU (recv buffer)
