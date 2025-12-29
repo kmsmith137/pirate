@@ -124,7 +124,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     MegaRingbuf::Params mrb_params;
     mrb_params.total_beams = beams_per_gpu;
     mrb_params.active_beams = num_active_batches * beams_per_batch;
-    mrb_params.gpu_clag_maxfrac = config.gpu_clag_maxfrac;
+    mrb_params.max_gpu_clag = config.max_gpu_clag;
 
     for (long ids = 0; ids < num_downsampling_levels; ids++) {
         long tot_rank = stage1_dd_rank.at(ids) + stage1_amb_rank.at(ids);

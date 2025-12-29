@@ -166,8 +166,8 @@ struct MegaRingbuf {
         std::vector<long> producer_nquads;  // Length (num_producers)
         std::vector<long> consumer_nquads;  // Length (num_consumers)
 
-        // For testing: limit on-gpu ring buffers to (clag) <= (gpu_clag_maxfrac) * (max_clag)
-        double gpu_clag_maxfrac = 1.0;   // set to 1 to disable (default)
+        // For testing: limit on-gpu ring buffers to (clag) <= max_gpu_clag
+        long max_gpu_clag = 10000;   // set to 10000 to disable (default)
     };
 
     MegaRingbuf(const Params &params);

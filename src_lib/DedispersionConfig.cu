@@ -386,8 +386,7 @@ void DedispersionConfig::validate() const
     // GPU configuration.
     xassert_divisible(beams_per_gpu, beams_per_batch);  // assumed for convenience
     xassert_le(num_active_batches * beams_per_batch, beams_per_gpu);
-    xassert_ge(gpu_clag_maxfrac, 0.0);
-    xassert_le(gpu_clag_maxfrac, 1.0);
+    xassert_ge(max_gpu_clag, 0);
 
     for (const EarlyTrigger &et: early_triggers) {
         long ds_rank = et.ds_level ? (tree_rank-1) : (tree_rank);
@@ -652,14 +651,12 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     emitter << YAML::Key << "num_active_batches" << YAML::Value << num_active_batches;
 
-    if (gpu_clag_maxfrac < 1.0) {
+    if (max_gpu_clag < 10000) {
         if (verbose)
             emitter << YAML::Newline;
-        stringstream ss;
-        ss << fixed << setprecision(3) << gpu_clag_maxfrac;
-        emitter << YAML::Key << "gpu_clag_maxfrac" << YAML::Value << ss.str();
+        emitter << YAML::Key << "max_gpu_clag" << YAML::Value << max_gpu_clag;
         if (verbose)
-            emitter << YAML::Comment("for testing: limit on-gpu ring buffers (default 1.0 = disabled)");
+            emitter << YAML::Comment("for testing: limit on-gpu ring buffers (default 10000 = disabled)");
     }
 
     emitter << YAML::EndMap;
@@ -711,7 +708,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
     ret.beams_per_gpu = f.get_scalar<long> ("beams_per_gpu");
     ret.beams_per_batch = f.get_scalar<long> ("beams_per_batch");
     ret.num_active_batches = f.get_scalar<long> ("num_active_batches");
-    ret.gpu_clag_maxfrac = f.get_scalar<double> ("gpu_clag_maxfrac", 1.0);
+    ret.max_gpu_clag = f.get_scalar<long> ("max_gpu_clag", 10000);
 
     YamlFile ets = f["early_triggers"];
 
@@ -790,8 +787,8 @@ void DedispersionConfig::emit_cpp(ostream &os, const char *name, int indent) con
        << s << "beams_per_batch = " << beams_per_batch << ";\n"
        << s << "num_active_batches = " << num_active_batches << ";\n";
 
-    if (gpu_clag_maxfrac < 1.0)
-        os << s << "gpu_clag_maxfrac = " << gpu_clag_maxfrac << ";\n";
+    if (max_gpu_clag < 10000)
+        os << s << "max_gpu_clag = " << max_gpu_clag << ";\n";
 }
 
 
@@ -922,8 +919,9 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
     ret.num_active_batches = rand_int(1,v[2]+1);
 
     // GPU configuration.
-    ret.gpu_clag_maxfrac = rand_uniform(0, 1.5);
-    ret.gpu_clag_maxfrac = min(ret.gpu_clag_maxfrac, 1.0);
+    long max_delay = pow2(ret.tree_rank + ret.num_downsampling_levels - 1);
+    long max_clag = (max_delay / ret.time_samples_per_chunk) + 1;
+    ret.max_gpu_clag = rand_int(0, max_clag+1);
 
     // For later convenience: set nt_divisor to the largest power of 2
     // which divides time_samples_per_chunk.

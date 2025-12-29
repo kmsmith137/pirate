@@ -302,7 +302,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("beams_per_batch", &DedispersionConfig::beams_per_batch)
           .def_readonly("num_active_batches", &DedispersionConfig::num_active_batches)
           // Testing parameter
-          .def_readonly("gpu_clag_maxfrac", &DedispersionConfig::gpu_clag_maxfrac)
+          .def_readonly("max_gpu_clag", &DedispersionConfig::max_gpu_clag)
     ;
 
     // DedispersionPlan: construct via shared_ptr

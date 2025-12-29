@@ -101,9 +101,9 @@ struct DedispersionConfig
     long beams_per_batch = 0;
     long num_active_batches = 0;
 
-    // For testing: limit on-gpu ring buffers to (clag) <= (gpu_clag_maxfrac) * (max_clag)
-    // Set to 1.0 to disable (this is the default).
-    double gpu_clag_maxfrac = 1.0;
+    // For testing: limit on-gpu ring buffers to (clag) <= max_gpu_clag.
+    // Set to 10000 to disable (this is the default).
+    long max_gpu_clag = 10000;
     
     void validate() const;
 

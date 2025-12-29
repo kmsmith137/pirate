@@ -21,7 +21,7 @@ peak_finding_params:
   - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
   - {max_width: 16, dm_downsampling: 0, time_downsampling: 0, wt_dm_downsampling: 64, wt_time_downsampling: 64}
 
-gpu_clag_maxfrac: 0.02
+max_gpu_clag: 3
 beams_per_gpu: 250
 beams_per_batch: 2
 num_active_batches: 2

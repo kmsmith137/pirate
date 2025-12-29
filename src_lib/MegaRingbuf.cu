@@ -63,8 +63,7 @@ void MegaRingbuf::finalize(bool delete_internals)
     if (is_finalized)
         throw runtime_error("double call to MegaRingbuf::finalize()");
 
-    this->max_gpu_clag = long(max_clag * params.gpu_clag_maxfrac + 0.5);
-    this->max_gpu_clag = min(max_gpu_clag, max_clag);
+    this->max_gpu_clag = min(params.max_gpu_clag, max_clag);
     this->max_gpu_clag = max(max_gpu_clag, 0L);
     
     // Part 1: partially initialize zones
