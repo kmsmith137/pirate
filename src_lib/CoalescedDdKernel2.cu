@@ -88,7 +88,7 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     long quads_nbytes = nsegments_per_beam * 4 * 4;
     long pstate_nbytes_per_beam = A * registry_value.pstate32_per_small_tree * 4;
 
-    resource_tracker.add_kernel("cdd2_core", bw_in + bw_out_max + bw_out_argmax);
+    resource_tracker.add_kernel("cdd2", bw_in + bw_out_max + bw_out_argmax);
     resource_tracker.add_gmem_bw("cdd2_quads", B * quads_nbytes);
     resource_tracker.add_gmem_bw("cdd2_pstate", 2 * B * pstate_nbytes_per_beam);
     resource_tracker.add_gmem_bw("cdd2_weights", expected_wt_shape[0] * expected_wt_strides[0] * S);

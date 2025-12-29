@@ -513,7 +513,7 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     // Resource tracking
     long ST = xdiv(params.dtype.nbits, 8);    
     long iobuf_nbytes = params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
-    resource_tracker.add_kernel("dd_iobuf", 2*iobuf_nbytes);
+    resource_tracker.add_kernel("dd", 2*iobuf_nbytes);
 
     long ps_nbytes_per_beam = pow2(params.amb_rank) * registry_value.pstate32_per_small_tree * 4;
     resource_tracker.add_gmem_footprint("dd_pstate", params.total_beams * ps_nbytes_per_beam, true);

@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 import textwrap
 import argparse
 
@@ -487,6 +488,8 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config-only', action='store_true', help="Print config only (skip plan)")
     parser.add_argument('--channel-map', action='store_true', help="Show channel map tree->freq (warning: produces long output!)")
+    parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
+    parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
 
 
 def show_dedisperser(args):
@@ -517,6 +520,38 @@ def show_dedisperser(args):
             freq_index = channel_map[i]
             freq = config.index_to_frequency(freq_index)
             print(f'  tree_index={i}  freq_index={freq_index:.4f}  freq={freq:.2f}')
+
+    if args.resources or args.fine_grained_resources:
+        print_separator('Resource tracking starts here')
+        if args.config_only:
+            plan = pirate_pybind11.DedispersionPlan(config)
+        dedisperser = pirate_pybind11.GpuDedisperser(plan)
+        rt = dedisperser.resource_tracker
+        multiplier = (config.beams_per_gpu / config.beams_per_batch) / (1.0e-3 * config.time_samples_per_chunk * config.time_sample_ms)
+        fine_grained = args.fine_grained_resources
+        print(rt.to_yaml_string(multiplier, fine_grained))
+
+
+###################################   show_random_config command  ###################################
+
+
+def parse_show_random_config(subparsers):
+    parser = subparsers.add_parser("show_random_config", help="Generate random DedispersionConfig(s) and print as YAML")
+    parser.add_argument('-n', type=int, default=1, metavar='NCONFIG', help='generate multiple random configs')
+    parser.add_argument('-a', action='store_true', help='generate arbitrary random config, without restricting to precompiled kernels')
+    parser.add_argument('-v', action='store_true', help='verbose')
+
+
+def show_random_config(args):
+    gpu_valid = not args.a
+    
+    for i in range(args.n):
+        if args.n > 1:
+            print(f'\n################################# iteration {i+1}/{args.n} #################################\n')
+        
+        config = pirate_pybind11.DedispersionConfig.make_random(gpu_valid=gpu_valid)
+        yaml_str = config.to_yaml_string(verbose=args.v)
+        print(yaml_str)
 
 
 ###################################   random_kernels command  ###################################
@@ -568,13 +603,11 @@ def random_kernels(args):
             print(f"('fp{nbits}', {subband_counts}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
-        print('# (dtype, dd_rank, subband_counts, Wmax, Dcore, Dout, Tinner)')
+        print("# (dtype, dd_rank, Wmax, Dcore, Dout, Tinner, subband_counts, et_delta_ranks)")
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
-            dd_rank = randi(3,9)
-            pf_rank = dd_rank - (dd_rank // 2)
-            subband_counts = FrequencySubbands.make_random_subband_counts(pf_rank)
+            subband_counts = FrequencySubbands.make_random_subband_counts()
             Wmax = 2**randi(5)
             Dcore = 32 // nbits
             Dout = Dcore
@@ -588,8 +621,21 @@ def random_kernels(args):
                     Dcore *= 2
                 if 1 <= n <= 2:
                     Dout *= 2
-            
-            print(f"('fp{nbits}', {dd_rank}, {subband_counts}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
+
+            # Currently, cdd2 assumes dd_rank >= 3
+            dd_rank_max = randi(3,9)
+            dd_rank_min = max(dd_rank_max-1, 3)
+
+            for dd_rank in range(dd_rank_min, dd_rank_max+1):
+                et_delta_rank_min = 1
+                et_delta_rank_max = dd_rank-3
+                et_candidates = list(range(et_delta_rank_min, et_delta_rank_max+1))
+
+                ncand = randi(0, len(et_candidates)+1)
+                et_delta_ranks = [0] + random.sample(et_candidates, ncand)
+
+                s = '     # continuation' if (dd_rank > dd_rank_min) else ''
+                print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {subband_counts}, {et_delta_ranks}),{s}")
 
     if args.pfwr:
         print('# (dtype, subband_counts, Dcore, P, Tinner)')
@@ -617,6 +663,7 @@ def main():
     parse_show_kernels(subparsers)
     parse_show_subbands(subparsers)
     parse_show_dedisperser(subparsers)
+    parse_show_random_config(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
     parse_scratch(subparsers)
@@ -637,6 +684,8 @@ def main():
         show_subbands(args)
     elif args.command == "show_dedisperser":
         show_dedisperser(args)
+    elif args.command == "show_random_config":
+        show_random_config(args)
     elif args.command == "test_node":
         test_node(args)
     elif args.command == "send":

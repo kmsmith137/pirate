@@ -253,6 +253,19 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<DedispersionConfig>(m, "DedispersionConfig")
           .def_static("from_yaml", static_cast<DedispersionConfig (*)(const std::string &)>(&DedispersionConfig::from_yaml),
                       py::arg("filename"))
+          .def_static("make_random",
+               [](int max_rank, int max_early_triggers, bool gpu_valid, bool verbose) {
+                   DedispersionConfig::RandomArgs args;
+                   args.max_rank = max_rank;
+                   args.max_early_triggers = max_early_triggers;
+                   args.gpu_valid = gpu_valid;
+                   args.verbose = verbose;
+                   return DedispersionConfig::make_random(args);
+               },
+               py::arg("max_rank") = 10,
+               py::arg("max_early_triggers") = 5,
+               py::arg("gpu_valid") = true,
+               py::arg("verbose") = false)
           .def("to_yaml_string", &DedispersionConfig::to_yaml_string,
                py::arg("verbose") = false)
           .def("validate", &DedispersionConfig::validate)
@@ -274,6 +287,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("zone_nfreq", &DedispersionConfig::zone_nfreq)
           .def_readonly("zone_freq_edges", &DedispersionConfig::zone_freq_edges)
           // Core dedispersion parameters
+          .def_readonly("time_sample_ms", &DedispersionConfig::time_sample_ms)
           .def_readonly("tree_rank", &DedispersionConfig::tree_rank)
           .def_readonly("num_downsampling_levels", &DedispersionConfig::num_downsampling_levels)
           .def_readonly("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk)

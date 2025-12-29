@@ -191,6 +191,9 @@ static void _emit_dict(YAML::Emitter &emitter, const std::string &name,
     std::stringstream ss;
     ss << scaled_total << " " << unit;
 
+    if (fine_grained)
+        emitter << YAML::Newline << YAML::Newline;
+    
     emitter << YAML::Key << name;
 
     if (!fine_grained) {
@@ -233,9 +236,9 @@ void ResourceTracker::to_yaml(YAML::Emitter &emitter, double multiplier, bool fi
     _emit_dict(emitter, "g2h_bw", g2h_bw_nbytes, bw_scale, "GB/s", fine_grained);
 
     // Count stats
-    _emit_dict(emitter, "memcpy_h2g", memcpy_h2g_calls, count_scale, "calls/s", fine_grained);
-    _emit_dict(emitter, "memcpy_g2h", memcpy_g2h_calls, count_scale, "calls/s", fine_grained);
-    _emit_dict(emitter, "kernel_launches", kernel_launches, count_scale, "calls/s", fine_grained);
+    _emit_dict(emitter, "memcpy_h2g", memcpy_h2g_calls, count_scale, "memcopies/s", fine_grained);
+    _emit_dict(emitter, "memcpy_g2h", memcpy_g2h_calls, count_scale, "memcopies/s", fine_grained);
+    _emit_dict(emitter, "kernel_launches", kernel_launches, count_scale, "launches/s", fine_grained);
 
     // Footprint stats
     _emit_dict(emitter, "gmem_footprint", gmem_footprint_nbytes, footprint_scale, "GiB", fine_grained);
