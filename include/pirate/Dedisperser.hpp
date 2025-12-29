@@ -98,28 +98,26 @@ struct GpuDedisperser
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
-    // launch() interface needs some explanation:
-    //
-    //  - Caller is responsible for creating/managing (nstreams) cuda streams,
-    //    and ensuring that the (istream, stream) arguments are always consistent.
-    //
-    //  - Before calling launch(), caller must queue kernels to 'stream' which
-    //    populate the input buffer (stage1_dd_kernels[istream].bufs[0]).
-    //
-    //  - launch() returns asynchronously. When 'stream' is synchronized,
-    //    the output buffers (stage2_dd_kernels[istream].bufs[:]) will be populated.
-    //
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
-    //
-    // FIXME interface will evolve over time (e.g. cudaEvents).
+    // XXX temporary kludge: uses default stream for all kernels/copies!!!
 
-    void launch(long ichunk, long ibatch, long istream, cudaStream_t stream);
+    void launch(long ichunk, long ibatch);
 
     // Static member function: runs one randomized test iteration.
     static void test();
 
     // Static member function: runs one test iteration with specified configuration.
     static void test_one(const DedispersionConfig &config, int nchunks, bool host_only=false);
+
+    void _launch_tree_gridding(long ichunk, long ibatch);
+    void _launch_lagged_downsampler(long ichunk, long ibatch);
+    void _launch_dd_stage1(long ichunk, long ibatch);
+    void _launch_et_g2g(long ichunk, long ibatch);   // copies from 'gpu' zones to 'g2h' zones
+    void _run_et_h2h(long ichunk, long ibatch);      // on CPU! copies from 'host' zones to 'et_host' zone
+    void _launch_et_h2g(long ichuink, long ibatch);  // copies from 'et_host' zone to 'et_gpu' zone
+    void _launch_g2h(long ichunk, long ibatch);      // this is the main gpu->host copy
+    void _launch_h2g(long ichunk, long ibatch);      // this is the main host->gpu copy
+    void _launch_cdd2(long ichunk, long ibatch);
 };
 
 

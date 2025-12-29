@@ -136,6 +136,13 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         resource_tracker.add_gmem_footprint("out_max", out_nelts * bytes_per_elt, true);
         resource_tracker.add_gmem_footprint("out_argmax", out_nelts * 4, true);  // uint = 4 bytes
     }
+
+    // XXX should I keep these asserts?
+    shared_ptr<MegaRingbuf> mega_ringbuf = plan->mega_ringbuf;
+    long max_clag = mega_ringbuf->max_clag;
+    xassert(mega_ringbuf->host_zones.size() == uint(max_clag+1));
+    xassert(mega_ringbuf->xfer_zones.size() == uint(max_clag+1));
+    xassert_divisible(config.beams_per_gpu, config.beams_per_batch);   // assert that length-BB copies don't "wrap"
 }
 
 
@@ -202,28 +209,28 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
 }
 
 
-void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t stream)
+// ------------------------------------------------------------------------------------------
+
+
+void GpuDedisperser::_launch_tree_gridding(long ichunk, long ibatch)
 {
-    const long BT = this->config.beams_per_gpu;            // total beams
-    const long BB = this->config.beams_per_batch;          // beams per batch
-    const long BA = this->config.num_active_batches * BB;  // active beams
-    const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
-
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert((istream >= 0) && (istream < nstreams));
-    xassert(ichunk >= 0);
-    xassert(is_allocated);
-    
-    long iframe = (ichunk * BT) + (ibatch * BB);
-    
-    // Step 0: Run tree gridding kernel (input_arrays[istream,:,:,:] -> stage1_dd_bufs[istream].bufs[0]).
+    long istream = (ichunk * nbatches + ibatch) % nstreams;
     Array<void> &dd_buf0 = stage1_dd_bufs.at(istream).bufs.at(0);
-    tree_gridding_kernel->launch(dd_buf0, input_arrays.slice(0,istream), stream);
-    
-    // Step 1: run LaggedDownsampler.
-    lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, stream);
+    tree_gridding_kernel->launch(dd_buf0, input_arrays.slice(0,istream), nullptr);
+}
 
-    // Step 2: run stage1 dedispersion kernels (output to ringbuf)
+
+void GpuDedisperser::_launch_lagged_downsampler(long ichunk, long ibatch)
+{
+    long istream = (ichunk * nbatches + ibatch) % nstreams;
+    lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, nullptr);  // XXX stream=nullptr
+}
+
+
+void GpuDedisperser::_launch_dd_stage1(long ichunk, long ibatch)
+{
+    long istream = (ichunk * nbatches + ibatch) % nstreams;
+
     for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
         shared_ptr<GpuDedispersionKernel> kernel = stage1_dd_kernels.at(ids);
         const DedispersionKernelParams &kp = kernel->params;
@@ -231,10 +238,35 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime });
-        kernel->launch(dd_buf, this->gpu_ringbuf, ichunk, ibatch, stream);
+        kernel->launch(dd_buf, this->gpu_ringbuf, ichunk, ibatch, nullptr);  // XXX stream=nullptr
     }
+}
 
-    // Step 3: extra copying steps needed for early triggers.
+
+void GpuDedisperser::_launch_et_g2g(long ichunk, long ibatch)
+{
+    // copies from 'gpu' zones to 'g2h' zones
+    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ichunk, ibatch, nullptr);  // XXX stream=nullptr
+}
+
+
+void GpuDedisperser::_run_et_h2h(long ichunk, long ibatch)
+{
+    // copy host -> et_host
+    // FIXME: in principle this is a bug: running copy kernel without synchronizing
+    // wiuth gpu->host copy that produces its input data, or host->gpu copy that
+    // consumes its output data. The current unit tests don't detect this!
+    this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);
+}
+
+
+void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch)
+{
+    const long BT = this->config.beams_per_gpu;            // total beams
+    const long BB = this->config.beams_per_batch;          // beams per batch
+    const long BA = this->config.num_active_batches * BB;  // active beams
+    const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
+    const long iframe = (ichunk * BT) + (ibatch * BB);
 
     MegaRingbuf::Zone &eth_zone = plan->mega_ringbuf->et_host_zone;
     MegaRingbuf::Zone &etg_zone = plan->mega_ringbuf->et_gpu_zone;
@@ -246,34 +278,60 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
     long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
     char *et_src = (char *) this->host_ringbuf.data + (eth_zone.global_segment_offset + et_off) * SB;
     char *et_dst = (char *) this->gpu_ringbuf.data + (etg_zone.global_segment_offset + et_off) * SB;
-    long et_nbytes = BB * eth_zone.segments_per_frame * SB;  // in constructor
-    
-    // copy gpu -> xfer
-    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ichunk, ibatch, stream);
-
-    // copy host -> et_host
-    // FIXME: in principle this is a bug: running copy kernel without synchronizing
-    // wiuth gpu->host copy that produces its input data, or host->gpu copy that
-    // consumes its output data. The current unit tests don't detect this!
-    this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);
+    long et_nbytes = BB * eth_zone.segments_per_frame * SB;    
 
     // copy et_host -> et_gpu (must come after h2h_copy_kernel)
-    CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, stream)); 
+    CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
+}
 
-    // Step 4: copy host <-> xfer
-    // There is some cut-and-paste with ReferenceDedisperser, but not enough to bother refactoring.
-    // FIXME: currently putting copies on the compute stream!
-    // This is terrible for performance, but I'm just testing correctness for now.
-    
-    shared_ptr<MegaRingbuf> mega_ringbuf = plan->mega_ringbuf;
-    long max_clag = mega_ringbuf->max_clag;
-    xassert(mega_ringbuf->host_zones.size() == uint(max_clag+1));
-    xassert(mega_ringbuf->xfer_zones.size() == uint(max_clag+1));
-    xassert_divisible(BT, BB);   // assert that length-BB copies don't "wrap"
-    
+
+void GpuDedisperser::_launch_g2h(long ichunk, long ibatch)
+{    
+    const long BT = this->config.beams_per_gpu;            // total beams
+    const long BB = this->config.beams_per_batch;          // beams per batch
+    const long BA = this->config.num_active_batches * BB;  // active beams
+    const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
+    const long iframe = (ichunk * BT) + (ibatch * BB);
+    const long max_clag = plan->mega_ringbuf->max_clag;
+
     for (int clag = 0; clag <= max_clag; clag++) {
-        MegaRingbuf::Zone &host_zone = mega_ringbuf->host_zones.at(clag);
-        MegaRingbuf::Zone &xfer_zone = mega_ringbuf->xfer_zones.at(clag);
+        MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
+        MegaRingbuf::Zone &xfer_zone = plan->mega_ringbuf->xfer_zones.at(clag);
+
+        xassert(host_zone.segments_per_frame == xfer_zone.segments_per_frame);
+        xassert(host_zone.num_frames == clag*BT + BA);
+        xassert(xfer_zone.num_frames == 2*BA);
+
+        if (host_zone.segments_per_frame == 0)
+            continue;
+        
+        char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.global_segment_offset * SB);
+        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (xfer_zone.global_segment_offset * SB);
+        
+        long hdst = (iframe) % host_zone.num_frames;       // host dst phase
+        long xsrc = (iframe) % xfer_zone.num_frames;       // xfer src phase
+        
+        long m = host_zone.segments_per_frame * SB;  // nbytes per frame
+        long n = BB * m;                             // nbytes to copy
+        
+        CUDA_CALL(cudaMemcpyAsync(hp + hdst*m, xp + xsrc*m, n, cudaMemcpyDeviceToHost, nullptr));  // XXX stream=nullptr
+    }
+}
+
+
+// XXX clean up cut-and-paste with _launch_g2h().
+void GpuDedisperser::_launch_h2g(long ichunk, long ibatch)
+{
+    const long BT = this->config.beams_per_gpu;            // total beams
+    const long BB = this->config.beams_per_batch;          // beams per batch
+    const long BA = this->config.num_active_batches * BB;  // active beams
+    const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
+    const long iframe = (ichunk * BT) + (ibatch * BB);
+    const long max_clag = plan->mega_ringbuf->max_clag;
+
+    for (int clag = 0; clag <= max_clag; clag++) {
+        MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
+        MegaRingbuf::Zone &xfer_zone = plan->mega_ringbuf->xfer_zones.at(clag);
 
         xassert(host_zone.segments_per_frame == xfer_zone.segments_per_frame);
         xassert(host_zone.num_frames == clag*BT + BA);
@@ -286,26 +344,46 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
         char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (xfer_zone.global_segment_offset * SB);
         
         long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
-        long hdst = (iframe) % host_zone.num_frames;       // host dst phase
-        long xsrc = (iframe) % xfer_zone.num_frames;       // xfer src phase
         long xdst = (iframe + BA) % xfer_zone.num_frames;  // xfer dst phase
         
         long m = host_zone.segments_per_frame * SB;  // nbytes per frame
         long n = BB * m;                             // nbytes to copy
         
-        CUDA_CALL(cudaMemcpyAsync(xp + xdst*m, hp + hsrc*m, n, cudaMemcpyHostToDevice, stream));
-        CUDA_CALL(cudaMemcpyAsync(hp + hdst*m, xp + xsrc*m, n, cudaMemcpyDeviceToHost, stream));
+        CUDA_CALL(cudaMemcpyAsync(xp + xdst*m, hp + hsrc*m, n, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
     }
-    
-    // Step 5: run cdd2 kernels (input from ringbuf)
+}
+
+
+void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch)
+{
+    long istream = (ichunk * nbatches + ibatch) % nstreams;
+
     for (long itree = 0; itree < ntrees; itree++) {
         Array<void> slice_max = out_max.at(itree).slice(0,istream);
         Array<uint> slice_argmax = out_argmax.at(itree).slice(0,istream);
         Array<void> slice_wt = wt_arrays.at(itree).slice(0,istream);
 
         shared_ptr<CoalescedDdKernel2> cdd2_kernel = cdd2_kernels.at(itree);
-        cdd2_kernel->launch(slice_max, slice_argmax, this->gpu_ringbuf, slice_wt, ichunk, ibatch, stream);
+        cdd2_kernel->launch(slice_max, slice_argmax, this->gpu_ringbuf, slice_wt, ichunk, ibatch, nullptr);  // XXX stream=nullptr
     }
+}
+
+
+void GpuDedisperser::launch(long ichunk, long ibatch)
+{
+    xassert(ichunk >= 0);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(is_allocated);
+    
+    _launch_tree_gridding(ichunk, ibatch);
+    _launch_lagged_downsampler(ichunk, ibatch);
+    _launch_dd_stage1(ichunk, ibatch);
+    _launch_et_g2g(ichunk, ibatch);
+    _run_et_h2h(ichunk, ibatch);
+    _launch_et_h2g(ichunk, ibatch);
+    _launch_g2h(ichunk, ibatch);
+    _launch_h2g(ichunk, ibatch);
+    _launch_cdd2(ichunk, ibatch);
 }
 
 
@@ -442,7 +520,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 
             if (!host_only) {
                 gdd->input_arrays.slice(0,0).fill(arr.convert(config.dtype));  // istream=0
-                gdd->launch(ichunk, ibatch, 0, nullptr);  // (ichunk, ibatch, istream, stream)
+                gdd->launch(ichunk, ibatch);
             }
             
             for (int itree = 0; itree < ntrees; itree++) {
