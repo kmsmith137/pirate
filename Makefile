@@ -101,6 +101,8 @@ LIB_SRCFILES = \
   src_lib/CasmBeamformer.cu \
   src_lib/ChimeDedisperser.cu \
   src_lib/CoalescedDdKernel2.cu \
+  src_lib/CudaEventRingbuf.cu \
+  src_lib/CudaStreamPool.cu \
   src_lib/DedispersionBuffer.cu \
   src_lib/DedispersionConfig.cu \
   src_lib/DedispersionKernel.cu \
@@ -177,6 +179,8 @@ HFILES = \
   include/pirate/BumpAllocator.hpp \
   include/pirate/CasmBeamformer.hpp \
   include/pirate/CoalescedDdKernel2.hpp \
+  include/pirate/CudaEventRingbuf.hpp \
+  include/pirate/CudaStreamPool.hpp \
   include/pirate/Dedisperser.hpp \
   include/pirate/DedispersionBuffer.hpp \
   include/pirate/DedispersionConfig.hpp \
