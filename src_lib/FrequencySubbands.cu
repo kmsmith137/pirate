@@ -108,50 +108,46 @@ void FrequencySubbands::validate_subband_counts(const std::vector<long> &subband
     }        
 }
 
-// Static member function
-vector<long> FrequencySubbands::rerank_subband_counts(const vector<long> &src_counts, long dst_rank)
+// Static member function.
+// "Restricts" top-level subband counts to a specific tree.
+// The tree may have an early trigger (et_delta_rank > 0) or a different pf_rank.
+vector<long> FrequencySubbands::restrict_subband_counts(const vector<long> &subband_counts, long et_delta_rank, long new_pf_rank)
 {
-    xassert(dst_rank > 0);
-    validate_subband_counts(src_counts);
-    long src_rank = src_counts.size() - 1;
+    validate_subband_counts(subband_counts);
+    xassert(et_delta_rank >= 0);
+    xassert(new_pf_rank >= 0);
 
-    vector<long> dst_counts(dst_rank+1);
-    dst_counts[dst_rank] = 1;
+    // Step 1: apply early trigger (et_delta_rank).
 
-    for (long pf_level = 0; pf_level < dst_rank; pf_level++) {
-        long src_level = pf_level - dst_rank + src_rank;
+    long src_rank = subband_counts.size() - 1;
+    long early_rank = max(src_rank - et_delta_rank, 0L);
+
+    vector<long> early_counts(early_rank+1);
+    early_counts[early_rank] = 1;
+
+    for (long pf_level = 0; pf_level < early_rank; pf_level++) {
+        long max_count = (pf_level > 0) ? (pow2(early_rank+1-pf_level)-1) : pow2(early_rank);
+        early_counts.at(pf_level) = min(subband_counts.at(pf_level), max_count);
+    }
+
+    // Step 2: apply new_pf_rank.
+
+    vector<long> dst_counts(new_pf_rank+1);
+    dst_counts[new_pf_rank] = 1;
+
+    for (long pf_level = 0; pf_level < new_pf_rank; pf_level++) {
+        long src_level = pf_level - new_pf_rank + early_rank;
 
         // Some awkward logic here, to account for pf_level==0 being "special".
 
-        if ((src_level < 0) || (src_counts.at(src_level) == 0))
+        if ((src_level < 0) || (early_counts.at(src_level) == 0))
             dst_counts.at(pf_level) = 0;
         else if ((src_level == 0) && (pf_level > 0))
-            dst_counts.at(pf_level) = 2 * src_counts.at(src_level) - 1;
+            dst_counts.at(pf_level) = 2 * early_counts.at(src_level) - 1;
         else if ((src_level > 0) && (pf_level == 0))
-            dst_counts.at(pf_level) = src_counts.at(src_level)/2 + 1;
+            dst_counts.at(pf_level) = early_counts.at(src_level)/2 + 1;
         else
-            dst_counts.at(pf_level) = src_counts.at(src_level);
-    }
-
-    validate_subband_counts(dst_counts);
-    return dst_counts;
-}
-
-// Static member function
-vector<long> FrequencySubbands::early_subband_counts(const vector<long> &subband_counts, long delta_rank)
-{
-    xassert(delta_rank >= 0);
-    validate_subband_counts(subband_counts);
-
-    long src_rank = subband_counts.size() - 1;
-    long dst_rank = max(src_rank - delta_rank, 0L);
-
-    vector<long> dst_counts(dst_rank+1);
-    dst_counts[dst_rank] = 1;
-
-    for (long pf_level = 0; pf_level < dst_rank; pf_level++) {
-        long max_count = (pf_level > 0) ? (pow2(dst_rank+1-pf_level)-1) : pow2(dst_rank);
-        dst_counts.at(pf_level) = min(subband_counts.at(pf_level), max_count);
+            dst_counts.at(pf_level) = early_counts.at(src_level);
     }
 
     validate_subband_counts(dst_counts);

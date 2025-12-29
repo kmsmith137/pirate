@@ -73,25 +73,25 @@ struct FrequencySubbands
     double fmin = 0.0;
     double fmax = 0.0;
 
-    // These members are used in the peak-finding kernel, whose 'out_argmax' array consists
-    // of "tokens" of the form (t) | (p << 8) | (m << 16).
+    inline long m_to_ilo(int m) const { long f = m_to_f.at(m); return f_to_ilo.at(f); }
+    inline long m_to_ihi(int m) const { long f = m_to_f.at(m); return f_to_ihi.at(f); }
+
+    void show(std::ostream &os = std::cout) const;
+    void show_compact(std::stringstream &ss) const;  // requires fmin/fmax specified at construction
+    void show_token(uint token, std::ostream &os = std::cout) const;
+    std::string to_string() const;
+
+    // Static member function.
+    // "Restricts" top-level subband counts to a specific tree.
+    // The tree may have an early trigger (et_delta_rank > 0) or a different pf_rank.
+
+    static std::vector<long> restrict_subband_counts(const std::vector<long> &subband_counts, long et_delta_rank, long new_pf_rank);
 
     // For debugging/testing.
     static void validate_subband_counts(const std::vector<long> &subband_counts);
-    static std::vector<long> rerank_subband_counts(const std::vector<long> &subband_counts, long new_pf_rank);
-    static std::vector<long> early_subband_counts(const std::vector<long> &subband_counts, long delta_rank);
-
     static std::vector<long> make_random_subband_counts(long pf_rank);
     static std::vector<long> make_random_subband_counts();
     static FrequencySubbands make_random();
-
-    void show_token(uint token, std::ostream &os = std::cout) const;
-    void show(std::ostream &os = std::cout) const;
-    void show_compact(std::stringstream &ss) const;  // requires fmin/fmax specified at construction
-    std::string to_string() const;
-
-    inline long m_to_ilo(int m) const { long f = m_to_f.at(m); return f_to_ilo.at(f); }
-    inline long m_to_ihi(int m) const { long f = m_to_f.at(m); return f_to_ihi.at(f); }
 };
 
 

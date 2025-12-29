@@ -877,7 +877,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     long ds_stage2_dd_rank = ret.tree_rank / 2;
     long ds_pf_rank = (ds_stage2_dd_rank + 1) / 2;
-    vector<long> ds_subband_counts = FrequencySubbands::rerank_subband_counts(ret.frequency_subband_counts, ds_pf_rank);
+    vector<long> ds_subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, 0, ds_pf_rank);
 
     // May be overridden shortly.
     ret.num_downsampling_levels = 1;
@@ -994,8 +994,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
                 // to modify the subband_counts for the stage2 tree.
                 long delta_rank = tot_rank - et_rank;
                 long pf_rank = (ds_key.dd_rank + 1) / 2;
-                ds_key.subband_counts = FrequencySubbands::early_subband_counts(ret.frequency_subband_counts, delta_rank);
-                ds_key.subband_counts = FrequencySubbands::rerank_subband_counts(ds_key.subband_counts, pf_rank);
+                ds_key.subband_counts = FrequencySubbands::restrict_subband_counts(ret.frequency_subband_counts, delta_rank, pf_rank);
 
                 // If there is no kernel in the registry for this (dd_rank, subband_counts),
                 // then this et_rank is not an early trigger candidate.

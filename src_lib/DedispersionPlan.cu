@@ -84,9 +84,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
             // Modify the subband_counts for the stage2 tree.
             // (Accounts for early triggering, downsampling.)
-            vector<long> sc;
-            sc = FrequencySubbands::early_subband_counts(config.frequency_subband_counts, delta_rank);
-            sc = FrequencySubbands::rerank_subband_counts(sc, pf_rank);
+            vector<long> sc = FrequencySubbands::restrict_subband_counts(config.frequency_subband_counts, delta_rank, pf_rank);
             tree.frequency_subbands = FrequencySubbands(sc, fmin, fmax);
 
             tree.pf = config.peak_finding_params.at(ids);

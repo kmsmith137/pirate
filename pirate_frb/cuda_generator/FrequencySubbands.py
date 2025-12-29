@@ -151,49 +151,48 @@ class FrequencySubbands:
 
 
     @classmethod
-    def rerank_subband_counts(cls, src_counts, dst_rank):
-        if dst_rank <= 0:
-            raise RuntimeError("FrequencySubbands.rerank_subband_counts: dst_rank must be > 0")
+    def restrict_subband_counts(cls, subband_counts, et_delta_rank, new_pf_rank):
+        """
+        "Restricts" top-level subband counts to a specific tree.
+        The tree may have an early trigger (et_delta_rank > 0) or a different pf_rank.
+        """
         
-        cls.validate_subband_counts(src_counts)
-        src_rank = len(src_counts) - 1
-        
-        dst_counts = [0] * (dst_rank + 1)
-        dst_counts[dst_rank] = 1
-        
-        for pf_level in range(dst_rank):
-            src_level = pf_level - dst_rank + src_rank
-            
-            # Some awkward logic here, to account for pf_level==0 being "special".
-            if (src_level < 0) or (src_counts[src_level] == 0):
-                dst_counts[pf_level] = 0
-            elif (src_level == 0) and (pf_level > 0):
-                dst_counts[pf_level] = 2 * src_counts[src_level] - 1
-            elif (src_level > 0) and (pf_level == 0):
-                dst_counts[pf_level] = src_counts[src_level] // 2 + 1
-            else:
-                dst_counts[pf_level] = src_counts[src_level]
-        
-        cls.validate_subband_counts(dst_counts)
-        return dst_counts
-
-
-    @classmethod
-    def early_subband_counts(cls, subband_counts, delta_rank):
-        if delta_rank < 0:
-            raise RuntimeError("FrequencySubbands.early_subband_counts: delta_rank must be >= 0")
+        if et_delta_rank < 0:
+            raise RuntimeError("FrequencySubbands.restrict_subband_counts: et_delta_rank must be >= 0")
+        if new_pf_rank < 0:
+            raise RuntimeError("FrequencySubbands.restrict_subband_counts: new_pf_rank must be >= 0")
         
         cls.validate_subband_counts(subband_counts)
         
+        # Step 1: apply early trigger (et_delta_rank).
+
         src_rank = len(subband_counts) - 1
-        dst_rank = max(src_rank - delta_rank, 0)
+        early_rank = max(src_rank - et_delta_rank, 0)
         
-        dst_counts = [0] * (dst_rank + 1)
-        dst_counts[dst_rank] = 1
+        early_counts = [0] * (early_rank + 1)
+        early_counts[early_rank] = 1
         
-        for pf_level in range(dst_rank):
-            max_count = (2**(dst_rank+1-pf_level) - 1) if (pf_level > 0) else 2**dst_rank
-            dst_counts[pf_level] = min(subband_counts[pf_level], max_count)
+        for pf_level in range(early_rank):
+            max_count = (2**(early_rank+1-pf_level) - 1) if (pf_level > 0) else 2**early_rank
+            early_counts[pf_level] = min(subband_counts[pf_level], max_count)
+        
+        # Step 2: apply new_pf_rank.
+
+        dst_counts = [0] * (new_pf_rank + 1)
+        dst_counts[new_pf_rank] = 1
+        
+        for pf_level in range(new_pf_rank):
+            src_level = pf_level - new_pf_rank + early_rank
+            
+            # Some awkward logic here, to account for pf_level==0 being "special".
+            if (src_level < 0) or (early_counts[src_level] == 0):
+                dst_counts[pf_level] = 0
+            elif (src_level == 0) and (pf_level > 0):
+                dst_counts[pf_level] = 2 * early_counts[src_level] - 1
+            elif (src_level > 0) and (pf_level == 0):
+                dst_counts[pf_level] = early_counts[src_level] // 2 + 1
+            else:
+                dst_counts[pf_level] = early_counts[src_level]
         
         cls.validate_subband_counts(dst_counts)
         return dst_counts
