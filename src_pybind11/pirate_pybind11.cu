@@ -12,6 +12,7 @@
 
 #include "../include/pirate/CasmBeamformer.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"
+#include "../include/pirate/ResourceTracker.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
@@ -141,6 +142,33 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def("stop", &FakeServer::stop)
     ;
 
+    py::class_<ResourceTracker>(m, "ResourceTracker")
+          .def(py::init<>())
+          .def("add_kernel", &ResourceTracker::add_kernel,
+               py::arg("key"), py::arg("gmem_bw_nbytes"))
+          .def("add_memcpy_h2g", &ResourceTracker::add_memcpy_h2g,
+               py::arg("key"), py::arg("nbytes"))
+          .def("add_memcpy_g2h", &ResourceTracker::add_memcpy_g2h,
+               py::arg("key"), py::arg("nbytes"))
+          .def("add_gmem_bw", &ResourceTracker::add_gmem_bw,
+               py::arg("key"), py::arg("gmem_bw_nbytes"))
+          .def("add_hmem_bw", &ResourceTracker::add_hmem_bw,
+               py::arg("key"), py::arg("hmem_bw_nbytes"))
+          .def("add_gmem_footprint", &ResourceTracker::add_gmem_footprint,
+               py::arg("key"), py::arg("gmem_footprint_nbytes"), py::arg("align") = false)
+          .def("add_hmem_footprint", &ResourceTracker::add_hmem_footprint,
+               py::arg("key"), py::arg("hmem_footprint_nbytes"), py::arg("align") = false)
+          .def("get_gmem_bw", &ResourceTracker::get_gmem_bw,
+               py::arg("key") = "")
+          .def("get_gmem_footprint", &ResourceTracker::get_gmem_footprint,
+               py::arg("key") = "")
+          .def("get_hmem_footprint", &ResourceTracker::get_hmem_footprint,
+               py::arg("key") = "")
+          .def("__iadd__", &ResourceTracker::operator+=, py::return_value_policy::reference)
+          .def("to_yaml_string", &ResourceTracker::to_yaml_string,
+               py::arg("multiplier"), py::arg("fine_grained"))
+    ;
+
     py::class_<CoalescedDdKernel2>(m, "CoalescedDdKernel2")
           .def_static("test", &CoalescedDdKernel2::test)
           .def_static("time", &CoalescedDdKernel2::time)
@@ -156,6 +184,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     py::class_<GpuDedisperser>(m, "GpuDedisperser")
+          .def(py::init<const std::shared_ptr<DedispersionPlan> &>(), py::arg("plan"))
+          .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def_static("test", &GpuDedisperser::test)
     ;
 

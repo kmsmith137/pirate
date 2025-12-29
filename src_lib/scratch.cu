@@ -1,6 +1,6 @@
 #include <iostream>
 #include "../include/pirate/DedispersionPlan.hpp"
-#include "../include/pirate/CoalescedDdKernel2.hpp"
+#include "../include/pirate/Dedisperser.hpp"
 
 using namespace std;
 
@@ -15,32 +15,21 @@ void scratch()
 {
     cout << "pirate::scratch() called -- this is a place for quick throwaway tests" << endl;
 
-    for (int i = 0; i < 200; i++) {
-        cout << "\n\n    *** iteration " << i << " ***\n";
+    vector<string> filenames = {
+        "configs/dedispersion/chime.yml",
+        "configs/dedispersion/chime_sb1.yml",
+        "configs/dedispersion/chime_sb2.yml",
+        "configs/dedispersion/chime_sb2_et.yml",
+        "configs/dedispersion/chord_sb0.yml",
+        "configs/dedispersion/chord_sb1.yml",
+        "configs/dedispersion/chord_sb2.yml",
+        "configs/dedispersion/chord_sb2_et.yml"
+    };
 
-        DedispersionConfig::RandomArgs args;
-        args.max_rank = 16;
-        args.gpu_valid = true;
-        args.verbose = true;
-
-        DedispersionConfig config = DedispersionConfig::make_random(args);
-        cout << endl;
-        config.emit_cpp();
-
-        auto plan = make_shared<DedispersionPlan> (config);
-        xassert_eq(long(plan->stage2_dd_kernel_params.size()), plan->ntrees);
-        xassert_eq(long(plan->stage2_pf_params.size()), plan->ntrees);
-
-        if (!args.gpu_valid)
-            continue;
-
-        for (long i = 0; i < plan->ntrees; i++) {
-            // Check that we can construct the cdd2 kernel without failing an assert.
-            CoalescedDdKernel2 cdd2(
-                plan->stage2_dd_kernel_params.at(i),
-                plan->stage2_pf_params.at(i)
-            );
-        }
+    for (const string &filename: filenames) {
+        DedispersionConfig config = DedispersionConfig::from_yaml(filename);
+        shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
+        shared_ptr<GpuDedisperser> dd = make_shared<GpuDedisperser> (plan);
     }
 }
 
