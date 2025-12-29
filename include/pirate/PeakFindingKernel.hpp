@@ -337,7 +337,7 @@ struct GpuPeakFindingKernel
     bool is_allocated = false;
     long expected_ibatch = 0;
 
-    // Memory footprint, computed in constructor, checked in allocate().
+    // All rates are "per call to launch()".
     ResourceTracker resource_tracker;
 
     // -------------------- Internals start here --------------------

@@ -510,25 +510,22 @@ GpuDedispersionKernel::GpuDedispersionKernel(const Params &params_) :
     // Important: ensure that caller-specified 'nt_per_segment' matches GPU kernel.
     xassert_eq(params.nt_per_segment, registry_value.nt_per_segment);
 
-    // Compute GPU memory footprint, reflecting logic in allocate().
+    // Resource tracking
+    long ST = xdiv(params.dtype.nbits, 8);    
+    long iobuf_nbytes = params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
+    resource_tracker.add_kernel("dd_iobuf", 2*iobuf_nbytes);
+
     long ps_nbytes_per_beam = pow2(params.amb_rank) * registry_value.pstate32_per_small_tree * 4;
-    resource_tracker.add_gmem_footprint("persistent_state", params.total_beams * ps_nbytes_per_beam, true);
+    resource_tracker.add_gmem_footprint("dd_pstate", params.total_beams * ps_nbytes_per_beam, true);
+    resource_tracker.add_gmem_bw("dd_pstate", 2 * params.beams_per_batch * ps_nbytes_per_beam);
 
     long rb_quad_nbytes = pow2(params.amb_rank + params.dd_rank) * xdiv(params.ntime, params.nt_per_segment) * 16;
     long rb_count = (params.input_is_ringbuf ? 1 : 0) + (params.output_is_ringbuf ? 1 : 0);
-    if (params.input_is_ringbuf)
-        resource_tracker.add_gmem_footprint("input_quadruples", rb_quad_nbytes, true);
-    if (params.output_is_ringbuf)
-        resource_tracker.add_gmem_footprint("output_quadruples", rb_quad_nbytes, true);
 
-    long ST = xdiv(params.dtype.nbits, 8);    
-    long iobuf_nbytes = params.beams_per_batch * pow2(params.dd_rank+params.amb_rank) * params.ntime * params.nspec * ST;
-    this->bw_core_per_launch.nbytes_gmem = 2 * iobuf_nbytes;
-    this->bw_core_per_launch.kernel_launches = 1;
-    
-    this->bw_per_launch = bw_core_per_launch;
-    this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * ps_nbytes_per_beam;
-    this->bw_per_launch.nbytes_gmem += rb_count * rb_quad_nbytes;
+    for (int i = 0; i < rb_count; i++) {
+        resource_tracker.add_gmem_footprint("dd_quads", rb_quad_nbytes, true);
+        resource_tracker.add_gmem_bw("dd_quads", params.beams_per_batch * rb_quad_nbytes);
+    }
 }
 
 
@@ -1000,7 +997,7 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
 
     Array<void> in_big(params.dtype, in_shape, af_gpu | af_zero);
     Array<void> out_big(params.dtype, out_shape, af_gpu | af_zero);
-    double gb_per_launch = 1.0e-9 * kernel->bw_per_launch.nbytes_gmem;
+    double gb_per_launch = 1.0e-9 * kernel->resource_tracker.get_gmem_bw();
 
     KernelTimer kt(nchunks * nbatches, nbatches);   // one stream per batch
 

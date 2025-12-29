@@ -10,7 +10,6 @@
 
 #include "BumpAllocator.hpp"
 #include "ResourceTracker.hpp"
-#include "trackers.hpp"  // BandwidthTracker
 
 
 namespace pirate {
@@ -106,11 +105,6 @@ public:
     int shmem_nbytes_per_threadblock = 0;
     int state_nelts_per_beam = 0;
 
-    // Bandwidth per call to GpuLaggedDownsamplingKernel::launch().
-    // To get bandwidth per time chunk, multiply by 'nbatches'.
-    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate
-    BandwidthTracker bw_core_per_launch;  // only input/output arrays
-
     // These parameters (also computed in constructor) determine how the kernel is divided
     // into threadblocks. See GpuLaggedDownsamplingKernel.cu for more info.
     int M_W = 0;
@@ -121,7 +115,7 @@ public:
     // Shape (total_beams, state_nelts_per_beam).
     ksgpu::Array<void> persistent_state;
 
-    // Memory footprint, computed in constructor, checked in allocate().
+   // All rates are "per call to launch()".
     ResourceTracker resource_tracker;
 
     // Static member function: runs one randomized test iteration.

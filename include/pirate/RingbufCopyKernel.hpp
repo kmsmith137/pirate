@@ -4,7 +4,6 @@
 #include <ksgpu/Array.hpp>
 #include "BumpAllocator.hpp"
 #include "ResourceTracker.hpp"
-#include "trackers.hpp"  // BandwidthTracker
 
 namespace pirate {
 #if 0
@@ -37,11 +36,9 @@ struct CpuRingbufCopyKernel
 
     const RingbufCopyKernelParams params;
     const int noctuples;   // = (octuples.size / 8)
-    
-    // Bandwidth per call to CpuRingbufCopyKernel::launch().
-    // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
-    BandwidthTracker bw_per_launch;       // all arrays including octuples
-    BandwidthTracker bw_core_per_launch;  // only input/output arrays
+
+    // All rates are "per call to apply()".
+    ResourceTracker resource_tracker;
 };
 
 
@@ -63,13 +60,8 @@ struct GpuRingbufCopyKernel
     bool is_allocated = false;
     ksgpu::Array<uint> gpu_octuples;
 
-    // Memory footprint, computed in constructor, checked in allocate().
+    // All rates are "per call to launch()".
     ResourceTracker resource_tracker;
-    
-    // Bandwidth per call to GpuRingbufCopyKernel::launch().
-    // To get bandwidth per time chunk, multiply by (total_beams / beams_per_batch).
-    BandwidthTracker bw_per_launch;       // all gpu arrays including octuples
-    BandwidthTracker bw_core_per_launch;  // only input/output arrays
 
     // Static member function: runs one randomized test iteration.
     static void test();

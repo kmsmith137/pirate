@@ -63,81 +63,60 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
     long input_nbytes = nstreams * beams_per_batch * nfreq * nt_in * bytes_per_elt;
     resource_tracker.add_gmem_footprint("input_arrays", input_nbytes, true);
 
-    // Before we create any kernels, put "non-kernel" bandwidth in BandwidthTrackers.
-
-    // et_host -> et_gpu (note that host -> et_host will be included in h2h kernel.)
-    long SB = constants::bytes_per_gpu_cache_line;
-    long et_nbytes = beams_per_batch * plan->mega_ringbuf->et_host_zone.segments_per_frame * SB;
-    this->bw_core_per_launch.nbytes_h2g += et_nbytes;
-    this->bw_core_per_launch.nbytes_gmem += et_nbytes;
-    this->bw_core_per_launch.nbytes_hmem += et_nbytes; // no factor 3 here
-    this->bw_core_per_launch.memcpy_h2g_calls += 1;
-
-    // xfer -> host -> xfer
-    for (const MegaRingbuf::Zone &host_zone: plan->mega_ringbuf->host_zones) {
-        long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
-        if (nbytes > 0) {
-            this->bw_core_per_launch.nbytes_gmem += 2*nbytes;
-            this->bw_core_per_launch.nbytes_hmem += 2*nbytes;
-            this->bw_core_per_launch.memcpy_h2g_calls += 1;
-            this->bw_core_per_launch.memcpy_g2h_calls += 1;
-        }
-    }
-
-    this->bw_per_launch = bw_core_per_launch;
-
     // Tree gridding kernel.
     this->tree_gridding_kernel = make_shared<GpuTreeGriddingKernel> (plan->tree_gridding_kernel_params);
-    resource_tracker.add_gmem_footprint("tree_gridding", tree_gridding_kernel->resource_tracker.get_gmem_footprint());
-    // this->bw_per_launch += tree_gridding_kernel->bw_per_launch;
+    this->resource_tracker += tree_gridding_kernel->resource_tracker;
 
     // Lagged downsampler.
     this->lds_kernel = GpuLaggedDownsamplingKernel::make(plan->lds_params);
-    resource_tracker.add_gmem_footprint("lagged_downsampler", lds_kernel->resource_tracker.get_gmem_footprint());
-    this->bw_core_per_launch += lds_kernel->bw_core_per_launch;
-    this->bw_per_launch += lds_kernel->bw_per_launch;
+    this->resource_tracker += lds_kernel->resource_tracker;
 
     // Stage1 dedispersion buffers.
     for (long istream = 0; istream < nstreams; istream++) {
         DedispersionBuffer buf(plan->stage1_dd_buf_params);
-        stage1_dd_bufs.push_back(buf);
-        resource_tracker.add_gmem_footprint("stage1_dd_bufs", buf.footprint_nbytes);
+        this->resource_tracker.add_gmem_footprint("stage1_dd_bufs", buf.footprint_nbytes, true);
+        this->stage1_dd_bufs.push_back(buf);
     }
 
     // Stage1 dedispersion kernels.
     for (long ids = 0; ids < plan->num_downsampling_levels; ids++) {
         const DedispersionKernelParams &dd_params = plan->stage1_dd_kernel_params.at(ids);
         auto dd_kernel = make_shared<GpuDedispersionKernel> (dd_params);
+        this->resource_tracker += dd_kernel->resource_tracker;
         this->stage1_dd_kernels.push_back(dd_kernel);
-        resource_tracker.add_gmem_footprint("stage1_dd_kernels", dd_kernel->resource_tracker.get_gmem_footprint());
-        this->bw_core_per_launch += dd_kernel->bw_core_per_launch;
-        this->bw_per_launch += dd_kernel->bw_per_launch;
     }
 
     // MegaRingbuf.
     this->gpu_ringbuf_nelts = plan->mega_ringbuf->gpu_global_nseg * plan->nelts_per_segment;
     this->host_ringbuf_nelts = plan->mega_ringbuf->host_global_nseg * plan->nelts_per_segment;
-    resource_tracker.add_gmem_footprint("gpu_ringbuf", gpu_ringbuf_nelts * bytes_per_elt, true);
-    resource_tracker.add_hmem_footprint("host_ringbuf", host_ringbuf_nelts * bytes_per_elt, true);
+    this->resource_tracker.add_gmem_footprint("gpu_ringbuf", gpu_ringbuf_nelts * bytes_per_elt, true);
+    this->resource_tracker.add_hmem_footprint("host_ringbuf", host_ringbuf_nelts * bytes_per_elt, true);
 
     // MegaRingbuf copy kernels.
     this->g2g_copy_kernel = make_shared<GpuRingbufCopyKernel> (plan->g2g_copy_kernel_params);
     this->h2h_copy_kernel = make_shared<CpuRingbufCopyKernel> (plan->h2h_copy_kernel_params);
-    resource_tracker.add_gmem_footprint("g2g_copy_kernel", g2g_copy_kernel->resource_tracker.get_gmem_footprint());
-    this->bw_core_per_launch += g2g_copy_kernel->bw_core_per_launch;
-    this->bw_core_per_launch += h2h_copy_kernel->bw_core_per_launch;
-    this->bw_per_launch += g2g_copy_kernel->bw_per_launch;
-    this->bw_per_launch += h2h_copy_kernel->bw_per_launch;
+    this->resource_tracker += g2g_copy_kernel->resource_tracker;
+    this->resource_tracker += h2h_copy_kernel->resource_tracker;
+
+    // Main GPU<->host copies.
+    long SB = constants::bytes_per_gpu_cache_line;
+    for (const MegaRingbuf::Zone &host_zone: plan->mega_ringbuf->host_zones) {
+        long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
+        resource_tracker.add_memcpy_g2h("g2h", nbytes);
+        resource_tracker.add_memcpy_h2g("h2g", nbytes); 
+    }
+
+    // et_host -> et_gpu (early trigger only)
+    long et_nbytes = beams_per_batch * plan->mega_ringbuf->et_host_zone.segments_per_frame * SB;
+    resource_tracker.add_memcpy_h2g("et_h2g", et_nbytes);
 
     // cdd2 kernels.
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionKernelParams &dd_params = plan->stage2_dd_kernel_params.at(itree);
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
         auto cdd2_kernel = make_shared<CoalescedDdKernel2> (dd_params, pf_params);
+        this->resource_tracker += cdd2_kernel->resource_tracker;
         this->cdd2_kernels.push_back(cdd2_kernel);
-        resource_tracker.add_gmem_footprint("cdd2_kernels", cdd2_kernel->resource_tracker.get_gmem_footprint());
-        this->bw_core_per_launch += cdd2_kernel->bw_core_per_launch;
-        this->bw_per_launch += cdd2_kernel->bw_per_launch;
     }
 
     // Peak-finding weight/output arrays.
@@ -279,7 +258,6 @@ void GpuDedisperser::launch(long ichunk, long ibatch, long istream, cudaStream_t
     this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);
 
     // copy et_host -> et_gpu (must come after h2h_copy_kernel)
-    // Note: keep this in sync with constructor logic to compute bw_per_launch
     CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, stream)); 
 
     // Step 4: copy host <-> xfer

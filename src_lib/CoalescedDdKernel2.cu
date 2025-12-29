@@ -81,23 +81,20 @@ CoalescedDdKernel2::CoalescedDdKernel2(const DedispersionKernelParams &dd_params
     long B = dd_params.beams_per_batch;
     long A = pow2(dd_params.amb_rank);
     long D = pow2(dd_params.dd_rank);
-    long nbytes = xdiv(dtype.nbits, 8);
-
-    bw_core_per_launch.nbytes_gmem += B * A * D * dd_params.ntime * nbytes;               // in
-    bw_core_per_launch.nbytes_gmem += B * pf_params.ndm_out * pf_params.nt_out * nbytes;  // out_max
-    bw_core_per_launch.nbytes_gmem += B * pf_params.ndm_out * pf_params.nt_out * 4;       // out_argmax
-    bw_core_per_launch.kernel_launches = 1;
-
-    // Compute GPU memory footprint, reflecting logic in allocate().
+    long S = xdiv(dtype.nbits, 8);
+    long bw_in = B * A * D * dd_params.ntime * S;
+    long bw_out_max = B * pf_params.ndm_out * pf_params.nt_out * S;
+    long bw_out_argmax = B * pf_params.ndm_out * pf_params.nt_out * 4;
     long quads_nbytes = nsegments_per_beam * 4 * 4;
     long pstate_nbytes_per_beam = A * registry_value.pstate32_per_small_tree * 4;
+
+    resource_tracker.add_kernel("cdd2_core", bw_in + bw_out_max + bw_out_argmax);
+    resource_tracker.add_gmem_bw("cdd2_quads", B * quads_nbytes);
+    resource_tracker.add_gmem_bw("cdd2_pstate", 2 * B * pstate_nbytes_per_beam);
+    resource_tracker.add_gmem_bw("cdd2_weights", expected_wt_shape[0] * expected_wt_strides[0] * S);
+ 
     resource_tracker.add_gmem_footprint("persistent_state", dd_params.total_beams * pstate_nbytes_per_beam, true);
     resource_tracker.add_gmem_footprint("quadruples", quads_nbytes, true);
-
-    bw_per_launch = bw_core_per_launch;
-    bw_per_launch.nbytes_gmem += B * quads_nbytes;                                        // quadruples
-    bw_per_launch.nbytes_gmem += B * pstate_nbytes_per_beam;                              // pstate
-    bw_per_launch.nbytes_gmem += expected_wt_shape[0] * expected_wt_strides[0] * nbytes;  // weights
 }
 
 
@@ -451,13 +448,8 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
                 ichunk, 
                 kt.stream);
 
-            if (kt.warmed_up && ((kt.curr_iteration % 10) == 9)) {
-                cout << "   total = "
-                     << (1.0e-9 * cdd2_kernel->bw_per_launch.nbytes_gmem / kt.dt)
-                     << " GB/s, core = "
-                     << (1.0e-9 * cdd2_kernel->bw_core_per_launch.nbytes_gmem / kt.dt)
-                     << " GB/s\n";
-            }
+            if (kt.warmed_up && ((kt.curr_iteration % 10) == 9))
+                cout << (1.0e-9 * cdd2_kernel->resource_tracker.get_gmem_bw() / kt.dt) << " GB/s\n";
         }
     }
 }

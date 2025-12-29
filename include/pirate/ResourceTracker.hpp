@@ -45,8 +45,8 @@ struct ResourceTracker
     // If align=true, then 'nbytes' is aligned to BumpAllocator::nalign.
     void add_gmem_bw(const std::string &key, long gmem_bw_nbytes);
     void add_hmem_bw(const std::string &key, long hmem_bw_nbytes);
-    void add_gmem_footprint(const std::string &key, long gmem_footprint_nbytes, bool align=false);
-    void add_hmem_footprint(const std::string &key, long hmem_footprint_nbytes, bool align=false);
+    void add_gmem_footprint(const std::string &key, long gmem_footprint_nbytes, bool align);
+    void add_hmem_footprint(const std::string &key, long hmem_footprint_nbytes, bool align);
 
     // If key is non-empty, returns value for that key (throws exception if not found).
     // If key is empty, returns sum over all keys.

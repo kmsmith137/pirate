@@ -167,9 +167,9 @@ GpuDequantizationKernel::GpuDequantizationKernel(Dtype dtype_, long nbeams_, lon
     xassert((ntime % 256) == 0);  // Required for cache-line alignment
     
     // Bandwidth: read int4 (0.5 bytes per element) + write output dtype
-    long bytes_in = nbeams * nfreq * ntime / 2;
-    long bytes_out = nbeams * nfreq * ntime * (dtype.nbits / 8);
-    bw_per_launch.nbytes_gmem = bytes_in + bytes_out;
+    long nbytes_in = nbeams * nfreq * ntime / 2;
+    long nbytes_out = nbeams * nfreq * ntime * (dtype.nbits / 8);
+    resource_tracker.add_kernel("dequantization", nbytes_in + nbytes_out);
     
     // Kernel config: each warp handles 256 time samples for one (beam, freq)
     // Block: (32, 8, 1) - threadIdx.y runs over frequency for better occupancy
@@ -363,7 +363,7 @@ void GpuDequantizationKernel::time()
              << "    dtype = " << dtype << "\n"
              << "    shape = (" << B << ", " << F << ", " << T << ")\n"
              << "    output size = " << output_gb << " GB\n"
-             << "    bandwidth per launch = " << (kernel.bw_per_launch.nbytes_gmem / 1.0e9) << " GB\n"
+             << "    bandwidth per launch = " << (kernel.resource_tracker.get_gmem_bw() / 1.0e9) << " GB\n"
              << endl;
         
         // Use KernelTimer with 500 iterations, 2 streams
@@ -375,7 +375,7 @@ void GpuDequantizationKernel::time()
             kernel.launch(gout, gin, kt.stream);
             
             if (kt.warmed_up && ((kt.curr_iteration+1) % print_interval == 0)) {
-                double bandwidth_gbps = kernel.bw_per_launch.nbytes_gmem / kt.dt / 1.0e9;
+                double bandwidth_gbps = kernel.resource_tracker.get_gmem_bw()  / kt.dt / 1.0e9;
                 cout << "    iter " << (kt.curr_iteration+1) << "/" << niter
                      << ": dt = " << (kt.dt * 1.0e3) << " ms"
                      << ", bandwidth = " << bandwidth_gbps << " GB/s" << endl;

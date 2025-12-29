@@ -6,7 +6,6 @@
 #include "DedispersionBuffer.hpp"
 #include "DedispersionTree.hpp"
 #include "ResourceTracker.hpp"
-#include "trackers.hpp"  // BandwidthTracker
 
 #include <vector>
 #include <memory>  // shared_ptr
@@ -85,9 +84,6 @@ struct GpuDedisperser
 
     bool is_allocated = false;
 
-    // Memory footprints, computed in constructor, checked in allocate().
-    ResourceTracker resource_tracker;
-
     // Peak-finding weights use a complicated GPU memory layout.
     // The helper class 'GpuPfWeightLayout' is intended to hide the details.
     // We have one GpuPfWeightLayout per output tree: cdd2_kernels[itree]->pf_weight_layout.
@@ -96,10 +92,8 @@ struct GpuDedisperser
     std::vector<std::vector<long>> extended_wt_shapes;   // length ntrees
     std::vector<std::vector<long>> extended_wt_strides;  // length ntrees
 
-    // Bandwidth per call to GpuDedisperser::launch().
-    // To get bandwidth per time chunk, multiply by 'nbatches'.
-    BandwidthTracker bw_core_per_launch;  // only input/output arrays
-    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate/wts
+    // All rates are "per call to launch()".
+    ResourceTracker resource_tracker;
 
     // Note: allocate() initializes or zeroes all arrays (i.e. no array is left uninitialized)
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
@@ -207,53 +201,6 @@ struct ReferenceDedisperserBase
         const std::vector<long> &Dcore,
         int sophistication
     );
-};
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// ChimeDedisperser: a temporary hack for timing.
-//
-// Warning: not thread-safe!
-
-
-struct ChimeDedisperser
-{
-    // I did some performance tuning, and found that the following values worked well:
-    //
-    //   config.beams_per_batch = 1
-    //   config.num_active_batches = 3
-    //
-    // This may change when RFI removal is incorporated (we may want to increase
-    // beams_per_batch, in order to reduce the number of kernel launches).
-
-    ChimeDedisperser(int beams_per_gpu=12, int num_active_batches=3, int beams_per_batch=1, bool use_copy_engine=false);
-    
-    // Call with current GPU appropriately set.
-    void initialize();
-    
-    // Dedisperses a data "cube" with shape (config.beams_per_gpu, nfreq, config.time_samples_per_chunk)
-    // Note 'beams_per_gpu' here, not 'beams_per_batch'!
-    void run(long ichunk);
-    
-    bool use_copy_engine = false;
-    int nfreq = 16384;
-    int istream = 0;
-    
-    DedispersionConfig config;
-    std::shared_ptr<DedispersionPlan> plan;
-    std::shared_ptr<GpuDedisperser> dedisperser;
-    std::vector<ksgpu::CudaStreamWrapper> streams;
-
-    // FIXME currently, gridding and peak-finding are not implemented.
-    // As a kludge, we put in some extra GPU->GPU memcopies with the same bandwidth.
-    ksgpu::Array<char> extra_buffers;  // shape (num_active_batches, 2, extra_nbytes_per_batch)
-    long extra_nbytes_per_batch = 0;   // FIXME doesn't get initialized until initialize() is called.
-
-    // Bandwidth per call to ChimeDedisperser::run().
-    // This corresponds to 'beams_per_gpu' beams, not 'beams_per_batch' beams.
-    // FIXME: doesn't currently get initialized until initialize() is called.
-    BandwidthTracker bw_per_run_call;
 };
 
 

@@ -759,19 +759,18 @@ GpuLaggedDownsamplingKernel::GpuLaggedDownsamplingKernel(const LaggedDownsamplin
     this->shmem_nbytes_per_threadblock = align_up(W * shmem_nbytes_per_warp, 128);
     this->state_nelts_per_beam = B * xdiv(shmem_nbytes_per_threadblock, ST);
 
+    long gmem_bw = 0;
     for (int ids = 0; ids < params.num_downsampling_levels; ids++) {
         int r = params.input_total_rank - (ids ? 1 : 0);
         long nt_ds = xdiv(params.ntime, pow2(ids));
-        this->bw_core_per_launch.nbytes_gmem += params.beams_per_batch * pow2(r) * nt_ds * ST;
+        gmem_bw += params.beams_per_batch * pow2(r) * nt_ds * ST;
     }
 
-    this->bw_core_per_launch.kernel_launches = 1;
-    this->bw_per_launch = bw_core_per_launch;
+    resource_tracker.add_kernel("lds", gmem_bw);
 
-    // Compute GPU memory footprint, reflecting logic in allocate().
     long pstate_nbytes_per_beam = state_nelts_per_beam * ST;
-    resource_tracker.add_gmem_footprint("persistent_state", params.total_beams * pstate_nbytes_per_beam, true);
-    this->bw_per_launch.nbytes_gmem += 2 * params.beams_per_batch * pstate_nbytes_per_beam;
+    resource_tracker.add_gmem_bw("lds_pstate", 2 * params.beams_per_batch * pstate_nbytes_per_beam);
+    resource_tracker.add_gmem_footprint("lds_pstate", params.total_beams * pstate_nbytes_per_beam, true);
 }
 
 

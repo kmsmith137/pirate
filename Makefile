@@ -96,10 +96,8 @@ PIRATE_PYEXT := pirate_frb/pirate_pybind11$(PYEXT_SUFFIX)
 
 # These get compiled into lib/libpirate.so.
 LIB_SRCFILES = \
-  src_lib/BandwidthTracker.cu \
   src_lib/BumpAllocator.cu \
   src_lib/CasmBeamformer.cu \
-  src_lib/ChimeDedisperser.cu \
   src_lib/CoalescedDdKernel2.cu \
   src_lib/CudaEventRingbuf.cu \
   src_lib/CudaStreamPool.cu \
@@ -205,7 +203,6 @@ HFILES = \
   include/pirate/inlines.hpp \
   include/pirate/network_utils.hpp \
   include/pirate/system_utils.hpp \
-  include/pirate/trackers.hpp \
   include/pirate/utils.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \
   include/pirate/loose_ends/bitvec.hpp \

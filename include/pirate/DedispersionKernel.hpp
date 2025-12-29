@@ -7,7 +7,6 @@
 #include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
 #include "ResourceTracker.hpp"
-#include "trackers.hpp"  // BandwidthTracker
 
 namespace pirate {
 #if 0
@@ -237,13 +236,10 @@ public:
     );
 
     long nbatches = 0;   // = (total_beams / beams_per_batch)
+
+    // All rates are "per call to launch()".
     ResourceTracker resource_tracker;
     
-    // Bandwidth per call to GpuDedispersionKernel::launch().
-    // To get bandwidth per time chunk, multiply by 'nbatches'.
-    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate, quadruples
-    BandwidthTracker bw_core_per_launch;  // only input/output arrays
-
     // Static member functions to query registry.
     static long registry_size() { return registry().size(); }
     static void show_registry() { registry().show(); }

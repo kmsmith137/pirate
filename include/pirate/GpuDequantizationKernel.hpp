@@ -3,7 +3,7 @@
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/Dtype.hpp>
-#include "trackers.hpp"  // BandwidthTracker
+#include "ResourceTracker.hpp"
 
 namespace pirate {
 #if 0
@@ -48,8 +48,8 @@ struct GpuDequantizationKernel
     long nfreq;
     long ntime;
     
-    BandwidthTracker bw_per_launch;
-    
+    ResourceTracker resource_tracker;
+
     // Kernel launch config
     dim3 nblocks;
     dim3 nthreads;

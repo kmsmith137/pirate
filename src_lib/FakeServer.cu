@@ -14,7 +14,6 @@
 #include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/inlines.hpp"
-#include "../include/pirate/trackers.hpp"       // BandwidthTracker
 #include "../include/pirate/file_utils.hpp"     // File, listdir()
 #include "../include/pirate/system_utils.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket, Epoll
@@ -653,7 +652,7 @@ struct Receiver : FakeServer::Worker
 
 struct ChimeWorker : public FakeServer::Worker
 {
-    ChimeDedisperser dedisperser;
+    // ChimeDedisperser dedisperser;
     long niter = 0;
     long ichunk = 0;
     int device = -1;
@@ -661,7 +660,7 @@ struct ChimeWorker : public FakeServer::Worker
     
     ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
         Worker(state_, vcpu_list_, cpu_),
-        dedisperser(beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine),
+        // dedisperser(beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine),
         device(device_)
     {
         xassert(device >= 0);
@@ -680,17 +679,17 @@ struct ChimeWorker : public FakeServer::Worker
     {
         // Must precede ChimeDedisperser::initialize().
         CUDA_CALL(cudaSetDevice(this->device));
-        dedisperser.initialize();
+        // dedisperser.initialize();
     }
 
     virtual Stats worker_body() override
     {
-        for (long i = 0; i < niter; i++)
-            dedisperser.run(ichunk++);
+        //for (long i = 0; i < niter; i++)
+        //    dedisperser.run(ichunk++);
         
         Stats stats;
-        stats.chime_beams = niter * dedisperser.config.beams_per_gpu * (1.0e-3 * dedisperser.config.time_samples_per_chunk);
-        stats.gmem[device] += niter * dedisperser.bw_per_run_call.nbytes_gmem;
+        // stats.chime_beams = niter * dedisperser.config.beams_per_gpu * (1.0e-3 * dedisperser.config.time_samples_per_chunk);
+        // stats.gmem[device] += niter * dedisperser.bw_per_run_call.nbytes_gmem;
         return stats;
     }
 };

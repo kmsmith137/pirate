@@ -12,7 +12,6 @@
 #include "FrequencySubbands.hpp"
 #include "KernelRegistry.hpp"
 #include "ResourceTracker.hpp"
-#include "trackers.hpp"  // BandwidthTracker
 
 
 namespace pirate {
@@ -66,9 +65,6 @@ struct CoalescedDdKernel2
 
     bool is_allocated = false;
 
-    // All rates are "per call to launch()".
-    ResourceTracker resource_tracker;
-
     // Derived parameters chosen by the kernel.
     GpuPfWeightLayout pf_weight_layout;     // layout of peak-finding weights in GPU memory
     std::vector<long> expected_wt_shape;    // from pf_weight_layout.get_shape()
@@ -81,11 +77,8 @@ struct CoalescedDdKernel2
     long nbatches = 0;         // = (total_beams / beams_per_batch)
     long nprofiles = 0;        // = (3 * log2(max_kernel_width) + 1)
 
-    // Bandwidth per call to GpuDedispersionKernel::launch().
-    // To get bandwidth per time chunk, multiply by 'nbatches'.
-
-    BandwidthTracker bw_per_launch;       // all gpu arrays including pstate
-    BandwidthTracker bw_core_per_launch;  // only input/output arrays
+    // All rates are "per call to launch()".
+    ResourceTracker resource_tracker;
 
     // -------------------- Internals start here --------------------
 

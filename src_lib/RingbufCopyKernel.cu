@@ -52,10 +52,8 @@ CpuRingbufCopyKernel::CpuRingbufCopyKernel(const RingbufCopyKernelParams &params
     noctuples(xdiv(params_.octuples.size, 8))
 {
     long B = params.beams_per_batch;
-    bw_core_per_launch.nbytes_gmem = B * noctuples * 2 * 128;  // includes factor 2 from h->h    
-
-    bw_per_launch = bw_core_per_launch;
-    bw_per_launch.nbytes_gmem += B * noctuples * 32;
+    resource_tracker.add_hmem_bw("h2h", B * noctuples * 2 * 128);  // includes factor 2 from h->h
+    resource_tracker.add_hmem_bw("h2h_octuples", B * noctuples * 32);
 }
 
 
@@ -133,15 +131,9 @@ GpuRingbufCopyKernel::GpuRingbufCopyKernel(const RingbufCopyKernelParams &params
     noctuples(xdiv(params_.octuples.size, 8))
 {
     long B = params.beams_per_batch;
-
-    bw_core_per_launch.nbytes_gmem = B * noctuples * 2 * 128;  // includes factor 2 from g->g
-    bw_core_per_launch.kernel_launches = 1;
-
-    bw_per_launch = bw_core_per_launch;
-    bw_per_launch.nbytes_gmem += B * noctuples * 32;
-
-    // Compute GPU memory footprint, reflecting logic in allocate().
-    resource_tracker.add_gmem_footprint("octuples", noctuples * 32, true);
+    resource_tracker.add_kernel("g2g", B * noctuples * 2 * 128);  // includes factor 2 from g->g
+    resource_tracker.add_gmem_bw("g2g_octuples", B * noctuples * 32);
+    resource_tracker.add_gmem_footprint("g2g_octuples", noctuples * 32, true);
 }
 
 
