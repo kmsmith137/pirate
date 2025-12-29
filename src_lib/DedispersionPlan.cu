@@ -470,65 +470,15 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     emitter << YAML::EndSeq;
 
-    // Compute intermediate values for megaringbuf section
-    long xseg = 0;
-    for (const MegaRingbuf::Zone &z: mega_ringbuf->xfer_zones)
-        xseg += z.segments_per_frame;
-    xseg /= 2;
-    
-    long etseg = mega_ringbuf->et_gpu_zone.segments_per_frame;
-    double nsamp = double(beams_per_gpu) * nfreq * config.time_samples_per_chunk;
+    // Output mega_ringbuf section
     double T = 1.0e-3 * config.time_samples_per_chunk * config.time_sample_ms;
-
-    double host_mb = mega_ringbuf->host_global_nseg * 128.0 / (1L << 20);
-    double gpu_mb = mega_ringbuf->gpu_global_nseg * 128.0 / (1L << 20);
-    double host_to_gpu_gbps = (xseg + etseg) * 128.0 * beams_per_gpu / T / 1.0e9;
-    double gpu_to_host_gbps = xseg * 128.0 * beams_per_gpu / T / 1.0e9;
-    double et_h2h_gbps = (mega_ringbuf->h2h_octuples.size / 8) * 2.0 * 128.0 * beams_per_gpu / T / 1.0e9;
+    double frames_per_second = beams_per_gpu / T;
 
     emitter << YAML::Newline << YAML::Newline
             << YAML::Key << "mega_ringbuf"
-            << YAML::Value << YAML::BeginMap;
-
-    {
-        stringstream ss;
-        ss << fixed << setprecision(2) << host_mb << " MB";
-        emitter << YAML::Key << "host" << YAML::Value << ss.str();
-    }
-    {
-        stringstream ss;
-        ss << fixed << setprecision(2) << gpu_mb << " MB";
-        emitter << YAML::Key << "gpu" << YAML::Value << ss.str();
-    }
-    {
-        stringstream ss;
-        ss << fixed << setprecision(3) << host_to_gpu_gbps << " GB/s";
-        emitter << YAML::Key << "host->gpu" << YAML::Value << ss.str();
-        if (verbose) {
-            stringstream cs;
-            cs << "plus raw data: " << fixed << setprecision(3) << (nsamp / T * 0.5 / 1.0e9)
-               << " GB/s if 4-bit, " << (nsamp / T / 1.0e9) << " GB/s if 8-bit";
-            emitter << YAML::Comment(cs.str());
-        }
-    }
-    {
-        stringstream ss;
-        ss << fixed << setprecision(3) << gpu_to_host_gbps << " GB/s";
-        emitter << YAML::Key << "gpu->host" << YAML::Value << ss.str();
-    }
-    {
-        stringstream ss;
-        ss << fixed << setprecision(3) << et_h2h_gbps << " GB/s";
-        emitter << YAML::Key << "et host->host" << YAML::Value << ss.str();
-    }
-
-    if (mega_ringbuf->et_h2h_headroom > 0) {
-        stringstream ss;
-        ss << fixed << setprecision(2) << (mega_ringbuf->et_h2h_headroom * T) << " seconds";
-        emitter << YAML::Key << "et headroom" << YAML::Value << ss.str();
-    }
-
-    emitter << YAML::EndMap;
+            << YAML::Value;
+    
+    mega_ringbuf->to_yaml(emitter, frames_per_second, nfreq, config.time_samples_per_chunk, verbose);
 
     // Compute dedispersion output bandwidth
     long dd_out_N = 0;

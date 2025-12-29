@@ -1,7 +1,10 @@
 #include "../include/pirate/MegaRingbuf.hpp"
 #include "../include/pirate/inlines.hpp"  // xmod()
 
+#include <sstream>
+#include <iomanip>
 #include <ksgpu/xassert.hpp>
+#include <yaml-cpp/emitter.h>
 
 using namespace std;
 using namespace ksgpu;
@@ -444,6 +447,117 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_trivial(long total_beams, long nquads)
     ret->is_finalized = true;
 
     return ret;
+}
+
+
+// Helper function for printing memory zone info in verbose mode
+static void _emit_memory_zones(YAML::Emitter &emitter, const string &key, double total_gib, const vector<MegaRingbuf::Zone> &zones, bool verbose)
+{
+    emitter << YAML::Key << key;
+    
+    if (!verbose) {
+        stringstream ss;
+        ss << fixed << setprecision(2) << total_gib << " GiB";
+        emitter << YAML::Value << ss.str();
+    }
+    else {
+        emitter << YAML::Value << YAML::BeginMap;
+        
+        // Print total
+        {
+            stringstream ss;
+            ss << fixed << setprecision(2) << total_gib << " GiB";
+            emitter << YAML::Key << "total" << YAML::Value << ss.str();
+        }
+        
+        // Print zones (at most 5 per line)
+        emitter << YAML::Key << "zones" << YAML::Value << YAML::Flow << YAML::BeginSeq;
+        
+        int zones_on_line = 0;
+        for (long clag = 0; clag < (long)zones.size(); clag++) {
+            const MegaRingbuf::Zone &z = zones.at(clag);
+            double capacity_gib = z.num_frames * z.segments_per_frame * 128.0 / (1L << 30);
+            
+            if (capacity_gib > 0) {
+                if (zones_on_line == 5) {
+                    emitter << YAML::Newline;
+                    zones_on_line = 0;
+                }
+                
+                emitter << YAML::BeginSeq;
+                emitter << clag;
+                
+                stringstream ss;
+                ss << fixed << setprecision(2) << capacity_gib << " GiB";
+                emitter << ss.str();
+                
+                emitter << YAML::EndSeq;
+                zones_on_line++;
+            }
+        }
+        emitter << YAML::EndSeq;
+        
+        emitter << YAML::EndMap;
+    }
+}
+
+
+void MegaRingbuf::to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose) const
+{
+    emitter << YAML::BeginMap;
+
+    // Compute intermediate values
+    long beams_per_gpu = params.total_beams;
+    double T = beams_per_gpu / frames_per_second;
+    
+    long xseg = 0;
+    for (const Zone &z: xfer_zones)
+        xseg += z.segments_per_frame;
+    xseg /= 2;
+    
+    long etseg = et_gpu_zone.segments_per_frame;
+    double nsamp = double(beams_per_gpu) * nfreq * time_samples_per_chunk;
+
+    double host_gib = host_global_nseg * 128.0 / (1L << 30);
+    double gpu_gib = gpu_global_nseg * 128.0 / (1L << 30);
+    double host_to_gpu_gbps = (xseg + etseg) * 128.0 * beams_per_gpu / T / 1.0e9;
+    double gpu_to_host_gbps = xseg * 128.0 * beams_per_gpu / T / 1.0e9;
+    double et_h2h_gbps = (h2h_octuples.size / 8) * 2.0 * 128.0 * beams_per_gpu / T / 1.0e9;
+
+    _emit_memory_zones(emitter, "host_zones", host_gib, host_zones, verbose);
+    _emit_memory_zones(emitter, "gpu_zones", gpu_gib, gpu_zones, verbose);
+    {
+        stringstream ss;
+        ss << fixed << setprecision(3) << host_to_gpu_gbps << " GB/s";
+        emitter << YAML::Key << "h2g bandwidth" << YAML::Value << ss.str();
+        if (verbose) {
+            stringstream cs;
+            cs << "plus raw data: " << fixed << setprecision(3) << (nsamp / T * 0.5 / 1.0e9)
+               << " GB/s if 4-bit, " << (nsamp / T / 1.0e9) << " GB/s if 8-bit";
+            emitter << YAML::Comment(cs.str());
+        }
+    }
+    {
+        stringstream ss;
+        ss << fixed << setprecision(3) << gpu_to_host_gbps << " GB/s";
+        emitter << YAML::Key << "g2h bandwidth" << YAML::Value << ss.str();
+    }
+    {
+        stringstream ss;
+        ss << fixed << setprecision(3) << et_h2h_gbps << " GB/s";
+        emitter << YAML::Key << "et_h2h bandwidth" << YAML::Value << ss.str();
+    }
+
+    if (et_h2h_headroom > 0) {
+        stringstream ss;
+        ss << fixed << setprecision(2) << (et_h2h_headroom * T) << " seconds";
+        emitter << YAML::Key << "et_h2h_headroom" << YAML::Value << ss.str();
+    }
+
+    emitter << YAML::Key << "max_clag" << YAML::Value << max_clag;
+    emitter << YAML::Key << "max_gpu_clag" << YAML::Value << max_gpu_clag;
+
+    emitter << YAML::EndMap;
 }
 
 

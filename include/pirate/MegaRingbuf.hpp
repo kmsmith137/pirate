@@ -6,6 +6,9 @@
 #include <vector>
 #include <ksgpu/Array.hpp>
 
+// Forward declaration for YAML
+namespace YAML { class Emitter; }
+
 namespace pirate {
 #if 0
 }  // editor auto-indent
@@ -211,6 +214,9 @@ struct MegaRingbuf {
     // Create the simplest possible MegaRingbuf, for standalone timing of dedispersion kernels.
     // FIXME I might implement something more realistic later.
     static std::shared_ptr<MegaRingbuf> make_trivial(long total_beams, long nquads);
+
+    // Serialize this MegaRingbuf to YAML format
+    void to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose=false) const;
 
     // The 'et_h2h_headroom' member is only used in informational print-statements.
     // It quantifies the amount of "headroom" that the et_h2h thread gets, before the
