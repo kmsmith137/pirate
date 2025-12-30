@@ -92,7 +92,6 @@ void CudaEventRingbuf::record(cudaStream_t stream, long seq_id)
         long slot = seq_id % max_size;
         
         std::unique_lock<std::mutex> lock(mutex);
-        
         _throw_if_stopped("record");
             
         // Check that seq_id matches expected value.
@@ -125,6 +124,7 @@ void CudaEventRingbuf::record(cudaStream_t stream, long seq_id)
             lock.unlock();
             CUDA_CALL(cudaEventRecord(events[slot], stream));
             lock.lock();
+            _throw_if_stopped("record");
         }
 
         produced[slot] = true;
@@ -204,8 +204,9 @@ void CudaEventRingbuf::_release(long seq_id)
 {
     long slot = seq_id % max_size;
 
-    std::unique_lock<std::mutex> lock(mutex);
-    
+    std::unique_lock<std::mutex> lock(mutex);    
+    _throw_if_stopped("wait/synchronize");
+
     // Some paranoid asserts.
     xassert(seq_id >= seq_start);
     xassert(seq_id < seq_end);
