@@ -31,6 +31,10 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
     this->beams_per_batch = config.beams_per_batch;
     this->num_active_batches = config.num_active_batches;
 
+    // Note: DedispersionPlan::nbits is a temporary hack, in order to communicate the bit depth
+    // to python. In the future, when ksgpu::Dtype has python bindings, this won't be needed.
+    this->nbits = config.dtype.nbits;
+
     // 'nelts_per_segment' is always (constants::bytes_per_gpu_cache_line / sizeof(dtype)).
     this->nelts_per_segment = config.get_nelts_per_segment();
     this->nbytes_per_segment = constants::bytes_per_gpu_cache_line;

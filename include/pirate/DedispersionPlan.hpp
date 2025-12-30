@@ -43,6 +43,7 @@ struct DedispersionPlan
     long beams_per_gpu = 0;              // same as config.beams_per_gpu
     long beams_per_batch = 0;            // same as config.beams_per_batch
     long num_active_batches = 0;         // same as config.num_active_batches
+    long nbits = 0;                      // same as config.dtype.nbits
 
     // Stage1 trees. These trees are "internal" to dedispersion, and can probably be ignored "from outside".
     // Total tree rank (dd_rank + amb_rank) is equal to (config.tree_rank - (ds_level ? 1 : 0)).

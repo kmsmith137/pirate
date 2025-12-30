@@ -29,15 +29,18 @@ struct GpuDedisperser
         bool fixed_weights = false;
     };
 
+    // FIXME: API for interacting with input/output buffers seems overcomplicated.
+    // Is there a better API?
+
     // acquire_input_sync() - blocks calling thread until input buffer is empty.
     // acquire_output_async() - queues "input buffer is empty" event to specified stream.
     void acquire_input_sync(long ichunk, long ibatch);
     void acquire_input_async(long ichunk, long ibatch, cudaStream_t stream);
 
-    // Caller passes "input buffer is full" event, when done with the input buffer.
-    // The release_input() function queues all the compute kernels.
+    // The release_input() function queues all the compute kernels (using an event
+    // recorded from 'stream' for synchronization).
     // NOTE: release_input() can block!!
-    void release_input(cudaEvent_t event);
+    void release_input(cudaEvent_t stream);
 
     // acquire_input_sync() - blocks calling thread until output buffer is full.
     // acquire_output_async() - queues "output buffer is full" event to specified stream.
@@ -45,7 +48,9 @@ struct GpuDedisperser
     void acquire_output_async(long ichunk, long ibatch, cudaStream_t stream);
 
     // Caller passes "output buffer is empty" event, when done with the output buffer.
-    void release_output(cudaEvent_t event);
+    void release_output(cudaStream_t stream);
+
+    // --------------------------------------------------------------------------------
 
     // From main thread.
     void _launch_tree_gridding(long ichunk, long ibatch);
@@ -78,6 +83,10 @@ struct GpuDedisperser
     long curr_output_ichunk = 0;
     long curr_output_ibatch = 0;
     bool curr_output_acquired = false;
+
+    // For now, we always use one et_h2h worker thread.
+    // FIXME(?) dynamically assign the number of et_h2h worker threads?
+    std::thread worker;
 };
 
 
@@ -485,3 +494,27 @@ void GpuDedisperser::release_output()
     evrb_output.record(seq_id);
 }
 
+void GpuDedisperser::time()
+{
+    // use high priority stream!
+    // create plan
+    // create stream_pool
+    params.fixed_weights = true;
+
+    for (long seq_id = 0; seq_id < num_iterations; seq_id++) {
+        compute_stream = xx;
+
+        acquire_input_async(ichunk, ibatch, h2g_stream);
+        cudaMemcpyAsync(h2g_stream);
+        xx;  // synchronize h2g -> compute
+        xx;  // synchronize to KernelTimer stream
+
+        gdqk;
+        release_input();
+
+        acquire_output_async(ichunk, ibatch, compute_stream);
+        release_output(compute_stream);
+
+        // wait on an event at the bottom
+    }
+}

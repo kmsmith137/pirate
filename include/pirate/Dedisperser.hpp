@@ -65,6 +65,11 @@ struct GpuDedisperser
     // "outer" vector has length ntrees
     // "inner" array shape (nstreams, beams_per_batch, t.ndm_out, t.nt_out)
     //    where t= plan->trees.at(itree)
+    //
+    // Note: currently using a "short" (length-nstreams) ring buffer for 
+    // dedispersion outputs. In the future when I implement RPC postprocessing,
+    // it may make sense to have a configurable buffer length.
+
     std::vector<ksgpu::Array<void>> out_max;     // config.dtype
     std::vector<ksgpu::Array<uint>> out_argmax;  // uint dtype
 

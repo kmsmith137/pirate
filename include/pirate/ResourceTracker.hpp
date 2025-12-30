@@ -54,6 +54,9 @@ struct ResourceTracker
     long get_gmem_footprint(const std::string &key = "") const;
     long get_hmem_footprint(const std::string &key = "") const;
 
+    // Returns a copy of this ResourceTracker.
+    ResourceTracker clone() const;
+
     // Used to accumulate "child" ResourceTrackers into their parent.
     ResourceTracker &operator+=(const ResourceTracker &);
 

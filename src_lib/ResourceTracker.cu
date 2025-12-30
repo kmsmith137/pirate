@@ -132,6 +132,12 @@ long ResourceTracker::get_hmem_footprint(const std::string &key) const
 }
 
 
+ResourceTracker ResourceTracker::clone() const
+{
+    return *this;
+}
+
+
 ResourceTracker &ResourceTracker::operator+=(const ResourceTracker &x)
 {
     for (const auto &p : x.gmem_bw_nbytes)

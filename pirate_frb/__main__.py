@@ -476,8 +476,8 @@ def scratch(args):
 ###################################   show_dedisperser command  ###################################
 
 
-def print_separator(label):
-    t = '-' * (50 - len(label)//2)
+def print_separator(label, filler='-'):
+    t = filler * (50 - len(label)//2)
     print(f'\n{t}  {label}  {t}\n')
     sys.stdout.flush()
 
@@ -522,11 +522,19 @@ def show_dedisperser(args):
             print(f'  tree_index={i}  freq_index={freq_index:.4f}  freq={freq:.2f}')
 
     if args.resources or args.fine_grained_resources:
-        print_separator('Resource tracking starts here')
+        print_separator('Resource tracking starts here (assumes 4-bit raw data)')
         if args.config_only:
             plan = pirate_pybind11.DedispersionPlan(config)
+
+        nin = plan.beams_per_batch * plan.nfreq * plan.nt_in
+        nbits = plan.nbits
+
+        # Add a dequantizer and raw-data h2g copy, to give a more realistic accounting of cost.
         dedisperser = pirate_pybind11.GpuDedisperser(plan)
-        rt = dedisperser.resource_tracker
+        rt = dedisperser.resource_tracker.clone()
+        rt.add_kernel('dequantizer', (nin * (nbits+4)) // 8)
+        rt.add_memcpy_h2g('raw_data', (nin*4) // 8)
+
         multiplier = (config.beams_per_gpu / config.beams_per_batch) / (1.0e-3 * config.time_samples_per_chunk * config.time_sample_ms)
         fine_grained = args.fine_grained_resources
         print(rt.to_yaml_string(multiplier, fine_grained))
@@ -547,7 +555,7 @@ def show_random_config(args):
     
     for i in range(args.n):
         if args.n > 1:
-            print(f'\n################################# iteration {i+1}/{args.n} #################################\n')
+            print_separator(f'iteration {i+1}/{args.n}', filler='#')
         
         config = pirate_pybind11.DedispersionConfig.make_random(gpu_valid=gpu_valid)
         yaml_str = config.to_yaml_string(verbose=args.v)

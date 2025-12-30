@@ -1,5 +1,3 @@
-// FIXME split into multiple source files soon (single-core compile time is ~15 seconds).
-
 // For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cu.
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -164,6 +162,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("key") = "")
           .def("get_hmem_footprint", &ResourceTracker::get_hmem_footprint,
                py::arg("key") = "")
+          .def("clone", &ResourceTracker::clone)
           .def("__iadd__", &ResourceTracker::operator+=, py::return_value_policy::reference)
           .def("to_yaml_string", &ResourceTracker::to_yaml_string,
                py::arg("multiplier"), py::arg("fine_grained"))
@@ -308,6 +307,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // DedispersionPlan: construct via shared_ptr
     py::class_<DedispersionPlan, std::shared_ptr<DedispersionPlan>>(m, "DedispersionPlan")
           .def(py::init<const DedispersionConfig &>(), py::arg("config"))
+          .def_readonly("nfreq", &DedispersionPlan::nfreq)
+          .def_readonly("nt_in", &DedispersionPlan::nt_in)
+          .def_readonly("num_downsampling_levels", &DedispersionPlan::num_downsampling_levels)
+          .def_readonly("beams_per_gpu", &DedispersionPlan::beams_per_gpu)
+          .def_readonly("beams_per_batch", &DedispersionPlan::beams_per_batch)
+          .def_readonly("num_active_batches", &DedispersionPlan::num_active_batches)
+          .def_readonly("ntrees", &DedispersionPlan::ntrees)
+          .def_readonly("nbits", &DedispersionPlan::nbits)
           .def("to_yaml_string", &DedispersionPlan::to_yaml_string, py::arg("verbose") = false)
     ;
 
