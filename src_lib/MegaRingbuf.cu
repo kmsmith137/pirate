@@ -15,6 +15,21 @@ namespace pirate {
 #endif
 
 
+long MegaRingbuf::Zone::segment_offset_of_frame(long iframe) const
+{
+    // If the Zone has been initialized, then these checks should never fail.
+    xassert(global_segment_offset >= 0);
+    xassert(num_frames > 0);
+
+    if (iframe < 0) {
+        long j = (-iframe) % num_frames;
+        iframe = num_frames - j;
+    }
+
+    iframe %= num_frames;
+    return global_segment_offset + (iframe % num_frames) * segments_per_frame;
+}
+
 
 MegaRingbuf::MegaRingbuf(const Params &params_) :
     params(params_)
@@ -453,6 +468,11 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_trivial(long total_beams, long nquads)
 
     return ret;
 }
+
+
+// ------------------------------------------------------------------------------------------
+//
+// YAML serialization.
 
 
 // Helper function for printing memory zone info in verbose mode

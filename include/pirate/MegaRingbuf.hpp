@@ -251,6 +251,8 @@ struct MegaRingbuf {
         long num_frames = 0;
         long segments_per_frame = 0;
         long global_segment_offset = -1;
+
+        long segment_offset_of_frame(long iframe) const;
     };
 
     // All vector<Zone> objects have length (max_clag + 1).

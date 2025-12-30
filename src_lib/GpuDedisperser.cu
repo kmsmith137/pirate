@@ -276,13 +276,12 @@ void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch)
     xassert(eth_zone.num_frames == BA);
     xassert(etg_zone.num_frames == BA);
 
-    long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
-    char *et_src = (char *) this->host_ringbuf.data + (eth_zone.global_segment_offset + et_off) * SB;
-    char *et_dst = (char *) this->gpu_ringbuf.data + (etg_zone.global_segment_offset + et_off) * SB;
-    long et_nbytes = BB * eth_zone.segments_per_frame * SB;    
-
-    // copy et_host -> et_gpu (must come after h2h_copy_kernel)
-    CUDA_CALL(cudaMemcpyAsync(et_dst, et_src, et_nbytes, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
+    long soff = eth_zone.segment_offset_of_frame(iframe);
+    long doff = etg_zone.segment_offset_of_frame(iframe);
+    char *src = (char *) this->host_ringbuf.data + (soff * SB);
+    char *dst = (char *) this->gpu_ringbuf.data + (doff * SB);
+    long nbytes = beams_per_batch * etg_zone.segments_per_frame * SB;
+    CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
 }
 
 
@@ -293,9 +292,8 @@ void GpuDedisperser::_launch_g2h(long ichunk, long ibatch)
     const long BA = this->config.num_active_batches * BB;  // active beams
     const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
     const long iframe = (ichunk * BT) + (ibatch * BB);
-    const long max_clag = plan->mega_ringbuf->max_clag;
 
-    for (int clag = 0; clag <= max_clag; clag++) {
+    for (int clag = 0; clag <= plan->mega_ringbuf->max_clag; clag++) {
         MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
         MegaRingbuf::Zone &g2h_zone = plan->mega_ringbuf->g2h_zones.at(clag);
 
@@ -303,19 +301,14 @@ void GpuDedisperser::_launch_g2h(long ichunk, long ibatch)
         xassert(host_zone.num_frames == clag*BT + BA);
         xassert(g2h_zone.num_frames == BA);
 
-        if (host_zone.segments_per_frame == 0)
-            continue;
-        
-        char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.global_segment_offset * SB);
-        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (g2h_zone.global_segment_offset * SB);
-        
-        long hdst = (iframe) % host_zone.num_frames;       // host dst phase
-        long xsrc = (iframe) % g2h_zone.num_frames;        // g2h src phase
-        
-        long m = host_zone.segments_per_frame * SB;  // nbytes per frame
-        long n = BB * m;                             // nbytes to copy
-        
-        CUDA_CALL(cudaMemcpyAsync(hp + hdst*m, xp + xsrc*m, n, cudaMemcpyDeviceToHost, nullptr));  // XXX stream=nullptr
+        if (host_zone.segments_per_frame > 0) {
+            long soff = g2h_zone.segment_offset_of_frame(iframe);
+            long doff = host_zone.segment_offset_of_frame(iframe);
+            char *src = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (soff * SB);
+            char *dst = reinterpret_cast<char *> (this->host_ringbuf.data) + (doff * SB);
+            long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
+            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyDeviceToHost, nullptr));  // XXX stream=nullptr
+        }
     }
 }
 
@@ -330,7 +323,7 @@ void GpuDedisperser::_launch_h2g(long ichunk, long ibatch)
     const long iframe = (ichunk * BT) + (ibatch * BB);
     const long max_clag = plan->mega_ringbuf->max_clag;
 
-    for (int clag = 0; clag <= max_clag; clag++) {
+    for (int clag = 0; clag <= plan->mega_ringbuf->max_clag; clag++) {
         MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
         MegaRingbuf::Zone &h2g_zone = plan->mega_ringbuf->h2g_zones.at(clag);
 
@@ -338,19 +331,14 @@ void GpuDedisperser::_launch_h2g(long ichunk, long ibatch)
         xassert(host_zone.num_frames == clag*BT + BA);
         xassert(h2g_zone.num_frames == BA);
 
-        if (host_zone.segments_per_frame == 0)
-            continue;
-        
-        char *hp = reinterpret_cast<char *> (this->host_ringbuf.data) + (host_zone.global_segment_offset * SB);
-        char *xp = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (h2g_zone.global_segment_offset * SB);
-        
-        long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
-        long xdst = (iframe) % h2g_zone.num_frames;        // h2g dst phase
-        
-        long m = host_zone.segments_per_frame * SB;  // nbytes per frame
-        long n = BB * m;                             // nbytes to copy
-        
-        CUDA_CALL(cudaMemcpyAsync(xp + xdst*m, hp + hsrc*m, n, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
+        if (host_zone.segments_per_frame > 0) {
+            long soff = host_zone.segment_offset_of_frame(iframe - clag*BT);
+            long doff = h2g_zone.segment_offset_of_frame(iframe);
+            char *src = reinterpret_cast<char *> (this->host_ringbuf.data) + (soff * SB);
+            char *dst = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (doff * SB);
+            long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
+            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
+        }
     }
 }
 
