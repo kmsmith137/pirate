@@ -1,12 +1,24 @@
 struct GpuDedisperser
 {
+    // acquire_input_sync() - blocks calling thread until input buffer is empty.
+    // acquire_output_async() - queues "input buffer is empty" event to specified stream.
     void acquire_input_sync(long ichunk, long ibatch);
     void acquire_input_async(long ichunk, long ibatch, cudaStream_t stream);
 
-    // This function queues all the compute kernels.
-    // 'event' can be NULL, if appropriate compute stream has already released the input buffer.
-    void release_input(cudaEvent_t event);  // NOTE can block!!
+    // Caller passes "input buffer is full" event, when done with the input buffer.
+    // The release_input() function queues all the compute kernels.
+    // NOTE: release_input() can block!!
+    void release_input(cudaEvent_t event);
 
+    // acquire_input_sync() - blocks calling thread until output buffer is full.
+    // acquire_output_async() - queues "output buffer is full" event to specified stream.
+    void acquire_output_sync();
+    void acquire_output_async(); 
+
+    // Caller passes "output buffer is empty" event, when done with the output buffer.
+    void release_output();
+
+    void shutdown();
 
     // From main thread.
     void _launch_tree_gridding(long ichunk, long ibatch);
@@ -29,20 +41,33 @@ struct GpuDedisperser
     CudaEventRingbuf evrb_h2g;     // produced by main thread, consumed by both threads
     CudaEventRingbuf evrb_et_h2g;  // produced by worker thread, consumed by main thread
     CudaEventRingbuf evrb_cdd2;
+    CudaEventRingbuf evrb_end;     // produced in release_output()
 
+    // These 
+    std::mutex mutex;
     long input_curr_ichunk = 0;
     long input_curr_ibatch = 0;
+    long output_curr_ichunk = 0;
+    long output_curr_ichunk = 0;
     bool input_acquired = false;
+    bool output_acquired = false;
 };
 
 
+GpuDedisperser::~GpuDedisperser()
+{
+
+}
 
 void GpuDedisperser::acquire_input_sync(long ichunk, long ibatch)
 {
-    xxx;  // kill worker thread on exception
-    xxx;  // check for ichunk/ibatch mismatch
-    xxx;  // assert allocated
-    evrb_tree_gridding.synchronize(iseq - nstreams);
+    try {
+        xxx;  // kill worker thread on exception
+        xxx;  // check for ichunk/ibatch mismatch
+        xxx;  // assert allocated
+        evrb_tree_gridding.synchronize(iseq - nstreams);
+    }
+
 }
 
 void GpuDedisperser::acquire_input_async(long ichunk, long ibatch, cudaStream_t stream)
@@ -53,7 +78,7 @@ void GpuDedisperser::acquire_input_async(long ichunk, long ibatch, cudaStream_t 
     evrb_tree_gridding.wait(stream, iseq - nstreams);
 }
 
-void GpuDeDeispeser::release_input(long ichunk, long ibatch, cudaEvent_t event)
+void GpuDeDedispeser::release_input(long ichunk, long ibatch, cudaEvent_t event)
 {
     xxx;  // kill worker thread on exception
     xxx;  // check for ichunk/ibatch mismatch
@@ -109,8 +134,51 @@ void GpuDeDeispeser::release_input(long ichunk, long ibatch, cudaEvent_t event)
     evrb_h2g.record(h2g_stream, iseq);
 
     // cdd2 needs to worry about two producers: h2g and et_h2g.
+    // cdd2 needs to worry about one consumer: release_output()
+    
     evrb_h2g.wait();
     evrb_et_h2g.wait(compute_stream, xxx, true);  //can block!
+    evrb_end.wait(compute_stream, xxx);
     _launch_cdd2(ichunk, ibatch);
 }
 
+
+void GpuDedisperser::acquire_output_sync()
+{
+    xxx;  // boilerplate
+    evrb_cdd2.synchronize(iseq);
+}
+
+
+void GpuDedisperser::acquire_output_async()
+{
+    xxx;  // boilerplate
+    evrb_cdd2.wait(stream, iseq); 
+}
+
+void GpuDedisperser::release_output()
+{
+    xxx;  // boilerplate
+    evrb_end.record(iseq);
+}
+
+
+void GpuDedisperser::worker_main()
+{
+    // shut down if exception is thrown.
+    xxx;
+
+    cudaStream_t h2g_stream = xx;
+
+    for (iseq) {
+        // et_h2h needs to worry about one producer: g2h.
+        // et_h2h needs to worry about one consumer: et_h2g.
+        evrb_g2h.synchronize(iseq - xxx, true);     // blocking=true
+        evrb_et_h2g.synchronize(iseq - xxx, true);  // blocking=true
+        _run_et_h2h();
+
+        // et_h2g needs to worry about one consumer: cdd2.
+        evrb_cdd2.wait(true);  // blocking=true
+        _launch_et_h2g();
+    }
+}
