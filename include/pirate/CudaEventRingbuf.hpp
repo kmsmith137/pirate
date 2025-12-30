@@ -60,6 +60,7 @@ struct CudaEventRingbuf
     void record(cudaStream_t stream, long seq_id);
 
     // Consumer: retrieve event from ringbuf, and call cudaStreamWaitEvent(stream, event).
+    // If seq_id < 0, this is a no-op.
     //
     // If the seq_id has not yet been produced (via record()):
     //   - If blocking=false (default), throws an exception.
@@ -68,6 +69,7 @@ struct CudaEventRingbuf
     void wait(cudaStream_t stream, long seq_id, bool blocking = false);
 
     // Consumer: retrieve event from ringbuf, and call cudaEventSynchronize(event).
+    // If seq_id < 0, this is a no-op.
     //
     // If the seq_id has not yet been produced (via record()):
     //   - If blocking=false (default), throws an exception.
@@ -77,6 +79,7 @@ struct CudaEventRingbuf
 
     // Blocks calling thread until an event with specified seq_id has been produced.
     // Does not consume an event, or modify the ringbuf.
+    // If seq_id < 0, this is a no-op.
     void synchronize_with_producer(long seq_id);
 
     // ----- Internals -----

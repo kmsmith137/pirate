@@ -197,6 +197,9 @@ void CudaEventRingbuf::_release(long seq_id)
 
 void CudaEventRingbuf::wait(cudaStream_t stream, long seq_id, bool blocking)
 {
+    if ((seq_id < 0) && (nconsumers > 0))
+        return;
+
     cudaEvent_t event = _acquire(seq_id, blocking);
     CUDA_CALL(cudaStreamWaitEvent(stream, event, 0));
     _release(seq_id);
@@ -205,6 +208,9 @@ void CudaEventRingbuf::wait(cudaStream_t stream, long seq_id, bool blocking)
 
 void CudaEventRingbuf::synchronize(long seq_id, bool blocking)
 {
+    if ((seq_id < 0) && (nconsumers > 0))
+        return;
+    
     cudaEvent_t event = _acquire(seq_id, blocking);
     CUDA_CALL(cudaEventSynchronize(event));
     _release(seq_id);
@@ -213,6 +219,9 @@ void CudaEventRingbuf::synchronize(long seq_id, bool blocking)
 
 void CudaEventRingbuf::synchronize_with_producer(long seq_id)
 {
+    if (seq_id < 0)
+        return;
+
     long slot = seq_id % max_size;
 
     std::unique_lock<std::mutex> lock(mutex);
