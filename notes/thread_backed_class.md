@@ -4,11 +4,17 @@ A pattern for a class `X`:
 
 - `X` is backed by one or more worker threads whose lifetimes are "tied" to X: threads are created when new objects are created, and joined in `~X()`. Note that it is safe for the worker thread(s) to hold a bare pointer (`X *this`), since the object always outlives the worker thread(s).
 
-- `X` has a `stop(std::exception_ptr e)` method which can be called externally, to put the object into a "stopped" state. The value of `e` is saved in `X::error`, and null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. When the object enters its stopped state, the worker thread returns.
+- `X` has a `stop(std::exception_ptr e)` method which can be called externally, to put the object into a "stopped" state (`X::is_stopped==true`). The value of `e` is saved in `X::error`, and is null or non-null depending on whether the call to `stop()` represents normal termination. The first caller to `stop()` sets `X::error`. 
 
-- Some public methods of `X` are labelled as "entry points". If an entry point is called in the stop state, the exception `e` is rethrown. (If `e` is `NULL`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.)
+- When the object enters its stopped state, the worker thread returns (as promptly as is practical).
 
 - If the worker thread throws an exception `e`, then the worker thread catches the exception, calls `X::stop(e)`, and exits.
+
+- Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `NULL`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.) 
+
+- If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown.
+
+- In a context where the value of `is_stopped` is checked (e.g. entry point or `worker_thread_main`), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `cv.notify()`. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
 
 - `~X()` calls `stop()` before joining the worker thread, to force the worker thread to exit.
 

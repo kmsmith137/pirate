@@ -56,55 +56,92 @@ CudaEventRingbuf::~CudaEventRingbuf()
 }
 
 
-void CudaEventRingbuf::record(cudaStream_t stream, long seq_id)
-{        
-    // Get the slot for this event.
-    long slot = seq_id % max_size;
-    
+void CudaEventRingbuf::stop(std::exception_ptr e)
+{
     std::unique_lock<std::mutex> lock(mutex);
-        
-    // Check that seq_id matches expected value.
-    if (seq_id != seq_end) {
-        std::ostringstream ss;
-        ss << "CudaEventRingbuf '" << name << "' record(): expected seq_id=" 
-           << seq_end << ", got seq_id=" << seq_id;
-        throw std::runtime_error(ss.str());
-    }
-
-    // Check ring buffer capacity.
-    if (seq_end - seq_start >= max_size) {
-        std::ostringstream ss;
-        ss << "CudaEventRingbuf '" << name << "' record(): ring buffer overflow."
-           << " Either max_size=" << max_size << " was too small, or nconsumers="
-           << nconsumers << " is too large.";
-        throw std::runtime_error(ss.str());
-    }
-        
-    // Reset counters for the new seq_id at this slot.
-    produced[slot] = false;
-    acquired[slot] = 0;
-    released[slot] = 0;
-        
-    // Reserve the slot by incrementing seq_end.
-    seq_end++;
     
-    // Record the event without holding the lock (only if nconsumers > 0).
-    if (nconsumers > 0) {
-        lock.unlock();
-        CUDA_CALL(cudaEventRecord(events[slot], stream));
-        lock.lock();
+    if (!is_stopped) {
+        is_stopped = true;
+        error = e;
     }
-
-    produced[slot] = true;
-    
-    // If nconsumers == 0, slots are immediately recyclable.
-    if (nconsumers == 0)
-        seq_start = seq_end;
     
     lock.unlock();
-        
-    // Wake up any threads waiting in synchronize_with_producer().
     cv.notify_all();
+}
+
+
+void CudaEventRingbuf::_throw_if_stopped(const char *method_name)
+{
+    // Caller must hold mutex.
+    if (!is_stopped)
+        return;
+    
+    if (error)
+        std::rethrow_exception(error);
+    
+    std::ostringstream ss;
+    ss << "CudaEventRingbuf::" << method_name << "(): called on stopped instance '" << this->name << "'";
+    throw std::runtime_error(ss.str());
+}
+
+
+void CudaEventRingbuf::record(cudaStream_t stream, long seq_id)
+{
+    try {
+        // Get the slot for this event.
+        long slot = seq_id % max_size;
+        
+        std::unique_lock<std::mutex> lock(mutex);
+        
+        _throw_if_stopped("record");
+            
+        // Check that seq_id matches expected value.
+        if (seq_id != seq_end) {
+            std::ostringstream ss;
+            ss << "CudaEventRingbuf '" << name << "' record(): expected seq_id=" 
+               << seq_end << ", got seq_id=" << seq_id;
+            throw std::runtime_error(ss.str());
+        }
+
+        // Check ring buffer capacity.
+        if (seq_end - seq_start >= max_size) {
+            std::ostringstream ss;
+            ss << "CudaEventRingbuf '" << name << "' record(): ring buffer overflow."
+               << " Either max_size=" << max_size << " was too small, or nconsumers="
+               << nconsumers << " is too large.";
+            throw std::runtime_error(ss.str());
+        }
+            
+        // Reset counters for the new seq_id at this slot.
+        produced[slot] = false;
+        acquired[slot] = 0;
+        released[slot] = 0;
+            
+        // Reserve the slot by incrementing seq_end.
+        seq_end++;
+        
+        // Record the event without holding the lock (only if nconsumers > 0).
+        if (nconsumers > 0) {
+            lock.unlock();
+            CUDA_CALL(cudaEventRecord(events[slot], stream));
+            lock.lock();
+        }
+
+        produced[slot] = true;
+        
+        // If nconsumers == 0, slots are immediately recyclable.
+        if (nconsumers == 0)
+            seq_start = seq_end;
+        
+        lock.unlock();
+            
+        // Wake up any threads waiting in synchronize_with_producer().
+        cv.notify_all();
+    }
+    catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -121,6 +158,8 @@ cudaEvent_t CudaEventRingbuf::_acquire(long seq_id, bool blocking)
     std::unique_lock<std::mutex> lock(mutex);
     
     for (;;) {
+        _throw_if_stopped("wait/synchronize");
+        
         // Check if seq_id is too old (already recycled). This would indicate
         // overconsumption, so use the same exception text as below.
         if (seq_id < seq_start) {
@@ -200,9 +239,15 @@ void CudaEventRingbuf::wait(cudaStream_t stream, long seq_id, bool blocking)
     if ((seq_id < 0) && (nconsumers > 0))
         return;
 
-    cudaEvent_t event = _acquire(seq_id, blocking);
-    CUDA_CALL(cudaStreamWaitEvent(stream, event, 0));
-    _release(seq_id);
+    try {
+        cudaEvent_t event = _acquire(seq_id, blocking);
+        CUDA_CALL(cudaStreamWaitEvent(stream, event, 0));
+        _release(seq_id);
+    }
+    catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -211,9 +256,15 @@ void CudaEventRingbuf::synchronize(long seq_id, bool blocking)
     if ((seq_id < 0) && (nconsumers > 0))
         return;
     
-    cudaEvent_t event = _acquire(seq_id, blocking);
-    CUDA_CALL(cudaEventSynchronize(event));
-    _release(seq_id);
+    try {
+        cudaEvent_t event = _acquire(seq_id, blocking);
+        CUDA_CALL(cudaEventSynchronize(event));
+        _release(seq_id);
+    }
+    catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -222,16 +273,24 @@ void CudaEventRingbuf::synchronize_with_producer(long seq_id)
     if (seq_id < 0)
         return;
 
-    long slot = seq_id % max_size;
+    try {
+        long slot = seq_id % max_size;
 
-    std::unique_lock<std::mutex> lock(mutex);
-    
-    for (;;) {
-        if (seq_id < seq_start)
-            return;
-        if ((seq_id < seq_end) && produced[slot])
-            return;
-        cv.wait(lock);
+        std::unique_lock<std::mutex> lock(mutex);
+        
+        for (;;) {
+            _throw_if_stopped("synchronize_with_producer");
+            
+            if (seq_id < seq_start)
+                return;
+            if ((seq_id < seq_end) && produced[slot])
+                return;
+            cv.wait(lock);
+        }
+    }
+    catch (...) {
+        stop(std::current_exception());
+        throw;
     }
 }
 

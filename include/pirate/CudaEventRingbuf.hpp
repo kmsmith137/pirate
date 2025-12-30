@@ -5,6 +5,7 @@
 #include <vector>
 #include <mutex>
 #include <condition_variable>
+#include <exception>
 #include <cuda_runtime.h>
 
 namespace pirate {
@@ -34,6 +35,11 @@ namespace pirate {
 // record() and synchronize_with_producer() are allowed. No cuda events are
 // allocated. This is useful for pure producer-consumer synchronization without
 // GPU event overhead.
+//
+// Stopped state: The ringbuf can be put into a "stopped" state via stop(e).
+// Entry points (record, wait, synchronize, synchronize_with_producer) will
+// rethrow the stored exception when called in the stopped state. If an entry
+// point throws an exception, stop(e) is called automatically before rethrowing.
 //
 // CudaEventRingbuf is noncopyable.
 
@@ -82,6 +88,11 @@ struct CudaEventRingbuf
     // If seq_id < 0, this is a no-op.
     void synchronize_with_producer(long seq_id);
 
+    // Put the ringbuf into "stopped" state. The first caller sets 'error'.
+    // If e is null, represents normal termination; if non-null, represents an error.
+    // Entry points called after stop() will rethrow the stored exception.
+    void stop(std::exception_ptr e = std::exception_ptr());
+
     // ----- Internals -----
 
     std::string name;
@@ -106,9 +117,15 @@ struct CudaEventRingbuf
     std::vector<int> released;   // per-slot release count (protected by mutex)
     
     std::mutex mutex;
-    std::condition_variable cv;  // signaled when seq_start/seq_end/produced changes
+    std::condition_variable cv;  // signaled when seq_start/seq_end/produced/is_stopped changes
     long seq_start = 0;          // lowest valid seq_id in ring buffer
     long seq_end = 0;            // one past highest valid seq_id (next seq_id to be recorded)
+    
+    bool is_stopped = false;     // true after stop() is called
+    std::exception_ptr error;    // set by first caller to stop()
+    
+    // Helper: throw if stopped (call while holding mutex).
+    void _throw_if_stopped(const char *method_name);
     
     // Helper: acquire event at seq_id for consumption.
     // If blocking=false and seq_id not yet produced, throws an exception.
