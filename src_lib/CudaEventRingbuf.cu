@@ -197,4 +197,20 @@ void CudaEventRingbuf::synchronize(long seq_id, bool blocking)
 }
 
 
+void CudaEventRingbuf::synchronize_with_producer(long seq_id)
+{
+    long slot = seq_id % max_size;
+
+    std::unique_lock<std::mutex> lock(mutex);
+    
+    for (;;) {
+        if (seq_id < seq_start)
+            return;
+        if ((seq_id < seq_end) && produced[slot])
+            return;
+        cv.wait(lock);
+    }
+}
+
+
 }  // namespace pirate

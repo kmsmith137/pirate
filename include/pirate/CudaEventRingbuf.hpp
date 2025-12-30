@@ -70,6 +70,10 @@ struct CudaEventRingbuf
 
     void synchronize(long seq_id, bool blocking = false);
 
+    // Blocks calling thread until an event with specified seq_id has been produced.
+    // Does not consume an event, or modify the ringbuf.
+    void synchronize_with_producer(long seq_id);
+
     // ----- Internals -----
 
     std::string name;
