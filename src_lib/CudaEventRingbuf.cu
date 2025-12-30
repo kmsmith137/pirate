@@ -18,9 +18,9 @@ CudaEventRingbuf::CudaEventRingbuf(const std::string &name_, int nconsumers_,
       max_size(max_size_),
       blocking_sync(blocking_sync_)
 {
-    if (nconsumers <= 0) {
+    if (nconsumers < 0) {
         std::ostringstream ss;
-        ss << "CudaEventRingbuf '" << name << "': nconsumers=" << nconsumers << " must be > 0";
+        ss << "CudaEventRingbuf '" << name << "': nconsumers=" << nconsumers << " must be >= 0";
         throw std::runtime_error(ss.str());
     }
 
@@ -35,23 +35,24 @@ CudaEventRingbuf::CudaEventRingbuf(const std::string &name_, int nconsumers_,
     if (blocking_sync)
         event_flags |= cudaEventBlockingSync;
 
-    // Pre-allocate all events and counters.
-    events.resize(max_size);
+    // Pre-allocate counters.
     produced.resize(max_size, false);
     acquired.resize(max_size, 0);
     released.resize(max_size, 0);
     
-    for (long i = 0; i < max_size; i++) {
-        CUDA_CALL(cudaEventCreateWithFlags(&events[i], event_flags));
+    // Pre-allocate events (only if nconsumers > 0).
+    if (nconsumers > 0) {
+        events.resize(max_size);
+        for (long i = 0; i < max_size; i++)
+            CUDA_CALL(cudaEventCreateWithFlags(&events[i], event_flags));
     }
 }
 
 
 CudaEventRingbuf::~CudaEventRingbuf()
 {
-    for (long i = 0; i < max_size; i++) {
+    for (size_t i = 0; i < events.size(); i++)
         cudaEventDestroy(events[i]);
-    }
 }
 
 
@@ -87,21 +88,34 @@ void CudaEventRingbuf::record(cudaStream_t stream, long seq_id)
     // Reserve the slot by incrementing seq_end.
     seq_end++;
     
-    // Record the event without holding the lock.
-    lock.unlock();
-    CUDA_CALL(cudaEventRecord(events[slot], stream));
+    // Record the event without holding the lock (only if nconsumers > 0).
+    if (nconsumers > 0) {
+        lock.unlock();
+        CUDA_CALL(cudaEventRecord(events[slot], stream));
+        lock.lock();
+    }
 
-    lock.lock();
     produced[slot] = true;
+    
+    // If nconsumers == 0, slots are immediately recyclable.
+    if (nconsumers == 0)
+        seq_start = seq_end;
+    
     lock.unlock();
         
-    // Wake up any consumers waiting for this event.
+    // Wake up any threads waiting in synchronize_with_producer().
     cv.notify_all();
 }
 
 
 cudaEvent_t CudaEventRingbuf::_acquire(long seq_id, bool blocking)
 {
+    if (nconsumers == 0) {
+        std::ostringstream ss;
+        ss << "CudaEventRingbuf '" << name << "': wait()/synchronize() called with nconsumers=0";
+        throw std::runtime_error(ss.str());
+    }
+
     long slot = seq_id % max_size;
 
     std::unique_lock<std::mutex> lock(mutex);

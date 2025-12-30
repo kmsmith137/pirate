@@ -30,6 +30,11 @@ namespace pirate {
 // Each seq_id can be consumed at most 'nconsumers' times. If consumed more, an
 // exception is thrown. If the ring buffer exceeds max_size, an exception is thrown.
 //
+// Special case nconsumers=0: wait() and synchronize() throw exceptions, but
+// record() and synchronize_with_producer() are allowed. No cuda events are
+// allocated. This is useful for pure producer-consumer synchronization without
+// GPU event overhead.
+//
 // CudaEventRingbuf is noncopyable.
 
 
@@ -37,7 +42,7 @@ struct CudaEventRingbuf
 {
     // Constructor.
     //   - name: Used in error messages.
-    //   - nconsumers: Number of times each event can be consumed.
+    //   - nconsumers: Number of times each event can be consumed (0 is allowed, see above).
     //   - max_size: Maximum ring buffer size (throws if exceeded).
     //   - blocking_sync: If true, then synchronize() will block instead of busy-waiting.
     
