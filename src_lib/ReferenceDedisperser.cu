@@ -533,21 +533,22 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
     // Step 3: extra copying steps needed for early triggers.
 
+    this->g2g_copy_kernel->apply(this->gpu_ringbuf, ichunk, ibatch);     // gpu -> g2h
+    this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);    // host -> et_host
+
     MegaRingbuf::Zone &eth_zone = plan->mega_ringbuf->et_host_zone;
     MegaRingbuf::Zone &etg_zone = plan->mega_ringbuf->et_gpu_zone;
-    
+
     xassert(eth_zone.segments_per_frame == etg_zone.segments_per_frame);
     xassert(eth_zone.num_frames == BA);
     xassert(etg_zone.num_frames == BA);
 
-    long et_off = (iframe % eth_zone.num_frames) * eth_zone.segments_per_frame;
-    float *et_src = this->host_ringbuf.data + (eth_zone.global_segment_offset + et_off) * S;
-    float *et_dst = this->gpu_ringbuf.data + (etg_zone.global_segment_offset + et_off) * S;
-    long et_nbytes = BB * eth_zone.segments_per_frame * S * sizeof(float);
-    
-    this->g2g_copy_kernel->apply(this->gpu_ringbuf, ichunk, ibatch);     // gpu -> g2h
-    this->h2h_copy_kernel->apply(this->host_ringbuf, ichunk, ibatch);    // host -> et_host
-    memcpy(et_dst, et_src, et_nbytes);  // et_host -> et_gpu (must come after h2h_copy_kernel)
+    long soff = eth_zone.segment_offset_of_frame(iframe);
+    long doff = etg_zone.segment_offset_of_frame(iframe);
+    float *src = this->host_ringbuf.data + (soff * S);
+    float *dst = this->gpu_ringbuf.data + (doff * S);
+    long nbytes = beams_per_batch * etg_zone.segments_per_frame * S * sizeof(float); 
+    memcpy(dst, src, nbytes);  // et_host -> et_gpu (must come after h2h_copy_kernel)
     
     // Step 4: copy host <-> gpu
     
@@ -570,22 +571,24 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
         if (host_zone.segments_per_frame == 0)
             continue;
-        
-        float *hp = this->host_ringbuf.data + (host_zone.global_segment_offset * S);
-        float *h2gp = this->gpu_ringbuf.data + (h2g_zone.global_segment_offset * S);
-        float *g2hp = this->gpu_ringbuf.data + (g2h_zone.global_segment_offset * S);
 
-        long hsrc = (iframe + BA) % host_zone.num_frames;  // host src phase
-        long hdst = (iframe) % host_zone.num_frames;       // host dst phase
-        long xsrc = (iframe) % g2h_zone.num_frames;        // g2h src phase
-        long xdst = (iframe) % h2g_zone.num_frames;        // h2g dst phase
-        
-        long m = host_zone.segments_per_frame * S;   // nelts per beam (=frame)
-        long n = BB * m * sizeof(float);             // nbytes to copy
+        // First, GPU->host copy.
+        // (Ordering of memcopies is arbitrary. On the GPU they happen in parallel.)
 
-        // Ordering of memcopies is arbitrary. (On the GPU they happen in parallel.)
-        memcpy(h2gp + xdst*m, hp + hsrc*m, n);
-        memcpy(hp + hdst*m, g2hp + xsrc*m, n);
+        long soff = g2h_zone.segment_offset_of_frame(iframe);
+        long doff = host_zone.segment_offset_of_frame(iframe);
+        float *src = this->gpu_ringbuf.data + (soff * S);
+        float *dst = this->host_ringbuf.data + (doff * S);
+        long nbytes = beams_per_batch * host_zone.segments_per_frame * S * sizeof(float);
+        memcpy(dst, src, nbytes);
+
+        // Second, host->GPU copy.
+
+        soff = host_zone.segment_offset_of_frame(iframe - clag*BT);
+        doff = h2g_zone.segment_offset_of_frame(iframe);
+        src = this->host_ringbuf.data + (soff * S);
+        dst = this->gpu_ringbuf.data + (doff * S);
+        memcpy(dst, src, nbytes);  // same nbytes as before
     }
     
     // Step 5: run stage2 dedispersion kernels (input from ringbuf). 
