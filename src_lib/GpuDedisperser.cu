@@ -228,11 +228,6 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     // the next batch of gpu kernels.
 
     // For h2g prefetching to work, the following assert must be satisfied.
-    cout << "XXX has_host_ringbuf=" << has_host_ringbuf 
-         << ", min_host_clag=" << mega_ringbuf->min_host_clag 
-         << ", nbatches=" << nbatches
-         << ", nstreams=" << nstreams << endl;
-         
     xassert_ge(host_seq_lag, nstreams);
 
     // To implement h2g prefetching, we pretend that the first (nstreams) batches
@@ -920,8 +915,8 @@ void GpuDedisperser::_worker_main()
     // in all the CudaEventRingbufs.
 
     for (;;) {
-        long ichunk = seq_id / nstreams;
-        long ibatch = seq_id % nstreams;
+        long ichunk = seq_id / nbatches;
+        long ibatch = seq_id % nbatches;
 
         // et_h2h kernel: inbufs=[host], outbufs=[et_host]
         //   host inbuf: producers=[g2h]
