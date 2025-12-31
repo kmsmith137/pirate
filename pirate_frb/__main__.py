@@ -530,7 +530,10 @@ def show_dedisperser(args):
         nbits = plan.nbits
 
         # Add a dequantizer and raw-data h2g copy, to give a more realistic accounting of cost.
-        dedisperser = pirate_pybind11.GpuDedisperser(plan)
+        params = pirate_pybind11.GpuDedisperserParams()
+        params.plan = plan
+        params.stream_pool = pirate_pybind11.CudaStreamPool.create(plan.num_active_batches)
+        dedisperser = pirate_pybind11.GpuDedisperser(params)
         rt = dedisperser.resource_tracker.clone()
         rt.add_kernel('dequantizer', (nin * (nbits+4)) // 8)
         rt.add_memcpy_h2g('raw_data', (nin*4) // 8)

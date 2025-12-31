@@ -10,6 +10,7 @@
 
 #include "../include/pirate/CasmBeamformer.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"
+#include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/ResourceTracker.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
@@ -140,6 +141,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def("stop", &FakeServer::stop)
     ;
 
+    // CudaStreamPool: always accessed via shared_ptr.
+    // Note: CudaStreamWrapper members are not exposed to python.
+    py::class_<CudaStreamPool, std::shared_ptr<CudaStreamPool>>(m, "CudaStreamPool")
+        .def_readonly("pool_id", &CudaStreamPool::pool_id)
+        .def_readonly("num_compute_streams", &CudaStreamPool::num_compute_streams)
+        .def_static("create", &CudaStreamPool::create, py::arg("num_compute_streams"))
+    ;
+
     py::class_<ResourceTracker>(m, "ResourceTracker")
           .def(py::init<>())
           .def("add_kernel", &ResourceTracker::add_kernel,
@@ -182,8 +191,17 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
 
+    // GpuDedisperser::Params (nested struct, exposed as GpuDedisperserParams)
+    py::class_<GpuDedisperser::Params>(m, "GpuDedisperserParams")
+          .def(py::init<>())
+          .def_readwrite("plan", &GpuDedisperser::Params::plan)
+          .def_readwrite("stream_pool", &GpuDedisperser::Params::stream_pool)
+          .def_readwrite("detect_deadlocks", &GpuDedisperser::Params::detect_deadlocks)
+          .def_readwrite("fixed_weights", &GpuDedisperser::Params::fixed_weights)
+    ;
+
     py::class_<GpuDedisperser>(m, "GpuDedisperser")
-          .def(py::init<const std::shared_ptr<DedispersionPlan> &>(), py::arg("plan"))
+          .def(py::init<const GpuDedisperser::Params &>(), py::arg("params"))
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def_static("test_random", &GpuDedisperser::test_random)
     ;
