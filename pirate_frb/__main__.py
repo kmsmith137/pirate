@@ -490,6 +490,7 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('--channel-map', action='store_true', help="Show channel map tree->freq (warning: produces long output!)")
     parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
     parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
+    parser.add_argument('--test', action='store_true', help="Run GpuDedisperser.test_one() with config")
 
 
 def show_dedisperser(args):
@@ -541,6 +542,13 @@ def show_dedisperser(args):
         multiplier = (config.beams_per_gpu / config.beams_per_batch) / (1.0e-3 * config.time_samples_per_chunk * config.time_sample_ms)
         fine_grained = args.fine_grained_resources
         print(rt.to_yaml_string(multiplier, fine_grained))
+
+    if args.test:
+        print_separator('Testing GpuDedisperser')
+        nchunks = (2**(config.tree_rank + config.num_downsampling_levels - 1)) // config.time_samples_per_chunk + 10
+        print(f'Running GpuDedisperser.test_one(config, nchunks={nchunks})')
+        pirate_pybind11.GpuDedisperser.test_one(config, nchunks)
+        print('Test passed!')
 
 
 ###################################   show_random_config command  ###################################

@@ -242,14 +242,17 @@ void MegaRingbuf::finalize(bool delete_internals)
                     _push_triple(h2h_triples, &et_host_zone, 0);                      // h2h dst
                     _set_triple(consumer, &et_gpu_zone, 0);
 
+                    xassert(chunk_lag > gpu_clag);
                     this->min_et_clag = min(min_et_clag, chunk_lag - gpu_clag);
                     this->min_et_headroom = min(min_et_headroom, gpu_clag + host_clag - chunk_lag);
                 }
             }
 
             // Loose end: min_host_clag
-            if (ncpu > 0)
-                this->min_host_clag = min(min_host_clag, host_clag - gpu_clag);
+            if (ncpu > 0) {
+                xassert(host_clag > 0);
+                this->min_host_clag = min(min_host_clag, host_clag);
+            }
         }
     }
 

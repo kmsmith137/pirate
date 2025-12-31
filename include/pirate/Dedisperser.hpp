@@ -205,7 +205,7 @@ struct GpuDedisperser
     std::shared_ptr<CudaEventRingbuf> evrb_et_h2g;
     std::shared_ptr<CudaEventRingbuf> evrb_output;
 
-    // Used to keep track of lags between kernels.
+    // These members help keep track of lags between kernels.
     long host_seq_lag = 0;     // has_host_ringbuf ? (mega_ringbuf->min_host_clag * nbatches) : (2*nstreams)
     long et_seq_headroom = 0;  // has_early_triggers ? (mega_ringbuf->min_et_headroom * nbatches) : (2*nstreams)
     long et_seq_lag = 0;       // has_early_triggers ? (mega_ringbuf->min_et_clag * nbatches) : (2*nstreams)
