@@ -213,22 +213,22 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
 // ------------------------------------------------------------------------------------------
 
 
-void GpuDedisperser::_launch_tree_gridding(long ichunk, long ibatch)
+void GpuDedisperser::_launch_tree_gridding(long ichunk, long ibatch, cudaStream_t stream)
 {
     long istream = (ichunk * nbatches + ibatch) % nstreams;
     Array<void> &dd_buf0 = stage1_dd_bufs.at(istream).bufs.at(0);
-    tree_gridding_kernel->launch(dd_buf0, input_arrays.slice(0,istream), nullptr);
+    tree_gridding_kernel->launch(dd_buf0, input_arrays.slice(0,istream), stream);
 }
 
 
-void GpuDedisperser::_launch_lagged_downsampler(long ichunk, long ibatch)
+void GpuDedisperser::_launch_lagged_downsampler(long ichunk, long ibatch, cudaStream_t stream)
 {
     long istream = (ichunk * nbatches + ibatch) % nstreams;
-    lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, nullptr);  // XXX stream=nullptr
+    lds_kernel->launch(stage1_dd_bufs.at(istream), ichunk, ibatch, stream);
 }
 
 
-void GpuDedisperser::_launch_dd_stage1(long ichunk, long ibatch)
+void GpuDedisperser::_launch_dd_stage1(long ichunk, long ibatch, cudaStream_t stream)
 {
     long istream = (ichunk * nbatches + ibatch) % nstreams;
 
@@ -239,19 +239,19 @@ void GpuDedisperser::_launch_dd_stage1(long ichunk, long ibatch)
 
         // See comments in DedispersionKernel.hpp for an explanation of this reshape operation.
         dd_buf = dd_buf.reshape({ kp.beams_per_batch, pow2(kp.amb_rank), pow2(kp.dd_rank), kp.ntime });
-        kernel->launch(dd_buf, this->gpu_ringbuf, ichunk, ibatch, nullptr);  // XXX stream=nullptr
+        kernel->launch(dd_buf, this->gpu_ringbuf, ichunk, ibatch, stream);
     }
 }
 
 
-void GpuDedisperser::_launch_et_g2g(long ichunk, long ibatch)
+void GpuDedisperser::_launch_et_g2g(long ichunk, long ibatch, cudaStream_t stream)
 {
     // copies from 'gpu' zones to 'g2h' zones
-    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ichunk, ibatch, nullptr);  // XXX stream=nullptr
+    this->g2g_copy_kernel->launch(this->gpu_ringbuf, ichunk, ibatch, stream);
 }
 
 
-void GpuDedisperser::_run_et_h2h(long ichunk, long ibatch)
+void GpuDedisperser::_do_et_h2h(long ichunk, long ibatch)
 {
     // copy host -> et_host
     // FIXME: in principle this is a bug: running copy kernel without synchronizing
@@ -261,7 +261,7 @@ void GpuDedisperser::_run_et_h2h(long ichunk, long ibatch)
 }
 
 
-void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch)
+void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch, cudaStream_t stream)
 {
     const long BT = this->config.beams_per_gpu;            // total beams
     const long BB = this->config.beams_per_batch;          // beams per batch
@@ -281,11 +281,11 @@ void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch)
     char *src = (char *) this->host_ringbuf.data + (soff * SB);
     char *dst = (char *) this->gpu_ringbuf.data + (doff * SB);
     long nbytes = beams_per_batch * etg_zone.segments_per_frame * SB;
-    CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
+    CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, stream));
 }
 
 
-void GpuDedisperser::_launch_g2h(long ichunk, long ibatch)
+void GpuDedisperser::_launch_g2h(long ichunk, long ibatch, cudaStream_t stream)
 {    
     const long BT = this->config.beams_per_gpu;            // total beams
     const long BB = this->config.beams_per_batch;          // beams per batch
@@ -307,14 +307,14 @@ void GpuDedisperser::_launch_g2h(long ichunk, long ibatch)
             char *src = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (soff * SB);
             char *dst = reinterpret_cast<char *> (this->host_ringbuf.data) + (doff * SB);
             long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
-            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyDeviceToHost, nullptr));  // XXX stream=nullptr
+            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyDeviceToHost, stream));
         }
     }
 }
 
 
 // XXX clean up cut-and-paste with _launch_g2h().
-void GpuDedisperser::_launch_h2g(long ichunk, long ibatch)
+void GpuDedisperser::_launch_h2g(long ichunk, long ibatch, cudaStream_t stream)
 {
     const long BT = this->config.beams_per_gpu;            // total beams
     const long BB = this->config.beams_per_batch;          // beams per batch
@@ -337,13 +337,13 @@ void GpuDedisperser::_launch_h2g(long ichunk, long ibatch)
             char *src = reinterpret_cast<char *> (this->host_ringbuf.data) + (soff * SB);
             char *dst = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (doff * SB);
             long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
-            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, nullptr));  // XXX stream=nullptr
+            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, stream));
         }
     }
 }
 
 
-void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch)
+void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch, cudaStream_t stream)
 {
     long istream = (ichunk * nbatches + ibatch) % nstreams;
 
@@ -353,7 +353,7 @@ void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch)
         Array<void> slice_wt = wt_arrays.at(itree).slice(0,istream);
 
         shared_ptr<CoalescedDdKernel2> cdd2_kernel = cdd2_kernels.at(itree);
-        cdd2_kernel->launch(slice_max, slice_argmax, this->gpu_ringbuf, slice_wt, ichunk, ibatch, nullptr);  // XXX stream=nullptr
+        cdd2_kernel->launch(slice_max, slice_argmax, this->gpu_ringbuf, slice_wt, ichunk, ibatch, stream);
     }
 }
 
@@ -364,15 +364,16 @@ void GpuDedisperser::launch(long ichunk, long ibatch)
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(is_allocated);
     
-    _launch_tree_gridding(ichunk, ibatch);
-    _launch_lagged_downsampler(ichunk, ibatch);
-    _launch_dd_stage1(ichunk, ibatch);
-    _launch_et_g2g(ichunk, ibatch);
-    _run_et_h2h(ichunk, ibatch);
-    _launch_et_h2g(ichunk, ibatch);
-    _launch_g2h(ichunk, ibatch);
-    _launch_h2g(ichunk, ibatch);
-    _launch_cdd2(ichunk, ibatch);
+    // XXX temporary kludge: uses default stream for all kernels/copies!!!
+    _launch_tree_gridding(ichunk, ibatch, nullptr);
+    _launch_lagged_downsampler(ichunk, ibatch, nullptr);
+    _launch_dd_stage1(ichunk, ibatch, nullptr);
+    _launch_et_g2g(ichunk, ibatch, nullptr);
+    _do_et_h2h(ichunk, ibatch);
+    _launch_et_h2g(ichunk, ibatch, nullptr);
+    _launch_g2h(ichunk, ibatch, nullptr);
+    _launch_h2g(ichunk, ibatch, nullptr);
+    _launch_cdd2(ichunk, ibatch, nullptr);
 }
 
 

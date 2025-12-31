@@ -105,7 +105,6 @@ struct GpuDedisperser
 
     // Reminder: a "chunk" is a range of time indices, and a "batch" is a range of beam indices.
     // XXX temporary kludge: uses default stream for all kernels/copies!!!
-
     void launch(long ichunk, long ibatch);
 
     // Static member function: runs one randomized test iteration.
@@ -114,15 +113,21 @@ struct GpuDedisperser
     // Static member function: runs one test iteration with specified configuration.
     static void test_one(const DedispersionConfig &config, int nchunks, bool host_only=false);
 
-    void _launch_tree_gridding(long ichunk, long ibatch);
-    void _launch_lagged_downsampler(long ichunk, long ibatch);
-    void _launch_dd_stage1(long ichunk, long ibatch);
-    void _launch_et_g2g(long ichunk, long ibatch);   // copies from 'gpu' zones to 'g2h' zones
-    void _run_et_h2h(long ichunk, long ibatch);      // on CPU! copies from 'host' zones to 'et_host' zone
-    void _launch_et_h2g(long ichuink, long ibatch);  // copies from 'et_host' zone to 'et_gpu' zone
-    void _launch_g2h(long ichunk, long ibatch);      // this is the main gpu->host copy
-    void _launch_h2g(long ichunk, long ibatch);      // this is the main host->gpu copy
-    void _launch_cdd2(long ichunk, long ibatch);
+    // Helpers for individual compute steps. 
+    // (These are called once each, so are logically unncecessary, but I like the separation
+    // between "compute logic" and "synchronization logic".)
+
+    void _launch_tree_gridding(long ichunk, long ibatch, cudaStream_t stream);
+    void _launch_lagged_downsampler(long ichunk, long ibatch, cudaStream_t stream);
+    void _launch_dd_stage1(long ichunk, long ibatch, cudaStream_t stream);
+    void _launch_et_g2g(long ichunk, long ibatch, cudaStream_t stream);
+    void _launch_g2h(long ichunk, long ibatch, cudaStream_t stream);
+    void _launch_h2g(long ichunk, long ibatch, cudaStream_t stream);
+    void _launch_cdd2(long ichunk, long ibatch, cudaStream_t stream);
+
+    // These helpers will run from the et_h2h thread, not the main thread.
+    void _do_et_h2h(long ichunk, long ibatch);     // CPU kernel, not GPU kernel
+    void _launch_et_h2g(long ichuink, long ibatch, cudaStream_t stream);
 };
 
 
