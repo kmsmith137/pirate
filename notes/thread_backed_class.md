@@ -20,11 +20,17 @@ A pattern for a class `X`:
 
 ## Example Code
 
+In this toy example, `X` is backed by one worker thread, and contains a thread-safe work queue.
+The worker takes integer `id` values from the queue, and calls `X::process_request(id)`.
+The entry point `X::queue_request()` adds work to the queue.
+(The work queue is specific to this toy example -- other thread-backed classes may not contain a `std::queue`.)
+
 ```cpp
 #include <condition_variable>
 #include <exception>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <thread>
 
 class X {
@@ -67,6 +73,17 @@ class X {
         // Process request here
     }
 
+    // A helper function for entry points. Caller must hold mutex.
+    void _throw_if_stopped(const char *method_name)
+    {
+        if (error) 
+            std::rethrow_exception(error);
+
+        if (is_stopped) {
+            throw std::runtime_error(std::string(method_name) + " called on stopped instance");
+        }
+    }
+
 public:
     X() {
         // All members are initialized before this point (default member initializers).
@@ -92,21 +109,16 @@ public:
     void queue_request(int id) 
     {
         std::lock_guard lock(mutex);
-        if (error) 
-            std::rethrow_exception(error);
-        if (is_stopped) 
-            throw std::runtime_error("X::queue_request() called on stopped instance");
+        _throw_if_stopped("X::queue_request");
         queue.push(id);
         cv.notify_one();
     }
 
-    void example_entry_point() {
-        std::unique_lock<std::mutex> lk(mutex);
-        if (error) 
-            std::rethrow_exception(error);
-        if (is_stopped) 
-            throw std::runtime_error("X::example_entry_point() called on stopped instance");
-        lk.unlock();
+    void example_entry_point() 
+    {
+        std::unique_lock lock(mutex);
+        _throw_if_stopped("X::example_entry_point");
+        lock.unlock();
 
         try {
             _example_entry_point();
