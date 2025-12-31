@@ -35,13 +35,15 @@ struct GpuDedisperser
     // release_input(): before call, 'stream' must see full input buffer.
     // acquire_output(): after call, 'stream' sees full output buffer.
     // release_output(): before call, 'stream' must see empty output buffer.
-    // FIXME: I may rethink this API for input/output buffers later.
+    //
+    // FIXME: I may rethink this API later. (Do I want acquire_weights()?
+    // What should be the return type of acquire_output()?)
 
-    void acquire_input(long ichunk, long ibatch, cudaStream_t stream);
+    Array<void> acquire_input(long ichunk, long ibatch, cudaStream_t stream);
     void release_input(long ichunk, long ibatch, cudaEvent_t stream);
+
     void acquire_output(long ichunk, long ibatch, cudaStream_t stream);
     void release_output(long ichunk, long ibatch, cudaStream_t stream);
-
 
     // --------------------------------------------------------------------------------
 
@@ -56,6 +58,7 @@ struct GpuDedisperser
     void _run_et_h2h(long ichunk, long ibatch);      // on CPU! copies from 'host' zones to 'et_host' zone
     void _launch_et_h2g(long ichuink, long ibatch);  // copies from 'et_host' zone to 'et_gpu' zone
 
+    // These methods contain the difficult code :)
     void _launch_dedispersion_kernels(long ichunk, long ibatch, cudaStream_t stream);
     void _worker_thread_main();
 
@@ -163,7 +166,7 @@ GpuDedisperser::allocate()
 // ------------------------------------------------------------------------------
 
 
-void GpuDedisperser::acquire_input(long ichunk, long ibatch, long stream)
+Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, long stream)
 {
     xassert(ichunk >= 0);
     xassert((ibatch >= 0) && (ibatch < nbatches));
@@ -211,6 +214,10 @@ void GpuDedisperser::acquire_input(long ichunk, long ibatch, long stream)
     // This call to wait() can be nonblocking, since we know that the tree_gridding/cdd2
     // kernel was successfully launched by a previous call to release_input().
     evrb->wait(stream, seq_id - nstreams);
+
+    // Return input array.
+    long istream = (ichunk * nbatches + ibatch) % nstreams;
+    return input_arrays.slice(0, istream);
 }
 
 
@@ -231,7 +238,7 @@ void GpuDeDedispeser::release_input(long ichunk, long ibatch, cudaStream_t strea
 
     if (!curr_input_acquired) {
         stringstream ss;
-        ss << "GpuDedisperser::acquire_input(): release_input() called without preceding"
+        ss << "GpuDedisperser::acquire_input(): release_input() called without "
            << " acquire_input(), (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
         throw runtime_error(ss.str());
     }
@@ -409,6 +416,11 @@ void GpuDedisperser::release_output(long ichunk, long ibatch, cudaStream_t strea
 // used temporarily when building the graph.) Note that initializing CudaEventRingbuf
 // capacities may be a sticking point. Don't forget KernelGraph::to_yaml()!
 //
+// Note that this code always synchronizes with g2h/h2g streams, and always spawns
+// an early trigger thread, even in simple cases where there are no host buffers
+// (or no early triggers). This small inefficiency is something that a KernelGraph
+// could fix.
+//
 // Note that the synchronization between main thread and et_h2h thread
 // is entirely via CudaEventRingbufs:
 //
@@ -542,8 +554,8 @@ void GpuDedisperser::_worker_main()
         //   host inbuf: producers=[g2h]
         //   et_host outbuf: consumers=[et_h2g]
 
-        evrb_g2h->synchronize(seq_id - min_et_clag, true);   // producer (blocking=true but farfetched)
-        evrb_et_h2g->synchronize(seq_id - nstreams);         // consumer
+        evrb_g2h->synchronize(seq_id - min_et_clag * beams_per_batch, true);   // producer (blocking=true but farfetched)
+        evrb_et_h2g->synchronize(seq_id - nstreams);                           // consumer
         _do_et_h2h(ichunk, ibatch);
 
         // et_h2g kernel: inbufs=[et_host], outbufs=[et_gpu]
@@ -588,6 +600,8 @@ void GpuDedisperser::time(long num_iterations, bool use_hugepages)
     BumpAllocator dummy_gpu_allocator(gpu_aflags, -1);
     this->allocate(dummy_gpu_allocator, dummy_cpu_allocator);
 
+    xxx;  // sleep and synchronize, so that et thread is not behind
+
     // We use a ksgpu::KernelTimer in the timing loop, for the sake of tradition,
     // but it's a little awkward since the KernelTimer defines its own stream pool.
     // In the loop below, we keep the KernelTimer streams synchronized with the 
@@ -604,13 +618,12 @@ void GpuDedisperser::time(long num_iterations, bool use_hugepages)
 
         Array<void> raw_cpu = multi_raw_cpu.slice(0, kt.istream);
         Array<void> raw_gpu = multi_raw_gpu.slice(0, kt.istream);
-        Array<void> dd_in = 
 
         CUDA_CALL(cudaMemcpyAsync(raw_gpu.data, raw_cpu.data, raw_nbytes, cudaMemcpyHostToDevice, h2g_stream));
 
         // Run dequantization kernel on compute stream.
         xxx;  // synchronize h2g_stream -> compute_stream
-        this->acquire_input(ichunk, ibatch, compute_stream);
+        Array<void> dd_in = this->acquire_input(ichunk, ibatch, compute_stream);
         dequantization_kernel.launch(this->input_arrays., in, compute_stream);
 
         // Launches all the dedispersion kernels.

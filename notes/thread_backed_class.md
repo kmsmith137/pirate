@@ -18,6 +18,8 @@ A pattern for a class `X`:
 
 - `~X()` calls `stop()` before joining the worker thread, to force the worker thread to exit.
 
+- In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X:allocate()`.
+
 ## Example Code
 
 In this toy example, `X` is backed by one worker thread, and contains a thread-safe work queue.

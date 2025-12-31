@@ -328,7 +328,6 @@ void GpuDedisperser::_launch_g2h(long ichunk, long ibatch, cudaStream_t stream)
 }
 
 
-// XXX clean up cut-and-paste with _launch_g2h().
 void GpuDedisperser::_launch_h2g(long ichunk, long ibatch, cudaStream_t stream)
 {
     const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
