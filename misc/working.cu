@@ -63,16 +63,6 @@ struct GpuDedisperser
     void _worker_thread_main();
 
     // The CudaEventRingbufs keep track of lagged dependencies between kernels.
-    //
-    // Synchronization between main thread and et_h2h worker thread works as follows:
-    //   - evrb_g2h: produced in main thread, consumed in worker
-    //   - evrb_cdd2: produced in main thread, consumed in worker
-    //   - evrb_et_h2g: produced in worker, consumed in main thread
-    //
-    // Synchronization of input/output buffers works as follows:
-    //   - (evrb_tree_gridding or evrb_cdd2): consumed in acquire_input()
-    //   - (evrb_output): produced in release_output()
-
     std::shared_ptr<CudaEventRingbuf> evrb_tree_gridding;
     std::shared_ptr<CudaEventRingbuf> evrb_g2g;
     std::shared_ptr<CudaEventRingbuf> evrb_g2h;
@@ -105,7 +95,6 @@ GpuDedisperser::GpuDedisperser() :
     xassert(stream_pool);
     xassert(plan->nstreams == stream_pool->nstreams);
 
-    this->plan = params.plan;
 
     // Initialize CudaEventRingbufs.
     //
@@ -122,7 +111,7 @@ GpuDedisperser::GpuDedisperser() :
 
     // FIXME: using huge CudaEventRingbuf capacity for now!
     // Not sure if this will work, but let's try.
-    long capacity = (plan->mega_ringbuf->max_clag * nbatches) + nstreams;
+    long capacity = (mega_ringbuf->max_clag * nbatches) + nstreams;
 
     this->evrb_tree_gridding = make_shared<CudaEventRingbuf> ("tree_gridding", tg_nconsumers, capacity);
     this->evrb_g2g = make_shared<CudaEventRingbuf> ("g2g", 1, capacity);
@@ -141,14 +130,14 @@ GpuDedisperser::GpuDedisperser() :
     // the next batch of gpu kernels.
 
     // For h2g prefectching to work, the following assert must be satisfied.
-    long min_host_clag = plan->mega_ringbuf->min_host_clag;
+    long min_host_clag = mega_ringbuf->min_host_clag;
     xassert_ge(min_host_clag * nbatches, nstreams);
 
     // To implement h2g prefectching, we pretend that the first (nstreams) batches
     // of h2g data have already been copied, by calling evrb_h2g.record(). Note
     // that this data is all-zeroes anyway, by the previous assert.
     for (long seq_id = 0; seq_id < nstreams; seq_id++) {
-        cudaStream_t s = plan->stream_pool->low_priority_h2g;
+        cudaStream_t s = stream_pool->low_priority_h2g;
         evrb_h2g->record(s, seq_id);
     }
 
@@ -310,9 +299,9 @@ void GpuDedisperser::release_output(long ichunk, long ibatch, cudaStream_t strea
     xassert((ibatch >= 0) && (ibatch < nbatches));
 
     long seq_id = ichunk * nbatches + ibatch;
-    cudaStream_t g2h_stream = params.stream_pool->low_priority_g2h_stream;
-    cudaStream_t h2g_stream = params.stream_pool->low_priority_h2g_stream;
-    cudaStream_t compute_stream = params.stream_pool->compute_streams.at(seq_id % nstreams);
+    cudaStream_t g2h_stream = stream_pool->low_priority_g2h_stream;
+    cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
+    cudaStream_t compute_stream = stream_pool->compute_streams.at(seq_id % nstreams);
 
     std::unique_lock<std::mutex> lock(mutex);
 
@@ -433,9 +422,9 @@ void GpuDedispersionKernel::_launch_dedispersion_kernels(long ichunk, long ibatc
 {
     // Argument-checking has already been done in release_input().
     long seq_id = ichunk * nbatches + ibatch;
-    cudaStream_t g2h_stream = params.stream_pool->low_priority_g2h_stream;
-    cudaStream_t h2g_stream = params.stream_pool->low_priority_h2g_stream;
-    cudaStream_t compute_stream = params.stream_pool->compute_streams.at(seq_id % nstreams);
+    cudaStream_t g2h_stream = stream_pool->low_priority_g2h_stream;
+    cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
+    cudaStream_t compute_stream = stream_pool->compute_streams.at(seq_id % nstreams);
 
     // Compute kernel waits on the caller-specified stream.
     cudaEvent_t *event = nullptr;
@@ -489,7 +478,7 @@ void GpuDedispersionKernel::_launch_dedispersion_kernels(long ichunk, long ibatc
     // as the only synchronization mechanism. (In practice, I doubt that the suboptimality
     // matters at all.)
 
-    long et_h2h_headroom = plan->mega_ringbuf->et_h2h_headroom;
+    long et_h2h_headroom = mega_ringbuf->et_h2h_headroom;
     long et_seq_id = seq_id - nstreams - (et_h2h_headroom * nbatches);
     evrb_et_h2g->synchronize_with_producer(et_seq_id);   // consumer (et_h2g)
     evrb_h2g->wait(g2h_stream, seq_id - nstreams);       // consumer (h2g)
@@ -528,7 +517,7 @@ void GpuDedispersionKernel::_launch_dedispersion_kernels(long ichunk, long ibatc
 
     long prefetch_ichunk = (seq_id + nstreams) / nbatches;
     long prefetch_ibatch = (seq_id + nstreams) % nbatches;
-    long min_host_clag = plan->mega_ringbuf->min_host_clag;
+    long min_host_clag = mega_ringbuf->min_host_clag;
     long producer_seq_id = seq_id + nstreams - (min_host_clag * nbatches);
 
     evrb_g2h->wait(h2g_stream, producer_seq_id);  // producer (g2h)
@@ -542,8 +531,8 @@ void GpuDedisperser::_worker_main()
 {
     xassert(is_allocated);
 
-    cudaStream_t h2g_stream = params.stream_pool->low_priority_h2g_stream;
-    long min_et_clag = plan->mega_ringbuf->min_et_clag;
+    cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
+    long min_et_clag = mega_ringbuf->min_et_clag;
     long seq_id = 0;
 
     for (;;) {
@@ -613,8 +602,8 @@ void GpuDedisperser::time(long num_iterations, bool use_hugepages)
         long ichunk = kt.curr_iteration / nbatches;
         long ibatch = kt.curr_iteration % nbatches;
 
-        cudaStream_t h2g_stream = this->params.stream_pool.high_priority_h2g;
-        cudaStream_t compute_stream = this->params.stream_pool.compute_streams.at(kt.istream);
+        cudaStream_t h2g_stream = this->stream_pool.high_priority_h2g;
+        cudaStream_t compute_stream = this->stream_pool.compute_streams.at(kt.istream);
 
         Array<void> raw_cpu = multi_raw_cpu.slice(0, kt.istream);
         Array<void> raw_gpu = multi_raw_gpu.slice(0, kt.istream);

@@ -23,12 +23,12 @@ CudaStreamPool::CudaStreamPool(int num_compute_streams_)
     pool_id = next_pool_id.fetch_add(1);
     
     // Create low-priority transfer streams (default priority = 0).
-    low_priority_g2h = ksgpu::CudaStreamWrapper::create(0);
-    low_priority_h2g = ksgpu::CudaStreamWrapper::create(0);
+    low_priority_g2h_stream = ksgpu::CudaStreamWrapper::create(0);
+    low_priority_h2g_stream = ksgpu::CudaStreamWrapper::create(0);
     
     // Create high-priority transfer streams (priority = -1).
-    high_priority_g2h = ksgpu::CudaStreamWrapper::create(-1);
-    high_priority_h2g = ksgpu::CudaStreamWrapper::create(-1);
+    high_priority_g2h_stream = ksgpu::CudaStreamWrapper::create(-1);
+    high_priority_h2g_stream = ksgpu::CudaStreamWrapper::create(-1);
     
     // Create compute streams (default priority = 0).
     compute_streams = ksgpu::CudaStreamWrapper::create_vector(num_compute_streams, 0);

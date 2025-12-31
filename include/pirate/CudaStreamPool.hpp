@@ -30,10 +30,10 @@ struct CudaStreamPool
     // Suggest using low priority for dedispersion ringbufs, and high-priority for
     // everything else. I think this simple heuristic will help with throughput.
     
-    ksgpu::CudaStreamWrapper low_priority_g2h;   // GPU to host
-    ksgpu::CudaStreamWrapper low_priority_h2g;   // Host to GPU
-    ksgpu::CudaStreamWrapper high_priority_g2h;  // GPU to host
-    ksgpu::CudaStreamWrapper high_priority_h2g;  // Host to GPU
+    ksgpu::CudaStreamWrapper low_priority_g2h_stream;   // GPU to host
+    ksgpu::CudaStreamWrapper low_priority_h2g_stream;   // Host to GPU
+    ksgpu::CudaStreamWrapper high_priority_g2h_stream;  // GPU to host
+    ksgpu::CudaStreamWrapper high_priority_h2g_stream;  // Host to GPU
     
     // Compute streams (default priority = 0).
     std::vector<ksgpu::CudaStreamWrapper> compute_streams;
