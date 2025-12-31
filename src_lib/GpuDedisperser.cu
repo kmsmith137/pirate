@@ -137,13 +137,40 @@ GpuDedisperser::GpuDedisperser(const shared_ptr<DedispersionPlan> &plan_) :
         resource_tracker.add_gmem_footprint("out_argmax", out_nelts * 4, true);  // uint = 4 bytes
     }
 
-    // XXX should I keep these asserts?
+    // The kernel-launching code makes assumptions about the MegaRingbuf buffer sizes.
+    // List all of these assumptions in one place, and check them.
+
+    const long BT = total_beams;                 // total beams
+    const long BA = nstreams * beams_per_batch;  // active beams
+
     shared_ptr<MegaRingbuf> mega_ringbuf = plan->mega_ringbuf;
     long max_clag = mega_ringbuf->max_clag;
+
+    xassert_divisible(config.beams_per_gpu, config.beams_per_batch);   // assert that length-BB copies don't "wrap"
+    xassert(mega_ringbuf->gpu_zones.size() == uint(max_clag+1));
     xassert(mega_ringbuf->host_zones.size() == uint(max_clag+1));
     xassert(mega_ringbuf->h2g_zones.size() == uint(max_clag+1));
     xassert(mega_ringbuf->g2h_zones.size() == uint(max_clag+1));
-    xassert_divisible(config.beams_per_gpu, config.beams_per_batch);   // assert that length-BB copies don't "wrap"
+
+    for (int clag = 0; clag <= mega_ringbuf->max_clag; clag++) {
+        MegaRingbuf::Zone &host_zone = mega_ringbuf->host_zones.at(clag);
+        MegaRingbuf::Zone &g2h_zone = mega_ringbuf->g2h_zones.at(clag);
+        MegaRingbuf::Zone &h2g_zone = mega_ringbuf->h2g_zones.at(clag);
+
+        xassert(host_zone.segments_per_frame == g2h_zone.segments_per_frame);
+        xassert(host_zone.segments_per_frame == h2g_zone.segments_per_frame);
+
+        xassert(host_zone.num_frames == clag*BT + BA);
+        xassert(g2h_zone.num_frames == BA);
+        xassert(h2g_zone.num_frames == BA);
+    }
+
+    MegaRingbuf::Zone &eth_zone = mega_ringbuf->et_host_zone;
+    MegaRingbuf::Zone &etg_zone = mega_ringbuf->et_gpu_zone;
+
+    xassert(eth_zone.segments_per_frame == etg_zone.segments_per_frame);
+    xassert(eth_zone.num_frames == BA);
+    xassert(etg_zone.num_frames == BA);
 }
 
 
@@ -263,19 +290,13 @@ void GpuDedisperser::_do_et_h2h(long ichunk, long ibatch)
 
 void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch, cudaStream_t stream)
 {
-    const long BT = this->config.beams_per_gpu;            // total beams
-    const long BB = this->config.beams_per_batch;          // beams per batch
-    const long BA = this->config.num_active_batches * BB;  // active beams
     const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
-    const long iframe = (ichunk * BT) + (ibatch * BB);
+    const long iframe = (ichunk * total_beams) + (ibatch * beams_per_batch);
 
     MegaRingbuf::Zone &eth_zone = plan->mega_ringbuf->et_host_zone;
     MegaRingbuf::Zone &etg_zone = plan->mega_ringbuf->et_gpu_zone;
-    
-    xassert(eth_zone.segments_per_frame == etg_zone.segments_per_frame);
-    xassert(eth_zone.num_frames == BA);
-    xassert(etg_zone.num_frames == BA);
 
+    // Note: there are some relevant asserts in the GpuDedisperser constructor.
     long soff = eth_zone.segment_offset_of_frame(iframe);
     long doff = etg_zone.segment_offset_of_frame(iframe);
     char *src = (char *) this->host_ringbuf.data + (soff * SB);
@@ -287,19 +308,13 @@ void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch, cudaStream_t strea
 
 void GpuDedisperser::_launch_g2h(long ichunk, long ibatch, cudaStream_t stream)
 {    
-    const long BT = this->config.beams_per_gpu;            // total beams
-    const long BB = this->config.beams_per_batch;          // beams per batch
-    const long BA = this->config.num_active_batches * BB;  // active beams
     const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
-    const long iframe = (ichunk * BT) + (ibatch * BB);
+    const long iframe = (ichunk * total_beams) + (ibatch * beams_per_batch);
 
     for (int clag = 0; clag <= plan->mega_ringbuf->max_clag; clag++) {
+        // Note: there are some relevant asserts in the GpuDedisperser constructor.
         MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
         MegaRingbuf::Zone &g2h_zone = plan->mega_ringbuf->g2h_zones.at(clag);
-
-        xassert(host_zone.segments_per_frame == g2h_zone.segments_per_frame);
-        xassert(host_zone.num_frames == clag*BT + BA);
-        xassert(g2h_zone.num_frames == BA);
 
         if (host_zone.segments_per_frame > 0) {
             long soff = g2h_zone.segment_offset_of_frame(iframe);
@@ -316,23 +331,16 @@ void GpuDedisperser::_launch_g2h(long ichunk, long ibatch, cudaStream_t stream)
 // XXX clean up cut-and-paste with _launch_g2h().
 void GpuDedisperser::_launch_h2g(long ichunk, long ibatch, cudaStream_t stream)
 {
-    const long BT = this->config.beams_per_gpu;            // total beams
-    const long BB = this->config.beams_per_batch;          // beams per batch
-    const long BA = this->config.num_active_batches * BB;  // active beams
     const long SB = constants::bytes_per_gpu_cache_line;   // bytes per segment
-    const long iframe = (ichunk * BT) + (ibatch * BB);
-    const long max_clag = plan->mega_ringbuf->max_clag;
+    const long iframe = (ichunk * total_beams) + (ibatch * beams_per_batch);
 
     for (int clag = 0; clag <= plan->mega_ringbuf->max_clag; clag++) {
+        // Note: there are some relevant asserts in the GpuDedisperser constructor.
         MegaRingbuf::Zone &host_zone = plan->mega_ringbuf->host_zones.at(clag);
         MegaRingbuf::Zone &h2g_zone = plan->mega_ringbuf->h2g_zones.at(clag);
 
-        xassert(host_zone.segments_per_frame == h2g_zone.segments_per_frame);
-        xassert(host_zone.num_frames == clag*BT + BA);
-        xassert(h2g_zone.num_frames == BA);
-
         if (host_zone.segments_per_frame > 0) {
-            long soff = host_zone.segment_offset_of_frame(iframe - clag*BT);
+            long soff = host_zone.segment_offset_of_frame(iframe -  clag * total_beams);
             long doff = h2g_zone.segment_offset_of_frame(iframe);
             char *src = reinterpret_cast<char *> (this->host_ringbuf.data) + (soff * SB);
             char *dst = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (doff * SB);
