@@ -112,6 +112,12 @@ void MegaRingbuf::finalize(bool delete_internals)
     //     g2g_triples, h2h_triples).
     //
     //   - Initialize Zone::segments_per_beam (but not Zone::global_segment_offset).
+    //
+    //   - Initialize (min_host_clag, min_et_clag, min_et_headroom).
+
+    this->min_host_clag = max_clag;
+    this->min_et_clag = max_clag;
+    this->min_et_headroom = max_clag;
 
     this->producer_triples.resize(num_producers);
     this->consumer_triples.resize(num_consumers);
@@ -236,13 +242,14 @@ void MegaRingbuf::finalize(bool delete_internals)
                     _push_triple(h2h_triples, &et_host_zone, 0);                      // h2h dst
                     _set_triple(consumer, &et_gpu_zone, 0);
 
-                    long headroom = gpu_clag + host_clag - chunk_lag;
-                    xassert(headroom > 0);
-
-                    if ((et_h2h_headroom < 0) || (et_h2h_headroom > headroom))
-                        this->et_h2h_headroom = headroom;
+                    this->min_et_clag = min(min_et_clag, chunk_lag - gpu_clag);
+                    this->min_et_headroom = min(min_et_headroom, gpu_clag + host_clag - chunk_lag);
                 }
             }
+
+            // Loose end: min_host_clag
+            if (ncpu > 0)
+                this->min_host_clag = min(min_host_clag, host_clag - gpu_clag);
         }
     }
 
@@ -571,15 +578,12 @@ void MegaRingbuf::to_yaml(YAML::Emitter &emitter, double frames_per_second, long
         ss << fixed << setprecision(3) << et_h2h_gbps << " GB/s";
         emitter << YAML::Key << "et_h2h bandwidth" << YAML::Value << ss.str();
     }
-
-    if (et_h2h_headroom > 0) {
-        stringstream ss;
-        ss << fixed << setprecision(2) << (et_h2h_headroom * T) << " seconds";
-        emitter << YAML::Key << "et_h2h_headroom" << YAML::Value << ss.str();
-    }
-
+    
     emitter << YAML::Key << "max_clag" << YAML::Value << max_clag;
     emitter << YAML::Key << "max_gpu_clag" << YAML::Value << max_gpu_clag;
+    emitter << YAML::Key << "min_host_clag" << YAML::Value << min_host_clag;
+    emitter << YAML::Key << "min_et_clag" << YAML::Value << min_et_clag;
+    emitter << YAML::Key << "min_et_headroom" << YAML::Value << min_et_headroom;
 
     emitter << YAML::EndMap;
 }

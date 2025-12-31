@@ -218,13 +218,6 @@ struct MegaRingbuf {
     // Serialize this MegaRingbuf to YAML format
     void to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose=false) const;
 
-    // The 'et_h2h_headroom' member is only used in informational print-statements.
-    // It quantifies the amount of "headroom" that the et_h2h thread gets, before the
-    // end of the host-side ring buffer. (Reminder: in situations where a segment is
-    // copied N times from host to GPU, because of early triggers, the et_h2h thread
-    // sets up the first (N-1) copies.)
-    long et_h2h_headroom = -1;  // in chunks
-
     // ------------------------------------------------------------------------
     //
     // Internals.
@@ -242,8 +235,17 @@ struct MegaRingbuf {
     // segments[producer_id][producer_iquad] = (Segment containing consumer ids/iquads/lags)
     std::vector<std::vector<Segment>> segments;
 
-    long max_clag = 0;      // updated in add_segment()
-    long max_gpu_clag = 0;  // initialized in finalize()
+    // max_clag: largest lag (in chunks) of any zone
+    // max_gpu_clag: largest lag of any _nonempty_ gpu_zone
+    // min_host_clag: smallest lag of any _nonempty_ host zone
+    // min_et_clag: smallest lag between (segment arrives on host) and (et_h2h ingests segment)
+    // min_et_headroom: smallest lag between (et_h2h ingests segment) and (segment leaves host)
+
+    long max_clag = 0;         // updated in add_segment()
+    long max_gpu_clag = 0;     // initialized in finalize()
+    long min_host_clag = 0;    // initialized in finalize()
+    long min_et_clag = 0;      // initialized in finalize()
+    long min_et_headroom = 0;  // initialized in finalize()  
 
     // Zones are created in finalize().
     struct Zone
