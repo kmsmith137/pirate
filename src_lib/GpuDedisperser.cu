@@ -291,6 +291,79 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
     xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
 
     this->is_allocated = true;
+
+    // Create worker thread (thread-backed class pattern).
+    this->worker = std::thread(&GpuDedisperser::worker_main, this);
+}
+
+
+GpuDedisperser::~GpuDedisperser()
+{
+    // Stop the worker thread.
+    this->stop();
+
+    // Stop all CudaEventRingbufs before joining the worker thread.
+    // This ensures that any blocking waits in the worker thread will unblock.
+    if (evrb_tree_gridding) evrb_tree_gridding->stop();
+    if (evrb_g2g) evrb_g2g->stop();
+    if (evrb_g2h) evrb_g2h->stop();
+    if (evrb_h2g) evrb_h2g->stop();
+    if (evrb_cdd2) evrb_cdd2->stop();
+    if (evrb_et_h2g) evrb_et_h2g->stop();
+    if (evrb_output) evrb_output->stop();
+
+    // Join the worker thread.
+    if (worker.joinable())
+        worker.join();
+
+    // Synchronize all streams in stream_pool after joining the worker thread.
+    // This ensures that before GPU arrays are freed (in subsequent destructors),
+    // all kernels that perform IO on those arrays have completed. Without this
+    // synchronization, we would have a race condition where array memory could
+    // be freed while GPU kernels are still accessing it.
+    if (stream_pool) {
+        cudaStreamSynchronize(stream_pool->low_priority_g2h_stream);
+        cudaStreamSynchronize(stream_pool->low_priority_h2g_stream);
+        cudaStreamSynchronize(stream_pool->high_priority_g2h_stream);
+        cudaStreamSynchronize(stream_pool->high_priority_h2g_stream);
+        for (auto &s : stream_pool->compute_streams)
+            cudaStreamSynchronize(s);
+    }
+}
+
+
+void GpuDedisperser::stop(std::exception_ptr e)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (is_stopped) return;
+    is_stopped = true;
+    error = e;
+    
+    // GpuDedisperser doesn't currently need a condition_variable.
+    // See comment in Dedisperser.hpp.
+    // cv.notify_all();
+}
+
+
+void GpuDedisperser::_throw_if_stopped(const char *method_name)
+{
+    // Caller must hold mutex.
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped) {
+        throw std::runtime_error(std::string("GpuDedisperser::") + method_name + " called on stopped instance");
+    }
+}
+
+
+void GpuDedisperser::worker_main()
+{
+    try {
+        _worker_main();  // only returns if GpuDedisperser::is_stopped
+    } catch (...) {
+        stop(std::current_exception());
+    }
 }
 
 
@@ -432,6 +505,7 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
     xassert(is_allocated);
 
     std::unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("acquire_input");
 
     if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch)) {
         stringstream ss;
@@ -463,21 +537,26 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
     curr_input_acquired = true;
     lock.unlock();
 
-    // Argument-checking ends here.
+    // Argument-checking ends here. If an exception is thrown below, call stop().
     // If fixed_weights=true, then 'stream' should wait for the tree gridding
     // kernel (consumer of input array). If fixed_weights=false, then 'stream'
     // should wait for cdd2 (consumer of pf_weights array).
 
-    shared_ptr<CudaEventRingbuf> &evrb = params.fixed_weights ? evrb_tree_gridding : evrb_cdd2;
+    try {
+        shared_ptr<CudaEventRingbuf> &evrb = params.fixed_weights ? evrb_tree_gridding : evrb_cdd2;
 
-    // This call to wait() can be nonblocking, since we know that the tree_gridding/cdd2
-    // kernel was successfully launched by a previous call to release_input().
-    long seq_id = ichunk * nbatches + ibatch;
-    evrb->wait(stream, seq_id - nstreams);
+        // This call to wait() can be nonblocking, since we know that the tree_gridding/cdd2
+        // kernel was successfully launched by a previous call to release_input().
+        long seq_id = ichunk * nbatches + ibatch;
+        evrb->wait(stream, seq_id - nstreams);
 
-    // Return input array.
-    long istream = seq_id % nstreams;
-    return input_arrays.slice(0, istream);
+        // Return input array.
+        long istream = seq_id % nstreams;
+        return input_arrays.slice(0, istream);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -487,6 +566,7 @@ void GpuDedisperser::release_input(long ichunk, long ibatch, cudaStream_t stream
     xassert((ibatch >= 0) && (ibatch < nbatches));
 
     std::unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("release_input");
 
     if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch)) {
         stringstream ss;
@@ -513,9 +593,14 @@ void GpuDedisperser::release_input(long ichunk, long ibatch, cudaStream_t stream
 
     lock.unlock();
 
-    // Argument-checking ends here. The rest of release_input() is in its own
-    // method _launch_dedispersion_kernels().
-    _launch_dedispersion_kernels(ichunk, ibatch, stream);
+    // Argument-checking ends here. If an exception is thrown below, call stop().
+    // The rest of release_input() is in its own method _launch_dedispersion_kernels().
+    try {
+        _launch_dedispersion_kernels(ichunk, ibatch, stream);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -526,6 +611,7 @@ void GpuDedisperser::acquire_output(long ichunk, long ibatch, cudaStream_t strea
     xassert(is_allocated);
 
     std::unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("acquire_output");
 
     if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch)) {
         stringstream ss;
@@ -557,10 +643,16 @@ void GpuDedisperser::acquire_output(long ichunk, long ibatch, cudaStream_t strea
     curr_output_acquired = true;
     lock.unlock();
 
-    // Argument checking ends here. The caller-specified stream waits for 'cdd2' to produce outputs.
-    long seq_id = ichunk * nbatches + ibatch;
-    bool blocking = !params.detect_deadlocks;
-    evrb_cdd2->wait(stream, seq_id, blocking);
+    // Argument checking ends here. If an exception is thrown below, call stop().
+    // The caller-specified stream waits for 'cdd2' to produce outputs.
+    try {
+        long seq_id = ichunk * nbatches + ibatch;
+        bool blocking = !params.detect_deadlocks;
+        evrb_cdd2->wait(stream, seq_id, blocking);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -570,11 +662,9 @@ void GpuDedisperser::release_output(long ichunk, long ibatch, cudaStream_t strea
     xassert((ibatch >= 0) && (ibatch < nbatches));
 
     long seq_id = ichunk * nbatches + ibatch;
-    cudaStream_t g2h_stream = stream_pool->low_priority_g2h_stream;
-    cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
-    cudaStream_t compute_stream = stream_pool->compute_streams.at(seq_id % nstreams);
 
     std::unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("release_output");
 
     if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch)) {
         stringstream ss;
@@ -601,10 +691,15 @@ void GpuDedisperser::release_output(long ichunk, long ibatch, cudaStream_t strea
 
     lock.unlock();
     
-    // Argument-checking ends here. We record an event from the caller-specified stream,
-    // and put it in 'evrb_output' (a CudaEventRingbuf). The ccd2 kernel will wait for
-    // this event later.
-    evrb_output->record(stream, seq_id);
+    // Argument-checking ends here. If an exception is thrown below, call stop().
+    // We record an event from the caller-specified stream, and put it in 'evrb_output'
+    // (a CudaEventRingbuf). The cdd2 kernel will wait for this event later.
+    try {
+        evrb_output->record(stream, seq_id);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -805,6 +900,10 @@ void GpuDedisperser::_worker_main()
     cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
     long min_et_clag = mega_ringbuf->min_et_clag;
     long seq_id = 0;
+
+    // Note that the worker doesn't explicitly check GpuDedisperser::is_stopped.
+    // This is okay because calling GpuDedisperser::stop() automatically calls stop()
+    // in all the CudaEventRingbufs.
 
     for (;;) {
         long ichunk = seq_id / nstreams;

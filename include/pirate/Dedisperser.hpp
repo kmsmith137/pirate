@@ -111,6 +111,14 @@ struct GpuDedisperser
     void acquire_output(long ichunk, long ibatch, cudaStream_t stream);
     void release_output(long ichunk, long ibatch, cudaStream_t stream);
 
+    // Thread-backed class pattern: stop the worker thread and put the object
+    // into a "stopped" state. The first caller sets 'error'. If e is null,
+    // represents normal termination; if non-null, represents an error.
+    // Entry points called after stop() will rethrow the stored exception.
+    void stop(std::exception_ptr e = std::exception_ptr());
+
+    ~GpuDedisperser();
+
     // Static member function: runs one randomized test iteration.
     static void test_random();
 
@@ -183,6 +191,10 @@ struct GpuDedisperser
     // These methods contain the difficult code :)
     void _launch_dedispersion_kernels(long ichunk, long ibatch, cudaStream_t stream);
     void _worker_main();
+    void worker_main();
+
+    // Thread-backed class pattern: helpers.
+    void _throw_if_stopped(const char *method_name);
 
     // The CudaEventRingbufs keep track of lagged dependencies between kernels.
     std::shared_ptr<CudaEventRingbuf> evrb_tree_gridding;
@@ -194,7 +206,6 @@ struct GpuDedisperser
     std::shared_ptr<CudaEventRingbuf> evrb_output;
 
     std::mutex mutex;
-    std::condition_variable cv;
 
     long curr_input_ichunk = 0;
     long curr_input_ibatch = 0;
@@ -204,9 +215,12 @@ struct GpuDedisperser
     long curr_output_ibatch = 0;
     bool curr_output_acquired = false;
 
-    // For now, we always use one et_h2h worker thread.
-    // FIXME(?) dynamically assign the number of et_h2h worker threads later?
+    // Thread-backed class pattern: worker thread and stopped state.
+    // Note: no condition_variable needed to wake up worker thread, since the worker does
+    // all of its waiting on condition_variables which are members of CudaEventRingbuf.
     std::thread worker;
+    bool is_stopped = false;
+    std::exception_ptr error;
 };
 
 
