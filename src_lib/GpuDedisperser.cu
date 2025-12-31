@@ -188,23 +188,36 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     //   g2h: consumers=[dd1,h2g,et_h2h]
     //   h2g: consumers=[g2h,cdd2]
     //   cdd2: consumers=[tg,h2g,et_h2g,acq_input,acq_output]
-    //   et_h2g: consumers=[g2h,et_h2h,cdd2]
+    //   et_h2g: consumers=[et_h2h,cdd2]   (*)
     //   output: consumers=[cdd2]
+    //
+    // (*) Note that the g2h code waits on et_h2g, via CudaEventRingbuf::synchronize_with_producer(),
+    //     but this doesn't count as a "consumer" of the et_h2g ringbuf.
 
     long tg_nconsumers = params.fixed_weights ? 1 : 0;
     long cdd2_nconsumers = params.fixed_weights ? 4 : 5;
 
     // FIXME: using huge CudaEventRingbuf capacity for now!
     // Not sure if this will work, but let's try.
-    long capacity = (mega_ringbuf->max_clag * nbatches) + nstreams;
+    long capacity = 1000; // XXX host_seq_lag + et_seq_headroom + et_seq_lag + (3 * nstreams);
 
     this->evrb_tree_gridding = make_shared<CudaEventRingbuf> ("tree_gridding", tg_nconsumers, capacity);
     this->evrb_g2g = make_shared<CudaEventRingbuf> ("g2g", 1, capacity);
     this->evrb_g2h = make_shared<CudaEventRingbuf> ("g2h", 3, capacity);
     this->evrb_h2g = make_shared<CudaEventRingbuf> ("h2g", 2, capacity);
     this->evrb_cdd2 = make_shared<CudaEventRingbuf> ("cdd2", cdd2_nconsumers, capacity);
-    this->evrb_et_h2g = make_shared<CudaEventRingbuf> ("et_h2g", 3, capacity);
+    this->evrb_et_h2g = make_shared<CudaEventRingbuf> ("et_h2g", 2, capacity);
     this->evrb_output = make_shared<CudaEventRingbuf> ("output", 1, capacity);
+
+    bool has_host_ringbuf = (mega_ringbuf->host_global_nseg > 0);
+    bool has_early_triggers = (mega_ringbuf->et_host_zone.segments_per_frame > 0);
+
+    // These members help keep track of lags between kernels. See later in this source file for usage.
+    // In cases where a placeholder values is needed, we use (2*nstreams).
+
+    this->host_seq_lag = has_host_ringbuf ? (mega_ringbuf->min_host_clag * nbatches) : (2*nstreams);
+    this->et_seq_headroom = has_early_triggers ? (mega_ringbuf->min_et_headroom * nbatches) : (2*nstreams);
+    this->et_seq_lag = has_early_triggers ? (mega_ringbuf->min_et_clag * nbatches) : (2*nstreams);
 
     // Note special "prefetch" logic for h2g copies!!
     // I can't decide if this way of doing it is elegant or a hack :)
@@ -214,11 +227,15 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     // This should improve throughput, by "prefetching" the h2g data for
     // the next batch of gpu kernels.
 
-    // For h2g prefectching to work, the following assert must be satisfied.
-    long min_host_clag = mega_ringbuf->min_host_clag;
-    xassert_ge(min_host_clag * nbatches, nstreams);
+    // For h2g prefetching to work, the following assert must be satisfied.
+    cout << "XXX has_host_ringbuf=" << has_host_ringbuf 
+         << ", min_host_clag=" << mega_ringbuf->min_host_clag 
+         << ", nbatches=" << nbatches
+         << ", nstreams=" << nstreams << endl;
+         
+    xassert_ge(host_seq_lag, nstreams);
 
-    // To implement h2g prefectching, we pretend that the first (nstreams) batches
+    // To implement h2g prefetching, we pretend that the first (nstreams) batches
     // of h2g data have already been copied, by calling evrb_h2g.record(). Note
     // that this data is all-zeroes anyway, by the previous assert.
     for (long seq_id = 0; seq_id < nstreams; seq_id++) {
@@ -338,7 +355,7 @@ void GpuDedisperser::stop(std::exception_ptr e)
     if (is_stopped) return;
     is_stopped = true;
     error = e;
-    
+
     // GpuDedisperser doesn't currently need a condition_variable.
     // See comment in Dedisperser.hpp.
     // cv.notify_all();
@@ -844,8 +861,7 @@ void GpuDedisperser::_launch_dedispersion_kernels(long ichunk, long ibatch, cuda
     // as the only synchronization mechanism. (In practice, I doubt that the suboptimality
     // matters at all.)
 
-    long min_et_headroom = mega_ringbuf->min_et_headroom;
-    long et_seq_id = seq_id - nstreams - (min_et_headroom * nbatches);
+    long et_seq_id = seq_id - nstreams - et_seq_headroom;
     evrb_et_h2g->synchronize_with_producer(et_seq_id);   // consumer (et_h2g)
     evrb_h2g->wait(g2h_stream, seq_id - nstreams);       // consumer (h2g)
     evrb_g2g->wait(g2h_stream, seq_id);                  // producer (g2g)
@@ -883,13 +899,12 @@ void GpuDedisperser::_launch_dedispersion_kernels(long ichunk, long ibatch, cuda
 
     long prefetch_ichunk = (seq_id + nstreams) / nbatches;
     long prefetch_ibatch = (seq_id + nstreams) % nbatches;
-    long min_host_clag = mega_ringbuf->min_host_clag;
-    long producer_seq_id = seq_id + nstreams - (min_host_clag * nbatches);
+    long producer_seq_id = seq_id + nstreams - host_seq_lag;
 
     evrb_g2h->wait(h2g_stream, producer_seq_id);  // producer (g2h)
     evrb_cdd2->wait(h2g_stream, seq_id);          // consumer (cdd2)
     _launch_h2g(prefetch_ichunk, prefetch_ibatch, h2g_stream);
-    evrb_h2g->record(h2g_stream, seq_id);
+    evrb_h2g->record(h2g_stream, seq_id + nstreams);
 }
 
 
@@ -898,7 +913,6 @@ void GpuDedisperser::_worker_main()
     xassert(is_allocated);
 
     cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
-    long min_et_clag = mega_ringbuf->min_et_clag;
     long seq_id = 0;
 
     // Note that the worker doesn't explicitly check GpuDedisperser::is_stopped.
@@ -913,8 +927,8 @@ void GpuDedisperser::_worker_main()
         //   host inbuf: producers=[g2h]
         //   et_host outbuf: consumers=[et_h2g]
 
-        evrb_g2h->synchronize(seq_id - min_et_clag * beams_per_batch, true);   // producer (blocking=true but farfetched)
-        evrb_et_h2g->synchronize(seq_id - nstreams);                           // consumer
+        evrb_g2h->synchronize(seq_id - et_seq_lag, true);   // producer (blocking=true but farfetched)
+        evrb_et_h2g->synchronize(seq_id - nstreams);        // consumer
         _do_et_h2h(ichunk, ibatch);
 
         // et_h2g kernel: inbufs=[et_host], outbufs=[et_gpu]
