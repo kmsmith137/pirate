@@ -211,7 +211,7 @@ void CoalescedDdKernel2::launch(
 
 
 // Static member function: runs one randomized test iteration.
-void CoalescedDdKernel2::test()
+void CoalescedDdKernel2::test_random()
 {
     RegistryKey key = registry().get_random_key();
     Dtype dtype = key.dtype;
@@ -455,7 +455,7 @@ void CoalescedDdKernel2::time_one(const vector<long> &subband_counts, const stri
 }
 
 // Static member function
-void CoalescedDdKernel2::time()
+void CoalescedDdKernel2::time_selected()
 {
     // From makefile_helper.py
     time_one({0,0,0,0,1}, "no subbands");

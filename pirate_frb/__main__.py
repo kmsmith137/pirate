@@ -25,18 +25,18 @@ def parse_test(subparsers):
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
     parser.add_argument('--rt', action='store_true', help='Runs ReferenceTree and ReferenceLagbuf tests')
-    parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test()')
-    parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test()')
-    parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test()')
-    parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.test()')
-    parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test()')
-    parser.add_argument('--grck', action='store_true', help='Runs GpuRingbufCopyKernel.test()')
-    parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.test()')
-    parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.test()')
-    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test()')
+    parser.add_argument('--pfwr', action='store_true', help='Runs PfWeightReaderMicrokernel.test_random()')
+    parser.add_argument('--pfom', action='store_true', help='Runs PfOutputMicrokernel.test_random()')
+    parser.add_argument('--gldk', action='store_true', help='Runs GpuLaggedDownsamplingKernel.test_random()')
+    parser.add_argument('--gddk', action='store_true', help='Runs GpuDedispersionKernel.test_random()')
+    parser.add_argument('--gpfk', action='store_true', help='Runs GpuPeakFindingKernel.test_random()')
+    parser.add_argument('--grck', action='store_true', help='Runs GpuRingbufCopyKernel.test_random()')
+    parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.test_random()')
+    parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.test_random()')
+    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.test_random()')
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
-    parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test()')
+    parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
 
 
 def rrange(registry_class):
@@ -65,41 +65,41 @@ def test(args):
         print(f'\nIteration {i+1}/{args.niter}\n')
         
         if run_all_tests or args.rt:
-            pirate_pybind11.ReferenceLagbuf.test()
+            pirate_pybind11.ReferenceLagbuf.test_random()
             pirate_pybind11.ReferenceTree.test_basics()
             pirate_pybind11.ReferenceTree.test_subbands()
         
         if run_all_tests or args.pfwr:
             for _ in rrange(pirate_pybind11.PfWeightReaderMicrokernel):
-                pirate_pybind11.PfWeightReaderMicrokernel.test()
+                pirate_pybind11.PfWeightReaderMicrokernel.test_random()
         
         if run_all_tests or args.pfom:
             for _ in rrange(pirate_pybind11.PfOutputMicrokernel):
-                pirate_pybind11.PfOutputMicrokernel.test()
+                pirate_pybind11.PfOutputMicrokernel.test_random()
         
         if run_all_tests or args.gldk:
-            pirate_pybind11.GpuLaggedDownsamplingKernel.test()
+            pirate_pybind11.GpuLaggedDownsamplingKernel.test_random()
         
         if run_all_tests or args.gddk:
             for _ in rrange(pirate_pybind11.GpuDedispersionKernel):
-                pirate_pybind11.GpuDedispersionKernel.test()
+                pirate_pybind11.GpuDedispersionKernel.test_random()
         
         if run_all_tests or args.gpfk:
             for _ in rrange(pirate_pybind11.GpuPeakFindingKernel):
-                pirate_pybind11.GpuPeakFindingKernel.test()
+                pirate_pybind11.GpuPeakFindingKernel.test_random()
         
         if run_all_tests or args.grck:
-            pirate_pybind11.GpuRingbufCopyKernel.test()
+            pirate_pybind11.GpuRingbufCopyKernel.test_random()
         
         if run_all_tests or args.gtgk:
-            pirate_pybind11.GpuTreeGriddingKernel.test()
+            pirate_pybind11.GpuTreeGriddingKernel.test_random()
         
         if run_all_tests or args.gdqk:
-            pirate_pybind11.GpuDequantizationKernel.test()
+            pirate_pybind11.GpuDequantizationKernel.test_random()
 
         if run_all_tests or args.cdd2:
             for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
-                pirate_pybind11.CoalescedDdKernel2.test()
+                pirate_pybind11.CoalescedDdKernel2.test_random()
         
         if run_all_tests or args.casm:
             print()
@@ -120,7 +120,7 @@ def test(args):
             
         if run_all_tests or args.dd:
             for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
-                pirate_pybind11.GpuDedisperser.test()
+                pirate_pybind11.GpuDedisperser.test_random()
             
 
 #########################################   time command  ##########################################
@@ -135,9 +135,9 @@ def parse_time(subparsers):
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
     parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
-    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time()')
-    parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time()')
-    parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time()')
+    parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time_selected()')
+    parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
+    parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
     
 def time(args):
     timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2', 'gdqk', 'gtgk' ]
@@ -154,9 +154,9 @@ def time(args):
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
         
     if run_all_timings or args.gldk:
-        pirate_pybind11.GpuLaggedDownsamplingKernel.time()
+        pirate_pybind11.GpuLaggedDownsamplingKernel.time_selected()
     if run_all_timings or args.gddk:
-        pirate_pybind11.GpuDedispersionKernel.time()
+        pirate_pybind11.GpuDedispersionKernel.time_selected()
     if run_all_timings or args.casm:
         pirate_pybind11.CasmBeamformer.run_timings(args.ncu)
     if run_all_timings or args.zomb:
@@ -164,11 +164,11 @@ def time(args):
         pirate_pybind11.time_gpu_downsample()
         pirate_pybind11.time_gpu_transpose()
     if run_all_timings or args.cdd2:
-        pirate_pybind11.CoalescedDdKernel2.time()
+        pirate_pybind11.CoalescedDdKernel2.time_selected()
     if run_all_timings or args.gdqk:
-        pirate_pybind11.GpuDequantizationKernel.time()
+        pirate_pybind11.GpuDequantizationKernel.time_selected()
     if run_all_timings or args.gtgk:
-        pirate_pybind11.GpuTreeGriddingKernel.time()
+        pirate_pybind11.GpuTreeGriddingKernel.time_selected()
 
 
 #####################################   show_hardware command  #####################################

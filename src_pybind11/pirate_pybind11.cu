@@ -169,15 +169,15 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     py::class_<CoalescedDdKernel2>(m, "CoalescedDdKernel2")
-          .def_static("test", &CoalescedDdKernel2::test)
-          .def_static("time", &CoalescedDdKernel2::time)
+          .def_static("test_random", &CoalescedDdKernel2::test_random)
+          .def_static("time_selected", &CoalescedDdKernel2::time_selected)
           .def_static("registry_size", &CoalescedDdKernel2::registry_size)
           .def_static("show_registry", &CoalescedDdKernel2::show_registry)
     ;
 
     py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
-          .def_static("test", &GpuDedispersionKernel::test)
-          .def_static("time", &GpuDedispersionKernel::time)
+          .def_static("test_random", &GpuDedispersionKernel::test_random)
+          .def_static("time_selected", &GpuDedispersionKernel::time_selected)
           .def_static("registry_size", &GpuDedispersionKernel::registry_size)
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
@@ -185,36 +185,36 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<GpuDedisperser>(m, "GpuDedisperser")
           .def(py::init<const std::shared_ptr<DedispersionPlan> &>(), py::arg("plan"))
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
-          .def_static("test", &GpuDedisperser::test)
+          .def_static("test_random", &GpuDedisperser::test_random)
     ;
 
     py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")
-          .def_static("test", &GpuLaggedDownsamplingKernel::test)
-          .def_static("time", &GpuLaggedDownsamplingKernel::time)
+          .def_static("test_random", &GpuLaggedDownsamplingKernel::test_random)
+          .def_static("time_selected", &GpuLaggedDownsamplingKernel::time_selected)
     ;
 
     py::class_<GpuPeakFindingKernel>(m, "GpuPeakFindingKernel")
-          .def_static("test", &GpuPeakFindingKernel::test, py::arg("short_circuit") = false)
+          .def_static("test_random", &GpuPeakFindingKernel::test_random, py::arg("short_circuit") = false)
           .def_static("registry_size", &GpuPeakFindingKernel::registry_size)
           .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
     ;
 
     py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")
-          .def_static("test", &GpuRingbufCopyKernel::test)
+          .def_static("test_random", &GpuRingbufCopyKernel::test_random)
     ;
 
     py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel")
-          .def_static("test", &GpuTreeGriddingKernel::test)
-          .def_static("time", &GpuTreeGriddingKernel::time)
+          .def_static("test_random", &GpuTreeGriddingKernel::test_random)
+          .def_static("time_selected", &GpuTreeGriddingKernel::time_selected)
     ;
 
     py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel")
-          .def_static("test", &GpuDequantizationKernel::test)
-          .def_static("time", &GpuDequantizationKernel::time)
+          .def_static("test_random", &GpuDequantizationKernel::test_random)
+          .def_static("time_selected", &GpuDequantizationKernel::time_selected)
     ;
 
     py::class_<ReferenceLagbuf>(m, "ReferenceLagbuf")
-          .def_static("test", &ReferenceLagbuf::test)
+          .def_static("test_random", &ReferenceLagbuf::test_random)
     ;
 
     py::class_<ReferenceTree>(m, "ReferenceTree")
@@ -223,13 +223,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")
-          .def_static("test", &PfWeightReaderMicrokernel::test)
+          .def_static("test_random", &PfWeightReaderMicrokernel::test_random)
           .def_static("registry_size", &PfWeightReaderMicrokernel::registry_size)
           .def_static("show_registry", &PfWeightReaderMicrokernel::show_registry)
     ;
 
     py::class_<PfOutputMicrokernel>(m, "PfOutputMicrokernel")
-          .def_static("test", &PfOutputMicrokernel::test)
+          .def_static("test_random", &PfOutputMicrokernel::test_random)
           .def_static("registry_size", &PfOutputMicrokernel::registry_size)
           .def_static("show_registry", &PfOutputMicrokernel::show_registry)
     ;

@@ -64,7 +64,7 @@ struct GpuRingbufCopyKernel
     ResourceTracker resource_tracker;
 
     // Static member function: runs one randomized test iteration.
-    static void test();
+    static void test_random();
 };
 
 

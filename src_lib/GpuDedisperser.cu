@@ -540,7 +540,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 }
 
 // Static member function.
-void GpuDedisperser::test()
+void GpuDedisperser::test_random()
 {
     auto config = DedispersionConfig::make_random();
     config.num_active_batches = 1;   // FIXME currently we only support nstreams==1

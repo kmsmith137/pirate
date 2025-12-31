@@ -37,10 +37,10 @@ struct GpuDequantizationKernel
     void launch(ksgpu::Array<void> &out, const ksgpu::Array<void> &in, cudaStream_t stream) const;
     
     // Static test function (called via 'python -m pirate_frb test --gdqk')
-    static void test();
+    static void test_random();
     
     // Static timing function
-    static void time();
+    static void time_selected();
     
     // Members
     ksgpu::Dtype dtype;  // output dtype (float32 or float16)

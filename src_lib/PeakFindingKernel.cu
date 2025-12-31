@@ -706,7 +706,7 @@ void GpuPeakFindingKernel::launch(
 // Static member function.
 // If short_circuit=true, then we run some ReferencePeakFindingKernel tests, 
 // but don't test the GPU peak-finder.
-void GpuPeakFindingKernel::test(bool short_circuit)
+void GpuPeakFindingKernel::test_random(bool short_circuit)
 {
     RegistryKey key = registry().get_random_key();
     long simd_width = xdiv(32, key.dtype.nbits);
@@ -1035,7 +1035,7 @@ ostream &operator<<(ostream &os, const PfWeightReaderMicrokernel::RegistryValue 
 }
 
 
-void PfWeightReaderMicrokernel::test()
+void PfWeightReaderMicrokernel::test_random()
 {
     PfWeightReaderMicrokernel::RegistryKey key = PfWeightReaderMicrokernel::registry().get_random_key();
     PfWeightReaderMicrokernel::RegistryValue val = PfWeightReaderMicrokernel::registry().get(key);
@@ -1166,7 +1166,7 @@ ostream &operator<<(ostream &os, const PfOutputMicrokernel::RegistryValue &v)
 }
 
 
-void PfOutputMicrokernel::test()
+void PfOutputMicrokernel::test_random()
 {
     PfOutputMicrokernel::RegistryKey key = PfOutputMicrokernel::registry().get_random_key();
     

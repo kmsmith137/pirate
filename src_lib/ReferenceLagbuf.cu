@@ -133,7 +133,7 @@ void ReferenceLagbuf::apply_lags(ksgpu::Array<float> &arr) const
 
 
 // Static member function
-void ReferenceLagbuf::test()
+void ReferenceLagbuf::test_random()
 {
     // Number of dimensions in 'lags' array
     int nd = rand_int(1, 4);

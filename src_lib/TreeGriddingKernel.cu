@@ -284,7 +284,7 @@ void GpuTreeGriddingKernel::launch(Array<void> &out, const Array<void> &in, cuda
 // GpuTreeGriddingKernel::test()
 
 
-void GpuTreeGriddingKernel::test()
+void GpuTreeGriddingKernel::test_random()
 {
     TreeGriddingKernelParams params;
     params.dtype = (rand_uniform() < 0.5) ? Dtype(df_float,16) : Dtype(df_float,32);
@@ -356,7 +356,7 @@ void GpuTreeGriddingKernel::test()
 // GpuTreeGriddingKernel::time()
 
 
-void GpuTreeGriddingKernel::time()
+void GpuTreeGriddingKernel::time_selected()
 {
     Dtype fp16(df_float, 16);
     Dtype fp32(df_float, 32);

@@ -50,11 +50,11 @@ struct CoalescedDdKernel2
     static void show_registry() { registry().show(); }
 
     // Static member function: runs one randomized test iteration.
-    static void test();
+    static void test_random();
 
     // Static member functions: run timing for representative kernels.
     static void time_one(const std::vector<long> &subband_counts, const std::string &name);
-    static void time();
+    static void time_selected();
 
 
     // ------------------------  Members  ------------------------

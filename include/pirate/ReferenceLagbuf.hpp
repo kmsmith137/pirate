@@ -26,7 +26,7 @@ public:
 
     void apply_lags(ksgpu::Array<float> &arr) const;
 
-    static void test();
+    static void test_random();
 
 protected:
     ksgpu::Array<float> pstate;

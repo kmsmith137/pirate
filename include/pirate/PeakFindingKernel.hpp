@@ -312,7 +312,7 @@ struct GpuPeakFindingKernel
 
     // If short_circuit=true, then we run some ReferencePeakFindingKernel tests, 
     // but don't test the GPU peak-finder.
-    static void test(bool short_circuit=false);
+    static void test_random(bool short_circuit=false);
 
     // ------------------------  Members  ------------------------
 
@@ -463,7 +463,7 @@ struct PfWeightReaderMicrokernel
     static void show_registry() { registry().show(); }
 
     // Static member function: runs one randomized test iteration.
-    static void test();
+    static void test_random();
 };
 
 // Defined in GpuPeakFindingKernel.cu
@@ -508,7 +508,7 @@ struct PfOutputMicrokernel
     static void show_registry() { registry().show(); }
 
     // Static member function: runs one randomized test iteration.
-    static void test();
+    static void test_random();
 };
 
 // Defined in GpuPeakFindingKernel.cu

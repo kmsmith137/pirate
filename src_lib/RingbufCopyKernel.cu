@@ -319,7 +319,7 @@ static Array<uint> make_octuple_array(const vector<TestLocationPair> &v, bool pe
 }  // anonymous namespace
 
 
-void GpuRingbufCopyKernel::test()
+void GpuRingbufCopyKernel::test_random()
 {
     cout << "GpuRingbufCopyKernel::test()" << endl;
 

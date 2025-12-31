@@ -849,7 +849,7 @@ struct TestArrays
 
 
 // Static member function
-void GpuDedispersionKernel::test()
+void GpuDedispersionKernel::test_random()
 {
     const long max_nelts = 100 * 1000 * 1000;
     
@@ -978,7 +978,7 @@ void GpuDedispersionKernel::test()
 
 // Static member function.
 // Uses one stream per "beam batch".
-void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long nchunks)
+void GpuDedispersionKernel::time_one(const DedispersionKernelParams &params, long nchunks)
 {
     cout << "\nTime GPU dedispersion kernel\n";
     params.print();
@@ -1026,7 +1026,7 @@ void GpuDedispersionKernel::_time(const DedispersionKernelParams &params, long n
 
 
 // static
-void GpuDedispersionKernel::time()
+void GpuDedispersionKernel::time_selected()
 {
 #if 0
     // Time specific kernel.
@@ -1077,7 +1077,7 @@ void GpuDedispersionKernel::time()
                     params.consumer_id = params.input_is_ringbuf ? 0 : -1;
                 }
 
-               GpuDedispersionKernel::_time(params);
+               GpuDedispersionKernel::time_one(params);
             }
         }
     }

@@ -88,8 +88,8 @@ struct GpuTreeGriddingKernel
     dim3 nthreads;
     int nchan_per_thread;
 
-    static void test();  // runs one randomized test iteration
-    static void time();  // does a timing run with chord-like parameters
+    static void test_random();  // runs one randomized test iteration
+    static void time_selected();  // does a timing run with chord-like parameters
 };
 
 

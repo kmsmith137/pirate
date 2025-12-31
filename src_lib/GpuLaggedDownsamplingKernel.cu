@@ -1046,7 +1046,7 @@ static void run_test(const TestInstanceLDS &ti)
 }  // anonymous namespace
 
 
-void GpuLaggedDownsamplingKernel::test()
+void GpuLaggedDownsamplingKernel::test_random()
 {
     TestInstanceLDS ti = TestInstanceLDS::make_random();
     ti.params.emit_cpp(cout, "ti.params");
@@ -1142,7 +1142,7 @@ void time_gpu_lagged_downsampling_kernel(const LaggedDownsamplingKernelParams &p
 
 
 // static
-void GpuLaggedDownsamplingKernel::time()
+void GpuLaggedDownsamplingKernel::time_selected()
 {
     for (int num_downsampling_levels: {2,6}) {
         for (Dtype dtype: { Dtype::native<float>(), Dtype::native<__half>() }) {

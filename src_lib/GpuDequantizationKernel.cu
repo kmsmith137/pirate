@@ -284,7 +284,7 @@ void GpuDequantizationKernel::launch(Array<void> &out, const Array<void> &in, cu
 // test(): static member function for unit testing
 
 
-void GpuDequantizationKernel::test()
+void GpuDequantizationKernel::test_random()
 {
     // Random parameters
     Dtype dtype = (rand_uniform() < 0.5) ? Dtype(df_float,16) : Dtype(df_float,32);
@@ -334,7 +334,7 @@ void GpuDequantizationKernel::test()
 // time(): static member function for performance benchmarking
 
 
-void GpuDequantizationKernel::time()
+void GpuDequantizationKernel::time_selected()
 {
     Dtype fp16(df_float, 16);
     Dtype fp32(df_float, 32);

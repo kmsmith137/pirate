@@ -246,12 +246,12 @@ public:
 
     // Static member function: runs one randomized test iteration.
     // Called by 'python -m pirate_frb test --gddk'.
-    static void test();
+    static void test_random();
 
     // Static member function: run timing for representative kernels.
     // Called by 'python -m pirate_frb time --gddk'.
-    static void time();
-    static void _time(const DedispersionKernelParams &params, long nchunks=24);
+    static void time_selected();
+    static void time_one(const DedispersionKernelParams &params, long nchunks=24);
 
     // -------------------- Internals start here --------------------
 

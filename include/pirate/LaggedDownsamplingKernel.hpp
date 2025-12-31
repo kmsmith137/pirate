@@ -119,10 +119,10 @@ public:
     ResourceTracker resource_tracker;
 
     // Static member function: runs one randomized test iteration.
-    static void test();
+    static void test_random();
 
     // Static member function: run timing for representative kernels.
-    static void time();
+    static void time_selected();
 
 protected:
     // Constructor is protected -- use GpuLaggedDownsamplingKernel::make() instead.
