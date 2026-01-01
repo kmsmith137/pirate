@@ -87,48 +87,54 @@ void ResourceTracker::add_hmem_footprint(const std::string &key, long nbytes, bo
 }
 
 
-long ResourceTracker::get_gmem_bw(const std::string &key) const
+long ResourceTracker::_get_dict(const Dict &d, const std::string &key, const char *method_name) const
 {
     if (key.empty()) {
         long total = 0;
-        for (const auto &p : gmem_bw_nbytes)
+        for (const auto &p : d)
             total += p.second;
         return total;
     }
-    auto it = gmem_bw_nbytes.find(key);
-    if (it == gmem_bw_nbytes.end())
-        throw std::runtime_error("ResourceTracker::get_gmem_bw: key not found: " + key);
+    auto it = d.find(key);
+    if (it == d.end())
+        throw std::runtime_error(std::string(method_name) + ": key not found: " + key);
     return it->second;
+}
+
+
+long ResourceTracker::get_gmem_bw(const std::string &key) const
+{
+    return _get_dict(gmem_bw_nbytes, key, "ResourceTracker::get_gmem_bw");
+}
+
+
+long ResourceTracker::get_hmem_bw(const std::string &key) const
+{
+    return _get_dict(hmem_bw_nbytes, key, "ResourceTracker::get_hmem_bw");
+}
+
+
+long ResourceTracker::get_h2g_bw(const std::string &key) const
+{
+    return _get_dict(h2g_bw_nbytes, key, "ResourceTracker::get_h2g_bw");
+}
+
+
+long ResourceTracker::get_g2h_bw(const std::string &key) const
+{
+    return _get_dict(g2h_bw_nbytes, key, "ResourceTracker::get_g2h_bw");
 }
 
 
 long ResourceTracker::get_gmem_footprint(const std::string &key) const
 {
-    if (key.empty()) {
-        long total = 0;
-        for (const auto &p : gmem_footprint_nbytes)
-            total += p.second;
-        return total;
-    }
-    auto it = gmem_footprint_nbytes.find(key);
-    if (it == gmem_footprint_nbytes.end())
-        throw std::runtime_error("ResourceTracker::get_gmem_footprint: key not found: " + key);
-    return it->second;
+    return _get_dict(gmem_footprint_nbytes, key, "ResourceTracker::get_gmem_footprint");
 }
 
 
 long ResourceTracker::get_hmem_footprint(const std::string &key) const
 {
-    if (key.empty()) {
-        long total = 0;
-        for (const auto &p : hmem_footprint_nbytes)
-            total += p.second;
-        return total;
-    }
-    auto it = hmem_footprint_nbytes.find(key);
-    if (it == hmem_footprint_nbytes.end())
-        throw std::runtime_error("ResourceTracker::get_hmem_footprint: key not found: " + key);
-    return it->second;
+    return _get_dict(hmem_footprint_nbytes, key, "ResourceTracker::get_hmem_footprint");
 }
 
 

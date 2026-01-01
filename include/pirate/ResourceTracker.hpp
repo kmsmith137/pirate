@@ -51,6 +51,9 @@ struct ResourceTracker
     // If key is non-empty, returns value for that key (throws exception if not found).
     // If key is empty, returns sum over all keys.
     long get_gmem_bw(const std::string &key = "") const;
+    long get_hmem_bw(const std::string &key = "") const;
+    long get_h2g_bw(const std::string &key = "") const;
+    long get_g2h_bw(const std::string &key = "") const;
     long get_gmem_footprint(const std::string &key = "") const;
     long get_hmem_footprint(const std::string &key = "") const;
 
@@ -88,6 +91,10 @@ struct ResourceTracker
     // Called internally by add_*() methods and operator+=(). No-op if value==0.
     // Throws an exception if key is empty.
     static void _update_dict(Dict &d, const std::string &key, long value);
+
+    // Helper for get_*() methods. If key is empty, returns sum over all dict values.
+    // If key is non-empty, returns value for that key (throws exception if not found).
+    long _get_dict(const Dict &d, const std::string &key, const char *method_name) const;
 };
 
 

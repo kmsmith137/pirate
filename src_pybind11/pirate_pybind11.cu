@@ -167,6 +167,12 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("key"), py::arg("hmem_footprint_nbytes"), py::arg("align") = false)
           .def("get_gmem_bw", &ResourceTracker::get_gmem_bw,
                py::arg("key") = "")
+          .def("get_hmem_bw", &ResourceTracker::get_hmem_bw,
+               py::arg("key") = "")
+          .def("get_h2g_bw", &ResourceTracker::get_h2g_bw,
+               py::arg("key") = "")
+          .def("get_g2h_bw", &ResourceTracker::get_g2h_bw,
+               py::arg("key") = "")
           .def("get_gmem_footprint", &ResourceTracker::get_gmem_footprint,
                py::arg("key") = "")
           .def("get_hmem_footprint", &ResourceTracker::get_hmem_footprint,
