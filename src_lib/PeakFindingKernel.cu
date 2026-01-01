@@ -98,7 +98,7 @@ vector<long> GpuPfWeightLayout::get_strides(long nbeams, long ndm_wt, long nt_wt
     return { ndm_wt*Touter*S, Touter*S, S, F*Tinner*Pinner, Tinner*Pinner, Pinner, 1 };
 }
 
-Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
+void GpuPfWeightLayout::to_gpu(Array<void> &dst, const Array<float> &src) const
 {
     this->validate();
     
@@ -116,8 +116,14 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
     long nt_wt = src.shape[2];
     long Touter = xdiv(nt_wt, Tinner);   // must divide evenly
     
-    vector<long> shape = get_shape(nbeams, ndm_wt, nt_wt);
-    vector<long> strides = get_strides(nbeams, ndm_wt, nt_wt);
+    vector<long> shape = this->get_shape(nbeams, ndm_wt, nt_wt);
+    vector<long> strides = this->get_strides(nbeams, ndm_wt, nt_wt);
+
+    // Assert that 'dst' is on the GPU with the expected shape and strides.
+    xassert(dst.on_gpu());
+    xassert(dst.dtype == dtype);
+    xassert(dst.shape_equals(shape));
+    xassert(dst.strides_equal(strides));
 
     // Note: code below is poorly optimized! (Intended for unit tests.)
 
@@ -145,11 +151,34 @@ Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
     }
 
     Array<void> tmp2 = tmp.convert(dtype);
-    
-    // Allocate GPU array with non-contiguous touter-stride.
-    Array<void> dst(dtype, shape, strides, af_gpu | af_zero);    
-
     dst.fill(tmp2);  // copy CPU->GPU
+}
+
+
+Array<void> GpuPfWeightLayout::to_gpu(const Array<float> &src) const
+{
+    this->validate();
+    
+    if (src.ndim != 5) {
+        stringstream ss;
+        ss << "GpuPfWeightLayout::to_gpu(): expected shape (nbeams, ndm_wt, nt_wt, P, F), got " << src.shape_str();
+        throw runtime_error(ss.str());
+    }
+
+    xassert_eq(src.shape[3], P);
+    xassert_eq(src.shape[4], F);
+
+    long nbeams = src.shape[0];
+    long ndm_wt = src.shape[1];
+    long nt_wt = src.shape[2];
+    
+    vector<long> shape = this->get_shape(nbeams, ndm_wt, nt_wt);
+    vector<long> strides = this->get_strides(nbeams, ndm_wt, nt_wt);
+
+    // Allocate GPU array with non-contiguous touter-stride.
+    Array<void> dst(dtype, shape, strides, af_gpu | af_zero);
+
+    this->to_gpu(dst, src);
     return dst;
 }
 
