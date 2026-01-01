@@ -487,6 +487,7 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config-only', action='store_true', help="Print config only (skip plan)")
+    parser.add_argument('-s', '--streams', type=int, help="Override config.num_active_batches with specified value")
     parser.add_argument('--channel-map', action='store_true', help="Show channel map tree->freq (warning: produces long output!)")
     parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
     parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
@@ -497,6 +498,12 @@ def parse_show_dedisperser(subparsers):
 
 def show_dedisperser(args):
     config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file)
+    
+    # Override num_active_batches if --streams was specified
+    if args.streams is not None:
+        config.num_active_batches = args.streams
+        config.validate()
+    
     config.test()   # I decided to run the unit tests here, since they're very fast!
     
     config_yaml = config.to_yaml_string(args.verbose)

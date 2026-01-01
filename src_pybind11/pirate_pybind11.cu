@@ -311,23 +311,23 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                [](const DedispersionConfig &self) { return self.dtype.str(); },
                [](DedispersionConfig &self, const std::string &s) { self.dtype = ksgpu::Dtype::from_str(s); })
           // Frequency channel configuration
-          .def_readonly("zone_nfreq", &DedispersionConfig::zone_nfreq)
-          .def_readonly("zone_freq_edges", &DedispersionConfig::zone_freq_edges)
+          .def_readwrite("zone_nfreq", &DedispersionConfig::zone_nfreq)
+          .def_readwrite("zone_freq_edges", &DedispersionConfig::zone_freq_edges)
           // Core dedispersion parameters
-          .def_readonly("time_sample_ms", &DedispersionConfig::time_sample_ms)
-          .def_readonly("tree_rank", &DedispersionConfig::tree_rank)
-          .def_readonly("num_downsampling_levels", &DedispersionConfig::num_downsampling_levels)
-          .def_readonly("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk)
+          .def_readwrite("time_sample_ms", &DedispersionConfig::time_sample_ms)
+          .def_readwrite("tree_rank", &DedispersionConfig::tree_rank)
+          .def_readwrite("num_downsampling_levels", &DedispersionConfig::num_downsampling_levels)
+          .def_readwrite("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk)
           // Frequency sub-band configuration
-          .def_readonly("frequency_subband_counts", &DedispersionConfig::frequency_subband_counts)
+          .def_readwrite("frequency_subband_counts", &DedispersionConfig::frequency_subband_counts)
           // Peak-finding parameters (one per downsampling level)
-          .def_readonly("peak_finding_params", &DedispersionConfig::peak_finding_params)
+          .def_readwrite("peak_finding_params", &DedispersionConfig::peak_finding_params)
           // Early triggers
-          .def_readonly("early_triggers", &DedispersionConfig::early_triggers)
+          .def_readwrite("early_triggers", &DedispersionConfig::early_triggers)
           // GPU configuration
-          .def_readonly("beams_per_gpu", &DedispersionConfig::beams_per_gpu)
-          .def_readonly("beams_per_batch", &DedispersionConfig::beams_per_batch)
-          .def_readonly("num_active_batches", &DedispersionConfig::num_active_batches)
+          .def_readwrite("beams_per_gpu", &DedispersionConfig::beams_per_gpu)
+          .def_readwrite("beams_per_batch", &DedispersionConfig::beams_per_batch)
+          .def_readwrite("num_active_batches", &DedispersionConfig::num_active_batches)
           // Testing parameter
           .def_readonly("max_gpu_clag", &DedispersionConfig::max_gpu_clag)
     ;

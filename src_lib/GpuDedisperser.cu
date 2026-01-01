@@ -1158,6 +1158,8 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
 {   
     config.validate();
     xassert(niterations > 2*config.num_active_batches);
+    
+    cout << config.to_yaml_string() << endl;
 
     Dtype dtype = config.dtype;
     long B = config.beams_per_batch;
@@ -1250,7 +1252,7 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
         if (kt.warmed_up) {
             cout << "  iteration " << kt.curr_iteration
                  << ": real-time beams = " << (B * Tc / kt.dt)
-                 << ": gmem_bw = " << (1.0e-9 * gmem_bw / kt.dt)
+                 << ", gmem_bw = " << (1.0e-9 * gmem_bw / kt.dt)
                  << ", g2h_bw = " << (1.0e-9 * g2h_bw / kt.dt)
                  << ", h2g_bw = " << (1.0e-9 * h2g_bw / kt.dt)
                  << " GB/s" << endl;
