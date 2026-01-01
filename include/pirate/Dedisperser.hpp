@@ -49,6 +49,11 @@ struct GpuDedisperser
         std::shared_ptr<DedispersionPlan> plan;
         std::shared_ptr<CudaStreamPool> stream_pool;
 
+        // Set sizes of dedispersion output and peak-finding weights buffers.
+        // If uninitialized, default is plan->num_active_batches.
+        long nbatches_out = 0;
+        long nbatches_wt = 0;    // infrequently used (only in a unit test)
+        
         // detect_deadlocks=true: assumes that {acquire,release}_input() is called
         // on the same thread as {acquire,release}_output(), and detect deadlocks
         // accordingly.
@@ -58,19 +63,6 @@ struct GpuDedisperser
         // deadlock-checking logic is disabled.
 
         bool detect_deadlocks = true;
-
-        // fixed_weights=false: acquire_input() and release_input() also acquire
-        // and release the pf_weights. (This makes sense if the caller dynamically
-        // changes the weights, e.g. in a unit test.)
-        //
-        // fixed_weights=true: weights are assumed constant throughout the lifetime
-        // of the GpuDedisperser. (Currently used in timing, since it should be more
-        // representative of the final system.)
-        //
-        // Both of these ways of handling the weights are temporary hacks, that I'll
-        // revisit later!
-
-        bool fixed_weights = false;
     };
 
     GpuDedisperser(const Params &params);
@@ -102,6 +94,13 @@ struct GpuDedisperser
     //
     // FIXME: I may rethink this API later. (Do I want acquire_weights()?
     // What should be the return type of acquire_output()?)
+    //
+    // FIXME: currently there's no explicit API protecting the pf_weights.
+    // The caller is responsible for thinking through race conditions involving
+    // the pf_weights (e.g. in GpuDedisperser::test_one(), where the weights
+    // are updated during the unit test). This issue may go away on its own,
+    // since my tentative long-term plan is to generate the pf_weights
+    // "dynamically" as part of the compute graph.
 
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
@@ -137,12 +136,8 @@ struct GpuDedisperser
     std::vector<ksgpu::Array<void>> wt_arrays;
 
     // "outer" vector has length ntrees
-    // "inner" array shape (nstreams, beams_per_batch, t.ndm_out, t.nt_out)
+    // "inner" array shape (nbatches_out, beams_per_batch, t.ndm_out, t.nt_out)
     //    where t= plan->trees.at(itree)
-    //
-    // Note: currently using a "short" (length-nstreams) ring buffer for 
-    // dedispersion outputs. In the future when I implement RPC postprocessing,
-    // it may make sense to have a configurable buffer length.
 
     std::vector<ksgpu::Array<void>> out_max;     // config.dtype
     std::vector<ksgpu::Array<uint>> out_argmax;  // uint dtype
@@ -170,7 +165,8 @@ struct GpuDedisperser
     // The helper class 'GpuPfWeightLayout' is intended to hide the details.
     // We have one GpuPfWeightLayout per output tree: cdd2_kernels[itree]->pf_weight_layout.
     // The shape for one beam batch is here: cdd2_kernels[itree]->expected_wt_shape.
-    // The "extended" shapes below adds an outer length-nstreams index.
+    // The "extended" shapes below adds an outer index with length (nbatches_wt).
+
     std::vector<std::vector<long>> extended_wt_shapes;   // length ntrees
     std::vector<std::vector<long>> extended_wt_strides;  // length ntrees
     

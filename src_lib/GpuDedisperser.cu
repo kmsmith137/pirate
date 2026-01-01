@@ -48,6 +48,15 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     xassert(params.stream_pool);
     xassert_eq(params.plan->num_active_batches, params.stream_pool->num_compute_streams);
 
+    if (params.nbatches_out == 0)
+        params.nbatches_out = params.plan->num_active_batches;
+
+    if (params.nbatches_wt == 0)
+        params.nbatches_wt = params.plan->num_active_batches;
+
+    xassert(params.nbatches_out >= params.plan->num_active_batches);
+    xassert(params.nbatches_wt >= params.plan->num_active_batches);
+
     this->plan = params.plan;
     this->stream_pool = params.stream_pool;
     this->mega_ringbuf = plan->mega_ringbuf;
@@ -136,14 +145,14 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
         const vector<long> &wt_shape = cdd2_kernels.at(itree)->expected_wt_shape;
         const vector<long> &wt_strides = cdd2_kernels.at(itree)->expected_wt_strides;
 
-        // "Extended" weight shapes with a stream axis added.
-        this->extended_wt_shapes.push_back(svcat(nstreams, wt_shape));
+        // "Extended" weight shapes with an extra length-(nbatches_wt) axis added.
+        this->extended_wt_shapes.push_back(svcat(params.nbatches_wt, wt_shape));
         this->extended_wt_strides.push_back(svcat(wt_shape[0] * wt_strides[0], wt_strides));
 
-        long wt_nbytes = nstreams * wt_shape[0] * wt_strides[0] * bytes_per_elt;
+        long wt_nbytes = params.nbatches_wt * wt_shape[0] * wt_strides[0] * bytes_per_elt;
         resource_tracker.add_gmem_footprint("wt_arrays", wt_nbytes, true);
 
-        long out_nelts = nstreams * beams_per_batch * tree.ndm_out * tree.nt_out;
+        long out_nelts = params.nbatches_out * beams_per_batch * tree.ndm_out * tree.nt_out;
         resource_tracker.add_gmem_footprint("out_max", out_nelts * bytes_per_elt, true);
         resource_tracker.add_gmem_footprint("out_argmax", out_nelts * 4, true);  // uint = 4 bytes
     }
@@ -189,25 +198,21 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     //   g2g: consumers=[g2h]
     //   g2h: consumers=[dd1,h2g,et_h2h]
     //   h2g: consumers=[g2h,cdd2]
-    //   cdd2: consumers=[tg,h2g,et_h2g,acq_input,acq_output]
+    //   cdd2: consumers=[tg,h2g,et_h2g,acq_output]
     //   et_h2g: consumers=[et_h2h,cdd2]   (*)
     //   output: consumers=[cdd2]
     //
     // (*) Note that the g2h code waits on et_h2g, via CudaEventRingbuf::synchronize_with_producer(),
     //     but this doesn't count as a "consumer" of the et_h2g ringbuf.
 
-    long tg_nconsumers = params.fixed_weights ? 1 : 0;
-    long cdd2_nconsumers = params.fixed_weights ? 4 : 5;
-
     // FIXME: using huge CudaEventRingbuf capacity for now!
-    // Not sure if this will work, but let's try.
-    long capacity = 1000; // XXX host_seq_lag + et_seq_headroom + et_seq_lag + (3 * nstreams);
+    long capacity = 1000;
 
-    this->evrb_tree_gridding = make_shared<CudaEventRingbuf> ("tree_gridding", tg_nconsumers, capacity);
+    this->evrb_tree_gridding = make_shared<CudaEventRingbuf> ("tree_gridding", 1, capacity);
     this->evrb_g2g = make_shared<CudaEventRingbuf> ("g2g", 1, capacity);
     this->evrb_g2h = make_shared<CudaEventRingbuf> ("g2h", 3, capacity);
     this->evrb_h2g = make_shared<CudaEventRingbuf> ("h2g", 2, capacity);
-    this->evrb_cdd2 = make_shared<CudaEventRingbuf> ("cdd2", cdd2_nconsumers, capacity);
+    this->evrb_cdd2 = make_shared<CudaEventRingbuf> ("cdd2", 4, capacity);
     this->evrb_et_h2g = make_shared<CudaEventRingbuf> ("et_h2g", 2, capacity);
     this->evrb_output = make_shared<CudaEventRingbuf> ("output", 1, capacity);
 
@@ -278,7 +283,7 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
     // out_max, out_argmax
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
-        std::initializer_list<long> shape = { nstreams, beams_per_batch, tree.ndm_out, tree.nt_out };
+        std::initializer_list<long> shape = { params.nbatches_out, beams_per_batch, tree.ndm_out, tree.nt_out };
         out_max.push_back(gpu_allocator.allocate_array<void>(dtype, shape));
         out_argmax.push_back(gpu_allocator.allocate_array<uint>(shape));
     }
@@ -496,12 +501,14 @@ void GpuDedisperser::_launch_h2g(long ichunk, long ibatch, cudaStream_t stream)
 
 void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch, cudaStream_t stream)
 {
-    long istream = (ichunk * nbatches + ibatch) % nstreams;
+    long seq_id = ichunk * nbatches + ibatch;
+    long iout = seq_id % params.nbatches_out;
+    long iwt = seq_id % params.nbatches_wt;
 
     for (long itree = 0; itree < ntrees; itree++) {
-        Array<void> slice_max = out_max.at(itree).slice(0,istream);
-        Array<uint> slice_argmax = out_argmax.at(itree).slice(0,istream);
-        Array<void> slice_wt = wt_arrays.at(itree).slice(0,istream);
+        Array<void> slice_max = out_max.at(itree).slice(0,iout);
+        Array<uint> slice_argmax = out_argmax.at(itree).slice(0,iout);
+        Array<void> slice_wt = wt_arrays.at(itree).slice(0,iwt);
 
         shared_ptr<CoalescedDdKernel2> cdd2_kernel = cdd2_kernels.at(itree);
         cdd2_kernel->launch(slice_max, slice_argmax, this->gpu_ringbuf, slice_wt, ichunk, ibatch, stream);
@@ -540,7 +547,7 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
         long input_seq_id = ichunk * nbatches + ibatch;
         long output_seq_id = curr_output_ichunk * nbatches + curr_output_ibatch;
 
-        if (input_seq_id >= output_seq_id + nstreams) {
+        if (input_seq_id >= output_seq_id + params.nbatches_out) {
             throw runtime_error("GpuDedisperser: deadlock detected (calls to acquire_input()"
                 " are too far ahead of calls to release_output(). If the input/output arrays"
                 " are handled in different threads, then this error is a false alarm, and you"
@@ -551,18 +558,11 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
     curr_input_acquired = true;
     lock.unlock();
 
-    // Argument-checking ends here. If an exception is thrown below, call stop().
-    // If fixed_weights=true, then 'stream' should wait for the tree gridding
-    // kernel (consumer of input array). If fixed_weights=false, then 'stream'
-    // should wait for cdd2 (consumer of pf_weights array).
-
     try {
-        shared_ptr<CudaEventRingbuf> &evrb = params.fixed_weights ? evrb_tree_gridding : evrb_cdd2;
-
-        // This call to wait() can be nonblocking, since we know that the tree_gridding/cdd2
+        // This call to wait() can be nonblocking, since we know that the tree_gridding
         // kernel was successfully launched by a previous call to release_input().
         long seq_id = ichunk * nbatches + ibatch;
-        evrb->wait(stream, seq_id - nstreams);
+        evrb_tree_gridding->wait(stream, seq_id - nstreams);
 
         // Return input array.
         long istream = seq_id % nstreams;
@@ -879,9 +879,9 @@ void GpuDedisperser::_launch_dedispersion_kernels(long ichunk, long ibatch, cuda
     // These are produced in release_output().
     
     bool out_blocking = !params.detect_deadlocks;
-    evrb_h2g->wait(compute_stream, seq_id);                               // producer (h2g)
-    evrb_et_h2g->wait(compute_stream, seq_id, true);                      // producer (et_h2g), blocking=true
-    evrb_output->wait(compute_stream, seq_id - nstreams, out_blocking);   // consumer (output)
+    evrb_h2g->wait(compute_stream, seq_id);                                          // producer (h2g)
+    evrb_et_h2g->wait(compute_stream, seq_id, true);                                 // producer (et_h2g), blocking=true
+    evrb_output->wait(compute_stream, seq_id - params.nbatches_out, out_blocking);   // consumer (output)
     _launch_cdd2(ichunk, ibatch, compute_stream);
     evrb_cdd2->record(compute_stream, seq_id);
 
@@ -990,11 +990,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     long beams_per_batch = plan->beams_per_batch;
     long nbatches = xdiv(plan->beams_per_gpu, plan->beams_per_batch);
     long nstreams = plan->num_active_batches;
-
-    // FIXME test multi-stream logic in the future.
-    // For now, we use the default cuda stream, which simplifies things since we can
-    // freely mix operations such as Array::to_gpu() which use the default stream.
-    xassert(nstreams == 1);
     
     shared_ptr<GpuDedisperser> gdd;
 
@@ -1003,7 +998,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
         params.plan = plan;
         params.stream_pool = CudaStreamPool::create(nstreams);
         params.detect_deadlocks = true;
-        params.fixed_weights = false;
 
         gdd = make_shared<GpuDedisperser> (params);
         BumpAllocator gpu_allocator(af_gpu | af_zero, -1);     // dummy allocator
@@ -1048,19 +1042,16 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 
     for (int ichunk = 0; ichunk < nchunks; ichunk++) {
         for (int ibatch = 0; ibatch < nbatches; ibatch++) {
-            // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
-            // Random values uniform over [-1.0, 1.0].
-            Array<float> arr({beams_per_batch, plan->nfreq, plan->nt_in}, af_uhost);
-            for (long i = 0; i < arr.size; i++)
-                arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
-
-            if (!host_only) {
-                // Acquire input (and weights) on default stream.
-                Array<void> gpu_in = gdd->acquire_input(ichunk, ibatch, nullptr);
-                gpu_in.fill(arr.convert(config.dtype)); 
-            }
+            long seq_id = ichunk * nbatches + ibatch;
+            long iout = seq_id % gdd->params.nbatches_out;
+            long iwt = seq_id % gdd->params.nbatches_wt;
 
             // Randomly initialize weights.
+            // WARNING: as noted in Dedisperser.hpp, there's no explicit API protecting
+            // the weights, and the aller is responsible for thinking through race conditions.
+            // Here, updating the weights is okay since the weights are updated after the
+            // previous acquire_output(), and before the current release_input().
+
             for (int itree = 0; itree < ntrees; itree++) {
                 Array<float> sbv = subband_variances.at(itree);
                 Array<float> wt_cpu = ref_kernels_for_weights.at(itree)->make_random_weights(sbv);
@@ -1072,15 +1063,25 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 if (!host_only) {
                     // Fill weights between GpuDedisperser::acquire_input() and GpuDedisperser::release_input().
                     const GpuPfWeightLayout &wl = gdd->cdd2_kernels.at(itree)->pf_weight_layout;
-                    Array<void> wt_gpu = gdd->wt_arrays.at(itree).slice(0,0);  // FIXME istream=0 assumed
+                    Array<void> wt_gpu = gdd->wt_arrays.at(itree).slice(0,iwt);
                     // FIXME extra copy here (+ another extra copy "hidden" in GpuPfWeightLayout::to_gpu())
                     Array<void> tmp = wl.to_gpu(wt_cpu);
                     wt_gpu.fill(tmp);
                 }
             }
 
+            // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
+            // Random values uniform over [-1.0, 1.0].
+            Array<float> arr({beams_per_batch, plan->nfreq, plan->nt_in}, af_uhost);
+            for (long i = 0; i < arr.size; i++)
+                arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
+
             if (!host_only) {
-                // Release input on default cuda stream.
+                // Acquire and release input on default stream.
+                // Note that release_input() is called after the weights have been initialized.
+                // This detail is critical!
+                Array<void> gpu_in = gdd->acquire_input(ichunk, ibatch, nullptr);
+                gpu_in.fill(arr.convert(config.dtype));
                 gdd->release_input(ichunk, ibatch, nullptr);
             }
 
@@ -1100,7 +1101,9 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
             
             for (int itree = 0; itree < ntrees; itree++) {
                 // Compare peak-finding 'out_max'.
-                Array<void> gdd_max = gdd->out_max.at(itree).slice(0,0);  // FIXME istream=0 assumed
+                Array<void> gdd_max = gdd->out_max.at(itree).slice(0,iout);
+                Array<uint> gpu_tokens = gdd->out_argmax.at(itree).slice(0,iout).to_host();
+
                 assert_arrays_equal(rdd0->out_max.at(itree), rdd1->out_max.at(itree), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
                 assert_arrays_equal(rdd0->out_max.at(itree), rdd2->out_max.at(itree), "pfmax_ref0", "pfmax_ref2", {"beam","pfdm","pft"});
                 assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
@@ -1115,7 +1118,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_ref2", {"beam","pfdm","pft"});
 
                 double eps = 5.0 * config.dtype.precision();
-                Array<uint> gpu_tokens = gdd->out_argmax.at(itree).slice(0,0).to_host();  // FIXME istream=0 assumed 
                 pf_kernel->eval_tokens(pf_tmp.at(itree), gpu_tokens, rdd0->wt_arrays.at(itree));
                 assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
             }
@@ -1134,7 +1136,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
 void GpuDedisperser::test_random()
 {
     auto config = DedispersionConfig::make_random();
-    config.num_active_batches = 1;   // FIXME currently we only support nstreams==1
     config.validate();
     
     long ntree = pow2(config.tree_rank);
@@ -1182,7 +1183,6 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
     params.plan = make_shared<DedispersionPlan> (config);
     params.stream_pool = CudaStreamPool::create(S);
     params.detect_deadlocks = true;
-    params.fixed_weights = true;
     shared_ptr<GpuDedisperser> gdd = make_shared<GpuDedisperser> (params);
 
     ResourceTracker rt = gdd->resource_tracker;  // copy
