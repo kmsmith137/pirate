@@ -125,6 +125,7 @@ LIB_SRCFILES = \
   src_lib/file_utils.cu \
   src_lib/network_utils.cu \
   src_lib/scratch.cu \
+  src_lib/SlabAllocator.cu \
   src_lib/system_utils.cu \
   src_lib/utils.cu \
   src_lib/loose_ends/cpu_downsample.cu \
@@ -196,6 +197,7 @@ HFILES = \
   include/pirate/ReferenceTree.hpp \
   include/pirate/ResourceTracker.hpp \
   include/pirate/RingbufCopyKernel.hpp \
+  include/pirate/SlabAllocator.hpp \
   include/pirate/TreeGriddingKernel.hpp \
   include/pirate/YamlFile.hpp \
   include/pirate/constants.hpp \
