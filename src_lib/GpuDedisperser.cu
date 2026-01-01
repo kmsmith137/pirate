@@ -8,11 +8,13 @@
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
 #include "../include/pirate/MegaRingbuf.hpp"
+#include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
 
 #include <ksgpu/rand_utils.hpp>
 #include <ksgpu/test_utils.hpp>
+#include <ksgpu/KernelTimer.hpp>
 
 using namespace std;
 using namespace ksgpu;
@@ -1159,9 +1161,10 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
 
     Dtype dtype = config.dtype;
     long B = config.beams_per_batch;
-    long F = config.get_nfreq_tot();
+    long F = config.get_total_nfreq();
     long T = config.time_samples_per_chunk;
     long S = config.num_active_batches;
+    double Tc = 1.0e-3 * T * config.time_sample_ms;
 
     Dtype dt_int4 = Dtype::from_str("int4");
     int cpu_aflags = af_rhost | af_zero;
@@ -1172,6 +1175,7 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
 
     GpuDequantizationKernel dequantization_kernel(dtype, B, F, T);
 
+    cout << "GpuDedisperser::time(): creating GpuDedisperser" << endl;
     GpuDedisperser::Params params;
     params.plan = make_shared<DedispersionPlan> (config);
     params.stream_pool = CudaStreamPool::create(S);
@@ -1179,8 +1183,10 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
     params.fixed_weights = true;
     shared_ptr<GpuDedisperser> gdd = make_shared<GpuDedisperser> (params);
 
-    ResourceTracker rt = this->resource_tracker;  // copy
+    ResourceTracker rt = gdd->resource_tracker;  // copy
     rt += dequantization_kernel.resource_tracker;
+
+    long raw_nbytes = xdiv(B * F * T, 2);
     rt.add_memcpy_h2g("raw_data", raw_nbytes);
 
     double h2g_bw = rt.get_h2g_bw();
@@ -1188,9 +1194,9 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
     double gmem_bw = rt.get_gmem_bw();
 
     // The "multi_" prefix means "one array per stream".
-    Array<void> multi_raw_cpu(dt_int4, {S,B,F,T}, cpu_flags);
+    cout << "GpuDedisperser::time(): allocating" << endl;
+    Array<void> multi_raw_cpu(dt_int4, {S,B,F,T}, cpu_aflags);
     Array<void> multi_raw_gpu(dt_int4, {S,B,F,T}, gpu_aflags);
-    long raw_nbytes = xdiv(beams_per_batch * nfreq * nt_in, 2);
 
     BumpAllocator dummy_cpu_allocator(cpu_aflags, -1);
     BumpAllocator dummy_gpu_allocator(gpu_aflags, -1);
@@ -1202,14 +1208,15 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
     // We use a ksgpu::KernelTimer in the timing loop
 
     KernelTimer kt(niterations, S);
-
+    
+    cout << "GpuDedisperser::time(): running" << endl;
     while (kt.next()) {
         long seq_id = kt.curr_iteration;
-        long ichunk = seq_id / nbatches;
-        long ibatch = seq_id % nbatches;
+        long ichunk = seq_id / gdd->nbatches;
+        long ibatch = seq_id % gdd->nbatches;
 
-        cudaStream_t h2g_stream = this->stream_pool.high_priority_h2g;
-        cudaStream_t compute_stream = this->stream_pool.compute_streams.at(kt.istream);
+        cudaStream_t h2g_stream = gdd->stream_pool->high_priority_h2g_stream;
+        cudaStream_t compute_stream = gdd->stream_pool->compute_streams.at(kt.istream);
 
         Array<void> raw_cpu = multi_raw_cpu.slice(0, kt.istream);
         Array<void> raw_gpu = multi_raw_gpu.slice(0, kt.istream);
@@ -1228,20 +1235,21 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
         // First, wait on the producer (the cpu->gpu copy).
         // First, wait on the consumer (the dedisperser), by calling this->acquire_input().
         evrb_raw.wait(compute_stream, seq_id);
-        Array<void> dd_in = this->acquire_input(ichunk, ibatch, compute_stream);
+        Array<void> dd_in = gdd->acquire_input(ichunk, ibatch, compute_stream);
         dequantization_kernel.launch(dd_in, raw_gpu, compute_stream);
+        evrb_dq.record(compute_stream, seq_id);
 
         // Launch all the dedispersion kernels.
         // (They will wait for the dequantization kernel.)
-        this->release_input(ichunk, ibatch, compute_stream);
+        gdd->release_input(ichunk, ibatch, compute_stream);
 
         // Throw away the dedispersion output.
-        this->acquire_output(ichunk, ibatch, compute_stream);
-        this->release_output(ichunk, ibatch, compute_stream);
+        gdd->acquire_output(ichunk, ibatch, compute_stream);
+        gdd->release_output(ichunk, ibatch, compute_stream);
 
         if (kt.warmed_up) {
-            cout << "iteration " << kt.curr_iteration
-                 << ": beams/sec = " << (beams_per_batch / kt.dt)
+            cout << "  iteration " << kt.curr_iteration
+                 << ": real-time beams = " << (B * Tc / kt.dt)
                  << ": gmem_bw = " << (1.0e-9 * gmem_bw / kt.dt)
                  << ", g2h_bw = " << (1.0e-9 * g2h_bw / kt.dt)
                  << ", h2g_bw = " << (1.0e-9 * h2g_bw / kt.dt)

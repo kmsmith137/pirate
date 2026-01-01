@@ -212,6 +212,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
                py::arg("config"), py::arg("nchunks"), py::arg("host_only") = false)
+          .def_static("time_one", &GpuDedisperser::time_one,
+               py::arg("config"), py::arg("niterations"), py::arg("use_hugepages"))
     ;
 
     py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")

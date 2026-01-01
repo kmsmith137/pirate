@@ -491,6 +491,8 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
     parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
     parser.add_argument('--test', action='store_true', help="Run GpuDedisperser.test_one() with config")
+    parser.add_argument('--time', action='store_true', help="Run GpuDedisperser.time_one() with niterations=1000")
+    parser.add_argument('-H', '--no-hugepages', action='store_true', help="Disable hugepages (only meaningful with --time)")
 
 
 def show_dedisperser(args):
@@ -549,6 +551,14 @@ def show_dedisperser(args):
         print(f'Running GpuDedisperser.test_one(config, nchunks={nchunks})')
         pirate_pybind11.GpuDedisperser.test_one(config, nchunks)
         print('Test passed!')
+
+    if args.time:
+        print_separator('Timing GpuDedisperser')
+        niterations = 1000
+        use_hugepages = not args.no_hugepages
+        print(f'Running GpuDedisperser.time_one(config, niterations={niterations}, use_hugepages={use_hugepages})')
+        pirate_pybind11.GpuDedisperser.time_one(config, niterations, use_hugepages)
+        print('Timing complete!')
 
 
 ###################################   show_random_config command  ###################################
