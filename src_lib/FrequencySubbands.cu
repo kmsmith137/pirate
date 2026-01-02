@@ -18,8 +18,8 @@ namespace pirate {
 #endif
 
 
-// Note: there is a similar python class (pirate_frb.cuda_generator.FrequencySubbands), so changes
-// made here should also be reflected there.
+// Note: there is a similar python class (pirate_frb.cuda_generator.FrequencySubbands)
+// so changes made here should also be reflected there.
 
 
 // Default constructor, equivalent to subband_counts={1}
@@ -264,8 +264,16 @@ void FrequencySubbands::show_token(uint token, ostream &os) const
 
 void FrequencySubbands::show(ostream &os) const
 {
-    os << "FrequencySubbands(pf_rank=" << pf_rank
-       << ", subband_counts=" << ksgpu::tuple_str(subband_counts) << ")\n";
+    // Save stream state (format flags and precision)
+    ios::fmtflags oldFlags = os.flags();
+    streamsize oldPrecision = os.precision();
+
+    os << "FrequencySubbands(subband_counts=" << ksgpu::tuple_str(subband_counts);
+
+    if (fmin > 0.0)
+        os << fixed << setprecision(1) << ", fmin=" << fmin << ", fmax=" << fmax;
+
+    os << ")\n";
 
     for (long f = 0; f < F; f++) {
         long ilo = f_to_ilo.at(f);
@@ -275,11 +283,25 @@ void FrequencySubbands::show(ostream &os) const
         long level = integer_log2(ihi - ilo);
         os << "  f=" << f << ": level=" << level
            << "  (mlo,mhi)=(" << mlo << "," << mhi << ")"
-           << "  (ilo,ihi)=(" << ilo << "," << ihi << ")\n";
+           << "  (ilo,ihi)=(" << ilo << "," << ihi << ")";
+        
+        // Add (flo,fhi) if i_to_f is available
+        if (i_to_f.size() > 0) {
+            double freq_lo = i_to_f.at(ihi);  // note ihi here
+            double freq_hi = i_to_f.at(ilo);  // note ilo here
+            os << "  (flo,fhi)=(" << fixed << setprecision(1) 
+               << freq_lo << "," << freq_hi << ")";
+        }
+        
+        os << "\n";
     }
 
     os << "F=" << F << "  # number of distinct frequency subbands\n";
     os << "M=" << M << "  # number of \"multiplets\", i.e. (frequency_subband, fine_grained_dm) pairs\n";
+
+    // Restore stream state
+    os.flags(oldFlags);
+    os.precision(oldPrecision);
 }
 
 
@@ -295,6 +317,10 @@ void FrequencySubbands::show_compact(stringstream &ss) const
 {
     if (i_to_f.size() == 0)
         throw runtime_error("FrequencySubbands::show_compact(): fmin/fmax must be specified at construction");
+
+    // Save stream state (format flags and precision)
+    ios::fmtflags oldFlags = ss.flags();
+    streamsize oldPrecision = ss.precision();
 
     long curr_level = -1;
     int bands_on_line = 0;
@@ -322,6 +348,10 @@ void FrequencySubbands::show_compact(stringstream &ss) const
         curr_level = level;
         bands_on_line++;
     }
+
+    // Restore stream state
+    ss.flags(oldFlags);
+    ss.precision(oldPrecision);
 }
 
 

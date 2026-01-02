@@ -13,7 +13,6 @@ from .Hardware import Hardware
 from .FakeServer import FakeServer
 from .FakeCorrelator import FakeCorrelator
 from .CasmReferenceBeamformer import CasmReferenceBeamformer
-from .cuda_generator import FrequencySubbands
 from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
 
 
@@ -274,8 +273,8 @@ def make_subbands(args):
     assert args.fmin < args.fmax
     assert args.threshold <= 10.0
     
-    fs = FrequencySubbands(subband_counts=None, pf_rank=args.pf_rank, fmin=args.fmin, fmax=args.fmax, threshold=args.threshold)
-    fs.show()
+    fs = pirate_pybind11.FrequencySubbands.from_threshold(args.fmin, args.fmax, args.threshold, args.pf_rank)
+    print(fs.show())
 
 
 #######################################   test_node command  #######################################
@@ -640,15 +639,15 @@ def random_kernels(args):
                     Dout *= 2
             
             Wmax = 2**randi(5)
-            subband_counts = FrequencySubbands.make_random_subband_counts()
-            print(f"('fp{nbits}', {subband_counts}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
+            subband_counts = pirate_pybind11.FrequencySubbands.make_random_subband_counts()
+            print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
         print("# (dtype, dd_rank, Wmax, Dcore, Dout, Tinner, subband_counts, et_delta_ranks)")
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
-            subband_counts = FrequencySubbands.make_random_subband_counts()
+            subband_counts = pirate_pybind11.FrequencySubbands.make_random_subband_counts()
             Wmax = 2**randi(5)
             Dcore = 32 // nbits
             Dout = Dcore
@@ -676,7 +675,7 @@ def random_kernels(args):
                 et_delta_ranks = [0] + random.sample(et_candidates, ncand)
 
                 s = '     # continuation' if (dd_rank > dd_rank_min) else ''
-                print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {subband_counts}, {et_delta_ranks}),{s}")
+                print(f"('fp{nbits}', {dd_rank}, {Wmax}, {Dcore}, {Dout}, {Tinner}, {list(subband_counts)}, {et_delta_ranks}),{s}")
 
     if args.pfwr:
         print('# (dtype, subband_counts, Dcore, P, Tinner)')
@@ -687,7 +686,7 @@ def random_kernels(args):
             Tinner_log = randi(6)
             Dcore_log = randi(6-Tinner_log) + (32//nbits) - 1
             P = randi(1,15)
-            subband_counts = FrequencySubbands.make_random_subband_counts()
+            subband_counts = pirate_pybind11.FrequencySubbands.make_random_subband_counts()
             print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 
