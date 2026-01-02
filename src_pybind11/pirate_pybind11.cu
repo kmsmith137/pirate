@@ -146,7 +146,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<CudaStreamPool, std::shared_ptr<CudaStreamPool>>(m, "CudaStreamPool")
         .def_readonly("pool_id", &CudaStreamPool::pool_id)
         .def_readonly("num_compute_streams", &CudaStreamPool::num_compute_streams)
-        .def_static("create", &CudaStreamPool::create, py::arg("num_compute_streams"))
+        .def_static("create", &CudaStreamPool::create, 
+          py::arg("num_compute_streams"),
+          py::arg("compute_stream_priority") = 0
+        )
     ;
 
     py::class_<ResourceTracker>(m, "ResourceTracker")
@@ -212,7 +215,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
-               py::arg("config"), py::arg("nchunks"), py::arg("host_only") = false)
+               py::arg("config"), 
+               py::arg("nchunks"), 
+               py::arg("nbatches_out") = 0,
+               py::arg("host_only") = false)
           .def_static("time_one", &GpuDedisperser::time_one,
                py::arg("config"), py::arg("niterations"), py::arg("use_hugepages"))
     ;

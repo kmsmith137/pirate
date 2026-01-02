@@ -546,9 +546,9 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
 // We also scale each weight so that the variance of the pf-kernel output 
 // is of order 1. This is crucial for unit-testing fp16 kernels.
 //
-// Returned array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F).
+// Array shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, F).
 
-Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> &subband_variances)
+void ReferencePeakFindingKernel::make_random_weights(Array<float> &out, const Array<float> &subband_variances)
 {
     long B = params.beams_per_batch;
     long D = params.ndm_wt;
@@ -557,7 +557,9 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
     long F = fs.F;
 
     xassert_eq(P, 3*(P/3)+1);
+    xassert_shape_eq(out, ({B,D,T,P,F}));
     xassert_shape_eq(subband_variances, ({F,}));
+    xassert(out.on_host());
     xassert(subband_variances.on_host());
 
     vector<float> w0(F);
@@ -567,7 +569,6 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
         w0[f] = rsqrtf(var);
     }
 
-    Array<float> ret({B,D,T,P,F}, af_rhost);
     vector<float> wp(P);
     vector<float> wf(F);
 
@@ -588,9 +589,21 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
 
         for (long p = 0; p < P; p++)
             for (long f = 0; f < F; f++)
-                ret.data[i*P*F + p*F + f] = rand_uniform(1.0f, 2.0f) * wf[f] * wp[p];
+                out.data[i*P*F + p*F + f] = rand_uniform(1.0f, 2.0f) * wf[f] * wp[p];
     }
+}
 
+
+Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> &subband_variances)
+{
+    long B = params.beams_per_batch;
+    long D = params.ndm_wt;
+    long T = params.nt_wt;
+    long P = nprofiles;
+    long F = fs.F;
+
+    Array<float> ret({B,D,T,P,F}, af_rhost);
+    make_random_weights(ret, subband_variances);
     return ret;
 }
 

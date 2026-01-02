@@ -53,7 +53,7 @@ struct GpuDedisperser
         // If uninitialized, default is plan->num_active_batches.
         long nbatches_out = 0;
         long nbatches_wt = 0;    // infrequently used (only in a unit test)
-        
+
         // detect_deadlocks=true: assumes that {acquire,release}_input() is called
         // on the same thread as {acquire,release}_output(), and detect deadlocks
         // accordingly.
@@ -122,9 +122,8 @@ struct GpuDedisperser
     static void test_random();
 
     // Static member function: do one test/timing run with specified configuration.
-    static void test_one(const DedispersionConfig &config, int nchunks, bool host_only=false);
+    static void test_one(const DedispersionConfig &config, long nchunks, long nbatches_out=0, bool host_only=false);
     static void time_one(const DedispersionConfig &config, long niterations, bool use_hugepages);
-
     
     // --------------------------  Public members  --------------------------
 

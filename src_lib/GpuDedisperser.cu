@@ -970,33 +970,50 @@ static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, lon
 
 
 // Static member function.
-void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, bool host_only)
+void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, bool host_only)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.emit_cpp();
 
+    // I decided that this was the least awkward place to call DedispersionConfig::test(). 
+    config.test();  // calls config.validate()
+
+    Dtype dtype = config.dtype;
+    long beams_per_batch = config.beams_per_batch;
+    long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
+    long nstreams = config.num_active_batches;
+    long nt_in = config.time_samples_per_chunk;
+    long nfreq = config.get_total_nfreq();
+
     cout << "    nchunks = " << nchunks << ";\n"
+         << "    nbatches_out = " << nbatches_out << ";"
+         << "       // nstreams = " << nstreams << ", (chunks * batches) = " << (nchunks*nbatches) << "\n"
          << "    host_only = " << host_only << ";" << endl;
     
     if (host_only)
          cout << "    !!! Host-only test, GPU code will not be run !!!" << endl;
 
-    // I decided that this was the least awkward place to call DedispersionConfig::test().    
-    config.test();   // calls DedispersionConfig::validate()
+    if (nbatches_out == 0)
+        nbatches_out = nstreams;
 
-    shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
-
-    long ntrees = plan->ntrees;
-    long beams_per_batch = plan->beams_per_batch;
-    long nbatches = xdiv(plan->beams_per_gpu, plan->beams_per_batch);
-    long nstreams = plan->num_active_batches;
+    xassert(nchunks > 0);
+    xassert(nbatches_out > 0);
+    xassert(nbatches_out <= nchunks * nbatches);
     
+    shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
     shared_ptr<GpuDedisperser> gdd;
+    long ntrees = plan->ntrees;
 
     if (!host_only) {
+        // We use compute_stream_priority=-1 so that cudaMemcpyAsync(..., compute_stream)
+        // will fill the GpuDedisperser input arrays as quickly as possible. See below.
+        int compute_stream_priority = -1;
+
         GpuDedisperser::Params params;
         params.plan = plan;
-        params.stream_pool = CudaStreamPool::create(nstreams);
+        params.stream_pool = CudaStreamPool::create(nstreams, compute_stream_priority);
+        params.nbatches_out = nbatches_out;
+        params.nbatches_wt = nbatches_out;
         params.detect_deadlocks = true;
 
         gdd = make_shared<GpuDedisperser> (params);
@@ -1040,74 +1057,136 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
     shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, Dcore, 1);
     shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, Dcore, 2);
 
-    for (int ichunk = 0; ichunk < nchunks; ichunk++) {
-        for (int ibatch = 0; ibatch < nbatches; ibatch++) {
+    // Dedispersion input array. We randomly generate it (nbatches_out) batches at a time.
+    Array<float> dd_in_cpu({nbatches_out, beams_per_batch, nfreq, nt_in}, af_rhost | af_zero);
+    Array<void> dd_in_gpu(dtype, {nbatches_out, beams_per_batch, nfreq, nt_in}, af_gpu | af_zero);
+
+    // Peak-finding weights arrays. We randomly generate them (nbatches_out) batches at a time.
+    vector<Array<float>> pf_wt_cpu(ntrees);
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &t = plan->trees.at(itree);
+        long B = beams_per_batch;
+        long D = t.ndm_wt;
+        long T = t.nt_wt;
+        long P = t.nprofiles;
+        long F = t.frequency_subbands.F;
+        pf_wt_cpu.at(itree) = Array<float> ({nbatches_out,B,D,T,P,F}, af_rhost | af_zero);
+    }
+    
+    for (long ichunk = 0; ichunk < nchunks; ichunk++) {
+        for (long ibatch = 0; ibatch < nbatches; ibatch++) {
             long seq_id = ichunk * nbatches + ibatch;
-            long iout = seq_id % gdd->params.nbatches_out;
-            long iwt = seq_id % gdd->params.nbatches_wt;
+            long seq_base = (seq_id / nbatches_out) * nbatches_out;
 
-            // Randomly initialize weights.
-            // WARNING: as noted in Dedisperser.hpp, there's no explicit API protecting
-            // the weights, and the aller is responsible for thinking through race conditions.
-            // Here, updating the weights is okay since the weights are updated after the
-            // previous acquire_output(), and before the current release_input().
+            // Every (nbatches_out) batches, we do a large computation, to simulate
+            // dd_in and pf_wt arrays, copy to the GPU, and launch all GPU compute.
+            // This stress-tests the GPU synchronization logic.
 
-            for (int itree = 0; itree < ntrees; itree++) {
-                Array<float> sbv = subband_variances.at(itree);
-                Array<float> wt_cpu = ref_kernels_for_weights.at(itree)->make_random_weights(sbv);
+            if (seq_id == seq_base) {
+                long seq_end = min(seq_base + nbatches_out, nchunks * nbatches);
+                long ns = seq_end - seq_base;
 
+                // Simulate dedispersion input.
+                // Random values uniform over [-1.0, 1.0].
+                xassert(dd_in_cpu.is_fully_contiguous());
+                for (long i = 0; i < ns * beams_per_batch * nfreq * nt_in; i++)
+                    dd_in_cpu.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
+
+                // Copy dedispersion input to GPU.
+                if (!host_only) {
+                    Array<void> src = dd_in_cpu.slice(0,0,ns);
+                    Array<void> dst = dd_in_gpu.slice(0,0,ns);
+                    dst.fill(src.convert(dtype));
+                }
+
+                // Simulate peak-finding weights, and copy to GPU.
+                // As noted in Dedisperser.hpp, there's no explicit API protecting
+                // the weights, and the caller is responsible for thinking through race conditions.
+                // Out of paranoia, we put cudaDeviceSynchronize() here, but it shouldn't be necessary.
+
+                CUDA_CALL(cudaDeviceSynchronize());
+
+                for (long itree = 0; itree < ntrees; itree++) {
+                    Array<float> sbv = subband_variances.at(itree);
+
+                    for (long s = 0; s < ns; s++) {
+                        Array<float> wcpu = pf_wt_cpu.at(itree).slice(0,s);
+                        ref_kernels_for_weights.at(itree)->make_random_weights(wcpu, sbv);
+
+                        if (host_only)
+                            continue;
+
+                        const GpuPfWeightLayout &wl = gdd->cdd2_kernels.at(itree)->pf_weight_layout;
+                        Array<void> wgpu = gdd->wt_arrays.at(itree).slice(0,s);
+                        wl.to_gpu(wgpu, wcpu);
+                    }
+                }
+
+                if (!host_only) {
+
+                    // After all this setup, launch all compute on GPU. This loop is intended
+                    // to be fast, e.g. no activity on default stream, in order to stress-test
+                    // the kernel-queueing logic.
+
+                    for (long s = 0; s < ns; s++) {
+                        long iseq_gpu = seq_base + s;
+                        long ichunk_gpu = iseq_gpu / nbatches;
+                        long ibatch_gpu = iseq_gpu % nbatches;
+
+                        long istream = iseq_gpu % nstreams;
+                        cudaStream_t compute_stream = gdd->stream_pool->compute_streams.at(istream);
+
+                        Array<void> src = dd_in_gpu.slice(0,s);
+                        Array<void> dst = gdd->acquire_input(ichunk_gpu, ibatch_gpu, compute_stream);
+
+                        // Some paranoid asserts.
+                        xassert(src.dtype == dst.dtype);
+                        xassert_shape_eq(src, ({beams_per_batch, nfreq, nt_in}));
+                        xassert_shape_eq(dst, ({beams_per_batch, nfreq, nt_in}));
+                        xassert(src.is_fully_contiguous());
+                        xassert(dst.is_fully_contiguous());
+                        xassert(src.on_gpu());
+                        xassert(dst.on_gpu());
+
+                        // FIXME using cudaMemcpyAsync() here instead of ksgpu::launch_memcpy_kernel(),
+                        // due to alignment issues.
+
+                        long nbytes = dst.size * xdiv(dst.dtype.nbits, 8);
+                        cudaMemcpyAsync(dst.data, src.data, nbytes, cudaMemcpyDeviceToDevice, compute_stream);
+                        gdd->release_input(ichunk_gpu, ibatch_gpu, compute_stream);
+                    }
+                }
+            }
+            
+            // End of "Every (nbatches_out) batches, we do a large computation...".
+            // Back to the outer loops over (ichunk, ibatch).
+
+            for (long itree = 0; itree < ntrees; itree++) {
+                Array<float> wt_cpu = pf_wt_cpu.at(itree).slice(0, seq_id - seq_base);
                 rdd0->wt_arrays.at(itree).fill(wt_cpu);
                 rdd1->wt_arrays.at(itree).fill(wt_cpu);
                 rdd2->wt_arrays.at(itree).fill(wt_cpu);
-
-                if (!host_only) {
-                    // Fill weights between GpuDedisperser::acquire_input() and GpuDedisperser::release_input().
-                    const GpuPfWeightLayout &wl = gdd->cdd2_kernels.at(itree)->pf_weight_layout;
-                    Array<void> wt_gpu = gdd->wt_arrays.at(itree).slice(0,iwt);
-                    // FIXME extra copy here (+ another extra copy "hidden" in GpuPfWeightLayout::to_gpu())
-                    Array<void> tmp = wl.to_gpu(wt_cpu);
-                    wt_gpu.fill(tmp);
-                }
             }
 
-            // Frequency-space array with shape (beams_per_batch, nfreq, ntime).
-            // Random values uniform over [-1.0, 1.0].
-            Array<float> arr({beams_per_batch, plan->nfreq, plan->nt_in}, af_uhost);
-            for (long i = 0; i < arr.size; i++)
-                arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
+            Array<float> dd_in = dd_in_cpu.slice(0, seq_id - seq_base);
 
-            if (!host_only) {
-                // Acquire and release input on default stream.
-                // Note that release_input() is called after the weights have been initialized.
-                // This detail is critical!
-                Array<void> gpu_in = gdd->acquire_input(ichunk, ibatch, nullptr);
-                gpu_in.fill(arr.convert(config.dtype));
-                gdd->release_input(ichunk, ibatch, nullptr);
-            }
-
-            rdd0->input_array.fill(arr);
+            rdd0->input_array.fill(dd_in);
             rdd0->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
 
-            rdd1->input_array.fill(arr);
+            rdd1->input_array.fill(dd_in);
             rdd1->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
 
-            rdd2->input_array.fill(arr);
+            rdd2->input_array.fill(dd_in);
             rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
-
-            if (!host_only) {
-                // Acquire output on default stream.
-                gdd->acquire_output(ichunk, ibatch, nullptr);
-            }
             
-            for (int itree = 0; itree < ntrees; itree++) {
-                // Compare peak-finding 'out_max'.
-                Array<void> gdd_max = gdd->out_max.at(itree).slice(0,iout);
-                Array<uint> gpu_tokens = gdd->out_argmax.at(itree).slice(0,iout).to_host();
+            if (!host_only)
+                gdd->acquire_output(ichunk, ibatch, nullptr);
 
+            for (long itree = 0; itree < ntrees; itree++) {
+                // Compare peak-finding 'out_max'.
                 assert_arrays_equal(rdd0->out_max.at(itree), rdd1->out_max.at(itree), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
                 assert_arrays_equal(rdd0->out_max.at(itree), rdd2->out_max.at(itree), "pfmax_ref0", "pfmax_ref2", {"beam","pfdm","pft"});
-                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
-
+               
                 // To check 'out_argmax', we need to jump through some hoops.
                 shared_ptr<ReferencePeakFindingKernel> pf_kernel = rdd0->pf_kernels.at(itree);
 
@@ -1117,15 +1196,22 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, int nchunks, boo
                 pf_kernel->eval_tokens(pf_tmp.at(itree), rdd2->out_argmax.at(itree), rdd0->wt_arrays.at(itree));
                 assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_ref2", {"beam","pfdm","pft"});
 
+                if (host_only)
+                    continue;
+
+                long iout = seq_id % nbatches_out;                
+                Array<void> gdd_max = gdd->out_max.at(itree).slice(0,iout);
+                Array<uint> gpu_tokens = gdd->out_argmax.at(itree).slice(0,iout).to_host();
+
+                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
+
                 double eps = 5.0 * config.dtype.precision();
                 pf_kernel->eval_tokens(pf_tmp.at(itree), gpu_tokens, rdd0->wt_arrays.at(itree));
                 assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
             }
 
-            if (!host_only) {
-                // Release output on default cuda stream.
+            if (!host_only)
                 gdd->release_output(ichunk, ibatch, nullptr);
-            }
         }
     }
     
@@ -1144,8 +1230,20 @@ void GpuDedisperser::test_random()
     long max_nchunks = (1024*1024) / (ntree * nt_chunk * config.beams_per_gpu);
     max_nchunks = max(min_nchunks, max_nchunks);
 
-    long nchunks = ksgpu::rand_int(1, max_nchunks+1);    
-    GpuDedisperser::test_one(config, nchunks);
+    long nchunks = ksgpu::rand_int(1, max_nchunks+1);
+
+    long nfreq = config.get_total_nfreq();
+    long beams_per_batch = config.beams_per_batch;
+    long nbatches = xdiv(config.beams_per_gpu, config.beams_per_batch);
+    long min_nbatches_out = config.num_active_batches;
+    long max_nbatches_out = (1024*1024*1024) / (beams_per_batch * nfreq * nt_chunk);
+    max_nbatches_out = min(max_nbatches_out, nchunks * nbatches);
+    max_nbatches_out = max(min_nbatches_out, max_nbatches_out);
+
+    double t = rand_uniform(log(min_nbatches_out) + 1.0e-3, log(max_nbatches_out) + 1.0);
+    long nbatches_out = min(long(exp(t)), max_nbatches_out);
+
+    GpuDedisperser::test_one(config, nchunks, nbatches_out);
 }
 
 

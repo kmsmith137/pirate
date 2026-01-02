@@ -40,7 +40,10 @@ struct CudaStreamPool
 
     // Factory function to create a CudaStreamPool.
     // The num_compute_streams argument must be > 0.
-    static std::shared_ptr<CudaStreamPool> create(int num_compute_streams);
+    static std::shared_ptr<CudaStreamPool> create(
+        int num_compute_streams, 
+        int compute_stream_priority = 0
+    );
 
     // Noncopyable.
     CudaStreamPool(const CudaStreamPool &) = delete;
@@ -48,7 +51,7 @@ struct CudaStreamPool
 
 private:
     // Private constructor - use CudaStreamPool::create() instead.
-    CudaStreamPool(int num_compute_streams);
+    CudaStreamPool(int num_compute_streams, int compute_stream_priority);
 };
 
 
