@@ -1,5 +1,5 @@
 #include "../include/pirate/SlabAllocator.hpp"
-#include "../include/pirate/inlines.hpp"  // align_up(), is_aligned()
+#include "../include/pirate/inlines.hpp"  // align_up()
 
 #include <stdexcept>
 #include <sstream>
@@ -10,74 +10,6 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// SlabHeader: stored at the start of each slab for host memory allocations.
-// This holds the reference to keep the SlabAllocator alive.
-
-
-struct SlabAllocator::SlabHeader
-{
-    std::shared_ptr<SlabAllocator> allocator;
-    void *slab_ptr;  // pointer to start of internal slab (for returning to free list)
-    
-    SlabHeader(std::shared_ptr<SlabAllocator> a, void *p)
-        : allocator(std::move(a)), slab_ptr(p) { }
-    
-    ~SlabHeader()
-    {
-        if (allocator)
-            allocator->return_slab(slab_ptr);
-    }
-};
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// InPlaceAllocator: custom allocator that uses pre-existing memory rather than malloc.
-// Used with std::allocate_shared to embed the control block in the slab.
-
-
-template<typename T>
-struct SlabAllocator::InPlaceAllocator
-{
-    using value_type = T;
-    
-    void *mem;
-    
-    explicit InPlaceAllocator(void *m) : mem(m) { }
-    
-    template<typename U>
-    InPlaceAllocator(const InPlaceAllocator<U> &other) : mem(other.mem) { }
-    
-    T *allocate(std::size_t n)
-    {
-        // std::allocate_shared allocates space for both the control block and
-        // the SlabHeader in a single allocation. Verify it fits in our reserved space.
-        std::size_t total_bytes = n * sizeof(T);
-        if (total_bytes > SlabAllocator::control_overhead) {
-            std::stringstream ss;
-            ss << "SlabAllocator: control block size (" << total_bytes
-               << " bytes) exceeds reserved overhead (" << SlabAllocator::control_overhead
-               << " bytes). This is a build configuration issue.";
-            throw std::runtime_error(ss.str());
-        }
-        return static_cast<T *>(mem);
-    }
-    
-    void deallocate(T *, std::size_t) noexcept
-    {
-        // No-op: the memory is part of the slab, not separately allocated.
-    }
-    
-    template<typename U>
-    bool operator==(const InPlaceAllocator<U> &) const { return true; }
-    
-    template<typename U>
-    bool operator!=(const InPlaceAllocator<U> &other) const { return !(*this == other); }
-};
 
 
 // -------------------------------------------------------------------------------------------------
@@ -177,17 +109,13 @@ void *SlabAllocator::_allocate_slab(long nbytes)
     if (slab_size < 0) {
         slab_size = aligned_nbytes;
         
-        // We embed the control block at the start of each slab.
-        internal_slab_size = align_up(aligned_nbytes + control_overhead, nalign);
-        
         // Calculate total number of slabs.
-        num_slabs = capacity / internal_slab_size;
+        num_slabs = capacity / slab_size;
         
         if (num_slabs <= 0) {
             std::stringstream ss;
             ss << "SlabAllocator::get_slab(): capacity=" << capacity
-               << " is too small for slab_size=" << slab_size
-               << " (internal_slab_size=" << internal_slab_size << ")";
+               << " is too small for slab_size=" << slab_size;
             throw std::runtime_error(ss.str());
         }
         
@@ -195,7 +123,7 @@ void *SlabAllocator::_allocate_slab(long nbytes)
         char *base_ptr = static_cast<char *>(base.get());
         free_list.reserve(num_slabs);
         for (long i = 0; i < num_slabs; i++) {
-            free_list.push_back(base_ptr + i * internal_slab_size);
+            free_list.push_back(base_ptr + i * slab_size);
         }
     }
     else if (aligned_nbytes != slab_size) {
@@ -229,23 +157,14 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes)
 {
     void *slab_ptr = _allocate_slab(nbytes);
     
-    // Embed the control block at the start of the slab using std::allocate_shared
-    // with a custom allocator, avoiding any malloc for the shared_ptr machinery.
-    //
-    // Layout: [SlabHeader + control block] [padding] [user data]
-    //         ^-- slab_ptr                           ^-- user_ptr
+    // Create shared_ptr with a custom deleter that returns the slab to the pool.
+    // The captured shared_ptr<SlabAllocator> ensures the allocator (and its
+    // underlying memory) stays alive as long as any slab is in use.
+    std::shared_ptr<SlabAllocator> self = shared_from_this();
     
-    void *user_ptr = static_cast<char *>(slab_ptr) + control_overhead;
-    
-    // Create the shared_ptr using in-place allocation.
-    InPlaceAllocator<SlabHeader> alloc(slab_ptr);
-    std::shared_ptr<SlabHeader> header = std::allocate_shared<SlabHeader>(
-        alloc, shared_from_this(), slab_ptr);
-    
-    // Create an aliasing shared_ptr that points to the user data region.
-    // This shares ownership with 'header', so when all references to the
-    // user data are dropped, the SlabHeader destructor runs.
-    return std::shared_ptr<void>(header, user_ptr);
+    return std::shared_ptr<void>(slab_ptr, [self, slab_ptr](void *) {
+        self->return_slab(slab_ptr);
+    });
 }
 
 
@@ -283,4 +202,3 @@ long SlabAllocator::get_slab_size() const
 
 
 }  // namespace pirate
-

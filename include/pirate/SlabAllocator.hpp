@@ -28,20 +28,13 @@ namespace pirate {
 //   - Thread-safe (uses a lock for the free list)
 //   - Slabs hold a reference to the SlabAllocator, preventing the underlying
 //     memory from being freed while any slab is still in use
-//   - The shared_ptr control block is embedded in the slab itself, avoiding
-//     a separate malloc per allocation
+//   - Compatible with weak_ptr (control blocks are allocated separately)
 
 
 class SlabAllocator : public std::enable_shared_from_this<SlabAllocator>
 {
 public:
     static constexpr int nalign = constants::bytes_per_gpu_cache_line;
-    
-    // Overhead bytes reserved at the start of each slab for the control block.
-    // This must be large enough to hold both the SlabHeader struct and the
-    // shared_ptr control block. The first call to get_slab() verifies this at
-    // runtime. One cache line (128 bytes) is plenty on current systems.
-    static constexpr long control_overhead = constants::bytes_per_gpu_cache_line;
     
     // Construct SlabAllocator that allocates new memory using af_alloc().
     // The 'aflags' are memory allocation flags from ksgpu/mem_utils.hpp.
@@ -68,8 +61,6 @@ public:
     // the underlying memory is not freed while the slab is in use. When the
     // shared_ptr's reference count drops to zero, the slab is returned to the
     // pool for reuse.
-    //
-    // The control block is embedded in the slab itself (no malloc per slab).
     std::shared_ptr<void> get_slab(long nbytes);
     
     // Returns the number of slabs currently available in the free list.
@@ -89,8 +80,7 @@ private:
     
     // Slab management. These are protected by 'lock'.
     mutable std::mutex lock;
-    long slab_size = -1;        // user-visible slab size (established by first get_slab)
-    long internal_slab_size = 0; // slab_size + overhead, aligned
+    long slab_size = -1;        // slab size in bytes (established by first get_slab)
     long num_slabs = 0;         // total number of slabs
     std::vector<void *> free_list;  // stack of free slab pointers
     
@@ -98,20 +88,10 @@ private:
     void return_slab(void *slab_ptr);
     
     // Helper that allocates a slab (validates nbytes, pops from free list).
-    // Returns pointer to start of internal slab (before control_overhead).
     void *_allocate_slab(long nbytes);
-    
-    // Helper struct placed at start of each slab.
-    // Stores the shared_ptr to keep the SlabAllocator alive.
-    struct SlabHeader;
-    
-    // Custom allocator for std::allocate_shared that uses in-place memory.
-    template<typename T>
-    struct InPlaceAllocator;
 };
 
 
 }  // namespace pirate
 
 #endif // _PIRATE_SLAB_ALLOCATOR_HPP
-
