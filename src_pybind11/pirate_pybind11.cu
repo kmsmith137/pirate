@@ -1,4 +1,9 @@
+// Main pybind11 source file containing the PYBIND11_MODULE definition.
+// Core dedispersion bindings are defined here.
+// Kernel and infrastructure bindings are in pirate_pybind11_kernels.cu.
+//
 // For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cu.
+
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
@@ -8,35 +13,20 @@
 
 #include <ksgpu/pybind11.hpp>
 
-#include "../include/pirate/CasmBeamformer.hpp"
-#include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/ResourceTracker.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
-#include "../include/pirate/DedispersionKernel.hpp"
-#include "../include/pirate/FakeCorrelator.hpp"
-#include "../include/pirate/FakeServer.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
-#include "../include/pirate/GpuDequantizationKernel.hpp"
-#include "../include/pirate/LaggedDownsamplingKernel.hpp"
-#include "../include/pirate/PeakFindingKernel.hpp"
-#include "../include/pirate/ReferenceLagbuf.hpp"
-#include "../include/pirate/ReferenceTree.hpp"
-#include "../include/pirate/RingbufCopyKernel.hpp"
-#include "../include/pirate/TreeGriddingKernel.hpp"
-
-#include "../include/pirate/loose_ends/tests.hpp"
-#include "../include/pirate/loose_ends/timing.hpp"
 
 using namespace std;
 using namespace ksgpu;
 using namespace pirate;
 namespace py = pybind11;
 
-// Declared extern here, defined in src_lib/scratch.cu.
-namespace pirate { extern void scratch(); }
+// Defined in pirate_pybind11_kernels.cu.
+namespace pirate { void register_kernel_bindings(pybind11::module &m); }
 
 
 PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate_pybind11.so
@@ -51,95 +41,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         PyErr_SetString(PyExc_ImportError, "pirate: numpy.core.multiarray failed to import");
         return;
     }
-    
-    py::class_<CasmBeamformer> (m, "CasmBeamformer")
-        
-        // FIXME the constructor syntax I wanted was:
-        //
-        //    CasmBeamformer(
-        //      const Array<float> &frequencies,     // shape (F,)
-        //      const Array<int> &feed_indices,      // shape (256,2)
-        //      const Array<float> &beam_locations,  // shape (B,2)
-        //      int downsampling_factor,
-        //      float ns_feed_spacing = default_ns_feed_spacing,
-        //      const Array<float> &ew_feed_spacings = Array<float>()
-        //   )
-        //
-        // but I got an import-time error when I tried to specify a default
-        // argument for 'ew_feed_spacings'. For this reason, I ended up wrapping
-        // two constructors (with and without the 'ew_feed_spacings' arg).
-        //
-        // FIXME CasmBeamformer should have docstrings (low-priority since
-        // pybind11 interface is not "vendorized").
-        
-        .def(py::init<const Array<float> &, const Array<int> &, const Array<float> &, int, float>(),
-             py::arg("frequencies"), py::arg("feed_indices"),
-             py::arg("beam_locations"), py::arg("downsampling_factor"),
-             py::arg("ns_feed_spacing") = CasmBeamformer::default_ns_feed_spacing)
-        
-        .def(py::init<const Array<float> &, const Array<int> &, const Array<float> &, int, float, const Array<float> &>(),
-             py::arg("frequencies"), py::arg("feed_indices"),
-             py::arg("beam_locations"), py::arg("downsampling_factor"),
-             py::arg("ns_feed_spacing"),
-             py::arg("ew_feed_spacings"))
-
-        // FIXME figure out how to python-wrap 'stream' argument.
-        // (For now, the python interface always uses the default stream!
-        // Currently, we only use the python interface for testing, so this is okay.)
-        
-        .def("launch_beamformer",
-             [](CasmBeamformer &self, const Array<uint8_t> &e_in, const Array<float> &feed_weights, Array<float> &i_out) {
-                 self.launch_beamformer(e_in, feed_weights, i_out, nullptr);    // stream=nullptr
-             }, py::arg("e_in"), py::arg("feed_weights"), py::arg("i_out"))
-
-        .def_static("get_max_beams", &CasmBeamformer::get_max_beams)
-        .def_static("test_microkernels", &CasmBeamformer::test_microkernels)
-        .def_static("run_timings", &CasmBeamformer::run_timings, py::arg("ncu_hack"))
-    ;
-    
-    py::class_<FakeCorrelator>(m, "FakeCorrelator")
-        .def(py::init<long, bool, bool, bool>(),
-             py::arg("send_bufsize"), py::arg("use_zerocopy"), py::arg("use_mmap"), py::arg("use_hugepages"))
-
-        .def("add_endpoint", &FakeCorrelator::add_endpoint,
-             py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("total_gpbs"), py::arg("vcpu_list"))
-
-        .def("run", &FakeCorrelator::run)  // no args
-    ;
-    
-    
-    py::class_<FakeServer>(m, "FakeServer")
-        .def(py::init<const std::string &, bool>(),
-             py::arg("server_name"), py::arg("use_hugepages"))
-
-        .def("add_tcp_receiver", &FakeServer::add_tcp_receiver,
-             py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("recv_bufsize"),
-             py::arg("use_epoll"), py::arg("vcpu_list"), py::arg("cpu"), py::arg("inic"))
-
-        .def("add_chime_dedisperser", &FakeServer::add_chime_dedisperser,
-             py::arg("device"), py::arg("beams_per_gpu"), py::arg("num_active_batches"),
-             py::arg("beams_per_batch"), py::arg("use_copy_engine"), py::arg("vcpu_list"),
-             py::arg("cpu"))
-        
-        .def("add_memcpy_thread", &FakeServer::add_memcpy_thread,
-             py::arg("src_device"), py::arg("dst_device"), py::arg("blocksize"),
-             py::arg("use_copy_engine"), py::arg("vcpu_list"), py::arg("cpu"))
-        
-        .def("add_ssd_writer", &FakeServer::add_ssd_writer,
-             py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"),
-             py::arg("cpu"), py::arg("issd"))
-
-        .def("add_downsampling_thread", &FakeServer::add_downsampling_thread,
-             py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"),
-             py::arg("cpu"))
-
-         // Called by python code, to control server.
-        .def("abort", &FakeServer::abort, py::arg("abort_msg"))
-        .def("join_threads", &FakeServer::join_threads)
-        .def("show_stats", &FakeServer::show_stats)
-        .def("start", &FakeServer::start)
-        .def("stop", &FakeServer::stop)
-    ;
 
     // CudaStreamPool: always accessed via shared_ptr.
     // Note: CudaStreamWrapper members are not exposed to python.
@@ -186,20 +87,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("multiplier"), py::arg("fine_grained"))
     ;
 
-    py::class_<CoalescedDdKernel2>(m, "CoalescedDdKernel2")
-          .def_static("test_random", &CoalescedDdKernel2::test_random)
-          .def_static("time_selected", &CoalescedDdKernel2::time_selected)
-          .def_static("registry_size", &CoalescedDdKernel2::registry_size)
-          .def_static("show_registry", &CoalescedDdKernel2::show_registry)
-    ;
-
-    py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
-          .def_static("test_random", &GpuDedispersionKernel::test_random)
-          .def_static("time_selected", &GpuDedispersionKernel::time_selected)
-          .def_static("registry_size", &GpuDedispersionKernel::registry_size)
-          .def_static("show_registry", &GpuDedispersionKernel::show_registry)
-    ;
-
     // GpuDedisperser::Params (nested struct, exposed as GpuDedisperserParams)
     py::class_<GpuDedisperser::Params>(m, "GpuDedisperserParams")
           .def(py::init<>())
@@ -221,52 +108,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("host_only") = false)
           .def_static("time_one", &GpuDedisperser::time_one,
                py::arg("config"), py::arg("niterations"), py::arg("use_hugepages"))
-    ;
-
-    py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")
-          .def_static("test_random", &GpuLaggedDownsamplingKernel::test_random)
-          .def_static("time_selected", &GpuLaggedDownsamplingKernel::time_selected)
-    ;
-
-    py::class_<GpuPeakFindingKernel>(m, "GpuPeakFindingKernel")
-          .def_static("test_random", &GpuPeakFindingKernel::test_random, py::arg("short_circuit") = false)
-          .def_static("registry_size", &GpuPeakFindingKernel::registry_size)
-          .def_static("show_registry", &GpuPeakFindingKernel::show_registry)
-    ;
-
-    py::class_<GpuRingbufCopyKernel>(m, "GpuRingbufCopyKernel")
-          .def_static("test_random", &GpuRingbufCopyKernel::test_random)
-    ;
-
-    py::class_<GpuTreeGriddingKernel>(m, "GpuTreeGriddingKernel")
-          .def_static("test_random", &GpuTreeGriddingKernel::test_random)
-          .def_static("time_selected", &GpuTreeGriddingKernel::time_selected)
-    ;
-
-    py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel")
-          .def_static("test_random", &GpuDequantizationKernel::test_random)
-          .def_static("time_selected", &GpuDequantizationKernel::time_selected)
-    ;
-
-    py::class_<ReferenceLagbuf>(m, "ReferenceLagbuf")
-          .def_static("test_random", &ReferenceLagbuf::test_random)
-    ;
-
-    py::class_<ReferenceTree>(m, "ReferenceTree")
-          .def_static("test_basics", &ReferenceTree::test_basics)
-          .def_static("test_subbands", &ReferenceTree::test_subbands)
-    ;
-
-    py::class_<PfWeightReaderMicrokernel>(m, "PfWeightReaderMicrokernel")
-          .def_static("test_random", &PfWeightReaderMicrokernel::test_random)
-          .def_static("registry_size", &PfWeightReaderMicrokernel::registry_size)
-          .def_static("show_registry", &PfWeightReaderMicrokernel::show_registry)
-    ;
-
-    py::class_<PfOutputMicrokernel>(m, "PfOutputMicrokernel")
-          .def_static("test_random", &PfOutputMicrokernel::test_random)
-          .def_static("registry_size", &PfOutputMicrokernel::registry_size)
-          .def_static("show_registry", &PfOutputMicrokernel::show_registry)
     ;
 
     // DedispersionConfig::PeakFindingConfig (nested struct)
@@ -354,22 +195,57 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     py::class_<FrequencySubbands>(m, "FrequencySubbands")
+          // Constructors
+          .def(py::init<>())  // default constructor
           .def(py::init<const std::vector<long> &>(), py::arg("subband_counts"))
+          .def(py::init<const std::vector<long> &, double, double>(),
+               py::arg("subband_counts"), py::arg("fmin"), py::arg("fmax"))
+          // Data members (readonly since they are computed from subband_counts)
+          .def_readonly("subband_counts", &FrequencySubbands::subband_counts)
+          .def_readonly("pf_rank", &FrequencySubbands::pf_rank)
+          .def_readonly("F", &FrequencySubbands::F)
+          .def_readonly("M", &FrequencySubbands::M)
+          .def_readonly("m_to_f", &FrequencySubbands::m_to_f)
+          .def_readonly("m_to_d", &FrequencySubbands::m_to_d)
+          .def_readonly("f_to_ilo", &FrequencySubbands::f_to_ilo)
+          .def_readonly("f_to_ihi", &FrequencySubbands::f_to_ihi)
+          .def_readonly("f_to_mbase", &FrequencySubbands::f_to_mbase)
+          .def_readonly("i_to_f", &FrequencySubbands::i_to_f)
+          .def_readonly("fmin", &FrequencySubbands::fmin)
+          .def_readonly("fmax", &FrequencySubbands::fmax)
+          // Inline methods
+          .def("m_to_ilo", &FrequencySubbands::m_to_ilo, py::arg("m"))
+          .def("m_to_ihi", &FrequencySubbands::m_to_ihi, py::arg("m"))
+          // Methods with ostream arguments: wrap to return strings
+          .def("show", [](const FrequencySubbands &self) {
+              std::ostringstream os;
+              self.show(os);
+              return os.str();
+          })
+          .def("show_compact", [](const FrequencySubbands &self) {
+              std::stringstream ss;
+              self.show_compact(ss);
+              return ss.str();
+          })
+          .def("show_token", [](const FrequencySubbands &self, uint token) {
+              std::ostringstream os;
+              self.show_token(token, os);
+              return os.str();
+          }, py::arg("token"))
           .def("to_string", &FrequencySubbands::to_string)
+          // Static methods
+          .def_static("restrict_subband_counts", &FrequencySubbands::restrict_subband_counts,
+               py::arg("subband_counts"), py::arg("et_delta_rank"), py::arg("new_pf_rank"))
+          .def_static("validate_subband_counts", &FrequencySubbands::validate_subband_counts,
+               py::arg("subband_counts"))
+          .def_static("make_random_subband_counts",
+               static_cast<std::vector<long> (*)(long)>(&FrequencySubbands::make_random_subband_counts),
+               py::arg("pf_rank"))
+          .def_static("make_random_subband_counts",
+               static_cast<std::vector<long> (*)()>(&FrequencySubbands::make_random_subband_counts))
+          .def_static("make_random", &FrequencySubbands::make_random)
     ;
 
-    m.def("time_cpu_downsample", &time_cpu_downsample, py::arg("nthreads"));
-    m.def("time_gpu_downsample", &time_gpu_downsample);
-    m.def("time_gpu_transpose", &time_gpu_transpose);
-    
-    // "Zombie" tests (code that I wrote during protoyping that may never get used)
-    m.def("test_avx2_m64_outbuf", &test_avx2_m64_outbuf);
-    m.def("test_cpu_downsampler", &test_cpu_downsampler);
-    m.def("test_gpu_downsample", &test_gpu_downsample);
-    m.def("test_gpu_transpose", &test_gpu_transpose);
-    m.def("test_gpu_reduce2", &test_gpu_reduce2);
-
-    // Called by 'python -m pirate_frb scratch'. Defined in src_lib/utils.cu.
-    m.def("scratch", &scratch);
-
+    // Register kernel and infrastructure bindings from pirate_pybind11_kernels.cu.
+    register_kernel_bindings(m);
 }

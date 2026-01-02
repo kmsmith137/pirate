@@ -143,7 +143,8 @@ LIB_SRCFILES = \
 
 # These get compiled into pirate_frb/pirate_pybind11....so.
 PYEXT_SRCFILES = \
-  src_pybind11/pirate_pybind11.cu
+  src_pybind11/pirate_pybind11.cu \
+  src_pybind11/pirate_pybind11_kernels.cu
 
 # Must list all python source files here.
 # (Otherwise they won't show up in 'pip install' or pypi.)
