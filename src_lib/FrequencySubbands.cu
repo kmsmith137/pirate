@@ -22,32 +22,6 @@ namespace pirate {
 // made here should also be reflected there.
 
 
-// Helper functions for from_threshold()
-namespace {
-    // Returns maximum number of bands at given level for given pf_rank
-    // Level 0 is special (non-overlapping bands).
-    long max_bands_at_level(long pf_rank, long level) {
-        xassert(level >= 0);
-        xassert(level <= pf_rank);
-        return (level > 0) ? (pow2(pf_rank+1-level) - 1) : pow2(pf_rank);
-    }
-    
-    // Returns (ilo, ihi) for a given level and band index
-    // where 0 <= ilo < ihi <= 2^pf_rank.
-    pair<long, long> get_band_index_range(long pf_rank, long level, long b) {
-        xassert(level >= 0);
-        xassert(level <= pf_rank);
-        xassert(b >= 0);
-        xassert(b < max_bands_at_level(pf_rank, level));
-        
-        long s = pow2(max(level-1, 0L));  // spacing between bands
-        long ilo = b * s;
-        long ihi = b * s + pow2(level);
-        return {ilo, ihi};
-    }
-}
-
-
 // Default constructor, equivalent to subband_counts={1}
 FrequencySubbands::FrequencySubbands() :
     FrequencySubbands(vector<long>({1}))
@@ -142,8 +116,14 @@ FrequencySubbands FrequencySubbands::from_threshold(double fmin, double fmax, do
     vector<long> subband_counts(pf_rank+1, 0);
     
     for (long level = 0; level <= pf_rank; level++) {
-        for (long b = 0; b < max_bands_at_level(pf_rank, level); b++) {
-            auto [ilo, ihi] = get_band_index_range(pf_rank, level, b);
+        // Level 0 is special (non-overlapping bands).
+        long max_bands = (level > 0) ? (pow2(pf_rank+1-level) - 1) : pow2(pf_rank);
+        
+        for (long b = 0; b < max_bands; b++) {
+            // Compute (ilo, ihi) for this band: 0 <= ilo < ihi <= 2^pf_rank
+            long s = pow2(max(level-1, 0L));  // spacing between bands
+            long ilo = b * s;
+            long ihi = b * s + pow2(level);
             
             // Note: (lo,hi) swap when mapping indices to frequencies
             double freq_lo = i_to_f[ihi];
