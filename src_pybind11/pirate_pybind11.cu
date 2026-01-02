@@ -14,11 +14,12 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/CudaStreamPool.hpp"
-#include "../include/pirate/ResourceTracker.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/DedispersionTree.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
+#include "../include/pirate/ResourceTracker.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -192,6 +193,26 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("ntrees", &DedispersionPlan::ntrees)
           .def_readonly("nbits", &DedispersionPlan::nbits)
           .def("to_yaml_string", &DedispersionPlan::to_yaml_string, py::arg("verbose") = false)
+    ;
+
+    // DedispersionTree: simple data class representing output of dedisperser
+    // for one choice of (downsampling level, early trigger).
+    py::class_<DedispersionTree>(m, "DedispersionTree")
+          .def_readonly("ds_level", &DedispersionTree::ds_level)
+          .def_readonly("amb_rank", &DedispersionTree::amb_rank)
+          .def_readonly("pri_dd_rank", &DedispersionTree::pri_dd_rank)
+          .def_readonly("early_dd_rank", &DedispersionTree::early_dd_rank)
+          .def_readonly("nt_ds", &DedispersionTree::nt_ds)
+          .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
+          .def_readonly("pf", &DedispersionTree::pf)
+          .def_readonly("nprofiles", &DedispersionTree::nprofiles)
+          .def_readonly("ndm_out", &DedispersionTree::ndm_out)
+          .def_readonly("ndm_wt", &DedispersionTree::ndm_wt)
+          .def_readonly("nt_out", &DedispersionTree::nt_out)
+          .def_readonly("nt_wt", &DedispersionTree::nt_wt)
+          .def_readonly("dm_min", &DedispersionTree::dm_min)
+          .def_readonly("dm_max", &DedispersionTree::dm_max)
+          .def_readonly("trigger_frequency", &DedispersionTree::trigger_frequency)
     ;
 
     py::class_<FrequencySubbands>(m, "FrequencySubbands")

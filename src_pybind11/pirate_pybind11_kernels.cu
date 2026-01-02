@@ -205,4 +205,3 @@ void register_kernel_bindings(pybind11::module &m)
 }
 
 }  // namespace pirate
-
