@@ -16,9 +16,8 @@ class FrequencySubbands:
         Constructor syntax 1: FrequencySubbands(subband_counts=[5,3,2,1], pf_rank=None, fmin=None, fmax=None)
         Constructor syntax 2: FrequencySubbands(pf_rank=4, fmin=300., fmax=1500., threshold=0.2)
 
-        These examples are accessible from the command line:
-          python -m pirate_frb show_subbands 5 3 2 1
-          python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.2
+        Example accessible from the command line:
+          python -m make_subbands 300 1500 0.2 -r 4
         
         Key members:
         

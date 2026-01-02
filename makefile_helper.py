@@ -20,7 +20,7 @@
 # If I'm debugging something specific, then I'll set a debug flag.
 # For a long CI-style test run, I'll set all flags to true (high compile time!)
 
-production_kernels = True     # "production" CHIME/CHORD kernels
+production_kernels = False    # "production" CHIME/CHORD kernels
 debug_dd_kernels = False      # debug dedispersion kernels
 debug_pf_kernels = False      # debug peak-finding kernels
 debug_pfo_kernels = False     # debug peak-finding output microkernel

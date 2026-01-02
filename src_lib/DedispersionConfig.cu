@@ -587,7 +587,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         ss << "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
            << "This is a length-(pf_rank+1) vector containing the number of frequency subbands at each level.\n"
            << "To disable subbands and only search the full frequency band, set to [1].\n"
-           << "For a tool for creating frequency_subband_counts, see 'python -m pirate_frb show_subbands --help'.\n"
+           << "For a tool for creating frequency_subband_counts, see 'python -m pirate_frb make_subbands --help'.\n"
            << "Note: these are the 'top-level' frequency subbands; fewer subbands may be searched in individual trees.\n"
            << "In this config, there are " << fs.F << " top-level frequency subband(s):";
 

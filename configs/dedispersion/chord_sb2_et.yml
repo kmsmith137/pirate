@@ -22,7 +22,7 @@ early_triggers:
   - {ds_level: 3, delta_rank: 2}
   - {ds_level: 3, delta_rank: 1}
 
-# python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.1
+# python -m make_subbands 300 1500 0.1 -r 4
 frequency_subband_counts: [5,9,7,3,1]
 
 # FIXME peak_finding_params are not quite right (same params at each level)

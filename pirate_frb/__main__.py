@@ -239,37 +239,42 @@ def show_kernels(args):
         pirate_pybind11.GpuPeakFindingKernel.show_registry()
 
 
-######################################   show_subbands command  #####################################
+######################################   make_subbands command  #####################################
 
 
-def parse_show_subbands(subparsers):
+def parse_make_subbands(subparsers):
     parser = subparsers.add_parser(
-        "show_subbands",
-        help = "Show info on frequency subband scheme (see 'python -m pirate_frb show_subbands --help')",
+        "make_subbands",
+        help = "Create subband_counts with specified freq range and width (see 'python -m make_subbands --help')",
         formatter_class = argparse.RawDescriptionHelpFormatter,   # multi-line epilog
         epilog = textwrap.dedent("""
         Example usage:
 
-           # Specify subband_counts (rank is inferred)
-           python -m pirate_frb show_subbands 5 3 2 1
+           # Specify frequency min, max, and threshold
+           python -m make_subbands 300 1500 0.2
+           python -m make_subbands 400 800 0.1 -r 4
 
-           # Specify rank, frequency min/max, and threshold flo/fhi
-           python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.2
+        The 'threshold' argument is a "target" fractional bandwidth. For example, if threshold=0.2,
+        then the make_subbands command will try to make bands whose fractional bandwidth is <= 20%.
+        However, some subbands may be wider than the threshold, due to technical constraints.
         """)
     )
 
-    parser.add_argument('subband_counts', nargs='*', type=int)
-    parser.add_argument('-r', '--rank', type=int)
-    parser.add_argument('-f', '--fmin', type=float)
-    parser.add_argument('-F', '--fmax', type=float)
-    parser.add_argument('-t', '--threshold', type=float)
+    parser.add_argument('fmin', type=float, help='Minimum frequency (MHz)')
+    parser.add_argument('fmax', type=float, help='Maximum frequency (MHz)')
+    parser.add_argument('threshold', type=float, help='Threshold for flo/fhi')
+    parser.add_argument('-r', '--pf-rank', type=int, default=4, help='Peak finding rank (default: 4)')
 
 
-def show_subbands(args):
-    subband_counts = args.subband_counts if (len(args.subband_counts) > 0) else None
-    print(f'Constructing FrequencySubbands({subband_counts=}, pf_rank={args.rank}, fmin={args.fmin}, fmax={args.fmax}, threshold={args.threshold})')
+def make_subbands(args):
+    print(f'Constructing FrequencySubbands(pf_rank={args.pf_rank}, fmin={args.fmin}, fmax={args.fmax}, threshold={args.threshold})')
+
+    # These asserts detect out-of-order positional arguments.
+    assert args.fmin > 99.0
+    assert args.fmin < args.fmax
+    assert args.threshold <= 10.0
     
-    fs = FrequencySubbands(subband_counts=subband_counts, pf_rank=args.rank, fmin=args.fmin, fmax=args.fmax, threshold=args.threshold)
+    fs = FrequencySubbands(subband_counts=None, pf_rank=args.pf_rank, fmin=args.fmin, fmax=args.fmax, threshold=args.threshold)
     fs.show()
 
 
@@ -697,7 +702,7 @@ def main():
     parse_time(subparsers)
     parse_show_hardware(subparsers)
     parse_show_kernels(subparsers)
-    parse_show_subbands(subparsers)
+    parse_make_subbands(subparsers)
     parse_show_dedisperser(subparsers)
     parse_show_random_config(subparsers)
     parse_test_node(subparsers)
@@ -716,8 +721,8 @@ def main():
         show_hardware(args)
     elif args.command == "show_kernels":
         show_kernels(args)
-    elif args.command == "show_subbands":
-        show_subbands(args)
+    elif args.command == "make_subbands":
+        make_subbands(args)
     elif args.command == "show_dedisperser":
         show_dedisperser(args)
     elif args.command == "show_random_config":

@@ -16,7 +16,7 @@ dtype: float16
 # No early triggers.
 early_triggers: []
 
-# python -m pirate_frb show_subbands --rank=4 --fmin=300 --fmax=1500 --threshold=0.4
+# python -m make_subbands 300 1500 0.4 -r 4
 frequency_subband_counts: [1,2,2,2,1]
 
 # FIXME peak_finding_params are not quite right (same params at each level)

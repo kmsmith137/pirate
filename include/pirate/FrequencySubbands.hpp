@@ -47,7 +47,7 @@ struct FrequencySubbands
     //
     //   - To disable subbands, and only search the full frequency band, set subband_counts = {1}.
     //
-    //   - The commands 'python -m pirate_frb show_subbands' and 'python -m pirate_frb show_config --subbands'
+    //   - The commands 'python -m make_subbands' and 'python -m pirate_frb show_config --subbands'
     //     may be useful for constructing new subband_counts, or displaying subband_counts verbosely. 
     //
     // In the larger peak-finding kernel, each frequency subband is associated with 2^pf_level
