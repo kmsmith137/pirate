@@ -255,6 +255,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           }, py::arg("token"))
           .def("to_string", &FrequencySubbands::to_string)
           // Static methods
+          .def_static("from_threshold", &FrequencySubbands::from_threshold,
+               py::arg("fmin"), py::arg("fmax"), py::arg("threshold"), py::arg("pf_rank") = 4)
           .def_static("restrict_subband_counts", &FrequencySubbands::restrict_subband_counts,
                py::arg("subband_counts"), py::arg("et_delta_rank"), py::arg("new_pf_rank"))
           .def_static("validate_subband_counts", &FrequencySubbands::validate_subband_counts,

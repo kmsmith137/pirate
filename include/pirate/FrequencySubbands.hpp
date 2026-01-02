@@ -82,6 +82,12 @@ struct FrequencySubbands
     std::string to_string() const;
 
     // Static member function.
+    // Creates FrequencySubbands from frequency range and threshold.
+    // Equivalent to python FrequencySubbands(pf_rank, fmin, fmax, threshold).
+    
+    static FrequencySubbands from_threshold(double fmin, double fmax, double threshold, long pf_rank = 4);
+
+    // Static member function.
     // "Restricts" top-level subband counts to a specific tree.
     // The tree may have an early trigger (et_delta_rank > 0) or a different pf_rank.
 

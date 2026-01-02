@@ -22,6 +22,32 @@ namespace pirate {
 // made here should also be reflected there.
 
 
+// Helper functions for from_threshold()
+namespace {
+    // Returns maximum number of bands at given level for given pf_rank
+    // Level 0 is special (non-overlapping bands).
+    long max_bands_at_level(long pf_rank, long level) {
+        xassert(level >= 0);
+        xassert(level <= pf_rank);
+        return (level > 0) ? (pow2(pf_rank+1-level) - 1) : pow2(pf_rank);
+    }
+    
+    // Returns (ilo, ihi) for a given level and band index
+    // where 0 <= ilo < ihi <= 2^pf_rank.
+    pair<long, long> get_band_index_range(long pf_rank, long level, long b) {
+        xassert(level >= 0);
+        xassert(level <= pf_rank);
+        xassert(b >= 0);
+        xassert(b < max_bands_at_level(pf_rank, level));
+        
+        long s = pow2(max(level-1, 0L));  // spacing between bands
+        long ilo = b * s;
+        long ihi = b * s + pow2(level);
+        return {ilo, ihi};
+    }
+}
+
+
 // Default constructor, equivalent to subband_counts={1}
 FrequencySubbands::FrequencySubbands() :
     FrequencySubbands(vector<long>({1}))
@@ -83,6 +109,55 @@ FrequencySubbands::FrequencySubbands(const vector<long> &subband_counts_, double
         double val = start + t * (end - start);
         this->i_to_f[i] = pow(val, -0.5);
     }
+}
+
+
+// Static member function
+FrequencySubbands FrequencySubbands::from_threshold(double fmin, double fmax, double threshold, long pf_rank)
+{
+    // Input validation
+    xassert(fmin > 0);
+    xassert(fmax > fmin);
+    xassert(pf_rank >= 0);
+    
+    // Currently, pf_rank=4 is max value supported by the peak-finding kernel
+    if (pf_rank > 4)
+        throw std::runtime_error("FrequencySubbands::from_threshold: max allowed pf_rank is 4. This may change in the future.");
+    
+    // Initialize i_to_f: mapping (0 <= index <= 2^pf_rank) -> (frequency)
+    // Following Python logic: np.linspace(fmax**(-2), fmin**(-2), 2**pf_rank + 1)**(-0.5)
+    
+    long n = pow2(pf_rank) + 1;
+    double start = pow(fmax, -2.0);
+    double end = pow(fmin, -2.0);
+    
+    vector<double> i_to_f(n);
+    for (long i = 0; i < n; i++) {
+        double t = double(i) / double(n-1);
+        double val = start + t * (end - start);
+        i_to_f[i] = pow(val, -0.5);
+    }
+    
+    // Build subband_counts by iterating through levels and bands
+    vector<long> subband_counts(pf_rank+1, 0);
+    
+    for (long level = 0; level <= pf_rank; level++) {
+        for (long b = 0; b < max_bands_at_level(pf_rank, level); b++) {
+            auto [ilo, ihi] = get_band_index_range(pf_rank, level, b);
+            
+            // Note: (lo,hi) swap when mapping indices to frequencies
+            double freq_lo = i_to_f[ihi];
+            double freq_hi = i_to_f[ilo];
+            
+            // Include band if at top level, or if fractional bandwidth exceeds threshold
+            if ((level == pf_rank) || ((freq_hi / freq_lo) > (1.0 + threshold))) {
+                subband_counts[level]++;
+            }
+        }
+    }
+    
+    // Call existing constructor with computed subband_counts, fmin, and fmax
+    return FrequencySubbands(subband_counts, fmin, fmax);
 }
 
 
