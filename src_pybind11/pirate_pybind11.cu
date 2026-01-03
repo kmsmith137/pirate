@@ -13,6 +13,7 @@
 
 #include <ksgpu/pybind11.hpp>
 
+#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
@@ -267,6 +268,34 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("make_random_subband_counts",
                static_cast<std::vector<long> (*)()>(&FrequencySubbands::make_random_subband_counts))
           .def_static("make_random", &FrequencySubbands::make_random)
+    ;
+
+    // BumpAllocator: Thread-safe bump allocator for GPU/host memory
+    // Wrapped with shared_ptr for proper lifetime management when arrays reference the allocator.
+    // Note: Python injections in pirate_frb/pybind11_injections.py handle aflags and dtype conversions.
+    py::class_<BumpAllocator, std::shared_ptr<BumpAllocator>>(m, "BumpAllocator",
+        "Thread-safe bump allocator supporting GPU/host memory.\n\n"
+        "Modes:\n"
+        "  - capacity >= 0: Pre-allocates base region, allocations share this memory\n"
+        "  - capacity < 0: Dummy mode, each allocation gets independent memory")
+        .def(py::init<int, long>(),
+            py::arg("aflags"), py::arg("capacity"),
+            "Create allocator.\n\n"
+            "Args:\n"
+            "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
+            "    capacity: Bytes to pre-allocate (>= 0) or -1 for dummy mode")
+        .def_readonly("nbytes_allocated", &BumpAllocator::nbytes_allocated,
+            "Bytes allocated so far (aligned to 128-byte cache lines)")
+        .def_readonly("aflags", &BumpAllocator::aflags,
+            "Memory allocation flags")
+        .def_readonly("capacity", &BumpAllocator::capacity,
+            "Total capacity in bytes, or -1 for dummy mode")
+        .def("_allocate_array_raw",
+            [](std::shared_ptr<BumpAllocator> self, ksgpu::Dtype dtype, const std::vector<long> &shape) {
+                return self->_allocate_array_internal(dtype, shape.size(), shape.data(), nullptr);
+            },
+            py::arg("dtype"), py::arg("shape"),
+            "Internal: allocate array with dtype and shape (use allocate_array() instead)")
     ;
 
     // Register kernel and infrastructure bindings from pirate_pybind11_kernels.cu.

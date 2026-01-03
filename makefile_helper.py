@@ -20,13 +20,13 @@
 # If I'm debugging something specific, then I'll set a debug flag.
 # For a long CI-style test run, I'll set all flags to true (high compile time!)
 
-production_kernels = True    # "production" CHIME/CHORD kernels
-debug_dd_kernels = True      # debug dedispersion kernels
-debug_pf_kernels = True      # debug peak-finding kernels
-debug_pfo_kernels = True     # debug peak-finding output microkernel
-debug_pfwr_kernels = True    # debug peak-finding weight reader kernels
-debug_cdd2_kernels = True    # debug coalesced dedispersion-pf kernels
-debug_gpu_dd = True          # end-to-end test of gpu dedisperser
+production_kernels = False    # "production" CHIME/CHORD kernels
+debug_dd_kernels = False      # debug dedispersion kernels
+debug_pf_kernels = False      # debug peak-finding kernels
+debug_pfo_kernels = False     # debug peak-finding output microkernel
+debug_pfwr_kernels = False    # debug peak-finding weight reader kernels
+debug_cdd2_kernels = False    # debug coalesced dedispersion-pf kernels
+debug_gpu_dd = False          # end-to-end test of gpu dedisperser
 
 
 ####################################################################################################
