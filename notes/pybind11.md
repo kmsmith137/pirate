@@ -49,8 +49,10 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 
 - If a C++ function takes a `ksgpu::Dtype` argument, then call the `ksgpu.Dtype` constructor on `x` before passing it to the C++ function.
 
-- If a C++ function returns a bare pointer, or `shared_ptr<void>`, then don't python-wrap it unless specifically requested.
+- If a C++ function returns a bare pointer or `shared_ptr<void>`, then don't python-wrap it unless specifically requested.
 
 - C++ atomics must be converted to non-atomic types before converting to python.
 
 - If a C++ function has a `cudaStream_t` argument, it should appear in python as `stream=None`, and default to the current cupy stream.
+
+- If a C++ function returns a `ksgpu::CudaStreamWrapper`, then the pybind11 binding will return type `ksgpu_pybind11._CudaStreamWrapperBase`. It should appear to a python caller as returning type `ksgpu.CudaStreamWrapper` instead. Define a python wrapper which does the conversion. (This is a one-liner: the `ksgpu.CudaStreamWrapper` constructor takes a `_CudaStreamWrapperBase` argument. See `ksgpu/ksgpu/CudaStreamWrapper.py` for more context.)

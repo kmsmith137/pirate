@@ -45,14 +45,26 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     }
 
     // CudaStreamPool: always accessed via shared_ptr.
-    // Note: CudaStreamWrapper members are not exposed to python.
+    // Stream members are exposed to python as CudaStreamWrapper objects.
     py::class_<CudaStreamPool, std::shared_ptr<CudaStreamPool>>(m, "CudaStreamPool")
-        .def_readonly("pool_id", &CudaStreamPool::pool_id)
-        .def_readonly("num_compute_streams", &CudaStreamPool::num_compute_streams)
-        .def_static("create", &CudaStreamPool::create, 
+        .def(py::init([](int num_compute_streams, int compute_stream_priority) {
+            return CudaStreamPool::create(num_compute_streams, compute_stream_priority);
+        }), 
           py::arg("num_compute_streams"),
           py::arg("compute_stream_priority") = 0
         )
+        .def_readonly("pool_id", &CudaStreamPool::pool_id)
+        .def_readonly("num_compute_streams", &CudaStreamPool::num_compute_streams)
+        .def_property_readonly("low_priority_g2h_stream",
+            [](const CudaStreamPool &self) { return self.low_priority_g2h_stream; })
+        .def_property_readonly("low_priority_h2g_stream",
+            [](const CudaStreamPool &self) { return self.low_priority_h2g_stream; })
+        .def_property_readonly("high_priority_g2h_stream",
+            [](const CudaStreamPool &self) { return self.high_priority_g2h_stream; })
+        .def_property_readonly("high_priority_h2g_stream",
+            [](const CudaStreamPool &self) { return self.high_priority_h2g_stream; })
+        .def_property_readonly("compute_streams",
+            [](const CudaStreamPool &self) { return self.compute_streams; })
     ;
 
     py::class_<ResourceTracker>(m, "ResourceTracker")
