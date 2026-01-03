@@ -46,6 +46,10 @@ struct BumpAllocator
     // If capacity < 0, operates in "dummy" mode (see class comment above).
     BumpAllocator(int aflags, long capacity);
 
+    // Noncopyable
+    BumpAllocator(const BumpAllocator &) = delete;
+    BumpAllocator &operator=(const BumpAllocator &) = delete;
+
     // Number of bytes allocated so far (aligned to cache line size).
     // This counter is always valid, even in dummy mode.
     std::atomic<long> nbytes_allocated{0};
