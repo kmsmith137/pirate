@@ -156,6 +156,7 @@ PYFILES = \
   pirate_frb/FakeCorrelator.py \
   pirate_frb/FakeServer.py \
   pirate_frb/Hardware.py \
+  pirate_frb/pybind11_injections.py \
   pirate_frb/yaml_utils.py
 
 # Python source files in the 'pirate_frb.cuda_generator' submodule are listed separately.
@@ -179,6 +180,7 @@ HFILES = \
   include/pirate/BumpAllocator.hpp \
   include/pirate/CasmBeamformer.hpp \
   include/pirate/CoalescedDdKernel2.hpp \
+  include/pirate/constants.hpp \
   include/pirate/CudaEventRingbuf.hpp \
   include/pirate/CudaStreamPool.hpp \
   include/pirate/Dedisperser.hpp \
@@ -189,24 +191,24 @@ HFILES = \
   include/pirate/DedispersionTree.hpp \
   include/pirate/FakeCorrelator.hpp \
   include/pirate/FakeServer.hpp \
+  include/pirate/file_utils.hpp \
+  include/pirate/FrequencySubbands.hpp \
   include/pirate/GpuDequantizationKernel.hpp \
+  include/pirate/inlines.hpp \
   include/pirate/KernelRegistry.hpp \
   include/pirate/LaggedDownsamplingKernel.hpp \
   include/pirate/MegaRingbuf.hpp \
+  include/pirate/network_utils.hpp \
   include/pirate/PeakFindingKernel.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
   include/pirate/ResourceTracker.hpp \
   include/pirate/RingbufCopyKernel.hpp \
   include/pirate/SlabAllocator.hpp \
-  include/pirate/TreeGriddingKernel.hpp \
-  include/pirate/YamlFile.hpp \
-  include/pirate/constants.hpp \
-  include/pirate/file_utils.hpp \
-  include/pirate/inlines.hpp \
-  include/pirate/network_utils.hpp \
   include/pirate/system_utils.hpp \
+  include/pirate/TreeGriddingKernel.hpp \
   include/pirate/utils.hpp \
+  include/pirate/YamlFile.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \
   include/pirate/loose_ends/bitvec.hpp \
   include/pirate/loose_ends/cpu_downsample.hpp \
@@ -216,6 +218,8 @@ HFILES = \
   include/pirate/loose_ends/m128_outbuf.hpp \
   include/pirate/loose_ends/m64_outbuf.hpp \
   include/pirate/loose_ends/reduce2.hpp \
+  include/pirate/loose_ends/tests.hpp \
+  include/pirate/loose_ends/timing.hpp \
   include/pirate/loose_ends/TransposeKernel.hpp
 
 # 'make clean' deletes {*~, *.o, *.d, *.so, *.pyc} from these dirs.
