@@ -6,6 +6,16 @@ from . import utils
 
 class FrequencySubbands:
     def __init__(self, subband_counts):    
+        """
+        This is probably not the class you want! You probably want the C++ class 
+        pirate_frb.FrequencySubbands (or equivalently, pirate_frb.pybind11.FrequencySubbands).
+        
+        This class (pirate_frb.cuda_generator.FrequencySubbands) is a python reimplementation
+        of a subset of the functionality of the C++ class. It is only used by the code generator
+        (and makefile_helper.py), not the main pirate_frb package. This klduge is necessary becuase
+        the code generator runs during build time, when the C++ code has not been compiled yet.
+        """
+        
         assert len(subband_counts) > 0
         assert subband_counts[-1] == 1   # must search full band
 
@@ -31,7 +41,11 @@ class FrequencySubbands:
                 for d in range(2**level):
                     self.m_to_fd.append((self.F,d))
                 
-                ilo, ihi = self.get_band_index_range(level, b)
+                # Compute (ilo, ihi) for this band: 0 <= ilo < ihi <= 2**pf_rank
+                s = 2**max(level-1, 0)  # spacing between bands
+                ilo = b * s
+                ihi = b * s + 2**level
+                
                 self.f_to_irange.append((ilo,ihi))
                 self.f_to_mrange.append((self.M, self.M + 2**level))
 
