@@ -671,17 +671,6 @@ string DedispersionConfig::to_yaml_string(bool verbose) const
 }
 
 
-void DedispersionConfig::to_yaml(const std::string &filename, bool verbose) const
-{
-    YAML::Emitter emitter;
-    this->to_yaml(emitter, verbose);
-    const char *s = emitter.c_str();
-
-    File f(filename, O_WRONLY | O_CREAT | O_TRUNC);
-    f.write(s, strlen(s));
-}
-
-
 // -------------------------------------------------------------------------------------------------
 
 

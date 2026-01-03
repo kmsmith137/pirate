@@ -125,23 +125,115 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     // DedispersionConfig::PeakFindingConfig (nested struct)
-    py::class_<DedispersionConfig::PeakFindingConfig>(m, "PeakFindingConfig")
-          .def_readonly("max_width", &DedispersionConfig::PeakFindingConfig::max_width)
-          .def_readonly("dm_downsampling", &DedispersionConfig::PeakFindingConfig::dm_downsampling)
-          .def_readonly("time_downsampling", &DedispersionConfig::PeakFindingConfig::time_downsampling)
-          .def_readonly("wt_dm_downsampling", &DedispersionConfig::PeakFindingConfig::wt_dm_downsampling)
-          .def_readonly("wt_time_downsampling", &DedispersionConfig::PeakFindingConfig::wt_time_downsampling)
+    py::class_<DedispersionConfig::PeakFindingConfig>(m, "PeakFindingConfig",
+        "Configuration for peak finding at a single downsampling level.\n\n"
+        "Defines the maximum width for peak detection and downsampling factors\n"
+        "for both the coarse-grained and weights arrays relative to tree resolution.\n"
+        "All members must be powers of two.")
+          .def(py::init<>(),
+               "Create a PeakFindingConfig with default (zero) values.")
+          .def(py::init([](long max_width, long dm_downsampling, long time_downsampling,
+                          long wt_dm_downsampling, long wt_time_downsampling) {
+                   DedispersionConfig::PeakFindingConfig pf;
+                   pf.max_width = max_width;
+                   pf.dm_downsampling = dm_downsampling;
+                   pf.time_downsampling = time_downsampling;
+                   pf.wt_dm_downsampling = wt_dm_downsampling;
+                   pf.wt_time_downsampling = wt_time_downsampling;
+                   return pf;
+               }),
+               py::arg("max_width"),
+               py::arg("dm_downsampling"),
+               py::arg("time_downsampling"),
+               py::arg("wt_dm_downsampling"),
+               py::arg("wt_time_downsampling"),
+               "Create a PeakFindingConfig.\n\n"
+               "Args:\n"
+               "    max_width: Maximum width of peak-finding kernel (in tree time samples)\n"
+               "    dm_downsampling: DM downsampling factor relative to tree\n"
+               "    time_downsampling: Time downsampling factor relative to tree\n"
+               "    wt_dm_downsampling: DM downsampling factor for weights (>= dm_downsampling)\n"
+               "    wt_time_downsampling: Time downsampling for weights (>= time_downsampling)")
+          .def_readwrite("max_width", &DedispersionConfig::PeakFindingConfig::max_width,
+               "Maximum width of peak-finding kernel (in tree time samples)")
+          .def_readwrite("dm_downsampling", &DedispersionConfig::PeakFindingConfig::dm_downsampling,
+               "DM downsampling factor of coarse-grained array relative to tree")
+          .def_readwrite("time_downsampling", &DedispersionConfig::PeakFindingConfig::time_downsampling,
+               "Time downsampling factor of coarse-grained array relative to tree")
+          .def_readwrite("wt_dm_downsampling", &DedispersionConfig::PeakFindingConfig::wt_dm_downsampling,
+               "DM downsampling factor of weights array (must be >= dm_downsampling)")
+          .def_readwrite("wt_time_downsampling", &DedispersionConfig::PeakFindingConfig::wt_time_downsampling,
+               "Time downsampling factor of weights array (must be >= time_downsampling)")
+          .def("__repr__", [](const DedispersionConfig::PeakFindingConfig &self) {
+               std::ostringstream os;
+               os << "PeakFindingConfig(max_width=" << self.max_width
+                  << ", dm_downsampling=" << self.dm_downsampling
+                  << ", time_downsampling=" << self.time_downsampling
+                  << ", wt_dm_downsampling=" << self.wt_dm_downsampling
+                  << ", wt_time_downsampling=" << self.wt_time_downsampling << ")";
+               return os.str();
+          })
     ;
 
     // DedispersionConfig::EarlyTrigger (nested struct)
-    py::class_<DedispersionConfig::EarlyTrigger>(m, "EarlyTrigger")
-          .def_readonly("ds_level", &DedispersionConfig::EarlyTrigger::ds_level)
-          .def_readonly("delta", &DedispersionConfig::EarlyTrigger::delta_rank)
+    py::class_<DedispersionConfig::EarlyTrigger>(m, "EarlyTrigger",
+        "Early trigger configuration for reduced-latency dedispersion.\n\n"
+        "Early triggers search a subset [fmid, fmax] of the full frequency range\n"
+        "at reduced latency. Each trigger is parameterized by a downsampling level\n"
+        "and delta_rank, which specifies how 'early' the trigger is.")
+          .def(py::init<>(),
+               "Create an EarlyTrigger with default values (ds_level=-1, delta_rank=0).")
+          .def(py::init([](long ds_level, long delta_rank) {
+                   DedispersionConfig::EarlyTrigger et;
+                   et.ds_level = ds_level;
+                   et.delta_rank = delta_rank;
+                   return et;
+               }),
+               py::arg("ds_level"),
+               py::arg("delta_rank"),
+               "Create an EarlyTrigger.\n\n"
+               "Args:\n"
+               "    ds_level: Downsampling level (0 <= ds_level < num_downsampling_levels)\n"
+               "    delta_rank: Specifies 'early-ness' of trigger (must be > 0)")
+          .def_readwrite("ds_level", &DedispersionConfig::EarlyTrigger::ds_level,
+               "Downsampling level (0 <= ds_level < num_downsampling_levels)")
+          .def_readwrite("delta_rank", &DedispersionConfig::EarlyTrigger::delta_rank,
+               "Specifies 'early-ness' of trigger (must be > 0)")
+          .def("__repr__", [](const DedispersionConfig::EarlyTrigger &self) {
+               std::ostringstream os;
+               os << self;  // Use C++ operator<<
+               return os.str();
+          })
+          .def("__eq__", [](const DedispersionConfig::EarlyTrigger &self, 
+                           const DedispersionConfig::EarlyTrigger &other) {
+               return self == other;  // Use C++ operator==
+          }, py::arg("other"))
     ;
     
-    py::class_<DedispersionConfig>(m, "DedispersionConfig")
+    py::class_<DedispersionConfig>(m, "DedispersionConfig",
+        "Configuration for dedispersion processing.\n\n"
+        "Specifies frequency channels, time samples, dedispersion tree parameters,\n"
+        "downsampling levels, peak-finding configuration, early triggers, and GPU settings.\n"
+        "Can be loaded from YAML files or constructed programmatically.\n\n"
+        "Example:\n"
+        "    # Load from YAML\n"
+        "    config = DedispersionConfig.from_yaml('config.yaml')\n\n"
+        "    # Create and configure programmatically\n"
+        "    config = DedispersionConfig()\n"
+        "    config.zone_nfreq = [1024]\n"
+        "    config.zone_freq_edges = [400.0, 800.0]\n"
+        "    config.time_sample_ms = 0.983\n"
+        "    config.tree_rank = 13")
+          .def(py::init<>(),
+               "Create an empty DedispersionConfig.\n\n"
+               "All fields are initialized to default values and should be set programmatically.")
           .def_static("from_yaml", static_cast<DedispersionConfig (*)(const std::string &)>(&DedispersionConfig::from_yaml),
-                      py::arg("filename"))
+                      py::arg("filename"),
+                      "Load DedispersionConfig from a YAML file.\n\n"
+                      "Args:\n"
+                      "    filename: Path to YAML configuration file\n\n"
+                      "Returns:\n"
+                      "    DedispersionConfig object initialized from file")
           .def_static("make_random",
                [](int max_rank, int max_early_triggers, bool gpu_valid, bool verbose) {
                    DedispersionConfig::RandomArgs args;
@@ -154,44 +246,129 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("max_rank") = 10,
                py::arg("max_early_triggers") = 5,
                py::arg("gpu_valid") = true,
-               py::arg("verbose") = false)
+               py::arg("verbose") = false,
+               "Generate a random DedispersionConfig for testing.\n\n"
+               "Args:\n"
+               "    max_rank: Maximum tree rank (default=10)\n"
+               "    max_early_triggers: Max number of early triggers (0 to disable, default=5)\n"
+               "    gpu_valid: Generate GPU-valid configuration (default=True)\n"
+               "    verbose: Print debug info (default=False)\n\n"
+               "Returns:\n"
+               "    Randomly generated DedispersionConfig")
           .def("to_yaml_string", &DedispersionConfig::to_yaml_string,
-               py::arg("verbose") = false)
-          .def("validate", &DedispersionConfig::validate)
+               py::arg("verbose") = false,
+               "Convert configuration to YAML string.\n\n"
+               "Args:\n"
+               "    verbose: Include explanatory comments (default=False)\n\n"
+               "Returns:\n"
+               "    YAML string representation")
+          .def("validate", &DedispersionConfig::validate,
+               "Validate the configuration.\n\n"
+               "Checks that all parameters are consistent and within valid ranges.\n"
+               "Throws an exception if validation fails.")
           .def("add_early_trigger", &DedispersionConfig::add_early_trigger,
-               py::arg("ds_level"), py::arg("tree_rank"))
-          .def("get_nelts_per_segment", &DedispersionConfig::get_nelts_per_segment)
-          .def("frequency_to_index", &DedispersionConfig::frequency_to_index, py::arg("f"))
-          .def("index_to_frequency", &DedispersionConfig::index_to_frequency, py::arg("index"))
-          .def("delay_to_frequency", &DedispersionConfig::delay_to_frequency, py::arg("delay"))
-          .def("frequency_to_delay", &DedispersionConfig::frequency_to_delay, py::arg("f"))
-          .def("get_total_nfreq", &DedispersionConfig::get_total_nfreq)
-          .def("test", &DedispersionConfig::test)
-          .def("make_channel_map", &DedispersionConfig::make_channel_map)
+               py::arg("ds_level"), py::arg("tree_rank"),
+               "Add a single early trigger.\n\n"
+               "Early triggers are automatically kept sorted by ds_level (increasing)\n"
+               "and delta_rank (decreasing).\n\n"
+               "Args:\n"
+               "    ds_level: Downsampling level (0 <= ds_level < num_downsampling_levels)\n"
+               "    tree_rank: Tree rank for this trigger (must be > 0)")
+          .def("add_early_triggers", 
+               [](DedispersionConfig &self, long ds_level, const std::vector<long> &tree_ranks) {
+                   for (long tree_rank : tree_ranks) {
+                       self.add_early_trigger(ds_level, tree_rank);
+                   }
+               },
+               py::arg("ds_level"), py::arg("tree_ranks"),
+               "Add multiple early triggers at the same downsampling level.\n\n"
+               "Args:\n"
+               "    ds_level: Downsampling level for all triggers\n"
+               "    tree_ranks: List of tree ranks to add")
+          .def("get_nelts_per_segment", &DedispersionConfig::get_nelts_per_segment,
+               "Get the number of elements per segment.\n\n"
+               "Returns:\n"
+               "    Number of elements per segment")
+          .def("frequency_to_index", &DedispersionConfig::frequency_to_index, py::arg("f"),
+               "Convert frequency to fractional frequency channel index.\n\n"
+               "Args:\n"
+               "    f: Frequency in MHz\n\n"
+               "Returns:\n"
+               "    Fractional channel index (0.0 at lowest frequency)")
+          .def("index_to_frequency", &DedispersionConfig::index_to_frequency, py::arg("index"),
+               "Convert fractional channel index to frequency.\n\n"
+               "Args:\n"
+               "    index: Fractional channel index\n\n"
+               "Returns:\n"
+               "    Frequency in MHz")
+          .def("delay_to_frequency", &DedispersionConfig::delay_to_frequency, py::arg("delay"),
+               "Convert dispersion delay to frequency.\n\n"
+               "Delay is scaled so d=0 at f_max and d=2^tree_rank at f_min.\n\n"
+               "Args:\n"
+               "    delay: Dispersion delay in tree units\n\n"
+               "Returns:\n"
+               "    Frequency in MHz")
+          .def("frequency_to_delay", &DedispersionConfig::frequency_to_delay, py::arg("f"),
+               "Convert frequency to dispersion delay.\n\n"
+               "Delay is scaled so d=0 at f_max and d=2^tree_rank at f_min.\n\n"
+               "Args:\n"
+               "    f: Frequency in MHz\n\n"
+               "Returns:\n"
+               "    Dispersion delay in tree units")
+          .def("dm_per_unit_delay", &DedispersionConfig::dm_per_unit_delay,
+               "Get DM corresponding to one time sample delay across the full band.\n\n"
+               "Returns:\n"
+               "    DM in pc cm^-3 for one time sample delay")
+          .def("get_total_nfreq", &DedispersionConfig::get_total_nfreq,
+               "Get total number of frequency channels across all zones.\n\n"
+               "Returns:\n"
+               "    Sum of zone_nfreq")
+          .def("test", &DedispersionConfig::test,
+               "Test that frequency/delay conversions are self-consistent.\n\n"
+               "Samples random values and checks that forward/inverse transforms\n"
+               "are correct. Throws an exception if test fails.")
+          .def("make_channel_map", &DedispersionConfig::make_channel_map,
+               "Create channel map array defining tree-to-frequency mapping.\n\n"
+               "Returns:\n"
+               "    Array of length (2^tree_rank + 1) with channel boundaries")
           // dtype: exposed via getter/setter using ksgpu::Dtype::str() / ksgpu::Dtype::from_str()
           .def_property("dtype",
                [](const DedispersionConfig &self) { return self.dtype.str(); },
-               [](DedispersionConfig &self, const std::string &s) { self.dtype = ksgpu::Dtype::from_str(s); })
+               [](DedispersionConfig &self, const std::string &s) { self.dtype = ksgpu::Dtype::from_str(s); },
+               "Data type for dedispersion (e.g. 'float32', 'float16')")
           // Frequency channel configuration
-          .def_readwrite("zone_nfreq", &DedispersionConfig::zone_nfreq)
-          .def_readwrite("zone_freq_edges", &DedispersionConfig::zone_freq_edges)
+          .def_readwrite("zone_nfreq", &DedispersionConfig::zone_nfreq,
+               "Number of frequency channels in each zone (list of length nzones)")
+          .def_readwrite("zone_freq_edges", &DedispersionConfig::zone_freq_edges,
+               "Frequency edges in MHz (list of length nzones+1, monotone increasing)")
           // Core dedispersion parameters
-          .def_readwrite("time_sample_ms", &DedispersionConfig::time_sample_ms)
-          .def_readwrite("tree_rank", &DedispersionConfig::tree_rank)
-          .def_readwrite("num_downsampling_levels", &DedispersionConfig::num_downsampling_levels)
-          .def_readwrite("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk)
+          .def_readwrite("time_sample_ms", &DedispersionConfig::time_sample_ms,
+               "Time sample length in milliseconds")
+          .def_readwrite("tree_rank", &DedispersionConfig::tree_rank,
+               "Tree rank: number of tree channels is 2^tree_rank")
+          .def_readwrite("num_downsampling_levels", &DedispersionConfig::num_downsampling_levels,
+               "Number of downsampling levels (ds_level in 0..num_downsampling_levels-1)")
+          .def_readwrite("time_samples_per_chunk", &DedispersionConfig::time_samples_per_chunk,
+               "Number of time samples processed per chunk")
           // Frequency sub-band configuration
-          .def_readwrite("frequency_subband_counts", &DedispersionConfig::frequency_subband_counts)
+          .def_readwrite("frequency_subband_counts", &DedispersionConfig::frequency_subband_counts,
+               "Frequency subband counts (set to [1] to disable subbanding)")
           // Peak-finding parameters (one per downsampling level)
-          .def_readwrite("peak_finding_params", &DedispersionConfig::peak_finding_params)
+          .def_readwrite("peak_finding_params", &DedispersionConfig::peak_finding_params,
+               "Peak-finding configuration for each downsampling level")
           // Early triggers
-          .def_readwrite("early_triggers", &DedispersionConfig::early_triggers)
+          .def_readwrite("early_triggers", &DedispersionConfig::early_triggers,
+               "List of early triggers (sorted by ds_level, then delta_rank)")
           // GPU configuration
-          .def_readwrite("beams_per_gpu", &DedispersionConfig::beams_per_gpu)
-          .def_readwrite("beams_per_batch", &DedispersionConfig::beams_per_batch)
-          .def_readwrite("num_active_batches", &DedispersionConfig::num_active_batches)
+          .def_readwrite("beams_per_gpu", &DedispersionConfig::beams_per_gpu,
+               "Number of beams processed per GPU")
+          .def_readwrite("beams_per_batch", &DedispersionConfig::beams_per_batch,
+               "Number of beams per batch")
+          .def_readwrite("num_active_batches", &DedispersionConfig::num_active_batches,
+               "Number of active batches")
           // Testing parameter
-          .def_readonly("max_gpu_clag", &DedispersionConfig::max_gpu_clag)
+          .def_readwrite("max_gpu_clag", &DedispersionConfig::max_gpu_clag,
+               "Testing parameter: limit on-GPU ring buffer clag (default=10000)")
     ;
 
     // DedispersionPlan: construct via shared_ptr

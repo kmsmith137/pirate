@@ -51,6 +51,8 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 
 - If a C++ function returns a bare pointer or `shared_ptr<void>`, then don't python-wrap it unless specifically requested.
 
+- If a C++ function has an argument of type `ostream &`, `YAML::Emitter &`, or `YamlFile &`, then don't python-wrap it unless specifically requested.
+
 - C++ atomics must be converted to non-atomic types before converting to python.
 
 - If a C++ function has a `cudaStream_t` argument, it should appear in python as `stream=None`, and default to the current cupy stream.

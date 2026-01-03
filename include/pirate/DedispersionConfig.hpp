@@ -109,8 +109,7 @@ struct DedispersionConfig
 
     // Write in YAML format.
     // If 'verbose' is true, include comments explaining the meaning of each field.
-    void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
-    void to_yaml(const std::string &filename, bool verbose = false) const;    
+    void to_yaml(YAML::Emitter &emitter, bool verbose = false) const; 
     std::string to_yaml_string(bool verbose = false) const;
 
     // Construct from YAML file.
