@@ -10,6 +10,7 @@ import ksgpu
 from . import pirate_pybind11
 from . import casm
 from . import kernels
+from . import loose_ends
 
 from .Hardware import Hardware
 from .FakeServer import FakeServer
@@ -112,11 +113,11 @@ def test(args):
             
         if run_all_tests or args.zomb:
             # print()
-            pirate_pybind11.test_avx2_m64_outbuf()
-            pirate_pybind11.test_cpu_downsampler()
-            pirate_pybind11.test_gpu_downsample()
-            pirate_pybind11.test_gpu_transpose()
-            pirate_pybind11.test_gpu_reduce2()
+            loose_ends.test_avx2_m64_outbuf()
+            loose_ends.test_cpu_downsampler()
+            loose_ends.test_gpu_downsample()
+            loose_ends.test_gpu_transpose()
+            loose_ends.test_gpu_reduce2()
             
         if run_all_tests or args.dd:
             for _ in rrange(kernels.CoalescedDdKernel2):
@@ -160,9 +161,9 @@ def time(args):
     if run_all_timings or args.casm:
         casm.CasmBeamformer.run_timings(args.ncu)
     if run_all_timings or args.zomb:
-        pirate_pybind11.time_cpu_downsample(nthreads)
-        pirate_pybind11.time_gpu_downsample()
-        pirate_pybind11.time_gpu_transpose()
+        loose_ends.time_cpu_downsample(nthreads)
+        loose_ends.time_gpu_downsample()
+        loose_ends.time_gpu_transpose()
     if run_all_timings or args.cdd2:
         kernels.CoalescedDdKernel2.time_selected()
     if run_all_timings or args.gdqk:

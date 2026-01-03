@@ -8,8 +8,8 @@ from . import cuda_generator
 from . import pybind11_injections  # noqa: F401
 from . import casm
 from . import kernels
+from . import loose_ends
 
-from .casm import CasmReferenceBeamformer, Dense1dBeamformer
 from .FakeCorrelator import FakeCorrelator
 from .FakeServer import FakeServer
 from .Hardware import Hardware
