@@ -26,7 +26,7 @@ extensions = [
     'sphinx.ext.intersphinx',
     'myst_parser',
     'sphinx.ext.autosummary',
-    'sphinxcontrib.argparse',
+    'sphinxarg.ext',   # sphinx-argparse
 ]
 
 templates_path = ['_templates']
@@ -68,8 +68,12 @@ autodoc_default_options = {
     'show-inheritance': True,
 }
 
-# Mock imports for ReadTheDocs (where compiled extensions aren't available)
-autodoc_mock_imports = ['pirate_pybind11', 'ksgpu']
+# Note: Do NOT mock ksgpu or pirate_pybind11 here!
+# Mocking ksgpu prevents its ctypes trick from running, which causes
+# pirate_pybind11.so to fail loading (undefined symbols from ksgpu).
+# For local builds, we import the real modules to get pybind11 docstrings.
+# For ReadTheDocs (no compiled extensions), we'll need a different approach.
+autodoc_mock_imports = []
 
 # -- Intersphinx configuration -----------------------------------------------
 
