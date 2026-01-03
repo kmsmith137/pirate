@@ -284,7 +284,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
             "    capacity: Bytes to pre-allocate (>= 0) or -1 for dummy mode")
-        .def_readonly("nbytes_allocated", &BumpAllocator::nbytes_allocated,
+        .def_property_readonly("nbytes_allocated",
+            [](const BumpAllocator &self) { return self.nbytes_allocated.load(); },
             "Bytes allocated so far (aligned to 128-byte cache lines)")
         .def_readonly("aflags", &BumpAllocator::aflags,
             "Memory allocation flags")
