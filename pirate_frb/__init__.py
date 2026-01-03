@@ -7,6 +7,7 @@ from . import pirate_pybind11
 from . import cuda_generator
 from . import pybind11_injections  # noqa: F401
 from . import casm
+from . import kernels
 
 from .casm import CasmReferenceBeamformer, Dense1dBeamformer
 from .FakeCorrelator import FakeCorrelator

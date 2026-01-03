@@ -9,6 +9,7 @@ import ksgpu
 
 from . import pirate_pybind11
 from . import casm
+from . import kernels
 
 from .Hardware import Hardware
 from .FakeServer import FakeServer
@@ -64,41 +65,41 @@ def test(args):
         print(f'\nIteration {i+1}/{args.niter}\n')
         
         if run_all_tests or args.rt:
-            pirate_pybind11.ReferenceLagbuf.test_random()
-            pirate_pybind11.ReferenceTree.test_basics()
-            pirate_pybind11.ReferenceTree.test_subbands()
+            kernels.ReferenceLagbuf.test_random()
+            kernels.ReferenceTree.test_basics()
+            kernels.ReferenceTree.test_subbands()
         
         if run_all_tests or args.pfwr:
-            for _ in rrange(pirate_pybind11.PfWeightReaderMicrokernel):
-                pirate_pybind11.PfWeightReaderMicrokernel.test_random()
+            for _ in rrange(kernels.PfWeightReaderMicrokernel):
+                kernels.PfWeightReaderMicrokernel.test_random()
         
         if run_all_tests or args.pfom:
-            for _ in rrange(pirate_pybind11.PfOutputMicrokernel):
-                pirate_pybind11.PfOutputMicrokernel.test_random()
+            for _ in rrange(kernels.PfOutputMicrokernel):
+                kernels.PfOutputMicrokernel.test_random()
         
         if run_all_tests or args.gldk:
-            pirate_pybind11.GpuLaggedDownsamplingKernel.test_random()
+            kernels.GpuLaggedDownsamplingKernel.test_random()
         
         if run_all_tests or args.gddk:
-            for _ in rrange(pirate_pybind11.GpuDedispersionKernel):
-                pirate_pybind11.GpuDedispersionKernel.test_random()
+            for _ in rrange(kernels.GpuDedispersionKernel):
+                kernels.GpuDedispersionKernel.test_random()
         
         if run_all_tests or args.gpfk:
-            for _ in rrange(pirate_pybind11.GpuPeakFindingKernel):
-                pirate_pybind11.GpuPeakFindingKernel.test_random()
+            for _ in rrange(kernels.GpuPeakFindingKernel):
+                kernels.GpuPeakFindingKernel.test_random()
         
         if run_all_tests or args.grck:
-            pirate_pybind11.GpuRingbufCopyKernel.test_random()
+            kernels.GpuRingbufCopyKernel.test_random()
         
         if run_all_tests or args.gtgk:
-            pirate_pybind11.GpuTreeGriddingKernel.test_random()
+            kernels.GpuTreeGriddingKernel.test_random()
         
         if run_all_tests or args.gdqk:
-            pirate_pybind11.GpuDequantizationKernel.test_random()
+            kernels.GpuDequantizationKernel.test_random()
 
         if run_all_tests or args.cdd2:
-            for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
-                pirate_pybind11.CoalescedDdKernel2.test_random()
+            for _ in rrange(kernels.CoalescedDdKernel2):
+                kernels.CoalescedDdKernel2.test_random()
         
         if run_all_tests or args.casm:
             print()
@@ -118,7 +119,7 @@ def test(args):
             pirate_pybind11.test_gpu_reduce2()
             
         if run_all_tests or args.dd:
-            for _ in rrange(pirate_pybind11.CoalescedDdKernel2):
+            for _ in rrange(kernels.CoalescedDdKernel2):
                 pirate_pybind11.GpuDedisperser.test_random()
             
 
@@ -153,9 +154,9 @@ def time(args):
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
         
     if run_all_timings or args.gldk:
-        pirate_pybind11.GpuLaggedDownsamplingKernel.time_selected()
+        kernels.GpuLaggedDownsamplingKernel.time_selected()
     if run_all_timings or args.gddk:
-        pirate_pybind11.GpuDedispersionKernel.time_selected()
+        kernels.GpuDedispersionKernel.time_selected()
     if run_all_timings or args.casm:
         casm.CasmBeamformer.run_timings(args.ncu)
     if run_all_timings or args.zomb:
@@ -163,11 +164,11 @@ def time(args):
         pirate_pybind11.time_gpu_downsample()
         pirate_pybind11.time_gpu_transpose()
     if run_all_timings or args.cdd2:
-        pirate_pybind11.CoalescedDdKernel2.time_selected()
+        kernels.CoalescedDdKernel2.time_selected()
     if run_all_timings or args.gdqk:
-        pirate_pybind11.GpuDequantizationKernel.time_selected()
+        kernels.GpuDequantizationKernel.time_selected()
     if run_all_timings or args.gtgk:
-        pirate_pybind11.GpuTreeGriddingKernel.time_selected()
+        kernels.GpuTreeGriddingKernel.time_selected()
 
 
 #####################################   show_hardware command  #####################################
@@ -201,41 +202,41 @@ def show_kernels(args):
         if not first:
             print()
         first = False
-        n = pirate_pybind11.CoalescedDdKernel2.registry_size()
+        n = kernels.CoalescedDdKernel2.registry_size()
         print(f"CoalescedDdKernel2 registry ({n} entries):", flush=True)
-        pirate_pybind11.CoalescedDdKernel2.show_registry()
+        kernels.CoalescedDdKernel2.show_registry()
 
     if show_all or args.pfom:
         if not first:
             print()
         first = False
-        n = pirate_pybind11.PfOutputMicrokernel.registry_size()
+        n = kernels.PfOutputMicrokernel.registry_size()
         print(f"PfOutput microkernel registry ({n} entries):", flush=True)
-        pirate_pybind11.PfOutputMicrokernel.show_registry()
+        kernels.PfOutputMicrokernel.show_registry()
 
     if show_all or args.pfwr:
         if not first:
             print()
         first = False
-        n = pirate_pybind11.PfWeightReaderMicrokernel.registry_size()
+        n = kernels.PfWeightReaderMicrokernel.registry_size()
         print(f"PfWeightReader microkernel registry ({n} entries):", flush=True)
-        pirate_pybind11.PfWeightReaderMicrokernel.show_registry()
+        kernels.PfWeightReaderMicrokernel.show_registry()
 
     if show_all or args.gddk:
         if not first:
             print()
         first = False
-        n = pirate_pybind11.GpuDedispersionKernel.registry_size()
+        n = kernels.GpuDedispersionKernel.registry_size()
         print(f"Dedispersion kernel registry ({n} entries):", flush=True)
-        pirate_pybind11.GpuDedispersionKernel.show_registry()
+        kernels.GpuDedispersionKernel.show_registry()
     
     if show_all or args.gpfk:
         if not first:
             print()
         first = False
-        n = pirate_pybind11.GpuPeakFindingKernel.registry_size()
+        n = kernels.GpuPeakFindingKernel.registry_size()
         print(f"Peak-finding kernel registry ({n} entries):", flush=True)
-        pirate_pybind11.GpuPeakFindingKernel.show_registry()
+        kernels.GpuPeakFindingKernel.show_registry()
 
 
 ######################################   make_subbands command  #####################################
