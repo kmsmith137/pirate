@@ -6,9 +6,9 @@ import ksgpu
 from . import pirate_pybind11
 from . import cuda_generator
 from . import pybind11_injections  # noqa: F401
+from . import casm
 
-from .CasmReferenceBeamformer import CasmReferenceBeamformer
-from .Dense1dBeamformer import Dense1dBeamformer
+from .casm import CasmReferenceBeamformer, Dense1dBeamformer
 from .FakeCorrelator import FakeCorrelator
 from .FakeServer import FakeServer
 from .Hardware import Hardware

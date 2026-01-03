@@ -467,7 +467,7 @@ class CasmReferenceBeamformer:
         Note: this works in the chord pipeline, but not in the casm_bf repo!
         """
         
-        from . import pirate_pybind11
+        from .. import pirate_pybind11
         
         # FIXME(?) pybind11->cuda interface currently requires annoying dtype conversions.
         # (Currently the python interface is only used for testing, so it's not a serious issue.)
@@ -600,7 +600,7 @@ class CasmReferenceBeamformer:
 
         # Get max beams
         if linkage == 'pybind11':
-            from . import pirate_pybind11
+            from .. import pirate_pybind11
             Bmax = pirate_pybind11.CasmBeamformer.get_max_beams()
         elif linkage == 'ctypes':
             Bmax = cls.libcasm_bf().casm_bf_get_max_beams()

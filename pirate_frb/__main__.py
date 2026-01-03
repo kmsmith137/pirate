@@ -8,11 +8,11 @@ import argcomplete
 import ksgpu
 
 from . import pirate_pybind11
+from . import casm
 
 from .Hardware import Hardware
 from .FakeServer import FakeServer
 from .FakeCorrelator import FakeCorrelator
-from .CasmReferenceBeamformer import CasmReferenceBeamformer
 from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
 
 
@@ -104,10 +104,10 @@ def test(args):
             print()
             if i == 0:
                 # This test is slower than the others, but I don't think we need it more than once.
-                CasmReferenceBeamformer.test_interpolative_beamforming()
+                casm.CasmReferenceBeamformer.test_interpolative_beamforming()
             
-            pirate_pybind11.CasmBeamformer.test_microkernels()
-            CasmReferenceBeamformer.test_cuda_python_equivalence(linkage='pybind11')
+            casm.CasmBeamformer.test_microkernels()
+            casm.CasmReferenceBeamformer.test_cuda_python_equivalence(linkage='pybind11')
             
         if run_all_tests or args.zomb:
             # print()
@@ -157,7 +157,7 @@ def time(args):
     if run_all_timings or args.gddk:
         pirate_pybind11.GpuDedispersionKernel.time_selected()
     if run_all_timings or args.casm:
-        pirate_pybind11.CasmBeamformer.run_timings(args.ncu)
+        casm.CasmBeamformer.run_timings(args.ncu)
     if run_all_timings or args.zomb:
         pirate_pybind11.time_cpu_downsample(nthreads)
         pirate_pybind11.time_gpu_downsample()
