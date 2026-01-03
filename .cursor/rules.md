@@ -82,15 +82,10 @@ integer_log2(n)         // returns log2 of power-of-two
 - Functions which take an `ostream &` argument should not modify stream state in the caller. Save/restore the stream flags/precision if necessary.
 - Don't use `using namespace std` or `using namespace ksgpu` in headers.
 
-### Python Interface (pybind11)
+### Python Interface 
 
-Classes are exported in `src_pybind11/pirate_pybind11.cu`:
-```cpp
-py::class_<GpuDedispersionKernel>(m, "GpuDedispersionKernel")
-    .def_static("test", &GpuDedispersionKernel::test);
-```
-
-Python CLI: `python -m pirate_frb test --gddk` runs `GpuDedispersionKernel.test()`.
+ - C++ classes are exported with pybind11, in `src_pybind11/*.cu`.
+ - Python CLI: `python -m pirate_frb test --gddk` runs `GpuDedispersionKernel.test()`.
 The `--help` flag shows all available test flags.
 
 ### What to do, and not to do
