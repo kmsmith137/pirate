@@ -206,3 +206,47 @@ class CasmBeamformerInjections:
         # Call C++ method with stream pointer
         return self._cpp_launch_beamformer(e_in, feed_weights, i_out, stream_ptr)
 
+
+@ksgpu.inject_methods(pirate_pybind11.DedispersionConfig)
+class DedispersionConfigInjections:
+    """Python extensions for DedispersionConfig.
+    
+    Adds flexible dtype setter that accepts strings, numpy/cupy dtypes, etc.
+    """
+    
+    # Save reference to C++ dtype attribute
+    _cpp_dtype = pirate_pybind11.DedispersionConfig.dtype
+    
+    @property
+    def dtype(self):
+        """Data type for dedispersion.
+        
+        Returns
+        -------
+        ksgpu.Dtype
+            The current dtype setting.
+        """
+        return self._cpp_dtype
+    
+    @dtype.setter
+    def dtype(self, value):
+        """Set the data type for dedispersion.
+        
+        Parameters
+        ----------
+        value : str, numpy.dtype, cupy.dtype, or ksgpu.Dtype
+            Data type specification. Examples:
+            - 'float32', 'float16'
+            - np.float32, cp.float16
+            - ksgpu.Dtype('float32')
+            
+        Examples
+        --------
+        >>> config = DedispersionConfig()
+        >>> config.dtype = 'float32'
+        >>> config.dtype = np.float16
+        >>> config.dtype = ksgpu.Dtype('float32')
+        """
+        self._cpp_dtype = ksgpu.Dtype(value)
+
+

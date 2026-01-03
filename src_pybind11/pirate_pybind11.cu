@@ -331,10 +331,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Create channel map array defining tree-to-frequency mapping.\n\n"
                "Returns:\n"
                "    Array of length (2^tree_rank + 1) with channel boundaries")
-          // dtype: exposed via getter/setter using ksgpu::Dtype::str() / ksgpu::Dtype::from_str()
-          .def_property("dtype",
-               [](const DedispersionConfig &self) { return self.dtype.str(); },
-               [](DedispersionConfig &self, const std::string &s) { self.dtype = ksgpu::Dtype::from_str(s); },
+          // dtype: now uses direct readwrite, Python injection provides flexible setter
+          .def_readwrite("dtype", &DedispersionConfig::dtype,
                "Data type for dedispersion (e.g. 'float32', 'float16')")
           // Frequency channel configuration
           .def_readwrite("zone_nfreq", &DedispersionConfig::zone_nfreq,
