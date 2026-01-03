@@ -7,7 +7,7 @@ The `pirate_frb` command provides several subcommands for testing, timing, and r
 ```{argparse}
 ---
 module: pirate_frb.__main__
-func: main
+func: get_parser
 prog: pirate_frb
 ---
 ```

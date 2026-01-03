@@ -704,7 +704,13 @@ def random_kernels(args):
 ####################################################################################################
 
 
-def main():
+def get_parser():
+    """
+    Create and return the argument parser for pirate_frb.
+    
+    This function is separate from main() so that sphinx-argparse can
+    introspect the parser without actually parsing command-line arguments.
+    """
     parser = argparse.ArgumentParser(description="pirate_frb command-line driver (use --help for more info)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -720,6 +726,11 @@ def main():
     parse_scratch(subparsers)
     parse_random_kernels(subparsers)
 
+    return parser
+
+
+def main():
+    parser = get_parser()
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
 

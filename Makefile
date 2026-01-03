@@ -33,10 +33,6 @@ all: lib build_wheel build_sdist
 
 # Documentation targets
 docs:
-	@if [ ! -d "docs" ]; then \
-		echo "Error: docs/ directory not found. Run 'sphinx-quickstart docs' first."; \
-		exit 1; \
-	fi
 	$(MAKE) -C docs html
 
 docs-clean:
