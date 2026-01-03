@@ -13,3 +13,17 @@ from . import loose_ends
 from .FakeCorrelator import FakeCorrelator
 from .FakeServer import FakeServer
 from .Hardware import Hardware
+
+from .pirate_pybind11 import (
+    BumpAllocator,
+    CudaStreamPool,
+    DedispersionConfig,
+    DedispersionPlan,
+    DedispersionTree,
+    EarlyTrigger,
+    FrequencySubbands,
+    GpuDedisperser,
+    GpuDedisperserParams,
+    PeakFindingConfig,
+    ResourceTracker
+)

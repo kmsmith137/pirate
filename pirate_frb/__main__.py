@@ -12,6 +12,15 @@ from . import casm
 from . import kernels
 from . import loose_ends
 
+from . import (
+    CudaStreamPool,
+    DedispersionConfig,
+    DedispersionPlan,
+    FrequencySubbands,
+    GpuDedisperser,
+    GpuDedisperserParams,
+)
+
 from .Hardware import Hardware
 from .FakeServer import FakeServer
 from .FakeCorrelator import FakeCorrelator
@@ -121,7 +130,7 @@ def test(args):
             
         if run_all_tests or args.dd:
             for _ in rrange(kernels.CoalescedDdKernel2):
-                pirate_pybind11.GpuDedisperser.test_random()
+                GpuDedisperser.test_random()
             
 
 #########################################   time command  ##########################################
@@ -275,7 +284,7 @@ def make_subbands(args):
     assert args.fmin < args.fmax
     assert args.threshold <= 10.0
     
-    fs = pirate_pybind11.FrequencySubbands.from_threshold(args.fmin, args.fmax, args.threshold, args.pf_rank)
+    fs = FrequencySubbands.from_threshold(args.fmin, args.fmax, args.threshold, args.pf_rank)
     print(fs.show())
 
 
@@ -471,11 +480,11 @@ def send(args):
 
 
 def parse_scratch(subparsers):
-    # The scratch() function is defined in src_lib/utils.cu.
-    subparsers.add_parser("scratch", help="Run scratch code (defined in src_lib/utils.cu)")
+    # The scratch() function is defined in src_lib/scratch.cu.
+    subparsers.add_parser("scratch", help="Run scratch code (defined in src_lib/scratch.cu)")
 
 def scratch(args):
-    # The scratch() function is defined in src_lib/utils.cu.
+    # The scratch() function is defined in src_lib/scratch.cu.
     pirate_pybind11.scratch()
 
 
@@ -503,7 +512,7 @@ def parse_show_dedisperser(subparsers):
 
 
 def show_dedisperser(args):
-    config = pirate_pybind11.DedispersionConfig.from_yaml(args.config_file)
+    config = DedispersionConfig.from_yaml(args.config_file)
     
     # Override num_active_batches if --streams was specified
     if args.streams is not None:
@@ -519,7 +528,7 @@ def show_dedisperser(args):
     
     if not args.config_only:
         print_separator('DedispersionPlan starts here')
-        plan = pirate_pybind11.DedispersionPlan(config)
+        plan = DedispersionPlan(config)
         plan_yaml = plan.to_yaml_string(args.verbose)
         if args.verbose:
             plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
@@ -540,16 +549,16 @@ def show_dedisperser(args):
     if args.resources or args.fine_grained_resources:
         print_separator('Resource tracking starts here (assumes 4-bit raw data)')
         if args.config_only:
-            plan = pirate_pybind11.DedispersionPlan(config)
+            plan = DedispersionPlan(config)
 
         nin = plan.beams_per_batch * plan.nfreq * plan.nt_in
         nbits = plan.nbits
 
         # Add a dequantizer and raw-data h2g copy, to give a more realistic accounting of cost.
-        params = pirate_pybind11.GpuDedisperserParams()
+        params = GpuDedisperserParams()
         params.plan = plan
-        params.stream_pool = pirate_pybind11.CudaStreamPool.create(plan.num_active_batches)
-        dedisperser = pirate_pybind11.GpuDedisperser(params)
+        params.stream_pool = CudaStreamPool.create(plan.num_active_batches)
+        dedisperser = GpuDedisperser(params)
         rt = dedisperser.resource_tracker.clone()
         rt.add_kernel('dequantizer', (nin * (nbits+4)) // 8)
         rt.add_memcpy_h2g('raw_data', (nin*4) // 8)
@@ -562,7 +571,7 @@ def show_dedisperser(args):
         print_separator('Testing GpuDedisperser')
         nchunks = (2**(config.tree_rank + config.num_downsampling_levels - 1)) // config.time_samples_per_chunk + 10
         print(f'Running GpuDedisperser.test_one(config, nchunks={nchunks})')
-        pirate_pybind11.GpuDedisperser.test_one(config, nchunks)
+        GpuDedisperser.test_one(config, nchunks)
         print('Test passed!')
 
     if args.time:
@@ -570,7 +579,7 @@ def show_dedisperser(args):
         niterations = 1000
         use_hugepages = not args.no_hugepages
         print(f'Running GpuDedisperser.time_one(config, niterations={niterations}, use_hugepages={use_hugepages})')
-        pirate_pybind11.GpuDedisperser.time_one(config, niterations, use_hugepages)
+        GpuDedisperser.time_one(config, niterations, use_hugepages)
         print('Timing complete!')
 
 
@@ -591,7 +600,7 @@ def show_random_config(args):
         if args.n > 1:
             print_separator(f'iteration {i+1}/{args.n}', filler='#')
         
-        config = pirate_pybind11.DedispersionConfig.make_random(gpu_valid=gpu_valid)
+        config = DedispersionConfig.make_random(gpu_valid=gpu_valid)
         yaml_str = config.to_yaml_string(verbose=args.v)
         print(yaml_str)
 
@@ -641,7 +650,7 @@ def random_kernels(args):
                     Dout *= 2
             
             Wmax = 2**randi(5)
-            subband_counts = pirate_pybind11.FrequencySubbands.make_random_subband_counts()
+            subband_counts = FrequencySubbands.make_random_subband_counts()
             print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
@@ -649,7 +658,7 @@ def random_kernels(args):
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
-            subband_counts = pirate_pybind11.FrequencySubbands.make_random_subband_counts()
+            subband_counts = FrequencySubbands.make_random_subband_counts()
             Wmax = 2**randi(5)
             Dcore = 32 // nbits
             Dout = Dcore
@@ -688,7 +697,7 @@ def random_kernels(args):
             Tinner_log = randi(6)
             Dcore_log = randi(6-Tinner_log) + (32//nbits) - 1
             P = randi(1,15)
-            subband_counts = pirate_pybind11.FrequencySubbands.make_random_subband_counts()
+            subband_counts = FrequencySubbands.make_random_subband_counts()
             print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 
