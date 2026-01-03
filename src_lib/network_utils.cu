@@ -33,14 +33,14 @@ inline string errstr(int fd, const string &func_name)
 {
     if (fd < 0) {
         stringstream ss;
-        ss << func_name << "() called on uninitalized objectt";
+        ss << func_name << "() called on uninitialized object";
         return ss.str();
     }
 
     return errstr(func_name);
 }
 
-static void inet_pton_x(struct sockaddr_in &saddr, const string &ip_addr, short port)
+static void inet_pton_x(struct sockaddr_in &saddr, const string &ip_addr, uint16_t port)
 {
     memset(&saddr, 0, sizeof(saddr));
 
@@ -75,8 +75,11 @@ Socket::Socket(int domain, int type, int protocol)
 }
 
 
-void Socket::connect(const std::string &ip_addr, short port)
+void Socket::connect(const std::string &ip_addr, uint16_t port)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::connect() called on uninitialized socket");
+
     struct sockaddr_in saddr;
     inet_pton_x(saddr, ip_addr, port);
 
@@ -87,8 +90,11 @@ void Socket::connect(const std::string &ip_addr, short port)
 }
 
 
-void Socket::bind(const std::string &ip_addr, short port)
+void Socket::bind(const std::string &ip_addr, uint16_t port)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::bind() called on uninitialized socket");
+
     struct sockaddr_in saddr;
     inet_pton_x(saddr, ip_addr, port);
 
@@ -101,6 +107,9 @@ void Socket::bind(const std::string &ip_addr, short port)
 
 void Socket::listen(int backlog)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::listen() called on uninitialized socket");
+
     int err = ::listen(fd, backlog);
 
     if (_unlikely(err < 0))
@@ -117,6 +126,7 @@ void Socket::close()
     
     this->fd = -1;
     this->zerocopy = false;
+    this->connreset = false;
 
     if (_unlikely(err < 0))
         cout << errstr("Socket::close") << endl;
@@ -125,6 +135,9 @@ void Socket::close()
     
 long Socket::read(void *buf, long count)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::read() called on uninitialized socket");
+
     xassert(count > 0);
     long nbytes = ::read(this->fd, buf, count);
 
@@ -138,6 +151,9 @@ long Socket::read(void *buf, long count)
 
 long Socket::send(const void *buf, long count, int flags)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::send() called on uninitialized socket");
+
     xassert(count > 0);
 
     if (_unlikely(connreset))
@@ -153,7 +169,7 @@ long Socket::send(const void *buf, long count, int flags)
         // If send() is called subsequently (with Socket::connreset == true), then an exception is thrown.
         // This provides a mechanism for the sender to detect a closed connection.
 
-        if ((errno == ECONNRESET) && !connreset) {
+        if ((errno == ECONNRESET || errno == EPIPE) && !connreset) {
             connreset = true;
             errno = 0;
             return 0;
@@ -173,6 +189,9 @@ long Socket::send(const void *buf, long count, int flags)
 
 Socket Socket::accept()
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::accept() called on uninitialized socket");
+
     // FIXME currently throwing away sender's IP address
     sockaddr_in saddr_throwaway;
     socklen_t saddr_len = sizeof(saddr_throwaway);
@@ -189,6 +208,9 @@ Socket Socket::accept()
 
 void Socket::getopt(int level, int optname, void *optval, socklen_t *optlen)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::getopt() called on uninitialized socket");
+
     xassert(optval != nullptr);
     xassert(optlen != nullptr);
 
@@ -201,6 +223,9 @@ void Socket::getopt(int level, int optname, void *optval, socklen_t *optlen)
 
 void Socket::setopt(int level, int optname, const void *optval, socklen_t optlen)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::setopt() called on uninitialized socket");
+
     xassert(optval != nullptr);
         
     int err = setsockopt(fd, level, optname, optval, optlen);
@@ -212,16 +237,22 @@ void Socket::setopt(int level, int optname, const void *optval, socklen_t optlen
 
 void Socket::set_reuseaddr()
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::set_reuseaddr() called on uninitialized socket");
+
     int on = 1;
     int err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
-    if (err < 0)
+    if (_unlikely(err < 0))
         throw runtime_error(errstr(fd, "Socket::set_reuseaddr"));
 }
 
 
 void Socket::set_nonblocking()
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::set_nonblocking() called on uninitialized socket");
+
     int flags = fcntl(this->fd, F_GETFL);
     
     if (_unlikely(flags < 0))
@@ -236,6 +267,9 @@ void Socket::set_nonblocking()
 
 void Socket::set_pacing_rate(double bytes_per_sec)
 {
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::set_pacing_rate() called on uninitialized socket");
+
     xassert(bytes_per_sec >= 1.0);
 
     if (_unlikely(bytes_per_sec > 4.0e9)) {
@@ -257,30 +291,27 @@ void Socket::set_pacing_rate(double bytes_per_sec)
 
 void Socket::set_zerocopy()
 {
-      int on = 1;
-      int err = setsockopt(fd, SOL_SOCKET, SO_ZEROCOPY, &on, sizeof(on));
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::set_zerocopy() called on uninitialized socket");
 
-      if (err < 0)
-          throw runtime_error(errstr(fd, "Socket::set_zerocopy"));
+    int on = 1;
+    int err = setsockopt(fd, SOL_SOCKET, SO_ZEROCOPY, &on, sizeof(on));
 
-      // If the 'zerocopy' flag is set, then MSG_ZEROCOPY will be included in future calls to send().
-      this->zerocopy = true;
+    if (_unlikely(err < 0))
+        throw runtime_error(errstr(fd, "Socket::set_zerocopy"));
+
+    // If the 'zerocopy' flag is set, then MSG_ZEROCOPY will be included in future calls to send().
+    this->zerocopy = true;
 }
 
 
 // Move constructor.
 Socket::Socket(Socket &&s)
+    : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset)
 {
-    // FIXME figure out how to avoid cut-and-paste between move constructor (here) and move assignment-operator (below).
-    // Defining a helper function Socket::_move(Socket &&) didn't work ("an rvalue reference cannot be bound to an lvalue").
-    // Maybe I need an explicit call to std::move()?
-    
-    this->close();
-    this->fd = s.fd;
-    this->zerocopy = s.zerocopy;
-    
     s.fd = -1;
     s.zerocopy = false;
+    s.connreset = false;
 }
 
 
@@ -290,9 +321,11 @@ Socket &Socket::operator=(Socket &&s)
     this->close();
     this->fd = s.fd;
     this->zerocopy = s.zerocopy;
+    this->connreset = s.connreset;
     
     s.fd = -1;
     s.zerocopy = false;
+    s.connreset = false;
     return *this;
 }
 
@@ -335,6 +368,9 @@ void Epoll::close()
 
 void Epoll::add_fd(int fd, struct epoll_event &ev)
 {
+    if (_unlikely(epfd < 0))
+        throw runtime_error("Epoll::add_fd() called on uninitialized Epoll instance");
+
     int err = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
 
     if (_unlikely(err < 0))
@@ -348,13 +384,16 @@ void Epoll::add_fd(int fd, struct epoll_event &ev)
 
 int Epoll::wait(int timeout_ms)
 {
+    if (_unlikely(epfd < 0))
+        throw runtime_error("Epoll::wait() called on uninitialized Epoll instance");
+
+    if (_unlikely(events.size() == 0))
+        throw runtime_error("Epoll::wait() was called before Epoll::add_fd()");
+
     int ret = epoll_wait(epfd, &events[0], events.size(), timeout_ms);
 
-    if (_unlikely(ret < 0)) {
-        if (events.size() == 0)
-            throw runtime_error("Epoll::wait() was called before Epoll::add_fd()");
+    if (_unlikely(ret < 0))
         throw runtime_error(errstr(epfd, "Epoll::wait"));
-    }
 
     return ret;
 }

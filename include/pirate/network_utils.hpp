@@ -49,8 +49,8 @@ struct Socket
     
     ~Socket() { this->close(); }
     
-    void connect(const std::string &ip_addr, short port);
-    void bind(const std::string &ip_addr, short port);
+    void connect(const std::string &ip_addr, uint16_t port);
+    void bind(const std::string &ip_addr, uint16_t port);
     void listen(int backlog=128);
     void close();
 
