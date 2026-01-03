@@ -14,3 +14,7 @@ makefile_helper.out
 sdist_files.txt
 wheel_files.txt
 
+# Sphinx documentation
+docs/build/
+docs/source/_autosummary/
+
