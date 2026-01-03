@@ -370,17 +370,68 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     ;
 
     // DedispersionPlan: construct via shared_ptr
-    py::class_<DedispersionPlan, std::shared_ptr<DedispersionPlan>>(m, "DedispersionPlan")
-          .def(py::init<const DedispersionConfig &>(), py::arg("config"))
-          .def_readonly("nfreq", &DedispersionPlan::nfreq)
-          .def_readonly("nt_in", &DedispersionPlan::nt_in)
-          .def_readonly("num_downsampling_levels", &DedispersionPlan::num_downsampling_levels)
-          .def_readonly("beams_per_gpu", &DedispersionPlan::beams_per_gpu)
-          .def_readonly("beams_per_batch", &DedispersionPlan::beams_per_batch)
-          .def_readonly("num_active_batches", &DedispersionPlan::num_active_batches)
-          .def_readonly("ntrees", &DedispersionPlan::ntrees)
-          .def_readonly("nbits", &DedispersionPlan::nbits)
-          .def("to_yaml_string", &DedispersionPlan::to_yaml_string, py::arg("verbose") = false)
+    py::class_<DedispersionPlan, std::shared_ptr<DedispersionPlan>>(m, "DedispersionPlan",
+        "Dedispersion execution plan.\n\n"
+        "Created from a DedispersionConfig, this class contains all the derived parameters\n"
+        "and data structures needed to execute dedispersion on the GPU. The plan includes:\n\n"
+        "  - Stage1 and Stage2 dedispersion trees\n"
+        "  - Kernel parameters for all processing stages\n"
+        "  - Memory buffer layouts and ring buffer configuration\n"
+        "  - Derived parameters like tree dimensions and output array shapes\n\n"
+        "The plan is immutable once constructed and is shared between dedisperser instances.\n\n"
+        "Example:\n"
+        "    config = DedispersionConfig.from_yaml('config.yaml')\n"
+        "    plan = DedispersionPlan(config)\n"
+        "    print(f'Plan has {plan.ntrees} trees')\n"
+        "    for i, tree in enumerate(plan.trees):\n"
+        "        print(f'Tree {i}: ds_level={tree.ds_level}, dm_range=[{tree.dm_min:.1f}, {tree.dm_max:.1f}]')")
+          .def(py::init<const DedispersionConfig &>(), 
+               py::arg("config"),
+               "Create a DedispersionPlan from a configuration.\n\n"
+               "Args:\n"
+               "    config: DedispersionConfig object (must be validated)")
+          .def_readonly("config", &DedispersionPlan::config,
+               "The DedispersionConfig used to create this plan")
+          .def_readonly("dtype", &DedispersionPlan::dtype,
+               "Data type for dedispersion (same as config.dtype)")
+          .def_readonly("nfreq", &DedispersionPlan::nfreq,
+               "Total number of frequency channels (same as config.get_total_nfreq())")
+          .def_readonly("nt_in", &DedispersionPlan::nt_in,
+               "Number of input time samples per chunk (same as config.time_samples_per_chunk)")
+          .def_readonly("num_downsampling_levels", &DedispersionPlan::num_downsampling_levels,
+               "Number of downsampling levels (same as config.num_downsampling_levels)")
+          .def_readonly("beams_per_gpu", &DedispersionPlan::beams_per_gpu,
+               "Number of beams processed per GPU (same as config.beams_per_gpu)")
+          .def_readonly("beams_per_batch", &DedispersionPlan::beams_per_batch,
+               "Number of beams per batch (same as config.beams_per_batch)")
+          .def_readonly("num_active_batches", &DedispersionPlan::num_active_batches,
+               "Number of active batches (same as config.num_active_batches)")
+          .def_readonly("ntrees", &DedispersionPlan::ntrees,
+               "Total number of stage2 trees (num_downsampling_levels + number of early triggers)")
+          .def_readonly("nbits", &DedispersionPlan::nbits,
+               "Number of bits per element (same as config.dtype.nbits)")
+          .def_readonly("trees", &DedispersionPlan::trees,
+               "Vector of DedispersionTree objects representing stage2 output trees.\n"
+               "Length is ntrees. Each tree corresponds to one (downsampling level, early trigger) pair.")
+          .def_readonly("stage1_dd_rank", &DedispersionPlan::stage1_dd_rank,
+               "Active dedispersion rank of each stage1 tree.\n"
+               "Vector of length num_downsampling_levels. Stage1 trees are internal to dedispersion.")
+          .def_readonly("stage1_amb_rank", &DedispersionPlan::stage1_amb_rank,
+               "Ambient rank of each stage1 tree (= number of coarse frequency channels).\n"
+               "Vector of length num_downsampling_levels.")
+          .def_readonly("nelts_per_segment", &DedispersionPlan::nelts_per_segment,
+               "Number of elements per GPU memory segment.\n"
+               "Currently always constants::bytes_per_gpu_cache_line / sizeof(dtype)")
+          .def_readonly("nbytes_per_segment", &DedispersionPlan::nbytes_per_segment,
+               "Number of bytes per GPU memory segment.\n"
+               "Currently always constants::bytes_per_gpu_cache_line")
+          .def("to_yaml_string", &DedispersionPlan::to_yaml_string, 
+               py::arg("verbose") = false,
+               "Convert plan to YAML string representation.\n\n"
+               "Args:\n"
+               "    verbose: Include detailed information about all trees and parameters\n\n"
+               "Returns:\n"
+               "    YAML string representation of the plan")
     ;
 
     // DedispersionTree: simple data class representing output of dedisperser
