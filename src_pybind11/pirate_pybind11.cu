@@ -450,10 +450,19 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_static("validate_subband_counts", &FrequencySubbands::validate_subband_counts,
                py::arg("subband_counts"))
           .def_static("make_random_subband_counts",
-               static_cast<std::vector<long> (*)(long)>(&FrequencySubbands::make_random_subband_counts),
-               py::arg("pf_rank"))
-          .def_static("make_random_subband_counts",
-               static_cast<std::vector<long> (*)()>(&FrequencySubbands::make_random_subband_counts))
+               [](py::object pf_rank) -> std::vector<long> {
+                   if (pf_rank.is_none()) {
+                       return FrequencySubbands::make_random_subband_counts();
+                   } else {
+                       return FrequencySubbands::make_random_subband_counts(pf_rank.cast<long>());
+                   }
+               },
+               py::arg("pf_rank") = py::none(),
+               "Generate random subband counts.\n\n"
+               "Args:\n"
+               "    pf_rank: Peak-finding rank, or None to choose randomly\n\n"
+               "Returns:\n"
+               "    Random subband_counts vector")
           .def_static("make_random", &FrequencySubbands::make_random)
     ;
 
