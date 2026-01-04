@@ -89,34 +89,53 @@ struct Socket
 
 // -------------------------------------------------------------------------------------------------
 //
-// Epoll: RAII wrapper for epoll file descriptor.
+// Epoll: RAII wrapper for Linux epoll (I/O event notification for multiple file descriptors).
 //
-// Reminder: 'struct epoll_event' looks like this
+// Quick refresher on epoll:
+//
+//   - epoll is Linux's scalable I/O multiplexing mechanism (like select/poll but O(1) not O(n)).
+//   - An epoll instance monitors a set of fds, and reports which fds are "ready" for I/O.
+//   - For each fd, caller specifies events of interest (EPOLLIN, EPOLLOUT, etc.)
+//   - For each fd, caller also specifies opaque "context" (e.g. pointer to connection object).
+//   - When wait() returns, caller iterates over ready fds, using context to dispatch I/O.
+//
+// Basic usage:
+//
+//   Epoll ep;
+//   struct epoll_event ev;
+//   ev.events = EPOLLIN;              // interested in "ready to read"
+//   ev.data.ptr = my_connection_ptr;  // opaque context, "replayed" by wait()
+//   ep.add_fd(socket_fd, ev);
+//
+//   while (...) {
+//       int n = ep.wait();  // blocks until event (or use timeout)
+//       for (int i = 0; i < n; i++) {
+//           MyConnection *c = (MyConnection *) ep.events[i].data.ptr;
+//           if (ep.events[i].events & EPOLLIN)
+//               c->handle_read();
+//       }
+//   }
+//
+// The 'struct epoll_event' (passed to add_fd, populated by wait) looks like:
 //
 //   struct epoll_event {
-//      uint32_t events;        // bitmask, see below
-//      union {                 // union, not struct!!
-//           void        *ptr;
-//           int          fd;
-//           uint32_t     u32;
-//           uint64_t     u64;
-//      } data;
+//       uint32_t events;   // bitmask: requested events (add_fd) or occurred events (wait)
+//       union {            // opaque context, specified by caller, replayed by wait()
+//           void     *ptr;
+//           int       fd;
+//           uint32_t  u32;
+//           uint64_t  u64;
+//       } data;
 //   };
 //
-// Here is a partial list of bits in epoll_event::events (see 'man epoll' for complete list):
+// Common event flags (see 'man epoll' for full list):
 //
-//   EPOLLIN         fd is ready for read()
-//   EPOLLOUT        fd is ready for write()
-//   EPOLLRDHUP      peer closed connection, or shut down writing half of connection
-//   EPOLLHUP        "hangup", i.e. peer closed connection (what is difference versus EPOLLRDHUP)?
-//   EPOLLPRI        "exceptional condition" on fd (see POLLPRI in 'man poll')
-//   EPOLLERR        fd has error (also reported for the write end of a pipe when the read end has been closed)
-//   EPOLLET         requests edge-triggered notification (see 'man epoll')
-//   EPOLLONESHOT    requests one-shot notification (see 'man epoll')
-//   EPOLLWAKEUP     ensure system does not "suspend" or "hibernate" while event is being processed (see 'man epoll')
-//   EPOLLEXCLUSIVE  sets an exclusive wakeup mode for the epoll file descriptor (see 'man epoll')
-//
-// Epoll always waits on (EPOLLERR | EPOLLHUP), i.e. no need to include these flags in Epoll::add_fd().
+//   EPOLLIN      fd is ready for read()
+//   EPOLLOUT     fd is ready for write()
+//   EPOLLRDHUP   peer closed connection (or shutdown write half)
+//   EPOLLHUP     hangup (always monitored, even if not requested)
+//   EPOLLERR     error condition (always monitored, even if not requested)
+//   EPOLLET      edge-triggered mode (default is level-triggered)
 
 
 struct Epoll
@@ -132,7 +151,7 @@ struct Epoll
     ~Epoll() { this->close(); }
 
     void add_fd(int fd, struct epoll_event &ev);
-    // To add later: modify_fd(fd,ev), delete_fd(fd).
+    void delete_fd(int fd);
 
     // Returns number of events (or zero, if timeout expires).
     // Negative timeout means "blocking". Zero timeout is nonblocking.

@@ -393,6 +393,25 @@ void Epoll::add_fd(int fd, struct epoll_event &ev)
 }
 
 
+void Epoll::delete_fd(int fd)
+{
+    if (_unlikely(epfd < 0))
+        throw runtime_error("Epoll::delete_fd() called on uninitialized Epoll instance");
+
+    if (_unlikely(events.size() == 0))
+        throw runtime_error("Epoll::delete_fd() called, but no fds have been added");
+
+    // Note: the 'ev' argument to epoll_ctl(EPOLL_CTL_DEL) is ignored by the kernel,
+    // but Linux kernels before 2.6.9 required a non-NULL pointer.
+    int err = epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
+
+    if (_unlikely(err < 0))
+        throw runtime_error(errstr(epfd, "Epoll::delete_fd"));
+
+    this->events.pop_back();
+}
+
+
 int Epoll::wait(int timeout_ms)
 {
     if (_unlikely(epfd < 0))
