@@ -101,20 +101,25 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("multiplier"), py::arg("fine_grained"))
     ;
 
-    // GpuDedisperser::Params (nested struct, exposed as GpuDedisperserParams)
-    py::class_<GpuDedisperser::Params>(m, "GpuDedisperserParams")
-          .def(py::init<>())
-          .def_readwrite("plan", &GpuDedisperser::Params::plan)
-          .def_readwrite("stream_pool", &GpuDedisperser::Params::stream_pool)
-          .def_readwrite("nbatches_wt", &GpuDedisperser::Params::nbatches_wt)
-          .def_readwrite("nbatches_out", &GpuDedisperser::Params::nbatches_out)
-          .def_readwrite("detect_deadlocks", &GpuDedisperser::Params::detect_deadlocks)
-    ;
-
     py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
-          .def(py::init([](const GpuDedisperser::Params &params) {
+          .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
+                          std::shared_ptr<CudaStreamPool> stream_pool,
+                          long nbatches_out,
+                          long nbatches_wt,
+                          bool detect_deadlocks) {
+              GpuDedisperser::Params params;
+              params.plan = plan;
+              params.stream_pool = stream_pool;
+              params.nbatches_out = nbatches_out;
+              params.nbatches_wt = nbatches_wt;
+              params.detect_deadlocks = detect_deadlocks;
               return GpuDedisperser::create(params);
-          }), py::arg("params"))
+          }),
+          py::arg("plan"),
+          py::arg("stream_pool"),
+          py::arg("nbatches_out") = 0,
+          py::arg("nbatches_wt") = 0,
+          py::arg("detect_deadlocks") = true)
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,

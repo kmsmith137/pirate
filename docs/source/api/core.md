@@ -43,14 +43,6 @@ These are the primary classes for configuring and running dedispersion.
    :show-inheritance:
 ```
 
-## GpuDedisperserParams
-
-```{eval-rst}
-.. autoclass:: pirate_frb.GpuDedisperserParams
-   :members:
-   :show-inheritance:
-```
-
 ## PeakFindingConfig
 
 ```{eval-rst}

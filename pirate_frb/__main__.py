@@ -17,7 +17,6 @@ from . import (
     DedispersionConfig,
     DedispersionPlan,
     GpuDedisperser,
-    GpuDedisperserParams,
 )
 
 from .Hardware import Hardware
@@ -554,10 +553,8 @@ def show_dedisperser(args):
         nbits = plan.nbits
 
         # Add a dequantizer and raw-data h2g copy, to give a more realistic accounting of cost.
-        params = GpuDedisperserParams()
-        params.plan = plan
-        params.stream_pool = core.CudaStreamPool.create(plan.num_active_batches)
-        dedisperser = GpuDedisperser(params)
+        stream_pool = core.CudaStreamPool.create(plan.num_active_batches)
+        dedisperser = GpuDedisperser(plan, stream_pool)
         rt = dedisperser.resource_tracker.clone()
         rt.add_kernel('dequantizer', (nin * (nbits+4)) // 8)
         rt.add_memcpy_h2g('raw_data', (nin*4) // 8)
