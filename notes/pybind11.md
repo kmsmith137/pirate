@@ -25,9 +25,29 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
             self.label = label
 ```
 
-## General notes
+## Source file organization
 
-- Pybind11 code is in `src_pybind11/*.cu`.
+Pybind11 code is in the following source files:
+```
+   src_pybind11/pirate_pybind11_casm.cu
+   src_pybind11/pirate_pybind11_core.cu
+   src_pybind11/pirate_pybind11_kernels.cu
+   src_pybind11/pirate_pybind11_loose_ends.cu
+   src_pybind11/pirate_pybind11.cu   # toplevel
+```
+These get compiled into a single extension module `pirate_pybind11.so`.
+
+On the python side, the `pirate_frb` toplevel package is divided into subpackages `pirate_frb.casm`, `pirate_frb.core`, etc.
+Each subpackage imports the contents of the corresponding pybind11 file.
+For example, `pirate_frb/casm/__init__.py` contains the line:
+```py
+# Note: CasmBeamformer is the only class in src_pybind11/pirate_pybind11_casm.cu.
+from ..pirate_pybind11 import CasmBeamformer
+```
+Note that each pybind11 class will appear with two names -- for example `pirate_frb.pirate_pybind11.CasmBeamformer`
+is the same as `pirate_frb.casm.CasmBeamformer`. In python code, always use the latter "non-pybind11" name if possible.
+
+## General notes
 
 - Please write docstrings in the pybind11 code, but keep them concise and avoid superficial comments. If the meaning of a member/method is self-evident, then don't write a docstring.
 

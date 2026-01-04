@@ -1,6 +1,10 @@
 // Main pybind11 source file containing the PYBIND11_MODULE definition.
-// Core dedispersion bindings are defined here.
-// Kernel and infrastructure bindings are in pirate_pybind11_kernels.cu.
+// Main dedispersion bindings (DedispersionConfig, DedispersionPlan, GpuDedisperser) are defined here.
+// Other bindings are organized into separate files by subpackage:
+//   - pirate_pybind11_core.cu: core classes (pirate_frb.core)
+//   - pirate_pybind11_kernels.cu: GPU kernels (pirate_frb.kernels)
+//   - pirate_pybind11_casm.cu: CASM beamformer (pirate_frb.casm)
+//   - pirate_pybind11_loose_ends.cu: prototype functions (pirate_frb.loose_ends)
 //
 // For an explanation of PY_ARRAY_UNIQUE_SYMBOL, see comments in ksgpu/src_pybind11/ksgpu_pybind11.cu.
 
@@ -13,22 +17,23 @@
 
 #include <ksgpu/pybind11.hpp>
 
-#include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
-#include "../include/pirate/DedispersionTree.hpp"
-#include "../include/pirate/FrequencySubbands.hpp"
-#include "../include/pirate/ResourceTracker.hpp"
 
 using namespace std;
 using namespace ksgpu;
 using namespace pirate;
 namespace py = pybind11;
 
-// Defined in pirate_pybind11_kernels.cu.
-namespace pirate { void register_kernel_bindings(pybind11::module &m); }
+// Defined in separate source files.
+namespace pirate {
+    void register_core_bindings(pybind11::module &m);
+    void register_kernel_bindings(pybind11::module &m);
+    void register_casm_bindings(pybind11::module &m);
+    void register_loose_ends_bindings(pybind11::module &m);
+}
 
 
 PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate_pybind11.so
@@ -44,178 +49,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         return;
     }
 
-    // CudaStreamPool: always accessed via shared_ptr.
-    // Stream members are exposed to python as CudaStreamWrapper objects.
-    py::class_<CudaStreamPool, std::shared_ptr<CudaStreamPool>>(m, "CudaStreamPool")
-        .def(py::init([](int num_compute_streams, int compute_stream_priority) {
-            return CudaStreamPool::create(num_compute_streams, compute_stream_priority);
-        }), 
-          py::arg("num_compute_streams"),
-          py::arg("compute_stream_priority") = 0
-        )
-        .def_readonly("pool_id", &CudaStreamPool::pool_id)
-        .def_readonly("num_compute_streams", &CudaStreamPool::num_compute_streams)
-        .def_property_readonly("low_priority_g2h_stream",
-            [](const CudaStreamPool &self) { return self.low_priority_g2h_stream; })
-        .def_property_readonly("low_priority_h2g_stream",
-            [](const CudaStreamPool &self) { return self.low_priority_h2g_stream; })
-        .def_property_readonly("high_priority_g2h_stream",
-            [](const CudaStreamPool &self) { return self.high_priority_g2h_stream; })
-        .def_property_readonly("high_priority_h2g_stream",
-            [](const CudaStreamPool &self) { return self.high_priority_h2g_stream; })
-        .def_property_readonly("compute_streams",
-            [](const CudaStreamPool &self) { return self.compute_streams; })
-    ;
+    // Register bindings from other files, in order: core, kernels, casm, loose_ends
+    register_core_bindings(m);
+    register_kernel_bindings(m);
+    register_casm_bindings(m);
+    register_loose_ends_bindings(m);
 
-    py::class_<ResourceTracker>(m, "ResourceTracker")
-          .def(py::init<>())
-          .def("add_kernel", &ResourceTracker::add_kernel,
-               py::arg("key"), py::arg("gmem_bw_nbytes"))
-          .def("add_memcpy_h2g", &ResourceTracker::add_memcpy_h2g,
-               py::arg("key"), py::arg("nbytes"))
-          .def("add_memcpy_g2h", &ResourceTracker::add_memcpy_g2h,
-               py::arg("key"), py::arg("nbytes"))
-          .def("add_gmem_bw", &ResourceTracker::add_gmem_bw,
-               py::arg("key"), py::arg("gmem_bw_nbytes"))
-          .def("add_hmem_bw", &ResourceTracker::add_hmem_bw,
-               py::arg("key"), py::arg("hmem_bw_nbytes"))
-          .def("add_gmem_footprint", &ResourceTracker::add_gmem_footprint,
-               py::arg("key"), py::arg("gmem_footprint_nbytes"), py::arg("align") = false)
-          .def("add_hmem_footprint", &ResourceTracker::add_hmem_footprint,
-               py::arg("key"), py::arg("hmem_footprint_nbytes"), py::arg("align") = false)
-          .def("get_gmem_bw", &ResourceTracker::get_gmem_bw,
-               py::arg("key") = "")
-          .def("get_hmem_bw", &ResourceTracker::get_hmem_bw,
-               py::arg("key") = "")
-          .def("get_h2g_bw", &ResourceTracker::get_h2g_bw,
-               py::arg("key") = "")
-          .def("get_g2h_bw", &ResourceTracker::get_g2h_bw,
-               py::arg("key") = "")
-          .def("get_gmem_footprint", &ResourceTracker::get_gmem_footprint,
-               py::arg("key") = "")
-          .def("get_hmem_footprint", &ResourceTracker::get_hmem_footprint,
-               py::arg("key") = "")
-          .def("clone", &ResourceTracker::clone)
-          .def("__iadd__", &ResourceTracker::operator+=, py::return_value_policy::reference)
-          .def("to_yaml_string", &ResourceTracker::to_yaml_string,
-               py::arg("multiplier"), py::arg("fine_grained"))
-    ;
-
-    py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
-          .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
-                          std::shared_ptr<CudaStreamPool> stream_pool,
-                          long nbatches_out,
-                          long nbatches_wt,
-                          bool detect_deadlocks) {
-              GpuDedisperser::Params params;
-              params.plan = plan;
-              params.stream_pool = stream_pool;
-              params.nbatches_out = nbatches_out;
-              params.nbatches_wt = nbatches_wt;
-              params.detect_deadlocks = detect_deadlocks;
-              return GpuDedisperser::create(params);
-          }),
-          py::arg("plan"),
-          py::arg("stream_pool"),
-          py::arg("nbatches_out") = 0,
-          py::arg("nbatches_wt") = 0,
-          py::arg("detect_deadlocks") = true)
-          .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
-          .def_static("test_random", &GpuDedisperser::test_random)
-          .def_static("test_one", &GpuDedisperser::test_one,
-               py::arg("config"), 
-               py::arg("nchunks"), 
-               py::arg("nbatches_out") = 0,
-               py::arg("host_only") = false)
-          .def_static("time_one", &GpuDedisperser::time_one,
-               py::arg("config"), py::arg("niterations"), py::arg("use_hugepages"))
-    ;
-
-    // DedispersionConfig::PeakFindingConfig (nested struct)
-    py::class_<DedispersionConfig::PeakFindingConfig>(m, "PeakFindingConfig",
-        "Configuration for peak finding at a single downsampling level.\n\n"
-        "Defines the maximum width for peak detection and downsampling factors\n"
-        "for both the coarse-grained and weights arrays relative to tree resolution.\n"
-        "All members must be powers of two.")
-          .def(py::init<>(),
-               "Create a PeakFindingConfig with default (zero) values.")
-          .def(py::init([](long max_width, long dm_downsampling, long time_downsampling,
-                          long wt_dm_downsampling, long wt_time_downsampling) {
-                   DedispersionConfig::PeakFindingConfig pf;
-                   pf.max_width = max_width;
-                   pf.dm_downsampling = dm_downsampling;
-                   pf.time_downsampling = time_downsampling;
-                   pf.wt_dm_downsampling = wt_dm_downsampling;
-                   pf.wt_time_downsampling = wt_time_downsampling;
-                   return pf;
-               }),
-               py::arg("max_width"),
-               py::arg("dm_downsampling"),
-               py::arg("time_downsampling"),
-               py::arg("wt_dm_downsampling"),
-               py::arg("wt_time_downsampling"),
-               "Create a PeakFindingConfig.\n\n"
-               "Args:\n"
-               "    max_width: Maximum width of peak-finding kernel (in tree time samples)\n"
-               "    dm_downsampling: DM downsampling factor relative to tree\n"
-               "    time_downsampling: Time downsampling factor relative to tree\n"
-               "    wt_dm_downsampling: DM downsampling factor for weights (>= dm_downsampling)\n"
-               "    wt_time_downsampling: Time downsampling for weights (>= time_downsampling)")
-          .def_readwrite("max_width", &DedispersionConfig::PeakFindingConfig::max_width,
-               "Maximum width of peak-finding kernel (in tree time samples)")
-          .def_readwrite("dm_downsampling", &DedispersionConfig::PeakFindingConfig::dm_downsampling,
-               "DM downsampling factor of coarse-grained array relative to tree")
-          .def_readwrite("time_downsampling", &DedispersionConfig::PeakFindingConfig::time_downsampling,
-               "Time downsampling factor of coarse-grained array relative to tree")
-          .def_readwrite("wt_dm_downsampling", &DedispersionConfig::PeakFindingConfig::wt_dm_downsampling,
-               "DM downsampling factor of weights array (must be >= dm_downsampling)")
-          .def_readwrite("wt_time_downsampling", &DedispersionConfig::PeakFindingConfig::wt_time_downsampling,
-               "Time downsampling factor of weights array (must be >= time_downsampling)")
-          .def("__repr__", [](const DedispersionConfig::PeakFindingConfig &self) {
-               std::ostringstream os;
-               os << "PeakFindingConfig(max_width=" << self.max_width
-                  << ", dm_downsampling=" << self.dm_downsampling
-                  << ", time_downsampling=" << self.time_downsampling
-                  << ", wt_dm_downsampling=" << self.wt_dm_downsampling
-                  << ", wt_time_downsampling=" << self.wt_time_downsampling << ")";
-               return os.str();
-          })
-    ;
-
-    // DedispersionConfig::EarlyTrigger (nested struct)
-    py::class_<DedispersionConfig::EarlyTrigger>(m, "EarlyTrigger",
-        "Early trigger configuration for reduced-latency dedispersion.\n\n"
-        "Early triggers search a subset [fmid, fmax] of the full frequency range\n"
-        "at reduced latency. Each trigger is parameterized by a downsampling level\n"
-        "and delta_rank, which specifies how 'early' the trigger is.")
-          .def(py::init<>(),
-               "Create an EarlyTrigger with default values (ds_level=-1, delta_rank=0).")
-          .def(py::init([](long ds_level, long delta_rank) {
-                   DedispersionConfig::EarlyTrigger et;
-                   et.ds_level = ds_level;
-                   et.delta_rank = delta_rank;
-                   return et;
-               }),
-               py::arg("ds_level"),
-               py::arg("delta_rank"),
-               "Create an EarlyTrigger.\n\n"
-               "Args:\n"
-               "    ds_level: Downsampling level (0 <= ds_level < num_downsampling_levels)\n"
-               "    delta_rank: Specifies 'early-ness' of trigger (must be > 0)")
-          .def_readwrite("ds_level", &DedispersionConfig::EarlyTrigger::ds_level,
-               "Downsampling level (0 <= ds_level < num_downsampling_levels)")
-          .def_readwrite("delta_rank", &DedispersionConfig::EarlyTrigger::delta_rank,
-               "Specifies 'early-ness' of trigger (must be > 0)")
-          .def("__repr__", [](const DedispersionConfig::EarlyTrigger &self) {
-               std::ostringstream os;
-               os << self;  // Use C++ operator<<
-               return os.str();
-          })
-          .def("__eq__", [](const DedispersionConfig::EarlyTrigger &self, 
-                           const DedispersionConfig::EarlyTrigger &other) {
-               return self == other;  // Use C++ operator==
-          }, py::arg("other"))
-    ;
+    // Main dedispersion classes defined here
     
     py::class_<DedispersionConfig>(m, "DedispersionConfig",
         "Configuration for dedispersion processing.\n\n"
@@ -441,118 +281,33 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    YAML string representation of the plan")
     ;
 
-    // DedispersionTree: simple data class representing output of dedisperser
-    // for one choice of (downsampling level, early trigger).
-    py::class_<DedispersionTree>(m, "DedispersionTree")
-          .def_readonly("ds_level", &DedispersionTree::ds_level)
-          .def_readonly("amb_rank", &DedispersionTree::amb_rank)
-          .def_readonly("pri_dd_rank", &DedispersionTree::pri_dd_rank)
-          .def_readonly("early_dd_rank", &DedispersionTree::early_dd_rank)
-          .def_readonly("nt_ds", &DedispersionTree::nt_ds)
-          .def_readonly("frequency_subbands", &DedispersionTree::frequency_subbands)
-          .def_readonly("pf", &DedispersionTree::pf)
-          .def_readonly("nprofiles", &DedispersionTree::nprofiles)
-          .def_readonly("ndm_out", &DedispersionTree::ndm_out)
-          .def_readonly("ndm_wt", &DedispersionTree::ndm_wt)
-          .def_readonly("nt_out", &DedispersionTree::nt_out)
-          .def_readonly("nt_wt", &DedispersionTree::nt_wt)
-          .def_readonly("dm_min", &DedispersionTree::dm_min)
-          .def_readonly("dm_max", &DedispersionTree::dm_max)
-          .def_readonly("trigger_frequency", &DedispersionTree::trigger_frequency)
+    py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
+          .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
+                          std::shared_ptr<CudaStreamPool> stream_pool,
+                          long nbatches_out,
+                          long nbatches_wt,
+                          bool detect_deadlocks) {
+              GpuDedisperser::Params params;
+              params.plan = plan;
+              params.stream_pool = stream_pool;
+              params.nbatches_out = nbatches_out;
+              params.nbatches_wt = nbatches_wt;
+              params.detect_deadlocks = detect_deadlocks;
+              return GpuDedisperser::create(params);
+          }),
+          py::arg("plan"),
+          py::arg("stream_pool"),
+          py::arg("nbatches_out") = 0,
+          py::arg("nbatches_wt") = 0,
+          py::arg("detect_deadlocks") = true)
+          .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
+          .def_static("test_random", &GpuDedisperser::test_random)
+          .def_static("test_one", &GpuDedisperser::test_one,
+               py::arg("config"), 
+               py::arg("nchunks"), 
+               py::arg("nbatches_out") = 0,
+               py::arg("host_only") = false)
+          .def_static("time_one", &GpuDedisperser::time_one,
+               py::arg("config"), py::arg("niterations"), py::arg("use_hugepages"))
     ;
-
-    py::class_<FrequencySubbands>(m, "FrequencySubbands")
-          // Constructors
-          .def(py::init<>())  // default constructor
-          .def(py::init<const std::vector<long> &>(), py::arg("subband_counts"))
-          .def(py::init<const std::vector<long> &, double, double>(),
-               py::arg("subband_counts"), py::arg("fmin"), py::arg("fmax"))
-          // Data members (readonly since they are computed from subband_counts)
-          .def_readonly("subband_counts", &FrequencySubbands::subband_counts)
-          .def_readonly("pf_rank", &FrequencySubbands::pf_rank)
-          .def_readonly("F", &FrequencySubbands::F)
-          .def_readonly("M", &FrequencySubbands::M)
-          .def_readonly("m_to_f", &FrequencySubbands::m_to_f)
-          .def_readonly("m_to_d", &FrequencySubbands::m_to_d)
-          .def_readonly("f_to_ilo", &FrequencySubbands::f_to_ilo)
-          .def_readonly("f_to_ihi", &FrequencySubbands::f_to_ihi)
-          .def_readonly("f_to_mbase", &FrequencySubbands::f_to_mbase)
-          .def_readonly("i_to_f", &FrequencySubbands::i_to_f)
-          .def_readonly("fmin", &FrequencySubbands::fmin)
-          .def_readonly("fmax", &FrequencySubbands::fmax)
-          // Inline methods
-          .def("m_to_ilo", &FrequencySubbands::m_to_ilo, py::arg("m"))
-          .def("m_to_ihi", &FrequencySubbands::m_to_ihi, py::arg("m"))
-          // Methods with ostream arguments: wrap to return strings
-          .def("show", [](const FrequencySubbands &self) {
-              std::ostringstream os;
-              self.show(os);
-              return os.str();
-          })
-          .def("show_compact", [](const FrequencySubbands &self) {
-              std::stringstream ss;
-              self.show_compact(ss);
-              return ss.str();
-          })
-          .def("show_token", [](const FrequencySubbands &self, uint token) {
-              std::ostringstream os;
-              self.show_token(token, os);
-              return os.str();
-          }, py::arg("token"))
-          .def("to_string", &FrequencySubbands::to_string)
-          // Static methods
-          .def_static("from_threshold", &FrequencySubbands::from_threshold,
-               py::arg("fmin"), py::arg("fmax"), py::arg("threshold"), py::arg("pf_rank") = 4)
-          .def_static("restrict_subband_counts", &FrequencySubbands::restrict_subband_counts,
-               py::arg("subband_counts"), py::arg("et_delta_rank"), py::arg("new_pf_rank"))
-          .def_static("validate_subband_counts", &FrequencySubbands::validate_subband_counts,
-               py::arg("subband_counts"))
-          .def_static("make_random_subband_counts",
-               [](py::object pf_rank) -> std::vector<long> {
-                   if (pf_rank.is_none()) {
-                       return FrequencySubbands::make_random_subband_counts();
-                   } else {
-                       return FrequencySubbands::make_random_subband_counts(pf_rank.cast<long>());
-                   }
-               },
-               py::arg("pf_rank") = py::none(),
-               "Generate random subband counts.\n\n"
-               "Args:\n"
-               "    pf_rank: Peak-finding rank, or None to choose randomly\n\n"
-               "Returns:\n"
-               "    Random subband_counts vector")
-          .def_static("make_random", &FrequencySubbands::make_random)
-    ;
-
-    // BumpAllocator: Thread-safe bump allocator for GPU/host memory
-    // Wrapped with shared_ptr for proper lifetime management when arrays reference the allocator.
-    // Note: Python injections in pirate_frb/pybind11_injections.py handle aflags and dtype conversions.
-    py::class_<BumpAllocator, std::shared_ptr<BumpAllocator>>(m, "BumpAllocator",
-        "Thread-safe bump allocator supporting GPU/host memory.\n\n"
-        "Modes:\n"
-        "  - capacity >= 0: Pre-allocates base region, allocations share this memory\n"
-        "  - capacity < 0: Dummy mode, each allocation gets independent memory")
-        .def(py::init<int, long>(),
-            py::arg("aflags"), py::arg("capacity"),
-            "Create allocator.\n\n"
-            "Args:\n"
-            "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
-            "    capacity: Bytes to pre-allocate (>= 0) or -1 for dummy mode")
-        .def_property_readonly("nbytes_allocated",
-            [](const BumpAllocator &self) { return self.nbytes_allocated.load(); },
-            "Bytes allocated so far (aligned to 128-byte cache lines)")
-        .def_readonly("aflags", &BumpAllocator::aflags,
-            "Memory allocation flags")
-        .def_readonly("capacity", &BumpAllocator::capacity,
-            "Total capacity in bytes, or -1 for dummy mode")
-        .def("_allocate_array_raw",
-            [](std::shared_ptr<BumpAllocator> self, ksgpu::Dtype dtype, const std::vector<long> &shape) {
-                return self->_allocate_array_internal(dtype, shape.size(), shape.data(), nullptr);
-            },
-            py::arg("dtype"), py::arg("shape"),
-            "Internal: allocate array with dtype and shape (use allocate_array() instead)")
-    ;
-
-    // Register kernel and infrastructure bindings from pirate_pybind11_kernels.cu.
-    register_kernel_bindings(m);
 }

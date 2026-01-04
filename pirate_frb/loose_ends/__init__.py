@@ -9,5 +9,6 @@ from ..pirate_pybind11 import (
     time_cpu_downsample,
     time_gpu_downsample,
     time_gpu_transpose,
+    scratch
 )
 
