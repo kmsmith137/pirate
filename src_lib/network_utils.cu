@@ -127,6 +127,7 @@ void Socket::close()
     this->fd = -1;
     this->zerocopy = false;
     this->connreset = false;
+    this->nonblocking = false;
 
     if (_unlikely(err < 0))
         cout << errstr("Socket::close") << endl;
@@ -141,8 +142,13 @@ long Socket::read(void *buf, long count)
     xassert(count > 0);
     long nbytes = ::read(this->fd, buf, count);
 
-    if (_unlikely(nbytes < 0))
+    if (nbytes < 0) {
+        if (nonblocking && ((errno == EAGAIN) || (errno == EWOULDBLOCK))) {
+            errno = 0;
+            return 0;
+        }
         throw runtime_error(errstr(fd, "Socket::read"));
+    }
 
     xassert(nbytes <= count);
     return nbytes;
@@ -165,11 +171,17 @@ long Socket::send(const void *buf, long count, int flags)
     long nbytes = ::send(this->fd, buf, count, flags);
 
     if (nbytes < 0) {
-        // If receiver closes connection, then send() returns zero and sets Socket::connreset = true.
-        // If send() is called subsequently (with Socket::connreset == true), then an exception is thrown.
+
+        if (nonblocking && ((errno == EAGAIN) || (errno == EWOULDBLOCK))) {
+            errno = 0;
+            return 0;
+        }
+
+        // If receiver closes connection, then Socket::send() returns zero and sets Socket::connreset = true.
+        // If Socket::send() is called subsequently (with Socket::connreset == true), then an exception is thrown.
         // This provides a mechanism for the sender to detect a closed connection.
 
-        if ((errno == ECONNRESET || errno == EPIPE) && !connreset) {
+        if (!connreset && ((errno == ECONNRESET) || (errno == EPIPE))) {
             connreset = true;
             errno = 0;
             return 0;
@@ -262,6 +274,8 @@ void Socket::set_nonblocking()
 
     if (_unlikely(err < 0))
         throw runtime_error(errstr(fd, "Socket::set_nonblocking: F_SETFL fcntl"));
+
+    this->nonblocking = true;
 }
 
 
@@ -307,11 +321,9 @@ void Socket::set_zerocopy()
 
 // Move constructor.
 Socket::Socket(Socket &&s)
-    : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset)
+    : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking)
 {
     s.fd = -1;
-    s.zerocopy = false;
-    s.connreset = false;
 }
 
 
@@ -322,10 +334,9 @@ Socket &Socket::operator=(Socket &&s)
     this->fd = s.fd;
     this->zerocopy = s.zerocopy;
     this->connreset = s.connreset;
+    this->nonblocking = s.nonblocking;
     
     s.fd = -1;
-    s.zerocopy = false;
-    s.connreset = false;
     return *this;
 }
 

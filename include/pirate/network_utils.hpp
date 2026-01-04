@@ -40,8 +40,9 @@ namespace pirate {
 struct Socket
 {
     int fd = -1;
-    bool zerocopy = false;   // set by set_zerocopy(), supplies MSG_ZEROCOPY on future calls to send().
-    bool connreset = false;  // set by send() if 
+    bool zerocopy = false;     // set by set_zerocopy(), supplies MSG_ZEROCOPY on future calls to send().
+    bool connreset = false;    // set by send() if receiver closes connection, see below.
+    bool nonblocking = false;  // set by set_nonblocking(), modifies behavior of read(), send().
 
     // For TCP, use (domain,type) = (PF_INET,SOCK_STREAM). See "cheat sheet" above.
     Socket(int domain, int type, int protocol=0);
@@ -60,6 +61,7 @@ struct Socket
     // If receiver closes connection, then send() returns zero and sets Socket::connreset = true.
     // If send() is called subsequently (with Socket::connreset == true), then an exception is thrown.
     // This provides a mechanism for the sender to detect a closed connection.
+    // Note: send() also returns zero if socket is nonblocking, and is full (e.g. peer reading too slowly).
     long send(const void *buf, long count, int flags=0);
 
     // FIXME in current API, sender's IP address is thrown away!
