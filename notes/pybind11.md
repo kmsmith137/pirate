@@ -41,6 +41,8 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 
 - Don't use lambda-functions in cases where a named function (or constructor) would be equivalent.
 
+- Some C++ classes have protected constructors and a public static method `shared_ptr<X> X::create(...)`. In such cases, the python syntax should be `x = X(...)`, not `x = X.create(...)`.
+
 ## Specific argument types
 
 - The rules below usually require method injections to implement. They apply to both constructors and non-constructor methods.

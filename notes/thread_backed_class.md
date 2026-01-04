@@ -18,6 +18,8 @@ A pattern for a class `X`:
 
 - `~X()` calls `stop()` before joining the worker thread, to force the worker thread to exit.
 
+- `X` is noncopyable, nonmoveable, and always accessed through a shared_ptr.
+
 - In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X:allocate()`.
 
 - If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop()` should call `ptr->stop()` for each such pointer.

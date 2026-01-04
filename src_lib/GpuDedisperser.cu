@@ -41,6 +41,13 @@ static inline vector<T> svcat(const T &s, const vector<T> &v)
 }
 
 
+// Static factory function.
+std::shared_ptr<GpuDedisperser> GpuDedisperser::create(const GpuDedisperser::Params &params)
+{
+    return std::shared_ptr<GpuDedisperser>(new GpuDedisperser(params));
+}
+
+
 GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     params(params_)
 {
@@ -1016,7 +1023,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         params.nbatches_wt = nbatches_out;
         params.detect_deadlocks = true;
 
-        gdd = make_shared<GpuDedisperser> (params);
+        gdd = GpuDedisperser::create(params);
         BumpAllocator gpu_allocator(af_gpu | af_zero, -1);     // dummy allocator
         BumpAllocator host_allocator(af_rhost | af_zero, -1);  // dummy allocator
         gdd->allocate(gpu_allocator, host_allocator);
@@ -1281,7 +1288,7 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
     params.plan = make_shared<DedispersionPlan> (config);
     params.stream_pool = CudaStreamPool::create(S);
     params.detect_deadlocks = true;
-    shared_ptr<GpuDedisperser> gdd = make_shared<GpuDedisperser> (params);
+    shared_ptr<GpuDedisperser> gdd = GpuDedisperser::create(params);
 
     ResourceTracker rt = gdd->resource_tracker;  // copy
     rt += dequantization_kernel.resource_tracker;

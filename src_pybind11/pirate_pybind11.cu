@@ -111,8 +111,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readwrite("detect_deadlocks", &GpuDedisperser::Params::detect_deadlocks)
     ;
 
-    py::class_<GpuDedisperser>(m, "GpuDedisperser")
-          .def(py::init<const GpuDedisperser::Params &>(), py::arg("params"))
+    py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
+          .def(py::init([](const GpuDedisperser::Params &params) {
+              return GpuDedisperser::create(params);
+          }), py::arg("params"))
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,

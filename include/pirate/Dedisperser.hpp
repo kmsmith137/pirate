@@ -65,7 +65,14 @@ struct GpuDedisperser
         bool detect_deadlocks = true;
     };
 
-    GpuDedisperser(const Params &params);
+    // Factory function to create GpuDedisperser (preferred over direct construction).
+    static std::shared_ptr<GpuDedisperser> create(const Params &params);
+    
+    // Noncopyable and nonmoveable
+    GpuDedisperser(const GpuDedisperser&) = delete;
+    GpuDedisperser& operator=(const GpuDedisperser&) = delete;
+    GpuDedisperser(GpuDedisperser&&) = delete;
+    GpuDedisperser& operator=(GpuDedisperser&&) = delete;
     
     Params params;
 
@@ -126,6 +133,12 @@ struct GpuDedisperser
     static void time_one(const DedispersionConfig &config, long niterations, bool use_hugepages);
     
     // --------------------------  Public members  --------------------------
+
+protected:
+    // Constructor is protected - use create() factory function instead.
+    GpuDedisperser(const Params &params);
+
+public:
 
     // "inner" array shape (nstreams, beams_per_batch, nfreq, ntime).
     ksgpu::Array<void> input_arrays;       // config.dtype
