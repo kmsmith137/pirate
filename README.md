@@ -67,4 +67,7 @@ or C++ builds with `make`. Here's what I recommend:
 If you're contributing to the server code (hi Dustin), some initial thoughts
 are in `notes/server.md`.
 
+There are some sphinx docs in `docs/` but you should ignore them for now.
+They're just placeholders while I play with sphinx, and are not useful yet.
+
 Contact: Kendrick Smith <kmsmith@perimeterinstitute.ca>
