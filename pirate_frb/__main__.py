@@ -11,12 +11,11 @@ from . import pirate_pybind11
 from . import casm
 from . import kernels
 from . import loose_ends
+from . import core
 
 from . import (
-    CudaStreamPool,
     DedispersionConfig,
     DedispersionPlan,
-    FrequencySubbands,
     GpuDedisperser,
     GpuDedisperserParams,
 )
@@ -284,7 +283,7 @@ def make_subbands(args):
     assert args.fmin < args.fmax
     assert args.threshold <= 10.0
     
-    fs = FrequencySubbands.from_threshold(args.fmin, args.fmax, args.threshold, args.pf_rank)
+    fs = core.FrequencySubbands.from_threshold(args.fmin, args.fmax, args.threshold, args.pf_rank)
     print(fs.show())
 
 
@@ -557,7 +556,7 @@ def show_dedisperser(args):
         # Add a dequantizer and raw-data h2g copy, to give a more realistic accounting of cost.
         params = GpuDedisperserParams()
         params.plan = plan
-        params.stream_pool = CudaStreamPool.create(plan.num_active_batches)
+        params.stream_pool = core.CudaStreamPool.create(plan.num_active_batches)
         dedisperser = GpuDedisperser(params)
         rt = dedisperser.resource_tracker.clone()
         rt.add_kernel('dequantizer', (nin * (nbits+4)) // 8)
@@ -650,7 +649,7 @@ def random_kernels(args):
                     Dout *= 2
             
             Wmax = 2**randi(5)
-            subband_counts = FrequencySubbands.make_random_subband_counts()
+            subband_counts = core.FrequencySubbands.make_random_subband_counts()
             print(f"('fp{nbits}', {list(subband_counts)}, {Wmax}, {Dcore}, {Dout}, {Tinner})")
 
     if args.cdd2:
@@ -658,7 +657,7 @@ def random_kernels(args):
 
         for _ in range(args.n):
             nbits = 32 // randi(1,3)
-            subband_counts = FrequencySubbands.make_random_subband_counts()
+            subband_counts = core.FrequencySubbands.make_random_subband_counts()
             Wmax = 2**randi(5)
             Dcore = 32 // nbits
             Dout = Dcore
@@ -697,7 +696,7 @@ def random_kernels(args):
             Tinner_log = randi(6)
             Dcore_log = randi(6-Tinner_log) + (32//nbits) - 1
             P = randi(1,15)
-            subband_counts = FrequencySubbands.make_random_subband_counts()
+            subband_counts = core.FrequencySubbands.make_random_subband_counts()
             print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 

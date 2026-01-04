@@ -22,7 +22,7 @@ These are the primary classes for configuring and running dedispersion.
 ## DedispersionTree
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.DedispersionTree
+.. autoclass:: pirate_frb.core.DedispersionTree
    :members:
    :show-inheritance:
 ```
@@ -30,7 +30,7 @@ These are the primary classes for configuring and running dedispersion.
 ## FrequencySubbands
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.FrequencySubbands
+.. autoclass:: pirate_frb.core.FrequencySubbands
    :members:
    :show-inheritance:
 ```
@@ -54,7 +54,7 @@ These are the primary classes for configuring and running dedispersion.
 ## PeakFindingConfig
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.PeakFindingConfig
+.. autoclass:: pirate_frb.core.PeakFindingConfig
    :members:
    :show-inheritance:
 ```
@@ -62,7 +62,7 @@ These are the primary classes for configuring and running dedispersion.
 ## EarlyTrigger
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.EarlyTrigger
+.. autoclass:: pirate_frb.core.EarlyTrigger
    :members:
    :show-inheritance:
 ```
@@ -70,7 +70,7 @@ These are the primary classes for configuring and running dedispersion.
 ## CudaStreamPool
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.CudaStreamPool
+.. autoclass:: pirate_frb.core.CudaStreamPool
    :members:
    :show-inheritance:
 ```
@@ -78,7 +78,7 @@ These are the primary classes for configuring and running dedispersion.
 ## BumpAllocator
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.BumpAllocator
+.. autoclass:: pirate_frb.core.BumpAllocator
    :members:
    :show-inheritance:
 ```
@@ -86,7 +86,7 @@ These are the primary classes for configuring and running dedispersion.
 ## ResourceTracker
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.ResourceTracker
+.. autoclass:: pirate_frb.core.ResourceTracker
    :members:
    :show-inheritance:
 ```

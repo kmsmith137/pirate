@@ -9,21 +9,15 @@ from . import pybind11_injections  # noqa: F401
 from . import casm
 from . import kernels
 from . import loose_ends
+from . import core
 
 from .FakeCorrelator import FakeCorrelator
 from .FakeServer import FakeServer
 from .Hardware import Hardware
 
 from .pirate_pybind11 import (
-    BumpAllocator,
-    CudaStreamPool,
     DedispersionConfig,
     DedispersionPlan,
-    DedispersionTree,
-    EarlyTrigger,
-    FrequencySubbands,
     GpuDedisperser,
     GpuDedisperserParams,
-    PeakFindingConfig,
-    ResourceTracker
 )
