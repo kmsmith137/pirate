@@ -11,6 +11,7 @@
 
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
+#include "../include/pirate/SlabAllocator.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"  // for PeakFindingConfig, EarlyTrigger
 #include "../include/pirate/DedispersionTree.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
@@ -53,6 +54,42 @@ void register_core_bindings(pybind11::module &m)
             },
             py::arg("dtype"), py::arg("shape"),
             "Internal: allocate array with dtype and shape (use allocate_array() instead)")
+    ;
+
+    // SlabAllocator: Thread-safe pool allocator for fixed-size slabs
+    // Note: Python injections in pirate_frb/pybind11_injections.py handle aflags conversion.
+    // Note: get_slab() returns shared_ptr<void>, which is not wrapped (per pybind11 guidelines).
+    py::class_<SlabAllocator, std::shared_ptr<SlabAllocator>>(m, "SlabAllocator",
+        "Thread-safe pool allocator for fixed-size memory slabs.\n\n"
+        "Pre-allocates a large memory region subdivided into fixed-size slabs.\n"
+        "Slabs are returned to the pool when their reference count drops to zero.\n\n"
+        "Modes:\n"
+        "  - capacity >= 0: Pre-allocates base region, slabs share this memory\n"
+        "  - capacity < 0: Dummy mode, each get_slab() allocates fresh memory")
+        .def(py::init<int, long>(),
+            py::arg("aflags"), py::arg("capacity"),
+            "Create allocator with new memory.\n\n"
+            "Args:\n"
+            "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
+            "    capacity: Bytes to pre-allocate (>= 0) or < 0 for dummy mode")
+        .def(py::init<BumpAllocator &, long>(),
+            py::arg("bump_allocator"), py::arg("nbytes"),
+            "Create allocator using memory from a BumpAllocator.\n\n"
+            "Args:\n"
+            "    bump_allocator: Source of memory (must not be in dummy mode)\n"
+            "    nbytes: Bytes to allocate from the BumpAllocator")
+        .def("num_free_slabs", &SlabAllocator::num_free_slabs,
+            "Number of slabs currently available. Throws in dummy mode.")
+        .def("num_total_slabs", &SlabAllocator::num_total_slabs,
+            "Total number of slabs in the pool. Throws in dummy mode.")
+        .def("get_slab_size", &SlabAllocator::get_slab_size,
+            "Established slab size in bytes, or -1 if not yet established.")
+        .def("is_dummy", &SlabAllocator::is_dummy,
+            "True if in dummy mode (capacity < 0).")
+        .def_readonly("aflags", &SlabAllocator::aflags,
+            "Memory allocation flags")
+        .def_readonly("capacity", &SlabAllocator::capacity,
+            "Total capacity in bytes, or < 0 for dummy mode")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.

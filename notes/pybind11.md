@@ -47,6 +47,9 @@ from ..pirate_pybind11 import CasmBeamformer
 Note that each pybind11 class will appear with two names -- for example `pirate_frb.pirate_pybind11.CasmBeamformer`
 is the same as `pirate_frb.casm.CasmBeamformer`. In python code, always use the latter "non-pybind11" name if possible.
 
+If you are asked to python-bind a new class, please make sure that it is also imported into a python subpackage,
+and documented (with `autoclass`) in the sphinx docs.
+
 ## General notes
 
 - Please write docstrings in the pybind11 code, but keep them concise and avoid superficial comments. If the meaning of a member/method is self-evident, then don't write a docstring.

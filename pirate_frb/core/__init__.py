@@ -7,5 +7,6 @@ from ..pirate_pybind11 import (
     FrequencySubbands,
     PeakFindingConfig,
     ResourceTracker,
+    SlabAllocator,
 )
 
