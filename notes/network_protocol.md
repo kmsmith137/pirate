@@ -20,8 +20,6 @@ The network protocol for each of these connections is as follows:
   beams sent to the FRB search node, and `nfreq = len(freq_channels)` is the (sender-dependent) number of frequency 
   channels sent by the X-engine node.
 
-- Next 4 bytes are `0xf4bf4b01` again.
-
 - Next, a sequence of shape `(nbeams, nfreq, 256)` int4 arrays is sent.
   Each such array represents 256 time samples of intensity data.
   The value (-8) indicates "this sample is masked". 

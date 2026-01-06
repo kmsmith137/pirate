@@ -8,6 +8,7 @@
 #
 # This is a minimal "version 0", and will be extended later.
 
+version: 1
 
 # Frequency channels. The observed frequency band is divided into "zones".
 # Within each zone, all frequency channels have the same width, but the
@@ -31,7 +32,7 @@ zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 # Only makes sense in "context 1" (see above), to indicate which frequency channels
 # are sent by a particular X-engine node.
 
-freq_channels = [ 0, 10000, 20000, 28159 ]
+freq_channels: [ 0, 10000, 20000, 28159 ]
 
 # Number of beams, and their "beam ids" (opaque integer identifiers).
 # If beam_ids is absent, it defaults to [ 0, 1, ..., (nbeams-1) ].
@@ -39,8 +40,8 @@ freq_channels = [ 0, 10000, 20000, 28159 ]
 # I didn't specify anything concrete, since I didn't know what would be the best match
 # for existing X-engine code.
 
-nbeams = 3
-beam_ids = [ 100, 200, 300 ]
+nbeams: 3
+beam_ids: [ 100, 200, 300 ]
 
 # Future versions of this file format will include more timestamp info (e.g. start time,
 # initial FPGA count, conversion between time and FPGA counts). I didn't specify anything

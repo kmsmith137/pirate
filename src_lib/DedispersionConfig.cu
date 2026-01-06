@@ -467,7 +467,8 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         ss << "  zone_freq_edges: frequency band edges in MHz.\n";
         ss << "For example:\n";
         ss << "  zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz\n";
-        ss << "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band";
+        ss << "  zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band\n";
+        ss << "\n";
         ss << "In this config, we have:\n";
         ss << "  Total frequency channels: " << get_total_nfreq() << "\n";
         ss << "  Channel widths (MHz): [ ";
