@@ -79,7 +79,6 @@ private:
     int num_consumers;
     
     mutable std::mutex lock;
-    std::condition_variable cv;
     
     // Per-consumer state
     std::vector<bool> is_initialized;      // has consumer called initialize()?

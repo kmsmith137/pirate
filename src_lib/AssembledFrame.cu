@@ -19,14 +19,8 @@ namespace pirate {
 AssembledFrameAllocator::AssembledFrameAllocator(const std::shared_ptr<SlabAllocator> &slab_allocator_, int num_consumers_)
     : slab_allocator(slab_allocator_), num_consumers(num_consumers_)
 {
-    if (!slab_allocator) {
-        throw std::runtime_error("AssembledFrameAllocator: slab_allocator is null");
-    }
-    if (num_consumers <= 0) {
-        std::stringstream ss;
-        ss << "AssembledFrameAllocator: num_consumers=" << num_consumers << " must be positive";
-        throw std::runtime_error(ss.str());
-    }
+    xassert(slab_allocator);
+    xassert_gt(num_consumers, 0);
     
     is_initialized.resize(num_consumers, false);
     consumer_next_index.resize(num_consumers, 0);
@@ -40,28 +34,11 @@ AssembledFrameAllocator::AssembledFrameAllocator(const std::shared_ptr<SlabAlloc
 
 void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const std::vector<int> &beam_ids_)
 {
-    // Validate consumer_id
-    if ((consumer_id < 0) || (consumer_id >= num_consumers)) {
-        std::stringstream ss;
-        ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
-           << " is out of range [0, " << num_consumers << ")";
-        throw std::runtime_error(ss.str());
-    }
-    
-    // Validate arguments
-    if (nfreq_ <= 0) {
-        std::stringstream ss;
-        ss << "AssembledFrameAllocator::initialize(): nfreq=" << nfreq_ << " must be positive";
-        throw std::runtime_error(ss.str());
-    }
-    if (time_samples_per_chunk_ <= 0) {
-        std::stringstream ss;
-        ss << "AssembledFrameAllocator::initialize(): time_samples_per_chunk=" << time_samples_per_chunk_ << " must be positive";
-        throw std::runtime_error(ss.str());
-    }
-    if (beam_ids_.empty()) {
-        throw std::runtime_error("AssembledFrameAllocator::initialize(): beam_ids must be non-empty");
-    }
+    xassert_ge(consumer_id, 0);
+    xassert_lt(consumer_id, num_consumers);
+    xassert_gt(nfreq_, 0L);
+    xassert_gt(time_samples_per_chunk_, 0L);
+    xassert(!beam_ids_.empty());
     
     std::unique_lock<std::mutex> guard(lock);
     
@@ -155,13 +132,8 @@ std::shared_ptr<AssembledFrame> AssembledFrameAllocator::create_frame(long seq_i
 
 std::shared_ptr<AssembledFrame> AssembledFrameAllocator::get_frame(int consumer_id)
 {
-    // Validate consumer_id
-    if ((consumer_id < 0) || (consumer_id >= num_consumers)) {
-        std::stringstream ss;
-        ss << "AssembledFrameAllocator::get_frame(): consumer_id=" << consumer_id
-           << " is out of range [0, " << num_consumers << ")";
-        throw std::runtime_error(ss.str());
-    }
+    xassert_ge(consumer_id, 0);
+    xassert_lt(consumer_id, num_consumers);
     
     std::unique_lock<std::mutex> guard(lock);
     
