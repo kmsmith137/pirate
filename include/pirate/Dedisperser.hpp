@@ -111,7 +111,7 @@ struct GpuDedisperser
 
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
-    ksgpu::Array<void> acquire_input(long ichunk, long ibatch, cudaStream_t stream);
+    void acquire_input(long ichunk, long ibatch, cudaStream_t stream);
     void release_input(long ichunk, long ibatch, cudaStream_t stream);
 
     void acquire_output(long ichunk, long ibatch, cudaStream_t stream);

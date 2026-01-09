@@ -526,7 +526,7 @@ void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch, cudaStream_t stream)
 // -------------------------------------------------------------------------------------------------
 
 
-Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t stream)
+void GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t stream)
 {
     xassert(ichunk >= 0);
     xassert((ibatch >= 0) && (ibatch < nbatches));
@@ -570,10 +570,6 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
         // kernel was successfully launched by a previous call to release_input().
         long seq_id = ichunk * nbatches + ibatch;
         evrb_tree_gridding->wait(stream, seq_id - nstreams);
-
-        // Return input array.
-        long istream = seq_id % nstreams;
-        return input_arrays.slice(0, istream);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -1215,7 +1211,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                         cudaStream_t compute_stream = gdd->stream_pool->compute_streams.at(istream);
 
                         Array<void> src = dd_in_gpu.slice(0,s);
-                        Array<void> dst = gdd->acquire_input(ichunk_gpu, ibatch_gpu, compute_stream);
+                        gdd->acquire_input(ichunk_gpu, ibatch_gpu, compute_stream);
+                        Array<void> dst = gdd->view_input(ichunk_gpu, ibatch_gpu);
 
                         // Some paranoid asserts.
                         xassert(src.dtype == dst.dtype);
@@ -1413,7 +1410,8 @@ void GpuDedisperser::time_one(const DedispersionConfig &config, long niterations
         // First, wait on the producer (the cpu->gpu copy).
         // First, wait on the consumer (the dedisperser), by calling this->acquire_input().
         evrb_raw.wait(compute_stream, seq_id);
-        Array<void> dd_in = gdd->acquire_input(ichunk, ibatch, compute_stream);
+        gdd->acquire_input(ichunk, ibatch, compute_stream);
+        Array<void> dd_in = gdd->view_input(ichunk, ibatch);
         dequantization_kernel.launch(dd_in, raw_gpu, compute_stream);
         evrb_dq.record(compute_stream, seq_id);
 

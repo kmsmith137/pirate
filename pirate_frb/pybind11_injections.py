@@ -9,6 +9,9 @@ import ksgpu
 from . import pirate_pybind11
 
 
+########################################################################################################
+
+
 @ksgpu.inject_methods(pirate_pybind11.BumpAllocator)
 class BumpAllocatorInjections:
     """Python extensions for BumpAllocator."""
@@ -226,6 +229,7 @@ class GpuDedisperserInjections:
         """Acquire input buffer for writing.
         
         After this call returns, 'stream' sees an empty input buffer ready for writing.
+        Use view_input() to get the input buffer array.
         
         Parameters
         ----------
@@ -235,16 +239,11 @@ class GpuDedisperserInjections:
             Batch index
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
-            
-        Returns
-        -------
-        ksgpu.Array
-            Input buffer array
         """
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        return self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
+        self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
     
     def release_input(self, ichunk, ibatch, stream=None):
         """Release input buffer after writing.
@@ -333,11 +332,54 @@ class GpuDedisperserInjections:
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        arr = self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
+        self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
+        arr = self.view_input(ichunk, ibatch)
         try:
             yield arr
         finally:
             self._cpp_release_input(ichunk, ibatch, stream.ptr)
+    
+    @contextmanager
+    def get_output(self, ichunk, ibatch, stream=None):
+        """Context manager for acquiring and releasing output buffer.
+        
+        Acquires the output buffer on entry and releases it on exit.
+        
+        Parameters
+        ----------
+        ichunk : int
+            Chunk index
+        ibatch : int
+            Batch index
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+            
+        Yields
+        ------
+        tuple (out_max, out_argmax)
+            out_max : list of ksgpu.Array
+                Peak-finding maximum values, one array per tree.
+            out_argmax : list of ksgpu.Array
+                Peak-finding argmax tokens, one array per tree.
+            
+        Examples
+        --------
+        >>> g = GpuDedisperser(plan, stream_pool)
+        >>> g.allocate(gpu_alloc, host_alloc)
+        >>> with g.get_output(ichunk=0, ibatch=0) as (out_max, out_argmax):
+        ...     for itree in range(g.ntrees):
+        ...         process_tree(out_max[itree], out_argmax[itree])
+        """
+        import cupy as cp
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
+        out_max = self.view_out_max(ichunk, ibatch)
+        out_argmax = self.view_out_argmax(ichunk, ibatch)
+        try:
+            yield (out_max, out_argmax)
+        finally:
+            self._cpp_release_output(ichunk, ibatch, stream.ptr)
 
 
 @ksgpu.inject_methods(pirate_pybind11.SlabAllocator)

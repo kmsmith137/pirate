@@ -322,7 +322,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def("acquire_input", 
                [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   return self.acquire_input(ichunk, ibatch, stream);
+                   self.acquire_input(ichunk, ibatch, stream);
                },
                py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
           .def("release_input",
