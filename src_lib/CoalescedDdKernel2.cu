@@ -339,12 +339,8 @@ void CoalescedDdKernel2::test_random()
 
     // subband_variances are for make_random_weights()
     Array<float> subband_variances({F}, af_uhost);
-    for (long f = 0; f < F; f++) {
-        long ilo = fs.f_to_ilo.at(f);
-        long ihi = fs.f_to_ihi.at(f);
-        long df = (ihi-ilo) << (dd_params.dd_rank - fs.pf_rank);  // width of frequency band
-        subband_variances.at({f}) = df;
-    }
+    for (long f = 0; f < F; f++)
+        subband_variances.at({f}) = 1.0f;
 
     Array<float> dd_cpu({B,A,D,T}, af_uhost);      // 'dd_out' for ref_dd_kernel
     Array<float> sb_cpu({B,Dout,M,T}, af_uhost);   // 'sb_out' for ref_pf_kernel, input for ref_pf_kernel
@@ -385,7 +381,7 @@ void CoalescedDdKernel2::test_random()
             ref_pf_kernel.eval_tokens(max_x, argmax_x, wt_cpu);
 
             // Then compare to "max_cpu", possibly at reduced precision.
-            double eps = 5.0 * dtype.precision();
+            double eps = 4.0 * dtype.precision() * sqrt(dd_params.dd_rank + 1);
             assert_arrays_equal(max_cpu, max_x, "max_cpu", "max_x", {"b","d","tout"}, eps);
         }
     }

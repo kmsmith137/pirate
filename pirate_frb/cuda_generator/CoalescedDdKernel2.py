@@ -210,8 +210,8 @@ class CoalescedDdKernel2:
                     k.emit(f'// Sum with lag=({lag},{lag+1}): src=({src0},{src1}), dst=({dst0,dst1})')
                     tmp0, tmp1 = self.dd._advance2(k, src0, lag)   # behaves differently for float32, float16
 
-                    k.emit(f'{self.dt32} {dst0} = {tmp1} + {src1};')
-                    k.emit(f'{self.dt32} {dst1} = {tmp0} + {src1};')
+                    k.emit(f'{self.dt32} {dst0} = rsqrt2 * ({tmp1} + {src1});')
+                    k.emit(f'{self.dt32} {dst1} = rsqrt2 * ({tmp0} + {src1});')
 
 
             k.emit()
