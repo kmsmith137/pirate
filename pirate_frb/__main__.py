@@ -618,15 +618,29 @@ def time_dedisperser(args):
     if use_hugepages:
         cpu_aflags += ' | af_mmap_huge'
     
-    # Create GpuDedisperser
+    # Create GpuDedisperser (unallocated, to get resource tracking)
     print(f'Creating GpuDedisperser...')
     stream_pool = core.CudaStreamPool(plan.num_active_batches)
     dedisperser = GpuDedisperser(plan, stream_pool, detect_deadlocks=True)
     
-    # Create allocators and allocate
-    print(f'Allocating...')
-    gpu_allocator = core.BumpAllocator(gpu_aflags, -1)
-    cpu_allocator = core.BumpAllocator(cpu_aflags, -1)
+    # Calculate total memory needed.
+    # Dedisperser memory footprints come from resource tracking.
+    # Raw data arrays have shape (S, B, F, T // 2) with dtype uint8.
+    # BumpAllocator aligns all allocations to 128 bytes, so we add margin for alignment overhead.
+    S = plan.num_active_batches
+    B = plan.beams_per_batch
+    F = plan.nfreq
+    T = plan.nt_in
+    raw_nbytes = S * B * F * (T // 2)  # multi_raw_gpu and multi_raw_cpu
+    alignment_margin = 1024 * 1024  # 1 MB margin for alignment overhead
+    
+    gpu_nbytes = dedisperser.resource_tracker.get_gmem_footprint() + raw_nbytes + alignment_margin
+    cpu_nbytes = dedisperser.resource_tracker.get_hmem_footprint() + raw_nbytes + alignment_margin
+    
+    # Create allocators with pre-computed capacities and allocate
+    print(f'Allocating (gpu={gpu_nbytes/1e9:.3f} GB, cpu={cpu_nbytes/1e9:.3f} GB)...')
+    gpu_allocator = core.BumpAllocator(gpu_aflags, gpu_nbytes)
+    cpu_allocator = core.BumpAllocator(cpu_aflags, cpu_nbytes)
     dedisperser.allocate(gpu_allocator, cpu_allocator)
     
     # Run timing

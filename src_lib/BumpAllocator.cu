@@ -89,7 +89,8 @@ ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, i
     // _array_init_dchecked(..., allocate=false) initializes all Array members 
     // except 'data' and 'base', and returns element count needed for allocation.
     long nalloc = ksgpu::_array_init_dchecked(ret, dtype, ndim, shape, strides, aflags, false);
-    long nbytes = nalloc * (dtype.nbits / 8);
+    // Use ceiling division to handle sub-byte types (e.g., int4)
+    long nbytes = (nalloc * dtype.nbits + 7) / 8;
     
     if (ret.size > 0) {
         if (capacity < 0) {
