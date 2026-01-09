@@ -18,7 +18,7 @@ def integer_log2(n):
 
 
 def postpad_array(arr, new_nt):
-    """Pads last index of array (nt -> new_nt), and returns a new array."""
+    """Pads last index of array (nt -> new_nt), and returns a new array. The last axis is time."""
     
     assert arr.ndim >= 1
     assert new_nt >= arr.shape[-1]
@@ -30,7 +30,10 @@ def postpad_array(arr, new_nt):
 
 
 def lag_array(arr, axis, ix, lag):
-    """Lags an array 'slice' in place. The last axis is time."""
+    """
+    Lags an array 'slice' in place. The last axis is time.
+    Does not keep persistent state -- zeros/discards samples instead.
+    """
 
     assert 0 <= axis < (arr.ndim-1)
     assert 0 <= ix < arr.shape[axis]
@@ -45,7 +48,10 @@ def lag_array(arr, axis, ix, lag):
 
 
 def check_bits(bits):
-    """Checks that 'bits' is a sorted list of powers of two."""
+    """
+    Checks that 'bits' is a sorted list of powers of two.
+    Used in a context where there is an array with one length-2 axis per bit.
+    """
     
     assert all(is_power_of_two(x) for x in bits)
 
@@ -54,7 +60,10 @@ def check_bits(bits):
         
         
 def expand_bit_array(arr, old_bits, new_bits, has_spectator_axis):
-    """Returns a new array. The spectator axis (if present) must be last."""
+    """
+    Returns a new array. The spectator axis (if present) must be last.
+    The old_bits must be a subset of the new_bits.
+    """
 
     check_bits(old_bits)
     check_bits(new_bits)
@@ -226,6 +235,7 @@ class FreqMatrix:
         The FreqMatrix encodes how one frequency channel (corresponding to
         input tree index range [tmin,tmax]) gets "smeared" across multiple time
         samples in the dedispersion output, as a function of trial DM index.
+        Note that the TreeMatrix below will combine many FreqMatrices.
         
         Members:
 
