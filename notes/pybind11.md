@@ -76,6 +76,8 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - If a C++ function returns a bare pointer or `shared_ptr<void>`, then don't python-wrap it unless specifically requested.
 
+- If a C++ member has type `dim3`, then don't python-wrap it unless specifically requested.
+
 - If a C++ function has an argument of type `ostream &`, `YAML::Emitter &`, or `YamlFile &`, then don't python-wrap it unless specifically requested.
 
 - C++ atomics must be converted to non-atomic types before converting to python.

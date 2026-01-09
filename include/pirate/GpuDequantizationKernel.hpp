@@ -35,6 +35,12 @@ struct GpuDequantizationKernel
     // Input: shape (nbeams, nfreq, ntime), dtype int4, fully contiguous, on GPU
     // Output: shape (nbeams, nfreq, ntime), dtype matches this->dtype, fully contiguous, on GPU
     void launch(ksgpu::Array<void> &out, const ksgpu::Array<void> &in, cudaStream_t stream) const;
+
+    // Helper for pybind11 wrappers: validates uint8 input and reinterprets as int4.
+    // Since numpy/cupy don't support int4 dtype (dtypes must be at least 8 bits),
+    // the Python wrappers accept uint8 arrays of shape (nbeams, nfreq, ntime/2),
+    // which this function reinterprets as int4 with shape (nbeams, nfreq, ntime).
+    ksgpu::Array<void> convert_uint8_to_int4(const ksgpu::Array<void> &in_uint8) const;
     
     // Static test function (called via 'python -m pirate_frb test --gdqk')
     static void test_random();

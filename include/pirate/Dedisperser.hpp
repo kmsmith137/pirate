@@ -93,14 +93,16 @@ struct GpuDedisperser
     std::vector<DedispersionTree> trees;   // same as plan->trees
 
     // --------------------------  High-level API ---------------------------
-    //
+
+    void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
+
     // acquire_input): after call, 'stream' sees empty input buffer.
     // release_input(): before call, 'stream' must see full input buffer.
     // acquire_output(): after call, 'stream' sees full output buffer.
     // release_output(): before call, 'stream' must see empty output buffer.
     //
-    // FIXME: I may rethink this API later. (Do I want acquire_weights()?
-    // What should be the return type of acquire_output()?)
+    // Between "acquire" and "release", caller should use "view" methods
+    // (see below) to access the acquired buffers.
     //
     // FIXME: currently there's no explicit API protecting the pf_weights.
     // The caller is responsible for thinking through race conditions involving
@@ -109,16 +111,14 @@ struct GpuDedisperser
     // since my tentative long-term plan is to generate the pf_weights
     // "dynamically" as part of the compute graph.
 
-    void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
-
     void acquire_input(long ichunk, long ibatch, cudaStream_t stream);
     void release_input(long ichunk, long ibatch, cudaStream_t stream);
 
     void acquire_output(long ichunk, long ibatch, cudaStream_t stream);
     void release_output(long ichunk, long ibatch, cudaStream_t stream);
 
-    // View methods: return array slices for acquired buffers.
-    // Throws exception unless (ichunk, ibatch) has been acquired but not released.
+    // "View" methods: return array slices for acquired buffers.
+    // Throw exceptions unless (ichunk, ibatch) has been acquired but not released.
     ksgpu::Array<void> view_input(long ichunk, long ibatch);
     std::vector<ksgpu::Array<void>> view_out_max(long ichunk, long ibatch);
     std::vector<ksgpu::Array<uint>> view_out_argmax(long ichunk, long ibatch);

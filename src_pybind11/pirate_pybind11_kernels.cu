@@ -43,9 +43,74 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
 
-    py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel")
-          .def_static("test_random", &GpuDequantizationKernel::test_random)
-          .def_static("time_selected", &GpuDequantizationKernel::time_selected)
+    py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel",
+        "GPU kernel to convert int4 array to float32 or float16.\n\n"
+        "Input: contiguous array of shape (nbeams, nfreq, ntime), dtype int4.\n"
+        "Output: contiguous array of shape (nbeams, nfreq, ntime), dtype float32 or float16.\n\n"
+        "The int4 values are interpreted as signed two's complement (-8 to +7).\n"
+        "Nibble packing: low nibble = even index, high nibble = odd index.\n\n"
+        "IMPORTANT: Since numpy/cupy don't support int4 dtype (dtypes must be at least 8 bits),\n"
+        "the Python wrappers for apply_reference() and launch() accept a uint8 array of\n"
+        "shape (nbeams, nfreq, ntime//2), which is reinterpreted as int4 with shape\n"
+        "(nbeams, nfreq, ntime). The uint8 array must be fully contiguous.")
+          .def(py::init<Dtype, long, long, long>(),
+               py::arg("dtype"), py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"),
+               "Create a GpuDequantizationKernel.\n\n"
+               "Args:\n"
+               "    dtype: Output dtype (must be float32 or float16)\n"
+               "    nbeams: Number of beams\n"
+               "    nfreq: Number of frequency channels\n"
+               "    ntime: Number of time samples (must be divisible by 256)\n\n"
+               "Raises:\n"
+               "    RuntimeError: If dtype is invalid or ntime is not divisible by 256")
+          .def_readonly("dtype", &GpuDequantizationKernel::dtype,
+               "Output dtype (float32 or float16)")
+          .def_readonly("nbeams", &GpuDequantizationKernel::nbeams,
+               "Number of beams")
+          .def_readonly("nfreq", &GpuDequantizationKernel::nfreq,
+               "Number of frequency channels")
+          .def_readonly("ntime", &GpuDequantizationKernel::ntime,
+               "Number of time samples")
+          .def_readonly("resource_tracker", &GpuDequantizationKernel::resource_tracker,
+               "ResourceTracker for memory/bandwidth accounting")
+          .def("apply_reference",
+               [](const GpuDequantizationKernel &self, Array<float> &out, const Array<void> &in_uint8) {
+                   Array<void> in_int4 = self.convert_uint8_to_int4(in_uint8);
+                   self.apply_reference(out, in_int4);
+               },
+               py::arg("out"), py::arg("in_uint8"),
+               "Reference implementation (CPU, always outputs float32).\n\n"
+               "Args:\n"
+               "    out: Output array, shape (nbeams, nfreq, ntime), dtype float32,\n"
+               "         fully contiguous, on host\n"
+               "    in_uint8: Input array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
+               "              fully contiguous, on host. This is reinterpreted as int4\n"
+               "              with shape (nbeams, nfreq, ntime).\n\n"
+               "Note: The input is passed as uint8 because numpy/cupy don't support int4\n"
+               "(all dtypes must be at least 8 bits). Each uint8 element contains two\n"
+               "int4 values: low nibble = even index, high nibble = odd index.")
+          .def("launch",
+               [](const GpuDequantizationKernel &self, Array<void> &out, const Array<void> &in_uint8, uintptr_t stream_ptr) {
+                   Array<void> in_int4 = self.convert_uint8_to_int4(in_uint8);
+                   cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                   self.launch(out, in_int4, stream);
+               },
+               py::arg("out"), py::arg("in_uint8"), py::arg("stream_ptr"),
+               "GPU kernel launch (async, does not sync stream).\n\n"
+               "Args:\n"
+               "    out: Output array, shape (nbeams, nfreq, ntime), dtype matches\n"
+               "         kernel's dtype (float32 or float16), fully contiguous, on GPU\n"
+               "    in_uint8: Input array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
+               "              fully contiguous, on GPU. This is reinterpreted as int4\n"
+               "              with shape (nbeams, nfreq, ntime).\n"
+               "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)\n\n"
+               "Note: The input is passed as uint8 because numpy/cupy don't support int4\n"
+               "(all dtypes must be at least 8 bits). Each uint8 element contains two\n"
+               "int4 values: low nibble = even index, high nibble = odd index.")
+          .def_static("test_random", &GpuDequantizationKernel::test_random,
+               "Run randomized tests (called via 'python -m pirate_frb test --gdqk')")
+          .def_static("time_selected", &GpuDequantizationKernel::time_selected,
+               "Run timing benchmarks")
     ;
 
     py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")

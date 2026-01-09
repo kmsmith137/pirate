@@ -281,6 +281,39 @@ void GpuDequantizationKernel::launch(Array<void> &out, const Array<void> &in, cu
 
 // -------------------------------------------------------------------------------------------------
 //
+// convert_uint8_to_int4(): helper for pybind11 wrappers
+
+
+Array<void> GpuDequantizationKernel::convert_uint8_to_int4(const Array<void> &in_uint8) const
+{
+    Dtype dtype_uint8(df_uint, 8);
+    xassert_eq(in_uint8.dtype, dtype_uint8);
+    xassert_shape_eq(in_uint8, ({nbeams, nfreq, ntime/2}));
+    xassert(in_uint8.is_fully_contiguous());
+    
+    // Reinterpret uint8 (nbeams, nfreq, ntime/2) as int4 (nbeams, nfreq, ntime)
+    Dtype dtype_int4(df_int, 4);
+    Array<void> in_int4;
+    in_int4.data = in_uint8.data;
+    in_int4.ndim = 3;
+    in_int4.shape[0] = nbeams;
+    in_int4.shape[1] = nfreq;
+    in_int4.shape[2] = ntime;
+    in_int4.size = nbeams * nfreq * ntime;
+    in_int4.strides[0] = nfreq * ntime;
+    in_int4.strides[1] = ntime;
+    in_int4.strides[2] = 1;
+    in_int4.dtype = dtype_int4;
+    in_int4.aflags = in_uint8.aflags;
+    in_int4.base = in_uint8.base;
+    in_int4.check_invariants("GpuDequantizationKernel::convert_uint8_to_int4");
+    
+    return in_int4;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // test(): static member function for unit testing
 
 
