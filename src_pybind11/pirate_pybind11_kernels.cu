@@ -43,6 +43,9 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("show_registry", &GpuDedispersionKernel::show_registry)
     ;
 
+    // GpuDequantizationKernel: Python injections in pybind11_injections.py:
+    //   - __init__: converts dtype argument via ksgpu.Dtype()
+    //   - launch: converts stream=None to current cupy stream
     py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel",
         "GPU kernel to convert int4 array to float32 or float16.\n\n"
         "Input: contiguous array of shape (nbeams, nfreq, ntime), dtype int4.\n"

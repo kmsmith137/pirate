@@ -430,6 +430,63 @@ class SlabAllocatorInjections:
             self._cpp_init(aflags, nbytes)
 
 
+@ksgpu.inject_methods(pirate_pybind11.GpuDequantizationKernel)
+class GpuDequantizationKernelInjections:
+    """Python extensions for GpuDequantizationKernel.
+    
+    Adds dtype conversion for constructor and stream argument support for launch.
+    """
+    
+    # Save references to C++ methods
+    _cpp_init = pirate_pybind11.GpuDequantizationKernel.__init__
+    _cpp_launch = pirate_pybind11.GpuDequantizationKernel.launch
+    
+    def __init__(self, dtype, nbeams, nfreq, ntime):
+        """Create a GpuDequantizationKernel.
+        
+        Parameters
+        ----------
+        dtype : str, numpy.dtype, cupy.dtype, or ksgpu.Dtype
+            Output dtype (must be float32 or float16)
+        nbeams : int
+            Number of beams
+        nfreq : int
+            Number of frequency channels
+        ntime : int
+            Number of time samples (must be divisible by 256)
+        """
+        dtype = ksgpu.Dtype(dtype)
+        self._cpp_init(dtype, nbeams, nfreq, ntime)
+    
+    def launch(self, out, in_uint8, stream=None):
+        """GPU kernel launch (async, does not sync stream).
+        
+        Parameters
+        ----------
+        out : ksgpu.Array
+            Output array, shape (nbeams, nfreq, ntime), dtype matches
+            kernel's dtype (float32 or float16), fully contiguous, on GPU
+        in_uint8 : ksgpu.Array
+            Input array, shape (nbeams, nfreq, ntime//2), dtype uint8,
+            fully contiguous, on GPU. This is reinterpreted as int4
+            with shape (nbeams, nfreq, ntime).
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+        
+        Note
+        ----
+        The input is passed as uint8 because numpy/cupy don't support int4
+        (all dtypes must be at least 8 bits). Each uint8 element contains two
+        int4 values: low nibble = even index, high nibble = odd index.
+        """
+        import cupy as cp
+        
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        
+        self._cpp_launch(out, in_uint8, stream.ptr)
+
+
 @ksgpu.inject_methods(pirate_pybind11.DedispersionConfig)
 class DedispersionConfigInjections:
     """Python extensions for DedispersionConfig.

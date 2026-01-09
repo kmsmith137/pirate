@@ -131,7 +131,7 @@ def time_dedisperser(config_file: str, niterations: int):
         # Copy raw data from CPU to GPU.
         raw_gpu.set(raw_cpu, stream = h2g_stream)
         
-        # Synchronize here for timing measure,emt.
+        # Synchronize here for timing measurement.
         compute_stream.synchronize()
         timestamps.append(time.perf_counter())
 
@@ -145,7 +145,7 @@ def time_dedisperser(config_file: str, niterations: int):
         with gdd.get_input(ichunk, ibatch, stream = compute_stream) as dd_in:
             # The kernel expects uint8 input which it interprets as int4.
             # Note: launch() takes a raw stream pointer (int), not a CudaStreamWrapper.
-            dequantization_kernel.launch(dd_in, raw_gpu, compute_stream.ptr)
+            dequantization_kernel.launch(dd_in, raw_gpu, compute_stream)
             # Note that exiting the context manager triggers all the dedispersion kernels.
         
         # Acquire and release output (we're throwing away the output for timing purposes)

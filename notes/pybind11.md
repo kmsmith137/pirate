@@ -82,6 +82,6 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - C++ atomics must be converted to non-atomic types before converting to python.
 
-- If a C++ function has a `cudaStream_t` argument, it should appear in python as `stream=None`, and default to the current cupy stream.
+- If a C++ function has a `cudaStream_t` argument, it should appear in python as `stream=None`, where `stream` is a `cupy.cuda.stream`, and the default is the current cupy stream.
 
 - If a C++ function returns a `ksgpu::CudaStreamWrapper`, then the pybind11 binding will return type `ksgpu_pybind11._CudaStreamWrapperBase`. It should appear to a python caller as returning type `ksgpu.CudaStreamWrapper` instead. Define a python wrapper which does the conversion. (This is a one-liner: the `ksgpu.CudaStreamWrapper` constructor takes a `_CudaStreamWrapperBase` argument. See `ksgpu/ksgpu/CudaStreamWrapper.py` for more context.)
