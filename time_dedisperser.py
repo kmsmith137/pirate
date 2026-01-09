@@ -8,11 +8,6 @@ This script times the GpuDedisperser using Python/cupy, demonstrating how to:
   - Use acquire_input/release_input/acquire_output/release_output with cupy streams
   - Run and time the dedispersion pipeline
 
-NOTE: This simplified implementation uses a single (default) cupy stream and
-synchronizes after each iteration. The C++ time_one() uses multiple overlapping
-streams with CudaEventRingbuf for higher throughput. As a result, this Python
-version is ~20-25% slower than the C++ version.
-
 Usage:
     python time_dedisperser.py [config_file] [-n niterations]
 
@@ -63,7 +58,7 @@ def time_dedisperser(config_file: str, niterations: int):
     
     # Extract key parameters
     dtype = config.dtype
-    B = config.beams_per_batch        # beams per batch
+    B = config.beams_per_batch         # beams per batch
     F = config.get_total_nfreq()       # total frequency channels
     T = config.time_samples_per_chunk  # time samples per chunk
     S = config.num_active_batches      # number of streams/active batches
@@ -104,19 +99,12 @@ def time_dedisperser(config_file: str, niterations: int):
     
     # Create raw data arrays
     # int4 is represented as uint8 with half the elements (two int4 values per uint8 byte)
-    # Shape is (B, F, T//2) for uint8 representation
-    raw_shape = (B, F, T // 2)
-    
-    # Host array (numpy) - for simplicity we use regular numpy array
-    # (In production, pinned memory would be faster for async transfers)
-    raw_cpu_np = np.zeros(raw_shape, dtype=np.uint8)
-    
-    # GPU array (cupy)
-    raw_gpu = cp.zeros(raw_shape, dtype=cp.uint8)
-    
-    # Get the default cupy stream
-    stream = cp.cuda.get_current_stream()
-    stream_ptr = stream.ptr
+    # Shape is (S, B, F, T//2) for uint8 representation.
+    # Note that host_allocator returns pinned memory.
+
+    multi_raw_shape = (S, B, F, T // 2)
+    multi_raw_cpu = host_allocator.allocate_array(np.uint8, multi_raw_shape)
+    multi_raw_gpu = gpu_allocator.allocate_array(cp.uint8, multi_raw_shape)
     
     # Timing loop
     print(f"Running {niterations} iterations...")
@@ -126,34 +114,43 @@ def time_dedisperser(config_file: str, niterations: int):
     cp.cuda.Device().synchronize()
     
     timestamps = [time.perf_counter()]
+    event = cp.cuda.Event(disable_timing=True)
     
     for iteration in range(niterations):
         # Compute chunk/batch indices
         ichunk = iteration // gdd.nbatches
         ibatch = iteration % gdd.nbatches
+        istream = iteration % S
+
+        # Setup for current iteration.
+        h2g_stream = stream_pool.high_priority_h2g_stream
+        compute_stream = stream_pool.compute_streams[istream]
+        raw_cpu = multi_raw_cpu[istream]
+        raw_gpu = multi_raw_gpu[istream]
+
+        # Copy raw data from CPU to GPU.
+        raw_gpu.set(raw_cpu, stream = h2g_stream)
         
-        # Copy raw data from CPU to GPU (async on default stream)
-        # Using cupy's async copy via set() with pinned memory
-        raw_gpu.set(raw_cpu_np)
-        
-        # Acquire input buffer, run dequantization, release input
-        gdd.acquire_input(ichunk, ibatch, stream)
-        dd_in = gdd.view_input(ichunk, ibatch)
-        
-        # Launch dequantization kernel
-        # The kernel expects uint8 input which it interprets as int4
-        dequantization_kernel.launch(dd_in, raw_gpu, stream_ptr)
-        
-        # Release input - this triggers all the dedispersion kernels
-        gdd.release_input(ichunk, ibatch, stream)
+        # Synchronize here for timing measure,emt.
+        compute_stream.synchronize()
+        timestamps.append(time.perf_counter())
+
+        # Next step is dequantization kernel.
+        # Before launching, need to wait on producer (host->gpu copy) using a cuda event.
+        # Need to wait on consumer (dedisperser) using the with-statement below.
+
+        event.record(h2g_stream)
+        compute_stream.wait_event(event)
+
+        with gdd.get_input(ichunk, ibatch, stream = compute_stream) as dd_in:
+            # The kernel expects uint8 input which it interprets as int4.
+            # Note: launch() takes a raw stream pointer (int), not a CudaStreamWrapper.
+            dequantization_kernel.launch(dd_in, raw_gpu, compute_stream.ptr)
+            # Note that exiting the context manager triggers all the dedispersion kernels.
         
         # Acquire and release output (we're throwing away the output for timing purposes)
-        gdd.acquire_output(ichunk, ibatch, stream)
-        gdd.release_output(ichunk, ibatch, stream)
-        
-        # Synchronize for timing measurement
-        stream.synchronize()
-        timestamps.append(time.perf_counter())
+        gdd.acquire_output(ichunk, ibatch, compute_stream)
+        gdd.release_output(ichunk, ibatch, compute_stream)
         
         # Calculate and print timing after warmup
         # Use the same averaging logic as C++ KernelTimer
