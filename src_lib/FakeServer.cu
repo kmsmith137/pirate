@@ -265,7 +265,7 @@ static void worker_thread_main(shared_ptr<FakeServer::Worker> worker)
     
     try {
         // No-ops if 'vcpu_list' is empty.
-        pin_thread_to_vcpus(worker->vcpu_list);
+        set_thread_affinity(worker->vcpu_list);
         
         // Reminder: worker threads wait at the barrier twice.
         //  - After returning from worker_initialize(), before calling worker_accept_connections()

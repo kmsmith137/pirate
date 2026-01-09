@@ -16,6 +16,7 @@
 #include "../include/pirate/DedispersionTree.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/ResourceTracker.hpp"
+#include "../include/pirate/system_utils.hpp"  // set_thread_affinity, get_thread_affinity
 
 using namespace std;
 using namespace ksgpu;
@@ -317,6 +318,20 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("dm_max", &DedispersionTree::dm_max)
           .def_readonly("trigger_frequency", &DedispersionTree::trigger_frequency)
     ;
+
+    // Thread affinity functions
+    m.def("set_thread_affinity", &set_thread_affinity,
+          py::arg("vcpu_list"),
+          "Set the calling thread's CPU affinity to the specified vCPUs.\n\n"
+          "Args:\n"
+          "    vcpu_list: List of vCPU indices. If empty, this is a no-op.\n\n"
+          "Raises:\n"
+          "    RuntimeError: If a vCPU index is out of range or the system call fails.");
+
+    m.def("get_thread_affinity", &get_thread_affinity,
+          "Get the calling thread's CPU affinity mask.\n\n"
+          "Returns:\n"
+          "    List of vCPU indices that the thread is allowed to run on.");
 }
 
 }  // namespace pirate

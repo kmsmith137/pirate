@@ -20,7 +20,7 @@ extern void sys_usleep(long usec);
 
 // -------------------------------------------------------------------------------------------------
 //
-// pin_thread_to_vcpus(vcpu_list)
+// set_thread_affinity(vcpu_list)
 //
 // The 'vcpu_list' argument is a list of integer vCPUs, where I'm defining a vCPU
 // to be the scheduling unit in pthread_setaffinity_np() or sched_setaffinity().
@@ -32,9 +32,16 @@ extern void sys_usleep(long usec);
 // I think that the number of vCPUs and their location in the NUMA hierarchy
 // always follows the output of 'lscpu -ae', but AFAIK this isn't stated anywhere.
 //
-// If 'vcpu_list' is an empty vector, then pin_thread_to_vcpus() is a no-op.
+// If 'vcpu_list' is an empty vector, then set_thread_affinity() is a no-op.
 
-extern void pin_thread_to_vcpus(const std::vector<int> &vcpu_list);
+extern void set_thread_affinity(const std::vector<int> &vcpu_list);
+
+// get_thread_affinity()
+//
+// Returns the current thread's CPU affinity mask as a vector of vCPU indices.
+// An empty vector means the thread can run on any CPU.
+
+extern std::vector<int> get_thread_affinity();
 
 
 } // namespace pirate

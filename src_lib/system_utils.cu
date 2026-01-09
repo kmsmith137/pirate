@@ -54,7 +54,7 @@ void sys_usleep(long usec)
 
 // -------------------------------------------------------------------------------------------------
 //
-// pin_thread_to_vcpus(vcpu_list)
+// set_thread_affinity(vcpu_list)
 //
 // The 'vcpu_list' argument is a list of integer vCPUs, where I'm defining a vCPU
 // to be the scheduling unit in pthread_setaffinity_np() or sched_setaffinity().
@@ -66,10 +66,10 @@ void sys_usleep(long usec)
 // I think that the number of vCPUs and their location in the NUMA hierarchy
 // always follows the output of 'lscpu -ae', but AFAIK this isn't stated anywhere.
 //
-// If 'vcpu_list' is an empty vector, then pin_thread_to_vcpus() is a no-op.
+// If 'vcpu_list' is an empty vector, then set_thread_affinity() is a no-op.
 
 
-void pin_thread_to_vcpus(const vector<int> &vcpu_list)
+void set_thread_affinity(const vector<int> &vcpu_list)
 {
     if (vcpu_list.size() == 0)
         return;
@@ -92,7 +92,7 @@ void pin_thread_to_vcpus(const vector<int> &vcpu_list)
     for (int vcpu: vcpu_list) {
         if ((vcpu < 0) || (vcpu >= num_vcpus)) {
             stringstream ss;
-            ss << "pirate::pin_thread_to_vcpus(): vcpu=" << vcpu
+            ss << "pirate::set_thread_affinity(): vcpu=" << vcpu
                << " is out of range (num_vcpus=" << num_vcpus <<  to_string(num_vcpus) + ")";
             throw runtime_error(ss.str());
         }
@@ -107,6 +107,32 @@ void pin_thread_to_vcpus(const vector<int> &vcpu_list)
         // it returns an error code, rather than setting 'errno'.
         throw runtime_error(string("pthread_setaffinity_np(): ") + strerror(err));
     }
+}
+
+
+vector<int> get_thread_affinity()
+{
+    int num_vcpus = std::thread::hardware_concurrency();
+    
+    cpu_set_t cs;
+    CPU_ZERO(&cs);
+
+    // Note: pthread_self() always succeeds, no need to check its return value.
+    int err = pthread_getaffinity_np(pthread_self(), sizeof(cs), &cs);
+
+    if (err != 0) {
+        // If pthread_getaffinity_np() fails, then according to its manpage,
+        // it returns an error code, rather than setting 'errno'.
+        throw runtime_error(string("pthread_getaffinity_np(): ") + strerror(err));
+    }
+
+    vector<int> ret;
+    for (int i = 0; i < num_vcpus; i++) {
+        if (CPU_ISSET(i, &cs))
+            ret.push_back(i);
+    }
+
+    return ret;
 }
 
 

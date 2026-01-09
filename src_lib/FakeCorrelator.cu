@@ -1,6 +1,6 @@
 #include "../include/pirate/FakeCorrelator.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket
-#include "../include/pirate/system_utils.hpp"   // pin_thread_to_vcpus()
+#include "../include/pirate/system_utils.hpp"   // set_thread_affinity()
 
 #include <thread>
 #include <sstream>
@@ -115,7 +115,7 @@ void FakeCorrelator::sender_main(long endpoint_index)
     Endpoint &e = endpoints.at(endpoint_index);
 
     long nconn = e.num_tcp_connections;
-    pin_thread_to_vcpus(e.vcpu_list);
+    set_thread_affinity(e.vcpu_list);
     
     stringstream ss;
     ss << e.ip_addr << ": creating " << nconn << " TCP connections\n";
