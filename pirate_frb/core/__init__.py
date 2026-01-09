@@ -8,5 +8,7 @@ from ..pirate_pybind11 import (
     PeakFindingConfig,
     ResourceTracker,
     SlabAllocator,
+    get_thread_affinity,
+    set_thread_affinity,
 )
 
