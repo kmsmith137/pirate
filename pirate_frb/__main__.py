@@ -505,9 +505,6 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
     parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
     parser.add_argument('--test', action='store_true', help="Run GpuDedisperser.test_one() with config")
-    parser.add_argument('--time', action='store_true', help="Run GpuDedisperser.time() with niterations=1000")
-    parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (only meaningful with --time)")
-    parser.add_argument('-H', '--no-hugepages', action='store_true', help="Disable hugepages (only meaningful with --time)")
 
 
 def show_dedisperser(args):
@@ -571,35 +568,6 @@ def show_dedisperser(args):
         GpuDedisperser.test_one(config, nchunks)
         print('Test passed!')
 
-    if args.time:
-        print_separator('Timing GpuDedisperser')
-        niterations = args.niter
-        use_hugepages = not args.no_hugepages
-        
-        # Set up allocator flags
-        gpu_aflags = 'af_gpu | af_zero'
-        cpu_aflags = 'af_rhost | af_zero'
-        if use_hugepages:
-            cpu_aflags += ' | af_mmap_huge'
-        
-        # Create GpuDedisperser
-        print(f'Creating GpuDedisperser...')
-        if args.config_only:
-            plan = DedispersionPlan(config)
-        stream_pool = core.CudaStreamPool(plan.num_active_batches)
-        dedisperser = GpuDedisperser(plan, stream_pool, detect_deadlocks=True)
-        
-        # Create allocators and allocate
-        print(f'Allocating...')
-        gpu_allocator = core.BumpAllocator(gpu_aflags, -1)
-        cpu_allocator = core.BumpAllocator(cpu_aflags, -1)
-        dedisperser.allocate(gpu_allocator, cpu_allocator)
-        
-        # Run timing
-        print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages})...')
-        dedisperser.time(gpu_allocator, cpu_allocator, niterations)
-        print('Timing complete!')
-
 
 ###################################   show_random_config command  ###################################
 
@@ -621,6 +589,46 @@ def show_random_config(args):
         config = DedispersionConfig.make_random(gpu_valid=gpu_valid)
         yaml_str = config.to_yaml_string(verbose=args.v)
         print(yaml_str)
+
+
+###################################   time_dedisperser command  ###################################
+
+
+def parse_time_dedisperser(subparsers):
+    parser = subparsers.add_parser("time_dedisperser", help="Run GpuDedisperser timing benchmarks")
+    parser.add_argument('config_file', help="Path to YAML config file")
+    parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (default 1000)")
+    parser.add_argument('-H', '--no-hugepages', action='store_true', help="Disable hugepages")
+
+
+def time_dedisperser(args):
+    config = DedispersionConfig.from_yaml(args.config_file)
+    plan = DedispersionPlan(config)
+    
+    niterations = args.niter
+    use_hugepages = not args.no_hugepages
+    
+    # Set up allocator flags
+    gpu_aflags = 'af_gpu | af_zero'
+    cpu_aflags = 'af_rhost | af_zero'
+    if use_hugepages:
+        cpu_aflags += ' | af_mmap_huge'
+    
+    # Create GpuDedisperser
+    print(f'Creating GpuDedisperser...')
+    stream_pool = core.CudaStreamPool(plan.num_active_batches)
+    dedisperser = GpuDedisperser(plan, stream_pool, detect_deadlocks=True)
+    
+    # Create allocators and allocate
+    print(f'Allocating...')
+    gpu_allocator = core.BumpAllocator(gpu_aflags, -1)
+    cpu_allocator = core.BumpAllocator(cpu_aflags, -1)
+    dedisperser.allocate(gpu_allocator, cpu_allocator)
+    
+    # Run timing
+    print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages})...')
+    dedisperser.time(gpu_allocator, cpu_allocator, niterations)
+    print('Timing complete!')
 
 
 ###################################   random_kernels command  ###################################
@@ -738,6 +746,7 @@ def get_parser():
     parse_show_kernels(subparsers)
     parse_make_subbands(subparsers)
     parse_show_dedisperser(subparsers)
+    parse_time_dedisperser(subparsers)
     parse_show_random_config(subparsers)
     parse_test_node(subparsers)
     parse_send(subparsers)
@@ -764,6 +773,8 @@ def main():
         make_subbands(args)
     elif args.command == "show_dedisperser":
         show_dedisperser(args)
+    elif args.command == "time_dedisperser":
+        time_dedisperser(args)
     elif args.command == "show_random_config":
         show_random_config(args)
     elif args.command == "test_node":
