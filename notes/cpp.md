@@ -20,10 +20,11 @@ xassert_divisible(x,y);  // throw exception unless (x % y) == 0
 // also: xassert_ne(), xassert_lt(), xassert_le(), xassert_gt(), xassert_ge()
 
 // Throw exception unless 'arr' (type ksgpu::Array) has shape {3,4,5}.
-// Note parentheses around the shape.
+// IMPORTANT: note parentheses around the shape -- these are needed to compile!
 xassert_shape_eq(arr, ({3,4,5}));
 ```
 The exception text shows the file/line (like regular `assert()`), plus values of the arguments `x` and `y`.
+In the case of `xassert_shape_eq()`, both array shapes are shown.
 
 Please use `xassert()` for argument-checking and error-checking, unless there is a reason to create a more verbose error message.
 For example:
@@ -45,6 +46,15 @@ void f(int x, int y, int z)
     if ((x+y) >= z) {
         stringstream ss;
         ss << "f(): expected (x+y) < z, got x=" << x << ", y=" << ", z=" << z;
+        throw runtime_error(ss.str());
+    }
+
+    // Example 3: you should replace this by xassert_shape_eq(arr, ({M,N})), since the xassert_shape_eq()
+    // message contains more information (namely, the actual and expected array shapes).
+
+    if ((arr.ndim != 2) || (arr.shape[0] != x) && (arr.shape[1] != y)) {
+        stringstream ss;
+        ss << "f(): expected shape (x,y) = (" << x << "," << y << "), got " << arr.shape_str();
         throw runtime_error(ss.str());
     }
 }
