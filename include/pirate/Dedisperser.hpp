@@ -137,7 +137,10 @@ struct GpuDedisperser
     // Static member function: do one test run with specified configuration.
     static void test_one(const DedispersionConfig &config, long nchunks, long nbatches_out=0, bool host_only=false);
 
-    // Run timing benchmark. Must call allocate() first.
+    // Run timing benchmark (C++ version).
+    // To run from command line: 'python -m pirate_frb time_dedisperser config.yml'.
+    // (Note that the --python flag will run the python version of the timing benchmark, 
+    //  which is in pirate_frb.utils.time_cupy_dedisperser().)
     void time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations);
     
     // --------------------------  Public members  --------------------------

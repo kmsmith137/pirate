@@ -632,9 +632,12 @@ def time_dedisperser(args):
     # Run timing
     print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages}, python={use_python})...')
     if use_python:
+        # Python version of timing code: pirate_frb.utils.time_cupy_dedisperser().
         utils.time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations)
     else:
+        # C++ version of timing code: GpuDedisperser::time().
         dedisperser.time(gpu_allocator, cpu_allocator, niterations)
+    
     print('Timing complete!')
 
 

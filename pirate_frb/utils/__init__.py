@@ -42,9 +42,14 @@ class ThreadAffinity:
 def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations):
     """
     Time the GpuDedisperser using Python/cupy, similar to C++ GpuDedisperser::time().
-    
+
+    To run from command line:  'python -m pirate_frb time_dedisperser config.yml --python'.
+    (Note that omitting the --python flag will run the C++ version of the timing benchmark,
+    which is in GpuDedisperser::time().)
+
     This function reimplements the timing logic from C++ using cupy for array/stream
     management. It:
+
     1. Creates the GpuDequantizationKernel
     2. Allocates raw data arrays using the provided allocators
     3. Runs a timing loop that:
