@@ -313,6 +313,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("ntrees", &GpuDedisperser::ntrees)
           .def_readonly("trees", &GpuDedisperser::trees)
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
+          .def_readonly("stream_pool", &GpuDedisperser::stream_pool)
           .def("allocate", &GpuDedisperser::allocate,
                py::arg("gpu_allocator"), py::arg("host_allocator"),
                "Allocate GPU and host memory buffers for dedispersion.\n\n"

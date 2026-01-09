@@ -39,7 +39,7 @@ class ThreadAffinity:
         return False  # Don't suppress exceptions
 
 
-def time_cupy_dedisperser(dedisperser, stream_pool, gpu_allocator, cpu_allocator, niterations):
+def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations):
     """
     Time the GpuDedisperser using Python/cupy, similar to C++ GpuDedisperser::time().
     
@@ -56,7 +56,6 @@ def time_cupy_dedisperser(dedisperser, stream_pool, gpu_allocator, cpu_allocator
     
     Args:
         dedisperser: An allocated GpuDedisperser instance
-        stream_pool: CudaStreamPool used by the dedisperser
         gpu_allocator: BumpAllocator for GPU memory
         cpu_allocator: BumpAllocator for CPU (pinned) memory
         niterations: Number of timing iterations to run
@@ -65,6 +64,7 @@ def time_cupy_dedisperser(dedisperser, stream_pool, gpu_allocator, cpu_allocator
     # Extract key parameters from dedisperser
     config = dedisperser.config
     plan = dedisperser.plan
+    stream_pool = dedisperser.stream_pool
     
     dtype = plan.dtype
     B = plan.beams_per_batch          # beams per batch

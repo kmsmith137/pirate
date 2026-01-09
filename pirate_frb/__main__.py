@@ -632,7 +632,7 @@ def time_dedisperser(args):
     # Run timing
     print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages}, python={use_python})...')
     if use_python:
-        utils.time_cupy_dedisperser(dedisperser, stream_pool, gpu_allocator, cpu_allocator, niterations)
+        utils.time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations)
     else:
         dedisperser.time(gpu_allocator, cpu_allocator, niterations)
     print('Timing complete!')
