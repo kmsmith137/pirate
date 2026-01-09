@@ -343,9 +343,10 @@ inline float *ReferenceTree::dedisperse_1d(
     float *src, long sstride, 
     float *ps, long lag)
 {
+    static constexpr float rsqrt2 = 0.7071067811865476f;
+    float *tmp = scratch.data;
     long T = params.ntime;
     long S = params.nspec;
-    float *tmp = scratch.data;
 
     // (pstate[:], src[0,:]) -> scratch (length (T+lag+1)*S)
     xassert(scratch.size >= (T+lag+1) * S);
@@ -361,8 +362,8 @@ inline float *ReferenceTree::dedisperse_1d(
         float x1 = tmp[ts+S];         // x1 = src[0, ts - lag*S]
         float y = src[sstride + ts];  // y = src[1, ts]
         
-        dst[ts] = x1 + y;             // dst[0, ts]
-        dst[dstride + ts] = x0 + y;   // dst[1, ts]
+        dst[ts] = rsqrt2 * (x1 + y);             // dst[0, ts]
+        dst[dstride + ts] = rsqrt2 * (x0 + y);   // dst[1, ts]
     }
 
     return ps + (lag+1)*S;
@@ -432,6 +433,7 @@ void ReferenceTree::test_basics()
     // Check a few random entries of 'out_dni', by comparing them to brute-force summation.
 
     for (int e = 0; e < 10; e++) {
+        float w = 1.0f / sqrtf(D);
         long b = rand_int(0,B);
         long a = rand_int(0,A);
         long t = rand_int(0,N*T);   // note (N*T), not T
@@ -452,7 +454,7 @@ void ReferenceTree::test_basics()
             if (t0 < 0)
                 continue;
             for (long s = 0; s < S; s++)
-                dd_bfs.data[s] += in_slice.data[f*N*T*S + t0*S + s];
+                dd_bfs.data[s] += w * in_slice.data[f*N*T*S + t0*S + s];
         }
 
         assert_arrays_equal(out_slice, dd_bfs, "dedisperse_non_incremental", "brute_force_sum", {"s"});

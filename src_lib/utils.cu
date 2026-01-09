@@ -134,6 +134,8 @@ long dedispersion_delay(int rank, long freq, long dm_brev)
 
 void dedisperse_non_incremental(Array<float> &arr, long nspec)
 {
+    static constexpr float rsqrt2 = 0.7071067811865476f;
+
     xassert(arr.ndim == 2);
     long nfreq = arr.shape[0];
     long ninner = arr.shape[1];
@@ -164,8 +166,8 @@ void dedisperse_non_incremental(Array<float> &arr, long nspec)
                     float x1 = (k >= lag1) ? row0[k-lag1] : 0.0f;
                     float y = row1[k];
 
-                    row0[k] = x1 + y;
-                    row1[k] = x0 + y;
+                    row0[k] = rsqrt2 * (x1 + y);
+                    row1[k] = rsqrt2 * (x0 + y);
                 }
             }
         }
