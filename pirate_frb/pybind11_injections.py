@@ -3,6 +3,8 @@ Method injections for pybind11-wrapped pirate classes.
 Extends C++ classes with Python convenience methods.
 """
 
+from contextlib import contextmanager
+
 import ksgpu
 from . import pirate_pybind11
 
@@ -205,6 +207,137 @@ class CasmBeamformerInjections:
         
         # Call C++ method with stream pointer
         return self._cpp_launch_beamformer(e_in, feed_weights, i_out, stream_ptr)
+
+
+@ksgpu.inject_methods(pirate_pybind11.GpuDedisperser)
+class GpuDedisperserInjections:
+    """Python extensions for GpuDedisperser.
+    
+    Adds stream argument support to acquire/release methods.
+    """
+    
+    # Save references to C++ methods
+    _cpp_acquire_input = pirate_pybind11.GpuDedisperser.acquire_input
+    _cpp_release_input = pirate_pybind11.GpuDedisperser.release_input
+    _cpp_acquire_output = pirate_pybind11.GpuDedisperser.acquire_output
+    _cpp_release_output = pirate_pybind11.GpuDedisperser.release_output
+    
+    def acquire_input(self, ichunk, ibatch, stream=None):
+        """Acquire input buffer for writing.
+        
+        After this call returns, 'stream' sees an empty input buffer ready for writing.
+        
+        Parameters
+        ----------
+        ichunk : int
+            Chunk index
+        ibatch : int
+            Batch index
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+            
+        Returns
+        -------
+        ksgpu.Array
+            Input buffer array
+        """
+        import cupy as cp
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        return self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
+    
+    def release_input(self, ichunk, ibatch, stream=None):
+        """Release input buffer after writing.
+        
+        Before calling this, 'stream' must see a full input buffer.
+        
+        Parameters
+        ----------
+        ichunk : int
+            Chunk index
+        ibatch : int
+            Batch index
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+        """
+        import cupy as cp
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        self._cpp_release_input(ichunk, ibatch, stream.ptr)
+    
+    def acquire_output(self, ichunk, ibatch, stream=None):
+        """Acquire output buffer for reading.
+        
+        After this call returns, 'stream' sees a full output buffer ready for reading.
+        
+        Parameters
+        ----------
+        ichunk : int
+            Chunk index
+        ibatch : int
+            Batch index
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+        """
+        import cupy as cp
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
+    
+    def release_output(self, ichunk, ibatch, stream=None):
+        """Release output buffer after reading.
+        
+        Before calling this, 'stream' must see an empty output buffer.
+        
+        Parameters
+        ----------
+        ichunk : int
+            Chunk index
+        ibatch : int
+            Batch index
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+        """
+        import cupy as cp
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        self._cpp_release_output(ichunk, ibatch, stream.ptr)
+    
+    @contextmanager
+    def get_input(self, ichunk, ibatch, stream=None):
+        """Context manager for acquiring and releasing input buffer.
+        
+        Acquires the input buffer on entry and releases it on exit.
+        
+        Parameters
+        ----------
+        ichunk : int
+            Chunk index
+        ibatch : int
+            Batch index
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+            
+        Yields
+        ------
+        ksgpu.Array
+            Input buffer array that can be used as a cupy array.
+            
+        Examples
+        --------
+        >>> g = GpuDedisperser(plan, stream_pool)
+        >>> g.allocate(gpu_alloc, host_alloc)
+        >>> with g.get_input(ichunk=0, ibatch=0) as arr:
+        ...     arr[:] = input_data  # write to the buffer
+        """
+        import cupy as cp
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        arr = self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
+        try:
+            yield arr
+        finally:
+            self._cpp_release_input(ichunk, ibatch, stream.ptr)
 
 
 @ksgpu.inject_methods(pirate_pybind11.SlabAllocator)

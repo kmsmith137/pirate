@@ -281,6 +281,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    YAML string representation of the plan")
     ;
 
+    // GpuDedisperser: pybind11_injections.py adds stream=None wrappers for acquire/release methods
     py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
           .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
                           std::shared_ptr<CudaStreamPool> stream_pool,
@@ -300,9 +301,24 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           py::arg("nbatches_out") = 0,
           py::arg("nbatches_wt") = 0,
           py::arg("detect_deadlocks") = true)
+          .def_readonly("config", &GpuDedisperser::config)
+          .def_readonly("plan", &GpuDedisperser::plan)
+          .def_readonly("dtype", &GpuDedisperser::dtype)
+          .def_readonly("nfreq", &GpuDedisperser::nfreq)
+          .def_readonly("nt_in", &GpuDedisperser::nt_in)
+          .def_readonly("total_beams", &GpuDedisperser::total_beams)
+          .def_readonly("beams_per_batch", &GpuDedisperser::beams_per_batch)
+          .def_readonly("nstreams", &GpuDedisperser::nstreams)
+          .def_readonly("nbatches", &GpuDedisperser::nbatches)
+          .def_readonly("ntrees", &GpuDedisperser::ntrees)
+          .def_readonly("trees", &GpuDedisperser::trees)
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def("allocate", &GpuDedisperser::allocate,
-               py::arg("gpu_allocator"), py::arg("host_allocator"))
+               py::arg("gpu_allocator"), py::arg("host_allocator"),
+               "Allocate GPU and host memory buffers for dedispersion.\n\n"
+               "Args:\n"
+               "    gpu_allocator: BumpAllocator for GPU memory\n"
+               "    host_allocator: BumpAllocator for host memory")
           .def("acquire_input", 
                [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
