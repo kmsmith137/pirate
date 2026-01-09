@@ -147,9 +147,10 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
             dequantization_kernel.launch(dd_in, raw_gpu, compute_stream)
             # Note: exiting the context manager triggers all the dedispersion kernels.
         
-        # Acquire and release output (we're throwing away the output for timing purposes)
-        dedisperser.acquire_output(ichunk, ibatch, compute_stream)
-        dedisperser.release_output(ichunk, ibatch, compute_stream)
+        # We're throwing away the output for timing purposes, but we still call get_output()
+        # since it performs important synchronization.
+        with dedisperser.get_output(ichunk, ibatch, stream=compute_stream) as (out_max, out_argmax):
+            pass
         
         # Calculate and print timing after warmup
         # Use the same averaging logic as C++ KernelTimer
