@@ -505,7 +505,7 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('-r', '--resources', action='store_true', help="Show resource tracking (all kernels must be precompiled)")
     parser.add_argument('-R', '--fine-grained-resources', action='store_true', help="Like -r, but shows fine-grained per-kernel info")
     parser.add_argument('--test', action='store_true', help="Run GpuDedisperser.test_one() with config")
-    parser.add_argument('--time', action='store_true', help="Run GpuDedisperser.time_one() with niterations=1000")
+    parser.add_argument('--time', action='store_true', help="Run GpuDedisperser.time() with niterations=1000")
     parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (only meaningful with --time)")
     parser.add_argument('-H', '--no-hugepages', action='store_true', help="Disable hugepages (only meaningful with --time)")
 
@@ -575,8 +575,29 @@ def show_dedisperser(args):
         print_separator('Timing GpuDedisperser')
         niterations = args.niter
         use_hugepages = not args.no_hugepages
-        print(f'Running GpuDedisperser.time_one(config, niterations={niterations}, use_hugepages={use_hugepages})')
-        GpuDedisperser.time_one(config, niterations, use_hugepages)
+        
+        # Set up allocator flags
+        gpu_aflags = 'af_gpu | af_zero'
+        cpu_aflags = 'af_rhost | af_zero'
+        if use_hugepages:
+            cpu_aflags += ' | af_mmap_huge'
+        
+        # Create GpuDedisperser
+        print(f'Creating GpuDedisperser...')
+        if args.config_only:
+            plan = DedispersionPlan(config)
+        stream_pool = core.CudaStreamPool(plan.num_active_batches)
+        dedisperser = GpuDedisperser(plan, stream_pool, detect_deadlocks=True)
+        
+        # Create allocators and allocate
+        print(f'Allocating...')
+        gpu_allocator = core.BumpAllocator(gpu_aflags, -1)
+        cpu_allocator = core.BumpAllocator(cpu_aflags, -1)
+        dedisperser.allocate(gpu_allocator, cpu_allocator)
+        
+        # Run timing
+        print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages})...')
+        dedisperser.time(gpu_allocator, cpu_allocator, niterations)
         print('Timing complete!')
 
 

@@ -363,7 +363,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("nchunks"), 
                py::arg("nbatches_out") = 0,
                py::arg("host_only") = false)
-          .def_static("time_one", &GpuDedisperser::time_one,
-               py::arg("config"), py::arg("niterations"), py::arg("use_hugepages"))
+          .def("time", &GpuDedisperser::time,
+               py::arg("gpu_allocator"), py::arg("cpu_allocator"), py::arg("niterations"),
+               "Run timing benchmark.\n\n"
+               "Must call allocate() first.\n\n"
+               "Args:\n"
+               "    gpu_allocator: BumpAllocator for GPU memory (for raw data arrays)\n"
+               "    cpu_allocator: BumpAllocator for host memory (for raw data arrays)\n"
+               "    niterations: Number of timing iterations")
     ;
 }

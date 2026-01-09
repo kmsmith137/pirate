@@ -34,7 +34,7 @@ from pirate_frb.pirate_pybind11 import (
 )
 
 
-def time_dedisperser(config_file: str, niterations: int):
+def time_cupy_dedisperser(config_file: str, niterations: int):
     """
     Time the GpuDedisperser using Python/cupy, reimplementing the C++ time_one() logic.
     
@@ -192,7 +192,7 @@ def main():
     )
     
     args = parser.parse_args()
-    time_dedisperser(args.config_file, args.niter)
+    time_cupy_dedisperser(args.config_file, args.niter)
 
 
 if __name__ == "__main__":

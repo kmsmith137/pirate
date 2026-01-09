@@ -134,9 +134,11 @@ struct GpuDedisperser
     // Static member function: runs one randomized test iteration.
     static void test_random();
 
-    // Static member function: do one test/timing run with specified configuration.
+    // Static member function: do one test run with specified configuration.
     static void test_one(const DedispersionConfig &config, long nchunks, long nbatches_out=0, bool host_only=false);
-    static void time_one(const DedispersionConfig &config, long niterations, bool use_hugepages);
+
+    // Run timing benchmark. Must call allocate() first.
+    void time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations);
     
     // --------------------------  Public members  --------------------------
 
