@@ -45,6 +45,7 @@ int integer_log2(long n)
     return p;
 }
 
+
 int rb_lag(int freq_coarse, int dm_brev, int stage1_rank, int stage2_rank, bool uflag)
 {
     xassert(stage1_rank >= 0);
@@ -69,7 +70,7 @@ int rb_lag(int freq_coarse, int dm_brev, int stage1_rank, int stage2_rank, bool 
 }
 
 
-void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool normalize)
+void reference_downsample_freq(const Array<float> &in, Array<float> &out)
 {
     xassert(out.ndim == 2);
     xassert(out.strides[1] == 1);
@@ -77,7 +78,7 @@ void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool n
     xassert(in.shape_equals({ 2*out.shape[0], out.shape[1] }));
     xassert(in.strides[1] == 1);
 
-    float w = normalize ? 0.5 : 1.0;
+    float w = 0.7071067811865476f;  // 1/sqrt(2)
     int nchan_out = out.shape[0];
     int nt = out.shape[1];
 
@@ -92,7 +93,7 @@ void reference_downsample_freq(const Array<float> &in, Array<float> &out, bool n
 }
 
     
-void reference_downsample_time(const Array<float> &in, Array<float> &out, bool normalize)
+void reference_downsample_time(const Array<float> &in, Array<float> &out)
 {
     xassert(out.ndim == 2);
     xassert(out.strides[1] == 1);
@@ -100,7 +101,7 @@ void reference_downsample_time(const Array<float> &in, Array<float> &out, bool n
     xassert(in.shape_equals({ out.shape[0], 2*out.shape[1] }));
     xassert(in.strides[1] == 1);
 
-    float w = normalize ? 0.5 : 1.0;
+    float w = 0.7071067811865476f;  // 1/sqrt(2)
     int nchan = out.shape[0];
     int nt_out = out.shape[1];
 

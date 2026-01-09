@@ -205,7 +205,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
         for (long b = 0; b < beams_per_batch; b++) {
             Array<float> src2 = src.slice(0,b);
             Array<float> dst2 = dst.slice(0,b);
-            reference_downsample_time(src2, dst2, false);  // normalize=false, i.e. no factor 0.5
+            reference_downsample_time(src2, dst2);  // note factor 1/sqrt(2) here!
         }
     }
 

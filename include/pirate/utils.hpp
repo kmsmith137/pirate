@@ -24,9 +24,9 @@ extern int integer_log2(long n);
 extern int rb_lag(int freq_coarse, int dm_brev, int stage1_rank, int stage2_rank, bool uflag=false);
 
 // Downsamples (freq,time) array by a factor 2 along either frequency or time axis.
-// Each pair of elements will be averaged/summed, depending on whether the 'normalize' flag is true/false.
-extern void reference_downsample_freq(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, bool normalize);
-extern void reference_downsample_time(const ksgpu::Array<float> &in, ksgpu::Array<float> &out, bool normalize);
+// "Variance-preserving" normalization 1/sqrt(2).
+extern void reference_downsample_freq(const ksgpu::Array<float> &in, ksgpu::Array<float> &out);
+extern void reference_downsample_time(const ksgpu::Array<float> &in, ksgpu::Array<float> &out);
 
 // dedisperse_non_incremental(): currently only used for testing the ReferenceTree,
 // but I could imagine this being useful elsewhere some day. Dedispersion is done in

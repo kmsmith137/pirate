@@ -159,7 +159,12 @@ template<> __device__ __half2 *shmem_base<__half2> () { return shmem_h2; }
 // zero<T>(): returns zero
 template<typename T> __device__ T zero();
 template<> __device__ float zero<float>() { return 0.0f; }
-template<> __device__ __half2 zero<__half2>() { return __half2half2(0.0f); }
+template<> __device__ __half2 zero<__half2>() { return __float2half2_rn(0.0f); }
+
+// one_half<T>: returns 0.5
+template<typename T> __device__ T one_over_sqrt2();
+template<> __device__ float one_over_sqrt2<float>() { return 0.707106781f; }
+template<> __device__ __half2 one_over_sqrt2<__half2>() { return __float2half2_rn(0.7071067811f); }
 
 // For debugging
 template<typename T> struct is_float { static constexpr bool value = false; };
@@ -274,18 +279,18 @@ struct wparams
 // -------------------------------------------------------------------------------------------------
 
 
-__device__ float ld_downsample(float x, float y)
+__device__ float ld_downsample(float rsqrt2, float x, float y)
 {
-    return (x + y);
+    return rsqrt2 * (x + y);
 }
 
 // Input: x=[z0 z1] and y=[z2 z3].
-// Output: [ (z0+z1) (z2+z3) ]
-__device__ half2 ld_downsample(__half2 x, __half2 y)
+// Output: [ (z0+z1) (z2+z3) ] / sqrt(2)
+__device__ half2 ld_downsample(__half2 rsqrt2, __half2 x, __half2 y)
 {
     __half2 t = __lows2half2(x, y);  // [ z0 z2 ]
     __half2 u = __highs2half2(x, y); // [ z1 z3 ]
-    return (t + u);        // [ (z0+z1) (z2+z3) ]
+    return rsqrt2 * (t + u);         // [ (z0+z1) (z2+z3) ] / sqrt(2)
 }
 
 
@@ -454,7 +459,7 @@ struct ld_kernel
     // If RestoreRs==true, then 'rs' is fully cycled (by 32 registers).
     // If RestoreRs==false, then 'rs' is cycled by (2*D) registers.
 
-    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs,
+    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T rsqrt2,
                             T x000, T x001, T x010, T x011, T x100, T x101, T x110, T x111)
     {
         const int laneId = threadIdx.x;
@@ -466,10 +471,10 @@ struct ld_kernel
         //   i = output row
         //   j = input row within output row
         
-        T x00 = ld_downsample(x000, x001);
-        T x01 = ld_downsample(x010, x011);
-        T x10 = ld_downsample(x100, x101);
-        T x11 = ld_downsample(x110, x111);
+        T x00 = ld_downsample(rsqrt2, x000, x001);
+        T x01 = ld_downsample(rsqrt2, x010, x011);
+        T x10 = ld_downsample(rsqrt2, x100, x101);
+        T x11 = ld_downsample(rsqrt2, x110, x111);
 
         // Apply one-sample lag to x00 and x01.
         // Cycles 'rs' by either 1 or 2 lanes, depending on whether float16 or float32.
@@ -481,8 +486,8 @@ struct ld_kernel
         // Downsample in frequency.
         // Get 1-d register array, indexed by output frequency.
         
-        T x0 = x00 + x01;
-        T x1 = x10 + x11;
+        T x0 = rsqrt2 * (x00 + x01);
+        T x1 = rsqrt2 * (x10 + x11);
 
         // If float16, need to apply one-sample lag to either x0 or x1
         // (depending on whether j or i is odd).
@@ -511,7 +516,7 @@ struct ld_kernel
 
         int nreg2 = nreg_out >> 1;
         T *out2 = out + (wp.nrext * nreg_out);
-        next_kernel.process(wp, out2, nreg2, counter, rs, x00u, x01, x10u, x11);
+        next_kernel.process(wp, out2, nreg2, counter, rs, rsqrt2, x00u, x01, x10u, x11);
 
         if constexpr (RestoreRs)
             rs = __shfl_sync(0xffffffff, rs, laneId + 2*D);
@@ -546,7 +551,7 @@ struct ld_half_kernel
     //
     // Cycles 'rs' by (2*D) registers.
 
-    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T x00, T x01, T x10, T x11)
+    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T rsqrt2, T x00, T x01, T x10, T x11)
     {
         if (counter & 1) {
             ld_transpose(y00, x00);
@@ -555,7 +560,7 @@ struct ld_half_kernel
             ld_transpose(y11, x11);
 
             int counter2 = counter >> 1;
-            base_kernel.process(wp, out, nreg_out, counter2, rs, y00, x00, y01, x01, y10, x10, y11, x11);
+            base_kernel.process(wp, out, nreg_out, counter2, rs, rsqrt2, y00, x00, y01, x01, y10, x10, y11, x11);
         }
         else {
             y00 = x00;
@@ -572,7 +577,7 @@ template<typename T>
 struct ld_half_kernel<T,0>
 {
     __device__ ld_half_kernel(const wparams<T> &wp, long ntime_cumulative) { }
-    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T x00, T x01, T x10, T x11) { }
+    __device__ void process(const wparams<T> &wp, T *out, long nreg_out, int counter, T &rs, T rsqrt2, T x00, T x01, T x10, T x11) { }
 };
 
 
@@ -669,6 +674,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
     
     const wparams<T> wp(D);
     T rs = restore_state<T,D> (wp, persistent_state);
+    T rsqrt2 = one_over_sqrt2<T> ();
 
     ld_kernel<T,D,true> kernel(wp, ntime_cumulative);  // last template argument is RestoreRs=true
 
@@ -701,7 +707,7 @@ lagged_downsample(const T *in, T *out, int ntime, long ntime_cumulative, long bs
         ld_transpose(x100, x101);
         ld_transpose(x110, x111);
         
-        kernel.process(wp, out, nreg_out, counter, rs,
+        kernel.process(wp, out, nreg_out, counter, rs, rsqrt2,
                        x000, x001, x010, x011, x100, x101, x110, x111);
         
         in += 64;
@@ -1028,11 +1034,7 @@ static void run_test(const TestInstanceLDS &ti)
 
             // Compare results.
             for (int ids = 1; ids < p.num_downsampling_levels; ids++) {
-                // Note: if the definition of the LaggedDownsampler changes to include
-                // factors of 0.5, then the value of 'rms' may need to change.
-                
-                double rms = sqrt(2 << ids);    // rms of output array
-                double epsabs = 3 * p.dtype.precision() * rms * sqrt(ids+1);
+                double epsabs = 3 * p.dtype.precision() * sqrt(ids+1);
                 
                 assert_arrays_equal(cpu_buf.bufs.at(ids),
                                     gpu_buf.bufs.at(ids),

@@ -115,7 +115,7 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
     
     // Reshaped time-downsampled input array: (nb * 2^r, ntime/2)
     Array<float> in_ds({ nb * pow2(r), ntime/2 }, af_uhost | af_zero);
-    reference_downsample_time(in_2d, in_ds, false);  // normalize=false, i.e. sum with no factor 0.5
+    reference_downsample_time(in_2d, in_ds);  // note: factor 1/sqrt(2) applied here
     
     // Apply "small" lags (one-sample lags in even channels), before frequency downsampling.
     Array<float> in_ds2 = in_ds.clone();   // copy since we'll need 'in_ds' later.
@@ -123,7 +123,7 @@ void ReferenceLaggedDownsamplingKernel::_apply(const Array<float> &in, Array<voi
 
     // Downsample in frequency, and apply "large" lags.
     Array<float> out_tmp({ nb * pow2(r-1), ntime/2 }, af_uhost | af_zero);
-    reference_downsample_freq(in_ds2, out_tmp, false);   // normalize=false, i.e. sum with no factor 0.5
+    reference_downsample_freq(in_ds2, out_tmp);   // note: factor 1/sqrt(2) applied here
     lagbufs_large.at(ibatch)->apply_lags(out_tmp);
     
     // Reshape output_tmp array from 2-d to target shape, and copy to caller-specified array.
