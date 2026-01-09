@@ -605,6 +605,12 @@ def parse_time_dedisperser(subparsers):
 def time_dedisperser(args):
     from . import utils
     
+    # Pin thread to first CPU (for consistent timing on dual-CPU systems)
+    hw = Hardware()
+    vcpu_list = hw.vcpu_list_from_cpu(0)
+    core.set_thread_affinity(vcpu_list)
+    print(f'Pinned thread to CPU 0 (vcpus {vcpu_list})')
+    
     config = DedispersionConfig.from_yaml(args.config_file)
     plan = DedispersionPlan(config)
     
@@ -632,7 +638,7 @@ def time_dedisperser(args):
     F = plan.nfreq
     T = plan.nt_in
     raw_nbytes = S * B * F * (T // 2)  # multi_raw_gpu and multi_raw_cpu
-    alignment_margin = 1024 * 1024  # 1 MB margin for alignment overhead
+    alignment_margin = 128             # 1 MB margin for alignment overhead
     
     gpu_nbytes = dedisperser.resource_tracker.get_gmem_footprint() + raw_nbytes + alignment_margin
     cpu_nbytes = dedisperser.resource_tracker.get_hmem_footprint() + raw_nbytes + alignment_margin
