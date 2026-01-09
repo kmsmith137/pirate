@@ -599,14 +599,18 @@ def parse_time_dedisperser(subparsers):
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (default 1000)")
     parser.add_argument('-H', '--no-hugepages', action='store_true', help="Disable hugepages")
+    parser.add_argument('--python', action='store_true', help="Use Python/cupy timing instead of C++ (for testing pybind11 interface)")
 
 
 def time_dedisperser(args):
+    from . import utils
+    
     config = DedispersionConfig.from_yaml(args.config_file)
     plan = DedispersionPlan(config)
     
     niterations = args.niter
     use_hugepages = not args.no_hugepages
+    use_python = args.python
     
     # Set up allocator flags
     gpu_aflags = 'af_gpu | af_zero'
@@ -626,8 +630,11 @@ def time_dedisperser(args):
     dedisperser.allocate(gpu_allocator, cpu_allocator)
     
     # Run timing
-    print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages})...')
-    dedisperser.time(gpu_allocator, cpu_allocator, niterations)
+    print(f'Running timing (niterations={niterations}, use_hugepages={use_hugepages}, python={use_python})...')
+    if use_python:
+        utils.time_cupy_dedisperser(dedisperser, stream_pool, gpu_allocator, cpu_allocator, niterations)
+    else:
+        dedisperser.time(gpu_allocator, cpu_allocator, niterations)
     print('Timing complete!')
 
 
