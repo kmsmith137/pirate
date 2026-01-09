@@ -724,6 +724,77 @@ void GpuDedisperser::release_output(long ichunk, long ibatch, cudaStream_t strea
 }
 
 
+Array<void> GpuDedisperser::view_input(long ichunk, long ibatch)
+{
+    xassert(ichunk >= 0);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(is_allocated);
+
+    std::unique_lock<std::mutex> lock(mutex);
+
+    if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch) || !curr_input_acquired) {
+        stringstream ss;
+        ss << "GpuDedisperser::view_input(): (ichunk,ibatch)=(" << ichunk << "," << ibatch
+           << ") is not currently acquired";
+        throw runtime_error(ss.str());
+    }
+
+    long seq_id = ichunk * nbatches + ibatch;
+    long istream = seq_id % nstreams;
+    return input_arrays.slice(0, istream);
+}
+
+
+vector<Array<void>> GpuDedisperser::view_out_max(long ichunk, long ibatch)
+{
+    xassert(ichunk >= 0);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(is_allocated);
+
+    std::unique_lock<std::mutex> lock(mutex);
+
+    if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch) || !curr_output_acquired) {
+        stringstream ss;
+        ss << "GpuDedisperser::view_out_max(): (ichunk,ibatch)=(" << ichunk << "," << ibatch
+           << ") is not currently acquired";
+        throw runtime_error(ss.str());
+    }
+
+    long seq_id = ichunk * nbatches + ibatch;
+    long iout = seq_id % params.nbatches_out;
+
+    vector<Array<void>> ret(ntrees);
+    for (long itree = 0; itree < ntrees; itree++)
+        ret[itree] = out_max.at(itree).slice(0, iout);
+    return ret;
+}
+
+
+vector<Array<uint>> GpuDedisperser::view_out_argmax(long ichunk, long ibatch)
+{
+    xassert(ichunk >= 0);
+    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(is_allocated);
+
+    std::unique_lock<std::mutex> lock(mutex);
+
+    if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch) || !curr_output_acquired) {
+        stringstream ss;
+        ss << "GpuDedisperser::view_out_argmax(): (ichunk,ibatch)=(" << ichunk << "," << ibatch
+           << ") is not currently acquired";
+        throw runtime_error(ss.str());
+    }
+
+    long seq_id = ichunk * nbatches + ibatch;
+    long iout = seq_id % params.nbatches_out;
+
+    vector<Array<uint>> ret(ntrees);
+    for (long itree = 0; itree < ntrees; itree++)
+        ret[itree] = out_argmax.at(itree).slice(0, iout);
+    return ret;
+}
+
+
 // ------------------------------------------------------------------------------------
 //
 // Difficult code starts here!

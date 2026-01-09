@@ -117,6 +117,12 @@ struct GpuDedisperser
     void acquire_output(long ichunk, long ibatch, cudaStream_t stream);
     void release_output(long ichunk, long ibatch, cudaStream_t stream);
 
+    // View methods: return array slices for acquired buffers.
+    // Throws exception unless (ichunk, ibatch) has been acquired but not released.
+    ksgpu::Array<void> view_input(long ichunk, long ibatch);
+    std::vector<ksgpu::Array<void>> view_out_max(long ichunk, long ibatch);
+    std::vector<ksgpu::Array<uint>> view_out_argmax(long ichunk, long ibatch);
+
     // Thread-backed class pattern: stop the worker thread and put the object
     // into a "stopped" state. The first caller sets 'error'. If e is null,
     // represents normal termination; if non-null, represents an error.

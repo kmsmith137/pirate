@@ -301,6 +301,46 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           py::arg("nbatches_wt") = 0,
           py::arg("detect_deadlocks") = true)
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
+          .def("allocate", &GpuDedisperser::allocate,
+               py::arg("gpu_allocator"), py::arg("host_allocator"))
+          .def("acquire_input", 
+               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+                   cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                   return self.acquire_input(ichunk, ibatch, stream);
+               },
+               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+          .def("release_input",
+               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+                   cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                   self.release_input(ichunk, ibatch, stream);
+               },
+               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+          .def("acquire_output",
+               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+                   cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                   self.acquire_output(ichunk, ibatch, stream);
+               },
+               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+          .def("release_output",
+               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+                   cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+                   self.release_output(ichunk, ibatch, stream);
+               },
+               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+          .def("view_input", &GpuDedisperser::view_input,
+               py::arg("ichunk"), py::arg("ibatch"),
+               "Return view of input buffer for acquired (ichunk, ibatch).\n\n"
+               "Throws exception unless (ichunk, ibatch) has been acquired but not released.")
+          .def("view_out_max", &GpuDedisperser::view_out_max,
+               py::arg("ichunk"), py::arg("ibatch"),
+               "Return list of out_max buffer views for acquired (ichunk, ibatch).\n\n"
+               "Returns a list of length ntrees, indexed by itree.\n"
+               "Throws exception unless (ichunk, ibatch) has been acquired but not released.")
+          .def("view_out_argmax", &GpuDedisperser::view_out_argmax,
+               py::arg("ichunk"), py::arg("ibatch"),
+               "Return list of out_argmax buffer views for acquired (ichunk, ibatch).\n\n"
+               "Returns a list of length ntrees, indexed by itree.\n"
+               "Throws exception unless (ichunk, ibatch) has been acquired but not released.")
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
                py::arg("config"), 
