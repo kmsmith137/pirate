@@ -199,6 +199,7 @@ PYFILES = \
   pirate_frb/casm/CasmReferenceBeamformer.py \
   pirate_frb/casm/Dense1dBeamformer.py \
   pirate_frb/core/__init__.py \
+  pirate_frb/core/AnalyticFrequencyChannel.py \
   pirate_frb/kernels/__init__.py \
   pirate_frb/loose_ends/__init__.py \
   pirate_frb/utils/__init__.py

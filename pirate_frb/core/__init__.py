@@ -12,3 +12,4 @@ from ..pirate_pybind11 import (
     set_thread_affinity,
 )
 
+from .AnalyticFrequencyChannel import AnalyticFrequencyChannel 
