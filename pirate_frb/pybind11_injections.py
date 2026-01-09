@@ -3,6 +3,8 @@ Method injections for pybind11-wrapped pirate classes.
 Extends C++ classes with Python convenience methods.
 """
 
+from contextlib import contextmanager
+
 import ksgpu
 from . import pirate_pybind11
 
@@ -300,6 +302,42 @@ class GpuDedisperserInjections:
         if stream is None:
             stream = cp.cuda.get_current_stream()
         self._cpp_release_output(ichunk, ibatch, stream.ptr)
+    
+    @contextmanager
+    def get_input(self, ichunk, ibatch, stream=None):
+        """Context manager for acquiring and releasing input buffer.
+        
+        Acquires the input buffer on entry and releases it on exit.
+        
+        Parameters
+        ----------
+        ichunk : int
+            Chunk index
+        ibatch : int
+            Batch index
+        stream : cupy.cuda.Stream or None, optional
+            CUDA stream to use. If None, uses current cupy stream.
+            
+        Yields
+        ------
+        ksgpu.Array
+            Input buffer array that can be used as a cupy array.
+            
+        Examples
+        --------
+        >>> g = GpuDedisperser(plan, stream_pool)
+        >>> g.allocate(gpu_alloc, host_alloc)
+        >>> with g.get_input(ichunk=0, ibatch=0) as arr:
+        ...     arr[:] = input_data  # write to the buffer
+        """
+        import cupy as cp
+        if stream is None:
+            stream = cp.cuda.get_current_stream()
+        arr = self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
+        try:
+            yield arr
+        finally:
+            self._cpp_release_input(ichunk, ibatch, stream.ptr)
 
 
 @ksgpu.inject_methods(pirate_pybind11.SlabAllocator)
