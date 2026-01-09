@@ -135,8 +135,10 @@ class CoalescedDdKernel2:
         k.emit(f'constexpr int wt_touter_stride32 = {utils.xdiv(self.pf.wt_touter_byte_stride,4)};')
         k.emit()
 
+        self.dd._emit_rsqrt2(k)
+
         if self.Wmax > 1:
-            k.emit(f'{self.dt32} pf_a = {self.dtype.from_float("0.5f")};')
+            k.emit(f'const {self.dt32} pf_a = {self.dtype.from_float("0.5f")};')
             k.emit()
 
         self.dd._apply_inbuf_offsets(k)    # operates on grb* pointers, since self.dd.input_is_ringbuf == True

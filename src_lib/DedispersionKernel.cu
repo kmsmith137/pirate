@@ -960,14 +960,12 @@ void GpuDedispersionKernel::test_random()
         }
     }
     
-    // FIXME revisit epsilon if we change the normalization of the dedispersion transform.
-    double epsrel = 3 * params.dtype.precision();
-    double epsabs = 3 * params.dtype.precision() * pow(1.414, params.dd_rank);
+    double eps = 2 * params.dtype.precision() * sqrt(params.dd_rank+1);
 
     if (params.output_is_ringbuf)
-        ksgpu::assert_arrays_equal(cpu_arrs.big_outbuf, gpu_arrs.big_outbuf, "cpu", "gpu", {"i"}, epsabs, epsrel);
+        ksgpu::assert_arrays_equal(cpu_arrs.big_outbuf, gpu_arrs.big_outbuf, "cpu", "gpu", {"i"}, eps, eps);
     else
-        ksgpu::assert_arrays_equal(cpu_arrs.big_outbuf, gpu_arrs.big_outbuf, "cpu", "gpu", {"beam","amb","dmbr","time","spec"}, epsabs, epsrel);
+        ksgpu::assert_arrays_equal(cpu_arrs.big_outbuf, gpu_arrs.big_outbuf, "cpu", "gpu", {"beam","amb","dmbr","time","spec"}, eps, eps);
 }
 
 

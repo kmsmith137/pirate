@@ -87,6 +87,7 @@ class Dedisperser:
         k.emit(f'       void *pstate_, int ntime, ulong nt_cumul, bool is_downsampled_tree)')
         k.emit('{')
 
+        self._emit_rsqrt2(k)
         self._apply_inbuf_offsets(k)    # behaves differently, depending on self.input_is_ringbuf
         self._apply_outbuf_offsets(k)   # behaves differently, depending on self.output_is_ringbuf
         self._init_srb(k)               # no-ops if (self.two_stage) is False
@@ -117,6 +118,11 @@ class Dedisperser:
         k.emit('}   // kernel')
 
         
+    def _emit_rsqrt2(self, k):
+        rhs = self.dtype.from_float("0.7071067811865476f")
+        k.emit(f'const {self.dt32} rsqrt2 = {rhs};')
+
+
     def _load_input_data(self, k):
         if self.input_is_ringbuf:
             k.emit('// Load data from input ringbuf into registers.')
@@ -239,8 +245,8 @@ class Dedisperser:
                 
                 k.emit(f'// dedisperse {x0}, {x1} with time lag {lag} (not accounting for nbits, nspec)')
                 tmp0, tmp1 = self._advance2(k, x0, lag)
-                k.emit(f'{x0} = {tmp1} + {x1};')
-                k.emit(f'{x1} += {tmp0};')
+                k.emit(f'{x0} = rsqrt2 * ({tmp1} + {x1});')
+                k.emit(f'{x1} = rsqrt2 * ({tmp0} + {x1});')
 
         k.emit(f'// dedispersion_pass: pass {i} ends here')
 
