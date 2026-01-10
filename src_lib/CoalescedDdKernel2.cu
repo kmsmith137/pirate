@@ -224,13 +224,13 @@ void CoalescedDdKernel2::test_random()
     long nt_in_per_wt = (Tinner > 1) ? xdiv(32*simd_width,Tinner) : ((32 * simd_width) << rand_int(0,3));
     long nt_in_divisor = max(32*simd_width, nt_in_per_wt);
 
-    auto v = ksgpu::random_integers_with_bounded_product(5, 20000 / pow2(dd_rank));
+    auto v = ksgpu::random_integers_with_bounded_product(5, 30000 / pow2(dd_rank));
     long nchunks = v[0];
     long nt_in_per_chunk = nt_in_divisor * v[1];
     long beams_per_batch = v[2];
     long num_batches = v[3];
     long total_beams = beams_per_batch * num_batches;
-    long amb_rank = max(8L, long(log2(v[4] + 0.5)));
+    long amb_rank = min(8L, long(log2(v[4] + 0.5)));
     long lg_ndm_out = amb_rank + dd_rank - pf_rank;
     long lg_ndm_wt = rand_int(0, lg_ndm_out+1);
     bool is_downsampled_tree = rand_bool();
