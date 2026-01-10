@@ -19,14 +19,15 @@ namespace pirate {
 
 
 ReferenceTree::ReferenceTree(const Params &params_) :
-    params(params_), fs(params_.subband_counts)
+    params(params_), frequency_subbands(params_.subband_counts)
 {
     xassert(params.num_beams > 0);
     xassert(params.amb_rank >= 0);
     xassert(params.dd_rank >= 0);
     xassert(params.ntime > 0);
     xassert(params.nspec > 0);
-        
+    
+    const FrequencySubbands &fs = frequency_subbands;
     xassert(fs.pf_rank <= params.dd_rank);
 
     long M = fs.M;
@@ -95,6 +96,8 @@ ReferenceTree::ReferenceTree(const Params &params_) :
 
 void ReferenceTree::dedisperse(Array<float> &buf, Array<float> &out)
 {
+    const FrequencySubbands &fs = frequency_subbands;
+
     long M = fs.M;
     long T = params.ntime;
     long S = params.nspec;
@@ -158,6 +161,8 @@ float *ReferenceTree::dedisperse_2d(
     float *outp, long out_dstride, long out_mstride, 
     float *ps)
 {
+    const FrequencySubbands &fs = frequency_subbands;
+    
     // Input array shape: (pow2(dd_rank), T*S)
     // Output array shape: (pf_ndm, M, T*S). Can be NULL.
 

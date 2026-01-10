@@ -40,7 +40,7 @@ struct ReferenceTree
     };
 
     Params params;
-    FrequencySubbands fs;
+    FrequencySubbands frequency_subbands;
 
     ksgpu::Array<float> pstate;
     ksgpu::Array<float> scratch;
