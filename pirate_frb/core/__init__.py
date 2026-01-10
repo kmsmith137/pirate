@@ -12,4 +12,4 @@ from ..pirate_pybind11 import (
     set_thread_affinity,
 )
 
-from .AnalyticFrequencyChannel import AnalyticDedisperser
+from .AnalyticDedisperser import AnalyticDedisperser
