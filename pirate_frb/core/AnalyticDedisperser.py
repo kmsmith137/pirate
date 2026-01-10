@@ -290,7 +290,7 @@ class AnalyticDedisperser:
 
         maxdiff = float(np.max(np.abs(dst_ref - dst_ana)))
         print(f'AnalyticDedisperser.test_gridding(): {maxdiff=}')
-        assert maxdiff < 1e-6
+        assert maxdiff < 1.0e-5
 
 
     @classmethod

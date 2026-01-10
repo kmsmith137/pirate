@@ -45,6 +45,7 @@ def parse_test(subparsers):
     parser.add_argument('--casm', action='store_true', help='Runs some casm tests')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
+    parser.add_argument('--ana', action='store_true', help='Runs AnalyticDedisperser.test_random()')
 
 
 def rrange(registry_class):
@@ -64,7 +65,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'zomb', 'dd' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'zomb', 'dd', 'ana' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -129,6 +130,9 @@ def test(args):
         if run_all_tests or args.dd:
             for _ in rrange(kernels.CoalescedDdKernel2):
                 GpuDedisperser.test_random()
+        
+        if run_all_tests or args.ana:
+            core.AnalyticDedisperser.test_random()
             
 
 #########################################   time command  ##########################################
