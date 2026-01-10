@@ -152,7 +152,45 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("test_random", &ReferenceLagbuf::test_random)
     ;
 
-    py::class_<ReferenceTree>(m, "ReferenceTree")
+    py::class_<ReferenceTree>(m, "ReferenceTree",
+        "Reference implementation of tree dedispersion.\n\n"
+        "Processes input incrementally in chunks of shape\n"
+        "(num_beams, 2^amb_rank, 2^dd_rank, ntime * nspec).")
+          .def(py::init([](long num_beams, long amb_rank, long dd_rank, long ntime,
+                           long nspec, const std::vector<long> &subband_counts) {
+              ReferenceTree::Params params;
+              params.num_beams = num_beams;
+              params.amb_rank = amb_rank;
+              params.dd_rank = dd_rank;
+              params.ntime = ntime;
+              params.nspec = nspec;
+              params.subband_counts = subband_counts;
+              return new ReferenceTree(params);
+          }),
+          py::arg("num_beams"), py::arg("amb_rank"), py::arg("dd_rank"), py::arg("ntime"),
+          py::arg("nspec") = 1, py::arg("subband_counts") = std::vector<long>{1})
+          .def_property_readonly("num_beams", [](const ReferenceTree &self) { return self.params.num_beams; })
+          .def_property_readonly("amb_rank", [](const ReferenceTree &self) { return self.params.amb_rank; })
+          .def_property_readonly("dd_rank", [](const ReferenceTree &self) { return self.params.dd_rank; })
+          .def_property_readonly("ntime", [](const ReferenceTree &self) { return self.params.ntime; })
+          .def_property_readonly("nspec", [](const ReferenceTree &self) { return self.params.nspec; })
+          .def_property_readonly("subband_counts", [](const ReferenceTree &self) { return self.params.subband_counts; })
+          .def_readonly("frequency_subbands", &ReferenceTree::frequency_subbands)
+          .def("dedisperse",
+               [](ReferenceTree &self, Array<float> &buf, py::object out_obj) {
+                   if (out_obj.is_none()) {
+                       Array<float> out;
+                       self.dedisperse(buf, out);
+                   } else {
+                       Array<float> out = out_obj.cast<Array<float>>();
+                       self.dedisperse(buf, out);
+                   }
+               },
+               py::arg("buf"), py::arg("out") = py::none(),
+               "Dedisperses buf in place, writes subbands to out.\n\n"
+               "Args:\n"
+               "    buf: Input/output array, shape (num_beams, 2^amb_rank, 2^dd_rank, ntime*nspec)\n"
+               "    out: Output array for subbands (optional if M=1)")
           .def_static("test_basics", &ReferenceTree::test_basics)
           .def_static("test_subbands", &ReferenceTree::test_subbands)
     ;
