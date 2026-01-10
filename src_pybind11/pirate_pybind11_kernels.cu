@@ -136,15 +136,16 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("time_selected", &GpuTreeGriddingKernel::time_selected)
     ;
 
-    // ReferenceTreeGriddingKernel: Python injection in pybind11_injections.py:
-    //   - __init__: converts dtype argument via ksgpu.Dtype()
+    // ReferenceTreeGriddingKernel
+    // Note: dtype is omitted since the reference kernel always uses float32 arrays.
     py::class_<ReferenceTreeGriddingKernel>(m, "ReferenceTreeGriddingKernel",
         "Reference implementation of tree gridding kernel.\n\n"
-        "Rebins input frequency channels into output tree channels using weighted sums.")
-          .def(py::init([](Dtype dtype, long nfreq, long nchan, long ntime,
+        "Rebins input frequency channels into output tree channels using weighted sums.\n"
+        "Always uses float32 arrays regardless of dtype parameter in TreeGriddingKernelParams.")
+          .def(py::init([](long nfreq, long nchan, long ntime,
                            long beams_per_batch, const Array<double> &channel_map) {
               TreeGriddingKernelParams params;
-              params.dtype = dtype;
+              params.dtype = Dtype::native<float>();  // Reference kernel always uses float32
               params.nfreq = nfreq;
               params.nchan = nchan;
               params.ntime = ntime;
@@ -152,9 +153,8 @@ void register_kernel_bindings(pybind11::module &m)
               params.channel_map = channel_map;
               return new ReferenceTreeGriddingKernel(params);
           }),
-          py::arg("dtype"), py::arg("nfreq"), py::arg("nchan"), py::arg("ntime"),
+          py::arg("nfreq"), py::arg("nchan"), py::arg("ntime"),
           py::arg("beams_per_batch"), py::arg("channel_map"))
-          .def_property_readonly("dtype", [](const ReferenceTreeGriddingKernel &self) { return self.params.dtype; })
           .def_property_readonly("nfreq", [](const ReferenceTreeGriddingKernel &self) { return self.params.nfreq; })
           .def_property_readonly("nchan", [](const ReferenceTreeGriddingKernel &self) { return self.params.nchan; })
           .def_property_readonly("ntime", [](const ReferenceTreeGriddingKernel &self) { return self.params.ntime; })
