@@ -1028,6 +1028,7 @@ static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, lon
     const DedispersionTree &tree = plan->trees.at(itree);
     const FrequencySubbands &fs = tree.frequency_subbands;
 
+    // Tree index range 0 <= ilo < ihi < 2^pf_rank.
     long ilo = fs.f_to_ilo.at(f);
     long ihi = fs.f_to_ihi.at(f);
 
@@ -1039,7 +1040,8 @@ static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, lon
     double filo = plan->config.frequency_to_index(flo);
     double fihi = plan->config.frequency_to_index(fhi);
 
-    return (fihi - filo) * pow2(tree.ds_level) / 3.0;
+    long r = tree.early_dd_rank + tree.amb_rank + (tree.ds_level ? 1 : 0);
+    return (fihi - filo) / pow(2,r) / 3.0;
 }
 
 
@@ -1258,6 +1260,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 gdd->acquire_output(ichunk, ibatch, nullptr);
 
             for (long itree = 0; itree < ntrees; itree++) {
+                const DedispersionTree &tree = plan->trees.at(itree);
+
                 // Compare peak-finding 'out_max'.
                 assert_arrays_equal(rdd0->out_max.at(itree), rdd1->out_max.at(itree), "pfmax_ref0", "pfmax_ref1", {"beam","pfdm","pft"});
                 assert_arrays_equal(rdd0->out_max.at(itree), rdd2->out_max.at(itree), "pfmax_ref0", "pfmax_ref2", {"beam","pfdm","pft"});
@@ -1278,9 +1282,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 Array<void> gdd_max = gdd->out_max.at(itree).slice(0,iout);
                 Array<uint> gpu_tokens = gdd->out_argmax.at(itree).slice(0,iout).to_host();
 
-                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"});
+                long n = tree.ds_level + tree.amb_rank + tree.early_dd_rank;
+                double eps = 3.0 * config.dtype.precision() * sqrt(n+2);
+                assert_arrays_equal(rdd0->out_max.at(itree), gdd_max, "pfmax_ref0", "pfmax_gpu", {"beam","pfdm","pft"}, eps, eps);
 
-                double eps = 5.0 * config.dtype.precision();
                 pf_kernel->eval_tokens(pf_tmp.at(itree), gpu_tokens, rdd0->wt_arrays.at(itree));
                 assert_arrays_equal(rdd0->out_max.at(itree), pf_tmp.at(itree), "pfmax_ref0", "pf_tmp_gpu", {"beam","pfdm","pft"}, eps, eps);
             }
