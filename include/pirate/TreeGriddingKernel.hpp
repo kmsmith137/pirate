@@ -39,6 +39,7 @@ struct TreeGriddingKernelParams
 
 struct ReferenceTreeGriddingKernel
 {
+    // Note: reference kernel ignores params.dtype, and always uses float32.
     ReferenceTreeGriddingKernel(const TreeGriddingKernelParams &params);
 
     // Rebins input frequency channels into output "tree" channels, using weighted sums.
