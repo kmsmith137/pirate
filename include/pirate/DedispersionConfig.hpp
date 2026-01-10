@@ -31,7 +31,7 @@ struct DedispersionConfig
     std::vector<double> zone_freq_edges;  // length (nzones+1), monotone increasing, in MHz.
 
     // Time sample length in milliseconds.
-    float time_sample_ms = 0.0f;
+    double time_sample_ms = 0.0f;
 
     // Core dedispersion parameters.
     // The number of "tree" channels is ntree = 2^tree_rank.
@@ -130,15 +130,15 @@ struct DedispersionConfig
     // E.g. f=zone_freq_edges[i] corresponds to index = sum_{j<i} zone_nfreq[j].
     // Throws an exception if out-of-range (but allows a little roundoff error).
     // Uses linear search (not binary search) since the number of zones is assumed small.
-    float frequency_to_index(float f) const;
-    float index_to_frequency(float index) const;
+    double frequency_to_index(double f) const;
+    double index_to_frequency(double index) const;
 
     // Converts between frequency and "delay" (a scaled version of f^(-2)).
     // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo,
     // where flo=zone_freq_edges.front(), fhi=zone_freq_edges.back(), and ntree=2^tree_rank.
     // Valid delay range is [0, 2^tree_rank], valid frequency range is [flo, fhi].
-    float delay_to_frequency(float delay) const;
-    float frequency_to_delay(float f) const;
+    double delay_to_frequency(double delay) const;
+    double frequency_to_delay(double f) const;
 
     // Returns the DM (in standard units, pc cm^{-3}) of an FRB whose dispersion delay
     // across the full band (zone_freq_edges.front() < f < zone_freq_edges.back()) is

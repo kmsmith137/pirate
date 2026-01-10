@@ -81,12 +81,12 @@ long DedispersionConfig::get_total_nfreq() const
 }
 
 
-float DedispersionConfig::frequency_to_index(float f) const
+double DedispersionConfig::frequency_to_index(double f) const
 {
     // Allow small roundoff error at band edges.
-    float fmin = zone_freq_edges.front();
-    float fmax = zone_freq_edges.back();
-    float eps = 1.0e-5f * (fmax - fmin);
+    double fmin = zone_freq_edges.front();
+    double fmax = zone_freq_edges.back();
+    double eps = 1.0e-5 * (fmax - fmin);
     
     if ((f < fmin - eps) || (f > fmax + eps)) {
         stringstream ss;
@@ -100,14 +100,14 @@ float DedispersionConfig::frequency_to_index(float f) const
     f = std::min(f, fmax);
     
     // Linear search through zones.
-    float channel_offset = 0;
+    double channel_offset = 0;
     for (size_t i = 0; i < zone_nfreq.size(); i++) {
-        float f0 = zone_freq_edges[i];
-        float f1 = zone_freq_edges[i+1];
+        double f0 = zone_freq_edges[i];
+        double f1 = zone_freq_edges[i+1];
         
         if (f <= f1) {
             // Frequency is in zone i.
-            float frac = (f - f0) / (f1 - f0);
+            double frac = (f - f0) / (f1 - f0);
             channel_offset += frac * zone_nfreq[i];
             break;
         }
@@ -115,22 +115,22 @@ float DedispersionConfig::frequency_to_index(float f) const
         channel_offset += zone_nfreq[i];
     }
     
-    float tot_nfreq = this->get_total_nfreq();
+    double tot_nfreq = this->get_total_nfreq();
 
     // Clamp channel_offset to [0, tot_nfreq]. (Mostly redundant with
     // previous clamping logic, but roundoff error may spill slightly
     // outside the range.)
     
-    channel_offset = std::max(channel_offset, 0.0f);
+    channel_offset = std::max(channel_offset, 0.0);
     channel_offset = std::min(channel_offset, tot_nfreq);
     return channel_offset;
 }
 
 
-float DedispersionConfig::index_to_frequency(float index) const
+double DedispersionConfig::index_to_frequency(double index) const
 {
-    float tot_nfreq = this->get_total_nfreq();
-    float eps = 1.0e-5f * tot_nfreq;
+    double tot_nfreq = this->get_total_nfreq();
+    double eps = 1.0e-5 * tot_nfreq;
     
     if ((index < -eps) || (index > tot_nfreq + eps)) {
         stringstream ss;
@@ -140,19 +140,19 @@ float DedispersionConfig::index_to_frequency(float index) const
     }
     
     // Clamp to valid range (in case of small roundoff error).
-    index = std::max(index, 0.0f);
+    index = std::max(index, 0.0);
     index = std::min(index, tot_nfreq);
     
     // Linear search through zones.
-    float channel_offset = 0;
+    double channel_offset = 0;
     for (size_t i = 0; i < zone_nfreq.size(); i++) {
-        float next_offset = channel_offset + zone_nfreq[i];
+        double next_offset = channel_offset + zone_nfreq[i];
         
         if (index <= next_offset) {
             // Index is in zone i.
-            float frac = (index - channel_offset) / zone_nfreq[i];
-            float f0 = zone_freq_edges[i];
-            float f1 = zone_freq_edges[i+1];
+            double frac = (index - channel_offset) / zone_nfreq[i];
+            double f0 = zone_freq_edges[i];
+            double f1 = zone_freq_edges[i+1];
             return f0 + frac * (f1 - f0);
         }
         
@@ -164,15 +164,15 @@ float DedispersionConfig::index_to_frequency(float index) const
 }
 
 
-float DedispersionConfig::delay_to_frequency(float delay) const
+double DedispersionConfig::delay_to_frequency(double delay) const
 {
     // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo.
     // Formula: f = 1 / sqrt(d/scale + 1/fhi^2), where scale = ntree / (1/flo^2 - 1/fhi^2).
     
-    float flo = zone_freq_edges.front();
-    float fhi = zone_freq_edges.back();
-    float ntree = pow2(tree_rank);
-    float eps = 1.0e-5f * ntree;
+    double flo = zone_freq_edges.front();
+    double fhi = zone_freq_edges.back();
+    double ntree = pow2(tree_rank);
+    double eps = 1.0e-5 * ntree;
     
     if ((delay < -eps) || (delay > ntree + eps)) {
         stringstream ss;
@@ -182,26 +182,26 @@ float DedispersionConfig::delay_to_frequency(float delay) const
     }
     
     // Clamp to valid range (in case of small roundoff error).
-    delay = std::max(delay, 0.0f);
+    delay = std::max(delay, 0.0);
     delay = std::min(delay, ntree);
     
-    float scale = ntree / (1.0f/(flo*flo) - 1.0f/(fhi*fhi));
-    float inv_fhi_sq = 1.0f / (fhi * fhi);
-    float f = 1.0f / sqrtf(delay/scale + inv_fhi_sq);
+    double scale = ntree / (1.0/(flo*flo) - 1.0/(fhi*fhi));
+    double inv_fhi_sq = 1.0 / (fhi * fhi);
+    double f = 1.0 / sqrt(delay/scale + inv_fhi_sq);
     
     return f;
 }
 
 
-float DedispersionConfig::frequency_to_delay(float f) const
+double DedispersionConfig::frequency_to_delay(double f) const
 {
     // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo.
     // Formula: d = scale * (1/f^2 - 1/fhi^2), where scale = ntree / (1/flo^2 - 1/fhi^2).
     
-    float flo = zone_freq_edges.front();
-    float fhi = zone_freq_edges.back();
-    float ntree = pow2(tree_rank);
-    float eps = 1.0e-5f * (fhi - flo);
+    double flo = zone_freq_edges.front();
+    double fhi = zone_freq_edges.back();
+    double ntree = pow2(tree_rank);
+    double eps = 1.0e-5 * (fhi - flo);
     
     if ((f < flo - eps) || (f > fhi + eps)) {
         stringstream ss;
@@ -215,9 +215,9 @@ float DedispersionConfig::frequency_to_delay(float f) const
     f = std::min(f, fhi);
     
     // Delays before rescaling.
-    float d = 1.0f / (f*f);
-    float dlo = 1.0f / (flo*flo);
-    float dhi = 1.0f / (fhi*fhi);
+    double d = 1.0/ (f*f);
+    double dlo = 1.0 / (flo*flo);
+    double dhi = 1.0 / (fhi*fhi);
 
     // Return rescaled delay.
     // FIXME ntree or (ntree-1) here?
@@ -265,56 +265,56 @@ void DedispersionConfig::test() const
 {
     this->validate();
     
-    float flo = zone_freq_edges.front();
-    float fhi = zone_freq_edges.back();
-    float tot_nfreq = this->get_total_nfreq();
-    float ntree = pow2(tree_rank);
+    double flo = zone_freq_edges.front();
+    double fhi = zone_freq_edges.back();
+    double tot_nfreq = this->get_total_nfreq();
+    double ntree = pow2(tree_rank);
     
     // Test frequency_to_index / index_to_frequency at all zone boundaries.
     // E.g. if f=zone_freq_edges[i], then index = sum_{j<i} zone_nfreq[j].
-    float expected_index = 0;
+    double expected_index = 0;
     for (size_t i = 0; i < zone_freq_edges.size(); i++) {
-        float f = zone_freq_edges[i];
-        float index = frequency_to_index(f);
-        xassert(fabsf(index - expected_index) < 1.0e-4f * tot_nfreq);
+        double f = zone_freq_edges[i];
+        double index = frequency_to_index(f);
+        xassert(fabs(index - expected_index) < 1.0e-4 * tot_nfreq);
         
-        float f2 = index_to_frequency(expected_index);
-        xassert(fabsf(f - f2) < 1.0e-4f * fhi);
+        double f2 = index_to_frequency(expected_index);
+        xassert(fabs(f - f2) < 1.0e-4 * fhi);
         
         if (i < zone_nfreq.size())
             expected_index += zone_nfreq[i];
     }
     
     // Test delay_to_frequency / frequency_to_delay at endpoints.
-    xassert(fabsf(delay_to_frequency(0.0f) - fhi) < 1.0e-4f * fhi);
-    xassert(fabsf(delay_to_frequency(ntree) - flo) < 1.0e-4f * fhi);
-    xassert(fabsf(frequency_to_delay(fhi)) < 1.0e-4f * ntree);
-    xassert(fabsf(frequency_to_delay(flo) - ntree) < 1.0e-4f * ntree);
+    xassert(fabs(delay_to_frequency(0.0) - fhi) < 1.0e-4 * fhi);
+    xassert(fabs(delay_to_frequency(ntree) - flo) < 1.0e-4 * fhi);
+    xassert(fabs(frequency_to_delay(fhi)) < 1.0e-4 * ntree);
+    xassert(fabs(frequency_to_delay(flo) - ntree) < 1.0e-4 * ntree);
     
     // Test that frequency_to_index and index_to_frequency are inverses.
     for (int i = 0; i < 10; i++) {
-        float index = rand_uniform(0, tot_nfreq);
-        float f = index_to_frequency(index);
-        float index2 = frequency_to_index(f);
-        xassert(fabsf(index - index2) < 1.0e-4f * tot_nfreq);
+        double index = rand_uniform(0, tot_nfreq);
+        double f = index_to_frequency(index);
+        double index2 = frequency_to_index(f);
+        xassert(fabs(index - index2) < 1.0e-4 * tot_nfreq);
         
         f = rand_uniform(flo, fhi);
         index = frequency_to_index(f);
-        float f2 = index_to_frequency(index);
-        xassert(fabsf(f - f2) < 1.0e-4f * fhi);
+        double f2 = index_to_frequency(index);
+        xassert(fabs(f - f2) < 1.0e-4 * fhi);
     }
     
     // Test that delay_to_frequency and frequency_to_delay are inverses.
     for (int i = 0; i < 10; i++) {
-        float delay = rand_uniform(0, ntree);
-        float f = delay_to_frequency(delay);
-        float delay2 = frequency_to_delay(f);
-        xassert(fabsf(delay - delay2) < 1.0e-4f * ntree);
+        double delay = rand_uniform(0, ntree);
+        double f = delay_to_frequency(delay);
+        double delay2 = frequency_to_delay(f);
+        xassert(fabs(delay - delay2) < 1.0e-4 * ntree);
         
         f = rand_uniform(flo, fhi);
         delay = frequency_to_delay(f);
-        float f2 = delay_to_frequency(delay);
-        xassert(fabsf(f - f2) < 1.0e-4f * fhi);
+        double f2 = delay_to_frequency(delay);
+        xassert(fabs(f - f2) < 1.0e-4 * fhi);
     }
 }
 
@@ -367,7 +367,7 @@ void DedispersionConfig::validate() const
         xassert(zone_nfreq[i] > 0);
     
     for (size_t i = 0; i+1 < zone_freq_edges.size(); i++) {
-        xassert(zone_freq_edges[i] > 0.0f);
+        xassert(zone_freq_edges[i] > 0.0);
         xassert(zone_freq_edges[i] < zone_freq_edges[i+1]);
     }
 
@@ -690,7 +690,7 @@ DedispersionConfig DedispersionConfig::from_yaml(const YamlFile &f)
 
     ret.zone_nfreq = f.get_vector<long> ("zone_nfreq");
     ret.zone_freq_edges = f.get_vector<double> ("zone_freq_edges");
-    ret.time_sample_ms = f.get_scalar<float> ("time_sample_ms");
+    ret.time_sample_ms = f.get_scalar<double> ("time_sample_ms");
     ret.tree_rank = f.get_scalar<long> ("tree_rank");
     ret.num_downsampling_levels = f.get_scalar<long> ("num_downsampling_levels");
     ret.time_samples_per_chunk = f.get_scalar<long> ("time_samples_per_chunk");
