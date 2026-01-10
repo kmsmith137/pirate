@@ -11,5 +11,6 @@ from ..pirate_pybind11 import (
     PfWeightReaderMicrokernel,
     ReferenceLagbuf,
     ReferenceTree,
+    ReferenceTreeGriddingKernel,
 )
 

@@ -136,6 +136,48 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("time_selected", &GpuTreeGriddingKernel::time_selected)
     ;
 
+    // ReferenceTreeGriddingKernel: Python injection in pybind11_injections.py:
+    //   - __init__: converts dtype argument via ksgpu.Dtype()
+    py::class_<ReferenceTreeGriddingKernel>(m, "ReferenceTreeGriddingKernel",
+        "Reference implementation of tree gridding kernel.\n\n"
+        "Rebins input frequency channels into output tree channels using weighted sums.")
+          .def(py::init([](Dtype dtype, long nfreq, long nchan, long ntime,
+                           long beams_per_batch, const Array<double> &channel_map) {
+              TreeGriddingKernelParams params;
+              params.dtype = dtype;
+              params.nfreq = nfreq;
+              params.nchan = nchan;
+              params.ntime = ntime;
+              params.beams_per_batch = beams_per_batch;
+              params.channel_map = channel_map;
+              return new ReferenceTreeGriddingKernel(params);
+          }),
+          py::arg("dtype"), py::arg("nfreq"), py::arg("nchan"), py::arg("ntime"),
+          py::arg("beams_per_batch"), py::arg("channel_map"))
+          .def_property_readonly("dtype", [](const ReferenceTreeGriddingKernel &self) { return self.params.dtype; })
+          .def_property_readonly("nfreq", [](const ReferenceTreeGriddingKernel &self) { return self.params.nfreq; })
+          .def_property_readonly("nchan", [](const ReferenceTreeGriddingKernel &self) { return self.params.nchan; })
+          .def_property_readonly("ntime", [](const ReferenceTreeGriddingKernel &self) { return self.params.ntime; })
+          .def_property_readonly("beams_per_batch", [](const ReferenceTreeGriddingKernel &self) { return self.params.beams_per_batch; })
+          .def_property_readonly("channel_map", [](const ReferenceTreeGriddingKernel &self) { return self.params.channel_map; })
+          .def("apply",
+               [](ReferenceTreeGriddingKernel &self, const Array<float> &in) {
+                   Dtype dtype = Dtype::native<float> ();
+                   long beams = self.params.beams_per_batch;
+                   long nchan = self.params.nchan;
+                   long ntime = self.params.ntime;
+                   Array<float> out(dtype, {beams, nchan, ntime}, af_rhost);
+                   self.apply(out, in);
+                   return out;
+               },
+               py::arg("in"),
+               "Rebins input frequency channels into output tree channels.\n\n"
+               "Args:\n"
+               "    in: Input array, shape (beams_per_batch, nfreq, ntime)\n\n"
+               "Returns:\n"
+               "    Output array, shape (beams_per_batch, nchan, ntime)")
+    ;
+
     py::class_<PfOutputMicrokernel>(m, "PfOutputMicrokernel")
           .def_static("test_random", &PfOutputMicrokernel::test_random)
           .def_static("registry_size", &PfOutputMicrokernel::registry_size)

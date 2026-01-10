@@ -487,6 +487,37 @@ class GpuDequantizationKernelInjections:
         self._cpp_launch(out, in_uint8, stream.ptr)
 
 
+@ksgpu.inject_methods(pirate_pybind11.ReferenceTreeGriddingKernel)
+class ReferenceTreeGriddingKernelInjections:
+    """Python extensions for ReferenceTreeGriddingKernel.
+    
+    Adds dtype conversion for constructor.
+    """
+    
+    _cpp_init = pirate_pybind11.ReferenceTreeGriddingKernel.__init__
+    
+    def __init__(self, dtype, nfreq, nchan, ntime, beams_per_batch, channel_map):
+        """Create a ReferenceTreeGriddingKernel.
+        
+        Parameters
+        ----------
+        dtype : str, numpy.dtype, cupy.dtype, or ksgpu.Dtype
+            Data type (used by GPU kernel; ignored by reference kernel which always uses float32)
+        nfreq : int
+            Number of input frequency channels
+        nchan : int
+            Number of output tree channels
+        ntime : int
+            Time samples per chunk
+        beams_per_batch : int
+            Number of beams per batch
+        channel_map : array
+            Length (nchan+1) array defining channel boundaries, must be monotonically decreasing
+        """
+        dtype = ksgpu.Dtype(dtype)
+        self._cpp_init(dtype, nfreq, nchan, ntime, beams_per_batch, channel_map)
+
+
 @ksgpu.inject_methods(pirate_pybind11.DedispersionConfig)
 class DedispersionConfigInjections:
     """Python extensions for DedispersionConfig.
