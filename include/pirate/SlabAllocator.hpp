@@ -76,15 +76,19 @@ public:
     std::shared_ptr<void> get_slab(long nbytes, bool blocking = false);
     
     // Returns the number of slabs currently available in the free list.
-    // Throws exception in dummy mode.
+    // Throws exception in dummy mode or if not initialized.
     long num_free_slabs() const;
     
     // Returns the total number of slabs in the pool.
-    // Throws exception in dummy mode.
+    // Throws exception in dummy mode or if not initialized.
     long num_total_slabs() const;
     
-    // Returns the established slab size, or -1 if no slabs have been allocated yet.
+    // Returns the established slab size.
+    // Throws exception if not initialized.
     long get_slab_size() const;
+    
+    // Returns true if the slab size has been established.
+    bool is_initialized() const;
     
     // Returns true if in dummy mode (capacity < 0).
     bool is_dummy() const { return capacity < 0; }

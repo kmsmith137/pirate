@@ -1,9 +1,12 @@
 #include "../include/pirate/AssembledFrame.hpp"
 
 #include <ksgpu/xassert.hpp>
+#include <ksgpu/mem_utils.hpp>
 
 #include <sstream>
 #include <stdexcept>
+
+using namespace std;
 
 namespace pirate {
 #if 0
@@ -16,11 +19,14 @@ namespace pirate {
 // Constructor
 
 
-AssembledFrameAllocator::AssembledFrameAllocator(const std::shared_ptr<SlabAllocator> &slab_allocator_, int num_consumers_)
+AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator> &slab_allocator_, int num_consumers_)
     : slab_allocator(slab_allocator_), num_consumers(num_consumers_)
 {
     xassert(slab_allocator);
     xassert_gt(num_consumers, 0);
+
+    if (!ksgpu::af_on_host(slab_allocator->aflags))
+        throw runtime_error("AssembledFrameAllocator: slab_allocator must be on host");
     
     is_initialized.resize(num_consumers, false);
     consumer_next_index.resize(num_consumers, 0);
@@ -32,7 +38,7 @@ AssembledFrameAllocator::AssembledFrameAllocator(const std::shared_ptr<SlabAlloc
 // initialize()
 
 
-void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const std::vector<int> &beam_ids_)
+void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const vector<int> &beam_ids_)
 {
     xassert_ge(consumer_id, 0);
     xassert_lt(consumer_id, num_consumers);
@@ -40,13 +46,13 @@ void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time
     xassert_gt(time_samples_per_chunk_, 0L);
     xassert(!beam_ids_.empty());
     
-    std::unique_lock<std::mutex> guard(lock);
+    unique_lock<mutex> guard(lock);
     
     // Check for double initialization
     if (is_initialized[consumer_id]) {
-        std::stringstream ss;
+        stringstream ss;
         ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id << " already initialized";
-        throw std::runtime_error(ss.str());
+        throw runtime_error(ss.str());
     }
     
     if (num_initialized == 0) {
@@ -58,23 +64,23 @@ void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time
     else {
         // Subsequent consumers: validate parameters match
         if (nfreq_ != nfreq) {
-            std::stringstream ss;
+            stringstream ss;
             ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
                << " has nfreq=" << nfreq_ << ", expected " << nfreq;
-            throw std::runtime_error(ss.str());
+            throw runtime_error(ss.str());
         }
         if (time_samples_per_chunk_ != time_samples_per_chunk) {
-            std::stringstream ss;
+            stringstream ss;
             ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
                << " has time_samples_per_chunk=" << time_samples_per_chunk_
                << ", expected " << time_samples_per_chunk;
-            throw std::runtime_error(ss.str());
+            throw runtime_error(ss.str());
         }
         if (beam_ids_ != beam_ids) {
-            std::stringstream ss;
+            stringstream ss;
             ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
                << " has mismatched beam_ids";
-            throw std::runtime_error(ss.str());
+            throw runtime_error(ss.str());
         }
     }
     
@@ -88,7 +94,7 @@ void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time
 // create_frame(): helper to create a new frame for a given sequence index
 
 
-std::shared_ptr<AssembledFrame> AssembledFrameAllocator::create_frame(long seq_index)
+shared_ptr<AssembledFrame> AssembledFrameAllocator::create_frame(long seq_index)
 {
     // Must be called with lock held.
     // Assumes initialization is complete.
@@ -97,7 +103,7 @@ std::shared_ptr<AssembledFrame> AssembledFrameAllocator::create_frame(long seq_i
     long time_chunk_index = seq_index / nbeams;
     int beam_index = seq_index % nbeams;
     
-    auto frame = std::make_shared<AssembledFrame>();
+    auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = time_samples_per_chunk;
     frame->beam_id = beam_ids[beam_index];
@@ -106,7 +112,10 @@ std::shared_ptr<AssembledFrame> AssembledFrameAllocator::create_frame(long seq_i
     // Allocate data using slab allocator.
     // int4 dtype means 4 bits per element, so nbytes = (nfreq * ntime) / 2.
     long nbytes = (nfreq * time_samples_per_chunk) / 2;
-    std::shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
+    shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
+
+    // Array is initialized to all (-8) values.
+    memset(slab.get(), 0x88, nbytes);
     
     // Initialize ksgpu::Array<void> manually.
     frame->data.data = slab.get();
@@ -130,19 +139,19 @@ std::shared_ptr<AssembledFrame> AssembledFrameAllocator::create_frame(long seq_i
 // get_frame()
 
 
-std::shared_ptr<AssembledFrame> AssembledFrameAllocator::get_frame(int consumer_id)
+shared_ptr<AssembledFrame> AssembledFrameAllocator::get_frame(int consumer_id)
 {
     xassert_ge(consumer_id, 0);
     xassert_lt(consumer_id, num_consumers);
     
-    std::unique_lock<std::mutex> guard(lock);
+    unique_lock<mutex> guard(lock);
     
     // Check that this consumer has been initialized
     if (!is_initialized[consumer_id]) {
-        std::stringstream ss;
+        stringstream ss;
         ss << "AssembledFrameAllocator::get_frame(): consumer_id=" << consumer_id
            << " has not called initialize()";
-        throw std::runtime_error(ss.str());
+        throw runtime_error(ss.str());
     }
     
     // Get this consumer's next sequence index
@@ -172,6 +181,23 @@ std::shared_ptr<AssembledFrame> AssembledFrameAllocator::get_frame(int consumer_
     }
     
     return frame;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// num_free_frames() and num_total_frames()
+
+
+long AssembledFrameAllocator::num_free_frames() const
+{
+    return slab_allocator->num_free_slabs();
+}
+
+
+long AssembledFrameAllocator::num_total_frames() const
+{
+    return slab_allocator->num_total_slabs();
 }
 
 

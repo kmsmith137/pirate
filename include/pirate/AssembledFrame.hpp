@@ -27,6 +27,7 @@ struct AssembledFrame
 
     // dtype int4, shape (nfreq, ntime).
     // This array is allocated on memory returned from a SlabAllocator.
+    // Newly allocated frames have all 'data' elements set to (-8).
     ksgpu::Array<void> data;
 };
 
@@ -66,6 +67,14 @@ struct AssembledFrameAllocator
     // Frame memory is allocated from 'slab_allocator', with nbytes = (nfreq * time_samples_per_chunk) / 2.
 
     std::shared_ptr<AssembledFrame> get_frame(int consumer_id);
+
+    // Returns the number of free frames (same as num_free_slabs() from the underlying slab_allocator).
+    // Throws exception in dummy mode or if not initialized.
+    long num_free_frames() const;
+
+    // Returns the total number of frames (same as num_total_slabs() from the underlying slab_allocator).
+    // Throws exception in dummy mode or if not initialized.
+    long num_total_frames() const;
 
 private:
     std::shared_ptr<SlabAllocator> slab_allocator;

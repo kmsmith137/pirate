@@ -199,6 +199,10 @@ long SlabAllocator::num_free_slabs() const
         throw std::runtime_error("SlabAllocator::num_free_slabs(): not available in dummy mode");
     
     std::lock_guard<std::mutex> guard(lock);
+    
+    if (slab_size < 0)
+        throw std::runtime_error("SlabAllocator::num_free_slabs(): slab size has not been established yet");
+    
     return static_cast<long>(free_list.size());
 }
 
@@ -209,6 +213,10 @@ long SlabAllocator::num_total_slabs() const
         throw std::runtime_error("SlabAllocator::num_total_slabs(): not available in dummy mode");
     
     std::lock_guard<std::mutex> guard(lock);
+    
+    if (slab_size < 0)
+        throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
+    
     return num_slabs;
 }
 
@@ -216,7 +224,18 @@ long SlabAllocator::num_total_slabs() const
 long SlabAllocator::get_slab_size() const
 {
     std::lock_guard<std::mutex> guard(lock);
+    
+    if (slab_size < 0)
+        throw std::runtime_error("SlabAllocator::get_slab_size(): slab size has not been established yet");
+    
     return slab_size;
+}
+
+
+bool SlabAllocator::is_initialized() const
+{
+    std::lock_guard<std::mutex> guard(lock);
+    return slab_size >= 0;
 }
 
 
