@@ -9,6 +9,7 @@
 #include <pybind11/stl.h>
 #include <ksgpu/pybind11.hpp>
 
+#include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
@@ -91,6 +92,58 @@ void register_core_bindings(pybind11::module &m)
             "Memory allocation flags")
         .def_readonly("capacity", &SlabAllocator::capacity,
             "Total capacity in bytes, or < 0 for dummy mode")
+    ;
+
+    // AssembledFrame: data frame containing beamformed data for one (time_chunk, beam_id) pair.
+    // The 'data' member is int4 with shape (nfreq, ntime), but exposed to Python as uint8
+    // with shape (nfreq, ntime/2) since numpy doesn't support sub-byte dtypes.
+    py::class_<AssembledFrame, std::shared_ptr<AssembledFrame>>(m, "AssembledFrame",
+        "Data frame containing beamformed data for one (time_chunk, beam_id) pair.")
+        .def_readonly("nfreq", &AssembledFrame::nfreq)
+        .def_readonly("ntime", &AssembledFrame::ntime)
+        .def_readonly("beam_id", &AssembledFrame::beam_id)
+        .def_readonly("time_chunk_index", &AssembledFrame::time_chunk_index)
+        .def_property_readonly("data",
+            [](const AssembledFrame &self) {
+                // Convert int4 array (nfreq, ntime) to uint8 array (nfreq, ntime/2).
+                Array<uint8_t> arr;
+                arr.data = static_cast<uint8_t *>(self.data.data);
+                arr.ndim = 2;
+                arr.shape[0] = self.nfreq;
+                arr.shape[1] = self.ntime / 2;
+                arr.size = self.nfreq * (self.ntime / 2);
+                arr.strides[0] = self.ntime / 2;
+                arr.strides[1] = 1;
+                arr.dtype = Dtype::native<uint8_t>();
+                arr.aflags = self.data.aflags;
+                arr.base = self.data.base;
+                arr.check_invariants("AssembledFrame::data getter");
+                return arr;
+            },
+            "Data as uint8 array with shape (nfreq, ntime/2).\n\n"
+            "The underlying data is int4 (nfreq, ntime), packed as uint8.")
+    ;
+
+    // AssembledFrameAllocator: allocates AssembledFrames for multiple consumers.
+    // Designed for multi-threaded use, but works fine with a single Python consumer.
+    py::class_<AssembledFrameAllocator, std::shared_ptr<AssembledFrameAllocator>>(m, "AssembledFrameAllocator",
+        "Allocates AssembledFrames for multiple consumers.\n\n"
+        "Each consumer calls initialize() once, then get_frame() in a loop.\n"
+        "All consumers receive the same sequence of frames (same shared_ptr).")
+        .def(py::init<const std::shared_ptr<SlabAllocator> &, int>(),
+            py::arg("slab_allocator"), py::arg("num_consumers"))
+        .def_readonly("nfreq", &AssembledFrameAllocator::nfreq)
+        .def_readonly("time_samples_per_chunk", &AssembledFrameAllocator::time_samples_per_chunk)
+        .def_readonly("beam_ids", &AssembledFrameAllocator::beam_ids)
+        .def("initialize", &AssembledFrameAllocator::initialize,
+            py::arg("consumer_id"), py::arg("nfreq"),
+            py::arg("time_samples_per_chunk"), py::arg("beam_ids"),
+            "Initialize a consumer. Must be called once per consumer before get_frame().\n\n"
+            "All consumers must provide the same nfreq, time_samples_per_chunk, and beam_ids.")
+        .def("get_frame", &AssembledFrameAllocator::get_frame,
+            py::arg("consumer_id"),
+            "Get the next frame for this consumer.\n\n"
+            "Frames cycle through beam_ids for each time_chunk_index.")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.

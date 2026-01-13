@@ -49,28 +49,21 @@ struct AssembledFrameAllocator
     void initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<int> &beam_ids);
 
     // Each consumer calls get_frame() in a loop.
-    //  - The first call to get_frame() returns a frame with time_chunk_index=0 and beam_id=beam_ids[0].
-    //  - The next (nbeams-1) calls return frames with time_chunk_index=0 and beam_ids[1:]
-    //  - The next (nbeams) calls return time_chunk_index=1,
-    //     etc.
+    // Frames are returned in the following ordering:
     //
-    // Thus, each consumer receives a sequence of frames with a preset pattern of time and beam indices.
+    //   for i in 0,1,2,...
+    //      for j in 0,...,B-1,  where B=beam_ids.size()
+    //          The (i*B+j)-th call to get_frame() returns time_chunk_index=i, beam_id=beam_ids[j]
     //
-    // IMPORANT: at a given point in the sequence, the frames received by the different consumers must be 
-    // shared_ptrs to the same AssembledFrame object. That is, all consumers get the same AssembledFrame
-    // on the first call (time_index=0, beam_ids[0]). On the second call, the AssembledFrame is different
-    // from the first call, but the same for all consumers (and so on for the third, fourth, ... call).
+    // All consumers receive the same sequence of frames, and corresponding frames are
+    // shared: the N-th call to get_frame() returns the same shared_ptr<AssembledFrame>
+    // for all consumers (not a copy).
     //
-    // To make this work, the AssembledFrameAllocator is responsible for keeping an internal queue of
-    // AssembledFrames that have been sent to one consumer, but not yet sent to all consumers. When an
-    // AssembledFrame exits the queue (i.e. when it is sent to the last consumer), its shared_ptr reference
-    // is dropped (no longer held by the AssembledFrameAllocator).
+    // The allocator holds a reference to each frame until all consumers have received it.
+    // When the last consumer receives a frame, the allocator drops its reference. (If all
+    // consumers have also dropped their references, then the frame is deallocated.)
     //
-    // The AssembledFrameAllocator creates new frames with 
-    //   auto frame = make_shared<AssembledFrame>();
-    //
-    // and initializes frame->data so that it points to a slab from 'slab_allocator' with
-    // nbytes = (nfreq * time_samples_per_chunk) / 2.
+    // Frame memory is allocated from 'slab_allocator', with nbytes = (nfreq * time_samples_per_chunk) / 2.
 
     std::shared_ptr<AssembledFrame> get_frame(int consumer_id);
 
