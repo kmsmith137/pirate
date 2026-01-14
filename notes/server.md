@@ -73,7 +73,7 @@ The repo currently includes a little bit of low-level code that may be helpful:
   - `Epoll`: similar C++ wrapper class for linux epoll file descriptor.
      (Allows one thread to read from multiple TCP sockets efficiently, see `man epoll`).
 
-  - To see `class Socket` and `class Epoll` in action, check out `FakeServer.cu`,
+  - To see `class Socket` and `class Epoll` in action, check out `FakeServer.cpp`,
     which accepts connections from a fixed number of TCP sockets, and then reads
     data in parallel from them.
 

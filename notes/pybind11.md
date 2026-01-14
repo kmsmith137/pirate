@@ -29,11 +29,11 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 
 Pybind11 code is in the following source files:
 ```
-   src_pybind11/pirate_pybind11_casm.cu
-   src_pybind11/pirate_pybind11_core.cu
-   src_pybind11/pirate_pybind11_kernels.cu
-   src_pybind11/pirate_pybind11_loose_ends.cu
-   src_pybind11/pirate_pybind11.cu   # toplevel
+   src_pybind11/pirate_pybind11_casm.cpp
+   src_pybind11/pirate_pybind11_core.cpp
+   src_pybind11/pirate_pybind11_kernels.cpp
+   src_pybind11/pirate_pybind11_loose_ends.cpp
+   src_pybind11/pirate_pybind11.cpp   # toplevel
 ```
 These get compiled into a single extension module `pirate_pybind11.so`.
 
@@ -54,7 +54,7 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - Please write docstrings in the pybind11 code, but keep them concise and avoid superficial comments. If the meaning of a member/method is self-evident, then don't write a docstring.
 
-- When writing docstrings, comments in the larger C++ codebase may be useful. For example, when writing python bindings for `class pirate::BumpAllocator`, comments in the source files `include/pirate/BumpAllocator.hpp` and `src_lib/BumpAllocator.cu` may be useful for writing docstrings.
+- When writing docstrings, comments in the larger C++ codebase may be useful. For example, when writing python bindings for `class pirate::BumpAllocator`, comments in the source files `include/pirate/BumpAllocator.hpp` and `src_lib/BumpAllocator.cpp` may be useful for writing docstrings.
 
 - If it's technically challenging (or awkward) to python-bind a C++ class member/method, or if the member/method seems unlikely to be useful from python, then skip it. Please list in the chat all "skipped" members/methods.
 
