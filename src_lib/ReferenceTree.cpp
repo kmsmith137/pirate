@@ -75,7 +75,7 @@ ReferenceTree::ReferenceTree(const Params &params_) :
     // Written in a brain-dead way which "mirrors" ReferenceTree::dedisperse_2d().
 
     for (long pf_level = 1; pf_level <= fs.pf_rank; pf_level++) {
-        long nf_in = pow2(fs.pf_rank - pf_level + 1);
+        // long nf_in = pow2(fs.pf_rank - pf_level + 1);
         long pf_ndm = pow2(params.dd_rank - fs.pf_rank);
         long pf_nd2 = pow2(pf_level - 1);
 
