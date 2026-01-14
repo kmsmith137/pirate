@@ -16,9 +16,6 @@ namespace pirate {
 #endif
 
 
-// Protocol magic number (little-endian): 0xf4bf4b01 where 01 is the version number.
-static constexpr uint32_t protocol_magic = 0xf4bf4b01;
-
 
 FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::string &ip_addr_, uint16_t port_, int nthreads_) :
     xmd(xmd_),
@@ -120,33 +117,6 @@ XEngineMetadata FakeXEngine::make_worker_metadata(int thread_id) const
 }
 
 
-bool FakeXEngine::wait_for_sync(long array_index)
-{
-    // Before sending array N, wait until all threads have finished array N-2.
-    // "All threads finished array K" means arrays_completed >= nthreads * (K + 1).
-    // So we need arrays_completed >= nthreads * (N - 2 + 1) = nthreads * (N - 1).
-
-    if (array_index < 2)
-        return true;  // no waiting needed for first two arrays
-
-    long required = long(nthreads) * (array_index - 1);
-
-    while (arrays_completed.load() < required) {
-        // Check if stopped.
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            if (is_stopped)
-                return false;
-        }
-
-        // Brief sleep to avoid busy-waiting.
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-    }
-
-    return true;
-}
-
-
 void FakeXEngine::worker_main(int thread_id)
 {
     try {
@@ -157,9 +127,7 @@ void FakeXEngine::worker_main(int thread_id)
 }
 
 
-// Helper: send all bytes from buffer, using short timeouts to allow prompt exit.
-// Returns false if stopped or connection reset.
-static bool send_all(FakeXEngine *fxe, Socket &sock, const void *buf, long nbytes)
+bool FakeXEngine::_send_all(Socket &sock, const void *buf, long nbytes)
 {
     const char *ptr = static_cast<const char *>(buf);
     long pos = 0;
@@ -167,13 +135,13 @@ static bool send_all(FakeXEngine *fxe, Socket &sock, const void *buf, long nbyte
     while (pos < nbytes) {
         // Check if stopped.
         {
-            std::lock_guard<std::mutex> lock(fxe->mutex);
-            if (fxe->is_stopped)
+            std::lock_guard<std::mutex> lock(mutex);
+            if (is_stopped)
                 return false;
         }
 
         // Try to send with short timeout.
-        long n = sock.send_with_timeout(ptr + pos, nbytes - pos, FakeXEngine::send_timeout_ms);
+        long n = sock.send_with_timeout(ptr + pos, nbytes - pos, send_timeout_ms);
 
         if (sock.connreset)
             return false;
@@ -201,49 +169,58 @@ void FakeXEngine::_worker_main(int thread_id)
     Socket sock(PF_INET, SOCK_STREAM);
     sock.connect(ip_addr, port);
 
-    // Send protocol header: magic number (4 bytes).
-    uint32_t magic = protocol_magic;
-    if (!send_all(this, sock, &magic, sizeof(magic)))
-        return;
-
-    // Send YAML metadata.
+    // Build protocol header: magic (4 bytes) + string length (4 bytes) + YAML string.
     string yaml_str = worker_xmd.to_yaml_string();
 
-    // Pad string to include null terminator, and pad to 4-byte alignment.
-    long str_len = yaml_str.size() + 1;  // include null terminator
+    // Pad YAML string to include null terminator and 4-byte alignment.
+    long str_len = yaml_str.size() + 1;
     long padded_len = ((str_len + 3) / 4) * 4;
-    yaml_str.resize(padded_len, '\0');
 
-    // Send string length (4 bytes).
+    // Build contiguous header buffer.
+    vector<char> header_buf(8 + padded_len, '\0');
+    uint32_t magic = protocol_magic;
     uint32_t len32 = static_cast<uint32_t>(padded_len);
-    if (!send_all(this, sock, &len32, sizeof(len32)))
-        return;
+    memcpy(header_buf.data(), &magic, 4);
+    memcpy(header_buf.data() + 4, &len32, 4);
+    memcpy(header_buf.data() + 8, yaml_str.data(), yaml_str.size());
 
-    // Send the YAML string (null-terminated and padded).
-    if (!send_all(this, sock, yaml_str.data(), padded_len))
+    // Send protocol header in a single call.
+    if (!_send_all(sock, header_buf.data(), header_buf.size()))
         return;
 
     // Send data arrays in a loop.
     long array_index = 0;
 
     while (true) {
-        // Wait for synchronization barrier.
-        if (!wait_for_sync(array_index))
-            return;
+        // Synchronization: before sending array N, wait until all threads
+        // have finished sending array N-2. Uses even/odd barrier counters.
+        // barrier[slot] counts completions of arrays with (index % 2 == slot).
+        // "All threads finished array K" means barrier[K%2] >= nthreads * (K/2 + 1).
+        // For array N-2: barrier[N%2] >= nthreads * ((N-2)/2 + 1) = nthreads * (N/2).
 
-        // Check if stopped before sending.
-        {
-            std::lock_guard<std::mutex> lock(mutex);
+        int slot = array_index % 2;
+        long required = long(nthreads) * (array_index / 2);
+
+        std::unique_lock<std::mutex> lock(mutex);
+
+        while (barrier[slot] < required) {
             if (is_stopped)
                 return;
+            cv.wait(lock);
         }
 
-        // Send data array.
-        if (!send_all(this, sock, data_buf.data(), data_nbytes))
+        lock.unlock();
+
+        // Send data array. Checks 'is_stopped'.
+        if (!_send_all(sock, data_buf.data(), data_nbytes))
             return;
 
-        // Increment completion counter.
-        arrays_completed.fetch_add(1);
+        // Increment barrier and notify waiting threads.
+        lock.lock();
+        barrier[slot]++;
+        lock.unlock();
+        
+        cv.notify_all();
         array_index++;
     }
 }

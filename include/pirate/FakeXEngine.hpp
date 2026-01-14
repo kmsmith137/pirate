@@ -19,6 +19,9 @@ namespace pirate {
 #endif
 
 
+struct Socket;  // forward declaration (defined in network_utils.hpp)
+
+
 // FakeXEngine: simulates 64 upstream X-engine nodes sending data to a single receiver.
 //
 // This class is a "thread-backed class" (see notes/thread_backed_class.md) that spawns
@@ -43,6 +46,11 @@ namespace pirate {
 
 struct FakeXEngine
 {
+    // Protocol magic number (little-endian): 0xf4bf4b01 where 01 is the version number.
+    static constexpr uint32_t protocol_magic = 0xf4bf4b01;
+    // Timeout for send operations (milliseconds).
+    static constexpr int send_timeout_ms = 10;
+
     // Constructor args.
     const XEngineMetadata xmd;
     const std::string ip_addr;
@@ -58,13 +66,13 @@ struct FakeXEngine
     // Worker threads (created in start()).
     std::vector<std::thread> workers;
 
-    // Synchronization: tracks how many arrays have been completed across all threads.
-    // After sending array i, each thread increments this counter.
-    // Before sending array N, each thread waits until arrays_completed >= nthreads * (N-1).
-    std::atomic<long> arrays_completed{0};
+    // Synchronization: tracks completion of even/odd arrays.
+    // barrier[0] counts completions of arrays 0, 2, 4, ...
+    // barrier[1] counts completions of arrays 1, 3, 5, ...
+    // Before sending array N, wait for barrier[N%2] >= nthreads * (N/2).
+    // Non-atomic, protected by lock.
 
-    // Timeout for send operations (milliseconds).
-    static constexpr int send_timeout_ms = 10;
+    long barrier[2] = {0,0};
 
     // ----- Public interface -----
 
@@ -102,9 +110,9 @@ private:
     // Wrapper that catches exceptions and calls stop().
     void worker_main(int thread_id);
 
-    // Helper: wait for synchronization barrier before sending array N.
-    // Returns false if stopped while waiting.
-    bool wait_for_sync(long array_index);
+    // Helper: send all bytes from buffer, using short timeouts to allow prompt exit.
+    // Returns false if stopped or connection reset.
+    bool _send_all(Socket &sock, const void *buf, long nbytes);
 };
 
 
