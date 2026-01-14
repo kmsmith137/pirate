@@ -144,6 +144,12 @@ void register_core_bindings(pybind11::module &m)
             py::arg("consumer_id"),
             "Get the next frame for this consumer.\n\n"
             "Frames cycle through beam_ids for each time_chunk_index.")
+        .def("num_free_frames", &AssembledFrameAllocator::num_free_frames,
+            "Number of frames currently available in the pool.\n\n"
+            "Throws in dummy mode or if not initialized.")
+        .def("num_total_frames", &AssembledFrameAllocator::num_total_frames,
+            "Total number of frames in the pool.\n\n"
+            "Throws in dummy mode or if not initialized.")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.

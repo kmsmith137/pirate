@@ -12,6 +12,7 @@ from . import casm
 from . import kernels
 from . import loose_ends
 from . import core
+from . import tests
 
 from . import (
     DedispersionConfig,
@@ -46,6 +47,7 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--ana', action='store_true', help='Runs AnalyticDedisperser.test_random()')
+    parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
 
 
 def rrange(registry_class):
@@ -65,7 +67,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'zomb', 'dd', 'ana' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'zomb', 'dd', 'ana', 'net' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -133,7 +135,12 @@ def test(args):
         
         if run_all_tests or args.ana:
             core.AnalyticDedisperser.test_random()
-            
+        
+        if run_all_tests or args.net:
+            # Network/allocator tests only need to run once (not niter times)
+            if i == 0:
+                tests.test_assembled_frame_allocator()
+
 
 #########################################   time command  ##########################################
 

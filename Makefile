@@ -202,6 +202,8 @@ PYFILES = \
   pirate_frb/core/AnalyticDedisperser.py \
   pirate_frb/kernels/__init__.py \
   pirate_frb/loose_ends/__init__.py \
+  pirate_frb/tests/__init__.py \
+  pirate_frb/tests/test_assembled_frame_allocator.py \
   pirate_frb/utils/__init__.py
 
 # Python source files in the 'pirate_frb.cuda_generator' submodule are listed separately.
