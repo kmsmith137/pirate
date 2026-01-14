@@ -1,6 +1,7 @@
 #include "../include/pirate/network_utils.hpp"
 
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 
@@ -215,6 +216,35 @@ Socket Socket::accept()
         throw runtime_error(errstr(fd, "Socket::accept"));
 
     return ret;
+}
+
+
+Socket Socket::accept(int timeout_ms)
+{
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::accept() called on uninitialized socket");
+
+    // Negative timeout means blocking (same as accept()).
+    if (timeout_ms < 0)
+        return this->accept();
+
+    // Use poll() to implement timeout.
+    struct pollfd pfd;
+    pfd.fd = this->fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    int ret = poll(&pfd, 1, timeout_ms);
+
+    if (_unlikely(ret < 0))
+        throw runtime_error(errstr(fd, "Socket::accept: poll"));
+
+    // Timeout expired.
+    if (ret == 0)
+        return Socket();
+
+    // Socket is ready for accept().
+    return this->accept();
 }
 
 

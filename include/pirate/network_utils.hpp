@@ -66,6 +66,10 @@ struct Socket
 
     // FIXME in current API, sender's IP address is thrown away!
     Socket accept();
+    
+    // accept() with timeout. Returns an uninitialized (fd < 0) Socket if timeout expires.
+    // A negative timeout is blocking (same as accept()).
+    Socket accept(int timeout_ms);
 
     // General wrappers for getsockopt(), setsockopt()
     void getopt(int level, int optname, void *optval, socklen_t *optlen);

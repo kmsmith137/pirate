@@ -150,6 +150,7 @@ LIB_SRCFILES = \
   src_lib/LaggedDownsamplingKernelParams.cu \
   src_lib/MegaRingbuf.cu \
   src_lib/PeakFindingKernel.cu \
+  src_lib/Receiver.cu \
   src_lib/ReferenceDedisperser.cu \
   src_lib/ReferenceLagbuf.cu \
   src_lib/ReferenceLaggedDownsamplingKernel.cu \
@@ -248,6 +249,7 @@ HFILES = \
   include/pirate/MegaRingbuf.hpp \
   include/pirate/network_utils.hpp \
   include/pirate/PeakFindingKernel.hpp \
+  include/pirate/Receiver.hpp \
   include/pirate/ReferenceLagbuf.hpp \
   include/pirate/ReferenceTree.hpp \
   include/pirate/ResourceTracker.hpp \
