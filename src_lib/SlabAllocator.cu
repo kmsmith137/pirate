@@ -161,7 +161,6 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
         std::unique_lock<std::mutex> guard(lock);
         _check_nbytes(nbytes);
         guard.unlock();
-        
         return ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8), slab_size, aflags);
     }
     

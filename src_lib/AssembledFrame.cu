@@ -316,8 +316,12 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
         }
 
         // Get frame and increment receive count.
-        auto &[frame, num_received] = frame_queue[queue_pos];
+        auto &[frame_ref, num_received] = frame_queue[queue_pos];
         num_received++;
+        
+        // IMPORTANT: Make a copy of the shared_ptr BEFORE popping from queue!
+        // frame_ref becomes a dangling reference after pop_front().
+        auto result = frame_ref;
     
         // Increment this consumer's sequence index.
         consumer_next_index[consumer_id]++;
@@ -328,7 +332,7 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
             queue_start_index++;
         }
     
-        return frame;
+        return result;
     }
 }
 
