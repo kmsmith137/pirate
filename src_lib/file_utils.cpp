@@ -1,6 +1,7 @@
 #include "../include/pirate/file_utils.hpp"
 #include <ksgpu/xassert.hpp>
 
+#include <cstring>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>

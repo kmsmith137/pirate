@@ -1,5 +1,6 @@
 #include "../include/pirate/network_utils.hpp"
 
+#include <cstring>
 #include <fcntl.h>
 #include <poll.h>
 #include <unistd.h>

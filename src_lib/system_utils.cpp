@@ -1,5 +1,6 @@
 #include "../include/pirate/system_utils.hpp"
 
+#include <cstring>
 #include <thread>
 #include <string>
 #include <sstream>

@@ -1,6 +1,7 @@
 #ifndef _PIRATE_GPU_DEQUANTIZATION_KERNEL_HPP
 #define _PIRATE_GPU_DEQUANTIZATION_KERNEL_HPP
 
+#include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 #include <ksgpu/Dtype.hpp>
 #include "ResourceTracker.hpp"

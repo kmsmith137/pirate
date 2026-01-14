@@ -1,6 +1,7 @@
 #ifndef _PIRATE_TREE_GRIDDING_KERNEL_HPP
 #define _PIRATE_TREE_GRIDDING_KERNEL_HPP
 
+#include <cuda_runtime.h>
 #include <ksgpu/Array.hpp>
 #include "BumpAllocator.hpp"
 #include "ResourceTracker.hpp"
