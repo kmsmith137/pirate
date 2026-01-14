@@ -14,7 +14,19 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
-// SlabAllocator constructors
+// SlabAllocator factory methods and constructors
+
+
+std::shared_ptr<SlabAllocator> SlabAllocator::create(int aflags, long capacity)
+{
+    return std::shared_ptr<SlabAllocator>(new SlabAllocator(aflags, capacity));
+}
+
+
+std::shared_ptr<SlabAllocator> SlabAllocator::create(BumpAllocator &b, long nbytes)
+{
+    return std::shared_ptr<SlabAllocator>(new SlabAllocator(b, nbytes));
+}
 
 
 SlabAllocator::SlabAllocator(int aflags_, long capacity_)

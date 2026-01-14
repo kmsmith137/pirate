@@ -46,15 +46,15 @@ class SlabAllocator : public std::enable_shared_from_this<SlabAllocator>
 public:
     static constexpr int nalign = constants::bytes_per_gpu_cache_line;
     
-    // Construct SlabAllocator that allocates new memory using af_alloc().
+    // Factory method: create SlabAllocator that allocates new memory using af_alloc().
     // The 'aflags' are memory allocation flags from ksgpu/mem_utils.hpp.
     // If capacity < 0, operates in "dummy" mode (see class comment).
-    SlabAllocator(int aflags, long capacity);
+    static std::shared_ptr<SlabAllocator> create(int aflags, long capacity);
     
-    // Construct SlabAllocator that gets memory from an existing BumpAllocator.
+    // Factory method: create SlabAllocator that gets memory from an existing BumpAllocator.
     // The aflags are inherited from the BumpAllocator.
     // Throws exception if BumpAllocator is in dummy mode.
-    SlabAllocator(BumpAllocator &b, long nbytes);
+    static std::shared_ptr<SlabAllocator> create(BumpAllocator &b, long nbytes);
     
     // Non-copyable, non-movable.
     SlabAllocator(const SlabAllocator &) = delete;
@@ -101,6 +101,11 @@ public:
 
     const int aflags;           // allocation flags from ksgpu
     const long capacity;        // total bytes in base region, or < 0 for dummy mode
+
+protected:
+    // Protected constructors - use create() factory methods instead.
+    SlabAllocator(int aflags, long capacity);
+    SlabAllocator(BumpAllocator &b, long nbytes);
 
 private:
     // The underlying memory region (empty in dummy mode).

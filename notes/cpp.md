@@ -9,6 +9,8 @@
 - Use spaces, not tabs.
 
 - Functions which take an `ostream &` argument should not modify stream state in the caller.
+`
+- If a class `X` derives from `std::enable_shared_from_this`, then its constructor(s() must be protected, and the class must define `create()` static method(s) that return `shared_ptr<X>`.
 
 ## xassert macros
 

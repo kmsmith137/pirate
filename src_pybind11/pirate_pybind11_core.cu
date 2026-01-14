@@ -68,13 +68,13 @@ void register_core_bindings(pybind11::module &m)
         "Modes:\n"
         "  - capacity >= 0: Pre-allocates base region, slabs share this memory\n"
         "  - capacity < 0: Dummy mode, each get_slab() allocates fresh memory")
-        .def(py::init<int, long>(),
+        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(int, long)>(&SlabAllocator::create)),
             py::arg("aflags"), py::arg("capacity"),
             "Create allocator with new memory.\n\n"
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
             "    capacity: Bytes to pre-allocate (>= 0) or < 0 for dummy mode")
-        .def(py::init<BumpAllocator &, long>(),
+        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(BumpAllocator &, long)>(&SlabAllocator::create)),
             py::arg("bump_allocator"), py::arg("nbytes"),
             "Create allocator using memory from a BumpAllocator.\n\n"
             "Args:\n"
