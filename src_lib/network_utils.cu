@@ -353,6 +353,69 @@ void Socket::set_zerocopy()
 }
 
 
+long Socket::send_with_timeout(const void *buf, long count, int timeout_ms)
+{
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::send_with_timeout() called on uninitialized socket");
+
+    xassert(count > 0);
+
+    if (_unlikely(connreset))
+        throw runtime_error("Socket::send_with_timeout() called after connection was reset");
+
+    // Negative timeout means blocking (same as send()).
+    if (timeout_ms < 0)
+        return this->send(buf, count);
+
+    // Use poll() to implement timeout.
+    struct pollfd pfd;
+    pfd.fd = this->fd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+
+    int ret = poll(&pfd, 1, timeout_ms);
+
+    if (_unlikely(ret < 0))
+        throw runtime_error(errstr(fd, "Socket::send_with_timeout: poll"));
+
+    // Timeout expired.
+    if (ret == 0)
+        return 0;
+
+    // Socket is ready for send().
+    // Use MSG_DONTWAIT to avoid blocking even if poll() returned ready.
+    int flags = MSG_DONTWAIT;
+    if (zerocopy)
+        flags |= MSG_ZEROCOPY;
+
+    long nbytes = ::send(this->fd, buf, count, flags);
+
+    if (nbytes < 0) {
+        // Would block (shouldn't happen after poll, but handle it).
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+            errno = 0;
+            return 0;
+        }
+
+        // Connection reset by peer.
+        if ((errno == ECONNRESET) || (errno == EPIPE)) {
+            connreset = true;
+            errno = 0;
+            return 0;
+        }
+
+        throw runtime_error(errstr(fd, "Socket::send_with_timeout"));
+    }
+
+    // Shouldn't happen, but handle it.
+    if (_unlikely(nbytes == 0))
+        throw runtime_error("send() returned zero?!");
+
+    xassert(nbytes <= count);
+    return nbytes;
+}
+
+
 // Move constructor.
 Socket::Socket(Socket &&s)
     : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking), eof(s.eof)

@@ -143,6 +143,7 @@ LIB_SRCFILES = \
   src_lib/DedispersionPlan.cu \
   src_lib/FakeCorrelator.cu \
   src_lib/FakeServer.cu \
+  src_lib/FakeXEngine.cu \
   src_lib/FrequencySubbands.cu \
   src_lib/GpuDedisperser.cu \
   src_lib/GpuDequantizationKernel.cu \
@@ -241,6 +242,7 @@ HFILES = \
   include/pirate/DedispersionTree.hpp \
   include/pirate/FakeCorrelator.hpp \
   include/pirate/FakeServer.hpp \
+  include/pirate/FakeXEngine.hpp \
   include/pirate/file_utils.hpp \
   include/pirate/FrequencySubbands.hpp \
   include/pirate/GpuDequantizationKernel.hpp \

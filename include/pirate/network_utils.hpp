@@ -66,6 +66,11 @@ struct Socket
     // Note: send() also returns zero if socket is nonblocking, and is full (e.g. peer reading too slowly).
     long send(const void *buf, long count, int flags=0);
 
+    // send() with timeout. Returns the number of bytes sent (possibly zero if timeout expires).
+    // A negative timeout is blocking (same as send()).
+    // On connection reset, returns zero and sets Socket::connreset = true.
+    long send_with_timeout(const void *buf, long count, int timeout_ms);
+
     // FIXME in current API, sender's IP address is thrown away!
     Socket accept();
     
