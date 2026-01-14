@@ -43,6 +43,7 @@ struct Socket
     bool zerocopy = false;     // set by set_zerocopy(), supplies MSG_ZEROCOPY on future calls to send().
     bool connreset = false;    // set by send() if receiver closes connection, see below.
     bool nonblocking = false;  // set by set_nonblocking(), modifies behavior of read(), send().
+    bool eof = false;          // set by read() when connection is closed (EOF).
 
     // For TCP, use (domain,type) = (PF_INET,SOCK_STREAM). See "cheat sheet" above.
     Socket(int domain, int type, int protocol=0);
@@ -55,7 +56,8 @@ struct Socket
     void listen(int backlog=128);
     void close();
 
-    // Reminder: read() returns zero if connection ended, or if socket is nonblocking and no data is ready.
+    // read() returns zero if connection ended (EOF), or if socket is nonblocking and no data is ready.
+    // To distinguish these cases, check Socket::eof after read() returns zero.
     long read(void *buf, long maxbytes);
 
     // If receiver closes connection, then send() returns zero and sets Socket::connreset = true.

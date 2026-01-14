@@ -129,6 +129,7 @@ void Socket::close()
     this->zerocopy = false;
     this->connreset = false;
     this->nonblocking = false;
+    this->eof = false;
 
     if (_unlikely(err < 0))
         cout << errstr("Socket::close") << endl;
@@ -146,10 +147,13 @@ long Socket::read(void *buf, long count)
     if (nbytes < 0) {
         if (nonblocking && ((errno == EAGAIN) || (errno == EWOULDBLOCK))) {
             errno = 0;
-            return 0;
+            return 0;  // would block, eof stays false
         }
         throw runtime_error(errstr(fd, "Socket::read"));
     }
+
+    if (nbytes == 0)
+        this->eof = true;  // connection closed (EOF)
 
     xassert(nbytes <= count);
     return nbytes;
@@ -351,7 +355,7 @@ void Socket::set_zerocopy()
 
 // Move constructor.
 Socket::Socket(Socket &&s)
-    : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking)
+    : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking), eof(s.eof)
 {
     s.fd = -1;
 }
@@ -365,6 +369,7 @@ Socket &Socket::operator=(Socket &&s)
     this->zerocopy = s.zerocopy;
     this->connreset = s.connreset;
     this->nonblocking = s.nonblocking;
+    this->eof = s.eof;
     
     s.fd = -1;
     return *this;

@@ -1,9 +1,8 @@
 #include "../include/pirate/Receiver.hpp"
 
-#include <algorithm>
-#include <functional>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <ksgpu/xassert.hpp>
 
@@ -18,8 +17,7 @@ namespace pirate {
 
 Receiver::Receiver(const std::string &ip_addr_, uint16_t tcp_port_) :
     ip_addr(ip_addr_),
-    tcp_port(tcp_port_),
-    epoll(false)  // uninitialized; will be initialized in reader thread
+    tcp_port(tcp_port_)
 {
     xassert(ip_addr.size() > 0);
     xassert(tcp_port > 0);
@@ -128,9 +126,10 @@ void Receiver::reader_main()
 
 void Receiver::_reader_main()
 {
-    // Initialize epoll and receive buffer.
-    epoll.initialize();
-    recv_buf.resize(recv_bufsize);
+    // Local state for reader thread.
+    Epoll epoll;
+    vector<char> recv_buf(recv_bufsize);
+    unordered_map<Socket *, shared_ptr<Socket>> active_sockets;
 
     while (true) {
         // Check if stopped, and receive pending sockets from listener thread.
@@ -142,14 +141,19 @@ void Receiver::_reader_main()
 
             // Receive pending sockets from listener.
             for (auto &sp : pending_sockets) {
-                sp->set_nonblocking();
+                Socket *sock = sp.get();
+                xassert(sock != nullptr);
+                xassert(sock->fd >= 0);
+                xassert(active_sockets.find(sock) == active_sockets.end());
+
+                sock->set_nonblocking();
 
                 epoll_event ev;
                 ev.events = EPOLLIN | EPOLLRDHUP | EPOLLHUP;
-                ev.data.u64 = (uint64_t) active_sockets.size();  // index into active_sockets
-                epoll.add_fd(sp->fd, ev);
+                ev.data.ptr = sock;  // store Socket* pointer in epoll context
+                epoll.add_fd(sock->fd, ev);
 
-                active_sockets.push_back(sp);
+                active_sockets[sock] = sp;
                 num_connections.fetch_add(1);
             }
             pending_sockets.clear();
@@ -158,89 +162,56 @@ void Receiver::_reader_main()
         // If no active sockets, sleep briefly and loop again.
         if (active_sockets.empty()) {
             // Sleep 1ms to avoid busy-waiting.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(epoll_timeout_ms));
             continue;
         }
 
         // Wait for events with timeout.
         int num_events = epoll.wait(epoll_timeout_ms);
 
-        // Process events.
-        // Note: we must be careful when removing sockets, since indices in epoll events
-        // reference positions in active_sockets. We mark sockets to remove, then remove them.
-
-        vector<long> sockets_to_remove;
+        // Process events and collect sockets to remove.
+        vector<Socket *> sockets_to_remove;
 
         for (int i = 0; i < num_events; i++) {
-            long idx = (long) epoll.events[i].data.u64;
+            Socket *sock = static_cast<Socket *>(epoll.events[i].data.ptr);
             uint32_t ev_flags = epoll.events[i].events;
 
-            xassert((idx >= 0) && (idx < (long)active_sockets.size()));
-            auto &sp = active_sockets[idx];
+            xassert(sock != nullptr);
+            xassert(active_sockets.find(sock) != active_sockets.end());
 
-            // Connection closed by peer.
+            // Connection closed by peer (via epoll flags).
             if ((ev_flags & EPOLLRDHUP) || (ev_flags & EPOLLHUP) || (ev_flags & EPOLLERR)) {
-                sockets_to_remove.push_back(idx);
+                sockets_to_remove.push_back(sock);
                 continue;
             }
 
             // Data available to read.
             if (ev_flags & EPOLLIN) {
                 // Nonblocking read.
-                long nbytes = sp->read(recv_buf.data(), recv_bufsize);
+                long nbytes = sock->read(recv_buf.data(), recv_bufsize);
 
                 if (nbytes > 0) {
                     // Data received (and thrown away).
                     num_bytes.fetch_add(nbytes);
                 }
-                else if (nbytes == 0) {
-                    // Connection closed (read returned 0 on nonblocking socket means EOF).
-                    sockets_to_remove.push_back(idx);
+                else if ((nbytes == 0) && sock->eof) {
+                    // Connection closed (EOF).
+                    sockets_to_remove.push_back(sock);
                 }
+                // If nbytes == 0 and !sock->eof, it's just "would block" - do nothing.
             }
         }
 
         // Remove closed sockets.
-        // We must remove in reverse order to avoid invalidating indices.
-        // Also, we must rebuild epoll since indices will change.
+        // With unordered_map + Socket* pointers, no index updates needed.
+        for (Socket *sock : sockets_to_remove) {
+            auto it = active_sockets.find(sock);
+            if (it == active_sockets.end())
+                continue;  // already removed (e.g., duplicate in sockets_to_remove)
 
-        if (!sockets_to_remove.empty()) {
-            // Sort in reverse order.
-            std::sort(sockets_to_remove.begin(), sockets_to_remove.end(), std::greater<long>());
-
-            // Remove duplicates.
-            auto last = std::unique(sockets_to_remove.begin(), sockets_to_remove.end());
-            sockets_to_remove.erase(last, sockets_to_remove.end());
-
-            for (long idx : sockets_to_remove) {
-                // Remove from epoll.
-                epoll.delete_fd(active_sockets[idx]->fd);
-
-                // Remove from active_sockets (swap with last, then pop).
-                long last_idx = (long)active_sockets.size() - 1;
-
-                if (idx != last_idx) {
-                    // Update epoll for the swapped socket.
-                    // We need to modify the existing fd in epoll to update its data.u64.
-                    auto &swapped = active_sockets.back();
-
-                    epoll_event ev;
-                    ev.events = EPOLLIN | EPOLLRDHUP | EPOLLHUP;
-                    ev.data.u64 = (uint64_t) idx;
-
-                    int err = epoll_ctl(epoll.epfd, EPOLL_CTL_MOD, swapped->fd, &ev);
-                    if (err < 0) {
-                        stringstream ss;
-                        ss << "epoll_ctl(EPOLL_CTL_MOD) failed: " << strerror(errno);
-                        throw runtime_error(ss.str());
-                    }
-
-                    std::swap(active_sockets[idx], active_sockets.back());
-                }
-
-                active_sockets.pop_back();
-                num_connections.fetch_sub(1);
-            }
+            epoll.delete_fd(sock->fd);
+            active_sockets.erase(it);
+            num_connections.fetch_sub(1);
         }
     }
 }

@@ -53,22 +53,16 @@ struct Receiver
     // Protected by 'mutex'.
     std::vector<std::shared_ptr<Socket>> pending_sockets;
 
-    // Active sockets: managed by reader thread.
-    // Not protected by mutex (only accessed by reader thread).
-    std::vector<std::shared_ptr<Socket>> active_sockets;
-    Epoll epoll;
-
     // Statistics (atomic for lock-free reads).
     std::atomic<long> num_connections{0};
     std::atomic<long> num_bytes{0};
 
-    // Receive buffer (allocated by reader thread).
-    static constexpr long recv_bufsize = 256 * 1024;
-    std::vector<char> recv_buf;
-
     // Timeouts (milliseconds).
     static constexpr int accept_timeout_ms = 10;
-    static constexpr int epoll_timeout_ms = 10;
+    static constexpr int epoll_timeout_ms = 1;
+
+    // Receive buffer size.
+    static constexpr long recv_bufsize = 256 * 1024;
 
     // ----- Public interface -----
 
