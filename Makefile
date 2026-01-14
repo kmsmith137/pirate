@@ -165,6 +165,7 @@ LIB_SRCFILES = \
   src_lib/SlabAllocator.cu \
   src_lib/system_utils.cu \
   src_lib/utils.cu \
+  src_lib/XEngineMetadata.cu \
   src_lib/loose_ends/cpu_downsample.cu \
   src_lib/loose_ends/gpu_downsample.cu \
   src_lib/loose_ends/gpu_transpose.cu \
@@ -258,6 +259,7 @@ HFILES = \
   include/pirate/system_utils.hpp \
   include/pirate/TreeGriddingKernel.hpp \
   include/pirate/utils.hpp \
+  include/pirate/XEngineMetadata.hpp \
   include/pirate/YamlFile.hpp \
   include/pirate/loose_ends/avx256_downsample.hpp \
   include/pirate/loose_ends/bitvec.hpp \

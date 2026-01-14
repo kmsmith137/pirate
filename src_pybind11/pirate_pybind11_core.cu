@@ -18,6 +18,7 @@
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/ResourceTracker.hpp"
 #include "../include/pirate/system_utils.hpp"  // set_thread_affinity, get_thread_affinity
+#include "../include/pirate/XEngineMetadata.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -391,6 +392,43 @@ void register_core_bindings(pybind11::module &m)
           "Get the calling thread's CPU affinity mask.\n\n"
           "Returns:\n"
           "    List of vCPU indices that the thread is allowed to run on.");
+
+    // XEngineMetadata: documents file format for communication between X-engine and FRB nodes.
+    // Skipped methods: to_yaml() [YAML::Emitter arg], from_yaml() [YamlFile arg]
+    py::class_<XEngineMetadata>(m, "XEngineMetadata",
+        "Metadata for X-engine to FRB node communication.\n\n"
+        "Used in two contexts:\n"
+        "  1. Sent by X-engine nodes to FRB nodes at start of TCP stream\n"
+        "  2. Configuration for the fake correlator in testing")
+          .def(py::init<>())
+          .def_readwrite("version", &XEngineMetadata::version,
+               "Version number of the metadata format")
+          .def_readwrite("zone_nfreq", &XEngineMetadata::zone_nfreq,
+               "Number of frequency channels in each zone")
+          .def_readwrite("zone_freq_edges", &XEngineMetadata::zone_freq_edges,
+               "Frequency band edges in MHz (length nzones+1, monotone increasing)")
+          .def_readwrite("freq_channels", &XEngineMetadata::freq_channels,
+               "Which frequency channels are present (optional)")
+          .def_readwrite("nbeams", &XEngineMetadata::nbeams,
+               "Number of beams")
+          .def_readwrite("beam_ids", &XEngineMetadata::beam_ids,
+               "Beam identifiers (defaults to [0, 1, ..., nbeams-1] if empty)")
+          .def("validate", &XEngineMetadata::validate,
+               "Validate that all members have sensible values")
+          .def("get_total_nfreq", &XEngineMetadata::get_total_nfreq,
+               "Returns sum of zone_nfreq (total frequency channels)")
+          .def("to_yaml_string", &XEngineMetadata::to_yaml_string,
+               py::arg("verbose") = false,
+               "Serialize to YAML string.\n\n"
+               "Args:\n"
+               "    verbose: Include explanatory comments")
+          .def_static("from_yaml_string", &XEngineMetadata::from_yaml_string,
+               py::arg("s"),
+               "Parse XEngineMetadata from a YAML string")
+          .def_static("from_yaml_file", &XEngineMetadata::from_yaml_file,
+               py::arg("filename"),
+               "Parse XEngineMetadata from a YAML file")
+    ;
 }
 
 }  // namespace pirate

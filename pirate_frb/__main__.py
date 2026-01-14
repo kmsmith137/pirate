@@ -497,6 +497,21 @@ def scratch(args):
     pirate_pybind11.scratch()
 
 
+################################   show_xengine_metadata command  ##################################
+
+
+def parse_show_xengine_metadata(subparsers):
+    parser = subparsers.add_parser("show_xengine_metadata", help="Parse X-engine metadata file and write YAML to stdout")
+    parser.add_argument('config_file', help="Path to YAML config file")
+    parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
+
+
+def show_xengine_metadata(args):
+    metadata = core.XEngineMetadata.from_yaml_file(args.config_file)
+    yaml_str = metadata.to_yaml_string(args.verbose)
+    print(yaml_str)
+
+
 ###################################   show_dedisperser command  ###################################
 
 
@@ -786,6 +801,7 @@ def get_parser():
     parse_show_hardware(subparsers)
     parse_show_kernels(subparsers)
     parse_make_subbands(subparsers)
+    parse_show_xengine_metadata(subparsers)
     parse_show_dedisperser(subparsers)
     parse_time_dedisperser(subparsers)
     parse_show_random_config(subparsers)
@@ -812,6 +828,8 @@ def main():
         show_kernels(args)
     elif args.command == "make_subbands":
         make_subbands(args)
+    elif args.command == "show_xengine_metadata":
+        show_xengine_metadata(args)
     elif args.command == "show_dedisperser":
         show_dedisperser(args)
     elif args.command == "time_dedisperser":
