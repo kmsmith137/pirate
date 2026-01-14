@@ -5,6 +5,7 @@
 #include "BumpAllocator.hpp"
 
 #include <condition_variable>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -92,6 +93,11 @@ public:
     
     // Returns true if in dummy mode (capacity < 0).
     bool is_dummy() const { return capacity < 0; }
+    
+    // Stop the allocator. Any thread blocked in get_slab() will wake up and throw.
+    // If 'e' is non-null, it represents an error; if null, it's normal termination.
+    // Thread-safe; first call sets the error.
+    void stop(std::exception_ptr e = nullptr);
 
     const int aflags;           // allocation flags from ksgpu
     const long capacity;        // total bytes in base region, or < 0 for dummy mode
@@ -102,22 +108,20 @@ private:
     
     // Slab management. These are protected by 'lock'.
     mutable std::mutex lock;
-    std::condition_variable cv;     // signaled when a slab is returned
+    std::condition_variable cv;     // signaled when a slab is returned or stop() is called
     long slab_size = -1;            // slab size in bytes (established by first get_slab)
     long num_slabs = 0;             // total number of slabs
     std::vector<void *> free_list;  // stack of free slab pointers
     
+    // Stop pattern (see notes/thread_backed_class.md)
+    bool is_stopped = false;
+    std::exception_ptr error;
+    
+    // Helper for blocking operations. Caller must hold lock.
+    void _throw_if_stopped();
+    
     // Helper called when a slab's refcount drops to zero.
     void return_slab(void *slab_ptr);
-    
-    // Helper that allocates a slab (validates nbytes, pops from free list).
-    // If blocking=true, waits for a slab to be available.
-    void *_allocate_slab(long nbytes, bool blocking);
-    
-    // On first call: set this->slab_size, return true.
-    // Subsequent calls: throw exception on size mismatch, return false.
-    // Caller must hold 'lock'.
-    bool _check_nbytes(long nbytes);
 };
 
 

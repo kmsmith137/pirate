@@ -72,80 +72,27 @@ SlabAllocator::SlabAllocator(BumpAllocator &b, long nbytes)
 
 // -------------------------------------------------------------------------------------------------
 //
-// _check_nbytes(): helper for slab size validation
-// Caller must hold 'lock'.
+// stop() and _throw_if_stopped()
 
-bool SlabAllocator::_check_nbytes(long nbytes)
-{    
-    if (nbytes <= 0) {
-        std::stringstream ss;
-        ss << "SlabAllocator::get_slab(): nbytes=" << nbytes << " must be positive";
-        throw std::runtime_error(ss.str());
-    }
 
-    long aligned_nbytes = align_up(nbytes, nalign);
-    
-    if (slab_size < 0) {
-        slab_size = aligned_nbytes;
-        return true;
-    }
-    
-    if (aligned_nbytes != slab_size) {
-        std::stringstream ss;
-        ss << "SlabAllocator::get_slab(): requested size " << nbytes
-           << " (aligned: " << aligned_nbytes << ") does not match established slab size "
-           << slab_size;
-        throw std::runtime_error(ss.str());
-    }
-    
-    return false;
+void SlabAllocator::stop(std::exception_ptr e)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    if (is_stopped)
+        return;
+    is_stopped = true;
+    error = e;
+    cv.notify_all();
 }
 
 
-// -------------------------------------------------------------------------------------------------
-//
-// _allocate_slab(): helper that pops a slab from the free list (or waits if blocking)
-
-
-void *SlabAllocator::_allocate_slab(long nbytes, bool blocking)
+void SlabAllocator::_throw_if_stopped()
 {
-    xassert(!is_dummy());
+    if (error)
+        std::rethrow_exception(error);
     
-    std::unique_lock<std::mutex> guard(lock);
-    
-    if (_check_nbytes(nbytes)) {
-        // First allocation: initialize free list with all slabs.
-        long aligned_capacity = align_up(capacity, nalign);
-        num_slabs = aligned_capacity / slab_size;
-        
-        if (num_slabs <= 0) {
-            std::stringstream ss;
-            ss << "SlabAllocator::get_slab(): capacity=" << capacity
-               << " is too small for slab_size=" << slab_size;
-            throw std::runtime_error(ss.str());
-        }
-        
-        char *base_ptr = static_cast<char *>(base.get());
-        free_list.reserve(num_slabs);
-        for (long i = 0; i < num_slabs; i++) {
-            free_list.push_back(base_ptr + i * slab_size);
-        }
-    }
-    
-    // Wait for a slab if blocking, otherwise throw.
-    if (blocking) {
-        cv.wait(guard, [this]() { return !free_list.empty(); });
-    }
-    else if (free_list.empty()) {
-        std::stringstream ss;
-        ss << "SlabAllocator::get_slab(): no free slabs available (total slabs: "
-           << num_slabs << ")";
-        throw std::runtime_error(ss.str());
-    }
-    
-    void *slab_ptr = free_list.back();
-    free_list.pop_back();
-    return slab_ptr;
+    if (is_stopped)
+        throw std::runtime_error("SlabAllocator::get_slab() called on stopped instance");
 }
 
 
@@ -156,17 +103,68 @@ void *SlabAllocator::_allocate_slab(long nbytes, bool blocking)
 
 std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
 {
+    if (nbytes <= 0) {
+        std::stringstream ss;
+        ss << "SlabAllocator::get_slab(): nbytes=" << nbytes << " must be positive";
+        throw std::runtime_error(ss.str());
+    }
+
+    long aligned_nbytes = align_up(nbytes, nalign);
+
+    std::unique_lock<std::mutex> guard(lock);
+    _throw_if_stopped();
+
+    if ((slab_size >= 0) && (aligned_nbytes != slab_size)) {
+        std::stringstream ss;
+        ss << "SlabAllocator::get_slab(): requested size " << nbytes
+           << " (aligned: " << aligned_nbytes << ") does not match established slab size "
+           << slab_size;
+        throw std::runtime_error(ss.str());
+    }
+
     if (is_dummy()) {
-        // Dummy mode: allocate fresh memory using af_alloc().
-        std::unique_lock<std::mutex> guard(lock);
-        _check_nbytes(nbytes);
+        slab_size = aligned_nbytes;
         guard.unlock();
-        return ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8), slab_size, aflags);
+        return ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint,8), slab_size, aflags);
     }
     
-    // Normal mode: get slab from pool.
-    void *slab_ptr = _allocate_slab(nbytes, blocking);
-    
+    if (slab_size < 0) {
+        slab_size = aligned_nbytes;
+
+        // First allocation: initialize free list with all slabs.
+        long aligned_capacity = align_up(capacity, nalign);
+        num_slabs = aligned_capacity / slab_size;
+        
+        if (num_slabs <= 0) {
+            std::stringstream ss;
+            ss << "SlabAllocator::get_slab(): capacity=" << capacity
+                << " is too small for slab_size=" << slab_size;
+            throw std::runtime_error(ss.str());
+        }
+        
+        char *base_ptr = static_cast<char *>(base.get());
+        free_list.reserve(num_slabs);
+        for (long i = 0; i < num_slabs; i++)
+            free_list.push_back(base_ptr + i * slab_size);
+    }
+
+    // Wait for a slab if blocking, otherwise throw.
+    while (free_list.empty()) {
+        if (!blocking) {
+            std::stringstream ss;
+            ss << "SlabAllocator::get_slab(): no free slabs available (total slabs: "
+               << num_slabs << ")";
+            throw std::runtime_error(ss.str());
+        }
+
+        cv.wait(guard);
+        _throw_if_stopped();
+    }
+
+    void *slab_ptr = free_list.back();
+    free_list.pop_back();
+    guard.unlock();
+
     // Create shared_ptr with a custom deleter that returns the slab to the pool.
     // The captured shared_ptr<SlabAllocator> ensures the allocator (and its
     // underlying memory) stays alive as long as any slab is in use.

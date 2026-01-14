@@ -58,12 +58,19 @@ AssembledFrameAllocator::~AssembledFrameAllocator()
 
 void AssembledFrameAllocator::stop(exception_ptr e)
 {
-    lock_guard<mutex> guard(lock);
+    unique_lock<mutex> guard(lock);
+
     if (is_stopped)
         return;
-    is_stopped = true;
+
     error = e;
+    is_stopped = true;
+    
+    guard.unlock();
     cv.notify_all();
+
+    // Propagate stop to SlabAllocator (wakes up worker thread if blocked in get_slab).
+    slab_allocator->stop(e);
 }
 
 
