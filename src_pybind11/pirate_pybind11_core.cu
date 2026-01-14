@@ -19,6 +19,8 @@
 #include "../include/pirate/ResourceTracker.hpp"
 #include "../include/pirate/system_utils.hpp"  // set_thread_affinity, get_thread_affinity
 #include "../include/pirate/XEngineMetadata.hpp"
+#include "../include/pirate/FakeXEngine.hpp"
+#include "../include/pirate/Receiver.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -428,6 +430,76 @@ void register_core_bindings(pybind11::module &m)
           .def_static("from_yaml_file", &XEngineMetadata::from_yaml_file,
                py::arg("filename"),
                "Parse XEngineMetadata from a YAML file")
+    ;
+
+    // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a receiver.
+    // Skipped members: mutex, cv, is_stopped, error, workers, barrier (internal state)
+    // Skipped methods: _throw_if_stopped, make_worker_metadata, worker_main, _worker_main, _send_all (private)
+    py::class_<FakeXEngine>(m, "FakeXEngine",
+        "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
+        "Creates multiple worker threads, each sending data over a TCP connection\n"
+        "following the X->FRB network protocol.\n\n"
+        "Usage:\n"
+        "    xmd = XEngineMetadata.from_yaml_file('...')\n"
+        "    fxe = FakeXEngine(xmd, '127.0.0.1', 8787, 64)\n"
+        "    fxe.start()  # creates threads and begins sending\n"
+        "    # ... wait ...\n"
+        "    fxe.stop()   # signals threads to stop")
+          .def(py::init<const XEngineMetadata &, const std::string &, uint16_t, int>(),
+               py::arg("xmd"), py::arg("ip_addr"), py::arg("port"), py::arg("nthreads"),
+               "Create a FakeXEngine (does not start sending until start() is called).\n\n"
+               "Args:\n"
+               "    xmd: X-engine metadata defining frequency channels and beams\n"
+               "    ip_addr: IP address of the receiver\n"
+               "    port: TCP port of the receiver\n"
+               "    nthreads: Number of worker threads (simulated X-engine nodes)")
+          .def("start", &FakeXEngine::start,
+               "Create worker threads and begin sending data.\n\n"
+               "Raises:\n"
+               "    RuntimeError: If already started or stopped")
+          .def("stop", [](FakeXEngine &self) { self.stop(); },
+               "Signal worker threads to stop. Safe to call multiple times.")
+          .def_readonly("xmd", &FakeXEngine::xmd,
+               "X-engine metadata")
+          .def_readonly("ip_addr", &FakeXEngine::ip_addr,
+               "Receiver IP address")
+          .def_readonly("port", &FakeXEngine::port,
+               "Receiver TCP port")
+          .def_readonly("nthreads", &FakeXEngine::nthreads,
+               "Number of worker threads")
+          .def_property_readonly_static("protocol_magic",
+               [](py::object) { return FakeXEngine::protocol_magic; },
+               "Protocol magic number (0xf4bf4b01)")
+          .def_property_readonly_static("send_timeout_ms",
+               [](py::object) { return FakeXEngine::send_timeout_ms; },
+               "Timeout for send operations in milliseconds")
+    ;
+
+    // Receiver: listens for TCP connections and reads data.
+    // Skipped members: mutex, cv, is_stopped, error, listener_thread, reader_thread, pending_sockets (internal)
+    // Skipped methods: _listener_main, _reader_main, listener_main, reader_main (private)
+    py::class_<Receiver>(m, "Receiver",
+        "Listens for TCP connections and reads data.\n\n"
+        "A thread-backed class with two worker threads:\n"
+        "  - listener: accepts incoming connections\n"
+        "  - reader: reads data from all open connections using epoll")
+          .def(py::init<const std::string &, uint16_t>(),
+               py::arg("ip_addr"), py::arg("tcp_port"),
+               "Create and start a Receiver.\n\n"
+               "Args:\n"
+               "    ip_addr: IP address to bind to\n"
+               "    tcp_port: TCP port to listen on")
+          .def("get_status", [](Receiver &self) {
+               long num_conn, num_bytes;
+               self.get_status(num_conn, num_bytes);
+               return py::make_tuple(num_conn, num_bytes);
+          }, "Returns (num_connections, num_bytes) tuple.")
+          .def("stop", [](Receiver &self) { self.stop(); },
+               "Signal worker threads to stop. Safe to call multiple times.")
+          .def_readonly("ip_addr", &Receiver::ip_addr,
+               "IP address bound to")
+          .def_readonly("tcp_port", &Receiver::tcp_port,
+               "TCP port listening on")
     ;
 }
 
