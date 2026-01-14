@@ -7,8 +7,10 @@
 
 #include <condition_variable>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 namespace pirate {
@@ -32,9 +34,27 @@ struct AssembledFrame
 };
 
 
+// AssembledFrameAllocator: Thread-backed class that allocates AssembledFrames.
+//
+// In non-dummy mode, a worker thread pre-initializes frames (calls memset to fill
+// with 0x88) to reduce latency for callers of get_frame().
+//
+// In dummy mode (slab_allocator->is_dummy()), no worker thread is created, and
+// frames are initialized synchronously by the caller of get_frame().
+//
+// Entry points (following thread-backed class pattern): initialize(), get_frame().
+// These will throw if the allocator is stopped, and will call stop() on exception.
+
 struct AssembledFrameAllocator
 {
     AssembledFrameAllocator(const std::shared_ptr<SlabAllocator> &slab_allocator, int num_consumers);
+    ~AssembledFrameAllocator();
+
+    // Non-copyable, non-movable (required for thread-backed class pattern).
+    AssembledFrameAllocator(const AssembledFrameAllocator &) = delete;
+    AssembledFrameAllocator &operator=(const AssembledFrameAllocator &) = delete;
+    AssembledFrameAllocator(AssembledFrameAllocator &&) = delete;
+    AssembledFrameAllocator &operator=(AssembledFrameAllocator &&) = delete;
 
     long nfreq = 0;
     long time_samples_per_chunk = 0;
@@ -46,6 +66,8 @@ struct AssembledFrameAllocator
     // the same beam_ids in the same order.
     //
     // Consumers run in different threads, so everything needs to be thread-safe.
+    //
+    // Entry point: throws if stopped, calls stop() on exception.
 
     void initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<int> &beam_ids);
 
@@ -65,6 +87,8 @@ struct AssembledFrameAllocator
     // consumers have also dropped their references, then the frame is deallocated.)
     //
     // Frame memory is allocated from 'slab_allocator', with nbytes = (nfreq * time_samples_per_chunk) / 2.
+    //
+    // Entry point: throws if stopped, calls stop() on exception.
 
     std::shared_ptr<AssembledFrame> get_frame(int consumer_id);
 
@@ -76,23 +100,52 @@ struct AssembledFrameAllocator
     // Throws exception in dummy mode or if not initialized.
     long num_total_frames() const;
 
+    // Stop the allocator. After calling stop(), entry points will throw.
+    // If 'e' is non-null, it represents an error; if null, it's normal termination.
+    // Thread-safe; first call sets the error.
+    void stop(std::exception_ptr e = nullptr);
+
 private:
     std::shared_ptr<SlabAllocator> slab_allocator;
     int num_consumers;
+    bool is_dummy_mode;  // cached from slab_allocator->is_dummy()
     
     mutable std::mutex lock;
+    std::condition_variable cv;  // signaled on: stop, frame added to queue, frame received by all consumers
+    
+    // Thread-backed class pattern: stopped state and error
+    bool is_stopped = false;
+    std::exception_ptr error;
+    std::thread worker_thread;
     
     // Per-consumer state
     std::vector<bool> is_initialized;      // has consumer called initialize()?
     std::vector<long> consumer_next_index; // next sequence index for each consumer
     int num_initialized = 0;               // count of consumers that have initialized
     
-    // Queue of frames: (frame, num_consumers_received)
+    // Queue of frames: (frame, num_consumers_received).
+    // In non-dummy mode, the worker thread pushes pre-initialized frames to the back.
+    // In dummy mode, get_frame() creates frames synchronously and pushes to the back.
+    // Frames are popped from the front when all consumers have received them.
     std::deque<std::pair<std::shared_ptr<AssembledFrame>, int>> frame_queue;
-    long queue_start_index = 0;  // sequence index of first frame in queue
+    long queue_start_index = 0;             // sequence index of first frame in queue
+    bool frame_creation_underway = false;   // is there a thread in the process of creating a new frame?
+
+    // Create a new frame and add it to the queue.
+    // Caller must currently hold lock via 'guard'.
+    // The lock will be dropped and re-acquired.
+    void _create_frame(std::unique_lock<std::mutex> &lock);
     
-    // Helper to create a new frame for the given sequence index.
-    std::shared_ptr<AssembledFrame> create_frame(long seq_index);
+    // Helper for entry points. Caller must hold lock.
+    void _throw_if_stopped(const char *method_name);
+    
+    // Worker thread functions (non-dummy mode only).
+    void _worker_main();
+    void worker_main();
+    
+    // Internal implementations of entry points.
+    void _initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<int> &beam_ids);
+    std::shared_ptr<AssembledFrame> _get_frame(int consumer_id);
 };
 
 
