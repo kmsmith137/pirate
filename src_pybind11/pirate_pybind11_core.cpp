@@ -21,6 +21,7 @@
 #include "../include/pirate/XEngineMetadata.hpp"
 #include "../include/pirate/FakeXEngine.hpp"
 #include "../include/pirate/Receiver.hpp"
+#include "../include/pirate/FrbServer.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -476,9 +477,10 @@ void register_core_bindings(pybind11::module &m)
     ;
 
     // Receiver: listens for TCP connections and reads data.
-    // Skipped members: mutex, cv, is_stopped, error, listener_thread, reader_thread, pending_sockets (internal)
+    // Skipped members: mutex, cv, is_started, is_stopped, error, listener_thread, reader_thread, pending_sockets (internal)
     // Skipped methods: _listener_main, _reader_main, listener_main, reader_main (private)
-    py::class_<Receiver>(m, "Receiver",
+    // Note: Uses shared_ptr holder so Receivers can be passed to FrbServer.
+    py::class_<Receiver, std::shared_ptr<Receiver>>(m, "Receiver",
         "Listens for TCP connections and reads data.\n\n"
         "A thread-backed class with two worker threads:\n"
         "  - listener: accepts incoming connections\n"
@@ -504,6 +506,31 @@ void register_core_bindings(pybind11::module &m)
                "IP address bound to")
           .def_readonly("tcp_port", &Receiver::tcp_port,
                "TCP port listening on")
+    ;
+
+    // FrbServer: gRPC server that queries Receivers and responds to RPCs.
+    // Skipped members: params, rpc_service, rpc_server, mutex, is_started, is_stopped (internal)
+    // Note: Params struct is not exposed; constructor takes receivers and address directly.
+    py::class_<FrbServer>(m, "FrbServer",
+        "gRPC server that queries Receivers via RPC.\n\n"
+        "Wraps multiple Receivers and exposes their status via gRPC.")
+          .def(py::init([](std::vector<std::shared_ptr<Receiver>> receivers, const std::string &rpc_server_address) {
+               auto params = std::make_shared<FrbServer::Params>();
+               params->receivers = std::move(receivers);
+               params->rpc_server_address = rpc_server_address;
+               return std::make_unique<FrbServer>(params);
+          }),
+               py::arg("receivers"), py::arg("rpc_server_address"),
+               "Create an FrbServer.\n\n"
+               "Args:\n"
+               "    receivers: List of Receiver objects to query\n"
+               "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')")
+          .def("start", &FrbServer::start,
+               "Start all Receivers.\n\n"
+               "Raises:\n"
+               "    RuntimeError: If called twice or after stop().")
+          .def("stop", [](FrbServer &self) { self.stop(); },
+               "Stop the server and all Receivers. Safe to call multiple times.")
     ;
 }
 

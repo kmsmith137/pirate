@@ -19,4 +19,5 @@ from .pirate_pybind11 import (
     DedispersionConfig,
     DedispersionPlan,
     GpuDedisperser,
+    FrbServer
 )
