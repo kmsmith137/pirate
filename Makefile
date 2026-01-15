@@ -122,6 +122,9 @@ GRPC_CCFILES += $(GRPC_PROTO:%.proto=%.grpc.pb.cc)
 GRPC_PYFILES = $(GRPC_PROTO:grpc/%.proto=pirate_frb/rpc/grpc/%_pb2.py)
 GRPC_PYFILES += $(GRPC_PROTO:grpc/%.proto=pirate_frb/rpc/grpc/%_pb2_grpc.py)
 
+# FrbServer.cu includes gRPC headers, so must be generated first
+src_lib/FrbServer.o: $(GRPC_HFILES)
+
 
 ####################################################################################################
 #
