@@ -244,6 +244,7 @@ PYFILES = \
   pirate_frb/tests/test_assembled_frame_allocator.py \
   pirate_frb/utils/__init__.py \
   pirate_frb/rpc/__init__.py \
+  pirate_frb/rpc/FrbClient.py \
   pirate_frb/rpc/grpc/__init__.py
 
 # Python source files in the 'pirate_frb.cuda_generator' submodule are listed separately.
