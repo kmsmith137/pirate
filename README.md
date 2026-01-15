@@ -11,7 +11,7 @@ On a CHIME/CHORD machine, this conda environment works for me:
     # Note: last two lines are optional (scipy, sphinx, etc)
 
     conda create -c conda-forge -n ENVNAME \
-    grpc-cpp grpcio grpcio-tools \
+    grpc-cpp grpcio grpcio-tools protoletariat \
     cupy pybind11 yaml-cpp \
     scipy matplotlib ipykernel argcomplete \
     sphinx sphinx-argparse furo myst-parser emacs
