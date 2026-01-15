@@ -15,6 +15,7 @@ wheel_files.txt
 # GRPC
 grpc/*.pb.h
 grpc/*.pb.cc
+grpc/*.protoc_*_sentinel
 pirate_frb/rpc/grpc/*_pb2.py
 pirate_frb/rpc/grpc/*_pb2_grpc.py
 
