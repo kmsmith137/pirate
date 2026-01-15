@@ -485,10 +485,14 @@ void register_core_bindings(pybind11::module &m)
         "  - reader: reads data from all open connections using epoll")
           .def(py::init<const std::string &, uint16_t>(),
                py::arg("ip_addr"), py::arg("tcp_port"),
-               "Create and start a Receiver.\n\n"
+               "Create a Receiver (does not start worker threads).\n\n"
                "Args:\n"
                "    ip_addr: IP address to bind to\n"
                "    tcp_port: TCP port to listen on")
+          .def("start", &Receiver::start,
+               "Start the worker threads.\n\n"
+               "Raises:\n"
+               "    RuntimeError: If called twice or after stop().")
           .def("get_status", [](Receiver &self) {
                long num_conn, num_bytes;
                self.get_status(num_conn, num_bytes);

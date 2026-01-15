@@ -21,6 +21,19 @@ Receiver::Receiver(const std::string &ip_addr_, uint16_t tcp_port_) :
 {
     xassert(ip_addr.size() > 0);
     xassert(tcp_port > 0);
+}
+
+
+void Receiver::start()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+
+    if (is_started)
+        throw std::runtime_error("Receiver::start() called twice");
+    if (is_stopped)
+        throw std::runtime_error("Receiver::start() called after stop()");
+
+    is_started = true;
 
     // Spawn both worker threads.
     listener_thread = std::thread(&Receiver::listener_main, this);

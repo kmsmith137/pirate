@@ -28,6 +28,7 @@ namespace pirate {
 //
 // Usage:
 //   auto receiver = std::make_shared<Receiver> (ip_addr, port);
+//   receiver->start();
 //   // ... wait for data to be received ...
 //   long num_conn, num_bytes;
 //   receiver->get_status(num_conn, num_bytes);
@@ -42,6 +43,7 @@ struct Receiver
     // Thread-backed class state (protected by 'mutex').
     std::mutex mutex;
     std::condition_variable cv;
+    bool is_started = false;
     bool is_stopped = false;
     std::exception_ptr error;
 
@@ -66,11 +68,14 @@ struct Receiver
 
     // ----- Public interface -----
 
-    // Constructor spawns both worker threads.
+    // Constructor initializes state but does not start worker threads.
     Receiver(const std::string &ip_addr, uint16_t tcp_port);
 
     // Destructor calls stop() and joins worker threads.
     ~Receiver();
+
+    // Spawn worker threads. Throws exception if called twice or after stop().
+    void start();
 
     // Thread-safe: returns current number of active TCP connections, and total bytes read.
     void get_status(long &num_connections, long &num_bytes);
