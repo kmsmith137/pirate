@@ -15,7 +15,8 @@ The network protocol for each of these connections is as follows:
 
 - The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.
 
-- A zero-terminated ascii string follows, containing metadata in the file format from `configs/xengine_metadata_v1.yml`. 
+- A zero-terminated ascii string follows, containing metadata in the file format from `configs/xengine_metadata_v1.yml`. There is a C++ class `XEngineMetadata` for parsing this string.
+
   Note that the metadata includes `freq_channels` and `nbeams`. Here, `nbeams` is the (receiver-dependent) number of 
   beams sent to the FRB search node, and `nfreq = len(freq_channels)` is the (sender-dependent) number of frequency 
   channels sent by the X-engine node.

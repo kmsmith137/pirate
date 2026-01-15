@@ -36,6 +36,11 @@ namespace pirate {
 
 struct Receiver
 {
+    // Peer: per-sender state for an active TCP connection.
+    // Parses the network protocol described in notes/network_protocol.md.
+    // (Full definition is in Receiver.cpp.)
+    struct Peer;
+
     // Constructor args.
     const std::string ip_addr;
     const uint16_t tcp_port;
@@ -51,9 +56,9 @@ struct Receiver
     std::thread listener_thread;
     std::thread reader_thread;
 
-    // Pending sockets: handed off from listener to reader.
+    // Pending peers: handed off from listener to reader.
     // Protected by 'mutex'.
-    std::vector<std::shared_ptr<Socket>> pending_sockets;
+    std::vector<std::shared_ptr<Peer>> pending_peers;
 
     // Statistics (atomic for lock-free reads).
     std::atomic<long> num_connections{0};
