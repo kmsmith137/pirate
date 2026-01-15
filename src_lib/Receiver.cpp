@@ -6,9 +6,11 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include <ksgpu/Array.hpp>
 #include <ksgpu/xassert.hpp>
 
 using namespace std;
+using namespace ksgpu;
 
 
 namespace pirate {
@@ -26,54 +28,31 @@ namespace pirate {
 // Parses the network protocol described in notes/network_protocol.md.
 struct Receiver::Peer
 {
+    Socket socket;
+
     // Parsing state machine.
     enum class State {
         ReadMagic,       // Reading 4-byte magic number 0xf4bf4b01
         ReadStringLen,   // Reading 4-byte YAML string length
         ReadYamlString,  // Reading zero-terminated YAML string
         ReadData,        // Reading (nbeams, nfreq, 256) data arrays
-        Error            // Protocol error occurred
     };
 
-    Socket socket;
     State state = State::ReadMagic;
+    Array<char> recv_buf;           // only used while state < ReadData
+    long recv_nbytes = 0;           // 0 <= recv_nbytes < recv_buf.size
 
-    // Receive buffer for accumulating partial data.
-    std::vector<char> recv_buf;
+    // If (state > ReadStringLen), this is the expected YAML string length (including null terminator).
+    int32_t yaml_string_len = 0;
 
-    // Size of pending write (set by get_recv_buffer, used by process_received).
-    long pending_write_size = 0;
-
-    // After ReadStringLen, this is the expected YAML string length (including null terminator).
-    uint32_t yaml_string_len = 0;
-
-    // After ReadYamlString, this contains the parsed metadata.
+    // If (state > ReadYamlString), this contains the parsed metadata.
     XEngineMetadata metadata;
-
-    // Size of each data chunk: (nbeams * nfreq * 256) / 2 bytes (int4 pairs).
-    // Set after metadata is parsed.
-    long data_chunk_bytes = 0;
-
-    // Number of bytes read in the current data chunk.
-    long data_chunk_pos = 0;
-
-    // Magic number for protocol version 1.
-    static constexpr uint32_t magic_v1 = 0xf4bf4b01;
 
     // Constructor.
     explicit Peer(Socket sock);
 
-    // Returns pointer to buffer where new data should be written.
-    // Ensures recv_buf has space for at least 'nbytes' more bytes.
-    char *get_recv_buffer(long nbytes);
-
-    // Called after 'nbytes' have been written to the buffer returned by get_recv_buffer().
-    // Processes the data and updates state machine.
-    void process_received(long nbytes);
-
-private:
-    // Process as much data as possible from recv_buf. Called by process_received().
-    void _process_recv_buf();
+    // Caller reads data into 'recv_buf', updates 'recv_nbytes', then calls process_received().
+    void process_received();
 };
 
 
@@ -81,136 +60,81 @@ Receiver::Peer::Peer(Socket sock)
     : socket(std::move(sock))
 {
     xassert(socket.fd >= 0);
+    this->recv_buf = Array<char> ({10*1024}, af_uhost);
 }
 
 
-char *Receiver::Peer::get_recv_buffer(long nbytes)
+void Receiver::Peer::process_received()
 {
-    xassert(pending_write_size == 0);  // Must call process_received() before next get_recv_buffer().
-    size_t old_size = recv_buf.size();
-    recv_buf.resize(old_size + nbytes);
-    pending_write_size = nbytes;
-    return recv_buf.data() + old_size;
-}
+    // Magic number for protocol version 1.
+    static constexpr uint32_t magic_v1 = 0xf4bf4b01;
 
-
-void Receiver::Peer::process_received(long nbytes)
-{
-    xassert(pending_write_size > 0);
-    xassert(nbytes >= 0);
-    xassert(nbytes <= pending_write_size);
-
-    // Shrink recv_buf if we received fewer bytes than requested.
-    if (nbytes < pending_write_size) {
-        recv_buf.resize(recv_buf.size() - (pending_write_size - nbytes));
-    }
-    pending_write_size = 0;
-
-    _process_recv_buf();
-}
-
-
-void Receiver::Peer::_process_recv_buf()
-{
     // Process as much as possible from recv_buf.
-    while (true) {
-        if (state == State::ReadMagic) {
-            if (recv_buf.size() < 4)
-                break;
+    if (state == State::ReadMagic) {
+        if (recv_nbytes < 4)
+            return;
 
-            // Read 4-byte little-endian magic number.
-            uint32_t magic = 0;
-            memcpy(&magic, recv_buf.data(), 4);
+        // Read 4-byte little-endian magic number.
+        uint32_t magic = *((uint32_t *) recv_buf.data);
 
-            if (magic != magic_v1) {
-                stringstream ss;
-                ss << "Receiver::Peer: invalid magic number 0x" << hex << magic
-                   << " (expected 0x" << magic_v1 << ")";
-                throw runtime_error(ss.str());
-            }
-
-            // Consume 4 bytes from recv_buf.
-            recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4);
-            state = State::ReadStringLen;
+        if (magic != magic_v1) {
+            stringstream ss;
+            ss << "Receiver::Peer: invalid magic number 0x" << hex << magic
+                << " (expected 0x" << magic_v1 << ")";
+            throw runtime_error(ss.str());
         }
-        else if (state == State::ReadStringLen) {
-            if (recv_buf.size() < 4)
-                break;
 
-            // Read 4-byte little-endian string length.
-            memcpy(&yaml_string_len, recv_buf.data(), 4);
-
-            if (yaml_string_len == 0) {
-                throw runtime_error("Receiver::Peer: YAML string length is zero");
-            }
-            if (yaml_string_len > 1024 * 1024) {
-                stringstream ss;
-                ss << "Receiver::Peer: YAML string length " << yaml_string_len
-                   << " exceeds maximum (1 MB)";
-                throw runtime_error(ss.str());
-            }
-
-            // Consume 4 bytes from recv_buf.
-            recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4);
-            state = State::ReadYamlString;
-        }
-        else if (state == State::ReadYamlString) {
-            if (recv_buf.size() < yaml_string_len)
-                break;
-
-            // Verify null terminator.
-            if (recv_buf[yaml_string_len - 1] != '\0') {
-                throw runtime_error("Receiver::Peer: YAML string is not null-terminated");
-            }
-
-            // Parse YAML string into XEngineMetadata.
-            string yaml_str(recv_buf.data(), yaml_string_len - 1);  // Exclude null terminator.
-            metadata = XEngineMetadata::from_yaml_string(yaml_str);
-
-            // Compute data chunk size: (nbeams * nfreq * 256) int4 values, packed 2 per byte.
-            long nfreq = static_cast<long>(metadata.freq_channels.size());
-            if (nfreq == 0) {
-                // If freq_channels is empty, use total_nfreq.
-                nfreq = metadata.get_total_nfreq();
-            }
-            data_chunk_bytes = (metadata.nbeams * nfreq * 256) / 2;
-
-            // Consume yaml_string_len bytes from recv_buf.
-            recv_buf.erase(recv_buf.begin(), recv_buf.begin() + yaml_string_len);
-            state = State::ReadData;
-        }
-        else if (state == State::ReadData) {
-            // Discard data (placeholder for future processing).
-            // Just consume all remaining bytes in recv_buf.
-            if (recv_buf.empty())
-                break;
-
-            long bytes_to_consume = recv_buf.size();
-
-            // Track position in current data chunk (for future use).
-            data_chunk_pos += bytes_to_consume;
-            while (data_chunk_pos >= data_chunk_bytes) {
-                data_chunk_pos -= data_chunk_bytes;
-            }
-
-            recv_buf.clear();
-        }
-        else if (state == State::Error) {
-            // In error state, discard all data.
-            recv_buf.clear();
-            break;
-        }
-        else {
-            throw runtime_error("Receiver::Peer: unknown state");
-        }
+        state = State::ReadStringLen;
+        // fall through...
     }
+
+    if (state == State::ReadStringLen) {
+        if (recv_nbytes < 8)
+            return;
+
+        // Read 4-byte little-endian string length.
+        this->yaml_string_len = *((int32_t *) (recv_buf.data + 4));
+        xassert_gt(yaml_string_len, 0);
+        xassert_le(yaml_string_len, 1024*1024);
+
+        // Enlarge recv_buf if needed.
+        long target_size = yaml_string_len + 8;
+
+        if (recv_buf.size < target_size) {
+            Array<char> new_buf({target_size}, af_uhost);
+            memcpy(new_buf.data, recv_buf.data, recv_nbytes);
+            recv_buf = new_buf;
+        }
+
+        state = State::ReadYamlString;
+        // fall through...
+    }
+
+    if (state == State::ReadYamlString) {
+        if (recv_nbytes < yaml_string_len + 8)
+            return;
+
+        const char *yaml_string = recv_buf.data + 8;
+
+        // Verify null terminator.
+        if (yaml_string[yaml_string_len - 1] != '\0')
+            throw runtime_error("Receiver::Peer: YAML string is not null-terminated");
+
+        // Parse YAML string into XEngineMetadata.
+        this->metadata = XEngineMetadata::from_yaml_string(std::string(yaml_string));
+        this->metadata.validate();
+        state = State::ReadData;
+        return;  // don't fall through
+    }
+
+    throw runtime_error("Receiver::Peer::process_received(): should never get here");
 }
 
 
 // -------------------------------------------------------------------------------------------------
 
 
-Receiver::Receiver(const std::string &ip_addr_, uint16_t tcp_port_) :
+Receiver::Receiver(const string &ip_addr_, uint16_t tcp_port_) :
     ip_addr(ip_addr_),
     tcp_port(tcp_port_)
 {
@@ -221,12 +145,12 @@ Receiver::Receiver(const std::string &ip_addr_, uint16_t tcp_port_) :
 
 void Receiver::start()
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    lock_guard<std::mutex> lock(mutex);
 
     if (is_started)
-        throw std::runtime_error("Receiver::start() called twice");
+        throw runtime_error("Receiver::start() called twice");
     if (is_stopped)
-        throw std::runtime_error("Receiver::start() called after stop()");
+        throw runtime_error("Receiver::start() called after stop()");
 
     is_started = true;
 
@@ -256,7 +180,7 @@ void Receiver::get_status(long &out_num_connections, long &out_num_bytes)
 
 void Receiver::stop(std::exception_ptr e)
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    lock_guard<std::mutex> lock(mutex);
 
     if (is_stopped)
         return;
@@ -293,7 +217,7 @@ void Receiver::_listener_main()
     while (true) {
         // Check if stopped.
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            lock_guard<std::mutex> lock(mutex);
             if (is_stopped)
                 return;
         }
@@ -306,10 +230,10 @@ void Receiver::_listener_main()
             continue;
 
         // Create Peer (which owns the Socket) and hand off to reader thread.
-        auto peer_ptr = std::make_shared<Peer>(std::move(new_socket));
+        auto peer_ptr = make_shared<Peer> (std::move(new_socket));
 
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            lock_guard<std::mutex> lock(mutex);
             pending_peers.push_back(peer_ptr);
             cv.notify_all();
         }
@@ -338,10 +262,13 @@ void Receiver::_reader_main()
     Epoll epoll;
     unordered_map<Peer *, shared_ptr<Peer>> active_peers;
 
+    // Currently, this buffer is just used for reading data that we plan to throw away.
+    Array<char> recv_buf({recv_bufsize}, af_uhost);
+
     while (true) {
         // Check if stopped, and receive pending peers from listener thread.
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            lock_guard<std::mutex> lock(mutex);
 
             if (is_stopped)
                 return;
@@ -396,27 +323,23 @@ void Receiver::_reader_main()
 
             // Data available to read.
             if (ev_flags & EPOLLIN) {
-                // Get buffer from Peer to read directly into.
-                char *buf = peer->get_recv_buffer(recv_bufsize);
+                bool use_peer_recv_buf = (peer->state < Peer::State::ReadData);
+                char *buf = use_peer_recv_buf ? (peer->recv_buf.data + peer->recv_nbytes) : (recv_buf.data);
+                long bufsize = use_peer_recv_buf ? (peer->recv_buf.size - peer->recv_nbytes) : (recv_buf.size);
 
-                // Nonblocking read directly into Peer's buffer.
-                long nbytes = sock.read(buf, recv_bufsize);
+                long nbytes = sock.read(buf, bufsize);
 
                 if (nbytes > 0) {
-                    // Process data through the Peer state machine.
-                    // This parses the protocol (magic, string length, YAML, data).
-                    peer->process_received(nbytes);
-                    num_bytes.fetch_add(nbytes);
-                }
-                else {
-                    // No data read - must still call process_received(0) to reset state.
-                    peer->process_received(0);
-
-                    if ((nbytes == 0) && sock.eof) {
-                        // Connection closed (EOF).
-                        peers_to_remove.push_back(peer);
+                    if (use_peer_recv_buf) {
+                        peer->recv_nbytes += nbytes;
+                        peer->process_received();
                     }
+                    this->num_bytes.fetch_add(nbytes);
                 }
+                
+                if (sock.eof)
+                    peers_to_remove.push_back(peer);
+
                 // If nbytes == 0 and !sock.eof, it's just "would block" - do nothing.
             }
         }
