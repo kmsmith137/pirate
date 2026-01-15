@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package frb.search.v1;
+
+// Service definition
+service FrbSearch {
+  // Returns the current status of the search engine
+  rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
+}
+
+// Request message (currently empty, but extensible)
+message GetStatusRequest {}
+
+// Response message containing the two metrics
+message GetStatusResponse {
+  int64 num_connections = 1;
+  int64 num_bytes = 2;
+}
