@@ -11,6 +11,9 @@
 #include <stdexcept>
 #include <ksgpu/xassert.hpp>
 
+using namespace std;
+
+
 namespace pirate {
 #if 0
 }  // editor auto-indent
@@ -18,12 +21,25 @@ namespace pirate {
 
 namespace fs = frb::search::v1;
 
+
+struct FrbServer::State
+{
+    // Placeholder -- more members to come.
+    FrbServer::Params params;
+
+    State(const FrbServer::Params &p) : params(p) { }
+};
+
+
+// -------------------------------------------------------------------------------------------------
+
+
 // Service implementation (forward-declared in header)
 class FrbRpcService final : public fs::FrbSearch::Service {
 public:
-    std::shared_ptr<FrbServer::Params> params;
+    std::shared_ptr<FrbServer::State> state;
 
-    FrbRpcService(const std::shared_ptr<FrbServer::Params> &p) : params(p) {}
+    FrbRpcService(const shared_ptr<FrbServer::State> &s) : state(s) {}
 
     grpc::Status GetStatus(
         grpc::ServerContext* context,
@@ -33,7 +49,7 @@ public:
         // Call Receiver::get_status() for each receiver,
         // and sum the results over receivers.
         long total_conn = 0, total_bytes = 0;
-        for (auto &r : params->receivers) {
+        for (auto &r : state->params.receivers) {
             long nc, nb;
             r->get_status(nc, nb);
             total_conn += nc;
@@ -49,16 +65,16 @@ public:
 // -------------------------------------------------------------------------------------------------
 
 
-FrbServer::FrbServer(const std::shared_ptr<Params> &p)
-    : params(p)
+FrbServer::FrbServer(const Params &params)
 {
-    xassert(p->receivers.size() > 0);
-    xassert(p->rpc_server_address.size() > 0);  // check that string was initialized
+    xassert(params.receivers.size() > 0);
+    xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
 
-    this->rpc_service = std::make_unique<FrbRpcService>(p);
+    this->state = make_shared<FrbServer::State> (params);
+    this->rpc_service = make_unique<FrbRpcService> (state);
 
     grpc::ServerBuilder builder;
-    builder.AddListeningPort(params->rpc_server_address, grpc::InsecureServerCredentials());
+    builder.AddListeningPort(params.rpc_server_address, grpc::InsecureServerCredentials());
     builder.RegisterService(rpc_service.get());
     this->rpc_server = builder.BuildAndStart();
 }
@@ -83,14 +99,14 @@ void FrbServer::_throw_if_stopped(const char *method_name)
         std::rethrow_exception(error);
 
     if (is_stopped) {
-        throw std::runtime_error(std::string(method_name) + " called on stopped instance");
+        throw runtime_error(string(method_name) + " called on stopped instance");
     }
 }
 
 
 void FrbServer::_worker_main(int receiver_index)
 {
-    auto &receiver = params->receivers.at(receiver_index);
+    auto &receiver = state->params.receivers.at(receiver_index);
 
     // For now, just get metadata (blocking) and exit.
     receiver->get_metadata(true);  // blocking=true
@@ -109,21 +125,21 @@ void FrbServer::worker_main(int receiver_index)
 
 void FrbServer::start()
 {
-    std::unique_lock<std::mutex> lock(mutex);
+    unique_lock<std::mutex> lock(mutex);
     _throw_if_stopped("FrbServer::start");
 
     if (is_started)
-        throw std::runtime_error("FrbServer::start() called twice");
+        throw runtime_error("FrbServer::start() called twice");
 
     is_started = true;
     lock.unlock();
 
     // Start all receivers.
-    for (auto &r : params->receivers)
+    for (auto &r : state->params.receivers)
         r->start();
 
     // Spawn one worker thread per receiver.
-    int nreceivers = params->receivers.size();
+    int nreceivers = state->params.receivers.size();
     for (int i = 0; i < nreceivers; i++)
         workers.emplace_back(&FrbServer::worker_main, this, i);
 }
@@ -131,7 +147,7 @@ void FrbServer::start()
 
 void FrbServer::stop(std::exception_ptr e)
 {
-    std::unique_lock<std::mutex> lock(mutex);
+    unique_lock<std::mutex> lock(mutex);
 
     if (is_stopped)
         return;
@@ -142,7 +158,7 @@ void FrbServer::stop(std::exception_ptr e)
     lock.unlock();
 
     // Stop all receivers.
-    for (auto &r : params->receivers)
+    for (auto &r : state->params.receivers)
         r->stop();
 
     // Shutdown RPC server.

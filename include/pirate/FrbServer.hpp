@@ -17,7 +17,7 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-// Forward declare (defined in FrbServer.cpp)
+// Forward declarations (defined in FrbServer.cpp)
 struct Receiver;       // defined in Receiver.{hpp.cu}
 struct FrbRpcService;  // defined in FrbServer.cu
 
@@ -27,16 +27,13 @@ struct FrbRpcService;  // defined in FrbServer.cu
 
 struct FrbServer
 {
-    // The Params struct does double duty: it contains constructor
-    // arguments, and also allows the FrbServer and FrbRpcService
-    // to share state (via shared_ptr<Params> members).
-
+    // Constructor args (more to come).
     struct Params {
         std::vector<std::shared_ptr<Receiver>> receivers;
         std::string rpc_server_address;
     };
 
-    FrbServer(const std::shared_ptr<Params> &params);
+    FrbServer(const Params &params);
     ~FrbServer();  // calls stop(), joins workers, then rpc_server->Wait()
 
     // Start/stop the Receivers and the RPC service.
@@ -44,7 +41,10 @@ struct FrbServer
     void start();  // entry point
     void stop(std::exception_ptr e = nullptr);  // idempotent
 
-    std::shared_ptr<Params> params;
+    // Shared state between FrbServer and FrbRpcServer
+    struct State;  // defined in FrbServer.cu
+    std::shared_ptr<State> state;  
+
     std::unique_ptr<FrbRpcService> rpc_service;
     std::unique_ptr<grpc::Server> rpc_server;
 

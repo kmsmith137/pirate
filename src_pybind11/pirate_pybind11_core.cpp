@@ -515,9 +515,9 @@ void register_core_bindings(pybind11::module &m)
         "gRPC server that queries Receivers via RPC.\n\n"
         "Wraps multiple Receivers and exposes their status via gRPC.")
           .def(py::init([](std::vector<std::shared_ptr<Receiver>> receivers, const std::string &rpc_server_address) {
-               auto params = std::make_shared<FrbServer::Params>();
-               params->receivers = std::move(receivers);
-               params->rpc_server_address = rpc_server_address;
+               FrbServer::Params params;
+               params.receivers = std::move(receivers);
+               params.rpc_server_address = rpc_server_address;
                return std::make_unique<FrbServer>(params);
           }),
                py::arg("receivers"), py::arg("rpc_server_address"),
