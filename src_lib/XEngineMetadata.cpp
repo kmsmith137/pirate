@@ -221,4 +221,40 @@ XEngineMetadata XEngineMetadata::from_yaml(const YamlFile &f)
 }
 
 
+// static member function
+void XEngineMetadata::check_sender_consistency(const XEngineMetadata &ref, const XEngineMetadata &m)
+{
+    if (m.zone_nfreq != ref.zone_nfreq) {
+        stringstream ss;
+        ss << "XEngineMetadata::check_sender_consistency: mismatch in zone_nfreq";
+        throw runtime_error(ss.str());
+    }
+    if (m.zone_freq_edges.size() != ref.zone_freq_edges.size()) {
+        stringstream ss;
+        ss << "XEngineMetadata::check_sender_consistency: mismatch in zone_freq_edges (different sizes)";
+        throw runtime_error(ss.str());
+    }
+    for (size_t i = 0; i < m.zone_freq_edges.size(); i++) {
+        double diff = m.zone_freq_edges[i] - ref.zone_freq_edges[i];
+        if ((diff < -1.0e-3) || (diff > 1.0e-3)) {
+            stringstream ss;
+            ss << "XEngineMetadata::check_sender_consistency: mismatch in zone_freq_edges[" << i << "]: got "
+               << m.zone_freq_edges[i] << ", expected " << ref.zone_freq_edges[i];
+            throw runtime_error(ss.str());
+        }
+    }
+    if (m.nbeams != ref.nbeams) {
+        stringstream ss;
+        ss << "XEngineMetadata::check_sender_consistency: mismatch in nbeams: got " << m.nbeams
+           << ", expected " << ref.nbeams;
+        throw runtime_error(ss.str());
+    }
+    if (m.beam_ids != ref.beam_ids) {
+        stringstream ss;
+        ss << "XEngineMetadata::check_sender_consistency: mismatch in beam_ids";
+        throw runtime_error(ss.str());
+    }
+}
+
+
 }  // namespace pirate

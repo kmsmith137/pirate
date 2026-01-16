@@ -66,6 +66,11 @@ struct XEngineMetadata
     static XEngineMetadata from_yaml_string(const std::string &s);
     static XEngineMetadata from_yaml_file(const std::string &filename);
     static XEngineMetadata from_yaml(const YamlFile &file);
+
+    // Check that two XEngineMetadata objects (from different senders) have consistent fields.
+    // Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.
+    // Throws exception on mismatch.
+    static void check_sender_consistency(const XEngineMetadata &ref, const XEngineMetadata &m);
 };
 
 
