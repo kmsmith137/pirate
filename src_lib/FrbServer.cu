@@ -9,6 +9,7 @@
 #pragma nv_diagnostic pop
 
 #include <stdexcept>
+#include <ksgpu/xassert.hpp>
 
 namespace pirate {
 #if 0
@@ -49,42 +50,86 @@ public:
 
 
 FrbServer::FrbServer(const std::shared_ptr<Params> &p)
-    : params(p),
-      rpc_service(std::make_unique<FrbRpcService>(p))
+    : params(p)
 {
+    xassert(p->receivers.size() > 0);
+    xassert(p->rpc_server_address.size() > 0);  // check that string was initialized
+
+    this->rpc_service = std::make_unique<FrbRpcService>(p);
+
     grpc::ServerBuilder builder;
     builder.AddListeningPort(params->rpc_server_address, grpc::InsecureServerCredentials());
     builder.RegisterService(rpc_service.get());
-    rpc_server = builder.BuildAndStart();
+    this->rpc_server = builder.BuildAndStart();
 }
 
 
 FrbServer::~FrbServer()
 {
     stop();
+
+    for (auto &w : workers)
+        if (w.joinable())
+            w.join();
+
     if (rpc_server)
         rpc_server->Wait();
+}
+
+
+void FrbServer::_throw_if_stopped(const char *method_name)
+{
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped) {
+        throw std::runtime_error(std::string(method_name) + " called on stopped instance");
+    }
+}
+
+
+void FrbServer::_worker_main(int receiver_index)
+{
+    auto &receiver = params->receivers.at(receiver_index);
+
+    // For now, just get metadata (blocking) and exit.
+    receiver->get_metadata(true);  // blocking=true
+}
+
+
+void FrbServer::worker_main(int receiver_index)
+{
+    try {
+        _worker_main(receiver_index);
+    } catch (...) {
+        stop(std::current_exception());
+    }
 }
 
 
 void FrbServer::start()
 {
     std::unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("FrbServer::start");
 
     if (is_started)
         throw std::runtime_error("FrbServer::start() called twice");
-    if (is_stopped)
-        throw std::runtime_error("FrbServer::start() called after stop()");
 
     is_started = true;
     lock.unlock();
 
+    // Start all receivers.
     for (auto &r : params->receivers)
         r->start();
+
+    // Spawn one worker thread per receiver.
+    int nreceivers = params->receivers.size();
+    for (int i = 0; i < nreceivers; i++)
+        workers.emplace_back(&FrbServer::worker_main, this, i);
 }
 
 
-void FrbServer::stop()
+void FrbServer::stop(std::exception_ptr e)
 {
     std::unique_lock<std::mutex> lock(mutex);
 
@@ -92,12 +137,17 @@ void FrbServer::stop()
         return;
 
     is_stopped = true;
+    error = e;
+    cv.notify_all();
     lock.unlock();
 
-    if (rpc_server)
-        rpc_server->Shutdown();
+    // Stop all receivers.
     for (auto &r : params->receivers)
         r->stop();
+
+    // Shutdown RPC server.
+    if (rpc_server)
+        rpc_server->Shutdown();
 }
 
 
