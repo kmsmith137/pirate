@@ -1,5 +1,6 @@
 #include "../include/pirate/FrbServer.hpp"
 #include "../include/pirate/Receiver.hpp"
+#include "../include/pirate/XEngineMetadata.hpp"
 
 // Suppress nvcc warning #970 from gRPC headers ("qualifier on friend declaration ignored")
 #pragma nv_diagnostic push
@@ -24,8 +25,13 @@ namespace fs = frb::search::v1;
 
 struct FrbServer::State
 {
-    // Placeholder -- more members to come.
     FrbServer::Params params;
+
+    // Metadata from receivers (protected by 'mutex').
+    // Used to check that all receivers send consistent metadata.
+    mutex mutex;
+    bool has_metadata = false;
+    XEngineMetadata metadata;
 
     State(const FrbServer::Params &p) : params(p) { }
 };
@@ -108,8 +114,18 @@ void FrbServer::_worker_main(int receiver_index)
 {
     auto &receiver = state->params.receivers.at(receiver_index);
 
-    // For now, just get metadata (blocking) and exit.
-    receiver->get_metadata(true);  // blocking=true
+    // Get metadata from receiver (blocking).
+    XEngineMetadata m = receiver->get_metadata(true);  // blocking=true
+
+    // Check consistency with other receivers.
+    lock_guard<std::mutex> lock(state->mutex);
+
+    if (!state->has_metadata) {
+        state->metadata = m;
+        state->has_metadata = true;
+    } else {
+        XEngineMetadata::check_sender_consistency(state->metadata, m);
+    }
 }
 
 
