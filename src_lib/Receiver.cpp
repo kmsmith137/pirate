@@ -131,6 +131,43 @@ void Receiver::Peer::process_received()
 }
 
 
+// Helper: check that two XEngineMetadata objects have consistent fields.
+// (Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.)
+static void check_metadata_consistency(const XEngineMetadata &ref, const XEngineMetadata &m)
+{
+    if (m.zone_nfreq != ref.zone_nfreq) {
+        stringstream ss;
+        ss << "Receiver: XEngineMetadata mismatch in zone_nfreq";
+        throw runtime_error(ss.str());
+    }
+    if (m.zone_freq_edges.size() != ref.zone_freq_edges.size()) {
+        stringstream ss;
+        ss << "Receiver: XEngineMetadata mismatch in zone_freq_edges (different sizes)";
+        throw runtime_error(ss.str());
+    }
+    for (size_t i = 0; i < m.zone_freq_edges.size(); i++) {
+        double diff = m.zone_freq_edges[i] - ref.zone_freq_edges[i];
+        if ((diff < -1.0e-3) || (diff > 1.0e-3)) {
+            stringstream ss;
+            ss << "Receiver: XEngineMetadata mismatch in zone_freq_edges[" << i << "]: got "
+               << m.zone_freq_edges[i] << ", expected " << ref.zone_freq_edges[i];
+            throw runtime_error(ss.str());
+        }
+    }
+    if (m.nbeams != ref.nbeams) {
+        stringstream ss;
+        ss << "Receiver: XEngineMetadata mismatch in nbeams: got " << m.nbeams
+           << ", expected " << ref.nbeams;
+        throw runtime_error(ss.str());
+    }
+    if (m.beam_ids != ref.beam_ids) {
+        stringstream ss;
+        ss << "Receiver: XEngineMetadata mismatch in beam_ids";
+        throw runtime_error(ss.str());
+    }
+}
+
+
 // -------------------------------------------------------------------------------------------------
 
 
@@ -333,6 +370,18 @@ void Receiver::_reader_main()
                     if (use_peer_recv_buf) {
                         peer->recv_nbytes += nbytes;
                         peer->process_received();
+
+                        // If peer just finished parsing metadata, validate consistency.
+                        if (peer->state == Peer::State::ReadData) {
+                            lock_guard<std::mutex> lock(mutex);
+                            if (!has_metadata) {
+                                metadata = peer->metadata;
+                                has_metadata = true;
+                                cv.notify_all();
+                            } else {
+                                check_metadata_consistency(metadata, peer->metadata);
+                            }
+                        }
                     }
                     this->num_bytes.fetch_add(nbytes);
                 }

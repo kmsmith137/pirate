@@ -10,7 +10,8 @@
 #include <thread>
 #include <vector>
 
-#include "network_utils.hpp"  // Socket, Epoll
+#include "network_utils.hpp"    // Socket, Epoll
+#include "XEngineMetadata.hpp"  // XEngineMetadata
 
 
 namespace pirate {
@@ -51,6 +52,12 @@ struct Receiver
     bool is_started = false;
     bool is_stopped = false;
     std::exception_ptr error;
+
+    // Reference metadata from first peer (protected by 'mutex').
+    // Used to check that all peers send consistent metadata.
+    // (Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.)
+    bool has_metadata = false;
+    XEngineMetadata metadata;
 
     // Worker threads.
     std::thread listener_thread;
