@@ -365,7 +365,10 @@ void Receiver::_reader_main()
                         if (peer->state == Peer::State::ReadData) {
                             lock_guard<std::mutex> lock(mutex);
                             if (!has_metadata) {
+                                // We clear metadata.freq_channels, since it would otherwise contain the frequency channels
+                                // sent by one arbitrarily selected peer, which would be more confusing than helpful.
                                 metadata = peer->metadata;
+                                metadata.freq_channels.clear();
                                 has_metadata = true;
                                 cv.notify_all();
                             } else {
