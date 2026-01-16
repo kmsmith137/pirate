@@ -35,7 +35,7 @@ struct Receiver::Peer
         ReadMagic,       // Reading 4-byte magic number 0xf4bf4b01
         ReadStringLen,   // Reading 4-byte YAML string length
         ReadYamlString,  // Reading zero-terminated YAML string
-        ReadData,        // Reading (nbeams, nfreq, 256) data arrays
+        ReadData         // Reading (nbeams, nfreq, 256) data arrays
     };
 
     State state = State::ReadMagic;
@@ -50,9 +50,6 @@ struct Receiver::Peer
 
     // Constructor.
     explicit Peer(Socket sock);
-
-    // Caller reads data into 'recv_buf', updates 'recv_nbytes', then calls process_received().
-    void process_received();
 };
 
 
@@ -60,74 +57,7 @@ Receiver::Peer::Peer(Socket sock)
     : socket(std::move(sock))
 {
     xassert(socket.fd >= 0);
-    this->recv_buf = Array<char> ({10*1024}, af_uhost);
-}
-
-
-void Receiver::Peer::process_received()
-{
-    // Magic number for protocol version 1.
-    static constexpr uint32_t magic_v1 = 0xf4bf4b01;
-
-    // Process as much as possible from recv_buf.
-    if (state == State::ReadMagic) {
-        if (recv_nbytes < 4)
-            return;
-
-        // Read 4-byte little-endian magic number.
-        uint32_t magic = *((uint32_t *) recv_buf.data);
-
-        if (magic != magic_v1) {
-            stringstream ss;
-            ss << "Receiver::Peer: invalid magic number 0x" << hex << magic
-                << " (expected 0x" << magic_v1 << ")";
-            throw runtime_error(ss.str());
-        }
-
-        state = State::ReadStringLen;
-        // fall through...
-    }
-
-    if (state == State::ReadStringLen) {
-        if (recv_nbytes < 8)
-            return;
-
-        // Read 4-byte little-endian string length.
-        this->yaml_string_len = *((int32_t *) (recv_buf.data + 4));
-        xassert_gt(yaml_string_len, 0);
-        xassert_le(yaml_string_len, 1024*1024);
-
-        // Enlarge recv_buf if needed.
-        long target_size = yaml_string_len + 8;
-
-        if (recv_buf.size < target_size) {
-            Array<char> new_buf({target_size}, af_uhost);
-            memcpy(new_buf.data, recv_buf.data, recv_nbytes);
-            recv_buf = new_buf;
-        }
-
-        state = State::ReadYamlString;
-        // fall through...
-    }
-
-    if (state == State::ReadYamlString) {
-        if (recv_nbytes < yaml_string_len + 8)
-            return;
-
-        const char *yaml_string = recv_buf.data + 8;
-
-        // Verify null terminator.
-        if (yaml_string[yaml_string_len - 1] != '\0')
-            throw runtime_error("Receiver::Peer: YAML string is not null-terminated");
-
-        // Parse YAML string into XEngineMetadata.
-        this->metadata = XEngineMetadata::from_yaml_string(std::string(yaml_string));
-        this->metadata.validate();
-        state = State::ReadData;
-        return;  // don't fall through
-    }
-
-    throw runtime_error("Receiver::Peer::process_received(): should never get here");
+    this->recv_buf = Array<char> ({recv_bufsize}, af_uhost);
 }
 
 
@@ -289,9 +219,6 @@ void Receiver::_reader_main()
     Epoll epoll;
     unordered_map<Peer *, shared_ptr<Peer>> active_peers;
 
-    // Currently, this buffer is just used for reading data that we plan to throw away.
-    Array<char> recv_buf({recv_bufsize}, af_uhost);
-
     while (true) {
         // Check if stopped, and receive pending peers from listener thread.
         {
@@ -350,35 +277,16 @@ void Receiver::_reader_main()
 
             // Data available to read.
             if (ev_flags & EPOLLIN) {
-                bool use_peer_recv_buf = (peer->state < Peer::State::ReadData);
-                char *buf = use_peer_recv_buf ? (peer->recv_buf.data + peer->recv_nbytes) : (recv_buf.data);
-                long bufsize = use_peer_recv_buf ? (peer->recv_buf.size - peer->recv_nbytes) : (recv_buf.size);
-
+                char *buf = peer->recv_buf.data + peer->recv_nbytes;
+                long bufsize = peer->recv_buf.size - peer->recv_nbytes;
                 long nbytes = sock.read(buf, bufsize);
 
                 if (nbytes > 0) {
-                    if (use_peer_recv_buf) {
-                        peer->recv_nbytes += nbytes;
-                        peer->process_received();
-
-                        // If peer just finished parsing metadata, validate consistency.
-                        if (peer->state == Peer::State::ReadData) {
-                            lock_guard<std::mutex> lock(mutex);
-                            if (!has_metadata) {
-                                // We clear metadata.freq_channels, since it would otherwise contain the frequency channels
-                                // sent by one arbitrarily selected peer, which would be more confusing than helpful.
-                                metadata = peer->metadata;
-                                metadata.freq_channels.clear();
-                                has_metadata = true;
-                                cv.notify_all();
-                            } else {
-                                XEngineMetadata::check_sender_consistency(metadata, peer->metadata);
-                            }
-                        }
-                    }
+                    peer->recv_nbytes += nbytes;
                     this->num_bytes.fetch_add(nbytes);
+                    this->_post_receive(peer);
                 }
-                
+
                 if (sock.eof)
                     peers_to_remove.push_back(peer);
 
@@ -398,6 +306,95 @@ void Receiver::_reader_main()
             num_connections.fetch_sub(1);
         }
     }
+}
+
+
+void Receiver::_post_receive(Peer *peer)
+{
+    char *recv_buf = peer->recv_buf.data;
+    long recv_nbytes = peer->recv_nbytes;
+    
+    // Process as much as possible from recv_buf.
+    if (peer->state == Peer::State::ReadMagic) {
+        if (recv_nbytes < 4)
+            return;
+        
+        // Read 4-byte little-endian magic number.
+        uint32_t magic = *((uint32_t *) recv_buf);
+        static constexpr uint32_t magic_v1 = 0xf4bf4b01;
+        
+        if (magic != magic_v1) {
+            stringstream ss;
+            ss << "Receiver::Peer: invalid magic number 0x" << hex << magic
+               << " (expected 0x" << magic_v1 << ")";
+            throw runtime_error(ss.str());
+        }
+        
+        peer->state = Peer::State::ReadStringLen;
+        // fall through...
+    }
+    
+    if (peer->state == Peer::State::ReadStringLen) {
+        if (recv_nbytes < 8)
+            return;
+        
+        // Read 4-byte little-endian string length.
+        peer->yaml_string_len = *((int32_t *) (recv_buf + 4));
+        xassert_gt(peer->yaml_string_len, 0);
+        xassert_le(peer->yaml_string_len, 1024*1024);
+        
+        // Enlarge recv_buf if needed.
+        long target_size = peer->yaml_string_len + 8;
+        
+        if (peer->recv_buf.size < target_size) {
+            Array<char> new_buf({target_size}, af_uhost);
+            memcpy(new_buf.data, recv_buf, recv_nbytes);
+            peer->recv_buf = new_buf;
+            recv_buf = new_buf.data;
+        }
+        
+        peer->state = Peer::State::ReadYamlString;
+        // fall through...
+    }
+    
+    if (peer->state == Peer::State::ReadYamlString) {
+        if (recv_nbytes < peer->yaml_string_len + 8)
+           return;
+        
+        const char *yaml_string = recv_buf+8;
+        
+        // Verify null terminator.
+        if (yaml_string[peer->yaml_string_len - 1] != '\0')
+            throw runtime_error("Receiver::Peer: YAML string is not null-terminated");
+        
+        // Parse YAML string into XEngineMetadata.
+        peer->metadata = XEngineMetadata::from_yaml_string(std::string(yaml_string));
+        peer->metadata.validate();
+
+        unique_lock<std::mutex> lock(mutex);
+
+        if (!this->has_metadata) {
+            // We clear metadata.freq_channels, since it would otherwise contain the frequency channels
+            // sent by one arbitrarily selected peer, which would be more confusing than helpful.
+            this->metadata = peer->metadata;
+            this->metadata.freq_channels.clear();
+            this->has_metadata = true;
+            this->cv.notify_all();
+        } 
+        else
+            XEngineMetadata::check_sender_consistency(this->metadata, peer->metadata);
+        
+        peer->state = Peer::State::ReadData;
+        // fall through...
+    }
+    
+    if (peer->state == Peer::State::ReadData) {
+        // For now, throw data away!
+        peer->recv_nbytes = 0;
+        return;
+    }
+
+    throw runtime_error("Should never get here");
 }
 
 

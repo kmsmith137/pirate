@@ -115,6 +115,9 @@ private:
     void listener_main();
     void reader_main();
 
+    // Helpers for reading data.
+    void _post_receive(Peer *peer);
+
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name) const;
 };
