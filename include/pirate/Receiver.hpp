@@ -47,8 +47,8 @@ struct Receiver
     const uint16_t tcp_port;
 
     // Thread-backed class state (protected by 'mutex').
-    std::mutex mutex;
-    std::condition_variable cv;
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;
     bool is_started = false;
     bool is_stopped = false;
     std::exception_ptr error;
@@ -96,6 +96,9 @@ struct Receiver
     // If 'e' is non-null, it represents an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr);
 
+    // If blocking=false and metadata has not been initialized, return a default-constructed XEngineMetadata.
+    XEngineMetadata get_metadata(bool blocking) const;
+
     // ----- Noncopyable, nonmoveable -----
 
     Receiver(const Receiver &) = delete;
@@ -111,6 +114,9 @@ private:
     // Wrappers that catch exceptions and call stop().
     void listener_main();
     void reader_main();
+
+    // Helper for entry points. Caller must hold mutex.
+    void _throw_if_stopped(const char *method_name) const;
 };
 
 

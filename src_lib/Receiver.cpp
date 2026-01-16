@@ -228,6 +228,33 @@ void Receiver::stop(std::exception_ptr e)
 }
 
 
+void Receiver::_throw_if_stopped(const char *method_name) const
+{
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped)
+        throw runtime_error(string(method_name) + " called on stopped instance");
+}
+
+
+XEngineMetadata Receiver::get_metadata(bool blocking) const
+{
+    unique_lock<std::mutex> lock(mutex);
+
+    for (;;) {
+        _throw_if_stopped("Receiver::get_metadata");
+
+        if (has_metadata)
+            return metadata;
+        if (!blocking)
+            return XEngineMetadata();
+
+        cv.wait(lock);
+    }
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // Listener thread
