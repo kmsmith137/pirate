@@ -485,12 +485,23 @@ void register_core_bindings(pybind11::module &m)
         "A thread-backed class with two worker threads:\n"
         "  - listener: accepts incoming connections\n"
         "  - reader: reads data from all open connections using epoll")
-          .def(py::init<const std::string &, uint16_t>(),
-               py::arg("ip_addr"), py::arg("tcp_port"),
+          .def(py::init([](const std::string &address, long time_samples_per_chunk,
+                           std::shared_ptr<AssembledFrameAllocator> allocator, long consumer_id) {
+               Receiver::Params params;
+               params.address = address;
+               params.time_samples_per_chunk = time_samples_per_chunk;
+               params.allocator = allocator;
+               params.consumer_id = consumer_id;
+               return std::make_shared<Receiver>(params);
+          }),
+               py::arg("address"), py::arg("time_samples_per_chunk"),
+               py::arg("allocator"), py::arg("consumer_id"),
                "Create a Receiver (does not start worker threads).\n\n"
                "Args:\n"
-               "    ip_addr: IP address to bind to\n"
-               "    tcp_port: TCP port to listen on")
+               "    address: Address to bind to (e.g. '127.0.0.1:5000')\n"
+               "    time_samples_per_chunk: Number of time samples per assembled chunk\n"
+               "    allocator: AssembledFrameAllocator for output frames\n"
+               "    consumer_id: Consumer ID for the allocator")
           .def("start", &Receiver::start,
                "Start the worker threads.\n\n"
                "Raises:\n"
@@ -502,10 +513,15 @@ void register_core_bindings(pybind11::module &m)
           }, "Returns (num_connections, num_bytes) tuple.")
           .def("stop", [](Receiver &self) { self.stop(); },
                "Signal worker threads to stop. Safe to call multiple times.")
-          .def_readonly("ip_addr", &Receiver::ip_addr,
-               "IP address bound to")
-          .def_readonly("tcp_port", &Receiver::tcp_port,
-               "TCP port listening on")
+          .def("get_metadata", &Receiver::get_metadata,
+               py::arg("blocking"),
+               "Get metadata from peers.\n\n"
+               "Args:\n"
+               "    blocking: If True, wait until metadata is available.\n\n"
+               "Returns:\n"
+               "    XEngineMetadata object (default-constructed if non-blocking and not available).")
+          .def_property_readonly("address", [](const Receiver &self) { return self.params.address; },
+               "Address bound to (e.g. '127.0.0.1:5000')")
     ;
 
     // FrbServer: gRPC server that queries Receivers and responds to RPCs.

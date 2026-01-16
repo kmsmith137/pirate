@@ -64,12 +64,39 @@ Receiver::Peer::Peer(Socket sock)
 // -------------------------------------------------------------------------------------------------
 
 
-Receiver::Receiver(const string &ip_addr_, uint16_t tcp_port_) :
-    ip_addr(ip_addr_),
-    tcp_port(tcp_port_)
+// Helper: parse "ip:port" address string.
+static void parse_address(const string &address, string &ip_addr, uint16_t &tcp_port)
 {
-    xassert(ip_addr.size() > 0);
-    xassert(tcp_port > 0);
+    size_t colon_pos = address.rfind(':');
+    if (colon_pos == string::npos) {
+        throw runtime_error("Receiver: invalid address '" + address + "' (expected 'ip:port' format)");
+    }
+
+    ip_addr = address.substr(0, colon_pos);
+    string port_str = address.substr(colon_pos + 1);
+
+    if (ip_addr.empty()) {
+        throw runtime_error("Receiver: invalid address '" + address + "' (empty IP)");
+    }
+    if (port_str.empty()) {
+        throw runtime_error("Receiver: invalid address '" + address + "' (empty port)");
+    }
+
+    try {
+        int port = std::stoi(port_str);
+        if ((port <= 0) || (port > 65535)) {
+            throw runtime_error("Receiver: invalid port in address '" + address + "'");
+        }
+        tcp_port = static_cast<uint16_t>(port);
+    } catch (const std::exception &) {
+        throw runtime_error("Receiver: invalid port in address '" + address + "'");
+    }
+}
+
+
+Receiver::Receiver(const Params &p) : params(p)
+{
+    parse_address(params.address, params.ip_addr, params.tcp_port);
 }
 
 
@@ -168,7 +195,7 @@ void Receiver::_listener_main()
     // Create and configure listening socket.
     Socket listening_socket(PF_INET, SOCK_STREAM);
     listening_socket.set_reuseaddr();
-    listening_socket.bind(ip_addr, tcp_port);
+    listening_socket.bind(params.ip_addr, params.tcp_port);
     listening_socket.listen();
 
     while (true) {

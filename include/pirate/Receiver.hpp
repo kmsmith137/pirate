@@ -15,6 +15,8 @@
 
 
 namespace pirate {
+
+struct AssembledFrameAllocator;  // forward declaration
 #if 0
 }   // pacify editor auto-indent
 #endif
@@ -37,51 +39,24 @@ namespace pirate {
 
 struct Receiver
 {
-    // Peer: per-sender state for an active TCP connection.
-    // Parses the network protocol described in notes/network_protocol.md.
-    // (Full definition is in Receiver.cpp.)
-    struct Peer;
-
-    // Constructor args.
-    const std::string ip_addr;
-    const uint16_t tcp_port;
-
-    // Thread-backed class state (protected by 'mutex').
-    mutable std::mutex mutex;
-    mutable std::condition_variable cv;
-    bool is_started = false;
-    bool is_stopped = false;
-    std::exception_ptr error;
-
-    // Reference metadata from first peer (protected by 'mutex').
-    // Used to check that all peers send consistent metadata.
-    // (Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.)
-    bool has_metadata = false;
-    XEngineMetadata metadata;
-
-    // Worker threads.
-    std::thread listener_thread;
-    std::thread reader_thread;
-
-    // Pending peers: handed off from listener to reader.
-    // Protected by 'mutex'.
-    std::vector<std::shared_ptr<Peer>> pending_peers;
-
-    // Statistics (atomic for lock-free reads).
-    std::atomic<long> num_connections{0};
-    std::atomic<long> num_bytes{0};
-
-    // Timeouts (milliseconds).
-    static constexpr int accept_timeout_ms = 10;
-    static constexpr int epoll_timeout_ms = 1;
-
-    // Receive buffer size.
-    static constexpr long recv_bufsize = 256 * 1024;
-
     // ----- Public interface -----
 
+    // Constructor args.
+    struct Params {
+        std::string address;  // "ip:port" format, e.g. "127.0.0.1:5000"
+
+        // Not used yet!
+        long time_samples_per_chunk = 0;
+        std::shared_ptr<AssembledFrameAllocator> allocator;
+        long consumer_id = -1;
+
+        // Parsed from 'address' in constructor.
+        std::string ip_addr;
+        uint16_t tcp_port = 0;
+    };
+
     // Constructor initializes state but does not start worker threads.
-    Receiver(const std::string &ip_addr, uint16_t tcp_port);
+    Receiver(const Params &params);
 
     // Destructor calls stop() and joins worker threads.
     ~Receiver();
@@ -105,6 +80,47 @@ struct Receiver
     Receiver &operator=(const Receiver &) = delete;
     Receiver(Receiver &&) = delete;
     Receiver &operator=(Receiver &&) = delete;
+
+    // Constructor args.
+    Params params;
+
+    // Thread-backed class state (protected by 'mutex').
+    mutable std::mutex mutex;
+    mutable std::condition_variable cv;
+    bool is_started = false;
+    bool is_stopped = false;
+    std::exception_ptr error;
+
+    // Reference metadata from first peer (protected by 'mutex').
+    // Used to check that all peers send consistent metadata.
+    // (Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.)
+    bool has_metadata = false;
+    XEngineMetadata metadata;
+
+    // Worker threads.
+    std::thread listener_thread;
+    std::thread reader_thread;
+
+    // Peer: per-sender state for an active TCP connection.
+    // Parses the network protocol described in notes/network_protocol.md.
+    // (Full definition is in Receiver.cpp.)
+    struct Peer;
+
+    // Pending peers: handed off from listener to reader.
+    // Protected by 'mutex'.
+    std::vector<std::shared_ptr<Peer>> pending_peers;
+
+    // Statistics (atomic for lock-free reads).
+    std::atomic<long> num_connections{0};
+    std::atomic<long> num_bytes{0};
+
+    // Timeouts (milliseconds).
+    static constexpr int accept_timeout_ms = 10;
+    static constexpr int epoll_timeout_ms = 1;
+
+    // Receive buffer size.
+    static constexpr long recv_bufsize = 256 * 1024;
+
 
 private:
     // Worker thread main functions.
