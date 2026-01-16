@@ -6,6 +6,9 @@ package frb.search.v1;
 service FrbSearch {
   // Returns the current status of the search engine
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
+
+  // Returns metadata as a YAML string (empty if metadata not yet available)
+  rpc GetMetadata (GetMetadataRequest) returns (GetMetadataResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -15,4 +18,14 @@ message GetStatusRequest {}
 message GetStatusResponse {
   int64 num_connections = 1;
   int64 num_bytes = 2;
+}
+
+// Request message for GetMetadata
+message GetMetadataRequest {
+  bool verbose = 1;  // If true, include comments explaining each field
+}
+
+// Response message for GetMetadata
+message GetMetadataResponse {
+  string yaml_string = 1;  // Empty string if metadata not yet available
 }

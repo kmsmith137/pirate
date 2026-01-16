@@ -39,6 +39,20 @@ class FrbClient:
         response = self.stub.GetStatus(request)
         return (response.num_connections, response.num_bytes)
     
+    def get_metadata(self, verbose: bool = False) -> str:
+        """Query the server for metadata as a YAML string.
+        
+        Args:
+            verbose: If True, include comments explaining each field.
+        
+        Returns:
+            YAML string representation of metadata, or empty string if
+            metadata is not yet available.
+        """
+        request = frb_search_pb2.GetMetadataRequest(verbose=verbose)
+        response = self.stub.GetMetadata(request)
+        return response.yaml_string
+    
     def close(self):
         """Close the gRPC channel."""
         self.channel.close()

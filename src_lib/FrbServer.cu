@@ -65,6 +65,28 @@ public:
         response->set_num_bytes(total_bytes);
         return grpc::Status::OK;
     }
+
+    grpc::Status GetMetadata(
+        grpc::ServerContext* context,
+        const fs::GetMetadataRequest* request,
+        fs::GetMetadataResponse* response) override
+    {
+        // Check has_metadata under lock, then release.
+        // Safe because has_metadata transitions false->true exactly once,
+        // and metadata is immutable after being set.
+        bool has_metadata;
+        {
+            lock_guard<std::mutex> lock(state->mutex);
+            has_metadata = state->has_metadata;
+        }
+
+        if (has_metadata) {
+            response->set_yaml_string(state->metadata.to_yaml_string(request->verbose()));
+        } else {
+            response->set_yaml_string("");
+        }
+        return grpc::Status::OK;
+    }
 };
 
 
