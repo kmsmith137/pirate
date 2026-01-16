@@ -29,7 +29,7 @@ struct FrbServer::State
 
     // Metadata from receivers (protected by 'mutex').
     // Used to check that all receivers send consistent metadata.
-    mutex mutex;
+    std::mutex mutex;
     bool has_metadata = false;
     XEngineMetadata metadata;
 
