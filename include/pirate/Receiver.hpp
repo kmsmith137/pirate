@@ -49,10 +49,6 @@ struct Receiver
         long time_samples_per_chunk = 0;
         std::shared_ptr<AssembledFrameAllocator> allocator;
         long consumer_id = -1;
-
-        // Parsed from 'address' in constructor.
-        std::string ip_addr;
-        uint16_t tcp_port = 0;
     };
 
     // Constructor initializes state but does not start worker threads.
@@ -83,6 +79,8 @@ struct Receiver
 
     // Constructor args.
     Params params;
+    std::string ip_addr;    // parsed from params.address
+    uint16_t tcp_port = 0;  // parsed from params.address
 
     // Thread-backed class state (protected by 'mutex').
     mutable std::mutex mutex;

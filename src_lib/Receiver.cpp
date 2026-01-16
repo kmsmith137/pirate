@@ -96,7 +96,12 @@ static void parse_address(const string &address, string &ip_addr, uint16_t &tcp_
 
 Receiver::Receiver(const Params &p) : params(p)
 {
-    parse_address(params.address, params.ip_addr, params.tcp_port);
+    parse_address(params.address, this->ip_addr, this->tcp_port);
+
+    xassert(params.allocator);
+    xassert(params.consumer_id >= 0);
+    xassert(params.time_samples_per_chunk > 0);
+    xassert_divisible(params.time_samples_per_chunk, 256);
 }
 
 
@@ -195,7 +200,7 @@ void Receiver::_listener_main()
     // Create and configure listening socket.
     Socket listening_socket(PF_INET, SOCK_STREAM);
     listening_socket.set_reuseaddr();
-    listening_socket.bind(params.ip_addr, params.tcp_port);
+    listening_socket.bind(ip_addr, tcp_port);
     listening_socket.listen();
 
     while (true) {
