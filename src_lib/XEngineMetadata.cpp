@@ -126,16 +126,16 @@ void XEngineMetadata::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     // ---- freq_channels (optional) ----
 
-    if (verbose) {
-        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "Optional: which frequency channels are present?\n"
-            "A list of distinct integers 0 <= (channel_id) < (total frequency channels).\n"
-            "Only makes sense in \"context 1\" (see above), to indicate which frequency channels\n"
-            "are sent by a particular X-engine node."
-        ) << YAML::Newline << YAML::Newline;
-    }
-
     if (freq_channels.size() > 0) {
+        if (verbose) {
+            emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+                "Optional: which frequency channels are present?\n"
+                "A list of distinct integers 0 <= (channel_id) < (total frequency channels).\n"
+                "Only makes sense in \"context 1\" (see above), to indicate which frequency channels\n"
+                "are sent by a particular X-engine node."
+            ) << YAML::Newline << YAML::Newline;
+        }
+        
         emitter << YAML::Key << "freq_channels"
                 << YAML::Value << YAML::Flow << YAML::BeginSeq;
         for (long ch: freq_channels)
