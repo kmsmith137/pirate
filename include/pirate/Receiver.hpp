@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -59,6 +60,10 @@ struct Receiver
     // Thread-safe: returns current number of active TCP connections, and total bytes read.
     void get_status(long &num_connections, long &num_bytes);
 
+    // Entry point: retrieve an assembled frame from the queue (blocking).
+    // This blocks until a frame is available, or throws if Receiver is stopped.
+    std::shared_ptr<AssembledFrame> get_frame();
+
     // Put Receiver into stopped state. Worker threads exit promptly.
     // If 'e' is non-null, it represents an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr);
@@ -91,6 +96,11 @@ struct Receiver
 
     bool has_metadata = false;
     XEngineMetadata metadata;
+
+    // Queue of completed frames ready for retrieval via get_frame().
+    // Protected by 'mutex'. Frames are pushed from _find_frame() (reader thread)
+    // and popped by get_frame() (caller thread).
+    std::queue<std::shared_ptr<AssembledFrame>> completed_frames;
 
     // The Receiver incrementally receives a data "cube" indexed by (beam, freq, time).
     // Time indices are divided into "chunks" (of size Params::time_samples_per_chunk),

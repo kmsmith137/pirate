@@ -191,6 +191,25 @@ XEngineMetadata Receiver::get_metadata(bool blocking) const
 }
 
 
+// Entry point: retrieve an assembled frame from the queue (blocking).
+shared_ptr<AssembledFrame> Receiver::get_frame()
+{
+    unique_lock<std::mutex> lock(mutex);
+
+    for (;;) {
+        _throw_if_stopped("Receiver::get_frame");
+
+        if (!completed_frames.empty()) {
+            shared_ptr<AssembledFrame> frame = completed_frames.front();
+            completed_frames.pop();
+            return frame;
+        }
+
+        cv.wait(lock);
+    }
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // Listener thread
@@ -604,15 +623,22 @@ char *Receiver::_find_frame(long ichunk, long ibeam)
         // server error, so throw an exception to flag it for debugging.
         xassert(ichunk == curr_base_chunk + 2);
         
-        // Advance the ring buffer. For now, the evicted data is thrown away!
-        // This will be improved soon.
+        // Advance the ring buffer. Evicted frames are transferred to completed_frames queue.
 
         for (long b = 0; b < nbeams; b++) {
+            long i = (ichunk & 1) * nbeams + b;
+            
+            // Transfer evicted frame to completed_frames queue.
+            {
+                lock_guard<std::mutex> lock(mutex);
+                this->completed_frames.push(this->curr_frames[i]);
+            }
+            this->cv.notify_all();
+            
+            // Replace with new frame from allocator.
             shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
             xassert(frame->time_chunk_index == ichunk);
             xassert(frame->beam_id == metadata.beam_ids.at(b));
-
-            long i = (ichunk & 1) * nbeams + b;
             this->curr_frames[i] = frame;
         }
 
