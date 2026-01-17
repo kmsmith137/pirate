@@ -639,7 +639,7 @@ char *Receiver::_find_frame(long ichunk, long ibeam)
             shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
             xassert(frame->time_chunk_index == ichunk);
             xassert(frame->beam_id == metadata.beam_ids.at(b));
-            this->curr_frames[i] = frame;
+            this->curr_frames[i] = std::move(frame);
         }
 
         this->curr_base_chunk++;
