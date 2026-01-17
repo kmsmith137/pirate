@@ -333,8 +333,10 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
         // Increment this consumer's sequence index, and update first_unreceived_index.
         // (first_unreceived_index is the max of all consumer_next_index values.)
         consumer_next_index[consumer_id]++;
-        if (consumer_next_index[consumer_id] > first_unreceived_index)
+        if (consumer_next_index[consumer_id] > first_unreceived_index) {
             first_unreceived_index = consumer_next_index[consumer_id];
+            cv.notify_all();  // Wake up block_until_low_memory() if waiting
+        }
     
         // Pop frames from front that all consumers have received.
         while (!frame_queue.empty() && (frame_queue.front().second == num_consumers)) {
@@ -367,6 +369,50 @@ long AssembledFrameAllocator::num_free_frames() const
 long AssembledFrameAllocator::num_total_frames() const
 {
     return slab_allocator->num_total_slabs();
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// block_until_low_memory() - Entry point
+
+
+void AssembledFrameAllocator::block_until_low_memory(long nframe_threshold)
+{
+    try {
+        _block_until_low_memory(nframe_threshold);
+    } catch (...) {
+        this->stop(current_exception());
+        throw;
+    }
+}
+
+
+void AssembledFrameAllocator::_block_until_low_memory(long nframe_threshold)
+{
+    unique_lock<mutex> guard(lock);
+
+    for (;;) {
+        _throw_if_stopped("AssembledFrameAllocator::block_until_low_memory");
+        guard.unlock();
+
+        // Block until slab allocator is empty (all slabs allocated).
+        slab_allocator->block_until_empty();
+        
+        // Check num_preinitialized under lock.
+        guard.lock();
+        _throw_if_stopped("AssembledFrameAllocator::block_until_low_memory");
+        
+        long queue_end_index = queue_start_index + frame_queue.size();
+        long num_preinitialized = queue_end_index - first_unreceived_index;
+        
+        if (num_preinitialized <= nframe_threshold)
+            return;
+        
+        // Wait for something to change (either num_preinitialized decreases,
+        // or a slab is returned and a new frame is created).
+        cv.wait(guard);
+    }
 }
 
 

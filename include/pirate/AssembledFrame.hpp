@@ -102,6 +102,11 @@ struct AssembledFrameAllocator
     // Throws exception in dummy mode or if not initialized.
     long num_free_frames() const;
 
+    // Entry point: Block until slab allocator is empty (all slabs in use), AND the number of
+    // pre-initialized frames waiting for first consumer is <= nframe_threshold.
+    // Throws exception in dummy mode, or if stop() is called from another thread.
+    void block_until_low_memory(long nframe_threshold);
+
     // Returns the total number of frames (same as num_total_slabs() from the underlying slab_allocator).
     // Throws exception in dummy mode or if not initialized.
     long num_total_frames() const;
@@ -158,6 +163,7 @@ private:
     // Internal implementations of entry points.
     void _initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<long> &beam_ids);
     std::shared_ptr<AssembledFrame> _get_frame(int consumer_id);
+    void _block_until_low_memory(long nframe_threshold);
 };
 
 
