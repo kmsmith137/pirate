@@ -631,7 +631,7 @@ char *Receiver::_find_frame(long ichunk, long ibeam)
             // Transfer evicted frame to completed_frames queue.
             {
                 lock_guard<std::mutex> lock(mutex);
-                this->completed_frames.push(this->curr_frames[i]);
+                this->completed_frames.push(std::move(this->curr_frames[i]));
             }
             this->cv.notify_all();
             
