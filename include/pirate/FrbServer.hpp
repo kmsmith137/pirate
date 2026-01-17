@@ -63,6 +63,9 @@ struct FrbServer
     // Worker threads (one per receiver).
     std::vector<std::thread> workers;
 
+    // Reaper thread (only spawned in non-dummy mode).
+    std::thread reaper_thread;
+
     // ----- Noncopyable, nonmoveable -----
 
     FrbServer(const FrbServer &) = delete;
@@ -77,6 +80,10 @@ private:
     // Worker thread functions.
     void _worker_main(int receiver_index);
     void worker_main(int receiver_index);
+
+    // Reaper thread functions.
+    void _reaper_thread_main();
+    void reaper_thread_main();
 };
 
 

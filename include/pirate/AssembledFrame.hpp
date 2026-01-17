@@ -114,6 +114,9 @@ struct AssembledFrameAllocator
     // If blocking=true and not initialized, blocks until initialized.
     long num_total_frames(bool blocking = false) const;
 
+    // Returns true if in dummy mode.
+    bool is_dummy() const { return is_dummy_mode; }
+
     // Stop the allocator. After calling stop(), entry points will throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
     // Thread-safe; first call sets the error.

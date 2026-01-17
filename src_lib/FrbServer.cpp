@@ -28,6 +28,7 @@ struct FrbServer::State
     // Metadata from receivers (protected by 'mutex').
     // Used to check that all receivers send consistent metadata.
     std::mutex mutex;
+    std::condition_variable cv;  // signaled when metadata becomes available
     bool has_metadata = false;
     XEngineMetadata metadata;
 
@@ -153,6 +154,9 @@ FrbServer::~FrbServer()
         if (w.joinable())
             w.join();
 
+    if (reaper_thread.joinable())
+        reaper_thread.join();
+
     if (rpc_server)
         rpc_server->Wait();
 }
@@ -187,6 +191,7 @@ void FrbServer::_worker_main(int receiver_index)
         state->has_metadata = true;
         // The frame_ringbuf is initialized at the same time as the metadata.
         state->frame_ringbuf.resize(rb_size);
+        state->cv.notify_all();  // wake up reaper thread
     } else {
         XEngineMetadata::check_sender_consistency(state->metadata, m);
         xassert(long(state->frame_ringbuf.size()) == rb_size);
@@ -257,6 +262,36 @@ void FrbServer::worker_main(int receiver_index)
 }
 
 
+void FrbServer::_reaper_thread_main()
+{
+    // Wait for metadata.
+    unique_lock<std::mutex> state_lock(state->mutex);
+    while (!state->has_metadata) {
+        if (is_stopped)
+            return;
+        state->cv.wait(state_lock);
+    }
+    long nbeams = state->metadata.nbeams;
+    state_lock.unlock();
+
+    // Get total number of frames (blocking until allocator is initialized).
+    auto &allocator = state->params.receivers[0]->params.allocator;
+    long total_frames = allocator->num_total_frames(/*blocking=*/ true);
+
+    xassert(total_frames >= 6 * nbeams);
+}
+
+
+void FrbServer::reaper_thread_main()
+{
+    try {
+        _reaper_thread_main();
+    } catch (...) {
+        stop(std::current_exception());
+    }
+}
+
+
 void FrbServer::start()
 {
     unique_lock<std::mutex> lock(mutex);
@@ -276,6 +311,11 @@ void FrbServer::start()
     int nreceivers = state->params.receivers.size();
     for (int i = 0; i < nreceivers; i++)
         workers.emplace_back(&FrbServer::worker_main, this, i);
+
+    // Spawn reaper thread iff allocator is not in dummy mode.
+    auto &allocator = state->params.receivers[0]->params.allocator;
+    if (!allocator->is_dummy())
+        reaper_thread = std::thread(&FrbServer::reaper_thread_main, this);
 }
 
 
@@ -291,9 +331,15 @@ void FrbServer::stop(std::exception_ptr e)
     cv.notify_all();
     lock.unlock();
 
+    // Notify state->cv to wake up reaper thread.
+    state->cv.notify_all();
+
     // Stop all receivers.
     for (auto &r : state->params.receivers)
         r->stop();
+
+    // Stop the allocator (which will unblock num_total_frames).
+    state->params.receivers[0]->params.allocator->stop();
 
     // Shutdown RPC server.
     if (rpc_server)
