@@ -30,7 +30,7 @@ struct FrbRpcService;  // defined in FrbServer.cpp
 
 
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
-// One worker thread is created per Receiver.
+// Contains a watchdog thread that propagates errors from FrbServerImpl.
 
 struct FrbServer
 {
@@ -40,7 +40,7 @@ struct FrbServer
     };
 
     FrbServer(const Params &params);
-    ~FrbServer();  // calls stop(), joins workers, then rpc_server->Wait()
+    ~FrbServer();  // calls stop(), joins watchdog, then rpc_server->Wait()
 
     // Start/stop the Receivers and the RPC service.
     // Asynchronous: neither start() nor stop() calls rpc_server->Wait().
@@ -60,11 +60,8 @@ struct FrbServer
     bool is_stopped = false;
     std::exception_ptr error;
 
-    // Worker threads (one per receiver).
-    std::vector<std::thread> workers;
-
-    // Reaper thread (only spawned in non-dummy mode).
-    std::thread reaper_thread;
+    // Watchdog thread: waits for FrbServerImpl to stop, then propagates the error.
+    std::thread watchdog_thread;
 
     // ----- Noncopyable, nonmoveable -----
 
@@ -77,28 +74,36 @@ private:
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);
 
-    // Worker thread functions.
-    void _worker_main(int receiver_index);
-    void worker_main(int receiver_index);
-
-    // Reaper thread functions.
-    void _reaper_thread_main();
-    void reaper_thread_main();
+    // Watchdog thread functions.
+    void _watchdog_thread_main();
+    void watchdog_thread_main();
 };
 
 
-// FrbServerImpl: Shared state between FrbServer and FrbRpcService.
+// FrbServerImpl: Thread-backed class containing worker and reaper threads.
+// Shared state between FrbServer and FrbRpcService.
 
 struct FrbServerImpl
 {
     using Params = FrbServer::Params;
 
+    FrbServerImpl(const Params &p);
+    ~FrbServerImpl();  // calls stop(), joins workers and reaper
+
+    void start();  // entry point
+    void stop(std::exception_ptr e = nullptr);  // idempotent
+
     Params params;
+
+    // Thread-backed class state (protected by 'mutex').
+    std::mutex mutex;
+    std::condition_variable cv;  // signaled on: stop, metadata available
+    bool is_started = false;
+    bool is_stopped = false;
+    std::exception_ptr error;
 
     // Metadata from receivers (protected by 'mutex').
     // Used to check that all receivers send consistent metadata.
-    std::mutex mutex;
-    std::condition_variable cv;  // signaled when metadata becomes available
     bool has_metadata = false;
     XEngineMetadata metadata;
 
@@ -113,7 +118,18 @@ struct FrbServerImpl
     long rb_finalized = 0;   // (last finalized frame_id in ringbuf) + 1
     long rb_end = 0;         // (last frame_id in ringbuf) + 1
 
-    FrbServerImpl(const Params &p) : params(p) { }
+    // Worker threads (one per receiver).
+    std::vector<std::thread> workers;
+
+    // Reaper thread (only spawned in non-dummy mode).
+    std::thread reaper_thread;
+
+    // ----- Noncopyable, nonmoveable -----
+
+    FrbServerImpl(const FrbServerImpl &) = delete;
+    FrbServerImpl &operator=(const FrbServerImpl &) = delete;
+    FrbServerImpl(FrbServerImpl &&) = delete;
+    FrbServerImpl &operator=(FrbServerImpl &&) = delete;
 
     // Call with lock held.
     inline void _check_rb_invariants()
@@ -123,6 +139,18 @@ struct FrbServerImpl
         xassert(rb_finalized <= rb_end);
         xassert(rb_end <= rb_start + long(frame_ringbuf.size()));
     }
+
+private:
+    // Helper for entry points. Caller must hold mutex.
+    void _throw_if_stopped(const char *method_name);
+
+    // Worker thread functions.
+    void _worker_main(int receiver_index);
+    void worker_main(int receiver_index);
+
+    // Reaper thread functions.
+    void _reaper_thread_main();
+    void reaper_thread_main();
 };
 
 

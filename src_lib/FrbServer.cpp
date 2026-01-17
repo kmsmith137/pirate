@@ -80,6 +80,212 @@ public:
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// FrbServerImpl
+
+
+FrbServerImpl::FrbServerImpl(const Params &p) : params(p) { }
+
+
+FrbServerImpl::~FrbServerImpl()
+{
+    stop();
+
+    for (auto &w : workers)
+        if (w.joinable())
+            w.join();
+
+    if (reaper_thread.joinable())
+        reaper_thread.join();
+}
+
+
+void FrbServerImpl::_throw_if_stopped(const char *method_name)
+{
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped) {
+        throw runtime_error(string(method_name) + " called on stopped instance");
+    }
+}
+
+
+void FrbServerImpl::_worker_main(int receiver_index)
+{
+    auto &receiver = params.receivers.at(receiver_index);
+    long num_receivers = params.receivers.size();
+
+    // Get metadata from receiver (blocking).
+    XEngineMetadata m = receiver->get_metadata(true);  // blocking=true
+    long rb_size = FrbServerImpl::ringbuf_nchunks * m.nbeams;
+    long nbeams = m.nbeams;
+
+    // Check consistency with other receivers.
+    unique_lock<std::mutex> lock(mutex);
+
+    if (!has_metadata) {
+        metadata = m;
+        has_metadata = true;
+        // The frame_ringbuf is initialized at the same time as the metadata.
+        frame_ringbuf.resize(rb_size);
+        cv.notify_all();  // wake up reaper thread
+    } else {
+        XEngineMetadata::check_sender_consistency(metadata, m);
+        xassert(long(frame_ringbuf.size()) == rb_size);
+    }
+
+    lock.unlock();
+
+    for (long frame_id = 0; true; frame_id++) {
+        long rb_slot = frame_id % rb_size;
+        long expected_time_chunk_index = frame_id / nbeams;
+        long expected_beam_id = m.beam_ids.at(frame_id % nbeams);
+
+        shared_ptr<AssembledFrame> frame = receiver->get_frame();
+        xassert(frame->time_chunk_index == expected_time_chunk_index);
+        xassert(frame->beam_id == expected_beam_id);
+
+        // Insert the new frame into frame_ringbuf. Note that each frame
+        // must be received from all Receivers before it is "finalized".
+
+        lock.lock();
+
+        // In principle, this assert can fail if one Receiver is running far behind.
+        // I decided it was best to "handle" this condition by throwing an exception,
+        // since something has gone off the rails, and needs human debugging.
+        xassert(rb_finalized >= frame_id - rb_size + 1);
+
+        lock_guard<std::mutex> frame_lock(frame->mutex);
+        frame->finalize_count++;
+
+        if (frame->finalize_count == 1) {
+            // Frame received from first Receiver. Check that it is not in
+            // the ringbuf already, and put it at the end of the ringbuf.
+            xassert(rb_end == frame_id);
+            frame_ringbuf[rb_slot] = frame;
+            rb_start = max(frame_id - rb_size + 1, 0L);
+            rb_end = frame_id + 1;
+            // Note that frame is not finalized yet (see below).
+        }
+        else {
+            // Frame has previously been received from another Receiver.
+            // Check that it is already in the ringbuf, but not finalized yet.
+            xassert(frame_id >= rb_finalized);
+            xassert(frame_id < rb_end);
+            xassert(frame_ringbuf[rb_slot] == frame);
+        }
+
+        if (frame->finalize_count == num_receivers) {
+            // Frame received from last Receiver, so finalize it.
+            xassert(rb_finalized == frame_id);
+            rb_finalized++;
+        }
+
+        _check_rb_invariants();
+
+        lock.unlock();
+        // Note that frame_lock is also dropped here.
+    }
+}
+
+
+void FrbServerImpl::worker_main(int receiver_index)
+{
+    try {
+        _worker_main(receiver_index);
+    } catch (...) {
+        stop(std::current_exception());
+    }
+}
+
+
+void FrbServerImpl::_reaper_thread_main()
+{
+    // Wait for metadata.
+    unique_lock<std::mutex> lock(mutex);
+    while (!has_metadata) {
+        if (is_stopped)
+            return;
+        cv.wait(lock);
+    }
+    long nbeams = metadata.nbeams;
+    lock.unlock();
+
+    // Get total number of frames (blocking until allocator is initialized).
+    auto &allocator = params.receivers[0]->params.allocator;
+    long total_frames = allocator->num_total_frames(/*blocking=*/ true);
+
+    xassert(total_frames >= 6 * nbeams);
+}
+
+
+void FrbServerImpl::reaper_thread_main()
+{
+    try {
+        _reaper_thread_main();
+    } catch (...) {
+        stop(std::current_exception());
+    }
+}
+
+
+void FrbServerImpl::start()
+{
+    unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("FrbServerImpl::start");
+
+    if (is_started)
+        throw runtime_error("FrbServerImpl::start() called twice");
+
+    is_started = true;
+    lock.unlock();
+
+    try {
+        // Start all receivers.
+        for (auto &r : params.receivers)
+            r->start();
+
+        // Spawn one worker thread per receiver.
+        int nreceivers = params.receivers.size();
+        for (int i = 0; i < nreceivers; i++)
+            workers.emplace_back(&FrbServerImpl::worker_main, this, i);
+
+        // Spawn reaper thread iff allocator is not in dummy mode.
+        auto &allocator = params.receivers[0]->params.allocator;
+        if (!allocator->is_dummy())
+            reaper_thread = std::thread(&FrbServerImpl::reaper_thread_main, this);
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void FrbServerImpl::stop(std::exception_ptr e)
+{
+    unique_lock<std::mutex> lock(mutex);
+
+    if (is_stopped)
+        return;
+
+    is_stopped = true;
+    error = e;
+    cv.notify_all();
+    lock.unlock();
+
+    // Stop all receivers.
+    for (auto &r : params.receivers)
+        r->stop();
+
+    // Stop the allocator (which will unblock num_total_frames).
+    params.receivers[0]->params.allocator->stop();
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// FrbServer
 
 
 FrbServer::FrbServer(const Params &params)
@@ -96,6 +302,9 @@ FrbServer::FrbServer(const Params &params)
 
     this->state = make_shared<FrbServerImpl> (params);
     this->rpc_service = make_unique<FrbRpcService> (state);
+
+    // Spawn watchdog thread (waits for state to stop, then propagates error).
+    watchdog_thread = std::thread(&FrbServer::watchdog_thread_main, this);
 }
 
 
@@ -103,12 +312,8 @@ FrbServer::~FrbServer()
 {
     stop();
 
-    for (auto &w : workers)
-        if (w.joinable())
-            w.join();
-
-    if (reaper_thread.joinable())
-        reaper_thread.join();
+    if (watchdog_thread.joinable())
+        watchdog_thread.join();
 
     if (rpc_server)
         rpc_server->Wait();
@@ -126,119 +331,25 @@ void FrbServer::_throw_if_stopped(const char *method_name)
 }
 
 
-void FrbServer::_worker_main(int receiver_index)
+void FrbServer::_watchdog_thread_main()
 {
-    auto &receiver = state->params.receivers.at(receiver_index);
-    long num_receivers = state->params.receivers.size();
-
-    // Get metadata from receiver (blocking).
-    XEngineMetadata m = receiver->get_metadata(true);  // blocking=true
-    long rb_size = FrbServerImpl::ringbuf_nchunks * m.nbeams;
-    long nbeams = m.nbeams;
-
-    // Check consistency with other receivers.
+    // Wait for FrbServerImpl to stop.
     unique_lock<std::mutex> state_lock(state->mutex);
-
-    if (!state->has_metadata) {
-        state->metadata = m;
-        state->has_metadata = true;
-        // The frame_ringbuf is initialized at the same time as the metadata.
-        state->frame_ringbuf.resize(rb_size);
-        state->cv.notify_all();  // wake up reaper thread
-    } else {
-        XEngineMetadata::check_sender_consistency(state->metadata, m);
-        xassert(long(state->frame_ringbuf.size()) == rb_size);
-    }
-
-    state_lock.unlock();
-
-    for (long frame_id = 0; true; frame_id++) {
-        long rb_slot = frame_id % rb_size;
-        long expected_time_chunk_index = frame_id / nbeams;
-        long expected_beam_id = m.beam_ids.at(frame_id % nbeams);
-
-        shared_ptr<AssembledFrame> frame = receiver->get_frame();
-        xassert(frame->time_chunk_index == expected_time_chunk_index);
-        xassert(frame->beam_id == expected_beam_id);
-
-        // Insert the new frame into state->frame_ringbuf. Note that each frame
-        // must be received from all Receivers before it is "finalized".
-
-        state_lock.lock();
-
-        // In principle, this assert can fail if one Receiver is running far behind.
-        // I decided it was best to "handle" this condition by throwing an exception,
-        // since something has gone off the rails, and needs human debugging.
-        xassert(state->rb_finalized >= frame_id - rb_size + 1);
-
-        lock_guard<std::mutex> frame_lock(frame->mutex);
-        frame->finalize_count++;
-
-        if (frame->finalize_count == 1) {
-            // Frame received from first Receiver. Check that it is not in
-            // the ringbuf already, and put it at the end of the ringbuf.
-            xassert(state->rb_end == frame_id);
-            state->frame_ringbuf[rb_slot] = frame;
-            state->rb_start = max(frame_id - rb_size + 1, 0L);
-            state->rb_end = frame_id + 1;
-            // Note that frame is not finalized yet (see below).
-        }
-        else {
-            // Frame has previously been received from another Receiver.
-            // Check that it is already in the ringbuf, but not finalized yet.
-            xassert(frame_id >= state->rb_finalized);
-            xassert(frame_id < state->rb_end);
-            xassert(state->frame_ringbuf[rb_slot] == frame);
-        }
-
-        if (frame->finalize_count == num_receivers) {
-            // Frame received from last Receiver, so finalize it.
-            xassert(state->rb_finalized == frame_id);
-            state->rb_finalized++;
-        }
-
-        state->_check_rb_invariants();
-
-        state_lock.unlock();
-        // Note that frame_lock is also dropped here.
-    }
-}
-
-
-void FrbServer::worker_main(int receiver_index)
-{
-    try {
-        _worker_main(receiver_index);
-    } catch (...) {
-        stop(std::current_exception());
-    }
-}
-
-
-void FrbServer::_reaper_thread_main()
-{
-    // Wait for metadata.
-    unique_lock<std::mutex> state_lock(state->mutex);
-    while (!state->has_metadata) {
-        if (is_stopped)
-            return;
+    while (!state->is_stopped) {
         state->cv.wait(state_lock);
     }
-    long nbeams = state->metadata.nbeams;
+    std::exception_ptr e = state->error;
     state_lock.unlock();
 
-    // Get total number of frames (blocking until allocator is initialized).
-    auto &allocator = state->params.receivers[0]->params.allocator;
-    long total_frames = allocator->num_total_frames(/*blocking=*/ true);
-
-    xassert(total_frames >= 6 * nbeams);
+    // Propagate to FrbServer.
+    this->stop(e);
 }
 
 
-void FrbServer::reaper_thread_main()
+void FrbServer::watchdog_thread_main()
 {
     try {
-        _reaper_thread_main();
+        _watchdog_thread_main();
     } catch (...) {
         stop(std::current_exception());
     }
@@ -256,25 +367,19 @@ void FrbServer::start()
     is_started = true;
     lock.unlock();
 
-    // Start the RPC server.
-    grpc::ServerBuilder builder;
-    builder.AddListeningPort(state->params.rpc_server_address, grpc::InsecureServerCredentials());
-    builder.RegisterService(rpc_service.get());
-    this->rpc_server = builder.BuildAndStart();
+    try {
+        // Start the RPC server.
+        grpc::ServerBuilder builder;
+        builder.AddListeningPort(state->params.rpc_server_address, grpc::InsecureServerCredentials());
+        builder.RegisterService(rpc_service.get());
+        this->rpc_server = builder.BuildAndStart();
 
-    // Start all receivers.
-    for (auto &r : state->params.receivers)
-        r->start();
-
-    // Spawn one worker thread per receiver.
-    int nreceivers = state->params.receivers.size();
-    for (int i = 0; i < nreceivers; i++)
-        workers.emplace_back(&FrbServer::worker_main, this, i);
-
-    // Spawn reaper thread iff allocator is not in dummy mode.
-    auto &allocator = state->params.receivers[0]->params.allocator;
-    if (!allocator->is_dummy())
-        reaper_thread = std::thread(&FrbServer::reaper_thread_main, this);
+        // Start FrbServerImpl (starts receivers, spawns worker/reaper threads).
+        state->start();
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -290,15 +395,8 @@ void FrbServer::stop(std::exception_ptr e)
     cv.notify_all();
     lock.unlock();
 
-    // Notify state->cv to wake up reaper thread.
-    state->cv.notify_all();
-
-    // Stop all receivers.
-    for (auto &r : state->params.receivers)
-        r->stop();
-
-    // Stop the allocator (which will unblock num_total_frames).
-    state->params.receivers[0]->params.allocator->stop();
+    // Stop FrbServerImpl (stops receivers, allocator, notifies threads).
+    state->stop();
 
     // Shutdown RPC server.
     if (rpc_server)
