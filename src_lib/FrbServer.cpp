@@ -96,11 +96,6 @@ FrbServer::FrbServer(const Params &params)
 
     this->state = make_shared<FrbServerImpl> (params);
     this->rpc_service = make_unique<FrbRpcService> (state);
-
-    grpc::ServerBuilder builder;
-    builder.AddListeningPort(params.rpc_server_address, grpc::InsecureServerCredentials());
-    builder.RegisterService(rpc_service.get());
-    this->rpc_server = builder.BuildAndStart();
 }
 
 
@@ -260,6 +255,12 @@ void FrbServer::start()
 
     is_started = true;
     lock.unlock();
+
+    // Start the RPC server.
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort(state->params.rpc_server_address, grpc::InsecureServerCredentials());
+    builder.RegisterService(rpc_service.get());
+    this->rpc_server = builder.BuildAndStart();
 
     // Start all receivers.
     for (auto &r : state->params.receivers)
