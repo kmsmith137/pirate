@@ -89,6 +89,10 @@ public:
             response->set_rb_end(state->rb_end);
         }
 
+        // Get num_free_frames from the allocator (permissive=true to handle uninitialized state).
+        auto &allocator = state->params.receivers[0]->params.allocator;
+        response->set_num_free_frames(allocator->num_free_frames(/*permissive=*/true));
+
         return grpc::Status::OK;
     }
 

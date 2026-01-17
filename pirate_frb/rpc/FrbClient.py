@@ -39,6 +39,7 @@ class FrbClient:
             - rb_start: First frame_id in ring buffer
             - rb_finalized: (Last finalized frame_id) + 1
             - rb_end: (Last frame_id in ring buffer) + 1
+            - num_free_frames: Number of available frames in AssembledFrameAllocator
         """
         request = frb_search_pb2.GetStatusRequest()
         return self.stub.GetStatus(request)

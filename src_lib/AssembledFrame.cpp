@@ -354,10 +354,24 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
 // num_free_frames() and num_total_frames()
 
 
-long AssembledFrameAllocator::num_free_frames() const
+long AssembledFrameAllocator::num_free_frames(bool permissive) const
 {
-    // Number of pre-initialized frames waiting for first consumer.
+    // In dummy mode: throw or return 0. (is_dummy_mode is set once in constructor, safe without lock.)
+    if (is_dummy_mode) {
+        if (permissive)
+            return 0;
+        throw runtime_error("AssembledFrameAllocator::num_free_frames(): not available in dummy mode");
+    }
+
+    // Check num_initialized and compute num_preinitialized under lock.
     unique_lock<mutex> guard(lock);
+
+    if (num_initialized == 0) {
+        if (permissive)
+            return 0;
+        throw runtime_error("AssembledFrameAllocator::num_free_frames(): allocator not initialized");
+    }
+
     long queue_end_index = queue_start_index + frame_queue.size();
     long num_preinitialized = queue_end_index - first_unreceived_index;
     guard.unlock();    
@@ -366,8 +380,25 @@ long AssembledFrameAllocator::num_free_frames() const
 }
 
 
-long AssembledFrameAllocator::num_total_frames() const
+long AssembledFrameAllocator::num_total_frames(bool permissive) const
 {
+    // In dummy mode: throw or return 0. (is_dummy_mode is set once in constructor, safe without lock.)
+    if (is_dummy_mode) {
+        if (permissive)
+            return 0;
+        throw runtime_error("AssembledFrameAllocator::num_total_frames(): not available in dummy mode");
+    }
+
+    // Check num_initialized under lock.
+    unique_lock<mutex> guard(lock);
+
+    if (num_initialized == 0) {
+        if (permissive)
+            return 0;
+        throw runtime_error("AssembledFrameAllocator::num_total_frames(): allocator not initialized");
+    }
+
+    guard.unlock();
     return slab_allocator->num_total_slabs();
 }
 

@@ -21,6 +21,7 @@ message GetStatusResponse {
   int64 rb_start = 3;         // First frame_id in ring buffer
   int64 rb_finalized = 4;     // (Last finalized frame_id) + 1
   int64 rb_end = 5;           // (Last frame_id in ring buffer) + 1
+  int64 num_free_frames = 6;  // Number of available frames in AssembledFrameAllocator
 }
 
 // Request message for GetMetadata

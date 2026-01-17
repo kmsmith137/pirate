@@ -99,8 +99,9 @@ struct AssembledFrameAllocator
 
     // Returns the number of "available" frames: pre-initialized frames waiting for their first
     // consumer, plus free slabs in the underlying slab_allocator.
-    // Throws exception in dummy mode or if not initialized.
-    long num_free_frames() const;
+    // If permissive=false (default): throws exception in dummy mode or if not initialized.
+    // If permissive=true: returns 0 in dummy mode or if not initialized.
+    long num_free_frames(bool permissive = false) const;
 
     // Entry point: Block until slab allocator is empty (all slabs in use), AND the number of
     // pre-initialized frames waiting for first consumer is <= nframe_threshold.
@@ -108,8 +109,9 @@ struct AssembledFrameAllocator
     void block_until_low_memory(long nframe_threshold);
 
     // Returns the total number of frames (same as num_total_slabs() from the underlying slab_allocator).
-    // Throws exception in dummy mode or if not initialized.
-    long num_total_frames() const;
+    // If permissive=false (default): throws exception in dummy mode or if not initialized.
+    // If permissive=true: returns 0 in dummy mode or if not initialized.
+    long num_total_frames(bool permissive = false) const;
 
     // Stop the allocator. After calling stop(), entry points will throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
