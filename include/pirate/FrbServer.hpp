@@ -1,6 +1,12 @@
 #ifndef _PIRATE_FRB_SERVER_HPP
 #define _PIRATE_FRB_SERVER_HPP
 
+#include "Receiver.hpp"
+#include "AssembledFrame.hpp"
+#include "XEngineMetadata.hpp"
+
+#include <ksgpu/xassert.hpp>
+
 #include <condition_variable>
 #include <exception>
 #include <memory>
@@ -17,9 +23,10 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-// Forward declarations (defined in FrbServer.cpp)
-struct Receiver;       // defined in Receiver.{hpp.cu}
-struct FrbRpcService;  // defined in FrbServer.cu
+// Forward declaration (defined in FrbServer.cpp)
+struct FrbServerImpl;  // defined later in this file
+struct FrbRpcService;  // defined in FrbServer.cpp
+
 
 
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
@@ -27,12 +34,6 @@ struct FrbRpcService;  // defined in FrbServer.cu
 
 struct FrbServer
 {
-    // Total ring buffer size, in "chunks". In practice, the "real" ring buffer
-    // will usually be smaller, since it includes sentinel AssembledFrames whose
-    // data has been freed in response to memory pressure.
-    static constexpr int ringbuf_nchunks = 512;
-
-    // Constructor args (more to come).
     struct Params {
         std::vector<std::shared_ptr<Receiver>> receivers;
         std::string rpc_server_address;
@@ -46,9 +47,8 @@ struct FrbServer
     void start();  // entry point
     void stop(std::exception_ptr e = nullptr);  // idempotent
 
-    // Shared state between FrbServer and FrbRpcServer
-    struct State;  // defined in FrbServer.cu
-    std::shared_ptr<State> state;  
+    // Shared state between FrbServer and FrbRpcService
+    std::shared_ptr<FrbServerImpl> state;  
 
     std::unique_ptr<FrbRpcService> rpc_service;
     std::unique_ptr<grpc::Server> rpc_server;
@@ -84,6 +84,45 @@ private:
     // Reaper thread functions.
     void _reaper_thread_main();
     void reaper_thread_main();
+};
+
+
+// FrbServerImpl: Shared state between FrbServer and FrbRpcService.
+
+struct FrbServerImpl
+{
+    using Params = FrbServer::Params;
+
+    Params params;
+
+    // Metadata from receivers (protected by 'mutex').
+    // Used to check that all receivers send consistent metadata.
+    std::mutex mutex;
+    std::condition_variable cv;  // signaled when metadata becomes available
+    bool has_metadata = false;
+    XEngineMetadata metadata;
+
+    // The frame_ringbuf is initialized at the same time as the metadata.
+    // Ring buffer has length (ringbuf_nchunks * metadata.nbeams).
+    static constexpr int ringbuf_nchunks = 512;
+    std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
+
+    // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
+    // Invariant: rb_start <= rb_finalized <= rb_end <= (rb_start + frame_ringbuf.size()).
+    long rb_start = 0;       // (first frame_id in ringbuf)
+    long rb_finalized = 0;   // (last finalized frame_id in ringbuf) + 1
+    long rb_end = 0;         // (last frame_id in ringbuf) + 1
+
+    FrbServerImpl(const Params &p) : params(p) { }
+
+    // Call with lock held.
+    inline void _check_rb_invariants()
+    {
+        xassert(rb_start >= 0);
+        xassert(rb_start <= rb_finalized);
+        xassert(rb_finalized <= rb_end);
+        xassert(rb_end <= rb_start + long(frame_ringbuf.size()));
+    }
 };
 
 

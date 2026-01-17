@@ -1,11 +1,6 @@
 #include "../include/pirate/FrbServer.hpp"
 
-#include "../include/pirate/Receiver.hpp"
-#include "../include/pirate/AssembledFrame.hpp"
-#include "../include/pirate/XEngineMetadata.hpp"
-
 #include <stdexcept>
-#include <ksgpu/xassert.hpp>
 
 #include "../grpc/frb_search.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
@@ -21,49 +16,12 @@ namespace pirate {
 namespace fs = frb::search::v1;
 
 
-struct FrbServer::State
-{
-    FrbServer::Params params;
-
-    // Metadata from receivers (protected by 'mutex').
-    // Used to check that all receivers send consistent metadata.
-    std::mutex mutex;
-    std::condition_variable cv;  // signaled when metadata becomes available
-    bool has_metadata = false;
-    XEngineMetadata metadata;
-
-    // The frame_ringbuf is initialized at the same time as the metadata.
-    // Ring buffer has length (FrbServer::ringbuf_nchunks * metadata.nbeams).
-    vector<shared_ptr<AssembledFrame>> frame_ringbuf;
-
-    // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
-    // Invariant: rb_start <= rb_finalized <= rb_end <= (rb_start + frame_ringbuf.size()).
-    long rb_start = 0;       // (first frame_id in ringbuf)
-    long rb_finalized = 0;   // (last finalized frame_id in ringbuf) + 1
-    long rb_end = 0;         // (last frame_id in ringbuf) + 1
-
-    State(const FrbServer::Params &p) : params(p) { }
-
-    // Call with lock held.
-    inline void _check_rb_invariants()
-    {
-        xassert(rb_start >= 0);
-        xassert(rb_start <= rb_finalized);
-        xassert(rb_finalized <= rb_end);
-        xassert(rb_end <= rb_start + long(frame_ringbuf.size()));
-    }
-};
-
-
-// -------------------------------------------------------------------------------------------------
-
-
 // Service implementation (forward-declared in header)
 class FrbRpcService final : public fs::FrbSearch::Service {
 public:
-    std::shared_ptr<FrbServer::State> state;
+    std::shared_ptr<FrbServerImpl> state;
 
-    FrbRpcService(const shared_ptr<FrbServer::State> &s) : state(s) {}
+    FrbRpcService(const shared_ptr<FrbServerImpl> &s) : state(s) {}
 
     grpc::Status GetStatus(
         grpc::ServerContext* context,
@@ -136,7 +94,7 @@ FrbServer::FrbServer(const Params &params)
         xassert(params.receivers[i]->params.consumer_id == i);
     }
 
-    this->state = make_shared<FrbServer::State> (params);
+    this->state = make_shared<FrbServerImpl> (params);
     this->rpc_service = make_unique<FrbRpcService> (state);
 
     grpc::ServerBuilder builder;
@@ -180,7 +138,7 @@ void FrbServer::_worker_main(int receiver_index)
 
     // Get metadata from receiver (blocking).
     XEngineMetadata m = receiver->get_metadata(true);  // blocking=true
-    long rb_size = FrbServer::ringbuf_nchunks * m.nbeams;
+    long rb_size = FrbServerImpl::ringbuf_nchunks * m.nbeams;
     long nbeams = m.nbeams;
 
     // Check consistency with other receivers.
