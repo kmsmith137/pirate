@@ -58,7 +58,7 @@ struct AssembledFrameAllocator
 
     long nfreq = 0;
     long time_samples_per_chunk = 0;
-    std::vector<int> beam_ids;
+    std::vector<long> beam_ids;
 
     // Each consumer calls initalize() once, to establish the number of frequency channels,
     // number of time samples per chunk, and a list of beam IDs. If any of this data mismatches
@@ -69,7 +69,7 @@ struct AssembledFrameAllocator
     //
     // Entry point: throws if stopped, calls stop() on exception.
 
-    void initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<int> &beam_ids);
+    void initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<long> &beam_ids);
 
     // Each consumer calls get_frame() in a loop.
     // Frames are returned in the following ordering:
@@ -144,7 +144,7 @@ private:
     void worker_main();
     
     // Internal implementations of entry points.
-    void _initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<int> &beam_ids);
+    void _initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<long> &beam_ids);
     std::shared_ptr<AssembledFrame> _get_frame(int consumer_id);
 };
 

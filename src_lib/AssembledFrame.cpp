@@ -188,7 +188,7 @@ void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
 // initialize() - Entry point
 
 
-void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const vector<int> &beam_ids_)
+void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const vector<long> &beam_ids_)
 {
     {
         unique_lock<mutex> guard(lock);
@@ -204,7 +204,7 @@ void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time
 }
 
 
-void AssembledFrameAllocator::_initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const vector<int> &beam_ids_)
+void AssembledFrameAllocator::_initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const vector<long> &beam_ids_)
 {
     xassert_ge(consumer_id, 0);
     xassert_lt(consumer_id, num_consumers);

@@ -98,6 +98,13 @@ FrbServer::FrbServer(const Params &params)
     xassert(params.receivers.size() > 0);
     xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
 
+    // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
+    for (uint i = 0; i < params.receivers.size(); i++) {
+        xassert(params.receivers[i]);
+        xassert(params.receivers[i]->params.allocator == params.receivers[0]->params.allocator);
+        xassert(params.receivers[i]->params.consumer_id == i);
+    }
+
     this->state = make_shared<FrbServer::State> (params);
     this->rpc_service = make_unique<FrbRpcService> (state);
 
