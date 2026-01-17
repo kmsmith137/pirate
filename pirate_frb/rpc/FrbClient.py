@@ -10,12 +10,12 @@ class FrbClient:
     
     Usage:
         with FrbClient("localhost:50051") as client:
-            num_conn, num_bytes = client.get_status()
-            print(f"Connections: {num_conn}, Bytes: {num_bytes}")
+            status = client.get_status()
+            print(f"Connections: {status.num_connections}, Bytes: {status.num_bytes}")
     
     Or without context manager:
         client = FrbClient("localhost:50051")
-        num_conn, num_bytes = client.get_status()
+        status = client.get_status()
         client.close()
     """
     
@@ -29,15 +29,19 @@ class FrbClient:
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_search_pb2_grpc.FrbSearchStub(self.channel)
     
-    def get_status(self) -> tuple[int, int]:
+    def get_status(self):
         """Query the server for current status.
         
         Returns:
-            Tuple of (num_connections, num_bytes) summed over all receivers.
+            GetStatusResponse protobuf message with the following int fields:
+            - num_connections: Total number of active TCP connections (summed over receivers)
+            - num_bytes: Total bytes received (summed over receivers)
+            - rb_start: First frame_id in ring buffer
+            - rb_finalized: (Last finalized frame_id) + 1
+            - rb_end: (Last frame_id in ring buffer) + 1
         """
         request = frb_search_pb2.GetStatusRequest()
-        response = self.stub.GetStatus(request)
-        return (response.num_connections, response.num_bytes)
+        return self.stub.GetStatus(request)
     
     def get_metadata(self, verbose: bool = False) -> str:
         """Query the server for metadata as a YAML string.

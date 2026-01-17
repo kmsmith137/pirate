@@ -14,10 +14,13 @@ service FrbSearch {
 // Request message (currently empty, but extensible)
 message GetStatusRequest {}
 
-// Response message containing the two metrics
+// Response message containing status metrics
 message GetStatusResponse {
-  int64 num_connections = 1;
-  int64 num_bytes = 2;
+  int64 num_connections = 1;  // Total number of active TCP connections (summed over receivers)
+  int64 num_bytes = 2;        // Total bytes received (summed over receivers)
+  int64 rb_start = 3;         // First frame_id in ring buffer
+  int64 rb_finalized = 4;     // (Last finalized frame_id) + 1
+  int64 rb_end = 5;           // (Last frame_id in ring buffer) + 1
 }
 
 // Request message for GetMetadata

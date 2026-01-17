@@ -84,6 +84,15 @@ public:
         }
         response->set_num_connections(total_conn);
         response->set_num_bytes(total_bytes);
+
+        // Get ring buffer state under lock.
+        {
+            lock_guard<std::mutex> lock(state->mutex);
+            response->set_rb_start(state->rb_start);
+            response->set_rb_finalized(state->rb_finalized);
+            response->set_rb_end(state->rb_end);
+        }
+
         return grpc::Status::OK;
     }
 
