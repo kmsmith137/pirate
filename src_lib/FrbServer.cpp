@@ -79,6 +79,131 @@ public:
 };
 
 
+
+// -------------------------------------------------------------------------------------------------
+//
+// FrbServer
+
+
+FrbServer::FrbServer(const Params &params)
+{
+    xassert(params.receivers.size() > 0);
+    xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
+
+    // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
+    for (uint i = 0; i < params.receivers.size(); i++) {
+        xassert(params.receivers[i]);
+        xassert(params.receivers[i]->params.allocator == params.receivers[0]->params.allocator);
+        xassert(params.receivers[i]->params.consumer_id == i);
+    }
+
+    this->state = make_shared<FrbServerImpl> (params);
+    this->rpc_service = make_unique<FrbRpcService> (state);
+
+    // Spawn watchdog thread (waits for state to stop, then propagates error).
+    watchdog_thread = std::thread(&FrbServer::watchdog_thread_main, this);
+}
+
+
+FrbServer::~FrbServer()
+{
+    stop();
+
+    if (watchdog_thread.joinable())
+        watchdog_thread.join();
+
+    if (rpc_server)
+        rpc_server->Wait();
+}
+
+
+void FrbServer::_throw_if_stopped(const char *method_name)
+{
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped) {
+        throw runtime_error(string(method_name) + " called on stopped instance");
+    }
+}
+
+
+void FrbServer::_watchdog_thread_main()
+{
+    // Wait for FrbServerImpl::stop().
+    // Note that this also waits for FrbServer::stop(), since FrbServer::stop() calls FrbServerImpl::stop().
+
+    unique_lock<std::mutex> state_lock(state->mutex);
+    
+    while (!state->is_stopped)
+        state->cv.wait(state_lock);
+
+    std::exception_ptr e = state->error;
+    state_lock.unlock();
+
+    // Propagate to FrbServer.
+    this->stop(e);
+}
+
+
+void FrbServer::watchdog_thread_main()
+{
+    try {
+        _watchdog_thread_main();
+    } catch (...) {
+        stop(std::current_exception());
+    }
+}
+
+
+void FrbServer::start()
+{
+    unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("FrbServer::start");
+
+    if (is_started)
+        throw runtime_error("FrbServer::start() called twice");
+
+    is_started = true;
+    lock.unlock();
+
+    try {
+        // Start the RPC server.
+        grpc::ServerBuilder builder;
+        builder.AddListeningPort(state->params.rpc_server_address, grpc::InsecureServerCredentials());
+        builder.RegisterService(rpc_service.get());
+        this->rpc_server = builder.BuildAndStart();
+
+        // Start FrbServerImpl (starts receivers, spawns worker/reaper threads).
+        state->start();
+    } catch (...) {
+        stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void FrbServer::stop(std::exception_ptr e)
+{
+    unique_lock<std::mutex> lock(mutex);
+
+    if (is_stopped)
+        return;
+
+    is_stopped = true;
+    error = e;
+    cv.notify_all();
+    lock.unlock();
+
+    // Stop FrbServerImpl (stops receivers, allocator, notifies threads).
+    state->stop();
+
+    // Shutdown RPC server.
+    if (rpc_server)
+        rpc_server->Shutdown();
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // FrbServerImpl
@@ -280,127 +405,6 @@ void FrbServerImpl::stop(std::exception_ptr e)
 
     // Stop the allocator (which will unblock num_total_frames).
     params.receivers[0]->params.allocator->stop();
-}
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// FrbServer
-
-
-FrbServer::FrbServer(const Params &params)
-{
-    xassert(params.receivers.size() > 0);
-    xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
-
-    // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
-    for (uint i = 0; i < params.receivers.size(); i++) {
-        xassert(params.receivers[i]);
-        xassert(params.receivers[i]->params.allocator == params.receivers[0]->params.allocator);
-        xassert(params.receivers[i]->params.consumer_id == i);
-    }
-
-    this->state = make_shared<FrbServerImpl> (params);
-    this->rpc_service = make_unique<FrbRpcService> (state);
-
-    // Spawn watchdog thread (waits for state to stop, then propagates error).
-    watchdog_thread = std::thread(&FrbServer::watchdog_thread_main, this);
-}
-
-
-FrbServer::~FrbServer()
-{
-    stop();
-
-    if (watchdog_thread.joinable())
-        watchdog_thread.join();
-
-    if (rpc_server)
-        rpc_server->Wait();
-}
-
-
-void FrbServer::_throw_if_stopped(const char *method_name)
-{
-    if (error)
-        std::rethrow_exception(error);
-
-    if (is_stopped) {
-        throw runtime_error(string(method_name) + " called on stopped instance");
-    }
-}
-
-
-void FrbServer::_watchdog_thread_main()
-{
-    // Wait for FrbServerImpl to stop.
-    unique_lock<std::mutex> state_lock(state->mutex);
-    while (!state->is_stopped) {
-        state->cv.wait(state_lock);
-    }
-    std::exception_ptr e = state->error;
-    state_lock.unlock();
-
-    // Propagate to FrbServer.
-    this->stop(e);
-}
-
-
-void FrbServer::watchdog_thread_main()
-{
-    try {
-        _watchdog_thread_main();
-    } catch (...) {
-        stop(std::current_exception());
-    }
-}
-
-
-void FrbServer::start()
-{
-    unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("FrbServer::start");
-
-    if (is_started)
-        throw runtime_error("FrbServer::start() called twice");
-
-    is_started = true;
-    lock.unlock();
-
-    try {
-        // Start the RPC server.
-        grpc::ServerBuilder builder;
-        builder.AddListeningPort(state->params.rpc_server_address, grpc::InsecureServerCredentials());
-        builder.RegisterService(rpc_service.get());
-        this->rpc_server = builder.BuildAndStart();
-
-        // Start FrbServerImpl (starts receivers, spawns worker/reaper threads).
-        state->start();
-    } catch (...) {
-        stop(std::current_exception());
-        throw;
-    }
-}
-
-
-void FrbServer::stop(std::exception_ptr e)
-{
-    unique_lock<std::mutex> lock(mutex);
-
-    if (is_stopped)
-        return;
-
-    is_stopped = true;
-    error = e;
-    cv.notify_all();
-    lock.unlock();
-
-    // Stop FrbServerImpl (stops receivers, allocator, notifies threads).
-    state->stop();
-
-    // Shutdown RPC server.
-    if (rpc_server)
-        rpc_server->Shutdown();
 }
 
 
