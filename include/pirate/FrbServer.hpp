@@ -27,6 +27,11 @@ struct FrbRpcService;  // defined in FrbServer.cu
 
 struct FrbServer
 {
+    // Total ring buffer size, in "chunks". In practice, the "real" ring buffer
+    // will usually be smaller, since it includes sentinel AssembledFrames whose
+    // data has been freed in response to memory pressure.
+    static constexpr int ringbuf_nchunks = 512;
+
     // Constructor args (more to come).
     struct Params {
         std::vector<std::shared_ptr<Receiver>> receivers;

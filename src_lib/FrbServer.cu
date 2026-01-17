@@ -1,5 +1,7 @@
 #include "../include/pirate/FrbServer.hpp"
+
 #include "../include/pirate/Receiver.hpp"
+#include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/XEngineMetadata.hpp"
 
 // Suppress nvcc warning #970 from gRPC headers ("qualifier on friend declaration ignored")
@@ -33,7 +35,26 @@ struct FrbServer::State
     bool has_metadata = false;
     XEngineMetadata metadata;
 
+    // The frame_ringbuf is initialized at the same time as the metadata.
+    // Ring buffer has length (FrbServer::ringbuf_nchunks * metadata.nbeams).
+    vector<shared_ptr<AssembledFrame>> frame_ringbuf;
+
+    // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
+    // Invariant: rb_start <= rb_finalized <= rb_end <= (rb_start + frame_ringbuf.size()).
+    long rb_start = 0;       // (first frame_id in ringbuf)
+    long rb_finalized = 0;   // (last finalized frame_id in ringbuf) + 1
+    long rb_end = 0;         // (last frame_id in ringbuf) + 1
+
     State(const FrbServer::Params &p) : params(p) { }
+
+    // Call with lock held.
+    inline void _check_rb_invariants()
+    {
+        xassert(rb_start >= 0);
+        xassert(rb_start <= rb_finalized);
+        xassert(rb_finalized <= rb_end);
+        xassert(rb_end <= rb_start + long(frame_ringbuf.size()));
+    }
 };
 
 
@@ -142,18 +163,77 @@ void FrbServer::_throw_if_stopped(const char *method_name)
 void FrbServer::_worker_main(int receiver_index)
 {
     auto &receiver = state->params.receivers.at(receiver_index);
+    long num_receivers = state->params.receivers.size();
 
     // Get metadata from receiver (blocking).
     XEngineMetadata m = receiver->get_metadata(true);  // blocking=true
+    long rb_size = FrbServer::ringbuf_nchunks * m.nbeams;
+    long nbeams = m.nbeams;
 
     // Check consistency with other receivers.
-    lock_guard<std::mutex> lock(state->mutex);
+    unique_lock<std::mutex> state_lock(state->mutex);
 
     if (!state->has_metadata) {
         state->metadata = m;
         state->has_metadata = true;
+        // The frame_ringbuf is initialized at the same time as the metadata.
+        state->frame_ringbuf.resize(rb_size);
     } else {
         XEngineMetadata::check_sender_consistency(state->metadata, m);
+        xassert(long(state->frame_ringbuf.size()) == rb_size);
+    }
+
+    state_lock.unlock();
+
+    for (long frame_id = 0; true; frame_id++) {
+        long rb_slot = frame_id % rb_size;
+        long expected_time_chunk_index = frame_id / nbeams;
+        long expected_beam_id = m.beam_ids.at(frame_id % nbeams);
+
+        shared_ptr<AssembledFrame> frame = receiver->get_frame();
+        xassert(frame->time_chunk_index == expected_time_chunk_index);
+        xassert(frame->beam_id == expected_beam_id);
+
+        // Insert the new frame into state->frame_ringbuf. Note that each frame
+        // must be received from all Receivers before it is "finalized".
+
+        state_lock.lock();
+
+        // In principle, this assert can fail if one Receiver is running far behind.
+        // I decided it was best to "handle" this condition by throwing an exception,
+        // since something has gone off the rails, and needs human debugging.
+        xassert(state->rb_finalized >= frame_id - rb_size + 1);
+
+        lock_guard<std::mutex> frame_lock(frame->mutex);
+        frame->finalize_count++;
+
+        if (frame->finalize_count == 1) {
+            // Frame received from first Receiver. Check that it is not in
+            // the ringbuf already, and put it at the end of the ringbuf.
+            xassert(state->rb_end == frame_id);
+            state->frame_ringbuf[rb_slot] = frame;
+            state->rb_start = max(frame_id - rb_size + 1, 0L);
+            state->rb_end = frame_id + 1;
+            // Note that frame is not finalized yet (see below).
+        }
+        else {
+            // Frame has previously been received from another Receiver.
+            // Check that it is already in the ringbuf, but not finalized yet.
+            xassert(frame_id >= state->rb_finalized);
+            xassert(frame_id < state->rb_end);
+            xassert(state->frame_ringbuf[rb_slot] == frame);
+        }
+
+        if (frame->finalize_count == num_receivers) {
+            // Frame received from last Receiver, so finalize it.
+            xassert(state->rb_finalized == frame_id);
+            state->rb_finalized++;
+        }
+
+        state->_check_rb_invariants();
+
+        state_lock.unlock();
+        // Note that frame_lock is also dropped here.
     }
 }
 

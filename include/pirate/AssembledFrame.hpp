@@ -21,15 +21,20 @@ namespace pirate {
 
 struct AssembledFrame
 {
+    // Initialized at creation, not protected by lock.
     long nfreq = 0;
     long ntime = 0;
     long beam_id = 0;
     long time_chunk_index = 0;   // 0, 1, 2, ...
     // time_chunk_index will be replaced by an FPGA count in the future (?)
 
+    std::mutex mutex;
+    long finalize_count = 0;    // incremented by FrbServer worker thread(s)
+
     // dtype int4, shape (nfreq, ntime).
     // This array is allocated on memory returned from a SlabAllocator.
     // Newly allocated frames have all 'data' elements set to (-8).
+    // Data pointer is lock-protected, but data contents are not lock-protected.
     ksgpu::Array<void> data;
 };
 
