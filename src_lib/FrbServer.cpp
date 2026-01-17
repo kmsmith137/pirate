@@ -87,16 +87,7 @@ public:
 
 FrbServer::FrbServer(const Params &params)
 {
-    xassert(params.receivers.size() > 0);
-    xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
-
-    // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
-    for (uint i = 0; i < params.receivers.size(); i++) {
-        xassert(params.receivers[i]);
-        xassert(params.receivers[i]->params.allocator == params.receivers[0]->params.allocator);
-        xassert(params.receivers[i]->params.consumer_id == i);
-    }
-
+    // Note: Params argument-checking happens in the FrbServerImpl constructor.
     this->state = make_shared<FrbServerImpl> (params);
     this->rpc_service = make_unique<FrbRpcService> (state);
 
@@ -134,7 +125,7 @@ void FrbServer::_watchdog_thread_main()
     // Note that this also waits for FrbServer::stop(), since FrbServer::stop() calls FrbServerImpl::stop().
 
     unique_lock<std::mutex> state_lock(state->mutex);
-    
+
     while (!state->is_stopped)
         state->cv.wait(state_lock);
 
@@ -209,7 +200,20 @@ void FrbServer::stop(std::exception_ptr e)
 // FrbServerImpl
 
 
-FrbServerImpl::FrbServerImpl(const Params &p) : params(p) { }
+FrbServerImpl::FrbServerImpl(const Params &p) : params(p) 
+{ 
+    xassert(params.receivers.size() > 0);
+    xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
+
+    // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
+    for (uint i = 0; i < params.receivers.size(); i++) {
+        xassert(params.receivers[i]);
+        xassert(params.receivers[i]->params.allocator == params.receivers[0]->params.allocator);
+        xassert(params.receivers[i]->params.consumer_id == i);
+    }
+
+    this->allocator = params.receivers[0]->params.allocator;
+}
 
 
 FrbServerImpl::~FrbServerImpl()
@@ -252,7 +256,9 @@ void FrbServerImpl::_worker_main(int receiver_index)
     if (!has_metadata) {
         metadata = m;
         has_metadata = true;
-        // The frame_ringbuf is initialized at the same time as the metadata.
+        // The frame_ringbuf is initialized at the same time as the metadata,
+        // without dropping the lock in between. Correctness of worker_main() 
+        // and reaper_main() depend on this property.
         frame_ringbuf.resize(rb_size);
         cv.notify_all();  // wake up reaper thread
     } else {
@@ -329,16 +335,21 @@ void FrbServerImpl::_reaper_thread_main()
 {
     // Wait for metadata.
     unique_lock<std::mutex> lock(mutex);
+
     while (!has_metadata) {
         if (is_stopped)
             return;
         cv.wait(lock);
     }
-    long nbeams = metadata.nbeams;
+
     lock.unlock();
 
+    // It's okay to access metadata.nbeams and frame_ringbuf.size() after dropping
+    // the lock, since these are initialized once and constant thereafter.
+    long nbeams = metadata.nbeams;
+    long rb_size = frame_ringbuf.size();
+
     // Get total number of frames (blocking until allocator is initialized).
-    auto &allocator = params.receivers[0]->params.allocator;
     long total_frames = allocator->num_total_frames(/*blocking=*/ true);
 
     xassert(total_frames >= 6 * nbeams);
@@ -377,7 +388,6 @@ void FrbServerImpl::start()
             workers.emplace_back(&FrbServerImpl::worker_main, this, i);
 
         // Spawn reaper thread iff allocator is not in dummy mode.
-        auto &allocator = params.receivers[0]->params.allocator;
         if (!allocator->is_dummy())
             reaper_thread = std::thread(&FrbServerImpl::reaper_thread_main, this);
     } catch (...) {
@@ -404,7 +414,7 @@ void FrbServerImpl::stop(std::exception_ptr e)
         r->stop();
 
     // Stop the allocator (which will unblock num_total_frames).
-    params.receivers[0]->params.allocator->stop();
+    allocator->stop();
 }
 
 

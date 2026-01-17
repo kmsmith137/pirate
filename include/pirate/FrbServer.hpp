@@ -23,7 +23,7 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-// Forward declaration (defined in FrbServer.cpp)
+
 struct FrbServerImpl;  // defined later in this file
 struct FrbRpcService;  // defined in FrbServer.cpp
 
@@ -47,9 +47,7 @@ struct FrbServer
     void start();  // entry point
     void stop(std::exception_ptr e = nullptr);  // idempotent
 
-    // Shared state between FrbServer and FrbRpcService
-    std::shared_ptr<FrbServerImpl> state;  
-
+    std::shared_ptr<FrbServerImpl> state;
     std::unique_ptr<FrbRpcService> rpc_service;
     std::unique_ptr<grpc::Server> rpc_server;
 
@@ -94,6 +92,7 @@ struct FrbServerImpl
     void stop(std::exception_ptr e = nullptr);  // idempotent
 
     Params params;
+    std::shared_ptr<AssembledFrameAllocator> allocator;
 
     // Thread-backed class state (protected by 'mutex').
     std::mutex mutex;
