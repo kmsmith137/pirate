@@ -104,7 +104,23 @@ void SlabAllocator::_throw_if_stopped()
         std::rethrow_exception(error);
     
     if (is_stopped)
-        throw std::runtime_error("SlabAllocator::get_slab() called on stopped instance");
+        throw std::runtime_error("SlabAllocator method called on stopped instance");
+}
+
+
+void SlabAllocator::block_until_empty()
+{
+    if (is_dummy())
+        throw std::runtime_error("SlabAllocator::block_until_empty(): not available in dummy mode");
+    
+    std::unique_lock<std::mutex> guard(lock);
+    _throw_if_stopped();
+
+    // Wait until slab size is established and free list is empty.
+    while ((slab_size < 0) || !free_list.empty()) {
+        cv.wait(guard);
+        _throw_if_stopped();
+    }
 }
 
 
@@ -158,6 +174,9 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
         free_list.reserve(num_slabs);
         for (long i = 0; i < num_slabs; i++)
             free_list.push_back(base_ptr + i * slab_size);
+        
+        // Wake up any thread waiting in block_until_empty() for initialization.
+        cv.notify_all();
     }
 
     // Wait for a slab if blocking, otherwise throw.
@@ -175,7 +194,11 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
 
     void *slab_ptr = free_list.back();
     free_list.pop_back();
+    bool notify = free_list.empty();  // wake up block_until_empty() if free list is now empty
     guard.unlock();
+    
+    if (notify)
+        cv.notify_all();
 
     // Create shared_ptr with a custom deleter that returns the slab to the pool.
     // The captured shared_ptr<SlabAllocator> ensures the allocator (and its

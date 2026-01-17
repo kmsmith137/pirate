@@ -94,6 +94,11 @@ public:
     // Returns true if in dummy mode (capacity < 0).
     bool is_dummy() const { return capacity < 0; }
     
+    // Block until there are no free slabs (all slabs are in use).
+    // If slab size has not been established yet, blocks until it is.
+    // Throws exception in dummy mode, or if stop() is called from another thread.
+    void block_until_empty();
+
     // Stop the allocator. Any thread blocked in get_slab() will wake up and throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
     // Thread-safe; first call sets the error.
