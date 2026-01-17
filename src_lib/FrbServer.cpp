@@ -6,6 +6,7 @@
 #include <grpcpp/grpcpp.h>
 
 using namespace std;
+using namespace ksgpu;
 
 
 namespace pirate {
@@ -44,6 +45,7 @@ public:
         {
             lock_guard<std::mutex> lock(state->mutex);
             response->set_rb_start(state->rb_start);
+            response->set_rb_reaped(state->rb_reaped);
             response->set_rb_finalized(state->rb_finalized);
             response->set_rb_end(state->rb_end);
         }
@@ -287,7 +289,7 @@ void FrbServerImpl::_worker_main(int receiver_index)
         // since something has gone off the rails, and needs human debugging.
         xassert(rb_finalized >= frame_id - rb_size + 1);
 
-        lock_guard<std::mutex> frame_lock(frame->mutex);
+        unique_lock<std::mutex> frame_lock(frame->mutex);
         frame->finalize_count++;
 
         if (frame->finalize_count == 1) {
@@ -296,6 +298,7 @@ void FrbServerImpl::_worker_main(int receiver_index)
             xassert(rb_end == frame_id);
             frame_ringbuf[rb_slot] = frame;
             rb_start = max(frame_id - rb_size + 1, 0L);
+            rb_reaped = max(rb_start, rb_reaped);
             rb_end = frame_id + 1;
             // Note that frame is not finalized yet (see below).
         }
@@ -316,7 +319,8 @@ void FrbServerImpl::_worker_main(int receiver_index)
         _check_rb_invariants();
 
         lock.unlock();
-        // Note that frame_lock is also dropped here.
+        frame_lock.unlock();
+        cv.notify_all();
     }
 }
 
@@ -333,12 +337,14 @@ void FrbServerImpl::worker_main(int receiver_index)
 
 void FrbServerImpl::_reaper_thread_main()
 {
-    // Wait for metadata.
     unique_lock<std::mutex> lock(mutex);
 
-    while (!has_metadata) {
+    // Wait for metadata.
+    for (;;) {
         if (is_stopped)
             return;
+        if (has_metadata)
+            break;
         cv.wait(lock);
     }
 
@@ -351,8 +357,32 @@ void FrbServerImpl::_reaper_thread_main()
 
     // Get total number of frames (blocking until allocator is initialized).
     long total_frames = allocator->num_total_frames(/*blocking=*/ true);
-
     xassert(total_frames >= 6 * nbeams);
+
+    for (;;) {
+        allocator->block_until_low_memory(2 * nbeams);
+
+        unique_lock<std::mutex> lock(mutex);
+
+        // Wait for a reapable frame (i.e. rb_reaped < rb_finalized).
+        // Note that worker_main() signals the condition_variable when new frames are added.
+        for (;;) {
+            if (is_stopped)
+                return;
+            if (rb_reaped < rb_finalized)
+                break;
+            cv.wait(lock);
+        }
+
+        long rb_slot = rb_reaped % rb_size;
+        shared_ptr<AssembledFrame> frame = frame_ringbuf[rb_slot];
+        rb_reaped++;
+        lock.unlock();
+
+        lock_guard<std::mutex> frame_lock(frame->mutex);
+        frame->data = Array<void> ();
+        // frame_lock dropped (by going out of scope)
+    }
 }
 
 

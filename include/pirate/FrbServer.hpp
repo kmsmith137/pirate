@@ -112,8 +112,9 @@ struct FrbServerImpl
     std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
 
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
-    // Invariant: rb_start <= rb_finalized <= rb_end <= (rb_start + frame_ringbuf.size()).
+    // See below for invariants.
     long rb_start = 0;       // (first frame_id in ringbuf)
+    long rb_reaped = 0;      // (last reaped frame_id in ringbuf) + 1
     long rb_finalized = 0;   // (last finalized frame_id in ringbuf) + 1
     long rb_end = 0;         // (last frame_id in ringbuf) + 1
 
@@ -134,7 +135,8 @@ struct FrbServerImpl
     inline void _check_rb_invariants()
     {
         xassert(rb_start >= 0);
-        xassert(rb_start <= rb_finalized);
+        xassert(rb_start <= rb_reaped);
+        xassert(rb_reaped <= rb_finalized);
         xassert(rb_finalized <= rb_end);
         xassert(rb_end <= rb_start + long(frame_ringbuf.size()));
     }

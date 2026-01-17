@@ -32,9 +32,12 @@ struct AssembledFrame
     long finalize_count = 0;    // incremented by FrbServer worker thread(s)
 
     // dtype int4, shape (nfreq, ntime).
-    // This array is allocated on memory returned from a SlabAllocator.
     // Newly allocated frames have all 'data' elements set to (-8).
-    // Data pointer is lock-protected, but data contents are not lock-protected.
+    //
+    // Warning: if the AssembledFrame has been "reaped" under memory pressure,
+    // then 'data' is an empty array. The array state (empty vs nonempty) is
+    // protected by the lock, but the array contents are not lock-protected.
+
     ksgpu::Array<void> data;
 };
 
