@@ -4,15 +4,11 @@
 #include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/XEngineMetadata.hpp"
 
-// Suppress nvcc warning #970 from gRPC headers ("qualifier on friend declaration ignored")
-#pragma nv_diagnostic push
-#pragma nv_diag_suppress 970
-#include "../grpc/frb_search.grpc.pb.h"
-#include <grpcpp/grpcpp.h>
-#pragma nv_diagnostic pop
-
 #include <stdexcept>
 #include <ksgpu/xassert.hpp>
+
+#include "../grpc/frb_search.grpc.pb.h"
+#include <grpcpp/grpcpp.h>
 
 using namespace std;
 
