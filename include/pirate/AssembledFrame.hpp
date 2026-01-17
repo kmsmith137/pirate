@@ -97,7 +97,8 @@ struct AssembledFrameAllocator
 
     std::shared_ptr<AssembledFrame> get_frame(int consumer_id);
 
-    // Returns the number of free frames (same as num_free_slabs() from the underlying slab_allocator).
+    // Returns the number of "available" frames: pre-initialized frames waiting for their first
+    // consumer, plus free slabs in the underlying slab_allocator.
     // Throws exception in dummy mode or if not initialized.
     long num_free_frames() const;
 
@@ -132,8 +133,14 @@ private:
     // In non-dummy mode, the worker thread pushes pre-initialized frames to the back.
     // In dummy mode, get_frame() creates frames synchronously and pushes to the back.
     // Frames are popped from the front when all consumers have received them.
+    //
+    // The early part of the queue contains frames with (num_consumers_received > 0) that
+    // are waiting for subsequent consumers. The later part contains frames with
+    // (num_consumers_received == 0) that have been pre-initialized, waiting for their
+    // first consumer. The boundary between these regions is at first_unreceived_index.
     std::deque<std::pair<std::shared_ptr<AssembledFrame>, int>> frame_queue;
     long queue_start_index = 0;             // sequence index of first frame in queue
+    long first_unreceived_index = 0;        // sequence index of first frame not yet received by any consumer
     bool frame_creation_underway = false;   // is there a thread in the process of creating a new frame?
 
     // Create a new frame and add it to the queue.

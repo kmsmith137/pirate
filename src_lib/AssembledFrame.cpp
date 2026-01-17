@@ -330,8 +330,11 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
         // frame_ref becomes a dangling reference after pop_front().
         auto result = frame_ref;
     
-        // Increment this consumer's sequence index.
+        // Increment this consumer's sequence index, and update first_unreceived_index.
+        // (first_unreceived_index is the max of all consumer_next_index values.)
         consumer_next_index[consumer_id]++;
+        if (consumer_next_index[consumer_id] > first_unreceived_index)
+            first_unreceived_index = consumer_next_index[consumer_id];
     
         // Pop frames from front that all consumers have received.
         while (!frame_queue.empty() && (frame_queue.front().second == num_consumers)) {
@@ -351,7 +354,13 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
 
 long AssembledFrameAllocator::num_free_frames() const
 {
-    return slab_allocator->num_free_slabs();
+    // Number of pre-initialized frames waiting for first consumer.
+    unique_lock<mutex> guard(lock);
+    long queue_end_index = queue_start_index + frame_queue.size();
+    long num_preinitialized = queue_end_index - first_unreceived_index;
+    guard.unlock();    
+
+    return num_preinitialized + slab_allocator->num_free_slabs();
 }
 
 

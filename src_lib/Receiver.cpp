@@ -39,8 +39,9 @@ struct Receiver::Peer
     };
 
     State state = State::ReadMagic;
-    Array<char> recv_buf;           // only used while state < ReadData
-    long recv_nbytes = 0;           // 0 <= recv_nbytes < recv_buf.size
+    
+    Array<char> recv_buf;
+    long recv_nbytes = 0;   // 0 <= recv_nbytes < recv_buf.size
 
     // If (state > ReadStringLen), this is the expected YAML string length (including null terminator).
     int32_t yaml_string_len = 0;
@@ -160,6 +161,8 @@ void Receiver::stop(std::exception_ptr e)
 
     is_stopped = true;
     error = e;
+
+    params.allocator->stop();
     cv.notify_all();
 }
 
