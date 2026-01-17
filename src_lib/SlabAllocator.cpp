@@ -98,7 +98,7 @@ void SlabAllocator::stop(std::exception_ptr e)
 }
 
 
-void SlabAllocator::_throw_if_stopped()
+void SlabAllocator::_throw_if_stopped() const
 {
     if (error)
         std::rethrow_exception(error);
@@ -239,15 +239,20 @@ long SlabAllocator::num_free_slabs() const
 }
 
 
-long SlabAllocator::num_total_slabs() const
+long SlabAllocator::num_total_slabs(bool blocking) const
 {
     if (is_dummy())
         throw std::runtime_error("SlabAllocator::num_total_slabs(): not available in dummy mode");
     
-    std::lock_guard<std::mutex> guard(lock);
-    
-    if (slab_size < 0)
-        throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
+    std::unique_lock<std::mutex> guard(lock);
+    _throw_if_stopped();
+
+    while (slab_size < 0) {
+        if (!blocking)
+            throw std::runtime_error("SlabAllocator::num_total_slabs(): slab size has not been established yet");
+        cv.wait(guard);
+        _throw_if_stopped();
+    }
     
     return num_slabs;
 }

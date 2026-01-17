@@ -380,26 +380,9 @@ long AssembledFrameAllocator::num_free_frames(bool permissive) const
 }
 
 
-long AssembledFrameAllocator::num_total_frames(bool permissive) const
+long AssembledFrameAllocator::num_total_frames(bool blocking) const
 {
-    // In dummy mode: throw or return 0. (is_dummy_mode is set once in constructor, safe without lock.)
-    if (is_dummy_mode) {
-        if (permissive)
-            return 0;
-        throw runtime_error("AssembledFrameAllocator::num_total_frames(): not available in dummy mode");
-    }
-
-    // Check num_initialized under lock.
-    unique_lock<mutex> guard(lock);
-
-    if (num_initialized == 0) {
-        if (permissive)
-            return 0;
-        throw runtime_error("AssembledFrameAllocator::num_total_frames(): allocator not initialized");
-    }
-
-    guard.unlock();
-    return slab_allocator->num_total_slabs();
+    return slab_allocator->num_total_slabs(blocking);
 }
 
 

@@ -81,8 +81,10 @@ public:
     long num_free_slabs() const;
     
     // Returns the total number of slabs in the pool.
-    // Throws exception in dummy mode or if not initialized.
-    long num_total_slabs() const;
+    // Throws exception in dummy mode.
+    // If blocking=false (default) and not initialized, throws exception.
+    // If blocking=true and not initialized, blocks until initialized.
+    long num_total_slabs(bool blocking = false) const;
     
     // Returns the established slab size.
     // Throws exception if not initialized.
@@ -118,7 +120,7 @@ private:
     
     // Slab management. These are protected by 'lock'.
     mutable std::mutex lock;
-    std::condition_variable cv;     // signaled when a slab is returned or stop() is called
+    mutable std::condition_variable cv;  // signaled when a slab is returned, initialized, or stop() is called
     long slab_size = -1;            // slab size in bytes (established by first get_slab)
     long num_slabs = 0;             // total number of slabs
     std::vector<void *> free_list;  // stack of free slab pointers
@@ -128,7 +130,7 @@ private:
     std::exception_ptr error;
     
     // Helper for blocking operations. Caller must hold lock.
-    void _throw_if_stopped();
+    void _throw_if_stopped() const;
     
     // Helper called when a slab's refcount drops to zero.
     void return_slab(void *slab_ptr);

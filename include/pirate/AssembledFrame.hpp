@@ -109,9 +109,10 @@ struct AssembledFrameAllocator
     void block_until_low_memory(long nframe_threshold);
 
     // Returns the total number of frames (same as num_total_slabs() from the underlying slab_allocator).
-    // If permissive=false (default): throws exception in dummy mode or if not initialized.
-    // If permissive=true: returns 0 in dummy mode or if not initialized.
-    long num_total_frames(bool permissive = false) const;
+    // Throws exception in dummy mode.
+    // If blocking=false (default) and not initialized, throws exception.
+    // If blocking=true and not initialized, blocks until initialized.
+    long num_total_frames(bool blocking = false) const;
 
     // Stop the allocator. After calling stop(), entry points will throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
