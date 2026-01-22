@@ -1,3 +1,5 @@
 [submodule "asdf-cxx"]
 	path = asdf-cxx
 	url = https://github.com/kmsmith137/asdf-cxx
+    ignore = untracked
+	
