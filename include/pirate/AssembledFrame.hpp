@@ -28,9 +28,6 @@ struct AssembledFrame
     long time_chunk_index = 0;   // 0, 1, 2, ...
     // time_chunk_index will be replaced by an FPGA count in the future (?)
 
-    std::mutex mutex;
-    long finalize_count = 0;    // incremented by FrbServer worker thread(s)
-
     // dtype int4, shape (nfreq, ntime).
     // Newly allocated frames have all 'data' elements set to (-8).
     //
@@ -39,6 +36,11 @@ struct AssembledFrame
     // protected by the lock, but the array contents are not lock-protected.
 
     ksgpu::Array<void> data;
+
+    // Members after this point are internal state, and not saved to the ASDF file.
+    
+    std::mutex mutex;
+    long finalize_count = 0;    // incremented by FrbServer worker thread(s)
 };
 
 

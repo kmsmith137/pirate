@@ -12,7 +12,7 @@ On a CHIME/CHORD machine, this conda environment works for me:
 
     conda create -c conda-forge -n ENVNAME \
     grpc-cpp grpcio grpcio-tools protoletariat \
-    cupy pybind11 yaml-cpp \
+    cupy pybind11 yaml-cpp asdf \
     scipy matplotlib ipykernel argcomplete \
     sphinx sphinx-argparse furo myst-parser emacs
 ```
@@ -33,7 +33,7 @@ or C++ builds with `make`. Here's what I recommend:
     # the error messages if anything goes wrong. (pip either generates too
     # little output or too much output, depending on whether you use -v).
 
-    git clone https://github.com/kmsmith137/pirate
+    git clone --recursive https://github.com/kmsmith137/pirate
     cd pirate
     make -j 32
 

@@ -12,6 +12,9 @@ makefile_helper.out
 sdist_files.txt
 wheel_files.txt
 
+# ASDF
+asdf-cxx/include/asdf/config.hxx
+
 # GRPC
 grpc/*.pb.h
 grpc/*.pb.cc
