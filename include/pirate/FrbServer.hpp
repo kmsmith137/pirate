@@ -24,77 +24,36 @@ namespace pirate {
 #endif
 
 
-struct FrbServerImpl;  // defined later in this file
 struct FrbRpcService;  // defined in FrbServer.cpp
 
 
-
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
-// Contains a watchdog thread that propagates errors from FrbServerImpl.
+// Backing threads: one worker thread per Receiver, plus a reaper thread.
 
-struct FrbServer
+struct FrbServer : public std::enable_shared_from_this<FrbServer>
 {
     struct Params {
         std::vector<std::shared_ptr<Receiver>> receivers;
         std::string rpc_server_address;
     };
 
-    FrbServer(const Params &params);
-    ~FrbServer();  // calls stop(), joins watchdog, then rpc_server->Wait()
+    // Factory method (constructor is private).
+    static std::shared_ptr<FrbServer> create(const Params &params);
+
+    ~FrbServer();  // calls stop(), joins workers/reaper, then rpc_server->Wait()
 
     // Start/stop the Receivers and the RPC service.
     // Asynchronous: neither start() nor stop() calls rpc_server->Wait().
     void start();  // entry point
     void stop(std::exception_ptr e = nullptr);  // idempotent
 
-    std::shared_ptr<FrbServerImpl> state;
+    Params params;
+    std::shared_ptr<AssembledFrameAllocator> allocator;
+
     std::unique_ptr<FrbRpcService> rpc_service;
     std::unique_ptr<grpc::Server> rpc_server;
 
     // Thread-backed class state (protected by mutex).
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool is_started = false;
-    bool is_stopped = false;
-    std::exception_ptr error;
-
-    // Watchdog thread: waits for FrbServerImpl to stop, then propagates the error.
-    std::thread watchdog_thread;
-
-    // ----- Noncopyable, nonmoveable -----
-
-    FrbServer(const FrbServer &) = delete;
-    FrbServer &operator=(const FrbServer &) = delete;
-    FrbServer(FrbServer &&) = delete;
-    FrbServer &operator=(FrbServer &&) = delete;
-
-private:
-    // Helper for entry points. Caller must hold mutex.
-    void _throw_if_stopped(const char *method_name);
-
-    // Watchdog thread functions.
-    void _watchdog_thread_main();
-    void watchdog_thread_main();
-};
-
-
-// FrbServerImpl: Thread-backed class containing worker and reaper threads.
-// Shared state between FrbServer and FrbRpcService.
-
-struct FrbServerImpl
-{
-    using Params = FrbServer::Params;
-
-    FrbServerImpl(const Params &p);
-    ~FrbServerImpl();  // calls stop(), joins workers and reaper
-
-    void start();  // entry point
-    void stop(std::exception_ptr e = nullptr);  // idempotent
-
-    Params params;
-    std::shared_ptr<AssembledFrameAllocator> allocator;
-
-    // Thread-backed class state (protected by 'mutex').
     std::mutex mutex;
     std::condition_variable cv;  // signaled on: stop, metadata available
     bool is_started = false;
@@ -126,10 +85,10 @@ struct FrbServerImpl
 
     // ----- Noncopyable, nonmoveable -----
 
-    FrbServerImpl(const FrbServerImpl &) = delete;
-    FrbServerImpl &operator=(const FrbServerImpl &) = delete;
-    FrbServerImpl(FrbServerImpl &&) = delete;
-    FrbServerImpl &operator=(FrbServerImpl &&) = delete;
+    FrbServer(const FrbServer &) = delete;
+    FrbServer &operator=(const FrbServer &) = delete;
+    FrbServer(FrbServer &&) = delete;
+    FrbServer &operator=(FrbServer &&) = delete;
 
     // Call with lock held.
     inline void _check_rb_invariants()
@@ -142,6 +101,9 @@ struct FrbServerImpl
     }
 
 private:
+    // Private constructor (use create() instead).
+    FrbServer(const Params &params);
+
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);
 

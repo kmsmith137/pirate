@@ -527,14 +527,15 @@ void register_core_bindings(pybind11::module &m)
     // FrbServer: gRPC server that queries Receivers and responds to RPCs.
     // Skipped members: params, rpc_service, rpc_server, mutex, is_started, is_stopped (internal)
     // Note: Params struct is not exposed; constructor takes receivers and address directly.
-    py::class_<FrbServer>(m, "FrbServer",
+    // Note: FrbServer::create() is used internally, but appears as a constructor to Python.
+    py::class_<FrbServer, std::shared_ptr<FrbServer>>(m, "FrbServer",
         "gRPC server that queries Receivers via RPC.\n\n"
         "Wraps multiple Receivers and exposes their status via gRPC.")
           .def(py::init([](std::vector<std::shared_ptr<Receiver>> receivers, const std::string &rpc_server_address) {
                FrbServer::Params params;
                params.receivers = std::move(receivers);
                params.rpc_server_address = rpc_server_address;
-               return std::make_unique<FrbServer>(params);
+               return FrbServer::create(params);
           }),
                py::arg("receivers"), py::arg("rpc_server_address"),
                "Create an FrbServer.\n\n"
