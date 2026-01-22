@@ -26,42 +26,68 @@ public:
 
     FrbRpcService(const shared_ptr<FrbServerImpl> &s) : state(s) {}
 
+    // ---- GetStatus ----
+
+    void _GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response)
+    {
+        // Call Receiver::get_status() for each receiver,
+        // and sum the results over receivers.
+        long total_conn = 0, total_bytes = 0;
+        for (auto &r : state->params.receivers) {
+            long nc, nb;
+            r->get_status(nc, nb);
+            total_conn += nc;
+            total_bytes += nb;
+        }
+        response->set_num_connections(total_conn);
+        response->set_num_bytes(total_bytes);
+
+        // Get ring buffer state under lock.
+        {
+            lock_guard<std::mutex> lock(state->mutex);
+            response->set_rb_start(state->rb_start);
+            response->set_rb_reaped(state->rb_reaped);
+            response->set_rb_finalized(state->rb_finalized);
+            response->set_rb_end(state->rb_end);
+        }
+
+        // Get num_free_frames from the allocator (permissive=true to handle uninitialized state).
+        auto &allocator = state->params.receivers[0]->params.allocator;
+        response->set_num_free_frames(allocator->num_free_frames(/*permissive=*/true));
+    }
+
     grpc::Status GetStatus(
         grpc::ServerContext* context,
         const fs::GetStatusRequest* request,
         fs::GetStatusResponse* response) override
     {
         try {
-            // Call Receiver::get_status() for each receiver,
-            // and sum the results over receivers.
-            long total_conn = 0, total_bytes = 0;
-            for (auto &r : state->params.receivers) {
-                long nc, nb;
-                r->get_status(nc, nb);
-                total_conn += nc;
-                total_bytes += nb;
-            }
-            response->set_num_connections(total_conn);
-            response->set_num_bytes(total_bytes);
-
-            // Get ring buffer state under lock.
-            {
-                lock_guard<std::mutex> lock(state->mutex);
-                response->set_rb_start(state->rb_start);
-                response->set_rb_reaped(state->rb_reaped);
-                response->set_rb_finalized(state->rb_finalized);
-                response->set_rb_end(state->rb_end);
-            }
-
-            // Get num_free_frames from the allocator (permissive=true to handle uninitialized state).
-            auto &allocator = state->params.receivers[0]->params.allocator;
-            response->set_num_free_frames(allocator->num_free_frames(/*permissive=*/true));
-
+            _GetStatus(request, response);
             return grpc::Status::OK;
         } catch (const std::exception &e) {
             return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
         } catch (...) {
             return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetStatus");
+        }
+    }
+
+    // ---- GetMetadata ----
+
+    void _GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response)
+    {
+        // Check has_metadata under lock, then release.
+        // Safe because has_metadata transitions false->true exactly once,
+        // and metadata is immutable after being set.
+        bool has_metadata;
+        {
+            lock_guard<std::mutex> lock(state->mutex);
+            has_metadata = state->has_metadata;
+        }
+
+        if (has_metadata) {
+            response->set_yaml_string(state->metadata.to_yaml_string(request->verbose()));
+        } else {
+            response->set_yaml_string("");
         }
     }
 
@@ -71,20 +97,7 @@ public:
         fs::GetMetadataResponse* response) override
     {
         try {
-            // Check has_metadata under lock, then release.
-            // Safe because has_metadata transitions false->true exactly once,
-            // and metadata is immutable after being set.
-            bool has_metadata;
-            {
-                lock_guard<std::mutex> lock(state->mutex);
-                has_metadata = state->has_metadata;
-            }
-
-            if (has_metadata) {
-                response->set_yaml_string(state->metadata.to_yaml_string(request->verbose()));
-            } else {
-                response->set_yaml_string("");
-            }
+            _GetMetadata(request, response);
             return grpc::Status::OK;
         } catch (const std::exception &e) {
             return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
