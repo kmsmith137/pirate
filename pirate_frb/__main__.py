@@ -30,7 +30,8 @@ from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
 
 
 def parse_test(subparsers):
-    parser = subparsers.add_parser("test", help="Run unit tests (by default, all tests are run)")
+    help_text = "Run unit tests (by default, all tests are run)"
+    parser = subparsers.add_parser("test", help=help_text, description=help_text)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for tests (default 0)")
     parser.add_argument('-n', '--niter', type=int, default=100, help="Number of unit test iterations (default 100)")
     parser.add_argument('--rt', action='store_true', help='Runs ReferenceTree and ReferenceLagbuf tests')
@@ -146,7 +147,8 @@ def test(args):
 
 
 def parse_time(subparsers):
-    parser = subparsers.add_parser("time", help="Run unit times (by default, all timings are run)")
+    help_text = "Run unit times (by default, all timings are run)"
+    parser = subparsers.add_parser("time", help=help_text, description=help_text)
     parser.add_argument('-g', '--gpu', type=int, default=0, help="GPU to use for timing (default 0)")
     parser.add_argument('-t', '--nthreads', type=int, default=0, help="number of CPU threads (only for time_cpu_downsample)")
     parser.add_argument('--ncu', action='store_true', help="Just run a single kernel (intended for profiling with nvidia 'ncu')")
@@ -194,7 +196,8 @@ def time(args):
 
 
 def parse_show_hardware(subparsers):
-    subparsers.add_parser("show_hardware", help="Show hardware information")
+    help_text = "Show hardware information"
+    subparsers.add_parser("show_hardware", help=help_text, description=help_text)
     
 def show_hardware(args):
     h = Hardware()
@@ -205,7 +208,8 @@ def show_hardware(args):
 
 
 def parse_show_kernels(subparsers):
-    parser = subparsers.add_parser("show_kernels", help="Show registered cuda kernels (by default, all registries are shown)")
+    help_text = "Show registered cuda kernels (by default, all registries are shown)"
+    parser = subparsers.add_parser("show_kernels", help=help_text, description=help_text)
     parser.add_argument('--pfom', action='store_true', help='Show PfOutputMicrokernel registry')
     parser.add_argument('--pfwr', action='store_true', help='Show PfWeightReaderMicrokernel registry')
     parser.add_argument('--gddk', action='store_true', help='Show GpuDedispersionKernel registry')
@@ -262,9 +266,11 @@ def show_kernels(args):
 
 
 def parse_make_subbands(subparsers):
+    help_text = "Create subband_counts with specified freq range and width"
     parser = subparsers.add_parser(
         "make_subbands",
-        help = "Create subband_counts with specified freq range and width (see 'python -m make_subbands --help')",
+        help = help_text,
+        description = help_text,
         formatter_class = argparse.RawDescriptionHelpFormatter,   # multi-line epilog
         epilog = textwrap.dedent("""
         Example usage:
@@ -301,7 +307,8 @@ def make_subbands(args):
 
 
 def parse_test_node(subparsers):
-    parser = subparsers.add_parser("test_node", help="Run test server (if no flags are specified, then -dcsdn --h2g --g2h is the default)")
+    help_text = "Run test server (if no flags are specified, then -dcsdn --h2g --g2h is the default)"
+    parser = subparsers.add_parser("test_node", help=help_text, description=help_text)
     parser.add_argument('-d', '--dedisperse', dest='d', action='store_true', help='Run GPU dedispersion')
     parser.add_argument('-c', '--cpu', dest='c', action='store_true', help='Run AVX2 downsampling kernels on CPU')
     parser.add_argument('-s', '--ssd', dest='s', action='store_true', help='Write files to SSDs')
@@ -444,7 +451,8 @@ def test_node(args):
 
 
 def parse_send(subparsers):
-    parser = subparsers.add_parser("send", help='Send data to test server (this is the "other half" of "python -m pirate_frb test_node")')
+    help_text = 'Send data to test server (this is the "other half" of "python -m pirate_frb test_node")'
+    parser = subparsers.add_parser("send", help=help_text, description=help_text)
     parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
     parser.add_argument('-b', '--bufsize', type=int, default=65536, help="Send bufsize (default 65536)")
     parser.add_argument('ip_addrs', nargs='*', help="list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2")
@@ -490,7 +498,8 @@ def send(args):
 
 def parse_scratch(subparsers):
     # The scratch() function is defined in src_lib/scratch.cu.
-    subparsers.add_parser("scratch", help="Run scratch code (defined in src_lib/scratch.cu)")
+    help_text = "Run scratch code (defined in src_lib/scratch.cu)"
+    subparsers.add_parser("scratch", help=help_text, description=help_text)
 
 def scratch(args):
     # The scratch() function is defined in src_lib/scratch.cu.
@@ -501,7 +510,8 @@ def scratch(args):
 
 
 def parse_show_xengine_metadata(subparsers):
-    parser = subparsers.add_parser("show_xengine_metadata", help="Parse X-engine metadata file and write YAML to stdout")
+    help_text = "Parse X-engine metadata file and write YAML to stdout"
+    parser = subparsers.add_parser("show_xengine_metadata", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
 
@@ -522,7 +532,8 @@ def print_separator(label, filler='-'):
 
 
 def parse_show_dedisperser(subparsers):
-    parser = subparsers.add_parser("show_dedisperser", help="Parse a dedisperser config file and write YAML to stdout")
+    help_text = "Parse a dedisperser config file and write YAML to stdout"
+    parser = subparsers.add_parser("show_dedisperser", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config-only', action='store_true', help="Print config only (skip plan)")
@@ -599,7 +610,8 @@ def show_dedisperser(args):
 
 
 def parse_show_random_config(subparsers):
-    parser = subparsers.add_parser("show_random_config", help="Generate random DedispersionConfig(s) and print as YAML")
+    help_text = "Generate random DedispersionConfig(s) and print as YAML"
+    parser = subparsers.add_parser("show_random_config", help=help_text, description=help_text)
     parser.add_argument('-n', type=int, default=1, metavar='NCONFIG', help='generate multiple random configs')
     parser.add_argument('-a', action='store_true', help='generate arbitrary random config, without restricting to precompiled kernels')
     parser.add_argument('-v', action='store_true', help='verbose')
@@ -621,7 +633,8 @@ def show_random_config(args):
 
 
 def parse_time_dedisperser(subparsers):
-    parser = subparsers.add_parser("time_dedisperser", help="Run GpuDedisperser timing benchmarks")
+    help_text = "Run GpuDedisperser timing benchmarks"
+    parser = subparsers.add_parser("time_dedisperser", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (default 1000)")
     parser.add_argument('-H', '--no-hugepages', action='store_true', help="Disable hugepages")
@@ -691,7 +704,8 @@ def time_dedisperser(args):
 
 
 def parse_show_asdf(subparsers):
-    parser = subparsers.add_parser("show_asdf", help="Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful)")
+    help_text = "Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful)"
+    parser = subparsers.add_parser("show_asdf", help=help_text, description=help_text)
     parser.add_argument('asdf_file', help="Path to ASDF file")
 
 
@@ -701,7 +715,8 @@ def show_asdf(args):
 
 
 def parse_random_kernels(subparsers):
-    parser = subparsers.add_parser("random_kernels", help="A utility for maintaining makefile_helper.py")
+    help_text = "A utility for maintaining makefile_helper.py"
+    parser = subparsers.add_parser("random_kernels", help=help_text, description=help_text)
     parser.add_argument('-n', type=int, default=20, help='Number of random kernels to print (default 20)')
     parser.add_argument('--pf', action='store_true', help='Print random PeakFinder kernel params')
     parser.add_argument('--cdd2', action='store_true', help='Print random CoalescedDdKernel2 kernel params')
