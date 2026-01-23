@@ -247,26 +247,26 @@ dirent *Directory::read_next()
 // -------------------------------------------------------------------------------------------------
 
 
-FileDeleteGuard::FileDeleteGuard(const string &filename_, bool exist_ok)
+UnlinkGuard::UnlinkGuard(const string &filename_, bool exist_ok)
     : filename(filename_)
 {
     if (!exist_ok && file_exists(filename))
-        throw runtime_error(filename + ": file already exists (FileDeleteGuard)");
+        throw runtime_error(filename + ": file already exists (UnlinkGuard)");
 }
 
 
-FileDeleteGuard::~FileDeleteGuard()
+UnlinkGuard::~UnlinkGuard()
 {
     if (!committed && file_exists(filename)) {
         // In destructor, don't throw -- just print warning on failure.
         int err = unlink(filename.c_str());
         if (err != 0)
-            cerr << filename << ": warning: FileDeleteGuard::~FileDeleteGuard(): unlink() failed: " << strerror(errno) << endl;
+            cerr << filename << ": warning: UnlinkGuard::~UnlinkGuard(): unlink() failed: " << strerror(errno) << endl;
     }
 }
 
 
-void FileDeleteGuard::commit()
+void UnlinkGuard::commit()
 {
     committed = true;
 }
@@ -281,25 +281,25 @@ static string make_tmp_filename(const string &filename)
 }
 
 
-FileRenameGuard::FileRenameGuard(const string &filename_)
+RenameGuard::RenameGuard(const string &filename_)
     : filename(filename_),
       tmp_filename(make_tmp_filename(filename_))
 {
 }
 
 
-FileRenameGuard::~FileRenameGuard()
+RenameGuard::~RenameGuard()
 {
     if (!committed && file_exists(tmp_filename)) {
         // In destructor, don't throw -- just print warning on failure.
         int err = unlink(tmp_filename.c_str());
         if (err != 0)
-            cerr << tmp_filename << ": warning: FileRenameGuard::~FileRenameGuard(): unlink() failed: " << strerror(errno) << endl;
+            cerr << tmp_filename << ": warning: RenameGuard::~RenameGuard(): unlink() failed: " << strerror(errno) << endl;
     }
 }
 
 
-void FileRenameGuard::commit()
+void RenameGuard::commit()
 {
     int err = rename(tmp_filename.c_str(), filename.c_str());
     if (err != 0)
