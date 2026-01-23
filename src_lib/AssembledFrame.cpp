@@ -1,16 +1,20 @@
 #include "../include/pirate/AssembledFrame.hpp"
-#include "../include/pirate/inlines.hpp"  // xdiv()
+#include "../include/pirate/file_utils.hpp"   // FileDeleteGuard
+#include "../include/pirate/inlines.hpp"      // xdiv()
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/mem_utils.hpp>
+#include <ksgpu/rand_utils.hpp>    // rand_int()
 
 #include <asdf/asdf.hxx>
 
 #include <map>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 
 using namespace std;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0
@@ -150,6 +154,110 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
     frame->data.check_invariants("AssembledFrame::from_asdf()");
     
     return frame;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// AssembledFrame::test_asdf()
+
+
+// Helper function to generate a random hex string.
+static string make_random_hex_string(int len)
+{
+    static const char hex_chars[] = "0123456789abcdef";
+    
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution<int> dist(0, 15);
+    
+    string s;
+    for (int i = 0; i < len; i++)
+        s += hex_chars[dist(gen)];
+    
+    return s;
+}
+
+
+void AssembledFrame::test_asdf()
+{
+    cout << "AssembledFrame::test_asdf()..." << endl;
+    
+    // Random parameters (ntime must be even).
+    long nfreq = rand_int(10, 200);
+    long ntime = 2 * rand_int(10, 200);
+    long beam_id = rand_int(0, 1000);
+    long time_chunk_index = rand_int(0, 1000);
+    long nbytes = nfreq * (ntime / 2);
+    
+    cout << "  nfreq=" << nfreq << ", ntime=" << ntime
+         << ", beam_id=" << beam_id << ", time_chunk_index=" << time_chunk_index << endl;
+    
+    // Create random AssembledFrame.
+    auto frame1 = make_shared<AssembledFrame>();
+    frame1->nfreq = nfreq;
+    frame1->ntime = ntime;
+    frame1->beam_id = beam_id;
+    frame1->time_chunk_index = time_chunk_index;
+    
+    // Allocate and fill data with random bytes.
+    auto sptr = af_alloc<char>(nbytes, af_rhost);
+    for (long i = 0; i < nbytes; i++)
+        sptr.get()[i] = (char) rand_int(0, 256);
+    
+    // Initialize ksgpu::Array<void>.
+    frame1->data.data = sptr.get();
+    frame1->data.ndim = 2;
+    frame1->data.shape[0] = nfreq;
+    frame1->data.shape[1] = ntime;
+    frame1->data.size = nfreq * ntime;
+    frame1->data.strides[0] = ntime;
+    frame1->data.strides[1] = 1;
+    frame1->data.dtype = Dtype(df_int, 4);
+    frame1->data.aflags = af_rhost;
+    frame1->data.base = sptr;
+    frame1->data.check_invariants("AssembledFrame::test_asdf()");
+    
+    // Generate random filename in /dev/shm.
+    string filename = "/dev/shm/test_assembled_frame_" + make_random_hex_string(8) + ".asdf";
+    cout << "  filename=" << filename << endl;
+    
+    // FileDeleteGuard ensures temp file gets cleaned up (no commit()).
+    FileDeleteGuard guard(filename, /*exist_ok=*/ true);
+    
+    // Write to ASDF file.
+    frame1->to_asdf(filename);
+    
+    // Read back from ASDF file.
+    auto frame2 = AssembledFrame::from_asdf(filename);
+    
+    // Verify metadata matches.
+    xassert_eq(frame2->nfreq, nfreq);
+    xassert_eq(frame2->ntime, ntime);
+    xassert_eq(frame2->beam_id, beam_id);
+    xassert_eq(frame2->time_chunk_index, time_chunk_index);
+    
+    // Verify data matches.
+    xassert(frame2->data.data != nullptr);
+    xassert_eq(frame2->data.ndim, 2);
+    xassert_eq(frame2->data.shape[0], nfreq);
+    xassert_eq(frame2->data.shape[1], ntime);
+    xassert(frame2->data.is_fully_contiguous());
+    
+    const char *p1 = static_cast<const char *>(frame1->data.data);
+    const char *p2 = static_cast<const char *>(frame2->data.data);
+    
+    for (long i = 0; i < nbytes; i++) {
+        if (p1[i] != p2[i]) {
+            stringstream ss;
+            ss << "AssembledFrame::test_asdf(): data mismatch at byte " << i
+               << ": expected " << (int)(unsigned char)p1[i]
+               << ", got " << (int)(unsigned char)p2[i];
+            throw runtime_error(ss.str());
+        }
+    }
+    
+    cout << "AssembledFrame::test_asdf() passed!" << endl;
 }
 
 

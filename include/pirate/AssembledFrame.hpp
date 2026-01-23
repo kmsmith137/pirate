@@ -42,6 +42,9 @@ struct AssembledFrame
     void to_asdf(const std::string &filename) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);
     
+    // Unit test for ASDF I/O.
+    static void test_asdf();
+    
     // Members after this point are internal state, and not saved to the ASDF file.
     
     std::mutex mutex;

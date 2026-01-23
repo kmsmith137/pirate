@@ -126,6 +126,10 @@ void register_core_bindings(pybind11::module &m)
             },
             "Data as uint8 array with shape (nfreq, ntime/2).\n\n"
             "The underlying data is int4 (nfreq, ntime), packed as uint8.")
+        .def_static("test_asdf", &AssembledFrame::test_asdf,
+            "Unit test for ASDF file I/O.\n\n"
+            "Creates a random AssembledFrame, writes to temp file, reads back,\n"
+            "and verifies the data matches.")
     ;
 
     // AssembledFrameAllocator: allocates AssembledFrames for multiple consumers.
@@ -149,9 +153,11 @@ void register_core_bindings(pybind11::module &m)
             "Get the next frame for this consumer.\n\n"
             "Frames cycle through beam_ids for each time_chunk_index.")
         .def("num_free_frames", &AssembledFrameAllocator::num_free_frames,
+            py::arg("permissive") = false,
             "Number of frames currently available in the pool.\n\n"
             "Throws in dummy mode or if not initialized.")
         .def("num_total_frames", &AssembledFrameAllocator::num_total_frames,
+            py::arg("blocking") = false,
             "Total number of frames in the pool.\n\n"
             "Throws in dummy mode or if not initialized.")
     ;
