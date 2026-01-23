@@ -255,6 +255,9 @@ PYFILES = \
   pirate_frb/tests/__init__.py \
   pirate_frb/tests/test_assembled_frame_allocator.py \
   pirate_frb/utils/__init__.py \
+  pirate_frb/utils/ThreadAffinity.py \
+  pirate_frb/utils/time_cupy_dedisperser.py \
+  pirate_frb/utils/show_asdf.py \
   pirate_frb/rpc/__init__.py \
   pirate_frb/rpc/FrbClient.py \
   pirate_frb/rpc/grpc/__init__.py
