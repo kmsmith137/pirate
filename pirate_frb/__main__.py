@@ -690,6 +690,16 @@ def time_dedisperser(args):
 ###################################   random_kernels command  ###################################
 
 
+def parse_show_asdf(subparsers):
+    parser = subparsers.add_parser("show_asdf", help="Print the YAML header of an ASDF file. (Note: 'asdftool --info' is also useful)")
+    parser.add_argument('asdf_file', help="Path to ASDF file")
+
+
+def show_asdf(args):
+    from .utils import show_asdf as _show_asdf
+    _show_asdf(args.asdf_file)
+
+
 def parse_random_kernels(subparsers):
     parser = subparsers.add_parser("random_kernels", help="A utility for maintaining makefile_helper.py")
     parser.add_argument('-n', type=int, default=20, help='Number of random kernels to print (default 20)')
@@ -809,6 +819,7 @@ def get_parser():
     parse_send(subparsers)
     parse_scratch(subparsers)
     parse_random_kernels(subparsers)
+    parse_show_asdf(subparsers)
 
     return parser
 
@@ -844,6 +855,8 @@ def main():
         scratch(args)
     elif args.command == "random_kernels":
         random_kernels(args)
+    elif args.command == "show_asdf":
+        show_asdf(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
