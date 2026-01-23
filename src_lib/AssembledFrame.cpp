@@ -158,31 +158,23 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 
 // -------------------------------------------------------------------------------------------------
 //
-// AssembledFrame::test_asdf()
+// AssembledFrame::make_random()
 
 
-
-
-void AssembledFrame::test_asdf()
+// Static member function.
+shared_ptr<AssembledFrame> AssembledFrame::make_random(long nfreq, long ntime, long beam_id, long time_chunk_index)
 {
-    cout << "AssembledFrame::test_asdf()..." << endl;
+    xassert(nfreq > 0);
+    xassert(ntime > 0);
+    xassert((ntime % 2) == 0);
     
-    // Random parameters (ntime must be even).
-    long nfreq = rand_int(10, 200);
-    long ntime = 2 * rand_int(10, 200);
-    long beam_id = rand_int(0, 1000);
-    long time_chunk_index = rand_int(0, 1000);
     long nbytes = nfreq * (ntime / 2);
     
-    cout << "  nfreq=" << nfreq << ", ntime=" << ntime
-         << ", beam_id=" << beam_id << ", time_chunk_index=" << time_chunk_index << endl;
-    
-    // Create random AssembledFrame.
-    auto frame1 = make_shared<AssembledFrame>();
-    frame1->nfreq = nfreq;
-    frame1->ntime = ntime;
-    frame1->beam_id = beam_id;
-    frame1->time_chunk_index = time_chunk_index;
+    auto frame = make_shared<AssembledFrame>();
+    frame->nfreq = nfreq;
+    frame->ntime = ntime;
+    frame->beam_id = beam_id;
+    frame->time_chunk_index = time_chunk_index;
     
     // Allocate and fill data with random bytes.
     auto sptr = af_alloc<char>(nbytes, af_rhost);
@@ -190,17 +182,52 @@ void AssembledFrame::test_asdf()
         sptr.get()[i] = (char) rand_int(0, 256);
     
     // Initialize ksgpu::Array<void>.
-    frame1->data.data = sptr.get();
-    frame1->data.ndim = 2;
-    frame1->data.shape[0] = nfreq;
-    frame1->data.shape[1] = ntime;
-    frame1->data.size = nfreq * ntime;
-    frame1->data.strides[0] = ntime;
-    frame1->data.strides[1] = 1;
-    frame1->data.dtype = Dtype(df_int, 4);
-    frame1->data.aflags = af_rhost;
-    frame1->data.base = sptr;
-    frame1->data.check_invariants("AssembledFrame::test_asdf()");
+    frame->data.data = sptr.get();
+    frame->data.ndim = 2;
+    frame->data.shape[0] = nfreq;
+    frame->data.shape[1] = ntime;
+    frame->data.size = nfreq * ntime;
+    frame->data.strides[0] = ntime;
+    frame->data.strides[1] = 1;
+    frame->data.dtype = Dtype(df_int, 4);
+    frame->data.aflags = af_rhost;
+    frame->data.base = sptr;
+    frame->data.check_invariants("AssembledFrame::make_random()");
+    
+    return frame;
+}
+
+
+// Static member function.
+shared_ptr<AssembledFrame> AssembledFrame::make_random()
+{
+    // Random parameters (ntime must be even).
+    long nfreq = rand_int(10, 200);
+    long ntime = 2 * rand_int(10, 200);
+    long beam_id = rand_int(0, 1000);
+    long time_chunk_index = rand_int(0, 1000);
+    
+    return make_random(nfreq, ntime, beam_id, time_chunk_index);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// AssembledFrame::test_asdf()
+
+
+// Static member function.
+void AssembledFrame::test_asdf()
+{
+    cout << "AssembledFrame::test_asdf()..." << endl;
+    
+    auto frame1 = AssembledFrame::make_random();
+    long nfreq = frame1->nfreq;
+    long ntime = frame1->ntime;
+    long nbytes = nfreq * (ntime / 2);
+    
+    cout << "  nfreq=" << nfreq << ", ntime=" << ntime
+         << ", beam_id=" << frame1->beam_id << ", time_chunk_index=" << frame1->time_chunk_index << endl;
     
     // Generate random filename in /dev/shm.
     string filename = "/dev/shm/test_assembled_frame_" + make_random_hex_string(8) + ".asdf";

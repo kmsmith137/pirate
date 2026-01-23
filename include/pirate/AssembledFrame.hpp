@@ -42,6 +42,10 @@ struct AssembledFrame
     void to_asdf(const std::string &filename) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);
     
+    // Create a random AssembledFrame (for testing). Note: ntime must be even.
+    static std::shared_ptr<AssembledFrame> make_random(long nfreq, long ntime, long beam_id, long time_chunk_index);
+    static std::shared_ptr<AssembledFrame> make_random();  // randomizes all parameters
+    
     // Unit test for ASDF I/O.
     static void test_asdf();
     
