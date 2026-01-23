@@ -39,7 +39,7 @@ struct AssembledFrame
 
     // ASDF file I/O.
     // Note: int4 dtype is stored as uint8 with shape (nfreq, ntime/2).
-    void to_asdf(const std::string &filename) const;
+    void write_asdf(const std::string &filename) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);
     
     // Create a random AssembledFrame (for testing). Note: ntime must be even.

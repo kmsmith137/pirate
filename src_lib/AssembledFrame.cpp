@@ -23,10 +23,10 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
-// AssembledFrame::to_asdf()
+// AssembledFrame::write_asdf()
 
 
-void AssembledFrame::to_asdf(const std::string &filename) const
+void AssembledFrame::write_asdf(const std::string &filename) const
 {
     xassert(nfreq > 0);
     xassert(ntime > 0);
@@ -237,7 +237,7 @@ void AssembledFrame::test_asdf()
     FileDeleteGuard guard(filename, /*exist_ok=*/ true);
     
     // Write to ASDF file.
-    frame1->to_asdf(filename);
+    frame1->write_asdf(filename);
     
     // Read back from ASDF file.
     auto frame2 = AssembledFrame::from_asdf(filename);
@@ -245,8 +245,8 @@ void AssembledFrame::test_asdf()
     // Verify metadata matches.
     xassert_eq(frame2->nfreq, nfreq);
     xassert_eq(frame2->ntime, ntime);
-    xassert_eq(frame2->beam_id, beam_id);
-    xassert_eq(frame2->time_chunk_index, time_chunk_index);
+    xassert_eq(frame2->beam_id, frame1->beam_id);
+    xassert_eq(frame2->time_chunk_index, frame1->time_chunk_index);
     
     // Verify data matches.
     xassert(frame2->data.data != nullptr);
