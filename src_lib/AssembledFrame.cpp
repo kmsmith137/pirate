@@ -4,6 +4,9 @@
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/mem_utils.hpp>
 
+#include <asdf/asdf.hxx>
+
+#include <map>
 #include <sstream>
 #include <stdexcept>
 
@@ -13,6 +16,141 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// AssembledFrame::to_asdf()
+
+
+void AssembledFrame::to_asdf(const std::string &filename) const
+{
+    xassert(nfreq > 0);
+    xassert(ntime > 0);
+    xassert((ntime % 2) == 0);
+    
+    // Verify data array is valid and contiguous.
+    xassert(data.data != nullptr);
+    xassert(data.ndim == 2);
+    xassert(data.shape[0] == nfreq);
+    xassert(data.shape[1] == ntime);
+    xassert(data.is_fully_contiguous());
+
+    // Create ASDF group with metadata and array.
+    auto grp = make_shared<ASDF::group>();
+    
+    // Add scalar metadata.
+    grp->emplace("nfreq", make_shared<ASDF::int_entry>(int64_t(nfreq)));
+    grp->emplace("ntime", make_shared<ASDF::int_entry>(int64_t(ntime)));
+    grp->emplace("beam_id", make_shared<ASDF::int_entry>(int64_t(beam_id)));
+    grp->emplace("time_chunk_index", make_shared<ASDF::int_entry>(int64_t(time_chunk_index)));
+    
+    // Create ndarray for data.
+    // int4 dtype (4 bits per element) is stored as uint8 with shape (nfreq, ntime/2).
+    // Use ptr_block_t to avoid copying data.
+    long nbytes = nfreq * (ntime / 2);
+    auto block = make_shared<ASDF::ptr_block_t>(data.data, nbytes);
+    auto mblock = ASDF::make_constant_memoized(shared_ptr<ASDF::block_t>(block));
+    
+    auto arr = make_shared<ASDF::ndarray>(
+        mblock,
+        std::optional<ASDF::block_info_t>(),
+        ASDF::block_format_t::block,
+        ASDF::compression_t::none,
+        0,  // compression_level
+        vector<bool>(),  // mask
+        make_shared<ASDF::datatype_t>(ASDF::id_uint8),
+        ASDF::host_byteorder(),
+        vector<int64_t>{nfreq, ntime/2}
+    );
+    grp->emplace("data", arr);
+    
+    // Write to file.
+    auto project = make_shared<ASDF::asdf>(map<string, string>(), grp);
+    project->write(filename);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// AssembledFrame::from_asdf()
+
+
+shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename)
+{
+    // Read ASDF file.
+    ASDF::asdf project(filename);
+    auto grp = project.get_group();
+    xassert(grp != nullptr);
+    
+    // Read scalar metadata.
+    auto nfreq_entry = grp->at("nfreq");
+    auto ntime_entry = grp->at("ntime");
+    auto beam_id_entry = grp->at("beam_id");
+    auto time_chunk_index_entry = grp->at("time_chunk_index");
+    
+    auto nfreq_opt = nfreq_entry->get_maybe_int();
+    auto ntime_opt = ntime_entry->get_maybe_int();
+    auto beam_id_opt = beam_id_entry->get_maybe_int();
+    auto time_chunk_index_opt = time_chunk_index_entry->get_maybe_int();
+    
+    xassert(nfreq_opt.has_value());
+    xassert(ntime_opt.has_value());
+    xassert(beam_id_opt.has_value());
+    xassert(time_chunk_index_opt.has_value());
+    
+    long nfreq = nfreq_opt.value();
+    long ntime = ntime_opt.value();
+    long beam_id = beam_id_opt.value();
+    long time_chunk_index = time_chunk_index_opt.value();
+    
+    xassert(nfreq > 0);
+    xassert(ntime > 0);
+    xassert((ntime % 2) == 0);
+    
+    // Read data array.
+    auto data_entry = grp->at("data");
+    auto arr = data_entry->get_maybe_ndarray();
+    xassert(arr != nullptr);
+    
+    // Verify shape: uint8 with shape (nfreq, ntime/2).
+    auto shape = arr->get_shape();
+    xassert(shape.size() == 2);
+    xassert(shape[0] == nfreq);
+    xassert(shape[1] == ntime/2);
+    
+    // Get data pointer.
+    auto mdata = arr->get_data();
+    const void *src_ptr = mdata->ptr();
+    size_t nbytes = mdata->nbytes();
+    xassert(nbytes == (size_t)(nfreq * (ntime / 2)));
+    
+    // Allocate AssembledFrame with host memory.
+    auto frame = make_shared<AssembledFrame>();
+    frame->nfreq = nfreq;
+    frame->ntime = ntime;
+    frame->beam_id = beam_id;
+    frame->time_chunk_index = time_chunk_index;
+    
+    // Allocate data array on host.
+    auto sptr = ksgpu::af_alloc<char>(nbytes, ksgpu::af_rhost);
+    memcpy(sptr.get(), src_ptr, nbytes);
+    
+    // Initialize ksgpu::Array<void>.
+    frame->data.data = sptr.get();
+    frame->data.ndim = 2;
+    frame->data.shape[0] = nfreq;
+    frame->data.shape[1] = ntime;
+    frame->data.size = nfreq * ntime;
+    frame->data.strides[0] = ntime;
+    frame->data.strides[1] = 1;
+    frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
+    frame->data.aflags = ksgpu::af_rhost;
+    frame->data.base = sptr;
+    frame->data.check_invariants("AssembledFrame::from_asdf()");
+    
+    return frame;
+}
 
 
 // -------------------------------------------------------------------------------------------------

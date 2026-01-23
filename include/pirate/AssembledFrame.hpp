@@ -37,6 +37,11 @@ struct AssembledFrame
 
     ksgpu::Array<void> data;
 
+    // ASDF file I/O.
+    // Note: int4 dtype is stored as uint8 with shape (nfreq, ntime/2).
+    void to_asdf(const std::string &filename) const;
+    static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);
+    
     // Members after this point are internal state, and not saved to the ASDF file.
     
     std::mutex mutex;
