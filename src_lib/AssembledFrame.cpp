@@ -134,23 +134,10 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
     frame->ntime = ntime;
     frame->beam_id = beam_id;
     frame->time_chunk_index = time_chunk_index;
+    frame->data = Array<void>(Dtype(df_int, 4), {nfreq, ntime}, af_rhost);
     
-    // Allocate data array on host.
-    auto sptr = ksgpu::af_alloc<char>(nbytes, ksgpu::af_rhost);
-    memcpy(sptr.get(), src_ptr, nbytes);
-    
-    // Initialize ksgpu::Array<void>.
-    frame->data.data = sptr.get();
-    frame->data.ndim = 2;
-    frame->data.shape[0] = nfreq;
-    frame->data.shape[1] = ntime;
-    frame->data.size = nfreq * ntime;
-    frame->data.strides[0] = ntime;
-    frame->data.strides[1] = 1;
-    frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
-    frame->data.aflags = ksgpu::af_rhost;
-    frame->data.base = sptr;
-    frame->data.check_invariants("AssembledFrame::from_asdf()");
+    // Copy data from ASDF file.
+    memcpy(frame->data.data, src_ptr, nbytes);
     
     return frame;
 }
@@ -168,31 +155,19 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(long nfreq, long ntime, l
     xassert(ntime > 0);
     xassert((ntime % 2) == 0);
     
-    long nbytes = nfreq * (ntime / 2);
-    
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = ntime;
     frame->beam_id = beam_id;
     frame->time_chunk_index = time_chunk_index;
+    frame->data = Array<void>(Dtype(df_int, 4), {nfreq, ntime}, af_rhost);
     
-    // Allocate and fill data with random bytes.
-    auto sptr = af_alloc<char>(nbytes, af_rhost);
+    // Fill data with random bytes.
+    // (int4 dtype packs 2 elements per byte, so nbytes = nfreq * ntime / 2)
+    long nbytes = nfreq * (ntime / 2);
+    char *p = static_cast<char *>(frame->data.data);
     for (long i = 0; i < nbytes; i++)
-        sptr.get()[i] = (char) rand_int(0, 256);
-    
-    // Initialize ksgpu::Array<void>.
-    frame->data.data = sptr.get();
-    frame->data.ndim = 2;
-    frame->data.shape[0] = nfreq;
-    frame->data.shape[1] = ntime;
-    frame->data.size = nfreq * ntime;
-    frame->data.strides[0] = ntime;
-    frame->data.strides[1] = 1;
-    frame->data.dtype = Dtype(df_int, 4);
-    frame->data.aflags = af_rhost;
-    frame->data.base = sptr;
-    frame->data.check_invariants("AssembledFrame::make_random()");
+        p[i] = (char) rand_int(0, 256);
     
     return frame;
 }
