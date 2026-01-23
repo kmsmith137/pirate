@@ -90,6 +90,54 @@ struct Directory
 };
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// FileDeleteGuard: if the destructor is called before commit(), then unlink() the file.
+// Used to ensure that if an exception is thrown during file creation logic, then the
+// partially-written file is cleaned up.
+
+
+struct FileDeleteGuard
+{
+    std::string filename;
+    bool committed = false;
+    
+    // If exist_ok is false, then the constructor throws an exception if file already exists.
+    FileDeleteGuard(const std::string &filename, bool exist_ok = false);
+    ~FileDeleteGuard();
+    
+    void commit();
+
+    FileDeleteGuard(const FileDeleteGuard &) = delete;
+    FileDeleteGuard &operator=(const FileDeleteGuard &) = delete;
+};
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// FileRenameGuard: constructor initializes 'tmp_filename' to {filename}.tmp{RANDSTRING}.
+// commit() renames tmp_filename -> filename, by calling rename().
+// If the destructor is called before commit(), then unlink() the tmp file.
+// Used to ensure that if an exception/crash happens during file creation logic, then the
+// partially-written file is cleaned up if possible, or persists with a tmp filename if not.
+
+
+struct FileRenameGuard
+{
+    std::string filename;
+    std::string tmp_filename;
+    bool committed = false;
+    
+    FileRenameGuard(const std::string &filename);
+    ~FileRenameGuard();
+    
+    void commit();
+
+    FileRenameGuard(const FileRenameGuard &) = delete;
+    FileRenameGuard &operator=(const FileRenameGuard &) = delete;
+};
+
+
 }  // namespace pirate
 
 #endif  // _PIRATE_FILE_UTILS_HPP

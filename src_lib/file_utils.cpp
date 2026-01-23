@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
@@ -240,6 +241,82 @@ dirent *Directory::read_next()
 
     errno = errno ? errno : save_errno;
     return entry;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+FileDeleteGuard::FileDeleteGuard(const string &filename_, bool exist_ok)
+    : filename(filename_)
+{
+    if (!exist_ok && file_exists(filename))
+        throw runtime_error(filename + ": file already exists (FileDeleteGuard)");
+}
+
+
+FileDeleteGuard::~FileDeleteGuard()
+{
+    if (!committed && file_exists(filename)) {
+        // In destructor, don't throw -- just print warning on failure.
+        int err = unlink(filename.c_str());
+        if (err != 0)
+            cerr << filename << ": warning: FileDeleteGuard::~FileDeleteGuard(): unlink() failed: " << strerror(errno) << endl;
+    }
+}
+
+
+void FileDeleteGuard::commit()
+{
+    committed = true;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+
+
+static string make_tmp_filename(const string &filename)
+{
+    // Generate 8 random hex characters.
+    static const char hex_chars[] = "0123456789abcdef";
+    
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution<int> dist(0, 15);
+    
+    string rand_suffix;
+    for (int i = 0; i < 8; i++)
+        rand_suffix += hex_chars[dist(gen)];
+    
+    return filename + ".tmp" + rand_suffix;
+}
+
+
+FileRenameGuard::FileRenameGuard(const string &filename_)
+    : filename(filename_),
+      tmp_filename(make_tmp_filename(filename_))
+{
+}
+
+
+FileRenameGuard::~FileRenameGuard()
+{
+    if (!committed && file_exists(tmp_filename)) {
+        // In destructor, don't throw -- just print warning on failure.
+        int err = unlink(tmp_filename.c_str());
+        if (err != 0)
+            cerr << tmp_filename << ": warning: FileRenameGuard::~FileRenameGuard(): unlink() failed: " << strerror(errno) << endl;
+    }
+}
+
+
+void FileRenameGuard::commit()
+{
+    int err = rename(tmp_filename.c_str(), filename.c_str());
+    if (err != 0)
+        throw runtime_error(tmp_filename + " -> " + filename + ": rename() failed: " + strerror(errno));
+    
+    committed = true;
 }
 
 
