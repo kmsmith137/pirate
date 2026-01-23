@@ -1,9 +1,9 @@
 #include "../include/pirate/file_utils.hpp"
 #include <ksgpu/xassert.hpp>
+#include <ksgpu/rand_utils.hpp>
 
 #include <cstring>
 #include <iostream>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
@@ -277,18 +277,7 @@ void FileDeleteGuard::commit()
 
 static string make_tmp_filename(const string &filename)
 {
-    // Generate 8 random hex characters.
-    static const char hex_chars[] = "0123456789abcdef";
-    
-    random_device rd;
-    mt19937 gen(rd());
-    uniform_int_distribution<int> dist(0, 15);
-    
-    string rand_suffix;
-    for (int i = 0; i < 8; i++)
-        rand_suffix += hex_chars[dist(gen)];
-    
-    return filename + ".tmp" + rand_suffix;
+    return filename + ".tmp" + ksgpu::make_random_hex_string(8);
 }
 
 

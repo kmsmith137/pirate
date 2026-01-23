@@ -9,7 +9,6 @@
 #include <asdf/asdf.hxx>
 
 #include <map>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 
@@ -162,21 +161,6 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 // AssembledFrame::test_asdf()
 
 
-// Helper function to generate a random hex string.
-static string make_random_hex_string(int len)
-{
-    static const char hex_chars[] = "0123456789abcdef";
-    
-    random_device rd;
-    mt19937 gen(rd());
-    uniform_int_distribution<int> dist(0, 15);
-    
-    string s;
-    for (int i = 0; i < len; i++)
-        s += hex_chars[dist(gen)];
-    
-    return s;
-}
 
 
 void AssembledFrame::test_asdf()
