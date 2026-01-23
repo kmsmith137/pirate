@@ -189,6 +189,7 @@ LIB_SRCFILES = \
   src_lib/FakeCorrelator.cpp \
   src_lib/FakeServer.cpp \
   src_lib/FakeXEngine.cpp \
+  src_lib/FileWriter.cpp \
   src_lib/FrbServer.cpp \
   src_lib/FrequencySubbands.cpp \
   src_lib/GpuDedisperser.cpp \
@@ -297,6 +298,7 @@ HFILES = \
   include/pirate/FakeServer.hpp \
   include/pirate/FakeXEngine.hpp \
   include/pirate/file_utils.hpp \
+  include/pirate/FileWriter.hpp \
   include/pirate/FrbServer.hpp \
   include/pirate/FrequencySubbands.hpp \
   include/pirate/GpuDequantizationKernel.hpp \

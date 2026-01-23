@@ -53,6 +53,12 @@ struct AssembledFrame
     
     std::mutex mutex;
     long finalize_count = 0;    // incremented by FrbServer worker thread(s)
+
+    std::vector<std::string> filenames;
+    bool in_ssd_queue = false;
+    bool in_nfs_queue = false;
+    bool on_ssd = false;
+    int nfs_count = 0;
 };
 
 
