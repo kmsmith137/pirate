@@ -208,8 +208,8 @@ void AssembledFrame::test_asdf()
     string filename = "/dev/shm/test_assembled_frame_" + make_random_hex_string(8) + ".asdf";
     cout << "  filename=" << filename << endl;
     
-    // UnlinkGuard ensures temp file gets cleaned up (no commit()).
-    UnlinkGuard guard(filename, /*exist_ok=*/ true);
+    // RemoveGuard ensures temp file gets cleaned up (no commit()).
+    RemoveGuard guard(filename, /*exist_ok=*/ true);
     
     // Write to ASDF file.
     frame1->write_asdf(filename);

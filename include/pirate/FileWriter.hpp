@@ -5,6 +5,7 @@
 #include <queue>
 #include <string>
 #include <memory>
+#include <filesystem>
 #include <condition_variable>
 
 namespace pirate {
@@ -18,19 +19,29 @@ struct AssembledFrame;  // AssembledFrame.hpp
 struct FileWriter
 {
 public:
-   struct Params
+    // Constructor arguments.
+    struct Params
     {
-        std::string ssd_root;
-        std::string nfs_root;
+        std::filesystem::path ssd_root;
+        std::filesystem::path nfs_root;
         int num_ssd_threads = 4;
         int num_nfs_threads = 2;
     };
 
-    struct Tracker
+    // Status of write request, reported to RPC subscribers.
+    struct WriteStatus
+    {
+        std::filesystem::path save_path;
+        std::exception_ptr error;  // empty pointer if write was successful
+    };
+
+    struct RpcSubscriber
     {
         std::mutex mutex;
         std::condition_variable cv;
-        std::queue<std::pair<std::string,int>> queue;  // (filename, status) pairs
+        std::queue<WriteStatus> queue;
+        std::exception_ptr error;
+        bool is_stopped = false;
     };
 
     FileWriter(const Params &params);
@@ -43,7 +54,7 @@ public:
 
     void process_frame(const std::shared_ptr<AssembledFrame> &frame);
 
-    void add_tracker(const std::shared_ptr<Tracker> &tracker);
+    void add_subscriber(const std::shared_ptr<RpcSubscriber> &subscriber);
 
 
     // --------------------------------------------------
@@ -59,9 +70,24 @@ private:
 
     std::queue<std::shared_ptr<AssembledFrame>> ssd_queue;
     std::queue<std::shared_ptr<AssembledFrame>> nfs_queue;
-    std::vector<std::weak_ptr<Tracker>> trackers;
 
-    std::vector<std::shared_ptr<Tracker>> _get_trackers();
+    std::vector<std::weak_ptr<RpcSubscriber>> rpc_subscribers;
+
+    void _ssd_worker_main();
+    void _nfs_worker_main();
+
+    // All paths are relative to either params.ssd_root, or params.nfs_root.
+    // These functions assume that paths have been validated with pirate::is_safe_relpath().
+    // (This check happens before the paths get added to the AssembledFrame, in the write_request RPC.)
+    void _hardlink_in_nfs(const std::filesystem::path &src_path, const std::filesystem::path &dst_path);
+    void _write_to_ssd(const std::shared_ptr<AssembledFrame> &frame, const std::filesystem::path &path);
+    void _copy_from_ssd_to_nfs(const std::filesystem::path &path);
+    void _try_to_delete_from_ssd(const std::filesystem::path &path);
+
+    // More helper functions called internally.
+    void _ssd_worker_checks(const std::shared_ptr<AssembledFrame> &frame);
+    void _update_rpc_subscribers(const WriteStatus &write_status);
+    std::vector<std::shared_ptr<RpcSubscriber>> _get_rpc_subscribers();
 
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);

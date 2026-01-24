@@ -5,13 +5,15 @@
 
 #include <ksgpu/Array.hpp>
 
-#include <condition_variable>
-#include <deque>
-#include <exception>
-#include <memory>
 #include <mutex>
-#include <thread>
+#include <deque>
 #include <vector>
+#include <thread>
+#include <memory>
+#include <exception>
+#include <filesystem>
+#include <condition_variable>
+
 
 namespace pirate {
 #if 0
@@ -49,12 +51,24 @@ struct AssembledFrame
     // Unit test for ASDF I/O.
     static void test_asdf();
     
-    // Members after this point are internal state, and not saved to the ASDF file.
+    // Members after this point are internal state.
+    // These members are protected by the mutex, and are not saved to the ASDF file.
     
     std::mutex mutex;
     long finalize_count = 0;    // incremented by FrbServer worker thread(s)
 
-    std::vector<std::string> filenames;
+    // NOTE: all save_paths received from RPC clients MUST be validated with
+    // pirate::is_safe_relpath(). If this check fails, then an error is returned in
+    // the write request, and the save_path must not be added to the AssembledFrame.
+
+    std::vector<std::filesystem::path> save_paths;
+
+    // Save state. These members are protected by the lock, and can only be modified
+    // by member functions of 'class FileWriter'. In particular, when an RPC thread
+    // wants to add a save_path, it should acquire the lock, call save_paths.push_back(),
+    // drop the lock, and call FileWriter::process_frame().
+
+    std::exception_ptr save_error = nullptr;
     bool in_ssd_queue = false;
     bool in_nfs_queue = false;
     bool on_ssd = false;

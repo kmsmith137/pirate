@@ -823,6 +823,7 @@ struct MemcpyWorker : public FakeServer::Worker
 // -------------------------------------------------------------------------------------------------
 //
 // SsdWorker
+// FIXME should switch from std::string to fs::path
 
 
 struct SsdWorker : public FakeServer::Worker
@@ -881,10 +882,10 @@ struct SsdWorker : public FakeServer::Worker
         cout << ss.str() << flush;
 
         for (const string &filename: files_to_delete) {
-            // delete_file() is defined in pirate/file_utils.cu
+            // remove_file() is defined in pirate/file_utils.cu
             stringstream ss2;
             ss2 << root_dir << "/" << filename;
-            delete_file(ss2.str());
+            remove_file(ss2.str());
         }
     }
 
