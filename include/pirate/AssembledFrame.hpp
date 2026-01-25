@@ -72,7 +72,7 @@ struct AssembledFrame
     bool in_ssd_queue = false;
     bool in_nfs_queue = false;
     bool on_ssd = false;
-    int nfs_count = 0;
+    long nfs_count = 0;
 };
 
 

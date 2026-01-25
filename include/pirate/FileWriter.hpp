@@ -5,6 +5,8 @@
 #include <queue>
 #include <string>
 #include <memory>
+#include <thread>
+#include <vector>
 #include <filesystem>
 #include <condition_variable>
 
@@ -45,6 +47,15 @@ public:
     };
 
     FileWriter(const Params &params);
+    ~FileWriter();
+
+    // Noncopyable, nonmoveable.
+    FileWriter(const FileWriter &) = delete;
+    FileWriter(FileWriter &&) = delete;
+    FileWriter &operator=(const FileWriter &) = delete;
+    FileWriter &operator=(FileWriter &&) = delete;
+
+    void stop(std::exception_ptr e = nullptr);
 
     // process_frame(): adds frame to ssd/nfs queues if needed.
     //  - called by RPC thread, after a new filename is appended.
@@ -64,7 +75,6 @@ private:
 
     std::mutex mutex;
     std::condition_variable cv;
-    bool is_started = false;
     bool is_stopped = false;
     std::exception_ptr error;
 
@@ -73,8 +83,15 @@ private:
 
     std::vector<std::weak_ptr<RpcSubscriber>> rpc_subscribers;
 
-    void _ssd_worker_main();
-    void _nfs_worker_main();
+    std::vector<std::thread> ssd_threads;
+    std::vector<std::thread> nfs_threads;
+
+    void ssd_thread_main();
+    void nfs_thread_main();
+
+    void _ssd_thread_main();
+    void _nfs_thread_main();
+    void _process_frame(const std::shared_ptr<AssembledFrame> &frame);
 
     // All paths are relative to either params.ssd_root, or params.nfs_root.
     // These functions assume that paths have been validated with pirate::is_safe_relpath().
@@ -87,6 +104,7 @@ private:
     // More helper functions called internally.
     void _ssd_worker_checks(const std::shared_ptr<AssembledFrame> &frame);
     void _update_rpc_subscribers(const WriteStatus &write_status);
+
     std::vector<std::shared_ptr<RpcSubscriber>> _get_rpc_subscribers();
 
     // Helper for entry points. Caller must hold mutex.

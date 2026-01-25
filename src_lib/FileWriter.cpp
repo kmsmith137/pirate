@@ -21,10 +21,92 @@ FileWriter::FileWriter(const Params &params_) : params(params_)
     xassert(params.nfs_root.is_absolute());
     xassert(params.num_ssd_threads > 0);
     xassert(params.num_nfs_threads > 0);
+
+    // All members are initialized before this point.
+    // Now safe to start the worker threads.
+    for (long i = 0; i < params.num_ssd_threads; i++)
+        ssd_threads.emplace_back(&FileWriter::ssd_thread_main, this);
+    for (long i = 0; i < params.num_nfs_threads; i++)
+        nfs_threads.emplace_back(&FileWriter::nfs_thread_main, this);
+}
+
+
+FileWriter::~FileWriter()
+{
+    this->stop();
+
+    for (auto &t : ssd_threads)
+        if (t.joinable())
+            t.join();
+    
+    for (auto &t : nfs_threads)
+        if (t.joinable())
+            t.join();
+
+
+}
+
+
+void FileWriter::stop(std::exception_ptr e)
+{
+    unique_lock<std::mutex> lock(mutex);
+    if (is_stopped)
+        return;
+
+    is_stopped = true;
+    error = e;
+
+    auto subscribers = _get_rpc_subscribers();  // call with lock held
+    lock.unlock();
+
+    cv.notify_all();
+
+    for (const auto &s: subscribers) {
+        unique_lock<std::mutex> subscriber_lock(s->mutex);        
+        if (!s->is_stopped) {
+            s->is_stopped = true;
+            s->error = e;
+            subscriber_lock.unlock();
+            s->cv.notify_all();
+        }
+    }
+}
+
+
+void FileWriter::ssd_thread_main()
+{
+    try {
+        _ssd_thread_main();
+    } catch (...) {
+        stop(std::current_exception());
+    }
+}
+
+
+void FileWriter::nfs_thread_main()
+{
+    try {
+        _nfs_thread_main();
+    } catch (...) {
+        stop(std::current_exception());
+    }
 }
 
 
 void FileWriter::process_frame(const shared_ptr<AssembledFrame> &frame)
+{
+    xassert(frame);
+
+    try {
+        _process_frame(frame);
+    } catch (...) {
+        this->stop(std::current_exception());
+        throw;
+    }
+}
+
+
+void FileWriter::_process_frame(const shared_ptr<AssembledFrame> &frame)
 {
     unique_lock<std::mutex> frame_lock(frame->mutex);
 
@@ -64,12 +146,15 @@ void FileWriter::process_frame(const shared_ptr<AssembledFrame> &frame)
 void FileWriter::add_subscriber(const shared_ptr<RpcSubscriber> &subscriber)
 {
     xassert(subscriber);
+
     lock_guard<std::mutex> lock(mutex);
+    _throw_if_stopped("add_subscriber");
+
     rpc_subscribers.push_back(subscriber);
 }
 
 
-void FileWriter::_ssd_worker_main()
+void FileWriter::_ssd_thread_main()
 {
     unique_lock<std::mutex> state_lock(mutex);
 
@@ -89,7 +174,7 @@ void FileWriter::_ssd_worker_main()
         state_lock.unlock();
 
         // Wake up nfs threads that are waiting for the ssd queue to clear.
-        // (See _nfs_worker_main().)
+        // (See _nfs_thread_main().)
         cv.notify_all();
 
         // Some paranoid checks.
@@ -122,6 +207,9 @@ void FileWriter::_ssd_worker_main()
 
         state_lock.lock();
         nfs_queue.push(frame);
+        // Wake up nfs threads that are waiting for the nfs queue.
+        cv.notify_all();
+        // Lock remains held for next loop iteration.
     }
 }
 
@@ -139,7 +227,7 @@ void FileWriter::_ssd_worker_checks(const shared_ptr<AssembledFrame> &frame)
 }
 
 
-void FileWriter::_nfs_worker_main()
+void FileWriter::_nfs_thread_main()
 {
     // Outer loop over frames
     for (;;) {
@@ -157,8 +245,7 @@ void FileWriter::_nfs_worker_main()
         shared_ptr<AssembledFrame> frame = nfs_queue.front();
         nfs_queue.pop();  
 
-        if (!frame)
-            return;
+        xassert(frame);
 
         // Before the nfs thread processes the frame, we wait for the ssd queue
         // to clear. This ensures that under memory pressure, the ssd threads have
@@ -208,7 +295,7 @@ void FileWriter::_nfs_worker_main()
                 frame->on_ssd = false;
             }
 
-            int nfs_count = frame->nfs_count;
+            long nfs_count = frame->nfs_count;
 
             if (nfs_count >= long(frame->save_paths.size())) {
                 frame->in_nfs_queue = false;
@@ -311,13 +398,11 @@ void FileWriter::_try_to_delete_from_ssd(const fs::path &path)
 }
 
 
+// Call with lock held!!
 // Returns this->rpc_subscribers, calling lock() to convert weak_ptr -> shared_ptr.
 // Any subscribers which do not lock() successfully are "pruned" from this->rpc_subscribers.
 vector<shared_ptr<FileWriter::RpcSubscriber>> FileWriter::_get_rpc_subscribers()
 {
-    unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("_get_rpc_subscribers");
-
     vector<shared_ptr<FileWriter::RpcSubscriber>> ret;
 
     ulong i = 0;
@@ -341,7 +426,11 @@ vector<shared_ptr<FileWriter::RpcSubscriber>> FileWriter::_get_rpc_subscribers()
 
 void FileWriter::_update_rpc_subscribers(const WriteStatus &write_status)
 {
-    for (const auto &s: _get_rpc_subscribers()) {
+    unique_lock<std::mutex> lock(mutex);
+    auto subscribers = _get_rpc_subscribers();  // call with lock held
+    lock.unlock();
+
+    for (const auto &s: subscribers) {
         unique_lock<std::mutex> lock(s->mutex);
         if (!s->is_stopped) {
             s->queue.push(write_status);
