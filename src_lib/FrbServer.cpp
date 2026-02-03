@@ -235,34 +235,76 @@ public:
 
     // ---- SubscribeFiles ----
 
-    // Stub implementation: sends "test.asdf" 10 times with 1-second pause, then throws.
+    // Subscribes to file write notifications from FileWriter.
     // If the client closes the connection, exits gracefully.
     //
     // Note: gRPC's server-streaming model provides one thread of execution per connection
-    // via gRPC's internal thread pool. The subscriber_threads vector in FrbServer can be
-    // used in the future if we need explicit thread management beyond gRPC's model.
+    // via gRPC's internal thread pool.
     //
     // Each response has (filename, error_message). Empty error_message indicates success.
     void _subscribe_files(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
     {
-        for (int i = 0; i < 10; i++) {
+        shared_ptr<FrbServer> s = _lock_state();
+        shared_ptr<FileWriter> file_writer = s->params.file_writer;
+
+        // Create subscriber and register with FileWriter.
+        auto subscriber = make_shared<FileWriter::RpcSubscriber>();
+        file_writer->add_subscriber(subscriber);
+
+        // Loop over entries in subscriber's queue.
+        for (;;) {
             // Check if client has disconnected.
             if (context->IsCancelled())
                 return;
 
+            unique_lock<std::mutex> subscriber_lock(subscriber->mutex);
+
+            // Wait for queue entry, stop signal, or error (with 0.5 sec timeout).
+            // Timeout ensures context->IsCancelled() is checked regularly.
+            subscriber->cv.wait_for(subscriber_lock, std::chrono::milliseconds(500), [&subscriber]() {
+                return !subscriber->queue.empty() || subscriber->is_stopped || subscriber->error;
+            });
+
+            // Check for error condition.
+            if (subscriber->error)
+                std::rethrow_exception(subscriber->error);
+
+            // If queue is empty, loop back to check context->IsCancelled().
+            if (subscriber->queue.empty()) {
+                if (subscriber->is_stopped)
+                    return;
+                continue;
+            }
+
+            // Pop entry from queue.
+            FileWriter::WriteStatus write_status = std::move(subscriber->queue.front());
+            subscriber->queue.pop();
+
+            subscriber_lock.unlock();
+
+            // Build response with (filename, error_message).
+            // Empty error_message indicates success.
             fs::SubscribeFilesResponse response;
-            response.set_filename("test.asdf");
-            response.set_error_message("");  // Empty error_message indicates success.
+            response.set_filename(write_status.save_path.string());
+
+            if (write_status.error) {
+                try {
+                    std::rethrow_exception(write_status.error);
+                } catch (const std::exception &e) {
+                    // e.what() may return empty string; replace with "Unknown error".
+                    const char *msg = e.what();
+                    response.set_error_message((msg && msg[0]) ? msg : "Unknown error");
+                } catch (...) {
+                    response.set_error_message("Unknown error");
+                }
+            } else {
+                response.set_error_message("");  // Empty error_message indicates success.
+            }
 
             // Write() returns false if the stream has been closed by the client.
             if (!writer->Write(response))
                 return;
-
-            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
-
-        // After sending 10 filenames, throw an exception (as requested for the stub).
-        throw runtime_error("SubscribeFiles: stub exception after sending 10 filenames");
     }
 
     grpc::Status SubscribeFiles(
