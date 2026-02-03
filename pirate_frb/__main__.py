@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import random
 import textwrap
 import argparse
@@ -161,7 +162,7 @@ def parse_time(subparsers):
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
     
-def time(args):
+def time_command(args):
     timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2', 'gdqk', 'gtgk' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
@@ -715,6 +716,81 @@ def show_asdf(args):
     _show_asdf(args.asdf_file)
 
 
+###########################################   rpc command  #########################################
+
+
+def parse_rpc(subparsers):
+    help_text = "Connect to FrbServer and stream status + filenames"
+    parser = subparsers.add_parser("rpc", help=help_text, description=help_text)
+    parser.add_argument('server_address', help='Server address (e.g. 127.0.0.1:6000)')
+
+
+def rpc(args):
+    import threading
+    from .rpc import FrbClient
+
+    def status_thread(client, stop_event):
+        """Poll get_status once per second and print summary."""
+        try:
+            while not stop_event.is_set():
+                status = client.get_status()
+                print(f"[status] connections={status.num_connections}, bytes={status.num_bytes}, "
+                      f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_finalized},{status.rb_end}], "
+                      f"free={status.num_free_frames}")
+
+                for _ in range(10):
+                    if stop_event.is_set():
+                        return
+                    time.sleep(0.1)
+        except Exception as e:
+            print(f"[status] ERROR: {e}", file=sys.stderr)
+            stop_event.set()
+
+    def subscribe_thread(client, stop_event):
+        """Subscribe to filenames and print as they arrive."""
+        try:
+            for filename in client.subscribe_files():
+                if stop_event.is_set():
+                    return
+                print(f"[subscribe] Received filename: {filename}")
+        except Exception as e:
+            print(f"[subscribe] ERROR: {e}", file=sys.stderr)
+            stop_event.set()
+
+    client = FrbClient(args.server_address)
+
+    print(f"RPC client connected to {args.server_address}")
+    print("Running get_status (1/sec) and subscribe_files. Press Ctrl-C to stop.")
+    print()
+
+    stop_event = threading.Event()
+
+    t_status = threading.Thread(target=status_thread, args=(client, stop_event), daemon=True)
+    t_subscribe = threading.Thread(target=subscribe_thread, args=(client, stop_event), daemon=True)
+
+    t_status.start()
+    t_subscribe.start()
+
+    try:
+        while not stop_event.is_set():
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        print("\nStopping...")
+        stop_event.set()
+
+    t_status.join(timeout=1.0)
+    t_subscribe.join(timeout=1.0)
+
+    client.close()
+    print("RPC client stopped.")
+
+    if stop_event.is_set():
+        sys.exit(1)
+
+
+#####################################   random_kernels command  #####################################
+
+
 def parse_random_kernels(subparsers):
     help_text = "A utility for maintaining makefile_helper.py"
     parser = subparsers.add_parser("random_kernels", help=help_text, description=help_text)
@@ -836,6 +912,7 @@ def get_parser():
     parse_scratch(subparsers)
     parse_random_kernels(subparsers)
     parse_show_asdf(subparsers)
+    parse_rpc(subparsers)
 
     return parser
 
@@ -848,7 +925,7 @@ def main():
     if args.command == "test":
         test(args)
     elif args.command == "time":
-        time(args)
+        time_command(args)
     elif args.command == "show_hardware":
         show_hardware(args)
     elif args.command == "show_kernels":
@@ -873,6 +950,8 @@ def main():
         random_kernels(args)
     elif args.command == "show_asdf":
         show_asdf(args)
+    elif args.command == "rpc":
+        rpc(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
