@@ -22,6 +22,7 @@
 #include "../include/pirate/FakeXEngine.hpp"
 #include "../include/pirate/Receiver.hpp"
 #include "../include/pirate/FrbServer.hpp"
+#include "../include/pirate/FileWriter.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -554,6 +555,32 @@ void register_core_bindings(pybind11::module &m)
                "    RuntimeError: If called twice or after stop().")
           .def("stop", [](FrbServer &self) { self.stop(); },
                "Stop the server and all Receivers. Safe to call multiple times.")
+    ;
+
+    // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.
+    // Skipped members: Params, WriteStatus, RpcSubscriber, process_frame, add_subscriber (internal)
+    py::class_<FileWriter>(m, "FileWriter",
+        "Writes AssembledFrames to disk via SSD and NFS queues.\n\n"
+        "Creates worker threads for writing to local SSD and copying to NFS.")
+          .def(py::init([](const std::string &ssd_root, const std::string &nfs_root,
+                           int num_ssd_threads, int num_nfs_threads) {
+               FileWriter::Params params;
+               params.ssd_root = ssd_root;
+               params.nfs_root = nfs_root;
+               params.num_ssd_threads = num_ssd_threads;
+               params.num_nfs_threads = num_nfs_threads;
+               return std::make_unique<FileWriter>(params);
+          }),
+               py::arg("ssd_root"), py::arg("nfs_root"),
+               py::arg("num_ssd_threads") = 4, py::arg("num_nfs_threads") = 2,
+               "Create a FileWriter.\n\n"
+               "Args:\n"
+               "    ssd_root: Absolute path to local SSD directory\n"
+               "    nfs_root: Absolute path to NFS directory\n"
+               "    num_ssd_threads: Number of threads for SSD writes (default 4)\n"
+               "    num_nfs_threads: Number of threads for NFS copies (default 2)")
+          .def("stop", [](FileWriter &self) { self.stop(); },
+               "Stop the writer. Safe to call multiple times.")
     ;
 }
 

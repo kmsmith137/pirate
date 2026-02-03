@@ -7,6 +7,7 @@ from ..pirate_pybind11 import (
     DedispersionTree,
     EarlyTrigger,
     FakeXEngine,
+    FileWriter,
     FrequencySubbands,
     PeakFindingConfig,
     Receiver,
