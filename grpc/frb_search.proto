@@ -58,7 +58,9 @@ message WriteFilesResponse {
 // Request message for SubscribeFiles (currently empty, but extensible)
 message SubscribeFilesRequest {}
 
-// Response message for SubscribeFiles (streamed)
+// Response message for SubscribeFiles (streamed).
+// An empty error_message indicates success; non-empty indicates an error.
 message SubscribeFilesResponse {
-  string filename = 1;  // A single filename
+  string filename = 1;       // A single filename (valid only if error_message is empty)
+  string error_message = 2;  // Empty string indicates success; non-empty indicates error
 }

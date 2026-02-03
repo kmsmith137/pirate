@@ -749,12 +749,17 @@ def rpc(args):
     def subscribe_thread(client, stop_event):
         """Subscribe to filenames and print as they arrive."""
         try:
-            for filename in client.subscribe_files():
+            # subscribe_files() yields (filename, error_message) pairs.
+            # Empty error_message indicates success; non-empty indicates error.
+            for filename, error_message in client.subscribe_files():
                 if stop_event.is_set():
                     return
-                print(f"[subscribe] Received filename: {filename}")
+                if error_message:
+                    print(f"[subscribe_files] {filename} failed: {error_message}")
+                else:
+                    print(f"[subscribe_files] {filename} received")
         except Exception as e:
-            print(f"[subscribe] ERROR: {e}", file=sys.stderr)
+            print(f"[subscribe_files] ERROR: {e}", file=sys.stderr)
             stop_event.set()
 
     client = FrbClient(args.server_address)

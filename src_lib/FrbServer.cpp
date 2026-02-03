@@ -241,6 +241,8 @@ public:
     // Note: gRPC's server-streaming model provides one thread of execution per connection
     // via gRPC's internal thread pool. The subscriber_threads vector in FrbServer can be
     // used in the future if we need explicit thread management beyond gRPC's model.
+    //
+    // Each response has (filename, error_message). Empty error_message indicates success.
     void _subscribe_files(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
     {
         for (int i = 0; i < 10; i++) {
@@ -250,6 +252,7 @@ public:
 
             fs::SubscribeFilesResponse response;
             response.set_filename("test.asdf");
+            response.set_error_message("");  // Empty error_message indicates success.
 
             // Write() returns false if the stream has been closed by the client.
             if (!writer->Write(response))
