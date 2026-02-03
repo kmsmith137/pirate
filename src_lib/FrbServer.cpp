@@ -40,7 +40,7 @@ public:
 
     void _GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response)
     {
-        auto s = _lock_state();
+        shared_ptr<FrbServer> s = _lock_state();
 
         // Call Receiver::get_status() for each receiver,
         // and sum the results over receivers.
@@ -87,7 +87,7 @@ public:
 
     void _GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response)
     {
-        auto s = _lock_state();
+        shared_ptr<FrbServer> s = _lock_state();
 
         // Check has_metadata under lock, then release.
         // Safe because has_metadata transitions false->true exactly once,
@@ -124,7 +124,8 @@ public:
 
     void _WriteChunks(const fs::WriteChunksRequest *request, fs::WriteChunksResponse *response)
     {
-        auto s = _lock_state();
+        shared_ptr<FrbServer> s = _lock_state();
+        shared_ptr<FileWriter> file_writer = s->params.file_writer;
 
         // Convert beam_ids to beam_indices.
         vector<int> beam_indices;
@@ -155,8 +156,66 @@ public:
         // Construct FilenamePattern (validates that pattern contains "(BEAM)" and "(CHUNK)").
         FilenamePattern filename_pattern(request->filename_pattern());
 
-        // FIXME more implementation to follow
-        throw runtime_error("WriteChunks not fully implemented yet");
+        // Get frames from ring buffer.
+        // We compute frame_id = time_chunk_index * nbeams + beam_index directly for each
+        // (time_chunk_index, beam_index) pair, rather than iterating over the entire ring
+        // buffer and checking each frame's metadata. This is O(num_time_chunks * num_beams)
+        // instead of O(ringbuf_size).
+
+        vector<shared_ptr<AssembledFrame>> local_frames;
+
+        long num_time_chunks = max_time_chunk_index - min_time_chunk_index + 1;
+        local_frames.reserve(num_time_chunks * beam_indices.size());
+
+        unique_lock<std::mutex> server_lock(s->mutex);
+
+        long rb_nbeams = s->metadata.nbeams;
+        long rb_size = s->frame_ringbuf.size();
+        long rb_start = s->rb_start;
+        long rb_end = s->rb_end;
+
+        min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
+        max_time_chunk_index = min(max_time_chunk_index, rb_end / rb_nbeams);
+
+        for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
+            for (int b : beam_indices) {
+                long frame_id = t * rb_nbeams + b;
+                if ((frame_id >= rb_start) && (frame_id < rb_end)) {
+                    long rb_slot = frame_id % rb_size;
+                    local_frames.push_back(s->frame_ringbuf[rb_slot]);
+                }
+            }
+        }
+
+        server_lock.unlock();
+
+        // Process frames in reverse order: push filenames onto frame->save_paths,
+        // then call file_writer->process_frame(). Reverse order ensures that frames
+        // with lower time_chunk_index are processed last (and appear earlier in queues).
+
+        vector<string> filename_list;
+        filename_list.reserve(local_frames.size());
+
+        for (auto it = local_frames.rbegin(); it != local_frames.rend(); ++it) {
+            auto &frame = *it;
+
+            unique_lock<std::mutex> frame_lock(frame->mutex);
+
+            // Skip if frame has already been reaped.
+            if (frame->data.size == 0)
+                continue;
+
+            string filename = filename_pattern.expand(frame);
+            frame->save_paths.push_back(filename);
+            frame_lock.unlock();
+
+            file_writer->process_frame(frame);
+            filename_list.push_back(std::move(filename));
+        }
+
+        // Return filename list to RPC caller.
+        for (const auto &fn : filename_list)
+            response->add_filename_list(fn);
     }
 
     grpc::Status WriteChunks(
