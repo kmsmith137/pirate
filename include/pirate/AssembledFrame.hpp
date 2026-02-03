@@ -42,8 +42,12 @@ struct AssembledFrame
     // ASDF file I/O.
     // Note: int4 dtype is stored as uint8 with shape (nfreq, ntime/2).
     void write_asdf(const std::string &filename) const;
-    static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);
-    
+    static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);    // Call without lock held.
+
+    // Call with lock held!
+    // Called by reaper thread, or ssd writer thread.
+    void _reap_locked();
+
     // Create a random AssembledFrame (for testing). Note: ntime must be even.
     static std::shared_ptr<AssembledFrame> make_random(long nfreq, long ntime, long beam_id, long time_chunk_index);
     static std::shared_ptr<AssembledFrame> make_random();  // randomizes all parameters
@@ -53,8 +57,8 @@ struct AssembledFrame
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.
-    
-    std::mutex mutex;
+
+    mutable std::mutex mutex;
     long finalize_count = 0;    // incremented by FrbServer worker thread(s)
 
     // NOTE: all save_paths received from RPC clients MUST be validated with

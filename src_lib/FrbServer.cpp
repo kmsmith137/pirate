@@ -418,7 +418,7 @@ void FrbServer::_reaper_thread_main()
         lock.unlock();
 
         lock_guard<std::mutex> frame_lock(frame->mutex);
-        frame->data = Array<void> ();
+        frame->_reap_locked();
         // frame_lock dropped (by going out of scope)
     }
 }

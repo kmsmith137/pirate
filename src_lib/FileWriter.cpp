@@ -204,6 +204,9 @@ void FileWriter::_ssd_thread_main()
         frame->in_ssd_queue = false;
         frame->in_nfs_queue = true;
         frame->on_ssd = !eptr;
+        
+        // After the frame has been written to disk, it can be reaped to save memory.
+        frame->_reap_locked();
         frame_lock.unlock();
 
         state_lock.lock();

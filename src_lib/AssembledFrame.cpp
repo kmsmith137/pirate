@@ -21,9 +21,15 @@ namespace pirate {
 #endif
 
 
-// -------------------------------------------------------------------------------------------------
-//
-// AssembledFrame::write_asdf()
+// Call with lock held!
+void AssembledFrame::_reap_locked()
+{
+    if (data.size == 0)
+        return;  // already reaped
+    if (save_paths.size() && !on_ssd)
+        return;  // unreapable (until written to ssd)
+    this->data = Array<void> ();
+}
 
 
 void AssembledFrame::write_asdf(const std::string &filename) const
@@ -31,13 +37,24 @@ void AssembledFrame::write_asdf(const std::string &filename) const
     xassert(nfreq > 0);
     xassert(ntime > 0);
     xassert((ntime % 2) == 0);
-    
+
+    // Acquire lock and copy data to local variable, to avoid racing against reaper thread.
+    // Copying the Array also copies the shared_ptr in 'base', keeping the memory alive.
+    Array<void> local_data;
+
+    unique_lock<std::mutex> guard(mutex);
+    local_data = data;
+    guard.unlock();
+
+    if (local_data.size == 0)
+        throw runtime_error("internal error: attempt to write empty/reaped frame");
+
     // Verify data array is valid and contiguous.
-    xassert(data.data != nullptr);
-    xassert(data.ndim == 2);
-    xassert(data.shape[0] == nfreq);
-    xassert(data.shape[1] == ntime);
-    xassert(data.is_fully_contiguous());
+    xassert(local_data.data != nullptr);
+    xassert(local_data.ndim == 2);
+    xassert(local_data.shape[0] == nfreq);
+    xassert(local_data.shape[1] == ntime);
+    xassert(local_data.is_fully_contiguous());
 
     // Create ASDF group with metadata and array.
     auto grp = make_shared<ASDF::group>();
@@ -52,7 +69,7 @@ void AssembledFrame::write_asdf(const std::string &filename) const
     // int4 dtype (4 bits per element) is stored as uint8 with shape (nfreq, ntime/2).
     // Use ptr_block_t to avoid copying data.
     long nbytes = nfreq * (ntime / 2);
-    auto block = make_shared<ASDF::ptr_block_t>(data.data, nbytes);
+    auto block = make_shared<ASDF::ptr_block_t>(local_data.data, nbytes);
     auto mblock = ASDF::make_constant_memoized(shared_ptr<ASDF::block_t>(block));
     
     auto arr = make_shared<ASDF::ndarray>(
@@ -72,11 +89,6 @@ void AssembledFrame::write_asdf(const std::string &filename) const
     auto project = make_shared<ASDF::asdf>(map<string, string>(), grp);
     project->write(filename);
 }
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// AssembledFrame::from_asdf()
 
 
 shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename)
@@ -145,7 +157,7 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 
 // -------------------------------------------------------------------------------------------------
 //
-// AssembledFrame::make_random()
+// Static AssembledFrame member functions, for testing.
 
 
 // Static member function.
@@ -184,11 +196,6 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random()
     
     return make_random(nfreq, ntime, beam_id, time_chunk_index);
 }
-
-
-// -------------------------------------------------------------------------------------------------
-//
-// AssembledFrame::test_asdf()
 
 
 // Static member function.
