@@ -112,6 +112,25 @@ private:
 };
 
 
+// FilenamePattern: helper class to expand 'pattern' strings, such as
+// "dir1/dir2/file_(BEAM)_(CHUNK).asdf"
+
+struct FilenamePattern
+{
+    // Constructor validates that 'pattern' contains exactly one "(BEAM)" and one "(CHUNK)".
+    // Throws an exception if validation fails.
+    FilenamePattern(const std::string &pattern);
+
+    // Replace "(BEAM)" with f->beam_id and "(CHUNK)" with f->time_chunk_index.
+    std::string expand(const std::shared_ptr<AssembledFrame> &f) const;
+
+private:
+    std::string pattern;
+    std::size_t beam_pos;   // position of "(BEAM)" in pattern
+    std::size_t chunk_pos;  // position of "(CHUNK)" in pattern
+};
+
+
 }  // namespace pirate
 
 #endif  // _PIRATE_FILE_WRITER_HPP

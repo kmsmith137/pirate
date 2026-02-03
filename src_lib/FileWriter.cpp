@@ -450,4 +450,47 @@ void FileWriter::_throw_if_stopped(const char *method_name)
 }
 
 
+// -------------------------------------------------------------------------------------------------
+
+
+FilenamePattern::FilenamePattern(const string &pattern_) : pattern(pattern_)
+{
+    const string beam_marker = "(BEAM)";
+    const string chunk_marker = "(CHUNK)";
+
+    beam_pos = pattern.find(beam_marker);
+    if (beam_pos == string::npos)
+        throw runtime_error("FilenamePattern: pattern must contain '(BEAM)'");
+    if (pattern.find(beam_marker, beam_pos + 1) != string::npos)
+        throw runtime_error("FilenamePattern: pattern contains multiple '(BEAM)'");
+
+    chunk_pos = pattern.find(chunk_marker);
+    if (chunk_pos == string::npos)
+        throw runtime_error("FilenamePattern: pattern must contain '(CHUNK)'");
+    if (pattern.find(chunk_marker, chunk_pos + 1) != string::npos)
+        throw runtime_error("FilenamePattern: pattern contains multiple '(CHUNK)'");
+}
+
+
+string FilenamePattern::expand(const shared_ptr<AssembledFrame> &f) const
+{
+    xassert(f);
+
+    string ret = pattern;
+    string beam_str = to_string(f->beam_id);
+    string chunk_str = to_string(f->time_chunk_index);
+
+    // Replace in reverse order of position, so that indices remain valid.
+    if (beam_pos > chunk_pos) {
+        ret.replace(beam_pos, 6, beam_str);    // "(BEAM)" has length 6
+        ret.replace(chunk_pos, 7, chunk_str);  // "(CHUNK)" has length 7
+    } else {
+        ret.replace(chunk_pos, 7, chunk_str);
+        ret.replace(beam_pos, 6, beam_str);
+    }
+
+    return ret;
+}
+
+
 }  // namespace pirate
