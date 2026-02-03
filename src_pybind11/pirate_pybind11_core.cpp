@@ -538,16 +538,20 @@ void register_core_bindings(pybind11::module &m)
     py::class_<FrbServer, std::shared_ptr<FrbServer>>(m, "FrbServer",
         "gRPC server that queries Receivers via RPC.\n\n"
         "Wraps multiple Receivers and exposes their status via gRPC.")
-          .def(py::init([](std::vector<std::shared_ptr<Receiver>> receivers, const std::string &rpc_server_address) {
+          .def(py::init([](std::vector<std::shared_ptr<Receiver>> receivers,
+                           std::shared_ptr<FileWriter> file_writer,
+                           const std::string &rpc_server_address) {
                FrbServer::Params params;
                params.receivers = std::move(receivers);
+               params.file_writer = std::move(file_writer);
                params.rpc_server_address = rpc_server_address;
                return FrbServer::create(params);
           }),
-               py::arg("receivers"), py::arg("rpc_server_address"),
+               py::arg("receivers"), py::arg("file_writer"), py::arg("rpc_server_address"),
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    receivers: List of Receiver objects to query\n"
+               "    file_writer: FileWriter for saving frames to disk\n"
                "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
@@ -559,7 +563,7 @@ void register_core_bindings(pybind11::module &m)
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.
     // Skipped members: Params, WriteStatus, RpcSubscriber, process_frame, add_subscriber (internal)
-    py::class_<FileWriter>(m, "FileWriter",
+    py::class_<FileWriter, std::shared_ptr<FileWriter>>(m, "FileWriter",
         "Writes AssembledFrames to disk via SSD and NFS queues.\n\n"
         "Creates worker threads for writing to local SSD and copying to NFS.")
           .def(py::init([](const std::string &ssd_root, const std::string &nfs_root,
@@ -569,7 +573,7 @@ void register_core_bindings(pybind11::module &m)
                params.nfs_root = nfs_root;
                params.num_ssd_threads = num_ssd_threads;
                params.num_nfs_threads = num_nfs_threads;
-               return std::make_unique<FileWriter>(params);
+               return std::make_shared<FileWriter>(params);
           }),
                py::arg("ssd_root"), py::arg("nfs_root"),
                py::arg("num_ssd_threads") = 4, py::arg("num_nfs_threads") = 2,

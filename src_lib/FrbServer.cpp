@@ -161,6 +161,7 @@ std::shared_ptr<FrbServer> FrbServer::create(const Params &params)
 
 FrbServer::FrbServer(const Params &p) : params(p) 
 { 
+    xassert(params.file_writer);
     xassert(params.receivers.size() > 0);
     xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
 

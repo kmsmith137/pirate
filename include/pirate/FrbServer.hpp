@@ -24,6 +24,7 @@ namespace pirate {
 #endif
 
 
+struct FileWriter;     // FileWriter.hpp
 struct FrbRpcService;  // defined in FrbServer.cpp
 
 
@@ -34,6 +35,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
 {
     struct Params {
         std::vector<std::shared_ptr<Receiver>> receivers;
+        std::shared_ptr<FileWriter> file_writer;
         std::string rpc_server_address;
     };
 
