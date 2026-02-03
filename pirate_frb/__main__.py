@@ -716,16 +716,16 @@ def show_asdf(args):
     _show_asdf(args.asdf_file)
 
 
-###########################################   rpc command  #########################################
+########################################   rpc_status command  ######################################
 
 
-def parse_rpc(subparsers):
+def parse_rpc_status(subparsers):
     help_text = "Connect to FrbServer and stream status + filenames"
-    parser = subparsers.add_parser("rpc", help=help_text, description=help_text)
+    parser = subparsers.add_parser("rpc_status", help=help_text, description=help_text)
     parser.add_argument('server_address', help='Server address (e.g. 127.0.0.1:6000)')
 
 
-def rpc(args):
+def rpc_status(args):
     import threading
     from .rpc import FrbClient
 
@@ -791,6 +791,87 @@ def rpc(args):
 
     if stop_event.is_set():
         sys.exit(1)
+
+
+#########################################   rpc_write command  ######################################
+
+
+def parse_rpc_write(subparsers):
+    help_text = "Send write_files RPC to FrbServer with random beams/time range"
+    parser = subparsers.add_parser("rpc_write", help=help_text, description=help_text)
+    parser.add_argument('server_address', help='Server address (e.g. 127.0.0.1:6000)')
+
+
+def rpc_write(args):
+    import yaml
+    from .rpc import FrbClient
+
+    client = FrbClient(args.server_address)
+    print(f"Connected to {args.server_address}")
+
+    # Get metadata to obtain beam IDs.
+    metadata_yaml = client.get_metadata(verbose=False)
+    if not metadata_yaml:
+        print("Error: metadata not yet available")
+        client.close()
+        return
+
+    metadata = yaml.safe_load(metadata_yaml)
+    beam_ids = metadata['beam_ids']
+    nbeams = len(beam_ids)
+    print(f"Got metadata: {nbeams} beams, beam_ids={beam_ids}")
+
+    # Select random subset of beam IDs (1 to min(nbeams, 3)).
+    n = random.randint(1, min(nbeams, 3))
+    selected_beams = random.sample(beam_ids, n)
+    print(f"Selected {n} beams: {selected_beams}")
+
+    # Loop until we have frames available.
+    while True:
+        status = client.get_status()
+        rb_reaped = status.rb_reaped
+        rb_end = status.rb_end
+
+        # Convert frame IDs to time_chunk_index range.
+        # frame_id = time_chunk_index * nbeams + beam_index
+        # So time_chunk_index = frame_id // nbeams
+        # rb_t0: first fully available time chunk (round up)
+        # rb_t1: last available time chunk + 1 (round down)
+        rb_t0 = (rb_reaped + nbeams - 1) // nbeams  # round up
+        rb_t1 = rb_end // nbeams  # round down
+
+        print(f"Status: rb_reaped={rb_reaped}, rb_end={rb_end} -> time_chunk_index range [{rb_t0}, {rb_t1})")
+
+        if rb_t0 >= rb_t1:
+            print("No frames available yet, sleeping 1 second...")
+            time.sleep(1)
+            continue
+
+        break
+
+    # Choose random time range: rb_t0 <= t0 < t1 <= rb_t1, with 1 <= (t1-t0) <= 3.
+    max_range = min(3, rb_t1 - rb_t0)
+    range_size = random.randint(1, max_range)
+    t0 = random.randint(rb_t0, rb_t1 - range_size)
+    t1 = t0 + range_size
+
+    print(f"Requesting time_chunk_index range [{t0}, {t1})")
+
+    # Send write_files RPC.
+    # Note: write_files takes (min_time_chunk_index, max_time_chunk_index) as inclusive range.
+    filename_pattern = "test_(BEAM)_(CHUNK).asdf"
+    filenames = client.write_files(
+        beams=selected_beams,
+        min_time_chunk_index=t0,
+        max_time_chunk_index=t1 - 1,  # inclusive
+        filename_pattern=filename_pattern
+    )
+
+    print(f"\nwrite_files returned {len(filenames)} filenames:")
+    for fn in filenames:
+        print(f"  {fn}")
+
+    client.close()
 
 
 #####################################   random_kernels command  #####################################
@@ -917,7 +998,8 @@ def get_parser():
     parse_scratch(subparsers)
     parse_random_kernels(subparsers)
     parse_show_asdf(subparsers)
-    parse_rpc(subparsers)
+    parse_rpc_status(subparsers)
+    parse_rpc_write(subparsers)
 
     return parser
 
@@ -955,8 +1037,10 @@ def main():
         random_kernels(args)
     elif args.command == "show_asdf":
         show_asdf(args)
-    elif args.command == "rpc":
-        rpc(args)
+    elif args.command == "rpc_status":
+        rpc_status(args)
+    elif args.command == "rpc_write":
+        rpc_write(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
