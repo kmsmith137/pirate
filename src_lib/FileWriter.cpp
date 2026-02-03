@@ -2,6 +2,7 @@
 #include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/file_utils.hpp"
 
+#include <algorithm>
 #include <ksgpu/xassert.hpp>
 
 using namespace std;
@@ -460,15 +461,20 @@ FilenamePattern::FilenamePattern(const string &pattern_) : pattern(pattern_)
 
     beam_pos = pattern.find(beam_marker);
     if (beam_pos == string::npos)
-        throw runtime_error("FilenamePattern: pattern must contain '(BEAM)'");
-    if (pattern.find(beam_marker, beam_pos + 1) != string::npos)
-        throw runtime_error("FilenamePattern: pattern contains multiple '(BEAM)'");
+        throw runtime_error("FilenamePattern: pattern must contain '(BEAM)': " + pattern);
 
     chunk_pos = pattern.find(chunk_marker);
     if (chunk_pos == string::npos)
-        throw runtime_error("FilenamePattern: pattern must contain '(CHUNK)'");
-    if (pattern.find(chunk_marker, chunk_pos + 1) != string::npos)
-        throw runtime_error("FilenamePattern: pattern contains multiple '(CHUNK)'");
+        throw runtime_error("FilenamePattern: pattern must contain '(CHUNK)': " + pattern);
+
+    // Verify no stray parentheses (only '(' and ')' allowed are in (BEAM) and (CHUNK)).
+    long num_open = std::count(pattern.begin(), pattern.end(), '(');
+    long num_close = std::count(pattern.begin(), pattern.end(), ')');
+    if ((num_open != 2) || (num_close != 2))
+        throw runtime_error("FilenamePattern: pattern contains '(' or ')' outside of (BEAM) and (CHUNK): " + pattern);
+
+    if (!is_safe_relpath(pattern))
+        throw runtime_error("FilenamePattern: pattern is not a safe relative path: " + pattern);
 }
 
 
