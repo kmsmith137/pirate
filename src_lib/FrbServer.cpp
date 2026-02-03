@@ -118,6 +118,31 @@ public:
             return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetMetadata");
         }
     }
+
+    // ---- WriteChunks ----
+
+    void _WriteChunks(const fs::WriteChunksRequest *request, fs::WriteChunksResponse *response)
+    {
+        auto s = _lock_state();
+
+        // FIXME implement
+        throw runtime_error("WriteChunks not implemented yet");
+    }
+
+    grpc::Status WriteChunks(
+        grpc::ServerContext* context,
+        const fs::WriteChunksRequest* request,
+        fs::WriteChunksResponse* response) override
+    {
+        try {
+            _WriteChunks(request, response);
+            return grpc::Status::OK;
+        } catch (const std::exception &e) {
+            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+        } catch (...) {
+            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in WriteChunks");
+        }
+    }
 };
 
 

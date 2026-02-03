@@ -9,6 +9,9 @@ service FrbSearch {
 
   // Returns metadata as a YAML string (empty if metadata not yet available)
   rpc GetMetadata (GetMetadataRequest) returns (GetMetadataResponse);
+
+  // Write chunks to disk for specified beams and time range
+  rpc WriteChunks (WriteChunksRequest) returns (WriteChunksResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -33,4 +36,17 @@ message GetMetadataRequest {
 // Response message for GetMetadata
 message GetMetadataResponse {
   string yaml_string = 1;  // Empty string if metadata not yet available
+}
+
+// Request message for WriteChunks
+message WriteChunksRequest {
+  repeated int64 beams = 1;           // List of beam IDs to write
+  int64 min_time_chunk_index = 2;     // First time chunk index (inclusive)
+  int64 max_time_chunk_index = 3;     // Last time chunk index (inclusive)
+  string filename_pattern = 4;        // Pattern with (BEAM) and (CHUNK) placeholders
+}
+
+// Response message for WriteChunks
+message WriteChunksResponse {
+  repeated string filename_list = 1;  // List of filenames that will be written
 }

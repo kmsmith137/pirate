@@ -47,10 +47,10 @@ class FrbClient:
     
     def get_metadata(self, verbose: bool = False) -> str:
         """Query the server for metadata as a YAML string.
-        
+
         Args:
             verbose: If True, include comments explaining each field.
-        
+
         Returns:
             YAML string representation of metadata, or empty string if
             metadata is not yet available.
@@ -58,7 +58,35 @@ class FrbClient:
         request = frb_search_pb2.GetMetadataRequest(verbose=verbose)
         response = self.stub.GetMetadata(request)
         return response.yaml_string
-    
+
+    def write_chunks(
+        self,
+        beams: list[int],
+        min_time_chunk_index: int,
+        max_time_chunk_index: int,
+        filename_pattern: str
+    ) -> list[str]:
+        """Request the server to write chunks to disk.
+
+        Args:
+            beams: List of beam IDs to write.
+            min_time_chunk_index: First time chunk index (inclusive).
+            max_time_chunk_index: Last time chunk index (inclusive).
+            filename_pattern: Pattern with (BEAM) and (CHUNK) placeholders,
+                e.g. "dir1/dir2/file_(BEAM)_(CHUNK).asdf"
+
+        Returns:
+            List of filenames that will be written.
+        """
+        request = frb_search_pb2.WriteChunksRequest(
+            beams=beams,
+            min_time_chunk_index=min_time_chunk_index,
+            max_time_chunk_index=max_time_chunk_index,
+            filename_pattern=filename_pattern
+        )
+        response = self.stub.WriteChunks(request)
+        return list(response.filename_list)
+
     def close(self):
         """Close the gRPC channel."""
         self.channel.close()
