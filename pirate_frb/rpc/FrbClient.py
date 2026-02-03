@@ -87,6 +87,27 @@ class FrbClient:
         response = self.stub.WriteFiles(request)
         return list(response.filename_list)
 
+    def subscribe_files(self):
+        """Subscribe to a stream of filenames from the server.
+
+        This is a generator that yields filenames as they are sent by the server.
+        The connection can be closed by the client (by stopping iteration or
+        calling close()), or by the server on shutdown or exception.
+
+        Yields:
+            str: Filename sent by the server.
+
+        Raises:
+            grpc.RpcError: If the server closes the connection with an error.
+
+        Example:
+            for filename in client.subscribe_files():
+                print(f"Received: {filename}")
+        """
+        request = frb_search_pb2.SubscribeFilesRequest()
+        for response in self.stub.SubscribeFiles(request):
+            yield response.filename
+
     def close(self):
         """Close the gRPC channel."""
         self.channel.close()

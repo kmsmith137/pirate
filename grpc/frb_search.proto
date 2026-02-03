@@ -12,6 +12,10 @@ service FrbSearch {
 
   // Write files to disk for specified beams and time range
   rpc WriteFiles (WriteFilesRequest) returns (WriteFilesResponse);
+
+  // Subscribe to a stream of filenames. The connection can be closed by the client
+  // at any time, or by the server on shutdown or exception.
+  rpc SubscribeFiles (SubscribeFilesRequest) returns (stream SubscribeFilesResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -49,4 +53,12 @@ message WriteFilesRequest {
 // Response message for WriteFiles
 message WriteFilesResponse {
   repeated string filename_list = 1;  // List of filenames that will be written
+}
+
+// Request message for SubscribeFiles (currently empty, but extensible)
+message SubscribeFilesRequest {}
+
+// Response message for SubscribeFiles (streamed)
+message SubscribeFilesResponse {
+  string filename = 1;  // A single filename
 }

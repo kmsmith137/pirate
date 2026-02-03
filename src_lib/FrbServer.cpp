@@ -232,6 +232,50 @@ public:
             return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in WriteFiles");
         }
     }
+
+    // ---- SubscribeFiles ----
+
+    // Stub implementation: sends "test.asdf" 10 times with 1-second pause, then throws.
+    // If the client closes the connection, exits gracefully.
+    //
+    // Note: gRPC's server-streaming model provides one thread of execution per connection
+    // via gRPC's internal thread pool. The subscriber_threads vector in FrbServer can be
+    // used in the future if we need explicit thread management beyond gRPC's model.
+    void _subscribe_files(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
+    {
+        for (int i = 0; i < 10; i++) {
+            // Check if client has disconnected.
+            if (context->IsCancelled())
+                return;
+
+            fs::SubscribeFilesResponse response;
+            response.set_filename("test.asdf");
+
+            // Write() returns false if the stream has been closed by the client.
+            if (!writer->Write(response))
+                return;
+
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        // After sending 10 filenames, throw an exception (as requested for the stub).
+        throw runtime_error("SubscribeFiles: stub exception after sending 10 filenames");
+    }
+
+    grpc::Status SubscribeFiles(
+        grpc::ServerContext* context,
+        const fs::SubscribeFilesRequest* request,
+        grpc::ServerWriter<fs::SubscribeFilesResponse>* writer) override
+    {
+        try {
+            _subscribe_files(context, writer);
+            return grpc::Status::OK;
+        } catch (const std::exception &e) {
+            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+        } catch (...) {
+            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in SubscribeFiles");
+        }
+    }
 };
 
 
