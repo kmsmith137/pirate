@@ -72,6 +72,10 @@ void XEngineMetadata::validate() const
             }
         }
     }
+
+    // Validate initial_time_sample.
+    xassert_ge(initial_time_sample, 0);
+    xassert_divisible(initial_time_sample, 256);
 }
 
 
@@ -174,6 +178,18 @@ void XEngineMetadata::to_yaml(YAML::Emitter &emitter, bool verbose) const
         emitter << YAML::EndSeq;
     }
 
+    // ---- initial_time_sample ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "When an X-engine node sends metadata to an FRB search node, it indicates the starting time\n"
+            "of the data stream that will follow. Currently, we represent the starting time by a sample\n"
+            "count, which must be a multiple of 256."
+        ) << YAML::Newline << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "initial_time_sample" << YAML::Value << initial_time_sample;
+
     emitter << YAML::EndMap;
 }
 
@@ -217,6 +233,7 @@ XEngineMetadata XEngineMetadata::from_yaml(const YamlFile &f)
     ret.freq_channels = f.get_vector<long> ("freq_channels", std::vector<long>());
     ret.nbeams = f.get_scalar<long> ("nbeams");
     ret.beam_ids = f.get_vector<long> ("beam_ids", std::vector<long>());
+    ret.initial_time_sample = f.get_scalar<long> ("initial_time_sample");
 
     // If beam_ids is absent, default to [ 0, 1, ..., (nbeams-1) ].
     if (ret.beam_ids.empty()) {

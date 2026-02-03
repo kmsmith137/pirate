@@ -43,6 +43,10 @@ freq_channels: [ 0, 10000, 20000, 28159 ]
 nbeams: 3
 beam_ids: [ 100, 200, 300 ]
 
-# Future versions of this file format will include more timestamp info (e.g. start time,
-# initial FPGA count, conversion between time and FPGA counts). I didn't specify anything
+# When an X-engine node sends metadata to an FRB search node, it indicates the starting time
+# of the data stream that will follow. Currently, we represent the starting time by a sample
+# count, which must be a multiple of 256. Future versions of this file format may use something
+# different (FPGA count?) and provide more time-related metadata. I didn't specify anything
 # concrete, since I didn't know what would be the best match for existing X-engine code.
+
+initial_time_sample: 0

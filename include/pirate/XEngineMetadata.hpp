@@ -16,10 +16,14 @@ namespace pirate {
 
 // XEngineMetadata: documents file format for communication between X-engine and FRB nodes.
 //
-// This struct is used in two contexts:
+// This metadata is used in two contexts:
+//
 //   1. Every X-engine node sends this file to every FRB node, at the beginning
 //      of the TCP stream.
-//   2. As a configuration file for the "fake correlator" used for testing.
+//
+//   2. As a configuration file for the "fake X-engine" used for testing.
+//
+// Reference: pirate/configs/xengine/xengine_metadata_*.yml
 
 struct XEngineMetadata
 {
@@ -49,6 +53,11 @@ struct XEngineMetadata
     // If empty when read from YAML, defaults to [ 0, 1, ..., (nbeams-1) ].
     std::vector<long> beam_ids;
 
+    // When an X-engine node sends metadata to an FRB search node, it indicates the starting time
+    // of the data stream that will follow. Currently, we represent the starting time by a sample
+    // count, which must be a multiple of 256.
+    long initial_time_sample = 0;
+    
     // -------------------------------- Member functions --------------------------------
 
     // Validate that all members have been initialized with sensible values.
@@ -68,8 +77,8 @@ struct XEngineMetadata
     static XEngineMetadata from_yaml(const YamlFile &file);
 
     // Check that two XEngineMetadata objects (from different senders) have consistent fields.
-    // Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.
-    // Throws exception on mismatch.
+    // Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels or
+    // initial_time_sample. Throws exception on mismatch.
     static void check_sender_consistency(const XEngineMetadata &ref, const XEngineMetadata &m);
 };
 
