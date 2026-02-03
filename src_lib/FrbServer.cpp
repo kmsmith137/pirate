@@ -120,9 +120,9 @@ public:
         }
     }
 
-    // ---- WriteChunks ----
+    // ---- WriteFiles ----
 
-    void _WriteChunks(const fs::WriteChunksRequest *request, fs::WriteChunksResponse *response)
+    void _WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response)
     {
         shared_ptr<FrbServer> s = _lock_state();
         shared_ptr<FileWriter> file_writer = s->params.file_writer;
@@ -136,7 +136,7 @@ public:
             auto it = s->beam_id_to_index.find(beam_id);
             if (it == s->beam_id_to_index.end()) {
                 stringstream ss;
-                ss << "WriteChunks: unknown beam_id " << beam_id;
+                ss << "WriteFiles: unknown beam_id " << beam_id;
                 throw runtime_error(ss.str());
             }
             beam_indices.push_back(it->second);
@@ -148,7 +148,7 @@ public:
 
         if ((min_time_chunk_index < 0) || (min_time_chunk_index > max_time_chunk_index)) {
             stringstream ss;
-            ss << "WriteChunks: invalid time_chunk_index range [" << min_time_chunk_index
+            ss << "WriteFiles: invalid time_chunk_index range [" << min_time_chunk_index
                << ", " << max_time_chunk_index << "]";
             throw runtime_error(ss.str());
         }
@@ -218,18 +218,18 @@ public:
             response->add_filename_list(fn);
     }
 
-    grpc::Status WriteChunks(
+    grpc::Status WriteFiles(
         grpc::ServerContext* context,
-        const fs::WriteChunksRequest* request,
-        fs::WriteChunksResponse* response) override
+        const fs::WriteFilesRequest* request,
+        fs::WriteFilesResponse* response) override
     {
         try {
-            _WriteChunks(request, response);
+            _WriteFiles(request, response);
             return grpc::Status::OK;
         } catch (const std::exception &e) {
             return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
         } catch (...) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in WriteChunks");
+            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in WriteFiles");
         }
     }
 };

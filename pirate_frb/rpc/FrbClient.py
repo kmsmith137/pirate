@@ -59,14 +59,14 @@ class FrbClient:
         response = self.stub.GetMetadata(request)
         return response.yaml_string
 
-    def write_chunks(
+    def write_files(
         self,
         beams: list[int],
         min_time_chunk_index: int,
         max_time_chunk_index: int,
         filename_pattern: str
     ) -> list[str]:
-        """Request the server to write chunks to disk.
+        """Request the server to write files to disk.
 
         Args:
             beams: List of beam IDs to write.
@@ -78,13 +78,13 @@ class FrbClient:
         Returns:
             List of filenames that will be written.
         """
-        request = frb_search_pb2.WriteChunksRequest(
+        request = frb_search_pb2.WriteFilesRequest(
             beams=beams,
             min_time_chunk_index=min_time_chunk_index,
             max_time_chunk_index=max_time_chunk_index,
             filename_pattern=filename_pattern
         )
-        response = self.stub.WriteChunks(request)
+        response = self.stub.WriteFiles(request)
         return list(response.filename_list)
 
     def close(self):
