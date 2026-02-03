@@ -2,6 +2,7 @@
 #include "../include/pirate/YamlFile.hpp"
 
 #include <sstream>
+#include <unordered_set>
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/yaml.h>
 
@@ -59,6 +60,16 @@ void XEngineMetadata::validate() const
             ss << "XEngineMetadata::validate(): beam_ids.size()=" << beam_ids.size()
                << " does not match nbeams=" << nbeams;
             throw runtime_error(ss.str());
+        }
+
+        // Check for duplicate beam_ids.
+        std::unordered_set<long> seen;
+        for (long id : beam_ids) {
+            if (!seen.insert(id).second) {
+                stringstream ss;
+                ss << "XEngineMetadata::validate(): duplicate beam_id " << id;
+                throw runtime_error(ss.str());
+            }
         }
     }
 }

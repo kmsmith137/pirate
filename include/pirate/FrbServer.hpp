@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 // Forward declarations
@@ -66,6 +67,9 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // Used to check that all receivers send consistent metadata.
     bool has_metadata = false;
     XEngineMetadata metadata;
+
+    // Maps (beam id) -> (position in metadata.beam_ids).
+    std::unordered_map<long,int> beam_id_to_index;
 
     // The frame_ringbuf is initialized at the same time as the metadata.
     // Ring buffer has length (ringbuf_nchunks * metadata.nbeams).

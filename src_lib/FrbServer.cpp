@@ -291,10 +291,12 @@ void FrbServer::_worker_main(int receiver_index)
     if (!has_metadata) {
         metadata = m;
         has_metadata = true;
-        // The frame_ringbuf is initialized at the same time as the metadata,
-        // without dropping the lock in between. Correctness of worker_main() 
-        // and reaper_main() depend on this property.
+        // The frame_ringbuf and beam_id_to_index are initialized at the same time
+        // as the metadata, without dropping the lock in between. Correctness of
+        // worker_main() and reaper_main() depend on this property.
         frame_ringbuf.resize(rb_size);
+        for (int i = 0; i < nbeams; i++)
+            beam_id_to_index[m.beam_ids[i]] = i;
         cv.notify_all();  // wake up reaper thread
     } else {
         XEngineMetadata::check_sender_consistency(metadata, m);
