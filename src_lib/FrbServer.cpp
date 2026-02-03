@@ -1,4 +1,5 @@
 #include "../include/pirate/FrbServer.hpp"
+#include "../include/pirate/FileWriter.hpp"
 
 #include <stdexcept>
 
@@ -125,8 +126,37 @@ public:
     {
         auto s = _lock_state();
 
-        // FIXME implement
-        throw runtime_error("WriteChunks not implemented yet");
+        // Convert beam_ids to beam_indices.
+        vector<int> beam_indices;
+        beam_indices.reserve(request->beams_size());
+
+        for (int i = 0; i < request->beams_size(); i++) {
+            long beam_id = request->beams(i);
+            auto it = s->beam_id_to_index.find(beam_id);
+            if (it == s->beam_id_to_index.end()) {
+                stringstream ss;
+                ss << "WriteChunks: unknown beam_id " << beam_id;
+                throw runtime_error(ss.str());
+            }
+            beam_indices.push_back(it->second);
+        }
+
+        // Validate time_chunk_index range.
+        long min_time_chunk_index = request->min_time_chunk_index();
+        long max_time_chunk_index = request->max_time_chunk_index();
+
+        if ((min_time_chunk_index < 0) || (min_time_chunk_index > max_time_chunk_index)) {
+            stringstream ss;
+            ss << "WriteChunks: invalid time_chunk_index range [" << min_time_chunk_index
+               << ", " << max_time_chunk_index << "]";
+            throw runtime_error(ss.str());
+        }
+
+        // Construct FilenamePattern (validates that pattern contains "(BEAM)" and "(CHUNK)").
+        FilenamePattern filename_pattern(request->filename_pattern());
+
+        // FIXME more implementation to follow
+        throw runtime_error("WriteChunks not fully implemented yet");
     }
 
     grpc::Status WriteChunks(
