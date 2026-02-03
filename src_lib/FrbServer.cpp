@@ -18,311 +18,46 @@ namespace pirate {
 namespace fs = frb::search::v1;
 
 
-// Service implementation (forward-declared in header)
-// Note: All RPC methods should wrap their logic in try-catch, to gracefully return
-// an error status to the client (instead of crashing the server).
+// GRPC service implementation. See bottom of file for implementations of individual RPCs.
+
 class FrbRpcService final : public fs::FrbSearch::Service {
 public:
     std::weak_ptr<FrbServer> state;
 
     FrbRpcService(const weak_ptr<FrbServer> &s) : state(s) {}
 
+    // These functions implement the individual RPCs.
+    void _GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response);
+    void _GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response);
+    void _WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response);
+    void _SubscribeFiles(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer);
+
     // Helper to lock the weak_ptr. Throws if the server is exiting.
-    shared_ptr<FrbServer> _lock_state()
-    {
-        auto s = state.lock();
-        if (!s)
-            throw runtime_error("FrbServer is in the process of exiting");
-        return s;
-    }
+    inline shared_ptr<FrbServer> _lock_state();
 
-    // ---- GetStatus ----
-
-    void _GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response)
-    {
-        shared_ptr<FrbServer> s = _lock_state();
-
-        // Call Receiver::get_status() for each receiver,
-        // and sum the results over receivers.
-        long total_conn = 0, total_bytes = 0;
-        for (auto &r : s->params.receivers) {
-            long nc, nb;
-            r->get_status(nc, nb);
-            total_conn += nc;
-            total_bytes += nb;
-        }
-        response->set_num_connections(total_conn);
-        response->set_num_bytes(total_bytes);
-
-        // Get ring buffer state under lock.
-        {
-            lock_guard<std::mutex> lock(s->mutex);
-            response->set_rb_start(s->rb_start);
-            response->set_rb_reaped(s->rb_reaped);
-            response->set_rb_finalized(s->rb_finalized);
-            response->set_rb_end(s->rb_end);
-        }
-
-        // Get num_free_frames from the allocator (permissive=true to handle uninitialized state).
-        auto &allocator = s->params.receivers[0]->params.allocator;
-        response->set_num_free_frames(allocator->num_free_frames(/*permissive=*/true));
-    }
+    // Try-catch wrappers, to gracefully return an error status to the client 
+    // (instead of crashing the server).
 
     grpc::Status GetStatus(
         grpc::ServerContext* context,
         const fs::GetStatusRequest* request,
-        fs::GetStatusResponse* response) override
-    {
-        try {
-            _GetStatus(request, response);
-            return grpc::Status::OK;
-        } catch (const std::exception &e) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
-        } catch (...) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetStatus");
-        }
-    }
-
-    // ---- GetMetadata ----
-
-    void _GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response)
-    {
-        shared_ptr<FrbServer> s = _lock_state();
-
-        // Check has_metadata under lock, then release.
-        // Safe because has_metadata transitions false->true exactly once,
-        // and metadata is immutable after being set.
-        bool has_metadata;
-        {
-            lock_guard<std::mutex> lock(s->mutex);
-            has_metadata = s->has_metadata;
-        }
-
-        if (has_metadata) {
-            response->set_yaml_string(s->metadata.to_yaml_string(request->verbose()));
-        } else {
-            response->set_yaml_string("");
-        }
-    }
+        fs::GetStatusResponse* response) override;
 
     grpc::Status GetMetadata(
         grpc::ServerContext* context,
         const fs::GetMetadataRequest* request,
-        fs::GetMetadataResponse* response) override
-    {
-        try {
-            _GetMetadata(request, response);
-            return grpc::Status::OK;
-        } catch (const std::exception &e) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
-        } catch (...) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetMetadata");
-        }
-    }
-
-    // ---- WriteFiles ----
-
-    void _WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response)
-    {
-        shared_ptr<FrbServer> s = _lock_state();
-        shared_ptr<FileWriter> file_writer = s->params.file_writer;
-
-        // Convert beam_ids to beam_indices.
-        vector<int> beam_indices;
-        beam_indices.reserve(request->beams_size());
-
-        for (int i = 0; i < request->beams_size(); i++) {
-            long beam_id = request->beams(i);
-            auto it = s->beam_id_to_index.find(beam_id);
-            if (it == s->beam_id_to_index.end()) {
-                stringstream ss;
-                ss << "WriteFiles: unknown beam_id " << beam_id;
-                throw runtime_error(ss.str());
-            }
-            beam_indices.push_back(it->second);
-        }
-
-        // Validate time_chunk_index range.
-        long min_time_chunk_index = request->min_time_chunk_index();
-        long max_time_chunk_index = request->max_time_chunk_index();
-
-        if ((min_time_chunk_index < 0) || (min_time_chunk_index > max_time_chunk_index)) {
-            stringstream ss;
-            ss << "WriteFiles: invalid time_chunk_index range [" << min_time_chunk_index
-               << ", " << max_time_chunk_index << "]";
-            throw runtime_error(ss.str());
-        }
-
-        // Construct FilenamePattern (validates that pattern contains "(BEAM)" and "(CHUNK)").
-        FilenamePattern filename_pattern(request->filename_pattern());
-
-        // Get frames from ring buffer.
-        // We compute frame_id = time_chunk_index * nbeams + beam_index directly for each
-        // (time_chunk_index, beam_index) pair, rather than iterating over the entire ring
-        // buffer and checking each frame's metadata. This is O(num_time_chunks * num_beams)
-        // instead of O(ringbuf_size).
-
-        vector<shared_ptr<AssembledFrame>> local_frames;
-
-        long num_time_chunks = max_time_chunk_index - min_time_chunk_index + 1;
-        local_frames.reserve(num_time_chunks * beam_indices.size());
-
-        unique_lock<std::mutex> server_lock(s->mutex);
-
-        long rb_nbeams = s->metadata.nbeams;
-        long rb_size = s->frame_ringbuf.size();
-        long rb_start = s->rb_start;
-        long rb_end = s->rb_end;
-
-        min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
-        max_time_chunk_index = min(max_time_chunk_index, rb_end / rb_nbeams);
-
-        for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
-            for (int b : beam_indices) {
-                long frame_id = t * rb_nbeams + b;
-                if ((frame_id >= rb_start) && (frame_id < rb_end)) {
-                    long rb_slot = frame_id % rb_size;
-                    local_frames.push_back(s->frame_ringbuf[rb_slot]);
-                }
-            }
-        }
-
-        server_lock.unlock();
-
-        // Process frames in reverse order: push filenames onto frame->save_paths,
-        // then call file_writer->process_frame(). Reverse order ensures that frames
-        // with lower time_chunk_index are processed last (and appear earlier in queues).
-
-        vector<string> filename_list;
-        filename_list.reserve(local_frames.size());
-
-        for (auto it = local_frames.rbegin(); it != local_frames.rend(); ++it) {
-            auto &frame = *it;
-
-            unique_lock<std::mutex> frame_lock(frame->mutex);
-
-            // Skip if frame has already been reaped.
-            if (frame->data.size == 0)
-                continue;
-
-            string filename = filename_pattern.expand(frame);
-            frame->save_paths.push_back(filename);
-            frame_lock.unlock();
-
-            file_writer->process_frame(frame);
-            filename_list.push_back(std::move(filename));
-        }
-
-        // Return filename list to RPC caller.
-        for (const auto &fn : filename_list)
-            response->add_filename_list(fn);
-    }
+        fs::GetMetadataResponse* response) override;
 
     grpc::Status WriteFiles(
         grpc::ServerContext* context,
         const fs::WriteFilesRequest* request,
-        fs::WriteFilesResponse* response) override
-    {
-        try {
-            _WriteFiles(request, response);
-            return grpc::Status::OK;
-        } catch (const std::exception &e) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
-        } catch (...) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in WriteFiles");
-        }
-    }
-
-    // ---- SubscribeFiles ----
-
-    // Subscribes to file write notifications from FileWriter.
-    // If the client closes the connection, exits gracefully.
-    //
-    // Note: gRPC's server-streaming model provides one thread of execution per connection
-    // via gRPC's internal thread pool.
-    //
-    // Each response has (filename, error_message). Empty error_message indicates success.
-    void _subscribe_files(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
-    {
-        shared_ptr<FrbServer> s = _lock_state();
-        shared_ptr<FileWriter> file_writer = s->params.file_writer;
-
-        // Create subscriber and register with FileWriter.
-        auto subscriber = make_shared<FileWriter::RpcSubscriber>();
-        file_writer->add_subscriber(subscriber);
-
-        // Loop over entries in subscriber's queue.
-        for (;;) {
-            // Check if client has disconnected.
-            if (context->IsCancelled())
-                return;
-
-            unique_lock<std::mutex> subscriber_lock(subscriber->mutex);
-
-            // Wait for queue entry, stop signal, or error (with 0.5 sec timeout).
-            // Timeout ensures context->IsCancelled() is checked regularly.
-            subscriber->cv.wait_for(subscriber_lock, std::chrono::milliseconds(500), [&subscriber]() {
-                return !subscriber->queue.empty() || subscriber->is_stopped || subscriber->error;
-            });
-
-            // Check for error condition.
-            if (subscriber->error)
-                std::rethrow_exception(subscriber->error);
-
-            // If queue is empty, loop back to check context->IsCancelled().
-            if (subscriber->queue.empty()) {
-                if (subscriber->is_stopped)
-                    return;
-                continue;
-            }
-
-            // Pop entry from queue.
-            FileWriter::WriteStatus write_status = std::move(subscriber->queue.front());
-            subscriber->queue.pop();
-
-            subscriber_lock.unlock();
-
-            // Build response with (filename, error_message).
-            // Empty error_message indicates success.
-            fs::SubscribeFilesResponse response;
-            response.set_filename(write_status.save_path.string());
-
-            if (write_status.error) {
-                try {
-                    std::rethrow_exception(write_status.error);
-                } catch (const std::exception &e) {
-                    // e.what() may return empty string; replace with "Unknown error".
-                    const char *msg = e.what();
-                    response.set_error_message((msg && msg[0]) ? msg : "Unknown error");
-                } catch (...) {
-                    response.set_error_message("Unknown error");
-                }
-            } else {
-                response.set_error_message("");  // Empty error_message indicates success.
-            }
-
-            // Write() returns false if the stream has been closed by the client.
-            if (!writer->Write(response))
-                return;
-        }
-    }
+        fs::WriteFilesResponse* response) override;
 
     grpc::Status SubscribeFiles(
         grpc::ServerContext* context,
         const fs::SubscribeFilesRequest* request,
-        grpc::ServerWriter<fs::SubscribeFilesResponse>* writer) override
-    {
-        try {
-            _subscribe_files(context, writer);
-            return grpc::Status::OK;
-        } catch (const std::exception &e) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
-        } catch (...) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in SubscribeFiles");
-        }
-    }
+        grpc::ServerWriter<fs::SubscribeFilesResponse>* writer) override;
 };
-
 
 
 // -------------------------------------------------------------------------------------------------
@@ -613,5 +348,306 @@ void FrbServer::reaper_thread_main()
     }
 }
 
+
+// ------------------------------------------------------------------------------------------
+//
+// FrbRpcService implementation
+
+    
+// Helper to lock the weak_ptr. Throws if the server is exiting.
+shared_ptr<FrbServer> FrbRpcService::_lock_state()
+{
+    auto s = state.lock();
+    if (!s)
+        throw runtime_error("FrbServer is in the process of exiting");
+    return s;
+}
+
+// ---- GetStatus ----
+
+void FrbRpcService::_GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+
+    // Call Receiver::get_status() for each receiver,
+    // and sum the results over receivers.
+    long total_conn = 0, total_bytes = 0;
+    for (auto &r : s->params.receivers) {
+        long nc, nb;
+        r->get_status(nc, nb);
+        total_conn += nc;
+        total_bytes += nb;
+    }
+    response->set_num_connections(total_conn);
+    response->set_num_bytes(total_bytes);
+
+    // Get ring buffer state under lock.
+    {
+        lock_guard<std::mutex> lock(s->mutex);
+        response->set_rb_start(s->rb_start);
+        response->set_rb_reaped(s->rb_reaped);
+        response->set_rb_finalized(s->rb_finalized);
+        response->set_rb_end(s->rb_end);
+    }
+
+    // Get num_free_frames from the allocator (permissive=true to handle uninitialized state).
+    auto &allocator = s->params.receivers[0]->params.allocator;
+    response->set_num_free_frames(allocator->num_free_frames(/*permissive=*/true));
+}
+
+grpc::Status FrbRpcService::GetStatus(
+    grpc::ServerContext* context,
+    const fs::GetStatusRequest* request,
+    fs::GetStatusResponse* response) 
+{
+    try {
+        _GetStatus(request, response);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetStatus");
+    }
+}
+
+// ---- GetMetadata ----
+
+void FrbRpcService::_GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+
+    // Check has_metadata under lock, then release.
+    // Safe because has_metadata transitions false->true exactly once,
+    // and metadata is immutable after being set.
+    bool has_metadata;
+    {
+        lock_guard<std::mutex> lock(s->mutex);
+        has_metadata = s->has_metadata;
+    }
+
+    if (has_metadata) {
+        response->set_yaml_string(s->metadata.to_yaml_string(request->verbose()));
+    } else {
+        response->set_yaml_string("");
+    }
+}
+
+grpc::Status FrbRpcService::GetMetadata(
+    grpc::ServerContext* context,
+    const fs::GetMetadataRequest* request,
+    fs::GetMetadataResponse* response) 
+{
+    try {
+        _GetMetadata(request, response);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetMetadata");
+    }
+}
+
+// ---- WriteFiles ----
+
+void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+    shared_ptr<FileWriter> file_writer = s->params.file_writer;
+
+    // Convert beam_ids to beam_indices.
+    vector<int> beam_indices;
+    beam_indices.reserve(request->beams_size());
+
+    for (int i = 0; i < request->beams_size(); i++) {
+        long beam_id = request->beams(i);
+        auto it = s->beam_id_to_index.find(beam_id);
+        if (it == s->beam_id_to_index.end()) {
+            stringstream ss;
+            ss << "WriteFiles: unknown beam_id " << beam_id;
+            throw runtime_error(ss.str());
+        }
+        beam_indices.push_back(it->second);
+    }
+
+    // Validate time_chunk_index range.
+    long min_time_chunk_index = request->min_time_chunk_index();
+    long max_time_chunk_index = request->max_time_chunk_index();
+
+    if ((min_time_chunk_index < 0) || (min_time_chunk_index > max_time_chunk_index)) {
+        stringstream ss;
+        ss << "WriteFiles: invalid time_chunk_index range [" << min_time_chunk_index
+            << ", " << max_time_chunk_index << "]";
+        throw runtime_error(ss.str());
+    }
+
+    // Construct FilenamePattern (validates that pattern contains "(BEAM)" and "(CHUNK)").
+    FilenamePattern filename_pattern(request->filename_pattern());
+
+    // Get frames from ring buffer.
+    // We compute frame_id = time_chunk_index * nbeams + beam_index directly for each
+    // (time_chunk_index, beam_index) pair, rather than iterating over the entire ring
+    // buffer and checking each frame's metadata. This is O(num_time_chunks * num_beams)
+    // instead of O(ringbuf_size).
+
+    vector<shared_ptr<AssembledFrame>> local_frames;
+
+    long num_time_chunks = max_time_chunk_index - min_time_chunk_index + 1;
+    local_frames.reserve(num_time_chunks * beam_indices.size());
+
+    unique_lock<std::mutex> server_lock(s->mutex);
+
+    long rb_nbeams = s->metadata.nbeams;
+    long rb_size = s->frame_ringbuf.size();
+    long rb_start = s->rb_start;
+    long rb_end = s->rb_end;
+
+    min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
+    max_time_chunk_index = min(max_time_chunk_index, rb_end / rb_nbeams);
+
+    for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
+        for (int b : beam_indices) {
+            long frame_id = t * rb_nbeams + b;
+            if ((frame_id >= rb_start) && (frame_id < rb_end)) {
+                long rb_slot = frame_id % rb_size;
+                local_frames.push_back(s->frame_ringbuf[rb_slot]);
+            }
+        }
+    }
+
+    server_lock.unlock();
+
+    // Process frames in reverse order: push filenames onto frame->save_paths,
+    // then call file_writer->process_frame(). Reverse order ensures that frames
+    // with lower time_chunk_index are processed last (and appear earlier in queues).
+
+    vector<string> filename_list;
+    filename_list.reserve(local_frames.size());
+
+    for (auto it = local_frames.rbegin(); it != local_frames.rend(); ++it) {
+        auto &frame = *it;
+
+        unique_lock<std::mutex> frame_lock(frame->mutex);
+
+        // Skip if frame has already been reaped.
+        if (frame->data.size == 0)
+            continue;
+
+        string filename = filename_pattern.expand(frame);
+        frame->save_paths.push_back(filename);
+        frame_lock.unlock();
+
+        file_writer->process_frame(frame);
+        filename_list.push_back(std::move(filename));
+    }
+
+    // Return filename list to RPC caller.
+    for (const auto &fn : filename_list)
+        response->add_filename_list(fn);
+}
+
+grpc::Status FrbRpcService::WriteFiles(
+    grpc::ServerContext* context,
+    const fs::WriteFilesRequest* request,
+    fs::WriteFilesResponse* response) 
+{
+    try {
+        _WriteFiles(request, response);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in WriteFiles");
+    }
+}
+
+// ---- SubscribeFiles ----
+
+// Subscribes to file write notifications from FileWriter.
+// If the client closes the connection, exits gracefully.
+//
+// Note: gRPC's server-streaming model provides one thread of execution per connection
+// via gRPC's internal thread pool.
+//
+// Each response has (filename, error_message). Empty error_message indicates success.
+void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+    shared_ptr<FileWriter> file_writer = s->params.file_writer;
+
+    // Create subscriber and register with FileWriter.
+    auto subscriber = make_shared<FileWriter::RpcSubscriber>();
+    file_writer->add_subscriber(subscriber);
+
+    // Loop over entries in subscriber's queue.
+    for (;;) {
+        // Check if client has disconnected.
+        if (context->IsCancelled())
+            return;
+
+        unique_lock<std::mutex> subscriber_lock(subscriber->mutex);
+
+        // Wait for queue entry, stop signal, or error (with 0.5 sec timeout).
+        // Timeout ensures context->IsCancelled() is checked regularly.
+        subscriber->cv.wait_for(subscriber_lock, std::chrono::milliseconds(500), [&subscriber]() {
+            return !subscriber->queue.empty() || subscriber->is_stopped || subscriber->error;
+        });
+
+        // Check for error condition.
+        if (subscriber->error)
+            std::rethrow_exception(subscriber->error);
+
+        // If queue is empty, loop back to check context->IsCancelled().
+        if (subscriber->queue.empty()) {
+            if (subscriber->is_stopped)
+                return;
+            continue;
+        }
+
+        // Pop entry from queue.
+        FileWriter::WriteStatus write_status = std::move(subscriber->queue.front());
+        subscriber->queue.pop();
+
+        subscriber_lock.unlock();
+
+        // Build response with (filename, error_message).
+        // Empty error_message indicates success.
+        fs::SubscribeFilesResponse response;
+        response.set_filename(write_status.save_path.string());
+
+        if (write_status.error) {
+            try {
+                std::rethrow_exception(write_status.error);
+            } catch (const std::exception &e) {
+                // e.what() may return empty string; replace with "Unknown error".
+                const char *msg = e.what();
+                response.set_error_message((msg && msg[0]) ? msg : "Unknown error");
+            } catch (...) {
+                response.set_error_message("Unknown error");
+            }
+        } else {
+            response.set_error_message("");  // Empty error_message indicates success.
+        }
+
+        // Write() returns false if the stream has been closed by the client.
+        if (!writer->Write(response))
+            return;
+    }
+}
+
+grpc::Status FrbRpcService::SubscribeFiles(
+    grpc::ServerContext* context,
+    const fs::SubscribeFilesRequest* request,
+    grpc::ServerWriter<fs::SubscribeFilesResponse>* writer) 
+{
+    try {
+        _SubscribeFiles(context, writer);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in SubscribeFiles");
+    }
+}
+    
 
 }  // namespace pirate
