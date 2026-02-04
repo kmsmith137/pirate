@@ -146,7 +146,7 @@ private:
     void reader_main();
 
     // Helpers for reading data.
-    void _post_receive(Peer *peer);
+    void _read_data(Peer *peer);
     void _post_metadata(Peer *peer);
     void _process_4bit_data(Peer *peer, const char *buf, long nsegments);
     char *_find_frame(long ichunk, long ibeam);

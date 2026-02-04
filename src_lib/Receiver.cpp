@@ -328,7 +328,6 @@ void Receiver::_reader_main()
 
         for (int i = 0; i < num_events; i++) {
             Peer *peer = static_cast<Peer *>(epoll.events[i].data.ptr);
-            Socket &sock = peer->socket;
             uint32_t ev_flags = epoll.events[i].events;
 
             xassert(peer != nullptr);
@@ -342,20 +341,10 @@ void Receiver::_reader_main()
 
             // Data available to read.
             if (ev_flags & EPOLLIN) {
-                char *buf = peer->recv_buf.data + peer->recv_nbytes;
-                long bufsize = peer->recv_buf.size - peer->recv_nbytes;
-                long nbytes = sock.read(buf, bufsize);
+                this->_read_data(peer);
 
-                if (nbytes > 0) {
-                    peer->recv_nbytes += nbytes;
-                    this->num_bytes.fetch_add(nbytes);
-                    this->_post_receive(peer);
-                }
-
-                if (sock.eof)
+                if (peer->socket.eof)
                     peers_to_remove.push_back(peer);
-
-                // If nbytes == 0 and !sock.eof, it's just "would block" - do nothing.
             }
         }
 
@@ -377,17 +366,27 @@ void Receiver::_reader_main()
 }
 
 
-// Called after data is read from socket into peer->recv_buf.
-// The caller has already incremented peer->recv_nbytes.
+// Called after when peer->socket is ready for reading.
 // Reference for network protocol: notes/network_protocol.md.
 
-void Receiver::_post_receive(Peer *peer)
+void Receiver::_read_data(Peer *peer)
 {
     // Receive bufsize must always be a multiple of 128 (see below).
     static_assert((initial_recv_bufsize % 128) == 0);
 
     char *recv_buf = peer->recv_buf.data;
     long recv_nbytes = peer->recv_nbytes;
+    long recv_capacity = peer->recv_buf.size;
+
+    long nbytes = peer->socket.read(recv_buf + recv_nbytes, recv_capacity - recv_nbytes);
+
+    // If nbytes == 0 and !sock.eof, it's just "would block" - do nothing.
+    if (nbytes <= 0)
+        return;
+
+    recv_nbytes += nbytes;
+    peer->recv_nbytes = recv_nbytes;
+    this->num_bytes.fetch_add(nbytes);
     
     if (peer->state == Peer::State::ReadMagic) {
         if (recv_nbytes < 4)
