@@ -111,6 +111,21 @@ void FakeCorrelator::join()
 }
 
 
+bool FakeCorrelator::wait(int timeout_ms)
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    long nworkers = long(workers.size());
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+    while (num_workers_exited < nworkers) {
+        if (cv.wait_until(lock, deadline) == std::cv_status::timeout)
+            return false;
+    }
+
+    return true;
+}
+
+
 void FakeCorrelator::worker_main(long endpoint_index)
 {
     const string &ip_addr = endpoints.at(endpoint_index).ip_addr;
@@ -127,12 +142,20 @@ void FakeCorrelator::worker_main(long endpoint_index)
         stop(std::current_exception());
     }
 
-    stringstream ss;
-    ss << ip_addr << ": exiting, sent " << nbytes_to_str(nbytes_sent);
-    if (!errmsg.empty())
-        ss << " [error: " << errmsg << "]";
-    ss << "\n";
-    cout << ss.str() << flush;
+    {
+        stringstream ss;
+        ss << ip_addr << ": exiting, sent " << nbytes_to_str(nbytes_sent);
+        if (!errmsg.empty())
+            ss << " [error: " << errmsg << "]";
+        ss << "\n";
+        cout << ss.str() << flush;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        num_workers_exited++;
+        cv.notify_all();
+    }
 }
 
 

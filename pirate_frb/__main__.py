@@ -493,10 +493,12 @@ def send(args):
 
         correlator.start()
 
-        # Block until Ctrl-C or worker threads exit (e.g. receiver closes connections).
+        # Wait for workers to exit (e.g. receiver closes connections).
+        # Use wait() with a timeout so that CPython can process SIGINT between iterations.
         # The context manager calls stop()+join() on exit.
         try:
-            correlator.join()
+            while not correlator.wait(500):
+                pass
         except KeyboardInterrupt:
             print("\nInterrupted, stopping...")
 

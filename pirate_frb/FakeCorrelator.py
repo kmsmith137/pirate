@@ -30,6 +30,10 @@ class FakeCorrelator:
         self.cpp_correlator.join()
 
 
+    def wait(self, timeout_ms=500):
+        return self.cpp_correlator.wait(timeout_ms)
+
+
     def __enter__(self):
         return self
 

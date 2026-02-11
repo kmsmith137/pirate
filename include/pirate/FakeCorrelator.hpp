@@ -65,6 +65,10 @@ struct FakeCorrelator
     // Block until all worker threads have exited.
     void join();
 
+    // Wait until all workers have exited, or timeout expires.
+    // Returns true if all workers exited, false on timeout.
+    bool wait(int timeout_ms);
+
     // ----- Noncopyable, nonmoveable -----
 
     FakeCorrelator(const FakeCorrelator &) = delete;
@@ -94,6 +98,7 @@ private:
     bool is_stopped = false;
     bool is_started = false;
     std::exception_ptr error;
+    long num_workers_exited = 0;
 
     // Worker threads (created in start()).
     std::vector<std::thread> workers;

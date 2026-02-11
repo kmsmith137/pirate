@@ -611,6 +611,12 @@ void register_core_bindings(pybind11::module &m)
         .def("join", &FakeCorrelator::join,
              py::call_guard<py::gil_scoped_release>(),
              "Block until all worker threads have exited.")
+
+        .def("wait", &FakeCorrelator::wait,
+             py::arg("timeout_ms"),
+             py::call_guard<py::gil_scoped_release>(),
+             "Wait until all workers have exited, or timeout expires.\n"
+             "Returns True if all workers exited, False on timeout.")
     ;
         
     py::class_<FakeServer>(m, "FakeServer")
