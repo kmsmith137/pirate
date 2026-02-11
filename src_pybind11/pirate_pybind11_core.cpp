@@ -589,14 +589,28 @@ void register_core_bindings(pybind11::module &m)
                "Stop the writer. Safe to call multiple times.")
     ;
     
+    // FakeCorrelator: simulates a correlator sending data over TCP.
+    // Skipped members: mutex, cv, is_stopped, is_started, error, workers, endpoints (internal state)
+    // Skipped methods: _throw_if_stopped, worker_main, _worker_main, _send_all (private)
     py::class_<FakeCorrelator>(m, "FakeCorrelator")
         .def(py::init<long, bool, bool, bool>(),
              py::arg("send_bufsize"), py::arg("use_zerocopy"), py::arg("use_mmap"), py::arg("use_hugepages"))
 
         .def("add_endpoint", &FakeCorrelator::add_endpoint,
-             py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("total_gpbs"), py::arg("vcpu_list"))
+             py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("total_gbps"), py::arg("vcpu_list"),
+             "Add an endpoint. Must be called before start().")
 
-        .def("run", &FakeCorrelator::run)  // no args
+        .def("start", &FakeCorrelator::start,
+             py::call_guard<py::gil_scoped_release>(),
+             "Create worker threads and begin sending data.")
+
+        .def("stop", [](FakeCorrelator &self) { self.stop(); },
+             py::call_guard<py::gil_scoped_release>(),
+             "Signal worker threads to stop. Safe to call multiple times.")
+
+        .def("join", &FakeCorrelator::join,
+             py::call_guard<py::gil_scoped_release>(),
+             "Block until all worker threads have exited.")
     ;
         
     py::class_<FakeServer>(m, "FakeServer")

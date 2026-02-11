@@ -2,7 +2,6 @@
 #include "../include/pirate/network_utils.hpp"  // Socket
 #include "../include/pirate/system_utils.hpp"   // set_thread_affinity()
 
-#include <thread>
 #include <sstream>
 #include <iostream>
 
@@ -20,95 +19,134 @@ namespace pirate {
 #endif
 
 
-FakeCorrelator::FakeCorrelator(long send_bufsize_, bool use_zerocopy_, bool use_mmap_, bool use_hugepages_) :
-    barrier(0)  // Barrier will be initialized in run()
+FakeCorrelator::FakeCorrelator(long send_bufsize_, bool use_zerocopy_, bool use_mmap_, bool use_hugepages_)
 {
+    xassert(send_bufsize_ > 0);
+
     this->send_bufsize = send_bufsize_;
     this->use_zerocopy = use_zerocopy_;
     this->use_mmap = use_mmap_;
     this->use_hugepages = use_hugepages_;
-    
-    xassert(send_bufsize > 0);
+}
+
+
+FakeCorrelator::~FakeCorrelator()
+{
+    this->stop();
+    this->join();
+}
+
+
+void FakeCorrelator::_throw_if_stopped(const char *method_name)
+{
+    // Caller must hold mutex.
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped)
+        throw runtime_error(string(method_name) + " called on stopped instance");
 }
 
 
 void FakeCorrelator::add_endpoint(const string &ip_addr, long num_tcp_connections, double total_gbps, const vector<int> &vcpu_list)
 {
+    std::lock_guard<std::mutex> lock(mutex);
+    _throw_if_stopped("FakeCorrelator::add_endpoint");
+
+    if (is_started)
+        throw runtime_error("FakeCorrelator::add_endpoint() called after start()");
+
     Endpoint e;
     e.ip_addr = ip_addr;
     e.num_tcp_connections = num_tcp_connections;
     e.total_gbps = total_gbps;
     e.vcpu_list = vcpu_list;
 
-    this->endpoints.push_back(e);
+    endpoints.push_back(e);
 }
 
 
-static void sender_thread_main(FakeCorrelator *correlator, long endpoint_index)
+void FakeCorrelator::start()
 {
-    try {
-        correlator->sender_main(endpoint_index);
-    } catch (const exception &exc) {
-        correlator->abort(exc.what());
+    std::unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("FakeCorrelator::start");
+
+    if (is_started)
+        throw runtime_error("FakeCorrelator::start() called twice");
+
+    if (endpoints.empty())
+        throw runtime_error("FakeCorrelator::start() called with no endpoints");
+
+    is_started = true;
+    lock.unlock();
+
+    long num_endpoints = endpoints.size();
+    workers.resize(num_endpoints);
+
+    for (long i = 0; i < num_endpoints; i++)
+        workers[i] = std::thread(&FakeCorrelator::worker_main, this, i);
+}
+
+
+void FakeCorrelator::stop(std::exception_ptr e)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+
+    if (is_stopped)
+        return;
+
+    is_stopped = true;
+    error = e;
+    cv.notify_all();
+}
+
+
+void FakeCorrelator::join()
+{
+    for (auto &w : workers) {
+        if (w.joinable())
+            w.join();
     }
 }
 
 
-void FakeCorrelator::run()
+void FakeCorrelator::worker_main(long endpoint_index)
 {
-    long num_endpoints = this->endpoints.size();
-    xassert(num_endpoints >= 0);
-
-    cout << "\n"
-         << "Warning: this half-finished program will \"hang\" unless you wait to\n"
-         << "start it until after the receiver is fully initialized. The receiver is\n"
-         << "fully initialized when every TcpReceiver thread prints a line like this:\n"
-         << "\n"
-         << "  TcpReceiver(10.1.1.2, 1 connections, use_epoll=1): listening for TCP connections\n"
-         << endl;
-    
-    barrier.initialize(num_endpoints+1);
-    vector<std::thread> threads(num_endpoints);
-
-    for (long i = 0; i < num_endpoints; i++)
-        threads.at(i) = std::thread(sender_thread_main, this, i);
-
-    barrier.wait();
-    
-    stringstream ss;
-    ss << "All TCP connections active, sending data.\n"
-       << "Data will be sent until the receiver closes the connections.\n";
-    cout << ss.str() << flush;
-
-    barrier.wait();
-    
-    for (int ithread = 0; ithread < num_endpoints; ithread++)
-        threads[ithread].join();
+    try {
+        _worker_main(endpoint_index);
+    } catch (...) {
+        stop(std::current_exception());
+    }
 }
 
 
-void FakeCorrelator::abort(const string &msg)
+bool FakeCorrelator::_send_all(Socket &sock, const void *buf, long nbytes)
 {
-    std::unique_lock<mutex> lk(lock);
-        
-    if (aborted)
-        return;
-        
-    this->aborted = true;
-    this->abort_msg = msg;
-    cout << msg << endl;
+    const char *ptr = static_cast<const char *>(buf);
+    long pos = 0;
+
+    while (pos < nbytes) {
+        // Check if stopped.
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (is_stopped)
+                return false;
+        }
+
+        // Try to send with short timeout.
+        long n = sock.send_with_timeout(ptr + pos, nbytes - pos, send_timeout_ms);
+
+        if (sock.connreset)
+            return false;
+
+        pos += n;
+    }
+
+    return true;
 }
 
 
-void FakeCorrelator::throw_exception_if_aborted()
-{
-    std::unique_lock<mutex> lk(lock);
-    if (aborted)
-        throw runtime_error(abort_msg);
-}
-
-    
-void FakeCorrelator::sender_main(long endpoint_index)
+void FakeCorrelator::_worker_main(long endpoint_index)
 {
     xassert(endpoint_index >= 0);
     xassert(endpoint_index < long(endpoints.size()));
@@ -116,54 +154,46 @@ void FakeCorrelator::sender_main(long endpoint_index)
 
     long nconn = e.num_tcp_connections;
     set_thread_affinity(e.vcpu_list);
-    
-    stringstream ss;
-    ss << e.ip_addr << ": creating " << nconn << " TCP connections\n";
-    cout << ss.str() << flush;
-    
+
+    {
+        stringstream ss;
+        ss << e.ip_addr << ": creating " << nconn << " TCP connection(s)\n";
+        cout << ss.str() << flush;
+    }
+
     int aflags = ksgpu::af_uhost;
     if (use_mmap)
         aflags |= (use_hugepages ? ksgpu::af_mmap_huge : ksgpu::af_mmap_small);
-    
+
     shared_ptr<char> buf = ksgpu::af_alloc<char> (send_bufsize, aflags);
     vector<Socket> sockets;
 
     for (long i = 0; i < nconn; i++) {
         sockets.push_back(Socket(PF_INET, SOCK_STREAM));
         Socket &socket = sockets[i];
-        
-        // later: consider setsockopt(SO_RCVBUF), setsockopt(SO_SNDBUF), setsockopt(TCP_MAXSEG)
+
+        // FIXME connect() can block for a long time if receiver is not running.
         socket.connect(e.ip_addr, 8787);  // TCP port 8787
 
         if (e.total_gbps > 0.0) {
             double nbytes_per_sec = e.total_gbps / nconn / 8.0e-9;
             socket.set_pacing_rate(nbytes_per_sec);
         }
-    
+
         if (use_zerocopy)
             socket.set_zerocopy();
     }
 
-    this->barrier.wait();    
-    this->barrier.wait();
-    
-    long nbytes_total = 0;
+    {
+        stringstream ss;
+        ss << e.ip_addr << ": " << nconn << " TCP connection(s) active, sending data\n";
+        cout << ss.str() << flush;
+    }
 
     for (;;) {
         for (long i = 0; i < nconn; i++) {
-            Socket &socket = sockets[i];
-
-            // FIXME should have a flag in socket.send() to enable this loop automatically
-            long pos = 0;
-            while (pos < send_bufsize) {
-                long nbytes_sent = socket.send(buf.get() + pos, send_bufsize - pos);
-                throw_exception_if_aborted();
-                if (socket.connreset)
-                    return;
-                pos += nbytes_sent;
-            }
-            
-            nbytes_total += send_bufsize;
+            if (!_send_all(sockets[i], buf.get(), send_bufsize))
+                return;
         }
     }
 }

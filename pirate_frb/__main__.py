@@ -487,12 +487,18 @@ def send(args):
         print(f"  - The flag '--chord X', which is also equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
         sys.exit(2)
 
-    correlator = FakeCorrelator(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True)
+    with FakeCorrelator(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True) as correlator:
+        for ip_addr in ip_addrs:
+            correlator.add_endpoint(ip_addr, tcp_connections_per_ip_address, args.rate)
 
-    for ip_addr in ip_addrs:
-        correlator.add_endpoint(ip_addr, tcp_connections_per_ip_address, args.rate)
+        correlator.start()
 
-    correlator.run()
+        # Block until Ctrl-C or worker threads exit (e.g. receiver closes connections).
+        # The context manager calls stop()+join() on exit.
+        try:
+            correlator.join()
+        except KeyboardInterrupt:
+            print("\nInterrupted, stopping...")
 
 
 ######################################   scratch command  #######################################
