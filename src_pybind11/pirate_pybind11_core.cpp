@@ -23,6 +23,8 @@
 #include "../include/pirate/Receiver.hpp"
 #include "../include/pirate/FrbServer.hpp"
 #include "../include/pirate/FileWriter.hpp"
+#include "../include/pirate/FakeCorrelator.hpp"
+#include "../include/pirate/FakeServer.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -585,6 +587,49 @@ void register_core_bindings(pybind11::module &m)
                "    num_nfs_threads: Number of threads for NFS copies (default 2)")
           .def("stop", [](FileWriter &self) { self.stop(); },
                "Stop the writer. Safe to call multiple times.")
+    ;
+    
+    py::class_<FakeCorrelator>(m, "FakeCorrelator")
+        .def(py::init<long, bool, bool, bool>(),
+             py::arg("send_bufsize"), py::arg("use_zerocopy"), py::arg("use_mmap"), py::arg("use_hugepages"))
+
+        .def("add_endpoint", &FakeCorrelator::add_endpoint,
+             py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("total_gpbs"), py::arg("vcpu_list"))
+
+        .def("run", &FakeCorrelator::run)  // no args
+    ;
+        
+    py::class_<FakeServer>(m, "FakeServer")
+        .def(py::init<const std::string &, bool>(),
+             py::arg("server_name"), py::arg("use_hugepages"))
+
+        .def("add_tcp_receiver", &FakeServer::add_tcp_receiver,
+             py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("recv_bufsize"),
+             py::arg("use_epoll"), py::arg("vcpu_list"), py::arg("cpu"), py::arg("inic"))
+
+        .def("add_chime_dedisperser", &FakeServer::add_chime_dedisperser,
+             py::arg("device"), py::arg("beams_per_gpu"), py::arg("num_active_batches"),
+             py::arg("beams_per_batch"), py::arg("use_copy_engine"), py::arg("vcpu_list"),
+             py::arg("cpu"))
+        
+        .def("add_memcpy_thread", &FakeServer::add_memcpy_thread,
+             py::arg("src_device"), py::arg("dst_device"), py::arg("blocksize"),
+             py::arg("use_copy_engine"), py::arg("vcpu_list"), py::arg("cpu"))
+        
+        .def("add_ssd_writer", &FakeServer::add_ssd_writer,
+             py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"),
+             py::arg("cpu"), py::arg("issd"))
+
+        .def("add_downsampling_thread", &FakeServer::add_downsampling_thread,
+             py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"),
+             py::arg("cpu"))
+
+         // Called by python code, to control server.
+        .def("abort", &FakeServer::abort, py::arg("abort_msg"))
+        .def("join_threads", &FakeServer::join_threads)
+        .def("show_stats", &FakeServer::show_stats)
+        .def("start", &FakeServer::start)
+        .def("stop", &FakeServer::stop)
     ;
 }
 
