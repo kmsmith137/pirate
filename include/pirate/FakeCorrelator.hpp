@@ -101,8 +101,8 @@ private:
     // Helper: check if stopped, with lock held by caller.
     void _throw_if_stopped(const char *method_name);
 
-    // Worker thread main function.
-    void _worker_main(long endpoint_index);
+    // Worker thread main function. Returns total bytes sent.
+    long _worker_main(long endpoint_index);
 
     // Wrapper that catches exceptions and calls stop().
     void worker_main(long endpoint_index);

@@ -6,6 +6,7 @@
 #include <iostream>
 
 #include <ksgpu/mem_utils.hpp>
+#include <ksgpu/string_utils.hpp>  // nbytes_to_str()
 #include <ksgpu/xassert.hpp>
 
 
@@ -112,11 +113,26 @@ void FakeCorrelator::join()
 
 void FakeCorrelator::worker_main(long endpoint_index)
 {
+    const string &ip_addr = endpoints.at(endpoint_index).ip_addr;
+    string errmsg;
+    long nbytes_sent = 0;
+
     try {
-        _worker_main(endpoint_index);
+        nbytes_sent = _worker_main(endpoint_index);
+    } catch (const exception &exc) {
+        errmsg = exc.what();
+        stop(std::current_exception());
     } catch (...) {
+        errmsg = "unknown exception";
         stop(std::current_exception());
     }
+
+    stringstream ss;
+    ss << ip_addr << ": exiting, sent " << nbytes_to_str(nbytes_sent);
+    if (!errmsg.empty())
+        ss << " [error: " << errmsg << "]";
+    ss << "\n";
+    cout << ss.str() << flush;
 }
 
 
@@ -146,7 +162,7 @@ bool FakeCorrelator::_send_all(Socket &sock, const void *buf, long nbytes)
 }
 
 
-void FakeCorrelator::_worker_main(long endpoint_index)
+long FakeCorrelator::_worker_main(long endpoint_index)
 {
     xassert(endpoint_index >= 0);
     xassert(endpoint_index < long(endpoints.size()));
@@ -190,10 +206,13 @@ void FakeCorrelator::_worker_main(long endpoint_index)
         cout << ss.str() << flush;
     }
 
+    long nbytes_sent = 0;
+
     for (;;) {
         for (long i = 0; i < nconn; i++) {
             if (!_send_all(sockets[i], buf.get(), send_bufsize))
-                return;
+                return nbytes_sent;
+            nbytes_sent += send_bufsize;
         }
     }
 }
