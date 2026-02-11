@@ -5,7 +5,6 @@
 #include <cstring>    // memcpy
 #include <sstream>
 #include <stdexcept>
-#include <unordered_map>
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/xassert.hpp>
@@ -57,11 +56,25 @@ struct Receiver::Peer
     Array<char> rb_buf;           // length (rb_capacity)
     long rb_capacity = 0;
 
+    // Mutex/cv protect "ring buffer state" only.
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::exception_ptr error;
+    bool is_stopped = false;
+
     // Ring buffer state.
     long rb_start = 0;
     long rb_end = 0;
 
     explicit Peer(Socket sock);
+    ~Peer();
+
+    // Put Peer into stopped state.
+    // If 'e' is non-null, it represents an error; otherwise normal termination.
+    void stop(std::exception_ptr e = nullptr);
+
+    // Caller must hold mutex.
+    void _throw_if_stopped(const char *method_name);    
 };
 
 
@@ -69,6 +82,38 @@ Receiver::Peer::Peer(Socket sock)
     : socket(std::move(sock))
 {
     xassert(socket.fd >= 0);
+}
+
+
+Receiver::Peer::~Peer()
+{
+    this->stop();
+}
+
+
+void Receiver::Peer::stop(std::exception_ptr e)
+{
+    unique_lock<std::mutex> lock(mutex);
+
+    if (is_stopped)
+        return;
+
+    is_stopped = true;
+    error = e;
+
+    lock.unlock();
+    cv.notify_all();
+}
+
+
+// Caller must hold mutex.
+void Receiver::Peer::_throw_if_stopped(const char *method_name)
+{
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped)
+        throw runtime_error(string(method_name) + " called on stopped instance");
 }
 
 
@@ -118,7 +163,7 @@ Receiver::Receiver(const Params &p) : params(p)
 
 void Receiver::start()
 {
-    lock_guard<std::mutex> lock(mutex);
+    unique_lock<std::mutex> lock(mutex);
 
     if (is_started)
         throw runtime_error("Receiver::start() called twice");
@@ -126,10 +171,12 @@ void Receiver::start()
         throw runtime_error("Receiver::start() called after stop()");
 
     is_started = true;
+    lock.unlock();
 
-    // Spawn both worker threads.
+    // Spawn worker threads.
     listener_thread = std::thread(&Receiver::listener_main, this);
     reader_thread = std::thread(&Receiver::reader_main, this);
+    assembler_thread = std::thread(&Receiver::assembler_main, this);
 }
 
 
@@ -139,8 +186,12 @@ Receiver::~Receiver()
 
     if (listener_thread.joinable())
         listener_thread.join();
+
     if (reader_thread.joinable())
         reader_thread.join();
+
+    if (assembler_thread.joinable())
+        assembler_thread.join();
 }
 
 
@@ -153,13 +204,32 @@ void Receiver::get_status(long &out_num_connections, long &out_nbytes_cumul)
 
 void Receiver::stop(std::exception_ptr e)
 {
-    lock_guard<std::mutex> lock(mutex);
+    unique_lock<std::mutex> lock(mutex);
 
     if (is_stopped)
         return;
 
     is_stopped = true;
     error = e;
+
+    // While holding Receiver::mutex, call Peer::stop() on all peers in sight.
+
+    for (const auto& [raw_ptr, peer]: this->active_peers) {
+        if (peer)
+            peer->stop(e);
+    }
+
+    for (const shared_ptr<Peer> &peer: this->reader_peer_queue) {
+        if (peer) 
+            peer->stop(e);
+    }
+
+    for (const shared_ptr<Peer> &peer: this->assembler_peer_queue) {
+        if (peer)
+            peer->stop(e);
+    }
+
+    lock.unlock();
 
     params.allocator->stop();
     cv.notify_all();
@@ -235,15 +305,13 @@ void Receiver::_listener_main()
     listening_socket.bind(ip_addr, tcp_port);
     listening_socket.listen();
 
-    while (true) {
-        // Check if stopped.
-        {
-            lock_guard<std::mutex> lock(mutex);
-            if (is_stopped)
-                return;
-        }
+    for (;;) {
+        unique_lock<std::mutex> lock(mutex);
+        if (is_stopped) return;
+        lock.unlock();
 
-        // Accept with timeout, so we can check is_stopped frequently.
+        // Call accept() without lock held, and with a ~10ms timeout so that we
+        // regularly check for calls to Receiver::stop() (via is_stopped).
         Socket new_socket = listening_socket.accept(accept_timeout_ms);
 
         // Timeout expired, loop again.
@@ -253,11 +321,13 @@ void Receiver::_listener_main()
         // Create Peer (which owns the Socket) and hand off to reader thread.
         auto peer_ptr = make_shared<Peer> (std::move(new_socket));
 
-        {
-            lock_guard<std::mutex> lock(mutex);
-            pending_peers.push_back(peer_ptr);
-            cv.notify_all();
-        }
+        lock.lock();
+        if (is_stopped) return;
+        reader_peer_queue.push_back(peer_ptr);
+        lock.unlock();
+
+        // Wake up reader thread.
+        cv.notify_all();
     }
 }
 
@@ -279,26 +349,27 @@ void Receiver::reader_main()
 
 void Receiver::_reader_main()
 {
-    // Local state for reader thread.
     Epoll epoll;
-    unordered_map<Peer *, shared_ptr<Peer>> active_peers;
+    unique_lock<std::mutex> lock(mutex);
 
-    while (true) {
-        // Check if stopped, and receive pending peers from listener thread.
-        {
-            lock_guard<std::mutex> lock(mutex);
+    // Each iteration of the outer loop corresponds to one call to epoll.wait().
 
+    for (;;) {
+        // At top of loop, lock is held.
+
+        // Inner loop: receive Peers from listener thread (via reader_peer_queue).
+        // Add each Peer to 'active_peers' and 'epoll'.
+        for (;;) {
             if (is_stopped)
                 return;
 
-            // Receive pending peers from listener.
-            for (auto &peer_ptr : pending_peers) {
+            // FIXME could hold lock for less time here.
+            for (const shared_ptr<Peer> &peer_ptr: this->reader_peer_queue) {
                 Peer *peer = peer_ptr.get();
-                Socket &sock = peer->socket;
                 xassert(peer != nullptr);
-                xassert(sock.fd >= 0);
-                xassert(active_peers.find(peer) == active_peers.end());
 
+                Socket &sock = peer->socket;
+                xassert(sock.fd >= 0);
                 sock.set_nonblocking();
 
                 epoll_event ev;
@@ -306,20 +377,27 @@ void Receiver::_reader_main()
                 ev.data.ptr = peer;  // store Peer* pointer in epoll context
                 epoll.add_fd(sock.fd, ev);
 
-                active_peers[peer] = peer_ptr;
                 num_connections.fetch_add(1);
+
+                xassert(active_peers.find(peer) == active_peers.end());
+                active_peers[peer] = peer_ptr;
             }
-            pending_peers.clear();
+
+            reader_peer_queue.clear();
+
+            if (!active_peers.empty()) {
+                lock.unlock();
+                break;  // go to epoll()
+            }
+
+            // No active peers -- wait for listener thread.
+            cv.wait(lock);
         }
 
-        // If no active peers, sleep briefly and loop again.
-        if (active_peers.empty()) {
-            // Sleep 1ms to avoid busy-waiting.
-            std::this_thread::sleep_for(std::chrono::milliseconds(epoll_timeout_ms));
-            continue;
-        }
-
-        // Wait for events with timeout.
+        // Lock is not held here.
+        // Wait for events. We use a ~1ms timeout here, rather than a blocking call,
+        // so that we check for new connections (via receiver_peer_queue), and check
+        // for calls to Receiver::stop() (via is_stopped).
         int num_events = epoll.wait(epoll_timeout_ms);
 
         // Process events and collect peers to remove.
@@ -328,13 +406,15 @@ void Receiver::_reader_main()
         for (int i = 0; i < num_events; i++) {
             Peer *raw_peer = static_cast<Peer *> (epoll.events[i].data.ptr);
             uint32_t ev_flags = epoll.events[i].events;
-
-            auto it = active_peers.find(raw_peer);
             xassert(raw_peer != nullptr);
-            xassert(it != active_peers.end());
 
+            // Hold lock while querying this->active_peers.
+            lock.lock();
+            auto it = active_peers.find(raw_peer);
+            xassert(it != active_peers.end());
             shared_ptr<Peer> sh_peer = it->second;
             xassert(sh_peer.get() == raw_peer);
+            lock.unlock();
 
             // Connection closed by peer (via epoll flags).
             if ((ev_flags & EPOLLRDHUP) || (ev_flags & EPOLLHUP) || (ev_flags & EPOLLERR)) {
@@ -357,10 +437,11 @@ void Receiver::_reader_main()
             }
         }
 
-        // Remove closed peers.
-        // With unordered_map + Peer* pointers, no index updates needed.
-        // Note: if a peer closes the connection with < 128 bytes of residual data
-        // (incomplete segment), then the data is silently lost. This is okay.
+        // Remove closed peers (while holding lock)
+        // Note: if a peer closes the connection residual data (incomplete segment),
+        // then data is silently lost -- this is okay.
+
+        lock.lock();
 
         for (Peer *peer : peers_to_remove) {
             auto it = active_peers.find(peer);
@@ -372,6 +453,8 @@ void Receiver::_reader_main()
             active_peers.erase(it);
             num_connections.fetch_sub(1);
         }
+
+        // Back to top of outer loop, with lock held.
     }
 }
 
@@ -464,6 +547,7 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
 
     // Lock this->mutex, not peer->mutex!
     unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("Receiver::_read_yaml");
 
     if (this->has_metadata) {
         // It's okay to access this->metadata after dropping the lock, since this->metadata
@@ -483,43 +567,35 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     // sent by one arbitrarily selected peer, which would be more confusing than helpful.
     this->metadata.freq_channels.clear();
 
-    // Okay to drop lock at this point.
-    // (It's okay to access this->metadata after dropping the lock, see above.)
     lock.unlock();
-    this->cv.notify_all();
-
-    // Initialize AssembledFrameAllocator and curr_frames.
-    // (No lock held here, but there's only one reader thread, so no possibility of race conditions.)
-
-    this->params.allocator->initialize(
-        this->params.consumer_id,
-        this->metadata.get_total_nfreq(),
-        this->params.time_samples_per_chunk, 
-        this->metadata.beam_ids
-    );
-    
-    this->curr_frames.resize(2*nbeams);
-
-    for (long ichunk = 0; ichunk < 2; ichunk++) {
-        for (long ibeam = 0; ibeam < nbeams; ibeam++) {
-            auto frame = params.allocator->get_frame(params.consumer_id);
-            xassert(frame->time_chunk_index == ichunk);
-            xassert(frame->beam_id == metadata.beam_ids.at(ibeam));
-            this->curr_frames[ichunk*nbeams + ibeam] = frame;
-        }
-    }
+    cv.notify_all();  // wake up any threads waiting for metadata (including assembler thread)
 }
 
 
 void Receiver::_read_data(const shared_ptr<Peer> &peer)
 {
-    long rb_capacity = peer->rb_capacity;    
-    long rb_start = peer->rb_start;
-    long rb_end = peer->rb_end;
-
+    long rb_capacity = peer->rb_capacity;
     xassert(rb_capacity > 0);
-    xassert(rb_start <= rb_end);
-    xassert(rb_end < rb_start + rb_capacity);
+
+    // Note peer->mutex here, not this->mutex!
+    unique_lock<std::mutex> plock(peer->mutex);
+    long rb_start, rb_end;
+
+    // Wait for room in ring buffer.
+    for (;;) {
+        peer->_throw_if_stopped("Receiver::_read_data");
+
+        rb_start = peer->rb_start;
+        rb_end = peer->rb_end;
+
+        if (rb_end < rb_start + rb_capacity)
+            break;  // room available
+
+        peer->cv.wait(plock);  // wait for assembler thread
+    }
+
+    // Drop peer->mutex while reading from socket.
+    plock.unlock();
 
     // Read new data at rb_end.
     // Compute (buf, bufsize) accounting for wraparound.
@@ -534,102 +610,217 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
     if (nbytes_read <= 0)
         return;
 
-    rb_end += nbytes_read;
-    peer->rb_end = rb_end;
     this->nbytes_cumul.fetch_add(nbytes_read);
 
-    // Currently, we process data in the reader thread.
-    // (In the future, this will happen in an assembler thread.)
+    // Reacquire peer->mutex, update peer->rb_end, decide whether to queue for assembler thread.
+    plock.lock();
+    peer->_throw_if_stopped("Receiver::_read_data");
+    xassert(peer->rb_end == rb_end);
+    peer->rb_end += nbytes_read;
+    bool enqueue = (peer->rb_end >= peer->rb_start + peer->bytes_per_segment);
+    plock.unlock();
 
-    while (peer->rb_end >= peer->rb_start + peer->bytes_per_segment)
-        this->_process_data(peer);
+    // Note: peer->cv.notify_all() is not needed here, since assembler thread
+    // doesn't wait on ring buffer counters.
+
+    if (enqueue) {
+        // Enqueue 'peer' for processing by assembler thread.
+        // Note this->mutex here, not peer->mutex!
+        unique_lock<std::mutex> rlock(this->mutex);
+        _throw_if_stopped("Receiver::_read_data");
+        this->assembler_peer_queue.push_back(peer);
+        rlock.unlock();
+        cv.notify_all();
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Assembler thread
+
+
+void Receiver::assembler_main()
+{
+    try {
+        _assembler_main();
+    } catch (...) {
+        stop(std::current_exception());
+    }
+}
+
+
+void Receiver::_assembler_main()
+{
+    // Wait for yaml metadata to be parsed, by calling get_metadata(blocking=true) .
+    XEngineMetadata metadata = this->get_metadata(true);
+
+    // The assembler thread is responsible for calling AssembledFrameAllocator::initialize().
+    this->params.allocator->initialize(
+        this->params.consumer_id,
+        metadata.get_total_nfreq(),
+        this->params.time_samples_per_chunk, 
+        metadata.beam_ids
+    );
+    
+    // Initialize 'curr_frames' (not lock-protected).
+
+    long nbeams = metadata.nbeams;
+    this->curr_frames.resize(2*nbeams);
+
+    for (long ichunk = 0; ichunk < 2; ichunk++) {
+        for (long ibeam = 0; ibeam < nbeams; ibeam++) {
+            auto frame = params.allocator->get_frame(params.consumer_id);
+            xassert(frame->time_chunk_index == ichunk);
+            xassert(frame->beam_id == metadata.beam_ids.at(ibeam));
+            this->curr_frames[ichunk*nbeams + ibeam] = frame;
+        }
+    }
+
+    // Receive Peers from reader thread (via assembler_peer_queue),
+    // and call this->_process_data().
+
+    unique_lock<std::mutex> lock(mutex);
+
+    for (;;) {
+        if (is_stopped)
+            return;
+        
+        if (assembler_peer_queue.empty()) {
+            cv.wait(lock);
+            continue;  // back to top of loop, with lock held.
+        }
+
+        shared_ptr<Peer> peer = assembler_peer_queue.front();
+        assembler_peer_queue.pop_front();
+        lock.unlock();
+
+        try {
+            this->_process_data(peer);
+        }
+        catch (...) {
+            // Special logic to ensure that peer->stop() gets called, since at this
+            // point in the code, the assembler thread holds a reference to 'peer',
+            // but I'm not 100% confident that a reference is held elsewhere (since
+            // we already popped it from 'assembler_peer_queue').
+            peer->stop(std::current_exception());
+
+            // Note that rethrowing the exception will trigger Receiver::stop(), which
+            // calls Peer::stop() for all other Peers in sight (among other things).
+            throw;
+        }
+
+        // Back to top of loop with lock held.
+        lock.lock();
+    }
 }
 
 
 void Receiver::_process_data(const shared_ptr<Peer> &peer)
 {
-    long nt_chunk = params.time_samples_per_chunk;
+    const long *freq_channels = &peer->metadata.freq_channels[0];
     long nfreq = peer->metadata.freq_channels.size();
     long nbeams = peer->metadata.nbeams;
-    
-    long bs = peer->bytes_per_segment;
+    long nt_chunk = params.time_samples_per_chunk;
     long rb_capacity = peer->rb_capacity;
-    long rb_start = peer->rb_start;
-    long rb_end = peer->rb_end;
-
+    long bs = peer->bytes_per_segment;
+    
     xassert(bs > 0);
     xassert(rb_capacity > 0);
 
-    long rb_pos = rb_start % rb_capacity;
-    xassert(rb_end >= rb_start + bs);
-    xassert(rb_capacity >= rb_pos + bs);
+    // Note peer->lock (protects rb_{start,end}) here, not this->lock.
+    unique_lock<std::mutex> plock(peer->mutex);
+    peer->_throw_if_stopped("Receiver::_process_data()");
+    long rb_start = peer->rb_start;
+    long rb_end = peer->rb_end;
+    plock.unlock();
 
-    long iseg = rb_start / bs;
-    xassert(rb_start == iseg * bs);
+    // Loop over "segments" (256 time samples)
+    while (rb_end >= rb_start + bs) {
+        long rb_pos = rb_start % rb_capacity;
+        const char *src = peer->rb_buf.data + rb_pos;
+        xassert(rb_end >= rb_start + bs);
+        xassert(rb_capacity >= rb_pos + bs);
 
-    long ichunk = iseg / peer->segments_per_chunk;
-    iseg -= ichunk * peer->segments_per_chunk;
+        long iseg = rb_start / bs;
+        xassert(rb_start == iseg * bs);
 
-    // Target chunk is no longer in buffer (peer is running slow).
-    // In this case, we silently drop the data.
-    if (ichunk < curr_base_chunk) {
-        peer->rb_start += bs;
-        return;
-    }
+        long ichunk = iseg / peer->segments_per_chunk;
+        iseg -= ichunk * peer->segments_per_chunk;
 
-    if (ichunk >= curr_base_chunk + 2) {
-        // Since chunks are processed sequentially, we should never need to advance
-        // the ring buffer by more than one chunk. If this ever fails, it's an internal
-        // server error, so throw an exception to flag it for debugging.
+        // Note: this->curr_base_chunk and this->curr_frame are not lock-protected.
+        // (These members are only accessed by the assembler thread.)
 
-        xassert(ichunk == curr_base_chunk + 2);
-        
-        // Advance the ring buffer. Evicted frames are transferred to completed_frames queue.
+        if (ichunk < curr_base_chunk) {
+            // Target chunk is no longer in buffer (peer is running slow).
+            // In this case, we silently drop the data.
+            goto segment_done;  // hmmm
+        }
+
+        if (ichunk >= curr_base_chunk + 2) {
+            // Since chunks are processed sequentially, we should never need to advance
+            // the ring buffer by more than one chunk. If this ever fails, it's an internal
+            // server error, so throw an exception to flag it for debugging.
+
+            xassert(ichunk == curr_base_chunk + 2);
+            
+            // Advance the ring buffer. Evicted frames are transferred to completed_frames queue.
+
+            for (long b = 0; b < nbeams; b++) {
+                long i = (ichunk & 1) * nbeams + b;
+                
+                // Transfer evicted frame to completed_frames queue.
+                // Note this->lock (protects completed_frames) here, not peer->lock
+                unique_lock<std::mutex> rlock(mutex);
+                _throw_if_stopped("Receiver::_process_data");
+                this->completed_frames.push(std::move(this->curr_frames[i]));
+                rlock.unlock();
+                this->cv.notify_all();
+                
+                // Replace with new frame from allocator.
+                shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
+                xassert(frame->time_chunk_index == ichunk);
+                xassert(frame->beam_id == metadata.beam_ids.at(b));
+                this->curr_frames[i] = std::move(frame);
+            }
+
+            this->curr_base_chunk++;
+        }
+
+        // The rest of _process_data() copies one "segment" of data
+        // (all beams, per-sender frequency subset, 256 time samples)
+        // into the AssembledFrames.
 
         for (long b = 0; b < nbeams; b++) {
             long i = (ichunk & 1) * nbeams + b;
-            
-            // Transfer evicted frame to completed_frames queue.
-            unique_lock<std::mutex> lock(mutex);
-            this->completed_frames.push(std::move(this->curr_frames[i]));
-            lock.unlock();
-            cv.notify_all();
-            
-            // Replace with new frame from allocator.
-            shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
-            xassert(frame->time_chunk_index == ichunk);
-            xassert(frame->beam_id == metadata.beam_ids.at(b));
-            this->curr_frames[i] = std::move(frame);
+            shared_ptr<AssembledFrame> frame = this->curr_frames[i];
+            xassert(frame);
+
+            // The destination "base" pointer includes a time offset
+            // (128 bytes per segment), but no (beam, frequency) offset.
+            char *dst_base = (char *)frame->data.data + (iseg << 7);
+
+            for (long ifreq = 0; ifreq < nfreq; ifreq++) {
+                long freq_index = freq_channels[ifreq];
+                char *dst = dst_base + freq_index * (nt_chunk >> 1);
+                memcpy(dst, src, 128);
+                src += 128;
+            }
         }
 
-        this->curr_base_chunk++;
+    segment_done:
+        plock.lock();
+        peer->_throw_if_stopped("Receiver::_process_data()");
+        xassert(peer->rb_start == rb_start);
+        peer->rb_start += bs;
+        rb_start = peer->rb_start;
+        rb_end = peer->rb_end;
+        plock.unlock();
+        
+        // If the reader thread is waiting for space in the ring buffer,
+        // then wake up the reader thread.
+        peer->cv.notify_all();
     }
-
-    // The rest of _process_data() copies one "segment" of data
-    // (all beams, per-sender frequency subset, 256 time samples)
-    // into the AssembledFrames.
-
-    const char *src = peer->rb_buf.data + rb_pos;
-    const long *freq_channels = &peer->metadata.freq_channels[0];
-
-    for (long b = 0; b < nbeams; b++) {
-        long i = (ichunk & 1) * nbeams + b;
-        shared_ptr<AssembledFrame> frame = this->curr_frames[i];
-        xassert(frame);
-
-        // The destination "base" pointer includes a time offset
-        // (128 bytes per segment), but no (beam, frequency) offset.
-        char *dst_base = (char *)frame->data.data + (iseg << 7);
-
-        for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-            long freq_index = freq_channels[ifreq];
-            char *dst = dst_base + freq_index * (nt_chunk >> 1);
-            memcpy(dst, src, 128);
-            src += 128;
-        }
-    }
-
-    peer->rb_start += bs;
 }
 
 

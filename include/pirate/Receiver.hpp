@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unordered_map>
 
 #include "network_utils.hpp"    // Socket, Epoll
 #include "XEngineMetadata.hpp"  // XEngineMetadata
@@ -26,9 +27,10 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 // Receiver: a thread-backed class that listens for TCP connections
 // and reads data as quickly as possible from all open connections.
 //
-// The Receiver has two worker threads:
+// The Receiver has three worker threads:
 //   - listener: calls accept() in a loop, hands off new connections to reader
 //   - reader: uses epoll() to read data from all open connections
+//   - assembler: copies data segments from per-peer ring buffers into AssembledFrames
 //
 // See notes/network_protocol.md for the network protocol parsed by the Receiver.
 
@@ -82,6 +84,15 @@ struct Receiver
     std::string ip_addr;    // parsed from params.address
     uint16_t tcp_port = 0;  // parsed from params.address
 
+    // Worker threads.
+    std::thread listener_thread;
+    std::thread reader_thread;
+    std::thread assembler_thread;
+
+    // Lock-free counters.
+    std::atomic<long> num_connections{0};
+    std::atomic<long> nbytes_cumul{0};
+
     // Thread-backed class state (protected by 'mutex').
     mutable std::mutex mutex;
     mutable std::condition_variable cv;
@@ -89,7 +100,9 @@ struct Receiver
     bool is_stopped = false;
     std::exception_ptr error;
 
-    // Reference metadata from first peer (protected by 'mutex').
+    // All public members after this point are protected by 'mutex'.
+
+    // Reference metadata from first peer.
     // Used to check that all peers send consistent metadata.
     // (Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.)
 
@@ -97,10 +110,45 @@ struct Receiver
     XEngineMetadata metadata;
 
     // Queue of completed frames ready for retrieval via get_frame().
-    // Protected by 'mutex'. Frames are pushed from _find_frame() (reader thread)
-    // and popped by get_frame() (caller thread).
     std::queue<std::shared_ptr<AssembledFrame>> completed_frames;
 
+    // Peer: per-sender state for an active TCP connection.
+    // Parses the network protocol described in notes/network_protocol.md.
+    // (Full definition is in Receiver.cpp.)
+    struct Peer;
+
+    std::vector<std::shared_ptr<Peer>> reader_peer_queue;     // handoff listener -> reader
+    std::deque<std::shared_ptr<Peer>> assembler_peer_queue;   // handoff reader -> assembler
+
+    // active_peers: readable by any thread that holds the lock,
+    // but can only be modified (with lock held) by reader thread.
+    std::unordered_map<Peer *, std::shared_ptr<Peer>> active_peers;
+
+private:
+    // Worker thread main functions.
+    void _listener_main();
+    void _reader_main();
+    void _assembler_main();
+
+    // Wrappers that catch exceptions and call stop().
+    void listener_main();
+    void reader_main();
+    void assembler_main();
+
+    // Helpers called by reader thread.
+    void _read_ini(const std::shared_ptr<Peer> &peer);
+    void _read_yaml(const std::shared_ptr<Peer> &peer);
+    void _read_data(const std::shared_ptr<Peer> &peer);
+
+    // Helper called by assembler thread.
+    void _process_data(const std::shared_ptr<Peer> &peer);
+
+    // Helper for entry points. Caller must hold mutex.
+    void _throw_if_stopped(const char *method_name) const;
+
+    // curr_frames, curr_base_ichunk: not lock-protected!
+    // Only accessed by assembler thread.
+    //
     // The Receiver incrementally receives a data "cube" indexed by (beam, freq, time).
     // Time indices are divided into "chunks" (of size Params::time_samples_per_chunk),
     // and further subdivided into 256-sample "segments".
@@ -112,46 +160,9 @@ struct Receiver
     //
     // 'curr_frames' is a ring buffer of length (2 * nbeams).
     // It contains data for (curr_base_chunk) <= ichunk < (curr_base_chunk + 2).
-    // Accessed exclusively by reader thread -- not protected by lock.
 
     std::vector<std::shared_ptr<AssembledFrame>> curr_frames;  // length (2 * metadata.nbeams)
     long curr_base_chunk = 0;
-
-    // Worker threads.
-    std::thread listener_thread;
-    std::thread reader_thread;
-
-    // Peer: per-sender state for an active TCP connection.
-    // Parses the network protocol described in notes/network_protocol.md.
-    // (Full definition is in Receiver.cpp.)
-    struct Peer;
-
-    // Pending peers: handed off from listener to reader.
-    // Protected by 'mutex'.
-    std::vector<std::shared_ptr<Peer>> pending_peers;
-
-    // Statistics (atomic for lock-free reads).
-    std::atomic<long> num_connections{0};
-    std::atomic<long> nbytes_cumul{0};
-
-
-private:
-    // Worker thread main functions.
-    void _listener_main();
-    void _reader_main();
-
-    // Wrappers that catch exceptions and call stop().
-    void listener_main();
-    void reader_main();
-
-    // Helpers called by reader thread.
-    void _read_ini(const std::shared_ptr<Peer> &peer);
-    void _read_yaml(const std::shared_ptr<Peer> &peer);
-    void _read_data(const std::shared_ptr<Peer> &peer);
-    void _process_data(const std::shared_ptr<Peer> &peer);
-
-    // Helper for entry points. Caller must hold mutex.
-    void _throw_if_stopped(const char *method_name) const;
 };
 
 
