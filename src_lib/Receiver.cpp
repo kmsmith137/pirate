@@ -56,25 +56,13 @@ struct Receiver::Peer
     Array<char> rb_buf;           // length (rb_capacity)
     long rb_capacity = 0;
 
-    // Mutex/cv protect "ring buffer state" only.
+    // Ring buffer counters (rb_start, rb_end). Shared between reader/assembler threads.
+    // The mutex protects these counters, but no other Receiver::Peer members.
     std::mutex mutex;
-    std::condition_variable cv;
-    std::exception_ptr error;
-    bool is_stopped = false;
-
-    // Ring buffer state.
     long rb_start = 0;
     long rb_end = 0;
 
     explicit Peer(Socket sock);
-    ~Peer();
-
-    // Put Peer into stopped state.
-    // If 'e' is non-null, it represents an error; otherwise normal termination.
-    void stop(std::exception_ptr e = nullptr);
-
-    // Caller must hold mutex.
-    void _throw_if_stopped(const char *method_name);    
 };
 
 
@@ -82,38 +70,6 @@ Receiver::Peer::Peer(Socket sock)
     : socket(std::move(sock))
 {
     xassert(socket.fd >= 0);
-}
-
-
-Receiver::Peer::~Peer()
-{
-    this->stop();
-}
-
-
-void Receiver::Peer::stop(std::exception_ptr e)
-{
-    unique_lock<std::mutex> lock(mutex);
-
-    if (is_stopped)
-        return;
-
-    is_stopped = true;
-    error = e;
-
-    lock.unlock();
-    cv.notify_all();
-}
-
-
-// Caller must hold mutex.
-void Receiver::Peer::_throw_if_stopped(const char *method_name)
-{
-    if (error)
-        std::rethrow_exception(error);
-
-    if (is_stopped)
-        throw runtime_error(string(method_name) + " called on stopped instance");
 }
 
 
@@ -211,24 +167,6 @@ void Receiver::stop(std::exception_ptr e)
 
     is_stopped = true;
     error = e;
-
-    // While holding Receiver::mutex, call Peer::stop() on all peers in sight.
-
-    for (const auto& [raw_ptr, peer]: this->active_peers) {
-        if (peer)
-            peer->stop(e);
-    }
-
-    for (const shared_ptr<Peer> &peer: this->reader_peer_queue) {
-        if (peer) 
-            peer->stop(e);
-    }
-
-    for (const shared_ptr<Peer> &peer: this->assembler_peer_queue) {
-        if (peer)
-            peer->stop(e);
-    }
-
     lock.unlock();
 
     params.allocator->stop();
@@ -579,23 +517,17 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
 
     // Note peer->mutex here, not this->mutex!
     unique_lock<std::mutex> plock(peer->mutex);
-    long rb_start, rb_end;
-
-    // Wait for room in ring buffer.
-    for (;;) {
-        peer->_throw_if_stopped("Receiver::_read_data");
-
-        rb_start = peer->rb_start;
-        rb_end = peer->rb_end;
-
-        if (rb_end < rb_start + rb_capacity)
-            break;  // room available
-
-        peer->cv.wait(plock);  // wait for assembler thread
-    }
-
-    // Drop peer->mutex while reading from socket.
+    long rb_start = peer->rb_start;
+    long rb_end = peer->rb_end;
     plock.unlock();
+
+    // If there is no room in the ring buffer, then return without calling Socket::read().
+    // This happens if the assembler thread is running slow, and will put the reader thread
+    // into a busy-wait state, making repeated nonblocking calls to Epoll::wait().
+    // FIXME is there a better alternative? Or is this not worth worrying about?
+
+    if (rb_end >= rb_start + rb_capacity)
+        return;
 
     // Read new data at rb_end.
     // Compute (buf, bufsize) accounting for wraparound.
@@ -614,14 +546,10 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
 
     // Reacquire peer->mutex, update peer->rb_end, decide whether to queue for assembler thread.
     plock.lock();
-    peer->_throw_if_stopped("Receiver::_read_data");
     xassert(peer->rb_end == rb_end);
     peer->rb_end += nbytes_read;
     bool enqueue = (peer->rb_end >= peer->rb_start + peer->bytes_per_segment);
     plock.unlock();
-
-    // Note: peer->cv.notify_all() is not needed here, since assembler thread
-    // doesn't wait on ring buffer counters.
 
     if (enqueue) {
         // Enqueue 'peer' for processing by assembler thread.
@@ -695,21 +623,8 @@ void Receiver::_assembler_main()
         assembler_peer_queue.pop_front();
         lock.unlock();
 
-        try {
-            this->_process_data(peer);
-        }
-        catch (...) {
-            // Special logic to ensure that peer->stop() gets called, since at this
-            // point in the code, the assembler thread holds a reference to 'peer',
-            // but I'm not 100% confident that a reference is held elsewhere (since
-            // we already popped it from 'assembler_peer_queue').
-            peer->stop(std::current_exception());
-
-            // Note that rethrowing the exception will trigger Receiver::stop(), which
-            // calls Peer::stop() for all other Peers in sight (among other things).
-            throw;
-        }
-
+        this->_process_data(peer);
+        
         // Back to top of loop with lock held.
         lock.lock();
     }
@@ -728,9 +643,8 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
     xassert(bs > 0);
     xassert(rb_capacity > 0);
 
-    // Note peer->lock (protects rb_{start,end}) here, not this->lock.
+    // Note peer->lock here, not this->lock.
     unique_lock<std::mutex> plock(peer->mutex);
-    peer->_throw_if_stopped("Receiver::_process_data()");
     long rb_start = peer->rb_start;
     long rb_end = peer->rb_end;
     plock.unlock();
@@ -810,16 +724,11 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
 
     segment_done:
         plock.lock();
-        peer->_throw_if_stopped("Receiver::_process_data()");
         xassert(peer->rb_start == rb_start);
         peer->rb_start += bs;
         rb_start = peer->rb_start;
         rb_end = peer->rb_end;
         plock.unlock();
-        
-        // If the reader thread is waiting for space in the ring buffer,
-        // then wake up the reader thread.
-        peer->cv.notify_all();
     }
 }
 
