@@ -10,8 +10,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <unordered_map>
-
 #include "network_utils.hpp"    // Socket, Epoll
 #include "XEngineMetadata.hpp"  // XEngineMetadata
 
@@ -119,10 +117,6 @@ struct Receiver
 
     std::vector<std::shared_ptr<Peer>> reader_peer_queue;     // handoff listener -> reader
     std::deque<std::shared_ptr<Peer>> assembler_peer_queue;   // handoff reader -> assembler
-
-    // active_peers: readable by any thread that holds the lock,
-    // but can only be modified (with lock held) by reader thread.
-    std::unordered_map<Peer *, std::shared_ptr<Peer>> active_peers;
 
 private:
     // Worker thread main functions.

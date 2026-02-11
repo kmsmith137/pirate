@@ -5,6 +5,7 @@
 #include <cstring>    // memcpy
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <ksgpu/Array.hpp>
 #include <ksgpu/xassert.hpp>
@@ -288,53 +289,59 @@ void Receiver::reader_main()
 void Receiver::_reader_main()
 {
     Epoll epoll;
-    unique_lock<std::mutex> lock(mutex);
+    unordered_map<Peer *, shared_ptr<Peer>> active_peers;
 
     // Each iteration of the outer loop corresponds to one call to epoll.wait().
 
     for (;;) {
-        // At top of loop, lock is held.
+        // Acquire lock to check is_stopped and drain reader_peer_queue.
+        unique_lock<std::mutex> lock(mutex);
 
-        // Inner loop: receive Peers from listener thread (via reader_peer_queue).
-        // Add each Peer to 'active_peers' and 'epoll'.
         for (;;) {
             if (is_stopped)
                 return;
 
-            // FIXME could hold lock for less time here.
-            for (const shared_ptr<Peer> &peer_ptr: this->reader_peer_queue) {
-                Peer *peer = peer_ptr.get();
-                xassert(peer != nullptr);
+            if (!reader_peer_queue.empty())
+                break;
+            if (!active_peers.empty())
+                break;
 
-                Socket &sock = peer->socket;
-                xassert(sock.fd >= 0);
-                sock.set_nonblocking();
-
-                epoll_event ev;
-                ev.events = EPOLLIN | EPOLLRDHUP | EPOLLHUP;
-                ev.data.ptr = peer;  // store Peer* pointer in epoll context
-                epoll.add_fd(sock.fd, ev);
-
-                num_connections.fetch_add(1);
-
-                xassert(active_peers.find(peer) == active_peers.end());
-                active_peers[peer] = peer_ptr;
-            }
-
-            reader_peer_queue.clear();
-
-            if (!active_peers.empty()) {
-                lock.unlock();
-                break;  // go to epoll()
-            }
-
-            // No active peers -- wait for listener thread.
+            // No active peers and no pending peers -- wait for listener thread.
             cv.wait(lock);
         }
 
+        // Move pending peers from reader_peer_queue to local vector
+        // (so that we can drop the lock before calling set_nonblocking/epoll).
+        vector<shared_ptr<Peer>> new_peers = std::move(reader_peer_queue);
+        reader_peer_queue.clear();
+        lock.unlock();
+
+        // Add new peers to epoll and active_peers (no lock needed).
+        for (const shared_ptr<Peer> &peer_ptr: new_peers) {
+            Peer *peer = peer_ptr.get();
+            xassert(peer != nullptr);
+
+            Socket &sock = peer->socket;
+            xassert(sock.fd >= 0);
+            sock.set_nonblocking();
+
+            epoll_event ev;
+            ev.events = EPOLLIN | EPOLLRDHUP | EPOLLHUP;
+            ev.data.ptr = peer;  // store Peer* pointer in epoll context
+            epoll.add_fd(sock.fd, ev);
+
+            num_connections.fetch_add(1);
+
+            xassert(active_peers.find(peer) == active_peers.end());
+            active_peers[peer] = peer_ptr;
+        }
+
+        if (active_peers.empty())
+            continue;  // back to top, re-acquire lock
+
         // Lock is not held here.
         // Wait for events. We use a ~1ms timeout here, rather than a blocking call,
-        // so that we check for new connections (via receiver_peer_queue), and check
+        // so that we check for new connections (via reader_peer_queue), and check
         // for calls to Receiver::stop() (via is_stopped).
         int num_events = epoll.wait(epoll_timeout_ms);
 
@@ -346,13 +353,10 @@ void Receiver::_reader_main()
             uint32_t ev_flags = epoll.events[i].events;
             xassert(raw_peer != nullptr);
 
-            // Hold lock while querying this->active_peers.
-            lock.lock();
             auto it = active_peers.find(raw_peer);
             xassert(it != active_peers.end());
             shared_ptr<Peer> sh_peer = it->second;
             xassert(sh_peer.get() == raw_peer);
-            lock.unlock();
 
             // Connection closed by peer (via epoll flags).
             if ((ev_flags & EPOLLRDHUP) || (ev_flags & EPOLLHUP) || (ev_flags & EPOLLERR)) {
@@ -375,11 +379,9 @@ void Receiver::_reader_main()
             }
         }
 
-        // Remove closed peers (while holding lock)
-        // Note: if a peer closes the connection residual data (incomplete segment),
+        // Remove closed peers (no lock needed -- active_peers is local, num_connections is atomic).
+        // Note: if a peer closes the connection with residual data (incomplete segment),
         // then data is silently lost -- this is okay.
-
-        lock.lock();
 
         for (Peer *peer : peers_to_remove) {
             auto it = active_peers.find(peer);
@@ -391,8 +393,6 @@ void Receiver::_reader_main()
             active_peers.erase(it);
             num_connections.fetch_sub(1);
         }
-
-        // Back to top of outer loop, with lock held.
     }
 }
 
