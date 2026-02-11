@@ -34,7 +34,6 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 
 struct Receiver
 {
-    static constexpr long initial_recv_bufsize = 256 * 1024;
     static constexpr int accept_timeout_ms = 10;
     static constexpr int epoll_timeout_ms = 1;
 
@@ -58,7 +57,7 @@ struct Receiver
     void start();
 
     // Thread-safe: returns current number of active TCP connections, and total bytes read.
-    void get_status(long &num_connections, long &num_bytes);
+    void get_status(long &num_connections, long &nbytes_cumul);
 
     // Entry point: retrieve an assembled frame from the queue (blocking).
     // This blocks until a frame is available, or throws if Receiver is stopped.
@@ -133,7 +132,7 @@ struct Receiver
 
     // Statistics (atomic for lock-free reads).
     std::atomic<long> num_connections{0};
-    std::atomic<long> num_bytes{0};
+    std::atomic<long> nbytes_cumul{0};
 
 
 private:
@@ -145,11 +144,11 @@ private:
     void listener_main();
     void reader_main();
 
-    // Helpers for reading data.
-    void _read_data(Peer *peer);
-    void _post_metadata(Peer *peer);
-    void _process_4bit_data(Peer *peer, const char *buf, long nsegments);
-    char *_find_frame(long ichunk, long ibeam);
+    // Helpers called by reader thread.
+    void _read_ini(const std::shared_ptr<Peer> &peer);
+    void _read_yaml(const std::shared_ptr<Peer> &peer);
+    void _read_data(const std::shared_ptr<Peer> &peer);
+    void _process_data(const std::shared_ptr<Peer> &peer);
 
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name) const;

@@ -1,5 +1,6 @@
 #include "../include/pirate/Receiver.hpp"
 #include "../include/pirate/AssembledFrame.hpp"
+#include "../include/pirate/inlines.hpp"  // xdiv()
 
 #include <cstring>    // memcpy
 #include <sstream>
@@ -25,42 +26,41 @@ namespace pirate {
 
 
 // Peer: per-sender state for an active TCP connection.
-// Parses the network protocol described in notes/network_protocol.md.
 struct Receiver::Peer
 {
     Socket socket;
 
     // Parsing state machine.
+    // Network protocol reference: notes/network_protocol.md.
     enum class State {
-        ReadMagic,       // Reading 4-byte magic number 0xf4bf4b01
-        ReadStringLen,   // Reading 4-byte YAML string length
-        ReadYamlString,  // Reading zero-terminated YAML string
-        ReadData         // Reading (nbeams, nfreq, 256) data arrays
+        ReadIni = 0,      // Reading first 8 bytes (magic + yaml_len)
+        ReadYaml = 1,     // Reading zero-terminated YAML string
+        ReadData = 2      // Reading (nbeams, nfreq, 256) data arrays
     };
 
-    State state = State::ReadMagic;
+    State state = State::ReadIni;
     
-    Array<char> recv_buf;
-    long recv_nbytes = 0;   // 0 <= recv_nbytes < recv_buf.size
+    // First 8 bytes (read during State::ReadIni)
+    char ini_buf[8];
+    long ini_nbytes = 0;  // bytes read so far
 
-    // If (state > ReadStringLen), this is the expected YAML string length (including null terminator).
-    int32_t yaml_string_len = 0;
+    // These members are initialized when state ReadIni -> ReadYaml.
+    Array<char> yaml_buf;         // length (yaml_string_len + 1)
+    long yaml_nbytes = 0;         // bytes read so far (0 <= yaml_nbytes < yaml_string_len)
+    long yaml_string_len = 0;     // total bytes expected from sender
 
-    // If (state > ReadYamlString), this contains the parsed metadata.
+    // All following members are initialized when state ReadYaml -> ReadData.
     XEngineMetadata metadata;
+    long bytes_per_segment = 0;   // = nbeams * nfreq * 128
+    long segments_per_chunk = 0;  // = Receiver::Params::time_samples_per_chunk / 256
 
-    // The Receiver incrementally receives a data "cube" indexed by (beam, freq, time).
-    // Time indices are divided into "chunks" (of size Params::time_samples_per_chunk),
-    // and further subdivided into 256-sample "segments".
-    // These members keep track of the per-Peer current position in the data cube.
-    // They are ordered from slowest varying to fastest varying (see notes/network_protocol.md).
+    Array<char> rb_buf;           // length (rb_capacity)
+    long rb_capacity = 0;
 
-    long curr_chunk = 0;
-    long curr_segment = 0;
-    long curr_ibeam = 0;
-    long curr_ifreq = 0;
+    // Ring buffer state.
+    long rb_start = 0;
+    long rb_end = 0;
 
-    // Constructor.
     explicit Peer(Socket sock);
 };
 
@@ -69,14 +69,13 @@ Receiver::Peer::Peer(Socket sock)
     : socket(std::move(sock))
 {
     xassert(socket.fd >= 0);
-    this->recv_buf = Array<char> ({initial_recv_bufsize}, af_uhost);
 }
 
 
 // -------------------------------------------------------------------------------------------------
 
 
-// Helper: parse "ip:port" address string.
+// Helper for Receiver constructor: parse "ip:port" address string.
 static void parse_address(const string &address, string &ip_addr, uint16_t &tcp_port)
 {
     size_t colon_pos = address.rfind(':');
@@ -145,10 +144,10 @@ Receiver::~Receiver()
 }
 
 
-void Receiver::get_status(long &out_num_connections, long &out_num_bytes)
+void Receiver::get_status(long &out_num_connections, long &out_nbytes_cumul)
 {
     out_num_connections = num_connections.load();
-    out_num_bytes = num_bytes.load();
+    out_nbytes_cumul = nbytes_cumul.load();
 }
 
 
@@ -327,24 +326,34 @@ void Receiver::_reader_main()
         vector<Peer *> peers_to_remove;
 
         for (int i = 0; i < num_events; i++) {
-            Peer *peer = static_cast<Peer *>(epoll.events[i].data.ptr);
+            Peer *raw_peer = static_cast<Peer *> (epoll.events[i].data.ptr);
             uint32_t ev_flags = epoll.events[i].events;
 
-            xassert(peer != nullptr);
-            xassert(active_peers.find(peer) != active_peers.end());
+            auto it = active_peers.find(raw_peer);
+            xassert(raw_peer != nullptr);
+            xassert(it != active_peers.end());
+
+            shared_ptr<Peer> sh_peer = it->second;
+            xassert(sh_peer.get() == raw_peer);
 
             // Connection closed by peer (via epoll flags).
             if ((ev_flags & EPOLLRDHUP) || (ev_flags & EPOLLHUP) || (ev_flags & EPOLLERR)) {
-                peers_to_remove.push_back(peer);
+                peers_to_remove.push_back(raw_peer);
                 continue;
             }
 
             // Data available to read.
             if (ev_flags & EPOLLIN) {
-                this->_read_data(peer);
+                // Note: lack of "else if" is intentional -- can "fall through" from one state to the next.
+                if (sh_peer->state == Peer::State::ReadIni)
+                    this->_read_ini(sh_peer);
+                if (sh_peer->state == Peer::State::ReadYaml)
+                    this->_read_yaml(sh_peer);
+                if (sh_peer->state == Peer::State::ReadData)
+                    this->_read_data(sh_peer);
 
-                if (peer->socket.eof)
-                    peers_to_remove.push_back(peer);
+                if (sh_peer->socket.eof)
+                    peers_to_remove.push_back(raw_peer);
             }
         }
 
@@ -355,6 +364,7 @@ void Receiver::_reader_main()
 
         for (Peer *peer : peers_to_remove) {
             auto it = active_peers.find(peer);
+
             if (it == active_peers.end())
                 continue;  // already removed (e.g., duplicate in peers_to_remove)
 
@@ -366,135 +376,93 @@ void Receiver::_reader_main()
 }
 
 
-// Called after when peer->socket is ready for reading.
-// Reference for network protocol: notes/network_protocol.md.
-
-void Receiver::_read_data(Peer *peer)
+void Receiver::_read_ini(const shared_ptr<Peer> &peer)
 {
-    // Receive bufsize must always be a multiple of 128 (see below).
-    static_assert((initial_recv_bufsize % 128) == 0);
+    xassert(peer->ini_nbytes < 8);
 
-    char *recv_buf = peer->recv_buf.data;
-    long recv_nbytes = peer->recv_nbytes;
-    long recv_capacity = peer->recv_buf.size;
+    char *buf = peer->ini_buf + peer->ini_nbytes;
+    long bufsize = 8 - peer->ini_nbytes;
+    long nbytes_read = peer->socket.read(buf, bufsize);
 
-    long nbytes = peer->socket.read(recv_buf + recv_nbytes, recv_capacity - recv_nbytes);
-
-    // If nbytes == 0 and !sock.eof, it's just "would block" - do nothing.
-    if (nbytes <= 0)
+    // If nbytes_read == 0 and !sock.eof, it's just "would block" - do nothing.
+    if (nbytes_read <= 0)
         return;
 
-    recv_nbytes += nbytes;
-    peer->recv_nbytes = recv_nbytes;
-    this->num_bytes.fetch_add(nbytes);
-    
-    if (peer->state == Peer::State::ReadMagic) {
-        if (recv_nbytes < 4)
-            return;
-        
-        // Read 4-byte little-endian magic number.
-        uint32_t magic = *((uint32_t *) recv_buf);
-        static constexpr uint32_t magic_v1 = 0xf4bf4b01;
-        
-        if (magic != magic_v1) {
-            stringstream ss;
-            ss << "Receiver::Peer: invalid magic number 0x" << hex << magic
-               << " (expected 0x" << magic_v1 << ")";
-            throw runtime_error(ss.str());
-        }
-        
-        peer->state = Peer::State::ReadStringLen;
-        // fall through...
-    }
-    
-    if (peer->state == Peer::State::ReadStringLen) {
-        if (recv_nbytes < 8)
-            return;
-        
-        // Read 4-byte little-endian string length.
-        peer->yaml_string_len = *((int32_t *) (recv_buf + 4));
-        xassert_gt(peer->yaml_string_len, 0);
-        xassert_le(peer->yaml_string_len, 1024*1024);
-        
-        // Enlarge recv_buf if needed.
-        // Receive bufsize must always be a multiple of 128 (see below).
-        long target_size = peer->yaml_string_len + 8;
-        target_size = (target_size + 127) & ~127;  // align to multiple of 128
-        
-        if (peer->recv_buf.size < target_size) {
-            Array<char> new_buf({target_size}, af_uhost);
-            memcpy(new_buf.data, recv_buf, recv_nbytes);
-            peer->recv_buf = new_buf;
-            recv_buf = new_buf.data;
-        }
-        
-        peer->state = Peer::State::ReadYamlString;
-        // fall through...
-    }
-    
-    if (peer->state == Peer::State::ReadYamlString) {
-        if (recv_nbytes < peer->yaml_string_len + 8)
-           return;
-        
-        const char *yaml_string = recv_buf + 8;
+    peer->ini_nbytes += nbytes_read;
+    this->nbytes_cumul.fetch_add(nbytes_read);
 
-        // Verify null terminator.
-        if (yaml_string[peer->yaml_string_len - 1] != '\0')
-            throw runtime_error("Receiver::Peer: YAML string is not null-terminated");
-        
-        // Parse YAML string into XEngineMetadata.
-        peer->metadata = XEngineMetadata::from_yaml_string(std::string(yaml_string));
-        peer->metadata.validate();
-
-        this->_post_metadata(peer);
-
-        // After processing the metadata, there may be some int4 data in the buffer.
-
-        const char *data = recv_buf + peer->yaml_string_len + 8;
-        long data_nbytes = recv_nbytes - peer->yaml_string_len - 8;
-        long nsegments = data_nbytes >> 7;
-        long residual = data_nbytes - (nsegments << 7);
-
-        this->_process_4bit_data(peer, data, nsegments);
-
-        // Move residual data to front of buffer.
-        memmove(recv_buf, data + (nsegments << 7), residual);
-        peer->recv_nbytes = residual;
-
-        peer->state = Peer::State::ReadData;
-        return;  // don't fall through
-    }
-    
-    if (peer->state == Peer::State::ReadData) {
-        long nsegments = recv_nbytes >> 7;
-        long residual = recv_nbytes - (nsegments << 7);
-
-        if (nsegments > 0)
-            this->_process_4bit_data(peer, recv_buf, nsegments);
-
-        // Move residual data to front of buffer.
-        // We use memcpy(..., 128) instead of memmove(..., residual) so that the compiler
-        // will emit a few "unrolled" simd instructions. This is safe because the receive
-        // bufsize is always a multiple of 128, and "if ((nsegments > 0) && (residual > 0))"
-        // protects against read-past-end-of-buffer or overlapping-dst-src.
-
-        if ((nsegments > 0) && (residual > 0))
-            memcpy(recv_buf, recv_buf + (nsegments << 7), 128);
-
-        peer->recv_nbytes = residual;
+    if (peer->ini_nbytes < 8)
         return;
+
+    // Read 4-byte little-endian magic number.
+    uint32_t magic = *((uint32_t *) peer->ini_buf);
+    static constexpr uint32_t magic_v1 = 0xf4bf4b01;
+    
+    if (magic != magic_v1) {
+        stringstream ss;
+        ss << "Receiver::Peer: invalid magic number 0x" << hex << magic
+            << " (expected 0x" << magic_v1 << ")";
+        throw runtime_error(ss.str());
     }
 
-    throw runtime_error("Should never get here");
+    // Read 4-byte little-endian string length.
+    int32_t yaml_len = *((int32_t *) (peer->ini_buf + 4));
+    xassert_gt(yaml_len, 0);
+    xassert_le(yaml_len, 1024*1024);
+    
+    peer->yaml_string_len = yaml_len;
+    peer->yaml_buf = Array<char> ({yaml_len+1}, af_uhost);
+    peer->yaml_buf.data[yaml_len] = 0;
+    peer->state = Peer::State::ReadYaml;
 }
 
 
-// Called after peer->metadata is initialized.
-void Receiver::_post_metadata(Peer *peer)
+void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
 {
-    xassert(peer->metadata.freq_channels.size() > 0);
-    xassert(peer->metadata.beam_ids.size() > 0);
+    xassert(peer->yaml_string_len > 0);
+    xassert(peer->yaml_nbytes < peer->yaml_string_len);
 
+    char *yaml_str = peer->yaml_buf.data;
+    char *buf = yaml_str + peer->yaml_nbytes;
+    long bufsize = peer->yaml_string_len - peer->yaml_nbytes;
+    long nbytes_read = peer->socket.read(buf, bufsize);    
+
+    // If nbytes_read == 0 and !sock.eof, it's just "would block" - do nothing.
+    if (nbytes_read <= 0)
+        return;
+
+    peer->yaml_nbytes += nbytes_read;
+    this->nbytes_cumul.fetch_add(nbytes_read);
+
+    if (peer->yaml_nbytes < peer->yaml_string_len)
+        return;
+
+    // Verify null terminator.
+    if (yaml_str[peer->yaml_string_len - 1] != '\0')
+        throw runtime_error("Receiver::Peer: YAML string is not null-terminated");
+    
+    // Parse YAML string into XEngineMetadata.
+    peer->metadata = XEngineMetadata::from_yaml_string(std::string(yaml_str));
+    peer->metadata.validate();
+
+    long nfreq = peer->metadata.freq_channels.size();
+    long nbeams = peer->metadata.nbeams;
+
+    xassert(nfreq > 0);
+    xassert(nbeams > 0);
+    xassert(peer->metadata.initial_time_sample == 0);  // FIXME for now!
+
+    peer->bytes_per_segment = nbeams * nfreq * 128;
+    peer->segments_per_chunk = xdiv(params.time_samples_per_chunk, 256);
+
+    // Receive buffer size is either 64KB or two segments, whichever is larger.
+    long nseg = max((64*1024) / peer->bytes_per_segment, 2L);
+
+    peer->rb_capacity = nseg * peer->bytes_per_segment;
+    peer->rb_buf = Array<char> ({peer->rb_capacity}, af_uhost);
+    peer->state = Peer::State::ReadData;
+
+    // Lock this->mutex, not peer->mutex!
     unique_lock<std::mutex> lock(mutex);
 
     if (this->has_metadata) {
@@ -530,7 +498,6 @@ void Receiver::_post_metadata(Peer *peer)
         this->metadata.beam_ids
     );
     
-    long nbeams = this->metadata.nbeams;
     this->curr_frames.resize(2*nbeams);
 
     for (long ichunk = 0; ichunk < 2; ichunk++) {
@@ -538,91 +505,83 @@ void Receiver::_post_metadata(Peer *peer)
             auto frame = params.allocator->get_frame(params.consumer_id);
             xassert(frame->time_chunk_index == ichunk);
             xassert(frame->beam_id == metadata.beam_ids.at(ibeam));
-
             this->curr_frames[ichunk*nbeams + ibeam] = frame;
         }
     }
 }
 
 
-// Called after 4-bit data is received over the network, to copy the data 
-// into the AssembledFrames.
-
-void Receiver::_process_4bit_data(Peer *peer, const char *buf, long n)
+void Receiver::_read_data(const shared_ptr<Peer> &peer)
 {
-    if (n == 0)
+    long rb_capacity = peer->rb_capacity;    
+    long rb_start = peer->rb_start;
+    long rb_end = peer->rb_end;
+
+    xassert(rb_capacity > 0);
+    xassert(rb_start <= rb_end);
+    xassert(rb_end < rb_start + rb_capacity);
+
+    // Read new data at rb_end.
+    // Compute (buf, bufsize) accounting for wraparound.
+    long pos = rb_end % rb_capacity;
+    char *buf = peer->rb_buf.data + pos;
+    long bufsize = min(rb_capacity - pos, rb_start + rb_capacity - rb_end);
+
+    xassert(bufsize > 0);
+    long nbytes_read = peer->socket.read(buf, bufsize);
+
+    // If nbytes_read == 0 and !sock.eof, it's just "would block" - do nothing.
+    if (nbytes_read <= 0)
         return;
 
-    const long *freq_channels = &peer->metadata.freq_channels[0];
-    long nfreq = peer->metadata.freq_channels.size();
-    long nt_chunk = params.time_samples_per_chunk;
+    rb_end += nbytes_read;
+    peer->rb_end = rb_end;
+    this->nbytes_cumul.fetch_add(nbytes_read);
 
-    long ichunk = peer->curr_chunk;
-    long iseg = peer->curr_segment;
-    long ibeam = peer->curr_ibeam;
-    long ifreq = peer->curr_ifreq;
+    // Currently, we process data in the reader thread.
+    // (In the future, this will happen in an assembler thread.)
 
-    // Points to an int4 array of shape (nfreq_tot, time_samples_per_chunk)
-    char *frame = this->_find_frame(ichunk, ibeam);
-
-    for (long i = 0; i < n; i++) {
-        if (frame != nullptr) {
-            // Logical array location (freq_index, 256 * iseg).
-            // Note factors of 2, since the array is int4, but the pointer is (char *).
-            long freq_index = freq_channels[ifreq];
-            char *dst = frame + freq_index * (nt_chunk >> 1) + (iseg << 7);
-            memcpy(dst, buf, 128);
-        }
-
-        // Advance to the next value (ichunk, iseg, ibeam, ifreq).
-        // If (ichunk, ibeam) change, then we call _find_frame() again.
-
-        buf += 128;
-        ifreq++;
-
-        if (ifreq < nfreq)
-            continue;
-
-        ifreq = 0;
-        ibeam++;
-
-        if (ibeam == metadata.nbeams) {
-            ibeam = 0;
-            iseg++;
-        }
-
-        if (iseg == (nt_chunk >> 8)) {
-            iseg = 0;
-            ichunk++;
-        }
-
-        frame = this->_find_frame(ichunk, ibeam);
-    }
-
-    peer->curr_chunk = ichunk;
-    peer->curr_segment = iseg;
-    peer->curr_ibeam = ibeam;
-    peer->curr_ifreq = ifreq;
+    while (peer->rb_end >= peer->rb_start + peer->bytes_per_segment)
+        this->_process_data(peer);
 }
 
 
-// Returns a pointer to the specified frame in the 'curr_frames' ringbuf,
-// advancing the ringbuf if necessary. Returns NULL if the ring buffer has
-// already advanced beyond the target frame.
-
-char *Receiver::_find_frame(long ichunk, long ibeam)
+void Receiver::_process_data(const shared_ptr<Peer> &peer)
 {
-    long nbeams = metadata.nbeams;
+    long nt_chunk = params.time_samples_per_chunk;
+    long nfreq = peer->metadata.freq_channels.size();
+    long nbeams = peer->metadata.nbeams;
+    
+    long bs = peer->bytes_per_segment;
+    long rb_capacity = peer->rb_capacity;
+    long rb_start = peer->rb_start;
+    long rb_end = peer->rb_end;
+
+    xassert(bs > 0);
+    xassert(rb_capacity > 0);
+
+    long rb_pos = rb_start % rb_capacity;
+    xassert(rb_end >= rb_start + bs);
+    xassert(rb_capacity >= rb_pos + bs);
+
+    long iseg = rb_start / bs;
+    xassert(rb_start == iseg * bs);
+
+    long ichunk = iseg / peer->segments_per_chunk;
+    iseg -= ichunk * peer->segments_per_chunk;
 
     // Target chunk is no longer in buffer (peer is running slow).
-    // In this case, we siletly drop the data.
-    if (ichunk < curr_base_chunk)
-        return nullptr;
+    // In this case, we silently drop the data.
+    if (ichunk < curr_base_chunk) {
+        peer->rb_start += bs;
+        return;
+    }
 
     if (ichunk >= curr_base_chunk + 2) {
         // Since chunks are processed sequentially, we should never need to advance
         // the ring buffer by more than one chunk. If this ever fails, it's an internal
         // server error, so throw an exception to flag it for debugging.
+
         xassert(ichunk == curr_base_chunk + 2);
         
         // Advance the ring buffer. Evicted frames are transferred to completed_frames queue.
@@ -631,11 +590,10 @@ char *Receiver::_find_frame(long ichunk, long ibeam)
             long i = (ichunk & 1) * nbeams + b;
             
             // Transfer evicted frame to completed_frames queue.
-            {
-                lock_guard<std::mutex> lock(mutex);
-                this->completed_frames.push(std::move(this->curr_frames[i]));
-            }
-            this->cv.notify_all();
+            unique_lock<std::mutex> lock(mutex);
+            this->completed_frames.push(std::move(this->curr_frames[i]));
+            lock.unlock();
+            cv.notify_all();
             
             // Replace with new frame from allocator.
             shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
@@ -647,8 +605,31 @@ char *Receiver::_find_frame(long ichunk, long ibeam)
         this->curr_base_chunk++;
     }
 
-    long i = (ichunk & 1) * nbeams + ibeam;
-    return (char *) (curr_frames[i]->data.data);
+    // The rest of _process_data() copies one "segment" of data
+    // (all beams, per-sender frequency subset, 256 time samples)
+    // into the AssembledFrames.
+
+    const char *src = peer->rb_buf.data + rb_pos;
+    const long *freq_channels = &peer->metadata.freq_channels[0];
+
+    for (long b = 0; b < nbeams; b++) {
+        long i = (ichunk & 1) * nbeams + b;
+        shared_ptr<AssembledFrame> frame = this->curr_frames[i];
+        xassert(frame);
+
+        // The destination "base" pointer includes a time offset
+        // (128 bytes per segment), but no (beam, frequency) offset.
+        char *dst_base = (char *)frame->data.data + (iseg << 7);
+
+        for (long ifreq = 0; ifreq < nfreq; ifreq++) {
+            long freq_index = freq_channels[ifreq];
+            char *dst = dst_base + freq_index * (nt_chunk >> 1);
+            memcpy(dst, src, 128);
+            src += 128;
+        }
+    }
+
+    peer->rb_start += bs;
 }
 
 
