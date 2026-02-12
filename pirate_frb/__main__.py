@@ -653,6 +653,8 @@ def parse_time_dedisperser(subparsers):
     parser = subparsers.add_parser("time_dedisperser", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-n', '--niter', type=int, default=1000, help="Number of iterations for timing (default 1000)")
+    parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
+    parser.add_argument('-g', '--max-gpu-clag', type=int, help="Override config.max_gpu_clag with specified value")
     parser.add_argument('-H', '--no-hugepages', action='store_true', help="Disable hugepages")
     parser.add_argument('--python', action='store_true', help="Use Python/cupy timing instead of C++ (for testing pybind11 interface)")
 
@@ -667,6 +669,13 @@ def time_dedisperser(args):
     print(f'Pinned thread to CPU 0 (vcpus {vcpu_list})')
     
     config = DedispersionConfig.from_yaml(args.config_file)
+
+    # Override config members if command-line flags were specified
+    if args.beams is not None:
+        config.beams_per_gpu = args.beams
+    if args.max_gpu_clag is not None:
+        config.max_gpu_clag = args.max_gpu_clag
+
     plan = DedispersionPlan(config)
     
     niterations = args.niter
