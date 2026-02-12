@@ -191,7 +191,7 @@ struct FakeServer::Worker
     
     // Called by worker thread.
     virtual void worker_initialize() = 0;
-    virtual void worker_accept_connections() { }   // only Receiver subclass defines this
+    virtual void worker_accept_connections() { }   // only TcpReceiver subclass defines this
     virtual Stats worker_body() = 0;
 
     shared_ptr<char> worker_alloc(long nbytes, bool on_gpu=false);
@@ -467,7 +467,8 @@ void FakeServer::join_threads()
     lk.unlock();
     
     for (ulong i = 0; i < threads.size(); i++)
-        threads[i].join();
+        if (threads[i].joinable())
+            threads[i].join();
 }
 
 
@@ -481,10 +482,10 @@ void FakeServer::abort(const string &abort_msg)
 
 // -------------------------------------------------------------------------------------------------
 //
-// Receiver
+// TcpReceiver
 
 
-struct Receiver : FakeServer::Worker
+struct TcpReceiver : FakeServer::Worker
 {
     // Initialized in constructor.
     string ip_addr;
@@ -504,7 +505,7 @@ struct Receiver : FakeServer::Worker
     vector<Socket> data_sockets;
 
     
-    Receiver(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
+    TcpReceiver(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
         Worker(state_, vcpu_list_, cpu_),
         ip_addr(ip_addr_),
         num_tcp_connections(num_tcp_connections_),
@@ -1000,7 +1001,7 @@ struct DownsamplingWorker : public FakeServer::Worker
 
 void FakeServer::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list, int cpu, int inic)
 {
-    auto wp = make_shared<Receiver> (state, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
+    auto wp = make_shared<TcpReceiver> (state, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
     this->_add_worker(wp, "add_tcp_receiver");
 }
 
