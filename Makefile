@@ -177,6 +177,7 @@ ASDF_CXX_SRCFILES = \
 
 LIB_SRCFILES = \
   src_lib/AssembledFrame.cpp \
+  src_lib/Barrier.cpp \
   src_lib/BumpAllocator.cpp \
   src_lib/CasmBeamformer.cu \
   src_lib/CoalescedDdKernel2.cu \
@@ -282,6 +283,7 @@ CUDAGEN_PYFILES = \
 # (Otherwise they won't show up in 'pip install' or pypi.)
 HFILES = \
   include/pirate/AssembledFrame.hpp \
+  include/pirate/Barrier.hpp \
   include/pirate/BumpAllocator.hpp \
   include/pirate/CasmBeamformer.hpp \
   include/pirate/CoalescedDdKernel2.hpp \

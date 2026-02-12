@@ -5,7 +5,6 @@
 #include <sstream>
 #include <iostream>
 
-#include <ksgpu/Barrier.hpp>
 #include <ksgpu/mem_utils.hpp>
 #include <ksgpu/cuda_utils.hpp>
 #include <ksgpu/time_utils.hpp>
@@ -19,6 +18,7 @@
 #include "../include/pirate/network_utils.hpp"  // Socket, Epoll
 #include "../include/pirate/loose_ends/cpu_downsample.hpp"
 #include "../include/pirate/Dedisperser.hpp"
+#include "../include/pirate/Barrier.hpp"
 
 
 using namespace std;
@@ -135,7 +135,7 @@ struct FakeServer::State
     std::mutex lock;
     
     bool use_hugepages;
-    ksgpu::Barrier barrier;
+    Barrier barrier;
 
     void abort(const string &msg);
 };
