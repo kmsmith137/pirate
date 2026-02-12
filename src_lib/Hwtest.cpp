@@ -248,6 +248,12 @@ Hwtest::Hwtest(const std::string &server_name_, bool use_hugepages) :
 { }
 
 
+shared_ptr<Hwtest> Hwtest::create(const std::string &server_name, bool use_hugepages)
+{
+    return shared_ptr<Hwtest> (new Hwtest(server_name, use_hugepages));
+}
+
+
 void Hwtest::_add_worker(const shared_ptr<Worker> &wp, const string &caller)
 {
     std::unique_lock lk(state->lock);

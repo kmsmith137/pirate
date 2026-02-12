@@ -619,8 +619,10 @@ void register_core_bindings(pybind11::module &m)
              "Returns True if all workers exited, False on timeout.")
     ;
 
-    py::class_<Hwtest>(m, "Hwtest")
-        .def(py::init<const std::string &, bool>(),
+    py::class_<Hwtest, std::shared_ptr<Hwtest>>(m, "Hwtest")
+        .def(py::init([](const std::string &server_name, bool use_hugepages) {
+                 return Hwtest::create(server_name, use_hugepages);
+             }),
              py::arg("server_name"), py::arg("use_hugepages"))
 
         .def("add_tcp_receiver", &Hwtest::add_tcp_receiver,
