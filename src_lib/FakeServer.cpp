@@ -21,6 +21,8 @@
 #include "../include/pirate/Barrier.hpp"
 
 
+namespace fs = std::filesystem;
+
 using namespace std;
 using namespace ksgpu;
 
@@ -824,14 +826,13 @@ struct MemcpyWorker : public FakeServer::Worker
 // -------------------------------------------------------------------------------------------------
 //
 // SsdWorker
-// FIXME should switch from std::string to fs::path
 
 
 struct SsdWorker : public FakeServer::Worker
 {
     // string worker_name;    // inherited from 'Worker' base class
 
-    string root_dir;
+    fs::path root_dir;
     long nbytes_per_file = 0;
     int issd = -1;
     
@@ -846,18 +847,18 @@ struct SsdWorker : public FakeServer::Worker
         nbytes_per_file(nbytes_per_file_),
         issd(issd_)
     {
-        xassert(root_dir.size() > 0);
+        xassert(!root_dir.empty());
         xassert(nbytes_per_file > 0);
         xassert((issd >= 0) && (issd < FakeServer::Stats::max_ssd));
 
         this->nfiles_per_iteration = (nbytes_per_file + 256L*1024L*1024L - 1) / nbytes_per_file;
-        
+
         stringstream ss;
-        ss << "SsdWriter(dir=" << root_dir
+        ss << "SsdWriter(dir=" << root_dir.string()
            << ", nbytes_per_file=" << ksgpu::nbytes_to_str(nbytes_per_file)
            << ", nfiles_per_iteration=" << nfiles_per_iteration
            << ")";
-        
+
         this->worker_name = ss.str();
     }
 
@@ -866,8 +867,8 @@ struct SsdWorker : public FakeServer::Worker
         // FIXME should be random data, to avoid confusion from compressed filesystems
         data = worker_alloc(nbytes_per_file);
 
-        // listdir() is defined in pirate/file_utils.cu
-        vector<string> all_files = listdir(root_dir);
+        // listdir() is defined in pirate/file_utils.cpp
+        vector<string> all_files = listdir(root_dir.string());
         vector<string> files_to_delete;
 
         for (const string &filename: all_files) {
@@ -879,15 +880,11 @@ struct SsdWorker : public FakeServer::Worker
             return;
 
         stringstream ss;
-        ss << "SsdWriter(" << root_dir << "): deleting " << files_to_delete.size() << " stale files from previous run\n";
+        ss << "SsdWriter(" << root_dir.string() << "): deleting " << files_to_delete.size() << " stale files from previous run\n";
         cout << ss.str() << flush;
 
-        for (const string &filename: files_to_delete) {
-            // remove_file() is defined in pirate/file_utils.cu
-            stringstream ss2;
-            ss2 << root_dir << "/" << filename;
-            remove_file(ss2.str());
-        }
+        for (const string &filename: files_to_delete)
+            remove_file(root_dir / filename);
     }
 
 
@@ -918,10 +915,7 @@ struct SsdWorker : public FakeServer::Worker
         // For now, I'm just calling write() in a loop, since this seems to give decent performance.
 
         for (int i = 0; i < nfiles_per_iteration; i++) {
-            stringstream ss;
-            ss << root_dir << "/file_" << (curr_file++);
-            string filename = ss.str();
-
+            string filename = (root_dir / ("file_" + to_string(curr_file++))).string();
             File f(filename, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT | O_SYNC);
             f.write(data.get(), nbytes_per_file);
         }
