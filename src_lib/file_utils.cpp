@@ -263,23 +263,6 @@ void makedir(const string &filename, bool throw_exception_if_directory_exists, m
 }
 
 
-vector<string> listdir(const string &dirname)
-{
-    vector<string> filenames;
-
-    Directory dir(dirname);
-
-    for (;;) {
-        struct dirent *entry = dir.read_next();
-        
-        if (entry)
-            filenames.push_back(entry->d_name);
-        else
-            return filenames;
-    }
-}
-
-
 // -------------------------------------------------------------------------------------------------
 
     

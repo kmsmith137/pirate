@@ -13,7 +13,7 @@
 #include <ksgpu/xassert.hpp>
 
 #include "../include/pirate/inlines.hpp"
-#include "../include/pirate/file_utils.hpp"     // File, listdir()
+#include "../include/pirate/file_utils.hpp"     // File, remove_file()
 #include "../include/pirate/system_utils.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket, Epoll
 #include "../include/pirate/loose_ends/cpu_downsample.hpp"
@@ -867,24 +867,21 @@ struct SsdWorker : public FakeServer::Worker
         // FIXME should be random data, to avoid confusion from compressed filesystems
         data = worker_alloc(nbytes_per_file);
 
-        // listdir() is defined in pirate/file_utils.cpp
-        vector<string> all_files = listdir(root_dir.string());
-        vector<string> files_to_delete;
+        vector<fs::path> files_to_delete;
 
-        for (const string &filename: all_files) {
-            if (is_stale_file(filename))
-                files_to_delete.push_back(filename);
-        }
+        for (const auto &entry : fs::directory_iterator(root_dir))
+            if (is_stale_file(entry.path().filename().string()))
+                files_to_delete.push_back(entry.path());
 
-        if (files_to_delete.size() == 0)
+        if (files_to_delete.empty())
             return;
 
         stringstream ss;
         ss << "SsdWriter(" << root_dir.string() << "): deleting " << files_to_delete.size() << " stale files from previous run\n";
         cout << ss.str() << flush;
 
-        for (const string &filename: files_to_delete)
-            remove_file(root_dir / filename);
+        for (const auto &path : files_to_delete)
+            remove_file(path);
     }
 
 

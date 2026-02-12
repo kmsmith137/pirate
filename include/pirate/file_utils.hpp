@@ -137,10 +137,6 @@ extern void makedir(const std::string &filename,
                     bool throw_exception_if_directory_exists = true,
                     mode_t mode = 0777);
 
-// Note: includes '.' and '..'
-extern std::vector<std::string> listdir(const std::string &dirname);
-
-
 // -------------------------------------------------------------------------------------------------
 //
 // File: RAII wrapper for unix file descriptor.
@@ -172,8 +168,6 @@ struct File
 //
 // Directory: RAII wrapper for (DIR *), from the C standard library.
 //
-// Note: instead of using this class, you may prefer pirate::listdir(),
-// which is declared above and returns a vector<string>.
 
 
 struct Directory
