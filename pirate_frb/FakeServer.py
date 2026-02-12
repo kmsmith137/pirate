@@ -1,5 +1,4 @@
 import os
-import time
 
 from . import pirate_pybind11
 
@@ -100,13 +99,30 @@ class FakeServer:
         self.cpp_server.add_downsampling_thread(src_bit_depth, src_nelts, vcpu_list, cpu)
         
 
-    def run(self, seconds=20):
+    def start(self):
         self.cpp_server.start()
 
-        while True:
-            time.sleep(1)
-            if self.cpp_server.show_stats() > seconds:
-                break
 
+    def stop(self):
         self.cpp_server.stop()
-        self.cpp_server.join_threads()
+
+
+    def join(self):
+        self.cpp_server.join()
+
+
+    def wait(self, timeout_ms=500):
+        return self.cpp_server.wait(timeout_ms)
+
+
+    def show_stats(self):
+        return self.cpp_server.show_stats()
+
+
+    def __enter__(self):
+        return self
+
+
+    def __exit__(self, *args):
+        self.stop()
+        self.join()
