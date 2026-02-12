@@ -23,8 +23,8 @@ The command includes 11 subcommands:
 - **make_subbands** - Create subband_counts with specified frequency range and width
 - **show_dedisperser** - Parse a dedisperser config file and write YAML to stdout
 - **show_random_config** - Generate random DedispersionConfig(s) and print as YAML
-- **test_node** - Run test server
-- **send** - Send data to test server
+- **hwtest** - Run test server
+- **hwtest_send** - Send data to test server
 - **scratch** - Run scratch code (defined in src_lib/scratch.cu)
 - **random_kernels** - A utility for maintaining makefile_helper.py
 

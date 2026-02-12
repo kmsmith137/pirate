@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_FAKE_SERVER_HPP
-#define _PIRATE_INTERNALS_FAKE_SERVER_HPP
+#ifndef _PIRATE_INTERNALS_HWTEST_HPP
+#define _PIRATE_INTERNALS_HWTEST_HPP
 
 #include <mutex>
 #include <vector>
@@ -18,9 +18,9 @@ namespace pirate {
 struct DedispersionPlan;
 
 
-struct FakeServer
+struct Hwtest
 {
-    FakeServer(const std::string &server_name="FakeServer", bool use_hugepages=true);
+    Hwtest(const std::string &server_name="Hwtest", bool use_hugepages=true);
 
     // I've been using 512KB as a default 'recv_bufsize', but I haven't explored this systematically.
     void add_tcp_receiver(const std::string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const std::vector<int> &vcpu_list, int cpu, int inic);
@@ -50,7 +50,7 @@ struct FakeServer
     void start();
     void stop();
 
-    // Defined in src_lib/FakeServer.cu
+    // Defined in src_lib/Hwtest.cpp
     struct State;    
     struct Stats;
     struct Worker;
@@ -71,4 +71,4 @@ struct FakeServer
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_FAKE_SERVER_HPP
+#endif // _PIRATE_INTERNALS_HWTEST_HPP

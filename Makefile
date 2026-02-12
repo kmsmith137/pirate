@@ -187,8 +187,8 @@ LIB_SRCFILES = \
   src_lib/DedispersionConfig.cpp \
   src_lib/DedispersionKernel.cu \
   src_lib/DedispersionPlan.cpp \
-  src_lib/FakeCorrelator.cpp \
-  src_lib/FakeServer.cpp \
+  src_lib/HwtestSender.cpp \
+  src_lib/Hwtest.cpp \
   src_lib/FakeXEngine.cpp \
   src_lib/FileWriter.cpp \
   src_lib/FrbServer.cpp \
@@ -242,8 +242,8 @@ PYEXT_SRCFILES = \
 PYFILES = \
   pirate_frb/__init__.py \
   pirate_frb/__main__.py \
-  pirate_frb/FakeCorrelator.py \
-  pirate_frb/FakeServer.py \
+  pirate_frb/HwtestSender.py \
+  pirate_frb/Hwtest.py \
   pirate_frb/Hardware.py \
   pirate_frb/pybind11_injections.py \
   pirate_frb/yaml_utils.py \
@@ -296,8 +296,8 @@ HFILES = \
   include/pirate/DedispersionKernel.hpp \
   include/pirate/DedispersionPlan.hpp \
   include/pirate/DedispersionTree.hpp \
-  include/pirate/FakeCorrelator.hpp \
-  include/pirate/FakeServer.hpp \
+  include/pirate/HwtestSender.hpp \
+  include/pirate/Hwtest.hpp \
   include/pirate/FakeXEngine.hpp \
   include/pirate/file_utils.hpp \
   include/pirate/FileWriter.hpp \

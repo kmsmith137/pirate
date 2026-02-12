@@ -22,8 +22,8 @@ from . import (
 )
 
 from .Hardware import Hardware
-from .FakeServer import FakeServer
-from .FakeCorrelator import FakeCorrelator
+from .Hwtest import Hwtest
+from .HwtestSender import HwtestSender
 from .yaml_utils import indent_dedispersion_plan_comments, align_inline_comments
 
 
@@ -305,12 +305,12 @@ def make_subbands(args):
     print(fs.show())
 
 
-#######################################   test_node command  #######################################
+########################################   hwtest command  #########################################
 
 
-def parse_test_node(subparsers):
+def parse_hwtest(subparsers):
     help_text = "Run test server (if no flags are specified, then -dcsdn --h2g --g2h is the default)"
-    parser = subparsers.add_parser("test_node", help=help_text, description=help_text)
+    parser = subparsers.add_parser("hwtest", help=help_text, description=help_text)
     parser.add_argument('-d', '--dedisperse', dest='d', action='store_true', help='Run GPU dedispersion')
     parser.add_argument('-c', '--cpu', dest='c', action='store_true', help='Run AVX2 downsampling kernels on CPU')
     parser.add_argument('-s', '--ssd', dest='s', action='store_true', help='Write files to SSDs')
@@ -329,16 +329,16 @@ def parse_test_node(subparsers):
     parser.add_argument('--chord', action='store_true', help='Equivalent to --nic=enp13s0f0np0,enp13s0f1np1,enp160s0f0np0,enp160s0f1np1 --ssd-dirs=/scratch,/disk2/scratch')
     
 
-def test_node(args):
+def hwtest(args):
     # FIXME currently hardcoded
     ssd_dirs = [ '/scratch' ]
-    
+
     tcp_connections_per_ip_address = 1
     downsampling_threads_per_cpu = 8
     write_threads_per_ssd = 4
 
     no_flags = not (args.d or args.c or args.s or args.n or args.H or args.G or args.h2g or args.g2h)
-    server = FakeServer('Node test')
+    server = Hwtest('Node test')
     hw = server.hardware
 
     # IP address parsing starts here.
@@ -366,7 +366,7 @@ def test_node(args):
 
     if (ip_flag >= 2) or (ip_needed and (ip_flag == 0)):
         s = 'precisely' if ip_needed else 'at most'
-        print(f"pirate 'test_node' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
+        print(f"pirate 'hwtest' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
         print(f"  --ip=[IPADDRS]     for example --ip=10.1.1.2,10.1.2.2,10.1.3.2,10.1.4.2", file=sys.stderr)
         print(f'  --nic=[NICS]       for example --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
         print(f'  --toronto          equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1 --ssd-dirs=/scratch', file=sys.stderr)
@@ -398,7 +398,7 @@ def test_node(args):
 
     if (ssd_flag >= 2) or (ssd_needed and (ssd_flag == 0)):
         s = 'precisely' if ssd_needed else 'at most'
-        print(f"pirate 'test_node' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
+        print(f"pirate 'hwtest' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
         print(f"  --ssd-dirs=[DIRS]     for example --ssd-dirs=/scratch1,/scratch2", file=sys.stderr)
         print(f'  --ssd-devs=[DEVS]     for example --ssd-devs=nvme0n1p1,nvme0n2p1', file=sys.stderr)
         print(f'  --toronto             equivalent to --ssd-dirs=/scratch --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
@@ -408,7 +408,7 @@ def test_node(args):
     # Add threads to server.
     
     if no_flags:
-        print("No flags passed to test_node.run() -- by default, all tasks except hmem will be run")
+        print("No flags passed to hwtest -- by default, all tasks except hmem will be run")
 
     if args.H:
         # FIXME -- currently submit one thread per vcpu (should do something better)
@@ -449,12 +449,12 @@ def test_node(args):
     server.run(args.time)
 
 
-#########################################   send command  ##########################################
+######################################   hwtest_send command  #######################################
 
 
-def parse_send(subparsers):
-    help_text = 'Send data to test server (this is the "other half" of "python -m pirate_frb test_node")'
-    parser = subparsers.add_parser("send", help=help_text, description=help_text)
+def parse_hwtest_send(subparsers):
+    help_text = 'Send data to test server (this is the "other half" of "python -m pirate_frb hwtest")'
+    parser = subparsers.add_parser("hwtest_send", help=help_text, description=help_text)
     parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
     parser.add_argument('-b', '--bufsize', type=int, default=65536, help="Send bufsize (default 65536)")
     parser.add_argument('ip_addrs', nargs='*', help="list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2")
@@ -462,7 +462,7 @@ def parse_send(subparsers):
     parser.add_argument('--chord', type=int, help="'--chord X' is also equivalent to arguments: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X")
 
 
-def send(args):
+def hwtest_send(args):
     # FIXME currently hardcoded
     tcp_connections_per_ip_address = 1
 
@@ -481,13 +481,13 @@ def send(args):
         flag += 1
 
     if flag != 1:
-        print(f"pirate 'send' command: precisely one of the following must be specified on the command line:", file=sys.stderr)
+        print(f"pirate 'hwtest_send' command: precisely one of the following must be specified on the command line:", file=sys.stderr)
         print(f"  - A list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2", file=sys.stderr)
         print(f"  - The flag '--toronto X', which is equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
         print(f"  - The flag '--chord X', which is also equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
         sys.exit(2)
 
-    with FakeCorrelator(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True) as correlator:
+    with HwtestSender(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True) as correlator:
         for ip_addr in ip_addrs:
             correlator.add_endpoint(ip_addr, tcp_connections_per_ip_address, args.rate)
 
@@ -1016,8 +1016,8 @@ def get_parser():
     parse_show_dedisperser(subparsers)
     parse_time_dedisperser(subparsers)
     parse_show_random_config(subparsers)
-    parse_test_node(subparsers)
-    parse_send(subparsers)
+    parse_hwtest(subparsers)
+    parse_hwtest_send(subparsers)
     parse_scratch(subparsers)
     parse_random_kernels(subparsers)
     parse_show_asdf(subparsers)
@@ -1050,10 +1050,10 @@ def main():
         time_dedisperser(args)
     elif args.command == "show_random_config":
         show_random_config(args)
-    elif args.command == "test_node":
-        test_node(args)
-    elif args.command == "send":
-        send(args)
+    elif args.command == "hwtest":
+        hwtest(args)
+    elif args.command == "hwtest_send":
+        hwtest_send(args)
     elif args.command == "scratch":
         scratch(args)
     elif args.command == "random_kernels":

@@ -10,18 +10,18 @@ Classes for hardware abstraction and testing/simulation.
    :show-inheritance:
 ```
 
-## FakeServer
+## Hwtest
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.FakeServer
+.. autoclass:: pirate_frb.Hwtest
    :members:
    :show-inheritance:
 ```
 
-## FakeCorrelator
+## HwtestSender
 
 ```{eval-rst}
-.. autoclass:: pirate_frb.FakeCorrelator
+.. autoclass:: pirate_frb.HwtestSender
    :members:
    :show-inheritance:
 ```

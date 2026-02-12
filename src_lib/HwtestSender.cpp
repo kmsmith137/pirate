@@ -1,4 +1,4 @@
-#include "../include/pirate/FakeCorrelator.hpp"
+#include "../include/pirate/HwtestSender.hpp"
 #include "../include/pirate/network_utils.hpp"  // Socket
 #include "../include/pirate/system_utils.hpp"   // set_thread_affinity()
 
@@ -20,7 +20,7 @@ namespace pirate {
 #endif
 
 
-FakeCorrelator::FakeCorrelator(long send_bufsize_, bool use_zerocopy_, bool use_mmap_, bool use_hugepages_)
+HwtestSender::HwtestSender(long send_bufsize_, bool use_zerocopy_, bool use_mmap_, bool use_hugepages_)
 {
     xassert(send_bufsize_ > 0);
 
@@ -31,14 +31,14 @@ FakeCorrelator::FakeCorrelator(long send_bufsize_, bool use_zerocopy_, bool use_
 }
 
 
-FakeCorrelator::~FakeCorrelator()
+HwtestSender::~HwtestSender()
 {
     this->stop();
     this->join();
 }
 
 
-void FakeCorrelator::_throw_if_stopped(const char *method_name)
+void HwtestSender::_throw_if_stopped(const char *method_name)
 {
     // Caller must hold mutex.
     if (error)
@@ -49,13 +49,13 @@ void FakeCorrelator::_throw_if_stopped(const char *method_name)
 }
 
 
-void FakeCorrelator::add_endpoint(const string &ip_addr, long num_tcp_connections, double total_gbps, const vector<int> &vcpu_list)
+void HwtestSender::add_endpoint(const string &ip_addr, long num_tcp_connections, double total_gbps, const vector<int> &vcpu_list)
 {
     std::lock_guard<std::mutex> lock(mutex);
-    _throw_if_stopped("FakeCorrelator::add_endpoint");
+    _throw_if_stopped("HwtestSender::add_endpoint");
 
     if (is_started)
-        throw runtime_error("FakeCorrelator::add_endpoint() called after start()");
+        throw runtime_error("HwtestSender::add_endpoint() called after start()");
 
     Endpoint e;
     e.ip_addr = ip_addr;
@@ -67,16 +67,16 @@ void FakeCorrelator::add_endpoint(const string &ip_addr, long num_tcp_connection
 }
 
 
-void FakeCorrelator::start()
+void HwtestSender::start()
 {
     std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("FakeCorrelator::start");
+    _throw_if_stopped("HwtestSender::start");
 
     if (is_started)
-        throw runtime_error("FakeCorrelator::start() called twice");
+        throw runtime_error("HwtestSender::start() called twice");
 
     if (endpoints.empty())
-        throw runtime_error("FakeCorrelator::start() called with no endpoints");
+        throw runtime_error("HwtestSender::start() called with no endpoints");
 
     is_started = true;
     lock.unlock();
@@ -85,11 +85,11 @@ void FakeCorrelator::start()
     workers.resize(num_endpoints);
 
     for (long i = 0; i < num_endpoints; i++)
-        workers[i] = std::thread(&FakeCorrelator::worker_main, this, i);
+        workers[i] = std::thread(&HwtestSender::worker_main, this, i);
 }
 
 
-void FakeCorrelator::stop(std::exception_ptr e)
+void HwtestSender::stop(std::exception_ptr e)
 {
     std::lock_guard<std::mutex> lock(mutex);
 
@@ -102,7 +102,7 @@ void FakeCorrelator::stop(std::exception_ptr e)
 }
 
 
-void FakeCorrelator::join()
+void HwtestSender::join()
 {
     for (auto &w : workers) {
         if (w.joinable())
@@ -111,7 +111,7 @@ void FakeCorrelator::join()
 }
 
 
-bool FakeCorrelator::wait(int timeout_ms)
+bool HwtestSender::wait(int timeout_ms)
 {
     std::unique_lock<std::mutex> lock(mutex);
     long nworkers = long(workers.size());
@@ -126,7 +126,7 @@ bool FakeCorrelator::wait(int timeout_ms)
 }
 
 
-void FakeCorrelator::worker_main(long endpoint_index)
+void HwtestSender::worker_main(long endpoint_index)
 {
     const string &ip_addr = endpoints.at(endpoint_index).ip_addr;
     string errmsg;
@@ -159,7 +159,7 @@ void FakeCorrelator::worker_main(long endpoint_index)
 }
 
 
-bool FakeCorrelator::_send_all(Socket &sock, const void *buf, long nbytes)
+bool HwtestSender::_send_all(Socket &sock, const void *buf, long nbytes)
 {
     const char *ptr = static_cast<const char *>(buf);
     long pos = 0;
@@ -185,7 +185,7 @@ bool FakeCorrelator::_send_all(Socket &sock, const void *buf, long nbytes)
 }
 
 
-long FakeCorrelator::_worker_main(long endpoint_index)
+long HwtestSender::_worker_main(long endpoint_index)
 {
     xassert(endpoint_index >= 0);
     xassert(endpoint_index < long(endpoints.size()));

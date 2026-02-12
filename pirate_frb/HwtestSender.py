@@ -3,10 +3,10 @@ from . import pirate_pybind11
 from .Hardware import Hardware
 
 
-class FakeCorrelator:
+class HwtestSender:
     def __init__(self, send_bufsize=64*1024, use_zerocopy=True, use_mmap=False, use_hugepages=True):
         # Low-level C++ correlator, exported to python via pybind11.
-        self.cpp_correlator = pirate_pybind11.FakeCorrelator(send_bufsize, use_zerocopy, use_mmap, use_hugepages)
+        self.cpp_correlator = pirate_pybind11.HwtestSender(send_bufsize, use_zerocopy, use_mmap, use_hugepages)
 
         # The Hardware class provides member functions for querying hardware, in particular
         # for determining which cores are associated with PCIe devices (GPUs, NICs).

@@ -1,5 +1,5 @@
-#ifndef _PIRATE_INTERNALS_FAKE_CORRELATOR_HPP
-#define _PIRATE_INTERNALS_FAKE_CORRELATOR_HPP
+#ifndef _PIRATE_INTERNALS_HWTEST_SENDER_HPP
+#define _PIRATE_INTERNALS_HWTEST_SENDER_HPP
 
 #include <condition_variable>
 #include <exception>
@@ -16,7 +16,7 @@ namespace pirate {
 struct Socket;  // forward declaration (defined in network_utils.hpp)
 
 
-// FakeCorrelator: simulates a correlator by sending data over TCP connections
+// HwtestSender: simulates a correlator by sending data over TCP connections
 // to one or more receiver endpoints. Used for testing/benchmarking the receiver.
 //
 // This class is a "thread-backed class" (see notes/thread_backed_class.md) that
@@ -24,7 +24,7 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 // (optionally rate-limited) over TCP.
 //
 // Usage:
-//   auto fc = make_shared<FakeCorrelator>(send_bufsize, ...);
+//   auto fc = make_shared<HwtestSender>(send_bufsize, ...);
 //   fc->add_endpoint("10.1.1.2", 1, 0.0, vcpu_list);
 //   fc->start();   // creates worker threads and begins sending
 //   // ... wait ...
@@ -35,12 +35,12 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 //   - Opens TCP connection(s) to the endpoint on port 8787
 //   - Sends data in a loop until stopped or connection is closed
 
-struct FakeCorrelator
+struct HwtestSender
 {
     // Timeout for send operations (milliseconds).
     static constexpr int send_timeout_ms = 10;
 
-    FakeCorrelator(
+    HwtestSender(
         long send_bufsize = 64*1024,
         bool use_zerocopy = true,
         bool use_mmap = false,
@@ -48,7 +48,7 @@ struct FakeCorrelator
     );
 
     // Destructor calls stop() and joins worker threads.
-    ~FakeCorrelator();
+    ~HwtestSender();
 
     // Add an endpoint. Must be called before start().
     // total_gbps=0 means "no rate limit".
@@ -58,7 +58,7 @@ struct FakeCorrelator
     // Entry point: throws if already started or stopped.
     void start();
 
-    // Put FakeCorrelator into stopped state. Worker threads exit promptly.
+    // Put HwtestSender into stopped state. Worker threads exit promptly.
     // If 'e' is non-null, it represents an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr);
 
@@ -71,10 +71,10 @@ struct FakeCorrelator
 
     // ----- Noncopyable, nonmoveable -----
 
-    FakeCorrelator(const FakeCorrelator &) = delete;
-    FakeCorrelator &operator=(const FakeCorrelator &) = delete;
-    FakeCorrelator(FakeCorrelator &&) = delete;
-    FakeCorrelator &operator=(FakeCorrelator &&) = delete;
+    HwtestSender(const HwtestSender &) = delete;
+    HwtestSender &operator=(const HwtestSender &) = delete;
+    HwtestSender(HwtestSender &&) = delete;
+    HwtestSender &operator=(HwtestSender &&) = delete;
 
 private:
     struct Endpoint {
@@ -120,4 +120,4 @@ private:
 
 }  // namespace pirate
 
-#endif // _PIRATE_INTERNALS_FAKE_CORRELATOR_HPP
+#endif // _PIRATE_INTERNALS_HWTEST_SENDER_HPP

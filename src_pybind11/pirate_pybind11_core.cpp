@@ -23,8 +23,8 @@
 #include "../include/pirate/Receiver.hpp"
 #include "../include/pirate/FrbServer.hpp"
 #include "../include/pirate/FileWriter.hpp"
-#include "../include/pirate/FakeCorrelator.hpp"
-#include "../include/pirate/FakeServer.hpp"
+#include "../include/pirate/HwtestSender.hpp"
+#include "../include/pirate/Hwtest.hpp"
 
 using namespace std;
 using namespace ksgpu;
@@ -589,65 +589,65 @@ void register_core_bindings(pybind11::module &m)
                "Stop the writer. Safe to call multiple times.")
     ;
     
-    // FakeCorrelator: simulates a correlator sending data over TCP.
+    // HwtestSender: simulates a correlator sending data over TCP.
     // Skipped members: mutex, cv, is_stopped, is_started, error, workers, endpoints (internal state)
     // Skipped methods: _throw_if_stopped, worker_main, _worker_main, _send_all (private)
-    py::class_<FakeCorrelator>(m, "FakeCorrelator")
+    py::class_<HwtestSender>(m, "HwtestSender")
         .def(py::init<long, bool, bool, bool>(),
              py::arg("send_bufsize"), py::arg("use_zerocopy"), py::arg("use_mmap"), py::arg("use_hugepages"))
 
-        .def("add_endpoint", &FakeCorrelator::add_endpoint,
+        .def("add_endpoint", &HwtestSender::add_endpoint,
              py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("total_gbps"), py::arg("vcpu_list"),
              "Add an endpoint. Must be called before start().")
 
-        .def("start", &FakeCorrelator::start,
+        .def("start", &HwtestSender::start,
              py::call_guard<py::gil_scoped_release>(),
              "Create worker threads and begin sending data.")
 
-        .def("stop", [](FakeCorrelator &self) { self.stop(); },
+        .def("stop", [](HwtestSender &self) { self.stop(); },
              py::call_guard<py::gil_scoped_release>(),
              "Signal worker threads to stop. Safe to call multiple times.")
 
-        .def("join", &FakeCorrelator::join,
+        .def("join", &HwtestSender::join,
              py::call_guard<py::gil_scoped_release>(),
              "Block until all worker threads have exited.")
 
-        .def("wait", &FakeCorrelator::wait,
+        .def("wait", &HwtestSender::wait,
              py::arg("timeout_ms"),
              py::call_guard<py::gil_scoped_release>(),
              "Wait until all workers have exited, or timeout expires.\n"
              "Returns True if all workers exited, False on timeout.")
     ;
-        
-    py::class_<FakeServer>(m, "FakeServer")
+
+    py::class_<Hwtest>(m, "Hwtest")
         .def(py::init<const std::string &, bool>(),
              py::arg("server_name"), py::arg("use_hugepages"))
 
-        .def("add_tcp_receiver", &FakeServer::add_tcp_receiver,
+        .def("add_tcp_receiver", &Hwtest::add_tcp_receiver,
              py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("recv_bufsize"),
              py::arg("use_epoll"), py::arg("vcpu_list"), py::arg("cpu"), py::arg("inic"))
 
-        .def("add_chime_dedisperser", &FakeServer::add_chime_dedisperser,
+        .def("add_chime_dedisperser", &Hwtest::add_chime_dedisperser,
              py::arg("device"), py::arg("vcpu_list"), py::arg("cpu"))
-        
-        .def("add_memcpy_thread", &FakeServer::add_memcpy_thread,
+
+        .def("add_memcpy_thread", &Hwtest::add_memcpy_thread,
              py::arg("src_device"), py::arg("dst_device"), py::arg("blocksize"),
              py::arg("use_copy_engine"), py::arg("vcpu_list"), py::arg("cpu"))
-        
-        .def("add_ssd_writer", &FakeServer::add_ssd_writer,
+
+        .def("add_ssd_writer", &Hwtest::add_ssd_writer,
              py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"),
              py::arg("cpu"), py::arg("issd"))
 
-        .def("add_downsampling_thread", &FakeServer::add_downsampling_thread,
+        .def("add_downsampling_thread", &Hwtest::add_downsampling_thread,
              py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"),
              py::arg("cpu"))
 
          // Called by python code, to control server.
-        .def("abort", &FakeServer::abort, py::arg("abort_msg"))
-        .def("join_threads", &FakeServer::join_threads)
-        .def("show_stats", &FakeServer::show_stats)
-        .def("start", &FakeServer::start)
-        .def("stop", &FakeServer::stop)
+        .def("abort", &Hwtest::abort, py::arg("abort_msg"))
+        .def("join_threads", &Hwtest::join_threads)
+        .def("show_stats", &Hwtest::show_stats)
+        .def("start", &Hwtest::start)
+        .def("stop", &Hwtest::stop)
     ;
 }
 

@@ -11,8 +11,8 @@ from . import kernels
 from . import loose_ends
 from . import core
 
-from .FakeCorrelator import FakeCorrelator
-from .FakeServer import FakeServer
+from .HwtestSender import HwtestSender
+from .Hwtest import Hwtest
 from .Hardware import Hardware
 
 from .pirate_pybind11 import (

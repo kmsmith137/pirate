@@ -6,10 +6,10 @@ from . import pirate_pybind11
 from .Hardware import Hardware
 
 
-class FakeServer:
+class Hwtest:
     def __init__(self, server_name, use_hugepages=True):
         # Low-level C++ server, exported to python via pybind11.
-        self.cpp_server = pirate_pybind11.FakeServer(server_name, use_hugepages)
+        self.cpp_server = pirate_pybind11.Hwtest(server_name, use_hugepages)
         
         # The Hardware class provides member functions for querying hardware, in particular
         # for determining which cores are associated with PCIe devices (GPUs, NICs).
@@ -59,14 +59,14 @@ class FakeServer:
 
         if host_to_host:
             if cpu is None:
-                raise RuntimeError("FakeServer.add_memcpy() thread: for a host->host copy, the 'cpu' arg must be specified")
+                raise RuntimeError("Hwtest.add_memcpy() thread: for a host->host copy, the 'cpu' arg must be specified")
             vcpu_list = self.hardware.vcpu_list_from_cpu(cpu)
 
         else:
             if cpu is not None:
-                raise RuntimeError("FakeServer.add_memcpy_thread(): for a copy involving the GPU, the 'cpu' arg must not be specified")
+                raise RuntimeError("Hwtest.add_memcpy_thread(): for a copy involving the GPU, the 'cpu' arg must not be specified")
             if (src_device >= 0) and (dst_device >= 0) and (src_device != dst_device):
-                raise RuntimeError("FakeServer.add_memcpy_thread(): GPU->GPU copies between different GPUs are not currently supported")
+                raise RuntimeError("Hwtest.add_memcpy_thread(): GPU->GPU copies between different GPUs are not currently supported")
 
             gpu = max(src_device, dst_device)
             vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)

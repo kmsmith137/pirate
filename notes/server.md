@@ -73,32 +73,32 @@ The repo currently includes a little bit of low-level code that may be helpful:
   - `Epoll`: similar C++ wrapper class for linux epoll file descriptor.
      (Allows one thread to read from multiple TCP sockets efficiently, see `man epoll`).
 
-  - To see `class Socket` and `class Epoll` in action, check out `FakeServer.cpp`,
+  - To see `class Socket` and `class Epoll` in action, check out `Hwtest.cpp`,
     which accepts connections from a fixed number of TCP sockets, and then reads
     data in parallel from them.
 
-  - For context (and note that this is a bit of a tangent), the FakeServer
+  - For context (and note that this is a bit of a tangent), the Hwtest
     is some code intended for testing hardware, which times a synthetic load
     that consists of several things in parallel: network IO, disk IO, GPU-host
     PCIe transfers, GPU compute kernels, CPU compute kernels, host memory bandwidth.
 
-    If you'd like to run the FakeServer, here's an example networking-only run
-    (see `python -m pirate_frb test_node --help` for more info):
+    If you'd like to run the Hwtest, here's an example networking-only run
+    (see `python -m pirate_frb hwtest --help` for more info):
 
     ```
     # On cx67. The test will pause after "listening for TCP connections".
-    python -m pirate_frb test_node -n --toronto
+    python -m pirate_frb hwtest -n --toronto
 
     # On cx68. Send to all 4 IP addresses on cx67.
-    python -m pirate_frb send 10.50.0.1 10.50.1.1 10.50.2.1 10.50.3.1
+    python -m pirate_frb hwtest_send 10.50.0.1 10.50.1.1 10.50.2.1 10.50.3.1
     ```
-    I don't expect that the FakeServer will have much long-term usefulness,
+    I don't expect that the Hwtest will have much long-term usefulness,
     but browsing the code may help a little with getting started.
 
-  - Note that the FakeServer network receive code assumes that the number of
+  - Note that the Hwtest network receive code assumes that the number of
     senders is known in advance. The real networking code should allow senders
     to dynamically open/close connections (e.g. if an X-engine node goes down).
-    This will make the real code more complicated than the FakeServer.
+    This will make the real code more complicated than the Hwtest.
 
   - I think the "listener" thread which accepts new connections on a listening
     socket (and parses metadata) should be different from the "receiver" thread
