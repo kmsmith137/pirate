@@ -661,8 +661,11 @@ struct ChimeWorker : public FakeServer::Worker
 {
     DedispersionConfig dedispersion_config;
     shared_ptr<DedispersionPlan> dedispersion_plan;
+    shared_ptr<CudaStreamPool> cuda_stream_pool;
     shared_ptr<GpuDedisperser> gpu_dedisperser;
+    
     int device = -1;
+    long seq_id = 0;
 
     
     ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int device_) :
@@ -714,31 +717,54 @@ struct ChimeWorker : public FakeServer::Worker
 
         // Create DedispersionPlan and GpuDedisperser.
         dedispersion_plan = make_shared<DedispersionPlan> (dedispersion_config);
+        cuda_stream_pool = CudaStreamPool::create(dedispersion_config.num_active_batches);
 
         GpuDedisperser::Params gdd_params;
         gdd_params.plan = dedispersion_plan;
-        gdd_params.stream_pool = CudaStreamPool::create(dedispersion_config.num_active_batches);
+        gdd_params.stream_pool = cuda_stream_pool;
         gpu_dedisperser = GpuDedisperser::create(gdd_params);
 
         // Allocate GpuDedisperser using dummy-mode BumpAllocators.
-        BumpAllocator gpu_allocator(af_gpu | af_zero, -1);
-
         int host_aflags = af_rhost | af_zero;
         if (state->use_hugepages)
             host_aflags |= af_mmap_huge;
+        
         BumpAllocator host_allocator(host_aflags, -1);
-
+        BumpAllocator gpu_allocator(af_gpu | af_zero, -1);
         gpu_dedisperser->allocate(gpu_allocator, host_allocator);
     }
 
     virtual Stats worker_body() override
     {
-        //for (long i = 0; i < niter; i++)
-        //    dedisperser.run(ichunk++);
-        
+        const long nstreams = gpu_dedisperser->nstreams;
+        const long nbatches = gpu_dedisperser->nbatches;
+        const long beams_per_batch = gpu_dedisperser->beams_per_batch;
+        const long nouter = max(32/beams_per_batch, 1L);
+
+        for (long iouter = 0; iouter < nouter; iouter++) {
+            long istream = seq_id % nstreams;
+            long ichunk = seq_id / nbatches;
+            long ibatch = seq_id % nbatches;
+            this->seq_id++;
+            
+            cudaStream_t compute_stream = cuda_stream_pool->compute_streams.at(istream);
+
+            gpu_dedisperser->acquire_input(ichunk, ibatch, compute_stream);
+            gpu_dedisperser->release_input(ichunk, ibatch, compute_stream);
+            
+            gpu_dedisperser->acquire_output(ichunk, ibatch, compute_stream);
+            gpu_dedisperser->release_output(ichunk, ibatch, compute_stream);
+        }
+
+        // Reminder: ResourceTracker counts are "per batch".
+        const ResourceTracker &rt = gpu_dedisperser->resource_tracker;
+    
         Stats stats;
-        // stats.chime_beams = niter * dedisperser.config.beams_per_gpu * (1.0e-3 * dedisperser.config.time_samples_per_chunk);
-        // stats.gmem[device] += niter * dedisperser.bw_per_run_call.nbytes_gmem;
+        stats.hmem(cpu) = nouter * rt.get_hmem_bw();
+        stats.gmem[device] = nouter * rt.get_gmem_bw();
+        stats.h2g[device] = nouter * rt.get_h2g_bw();
+        stats.g2h[device] = nouter * rt.get_g2h_bw();
+        stats.chime_beams += nouter * beams_per_batch;
         return stats;
     }
 };
