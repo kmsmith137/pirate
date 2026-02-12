@@ -1,6 +1,8 @@
 #ifndef _PIRATE_INTERNALS_HWTEST_HPP
 #define _PIRATE_INTERNALS_HWTEST_HPP
 
+#include "Barrier.hpp"
+
 #include <mutex>
 #include <vector>
 #include <string>
@@ -49,19 +51,27 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     void stop();
 
     // Defined in src_lib/Hwtest.cpp
-    struct State;
     struct Stats;
     struct Worker;
 
-    std::string server_name;
-    std::shared_ptr<State> state;
+    // Values of 'code' member.
+    static constexpr int initializing = 0;
+    static constexpr int running = 1;
+    static constexpr int stopped = 2;
+    static constexpr int aborted = 3;
 
-    // After server is started, 'workers' is immutable after server is started.
-    // Before server is started, 'workers' is protected by state->lock (kinda awkward but turns out to be simplest).
+    std::string server_name;
+    int code = initializing;
+    std::string abort_msg;
+    std::mutex mutex;
+    bool use_hugepages;
+    Barrier barrier;
+
+    // After server is started, 'workers' is immutable.
+    // Before server is started, 'workers' is protected by mutex.
     std::vector<std::shared_ptr<Worker>> workers;
 
     std::vector<std::thread> threads;
-    std::mutex thread_lock;  // protects 'threads'
 
     void _add_worker(const std::shared_ptr<Worker> &worker, const std::string &caller);
 
