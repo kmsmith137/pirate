@@ -645,11 +645,10 @@ void register_core_bindings(pybind11::module &m)
              py::arg("cpu"))
 
          // Called by python code, to control server.
-        .def("abort", &Hwtest::abort, py::arg("abort_msg"))
         .def("join", &Hwtest::join)
         .def("show_stats", &Hwtest::show_stats)
         .def("start", &Hwtest::start)
-        .def("stop", &Hwtest::stop)
+        .def("stop", [](Hwtest &self) { self.stop(); })
     ;
 }
 

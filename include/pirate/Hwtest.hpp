@@ -3,6 +3,7 @@
 
 #include "Barrier.hpp"
 
+#include <exception>
 #include <mutex>
 #include <vector>
 #include <string>
@@ -44,25 +45,19 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
 
     // Called by python code, to control server.
     double show_stats();  // returns elapsed time in seconds
-    void abort(const std::string &abort_msg);
 
     void join();
     void start();
-    void stop();
+    void stop(std::exception_ptr e = nullptr);
 
     // Defined in src_lib/Hwtest.cpp
     struct Stats;
     struct Worker;
 
-    // Values of 'code' member.
-    static constexpr int initializing = 0;
-    static constexpr int running = 1;
-    static constexpr int stopped = 2;
-    static constexpr int aborted = 3;
-
     std::string server_name;
-    int code = initializing;
-    std::string abort_msg;
+    bool is_started = false;
+    bool is_stopped = false;
+    std::exception_ptr error;
     std::mutex mutex;
     bool use_hugepages;
     Barrier barrier;
@@ -74,6 +69,9 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     std::vector<std::thread> threads;
 
     void _add_worker(const std::shared_ptr<Worker> &worker, const std::string &caller);
+
+    // Helper for entry points. Caller must hold mutex.
+    void _throw_if_stopped(const char *method_name);
 
     // ----- Noncopyable, nonmoveable -----
 

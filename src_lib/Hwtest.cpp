@@ -125,7 +125,8 @@ struct Hwtest::Worker
 {
     using Stats = Hwtest::Stats;
 
-    weak_ptr<Hwtest> hwtest;
+    // Safe to hold bare pointer: Hwtest destructor joins all worker threads.
+    Hwtest *hwtest = nullptr;
 
     string worker_name = "Anonymous thread";
     vector<int> vcpu_list;
@@ -140,7 +141,7 @@ struct Hwtest::Worker
     bool tv_initialized = false;
     Stats cumulative_stats;
 
-    Worker(const weak_ptr<Hwtest> &hwtest_, const vector<int> vcpu_list_, int cpu_);
+    Worker(Hwtest *hwtest_, const vector<int> vcpu_list_, int cpu_);
     virtual ~Worker() { }
 
     // Called by worker thread.
@@ -153,10 +154,10 @@ struct Hwtest::Worker
 };
 
 
-Hwtest::Worker::Worker(const weak_ptr<Hwtest> &hwtest_, const vector<int> vcpu_list_, int cpu_) :
+Hwtest::Worker::Worker(Hwtest *hwtest_, const vector<int> vcpu_list_, int cpu_) :
     hwtest(hwtest_), vcpu_list(vcpu_list_), cpu(cpu_)
 {
-    xassert(!hwtest.expired());
+    xassert(hwtest);
     xassert(cpu < Hwtest::Stats::max_cpu);  // negative value is allowed (see above)
 }
 
@@ -164,13 +165,11 @@ Hwtest::Worker::Worker(const weak_ptr<Hwtest> &hwtest_, const vector<int> vcpu_l
 shared_ptr<char> Hwtest::Worker::worker_alloc(long nbytes, bool on_gpu)
 {
     xassert(nbytes > 0);
-    auto h = hwtest.lock();
-    xassert(h);
 
     int aflags = on_gpu ? ksgpu::af_gpu : ksgpu::af_rhost;
     // aflags |= af_verbose;
 
-    if (h->use_hugepages && !on_gpu)
+    if (hwtest->use_hugepages && !on_gpu)
         aflags |= ksgpu::af_mmap_huge;
 
     return ksgpu::af_alloc<char> (nbytes, aflags | af_zero);
@@ -206,24 +205,32 @@ shared_ptr<Hwtest> Hwtest::create(const std::string &server_name, bool use_hugep
 }
 
 
+void Hwtest::_throw_if_stopped(const char *method_name)
+{
+    if (error)
+        std::rethrow_exception(error);
+
+    if (is_stopped)
+        throw runtime_error(string(method_name) + " called on stopped instance");
+}
+
+
 void Hwtest::_add_worker(const shared_ptr<Worker> &wp, const string &caller)
 {
-    std::unique_lock lk(this->mutex);
+    std::lock_guard lk(this->mutex);
+    _throw_if_stopped(caller.c_str());
 
-    if (code != initializing)
-        throw runtime_error(caller + "() called on server which has either been started or aborted");
+    if (is_started)
+        throw runtime_error(caller + " called after start()");
 
     this->workers.push_back(wp);
 }    
 
 
 // Called by Hwtest::start().
-static void worker_thread_main(shared_ptr<Hwtest::Worker> worker)
+static void worker_thread_main(Hwtest *hwtest, shared_ptr<Hwtest::Worker> worker)
 {
     using Stats = Hwtest::Stats;
-
-    auto hwtest = worker->hwtest.lock();
-    xassert(hwtest);
 
     try {
         // No-ops if 'vcpu_list' is empty.
@@ -242,13 +249,10 @@ static void worker_thread_main(shared_ptr<Hwtest::Worker> worker)
         for (;;) {
             std::unique_lock lk(hwtest->mutex);
 
-            if (hwtest->code == Hwtest::aborted)
-                throw runtime_error(hwtest->abort_msg);
-            if (hwtest->code == Hwtest::stopped)
-                return;   // normal exit (triggered asynchronously by Hwtest::stop())
+            if (hwtest->is_stopped)
+                return;
 
-            xassert(hwtest->code == Hwtest::running);
-            lk.unlock();  // okay to drop lock after checking code.
+            lk.unlock();
 
             Stats stats = worker->worker_body();
             struct timeval tv = ksgpu::get_time();
@@ -267,8 +271,8 @@ static void worker_thread_main(shared_ptr<Hwtest::Worker> worker)
             }
         }
     }
-    catch (const exception &exc) {
-        hwtest->abort(exc.what());
+    catch (...) {
+        hwtest->stop(std::current_exception());
     }
 }
 
@@ -276,22 +280,21 @@ static void worker_thread_main(shared_ptr<Hwtest::Worker> worker)
 // Called from python, to start server.
 void Hwtest::start()
 {
-    std::unique_lock lk(this->mutex);
+    {
+        std::lock_guard lk(this->mutex);
+        _throw_if_stopped("Hwtest::start");
 
-    long num_workers = workers.size();
+        if (is_started)
+            throw runtime_error("Hwtest::start() called twice");
+        if (workers.empty())
+            throw runtime_error("Hwtest does not contain any worker threads");
 
-    if (num_workers == 0)
-        throw runtime_error("Hwtest does not contain any worker threads");
-
-    if (code != initializing)
-        throw runtime_error("Hwtest::start() called on server which has either been started or aborted");
-
-    code = running;
-    barrier.initialize(num_workers);
-    lk.unlock();
+        is_started = true;
+        barrier.initialize(workers.size());
+    }
 
     try {
-        xassert(threads.size() == 0);
+        long num_workers = workers.size();
         threads.resize(num_workers);
 
         // Reminder: after server is started, 'workers' is immutable, so we don't need to hold the lock here.
@@ -307,11 +310,12 @@ void Hwtest::start()
             ss << ", vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
             cout << ss.str() << flush;
 
-            threads[i] = std::thread(worker_thread_main, wp);
+            threads[i] = std::thread(worker_thread_main, this, wp);
         }
     }
-    catch (const exception &exc) {
-        this->abort(exc.what());
+    catch (...) {
+        this->stop(std::current_exception());
+        throw;
     }
 }
 
@@ -320,16 +324,13 @@ double Hwtest::show_stats()
 {
     using Stats = Hwtest::Stats;
 
-    std::unique_lock lk(this->mutex);
+    {
+        std::lock_guard lk(this->mutex);
+        _throw_if_stopped("Hwtest::show_stats");
 
-    // If a C++ worker thread throws an exception, this allows the exception text to show up in python.
-    if (code == aborted)
-        throw runtime_error(abort_msg);
-
-    if (code == initializing)
-        throw runtime_error("Hwtest::show_stats() called on server which has not been started");
-
-    lk.unlock();
+        if (!is_started)
+            throw runtime_error("Hwtest::show_stats() called on server which has not been started");
+    }
 
     // Reminder: after server is started, 'workers' is immutable, so we don't need to hold the lock here...
     long num_workers = workers.size();
@@ -399,58 +400,42 @@ double Hwtest::show_stats()
 }
 
 
-// Called from python, to stop server.
-void Hwtest::stop()
+void Hwtest::stop(std::exception_ptr e)
 {
-    std::unique_lock lk(this->mutex);
-
-    // If a C++ worker thread throws an exception, this allows the exception text to show up in python.
-    if (code == aborted)
-        throw runtime_error(abort_msg);
-
-    if (code == initializing)
-        throw runtime_error("Hwtest::stop() called on server which has not been started");
-
-    // No-op if stop() called multiple times.
-    code = stopped;
+    std::lock_guard lk(this->mutex);
+    if (is_stopped)
+        return;
+    is_stopped = true;
+    error = e;
+    barrier.abort("Hwtest stopped");
 }
 
 
 Hwtest::~Hwtest()
 {
-    try {
-        stop();
-        join();
-    }
-    catch (...) { }
+    stop();
+
+    for (auto &t : threads)
+        if (t.joinable())
+            t.join();
 }
 
 
 void Hwtest::join()
 {
-    std::unique_lock lk(this->mutex);
+    {
+        std::lock_guard lk(this->mutex);
+        if (!is_stopped)
+            throw runtime_error("Hwtest::join() called before stop()");
 
-    if (code < stopped)
-        throw runtime_error("Hwtest::join() called on server which has not been stopped (or aborted)");
-
-    lk.unlock();  // must release before joining, since worker threads acquire this->mutex
-
-    for (ulong i = 0; i < threads.size(); i++)
-        if (threads[i].joinable())
-            threads[i].join();
-}
-
-
-void Hwtest::abort(const string &msg)
-{
-    this->barrier.abort(msg);
-
-    std::unique_lock lk(this->mutex);
-
-    if (code != aborted) {
-        this->code = aborted;
-        this->abort_msg = msg;
+        // Rethrow error so that python caller sees the exception.
+        if (error)
+            std::rethrow_exception(error);
     }
+
+    for (auto &t : threads)
+        if (t.joinable())
+            t.join();
 }
 
 
@@ -479,7 +464,7 @@ struct TcpReceiver : Hwtest::Worker
     vector<Socket> data_sockets;
 
     
-    TcpReceiver(const weak_ptr<Hwtest> &hwtest_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
+    TcpReceiver(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
         Worker(hwtest_, vcpu_list_, cpu_),
         ip_addr(ip_addr_),
         num_tcp_connections(num_tcp_connections_),
@@ -636,7 +621,7 @@ struct ChimeWorker : public Hwtest::Worker
     long seq_id = 0;
 
     
-    ChimeWorker(const weak_ptr<Hwtest> &hwtest_, const vector<int> &vcpu_list_, int cpu_, int device_) :
+    ChimeWorker(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int device_) :
         Worker(hwtest_, vcpu_list_, cpu_),
         device(device_)
     {
@@ -693,10 +678,8 @@ struct ChimeWorker : public Hwtest::Worker
         gpu_dedisperser = GpuDedisperser::create(gdd_params);
 
         // Allocate GpuDedisperser using dummy-mode BumpAllocators.
-        auto h = hwtest.lock();
-        xassert(h);
         int host_aflags = af_rhost | af_zero;
-        if (h->use_hugepages)
+        if (hwtest->use_hugepages)
             host_aflags |= af_mmap_huge;
         
         BumpAllocator host_allocator(host_aflags, -1);
@@ -766,7 +749,7 @@ struct MemcpyWorker : public Hwtest::Worker
     CudaStreamWrapper stream;
 
     
-    MemcpyWorker(const weak_ptr<Hwtest> &hwtest_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_) :
+    MemcpyWorker(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_) :
         Worker(hwtest_, vcpu_list_, cpu_),
         src_device(src_device_),
         dst_device(dst_device_),
@@ -884,7 +867,7 @@ struct SsdWorker : public Hwtest::Worker
     
     shared_ptr<char> data;
 
-    SsdWorker(const weak_ptr<Hwtest> &hwtest_, const vector<int> &vcpu_list_, int cpu_, int issd_, const string &root_dir_, long nbytes_per_file_) :
+    SsdWorker(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int issd_, const string &root_dir_, long nbytes_per_file_) :
         Worker(hwtest_, vcpu_list_, cpu_),
         root_dir(root_dir_),
         nbytes_per_file(nbytes_per_file_),
@@ -985,7 +968,7 @@ struct DownsamplingWorker : public Hwtest::Worker
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
     
-    DownsamplingWorker(const weak_ptr<Hwtest> &hwtest_, const vector<int> &vcpu_list_, int cpu_, int src_bit_depth_, long src_nelts_) :
+    DownsamplingWorker(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int src_bit_depth_, long src_nelts_) :
         Worker(hwtest_, vcpu_list_, cpu_),
         src_bit_depth(src_bit_depth_),
         src_nelts(src_nelts_)
@@ -1035,31 +1018,31 @@ struct DownsamplingWorker : public Hwtest::Worker
 
 void Hwtest::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list, int cpu, int inic)
 {
-    auto wp = make_shared<TcpReceiver> (weak_from_this(), vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
+    auto wp = make_shared<TcpReceiver> (this, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
     this->_add_worker(wp, "add_tcp_receiver");
 }
 
 void Hwtest::add_chime_dedisperser(int device, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<ChimeWorker> (weak_from_this(), vcpu_list, cpu, device);
+    auto wp = make_shared<ChimeWorker> (this, vcpu_list, cpu, device);
     this->_add_worker(wp, "add_chime_dedisperser");
 }
 
 void Hwtest::add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<MemcpyWorker> (weak_from_this(), vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
+    auto wp = make_shared<MemcpyWorker> (this, vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
     this->_add_worker(wp, "add_memcpy_thread");
 }
 
 void Hwtest::add_ssd_writer(const string &root_dir, long nbytes_per_file, const vector<int> &vcpu_list, int cpu, int issd)
 {
-    auto wp = make_shared<SsdWorker> (weak_from_this(), vcpu_list, cpu, issd, root_dir, nbytes_per_file);
+    auto wp = make_shared<SsdWorker> (this, vcpu_list, cpu, issd, root_dir, nbytes_per_file);
     this->_add_worker(wp, "add_ssd_writer");
 }
 
 void Hwtest::add_downsampling_thread(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<DownsamplingWorker> (weak_from_this(), vcpu_list, cpu, src_bit_depth, src_nelts);
+    auto wp = make_shared<DownsamplingWorker> (this, vcpu_list, cpu, src_bit_depth, src_nelts);
     this->_add_worker(wp, "add_downsampling_thread");
 }
 
