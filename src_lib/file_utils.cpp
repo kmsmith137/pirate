@@ -20,8 +20,6 @@ namespace pirate {
 
 
 // -------------------------------------------------------------------------------------------------
-//
-// "New" wrappers, using std::filesystem and fs::path args.
 
 
 // Helper: Takes an existing error, formats a new message, and re-throws
@@ -160,6 +158,8 @@ void RemoveGuard::commit()
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// TmpFileGuard
 
 
 static fs::path make_tmp_filename(const fs::path &filename)
@@ -202,6 +202,8 @@ void TmpFileGuard::commit()
 
 
 // -------------------------------------------------------------------------------------------------
+//
+// File (RAII wrapper around unix file descriptor, currently only used in hwtest)
 
     
 File::File(const string &filename_, int oflags, int mode)

@@ -121,7 +121,7 @@ struct TmpFileGuard
 
 // -------------------------------------------------------------------------------------------------
 //
-// File: RAII wrapper for unix file descriptor.
+// File: RAII wrapper for unix file descriptor. (Currently only used in hwtest.)
 
 
 struct File
@@ -136,7 +136,6 @@ struct File
     ~File();
 
     void write(const void *p, long nbytes);
-    // FIXME add more member functions, including read().
     
     // The File class is noncopyable, but if copy semantics are needed, you can do
     //   shared_ptr<File> fp = make_shared<File> (filename, oflags, mode);

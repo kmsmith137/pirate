@@ -13,7 +13,6 @@
 #include "../include/pirate/constants.hpp"
 #include "../include/pirate/utils.hpp"           // integer_log2()
 #include "../include/pirate/inlines.hpp"         // xdiv(), pow2(), print_kv(), is_power_of_two()
-#include "../include/pirate/file_utils.hpp"      // File
 #include "../include/pirate/YamlFile.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/CoalescedDdKernel2.hpp"
