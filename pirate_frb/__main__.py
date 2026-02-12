@@ -309,10 +309,11 @@ def make_subbands(args):
 
 
 def parse_hwtest(subparsers):
-    help_text = "Run hardware test using YAML config file"
+    help_text = "Run hardware test using YAML config file (use -s to send data instead of receiving)"
     parser = subparsers.add_parser("hwtest", help=help_text, description=help_text)
     parser.add_argument('config_file', help='Path to YAML config file')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
+    parser.add_argument('-s', '--send', action='store_true', help='Send data to test server (uses ip_addrs from config file)')
 
 
 def parse_hwtest_config(filename):
@@ -396,6 +397,10 @@ def parse_hwtest_config(filename):
 def hwtest(args):
     config = parse_hwtest_config(args.config_file)
 
+    if args.send:
+        hwtest_send_from_config(config)
+        return
+
     server = Hwtest('Node test')
     hw = server.hardware
 
@@ -455,6 +460,28 @@ def hwtest(args):
             server.add_tcp_receiver(ip_addr, config['tcp_connections_per_ip_address'])
 
     server.run(args.time)
+
+
+def hwtest_send_from_config(config):
+    """Send data using ip_addrs/tcp_connections_per_ip_address from a hwtest config."""
+
+    ip_addrs = config['ip_addrs']
+    if len(ip_addrs) == 0:
+        raise RuntimeError("hwtest --send: 'ip_addrs' must be non-empty")
+
+    tcp_connections_per_ip_address = config['tcp_connections_per_ip_address']
+
+    with HwtestSender(send_bufsize=65536, use_zerocopy=True, use_mmap=False, use_hugepages=True) as sender:
+        for ip_addr in ip_addrs:
+            sender.add_endpoint(ip_addr, tcp_connections_per_ip_address, 0)
+
+        sender.start()
+
+        try:
+            while not sender.wait(500):
+                pass
+        except KeyboardInterrupt:
+            print("\nInterrupted, stopping...")
 
 
 ######################################   hwtest_send command  #######################################
