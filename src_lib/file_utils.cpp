@@ -6,7 +6,6 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <fts.h>
 #include <filesystem>
@@ -203,67 +202,6 @@ void TmpFileGuard::commit()
 
 
 // -------------------------------------------------------------------------------------------------
-//
-// "Old" wrappers, using unix syscalls and std::string args.
-// I plan to phase these out at some point.
-
-
-bool is_directory(const string &filename)
-{
-    struct stat s;
-
-    int err = stat(filename.c_str(), &s);
-    if (err < 0)
-        throw runtime_error(filename + ": " + strerror(errno));
-
-    return S_ISDIR(s.st_mode);
-}
-
-
-bool is_empty_directory(const string &dirname)
-{
-    Directory dir(dirname);
-
-    for (;;) {
-        struct dirent *entry = dir.read_next();
-
-        if (!entry)
-            return true;
-        if (!strcmp(entry->d_name, "."))
-            continue;
-        if (!strcmp(entry->d_name, ".."))
-            continue;
-        
-        return false;
-    }
-}
-
-
-void makedir(const string &filename, bool throw_exception_if_directory_exists, mode_t mode)
-{
-    int err = mkdir(filename.c_str(), mode);
-
-    if (err >= 0)
-        return;
-    if (throw_exception_if_directory_exists || (errno != EEXIST))
-        throw runtime_error(filename + ": mkdir() failed: " + strerror(errno));
-    
-    // If we get here, then mkdir() failed with EEXIST, and throw_exception_if_directory_exists=false.
-    // We still throw an exception if the file is not a directory.
-
-    struct stat s;
-    err = stat(filename.c_str(), &s);
-
-    // A weird corner case.
-    if (err < 0)
-        throw runtime_error(filename + ": mkdir() returned EEXIST but stat() failed, not sure what is going on");
-
-    if (!S_ISDIR(s.st_mode))
-        throw runtime_error(filename + ": file exists but is not a directory");
-}
-
-
-// -------------------------------------------------------------------------------------------------
 
     
 File::File(const string &filename_, int oflags, int mode)
@@ -319,46 +257,6 @@ void File::write(const void *p, long nbytes)
         pc += n;
         nbytes -= n;
     }
-}
-
-
-// -------------------------------------------------------------------------------------------------
-
-
-Directory::Directory(const string &dirname_) :
-    dirname(dirname_)
-{
-    this->dirp = opendir(dirname.c_str());
-    
-    if (!dirp)
-        throw runtime_error(dirname + ": opendir() failed: " + strerror(errno));
-}
-
-
-Directory::~Directory()
-{
-    if (dirp) {
-        closedir(dirp);
-        dirp = nullptr;
-    }
-}
-
-
-dirent *Directory::read_next()
-{
-    xassert(dirp != nullptr);
-
-    // Ugh
-    int save_errno = errno;
-    errno = 0;
-    
-    dirent *entry = readdir(dirp);
-
-    if (!entry && errno)
-        throw runtime_error(dirname + ": readdir() failed: " + strerror(errno));
-
-    errno = errno ? errno : save_errno;
-    return entry;
 }
 
 
