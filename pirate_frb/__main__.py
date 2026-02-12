@@ -446,18 +446,7 @@ def test_node(args):
         for ip_addr in ip_addrs:
             server.add_tcp_receiver(ip_addr, tcp_connections_per_ip_address)
 
-    with server:
-        server.start()
-
-        # Wait for workers to exit or timeout.
-        # Use wait() with a timeout so that CPython can process SIGINT between iterations.
-        # The context manager calls stop()+join() on exit.
-        try:
-            while not server.wait(500):
-                if server.show_stats() > args.time:
-                    break
-        except KeyboardInterrupt:
-            print("\nInterrupted, stopping...")
+    server.run(args.time)
 
 
 #########################################   send command  ##########################################

@@ -619,9 +619,6 @@ void register_core_bindings(pybind11::module &m)
              "Returns True if all workers exited, False on timeout.")
     ;
         
-    // FakeServer: benchmarking tool that runs multiple worker threads.
-    // Skipped members: mutex, cv, is_stopped, is_started, error, num_workers_exited, barrier, workers, threads (internal state)
-    // Skipped methods: _throw_if_stopped, _add_worker (private)
     py::class_<FakeServer>(m, "FakeServer")
         .def(py::init<const std::string &, bool>(),
              py::arg("server_name"), py::arg("use_hugepages"))
@@ -634,11 +631,11 @@ void register_core_bindings(pybind11::module &m)
              py::arg("device"), py::arg("beams_per_gpu"), py::arg("num_active_batches"),
              py::arg("beams_per_batch"), py::arg("use_copy_engine"), py::arg("vcpu_list"),
              py::arg("cpu"))
-
+        
         .def("add_memcpy_thread", &FakeServer::add_memcpy_thread,
              py::arg("src_device"), py::arg("dst_device"), py::arg("blocksize"),
              py::arg("use_copy_engine"), py::arg("vcpu_list"), py::arg("cpu"))
-
+        
         .def("add_ssd_writer", &FakeServer::add_ssd_writer,
              py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"),
              py::arg("cpu"), py::arg("issd"))
@@ -647,27 +644,12 @@ void register_core_bindings(pybind11::module &m)
              py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"),
              py::arg("cpu"))
 
-        .def("start", &FakeServer::start,
-             py::call_guard<py::gil_scoped_release>(),
-             "Create worker threads and begin running.")
-
-        .def("stop", [](FakeServer &self) { self.stop(); },
-             py::call_guard<py::gil_scoped_release>(),
-             "Signal worker threads to stop. Safe to call multiple times.")
-
-        .def("join", &FakeServer::join,
-             py::call_guard<py::gil_scoped_release>(),
-             "Block until all worker threads have exited.")
-
-        .def("wait", &FakeServer::wait,
-             py::arg("timeout_ms"),
-             py::call_guard<py::gil_scoped_release>(),
-             "Wait until all workers have exited, or timeout expires.\n"
-             "Returns True if all workers exited, False on timeout.")
-
-        .def("show_stats", &FakeServer::show_stats,
-             py::call_guard<py::gil_scoped_release>(),
-             "Show bandwidth stats. Returns elapsed time in seconds.")
+         // Called by python code, to control server.
+        .def("abort", &FakeServer::abort, py::arg("abort_msg"))
+        .def("join_threads", &FakeServer::join_threads)
+        .def("show_stats", &FakeServer::show_stats)
+        .def("start", &FakeServer::start)
+        .def("stop", &FakeServer::stop)
     ;
 }
 

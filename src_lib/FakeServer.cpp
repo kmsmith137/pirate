@@ -50,7 +50,7 @@ struct FakeServer::Stats
     static constexpr int max_gpu = 8;
     static constexpr int max_ssd = 8;
     static constexpr int max_nic = 8;
-
+    
     // Hardare bandwidths.
     double hmem_floating = 0;     // host memory bandwidth for "floating" threads (not pinned to a specific CPU)
     double hmem_pinned[max_cpu];  // host memory bandwidth for pinned threads
@@ -84,7 +84,7 @@ FakeServer::Stats &FakeServer::Stats::operator+=(const Stats &s)
 
     for (uint i = 0; (i * sizeof(double)) < sizeof(*this); i++)
         dst[i] += src[i];
-
+    
     return *this;
 }
 
@@ -109,6 +109,56 @@ double &FakeServer::Stats::hmem(int icpu)
     xassert(icpu < max_cpu);
     return (icpu >= 0) ? hmem_pinned[icpu] : hmem_floating;
 }
+        
+
+// -------------------------------------------------------------------------------------------------
+//
+// FakeServer::State
+
+
+struct FakeServer::State
+{
+    // Values of 'code' member below.
+    static constexpr int initializing = 0;
+    static constexpr int running = 1;
+    static constexpr int stopped = 2;
+    static constexpr int aborted = 3;
+    
+    // Worker threads wait at the barrier twice.
+    //  - After returning from worker_initialize(), before calling worker_accept_connections()
+    //  - After returning from worker_accept_connections(), before calling worker_body().
+
+    State(bool use_hugepages);
+    
+    int code = initializing;
+    std::string abort_msg;
+    std::mutex lock;
+    
+    bool use_hugepages;
+    ksgpu::Barrier barrier;
+
+    void abort(const string &msg);
+};
+
+
+FakeServer::State::State(bool use_hugepages_) :
+    use_hugepages(use_hugepages_),
+    barrier(0)  // will be initialized in FakeServer::start(), after worker thread count is known
+{ }
+
+
+void FakeServer::State::abort(const string &msg)
+{
+    this->barrier.abort(msg);
+
+    std::unique_lock lk(lock);
+
+    if (code != aborted) {
+        this->code = aborted;
+        this->abort_msg = msg;
+        // cout << msg << endl;
+    }
+}
 
 
 // -------------------------------------------------------------------------------------------------
@@ -118,10 +168,11 @@ double &FakeServer::Stats::hmem(int icpu)
 
 struct FakeServer::Worker
 {
+    using State = FakeServer::State;
     using Stats = FakeServer::Stats;
-
-    FakeServer *server;
-
+    
+    shared_ptr<FakeServer::State> state;
+    
     string worker_name = "Anonymous thread";
     vector<int> vcpu_list;
 
@@ -135,9 +186,9 @@ struct FakeServer::Worker
     bool tv_initialized = false;
     Stats cumulative_stats;
 
-    Worker(FakeServer *server_, const vector<int> vcpu_list_, int cpu_);
+    Worker(const shared_ptr<FakeServer::State> &state_, const vector<int> vcpu_list_, int cpu_);
     virtual ~Worker() { }
-
+    
     // Called by worker thread.
     virtual void worker_initialize() = 0;
     virtual void worker_accept_connections() { }   // only Receiver subclass defines this
@@ -145,22 +196,13 @@ struct FakeServer::Worker
 
     shared_ptr<char> worker_alloc(long nbytes, bool on_gpu=false);
     string devstr(int device);
-
-    // Helper: check if server is stopped (acquires mutex).
-    // Worker is a nested class, so it has access to FakeServer's private members.
-    // Subclasses (Receiver, etc.) should call this instead of accessing server->is_stopped directly.
-    bool check_stopped()
-    {
-        std::lock_guard<std::mutex> lk(server->mutex);
-        return server->is_stopped;
-    }
 };
 
 
-FakeServer::Worker::Worker(FakeServer *server_, const vector<int> vcpu_list_, int cpu_) :
-    server(server_), vcpu_list(vcpu_list_), cpu(cpu_)
+FakeServer::Worker::Worker(const shared_ptr<FakeServer::State> &state_, const vector<int> vcpu_list_, int cpu_) :
+    state(state_), vcpu_list(vcpu_list_), cpu(cpu_)
 {
-    xassert(server);
+    xassert(state);
     xassert(cpu < FakeServer::Stats::max_cpu);  // negative value is allowed (see above)
 }
 
@@ -168,13 +210,13 @@ FakeServer::Worker::Worker(FakeServer *server_, const vector<int> vcpu_list_, in
 shared_ptr<char> FakeServer::Worker::worker_alloc(long nbytes, bool on_gpu)
 {
     xassert(nbytes > 0);
-
+    
     int aflags = on_gpu ? ksgpu::af_gpu : ksgpu::af_rhost;
     // aflags |= af_verbose;
 
-    if (server->use_hugepages && !on_gpu)
+    if (state->use_hugepages && !on_gpu)
         aflags |= ksgpu::af_mmap_huge;
-
+        
     return ksgpu::af_alloc<char> (nbytes, aflags | af_zero);
 }
 
@@ -183,7 +225,7 @@ string FakeServer::Worker::devstr(int device)
 {
     if (device < 0)
         return "host";
-
+        
     stringstream ss;
     ss << "gpu" << device;
     return ss.str();
@@ -192,73 +234,64 @@ string FakeServer::Worker::devstr(int device)
 
 // -------------------------------------------------------------------------------------------------
 //
-// FakeServer core logic.
+// FakeServer core logic. This is the difficult part!
 
 
-FakeServer::FakeServer(const std::string &server_name_, bool use_hugepages_) :
+FakeServer::FakeServer(const std::string &server_name_, bool use_hugepages) :
     server_name(server_name_),
-    use_hugepages(use_hugepages_),
-    barrier(0)  // will be initialized in start(), after worker count is known
+    state(make_shared<FakeServer::State> (use_hugepages))
 { }
-
-
-FakeServer::~FakeServer()
-{
-    this->stop();
-    this->join();
-}
-
-
-void FakeServer::_throw_if_stopped(const char *method_name)
-{
-    // Caller must hold mutex.
-    if (error)
-        std::rethrow_exception(error);
-
-    if (is_stopped)
-        throw runtime_error(string(method_name) + " called on stopped instance");
-}
 
 
 void FakeServer::_add_worker(const shared_ptr<Worker> &wp, const string &caller)
 {
-    std::lock_guard<std::mutex> lk(mutex);
-    _throw_if_stopped(caller.c_str());
+    std::unique_lock lk(state->lock);
 
-    if (is_started)
-        throw runtime_error(caller + "() called after start()");
+    if (state->code != State::initializing)
+        throw runtime_error(caller + "() called on server which has either been started or aborted");;
 
+    // Reminder: this->workers is protected by state->lock.
     this->workers.push_back(wp);
-}
+}    
 
 
-// Called by start(). Runs in a worker thread.
-void FakeServer::_worker_thread_main(FakeServer *server, shared_ptr<FakeServer::Worker> worker)
+// Called by FakeServer::start().
+static void worker_thread_main(shared_ptr<FakeServer::Worker> worker)
 {
+    using State = FakeServer::State;
     using Stats = FakeServer::Stats;
 
+    shared_ptr<State> state = worker->state;
+    
     try {
         // No-ops if 'vcpu_list' is empty.
         set_thread_affinity(worker->vcpu_list);
-
-        // Worker threads wait at the barrier twice.
+        
+        // Reminder: worker threads wait at the barrier twice.
         //  - After returning from worker_initialize(), before calling worker_accept_connections()
         //  - After returning from worker_accept_connections(), before calling worker_body().
 
         worker->worker_initialize();
-        server->barrier.wait();
-
+        state->barrier.wait();
+        
         worker->worker_accept_connections();
-        server->barrier.wait();
+        state->barrier.wait();
 
         for (;;) {
-            if (worker->check_stopped())
-                break;
+            std::unique_lock lk(state->lock);
 
+            if (state->code == State::aborted)
+                throw runtime_error(state->abort_msg);
+            if (state->code == State::stopped)
+                return;   // normal exit (triggered asychronously by FakeServer::stop())
+            
+            xassert(state->code == State::running);
+            lk.unlock();  // okay to drop lock after checking state->code.
+            
             Stats stats = worker->worker_body();
             struct timeval tv = ksgpu::get_time();
 
-            std::lock_guard<std::mutex> lk2(worker->lock);
+            std::unique_lock lk2(worker->lock);
 
             // Skip stats from first call to worker_body().
             if (!worker->tv_initialized) {
@@ -272,104 +305,54 @@ void FakeServer::_worker_thread_main(FakeServer *server, shared_ptr<FakeServer::
             }
         }
     }
-    catch (...) {
-        server->stop(std::current_exception());
-    }
-
-    {
-        std::lock_guard<std::mutex> lk(server->mutex);
-        server->num_workers_exited++;
-        server->cv.notify_all();
+    catch (const exception &exc) {
+        state->abort(exc.what());
     }
 }
 
 
+// Called from python, to start server.
 void FakeServer::start()
 {
-    std::unique_lock<std::mutex> lk(mutex);
-    _throw_if_stopped("FakeServer::start");
-
-    if (is_started)
-        throw runtime_error("FakeServer::start() called twice");
-
-    if (workers.empty())
-        throw runtime_error("FakeServer::start() called with no workers");
-
-    is_started = true;
+    std::unique_lock lk(state->lock);
+    
     long num_workers = workers.size();
-    barrier.initialize(num_workers);
-    lk.unlock();
+    
+    if (num_workers == 0)
+        throw runtime_error("FakeServer does not contain any worker threads");
+    
+    if (state->code != State::initializing)
+        throw runtime_error("FakeServer::start() called on server which has either been started or aborted");;
 
-    threads.resize(num_workers);
+    state->code = State::running;
+    state->barrier.initialize(num_workers);
 
-    // Reminder: after start(), 'workers' is immutable, so we don't need to hold mutex here.
-    for (long i = 0; i < num_workers; i++) {
-        auto wp = workers[i];
+    std::unique_lock lk2(this->thread_lock);
+    lk.unlock();  // okay to drop state->lock
 
-        stringstream ss;
-        ss << "  [Thread " << i << "] " << wp->worker_name << ": ";
-        if (wp->cpu >= 0)
-            ss << "cpu=" << wp->cpu;
-        else
-            ss << "cpu=None";
-        ss << ", vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
-        cout << ss.str() << flush;
+    try {
+        xassert(threads.size() == 0);
+        threads.resize(num_workers);
 
-        threads[i] = std::thread(_worker_thread_main, this, wp);
-    }
-}
-
-
-void FakeServer::stop(std::exception_ptr e)
-{
-    std::unique_lock<std::mutex> lk(mutex);
-
-    if (is_stopped)
-        return;
-
-    is_stopped = true;
-    error = e;
-    cv.notify_all();
-
-    // Extract message from exception for barrier.abort().
-    string msg = "FakeServer stopped";
-    if (e) {
-        try {
-            std::rethrow_exception(e);
-        } catch (const exception &exc) {
-            msg = exc.what();
-        } catch (...) {
-            msg = "unknown exception";
+        // Reminder: after server is started, 'workers' is immutable, so we don't need to hold state->lock here.
+        for (long i = 0; i < num_workers; i++) {
+            auto wp = workers[i];
+            
+            stringstream ss;
+            ss << "  [Thread " << i << "] " << wp->worker_name << ": ";
+            if (wp->cpu >= 0)
+                ss << "cpu=" << wp->cpu;
+            else
+                ss << "cpu=None";
+            ss << ", vcpu_list=" << ksgpu::tuple_str(wp->vcpu_list) << "\n";
+            cout << ss.str() << flush;
+            
+            threads[i] = std::thread(worker_thread_main, wp);
         }
     }
-
-    // Must unlock before calling barrier.abort() (barrier has its own lock).
-    lk.unlock();
-    barrier.abort(msg);
-}
-
-
-void FakeServer::join()
-{
-    for (auto &w : threads) {
-        if (w.joinable())
-            w.join();
-    }
-}
-
-
-bool FakeServer::wait(int timeout_ms)
-{
-    std::unique_lock<std::mutex> lk(mutex);
-    long nworkers = long(threads.size());
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-
-    while (num_workers_exited < nworkers) {
-        if (cv.wait_until(lk, deadline) == std::cv_status::timeout)
-            return false;
-    }
-
-    return true;
+    catch (const exception &exc) {
+        state->abort(exc.what());
+    }                
 }
 
 
@@ -377,15 +360,18 @@ double FakeServer::show_stats()
 {
     using Stats = FakeServer::Stats;
 
-    {
-        std::lock_guard<std::mutex> lk(mutex);
-        _throw_if_stopped("FakeServer::show_stats");
+    std::unique_lock lk(state->lock);
 
-        if (!is_started)
-            throw runtime_error("FakeServer::show_stats() called before start()");
-    }
+    // If a C++ worker thread throws an exception, this allows the exception text to show up in python.
+    if (state->code == State::aborted)
+        throw runtime_error(state->abort_msg);
+    
+    if (state->code == State::initializing)
+        throw runtime_error("FakeSever::show_stats() called on server which has not been started");
 
-    // Reminder: after start(), 'workers' is immutable, so we don't need to hold mutex here...
+    lk.unlock();
+
+    // Reminder: after server is started, 'workers' is immutable, so we don't need to hold state->lock here...
     long num_workers = workers.size();
     vector<Stats> stats(num_workers);
     vector<double> dt(num_workers);
@@ -393,17 +379,17 @@ double FakeServer::show_stats()
     for (long i = 0; i < num_workers; i++) {
         // ...however, we do need to hold the per-worker lock, before reading stats from each worker.
         Worker *w = workers[i].get();
-        std::lock_guard<std::mutex> lk2(w->lock);
+        std::unique_lock lk2(w->lock);
         stats[i] = w->cumulative_stats;
         dt[i] = w->tv_initialized ? ksgpu::time_diff(w->tv0, w->tv1) : 0.0;
     }
-
+    
     Stats bw;
     double dt_max = 0.0;
 
     for (long i = 0; i < num_workers; i++) {
         dt_max = std::max(dt_max, dt[i]);
-
+        
         // Don't trust rate estimates below 0.5 sec.
         if (dt[i] >= 0.5)
             bw += stats[i] / dt[i];
@@ -417,7 +403,7 @@ double FakeServer::show_stats()
 
     if (bw.hmem_floating > 0.0)
         ss << "  Host memory bandwidth (floating): " << (1.0e-9 * bw.hmem_floating) << " GB/s\n";
-
+        
     for (int gpu = 0; gpu < FakeServer::Stats::max_gpu; gpu++)
         if (bw.gmem[gpu] > 0.0)
             ss << "  GPU global memory bandwidth (GPU " << gpu << "): " << (1.0e-9 * bw.gmem[gpu]) << " GB/s\n";
@@ -437,18 +423,59 @@ double FakeServer::show_stats()
     for (int inic = 0; inic < FakeServer::Stats::max_nic; inic++)
         if (bw.nic[inic] > 0.0)
             ss << "  Network bandwidth (NIC " << inic << "): " << (8.0e-9 * bw.nic[inic]) << " Gbps (not GB/s)\n";
-
+    
     if (bw.ds_kernel > 0.0)
         ss << "  AVX2 kernel throughput: " << (1.0e-9 * bw.ds_kernel) << " Gsamp/s\n";
     if (bw.chime_beams > 0.0)
         ss << "  Real-time CHIME beams: " << bw.chime_beams << "\n";
 
     string s = ss.str();
-
+    
     if (s.size() > 0)
         cout << "Elapsed time: " << dt_max << " sec\n" << s << flush;
 
     return dt_max;
+}
+
+
+// Called from python, to stop server.
+void FakeServer::stop()
+{
+    std::unique_lock lk(state->lock);
+
+    // If a C++ worker thread throws an exception, this allows the exception text to show up in python.
+    if (state->code == State::aborted)
+        throw runtime_error(state->abort_msg);
+    
+    if (state->code == State::initializing)
+        throw runtime_error("FakeSever::stop() called on server which has not been started");
+
+    // No-ops if stop() called multiple times.
+    state->code = State::stopped;
+}
+
+
+// Called from python, to join threads.
+void FakeServer::join_threads()
+{
+    std::unique_lock lk(state->lock);
+
+    if (state->code < State::stopped)
+        throw runtime_error("FakeServer::join_threads() called on server which has not been stopped (or aborted)");
+
+    std::unique_lock lk2(thread_lock);
+    lk.unlock();
+    
+    for (ulong i = 0; i < threads.size(); i++)
+        threads[i].join();
+}
+
+
+// Called from python (C++ callers can call State::abort())
+void FakeServer::abort(const string &abort_msg)
+{
+    // Call without acquiring state->lock.
+    state->abort(abort_msg);
 }
 
 
@@ -465,9 +492,9 @@ struct Receiver : FakeServer::Worker
     long recv_bufsize = 0;
     bool use_epoll = true;
     int inic = -1;
-
+    
     long nbytes_per_iteration = 300 * 1024 * 1024;
-
+    
     // Initialized in worker_initialize().
     shared_ptr<char> recv_buf;
     Socket listening_socket;
@@ -476,9 +503,9 @@ struct Receiver : FakeServer::Worker
     // Initialized in worker_accept_connections().
     vector<Socket> data_sockets;
 
-
-    Receiver(FakeServer *server_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
-        Worker(server_, vcpu_list_, cpu_),
+    
+    Receiver(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
+        Worker(state_, vcpu_list_, cpu_),
         ip_addr(ip_addr_),
         num_tcp_connections(num_tcp_connections_),
         recv_bufsize(recv_bufsize_),
@@ -496,8 +523,8 @@ struct Receiver : FakeServer::Worker
         ss << "TcpReceiver(" << ip_addr << ", " << num_tcp_connections << " connections, use_epoll=" << use_epoll << ")";
         this->worker_name = ss.str();
     }
-
-
+        
+    
     virtual void worker_initialize() override
     {
         this->recv_buf = worker_alloc(recv_bufsize);
@@ -510,8 +537,8 @@ struct Receiver : FakeServer::Worker
             this->epoll.initialize();
     }
 
-
-    virtual void worker_accept_connections() override
+    
+    virtual void worker_accept_connections()
     {
         stringstream ss;
         ss << worker_name << ": listening for TCP connections\n";
@@ -524,18 +551,11 @@ struct Receiver : FakeServer::Worker
         // I tried SO_RECVLOWAT here, but uProf reported significantly higher memory bandwidth!
 
         for (unsigned int ids = 0; ids < data_sockets.size(); ids++) {
-            // Use accept() with timeout so we can check is_stopped periodically.
-            for (;;) {
-                if (check_stopped())
-                    return;
-                this->data_sockets[ids] = listening_socket.accept(FakeServer::worker_timeout_ms);
-                if (data_sockets[ids].fd >= 0)
-                    break;
-            }
+            this->data_sockets[ids] = listening_socket.accept();
 
             if (!use_epoll)
                 continue;
-
+            
             this->data_sockets[ids].set_nonblocking();
 
             epoll_event ev;
@@ -555,25 +575,24 @@ struct Receiver : FakeServer::Worker
         return use_epoll ? _receive_epoll() : _receive_no_epoll();
     }
 
-
-    // Helper for worker_body(). (Called if use_epoll=false.)
-    // FIXME: blocking read() with no timeout; is_stopped is only checked between worker_body() calls.
+    
+    // Helper for receive_data(). (Called if use_epoll=false.)
     Stats _receive_no_epoll()
     {
-        xassert(data_sockets.size() == 1);
+        xassert(data_sockets.size() == 1);      
         long nbytes_cumul = 0;
-
+        
         while (nbytes_cumul < nbytes_per_iteration) {
             // Blocking read()
             long nbytes_read = data_sockets[0].read(recv_buf.get(), recv_bufsize);
             xassert(nbytes_read >= 0);
-
+            
             if (nbytes_read <= 0)
                 throw runtime_error("TCP connection ended prematurely");
-
-            nbytes_cumul += nbytes_read;
+            
+            nbytes_cumul += nbytes_read;            
         }
-
+        
         Stats stats;
         stats.nic[inic] = nbytes_cumul;
         stats.hmem(cpu) += 3 * nbytes_cumul;  // note factor 3 from "non-zerocopy" TCP
@@ -581,22 +600,14 @@ struct Receiver : FakeServer::Worker
     }
 
 
-    // Helper for worker_body(). (Called if use_epoll=true.)
+    // Helper for receive_iteration(). (Called if use_epoll=true.)
     Stats _receive_epoll()
     {
         long nbytes_cumul = 0;
-
+        
         while (nbytes_cumul < nbytes_per_iteration) {
-            // Check is_stopped before blocking on epoll.
-            if (check_stopped())
-                break;
-
             long nbytes_save = nbytes_cumul;
-            int num_events = epoll.wait(FakeServer::worker_timeout_ms);
-
-            // Timeout expired, loop back to check is_stopped.
-            if (num_events == 0)
-                continue;
+            int num_events = epoll.wait();  // blocking
 
             for (int iev = 0; iev < num_events; iev++) {
                 uint32_t ev_flags = epoll.events[iev].events;
@@ -606,7 +617,7 @@ struct Receiver : FakeServer::Worker
 
                 unsigned int ids = epoll.events[iev].data.u32;
                 xassert(ids < data_sockets.size());
-
+                
                 // Non-blocking read()
                 long nbytes_read = data_sockets[ids].read(recv_buf.get(), recv_bufsize);
                 xassert(nbytes_read >= 0);
@@ -615,7 +626,7 @@ struct Receiver : FakeServer::Worker
                 // I'd like to revisit this, just for the sake of general understanding.
                 // It seems to be harmless, since the reported values of "bytes/read()" and "bytes/epoll()"
                 // look reasonable.
-
+                
                 if (nbytes_read == 0)
                     continue;
 
@@ -625,14 +636,14 @@ struct Receiver : FakeServer::Worker
             if ((nbytes_cumul == nbytes_save) && (num_events == int(data_sockets.size())))
                 throw runtime_error("TCP connection(s) ended prematurely");
         }
-
+        
         Stats stats;
         stats.nic[inic] += nbytes_cumul;
         stats.hmem(cpu) += 3 * nbytes_cumul;  // note factor 3 from "non-zerocopy" TCP
         return stats;
     }
 };
-
+    
 
 // -------------------------------------------------------------------------------------------------
 //
@@ -646,9 +657,9 @@ struct ChimeWorker : public FakeServer::Worker
     long ichunk = 0;
     int device = -1;
 
-
-    ChimeWorker(FakeServer *server_, const vector<int> &vcpu_list_, int cpu_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
-        Worker(server_, vcpu_list_, cpu_),
+    
+    ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
+        Worker(state_, vcpu_list_, cpu_),
         // dedisperser(beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine),
         device(device_)
     {
@@ -658,7 +669,7 @@ struct ChimeWorker : public FakeServer::Worker
 
         xassert(beams_per_gpu > 0);  // paranoid -- also checked in ChimeDedisperser constructor
         this->niter = (beams_per_gpu + 99) / beams_per_gpu;
-
+        
         stringstream ss;
         ss << "ChimeDedisperser(" << devstr(device) << ", use_copy_engine=" << use_copy_engine << ")";
         this->worker_name = ss.str();
@@ -675,7 +686,7 @@ struct ChimeWorker : public FakeServer::Worker
     {
         //for (long i = 0; i < niter; i++)
         //    dedisperser.run(ichunk++);
-
+        
         Stats stats;
         // stats.chime_beams = niter * dedisperser.config.beams_per_gpu * (1.0e-3 * dedisperser.config.time_samples_per_chunk);
         // stats.gmem[device] += niter * dedisperser.bw_per_run_call.nbytes_gmem;
@@ -697,7 +708,7 @@ struct MemcpyWorker : public FakeServer::Worker
     // Initialized in constructor.
     int src_device = -1;   // -1 for host
     int dst_device = -1;   // -1 for host
-    long blocksize = 0;
+    long blocksize = 0;    
     long nbytes_per_iteration = 0;
     bool use_copy_engine = false;
 
@@ -708,9 +719,9 @@ struct MemcpyWorker : public FakeServer::Worker
     // Reminder: cudaStream_t is a typedef for (CUstream_st *)
     CudaStreamWrapper stream;
 
-
-    MemcpyWorker(FakeServer *server_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_) :
-        Worker(server_, vcpu_list_, cpu_),
+    
+    MemcpyWorker(const shared_ptr<FakeServer::State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_device_, int dst_device_, long blocksize_, bool use_copy_engine_) :
+        Worker(state_, vcpu_list_, cpu_),
         src_device(src_device_),
         dst_device(dst_device_),
         blocksize(blocksize_),
@@ -743,7 +754,7 @@ struct MemcpyWorker : public FakeServer::Worker
 
         if ((src_device >= 0) && (dst_device >= 0))
             ss << ", use_copy_engine=" << use_copy_engine;
-
+        
         ss << ")";
         this->worker_name = ss.str();
     }
@@ -753,7 +764,7 @@ struct MemcpyWorker : public FakeServer::Worker
     {
         bool uses_gpu = (src_device >= 0) || (dst_device >= 0);
         bool uses_host = (src_device < 0) || (dst_device < 0);
-
+        
         if (uses_gpu) {
             int gpu = max(src_device, dst_device);
             int cuda_stream_priority = uses_host ? -1 : 0;  // lower numerical value = higher priority
@@ -764,12 +775,12 @@ struct MemcpyWorker : public FakeServer::Worker
         this->psrc = worker_alloc(blocksize, (src_device >= 0));  // last argument is boolean 'on_gpu'
         this->pdst = worker_alloc(blocksize, (dst_device >= 0));  // last argument is boolean 'on_gpu'
     }
-
+    
 
     virtual Stats worker_body() override
     {
         long pos = 0;
-
+        
         while (pos < nbytes_per_iteration) {
             long n = min(nbytes_per_iteration - pos, blocksize);
             pos += n;
@@ -788,7 +799,7 @@ struct MemcpyWorker : public FakeServer::Worker
             stats.hmem(cpu) += nbytes_per_iteration;
         if (dst_device < 0)
             stats.hmem(cpu) += nbytes_per_iteration;
-
+        
         if (src_device >= 0)
             stats.gmem[src_device] += nbytes_per_iteration;
         if (dst_device >= 0)
@@ -804,7 +815,7 @@ struct MemcpyWorker : public FakeServer::Worker
 
         return stats;
     }
-
+    
     virtual ~MemcpyWorker() { }
 };
 
@@ -822,14 +833,14 @@ struct SsdWorker : public FakeServer::Worker
     string root_dir;
     long nbytes_per_file = 0;
     int issd = -1;
-
+    
     long nfiles_per_iteration = 0;
     long curr_file = 0;
-
+    
     shared_ptr<char> data;
 
-    SsdWorker(FakeServer *server_, const vector<int> &vcpu_list_, int cpu_, int issd_, const string &root_dir_, long nbytes_per_file_) :
-        Worker(server_, vcpu_list_, cpu_),
+    SsdWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, int issd_, const string &root_dir_, long nbytes_per_file_) :
+        Worker(state_, vcpu_list_, cpu_),
         root_dir(root_dir_),
         nbytes_per_file(nbytes_per_file_),
         issd(issd_)
@@ -839,13 +850,13 @@ struct SsdWorker : public FakeServer::Worker
         xassert((issd >= 0) && (issd < FakeServer::Stats::max_ssd));
 
         this->nfiles_per_iteration = (nbytes_per_file + 256L*1024L*1024L - 1) / nbytes_per_file;
-
+        
         stringstream ss;
         ss << "SsdWriter(dir=" << root_dir
            << ", nbytes_per_file=" << ksgpu::nbytes_to_str(nbytes_per_file)
            << ", nfiles_per_iteration=" << nfiles_per_iteration
            << ")";
-
+        
         this->worker_name = ss.str();
     }
 
@@ -888,18 +899,18 @@ struct SsdWorker : public FakeServer::Worker
 
         if (len < 6)
             return false;
-
+        
         if (memcmp(s, "file_", 5))
             return false;
-
+        
         for (int i = 5; i < len; i++)
             if (!isdigit(s[i]))
                 return false;
 
         return true;
     }
-
-
+        
+        
     virtual Stats worker_body() override
     {
         // FIXME try writev(), if (nwrites_per_file > 1).
@@ -938,9 +949,9 @@ struct DownsamplingWorker : public FakeServer::Worker
 
     shared_ptr<char> psrc;
     shared_ptr<char> pdst;
-
-    DownsamplingWorker(FakeServer *server_, const vector<int> &vcpu_list_, int cpu_, int src_bit_depth_, long src_nelts_) :
-        Worker(server_, vcpu_list_, cpu_),
+    
+    DownsamplingWorker(const shared_ptr<State> &state_, const vector<int> &vcpu_list_, int cpu_, int src_bit_depth_, long src_nelts_) :
+        Worker(state_, vcpu_list_, cpu_),
         src_bit_depth(src_bit_depth_),
         src_nelts(src_nelts_)
     {
@@ -966,7 +977,7 @@ struct DownsamplingWorker : public FakeServer::Worker
         this->psrc = worker_alloc(src_nbytes);
         this->pdst = worker_alloc(dst_nbytes);
     }
-
+    
     virtual Stats worker_body() override
     {
         // cpu_downsample(int src_bit_depth, const uint8_t *src, uint8_t *dst, long src_nbytes, long dst_nbytes);
@@ -989,31 +1000,31 @@ struct DownsamplingWorker : public FakeServer::Worker
 
 void FakeServer::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list, int cpu, int inic)
 {
-    auto wp = make_shared<Receiver> (this, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
+    auto wp = make_shared<Receiver> (state, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
     this->_add_worker(wp, "add_tcp_receiver");
 }
 
 void FakeServer::add_chime_dedisperser(int device, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<ChimeWorker> (this, vcpu_list, cpu, device, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine);
+    auto wp = make_shared<ChimeWorker> (state, vcpu_list, cpu, device, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine);
     this->_add_worker(wp, "add_chime_dedisperser");
 }
 
 void FakeServer::add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<MemcpyWorker> (this, vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
+    auto wp = make_shared<MemcpyWorker> (state, vcpu_list, cpu, src_device, dst_device, blocksize, use_copy_engine);
     this->_add_worker(wp, "add_memcpy_thread");
 }
 
 void FakeServer::add_ssd_writer(const string &root_dir, long nbytes_per_file, const vector<int> &vcpu_list, int cpu, int issd)
 {
-    auto wp = make_shared<SsdWorker> (this, vcpu_list, cpu, issd, root_dir, nbytes_per_file);
+    auto wp = make_shared<SsdWorker> (state, vcpu_list, cpu, issd, root_dir, nbytes_per_file);
     this->_add_worker(wp, "add_ssd_writer");
 }
 
 void FakeServer::add_downsampling_thread(int src_bit_depth, long src_nelts, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<DownsamplingWorker> (this, vcpu_list, cpu, src_bit_depth, src_nelts);
+    auto wp = make_shared<DownsamplingWorker> (state, vcpu_list, cpu, src_bit_depth, src_nelts);
     this->_add_worker(wp, "add_downsampling_thread");
 }
 
