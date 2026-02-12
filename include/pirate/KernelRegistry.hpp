@@ -1,12 +1,14 @@
 #ifndef _PIRATE_KERNEL_REGISTRY_HPP
 #define _PIRATE_KERNEL_REGISTRY_HPP
 
+#include <set>
 #include <mutex>
 #include <vector>
 #include <string>
 #include <sstream>
 #include <iostream>
 #include <stdexcept>
+#include <cuda_runtime.h>
 #include <ksgpu/rand_utils.hpp>
 
 
@@ -48,8 +50,12 @@ struct KernelRegistry
     {
         Key key;
         Val val;
-        bool debug = false;        // debug kernel "clobbers" non-debug kernel
-        bool initialized = false;  // has deferred_initialization() been called?
+        bool debug = false;           // debug kernel "clobbers" non-debug kernel
+
+        // Track which CUDA devices have been initialized. deferred_initialization()
+        // calls cudaFuncSetAttribute(), which is a per-device operation — it must be
+        // called separately on each GPU that will launch the kernel.
+        std::set<int> initialized_devices;
     };
     
     mutable std::mutex lock;
@@ -125,9 +131,11 @@ struct KernelRegistry
             throw std::runtime_error(ss.str());
         }
 
-        if (!e->initialized) {
+        int device;
+        cudaGetDevice(&device);
+        if (!e->initialized_devices.count(device)) {
             this->deferred_initialization(e->val);
-            e->initialized = true;
+            e->initialized_devices.insert(device);
         }
         
         Val ret = e->val;
