@@ -1403,7 +1403,7 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
         // (They will wait for the dequantization kernel.)
         release_input(ichunk, ibatch, compute_stream);
 
-        // Throw away the dedispersion output.
+        // Wait for dedispersion output (then throw it away).
         acquire_output(ichunk, ibatch, compute_stream);
         release_output(ichunk, ibatch, compute_stream);
 

@@ -96,7 +96,7 @@ struct GpuDedisperser
 
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
-    // acquire_input): after call, 'stream' sees empty input buffer.
+    // acquire_input(): after call, 'stream' sees empty input buffer.
     // release_input(): before call, 'stream' must see full input buffer.
     // acquire_output(): after call, 'stream' sees full output buffer.
     // release_output(): before call, 'stream' must see empty output buffer.
