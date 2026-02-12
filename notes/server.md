@@ -87,10 +87,10 @@ The repo currently includes a little bit of low-level code that may be helpful:
 
     ```
     # On cx67. The test will pause after "listening for TCP connections".
-    python -m pirate_frb hwtest -n --toronto
+    python -m pirate_frb hwtest config.yml
 
     # On cx68. Send to all 4 IP addresses on cx67.
-    python -m pirate_frb hwtest_send 10.50.0.1 10.50.1.1 10.50.2.1 10.50.3.1
+    python -m pirate_frb hwtest -s config.yml
     ```
     I don't expect that the Hwtest will have much long-term usefulness,
     but browsing the code may help a little with getting started.

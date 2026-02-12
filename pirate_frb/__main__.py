@@ -484,60 +484,6 @@ def hwtest_send_from_config(config):
             print("\nInterrupted, stopping...")
 
 
-######################################   hwtest_send command  #######################################
-
-
-def parse_hwtest_send(subparsers):
-    help_text = 'Send data to test server (this is the "other half" of "python -m pirate_frb hwtest")'
-    parser = subparsers.add_parser("hwtest_send", help=help_text, description=help_text)
-    parser.add_argument('-r', '--rate', type=float, default=0, help='rate limit per ip address (default 0, meaning no limit)')
-    parser.add_argument('-b', '--bufsize', type=int, default=65536, help="Send bufsize (default 65536)")
-    parser.add_argument('ip_addrs', nargs='*', help="list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2")
-    parser.add_argument('--toronto', type=int, help="'--toronto X' is equivalent to arguments: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X")
-    parser.add_argument('--chord', type=int, help="'--chord X' is also equivalent to arguments: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X")
-
-
-def hwtest_send(args):
-    # FIXME currently hardcoded
-    tcp_connections_per_ip_address = 1
-
-    # Init 'ip_addrs' (list of strings)
-    flag = 0
-    if len(args.ip_addrs) > 0:
-        ip_addrs = args.ip_addrs
-        flag += 1
-    elif args.toronto is not None:
-        n = args.toronto
-        ip_addrs = [ f'10.1.1.{n}', f'10.1.2.{n}', f'10.1.3.{n}', f'10.1.4.{n}' ]
-        flag += 1
-    elif args.chord is not None:
-        n = args.chord
-        ip_addrs = [ f'10.1.1.{n}', f'10.1.2.{n}', f'10.1.3.{n}', f'10.1.4.{n}' ]
-        flag += 1
-
-    if flag != 1:
-        print(f"pirate 'hwtest_send' command: precisely one of the following must be specified on the command line:", file=sys.stderr)
-        print(f"  - A list of ip addresses, for example: 10.1.1.2 10.1.2.2 10.1.3.2 10.1.4.2", file=sys.stderr)
-        print(f"  - The flag '--toronto X', which is equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
-        print(f"  - The flag '--chord X', which is also equivalent to: 10.1.1.X 10.1.2.X 10.1.3.X 10.1.4.X", file=sys.stderr)
-        sys.exit(2)
-
-    with HwtestSender(send_bufsize=args.bufsize, use_zerocopy=True, use_mmap=False, use_hugepages=True) as correlator:
-        for ip_addr in ip_addrs:
-            correlator.add_endpoint(ip_addr, tcp_connections_per_ip_address, args.rate)
-
-        correlator.start()
-
-        # Wait for workers to exit (e.g. receiver closes connections).
-        # Use wait() with a timeout so that CPython can process SIGINT between iterations.
-        # The context manager calls stop()+join() on exit.
-        try:
-            while not correlator.wait(500):
-                pass
-        except KeyboardInterrupt:
-            print("\nInterrupted, stopping...")
-
-
 ######################################   scratch command  #######################################
 
 
@@ -1052,7 +998,6 @@ def get_parser():
     parse_time_dedisperser(subparsers)
     parse_show_random_config(subparsers)
     parse_hwtest(subparsers)
-    parse_hwtest_send(subparsers)
     parse_scratch(subparsers)
     parse_random_kernels(subparsers)
     parse_show_asdf(subparsers)
@@ -1087,8 +1032,6 @@ def main():
         show_random_config(args)
     elif args.command == "hwtest":
         hwtest(args)
-    elif args.command == "hwtest_send":
-        hwtest_send(args)
     elif args.command == "scratch":
         scratch(args)
     elif args.command == "random_kernels":

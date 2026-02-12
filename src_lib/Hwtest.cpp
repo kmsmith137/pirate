@@ -548,7 +548,7 @@ struct TcpReceiver : Hwtest::Worker
     virtual void worker_accept_connections()
     {
         stringstream ss;
-        ss << worker_name << ": listening for TCP connections\n";
+        ss << worker_name << ": listening for TCP connections. Reminder: use 'pirate_frb hwtest -s <config.yml>' to send data\n";
         cout << ss.str() << flush;
 
         this->data_sockets.resize(num_tcp_connections);
