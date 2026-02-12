@@ -309,142 +309,150 @@ def make_subbands(args):
 
 
 def parse_hwtest(subparsers):
-    help_text = "Run test server (if no flags are specified, then -dcsdn --h2g --g2h is the default)"
+    help_text = "Run hardware test using YAML config file"
     parser = subparsers.add_parser("hwtest", help=help_text, description=help_text)
-    parser.add_argument('-d', '--dedisperse', dest='d', action='store_true', help='Run GPU dedispersion')
-    parser.add_argument('-c', '--cpu', dest='c', action='store_true', help='Run AVX2 downsampling kernels on CPU')
-    parser.add_argument('-s', '--ssd', dest='s', action='store_true', help='Write files to SSDs')
-    parser.add_argument('-n', '--net', dest='n', action='store_true', help='Receive data over the network')
-    parser.add_argument('-H', '--hmem', dest='H', action='store_true', help='Host memory bandwidth test')
-    parser.add_argument('-G', '--gmem', dest='G', action='store_true', help='GPU memory bandwidth test')
-    parser.add_argument('--h2g', dest='h2g', action='store_true', help='Copy host->GPU')
-    parser.add_argument('--g2h', dest='g2h', action='store_true', help='Copy GPU->host')
-    parser.add_argument('-x', '--cross-numa', dest='cross_numa', action='store_true', help='Split SSD disk writer threads between numa domains')
+    parser.add_argument('config_file', help='Path to YAML config file')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
-    parser.add_argument('--ip', type=str, help='Comma-separated list of IP addresses')
-    parser.add_argument('--nic', type=str, help='Comma-separated list of NICs')
-    parser.add_argument('--ssd-dirs', type=str, help='Comma-separated list of directory names (one per SSD)')
-    parser.add_argument('--ssd-devs', type=str, help='Comma-separated list of SSD device names (e.g. /dev/nvme0n1p2 or just nvme0n1p2)')
-    parser.add_argument('--toronto', action='store_true', help='Equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1 --ssd-dirs=/scratch')
-    parser.add_argument('--chord', action='store_true', help='Equivalent to --nic=enp13s0f0np0,enp13s0f1np1,enp160s0f0np0,enp160s0f1np1 --ssd-dirs=/scratch,/disk2/scratch')
-    
+
+
+def parse_hwtest_config(filename):
+    """Parse and validate a hwtest YAML config file. Returns a dict."""
+
+    import yaml
+
+    with open(filename) as f:
+        config = yaml.safe_load(f)
+
+    if not isinstance(config, dict):
+        raise RuntimeError(f"{filename}: expected YAML mapping at top level, got {type(config).__name__}")
+
+    # Define all valid keys, grouped by type.
+    bool_keys = ['dedisperse', 'h2g_bw', 'g2h_bw', 'gmem_bw', 'hmem_bw']
+    int_keys = ['tcp_connections_per_ip_address', 'write_threads_per_ssd', 'downsampling_threads_per_cpu']
+    list_of_str_keys = ['ip_addrs', 'ssd_dirs', 'ssd_devices']
+    all_valid_keys = set(bool_keys + int_keys + list_of_str_keys)
+
+    # These keys must always be present. The remaining keys (tcp_connections_per_ip_address,
+    # write_threads_per_ssd, ssd_devices) are conditionally required -- see below.
+    always_required = set(bool_keys + ['ip_addrs', 'ssd_dirs', 'downsampling_threads_per_cpu'])
+
+    # Check for unknown keys.
+    unknown = set(config.keys()) - all_valid_keys
+    if unknown:
+        raise RuntimeError(f"{filename}: unrecognized key(s): {', '.join(sorted(unknown))}")
+
+    # Check required keys are present.
+    missing = always_required - set(config.keys())
+    if missing:
+        raise RuntimeError(f"{filename}: missing required key(s): {', '.join(sorted(missing))}")
+
+    # Type-check booleans.
+    for key in bool_keys:
+        if key in config and not isinstance(config[key], bool):
+            raise RuntimeError(f"{filename}: '{key}' must be true or false, got {repr(config[key])}")
+
+    # Type-check integers (note: in Python, bool is a subclass of int, so we must exclude it).
+    for key in int_keys:
+        if key in config:
+            if isinstance(config[key], bool) or not isinstance(config[key], int):
+                raise RuntimeError(f"{filename}: '{key}' must be an integer, got {repr(config[key])}")
+
+    # Type-check lists of strings.
+    for key in list_of_str_keys:
+        if key in config:
+            if not isinstance(config[key], list):
+                raise RuntimeError(f"{filename}: '{key}' must be a list, got {repr(config[key])}")
+            for i, elem in enumerate(config[key]):
+                if not isinstance(elem, str):
+                    raise RuntimeError(f"{filename}: {key}[{i}] must be a string, got {repr(elem)}")
+
+    # Range-check integers.
+    if config['downsampling_threads_per_cpu'] < 0:
+        raise RuntimeError(f"{filename}: 'downsampling_threads_per_cpu' must be >= 0, got {config['downsampling_threads_per_cpu']}")
+    if 'tcp_connections_per_ip_address' in config and config['tcp_connections_per_ip_address'] < 1:
+        raise RuntimeError(f"{filename}: 'tcp_connections_per_ip_address' must be >= 1, got {config['tcp_connections_per_ip_address']}")
+    if 'write_threads_per_ssd' in config and config['write_threads_per_ssd'] < 1:
+        raise RuntimeError(f"{filename}: 'write_threads_per_ssd' must be >= 1, got {config['write_threads_per_ssd']}")
+
+    # Conditionally required: tcp_connections_per_ip_address (when ip_addrs is non-empty).
+    if len(config['ip_addrs']) > 0 and 'tcp_connections_per_ip_address' not in config:
+        raise RuntimeError(f"{filename}: 'tcp_connections_per_ip_address' is required when 'ip_addrs' is non-empty")
+
+    # Conditionally required: ssd_devices and write_threads_per_ssd (when ssd_dirs is non-empty).
+    if len(config['ssd_dirs']) > 0:
+        if 'ssd_devices' not in config:
+            raise RuntimeError(f"{filename}: 'ssd_devices' is required when 'ssd_dirs' is non-empty")
+        if 'write_threads_per_ssd' not in config:
+            raise RuntimeError(f"{filename}: 'write_threads_per_ssd' is required when 'ssd_dirs' is non-empty")
+        if len(config['ssd_devices']) != len(config['ssd_dirs']):
+            raise RuntimeError(
+                f"{filename}: 'ssd_devices' has length {len(config['ssd_devices'])}, "
+                f"but 'ssd_dirs' has length {len(config['ssd_dirs'])} (must be equal)"
+            )
+
+    return config
+
 
 def hwtest(args):
-    # FIXME currently hardcoded
-    ssd_dirs = [ '/scratch' ]
+    config = parse_hwtest_config(args.config_file)
 
-    tcp_connections_per_ip_address = 1
-    downsampling_threads_per_cpu = 8
-    write_threads_per_ssd = 4
-
-    no_flags = not (args.d or args.c or args.s or args.n or args.H or args.G or args.h2g or args.g2h)
     server = Hwtest('Node test')
     hw = server.hardware
 
-    # IP address parsing starts here.
-    
-    ip_flag = 0
-    ip_addrs = [ ]
-    ip_needed = (no_flags or args.n) 
-   
-    if args.toronto:
-        ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in [ 'enp55s0f0np0', 'enp55s0f1np1', 'enp181s0f0np0', 'enp181s0f1np1' ] ]
-        ip_flag += 1   
-    elif args.chord:
-        ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in [ 'enp13s0f0np0', 'enp13s0f1np1', 'enp160s0f0np0', 'enp160s0f1np1' ] ]
-        ip_flag += 1
-    elif args.ip is not None:
-        ip_addrs = args.ip.split(',')
-        ip_flag += 1
-    elif args.nic is not None:
-        ip_addrs = [ hw.ip_addr_from_nic(nic) for nic in args.nic.split(',') ]
-        ip_flag += 1
-
-    # An indirect way of checking that all IP addresses are valid.
-    for ip in ip_addrs:
+    # Validate IP addresses (checks that each IP is associated with a known NIC).
+    for ip in config['ip_addrs']:
         hw.vcpu_list_from_ip_addr(ip)
 
-    if (ip_flag >= 2) or (ip_needed and (ip_flag == 0)):
-        s = 'precisely' if ip_needed else 'at most'
-        print(f"pirate 'hwtest' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
-        print(f"  --ip=[IPADDRS]     for example --ip=10.1.1.2,10.1.2.2,10.1.3.2,10.1.4.2", file=sys.stderr)
-        print(f'  --nic=[NICS]       for example --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
-        print(f'  --toronto          equivalent to --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1 --ssd-dirs=/scratch', file=sys.stderr)
-        print(f'  --chord            equivalent to --nic=enp13s0f0np0,enp13s0f1np1,enp160s0f0np0,enp160s0f1np1 --ssd-dirs=/scratch,/disk2/scratch', file=sys.stderr)
-        sys.exit(2)
-
-    # SSD parsing starts here.
-
-    ssd_flag = 0
-    ssd_dirs = [ ]
-    ssd_needed = (no_flags or args.s)
-
-    if args.toronto:
-        ssd_dirs = [ '/scratch' ]
-        ssd_flag += 1
-    elif args.chord:
-        ssd_dirs = [ '/scratch', '/disk2/scratch' ]
-        ssd_flag += 1
-    elif args.ssd_dirs is not None:
-        ssd_dirs = args.ssd_dirs.split(',')
-        ssd_flag += 1
-    elif args.ssd_devs is not None:
-        ssd_dirs = [ hw.mount_point_from_device(dev) for dev in args.ssd_devs.split(',') ]
-        ssd_flag += 1
-
-    # An indirect way of checking that all SSD dirnames are valid.
-    for ssd_dir in ssd_dirs:
+    # Validate SSD dirs (checks that each dir is a known mount point).
+    for ssd_dir in config['ssd_dirs']:
         hw.vcpu_list_from_dirname(ssd_dir)
 
-    if (ssd_flag >= 2) or (ssd_needed and (ssd_flag == 0)):
-        s = 'precisely' if ssd_needed else 'at most'
-        print(f"pirate 'hwtest' command: {s} one of the following must be specified on the command line:", file=sys.stderr)
-        print(f"  --ssd-dirs=[DIRS]     for example --ssd-dirs=/scratch1,/scratch2", file=sys.stderr)
-        print(f'  --ssd-devs=[DEVS]     for example --ssd-devs=nvme0n1p1,nvme0n2p1', file=sys.stderr)
-        print(f'  --toronto             equivalent to --ssd-dirs=/scratch --nic=enp55s0f0np0,enp55s0f1np1,enp181s0f0np0,enp181s0f1np1', file=sys.stderr)
-        print(f'  --chord               equivalent to --ssd-dirs=/scratch,/disk2/scratch --nic=enp13s0f0np0,enp13s0f1np1,enp160s0f0np0,enp160s0f1np1', file=sys.stderr)
-        sys.exit(2)
-        
-    # Add threads to server.
-    
-    if no_flags:
-        print("No flags passed to hwtest -- by default, all tasks except hmem will be run")
+    # Validate ssd_devices: check that each ssd_dir is backed by the corresponding ssd_device.
+    if len(config['ssd_dirs']) > 0:
+        for i, (ssd_dir, ssd_dev) in enumerate(zip(config['ssd_dirs'], config['ssd_devices'])):
+            actual_dev = hw.disk_from_dirname(ssd_dir)
+            if os.path.basename(actual_dev) != os.path.basename(ssd_dev):
+                raise RuntimeError(
+                    f"ssd_dirs[{i}]={ssd_dir!r} is backed by device {actual_dev!r}, "
+                    f"but ssd_devices[{i}]={ssd_dev!r} (mismatch)"
+                )
 
-    if args.H:
-        # FIXME -- currently submit one thread per vcpu (should do something better)
+    # Add workers to server.
+
+    if config['hmem_bw']:
         for icpu in range(hw.num_cpus):
             for v in hw.vcpu_list_from_cpu(icpu):
                 server.add_memcpy_thread(-1, -1, cpu=icpu)
-    if args.G:
+
+    if config['gmem_bw']:
         for gpu in range(hw.num_gpus):
             server.add_memcpy_thread(gpu, gpu, use_copy_engine=False)
-                
-    if no_flags or args.c:
+
+    if config['downsampling_threads_per_cpu'] > 0:
         for icpu in range(hw.num_cpus):
-            for _ in range(downsampling_threads_per_cpu):
+            for _ in range(config['downsampling_threads_per_cpu']):
                 server.add_downsampling_thread(icpu)
 
-    if no_flags or args.s:
-        for issd,ssd_dir in enumerate(ssd_dirs):
-            for thread in range(write_threads_per_ssd):
-                cpu = (thread % hw.num_cpus) if args.cross_numa else None
-                server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd, cpu=cpu)
+    if len(config['ssd_dirs']) > 0:
+        for issd, ssd_dir in enumerate(config['ssd_dirs']):
+            for thread in range(config['write_threads_per_ssd']):
+                server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd)
 
-    if no_flags or args.h2g:
+    if config['h2g_bw']:
         for gpu in range(hw.num_gpus):
-            server.add_memcpy_thread(-1, gpu)  # h2g
-    
-    if no_flags or args.g2h:
+            server.add_memcpy_thread(-1, gpu)
+
+    if config['g2h_bw']:
         for gpu in range(hw.num_gpus):
-            server.add_memcpy_thread(gpu, -1)  # g2h
-    
-    if no_flags or args.d:
+            server.add_memcpy_thread(gpu, -1)
+
+    if config['dedisperse']:
         for gpu in range(hw.num_gpus):
             server.add_chime_dedisperser(gpu)
 
-    if no_flags or args.n:
-        for ip_addr in ip_addrs:
-            server.add_tcp_receiver(ip_addr, tcp_connections_per_ip_address)
+    if len(config['ip_addrs']) > 0:
+        for ip_addr in config['ip_addrs']:
+            server.add_tcp_receiver(ip_addr, config['tcp_connections_per_ip_address'])
 
     server.run(args.time)
 

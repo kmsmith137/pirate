@@ -14,10 +14,6 @@ namespace pirate {
 #endif
 
 
-// Defined in include/pirate/DedispersionPlan.hpp
-struct DedispersionPlan;
-
-
 struct Hwtest
 {
     Hwtest(const std::string &server_name="Hwtest", bool use_hugepages=true);

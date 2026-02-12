@@ -1,0 +1,13 @@
+# For use with 'python -m pirate_frb hwtest'.
+# See cf00_all.yml for full syntax.
+
+ip_addrs: [ '10.0.0.1', '10.0.1.1', '10.0.2.1', '10.0.3.1' ]
+tcp_connections_per_ip_address: 1
+
+dedisperse: false
+ssd_dirs: [ ]
+downsampling_threads_per_cpu: 0
+h2g_bw: false
+g2h_bw: false
+gmem_bw: false
+hmem_bw: false
