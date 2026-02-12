@@ -1,8 +1,6 @@
 #include "../include/pirate/Barrier.hpp"
 #include <ksgpu/xassert.hpp>
 
-#include <stdexcept>
-
 using namespace std;
 
 
@@ -25,7 +23,7 @@ void Barrier::initialize(int nthreads_)
     std::unique_lock ul(lock);
 
     xassert_msg(this->nthreads <= 0, "Barrier::initialize() called on already-initialized Barrier");
-    xassert_msg(!this->aborted, this->abort_msg);
+    xassert_msg(!this->is_stopped, "Barrier::initialize() called on stopped Barrier");
     this->nthreads = nthreads_;
 }
 
@@ -42,7 +40,12 @@ void Barrier::wait()
     std::unique_lock ul(lock);
 
     xassert_msg(nthreads > 0, "Barrier::wait() called on uninitialized Barrier");
-    xassert_msg(!aborted, abort_msg);
+
+    if (is_stopped) {
+        if (error)
+            std::rethrow_exception(error);
+        return;
+    }
 
     if (nthreads_waiting == nthreads-1) {
         this->nthreads_waiting = 0;
@@ -55,25 +58,28 @@ void Barrier::wait()
     this->nthreads_waiting++;
 
     int wc = this->wait_count;
-    cv.wait(ul, [this,wc] { return (this->aborted || (this->wait_count > wc)); });
+    cv.wait(ul, [this,wc] { return (this->is_stopped || (this->wait_count > wc)); });
 
-    if (_unlikely(aborted))
-        throw runtime_error(abort_msg);
+    if (_unlikely(is_stopped)) {
+        if (error)
+            std::rethrow_exception(error);
+        return;
+    }
 }
 
 
-void Barrier::abort(const string &msg)
+void Barrier::stop(exception_ptr e)
 {
     std::unique_lock ul(lock);
 
-    if (_unlikely(aborted))
+    if (is_stopped)
         return;
 
-    this->aborted = true;
-    this->abort_msg = msg;
+    this->is_stopped = true;
+    this->error = e;
     ul.unlock();
     cv.notify_all();
-};
+}
 
 
 } // namespace pirate

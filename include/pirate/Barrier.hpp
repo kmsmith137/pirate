@@ -1,8 +1,8 @@
 #ifndef _PIRATE_BARRIER_HPP
 #define _PIRATE_BARRIER_HPP
 
+#include <exception>
 #include <mutex>
-#include <string>
 #include <condition_variable>
 
 namespace pirate {
@@ -23,15 +23,15 @@ struct Barrier
     int nthreads = 0;
     int nthreads_waiting = 0;
     int wait_count = 0;
-    bool aborted = false;
-    std::string abort_msg;
+    bool is_stopped = false;
+    std::exception_ptr error;
 
     // If constructor is called with nthreads=0, then 'nthreads' must be
     // set later, with a call to initialize().
     Barrier(int nthreads);
 
     void wait();
-    void abort(const std::string &msg);
+    void stop(std::exception_ptr e = nullptr);
     void initialize(int nthreads);
     bool is_initialized();
 

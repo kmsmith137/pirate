@@ -407,7 +407,7 @@ void Hwtest::stop(std::exception_ptr e)
         return;
     is_stopped = true;
     error = e;
-    barrier.abort("Hwtest stopped");
+    barrier.stop(e);
 }
 
 
