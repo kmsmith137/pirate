@@ -758,13 +758,14 @@ struct ChimeWorker : public FakeServer::Worker
 
         // Reminder: ResourceTracker counts are "per batch".
         const ResourceTracker &rt = gpu_dedisperser->resource_tracker;
-    
+        double tchunk = 1.0e-3 * dedispersion_config.time_sample_ms * dedispersion_config.time_samples_per_chunk;
+
         Stats stats;
         stats.hmem(cpu) = nouter * rt.get_hmem_bw();
         stats.gmem[device] = nouter * rt.get_gmem_bw();
         stats.h2g[device] = nouter * rt.get_h2g_bw();
         stats.g2h[device] = nouter * rt.get_g2h_bw();
-        stats.chime_beams += nouter * beams_per_batch;
+        stats.chime_beams += nouter * beams_per_batch * tchunk;  // beam-seconds
         return stats;
     }
 };
