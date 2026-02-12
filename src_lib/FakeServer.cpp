@@ -656,9 +656,7 @@ struct TcpReceiver : FakeServer::Worker
 
 struct ChimeWorker : public FakeServer::Worker
 {
-    // ChimeDedisperser dedisperser;
-    long niter = 0;
-    long ichunk = 0;
+    DedispersionConfig dedispersion_config;
     int device = -1;
 
     
@@ -677,9 +675,37 @@ struct ChimeWorker : public FakeServer::Worker
 
     virtual void worker_initialize() override
     {
-        // Must precede ChimeDedisperser::initialize().
         CUDA_CALL(cudaSetDevice(this->device));
-        // dedisperser.initialize();
+
+        // Hardcoded CHIME dedispersion config (equivalent to configs/dedispersion/chime.yml,
+        // except beams_per_gpu=16 and max_gpu_clag=1000.
+        
+        dedispersion_config.zone_nfreq = { 16384 };
+        dedispersion_config.zone_freq_edges = { 400, 800 };
+        dedispersion_config.time_sample_ms = 1.0;
+        dedispersion_config.tree_rank = 15;
+        dedispersion_config.num_downsampling_levels = 4;
+        dedispersion_config.time_samples_per_chunk = 2048;
+        dedispersion_config.dtype = Dtype::from_str("float16");
+        dedispersion_config.beams_per_gpu = 16;
+        dedispersion_config.beams_per_batch = 2;
+        dedispersion_config.num_active_batches = 2;
+        dedispersion_config.max_gpu_clag = 1000;
+
+        // No early triggers or frequency subbands.
+        dedispersion_config.early_triggers = { };
+        dedispersion_config.frequency_subband_counts = { 0, 0, 0, 0, 1 };
+
+        // FIXME peak_finding_params are not quite right (same params at each level).
+        // (max_width, dm_downsampling, time_downsampling, wt_dm_downsampling, wt_time_downsampling)
+        dedispersion_config.peak_finding_params = {
+            { 16, 0, 0, 64, 64 },
+            { 16, 0, 0, 64, 64 },
+            { 16, 0, 0, 64, 64 },
+            { 16, 0, 0, 64, 64 }
+        };
+        
+        dedispersion_config.validate();
     }
 
     virtual Stats worker_body() override
