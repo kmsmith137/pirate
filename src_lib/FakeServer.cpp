@@ -18,6 +18,9 @@
 #include "../include/pirate/network_utils.hpp"  // Socket, Epoll
 #include "../include/pirate/loose_ends/cpu_downsample.hpp"
 #include "../include/pirate/Dedisperser.hpp"
+#include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/BumpAllocator.hpp"
+#include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Barrier.hpp"
 
 
@@ -657,6 +660,8 @@ struct TcpReceiver : FakeServer::Worker
 struct ChimeWorker : public FakeServer::Worker
 {
     DedispersionConfig dedispersion_config;
+    shared_ptr<DedispersionPlan> dedispersion_plan;
+    shared_ptr<GpuDedisperser> gpu_dedisperser;
     int device = -1;
 
     
@@ -678,7 +683,7 @@ struct ChimeWorker : public FakeServer::Worker
         CUDA_CALL(cudaSetDevice(this->device));
 
         // Hardcoded CHIME dedispersion config (equivalent to configs/dedispersion/chime.yml,
-        // except beams_per_gpu=16 and max_gpu_clag=1000.
+        // except beams_per_gpu=16 and max_gpu_clag=1000. GPU memory usage is ~30 GB.
         
         dedispersion_config.zone_nfreq = { 16384 };
         dedispersion_config.zone_freq_edges = { 400, 800 };
@@ -706,6 +711,24 @@ struct ChimeWorker : public FakeServer::Worker
         };
         
         dedispersion_config.validate();
+
+        // Create DedispersionPlan and GpuDedisperser.
+        dedispersion_plan = make_shared<DedispersionPlan> (dedispersion_config);
+
+        GpuDedisperser::Params gdd_params;
+        gdd_params.plan = dedispersion_plan;
+        gdd_params.stream_pool = CudaStreamPool::create(dedispersion_config.num_active_batches);
+        gpu_dedisperser = GpuDedisperser::create(gdd_params);
+
+        // Allocate GpuDedisperser using dummy-mode BumpAllocators.
+        BumpAllocator gpu_allocator(af_gpu | af_zero, -1);
+
+        int host_aflags = af_rhost | af_zero;
+        if (state->use_hugepages)
+            host_aflags |= af_mmap_huge;
+        BumpAllocator host_allocator(host_aflags, -1);
+
+        gpu_dedisperser->allocate(gpu_allocator, host_allocator);
     }
 
     virtual Stats worker_body() override
