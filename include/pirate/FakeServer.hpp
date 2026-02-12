@@ -26,7 +26,7 @@ struct FakeServer
     void add_tcp_receiver(const std::string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const std::vector<int> &vcpu_list, int cpu, int inic);
 
     // Dedispersion on one GPU, using simplified CHIME parameters.
-    void add_chime_dedisperser(int device, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine, const std::vector<int> &vcpu_list, int cpu);
+    void add_chime_dedisperser(int device, const std::vector<int> &vcpu_list, int cpu);
     
     // The 'src_device' and 'dst_device' args can be (-1) for "host".
     // Important note: it turns out that cudaMemcpy() runs slow for sizes >4GB (!!)

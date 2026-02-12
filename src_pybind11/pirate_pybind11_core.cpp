@@ -628,9 +628,7 @@ void register_core_bindings(pybind11::module &m)
              py::arg("use_epoll"), py::arg("vcpu_list"), py::arg("cpu"), py::arg("inic"))
 
         .def("add_chime_dedisperser", &FakeServer::add_chime_dedisperser,
-             py::arg("device"), py::arg("beams_per_gpu"), py::arg("num_active_batches"),
-             py::arg("beams_per_batch"), py::arg("use_copy_engine"), py::arg("vcpu_list"),
-             py::arg("cpu"))
+             py::arg("device"), py::arg("vcpu_list"), py::arg("cpu"))
         
         .def("add_memcpy_thread", &FakeServer::add_memcpy_thread,
              py::arg("src_device"), py::arg("dst_device"), py::arg("blocksize"),

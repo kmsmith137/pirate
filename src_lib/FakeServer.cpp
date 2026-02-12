@@ -428,6 +428,7 @@ double FakeServer::show_stats()
     
     if (bw.ds_kernel > 0.0)
         ss << "  AVX2 kernel throughput: " << (1.0e-9 * bw.ds_kernel) << " Gsamp/s\n";
+    
     if (bw.chime_beams > 0.0)
         ss << "  Real-time CHIME beams: " << bw.chime_beams << "\n";
 
@@ -661,20 +662,16 @@ struct ChimeWorker : public FakeServer::Worker
     int device = -1;
 
     
-    ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int device_, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine) :
+    ChimeWorker(const shared_ptr<FakeServer::State> state_, const vector<int> &vcpu_list_, int cpu_, int device_) :
         Worker(state_, vcpu_list_, cpu_),
-        // dedisperser(beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine),
         device(device_)
     {
         xassert(device >= 0);
         xassert(device < FakeServer::Stats::max_gpu);
         xassert(device < get_cuda_device_count());
 
-        xassert(beams_per_gpu > 0);  // paranoid -- also checked in ChimeDedisperser constructor
-        this->niter = (beams_per_gpu + 99) / beams_per_gpu;
-        
         stringstream ss;
-        ss << "ChimeDedisperser(" << devstr(device) << ", use_copy_engine=" << use_copy_engine << ")";
+        ss << "ChimeDedisperser(" << devstr(device) << ")";
         this->worker_name = ss.str();
     }
 
@@ -996,9 +993,9 @@ void FakeServer::add_tcp_receiver(const string &ip_addr, long num_tcp_connection
     this->_add_worker(wp, "add_tcp_receiver");
 }
 
-void FakeServer::add_chime_dedisperser(int device, int beams_per_gpu, int num_active_batches, int beams_per_batch, bool use_copy_engine, const vector<int> &vcpu_list, int cpu)
+void FakeServer::add_chime_dedisperser(int device, const vector<int> &vcpu_list, int cpu)
 {
-    auto wp = make_shared<ChimeWorker> (state, vcpu_list, cpu, device, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine);
+    auto wp = make_shared<ChimeWorker> (state, vcpu_list, cpu, device);
     this->_add_worker(wp, "add_chime_dedisperser");
 }
 

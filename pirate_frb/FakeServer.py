@@ -34,13 +34,10 @@ class FakeServer:
         self.nic_counter += 1
 
 
-    def add_chime_dedisperser(self, gpu, use_copy_engine=False, num_active_batches=3, beams_per_batch=1, beams_per_gpu=None):
-        if beams_per_gpu is None:
-            beams_per_gpu = num_active_batches * beams_per_batch
-
+    def add_chime_dedisperser(self, gpu):
         vcpu_list = self.hardware.vcpu_list_from_gpu(gpu)
         cpu = self.cpu_from_vcpu_list(vcpu_list)
-        self.cpp_server.add_chime_dedisperser(gpu, beams_per_gpu, num_active_batches, beams_per_batch, use_copy_engine, vcpu_list, cpu)
+        self.cpp_server.add_chime_dedisperser(gpu, vcpu_list, cpu)
                                   
     
     def add_memcpy_thread(self, src_device, dst_device, blocksize=1024**3, cpu=None, use_copy_engine=False):
