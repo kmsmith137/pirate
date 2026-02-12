@@ -43,7 +43,8 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     // Called by python code, to control server.
     double show_stats();  // returns elapsed time in seconds
     void abort(const std::string &abort_msg);
-    void join_threads();
+
+    void join();
     void start();
     void stop();
 
@@ -71,6 +72,9 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     Hwtest(Hwtest &&) = delete;
     Hwtest &operator=(Hwtest &&) = delete;
 
+    // Destructor calls stop() and join().
+    ~Hwtest();
+    
 protected:
     Hwtest(const std::string &server_name, bool use_hugepages);
 };

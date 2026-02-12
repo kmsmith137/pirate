@@ -106,4 +106,4 @@ class Hwtest:
                 break
 
         self.cpp_server.stop()
-        self.cpp_server.join_threads()
+        self.cpp_server.join()

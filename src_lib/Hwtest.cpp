@@ -467,17 +467,26 @@ void Hwtest::stop()
 }
 
 
-// Called from python, to join threads.
-void Hwtest::join_threads()
+Hwtest::~Hwtest()
+{
+    try {
+        stop();
+        join();
+    }
+    catch (...) { }
+}
+
+
+void Hwtest::join()
 {
     std::unique_lock lk(state->lock);
 
     if (state->code < State::stopped)
-        throw runtime_error("Hwtest::join_threads() called on server which has not been stopped (or aborted)");
+        throw runtime_error("Hwtest::join() called on server which has not been stopped (or aborted)");
 
     std::unique_lock lk2(thread_lock);
     lk.unlock();
-    
+
     for (ulong i = 0; i < threads.size(); i++)
         if (threads[i].joinable())
             threads[i].join();

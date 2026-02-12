@@ -646,7 +646,7 @@ void register_core_bindings(pybind11::module &m)
 
          // Called by python code, to control server.
         .def("abort", &Hwtest::abort, py::arg("abort_msg"))
-        .def("join_threads", &Hwtest::join_threads)
+        .def("join", &Hwtest::join)
         .def("show_stats", &Hwtest::show_stats)
         .def("start", &Hwtest::start)
         .def("stop", &Hwtest::stop)
