@@ -323,17 +323,26 @@ void Hwtest::start()
 
 double Hwtest::show_stats()
 {
-    using Stats = Hwtest::Stats;
+    unique_lock lock(this->mutex);
+    _throw_if_stopped("Hwtest::show_stats");
+    
+    if (!is_started)
+        throw runtime_error("Hwtest::show_stats() called on server which has not been started");
 
-    {
-        std::lock_guard lk(this->mutex);
-        _throw_if_stopped("Hwtest::show_stats");
-
-        if (!is_started)
-            throw runtime_error("Hwtest::show_stats() called on server which has not been started");
-    }
+    lock.unlock();
 
     try {
+        return _show_stats();
+    } catch (...) {
+        this->stop(std::current_exception());
+        throw;
+    }
+}
+
+
+double Hwtest::_show_stats()
+{
+    using Stats = Hwtest::Stats;
 
     // Reminder: after server is started, 'workers' is immutable, so we don't need to hold the lock here...
     long num_workers = workers.size();
@@ -347,13 +356,13 @@ double Hwtest::show_stats()
         stats[i] = w->cumulative_stats;
         dt[i] = w->tv_initialized ? ksgpu::time_diff(w->tv0, w->tv1) : 0.0;
     }
-    
+
     Stats bw;
     double dt_max = 0.0;
 
     for (long i = 0; i < num_workers; i++) {
         dt_max = std::max(dt_max, dt[i]);
-        
+
         // Don't trust rate estimates below 0.5 sec.
         if (dt[i] >= 0.5)
             bw += stats[i] / dt[i];
@@ -367,7 +376,7 @@ double Hwtest::show_stats()
 
     if (bw.hmem_floating > 0.0)
         ss << "  Host memory bandwidth (floating): " << (1.0e-9 * bw.hmem_floating) << " GB/s\n";
-        
+
     for (int gpu = 0; gpu < Hwtest::Stats::max_gpu; gpu++)
         if (bw.gmem[gpu] > 0.0)
             ss << "  GPU global memory bandwidth (GPU " << gpu << "): " << (1.0e-9 * bw.gmem[gpu]) << " GB/s\n";
@@ -387,24 +396,19 @@ double Hwtest::show_stats()
     for (int inic = 0; inic < Hwtest::Stats::max_nic; inic++)
         if (bw.nic[inic] > 0.0)
             ss << "  Network bandwidth (NIC " << inic << "): " << (8.0e-9 * bw.nic[inic]) << " Gbps (not GB/s)\n";
-    
+
     if (bw.ds_kernel > 0.0)
         ss << "  AVX2 kernel throughput: " << (1.0e-9 * bw.ds_kernel) << " Gsamp/s\n";
-    
+
     if (bw.chime_beams > 0.0)
         ss << "  Real-time CHIME beams: " << bw.chime_beams << "\n";
 
     string s = ss.str();
-    
+
     if (s.size() > 0)
         cout << "Elapsed time: " << dt_max << " sec\n" << s << flush;
 
     return dt_max;
-
-    } catch (...) {
-        this->stop(std::current_exception());
-        throw;
-    }
 }
 
 

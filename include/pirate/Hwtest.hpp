@@ -45,6 +45,7 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
 
     // Called by python code, to control server.
     double show_stats();  // returns elapsed time in seconds
+    double _show_stats();  // helper, called without lock held.
 
     void join();
     void start();
@@ -72,6 +73,7 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
 
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name);
+
 
     // ----- Noncopyable, nonmoveable -----
 
