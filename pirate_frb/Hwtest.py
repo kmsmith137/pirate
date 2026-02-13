@@ -100,10 +100,13 @@ class Hwtest:
     def run(self, seconds=20):
         self.cpp_server.start()
 
-        while True:
-            time.sleep(1)
-            if self.cpp_server.show_stats() > seconds:
-                break
-
-        self.cpp_server.stop()
-        self.cpp_server.join()
+        try:
+            while True:
+                time.sleep(1)
+                if self.cpp_server.show_stats() > seconds:
+                    break
+        except KeyboardInterrupt:
+            print("\nInterrupted, stopping...")
+        finally:
+            self.cpp_server.stop()
+            self.cpp_server.join()

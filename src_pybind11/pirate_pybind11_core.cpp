@@ -645,10 +645,14 @@ void register_core_bindings(pybind11::module &m)
              py::arg("cpu"))
 
          // Called by python code, to control server.
-        .def("join", &Hwtest::join)
-        .def("show_stats", &Hwtest::show_stats)
-        .def("start", &Hwtest::start)
-        .def("stop", [](Hwtest &self) { self.stop(); })
+        .def("join", &Hwtest::join,
+             py::call_guard<py::gil_scoped_release>())
+        .def("show_stats", &Hwtest::show_stats,
+             py::call_guard<py::gil_scoped_release>())
+        .def("start", &Hwtest::start,
+             py::call_guard<py::gil_scoped_release>())
+        .def("stop", [](Hwtest &self) { self.stop(); },
+             py::call_guard<py::gil_scoped_release>())
     ;
 }
 

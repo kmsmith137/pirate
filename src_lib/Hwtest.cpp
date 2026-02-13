@@ -4,6 +4,7 @@
 #include <thread>
 #include <sstream>
 #include <iostream>
+#include <poll.h>
 
 #include <ksgpu/mem_utils.hpp>
 #include <ksgpu/cuda_utils.hpp>
@@ -332,6 +333,8 @@ double Hwtest::show_stats()
             throw runtime_error("Hwtest::show_stats() called on server which has not been started");
     }
 
+    try {
+
     // Reminder: after server is started, 'workers' is immutable, so we don't need to hold the lock here...
     long num_workers = workers.size();
     vector<Stats> stats(num_workers);
@@ -397,6 +400,11 @@ double Hwtest::show_stats()
         cout << "Elapsed time: " << dt_max << " sec\n" << s << flush;
 
     return dt_max;
+
+    } catch (...) {
+        this->stop(std::current_exception());
+        throw;
+    }
 }
 
 
@@ -423,19 +431,22 @@ Hwtest::~Hwtest()
 
 void Hwtest::join()
 {
+    std::exception_ptr e;
+
     {
         std::lock_guard lk(this->mutex);
         if (!is_stopped)
             throw runtime_error("Hwtest::join() called before stop()");
-
-        // Rethrow error so that python caller sees the exception.
-        if (error)
-            std::rethrow_exception(error);
+        e = error;
     }
 
     for (auto &t : threads)
         if (t.joinable())
             t.join();
+
+    // Rethrow error so that python caller sees the exception (after joining all threads).
+    if (e)
+        std::rethrow_exception(e);
 }
 
 
@@ -539,20 +550,37 @@ struct TcpReceiver : Hwtest::Worker
     // Helper for receive_data(). (Called if use_epoll=false.)
     Stats _receive_no_epoll()
     {
-        xassert(data_sockets.size() == 1);      
+        xassert(data_sockets.size() == 1);
         long nbytes_cumul = 0;
-        
+
         while (nbytes_cumul < nbytes_per_iteration) {
-            // Blocking read()
+            // Poll with 100ms timeout, to recheck is_stopped periodically.
+            struct pollfd pfd;
+            pfd.fd = data_sockets[0].fd;
+            pfd.events = POLLIN;
+            int ret = poll(&pfd, 1, 100);
+
+            if (ret < 0) {
+                if (errno == EINTR)
+                    continue;
+                throw runtime_error("TcpReceiver: poll() failed: " + string(strerror(errno)));
+            }
+            if (ret == 0) {
+                std::unique_lock lk(hwtest->mutex);
+                if (hwtest->is_stopped)
+                    return Stats();
+                continue;
+            }
+
             long nbytes_read = data_sockets[0].read(recv_buf.get(), recv_bufsize);
             xassert(nbytes_read >= 0);
-            
+
             if (nbytes_read <= 0)
                 throw runtime_error("TCP connection ended prematurely");
-            
-            nbytes_cumul += nbytes_read;            
+
+            nbytes_cumul += nbytes_read;
         }
-        
+
         Stats stats;
         stats.nic[inic] = nbytes_cumul;
         stats.hmem(cpu) += 3 * nbytes_cumul;  // note factor 3 from "non-zerocopy" TCP
@@ -567,7 +595,14 @@ struct TcpReceiver : Hwtest::Worker
         
         while (nbytes_cumul < nbytes_per_iteration) {
             long nbytes_save = nbytes_cumul;
-            int num_events = epoll.wait();  // blocking
+            int num_events = epoll.wait(100);  // 100ms timeout, to recheck is_stopped periodically
+
+            if (num_events == 0) {
+                std::unique_lock lk(hwtest->mutex);
+                if (hwtest->is_stopped)
+                    return Stats();
+                continue;
+            }
 
             for (int iev = 0; iev < num_events; iev++) {
                 uint32_t ev_flags = epoll.events[iev].events;
