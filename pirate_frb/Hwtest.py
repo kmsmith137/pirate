@@ -75,9 +75,9 @@ class Hwtest:
         self.cpp_server.add_memcpy_thread(src_device, dst_device, blocksize, use_copy_engine, vcpu_list, cpu)
         
         
-    def add_ssd_writer(self, root_dir, issd, nbytes_per_file = 64 * 1024**2, cpu=None):
+    def add_ssd_writer(self, root_dir, issd, write_asdf=False, nbytes_per_file = 64 * 1024**2, cpu=None):
         """If cpu is None, then SSD threads will be pinned to the same CPU as the SSD."""
-        
+
         # FIXME caller must keep track of 'issd' argument -- it would be better to auto-determine this.
         os.makedirs(root_dir, exist_ok=True)
 
@@ -86,8 +86,8 @@ class Hwtest:
             cpu = self.cpu_from_vcpu_list(vcpu_list)
         else:
             vcpu_list = self.hardware.vcpu_list_from_cpu(cpu)
-        
-        self.cpp_server.add_ssd_writer(root_dir, nbytes_per_file, vcpu_list, cpu, issd)
+
+        self.cpp_server.add_ssd_writer(root_dir, nbytes_per_file, write_asdf, vcpu_list, cpu, issd)
     
 
     def add_downsampling_thread(self, cpu, src_bit_depth=5, src_nelts=1024**3):

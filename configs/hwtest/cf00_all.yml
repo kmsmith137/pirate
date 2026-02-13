@@ -20,6 +20,7 @@ tcp_connections_per_ip_address: 1
 ssd_dirs: [ '/scratch', '/scratch2/scratch' ]
 ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p3' ]
 write_threads_per_ssd: 4
+write_asdf: false
 
 
 # Number of AVX2 downsampling threads per CPU (to disable, use zero).

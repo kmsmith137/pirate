@@ -637,8 +637,8 @@ void register_core_bindings(pybind11::module &m)
              py::arg("use_copy_engine"), py::arg("vcpu_list"), py::arg("cpu"))
 
         .def("add_ssd_writer", &Hwtest::add_ssd_writer,
-             py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("vcpu_list"),
-             py::arg("cpu"), py::arg("issd"))
+             py::arg("root_dir"), py::arg("nbytes_per_file"), py::arg("write_asdf"),
+             py::arg("vcpu_list"), py::arg("cpu"), py::arg("issd"))
 
         .def("add_downsampling_thread", &Hwtest::add_downsampling_thread,
              py::arg("src_bit_depth"), py::arg("src_nelts"), py::arg("vcpu_list"),

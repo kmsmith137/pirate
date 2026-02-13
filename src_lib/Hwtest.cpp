@@ -22,6 +22,7 @@
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Barrier.hpp"
+#include "../include/pirate/AssembledFrame.hpp"
 
 
 namespace fs = std::filesystem;
@@ -841,29 +842,43 @@ struct SsdWorker : public Hwtest::Worker
 
     fs::path root_dir;
     long nbytes_per_file = 0;
+    bool write_asdf = false;
     int issd = -1;
-    
+
     long nfiles_per_iteration = 0;
     long curr_file = 0;
-    
+
+    // Used in binary blob mode (write_asdf=false).
     shared_ptr<char> data;
 
-    SsdWorker(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int issd_, const string &root_dir_, long nbytes_per_file_) :
+    // Used in ASDF mode (write_asdf=true).
+    shared_ptr<AssembledFrame> asdf_frame;
+    long asdf_nbytes = 0;  // nfreq * ntime / 2 (number of bytes in AssembledFrame::data)
+
+    SsdWorker(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int issd_, const string &root_dir_, long nbytes_per_file_, bool write_asdf_) :
         Worker(hwtest_, vcpu_list_, cpu_),
         root_dir(root_dir_),
         nbytes_per_file(nbytes_per_file_),
+        write_asdf(write_asdf_),
         issd(issd_)
     {
         xassert(!root_dir.empty());
-        xassert(nbytes_per_file > 0);
         xassert((issd >= 0) && (issd < Hwtest::Stats::max_ssd));
 
-        this->nfiles_per_iteration = (nbytes_per_file + 256L*1024L*1024L - 1) / nbytes_per_file;
+        if (!write_asdf)
+            xassert(nbytes_per_file > 0);
+
+        this->nfiles_per_iteration = write_asdf ? 1 : ((nbytes_per_file + 256L*1024L*1024L - 1) / nbytes_per_file);
 
         stringstream ss;
-        ss << "SsdWriter(dir=" << root_dir.string()
-           << ", nbytes_per_file=" << ksgpu::nbytes_to_str(nbytes_per_file)
-           << ", nfiles_per_iteration=" << nfiles_per_iteration
+        ss << "SsdWriter(dir=" << root_dir.string();
+
+        if (write_asdf)
+            ss << ", write_asdf=true";
+        else
+            ss << ", nbytes_per_file=" << ksgpu::nbytes_to_str(nbytes_per_file);
+
+        ss << ", nfiles_per_iteration=" << nfiles_per_iteration
            << ")";
 
         this->worker_name = ss.str();
@@ -871,8 +886,15 @@ struct SsdWorker : public Hwtest::Worker
 
     virtual void worker_initialize() override
     {
-        // FIXME should be random data, to avoid confusion from compressed filesystems
-        data = worker_alloc(nbytes_per_file);
+        if (write_asdf) {
+            // Create a random AssembledFrame for repeated writing.
+            asdf_frame = AssembledFrame::make_random(32768, 2048, 0, 0);
+            asdf_nbytes = asdf_frame->nfreq * asdf_frame->ntime / 2;
+        }
+        else {
+            // FIXME should be random data, to avoid confusion from compressed filesystems
+            data = worker_alloc(nbytes_per_file);
+        }
 
         vector<fs::path> files_to_delete;
 
@@ -893,7 +915,7 @@ struct SsdWorker : public Hwtest::Worker
 
 
     // Helper for worker_initialize().
-    // Returns 'true' if filename is of the form 'file_NNN'
+    // Returns 'true' if filename is of the form 'file_NNN' or 'file_NNN.asdf'.
     bool is_stale_file(const string &filename)
     {
         const char *s = filename.c_str();
@@ -901,20 +923,38 @@ struct SsdWorker : public Hwtest::Worker
 
         if (len < 6)
             return false;
-        
+
         if (memcmp(s, "file_", 5))
             return false;
-        
-        for (int i = 5; i < len; i++)
+
+        // Strip trailing ".asdf" suffix if present.
+        int end = len;
+        if ((len >= 10) && !memcmp(s + len - 5, ".asdf", 5))
+            end = len - 5;
+
+        for (int i = 5; i < end; i++)
             if (!isdigit(s[i]))
                 return false;
 
         return true;
     }
-        
-        
+
+
     virtual Stats worker_body() override
     {
+        if (write_asdf) {
+            for (int i = 0; i < nfiles_per_iteration; i++) {
+                string filename = (root_dir / ("file_" + to_string(curr_file++) + ".asdf")).string();
+                asdf_frame->write_asdf(filename);
+            }
+
+            Stats stats;
+            stats.ssd[issd] = nfiles_per_iteration * asdf_nbytes;
+            stats.hmem(cpu) = stats.ssd[issd];
+            return stats;
+        }
+
+        // Binary blob mode.
         // FIXME try writev(), if (nwrites_per_file > 1).
         // For now, I'm just calling write() in a loop, since this seems to give decent performance.
 
@@ -1015,9 +1055,9 @@ void Hwtest::add_memcpy_thread(int src_device, int dst_device, long blocksize, b
     this->_add_worker(wp, "add_memcpy_thread");
 }
 
-void Hwtest::add_ssd_writer(const string &root_dir, long nbytes_per_file, const vector<int> &vcpu_list, int cpu, int issd)
+void Hwtest::add_ssd_writer(const string &root_dir, long nbytes_per_file, bool write_asdf, const vector<int> &vcpu_list, int cpu, int issd)
 {
-    auto wp = make_shared<SsdWorker> (this, vcpu_list, cpu, issd, root_dir, nbytes_per_file);
+    auto wp = make_shared<SsdWorker> (this, vcpu_list, cpu, issd, root_dir, nbytes_per_file, write_asdf);
     this->_add_worker(wp, "add_ssd_writer");
 }
 

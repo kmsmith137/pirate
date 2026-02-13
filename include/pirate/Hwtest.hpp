@@ -38,7 +38,8 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     void add_memcpy_thread(int src_device, int dst_device, long blocksize, bool use_copy_engine, const std::vector<int> &vcpu_list, int cpu);
 
     // To get multiple threads per SSD, use multiple workers with different 'root_dir' args.
-    void add_ssd_writer(const std::string &root_dir, long nbytes_per_file, const std::vector<int> &vcpu_list, int cpu, int issd);
+    // If write_asdf=true, writes AssembledFrame ASDF files instead of binary blobs.
+    void add_ssd_writer(const std::string &root_dir, long nbytes_per_file, bool write_asdf, const std::vector<int> &vcpu_list, int cpu, int issd);
 
     // Runs the AVX2 downsampling kernel
     void add_downsampling_thread(int src_bit_depth, long src_nelts, const std::vector<int> &vcpu_list, int cpu);

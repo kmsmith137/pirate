@@ -328,7 +328,7 @@ def parse_hwtest_config(filename):
         raise RuntimeError(f"{filename}: expected YAML mapping at top level, got {type(config).__name__}")
 
     # Define all valid keys, grouped by type.
-    bool_keys = ['dedisperse', 'h2g_bw', 'g2h_bw', 'gmem_bw', 'hmem_bw']
+    bool_keys = ['dedisperse', 'h2g_bw', 'g2h_bw', 'gmem_bw', 'hmem_bw', 'write_asdf']
     int_keys = ['tcp_connections_per_ip_address', 'write_threads_per_ssd', 'downsampling_threads_per_cpu']
     list_of_str_keys = ['ip_addrs', 'ssd_dirs', 'ssd_devices']
     all_valid_keys = set(bool_keys + int_keys + list_of_str_keys)
@@ -379,12 +379,14 @@ def parse_hwtest_config(filename):
     if len(config['ip_addrs']) > 0 and 'tcp_connections_per_ip_address' not in config:
         raise RuntimeError(f"{filename}: 'tcp_connections_per_ip_address' is required when 'ip_addrs' is non-empty")
 
-    # Conditionally required: ssd_devices and write_threads_per_ssd (when ssd_dirs is non-empty).
+    # Conditionally required: ssd_devices, write_threads_per_ssd, write_asdf (when ssd_dirs is non-empty).
     if len(config['ssd_dirs']) > 0:
         if 'ssd_devices' not in config:
             raise RuntimeError(f"{filename}: 'ssd_devices' is required when 'ssd_dirs' is non-empty")
         if 'write_threads_per_ssd' not in config:
             raise RuntimeError(f"{filename}: 'write_threads_per_ssd' is required when 'ssd_dirs' is non-empty")
+        if 'write_asdf' not in config:
+            raise RuntimeError(f"{filename}: 'write_asdf' is required when 'ssd_dirs' is non-empty")
         if len(config['ssd_devices']) != len(config['ssd_dirs']):
             raise RuntimeError(
                 f"{filename}: 'ssd_devices' has length {len(config['ssd_devices'])}, "
@@ -441,7 +443,7 @@ def hwtest(args):
     if len(config['ssd_dirs']) > 0:
         for issd, ssd_dir in enumerate(config['ssd_dirs']):
             for thread in range(config['write_threads_per_ssd']):
-                server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd)
+                server.add_ssd_writer(f'{ssd_dir}/thread{thread}', issd, write_asdf=config['write_asdf'])
 
     if config['h2g_bw']:
         for gpu in range(hw.num_gpus):
