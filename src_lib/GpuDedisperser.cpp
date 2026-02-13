@@ -1355,6 +1355,7 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
     double h2g_bw = rt.get_h2g_bw();
     double g2h_bw = rt.get_g2h_bw();
     double gmem_bw = rt.get_gmem_bw();
+    double hmem_bw = rt.get_hmem_bw();
 
     // The "multi_" prefix means "one array per stream".
     cout << "GpuDedisperser::time(): allocating raw data arrays" << endl;
@@ -1411,6 +1412,7 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
             cout << "  iteration " << kt.curr_iteration
                  << ": real-time beams = " << (B * Tc / kt.dt)
                  << ", gmem_bw = " << (1.0e-9 * gmem_bw / kt.dt)
+                 << ", hmem_bw = " << (1.0e-9 * hmem_bw / kt.dt)
                  << ", g2h_bw = " << (1.0e-9 * g2h_bw / kt.dt)
                  << ", h2g_bw = " << (1.0e-9 * h2g_bw / kt.dt)
                  << " GB/s" << endl;
