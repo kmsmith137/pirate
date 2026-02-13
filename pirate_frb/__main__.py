@@ -335,7 +335,7 @@ def parse_hwtest_config(filename):
 
     # These keys must always be present. The remaining keys (tcp_connections_per_ip_address,
     # write_threads_per_ssd, ssd_devices) are conditionally required -- see below.
-    always_required = set(bool_keys + ['ip_addrs', 'ssd_dirs', 'downsampling_threads_per_cpu'])
+    always_required = set(bool_keys + ['ip_addrs', 'ssd_dirs', 'downsampling_threads_per_cpu']) - {'write_asdf'}
 
     # Check for unknown keys.
     unknown = set(config.keys()) - all_valid_keys

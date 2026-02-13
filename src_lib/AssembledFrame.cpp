@@ -8,6 +8,9 @@
 
 #include <asdf/asdf.hxx>
 
+#include <fcntl.h>     // open(), O_RDONLY
+#include <unistd.h>    // fsync(), close()
+
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -32,7 +35,7 @@ void AssembledFrame::_reap_locked()
 }
 
 
-void AssembledFrame::write_asdf(const std::string &filename) const
+void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
 {
     xassert(nfreq > 0);
     xassert(ntime > 0);
@@ -88,6 +91,18 @@ void AssembledFrame::write_asdf(const std::string &filename) const
     // Write to file.
     auto project = make_shared<ASDF::asdf>(map<string, string>(), grp);
     project->write(filename);
+
+    // Re-open and fsync to ensure data is flushed to disk.
+    if (sync) {
+        int fd = open(filename.c_str(), O_RDONLY);
+        if (fd < 0)
+            throw runtime_error("AssembledFrame::write_asdf(): open() failed: " + string(strerror(errno)));
+        if (fsync(fd) < 0) {
+            close(fd);
+            throw runtime_error("AssembledFrame::write_asdf(): fsync() failed: " + string(strerror(errno)));
+        }
+        close(fd);
+    }
 }
 
 

@@ -41,7 +41,7 @@ struct AssembledFrame
 
     // ASDF file I/O.
     // Note: int4 dtype is stored as uint8 with shape (nfreq, ntime/2).
-    void write_asdf(const std::string &filename) const;
+    void write_asdf(const std::string &filename, bool sync=true) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);    // Call without lock held.
 
     // Call with lock held!
