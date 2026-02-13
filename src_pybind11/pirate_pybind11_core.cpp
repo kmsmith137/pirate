@@ -627,7 +627,7 @@ void register_core_bindings(pybind11::module &m)
 
         .def("add_tcp_receiver", &Hwtest::add_tcp_receiver,
              py::arg("ip_addr"), py::arg("num_tcp_connections"), py::arg("recv_bufsize"),
-             py::arg("use_epoll"), py::arg("vcpu_list"), py::arg("cpu"), py::arg("inic"))
+             py::arg("vcpu_list"), py::arg("cpu"), py::arg("inic"))
 
         .def("add_chime_dedisperser", &Hwtest::add_chime_dedisperser,
              py::arg("device"), py::arg("vcpu_list"), py::arg("cpu"))

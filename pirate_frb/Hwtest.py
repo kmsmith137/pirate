@@ -27,10 +27,10 @@ class Hwtest:
         return cpu if (cpu is not None) else -1
         
 
-    def add_tcp_receiver(self, ip_addr, num_tcp_connections, recv_bufsize=512*1024, use_epoll=True):
+    def add_tcp_receiver(self, ip_addr, num_tcp_connections, recv_bufsize=512*1024):
         vcpu_list = self.hardware.vcpu_list_from_ip_addr(ip_addr)
         cpu = self.cpu_from_vcpu_list(vcpu_list)
-        self.cpp_server.add_tcp_receiver(ip_addr, num_tcp_connections, recv_bufsize, use_epoll, vcpu_list, cpu, self.nic_counter)
+        self.cpp_server.add_tcp_receiver(ip_addr, num_tcp_connections, recv_bufsize, vcpu_list, cpu, self.nic_counter)
         self.nic_counter += 1
 
 

@@ -23,7 +23,7 @@ struct Hwtest : public std::enable_shared_from_this<Hwtest>
     static std::shared_ptr<Hwtest> create(const std::string &server_name="Hwtest", bool use_hugepages=true);
 
     // I've been using 512KB as a default 'recv_bufsize', but I haven't explored this systematically.
-    void add_tcp_receiver(const std::string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const std::vector<int> &vcpu_list, int cpu, int inic);
+    void add_tcp_receiver(const std::string &ip_addr, long num_tcp_connections, long recv_bufsize, const std::vector<int> &vcpu_list, int cpu, int inic);
 
     // Dedispersion on one GPU, using simplified CHIME parameters.
     void add_chime_dedisperser(int device, const std::vector<int> &vcpu_list, int cpu);

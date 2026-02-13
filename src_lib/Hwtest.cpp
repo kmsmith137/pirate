@@ -4,7 +4,6 @@
 #include <thread>
 #include <sstream>
 #include <iostream>
-#include <poll.h>
 
 #include <ksgpu/mem_utils.hpp>
 #include <ksgpu/cuda_utils.hpp>
@@ -465,11 +464,10 @@ struct TcpReceiver : Hwtest::Worker
     string ip_addr;
     long num_tcp_connections = 0;
     long recv_bufsize = 0;
-    bool use_epoll = true;
     int inic = -1;
-    
+
     long nbytes_per_iteration = 300 * 1024 * 1024;
-    
+
     // Initialized in worker_initialize().
     shared_ptr<char> recv_buf;
     Socket listening_socket;
@@ -478,28 +476,26 @@ struct TcpReceiver : Hwtest::Worker
     // Initialized in worker_accept_connections().
     vector<Socket> data_sockets;
 
-    
-    TcpReceiver(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_, bool use_epoll_) :
+
+    TcpReceiver(Hwtest *hwtest_, const vector<int> &vcpu_list_, int cpu_, int inic_, const string &ip_addr_, long num_tcp_connections_, long recv_bufsize_) :
         Worker(hwtest_, vcpu_list_, cpu_),
         ip_addr(ip_addr_),
         num_tcp_connections(num_tcp_connections_),
         recv_bufsize(recv_bufsize_),
-        use_epoll(use_epoll_),
         inic(inic_),
         epoll(false)  // 'epoll' is constructed in an uninitialized state, and gets initialized in worker_initialize()
     {
         xassert(ip_addr.size() > 0);
         xassert(num_tcp_connections > 0);
-        xassert(use_epoll || (num_tcp_connections == 1));
         xassert(recv_bufsize > 0);
         xassert((inic >= 0) && (inic < Hwtest::Stats::max_nic));
 
         stringstream ss;
-        ss << "TcpReceiver(" << ip_addr << ", " << num_tcp_connections << " connections, use_epoll=" << use_epoll << ")";
+        ss << "TcpReceiver(" << ip_addr << ", " << num_tcp_connections << " connections)";
         this->worker_name = ss.str();
     }
-        
-    
+
+
     virtual void worker_initialize() override
     {
         this->recv_buf = worker_alloc(recv_bufsize);
@@ -507,12 +503,10 @@ struct TcpReceiver : Hwtest::Worker
         this->listening_socket = Socket(PF_INET, SOCK_STREAM);
         this->listening_socket.set_reuseaddr();
         this->listening_socket.bind(ip_addr, 8787);  // TCP port 8787
-
-        if (use_epoll)
-            this->epoll.initialize();
+        this->epoll.initialize();
     }
 
-    
+
     virtual void worker_accept_connections()
     {
         stringstream ss;
@@ -527,10 +521,6 @@ struct TcpReceiver : Hwtest::Worker
 
         for (unsigned int ids = 0; ids < data_sockets.size(); ids++) {
             this->data_sockets[ids] = listening_socket.accept();
-
-            if (!use_epoll)
-                continue;
-            
             this->data_sockets[ids].set_nonblocking();
 
             epoll_event ev;
@@ -547,56 +537,8 @@ struct TcpReceiver : Hwtest::Worker
 
     virtual Stats worker_body() override
     {
-        return use_epoll ? _receive_epoll() : _receive_no_epoll();
-    }
-
-    
-    // Helper for receive_data(). (Called if use_epoll=false.)
-    Stats _receive_no_epoll()
-    {
-        xassert(data_sockets.size() == 1);
         long nbytes_cumul = 0;
 
-        while (nbytes_cumul < nbytes_per_iteration) {
-            // Poll with 100ms timeout, to recheck is_stopped periodically.
-            struct pollfd pfd;
-            pfd.fd = data_sockets[0].fd;
-            pfd.events = POLLIN;
-            int ret = poll(&pfd, 1, 100);
-
-            if (ret < 0) {
-                if (errno == EINTR)
-                    continue;
-                throw runtime_error("TcpReceiver: poll() failed: " + string(strerror(errno)));
-            }
-            if (ret == 0) {
-                std::unique_lock lk(hwtest->mutex);
-                if (hwtest->is_stopped)
-                    return Stats();
-                continue;
-            }
-
-            long nbytes_read = data_sockets[0].read(recv_buf.get(), recv_bufsize);
-            xassert(nbytes_read >= 0);
-
-            if (nbytes_read <= 0)
-                throw runtime_error("TCP connection ended prematurely");
-
-            nbytes_cumul += nbytes_read;
-        }
-
-        Stats stats;
-        stats.nic[inic] = nbytes_cumul;
-        stats.hmem(cpu) += 3 * nbytes_cumul;  // note factor 3 from "non-zerocopy" TCP
-        return stats;
-    }
-
-
-    // Helper for receive_iteration(). (Called if use_epoll=true.)
-    Stats _receive_epoll()
-    {
-        long nbytes_cumul = 0;
-        
         while (nbytes_cumul < nbytes_per_iteration) {
             long nbytes_save = nbytes_cumul;
             int num_events = epoll.wait(100);  // 100ms timeout, to recheck is_stopped periodically
@@ -616,7 +558,7 @@ struct TcpReceiver : Hwtest::Worker
 
                 unsigned int ids = epoll.events[iev].data.u32;
                 xassert(ids < data_sockets.size());
-                
+
                 // Non-blocking read()
                 long nbytes_read = data_sockets[ids].read(recv_buf.get(), recv_bufsize);
                 xassert(nbytes_read >= 0);
@@ -625,7 +567,7 @@ struct TcpReceiver : Hwtest::Worker
                 // I'd like to revisit this, just for the sake of general understanding.
                 // It seems to be harmless, since the reported values of "bytes/read()" and "bytes/epoll()"
                 // look reasonable.
-                
+
                 if (nbytes_read == 0)
                     continue;
 
@@ -635,7 +577,7 @@ struct TcpReceiver : Hwtest::Worker
             if ((nbytes_cumul == nbytes_save) && (num_events == int(data_sockets.size())))
                 throw runtime_error("TCP connection(s) ended prematurely");
         }
-        
+
         Stats stats;
         stats.nic[inic] += nbytes_cumul;
         stats.hmem(cpu) += 3 * nbytes_cumul;  // note factor 3 from "non-zerocopy" TCP
@@ -1055,9 +997,9 @@ struct DownsamplingWorker : public Hwtest::Worker
 // Add workers.
 
 
-void Hwtest::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, bool use_epoll, const vector<int> &vcpu_list, int cpu, int inic)
+void Hwtest::add_tcp_receiver(const string &ip_addr, long num_tcp_connections, long recv_bufsize, const vector<int> &vcpu_list, int cpu, int inic)
 {
-    auto wp = make_shared<TcpReceiver> (this, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize, use_epoll);
+    auto wp = make_shared<TcpReceiver> (this, vcpu_list, cpu, inic, ip_addr, num_tcp_connections, recv_bufsize);
     this->_add_worker(wp, "add_tcp_receiver");
 }
 
