@@ -41,9 +41,46 @@ struct AssembledFrame
 
     // ASDF file I/O.
     // Note: int4 dtype is stored as uint8 with shape (nfreq, ntime/2).
+    //
+    // Note: if sync=true in write_asdf(), then we fsync() the file at the end.
+    // This is the default, to avoid runaway page cache usage. I tested that it
+    // still gives full ssd bandwith, if multiple writer threads are used.
+    //
+    // A future project: faster asdf?
+    //
+    //  - Currently, memory bandwidth of AssembledFrame::write_asdf() is 4-5x the memory
+    //    footprint. (Empirical, with 'pirate_frb hwtest configs/hwtest/cf00_asdf.yml'
+    //    and 'pcm-memory'.) This is potentially an issue (see 'misc/plan_hmem_bw.py').
+    //
+    //  - For binary "blobs", writing with open(..., O_DIRECT) -> write() is 1x the
+    //    footprint, and does not pollute the page cache, which seems important in
+    //    the larger footprint.
+    //
+    //  - Achieving this performance in a general purpose asdf implementation seems
+    //    challenging due to dual alignment requirements (O_DIRECT requires all writes
+    //    to be logically aligned on 4k boundaries within the file, and pointers to be
+    //    4k-aligned).
+    //
+    //  - Idea: write a short standalone asdf writer which is integrated with the
+    //    AssembledFrameAllocator (see below). The allocator uses a single memory
+    //    slab, which is both "backing" memory for the C++ arrays in the real-time
+    //    server, and "backing" memory for the asdf file, so that the file can be
+    //    written with a single call to write().
+    //
+    //  - Layout is nontrivial -- need to leave space for the yaml header, and gaps
+    //    between the arrays. There are some mild alignment requirements (C++ code
+    //    generally assumes that Arrays are 128-byte aligned, and O_DIRECT assumes
+    //    that the base pointer is page-aligned. I think that the asdf format is
+    //    flexible enough that these alignment requirements are not a problem.
+    //
+    //  - Note: according to google gemini, to determine the O_DIRECT page alignment
+    //    requirement, you should call ioctl(fd, BLKPBSZGET), not BLKSSZGET.
+    
     void write_asdf(const std::string &filename, bool sync=true) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);    // Call without lock held.
 
+    // --------------------  private/internal  --------------------
+    
     // Call with lock held!
     // Called by reaper thread, or ssd writer thread.
     void _reap_locked();
