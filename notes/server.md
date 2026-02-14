@@ -29,56 +29,9 @@ Here are some initial thoughts on writing the real-time server frontend.
     details to the real-time server, so that it behaves robustly if details
     change, such as NUMA/hyperthread configuration, or IP address assignment.
     Hopefully we can avoid rewriting this code in C++!
-  
-### Protocol
 
-We need a network protocol, for sending data from the X-engine to the FRB server.
-
-  - We decided to use TCP in CHORD (unlike CHIME).
-
-  - I think it will make sense to have 128 x 28 TCP connections. Each of the 64
-    X-engine nodes processes an independent set of frequencies on each of its CPUs,
-    and each of the 14 FRB nodes processes an independent set of beams on each
-    of its CPUs.
-
-  - Over each TCP connection, metadata should be sent first (yaml? json?)
-    followed by data in regular chunks. The chunked data consists of some
-    small float16 arrays (offsets/scales) and larger int4 arrays (intensities).
-    (At least, this is what's currently planned in the FRB quantization kernel
-    that runs on the X-engine.)
-
-  - The details of the metadata format, and "chunked" data format are TBD.
-    Please feel free to dive in and propose something.
-
-  - I like the design principle that the metadata should contain all relevant
-    configuration info from the X-engine, and that this info should not appear
-    redundantly in an FRB server configuration file. For example, the number
-    of frequency channels, upchannelization scheme, and beam configuration
-    should all be received from the X-engine.
-
-    However, this may complicate the FRB server, since some configuration info
-    will be received in real time. I don't see any reason offhand why this would
-    be a problem, but let's see how it goes.
-
-  - What should we do if different X-engine nodes send inconsistent metadata?
-    Crash?
-
-### Low-level network code
-
-The repo currently includes a little bit of low-level code that may be helpful:
-
-  - `Socket`: C++ wrapper class for unix socket, provides RAII semantics
-     and translates unix error codes to exceptions.
-
-  - `Epoll`: similar C++ wrapper class for linux epoll file descriptor.
-     (Allows one thread to read from multiple TCP sockets efficiently, see `man epoll`).
-
-  - To see `class Socket` and `class Epoll` in action, check out `Hwtest.cpp`,
-    which accepts connections from a fixed number of TCP sockets, and then reads
-    data in parallel from them.
-
-  - For context (and note that this is a bit of a tangent), the Hwtest
-    is some code intended for testing hardware, which times a synthetic load
+  - You may also find it useful to play with `Hwtest`:
+    code intended for testing hardware, which times a synthetic load
     that consists of several things in parallel: network IO, disk IO, GPU-host
     PCIe transfers, GPU compute kernels, CPU compute kernels, host memory bandwidth.
 
@@ -94,18 +47,39 @@ The repo currently includes a little bit of low-level code that may be helpful:
     ```
     I don't expect that the Hwtest will have much long-term usefulness,
     but browsing the code may help a little with getting started.
+  
+### X-engine to FRB networking
 
-  - Note that the Hwtest network receive code assumes that the number of
-    senders is known in advance. The real networking code should allow senders
-    to dynamically open/close connections (e.g. if an X-engine node goes down).
-    This will make the real code more complicated than the Hwtest.
+Each FRB node CPU (i.e. one "half" of a node, see above) has 2x25 GbE NICs,
+and receives data for a certain per-CPU set of beams.
 
-  - I think the "listener" thread which accepts new connections on a listening
-    socket (and parses metadata) should be different from the "receiver" thread
-    that receives chunked data. Do we also need a third "assembler" thread,
-    which rearranges chunked data into an internal data structure?
-    (`assembled_chunk` in CHIME, but in CHORD I'd prefer `AssembledFrame`
-    for consistency with naming conventions in the rest of the code).
+  - We decided to use TCP in CHORD (unlike CHIME).
+
+  - I think it will make sense to have 128 x 28 TCP connections. Each of the 64
+    X-engine nodes processes an independent set of frequencies on each of its two
+    CPUs, and each of the 14 FRB nodes processes an independent set of beams on
+    each of its two CPUs.
+
+  - Complication: each FRB CPU (i.e. "half" of a node) has 2x25 GbE NICs.
+    Each NIC receives **half of the frequencies for all beams**.
+    This is less convenient than receiving all frequencies for half the beams,
+    but reduces network hardware cost. It complicates the code a little (we
+    end up with two `struct Receiver` objects per `struct FrbServer`).
+
+  - I like the design principle that the metadata should contain all relevant
+    configuration info from the X-engine, and that this info should not appear
+    redundantly in an FRB server configuration file. For example, the number
+    of frequency channels, upchannelization scheme, and beam configuration
+    should all be received from the X-engine.
+
+    However, this may complicate the FRB server, since some configuration info
+    will be received in real time. So far, implementing this "dynamic configuration"
+    feature hasn't been too painful, but let's see how it goes.
+
+  - We currently crash if different X-engine nodes send inconsistent metadata,
+    or if there is a big problem, such as failing to parse the network protocol.
+    I think this is a better choice than "failing gracefully" -- we want to know
+    if there's a misconfiguration/bug, so that a human can get involved.
   
 ### Design decisions
 
@@ -131,11 +105,3 @@ The repo currently includes a little bit of low-level code that may be helpful:
 
   - How does the server shut down? Long-term I like the idea of a "shutdown"
     RPC, but in the short term we might want to implement a simpler alternative.
-
-  - To start out, we should just read data and throw it away, and verify that
-    we can keep up with the data rate. Later, we can add the `AssembledFrame`
-    data structure, triggered ring buffer, and copy to the GPU.
-
-  - Feel free to change the way that things are done in the code, add new
-    dependencies (e.g. grpc) etc. I'm a big believer in software development
-    by iterative improvement -- it's hard to get things right on the first try.

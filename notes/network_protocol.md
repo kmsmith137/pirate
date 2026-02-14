@@ -22,7 +22,7 @@ The network protocol for each of these connections is as follows:
   channels sent by the X-engine node.
 
 - Next, a sequence of shape `(nbeams, nfreq, 256)` int4 arrays is sent.
-  Each such array represents 256 time samples of intensity data (one "segment").
+  Each such array represents 256 time samples of intensity data (one "minichunk").
   The value (-8) indicates "this sample is masked". 
   We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
 
