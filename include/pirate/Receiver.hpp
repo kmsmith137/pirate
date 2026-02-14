@@ -28,7 +28,7 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 // The Receiver has three worker threads:
 //   - listener: calls accept() in a loop, hands off new connections to reader
 //   - reader: uses epoll() to read data from all open connections
-//   - assembler: copies data segments from per-peer ring buffers into AssembledFrames
+//   - assembler: copies data minichunks from per-peer ring buffers into AssembledFrames
 //
 // See notes/network_protocol.md for the network protocol parsed by the Receiver.
 
@@ -145,7 +145,7 @@ private:
     //
     // The Receiver incrementally receives a data "cube" indexed by (beam, freq, time).
     // Time indices are divided into "chunks" (of size Params::time_samples_per_chunk),
-    // and further subdivided into 256-sample "segments".
+    // and further subdivided into 256-sample "minichunks".
     //
     // At any time, the Receiver holds a two-chunk subset of the data cube.
     // When the first bit of data is received for chunk N, it evicts chunk (N-2).

@@ -51,8 +51,8 @@ struct Receiver::Peer
 
     // All following members are initialized when state ReadYaml -> ReadData.
     XEngineMetadata metadata;
-    long bytes_per_segment = 0;   // = nbeams * nfreq * 128
-    long segments_per_chunk = 0;  // = Receiver::Params::time_samples_per_chunk / 256
+    long bytes_per_minichunk = 0;   // = nbeams * nfreq * 128
+    long minichunks_per_chunk = 0;  // = Receiver::Params::time_samples_per_chunk / 256
 
     Array<char> rb_buf;           // length (rb_capacity)
     long rb_capacity = 0;
@@ -380,7 +380,7 @@ void Receiver::_reader_main()
         }
 
         // Remove closed peers (no lock needed -- active_peers is local, num_connections is atomic).
-        // Note: if a peer closes the connection with residual data (incomplete segment),
+        // Note: if a peer closes the connection with residual data (incomplete minichunk),
         // then data is silently lost -- this is okay.
 
         for (Peer *peer : peers_to_remove) {
@@ -473,13 +473,13 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     xassert(nbeams > 0);
     xassert(peer->metadata.initial_time_sample == 0);  // FIXME for now!
 
-    peer->bytes_per_segment = nbeams * nfreq * 128;
-    peer->segments_per_chunk = xdiv(params.time_samples_per_chunk, 256);
+    peer->bytes_per_minichunk = nbeams * nfreq * 128;
+    peer->minichunks_per_chunk = xdiv(params.time_samples_per_chunk, 256);
 
-    // Receive buffer size is either 64KB or two segments, whichever is larger.
-    long nseg = max((64*1024) / peer->bytes_per_segment, 2L);
+    // Receive buffer size is either 64KB or two minichunks, whichever is larger.
+    long nmc = max((64*1024) / peer->bytes_per_minichunk, 2L);
 
-    peer->rb_capacity = nseg * peer->bytes_per_segment;
+    peer->rb_capacity = nmc * peer->bytes_per_minichunk;
     peer->rb_buf = Array<char> ({peer->rb_capacity}, af_uhost);
     peer->state = Peer::State::ReadData;
 
@@ -548,7 +548,7 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
     plock.lock();
     xassert(peer->rb_end == rb_end);
     peer->rb_end += nbytes_read;
-    bool enqueue = (peer->rb_end >= peer->rb_start + peer->bytes_per_segment);
+    bool enqueue = (peer->rb_end >= peer->rb_start + peer->bytes_per_minichunk);
     plock.unlock();
 
     if (enqueue) {
@@ -638,9 +638,9 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
     long nbeams = peer->metadata.nbeams;
     long nt_chunk = params.time_samples_per_chunk;
     long rb_capacity = peer->rb_capacity;
-    long bs = peer->bytes_per_segment;
-    
-    xassert(bs > 0);
+    long bmc = peer->bytes_per_minichunk;
+
+    xassert(bmc > 0);
     xassert(rb_capacity > 0);
 
     // Note peer->lock here, not this->lock.
@@ -649,18 +649,18 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
     long rb_end = peer->rb_end;
     plock.unlock();
 
-    // Loop over "segments" (256 time samples)
-    while (rb_end >= rb_start + bs) {
+    // Loop over minichunks (256 time samples).
+    while (rb_end >= rb_start + bmc) {
         long rb_pos = rb_start % rb_capacity;
         const char *src = peer->rb_buf.data + rb_pos;
-        xassert(rb_end >= rb_start + bs);
-        xassert(rb_capacity >= rb_pos + bs);
+        xassert(rb_end >= rb_start + bmc);
+        xassert(rb_capacity >= rb_pos + bmc);
 
-        long iseg = rb_start / bs;
-        xassert(rb_start == iseg * bs);
+        long imc = rb_start / bmc;
+        xassert(rb_start == imc * bmc);
 
-        long ichunk = iseg / peer->segments_per_chunk;
-        iseg -= ichunk * peer->segments_per_chunk;
+        long ichunk = imc / peer->minichunks_per_chunk;
+        imc -= ichunk * peer->minichunks_per_chunk;
 
         // Note: this->curr_base_chunk and this->curr_frame are not lock-protected.
         // (These members are only accessed by the assembler thread.)
@@ -668,7 +668,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         if (ichunk < curr_base_chunk) {
             // Target chunk is no longer in buffer (peer is running slow).
             // In this case, we silently drop the data.
-            goto segment_done;  // hmmm
+            goto minichunk_done;  // hmmm
         }
 
         if (ichunk >= curr_base_chunk + 2) {
@@ -701,7 +701,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             this->curr_base_chunk++;
         }
 
-        // The rest of _process_data() copies one "segment" of data
+        // The rest of _process_data() copies one minichunk of data
         // (all beams, per-sender frequency subset, 256 time samples)
         // into the AssembledFrames.
 
@@ -711,8 +711,8 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             xassert(frame);
 
             // The destination "base" pointer includes a time offset
-            // (128 bytes per segment), but no (beam, frequency) offset.
-            char *dst_base = (char *)frame->data.data + (iseg << 7);
+            // (128 bytes per minichunk), but no (beam, frequency) offset.
+            char *dst_base = (char *)frame->data.data + (imc << 7);
 
             for (long ifreq = 0; ifreq < nfreq; ifreq++) {
                 long freq_index = freq_channels[ifreq];
@@ -722,10 +722,10 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             }
         }
 
-    segment_done:
+    minichunk_done:
         plock.lock();
         xassert(peer->rb_start == rb_start);
-        peer->rb_start += bs;
+        peer->rb_start += bmc;
         rb_start = peer->rb_start;
         rb_end = peer->rb_end;
         plock.unlock();
