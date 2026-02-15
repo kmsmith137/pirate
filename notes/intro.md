@@ -38,7 +38,8 @@ Pirate is a real-time FRB seach written in C++ / cuda / python.
   - The FRB server stores data sent by the X-engine in a ring buffer, and defines
     RPCs for saving data to disk, via a two-stage process where data is written
     to a local high-bandwidth SSD to relieve short-term memory pressure,
-    then "trickled" to an NFS sever for long-term storage.
+    then "trickled" to an NFS sever for long-term storage. I'm currently
+    using Erik's `asdf-cxx` library to write files.
   
   - The FRB server does real-time RFI masking (not implemented yet but it will
     be top priority soon!) followed by dedispersion. Both of these steps are

@@ -9,6 +9,17 @@ import subprocess
 
 class Hardware:
     def __init__(self):
+        """
+        I hacked up some python code (`class Hardware`) to query hardware
+        and work out which devices are associated with each CPU.
+        You can run this code with `python -m pirate_frb show_hardware`.
+        This code is currently pretty terrible -- feel free to improve it.
+        
+        The `Hardware` class is used when starting the real-time server,
+        to decide which hardware to associate with each of the two `FrbServer`
+        instances. This is all currently done from python.
+        """
+        
         pass
 
     @functools.cached_property
