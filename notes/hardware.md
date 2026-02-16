@@ -101,3 +101,6 @@ Let me know if you don't have access.
     10.0.3.1 -> 10.0.3.2
     ```
     IP addresses are assigned in netplan (no ansible) and MTUs are set to 9000.
+
+  - NFS server available at `/mnt/cs00/data`.
+  
