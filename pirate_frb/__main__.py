@@ -992,19 +992,22 @@ def get_parser():
 
     parse_test(subparsers)
     parse_time(subparsers)
+    parse_time_dedisperser(subparsers)
+    
+    parse_show_asdf(subparsers)
+    parse_show_dedisperser(subparsers)
     parse_show_hardware(subparsers)
     parse_show_kernels(subparsers)
-    parse_make_subbands(subparsers)
-    parse_show_xengine_metadata(subparsers)
-    parse_show_dedisperser(subparsers)
-    parse_time_dedisperser(subparsers)
     parse_show_random_config(subparsers)
-    parse_hwtest(subparsers)
-    parse_scratch(subparsers)
-    parse_random_kernels(subparsers)
-    parse_show_asdf(subparsers)
+    parse_show_xengine_metadata(subparsers)
+    
     parse_rpc_status(subparsers)
     parse_rpc_write(subparsers)
+    
+    parse_make_subbands(subparsers)
+    parse_random_kernels(subparsers)
+    parse_hwtest(subparsers)
+    parse_scratch(subparsers)
 
     return parser
 
