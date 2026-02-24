@@ -22,4 +22,6 @@ pirate_frb/rpc/grpc/*_pb2_grpc.py
 # Sphinx documentation
 docs/build/
 docs/source/_autosummary/
+docs/source/notes/
+docs/source/configs/
 

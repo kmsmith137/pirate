@@ -1,14 +1,53 @@
 # Configuration file for the Sphinx documentation builder.
-#
-# For the full list of built-in configuration values, see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+import shutil
+import glob
 import os
-import sys
-sys.path.insert(0, os.path.abspath('../..'))
+
+# -- Copy notes/*.md into docs/source/notes/ --------------------------------
+# The source of truth is notes/ at the repo root. We copy them here so Sphinx
+# can include them in the toctree. The docs/source/notes/ directory is in
+# .gitignore so these copies are never committed.
+
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+_notes_src = os.path.join(_repo_root, 'notes')
+_notes_dst = os.path.join(os.path.dirname(__file__), 'notes')
+
+os.makedirs(_notes_dst, exist_ok=True)
+for _f in glob.glob(os.path.join(_notes_src, '*.md')):
+    if not _f.endswith('~'):
+        shutil.copy2(_f, _notes_dst)
+
+# Copy configs/ so that relative links from notes (e.g. ../configs/...) resolve.
+# For each .yml/.yaml file, also generate a rendered .md page so that links
+# display the YAML in the browser instead of triggering a download.
+_configs_src = os.path.join(_repo_root, 'configs')
+_configs_dst = os.path.join(os.path.dirname(__file__), 'configs')
+if os.path.isdir(_configs_src):
+    if os.path.exists(_configs_dst):
+        shutil.rmtree(_configs_dst)
+    shutil.copytree(_configs_src, _configs_dst)
+    for _root, _dirs, _files in os.walk(_configs_dst):
+        for _fname in _files:
+            if _fname.endswith(('.yml', '.yaml')):
+                _yml_path = os.path.join(_root, _fname)
+                with open(_yml_path) as _fin:
+                    _yml_content = _fin.read()
+                with open(_yml_path + '.md', 'w') as _fout:
+                    _fout.write('---\norphan: true\n---\n\n')
+                    _fout.write(f'# {_fname}\n\n```yaml\n{_yml_content}```\n')
+
+# Rewrite .yml/.yaml links in the copied notes to point to the rendered .md pages.
+import re
+for _f in glob.glob(os.path.join(_notes_dst, '*.md')):
+    with open(_f) as _fin:
+        _text = _fin.read()
+    _new_text = re.sub(r'\(([^)]*\.ya?ml)\)', lambda m: f'({m.group(1)}.md)', _text)
+    if _new_text != _text:
+        with open(_f, 'w') as _fout:
+            _fout.write(_new_text)
 
 # -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'pirate_frb'
 copyright = '2026, Kendrick Smith'
@@ -17,28 +56,20 @@ version = '1.0.0'
 release = '1.0.0'
 
 # -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.napoleon',
-    'sphinx.ext.viewcode',
     'sphinx.ext.intersphinx',
     'myst_parser',
-    'sphinx.ext.autosummary',
-    'sphinxarg.ext',   # sphinx-argparse
 ]
 
 templates_path = ['_templates']
 exclude_patterns = []
 
-# Markdown only
 source_suffix = {
     '.md': 'markdown',
 }
 
 # -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 html_theme = 'furo'
 html_static_path = ['_static']
@@ -58,22 +89,6 @@ myst_enable_extensions = [
     "fieldlist",
     "attrs_inline",
 ]
-
-# -- Autodoc configuration ---------------------------------------------------
-
-autodoc_default_options = {
-    'members': True,
-    'member-order': 'bysource',
-    'undoc-members': False,
-    'show-inheritance': True,
-}
-
-# Note: Do NOT mock ksgpu or pirate_pybind11 here!
-# Mocking ksgpu prevents its ctypes trick from running, which causes
-# pirate_pybind11.so to fail loading (undefined symbols from ksgpu).
-# For local builds, we import the real modules to get pybind11 docstrings.
-# For ReadTheDocs (no compiled extensions), we'll need a different approach.
-autodoc_mock_imports = []
 
 # -- Intersphinx configuration -----------------------------------------------
 

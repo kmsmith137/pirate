@@ -1,4 +1,4 @@
-## X->FRB network protocol, version 1
+# X->FRB network protocol (v1)
 
 This document describes the network protocol used in the CHORD radio telescope, to send beamformed
 intensity data from the X-engine (a 64-node cluster) to the FRB search backend (a 14-node cluster).

@@ -1,5 +1,6 @@
-    
-### Chunks, batches, frames, and segments
+# Developer notes
+
+## Chunks, batches, frames, and segments
 
 Throughout the code:
 - A "chunk" (or "time chunk") is a range of **time indices**. The chunk size (e.g. 1024 or 2048) is defined in `DedispersionConfig::time_samples_per_chunk`.
@@ -8,7 +9,7 @@ Throughout the code:
 - A "frame" is a (chunk,beam) pair (not a (chunk,batch) pair!). Frames are used in `class MegaRingbuf`, and will also be used in the front-end server code and its intensity ring buffer.
 - A "segment" refers to a 128-byte, memory-contiguous subset of any array in GPU memory. Segments are used in low-level GPU kernels, and data structures which are GPU kernel adjacent (e.g. `DedispersionPlan`, `MegaRingbuf`).
 
-### File writing
+## File writing
 
 When the FRB server receives data from the X-engine, it stores it in a ring buffer.
 If an event is detected (this decision is made downstream by the "sifter"), the FRB
@@ -47,7 +48,7 @@ brainstorming sessions with Dustin.)
 We decided to deprioritze these future features, until we make more progress on
 the downstream code, and have a better sense for which features are most useful.
   
-### Hwtest and 'class Hardware'
+## Hwtest and 'class Hardware'
   
   - I hacked up some python code (`class Hardware`) to query hardware
     and work out which devices are associated with each CPU.
@@ -72,48 +73,72 @@ the downstream code, and have a better sense for which features are most useful.
     ```
     See `configs/hwtest/*.yml` for more examples.
 
-### Kendrick's unsolicited options on software engineering
+## Software engineering philosophy
 
   - The hardest thing to do as a programmer is to keep things simple.
     When software projects fail, it's usually a "soft failure" where overcomplexity
     starts to run away, and everyone loses motivation.
-    There can be tension between avoiding this long-term failure mode,
+    There can be real tension between avoiding this long-term failure mode,
     and short-term pressure to implement new features.
     
-    It's a hard problem to solve and there's no easy answer!
-    Two things that I've found helpful: (1) have blackboard discussions with other
-    developers before implementing new features, and (2) expect to frequently refactor,
-    when you find that an existing interface is overcomplicated/awkward.
+    This is a hard problem to solve and there's no easy answer!
+    Most of the bullet points below are thoughts on how to win the battle
+    against runaway covercomplexity.
 
-  - Good low-level abstractions are very important (e.g. an N-dimensional Array class).
+  - Before implementing new features, I find it ultra-useful to have blackboard
+    discussions with other developers, to brainstorm options. A good question
+    to ask is, "is the design currently on the blackboard the simplest design, or
+    did we miss something even simpler?". In contrast, I find that code reviews
+    are not so useful -- it's more important to discuss the initial design than the
+    final implementation.
+
+  - Designing intuitive interfaces between subsystems is half the battle.
+    A self-explanatory interface, where usage is transparent from glancing at function names,
+    is better than an elegant but counterintuitive interface, even if the elegant
+    interface is fewer lines of code.
+    
+  - Sometimes the best solution is obvious in hindsight -- expect to iterate
+    and refactor.
+  
+  - Good low-level abstractions are very important (e.g. a flexible N-dimensional Array class).
     I'm skeptical of high-level abstractions (e.g. any sort of Task virtual base class).
     It should always be possible to "opt out" of using an abstraction if it's getting in the way.
 
+  - Similarly, I'm a big fan of third-party libraries that are easy to call and solve
+    a specific problem, but I'm skeptical of anything called a "framework".
+      
   - Avoid databases and unnecessary layers of software -- most of our
     operational problems come from unanticipated issues in these areas.
+    A little brainstorming up front, to find the simplest possible design,
+    can avoid big problems later.
 
-    For example, dynamic configuration (where the X-engine passes its metadata to the
-    FRB server, the FRB server passes metadata to the sifter, etc.) helps avoid the use of
-    central databases. Including a copy of the metadata in saved data files also helps.
-  
-  - Given the choice between crashing and failing gracefully, it's usually
-    better to crash. Most errors are a result of misconfiguration, and in
-    this case it's best to crash with a helpful error message, so that a
-    human can get involved.
-
-  - Time spent writing unit tests always pays off in the long run!
+  - Time spent writing unit tests always pays off in the long run. After implementing
+    a feature, it's almost always best to spend time implementing systematic unit tests,
+    before moving on to the next feature.
 
   - The most painful bugs are the ones that only happen a small fraction of the time.
     You should pay the most attention to bugs that are very unlikely (e.g. race conditions,
     corner cases), which can be a little counterintuitive.
 
-  - I'm not a believer in engineering practices that impede "flow state", such as CI, code reviews,
-    or pull requests that require waiting on others. (Needless to say, everyone should run
+  - I'm not a believer in engineering practices that impede "flow state", such as CI, post-commit
+    hooks, code reviews, or pull requests. (Needless to say, everyone should run
     tests frequently, and get feedback from others in situations where it makes sense.)
+  
+  - Given the choice between crashing and failing gracefully, it's usually
+    better to crash (with a helpful error message). Most of the time, if there's
+    a problem, we want to make sure that a human notices so that it gets fixed.
 
-  - This one is controversial and it's okay if we disagree! I've recently become a huge convert
-    to LLM-assisted programming, and I'd advise everyone to start using LLM agents heavily. I recommend
-    Claude Code -- it's slower but more powerful than other tools, so it's the best choice for
-    research-level work. A good way to start is by asking it to review your code for bugs and
-    suggest improvements, and letting it write code as you get more comfortable. Let me know if
-    you need help getting started!
+  - I strongly recommend developing expertise with LLM programming agents asap.
+    In the last year, these tools have become extremely powerful, and are rapidly
+    getting better.
+
+    I recommend Claude Code -- it's slower than other tools but more powerful, so it's the
+    best choice for hard problems. I also like its "nerd-friendly", command-line, IDE-agnostic
+    interface. Let me know if you need help getting started! A good way to start is by using
+    it to review your code for bugs and suggest improvements, and letting it write code as you
+    get more comfortable.
+    
+  - It's easy to change design decisions before deployment, but hard to make big
+    changes after code goes into production. In our current pre-deployment phase,
+    we should put a lot of effort into making optimal design decisions, before they
+    get "baked in".

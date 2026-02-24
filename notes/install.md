@@ -1,4 +1,4 @@
-## Installation
+# Installation
 
 **NOTE.** Currently, this code can only be compiled on a recent ubuntu
 linux machine with **a physical GPU**, and the cuda toolkit installed.

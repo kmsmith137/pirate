@@ -1,4 +1,4 @@
-## C++/cuda guidelines (intended for LLM agents)
+# C++/cuda guidelines
 
 - Prefer private (or static) functions over anonymous scopes `{ ... }`.
 
@@ -12,14 +12,14 @@
 `
 - If a class `X` derives from `std::enable_shared_from_this`, then its constructor(s() must be protected, and the class must define `create()` static method(s) that return `shared_ptr<X>`.
 
-### ksgpu
+## ksgpu
 
 Uses the `ksgpu` helper library, esepcially the Array class (ksgpu/Array.hpp), memory managment (ksgpu/mem_utils.hpp),
 and xassert macros (ksgpu/xassert.hpp, see below).
 
 CRITIAL: please complain if you don't see the ksgpu library in the cursor/claude workspace.
 
-### xassert macros
+## xassert macros
 
 The following macros are similar to `assert()`, but throw an exception instead of terminating:
 ```

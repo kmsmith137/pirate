@@ -1,6 +1,6 @@
-## Hardware
+# Hardware
 
-### Nodes
+## Nodes
 
   - The CHORD FRB nodes have:
   
@@ -27,7 +27,7 @@
     which each other. It may be helpful to think of the FRB node as two independent
     "half-nodes" running on one physical machine.
 
-### Full CHORD network (future)
+## Full CHORD network (future)
 
   - In full CHORD, we'll have 64 X-engine nodes and 14 FRB nodes.
     We're currently planning to use TCP for communication, but we
@@ -68,7 +68,7 @@
     do have data payloads (e.g. pulse injections: the RPC caller simulates the pulse and
     sends a data array).
 
-### DRAO backend
+## DRAO backend
 
 We currently have a few FRB nodes in the DRAO block house, and an ad hoc network.
 Let me know if you don't have access.

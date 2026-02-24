@@ -1,9 +1,9 @@
-## Introduction
+# Introduction
 
 Pirate is a real-time FRB seach written in C++ / cuda / python.
 
   - Receives data via TCP from the "upstream" X-engine. The network protocol
-    is [here](network_protocol.md). The protcol includes metadata -- the
+    is [here](network_protocol.md). The protocol includes metadata -- the
     format is [here](../configs/xengine/xengine_metadata_v1.yml). Details
     of the protocol and metadata will change in the future.
 
