@@ -11,6 +11,7 @@ notes/install
 notes/intro
 notes/todo
 notes/developer
+cli
 notes/build
 notes/hardware
 notes/network_protocol

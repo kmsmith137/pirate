@@ -60,6 +60,7 @@ release = '1.0.0'
 extensions = [
     'sphinx.ext.intersphinx',
     'myst_parser',
+    'sphinxarg.ext',
 ]
 
 templates_path = ['_templates']
