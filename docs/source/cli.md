@@ -1,10 +1,10 @@
 # CLI reference
 
-Auto-generated from the argparse parser in `pirate_frb.__main__`.
+Many `pirate` features are accessed via the command-line interface:
+```
+pirate_frb SUBCOMMAND [ARGS...]
+```
+where the list of subcommands, and documentation for each subcommand, are given below.
 
-```{eval-rst}
-.. argparse::
-   :module: pirate_frb.__main__
-   :func: get_parser
-   :prog: pirate_frb
+```{include} _cli_generated.md
 ```

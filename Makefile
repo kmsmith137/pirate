@@ -58,9 +58,7 @@ docs:
 	$(MAKE) -C docs html
 
 docs-clean:
-	@if [ -d "docs/build" ]; then \
-		rm -rf docs/build; \
-	fi
+	rm -rf docs/build docs/source/notes docs/source/configs docs/source/_cli_generated.md
 
 docs-serve: docs
 	@echo "Starting documentation server at http://localhost:8000"

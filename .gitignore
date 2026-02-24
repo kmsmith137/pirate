@@ -24,4 +24,5 @@ docs/build/
 docs/source/_autosummary/
 docs/source/notes/
 docs/source/configs/
+docs/source/_cli_generated.md
 

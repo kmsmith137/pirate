@@ -47,6 +47,43 @@ for _f in glob.glob(os.path.join(_notes_dst, '*.md')):
         with open(_f, 'w') as _fout:
             _fout.write(_new_text)
 
+# -- Generate CLI subcommand summary table -----------------------------------
+# Import the argparse parser and extract the one-line help for each subcommand.
+
+import sys as _sys
+_sys.path.insert(0, _repo_root)
+from pirate_frb.__main__ import get_parser as _get_parser
+
+_parser = _get_parser()
+_lines = ['| Subcommand | Description |', '|---|---|']
+for _action in _parser._subparsers._actions:
+    if not hasattr(_action, '_choices_actions'):
+        continue
+    for _choice in _action._choices_actions:
+        _lines.append(f'| `{_choice.dest}` | {_choice.help or ""} |')
+
+# Write the summary table and per-subcommand argparse directives to _cli_generated.md.
+_cli_gen_path = os.path.join(os.path.dirname(__file__), '_cli_generated.md')
+with open(_cli_gen_path, 'w') as _fout:
+    # Summary table
+    _fout.write('## Subcommands\n\n')
+    _fout.write('\n'.join(_lines) + '\n\n')
+    # Per-subcommand detailed docs
+    _fout.write('## Detailed usage\n\n')
+    for _action in _parser._subparsers._actions:
+        if not hasattr(_action, '_choices_actions'):
+            continue
+        for _choice in _action._choices_actions:
+            _name = _choice.dest
+            _fout.write(f'### {_name}\n\n')
+            _fout.write('```{eval-rst}\n')
+            _fout.write('.. argparse::\n')
+            _fout.write('   :module: pirate_frb.__main__\n')
+            _fout.write('   :func: get_parser\n')
+            _fout.write('   :prog: pirate_frb\n')
+            _fout.write(f'   :path: {_name}\n')
+            _fout.write('```\n\n')
+
 # -- Project information -----------------------------------------------------
 
 project = 'pirate_frb'
@@ -64,7 +101,7 @@ extensions = [
 ]
 
 templates_path = ['_templates']
-exclude_patterns = []
+exclude_patterns = ['_cli_generated.md', '_cli_summary.md']
 
 source_suffix = {
     '.md': 'markdown',
