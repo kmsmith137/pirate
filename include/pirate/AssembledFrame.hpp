@@ -120,7 +120,10 @@ struct AssembledFrame
 // AssembledFrameAllocator: Thread-backed class that allocates AssembledFrames.
 //
 // In non-dummy mode, a worker thread pre-initializes frames (calls memset to fill
-// with 0x88) to reduce latency for callers of get_frame().
+// with 0x88) to reduce latency for callers of get_frame(). The worker thread
+// inherits its vcpu affinity from the caller of the constructor. Python callers
+// should call the AssembledFrameAllocator constructor within a ThreadAffinity
+// context manager.
 //
 // In dummy mode (slab_allocator->is_dummy()), no worker thread is created, and
 // frames are initialized synchronously by the caller of get_frame().

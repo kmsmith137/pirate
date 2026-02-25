@@ -30,7 +30,19 @@ struct FrbRpcService;  // defined in FrbServer.cpp
 
 
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
+//
 // Backing threads: one worker thread per Receiver, plus a reaper thread.
+// These threads inherit their vcpu affinity from the caller of FrbServer::start().
+// Python callers should call FrbServer.start() within a ThreadAffinity context
+// manager.
+//
+// Note that FrbServer::start() also spawns a grpc service with its own worker
+// threads. These threads will be unpinned (default system-wide affinity), since
+// they're spawned lazily by gRPC's runtime. This is fine for now, since all
+// RPCs are "lightweight". (In the future, when we define "heavyweight" RPCs
+// for e.g. injections, then we may want to look at gRPC's ResourceQuota and
+// custom thread pool mechanisms.)
+
 
 struct FrbServer : public std::enable_shared_from_this<FrbServer>
 {

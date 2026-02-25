@@ -18,6 +18,13 @@ namespace pirate {
 struct AssembledFrame;  // AssembledFrame.hpp
 
 
+// Note: the FileWriter spawns worker threads in its constructor.
+// (Total threads = Params::num_ssd_threads + Params::num_nfs_threads.)
+//
+// All worker threads inherit their vCPU affinity from the caller of
+// the constructor. Python callers should call the FileWriter constructor
+// within a ThreadAffinity context manager.
+
 struct FileWriter
 {
 public:

@@ -30,6 +30,10 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 //   - reader: uses epoll() to read data from all open connections
 //   - assembler: copies data minichunks from per-peer ring buffers into AssembledFrames
 //
+// NOTE: worker threads inherit the same vcpu affinity as the caller of start()
+// (not the Receiver constructor!). Python callers should call Receiver.start()
+// within a ThreadAffinity context manager.
+//
 // See notes/network_protocol.md for the network protocol parsed by the Receiver.
 
 struct Receiver
