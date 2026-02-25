@@ -449,20 +449,21 @@ void register_core_bindings(pybind11::module &m)
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
         "Creates multiple worker threads, each sending data over a TCP connection\n"
         "following the X->FRB network protocol.\n\n"
+        "Threads are assigned round-robin to IP addresses. nthreads must be a\n"
+        "multiple of len(ip_addrs).\n\n"
         "Usage:\n"
         "    xmd = XEngineMetadata.from_yaml_file('...')\n"
-        "    fxe = FakeXEngine(xmd, '127.0.0.1', 8787, 64)\n"
+        "    fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64)\n"
         "    fxe.start()  # creates threads and begins sending\n"
         "    # ... wait ...\n"
         "    fxe.stop()   # signals threads to stop")
-          .def(py::init<const XEngineMetadata &, const std::string &, uint16_t, int>(),
-               py::arg("xmd"), py::arg("ip_addr"), py::arg("port"), py::arg("nthreads"),
+          .def(py::init<const XEngineMetadata &, const std::vector<std::string> &, int>(),
+               py::arg("xmd"), py::arg("ip_addrs"), py::arg("nthreads"),
                "Create a FakeXEngine (does not start sending until start() is called).\n\n"
                "Args:\n"
                "    xmd: X-engine metadata defining frequency channels and beams\n"
-               "    ip_addr: IP address of the receiver\n"
-               "    port: TCP port of the receiver\n"
-               "    nthreads: Number of worker threads (simulated X-engine nodes)")
+               "    ip_addrs: List of receiver addresses in 'ip:port' format\n"
+               "    nthreads: Number of worker threads (must be a multiple of len(ip_addrs))")
           .def("start", &FakeXEngine::start,
                "Create worker threads and begin sending data.\n\n"
                "Raises:\n"
@@ -471,10 +472,8 @@ void register_core_bindings(pybind11::module &m)
                "Signal worker threads to stop. Safe to call multiple times.")
           .def_readonly("xmd", &FakeXEngine::xmd,
                "X-engine metadata")
-          .def_readonly("ip_addr", &FakeXEngine::ip_addr,
-               "Receiver IP address")
-          .def_readonly("port", &FakeXEngine::port,
-               "Receiver TCP port")
+          .def_readonly("ip_addrs", &FakeXEngine::ip_addrs,
+               "Receiver addresses in 'ip:port' format")
           .def_readonly("nthreads", &FakeXEngine::nthreads,
                "Number of worker threads")
           .def_property_readonly_static("protocol_magic",

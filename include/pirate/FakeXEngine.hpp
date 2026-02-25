@@ -30,7 +30,7 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 //
 // Usage:
 //   XEngineMetadata xmd = XEngineMetadata::from_yaml_file("...");
-//   FakeXEngine fxe(xmd, "127.0.0.1", 8787, 64);
+//   FakeXEngine fxe(xmd, {"10.0.0.2:5000", "10.0.1.2:5000"}, 64);
 //   fxe.start();  // creates worker threads and begins sending
 //   // ... wait ...
 //   fxe.stop();   // signals threads to stop
@@ -40,9 +40,10 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 //   - Sends protocol header (magic number + YAML metadata)
 //   - Sends shape-(nbeams, nfreq, 256) int4 data arrays (all zeros for now)
 //
-// Frequency channels are assigned round-robin to worker threads. Before sending
-// the N-th data array, each worker waits until all threads have finished sending
-// the (N-2)-th array, to keep threads synchronized.
+// Threads are assigned round-robin to IP addresses (nthreads must be a multiple
+// of ip_addrs.size()). Frequency channels are assigned round-robin to worker
+// threads. Before sending the N-th data array, each worker waits until all
+// threads have finished sending the (N-2)-th array, to keep threads synchronized.
 
 struct FakeXEngine
 {
@@ -53,8 +54,7 @@ struct FakeXEngine
 
     // Constructor args.
     const XEngineMetadata xmd;
-    const std::string ip_addr;
-    const uint16_t port;
+    const std::vector<std::string> ip_addrs;  // each element is "ip:port"
     const int nthreads;
 
     // Thread-backed class state (protected by 'mutex').
@@ -77,7 +77,8 @@ struct FakeXEngine
     // ----- Public interface -----
 
     // Constructor. Does not create worker threads (call start() for that).
-    FakeXEngine(const XEngineMetadata &xmd, const std::string &ip_addr, uint16_t port, int nthreads);
+    // Each element of 'ip_addrs' is "ip:port" format. nthreads must be a multiple of ip_addrs.size().
+    FakeXEngine(const XEngineMetadata &xmd, const std::vector<std::string> &ip_addrs, int nthreads);
 
     // Destructor calls stop() and joins worker threads.
     ~FakeXEngine();

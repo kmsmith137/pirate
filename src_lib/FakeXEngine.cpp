@@ -17,15 +17,53 @@ namespace pirate {
 
 
 
-FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::string &ip_addr_, uint16_t port_, int nthreads_) :
+// Helper: parse "ip:port" string. Throws on invalid format.
+static void parse_ip_port(const string &address, string &ip_addr, uint16_t &port)
+{
+    size_t colon_pos = address.rfind(':');
+    if (colon_pos == string::npos)
+        throw runtime_error("FakeXEngine: invalid address '" + address + "' (expected 'ip:port' format)");
+
+    ip_addr = address.substr(0, colon_pos);
+    string port_str = address.substr(colon_pos + 1);
+
+    long port_long;
+    try {
+        port_long = stol(port_str);
+    } catch (...) {
+        throw runtime_error("FakeXEngine: invalid port in address '" + address + "'");
+    }
+
+    if ((port_long <= 0) || (port_long > 65535))
+        throw runtime_error("FakeXEngine: invalid port in address '" + address + "'");
+
+    port = static_cast<uint16_t>(port_long);
+}
+
+
+FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_, int nthreads_) :
     xmd(xmd_),
-    ip_addr(ip_addr_),
-    port(port_),
+    ip_addrs(ip_addrs_),
     nthreads(nthreads_)
 {
-    xassert(ip_addr.size() > 0);
-    xassert(port > 0);
+    if (ip_addrs.empty())
+        throw runtime_error("FakeXEngine: ip_addrs is empty");
     xassert(nthreads > 0);
+
+    long naddrs = ip_addrs.size();
+    if (nthreads % naddrs != 0) {
+        stringstream ss;
+        ss << "FakeXEngine: nthreads=" << nthreads
+           << " is not a multiple of ip_addrs.size()=" << naddrs;
+        throw runtime_error(ss.str());
+    }
+
+    // Validate all addresses (parse early to catch errors before start()).
+    for (const auto &addr : ip_addrs) {
+        string ip;
+        uint16_t port;
+        parse_ip_port(addr, ip, port);
+    }
 
     // Validate that XEngineMetadata has enough frequency channels for all threads.
     long total_nfreq = xmd.get_total_nfreq();
@@ -165,7 +203,11 @@ void FakeXEngine::_worker_main(int thread_id)
     long data_nbytes = nbeams * nfreq * 128;
     vector<char> data_buf(data_nbytes, 0);  // all zeros for now
 
-    // Open TCP connection.
+    // Open TCP connection (threads assigned round-robin to IP addresses).
+    string ip_addr;
+    uint16_t port;
+    parse_ip_port(ip_addrs[thread_id % ip_addrs.size()], ip_addr, port);
+
     Socket sock(PF_INET, SOCK_STREAM);
     sock.connect(ip_addr, port);
 
