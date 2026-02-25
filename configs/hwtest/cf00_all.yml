@@ -17,8 +17,8 @@ tcp_connections_per_ip_address: 1
 # ssd_devices: if these don't match 'ssd_dirs', then an exception is thrown.
 #  (This is intended to catch misconfiguration where a device is not mounted.)
 
-ssd_dirs: [ '/scratch', '/scratch2/scratch' ]
-ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p3' ]
+ssd_dirs: [ '/scratch', '/scratch2' ]
+ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p1' ]
 write_threads_per_ssd: 4
 write_asdf: false
 
