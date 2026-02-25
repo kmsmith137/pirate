@@ -14,6 +14,7 @@ from . import core
 from .HwtestSender import HwtestSender
 from .Hwtest import Hwtest
 from .Hardware import Hardware
+from .run_server import run_server
 
 from .pirate_pybind11 import (
     DedispersionConfig,

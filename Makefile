@@ -244,6 +244,7 @@ PYFILES = \
   pirate_frb/Hwtest.py \
   pirate_frb/Hardware.py \
   pirate_frb/pybind11_injections.py \
+  pirate_frb/run_server.py \
   pirate_frb/yaml_utils.py \
   pirate_frb/casm/__init__.py \
   pirate_frb/casm/CasmReferenceBeamformer.py \

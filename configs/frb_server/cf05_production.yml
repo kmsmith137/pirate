@@ -1,0 +1,110 @@
+# This file starts a full-node (i.e. both CPUs) production server with full CHORD parameters.
+# Files are written through local SSD cache to a real NFS server (/mnt/cs00/data).
+#
+# To start server on cf05:
+#   pirate_frb run_server configs/frb_server/cf05_production.yml
+#
+# To send data from cf00 to cf05:
+#   pirate_frb run_server -s configs/frb_server/cf05_production.yml
+
+
+########################################  General config  ########################################
+
+
+# Under the hood, the frb search may consist of multiple servers (class FrbServer in the code).
+# Each server processes a disjoint set of beams, and receives data from a disjoint set of TCP
+# connections. In a multi-CPU machine, each server "lives" on a specific CPU. (The mapping between
+# servers in the config file, and physical CPUs, is determined automatically by querying the
+# hardware. A many-to-one mapping is allowed, i.e. multiple servers per CPU.)
+
+num_servers: 2
+
+# The time "chunk" size sets cadence throughout the FRB search, and the number
+# of time samples per output file. Must be a multiple of 256.
+
+time_samples_per_chunk: 1024 
+
+# Memory is fully allocated and zeroed before the server starts (with scattered
+# small exceptions where we do call malloc()).
+
+memory_per_server: '256 GB'
+use_hugepages: true
+
+
+########################################  Network config  ########################################
+
+
+# 'data_ip_addrs' is a list (length num_servers). Each entry is either an 'ip_addr:tcp_port'
+# string, or a list of such strings. The latter case arises if a server receives data from
+# multiple IP addresses. We expect this to happen in full CHORD. (Under the hood, each IP
+# address corresponds to one 'class Receiver', and an FrbServer can have multiple Receivers.)
+
+data_ip_addrs:
+  - [ '10.0.0.2:5000', '10.0.1.2:5000' ]
+  - [ '10.0.2.2:5000', '10.0.3.2:5000' ]
+
+# 'rpc_ip_addrs' is a list of 'ip_addr:tcp_port' strings. Currently, RPC threads are
+# not pinned to a specific CPU. This is fine for now, since all RPCs are "lightweight".
+# We may revisit in the future, when we define "heavyweight" RPCs for e.g. injections.
+# See discussion in include/pirate/FrbServer.hpp.
+
+rpc_ip_addrs:
+  - '10.222.3.5:6000'
+  - '10.222.3.5:6001'
+
+
+#####################################  File-writing config  ######################################
+
+
+# 'ssd_dirs' and 'ssd_devices' are lists of length num_servers.
+# If an ssd_dir isn't backed by the corresponding ssd_device, then an exception is thrown.
+# (This is intended to catch misconfiguration where an SSD is not mounted.)
+
+ssd_dirs: [ '/scratch', '/scratch2' ]
+ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p1' ]
+ssd_threads_per_server: 4
+
+# Currently, all servers write to the same nfs_dir (i.e. 'nfs_dir' is a string,
+# not a list of strings). The 'nfs_dir' member supports string interpolations
+# {user} and {date}. The nfs_dir will be created if it doesn't already exist.
+
+nfs_dir: '/mnt/cs00/data/{user}/{date}'
+nfs_threads_per_server: 2
+
+
+###################################  "Fake X-engine" config  #####################################
+#
+# This optional section is only needed if you want to send "fake X-engine" data
+# (pirate_frb run_server -s).
+
+
+# Note: The X-engine determines the beam configuration, and the FRB server
+# receives it dynamically at runtime.
+
+beams_per_server: 60
+base_beam_id: [ 100, 200 ]    # length num_servers
+
+# In the real system, each X-engine "half-node" (i.e. numa domain) opens a separate
+# TCP connection (128 TCP connections in full CHORD).
+#
+# The "fake X-engine" uses many TCP connections in order to mimic this behavior, but
+# they all originate from the same physical node. (Detail: if the server has multiple
+# data_ip_addrs, then the TCP connections are assigned round-robin.)
+
+tcp_connections_per_server: 128
+
+# Frequency channels. The observed frequency band is divided into "zones".
+# Within each zone, all frequency channels have the same width, but the
+# channel width may differ between zones.
+#   zone_nfreq: number of frequency channels in each zone.
+#   zone_freq_edges: frequency band edges in MHz.
+# For example:
+#   zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz
+#   zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band
+#
+# In this config, we have:
+#  Total frequency channels: 28160
+#  Channel widths (MHz): [ 0.00610352, 0.012207, 0.0244141, 0.0976562, 0.195312 ]
+
+zone_nfreq: [8192, 8192, 6144, 2048, 3584]
+zone_freq_edges: [300, 350, 450, 600, 800, 1500]

@@ -977,6 +977,17 @@ def random_kernels(args):
             print(f"('fp{nbits}', {tuple(subband_counts)}, {2**Dcore_log}, {P}, {2**Tinner_log})")
 
 
+######################################  run_server command  #####################################
+
+
+def parse_run_server(subparsers):
+    help_text = "Start FRB server(s) from a YAML config file"
+    parser = subparsers.add_parser("run_server", help=help_text, description=help_text)
+    parser.add_argument('config', help='Path to YAML config file')
+    # -s flag reserved for future use (fake X-engine sender mode).
+    parser.add_argument('-s', '--send', action='store_true', help='(not yet implemented) Send fake X-engine data')
+
+
 ####################################################################################################
 
 
@@ -1007,6 +1018,7 @@ def get_parser():
     parse_make_subbands(subparsers)
     parse_random_kernels(subparsers)
     parse_hwtest(subparsers)
+    parse_run_server(subparsers)
     parse_scratch(subparsers)
 
     return parser
@@ -1047,6 +1059,9 @@ def main():
         rpc_status(args)
     elif args.command == "rpc_write":
         rpc_write(args)
+    elif args.command == "run_server":
+        from .run_server import run_server
+        run_server(args.config)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
