@@ -198,15 +198,18 @@ def run_server(config_filename):
     print(f"  memory_per_server = {config['memory_per_server']}")
     print(f"  use_hugepages = {config['use_hugepages']}")
 
+    # Resolve NFS dir and create SSD/NFS dirs if needed.
+    # (Must happen before _validate_hardware, which calls os.stat on ssd_dirs.)
+    nfs_dir = _resolve_nfs_dir(config['nfs_dir'])
+    os.makedirs(nfs_dir, exist_ok=True)
+    for ssd_dir in config['ssd_dirs']:
+        os.makedirs(ssd_dir, exist_ok=True)
+    print(f"  nfs_dir = {nfs_dir}")
+
     hw = Hardware()
     cpus = config['server_cpus']
     _validate_hardware(config, hw)
     print(f"Hardware validation passed: server CPUs = {cpus}")
-
-    # Resolve NFS dir and create if needed.
-    nfs_dir = _resolve_nfs_dir(config['nfs_dir'])
-    os.makedirs(nfs_dir, exist_ok=True)
-    print(f"  nfs_dir = {nfs_dir}")
 
     capacity = config['memory_per_server_bytes']
     aflags = ksgpu.af_uhost
