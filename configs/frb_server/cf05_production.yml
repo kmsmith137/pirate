@@ -13,22 +13,23 @@
 
 # Under the hood, the frb search may consist of multiple servers (class FrbServer in the code).
 # Each server processes a disjoint set of beams, and receives data from a disjoint set of TCP
-# connections. In a multi-CPU machine, each server "lives" on a specific CPU. (The mapping between
-# servers in the config file, and physical CPUs, is determined automatically by querying the
-# hardware. A many-to-one mapping is allowed, i.e. multiple servers per CPU.)
+# connections. In a multi-CPU machine, each server "lives" on a specific CPU. The mapping between
+# servers in the config file, and physical CPUs, is determined by 'server_cpus'. (A many-to-one
+# mapping is allowed, i.e. multiple servers per CPU.)
 
 num_servers: 2
-
-# The time "chunk" size sets cadence throughout the FRB search, and the number
-# of time samples per output file. Must be a multiple of 256.
-
-time_samples_per_chunk: 1024 
+server_cpus: [ 0, 1 ]   # length num_servers
 
 # Memory is fully allocated and zeroed before the server starts (with scattered
 # small exceptions where we do call malloc()).
 
 memory_per_server: '256 GB'
 use_hugepages: true
+
+# The time "chunk" size sets cadence throughout the FRB search, and the number
+# of time samples per output file. Must be a multiple of 256.
+
+time_samples_per_chunk: 1024 
 
 
 ########################################  Network config  ########################################

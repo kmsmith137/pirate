@@ -11,7 +11,6 @@ import ksgpu
 from .Hardware import Hardware
 from .utils.ThreadAffinity import ThreadAffinity
 from .core import BumpAllocator, SlabAllocator, AssembledFrameAllocator, FileWriter, Receiver
-from . import FrbServer
 
 
 def _parse_memory_string(s):
@@ -56,8 +55,8 @@ def _parse_config(filename):
     # --- Required keys and their types ---
 
     required_keys = [
-        'num_servers', 'time_samples_per_chunk', 'memory_per_server',
-        'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs',
+        'num_servers', 'server_cpus', 'time_samples_per_chunk',
+        'memory_per_server', 'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs',
         'ssd_dirs', 'ssd_devices', 'ssd_threads_per_server',
         'nfs_dir', 'nfs_threads_per_server',
     ]
@@ -72,6 +71,13 @@ def _parse_config(filename):
 
     if not isinstance(n, int) or n <= 0:
         raise RuntimeError(f"{filename}: 'num_servers' must be a positive integer, got {n!r}")
+
+    sc = config['server_cpus']
+    if not isinstance(sc, list) or len(sc) != n:
+        raise RuntimeError(f"{filename}: 'server_cpus' must be a list of length {n}")
+    for i, cpu in enumerate(sc):
+        if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 0:
+            raise RuntimeError(f"{filename}: server_cpus[{i}] must be a non-negative integer, got {cpu!r}")
 
     tsc = config['time_samples_per_chunk']
     if not isinstance(tsc, int) or tsc <= 0:
@@ -130,65 +136,54 @@ def _parse_config(filename):
 
 
 def _validate_hardware(config, hw):
-    """Validate that NICs and SSDs are on the same physical CPU for each server.
+    """Check that all data_ip_addrs and ssd_dirs are consistent with server_cpus.
 
-    Returns a list of CPU indices (length num_servers), where cpus[i] is the
-    physical CPU for server i. A many-to-one mapping is allowed (multiple
-    servers on the same CPU).
+    For each server, verifies that the NIC(s) and SSD are on the physical CPU
+    specified by server_cpus[i]. Devices with no CPU affinity (loopback NICs,
+    tmpfs directories) automatically pass the consistency check.
     """
 
     n = config['num_servers']
-    cpus = []
+    cpus = config['server_cpus']
 
     for i in range(n):
-        # Collect vCPU lists for all data IP addresses on this server.
-        ip_cpus = set()
+        expected_cpu = cpus[i]
+
+        # Check data IP addresses.
         for addr in config['data_ip_addrs'][i]:
             ip = _extract_ip(addr)
             vcpus = hw.vcpu_list_from_ip_addr(ip)
             cpu = hw.cpu_from_vcpu_list(vcpus)
-            if cpu is None:
+            # cpu is None for loopback (no PCIe affinity, spans all CPUs).
+            if (cpu is not None) and (cpu != expected_cpu):
                 raise RuntimeError(
-                    f"Server {i}: data IP {addr} spans multiple physical CPUs "
-                    f"(vcpu_list={vcpus})"
+                    f"Server {i}: data IP {addr} is on CPU {cpu}, "
+                    f"but server_cpus[{i}] = {expected_cpu}"
                 )
-            ip_cpus.add(cpu)
 
-        if len(ip_cpus) > 1:
+        # Check SSD dir CPU affinity.
+        ssd_dir = config['ssd_dirs'][i]
+        try:
+            ssd_vcpus = hw.vcpu_list_from_dirname(ssd_dir)
+            ssd_cpu = hw.cpu_from_vcpu_list(ssd_vcpus)
+        except RuntimeError:
+            # Non-PCIe filesystem (e.g. tmpfs) has no CPU affinity.
+            ssd_cpu = None
+
+        if (ssd_cpu is not None) and (ssd_cpu != expected_cpu):
             raise RuntimeError(
-                f"Server {i}: data IP addresses are on different physical CPUs: "
-                f"{config['data_ip_addrs'][i]} -> CPUs {sorted(ip_cpus)}"
-            )
-
-        nic_cpu = ip_cpus.pop()
-
-        # Check SSD.
-        ssd_vcpus = hw.vcpu_list_from_dirname(config['ssd_dirs'][i])
-        ssd_cpu = hw.cpu_from_vcpu_list(ssd_vcpus)
-        if ssd_cpu is None:
-            raise RuntimeError(
-                f"Server {i}: SSD dir {config['ssd_dirs'][i]!r} spans multiple physical CPUs"
-            )
-
-        if nic_cpu != ssd_cpu:
-            raise RuntimeError(
-                f"Server {i}: NIC(s) are on CPU {nic_cpu} but SSD "
-                f"{config['ssd_dirs'][i]!r} is on CPU {ssd_cpu}"
+                f"Server {i}: SSD dir {ssd_dir!r} is on CPU {ssd_cpu}, "
+                f"but server_cpus[{i}] = {expected_cpu}"
             )
 
         # Verify SSD device matches.
-        actual_dev = hw.disk_from_dirname(config['ssd_dirs'][i])
+        actual_dev = hw.disk_from_dirname(ssd_dir)
         expected_dev = config['ssd_devices'][i]
         if os.path.basename(actual_dev) != os.path.basename(expected_dev):
             raise RuntimeError(
-                f"Server {i}: ssd_dirs[{i}]={config['ssd_dirs'][i]!r} is backed by "
+                f"Server {i}: ssd_dirs[{i}]={ssd_dir!r} is backed by "
                 f"device {actual_dev!r}, but ssd_devices[{i}]={expected_dev!r} (mismatch)"
             )
-
-        # NFS NIC is intentionally excluded from the CPU check.
-        cpus.append(nic_cpu)
-
-    return cpus
 
 
 def run_server(config_filename):
@@ -204,7 +199,8 @@ def run_server(config_filename):
     print(f"  use_hugepages = {config['use_hugepages']}")
 
     hw = Hardware()
-    cpus = _validate_hardware(config, hw)
+    cpus = config['server_cpus']
+    _validate_hardware(config, hw)
     print(f"Hardware validation passed: server CPUs = {cpus}")
 
     # Resolve NFS dir and create if needed.
@@ -269,6 +265,8 @@ def run_server(config_filename):
 
                 # FrbServer: ties together receivers, file writer, and RPC.
                 # No threads spawned in constructor.
+                # (Imported here to avoid circular import with __init__.py.)
+                from . import FrbServer
                 server = FrbServer(receivers, file_writer, config['rpc_ip_addrs'][i])
 
                 # server.start(): spawns worker/reaper threads and calls
