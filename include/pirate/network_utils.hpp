@@ -179,6 +179,11 @@ struct Epoll
 };
 
 
+// Parse "ip:port" string into separate ip_addr and port.
+// Throws runtime_error on invalid format.
+void parse_ip_address(const std::string &address, std::string &ip_addr, uint16_t &port);
+
+
 }  // namespace pirate
 
 #endif // _PIRATE_NETWORK_UTILS_HPP

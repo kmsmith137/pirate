@@ -77,39 +77,12 @@ Receiver::Peer::Peer(Socket sock)
 // -------------------------------------------------------------------------------------------------
 
 
-// Helper for Receiver constructor: parse "ip:port" address string.
-static void parse_address(const string &address, string &ip_addr, uint16_t &tcp_port)
-{
-    size_t colon_pos = address.rfind(':');
-    if (colon_pos == string::npos) {
-        throw runtime_error("Receiver: invalid address '" + address + "' (expected 'ip:port' format)");
-    }
-
-    ip_addr = address.substr(0, colon_pos);
-    string port_str = address.substr(colon_pos + 1);
-
-    if (ip_addr.empty()) {
-        throw runtime_error("Receiver: invalid address '" + address + "' (empty IP)");
-    }
-    if (port_str.empty()) {
-        throw runtime_error("Receiver: invalid address '" + address + "' (empty port)");
-    }
-
-    try {
-        int port = std::stoi(port_str);
-        if ((port <= 0) || (port > 65535)) {
-            throw runtime_error("Receiver: invalid port in address '" + address + "'");
-        }
-        tcp_port = static_cast<uint16_t>(port);
-    } catch (const std::exception &) {
-        throw runtime_error("Receiver: invalid port in address '" + address + "'");
-    }
-}
+// parse_ip_address() is defined in network_utils.hpp.
 
 
 Receiver::Receiver(const Params &p) : params(p)
 {
-    parse_address(params.address, this->ip_addr, this->tcp_port);
+    parse_ip_address(params.address, this->ip_addr, this->tcp_port);
 
     xassert(params.allocator);
     xassert(params.consumer_id >= 0);

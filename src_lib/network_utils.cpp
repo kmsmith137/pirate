@@ -528,4 +528,35 @@ int Epoll::wait(int timeout_ms)
 }
 
 
+// -------------------------------------------------------------------------------------------------
+
+
+void parse_ip_address(const string &address, string &ip_addr, uint16_t &port)
+{
+    size_t colon_pos = address.rfind(':');
+    if (colon_pos == string::npos)
+        throw runtime_error("parse_ip_address: invalid address '" + address + "' (expected 'ip:port' format)");
+
+    ip_addr = address.substr(0, colon_pos);
+    string port_str = address.substr(colon_pos + 1);
+
+    if (ip_addr.empty())
+        throw runtime_error("parse_ip_address: invalid address '" + address + "' (empty IP)");
+    if (port_str.empty())
+        throw runtime_error("parse_ip_address: invalid address '" + address + "' (empty port)");
+
+    long port_long;
+    try {
+        port_long = stol(port_str);
+    } catch (...) {
+        throw runtime_error("parse_ip_address: invalid port in address '" + address + "'");
+    }
+
+    if ((port_long <= 0) || (port_long > 65535))
+        throw runtime_error("parse_ip_address: invalid port in address '" + address + "'");
+
+    port = static_cast<uint16_t>(port_long);
+}
+
+
 } // namespace pirate

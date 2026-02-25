@@ -17,30 +17,6 @@ namespace pirate {
 
 
 
-// Helper: parse "ip:port" string. Throws on invalid format.
-static void parse_ip_port(const string &address, string &ip_addr, uint16_t &port)
-{
-    size_t colon_pos = address.rfind(':');
-    if (colon_pos == string::npos)
-        throw runtime_error("FakeXEngine: invalid address '" + address + "' (expected 'ip:port' format)");
-
-    ip_addr = address.substr(0, colon_pos);
-    string port_str = address.substr(colon_pos + 1);
-
-    long port_long;
-    try {
-        port_long = stol(port_str);
-    } catch (...) {
-        throw runtime_error("FakeXEngine: invalid port in address '" + address + "'");
-    }
-
-    if ((port_long <= 0) || (port_long > 65535))
-        throw runtime_error("FakeXEngine: invalid port in address '" + address + "'");
-
-    port = static_cast<uint16_t>(port_long);
-}
-
-
 FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_, int nthreads_) :
     xmd(xmd_),
     ip_addrs(ip_addrs_),
@@ -62,7 +38,7 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     for (const auto &addr : ip_addrs) {
         string ip;
         uint16_t port;
-        parse_ip_port(addr, ip, port);
+        parse_ip_address(addr, ip, port);
     }
 
     // Validate that XEngineMetadata has enough frequency channels for all threads.
@@ -206,7 +182,7 @@ void FakeXEngine::_worker_main(int thread_id)
     // Open TCP connection (threads assigned round-robin to IP addresses).
     string ip_addr;
     uint16_t port;
-    parse_ip_port(ip_addrs[thread_id % ip_addrs.size()], ip_addr, port);
+    parse_ip_address(ip_addrs[thread_id % ip_addrs.size()], ip_addr, port);
 
     Socket sock(PF_INET, SOCK_STREAM);
     sock.connect(ip_addr, port);
