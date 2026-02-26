@@ -427,6 +427,10 @@ def run_fake_xengine(config_filename):
 
         while True:
             time.sleep(1)
+            # Exit if all FakeXEngines stopped (e.g. server went away).
+            if all(fxe.is_stopped for fxe in fake_xengines):
+                print("\nAll connections lost (server exited?).")
+                break
 
     except KeyboardInterrupt:
         print("\nStopping...")

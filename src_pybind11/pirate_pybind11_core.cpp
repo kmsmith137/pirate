@@ -443,7 +443,7 @@ void register_core_bindings(pybind11::module &m)
     ;
 
     // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a receiver.
-    // Skipped members: mutex, cv, is_stopped, error, workers, barrier (internal state)
+    // Skipped members: mutex, cv, error, workers, barrier (internal state)
     // Skipped methods: _throw_if_stopped, make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
@@ -470,6 +470,12 @@ void register_core_bindings(pybind11::module &m)
                "    RuntimeError: If already started or stopped")
           .def("stop", [](FakeXEngine &self) { self.stop(); },
                "Signal worker threads to stop. Safe to call multiple times.")
+          .def_property_readonly("is_stopped",
+               [](FakeXEngine &self) {
+                   std::lock_guard<std::mutex> lock(self.mutex);
+                   return self.is_stopped;
+               },
+               "True if stop() has been called (e.g. due to connection reset).")
           .def_readonly("xmd", &FakeXEngine::xmd,
                "X-engine metadata")
           .def_readonly("ip_addrs", &FakeXEngine::ip_addrs,

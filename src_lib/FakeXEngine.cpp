@@ -157,8 +157,10 @@ bool FakeXEngine::_send_all(Socket &sock, const void *buf, long nbytes)
         // Try to send with short timeout.
         long n = sock.send_with_timeout(ptr + pos, nbytes - pos, send_timeout_ms);
 
-        if (sock.connreset)
+        if (sock.connreset) {
+            stop();  // wake up other threads waiting at the barrier
             return false;
+        }
 
         pos += n;
     }
