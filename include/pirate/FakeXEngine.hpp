@@ -44,6 +44,10 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 // of ip_addrs.size()). Frequency channels are assigned round-robin to worker
 // threads. Before sending the N-th data array, each worker waits until all
 // threads have finished sending the (N-2)-th array, to keep threads synchronized.
+//
+// Worker threads have the same vcpu affinity as the caller of FakeXEngine::start().
+// Python callers should call FakeXEngine.start() within a ThreadAffinity context
+// manager.
 
 struct FakeXEngine
 {

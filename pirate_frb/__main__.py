@@ -1065,8 +1065,12 @@ def main():
     elif args.command == "rpc_write":
         rpc_write(args)
     elif args.command == "run_server":
-        from .run_server import run_server
-        run_server(args.config)
+        if args.send:
+            from .run_server import run_fake_xengine
+            run_fake_xengine(args.config)
+        else:
+            from .run_server import run_server
+            run_server(args.config)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)

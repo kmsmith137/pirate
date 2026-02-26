@@ -11,6 +11,7 @@ import ksgpu
 from .Hardware import Hardware
 from .utils.ThreadAffinity import ThreadAffinity
 from .core import BumpAllocator, SlabAllocator, AssembledFrameAllocator, FileWriter, Receiver
+from .core import FakeXEngine, XEngineMetadata
 
 
 def _parse_memory_string(s):
@@ -291,3 +292,138 @@ def run_server(config_filename):
         for server in servers:
             server.stop()
         print("All servers stopped.")
+
+
+def _parse_fake_xengine_config(filename, config):
+    """Parse and validate the 'Fake X-engine' section of a run_server config.
+
+    Returns a dict with keys: beams_per_server, base_beam_id,
+    tcp_connections_per_server, zone_nfreq, zone_freq_edges.
+    """
+
+    n = config['num_servers']
+    fxe_keys = ['beams_per_server', 'base_beam_id', 'tcp_connections_per_server',
+                'zone_nfreq', 'zone_freq_edges']
+
+    missing = [k for k in fxe_keys if k not in config]
+    if missing:
+        raise RuntimeError(
+            f"{filename}: fake X-engine config requires key(s): {', '.join(missing)}\n"
+            f"  (needed for 'pirate_frb run_server -s')"
+        )
+
+    bps = config['beams_per_server']
+    if not isinstance(bps, int) or bps <= 0:
+        raise RuntimeError(f"{filename}: 'beams_per_server' must be a positive integer, got {bps!r}")
+
+    bbi = config['base_beam_id']
+    if not isinstance(bbi, list) or len(bbi) != n:
+        raise RuntimeError(f"{filename}: 'base_beam_id' must be a list of length {n}")
+    for i, v in enumerate(bbi):
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise RuntimeError(f"{filename}: base_beam_id[{i}] must be an integer, got {v!r}")
+
+    tcs = config['tcp_connections_per_server']
+    if not isinstance(tcs, int) or tcs <= 0:
+        raise RuntimeError(f"{filename}: 'tcp_connections_per_server' must be a positive integer, got {tcs!r}")
+
+    znf = config['zone_nfreq']
+    if not isinstance(znf, list) or len(znf) == 0:
+        raise RuntimeError(f"{filename}: 'zone_nfreq' must be a non-empty list of positive integers")
+    for i, v in enumerate(znf):
+        if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+            raise RuntimeError(f"{filename}: zone_nfreq[{i}] must be a positive integer, got {v!r}")
+
+    zfe = config['zone_freq_edges']
+    if not isinstance(zfe, list) or len(zfe) != len(znf) + 1:
+        raise RuntimeError(f"{filename}: 'zone_freq_edges' must be a list of length {len(znf)+1} (len(zone_nfreq)+1)")
+    for i, v in enumerate(zfe):
+        if not isinstance(v, (int, float)):
+            raise RuntimeError(f"{filename}: zone_freq_edges[{i}] must be a number, got {v!r}")
+    for i in range(len(zfe) - 1):
+        if zfe[i] >= zfe[i+1]:
+            raise RuntimeError(f"{filename}: 'zone_freq_edges' must be monotonically increasing, "
+                               f"but zone_freq_edges[{i}]={zfe[i]} >= zone_freq_edges[{i+1}]={zfe[i+1]}")
+
+    return {k: config[k] for k in fxe_keys}
+
+
+def _make_xengine_metadata(fxe_config, server_index):
+    """Create an XEngineMetadata for one FakeXEngine instance."""
+
+    xmd = XEngineMetadata()
+    xmd.zone_nfreq = fxe_config['zone_nfreq']
+    xmd.zone_freq_edges = [float(x) for x in fxe_config['zone_freq_edges']]
+
+    nbeams = fxe_config['beams_per_server']
+    base = fxe_config['base_beam_id'][server_index]
+    xmd.nbeams = nbeams
+    xmd.beam_ids = list(range(base, base + nbeams))
+
+    xmd.validate()
+    return xmd
+
+
+def run_fake_xengine(config_filename):
+    """Main entry point for 'pirate_frb run_server -s'."""
+
+    config = _parse_config(config_filename)
+    n = config['num_servers']
+    fxe_config = _parse_fake_xengine_config(config_filename, config)
+
+    hw = Hardware()
+    nthreads = fxe_config['tcp_connections_per_server']
+
+    print(f"Parsed config: {config_filename}")
+    print(f"  num_servers = {n}")
+    print(f"  tcp_connections_per_server = {nthreads}")
+
+    fake_xengines = []
+
+    try:
+        for i in range(n):
+            ip_addrs = config['data_ip_addrs'][i]
+
+            # Check that all destination IPs for this server route through
+            # NICs on the same physical CPU.
+            vcpu_list = None
+            for addr in ip_addrs:
+                ip = _extract_ip(addr)
+                vl = hw.vcpu_list_from_ip_addr(ip, is_dst_addr=True)
+                cpu = hw.cpu_from_vcpu_list(vl)
+                if vcpu_list is None:
+                    vcpu_list = vl
+                    first_cpu = cpu
+                elif cpu != first_cpu:
+                    raise RuntimeError(
+                        f"FakeXEngine {i}: destination IPs {ip_addrs} route through "
+                        f"NICs on different CPUs (need all on one CPU)"
+                    )
+
+            xmd = _make_xengine_metadata(fxe_config, i)
+
+            print(f"\nFakeXEngine {i}:")
+            print(f"  ip_addrs = {ip_addrs}")
+            print(f"  nthreads = {nthreads}")
+            print(f"  nbeams = {xmd.nbeams}, beam_ids = {xmd.beam_ids}")
+            print(f"  total_nfreq = {xmd.get_total_nfreq()}")
+
+            # Pin thread to sender NIC's CPU for NUMA-local thread creation.
+            with ThreadAffinity(vcpu_list):
+                fxe = FakeXEngine(xmd, ip_addrs, nthreads)
+                fxe.start()
+
+            fake_xengines.append(fxe)
+            print(f"  FakeXEngine {i} started.")
+
+        print(f"\nAll {n} FakeXEngine(s) started. Press Ctrl-C to stop.")
+
+        while True:
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
+        for fxe in fake_xengines:
+            fxe.stop()
+        print("All FakeXEngine(s) stopped.")
