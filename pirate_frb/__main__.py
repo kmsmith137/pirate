@@ -738,9 +738,24 @@ def rpc_status(args):
     def status_thread(addr, client, stop_event):
         """Poll get_status once per second and print summary."""
         try:
+            prev_time = None
+            prev_bytes = None
+
             while not stop_event.is_set():
                 status = client.get_status()
-                print(f"[{addr}] connections={status.num_connections}, bytes={status.num_bytes}, "
+                now = time.monotonic()
+
+                bw_str = ""
+                if prev_time is not None and (now - prev_time) > 0:
+                    delta_bytes = status.num_bytes - prev_bytes
+                    delta_time = now - prev_time
+                    gbps = (delta_bytes * 8) / (delta_time * 1e9)
+                    bw_str = f", bw={gbps:.2f} Gbps"
+
+                prev_time = now
+                prev_bytes = status.num_bytes
+
+                print(f"[{addr}] connections={status.num_connections}, bytes={status.num_bytes}{bw_str}, "
                       f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_finalized},{status.rb_end}], "
                       f"free={status.num_free_frames}")
 
