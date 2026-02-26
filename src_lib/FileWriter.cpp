@@ -23,6 +23,10 @@ FileWriter::FileWriter(const Params &params_) : params(params_)
     xassert(params.num_ssd_threads > 0);
     xassert(params.num_nfs_threads > 0);
 
+    // Create directories, if they don't already exist.
+    pirate::create_directories(params.ssd_root);
+    pirate::create_directories(params.nfs_root);
+
     // All members are initialized before this point.
     // Now safe to start the worker threads.
     for (long i = 0; i < params.num_ssd_threads; i++)
@@ -43,8 +47,6 @@ FileWriter::~FileWriter()
     for (auto &t : nfs_threads)
         if (t.joinable())
             t.join();
-
-
 }
 
 
