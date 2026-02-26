@@ -60,9 +60,11 @@ rpc_ip_addrs:
 # 'ssd_dirs' and 'ssd_devices' are lists of length num_servers.
 # If an ssd_dir isn't backed by the corresponding ssd_device, then an exception is thrown.
 # (This is intended to catch misconfiguration where an SSD is not mounted.)
+#
+# Note: on the chord frb nodes, /dev/nvme1n1 is on CPU0, and /dev/nvme0n1 is on CPU1.
 
-ssd_dirs: [ '/scratch', '/scratch2' ]
-ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p1' ]
+ssd_dirs: [ '/scratch2', '/scratch' ]
+ssd_devices: [ '/dev/nvme1n1p1', '/dev/nvme0n1p2' ]
 ssd_threads_per_server: 4
 
 # Currently, all servers write to the same nfs_dir (i.e. 'nfs_dir' is a string,
