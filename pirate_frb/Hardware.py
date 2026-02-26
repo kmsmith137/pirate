@@ -142,7 +142,12 @@ class Hardware:
             # Exclude loop devices.
             if device.startswith('loop'):
                 continue
-            
+
+            # Exclude NVMe controller-specific paths (e.g. nvme0c0n1).
+            # These duplicate the namespace device (e.g. nvme0n1) with the same PCIe address.
+            if re.fullmatch(r'nvme\d+c\d+n\d+', device):
+                continue
+
             # Read the uevent file to determine the device type.
             uevent_file = f'/sys/class/block/{device}/uevent'
             if os.path.exists(uevent_file):
