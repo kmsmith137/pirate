@@ -281,7 +281,13 @@ def run_server(config_filename):
             servers.append(server)
             print(f"  Server {i} started.")
 
-        print(f"\nAll {n} server(s) started. Press Ctrl-C to stop.")
+        rpc_addrs = ' '.join(config['rpc_ip_addrs'])
+        print(f"\nTo send fake data to server(s):  pirate_frb run_server -s {config_filename}")
+        print(f"To monitor status:               pirate_frb rpc_status {rpc_addrs}")
+        print(f"To write random data:            pirate_frb rpc_write {rpc_addrs}")
+        
+        print(f"\nReminder: the only way to interact with running server(s) is via RPC, see above.")
+        print(f"All {n} server(s) started. Press Ctrl-C to stop.")
 
         while True:
             time.sleep(1)
@@ -352,6 +358,7 @@ def _make_xengine_metadata(fxe_config, server_index):
     """Create an XEngineMetadata for one FakeXEngine instance."""
 
     xmd = XEngineMetadata()
+    xmd.version = 1
     xmd.zone_nfreq = fxe_config['zone_nfreq']
     xmd.zone_freq_edges = [float(x) for x in fxe_config['zone_freq_edges']]
 
