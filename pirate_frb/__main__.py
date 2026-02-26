@@ -726,21 +726,21 @@ def show_asdf(args):
 
 
 def parse_rpc_status(subparsers):
-    help_text = "Connect to FrbServer and stream status + filenames"
+    help_text = "Connect to FrbServer(s) and stream status + filenames"
     parser = subparsers.add_parser("rpc_status", help=help_text, description=help_text)
-    parser.add_argument('server_address', help='Server address (e.g. 127.0.0.1:6000)')
+    parser.add_argument('server_addresses', nargs='+', metavar='ADDRESS', help='Server address(es) (e.g. 127.0.0.1:6000)')
 
 
 def rpc_status(args):
     import threading
     from .rpc import FrbClient
 
-    def status_thread(client, stop_event):
+    def status_thread(addr, client, stop_event):
         """Poll get_status once per second and print summary."""
         try:
             while not stop_event.is_set():
                 status = client.get_status()
-                print(f"[status] connections={status.num_connections}, bytes={status.num_bytes}, "
+                print(f"[{addr}] connections={status.num_connections}, bytes={status.num_bytes}, "
                       f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_finalized},{status.rb_end}], "
                       f"free={status.num_free_frames}")
 
@@ -749,10 +749,10 @@ def rpc_status(args):
                         return
                     time.sleep(0.1)
         except Exception as e:
-            print(f"[status] ERROR: {e}", file=sys.stderr)
+            print(f"[{addr}] ERROR: {e}", file=sys.stderr)
             stop_event.set()
 
-    def subscribe_thread(client, stop_event):
+    def subscribe_thread(addr, client, stop_event):
         """Subscribe to filenames and print as they arrive."""
         try:
             # subscribe_files() yields (filename, error_message) pairs.
@@ -761,26 +761,31 @@ def rpc_status(args):
                 if stop_event.is_set():
                     return
                 if error_message:
-                    print(f"[subscribe_files] {filename} failed: {error_message}")
+                    print(f"[{addr}] {filename} failed: {error_message}")
                 else:
-                    print(f"[subscribe_files] {filename} received")
+                    print(f"[{addr}] {filename} received")
         except Exception as e:
-            print(f"[subscribe_files] ERROR: {e}", file=sys.stderr)
+            print(f"[{addr}] subscribe_files ERROR: {e}", file=sys.stderr)
             stop_event.set()
 
-    client = FrbClient(args.server_address)
+    clients = []
+    for addr in args.server_addresses:
+        clients.append((addr, FrbClient(addr)))
 
-    print(f"RPC client connected to {args.server_address}")
+    print(f"RPC client(s) connected to {', '.join(args.server_addresses)}")
     print("Running get_status (1/sec) and subscribe_files. Press Ctrl-C to stop.")
     print()
 
     stop_event = threading.Event()
+    threads = []
 
-    t_status = threading.Thread(target=status_thread, args=(client, stop_event), daemon=True)
-    t_subscribe = threading.Thread(target=subscribe_thread, args=(client, stop_event), daemon=True)
-
-    t_status.start()
-    t_subscribe.start()
+    for addr, client in clients:
+        t = threading.Thread(target=status_thread, args=(addr, client, stop_event), daemon=True)
+        t.start()
+        threads.append(t)
+        t = threading.Thread(target=subscribe_thread, args=(addr, client, stop_event), daemon=True)
+        t.start()
+        threads.append(t)
 
     try:
         while not stop_event.is_set():
@@ -789,11 +794,11 @@ def rpc_status(args):
         print("\nStopping...")
         stop_event.set()
 
-    t_status.join(timeout=1.0)
-    t_subscribe.join(timeout=1.0)
-
-    client.close()
-    print("RPC client stopped.")
+    for t in threads:
+        t.join(timeout=1.0)
+    for _, client in clients:
+        client.close()
+    print("RPC client(s) stopped.")
 
     if stop_event.is_set():
         sys.exit(1)
