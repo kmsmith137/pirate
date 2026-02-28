@@ -86,7 +86,8 @@ for _action in _parser._subparsers._actions:
     if not hasattr(_action, '_choices_actions'):
         continue
     for _choice in _action._choices_actions:
-        _lines.append(f'| `{_choice.dest}` | {_choice.help or ""} |')
+        _help = re.sub(r'(\w+_\w+)', r'`\1`', _choice.help or "")
+        _lines.append(f'| `{_choice.dest}` | {_help} |')
 
 # Write the summary table and per-subcommand argparse directives to _cli_generated.md.
 _cli_gen_path = os.path.join(os.path.dirname(__file__), '_cli_generated.md')
@@ -144,6 +145,13 @@ html_theme_options = {
         "color-brand-content": "#0056b3",
     },
 }
+
+# -- Suppress warnings -------------------------------------------------------
+# The sphinxarg.ext argparse directive renders help text as RST, which causes
+# spurious "emphasis start-string" warnings for identifiers containing underscores
+# (e.g. write_files). The rendered output is fine, so suppress the warning.
+
+suppress_warnings = ['docutils']
 
 # -- MyST configuration ------------------------------------------------------
 

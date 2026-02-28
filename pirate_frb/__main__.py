@@ -309,8 +309,28 @@ def make_subbands(args):
 
 
 def parse_hwtest(subparsers):
+    import argparse, textwrap
     help_text = "Run hardware test using YAML config file (use -s to send data instead of receiving)"
-    parser = subparsers.add_parser("hwtest", help=help_text, description=help_text)
+    description = textwrap.dedent("""\
+        Run hardware test using YAML config file (use -s to send data instead of receiving).
+
+        Runs and times parallel synthetic loads: network IO, disk IO, PCIe transfers
+        between GPU and host, GPU compute kernels, CPU compute kernels, host memory
+        bandwidth.
+
+        Example networking-only run:
+
+          # On cf05. The test will pause after "listening for TCP connections".
+          python -m pirate_frb hwtest configs/hwtest/cf05_net64.yml
+
+          # On cf00. Send to all four IP addresses on cf05.
+          python -m pirate_frb hwtest -s configs/hwtest/cf05_net64.yml
+
+        See configs/hwtest/*.yml for more examples.""")
+    parser = subparsers.add_parser(
+        "hwtest", help=help_text, description=description,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument('config_file', help='Path to YAML config file')
     parser.add_argument('-t', '--time', type=float, default=20, help='Number of seconds to run test (default 20)')
     parser.add_argument('-s', '--send', action='store_true', help='Send data to test server (uses ip_addrs from config file)')
