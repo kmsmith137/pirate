@@ -89,27 +89,23 @@ for _action in _parser._subparsers._actions:
         _help = re.sub(r'(\w+_\w+)', r'`\1`', _choice.help or "")
         _lines.append(f'| `{_choice.dest}` | {_help} |')
 
-# Write the summary table and per-subcommand argparse directives to _cli_generated.md.
+# Write the summary table and per-subcommand help to _cli_generated.md.
 _cli_gen_path = os.path.join(os.path.dirname(__file__), '_cli_generated.md')
 with open(_cli_gen_path, 'w') as _fout:
     # Summary table
     _fout.write('## Subcommands\n\n')
     _fout.write('\n'.join(_lines) + '\n\n')
-    # Per-subcommand detailed docs
+    # Per-subcommand detailed docs (captured from argparse format_help)
     _fout.write('## Detailed usage\n\n')
     for _action in _parser._subparsers._actions:
         if not hasattr(_action, '_choices_actions'):
             continue
         for _choice in _action._choices_actions:
             _name = _choice.dest
+            _subparser = _action.choices[_name]
+            _subparser.prog = f'pirate_frb {_name}'
             _fout.write(f'### {_name}\n\n')
-            _fout.write('```{eval-rst}\n')
-            _fout.write('.. argparse::\n')
-            _fout.write('   :module: pirate_frb.__main__\n')
-            _fout.write('   :func: get_parser\n')
-            _fout.write('   :prog: pirate_frb\n')
-            _fout.write(f'   :path: {_name}\n')
-            _fout.write('```\n\n')
+            _fout.write(f'```text\n{_subparser.format_help()}```\n\n')
 
 # -- Project information -----------------------------------------------------
 
@@ -124,7 +120,6 @@ release = '1.0.0'
 extensions = [
     'sphinx.ext.intersphinx',
     'myst_parser',
-    'sphinxarg.ext',
 ]
 
 templates_path = ['_templates']
@@ -145,13 +140,6 @@ html_theme_options = {
         "color-brand-content": "#0056b3",
     },
 }
-
-# -- Suppress warnings -------------------------------------------------------
-# The sphinxarg.ext argparse directive renders help text as RST, which causes
-# spurious "emphasis start-string" warnings for identifiers containing underscores
-# (e.g. write_files). The rendered output is fine, so suppress the warning.
-
-suppress_warnings = ['docutils']
 
 # -- MyST configuration ------------------------------------------------------
 
