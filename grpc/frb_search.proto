@@ -2,6 +2,11 @@ syntax = "proto3";
 
 package frb.search.v1;
 
+// Currently, there isn't much documentation for RPCs.
+// Comments in the .proto file are all we've got!
+// If you're reading this, please feel free to make improvements :)
+
+
 // Service definition
 service FrbSearch {
   // Returns the current status of the search engine

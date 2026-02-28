@@ -14,7 +14,7 @@
 
 ## gRPC
 
-- Proto files live in `grpc/` (currently just `grpc/frb_search.proto`).
+- Proto files live in `grpc/` (currently just [`grpc/frb_search.proto`](../grpc/frb_search.proto)).
 - `make grpc` generates both C++ and Python files from `.proto` files.
 - C++ generated files (`*.pb.{h,cc}`, `*.grpc.pb.{h,cc}`) are output to `grpc/`.
 - Python generated files (`*_pb2.py`, `*_pb2_grpc.py`) are output to `pirate_frb/rpc/grpc/`.

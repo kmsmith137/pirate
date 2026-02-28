@@ -15,6 +15,7 @@ cli
 notes/build
 notes/hardware
 notes/network_protocol
+_grpc_generated
 ```
 
 ```{toctree}

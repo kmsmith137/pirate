@@ -37,12 +37,38 @@ if os.path.isdir(_configs_src):
                     _fout.write('---\norphan: true\n---\n\n')
                     _fout.write(f'# {_fname}\n\n```yaml\n{_yml_content}```\n')
 
-# Rewrite .yml/.yaml links in the copied notes to point to the rendered .md pages.
+# Copy grpc/*.proto into docs/source/grpc/ and generate rendered .md pages.
+_grpc_src = os.path.join(_repo_root, 'grpc')
+_grpc_dst = os.path.join(os.path.dirname(__file__), 'grpc')
+os.makedirs(_grpc_dst, exist_ok=True)
+
+_proto_files = []
+for _f in sorted(glob.glob(os.path.join(_grpc_src, '*.proto'))):
+    _fname = os.path.basename(_f)
+    shutil.copy2(_f, _grpc_dst)
+    _proto_files.append(_fname)
+    _proto_path = os.path.join(_grpc_dst, _fname)
+    with open(_proto_path) as _fin:
+        _proto_content = _fin.read()
+    with open(_proto_path + '.md', 'w') as _fout:
+        _fout.write(f'# {_fname}\n\n```protobuf\n{_proto_content}\n```\n')
+
+# Generate a toctree page listing all proto files.
+_grpc_gen_path = os.path.join(os.path.dirname(__file__), '_grpc_generated.md')
+with open(_grpc_gen_path, 'w') as _fout:
+    _fout.write('# gRPC Protocol Definitions\n\n')
+    _fout.write('```{toctree}\n')
+    for _fname in _proto_files:
+        _fout.write(f'grpc/{_fname}\n')
+    _fout.write('```\n')
+
+# Rewrite .yml/.yaml/.proto links in the copied notes to point to the rendered .md pages.
 import re
 for _f in glob.glob(os.path.join(_notes_dst, '*.md')):
     with open(_f) as _fin:
         _text = _fin.read()
     _new_text = re.sub(r'\(([^)]*\.ya?ml)\)', lambda m: f'({m.group(1)}.md)', _text)
+    _new_text = re.sub(r'\(([^)]*\.proto)\)', lambda m: f'({m.group(1)}.md)', _new_text)
     if _new_text != _text:
         with open(_f, 'w') as _fout:
             _fout.write(_new_text)
