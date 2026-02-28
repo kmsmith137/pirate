@@ -269,22 +269,23 @@ def show_kernels(args):
 
 def parse_make_subbands(subparsers):
     help_text = "A utility for maintaining makefile_helper.py"
-    parser = subparsers.add_parser(
-        "make_subbands",
-        help = help_text,
-        description = help_text,
-        formatter_class = argparse.RawDescriptionHelpFormatter,   # multi-line epilog
-        epilog = textwrap.dedent("""
-        Example usage:
-
-           # Specify frequency min, max, and threshold
-           python -m make_subbands 300 1500 0.2
-           python -m make_subbands 400 800 0.1 -r 4
+    description = textwrap.dedent("""\
+        A utility for maintaining makefile_helper.py.
 
         The 'threshold' argument is a "target" fractional bandwidth. For example, if threshold=0.2,
         then the make_subbands command will try to make bands whose fractional bandwidth is <= 20%.
         However, some subbands may be wider than the threshold, due to technical constraints.
-        """)
+
+        Example usage::
+
+           # Specify frequency min, max, and threshold
+           python -m make_subbands 300 1500 0.2
+           python -m make_subbands 400 800 0.1 -r 4""")
+    parser = subparsers.add_parser(
+        "make_subbands",
+        help = help_text,
+        description = description,
+        formatter_class = argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument('fmin', type=float, help='Minimum frequency (MHz)')
@@ -310,7 +311,7 @@ def make_subbands(args):
 
 def parse_hwtest(subparsers):
     import argparse, textwrap
-    help_text = "Run hardware test using YAML config file (use -s to send data instead of receiving)"
+    help_text = "Run hardware test from hwtest.yml (use -s to send data instead of receiving)"
     description = textwrap.dedent("""\
         Run hardware test using YAML config file (use -s to send data instead of receiving).
 
@@ -318,7 +319,7 @@ def parse_hwtest(subparsers):
         between GPU and host, GPU compute kernels, CPU compute kernels, host memory
         bandwidth.
 
-        Example networking-only run:
+        Example networking-only run::
 
           # On cf05. The test will pause after "listening for TCP connections".
           python -m pirate_frb hwtest configs/hwtest/cf05_net64.yml
