@@ -47,31 +47,6 @@ brainstorming sessions with Dustin.)
 
 We decided to deprioritze these future features, until we make more progress on
 the downstream code, and have a better sense for which features are most useful.
-  
-## Hwtest and 'class Hardware'
-  
-  - I hacked up some python code (`class Hardware`) to query hardware
-    and work out which devices are associated with each CPU.
-    You can run this code with `python -m pirate_frb show_hardware`.
-    This code is currently pretty terrible -- feel free to improve it.
-
-    The `Hardware` class is used when starting the real-time server,
-    to decide which hardware to associate with each of the two `FrbServer`
-    instances. This is all currently done from python.
-
-  - `hwtest`: this code was written early, when we were benchmarking test nodes.
-    It runs and times parallel synthetic loads: network IO, disk IO, PCIe transfers
-    between GPU host, GPU compute kernels, CPU compute kernels, host memory bandwidth.
-
-    Here's an example networking-only run:
-    ```
-    # On cf05. The test will pause after "listening for TCP connections".
-    python -m pirate_frb hwtest configs/hwtest/cf05_net64.yml
-
-    # On cf00. Send to all four IP addresses on cf05
-    python -m pirate_frb hwtest -s configs/hwtest/cf05_net64.yml
-    ```
-    See `configs/hwtest/*.yml` for more examples.
 
 ## Software engineering philosophy
 
