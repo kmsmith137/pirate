@@ -18,7 +18,7 @@ On a CHIME/CHORD machine, this conda environment works for me:
 ```
 Note: I recommend the `miniforge` fork of conda, not the original conda.
 
-2. Install the `ksgpu` library (See instructions at https://github.com/kmsmith137/ksgpu).
+2. Install the `ksgpu` library (See instructions at https://github.com/kmsmith137/ksgpu/tree/chord).
 (This library was previously named `gputils`, but I renamed it since that name was taken on pypi.)
 
 **Warning.** If you're building `pirate`, then you need the `chord` branch of `ksgpu`,

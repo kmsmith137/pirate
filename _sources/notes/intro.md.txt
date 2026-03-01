@@ -11,7 +11,7 @@ Some notes/caveats:
     linux machine with **a physical GPU**, and the cuda toolkit installed.
     I hope to improve this in the future!
 
-  - Uses the [`ksgpu`](https://github.com/kmsmith137/ksgpu) helper library,
+  - Uses the [`ksgpu`](https://github.com/kmsmith137/ksgpu/tree/chord) helper library,
     but the **chord branch**, not the main branch. (I'm currently struggling
     with branch divergence between unrelated projects -- will fix this some
     day.)
