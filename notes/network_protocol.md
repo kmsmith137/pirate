@@ -27,4 +27,4 @@ The network protocol for each of these connections is as follows:
   We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
 
 NOTE: future versions of this file format will add float16 offsets and scales, so that the int4 data can be
-converted to intensities (which are always positive). Version 1 of this file fomat is a placeholder.
+converted to intensities (which are always positive). Version 1 of this file format is a placeholder.

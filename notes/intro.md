@@ -16,15 +16,16 @@ Some notes/caveats:
     with branch divergence between unrelated projects -- will fix this some
     day.)
     
-Pirate is a real-time FRB seach written in C++ / cuda / python.
+Pirate is a real-time FRB search written in C++ / cuda / python.
 
   - Receives data via TCP from the "upstream" X-engine. The network protocol
     is [here](network_protocol.md). The protocol includes metadata -- the
     format is defined by [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml).
     Details of the protocol and metadata will change in the future.
 
-  - Dynamic configuration: the X-engine metadata ([`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml)) includes important
-    parameters such as the frequency upchannelization and beam layout.
+  - Dynamic configuration: the X-engine metadata
+    (see [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml))
+    includes important parameters such as the frequency upchannelization and beam layout.
     The FRB search "dynamically" configures itself when this data is
     received from the X-engine.
 
@@ -49,13 +50,13 @@ Pirate is a real-time FRB seach written in C++ / cuda / python.
   
   - The FRB server defines [gRPC service(s)](../grpc/frb_search.proto) for things like control, monitoring,
     and triggered data writes. All interaction with a running server is via gRPC.
-    There is a python client (`pirate_frb.RpcClient') but not a C++ client
+    There is a python client (`pirate_frb.RpcClient`) but not a C++ client
     (not sure if we'll need one).
     
   - The FRB server stores data sent by the X-engine in a ring buffer, and defines
     RPCs for saving data to disk, via a two-stage process where data is written
     to a local high-bandwidth SSD to relieve short-term memory pressure,
-    then "trickled" to an NFS sever for long-term storage. I'm currently
+    then "trickled" to an NFS server for long-term storage. I'm currently
     using Erik's `asdf-cxx` library to write files.
   
   - The FRB server does real-time RFI masking (not implemented yet but it will

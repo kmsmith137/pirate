@@ -14,7 +14,7 @@
 
 ## ksgpu
 
-Uses the `ksgpu` helper library, esepcially the Array class (ksgpu/Array.hpp), memory managment (ksgpu/mem_utils.hpp),
+Uses the `ksgpu` helper library, especially the Array class (ksgpu/Array.hpp), memory managment (ksgpu/mem_utils.hpp),
 and xassert macros (ksgpu/xassert.hpp, see below).
 
 CRITIAL: please complain if you don't see the ksgpu library in the cursor/claude workspace.

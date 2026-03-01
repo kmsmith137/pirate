@@ -31,7 +31,7 @@
 
   - In full CHORD, we'll have 64 X-engine nodes and 14 FRB nodes.
     We're currently planning to use TCP for communication, but we
-    might switch to RDMA in the future, if we run into performacne issues.
+    might switch to RDMA in the future, if we run into performance issues.
   
   - As described above, each FRB node can be viewed as two half-nodes
     which processes an independent set of beams. Similarly, each X-engine

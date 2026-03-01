@@ -64,16 +64,20 @@ bullet points:
   - Write placeholder grouping code. Since there is no RFI for now, this
     can be pretty trivial.
 
-  - Design the gRPC interface between grouping code and thw downstream
+  - Design the gRPC interface between grouping code and the downstream
     sifting code. (Or did Dustin do this already?)
 
   - There are a lot of todo items related to the sifting code, database,
     and web viewer. Dustin is keeping track of those -- please ask Dustin
     if you're interested!
 
+  - There are a lot of todo items on the X-engine, needed to generate
+    and send beamformed data. (This is being handled by some combination
+    of Erik, Geoff, Dustin, Andre, Jim.)
+
 ## Goals for a pathfinder search
 
 Everything needed for the CHORD pathfinder: dedisperser should handle an
 RFI mask, library of RFI transforms, non-placeholder grouping code, lots
-of work on sifter/databse/web.
+of work on sifter/database/web.
 

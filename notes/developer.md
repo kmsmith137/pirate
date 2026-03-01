@@ -52,6 +52,43 @@ pirate_frb run_server -s configs/frb_server/cf05_production.yml
 pirate_frb rpc_write 10.222.3.5:6000 10.222.3.5:6001
 ```
 
+## ksgpu helper library
+
+Pirate uses `ksgpu`, a standalone helper library for CUDA/C++ development
+([github](https://github.com/kmsmith137/ksgpu/tree/chord), note: pirate uses the `chord` branch, not `main`).
+Here are the most heavily used features:
+
+- **`ksgpu::Array<T>`** (`ksgpu/Array.hpp`): A flexible N-dimensional array class.
+  Supports GPU, pinned host, and regular host memory. Key methods include
+  `.fill()`, `.cast<T>()`, `.on_gpu()`, `.is_fully_contiguous()`, and `.shape_str()`.
+  Most GPU data in pirate lives in `Array` objects.
+
+- **Memory allocation flags (`af_*`)** (`ksgpu/mem_utils.hpp`): Bitwise flags that control
+  how memory is allocated. Common flags: `af_gpu` (device memory), `af_rhost` (pinned host),
+  `af_uhost` (unpinned host), `af_zero` (zero-initialize), `af_random` (random-initialize),
+  `af_guard` (add guard regions to detect buffer overruns), `af_mmap_huge` (huge pages).
+  Flags are combined with `|`, e.g. `af_gpu | af_zero`.
+
+- **`xassert` macros** (`ksgpu/xassert.hpp`): Like `assert()`, but throw exceptions
+  with informative error messages. Includes `xassert()`, `xassert_eq()`, `xassert_lt()`,
+  `xassert_divisible()`, `xassert_shape_eq()`, etc. See [C++/cuda guidelines](cpp.md) for
+  detailed usage and examples.
+
+- **`ksgpu::Dtype`**: Represents a data type (e.g. float32, float16) at runtime.
+  Used throughout the codebase to support kernels that operate on multiple precisions.
+
+- **Device FP16 utilities** (`ksgpu/device_fp16.hpp`): Low-level GPU functions for
+  half-precision arithmetic, heavily used in performance-critical kernels.
+
+- **`CUDA_CALL()` macro**: Wraps CUDA API calls with error checking.
+
+- **`ksgpu::CpuThreadPool`**: Thread pool for parallelizing CPU work.
+
+- **`ksgpu::KernelTimer`**: Benchmarking tool for timing GPU kernels.
+
+- **Miscellaneous utilities**: `ksgpu::rand_int()`, `ksgpu::rand_uniform()`,
+  `ksgpu::nbytes_to_str()`, `ksgpu::tuple_str()`.
+
 ## Chunks, batches, frames, and segments
 
 Throughout the code:
@@ -60,6 +97,61 @@ Throughout the code:
 - A "batch" (or "beam batch") is a range of **beam indices**. The batch size (e.g. 1,2,4) is defined in `DedispersionConfig::beams_per_batch`.
 - A "frame" is a (chunk,beam) pair (not a (chunk,batch) pair!). Frames are used in `class MegaRingbuf`, and will also be used in the front-end server code and its intensity ring buffer.
 - A "segment" refers to a 128-byte, memory-contiguous subset of any array in GPU memory. Segments are used in low-level GPU kernels, and data structures which are GPU kernel adjacent (e.g. `DedispersionPlan`, `MegaRingbuf`).
+
+## Allocators
+
+The high-level goal here is to arrange things so that the server makes a single giant call
+to `malloc()` when it starts, with hugepages enabled. All data structures are "backed"
+by this giant memory region, and memory is recycled internally without needing to call
+`free() + malloc()`.
+
+This is challenging in part because of **dynamic configuration**: the X-engine metadata
+(see [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml))
+includes important parameters such as the frequency upchannelization and beam layout.
+The FRB search "dynamically" configures itself when this data is received from the X-engine.
+
+Currently, we implement the following Allocator classes for managing memory internally.
+This API is still in flux, and will probably change in the future.
+
+- **`BumpAllocator`**: A simple linear allocator. Pre-allocates a large block of memory
+  (GPU or host), then hands out 128-byte-aligned pointers sequentially. Memory is never
+  freed individually — everything is released when the allocator is destroyed.
+
+- **`SlabAllocator`**: A pool allocator. Divides a pre-allocated memory region into
+  fixed-size "slabs" that are recycled via reference counting — when a slab's refcount
+  drops to zero, it is returned to the free list.
+
+- **`AssembledFrameAllocator`**: A multi-consumer frame allocator built on `SlabAllocator`.
+  Manages `AssembledFrame` objects (host memory, int4 data) that hold beamformed intensity
+  data received from the X-engine. 
+
+## Networking
+
+
+The most important classes are:
+
+- **`Receiver`**: Listens for TCP connections from upstream X-engine nodes and assembles
+  incoming data into `AssembledFrame` objects. Implements the
+  [X->FRB network protocol](network_protocol.md), which includes YAML
+  metadata ([`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml)).
+  Each `Receiver` corresponds to one `(ip_addr, tcp_port)` pair.
+
+- **`FrbServer`**: High-level orchestrator that manages one or more `Receiver` instances,
+  a ring buffer of assembled frames, and a `FileWriter` for persistence. Exposes the
+  [gRPC service](../grpc/frb_search.proto).
+
+  In a multi-CPU machine, each CPU runs a separate `FrbServer` with
+  its own receivers, ring buffer, and RPC address (see
+  [`configs/frb_server/cf05_production.yml`](../configs/frb_server/cf05_production.yml)).
+  
+  There can be a many-to-one mapping between `Receivers` and `FrbServers`, if frequency
+  channels (i.e. X-engine nodes) are split between multiple NICs. (This is the current
+  plan for full CHORD, where we expect to split X->backend traffic between two switches.)
+
+- **`FakeXEngine`**: A testing class that simulates upstream X-engine nodes sending data
+  over TCP. Spawns multiple worker threads that each open a TCP connection, so that a
+  single `FakeXEngine` node can simulate multiple X-engine nodes.
+  Used for end-to-end testing (e.g. `pirate_frb run_server -s`).
 
 ## File writing
 
@@ -81,7 +173,7 @@ brainstorming sessions with Dustin.)
   
   - The FRB server uses a two-stage write path: first, data is written
     to a local high-bandwidth SSD to relieve short-term memory pressure,
-    then "trickled" to an NFS sever for long-term storage.
+    then "trickled" to an NFS server for long-term storage.
 
   - This two-stage process makes sense because the total throughput of the FRB
     server (in GB/s received from the X-engine) is less than SSD bandwidth, but
@@ -90,14 +182,14 @@ brainstorming sessions with Dustin.)
     always save data quickly enough to make room for new data.
 
   - Idea for a future feature: use the SSDs in the FRB search nodes as a distributed
-    cache for the NFS serer. Each node just has to keep the most recently written ~TB
+    cache for the NFS server. Each node just has to keep the most recently written ~TB
     of data on its SSD.
 
   - Idea for a future feature: if the FRB node crashes, and some files have been
     written to SSD but not yet written to NFS, then write these files to NFS when
     the server is restarted.
 
-We decided to deprioritze these future features, until we make more progress on
+We decided to deprioritize these future features, until we make more progress on
 the downstream code, and have a better sense for which features are most useful.
 
 ## Software engineering philosophy
@@ -110,7 +202,7 @@ the downstream code, and have a better sense for which features are most useful.
     
     This is a hard problem to solve and there's no easy answer!
     Most of the bullet points below are thoughts on how to win the battle
-    against runaway covercomplexity.
+    against runaway overcomplexity.
 
   - Before implementing new features, I find it ultra-useful to have blackboard
     discussions with other developers, to brainstorm options. A good question
@@ -147,7 +239,7 @@ the downstream code, and have a better sense for which features are most useful.
     You should pay the most attention to bugs that are very unlikely (e.g. race conditions,
     corner cases), which can be a little counterintuitive.
 
-  - I'm not a believer in engineering practices that impede "flow state", such as CI, post-commit
+  - I'm not a believer in engineering practices that create "friction", such as CI, post-commit
     hooks, code reviews, or pull requests. (Needless to say, everyone should run
     tests frequently, and get feedback from others in situations where it makes sense.)
   
