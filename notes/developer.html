@@ -1,0 +1,583 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="CLI reference" href="../cli.html" /><link rel="prev" title="To do list" href="todo.html" />
+
+    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
+        <title>Developer notes - pirate_frb 1.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f8f8f8;
+  --color-code-foreground: black;
+  --color-brand-primary: #007bff;
+  --color-brand-content: #0056b3;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
+<label class="overlay sidebar-overlay" for="__navigation">
+  <div class="visually-hidden">Hide navigation sidebar</div>
+</label>
+<label class="overlay toc-overlay" for="__toc">
+  <div class="visually-hidden">Hide table of contents sidebar</div>
+</label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <div class="visually-hidden">Toggle site navigation sidebar</div>
+        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle">
+          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <div class="visually-hidden">Toggle table of contents sidebar</div>
+        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  
+  <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Developer notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++/cuda guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/notes/developer.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle">
+              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <div class="visually-hidden">Toggle table of contents sidebar</div>
+            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="developer-notes">
+<h1>Developer notes<a class="headerlink" href="#developer-notes" title="Link to this heading">¶</a></h1>
+<section id="some-fun-cli-examples">
+<h2>Some fun CLI examples:<a class="headerlink" href="#some-fun-cli-examples" title="Link to this heading">¶</a></h2>
+<section id="run-unit-tests">
+<h3>Run unit tests<a class="headerlink" href="#run-unit-tests" title="Link to this heading">¶</a></h3>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Run all unit tests 5 times (default is 100!)</span>
+<span class="c1"># See &#39;pirate_frb test --help&#39; for many more flags.</span>
+<span class="n">pirate_frb</span> <span class="n">test</span> <span class="o">-</span><span class="n">n</span> <span class="mi">5</span>
+</pre></div>
+</div>
+</section>
+<section id="running-a-toy-server">
+<h3>Running a toy server<a class="headerlink" href="#running-a-toy-server" title="Link to this heading">¶</a></h3>
+<p>To run a toy server instance locally, run the following commands in separate terminal windows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Start the FRB server (listens for X-engine data and gRPC requests).</span>
+<span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span>
+
+<span class="c1"># Monitor server status (connections, bytes received, ring buffer state) and filenames.</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_status</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+
+<span class="c1"># Send fake X-engine data to the server.</span>
+<span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="o">-</span><span class="n">s</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span>
+
+<span class="c1"># Send a write_files RPC (saves data to disk for randomly chosen beams/time range).</span>
+<span class="c1"># Filenames will be printed in the &#39;rpc_status&#39; process as they are written.</span>
+<span class="c1"># Files appear in /dev/shm/pirate_nfs, and will be deleted when the server exits.</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_write</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+</pre></div>
+</div>
+</section>
+<section id="running-a-production-server-cf00-cf05">
+<h3>Running a production server (cf00/cf05)<a class="headerlink" href="#running-a-production-server-cf00-cf05" title="Link to this heading">¶</a></h3>
+<p>To run a production server on cf05 (with cf00 sending fake X-engine data),
+run the following commands in separate terminal windows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># On cf05. Start the FRB server (two servers, one per CPU, full CHORD parameters).</span>
+<span class="c1"># Files are written through local SSD cache to NFS (/mnt/cs00/data).</span>
+<span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">cf05_production</span><span class="o">.</span><span class="n">yml</span>
+
+<span class="c1"># On cf00 or cf05. Monitor server status and filenames.</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_status</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+
+<span class="c1"># On cf00. Send fake X-engine data to cf05 (128 TCP connections per server).</span>
+<span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="o">-</span><span class="n">s</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">cf05_production</span><span class="o">.</span><span class="n">yml</span>
+
+<span class="c1"># On cf00 or cf05. Send a write_files RPC to both servers.</span>
+<span class="c1"># Filenames will be printed in the &#39;rpc_status&#39; process as they are written.</span>
+<span class="c1"># Files appear on the real NFS server: /mnt/cs00/data/{user}/{date}</span>
+<span class="n">pirate_frb</span> <span class="n">rpc_write</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="ksgpu-helper-library">
+<h2>ksgpu helper library<a class="headerlink" href="#ksgpu-helper-library" title="Link to this heading">¶</a></h2>
+<p>Pirate uses <code class="docutils literal notranslate"><span class="pre">ksgpu</span></code>, a standalone helper library for CUDA/C++ development
+(<a class="reference external" href="https://github.com/kmsmith137/ksgpu/tree/chord">github</a>, note: pirate uses the <code class="docutils literal notranslate"><span class="pre">chord</span></code> branch, not <code class="docutils literal notranslate"><span class="pre">main</span></code>).
+Here are the most heavily used features:</p>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ksgpu::Array&lt;T&gt;</span></code></strong> (<code class="docutils literal notranslate"><span class="pre">ksgpu/Array.hpp</span></code>): A flexible N-dimensional array class.
+Supports GPU, pinned host, and regular host memory. Key methods include
+<code class="docutils literal notranslate"><span class="pre">.fill()</span></code>, <code class="docutils literal notranslate"><span class="pre">.cast&lt;T&gt;()</span></code>, <code class="docutils literal notranslate"><span class="pre">.on_gpu()</span></code>, <code class="docutils literal notranslate"><span class="pre">.is_fully_contiguous()</span></code>, and <code class="docutils literal notranslate"><span class="pre">.shape_str()</span></code>.
+Most GPU data in pirate lives in <code class="docutils literal notranslate"><span class="pre">Array</span></code> objects.</p></li>
+<li><p><strong>Memory allocation flags (<code class="docutils literal notranslate"><span class="pre">af_*</span></code>)</strong> (<code class="docutils literal notranslate"><span class="pre">ksgpu/mem_utils.hpp</span></code>): Bitwise flags that control
+how memory is allocated. Common flags: <code class="docutils literal notranslate"><span class="pre">af_gpu</span></code> (device memory), <code class="docutils literal notranslate"><span class="pre">af_rhost</span></code> (pinned host),
+<code class="docutils literal notranslate"><span class="pre">af_uhost</span></code> (unpinned host), <code class="docutils literal notranslate"><span class="pre">af_zero</span></code> (zero-initialize), <code class="docutils literal notranslate"><span class="pre">af_random</span></code> (random-initialize),
+<code class="docutils literal notranslate"><span class="pre">af_guard</span></code> (add guard regions to detect buffer overruns), <code class="docutils literal notranslate"><span class="pre">af_mmap_huge</span></code> (huge pages).
+Flags are combined with <code class="docutils literal notranslate"><span class="pre">|</span></code>, e.g. <code class="docutils literal notranslate"><span class="pre">af_gpu</span> <span class="pre">|</span> <span class="pre">af_zero</span></code>.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">xassert</span></code> macros</strong> (<code class="docutils literal notranslate"><span class="pre">ksgpu/xassert.hpp</span></code>): Like <code class="docutils literal notranslate"><span class="pre">assert()</span></code>, but throw exceptions
+with informative error messages. Includes <code class="docutils literal notranslate"><span class="pre">xassert()</span></code>, <code class="docutils literal notranslate"><span class="pre">xassert_eq()</span></code>, <code class="docutils literal notranslate"><span class="pre">xassert_lt()</span></code>,
+<code class="docutils literal notranslate"><span class="pre">xassert_divisible()</span></code>, <code class="docutils literal notranslate"><span class="pre">xassert_shape_eq()</span></code>, etc. See <a class="reference internal" href="cpp.html"><span class="std std-doc">C++/cuda guidelines</span></a> for
+detailed usage and examples.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ksgpu::Dtype</span></code></strong>: Represents a data type (e.g. float32, float16) at runtime.
+Used throughout the codebase to support kernels that operate on multiple precisions.</p></li>
+<li><p><strong>Device FP16 utilities</strong> (<code class="docutils literal notranslate"><span class="pre">ksgpu/device_fp16.hpp</span></code>): Low-level GPU functions for
+half-precision arithmetic, heavily used in performance-critical kernels.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">CUDA_CALL()</span></code> macro</strong>: Wraps CUDA API calls with error checking.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ksgpu::CpuThreadPool</span></code></strong>: Thread pool for parallelizing CPU work.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">ksgpu::KernelTimer</span></code></strong>: Benchmarking tool for timing GPU kernels.</p></li>
+<li><p><strong>Miscellaneous utilities</strong>: <code class="docutils literal notranslate"><span class="pre">ksgpu::rand_int()</span></code>, <code class="docutils literal notranslate"><span class="pre">ksgpu::rand_uniform()</span></code>,
+<code class="docutils literal notranslate"><span class="pre">ksgpu::nbytes_to_str()</span></code>, <code class="docutils literal notranslate"><span class="pre">ksgpu::tuple_str()</span></code>.</p></li>
+</ul>
+</section>
+<section id="chunks-batches-frames-and-segments">
+<h2>Chunks, batches, frames, and segments<a class="headerlink" href="#chunks-batches-frames-and-segments" title="Link to this heading">¶</a></h2>
+<p>Throughout the code:</p>
+<ul class="simple">
+<li><p>A “chunk” (or “time chunk”) is a range of <strong>time indices</strong>. The chunk size (e.g. 1024 or 2048) is defined in <code class="docutils literal notranslate"><span class="pre">DedispersionConfig::time_samples_per_chunk</span></code>.</p></li>
+<li><p>A “minichunk” is 256 time samples. This is the cadence for sending data from the X-engine to the FRB backend, and only arises in a limited part of the code (<code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">Receiver</span></code> and closely related).</p></li>
+<li><p>A “batch” (or “beam batch”) is a range of <strong>beam indices</strong>. The batch size (e.g. 1,2,4) is defined in <code class="docutils literal notranslate"><span class="pre">DedispersionConfig::beams_per_batch</span></code>.</p></li>
+<li><p>A “frame” is a (chunk,beam) pair (not a (chunk,batch) pair!). Frames are used in <code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">MegaRingbuf</span></code>, and will also be used in the front-end server code and its intensity ring buffer.</p></li>
+<li><p>A “segment” refers to a 128-byte, memory-contiguous subset of any array in GPU memory. Segments are used in low-level GPU kernels, and data structures which are GPU kernel adjacent (e.g. <code class="docutils literal notranslate"><span class="pre">DedispersionPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">MegaRingbuf</span></code>).</p></li>
+</ul>
+</section>
+<section id="allocators">
+<h2>Allocators<a class="headerlink" href="#allocators" title="Link to this heading">¶</a></h2>
+<p>The high-level goal here is to arrange things so that the server makes a single giant call
+to <code class="docutils literal notranslate"><span class="pre">malloc()</span></code> when it starts, with hugepages enabled. All data structures are “backed”
+by this giant memory region, and memory is recycled internally without needing to call
+<code class="docutils literal notranslate"><span class="pre">free()</span> <span class="pre">+</span> <span class="pre">malloc()</span></code>.</p>
+<p>This is challenging in part because of <strong>dynamic configuration</strong>: the X-engine metadata
+(see <a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>)
+includes important parameters such as the frequency upchannelization and beam layout.
+The FRB search “dynamically” configures itself when this data is received from the X-engine.</p>
+<p>Currently, we implement the following Allocator classes for managing memory internally.
+This API is still in flux, and will probably change in the future.</p>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">BumpAllocator</span></code></strong>: A simple linear allocator. Pre-allocates a large block of memory
+(GPU or host), then hands out 128-byte-aligned pointers sequentially. Memory is never
+freed individually — everything is released when the allocator is destroyed.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">SlabAllocator</span></code></strong>: A pool allocator. Divides a pre-allocated memory region into
+fixed-size “slabs” that are recycled via reference counting — when a slab’s refcount
+drops to zero, it is returned to the free list.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">AssembledFrameAllocator</span></code></strong>: A multi-consumer frame allocator built on <code class="docutils literal notranslate"><span class="pre">SlabAllocator</span></code>.
+Manages <code class="docutils literal notranslate"><span class="pre">AssembledFrame</span></code> objects (host memory, int4 data) that hold beamformed intensity
+data received from the X-engine.</p></li>
+</ul>
+</section>
+<section id="networking">
+<h2>Networking<a class="headerlink" href="#networking" title="Link to this heading">¶</a></h2>
+<p>The most important classes are:</p>
+<ul>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">Receiver</span></code></strong>: Listens for TCP connections from upstream X-engine nodes and assembles
+incoming data into <code class="docutils literal notranslate"><span class="pre">AssembledFrame</span></code> objects. Implements the
+<a class="reference internal" href="network_protocol.html"><span class="std std-doc">X-&gt;FRB network protocol</span></a>, which includes YAML
+metadata (<a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>).
+Each <code class="docutils literal notranslate"><span class="pre">Receiver</span></code> corresponds to one <code class="docutils literal notranslate"><span class="pre">(ip_addr,</span> <span class="pre">tcp_port)</span></code> pair.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">FrbServer</span></code></strong>: High-level orchestrator that manages one or more <code class="docutils literal notranslate"><span class="pre">Receiver</span></code> instances,
+a ring buffer of assembled frames, and a <code class="docutils literal notranslate"><span class="pre">FileWriter</span></code> for persistence. Exposes the
+<a class="reference internal" href="../grpc/frb_search.proto.html"><span class="std std-doc">gRPC service</span></a>.</p>
+<p>In a multi-CPU machine, each CPU runs a separate <code class="docutils literal notranslate"><span class="pre">FrbServer</span></code> with
+its own receivers, ring buffer, and RPC address (see
+<a class="reference internal" href="../configs/frb_server/cf05_production.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/frb_server/cf05_production.yml</span></code></span></a>).</p>
+<p>There can be a many-to-one mapping between <code class="docutils literal notranslate"><span class="pre">Receivers</span></code> and <code class="docutils literal notranslate"><span class="pre">FrbServers</span></code>, if frequency
+channels (i.e. X-engine nodes) are split between multiple NICs. (This is the current
+plan for full CHORD, where we expect to split X-&gt;backend traffic between two switches.)</p>
+</li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code></strong>: A testing class that simulates upstream X-engine nodes sending data
+over TCP. Spawns multiple worker threads that each open a TCP connection, so that a
+single <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code> node can simulate multiple X-engine nodes.
+Used for end-to-end testing (e.g. <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_server</span> <span class="pre">-s</span></code>).</p></li>
+</ul>
+</section>
+<section id="file-writing">
+<h2>File writing<a class="headerlink" href="#file-writing" title="Link to this heading">¶</a></h2>
+<p>When the FRB server receives data from the X-engine, it stores it in a ring buffer.
+If an event is detected (this decision is made downstream by the “sifter”), the FRB
+server receives an RPC, instructing it to save data to disk. There are some nontrivial
+design decisions here, so I made some notes. (Most of this came out of some blackboard
+brainstorming sessions with Dustin.)</p>
+<ul class="simple">
+<li><p>Client sends a <code class="docutils literal notranslate"><span class="pre">write_files</span></code> RPC, and server responds immediately (without
+waiting to write to disk) with a list of filenames that are scheduled for
+writing.</p></li>
+<li><p>There is a separate <code class="docutils literal notranslate"><span class="pre">subscribe_files</span></code> RPC, which establishes a persistent TCP
+connection to the server. Whenever the server writes a file, it sends the filename
+to all callers of <code class="docutils literal notranslate"><span class="pre">subscribe_files</span></code>.</p></li>
+<li><p>Files are written in asdf, using Erik’s <code class="docutils literal notranslate"><span class="pre">asdf-cxx</span></code> library.</p></li>
+<li><p>The FRB server uses a two-stage write path: first, data is written
+to a local high-bandwidth SSD to relieve short-term memory pressure,
+then “trickled” to an NFS server for long-term storage.</p></li>
+<li><p>This two-stage process makes sense because the total throughput of the FRB
+server (in GB/s received from the X-engine) is less than SSD bandwidth, but
+greater than NFS bandwidth. By writing to SSD, we ensure that we never crash
+under heavy write requests (unless the SSD fills completely) since we can
+always save data quickly enough to make room for new data.</p></li>
+<li><p>Idea for a future feature: use the SSDs in the FRB search nodes as a distributed
+cache for the NFS server. Each node just has to keep the most recently written ~TB
+of data on its SSD.</p></li>
+<li><p>Idea for a future feature: if the FRB node crashes, and some files have been
+written to SSD but not yet written to NFS, then write these files to NFS when
+the server is restarted.</p></li>
+</ul>
+<p>We decided to deprioritize these future features, until we make more progress on
+the downstream code, and have a better sense for which features are most useful.</p>
+</section>
+<section id="software-engineering-philosophy">
+<h2>Software engineering philosophy<a class="headerlink" href="#software-engineering-philosophy" title="Link to this heading">¶</a></h2>
+<ul>
+<li><p>The hardest thing to do as a programmer is to keep things simple.
+When software projects fail, it’s usually a “soft failure” where overcomplexity
+starts to run away, and everyone loses motivation.
+There can be real tension between avoiding this long-term failure mode,
+and short-term pressure to implement new features.</p>
+<p>This is a hard problem to solve and there’s no easy answer!
+Most of the bullet points below are thoughts on how to win the battle
+against runaway overcomplexity.</p>
+</li>
+<li><p>Before implementing new features, I find it ultra-useful to have blackboard
+discussions with other developers, to brainstorm options. A good question
+to ask is, “is the design currently on the blackboard the simplest design, or
+did we miss something even simpler?”. In contrast, I find that code reviews
+are not so useful – it’s more important to discuss the initial design than the
+final implementation.</p></li>
+<li><p>Designing intuitive interfaces between subsystems is half the battle.
+A self-explanatory interface, where usage is transparent from glancing at function names,
+is better than an elegant but counterintuitive interface, even if the elegant
+interface is fewer lines of code.</p></li>
+<li><p>Sometimes the best solution is obvious in hindsight – expect to iterate
+and refactor.</p></li>
+<li><p>Good low-level abstractions are very important (e.g. a flexible N-dimensional Array class).
+I’m skeptical of high-level abstractions (e.g. any sort of Task virtual base class).
+It should always be possible to “opt out” of using an abstraction if it’s getting in the way.</p></li>
+<li><p>Similarly, I’m a big fan of third-party libraries that are easy to call and solve
+a specific problem, but I’m skeptical of anything called a “framework”.</p></li>
+<li><p>Avoid databases and unnecessary layers of software – most of our
+operational problems come from unanticipated issues in these areas.
+A little brainstorming up front, to find the simplest possible design,
+can avoid big problems later.</p></li>
+<li><p>Time spent writing unit tests always pays off in the long run. After implementing
+a feature, it’s almost always best to spend time implementing systematic unit tests,
+before moving on to the next feature.</p></li>
+<li><p>The most painful bugs are the ones that only happen a small fraction of the time.
+You should pay the most attention to bugs that are very unlikely (e.g. race conditions,
+corner cases), which can be a little counterintuitive.</p></li>
+<li><p>I’m not a believer in engineering practices that create “friction”, such as CI, post-commit
+hooks, code reviews, or pull requests. (Needless to say, everyone should run
+tests frequently, and get feedback from others in situations where it makes sense.)</p></li>
+<li><p>Given the choice between crashing and failing gracefully, it’s usually
+better to crash (with a helpful error message). Most of the time, if there’s
+a problem, we want to make sure that a human notices so that it gets fixed.</p></li>
+<li><p>I strongly recommend developing expertise with LLM programming agents asap.
+In the last year, these tools have become extremely powerful, and are rapidly
+getting better.</p>
+<p>I recommend Claude Code – it’s slower than other tools but more powerful, so it’s the
+best choice for hard problems. I also like its “nerd-friendly”, command-line, IDE-agnostic
+interface. Let me know if you need help getting started! A good way to start is by using
+it to review your code for bugs and suggest improvements, and letting it write code as you
+get more comfortable.</p>
+</li>
+<li><p>It’s easy to change design decisions before deployment, but hard to make big
+changes after code goes into production. In our current pre-deployment phase,
+we should put a lot of effort into making optimal design decisions, before they
+get “baked in”.</p></li>
+</ul>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="../cli.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">CLI reference</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="todo.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">To do list</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, Kendrick Smith
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Developer notes</a><ul>
+<li><a class="reference internal" href="#some-fun-cli-examples">Some fun CLI examples:</a><ul>
+<li><a class="reference internal" href="#run-unit-tests">Run unit tests</a></li>
+<li><a class="reference internal" href="#running-a-toy-server">Running a toy server</a></li>
+<li><a class="reference internal" href="#running-a-production-server-cf00-cf05">Running a production server (cf00/cf05)</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#ksgpu-helper-library">ksgpu helper library</a></li>
+<li><a class="reference internal" href="#chunks-batches-frames-and-segments">Chunks, batches, frames, and segments</a></li>
+<li><a class="reference internal" href="#allocators">Allocators</a></li>
+<li><a class="reference internal" href="#networking">Networking</a></li>
+<li><a class="reference internal" href="#file-writing">File writing</a></li>
+<li><a class="reference internal" href="#software-engineering-philosophy">Software engineering philosophy</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=8d563738"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/scripts/furo.js?v=5fa4622c"></script>
+    </body>
+</html>

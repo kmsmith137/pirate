@@ -1,0 +1,60 @@
+---
+orphan: true
+---
+
+# xengine_metadata_v1.yml
+
+```yaml
+# The purpose of this "X-engine metadata" file is to document the file format.
+# It will be used in two contexts:
+#
+#  1. Every X-engine node sends this file to every FRB node, at the beginning
+#    of the TCP stream.
+#
+#  2. As a configuration file for the "fake correlator" used for testing.
+#
+# This is a minimal "version 0", and will be extended later.
+
+version: 1
+
+# Frequency channels. The observed frequency band is divided into "zones".
+# Within each zone, all frequency channels have the same width, but the
+# channel width may differ between zones.
+#   zone_nfreq: number of frequency channels in each zone.
+#   zone_freq_edges: frequency band edges in MHz.
+# For example:
+#   zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz
+#   zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band
+#
+# In this config, we have:
+#  Total frequency channels: 28160
+#  Channel widths (MHz): [ 0.00610352, 0.012207, 0.0244141, 0.0976562, 0.195312 ]
+
+zone_nfreq: [8192, 8192, 6144, 2048, 3584]
+zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+
+
+# Optional: which frequency channels are present?
+# A list of distinct integers 0 <= (channel_id) < (total frequency channels).
+# Only makes sense in "context 1" (see above), to indicate which frequency channels
+# are sent by a particular X-engine node.
+
+freq_channels: [ 0, 10000, 20000, 28159 ]
+
+# Number of beams, and their "beam ids" (opaque integer identifiers).
+# If beam_ids is absent, it defaults to [ 0, 1, ..., (nbeams-1) ].
+# Future versions of this file format will include more beam info (e.g. sky coordinates).
+# I didn't specify anything concrete, since I didn't know what would be the best match
+# for existing X-engine code.
+
+nbeams: 3
+beam_ids: [ 100, 200, 300 ]
+
+# When an X-engine node sends metadata to an FRB search node, it indicates the starting time
+# of the data stream that will follow. Currently, we represent the starting time by a sample
+# count, which must be a multiple of 256. Future versions of this file format may use something
+# different (FPGA count?) and provide more time-related metadata. I didn't specify anything
+# concrete, since I didn't know what would be the best match for existing X-engine code.
+
+initial_time_sample: 0
+```

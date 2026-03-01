@@ -1,0 +1,79 @@
+---
+orphan: true
+---
+
+# frb_search.proto
+
+```protobuf
+syntax = "proto3";
+
+package frb.search.v1;
+
+// Currently, there isn't much documentation for RPCs.
+// Comments in the .proto file are all we've got!
+// If you're reading this, please feel free to make improvements :)
+
+
+// Service definition
+service FrbSearch {
+  // Returns the current status of the search engine
+  rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
+
+  // Returns metadata as a YAML string (empty if metadata not yet available)
+  rpc GetMetadata (GetMetadataRequest) returns (GetMetadataResponse);
+
+  // Write files to disk for specified beams and time range
+  rpc WriteFiles (WriteFilesRequest) returns (WriteFilesResponse);
+
+  // Subscribe to a stream of filenames. The connection can be closed by the client
+  // at any time, or by the server on shutdown or exception.
+  rpc SubscribeFiles (SubscribeFilesRequest) returns (stream SubscribeFilesResponse);
+}
+
+// Request message (currently empty, but extensible)
+message GetStatusRequest {}
+
+// Response message containing status metrics
+message GetStatusResponse {
+  int64 num_connections = 1;  // Total number of active TCP connections (summed over receivers)
+  int64 num_bytes = 2;        // Total bytes received (summed over receivers)
+  int64 rb_start = 3;         // First frame_id in ring buffer
+  int64 rb_reaped = 4;        // (Last reaped frame_id) + 1
+  int64 rb_finalized = 5;     // (Last finalized frame_id) + 1
+  int64 rb_end = 6;           // (Last frame_id in ring buffer) + 1
+  int64 num_free_frames = 7;  // Number of available frames in AssembledFrameAllocator
+}
+
+// Request message for GetMetadata
+message GetMetadataRequest {
+  bool verbose = 1;  // If true, include comments explaining each field
+}
+
+// Response message for GetMetadata
+message GetMetadataResponse {
+  string yaml_string = 1;  // Empty string if metadata not yet available
+}
+
+// Request message for WriteFiles
+message WriteFilesRequest {
+  repeated int64 beams = 1;           // List of beam IDs to write
+  int64 min_time_chunk_index = 2;     // First time chunk index (inclusive)
+  int64 max_time_chunk_index = 3;     // Last time chunk index (inclusive)
+  string filename_pattern = 4;        // Pattern with (BEAM) and (CHUNK) placeholders
+}
+
+// Response message for WriteFiles
+message WriteFilesResponse {
+  repeated string filename_list = 1;  // List of filenames that will be written
+}
+
+// Request message for SubscribeFiles (currently empty, but extensible)
+message SubscribeFilesRequest {}
+
+// Response message for SubscribeFiles (streamed).
+// An empty error_message indicates success; non-empty indicates an error.
+message SubscribeFilesResponse {
+  string filename = 1;       // A single filename (valid only if error_message is empty)
+  string error_message = 2;  // Empty string indicates success; non-empty indicates error
+}
+```

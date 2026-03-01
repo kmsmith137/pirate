@@ -1,0 +1,66 @@
+---
+orphan: true
+---
+
+# toy.yml
+
+```yaml
+# Toy config for testing on a single machine with loopback.
+# See cf05_production.yml for more info on file format.
+#
+# To start the server:
+#   mkdir -p /dev/shm/pirate_ssd /dev/shm/pirate_nfs
+#   pirate_frb run_server configs/frb_server/toy.yml
+#
+# To send fake X-engine data (in a separate terminal):
+#   pirate_frb run_server -s configs/frb_server/toy.yml
+
+
+########################################  General config  ########################################
+
+
+num_servers: 1
+server_cpus: [ 0 ]   # length num_servers
+
+memory_per_server: '10 GB'
+use_hugepages: true
+
+time_samples_per_chunk: 1024
+
+
+########################################  Network config  ########################################
+
+
+data_ip_addrs:
+  - '127.0.0.1:5000'
+
+rpc_ip_addrs:
+  - '127.0.0.1:6000'
+
+
+#####################################  File-writing config  ######################################
+
+
+ssd_dirs: [ '/dev/shm/pirate_ssd' ]
+ssd_devices: [ 'tmpfs' ]
+ssd_threads_per_server: 4
+
+nfs_dir: '/dev/shm/pirate_nfs'
+nfs_threads_per_server: 2
+
+
+###################################  "Fake X-engine" config  #####################################
+#
+# This optional section is only needed if you want to send "fake X-engine" data
+# (pirate_frb run_server -s).
+
+
+beams_per_server: 3
+base_beam_id: [ 100 ]    # length num_servers
+
+tcp_connections_per_server: 64
+
+# Frequency channels from xengine_metadata_v1.yml.
+zone_nfreq: [8192, 8192, 6144, 2048, 3584]
+zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+```

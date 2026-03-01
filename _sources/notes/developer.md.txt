@@ -1,0 +1,263 @@
+# Developer notes
+
+## Some fun CLI examples:
+
+### Run unit tests
+
+```
+# Run all unit tests 5 times (default is 100!)
+# See 'pirate_frb test --help' for many more flags.
+pirate_frb test -n 5
+```
+
+### Running a toy server
+
+To run a toy server instance locally, run the following commands in separate terminal windows:
+
+```
+# Start the FRB server (listens for X-engine data and gRPC requests).
+pirate_frb run_server configs/frb_server/toy.yml
+
+# Monitor server status (connections, bytes received, ring buffer state) and filenames.
+pirate_frb rpc_status 127.0.0.1:6000
+
+# Send fake X-engine data to the server.
+pirate_frb run_server -s configs/frb_server/toy.yml
+
+# Send a write_files RPC (saves data to disk for randomly chosen beams/time range).
+# Filenames will be printed in the 'rpc_status' process as they are written.
+# Files appear in /dev/shm/pirate_nfs, and will be deleted when the server exits.
+pirate_frb rpc_write 127.0.0.1:6000
+```
+
+### Running a production server (cf00/cf05)
+
+To run a production server on cf05 (with cf00 sending fake X-engine data),
+run the following commands in separate terminal windows:
+
+```
+# On cf05. Start the FRB server (two servers, one per CPU, full CHORD parameters).
+# Files are written through local SSD cache to NFS (/mnt/cs00/data).
+pirate_frb run_server configs/frb_server/cf05_production.yml
+
+# On cf00 or cf05. Monitor server status and filenames.
+pirate_frb rpc_status 10.222.3.5:6000 10.222.3.5:6001
+
+# On cf00. Send fake X-engine data to cf05 (128 TCP connections per server).
+pirate_frb run_server -s configs/frb_server/cf05_production.yml
+
+# On cf00 or cf05. Send a write_files RPC to both servers.
+# Filenames will be printed in the 'rpc_status' process as they are written.
+# Files appear on the real NFS server: /mnt/cs00/data/{user}/{date}
+pirate_frb rpc_write 10.222.3.5:6000 10.222.3.5:6001
+```
+
+## ksgpu helper library
+
+Pirate uses `ksgpu`, a standalone helper library for CUDA/C++ development
+([github](https://github.com/kmsmith137/ksgpu/tree/chord), note: pirate uses the `chord` branch, not `main`).
+Here are the most heavily used features:
+
+- **`ksgpu::Array<T>`** (`ksgpu/Array.hpp`): A flexible N-dimensional array class.
+  Supports GPU, pinned host, and regular host memory. Key methods include
+  `.fill()`, `.cast<T>()`, `.on_gpu()`, `.is_fully_contiguous()`, and `.shape_str()`.
+  Most GPU data in pirate lives in `Array` objects.
+
+- **Memory allocation flags (`af_*`)** (`ksgpu/mem_utils.hpp`): Bitwise flags that control
+  how memory is allocated. Common flags: `af_gpu` (device memory), `af_rhost` (pinned host),
+  `af_uhost` (unpinned host), `af_zero` (zero-initialize), `af_random` (random-initialize),
+  `af_guard` (add guard regions to detect buffer overruns), `af_mmap_huge` (huge pages).
+  Flags are combined with `|`, e.g. `af_gpu | af_zero`.
+
+- **`xassert` macros** (`ksgpu/xassert.hpp`): Like `assert()`, but throw exceptions
+  with informative error messages. Includes `xassert()`, `xassert_eq()`, `xassert_lt()`,
+  `xassert_divisible()`, `xassert_shape_eq()`, etc. See [C++/cuda guidelines](cpp.md) for
+  detailed usage and examples.
+
+- **`ksgpu::Dtype`**: Represents a data type (e.g. float32, float16) at runtime.
+  Used throughout the codebase to support kernels that operate on multiple precisions.
+
+- **Device FP16 utilities** (`ksgpu/device_fp16.hpp`): Low-level GPU functions for
+  half-precision arithmetic, heavily used in performance-critical kernels.
+
+- **`CUDA_CALL()` macro**: Wraps CUDA API calls with error checking.
+
+- **`ksgpu::CpuThreadPool`**: Thread pool for parallelizing CPU work.
+
+- **`ksgpu::KernelTimer`**: Benchmarking tool for timing GPU kernels.
+
+- **Miscellaneous utilities**: `ksgpu::rand_int()`, `ksgpu::rand_uniform()`,
+  `ksgpu::nbytes_to_str()`, `ksgpu::tuple_str()`.
+
+## Chunks, batches, frames, and segments
+
+Throughout the code:
+- A "chunk" (or "time chunk") is a range of **time indices**. The chunk size (e.g. 1024 or 2048) is defined in `DedispersionConfig::time_samples_per_chunk`.
+- A "minichunk" is 256 time samples. This is the cadence for sending data from the X-engine to the FRB backend, and only arises in a limited part of the code (`struct Receiver` and closely related).
+- A "batch" (or "beam batch") is a range of **beam indices**. The batch size (e.g. 1,2,4) is defined in `DedispersionConfig::beams_per_batch`.
+- A "frame" is a (chunk,beam) pair (not a (chunk,batch) pair!). Frames are used in `class MegaRingbuf`, and will also be used in the front-end server code and its intensity ring buffer.
+- A "segment" refers to a 128-byte, memory-contiguous subset of any array in GPU memory. Segments are used in low-level GPU kernels, and data structures which are GPU kernel adjacent (e.g. `DedispersionPlan`, `MegaRingbuf`).
+
+## Allocators
+
+The high-level goal here is to arrange things so that the server makes a single giant call
+to `malloc()` when it starts, with hugepages enabled. All data structures are "backed"
+by this giant memory region, and memory is recycled internally without needing to call
+`free() + malloc()`.
+
+This is challenging in part because of **dynamic configuration**: the X-engine metadata
+(see [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml.md))
+includes important parameters such as the frequency upchannelization and beam layout.
+The FRB search "dynamically" configures itself when this data is received from the X-engine.
+
+Currently, we implement the following Allocator classes for managing memory internally.
+This API is still in flux, and will probably change in the future.
+
+- **`BumpAllocator`**: A simple linear allocator. Pre-allocates a large block of memory
+  (GPU or host), then hands out 128-byte-aligned pointers sequentially. Memory is never
+  freed individually — everything is released when the allocator is destroyed.
+
+- **`SlabAllocator`**: A pool allocator. Divides a pre-allocated memory region into
+  fixed-size "slabs" that are recycled via reference counting — when a slab's refcount
+  drops to zero, it is returned to the free list.
+
+- **`AssembledFrameAllocator`**: A multi-consumer frame allocator built on `SlabAllocator`.
+  Manages `AssembledFrame` objects (host memory, int4 data) that hold beamformed intensity
+  data received from the X-engine. 
+
+## Networking
+
+
+The most important classes are:
+
+- **`Receiver`**: Listens for TCP connections from upstream X-engine nodes and assembles
+  incoming data into `AssembledFrame` objects. Implements the
+  [X->FRB network protocol](network_protocol.md), which includes YAML
+  metadata ([`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml.md)).
+  Each `Receiver` corresponds to one `(ip_addr, tcp_port)` pair.
+
+- **`FrbServer`**: High-level orchestrator that manages one or more `Receiver` instances,
+  a ring buffer of assembled frames, and a `FileWriter` for persistence. Exposes the
+  [gRPC service](../grpc/frb_search.proto.md).
+
+  In a multi-CPU machine, each CPU runs a separate `FrbServer` with
+  its own receivers, ring buffer, and RPC address (see
+  [`configs/frb_server/cf05_production.yml`](../configs/frb_server/cf05_production.yml.md)).
+  
+  There can be a many-to-one mapping between `Receivers` and `FrbServers`, if frequency
+  channels (i.e. X-engine nodes) are split between multiple NICs. (This is the current
+  plan for full CHORD, where we expect to split X->backend traffic between two switches.)
+
+- **`FakeXEngine`**: A testing class that simulates upstream X-engine nodes sending data
+  over TCP. Spawns multiple worker threads that each open a TCP connection, so that a
+  single `FakeXEngine` node can simulate multiple X-engine nodes.
+  Used for end-to-end testing (e.g. `pirate_frb run_server -s`).
+
+## File writing
+
+When the FRB server receives data from the X-engine, it stores it in a ring buffer.
+If an event is detected (this decision is made downstream by the "sifter"), the FRB
+server receives an RPC, instructing it to save data to disk. There are some nontrivial
+design decisions here, so I made some notes. (Most of this came out of some blackboard
+brainstorming sessions with Dustin.)
+
+  - Client sends a `write_files` RPC, and server responds immediately (without
+    waiting to write to disk) with a list of filenames that are scheduled for
+    writing.
+
+  - There is a separate `subscribe_files` RPC, which establishes a persistent TCP
+    connection to the server. Whenever the server writes a file, it sends the filename
+    to all callers of `subscribe_files`.
+
+  - Files are written in asdf, using Erik's `asdf-cxx` library.
+  
+  - The FRB server uses a two-stage write path: first, data is written
+    to a local high-bandwidth SSD to relieve short-term memory pressure,
+    then "trickled" to an NFS server for long-term storage.
+
+  - This two-stage process makes sense because the total throughput of the FRB
+    server (in GB/s received from the X-engine) is less than SSD bandwidth, but
+    greater than NFS bandwidth. By writing to SSD, we ensure that we never crash
+    under heavy write requests (unless the SSD fills completely) since we can
+    always save data quickly enough to make room for new data.
+
+  - Idea for a future feature: use the SSDs in the FRB search nodes as a distributed
+    cache for the NFS server. Each node just has to keep the most recently written ~TB
+    of data on its SSD.
+
+  - Idea for a future feature: if the FRB node crashes, and some files have been
+    written to SSD but not yet written to NFS, then write these files to NFS when
+    the server is restarted.
+
+We decided to deprioritize these future features, until we make more progress on
+the downstream code, and have a better sense for which features are most useful.
+
+## Software engineering philosophy
+
+  - The hardest thing to do as a programmer is to keep things simple.
+    When software projects fail, it's usually a "soft failure" where overcomplexity
+    starts to run away, and everyone loses motivation.
+    There can be real tension between avoiding this long-term failure mode,
+    and short-term pressure to implement new features.
+    
+    This is a hard problem to solve and there's no easy answer!
+    Most of the bullet points below are thoughts on how to win the battle
+    against runaway overcomplexity.
+
+  - Before implementing new features, I find it ultra-useful to have blackboard
+    discussions with other developers, to brainstorm options. A good question
+    to ask is, "is the design currently on the blackboard the simplest design, or
+    did we miss something even simpler?". In contrast, I find that code reviews
+    are not so useful -- it's more important to discuss the initial design than the
+    final implementation.
+
+  - Designing intuitive interfaces between subsystems is half the battle.
+    A self-explanatory interface, where usage is transparent from glancing at function names,
+    is better than an elegant but counterintuitive interface, even if the elegant
+    interface is fewer lines of code.
+    
+  - Sometimes the best solution is obvious in hindsight -- expect to iterate
+    and refactor.
+  
+  - Good low-level abstractions are very important (e.g. a flexible N-dimensional Array class).
+    I'm skeptical of high-level abstractions (e.g. any sort of Task virtual base class).
+    It should always be possible to "opt out" of using an abstraction if it's getting in the way.
+
+  - Similarly, I'm a big fan of third-party libraries that are easy to call and solve
+    a specific problem, but I'm skeptical of anything called a "framework".
+      
+  - Avoid databases and unnecessary layers of software -- most of our
+    operational problems come from unanticipated issues in these areas.
+    A little brainstorming up front, to find the simplest possible design,
+    can avoid big problems later.
+
+  - Time spent writing unit tests always pays off in the long run. After implementing
+    a feature, it's almost always best to spend time implementing systematic unit tests,
+    before moving on to the next feature.
+
+  - The most painful bugs are the ones that only happen a small fraction of the time.
+    You should pay the most attention to bugs that are very unlikely (e.g. race conditions,
+    corner cases), which can be a little counterintuitive.
+
+  - I'm not a believer in engineering practices that create "friction", such as CI, post-commit
+    hooks, code reviews, or pull requests. (Needless to say, everyone should run
+    tests frequently, and get feedback from others in situations where it makes sense.)
+  
+  - Given the choice between crashing and failing gracefully, it's usually
+    better to crash (with a helpful error message). Most of the time, if there's
+    a problem, we want to make sure that a human notices so that it gets fixed.
+
+  - I strongly recommend developing expertise with LLM programming agents asap.
+    In the last year, these tools have become extremely powerful, and are rapidly
+    getting better.
+
+    I recommend Claude Code -- it's slower than other tools but more powerful, so it's the
+    best choice for hard problems. I also like its "nerd-friendly", command-line, IDE-agnostic
+    interface. Let me know if you need help getting started! A good way to start is by using
+    it to review your code for bugs and suggest improvements, and letting it write code as you
+    get more comfortable.
+    
+  - It's easy to change design decisions before deployment, but hard to make big
+    changes after code goes into production. In our current pre-deployment phase,
+    we should put a lot of effort into making optimal design decisions, before they
+    get "baked in".

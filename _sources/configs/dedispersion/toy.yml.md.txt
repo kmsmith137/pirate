@@ -1,0 +1,35 @@
+---
+orphan: true
+---
+
+# toy.yml
+
+```yaml
+# Subscale "toy" dedisperser, sometimes convenient for testing.
+# Does not need production_kernels=True in makefile_helper.py (unlike the chime/chord files in this directory).
+
+zone_nfreq: [640]
+zone_freq_edges: [400, 800]
+time_sample_ms: 1.0
+tree_rank: 10
+num_downsampling_levels: 3
+time_samples_per_chunk: 256
+dtype: float32
+
+early_triggers:
+  - {ds_level: 1, delta_rank: 1}
+  - {ds_level: 2, delta_rank: 2}
+  - {ds_level: 2, delta_rank: 1}
+
+frequency_subband_counts: [2,2,1]
+
+# FIXME peak_finding_params are not quite right (same params at each level)
+peak_finding_params:
+  - {max_width: 16, dm_downsampling: 0, time_downsampling: 16, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {max_width: 16, dm_downsampling: 0, time_downsampling: 16, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+  - {max_width: 16, dm_downsampling: 0, time_downsampling: 16, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+
+max_gpu_clag: 1
+beams_per_gpu: 16
+beams_per_batch: 2
+num_active_batches: 2```

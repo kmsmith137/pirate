@@ -1,0 +1,24 @@
+---
+orphan: true
+---
+
+# cf00_blob.yml
+
+```yaml
+# For use with 'python -m pirate_frb hwtest'.
+# See cf00_all.yml for full syntax.
+
+ssd_dirs: [ '/scratch', '/scratch2' ]
+ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p1' ]
+write_threads_per_ssd: 4
+write_asdf: false
+
+
+dedisperse: false
+ip_addrs: [ ]
+downsampling_threads_per_cpu: 0
+h2g_bw: false
+g2h_bw: false
+gmem_bw: false
+hmem_bw: false
+```

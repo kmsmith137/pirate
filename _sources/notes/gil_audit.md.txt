@@ -1,0 +1,173 @@
+# GIL audit for pybind11 wrappers
+
+## Background
+
+pybind11's `py::call_guard<py::gil_scoped_release>()` releases the GIL during
+the C++ function body, allowing other Python threads to run concurrently. The
+sequence is:
+
+1. Arguments converted (GIL held -- type_caster runs here)
+2. GIL released
+3. C++ function executes
+4. GIL re-acquired
+5. Return value converted (GIL held -- type_caster runs here)
+
+**ksgpu::Array type_caster**: Both `load()` (Python->C++) and `cast()` (C++->Python)
+call Python/numpy C API (`PyObject_GetAttrString`, `PyArray_New`, `PyImport_ImportModule`,
+`Py_INCREF`, etc.) and **require the GIL**. However, `call_guard<gil_scoped_release>`
+is safe to use with Array arguments/returns -- the GIL is only released during step 3.
+
+**Lambdas that call pybind11 API**: A few wrappers use lambdas that call
+`py::make_tuple()` or `py::object` methods. These need the GIL during the
+lambda body, so `call_guard` cannot be used directly. To drop the GIL in
+these cases, manually scope `py::gil_scoped_release` around just the C++ call.
+
+## Already drops GIL
+
+These wrappers already have `py::call_guard<py::gil_scoped_release>()`:
+
+| Wrapper | Method |
+|---|---|
+| `HwtestSender` | `start`, `stop`, `join`, `wait` |
+| `Hwtest` | `start`, `stop`, `join`, `show_stats` |
+
+
+## Should drop GIL: thread-backed start/stop/join
+
+These methods spawn or join threads, wait on condition variables, or do
+network I/O. Holding the GIL here can deadlock a multithreaded Python program.
+
+| Wrapper | Method | Notes |
+|---|---|---|
+| `FakeXEngine` | `start` | Spawns worker threads, may block on barrier |
+| `FakeXEngine` | `stop` (lambda) | Joins worker threads |
+| `Receiver` | `start` | Spawns listener + reader threads |
+| `Receiver` | `stop` (lambda) | Joins threads |
+| `Receiver` | `get_metadata(blocking=True)` | Waits on condition variable |
+| `FrbServer` | `start` | Starts receivers + gRPC service |
+| `FrbServer` | `stop` (lambda) | Stops server, joins threads |
+| `FileWriter` | `stop` (lambda) | Joins writer threads |
+| `AssembledFrameAllocator` | `get_frame` | Blocks until a frame is available |
+| `AssembledFrameAllocator` | `initialize` | Entry point for thread-backed class; may block |
+
+For the lambda wrappers (`stop` methods), the lambdas are simple (`self.stop()`)
+and don't use pybind11 API, so `call_guard<gil_scoped_release>` works directly.
+
+
+## Should drop GIL: long-running test/timing functions
+
+These functions run GPU tests or benchmarks that take seconds to minutes.
+None take or return `ksgpu::Array`. Adding `call_guard<gil_scoped_release>`
+is straightforward.
+
+**pirate_pybind11_kernels.cpp:**
+
+| Wrapper | Method |
+|---|---|
+| `CoalescedDdKernel2` | `test_random`, `time_selected` |
+| `GpuDedispersionKernel` | `test_random`, `time_selected` |
+| `GpuDequantizationKernel` | `test_random`, `time_selected` |
+| `GpuLaggedDownsamplingKernel` | `test_random`, `time_selected` |
+| `GpuPeakFindingKernel` | `test_random` |
+| `GpuRingbufCopyKernel` | `test_random` |
+| `GpuTreeGriddingKernel` | `test_random`, `time_selected` |
+| `PfOutputMicrokernel` | `test_random` |
+| `PfWeightReaderMicrokernel` | `test_random` |
+| `ReferenceLagbuf` | `test_random` |
+| `ReferenceTree` | `test_basics`, `test_subbands` |
+
+**pirate_pybind11_casm.cpp:**
+
+| Wrapper | Method |
+|---|---|
+| `CasmBeamformer` | `test_microkernels`, `run_timings` |
+
+**pirate_pybind11.cpp:**
+
+| Wrapper | Method |
+|---|---|
+| `GpuDedisperser` | `test_random`, `test_one`, `time` |
+
+**pirate_pybind11_core.cpp:**
+
+| Wrapper | Method |
+|---|---|
+| `AssembledFrame` | `test_asdf` |
+
+**pirate_pybind11_loose_ends.cpp:**
+
+| Wrapper | Method |
+|---|---|
+| (module-level) | `time_cpu_downsample`, `time_gpu_downsample`, `time_gpu_transpose` |
+| (module-level) | `test_avx2_m64_outbuf`, `test_cpu_downsampler`, `test_gpu_downsample`, `test_gpu_transpose`, `test_gpu_reduce2` |
+| (module-level) | `scratch` |
+
+
+## Should drop GIL: GPU synchronization
+
+These methods enqueue CUDA stream events and may block waiting for GPU work.
+They take only scalar/pointer args (no Array args), so `call_guard` is safe.
+
+| Wrapper | Method | Notes |
+|---|---|---|
+| `GpuDedisperser` | `acquire_input` (lambda) | GPU stream sync; lambda only does reinterpret_cast |
+| `GpuDedisperser` | `release_input` (lambda) | GPU stream sync |
+| `GpuDedisperser` | `acquire_output` (lambda) | GPU stream sync |
+| `GpuDedisperser` | `release_output` (lambda) | GPU stream sync |
+| `GpuDedisperser` | `allocate` | Allocates GPU + host memory (CUDA malloc) |
+
+
+## Could drop GIL (lower priority)
+
+These do nontrivial work but are unlikely to be called from multithreaded
+Python code. Dropping the GIL is still good practice.
+
+| Wrapper | Method | Notes |
+|---|---|---|
+| `DedispersionPlan` | constructor | Computes full plan from config; CPU-bound |
+| `DedispersionConfig` | `from_yaml` | File I/O |
+| `DedispersionConfig` | `make_random` | CPU computation with RNG |
+| `XEngineMetadata` | `from_yaml_file` | File I/O |
+| `BumpAllocator` | constructor | May call cudaMalloc (slow) |
+| `SlabAllocator` | constructors | May call cudaMalloc |
+| `CudaStreamPool` | constructor | Creates CUDA streams |
+| `CasmBeamformer` | constructor | Takes Array args; GPU setup |
+| `GpuDedisperser` | constructor (lambda) | Creates GPU resources |
+| `FakeXEngine` | constructor | Lightweight, but sets up data structures |
+| `FileWriter` | constructor (lambda) | Creates worker threads |
+
+
+## Keep GIL (no change needed)
+
+These are trivial accessors, quick computations, or return Python objects.
+
+| Wrapper | Methods | Notes |
+|---|---|---|
+| `BumpAllocator` | `_allocate_array_raw`, `nbytes_allocated`, readonly members | Quick pointer bump; returns Array |
+| `SlabAllocator` | `num_free_slabs`, `num_total_slabs`, `get_slab_size`, `is_dummy`, readonly members | Trivial accessors |
+| `AssembledFrame` | `data` property, readonly members | Quick Array view construction |
+| `AssembledFrameAllocator` | `num_free_frames`, `num_total_frames`, readonly members | Quick |
+| `CudaStreamPool` | `pool_id`, stream properties | Trivial accessors |
+| `DedispersionConfig` | all `def_readwrite`, `validate`, `test`, conversion methods, `to_yaml_string`, `add_early_trigger[s]`, `get_nelts_per_segment`, `get_total_nfreq`, `make_channel_map` | Small data class operations |
+| `DedispersionPlan` | all `def_readonly`, `to_yaml_string` | Read-only accessors |
+| `DedispersionTree` | all `def_readonly` | Read-only struct |
+| `EarlyTrigger` | all members, `__repr__`, `__eq__` | Tiny struct |
+| `PeakFindingConfig` | all members, `__repr__` | Tiny struct |
+| `FrequencySubbands` | all members and methods | Small data + quick math |
+| `ResourceTracker` | all methods | Lightweight bookkeeping |
+| `XEngineMetadata` | constructor, `validate`, `to_yaml_string`, `from_yaml_string`, members | Quick (except `from_yaml_file`, listed above) |
+| `FakeXEngine` | `is_stopped`, readonly members, static constants | Quick lock + read |
+| `Receiver` | `get_status` (lambda), `address` | Quick; lambda uses `py::make_tuple` |
+| `Hwtest` | `add_*` methods | Pre-start configuration |
+| `HwtestSender` | constructor, `add_endpoint` | Pre-start configuration |
+| `GpuDedisperser` | `view_input`, `view_out_max`, `view_out_argmax`, readonly members | Returns Array views |
+| `GpuDequantizationKernel` | constructor, `apply_reference`, `launch`, readonly members | Constructor is quick; `apply_reference` and `launch` take Array args and are either CPU reference (could drop GIL, but niche) or async GPU launch (returns immediately) |
+| `ReferenceTreeGriddingKernel` | constructor, `apply`, properties | Could drop GIL on `apply` for large arrays, but reference-only code |
+| `ReferenceTree` | constructor, `dedisperse`, properties | Could drop GIL on `dedisperse` for large arrays, but reference-only code |
+| `CoalescedDdKernel2` | `registry_size`, `show_registry` | Quick |
+| `GpuDedispersionKernel` | `registry_size`, `show_registry` | Quick |
+| `GpuPeakFindingKernel` | `registry_size`, `show_registry` | Quick |
+| `PfOutputMicrokernel` | `registry_size`, `show_registry` | Quick |
+| `PfWeightReaderMicrokernel` | `registry_size`, `show_registry` | Quick |
+| `set_thread_affinity` | | Syscall, but quick |
+| `get_thread_affinity` | | Syscall, but quick |

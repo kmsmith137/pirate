@@ -1,0 +1,47 @@
+---
+orphan: true
+---
+
+# cf00_all.yml
+
+```yaml
+# For use with 'python -m pirate_frb hwtest'.
+
+# dedisperse: If true, then run one dedispersion worker per GPU.
+# FIXME for now, uses hardcoded CHIME-like parameters, but with small nbeams, so that it stays on gpu.
+# I may generalize later (include a dedispersion config filename? or "inline" dedispersion config?).
+
+dedisperse: true
+
+
+# ip_addrs: list of IP addresses where TCP data will be received (to disable networking, use empty list)
+
+ip_addrs: [ '10.0.0.1', '10.0.1.1', '10.0.2.1', '10.0.3.1' ]
+tcp_connections_per_ip_address: 1
+
+
+# ssd_dirs: list of directories where data is written (to disable ssd writes, use empty list).
+# ssd_devices: if these don't match 'ssd_dirs', then an exception is thrown.
+#  (This is intended to catch misconfiguration where a device is not mounted.)
+
+ssd_dirs: [ '/scratch', '/scratch2' ]
+ssd_devices: [ '/dev/nvme0n1p2', '/dev/nvme1n1p1' ]
+write_threads_per_ssd: 4
+write_asdf: false
+
+
+# Number of AVX2 downsampling threads per CPU (to disable, use zero).
+# Note that 4 threads/cpu will use ~30 GB/sec/cpu host memory.
+
+downsampling_threads_per_cpu: 4
+
+
+# If any of these are true, then dispatch worker(s) to saturate bandwidth.
+# Warning: these are "heavyweight" operations (e.g. 'hmem_bw' runs one thread per vcpu),
+# and you probably don't want to run them in parallel with other things!
+
+h2g_bw: false
+g2h_bw: false
+gmem_bw: false
+hmem_bw: false
+```
