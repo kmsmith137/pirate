@@ -18,7 +18,9 @@ Some notes/caveats:
     with branch divergence between unrelated projects -- will fix this some
     day.)
 
-Documentation:
+Documentation: HTML docs are at [kmsmith137.github.io/pirate](https://kmsmith137.github.io/pirate/)
+but may not be completely up-to-date. You can generate up-to-date docs with `make docs` and `make docs-serve`,
+or browse the `.md` files below:
 
 - [Installation](notes/install.md)
 - [Introduction](notes/intro.md)
