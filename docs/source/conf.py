@@ -51,21 +51,16 @@ for _f in sorted(glob.glob(os.path.join(_grpc_src, '*.proto'))):
     with open(_proto_path) as _fin:
         _proto_content = _fin.read()
     with open(_proto_path + '.md', 'w') as _fout:
-        _fout.write(f'# {_fname}\n\n```protobuf\n{_proto_content}\n```\n')
+        _fout.write(f'---\norphan: true\n---\n\n# {_fname}\n\n```protobuf\n{_proto_content}\n```\n')
 
-# Generate a toctree page listing all proto files.
+# Generate a page listing all proto files (no toctree, to keep them out of the sidebar).
 _grpc_gen_path = os.path.join(os.path.dirname(__file__), '_grpc_generated.md')
 with open(_grpc_gen_path, 'w') as _fout:
     _fout.write('# gRPC Protocol Definitions\n\n')
     _fout.write('The FRB server currently defines a single gRPC service. ')
     _fout.write('Additional services will be added as the project grows.\n\n')
     for _fname in _proto_files:
-        _fout.write(f'- [{_fname}](grpc/{_fname})\n')
-    _fout.write('\n')
-    _fout.write('```{toctree}\n:hidden:\n')
-    for _fname in _proto_files:
-        _fout.write(f'grpc/{_fname}\n')
-    _fout.write('```\n')
+        _fout.write(f'- [{_fname}](grpc/{_fname}.md)\n')
 
 # Rewrite .yml/.yaml/.proto links in the copied notes to point to the rendered .md pages.
 import re
