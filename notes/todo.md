@@ -18,12 +18,26 @@
 
      - The networking/file-writing code currently has no unit tests!
        One approach is an "end-to-end" test, where the `FakeXEngine`
-       remembers 
-       Even a minimal test would be
+       sends random data to the FRB server, asks the FRB server to
+       save a random subset of its data to disk (via RPCs), and
+       compares the data files with the input.
 
-     - Simulated pulses (link to simpulse)
+     - Eventually I'd like to extend this end-to-end test to include
+       tests of corner cases in the FRB server logic, such as X-engine
+       nodes that disconnect and reconnect.
+
+     - Injecting simulated pulses! I'd like to do this by May (see below).
+       Pulses can be simulated with [simpulse](https://github.com/kmsmith137/simpulse).
+       We should brainstorm possible designs (e.g. do we simulate pulses "offline"
+       and save them to disk first? What does the `FakeXEngine` config file look
+       like?)
+
+       The `FakeXEngine` is intended for testing/debugging, but we should
+       try to write it in a way where some of the code can be recycled later
+       when we implement injections (which will be part of the production
+       real-time system).
      
-     - Some sort of simulated RFI (
+     - Injecting some form of simplified RFI would be useful for early testing.
      
      - Feel free to make big changes to (or even rewrite) the current
        `FakeXEngine`. I'm looking for someone to take "ownership" of

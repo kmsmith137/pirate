@@ -1,5 +1,21 @@
 # Introduction
 
+Some notes/caveats:
+
+  - This repo contains real-time server code (network receive, ring buffering,
+    file-writing RPCs) and GPU dedispersion code, but currently the **real-time
+    server does not call the GPU dedisperser**! Working on this is my top
+    priority.
+
+  - Currently, this code can only be compiled on a recent ubuntu
+    linux machine with **a physical GPU**, and the cuda toolkit installed.
+    I hope to improve this in the future!
+
+  - Uses the [`ksgpu`](https://github.com/kmsmith137/ksgpu) helper library,
+    but the **chord branch**, not the main branch. (I'm currently struggling
+    with branch divergence between unrelated projects -- will fix this some
+    day.)
+    
 Pirate is a real-time FRB seach written in C++ / cuda / python.
 
   - Receives data via TCP from the "upstream" X-engine. The network protocol
@@ -28,7 +44,8 @@ Pirate is a real-time FRB seach written in C++ / cuda / python.
     mature, we could refactor so that most of the FRB server code is in python,
     and we just call C++ for low-level compute kernels.
 
-  - Command line interface (`python -m pirate_frb ...`)
+  - Command line interface (`python -m pirate_frb ...`).
+    For more info, see `python -m pirate_frb --help` or the HTML docs.
   
   - The FRB server defines [gRPC service(s)](../grpc/frb_search.proto) for things like control, monitoring,
     and triggered data writes. All interaction with a running server is via gRPC.
@@ -59,5 +76,3 @@ Pirate is a real-time FRB seach written in C++ / cuda / python.
     with `cudaIpc`, using grpc to synchronize the producer/consumer, by
     streaming integer frame offsets back and forth. None of this is implemented
     yet, but it will be soon!
- 
-Uses the `chord` branch of the ksgpu library for the Array class, and other helpers.
