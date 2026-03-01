@@ -1,5 +1,57 @@
 # Developer notes
 
+## Some fun CLI examples:
+
+### Run unit tests
+
+```
+# Run all unit tests 5 times (default is 100!)
+# See 'pirate_frb test --help' for many more flags.
+pirate_frb test -n 5
+```
+
+### Running a toy server
+
+To run a toy server instance locally, run the following commands in separate terminal windows:
+
+```
+# Start the FRB server (listens for X-engine data and gRPC requests).
+pirate_frb run_server configs/frb_server/toy.yml
+
+# Monitor server status (connections, bytes received, ring buffer state) and filenames.
+pirate_frb rpc_status 127.0.0.1:6000
+
+# Send fake X-engine data to the server.
+pirate_frb run_server -s configs/frb_server/toy.yml
+
+# Send a write_files RPC (saves data to disk for randomly chosen beams/time range).
+# Filenames will be printed in the 'rpc_status' process as they are written.
+# Files appear in /dev/shm/pirate_nfs, and will be deleted when the server exits.
+pirate_frb rpc_write 127.0.0.1:6000
+```
+
+### Running a production server (cf00/cf05)
+
+To run a production server on cf05 (with cf00 sending fake X-engine data),
+run the following commands in separate terminal windows:
+
+```
+# On cf05. Start the FRB server (two servers, one per CPU, full CHORD parameters).
+# Files are written through local SSD cache to NFS (/mnt/cs00/data).
+pirate_frb run_server configs/frb_server/cf05_production.yml
+
+# On cf00 or cf05. Monitor server status and filenames.
+pirate_frb rpc_status 10.222.3.5:6000 10.222.3.5:6001
+
+# On cf00. Send fake X-engine data to cf05 (128 TCP connections per server).
+pirate_frb run_server -s configs/frb_server/cf05_production.yml
+
+# On cf00 or cf05. Send a write_files RPC to both servers.
+# Filenames will be printed in the 'rpc_status' process as they are written.
+# Files appear on the real NFS server: /mnt/cs00/data/{user}/{date}
+pirate_frb rpc_write 10.222.3.5:6000 10.222.3.5:6001
+```
+
 ## Chunks, batches, frames, and segments
 
 Throughout the code:
