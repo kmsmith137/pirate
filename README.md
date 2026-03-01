@@ -13,7 +13,7 @@ Some notes/caveats:
     linux machine with **a physical GPU**, and the cuda toolkit installed.
     I hope to improve this in the future!
 
-  - Uses the [`ksgpu`](https://github.com/kmsmith137/ksgpu) helper library,
+  - Uses the [`ksgpu`](https://github.com/kmsmith137/ksgpu/tree/chord) helper library,
     but the **chord branch**, not the main branch. (I'm currently struggling
     with branch divergence between unrelated projects -- will fix this some
     day.)
@@ -29,8 +29,5 @@ Documentation:
 - [X->FRB network protocol (v1)](notes/network_protocol.md)
 - [X->FRB metadata (v1)](configs/xengine/xengine_metadata_v1.yml)
 - [gRPC protocol definitions](grpc/)
-- [C++/cuda guidelines](notes/cpp.md)
-- [Pybind11](notes/pybind11.md)
-- [Thread-backed class pattern](notes/thread_backed_class.md)
 
 Contact: Kendrick Smith <kmsmith@perimeterinstitute.ca>

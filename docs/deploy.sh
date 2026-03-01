@@ -36,6 +36,8 @@ echo "==> Deploying docs..."
 # Replace all existing content with the fresh build.
 find "$WORKTREE_DIR" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 cp -a "$BUILD_DIR"/. "$WORKTREE_DIR"
+# Disable Jekyll so that GitHub Pages serves _static/ and other underscore dirs.
+touch "$WORKTREE_DIR/.nojekyll"
 
 cd "$WORKTREE_DIR"
 git add -A
