@@ -1036,6 +1036,15 @@ def parse_run_server(subparsers):
     parser.add_argument('-s', '--send', action='store_true', help='(not yet implemented) Send fake X-engine data')
 
 
+def run_server_command(args):
+    if args.send:
+        from .run_server import run_fake_xengine
+        run_fake_xengine(args.config)
+    else:
+        from .run_server import run_server
+        run_server(args.config)
+    
+
 ####################################################################################################
 
 
@@ -1049,6 +1058,10 @@ def get_parser():
     parser = argparse.ArgumentParser(description="pirate_frb command-line driver (use --help for more info)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    parse_run_server(subparsers)
+    parse_rpc_status(subparsers)
+    parse_rpc_write(subparsers)
+    
     parse_test(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
@@ -1060,13 +1073,9 @@ def get_parser():
     parse_show_random_config(subparsers)
     parse_show_xengine_metadata(subparsers)
     
-    parse_rpc_status(subparsers)
-    parse_rpc_write(subparsers)
-    
+    parse_hwtest(subparsers)
     parse_make_subbands(subparsers)
     parse_random_kernels(subparsers)
-    parse_hwtest(subparsers)
-    parse_run_server(subparsers)
     parse_scratch(subparsers)
 
     return parser
@@ -1075,6 +1084,7 @@ def get_parser():
 def main():
     parser = get_parser()
     argcomplete.autocomplete(parser)
+    
     args = parser.parse_args()
 
     if args.command == "test":
@@ -1108,12 +1118,7 @@ def main():
     elif args.command == "rpc_write":
         rpc_write(args)
     elif args.command == "run_server":
-        if args.send:
-            from .run_server import run_fake_xengine
-            run_fake_xengine(args.config)
-        else:
-            from .run_server import run_server
-            run_server(args.config)
+        run_server_command(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)
