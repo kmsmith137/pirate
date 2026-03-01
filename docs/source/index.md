@@ -15,6 +15,7 @@ cli
 notes/build
 notes/hardware
 notes/network_protocol
+X->FRB metadata (v1) <configs/xengine/xengine_metadata_v1.yml>
 _grpc_generated
 ```
 
