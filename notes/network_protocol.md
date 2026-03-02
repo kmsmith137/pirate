@@ -1,4 +1,4 @@
-# X->FRB network protocol (v1)
+# X->FRB network protocol (v2)
 
 This document describes the network protocol used in the CHORD radio telescope, to send beamformed
 intensity data from the X-engine (a 64-node cluster) to the FRB search backend (a 14-node cluster).
@@ -15,14 +15,16 @@ The network protocol for each of these connections is as follows:
 
 - The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.
 
-- A zero-terminated ascii string follows, containing metadata in the format defined by [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml). There is a C++ class `XEngineMetadata` for parsing this string.
+- A zero-terminated ascii string follows, containing metadata in the format defined by [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v2.yml). There is a C++ class `XEngineMetadata` for parsing this string.
 
   Note that the metadata includes `freq_channels` and `nbeams`. Here, `nbeams` is the (receiver-dependent) number of 
   beams sent to the FRB search node, and `nfreq = len(freq_channels)` is the (sender-dependent) number of frequency 
   channels sent by the X-engine node.
 
-- Next, a sequence of shape `(nbeams, nfreq, 256)` int4 arrays is sent.
-  Each such array represents 256 time samples of intensity data (one "minichunk").
+- Next, a sequence of (`uint64`, `(nbeams, nfreq, 256)` int4) pairs is sent.
+  Each uint64 is FPGA sequence number (seq) corresponding to the beginning of
+  the following array.
+  Each array represents 256 time samples of intensity data (one "minichunk").
   The value (-8) indicates "this sample is masked". 
   We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
 
