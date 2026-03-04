@@ -1,0 +1,111 @@
+# The purpose of this "X-engine metadata" file is to document the file format.
+# It will be used in two contexts:
+#
+#  1. Every X-engine node sends this file to every FRB node, at the beginning
+#    of the TCP stream.
+#
+#  2. As a configuration file for the "fake correlator" used for testing.
+#
+# This is a minimal "version 0", and will be extended later.
+
+version: 2
+
+# Frequency channels. The observed frequency band is divided into "zones".
+# Within each zone, all frequency channels have the same width, but the
+# channel width may differ between zones.
+#   zone_nfreq: number of frequency channels in each zone.
+#   zone_freq_edges: frequency band edges in MHz.
+# For example:
+#   zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz
+#   zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band
+#
+# In this config, we have:
+#  Total frequency channels: 28160
+#  Channel widths (MHz): [ 0.00610352, 0.012207, 0.0244141, 0.0976562, 0.195312 ]
+
+zone_nfreq: [8192, 8192, 6144, 2048, 3584]
+zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+
+# Suggestion: A global map of which frequencies are sent from each X-engine node, instead of the per-x-engine node field.  The xengine_id could (should?)
+# be its IP address
+freq_map: [
+  {xengine_id: XENGINE_01, freq_channels: [0, 10000, 20000, 28159]},
+  {xengine_id: XENGINE_02, freq_channels: [1, 10001, 20001]}
+]
+
+# Data for each beam, all fields required. An opaque id (required) and sky coordinates,
+# given as direction cosines in the grid frame.  The grid frame is defined by x & y unit vectors
+# which are orthogonal and lie along (or close to) the axes of the telescope grid. Each
+# beam has a skywards-directed unit vector b.  The grid_x and grid_y values are the x & y direction
+# cosines: b.x and b.y.
+#
+# This field is global and shared by all nodes
+beams: [
+  {id: 100, grid_x: 0.0, grid_y: 0.0},
+  {id: 200, grid_x: 0.1, grid_y: 0.0},
+  {id: 300, grid_x: 0.0, grid_y: 0.1},
+]
+
+# This specifies the mapping for which beams are processed by which node.
+# Each FRB server instance will have its own identifier which it will match
+# against an id in this list, and then retrieve the corresponding list of 
+# beam ids to process.
+beam_map: [
+  {frb_server_id: FRB_NODE_01, beam_ids: [100, 200]},
+  {frb_server_id: FRB_NODE_02, beam_ids: [300]}
+]
+
+# Each frame from the X-engine will come with the fpga sequence number (seq) at the beginning of the frame.
+# To keep time in pirate, we need to know:
+# - unix_ns_at_seq_0: the epoch (the UNIX time at seq = 0, in nanoseconds).
+# - dt_ns_per_seq: the rate at which seqs tick, number of nanoseconds per seq tick.
+# - seq_per_frame: the number of seq ticks covered by a data frame.
+#
+# In Kotekan language:
+# unix_nx_at_seq_0 = time0_ns
+# dt_ns_per_seq = fengine_fft_length / ADC_sampling_rate_GHz
+# seq_per_frame = 256 * frb_downsampling_factor (not sure if this exists)
+#
+# The sifter will need Earth Orientation Parameters (EOP) (which change in time and Kotekan has) and
+# a precession/nutation model (which Kotekan does *not* have) to compute RA/DEC for the beams.
+# Since the sifter has to do this calculation anyways, I propose we *don't* sent UT1 or EOP data
+# from Kotekan to Pirate, and instead rely on the sifter to make the astropy calls itself.
+#
+# This means the sifter may infer a *slightly* different UT1 for the same seq number compared to 
+# the X-engine (if it has more up-to-date EOP data).  The difference will be sub-ms, which I think is
+# acceptable?
+
+unix_ns_at_seq_0: 1772483060000000000
+dt_ns_per_seq: 5120
+seq_per_frame: 256
+
+######
+# Telescope alignment and localization parameters.
+######
+
+# Position on the Earth in degrees
+tel_origin_itrs_lat_deg: 49.32075144444
+tel_origin_itrs_lon_deg: -119.62081125
+
+# Unit vectors in the x & y grid directions, in topocentric coordinates.
+tel_grid_x_axis: [ 0.999974342398359362,
+                -0.000037539331442772,
+                -0.007163318767675494]
+tel_grid_y_axix: [0.000065403387739210,
+                0.999992433220348809,
+                0.003889630373557614]
+
+# Unit vectors for the dish frame, the elevation axis and vertical axis, in
+# topocentric coordinates.
+tel_dish_elev_axis: [0.99999999838132391,
+                -0.000056897733584327,
+                0.0]
+tel_dish_vert_axis: [0.0, 0.0, 1.0]
+
+# The dish pointing angle, co-elevation in degrees: angle away from vertical,
+# north is positive
+tel_dish_coelev_deg: 0.0
+
+# Values of dish separation in x and y directions in meters.
+tel_dish_separation_x_m: 6.300156854906823
+tel_dish_separation_y_m: 8.500057809796308
