@@ -26,34 +26,28 @@ version: 2
 zone_nfreq: [8192, 8192, 6144, 2048, 3584]
 zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 
-# Suggestion: A global map of which frequencies are sent from each X-engine node, instead of the per-x-engine node field.  The xengine_id could (should?)
-# be its IP address
-freq_map: [
-  {xengine_id: XENGINE_01, freq_channels: [0, 10000, 20000, 28159]},
-  {xengine_id: XENGINE_02, freq_channels: [1, 10001, 20001]}
-]
+# Optional: which frequency channels are present?
+# A list of distinct integers 0 <= (channel_id) < (total frequency channels).
+# Only makes sense in "context 1" (see above), to indicate which frequency channels
+# are sent by a particular X-engine node.
 
-# Data for each beam, all fields required. An opaque id (required) and sky coordinates,
+freq_channels: [ 0, 10000, 20000, 28159 ]
+
+# Data for each beam recieved by this node, all fields required. An opaque id and sky coordinates,
 # given as direction cosines in the grid frame.  The grid frame is defined by x & y unit vectors
 # which are orthogonal and lie along (or close to) the axes of the telescope grid. Each
 # beam has a skywards-directed unit vector b.  The grid_x and grid_y values are the x & y direction
 # cosines: b.x and b.y.
-#
-# This field is global and shared by all nodes
 beams: [
   {id: 100, grid_x: 0.0, grid_y: 0.0},
   {id: 200, grid_x: 0.1, grid_y: 0.0},
   {id: 300, grid_x: 0.0, grid_y: 0.1},
 ]
 
-# This specifies the mapping for which beams are processed by which node.
-# Each FRB server instance will have its own identifier which it will match
-# against an id in this list, and then retrieve the corresponding list of 
-# beam ids to process.
-beam_map: [
-  {frb_server_id: FRB_NODE_01, beam_ids: [100, 200]},
-  {frb_server_id: FRB_NODE_02, beam_ids: [300]}
-]
+#############
+# Timekeeping
+#############
+
 
 # Each frame from the X-engine will come with the fpga sequence number (seq) at the beginning of the frame.
 # To keep time in pirate, we need to know:
@@ -74,14 +68,35 @@ beam_map: [
 # This means the sifter may infer a *slightly* different UT1 for the same seq number compared to 
 # the X-engine (if it has more up-to-date EOP data).  The difference will be sub-ms, which I think is
 # acceptable?
+#
+# unix_ns_at_seq_0 will change whenever the F-engine reboots, which will also require a reboot of
+# the X-engine.
 
 unix_ns_at_seq_0: 1772483060000000000
 dt_ns_per_seq: 5120
 seq_per_frame: 256
 
-######
+###########
 # Telescope alignment and localization parameters.
-######
+###########
+
+# Coordinate Systems
+#
+# Topocentric: origin at the given lat/lon. x-axis is directed exactly East (increasing Longitude),
+#   y-axis is directed exactly North (increasing Latitude), z-axis is directed exactly "up" (increasing
+#   altitude). orthogonal, Z = X x Y.
+#
+# Grid: origin at SW corner of Dish Array, aligned with Dish Array.  x-axis directed "east-ish"
+#   parallel to dish "e/w" separatation vector.  y-axis directed "north-ish" parallel to "n/s"
+#   separation vector.  Z = X x Y points normal to grid plane.  Dish grid lives in x-y plane at a
+#   constant Z. Orthogonal. Rotated by O(1) degrees from "Topocentric"
+#
+# Dish Elevation Axis: The axis around which the dishes pivot. positive is in the east direction.
+#   *Not* parallel to the dish grid "e/w" separation. "Coelevation" pointing measures an angle around
+#   this axis.
+#
+# Dish Vertical Axis: Local "up/zenith" for the dishes. The direction which has coelevation = 0.0.
+#   Orthogonal to the Dish Elevation axis.
 
 # Position on the Earth in degrees
 tel_origin_itrs_lat_deg: 49.32075144444
@@ -91,7 +106,7 @@ tel_origin_itrs_lon_deg: -119.62081125
 tel_grid_x_axis: [ 0.999974342398359362,
                 -0.000037539331442772,
                 -0.007163318767675494]
-tel_grid_y_axix: [0.000065403387739210,
+tel_grid_y_axis: [0.000065403387739210,
                 0.999992433220348809,
                 0.003889630373557614]
 
