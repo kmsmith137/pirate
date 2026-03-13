@@ -10,6 +10,7 @@ import ksgpu
 
 from . import pirate_pybind11
 from . import casm
+from . import chime
 from . import kernels
 from . import loose_ends
 from . import core
@@ -157,13 +158,14 @@ def parse_time(subparsers):
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
     parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
+    parser.add_argument('--chime', action='store_true', help='Runs time_chime_frb_upchan()')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time_selected()')
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
     
 def time_command(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'zomb', 'cdd2', 'gdqk', 'gtgk' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -182,6 +184,8 @@ def time_command(args):
         kernels.GpuDedispersionKernel.time_selected()
     if run_all_timings or args.casm:
         casm.CasmBeamformer.run_timings(args.ncu)
+    if run_all_timings or args.chime:
+        chime.time_chime_frb_upchan()
     if run_all_timings or args.zomb:
         loose_ends.time_cpu_downsample(nthreads)
         loose_ends.time_gpu_downsample()
