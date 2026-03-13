@@ -286,6 +286,7 @@ HFILES = \
   include/pirate/Barrier.hpp \
   include/pirate/BumpAllocator.hpp \
   include/pirate/CasmBeamformer.hpp \
+  include/pirate/ChimeBeamformer.hpp \
   include/pirate/CoalescedDdKernel2.hpp \
   include/pirate/constants.hpp \
   include/pirate/CudaEventRingbuf.hpp \

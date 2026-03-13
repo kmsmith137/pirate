@@ -1,5 +1,17 @@
+#include "../include/pirate/ChimeBeamformer.hpp"
+
+#include <algorithm>   // std::max
 #include <cuda_fp16.h>
 #include <cufftdx.hpp>
+
+#include <ksgpu/xassert.hpp>
+#include <ksgpu/cuda_utils.hpp>   // CUDA_PEEK
+using ksgpu::Array;
+
+namespace pirate {
+#if 0
+}  // editor auto-indent
+#endif
 
 
 // -------------------------------------------------------------------------------------------------
@@ -135,7 +147,9 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
 //
 // Kernel is launched with {32,16} threads per block.
 
-__global__ void chime_frb_upchan(const __half2 *data, float *results_array)
+
+__global__ void __launch_bounds__(512,2)
+chime_frb_upchan(const __half2 *data, float *results_array)
 {
     // Shared memory
     // __half2 E[128][34];  // 17 KB
@@ -275,3 +289,66 @@ __global__ void chime_frb_upchan(const __half2 *data, float *results_array)
     results_array[roff] = v0;
     results_array[roff + bstride] = v1;
 }
+
+// 'data': shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
+// 'results_array': shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+void launch_chime_frb_upchan(const __half *data, float *results_array, long T, long F, cudaStream_t stream)
+{
+    xassert(T > 0);
+    xassert(F > 0);
+    xassert_divisible(T, 768);
+
+    long T768 = T / 768;
+
+    // Shared memory: __half2 E[128][34] + cuFFTDx workspace.
+    // Query cuFFTDx shared memory for each target SM and take the max.
+    using FFTdesc = decltype(
+          cufftdx::Size<128>()
+          + cufftdx::Precision<float>()
+          + cufftdx::Type<cufftdx::fft_type::c2c>()
+          + cufftdx::Direction<cufftdx::fft_direction::forward>()
+          + cufftdx::ElementsPerThread<4>()
+          + cufftdx::FFTsPerBlock<16>()
+          + cufftdx::Block()
+      );
+
+    constexpr unsigned int smem_fft = std::max({
+        decltype(FFTdesc() + cufftdx::SM<800>())::shared_memory_size,
+        decltype(FFTdesc() + cufftdx::SM<860>())::shared_memory_size,
+        decltype(FFTdesc() + cufftdx::SM<890>())::shared_memory_size
+    });
+
+    unsigned int smem_nbytes = (128 * 34 * sizeof(__half2)) + smem_fft;
+    
+    chime_frb_upchan<<< {32,(uint)F,(uint)T768}, {32,16}, smem_nbytes, stream >>>
+        (reinterpret_cast<__const __half2 *> (data), results_array);
+
+    CUDA_PEEK("chime_frb_upchan");
+}
+
+
+// 'data': shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
+// 'results_array': shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+void launch_chime_frb_upchan(const Array<__half> &data, Array<float> &results_array, cudaStream_t stream)
+{
+    // data: shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
+    xassert(data.ndim == 5);
+    long T = data.shape[0];
+    long F = data.shape[1];
+    xassert_eq(data.shape[2], 2);
+    xassert_eq(data.shape[3], 1024);
+    xassert_eq(data.shape[4], 2);
+    xassert(data.on_gpu());
+    xassert(data.is_fully_contiguous());
+
+    // results_array: shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+    xassert_divisible(T, 768);
+    xassert_shape_eq(results_array, ({1024, F, T/384, 16}));
+    xassert(results_array.on_gpu());
+    xassert(results_array.is_fully_contiguous());
+
+    launch_chime_frb_upchan(data.data, results_array.data, T, F, stream);
+}
+
+} // namespace pirate
+
