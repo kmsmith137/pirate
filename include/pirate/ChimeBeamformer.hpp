@@ -9,15 +9,18 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+// CHIME beamformer is split between two source files, in order to parallelize computation.
+// (Compile times are high since we use cufftdx.)
+//
+//  - ChimeBeamformer1.cu: chime_frb_beamform() and friends
+//  - ChimeBeamformer2.cu: chime_frb_upchan() and friends
+
 
 // 'data': shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
 // 'results_array': shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
-
 extern void launch_chime_frb_upchan(const __half *data, float *results_array, long T, long F, cudaStream_t stream=nullptr);
 extern void launch_chime_frb_upchan(const ksgpu::Array<__half> &data, ksgpu::Array<float> &results_array, cudaStream_t stream=nullptr);
-
 extern void cpu_chime_frb_upchan(const ksgpu::Array<float> &data, ksgpu::Array<float> &results_array);
-
 extern void time_chime_frb_upchan();
 
 

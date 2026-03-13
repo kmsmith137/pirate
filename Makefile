@@ -178,7 +178,7 @@ LIB_SRCFILES = \
   src_lib/Barrier.cpp \
   src_lib/BumpAllocator.cpp \
   src_lib/CasmBeamformer.cu \
-  src_lib/ChimeBeamformer.cu \
+  src_lib/ChimeBeamformer2.cu \
   src_lib/CoalescedDdKernel2.cu \
   src_lib/CudaEventRingbuf.cpp \
   src_lib/CudaStreamPool.cpp \
