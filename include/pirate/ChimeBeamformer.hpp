@@ -16,6 +16,8 @@ namespace pirate {
 extern void launch_chime_frb_upchan(const __half *data, float *results_array, long T, long F, cudaStream_t stream=nullptr);
 extern void launch_chime_frb_upchan(const ksgpu::Array<__half> &data, ksgpu::Array<float> &results_array, cudaStream_t stream=nullptr);
 
+extern void time_chime_frb_upchan();
+
 
 } // namespace pirate
 

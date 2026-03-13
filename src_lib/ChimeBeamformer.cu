@@ -4,9 +4,14 @@
 #include <cuda_fp16.h>
 #include <cufftdx.hpp>
 
+#include <iostream>
+
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>   // CUDA_PEEK
-using ksgpu::Array;
+#include <ksgpu/KernelTimer.hpp>
+
+using namespace std;
+using namespace ksgpu;
 
 namespace pirate {
 #if 0
@@ -348,6 +353,35 @@ void launch_chime_frb_upchan(const Array<__half> &data, Array<float> &results_ar
     xassert(results_array.is_fully_contiguous());
 
     launch_chime_frb_upchan(data.data, results_array.data, T, F, stream);
+}
+
+
+void time_chime_frb_upchan()
+{
+    long T = 49152;
+    long F = 16;
+    long niterations = 1000;
+    long nstreams = 1;
+
+    // Global memory: read data + write results_array.
+    // data: shape=(T,F,2,1024,2), dtype=__half (2 bytes)
+    // results_array: shape=(1024,F,T/384,16), dtype=float (4 bytes)
+    double gmem_gb = (double(T) * F * 2 * 1024 * 2 * sizeof(__half)
+                      + 1024.0 * F * (T/384) * 16 * sizeof(float)) / pow(2,30.);
+
+    Array<__half> data({T, F, 2, 1024, 2}, af_gpu | af_zero);
+    Array<float> results_array({1024, F, T/384, 16}, af_gpu | af_zero);
+
+    KernelTimer kt(niterations, nstreams);
+
+    while (kt.next()) {
+        launch_chime_frb_upchan(data, results_array, kt.stream);
+
+        if (kt.warmed_up && (kt.curr_iteration % 50 == 49)) {
+            double gb_per_sec = gmem_gb / kt.dt;
+            cout << "chime_frb_upchan: " << gb_per_sec << " GB/s (iteration " << kt.curr_iteration << ")" << endl;
+        }
+    }
 }
 
 } // namespace pirate
