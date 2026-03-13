@@ -1,6 +1,7 @@
 #include "../include/pirate/ChimeBeamformer.hpp"
 
 #include <algorithm>   // std::max
+#include <cmath>       // cos, sin, M_PI
 #include <cuda_fp16.h>
 #include <cufftdx.hpp>
 
@@ -147,10 +148,28 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
 // 'data': shape=(T,F,2,1024), dtype=float16+16, axes (time,freq,pol,beam)
 // 'results_array': shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
 //
-// Each threadblock processes (32 beams, one coarse freq, 768 times).
-// Thus, gridDim = (32,F,T/768).
+// Computational steps are as follows.
 //
-// Kernel is launched with {32,16} threads per block.
+//  1. Divide the data into length-128 time chunks. Let's denote this step
+//     as a logical reshaping to a shape (T/128, 128, F, 2, 1024) array
+//     indexed by (thi, tlo, freq, pol, beam).
+//
+//  2. Fourier transform the length-128 'tlo' index, to obtain an array
+//     with the same shape (T/128, 128, F, 2, 1024). We interpret the
+//     length-F axis as a "coarse" frequency, and the length-128 axis
+//     as an "upchannelized" frequency, and denote the index variables
+//     (thi, ufreq, cfreq, pol, beam).
+//
+//     The FFT is performed with positive exponent exp(+2pi*i*j*k/128)
+//     and without a (1/128) prefactor.
+//
+//  3. Take the absolute square (complex -> real), and downsample by
+//     a factor 3 in time, 8 in ufreq, 2 in polarization, to get a
+//     'results' array with shape (T/384, 16, F, 1024),  This is written
+//     to memory in a transposed ordering (1024, F, T/384, 16).
+//
+// Each threadblock processes (32 beams, one coarse freq, 768 times).
+// Thus, gridDim = (32,F,T/768). The kernel is launched with blockDim = {32,16}.
 
 
 __global__ void __launch_bounds__(512,2)
@@ -353,6 +372,70 @@ void launch_chime_frb_upchan(const Array<__half> &data, Array<float> &results_ar
     xassert(results_array.is_fully_contiguous());
 
     launch_chime_frb_upchan(data.data, results_array.data, T, F, stream);
+}
+
+
+// CPU reference implementation of chime_frb_upchan(), for testing.
+// Uses O(N^2) brute-force DFT (not FFT), and float32 data (not float16).
+
+void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
+{
+    // data: shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
+    xassert(data.ndim == 5);
+    long T = data.shape[0];
+    long F = data.shape[1];
+    xassert_eq(data.shape[2], 2);
+    xassert_eq(data.shape[3], 1024);
+    xassert_eq(data.shape[4], 2);
+    xassert(data.on_host());
+    xassert(data.is_fully_contiguous());
+
+    // results_array: shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+    xassert_divisible(T, 384);
+    xassert_shape_eq(results_array, ({1024, F, T/384, 16}));
+    xassert(results_array.on_host());
+    xassert(results_array.is_fully_contiguous());
+
+    memset(results_array.data, 0, results_array.size * sizeof(float));
+
+    for (long beam = 0; beam < 1024; beam++) {
+        for (long cfreq = 0; cfreq < F; cfreq++) {
+            for (long thi = 0; thi < T/128; thi++) {
+                for (long ufreq = 0; ufreq < 128; ufreq++) {
+
+                    // DFT with positive exponent (no 1/N prefactor):
+                    //   X[ufreq] = sum_{tlo} x[tlo] * exp(+2*pi*i*tlo*ufreq/128)
+                    // Then absolute-square and sum over polarizations.
+
+                    float intensity = 0.0f;
+
+                    for (long pol = 0; pol < 2; pol++) {
+                        float re = 0.0f;
+                        float im = 0.0f;
+
+                        for (long tlo = 0; tlo < 128; tlo++) {
+                            long t = thi * 128 + tlo;
+                            long idx = ((((t * F) + cfreq) * 2 + pol) * 1024 + beam) * 2;
+                            float x_re = data.data[idx];
+                            float x_im = data.data[idx + 1];
+
+                            double phase = 2.0 * M_PI * double(tlo) * double(ufreq) / 128.0;
+                            re += x_re * cos(phase) - x_im * sin(phase);
+                            im += x_re * sin(phase) + x_im * cos(phase);
+                        }
+
+                        intensity += re*re + im*im;
+                    }
+
+                    // Downsample: factor 3 in time, factor 8 in ufreq.
+                    long t_out = thi / 3;
+                    long ufreq_out = ufreq / 8;
+                    long ridx = ((beam * F + cfreq) * (T/384) + t_out) * 16 + ufreq_out;
+                    results_array.data[ridx] += intensity;
+                }
+            }
+        }
+    }
 }
 
 
