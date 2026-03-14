@@ -2,6 +2,7 @@
 
 #include <algorithm>   // std::max
 #include <cmath>       // cos, sin, M_PI
+#include <complex>
 #include <cuda_fp16.h>
 #include <cufftdx.hpp>
 
@@ -399,40 +400,39 @@ void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
 
     memset(results_array.data, 0, results_array.size * sizeof(float));
 
-    for (long beam = 0; beam < 1024; beam++) {
+    // Precompute twiddle factors: ei[n] = exp(+2*pi*i*n/128) for 0 <= n < 128.
+    vector<complex<float>> ei(128);
+    for (long n = 0; n < 128; n++) {
+        double phase = 2.0 * M_PI * n / 128.0;
+        ei[n] = { float(cos(phase)), float(sin(phase)) };
+    }
+
+    vector<complex<float>> v(128);
+    long tstride = data.strides[0];
+    long T128 = T / 128;
+
+    for (long t128 = 0; t128 < T128; t128++) {
+        long t384 = t128 / 3;
         for (long cfreq = 0; cfreq < F; cfreq++) {
-            for (long thi = 0; thi < T/128; thi++) {
-                for (long ufreq = 0; ufreq < 128; ufreq++) {
+            for (long pol = 0; pol < 2; pol++) {
+                for (long beam = 0; beam < 1024; beam++) {
+                    const float *psrc = &data.at({ 128*t128, cfreq, pol, beam, 0 });
+                    float *pdst = &results_array.at({ beam, cfreq, t384, 0 });
+                  
+                    for (long t = 0; t < 128; t++)
+                        v[t] = { psrc[t*tstride], psrc[t*tstride+1] };
 
-                    // DFT with positive exponent (no 1/N prefactor):
-                    //   X[ufreq] = sum_{tlo} x[tlo] * exp(+2*pi*i*tlo*ufreq/128)
-                    // Then absolute-square and sum over polarizations.
+                    for (int t = 0; t < 128; t++) {
+                        complex<float> x = { 0.0f, 0.0f };
+                        
+                        // DFT with positive exponent (no 1/N prefactor):
+                        //   X[ufreq] = sum_{tlo} x[tlo] * exp(+2*pi*i*tlo*ufreq/128)
+                        for (int u = 0; u < 128; u++)
+                            x += ei[(t*u) & 127] * v[u];
 
-                    float intensity = 0.0f;
-
-                    for (long pol = 0; pol < 2; pol++) {
-                        float re = 0.0f;
-                        float im = 0.0f;
-
-                        for (long tlo = 0; tlo < 128; tlo++) {
-                            long t = thi * 128 + tlo;
-                            long idx = ((((t * F) + cfreq) * 2 + pol) * 1024 + beam) * 2;
-                            float x_re = data.data[idx];
-                            float x_im = data.data[idx + 1];
-
-                            double phase = 2.0 * M_PI * double(tlo) * double(ufreq) / 128.0;
-                            re += x_re * cos(phase) - x_im * sin(phase);
-                            im += x_re * sin(phase) + x_im * cos(phase);
-                        }
-
-                        intensity += re*re + im*im;
+                        float intensity = x.real() * x.real() + x.imag() * x.imag();
+                        pdst[t >> 3] += intensity;
                     }
-
-                    // Downsample: factor 3 in time, factor 8 in ufreq.
-                    long t_out = thi / 3;
-                    long ufreq_out = ufreq / 8;
-                    long ridx = ((beam * F + cfreq) * (T/384) + t_out) * 16 + ufreq_out;
-                    results_array.data[ridx] += intensity;
                 }
             }
         }
@@ -461,8 +461,8 @@ void test_chime_frb_upchan()
     Array<float> results_cpu({1024, F, T/384, 16}, af_rhost | af_zero);
     cpu_chime_frb_upchan(data_cpu, results_cpu);
 
-    //assert_arrays_equal(results_cpu, results_gpu, "cpu", "gpu",
-    //                   {"beam","cfreq","time","ufreq"});
+    assert_arrays_equal(results_cpu, results_gpu, "cpu", "gpu",
+                       {"beam","cfreq","time","ufreq"});
 
     cout << "test_chime_frb_upchan: pass" << endl;
 }
