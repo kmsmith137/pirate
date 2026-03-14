@@ -221,4 +221,36 @@ pointer offsets are applied, we always write comments which:
  - Be careful not to use double precision by accident (e.g. `1.0` instead of `1.0f`).
    Double precision is very slow on many GPUs, including the L40S.
 
-   
+ 
+### Reviewing GPU kernels
+
+If you're asked to review `__device__` or `__global__` code for bugs, please note the following guidelines:
+
+ - There will probably be a lot of comments describing register assignments at different
+   points in the kernel. Please check systematically that the code is consistent with each
+   of these comments. Confusion over register assignments is a frequent source of bugs.
+
+ - Check all pointer offsets carefully, noting the guidelines above under "pointer offsets",
+   and register assignments documented in the code. Wrong pointer offsets (or inconsistency
+   with register assignments) is also a frequent source of bugs.
+ 
+ - Check that all global memory loads/stores are "cache-friendly", i.e. each instruction
+   operates on either 1, 2, or 4 entire cache lines per warp (depending on whether the
+   load/store is 32-bit, or "wide" 64/128-bit instruction), unless a comment explicitly
+   indicates otherwise.
+
+ - Check that all shared memory loads/stores are bank conflict free, unless a comment
+   explicitly indicates otherwise.
+ 
+ - Are there enough calls to `__syncthreads()`? Are there more calls than necessary?
+
+ - Any use of double precision (e.g. `1.0` instead of `1.0f`, or calling `sin` instead of `sinf`)
+   is considered a bug, unless there is a comment stating otherwise.
+
+ - Defining a `__global__` kernel without `__launch_bounds__` should be considered a bug,
+   unless there is a comment stating otherwise.
+ 
+ - Also check carefully for typos, and miscellaneous bugs not captured by the above guidelines.
+
+ - GPU kernels are subtle -- if you have any questions, or if comments in the code need
+   clarification, please ask in the chat.
