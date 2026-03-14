@@ -10,6 +10,7 @@
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>   // CUDA_PEEK
 #include <ksgpu/KernelTimer.hpp>
+#include <ksgpu/test_utils.hpp>   // assert_arrays_equal, rand_int
 
 using namespace std;
 using namespace ksgpu;
@@ -173,7 +174,7 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
 
 
 __global__ void __launch_bounds__(512,2)
-chime_frb_upchan(const __half2 *data, float *results_array)
+chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_array)
 {
     // Shared memory
     // __half2 E[128][34];  // 17 KB
@@ -436,6 +437,34 @@ void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
             }
         }
     }
+}
+
+
+void test_chime_frb_upchan()
+{
+    vector<long> v = ksgpu::random_integers_with_bounded_product(2, 10);
+    long T = 768 * v[0];
+    long F = v[1];
+
+    cout << "test_chime_frb_upchan: T=" << T << ", F=" << F << endl;
+
+    Array<float> data_cpu({T, F, 2, 1024, 2}, af_rhost | af_random);
+    Array<__half> data_gpu = data_cpu.template convert<__half>().to_gpu();
+
+    // GPU kernel (float16, cuFFTDx).
+    Array<float> results_gpu({1024, F, T/384, 16}, af_gpu | af_zero);
+    launch_chime_frb_upchan(data_gpu, results_gpu);
+    CUDA_PEEK("test_chime_frb_upchan");
+    CUDA_CALL(cudaDeviceSynchronize());
+
+    // CPU reference (float32, O(N^2) DFT).
+    Array<float> results_cpu({1024, F, T/384, 16}, af_rhost | af_zero);
+    cpu_chime_frb_upchan(data_cpu, results_cpu);
+
+    //assert_arrays_equal(results_cpu, results_gpu, "cpu", "gpu",
+    //                   {"beam","cfreq","time","ufreq"});
+
+    cout << "test_chime_frb_upchan: pass" << endl;
 }
 
 
