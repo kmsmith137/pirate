@@ -87,7 +87,7 @@ __device__ inline float _asymmetric_reduce(float x0, float x1, uint lane)
 }
 
 
-// Helper for _chime_frb_upchan().
+// Helper for chime_frb_upchan().
 //
 // This is a warp-local operation, whose input x[t] is a length-128 float16+16 array
 // with register assignment:
@@ -232,7 +232,7 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
     //   before: shape=(B,F,T/384,16), axes (beam,cfreq,t384,ufreq).
     //   after:  shape=(32,2,16), strides (32*F*T768, 16, 1)
 
-    results_array += (b32 * 32 * F + f) * (T768 * 32);
+    results_array += (b32 * 32UL * F + f) * ulong(T768 * 32);
     results_array += 32 * t768;
 
     // 'u' will accumulate intensity values for 32 beams, 16 ufreqs, 2 times.
@@ -314,6 +314,9 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
             _load_half4(sp + 32*34, e2, e3);
             _load_half4(sp + 64*34, e4, e5);
             _load_half4(sp + 96*34, e6, e7);
+
+            // Since each warp does an independent FFT, it's not safe to assume that cufftdx calls __syncthreads().
+            __syncthreads();
 
             // FFT, square, sum over f0, f1.
             char *smem_fft = smem_all + 17*1024;
