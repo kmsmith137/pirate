@@ -54,6 +54,11 @@ logical index bits (on the LHS and RHS of the `<->` symbol). This is a flexible 
 fully specifies how data is distributed on the GPU hardware, and can describe a wide range
 of possible mappings.
 
+**Note on complex datatypes:** when a datatype is complex, sometimes it's convenient to
+denote the register assignment using the corresponding real dtype, with an extra logical
+index bit `ReIm`. For example, if we have a `float16+16` array, with real/imag parts
+packed into a `__half2`, this could be represented as a `float16` array with `simd: s0 <-> ReIm`.
+
 ## Local transpose
 
 The "local transpose" is a thread-local operation which exchanges a "simd" bit for a "register" bit.
@@ -150,3 +155,70 @@ y3 = (threadIdx.x & 0x4) ? y3 : tmp;
 ```
 Local and warp transposes can be used as "building blocks", to build more complicated shuffling
 operations via composition.
+
+## Pointer offsets
+
+When a pointer is passed to a kernel, the value is the same on all threads.
+In general, before the pointer is dereferenced, three offsets may be added: a per-block, per-warp, and per-thread offset.
+After adding each offset, the array can be viewed as a smaller array, perhaps with nontrivial strides.
+Here's an example:
+```cpp
+// In this example, 'p' points to a shape (32,128,1024) array in global memory.
+// We assume that gridDim = { 128, 32 }, and each block processes a shape-(32,1,32) subarray.
+// We assume that blockDim = { 32, 32 }, and each warp processes a shape-(1,1,32) subarray.
+// Each thread processes one element.
+
+__global__ void f(float *p)
+{
+    // Apply per-block offset
+    //   before: shape (32,128,1024), contiguous
+    //   after: shape (32,32), strides (128*1024, 1)
+    
+    p += (blockIdx.x * 1024) + (blockIdx.y * 32);
+
+    // Apply per-warp offset
+    //   before: shape=(32,32), strides (128*1024, 1)
+    //   after: shape=(32,), contiguous
+
+    p += (threadIdx.y * 128 * 1024);
+
+    // In this example, we choose to apply the per-thread offset
+    // when the pointer is dereferenced.
+
+    float x = p[threadIdx.x];
+    
+    // ... further processing ...
+}
+```
+Note that in this example, the array dimension decreased as offsets were applied.
+
+Incorrect offsets are a common source of bugs. In order to minimize confusion, whenever
+pointer offsets are applied, we always write comments which:
+
+  - Explain which offsets have been applied so far (per-block, per-warp, per-thread)
+  - Explicitly state shapes and strides before and after the offset.
+
+
+## Performance guidelines
+
+ - Except in special situations, global memory loads/stores should be done with 32, 64, or 128 bit
+   instructions. Each warp should always read/write entire cache lines (either 1, 2, or 4 128-byte
+   cache lines per 32, 64, or 128 bit instruction).
+   
+   The wider instructions get higher memory bandwidth. However, we're mainly interested in an L40S GPU,
+   where gains are small: 64-bit instructions get ~15% higher bandwidth than 32-bit, and 128-bit instructions
+   offer negligible additional improvement.
+
+   Many GPU kernels are global memory bandwidth limited. In these cases, kernel performance is entirely
+   determined by the width of the instructions used to load/store global memory! Using a wider
+   instruction is often a straightforward change, so should be done even if the gain is only ~15%.
+
+ - Except in special situations, shared memory loads/stores should be bank conflict free.
+   On some architectures, crucially including the L40S, 64-bit shared memory loads/stores have twice
+   the bandwidth as 32-bit instructions! Use 64-bit loads/stores in critical paths unless there's a
+   technical obstacle.
+
+ - Be careful not to use double precision by accident (e.g. `1.0` instead of `1.0f`).
+   Double precision is very slow on many GPUs, including the L40S.
+
+   
