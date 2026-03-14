@@ -112,7 +112,7 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
           cufftdx::Size<128>()
           + cufftdx::Precision<float>()       // or __half
           + cufftdx::Type<cufftdx::fft_type::c2c>()
-          + cufftdx::Direction<cufftdx::fft_direction::forward>()
+          + cufftdx::Direction<cufftdx::fft_direction::inverse>()
           + cufftdx::ElementsPerThread<4>()
           + cufftdx::FFTsPerBlock<16>()
 #ifdef __CUDA_ARCH__
@@ -519,8 +519,13 @@ void test_chime_frb_upchan()
     Array<float> results_cpu({B, F, T/384, 16}, af_rhost | af_zero);
     cpu_chime_frb_upchan(data_cpu, results_cpu);
 
+    // Call assert_arrays_equal() with thresholds that are appropriate for float16.
+    // (By default, it will use float32 thresholds, since the 'results' arrays are float32).
+    double epsrel = 10 * Dtype::from_str("float16").precision();
+    double epsabs = epsrel * 48 * 128 * 0.67;  // mean intensity
+    
     assert_arrays_equal(results_cpu, results_gpu, "cpu", "gpu",
-                       {"beam","cfreq","time","ufreq"});
+                        {"beam","cfreq","time","ufreq"}, epsabs, epsrel);
 
     cout << "test_chime_frb_upchan: pass" << endl;
 }
