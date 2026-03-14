@@ -82,7 +82,7 @@ namespace pirate {
 // The kernel is launched with 32 warps, and blockDim = { 64, 16 }.
 
 
-__global__ void __launch_bounds___(1024,1)
+__global__ void __launch_bounds__(1024,1)
 chime_frb_beamform(
     const uint8_t *__restrict__ inputData,  // shape (T,F,2,4,256)
     const uint *__restrict__ map,           // shape (F,256)
@@ -176,21 +176,21 @@ chime_frb_beamform(
 
         // Now we do a lot of shuffling operations, to change the register assignment.
 
-        xxx;  // local tranpose (simd s0) <-> (register r2)
-        xxx;  // local tranpose (simd s1) <-> (register r1)
+        xxx;  // local transpose (simd s0) <-> (register r1)
+        xxx;  // local transpose (simd s1) <-> (register r2)
 
         // At this point, the register assignment is (dtype uint4+4):
         //  simd:      e1 e0
-        //  register:  n0 n1 n2
+        //  register:  n1 n0 n2
         //  thread:    t0 n6 n5 n4 n3
         //  warp:      t4 t3 t2 t1 n7
 
         xxx;  // warp transpose (register r0) <-> (thread t4)
-        xxx;  // warp transpose (register r1) <-> (thread t3)
+        xxx;  // warp transpose (register r2) <-> (thread t3)
 
         // At this point, the register assignment is (dtype uint4+4):
         //  simd:      e1 e0
-        //  register:  n0 n6 t0
+        //  register:  n6 n0 t0
         //  thread:    n2 n1 n5 n4 n3
         //  warp:      t4 t3 t2 t1 n7
 
@@ -210,7 +210,7 @@ chime_frb_beamform(
         //
         // where there is no length-4 ew axis since we have packed four uint4+4s
         // into a uint, with simd (s1 s0) <-> (e1 e0). We can use a 64-bit,
-        // bank-conflict-free store instruction hree.
+        // bank-conflict-free store instruction here.
 
         xxx;   // store to smem_E
 
