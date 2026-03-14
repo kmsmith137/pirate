@@ -66,31 +66,44 @@ __device__ __forceinline__ void _store_half4(__half2 *p, __half2 x, __half2 y)
 
 
 // Helper for _fft128_sq() and chime_frb_upchan().
-__device__ inline float _asymmetric_reduce(float x, float y, uint lane)
-{
-    // Input:
-    //  register <-> i
-    //  lane <-> j
-    //
-    // Output:
-    //  lane <-> i,   summed over j
+//
+// This is a thread-local operation, whose input 'x' is a (2,32) array
+// with register assignment:
+//   register:  i
+//   thread:    j4 j3 j2 j1 j0
+//
+// The output is an array 'y' formed by summing 'x' over one of the index
+// bits j_m, to obtain a (2,16) array with register assignment:
+//   thread:    j4 ... i ... j0   (j0 replaces j_m).
+//
+// The 'lane' argument is (1 << m).
 
-    float t = (threadIdx.x & lane) ? x : y;
+__device__ inline float _asymmetric_reduce(float x0, float x1, uint lane)
+{
+    float t = (threadIdx.x & lane) ? x0 : x1;
     t = __shfl_sync(~0U, t, threadIdx.x ^ lane);
-    t += (threadIdx.x & lane) ? y : x;
+    t += (threadIdx.x & lane) ? x1 : x0;
     return t;
 }
 
 
-
-// FFT, square, sum over f0+f1
+// Helper for _chime_frb_upchan().
 //
-// Input: float16+16 x
-//   register <-> t6 t5
-//   lane <-> t4 t3 t2 t1 t0
+// This is a warp-local operation, whose input x[t] is a length-128 float16+16 array
+// with register assignment:
+//   simd:      ReIm
+//   register:  t6 t5
+//   thread:    t4 t3 t2 t1 t0
 //
-// Output: float32 I
-//   lane <-> f4 f3 f2 f6 f5
+// We convert float16+16 -> float32+32, and take an FFT, to obtain a length-128 array y[f]
+// with index bits (f6 f5 f4 f3 f2 f1 f0)_2.
+//
+// Next, we take the absolute square, and sum array elements in consecutive groups of 4
+// to obtain a length-32 array I[]. We'll parameterize I-indices using index bits (f6 f5 f4 f3 f2)_2,
+// reflecting the structure of the sum ("consecutive groups of 4" means summing over f0,f1).
+//
+// We return the z array in register assignment (one float32 per thread):
+//   thread: f4 f3 f2 f6 f5
 
 __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x3, char *smem)
 {
@@ -113,6 +126,7 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
     using complex_t = typename FFT::value_type;
     static_assert(sizeof(complex_t) == 8);
     static_assert(FFT::storage_size == 4);
+    static_assert(FFT::shared_memory_size <= 16*1024);  // see "crucial note" in chime_frb_upchan()
 
     complex_t data[4];
     data[0] = complex_t(__half2float(x0.x), __half2float(x0.y));
@@ -121,43 +135,44 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
     data[3] = complex_t(__half2float(x3.x), __half2float(x3.y));
     
     // FFT and absolute square.
-    // After these steps, 't' has register assignment
-    //   register <-> f6 f5
-    //   lane <-> f4 f3 f2 f1 f0
-
+    
     FFT().execute(data, smem);    
 
-    float t0 = data[0].x * data[0].x + data[0].y * data[0].y;
-    float t1 = data[1].x * data[1].x + data[1].y * data[1].y;
-    float t2 = data[2].x * data[2].x + data[2].y * data[2].y;
-    float t3 = data[3].x * data[3].x + data[3].y * data[3].y;
-
-    // Call _asymmetric_reduce(), to sum over f0/f1, while "shuffling" f6/r5.
-    // After these steps, 'u' has register assignment:
-    //   lane <-> f4 f3 f2 f6 f5
+    float y0 = data[0].x * data[0].x + data[0].y * data[0].y;
+    float y1 = data[1].x * data[1].x + data[1].y * data[1].y;
+    float y2 = data[2].x * data[2].x + data[2].y * data[2].y;
+    float y3 = data[3].x * data[3].x + data[3].y * data[3].y;
     
-    float u0 = _asymmetric_reduce(t0, t1, 0x1);   // sum over f0
-    float u1 = _asymmetric_reduce(t2, t3, 0x1);   // sum over f0
-    float u = _asymmetric_reduce(u0, u1, 0x2);    // sum over f1
+    // After these steps, 'y' has register assignment
+    //   register: f6 f5
+    //   thread:   f4 f3 f2 f1 f0
 
-    return u;
+    // Call _asymmetric_reduce(), to sum over f0/f1, while "shuffling" f6/f5.
+    float w0 = _asymmetric_reduce(y0, y1, 0x1);   // sum over f0
+    float w1 = _asymmetric_reduce(y2, y3, 0x1);   // sum over f0
+    float z = _asymmetric_reduce(w0, w1, 0x2);    // sum over f1
+    
+    // After these steps, 'z' has register assignment:
+    //   thread: f4 f3 f2 f6 f5
+
+    return z;
 }
 
 
 // This is the "upchannelization" part of the CHIME FRB beamforming kernel, which
 // runs after the "beamforming" part.
 //
-// 'data': shape=(T,F,2,1024), dtype=float16+16, axes (time,freq,pol,beam)
-// 'results_array': shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+// 'data': shape=(T,F,2,B), dtype=float16+16, axes (time,freq,pol,beam)
+// 'results_array': shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
 //
 // Computational steps are as follows.
 //
 //  1. Divide the data into length-128 time chunks. Let's denote this step
-//     as a logical reshaping to a shape (T/128, 128, F, 2, 1024) array
+//     as a logical reshaping to a shape (T/128, 128, F, 2, B) array
 //     indexed by (thi, tlo, freq, pol, beam).
 //
 //  2. Fourier transform the length-128 'tlo' index, to obtain an array
-//     with the same shape (T/128, 128, F, 2, 1024). We interpret the
+//     with the same shape (T/128, 128, F, 2, B). We interpret the
 //     length-F axis as a "coarse" frequency, and the length-128 axis
 //     as an "upchannelized" frequency, and denote the index variables
 //     (thi, ufreq, cfreq, pol, beam).
@@ -167,47 +182,70 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
 //
 //  3. Take the absolute square (complex -> real), and downsample by
 //     a factor 3 in time, 8 in ufreq, 2 in polarization, to get a
-//     'results' array with shape (T/384, 16, F, 1024),  This is written
-//     to memory in a transposed ordering (1024, F, T/384, 16).
+//     'results' array with shape (T/384, 16, F, B),  This is written
+//     to memory in a transposed ordering (B, F, T/384, 16).
 //
 // Each threadblock processes (32 beams, one coarse freq, 768 times).
-// Thus, gridDim = (32,F,T/768). The kernel is launched with blockDim = {32,16}.
+// Thus, gridDim = (B/32,F,T/768). We assume that B is a multiple of 32,
+// and T is a multiple of 768. The values of (B,F,T) are supplied to the
+// kernel via gridDims (not kernel args).
+//
+// The kernel is launched with 16 warps, and blockDim = {32,16}.
 
 
 __global__ void __launch_bounds__(512,2)
 chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_array)
 {
-    // Shared memory
-    // __half2 E[128][34];  // 17 KB
-    //   + cuFFT            // 16 KB
+    // Shared memory layout (33 KB/threadblock):
+    //
+    //   __half2  smem_e[128][34];      // 17 KB
+    //   char     smem_fft[16*1024];    // 16 KB
+    //
+    // The 'smem_e' array is used to reorganize float16+16 input data, after reading
+    // from global memory, and before the FFT kernel. The 'smem_fft' array is used as
+    // scratch space by cufftdx. (Crucial note: in principle, the cufftdx scratch space
+    // is hardware-dependendent. There is a static_assert() in _fft128_sq() which
+    // checks that the scratch space is <= 16*1024 when compiling for a new gpu arch.)
+    
+    __shared__ char smem_all[33*1024];
 
-    extern __shared__ __half2 smem_e[];
-    char *smem_fft = reinterpret_cast<char *>(smem_e + 128*34);
-
-    // Block indices.
-    // Note that (T,F) are passed implicitly throgh grid dims.
+    // Block indices. Throughout this kernel, 't768' denotes a time index which has
+    // been downsampled by a factor 768 relative to the 'data' array, and analogously
+    // for t384, t128, etc.
+    
     uint b32 = blockIdx.x;
     uint f = blockIdx.y;
-    ulong t768 = blockIdx.z;  // note ulong
-    ulong F = gridDim.y;      // note ulong
-    ulong T768 = gridDim.z;   // note ulong
+    uint t768 = blockIdx.z;
+
+    uint B32 = gridDim.x;
+    uint F = gridDim.y;
+    uint T768 = gridDim.z;
     
-    // Absorb block indices into 'data'.
-    // data: shape=(T,F,2,1024), axes (time,freq,pol,beam)
-    data += (t768 * 768UL * F + f) * 2048UL;
+    // Apply per-block offsets to 'data' pointer.
+    //   before: shape=(T,F,2,B), axes (time,freq,pol,beam)
+    //   after: shape=(768,2,32), strides (2*F*B, B, 1)
+
+    data += (768UL*t768*F + f) * (64 * B32);
     data += (b32 * 32);
 
-    // Absorb block indices into 'results_array'.
-    // results_array: shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+    // Apply per-block offsets to 'results_array'.
+    //   before: shape=(B,F,T/384,16), axes (beam,cfreq,t384,ufreq).
+    //   after:  shape=(32,2,16), strides (32*F*T768, 16, 1)
+
     results_array += (b32 * 32 * F + f) * (T768 * 32);
     results_array += 32 * t768;
 
-    // 'u' will accumulate intensity values for 32 beams, 16 coarse freqs, 2 times.
-    // It's convenient to use the following weird register assignment:
-    //   register <-> t384
-    //   lane <-> f4 f3 b0 f6 f5
-    //   warp <-> b4 b3 b2 b1
-
+    // 'u' will accumulate intensity values for 32 beams, 16 ufreqs, 2 times.
+    // It's convenient to use the following weird register assignment
+    //   register:  t384
+    //   thread:      f4 f3 b0 f6 f5
+    //   warp:      b4 b3 b2 b1
+    //
+    // Note that we denote the length-2 time index by 't384'.
+    // We parametrize the length-16 ufreq axis using index bits (f6 f5 f4 f3)_2,
+    // since it will obtained by summing a length-128 axis in consecutive groups of 8
+    // (i.e. summing over f0,f1,f2). See related comment above _fft128_sq().
+    
     float u0 = 0.0f;
     float u1 = 0.0f;
 
@@ -215,105 +253,137 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
     for (uint t128 = 0; t128 < 6; t128++) {
         for (uint pol = 0; pol < 2; pol++) {
             
-            // Read data from global memory
-            //   register <-> t6 t5 b0
-            //   lane <-> t0 b4 b3 b2 b1
-            //   warp <-> t4 t3 t2 t1
+            // Read data from global memory (128 times, 32 beams) in register assignment
+            //   register:  t6 t5 b0
+            //   thread:    t0 b4 b3 b2 b1
+            //   warp:      t4 t3 t2 t1
             //
-            // Use 64-bit load instructions! This is the most important part of the kernel.
+            // We use 64-bit load instructions here. (This kernel is expected to be GPU memory
+            // bandwidth limited, so this detail determines overall performance.)
             
-            uint bhi = (threadIdx.x & 0xf);                      // index bits (b4 b3 b2 b1)
-            uint tlo = (threadIdx.x >> 4) | (threadIdx.y << 1);  // index bits (t4 t3 t2 t1 t0)
+            uint bhi = (threadIdx.x & 0xf);                      // index bits (b4 b3 b2 b1)_2
+            uint tlo = (threadIdx.x >> 4) | (threadIdx.y << 1);  // index bits (t4 t3 t2 t1 t0)_2
 
-            // 'data' is a shape (768,2,32) array with strides (2048*F, 1024, 1)
-            // (After "absorbing" block indices, see above.)
+            // Apply remaining 'data' offsets (per-warp, per-thread, t128, pol).
+            // We don't apply the (t6, t5, b0) offsets.
+            // After these offsets are applied, 'data' is a per-thread shape (4,2) array.
+            //   before: shape (768, 2, 32), strides (2*F*B, B, 1)
+            //   after:  shape (4,2), strides (64*F*B, 1)
+
+            ulong i = (t128 << 7) + tlo;
+            i = i * (F << 1) + pol;
+            i = i * (B32 << 5) + (bhi << 1);
             
-            const __half2 *dp = data;
-            dp += ulong(t128 << 18) * F;  // (128 * t128) * (2048 * F)
-            dp += (1024*pol + 2*bhi);
+            const __half2 *dp = data + i;
+            ulong dstride = (ulong(F) * ulong(B32)) << 11;  // 64*F*B
             
             __half2 e0, e1, e2, e3, e4, e5, e6, e7;
             
             _load_half4(dp, e0, e1);
-            _load_half4(dp + 32*2048*F, e2, e3);
-            _load_half4(dp + 64*2048*F, e4, e5);
-            _load_half4(dp + 96*2048*F, e6, e7);
+            _load_half4(dp + dstride, e2, e3);
+            _load_half4(dp + 2*dstride, e4, e5);
+            _load_half4(dp + 3*dstride, e6, e7);
             
-            // Write to shared memory, using 64-bit bank conflict free stores.
-            // __half2 E[128][34]
+            // Write to shared memory, using 64-bit bank-conflict-free store instructions.
+            //   register:  t6 t5 b0
+            //   thread:    t0 b4 b3 b2 b1
+            //   warp:      t4 t3 t2 t1
+            //   __half2    smem_e[128][34];   (time, beam)
 
-            uint s = (34 * tlo) + (2 * bhi);
-            
-            _store_half4(smem_e + s, e0, e1);
-            _store_half4(smem_e + s + 32*34, e2, e3);
-            _store_half4(smem_e + s + 64*34, e4, e5);
-            _store_half4(smem_e + s + 96*34, e6, e7);
+            __half2 *sp = (__half2 *)smem_all + (34*tlo) + (2*bhi);
+
+            _store_half4(sp, e0, e1);
+            _store_half4(sp + 32*34, e2, e3);
+            _store_half4(sp + 64*34, e4, e5);
+            _store_half4(sp + 96*34, e6, e7);
             
             __syncthreads();
 
-            // Read from shared memory, using 64-bit bank conflict free loads.
-            //   register <-> t6 t5 b0
-            //   lane <-> t4 t3 t2 t1 t0
-            //   warp <-> b4 b3 b2 b1
+            // Read from shared memory, using 64-bit bank-conflict-free loads, into the
+            // following register assignment (128 times, 32 beams):
+            //   register:  t6 t5 b0
+            //   thread:    t4 t3 t2 t1 t0
+            //   warp:      b4 b3 b2 b1
+            //   __half2    smem_e[128][34];   (time, beam)
 
             bhi = threadIdx.y;
             tlo = threadIdx.x;
-            s = (34 * tlo) + (2 * bhi);
+            sp = (__half2 *)smem_all + (34*tlo) + (2*bhi);
             
-            _load_half4(smem_e + s, e0, e1);
-            _load_half4(smem_e + s + 32*34, e2, e3);
-            _load_half4(smem_e + s + 64*34, e4, e5);
-            _load_half4(smem_e + s + 96*34, e6, e7);
+            _load_half4(sp, e0, e1);
+            _load_half4(sp + 32*34, e2, e3);
+            _load_half4(sp + 64*34, e4, e5);
+            _load_half4(sp + 96*34, e6, e7);
 
-            // FFT, square, sum over f0, f1, f2.
-            // After these steps, we have:
-            //   lane <-> f4 f3 b0 f6 f5
-            //   warp <-> b4 b3 b2 b1
-            
-            float t0 = _fft128_sq(e0, e2, e4, e6, smem_fft);  // sum over f0, f1
-            float t1 = _fft128_sq(e1, e3, e5, e7, smem_fft);  // sum over f0, f1
-            float t = _asymmetric_reduce(t0, t1, 0x4);        // sum over f2
+            // FFT, square, sum over f0, f1.
+            char *smem_fft = smem_all + 17*1024;
+            float t0 = _fft128_sq(e0, e2, e4, e6, smem_fft);
+            float t1 = _fft128_sq(e1, e3, e5, e7, smem_fft);
 
-            // Accumulate into (u0, u1)
+            // After the calls to _fft128_sq(), we have intensities which have been summed
+            // over 4 frequencies (bits f0,f1).
+            //   register:  b0
+            //   thread:    f4 f3 f2 f6 f5
+            //   warp:      b4 b3 b2 b1
+
+            // Sum over f2. We've now summed over 8 frequencies.
+            float t = _asymmetric_reduce(t0, t1, 0x4);
+
+            // Now we have intensities which have been summed over 8 freqs (bits f0,f1,f2).
+            //   thread:    f4 f3 b0 f6 f5
+            //   warp:      b4 b3 b2 b1
+            //
+            // Accumulate into (u0, u1).
             // Reminder: u register layout is
-            //   register <-> t384
-            //   lane <-> f4 f3 b0 f6 f5
-            //   warp <-> b4 b3 b2 b1
+            //   register:  t384
+            //   thread:    f4 f3 b0 f6 f5
+            //   warp:      b4 b3 b2 b1
             
             u0 = (t128 < 3) ? (u0+t) : (u0);
             u1 = (t128 < 3) ? (u1) : (u1+t);
-        }
-    }
+        } // end of pol loop
+    }     // end of t128 loop
 
-    // Warp shuffle u->v, obtaining:
-    //   register <-> b0
-    //   lane <-> f4 f3 t384 f6 f5
-    //   warp <-> b4 b3 b2 b1
+    // When we get here, the (u0,u1) registers are fully summed over 3 t128 values, 2 pols, 8 freqs.
+    // These values are ready to write to gpu global memory -- we just permute the register assignment first.
+    //
+    // Reminder: u register layout is
+    //   register:  t384
+    //   thread:    f4 f3 b0 f6 f5
+    //   warp:      b4 b3 b2 b1
 
-    float u = (threadIdx.x & 0x4) ? u0 : u1;
-    u = __shfl_sync(~0u, u, threadIdx.x ^ 0x4);
-    float v0 = (threadIdx.x & 0x4) ? u : u0;
-    float v1 = (threadIdx.x & 0x4) ? u1 : u;
+    // Warp shuffle: exchange register bit with thread bit 't2'.
+    float utmp = (threadIdx.x & 0x4) ? u0 : u1;
+    utmp = __shfl_sync(~0u, utmp, threadIdx.x ^ 0x4);
+    u0 = (threadIdx.x & 0x4) ? utmp : u0;
+    u1 = (threadIdx.x & 0x4) ? u1 : utmp;
 
-    // Permute lanes, obtaining:
-    //   register <-> b0
-    //   lane <-> t384 f6 f5 f4 f3
-    //   warp <-> b1 b2 b3 b4
+    // Now u register layout is:
+    //   register:  b0
+    //   thread:    f4 f3 t384 f6 f5
+    //   warp:      b4 b3 b2 b1
 
+    // Next step is permuting threads (f4 f3 t384 f6 f5) -> (t384 f6 f5 f4 f3).
     uint lane = (threadIdx.x & 0x1c) >> 2;  // t384 f6 f5
     lane |= (threadIdx.x & 0x3) << 3;       // f4 f3
 
-    v0 = __shfl_sync(~0u, v0, lane);
-    v1 = __shfl_sync(~0u, v1, lane);
-
-    // 'results_array' is a shape (32,2,16) array, strides (32*F*T768,16,1), axes (beam,t384,ufreq).
-    // (After "absorbing" block indices, see above.)
-
-    ulong bstride = 32UL * ulong(F) * ulong(T768);
-    ulong roff = threadIdx.y * (2 * bstride) + (threadIdx.x);
+    u0 = __shfl_sync(~0u, u0, lane);
+    u1 = __shfl_sync(~0u, u1, lane);
     
-    results_array[roff] = v0;
-    results_array[roff + bstride] = v1;
+    // Now u register layout is:
+    //   register:  b0
+    //   thread:    t384 f6 f5 f4 f3
+    //   warp:      b4 b3 b2 b1
+
+    // Apply per-warp and per-thread offsets to results_array.
+    //   before: shape (32,2,16), strides (32*F*T768, 16, 1)
+    //   after:  shape (2,), stride (32*F*T768)
+
+    ulong bstride = 32 * ulong(F) * ulong(T768);
+    results_array += threadIdx.y * (2 * bstride) + (threadIdx.x);
+    
+    results_array[0] = u0;
+    results_array[bstride] = u1;
 }
 
 // 'data': shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
@@ -325,28 +395,8 @@ void launch_chime_frb_upchan(const __half *data, float *results_array, long T, l
     xassert_divisible(T, 768);
 
     long T768 = T / 768;
-
-    // Shared memory: __half2 E[128][34] + cuFFTDx workspace.
-    // Query cuFFTDx shared memory for each target SM and take the max.
-    using FFTdesc = decltype(
-          cufftdx::Size<128>()
-          + cufftdx::Precision<float>()
-          + cufftdx::Type<cufftdx::fft_type::c2c>()
-          + cufftdx::Direction<cufftdx::fft_direction::forward>()
-          + cufftdx::ElementsPerThread<4>()
-          + cufftdx::FFTsPerBlock<16>()
-          + cufftdx::Block()
-      );
-
-    constexpr unsigned int smem_fft = std::max({
-        decltype(FFTdesc() + cufftdx::SM<800>())::shared_memory_size,
-        decltype(FFTdesc() + cufftdx::SM<860>())::shared_memory_size,
-        decltype(FFTdesc() + cufftdx::SM<890>())::shared_memory_size
-    });
-
-    unsigned int smem_nbytes = (128 * 34 * sizeof(__half2)) + smem_fft;
     
-    chime_frb_upchan<<< {32,(uint)F,(uint)T768}, {32,16}, smem_nbytes, stream >>>
+    chime_frb_upchan<<< {32,(uint)F,(uint)T768}, {32,16}, 0, stream >>>
         (reinterpret_cast<__const __half2 *> (data), results_array);
 
     CUDA_PEEK("chime_frb_upchan");
