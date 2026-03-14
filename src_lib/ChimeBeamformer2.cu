@@ -386,44 +386,48 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
     results_array[bstride] = u1;
 }
 
-// 'data': shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
-// 'results_array': shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
-void launch_chime_frb_upchan(const __half *data, float *results_array, long T, long F, cudaStream_t stream)
+// 'data': shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
+// 'results_array': shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
+void launch_chime_frb_upchan(const __half *data, float *results_array, long T, long F, long B, cudaStream_t stream)
 {
     xassert(T > 0);
     xassert(F > 0);
+    xassert(B > 0);
     xassert_divisible(T, 768);
+    xassert_divisible(B, 32);
 
     long T768 = T / 768;
-    
-    chime_frb_upchan<<< {32,(uint)F,(uint)T768}, {32,16}, 0, stream >>>
+    long B32 = B / 32;
+
+    chime_frb_upchan<<< {(uint)B32,(uint)F,(uint)T768}, {32,16}, 0, stream >>>
         (reinterpret_cast<__const __half2 *> (data), results_array);
 
     CUDA_PEEK("chime_frb_upchan");
 }
 
 
-// 'data': shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
-// 'results_array': shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+// 'data': shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
+// 'results_array': shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
 void launch_chime_frb_upchan(const Array<__half> &data, Array<float> &results_array, cudaStream_t stream)
 {
-    // data: shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
+    // data: shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
     xassert(data.ndim == 5);
     long T = data.shape[0];
     long F = data.shape[1];
+    long B = data.shape[3];
     xassert_eq(data.shape[2], 2);
-    xassert_eq(data.shape[3], 1024);
+    xassert_divisible(B, 32);
     xassert_eq(data.shape[4], 2);
     xassert(data.on_gpu());
     xassert(data.is_fully_contiguous());
 
-    // results_array: shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+    // results_array: shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
     xassert_divisible(T, 768);
-    xassert_shape_eq(results_array, ({1024, F, T/384, 16}));
+    xassert_shape_eq(results_array, ({B, F, T/384, 16}));
     xassert(results_array.on_gpu());
     xassert(results_array.is_fully_contiguous());
 
-    launch_chime_frb_upchan(data.data, results_array.data, T, F, stream);
+    launch_chime_frb_upchan(data.data, results_array.data, T, F, B, stream);
 }
 
 
@@ -432,19 +436,19 @@ void launch_chime_frb_upchan(const Array<__half> &data, Array<float> &results_ar
 
 void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
 {
-    // data: shape=(T,F,2,1024,2), axes (time,freq,pol,beam,ReIm)
+    // data: shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
     xassert(data.ndim == 5);
     long T = data.shape[0];
     long F = data.shape[1];
+    long B = data.shape[3];
     xassert_eq(data.shape[2], 2);
-    xassert_eq(data.shape[3], 1024);
     xassert_eq(data.shape[4], 2);
     xassert(data.on_host());
     xassert(data.is_fully_contiguous());
 
-    // results_array: shape=(1024,F,T/384,16), axes (beam,cfreq,time,ufreq)
+    // results_array: shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
     xassert_divisible(T, 384);
-    xassert_shape_eq(results_array, ({1024, F, T/384, 16}));
+    xassert_shape_eq(results_array, ({B, F, T/384, 16}));
     xassert(results_array.on_host());
     xassert(results_array.is_fully_contiguous());
 
@@ -465,7 +469,7 @@ void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
         long t384 = t128 / 3;
         for (long cfreq = 0; cfreq < F; cfreq++) {
             for (long pol = 0; pol < 2; pol++) {
-                for (long beam = 0; beam < 1024; beam++) {
+                for (long beam = 0; beam < B; beam++) {
                     const float *psrc = &data.at({ 128*t128, cfreq, pol, beam, 0 });
                     float *pdst = &results_array.at({ beam, cfreq, t384, 0 });
                   
@@ -492,23 +496,24 @@ void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
 
 void test_chime_frb_upchan()
 {
-    vector<long> v = ksgpu::random_integers_with_bounded_product(2, 10);
+    vector<long> v = ksgpu::random_integers_with_bounded_product(3, 10);
     long T = 768 * v[0];
     long F = v[1];
+    long B = 32 * v[2];
 
-    cout << "test_chime_frb_upchan: T=" << T << ", F=" << F << endl;
+    cout << "test_chime_frb_upchan: T=" << T << ", F=" << F << ", B=" << B << endl;
 
-    Array<float> data_cpu({T, F, 2, 1024, 2}, af_rhost | af_random);
+    Array<float> data_cpu({T, F, 2, B, 2}, af_rhost | af_random);
     Array<__half> data_gpu = data_cpu.template convert<__half>().to_gpu();
 
     // GPU kernel (float16, cuFFTDx).
-    Array<float> results_gpu({1024, F, T/384, 16}, af_gpu | af_zero);
+    Array<float> results_gpu({B, F, T/384, 16}, af_gpu | af_zero);
     launch_chime_frb_upchan(data_gpu, results_gpu);
     CUDA_PEEK("test_chime_frb_upchan");
     CUDA_CALL(cudaDeviceSynchronize());
 
     // CPU reference (float32, O(N^2) DFT).
-    Array<float> results_cpu({1024, F, T/384, 16}, af_rhost | af_zero);
+    Array<float> results_cpu({B, F, T/384, 16}, af_rhost | af_zero);
     cpu_chime_frb_upchan(data_cpu, results_cpu);
 
     assert_arrays_equal(results_cpu, results_gpu, "cpu", "gpu",
@@ -522,17 +527,18 @@ void time_chime_frb_upchan()
 {
     long T = 49152;
     long F = 16;
+    long B = 1024;
     long niterations = 1000;
     long nstreams = 1;
 
     // Global memory: read data + write results_array.
-    // data: shape=(T,F,2,1024,2), dtype=__half (2 bytes)
-    // results_array: shape=(1024,F,T/384,16), dtype=float (4 bytes)
-    double gmem_gb = (double(T) * F * 2 * 1024 * 2 * sizeof(__half)
-                      + 1024.0 * F * (T/384) * 16 * sizeof(float)) / pow(2,30.);
+    // data: shape=(T,F,2,B,2), dtype=__half (2 bytes)
+    // results_array: shape=(B,F,T/384,16), dtype=float (4 bytes)
+    double gmem_gb = (double(T) * F * 2 * B * 2 * sizeof(__half)
+                      + double(B) * F * (T/384) * 16 * sizeof(float)) / pow(2,30.);
 
-    Array<__half> data({T, F, 2, 1024, 2}, af_gpu | af_zero);
-    Array<float> results_array({1024, F, T/384, 16}, af_gpu | af_zero);
+    Array<__half> data({T, F, 2, B, 2}, af_gpu | af_zero);
+    Array<float> results_array({B, F, T/384, 16}, af_gpu | af_zero);
 
     KernelTimer kt(niterations, nstreams);
 
