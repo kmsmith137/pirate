@@ -19,5 +19,6 @@
 - Use spaces, not tabs.
 - All functions should error-check function arguments thoroughly and throw an exception if anything is wrong, unless the function is in a "hot loop". 
 - If similar code is repeated in multiple places, please consider whether a helper function would be a cleaner design.
+- Don't git commit unless explicitly requested.
 - Please write comments to explain big-picture functionality or non-obvious issues, but avoid superficial comments. 
 - Please ask me questions in the chat if my instructions are incomplete or unclear.
