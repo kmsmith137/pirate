@@ -829,7 +829,7 @@ void test_chime_frb_beamform()
 
     // GPU kernel (float16 output).
     Array<__half> outputData_gpu({T, F, 2, 4, 256, 2}, af_gpu | af_zero);
-    launch_chime_frb_beamform(inputData_gpu, map_gpu, co_gpu, outputData_gpu, gains_gpu);
+    launch_chime_frb_beamform(inputData_gpu, map_gpu, co_gpu, outputData_gpu, gains_gpu, nullptr);
     CUDA_PEEK("test_chime_frb_beamform");
     CUDA_CALL(cudaDeviceSynchronize());
 
@@ -882,6 +882,105 @@ void time_chime_frb_beamform()
             cout << "chime_frb_beamform: " << gb_per_sec << " GB/s (iteration " << kt.curr_iteration << ")" << endl;
         }
     }
+}
+
+// -------------------------------------------------------------------------------------------------
+//
+// Standalone computation of the CHIME FRB beamformer clamping map.
+//
+// This logic can be copied into another project without any kotekan dependencies.
+// It reimplements the logic from the following kotekan source files:
+//
+//   - lib/hsa/hsaBeamformKernel.hpp  (constants: LIGHT_SPEED, FEED_SEP, PI)
+//   - lib/hsa/hsaBeamformKernel.cpp  (constructor: freq_ref calculation)
+//   - lib/hsa/hsaBeamformKernel.cpp  (calculate_cl_index: clamping map)
+//   - lib/hsa/hsaBeamformKernel.cpp  (calculate_ew_phase: EW coefficients)
+//
+// The clamping map selects which 256 of 512 FFT bins to use as NS beams,
+// compensating for the frequency-dependent beam shift in a phased array.
+
+
+// ---- Hardcoded physical constants ----
+// Matches lib/hsa/hsaBeamformKernel.hpp lines 25-27.
+
+static constexpr double LIGHT_SPEED = 299792458.;  // speed of light [m/s]
+static constexpr double FEED_SEP = 0.3048;          // NS feed separation [m]
+static constexpr double PI = 3.14159265;             // (kotekan uses this value, not M_PI)
+
+
+// ---- Clamping map calculation ----
+// Matches lib/hsa/hsaBeamformKernel.cpp lines 158-183:
+//   void hsaBeamformKernel::calculate_cl_index(uint32_t* host_map, float freq_now, double freq_ref)
+//
+// The freq_ref calculation (kotekan constructor, line 57) is inlined at the top of this function:
+//   freq_ref = (LIGHT_SPEED * (128) / (sin(_northmost_beam * PI / 180.) * FEED_SEP * 256)) / 1.e6;
+//
+// For each of 256 output NS beams, computes which of the 512 FFT bins
+// to select at the given observing frequency.
+//
+// Args:
+//   host_map:          output array, must have room for 256 uint32 values, each in [0, 511].
+//   freq_now:          observing frequency [MHz]
+//   northmost_beam:    zenith angle of the northernmost beam [degrees].
+//                      Production CHIME uses 60.0.
+
+void calculate_cl_index(uint *host_map, double freq_now, double northmost_beam) {
+
+    // Reference frequency calculation.
+    // Matches lib/hsa/hsaBeamformKernel.cpp line 57 (constructor).
+    double freq_ref = (LIGHT_SPEED * 128 / (sin(northmost_beam * PI / 180.) * FEED_SEP * 256)) / 1.e6;
+
+    // Local variables match hsaBeamformKernel::calculate_cl_index() exactly.
+    double t, delta_t, beam_ref;
+    int cl_index;
+    double D2R = PI / 180.;
+    int pad = 2;
+
+    for (int b = 0; b < 256; ++b) {
+        // Sky angle for beam b at the reference frequency.
+        beam_ref =
+            asin(LIGHT_SPEED * (b - 256 / 2.) / (freq_ref * 1.e6) / (256) / FEED_SEP) * 180. / PI;
+
+        // FFT bin at the reference frequency (fractional, +0.5 for rounding).
+        t = 256 * pad * (freq_ref * 1.e6) * (FEED_SEP / LIGHT_SPEED * sin(beam_ref * D2R)) + 0.5;
+
+        // Shift due to observing at freq_now instead of freq_ref.
+        delta_t = 256 * pad * (freq_now * 1e6 - freq_ref * 1e6)
+                  * (FEED_SEP / LIGHT_SPEED * sin(beam_ref * D2R));
+
+        cl_index = (int)floor(t + delta_t) + 256 * pad / 2.;
+
+        // Wrap to [0, 512).
+        if (cl_index < 0)
+            cl_index = 256 * pad + cl_index;
+        else if (cl_index > 256 * pad)
+            cl_index = cl_index - 256 * pad;
+
+        cl_index = cl_index - 256;
+        if (cl_index < 0) {
+            cl_index = 256 * pad + cl_index;
+        }
+
+        host_map[b] = cl_index;
+    }
+}
+
+
+Array<uint> calculate_cl_indices(const Array<double> &freqs, double northmost_beam)
+{
+    xassert(freqs.ndim == 1);
+    xassert(freqs.on_host());
+    xassert(freqs.is_fully_contiguous());
+
+    long F = freqs.shape[0];
+    xassert(F > 0);
+
+    Array<uint> ret({F, 256}, af_rhost);
+
+    for (long f = 0; f < F; f++)
+        calculate_cl_index(ret.data + f * 256, freqs.data[f], northmost_beam);
+
+    return ret;
 }
 
 
