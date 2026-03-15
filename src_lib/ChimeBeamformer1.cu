@@ -64,7 +64,7 @@ namespace pirate {
 //  5. Clamping: here is where the 'map' argument comes in. We reduce J
 //     from length-512 to length-256 by selecting indices as follows:
 //
-//       K[i] = J[map[i]]   (where 0 <= i < 256, and 0 <= map[i] < 512)
+//       K[i] = J[map[255-i]]   (where 0 <= i < 256, and 0 <= map[i] < 512)
 //
 //  6. Restoring implicit axes, we now have a float32+32 array K[T,F,2,4,256].
 //     All math so far has been 32-bit. We convert to float16+16 and write to
@@ -151,7 +151,7 @@ chime_frb_beamform(
     // This is the value of map[ns], for a specific value of ns that will be
     // useful later in the kernel.
     uint map_ns = (threadIdx.x | (threadIdx.y << 6)) & 255;
-    uint mapval = map[map_ns];
+    uint mapval = map[255 - map_ns];
 
     // Initialize the "A-coefficients" (8 registers/thread).
     //
@@ -790,7 +790,7 @@ void cpu_chime_frb_beamform(
                 // Step 5+6: Clamping (map reindexing) and write output.
                 for (int eo = 0; eo < 4; eo++) {
                     for (int ns = 0; ns < 256; ns++) {
-                        uint m = map.at({f, ns});
+                        uint m = map.at({f, 255 - ns});
                         outputData.at({t, f, pol, eo, ns, 0}) = J[eo][m].real();
                         outputData.at({t, f, pol, eo, ns, 1}) = J[eo][m].imag();
                     }
