@@ -42,6 +42,7 @@ extern void cpu_chime_frb_beamform(
     const ksgpu::Array<float> &gains);
 
 extern void test_chime_frb_beamform();
+extern void time_chime_frb_beamform();
 
 
 // 'data': shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)

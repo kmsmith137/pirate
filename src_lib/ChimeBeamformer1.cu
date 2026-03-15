@@ -844,4 +844,45 @@ void test_chime_frb_beamform()
 }
 
 
+void time_chime_frb_beamform()
+{
+    long T = 49152;
+    long F = 16;
+    long niterations = 1000;
+    long nstreams = 1;
+
+    // Global memory: read inputData + gains + co + map, write outputData.
+    // inputData: shape=(T,F,2,4,256), dtype=uint8_t (1 byte)
+    // outputData: shape=(T,F,2,4,256,2), dtype=__half (2 bytes)
+    // gains: shape=(F,2,4,256,2), dtype=float (4 bytes) -- small, negligible
+    // co: shape=(F,4,4,2), dtype=float (4 bytes) -- small, negligible
+    // map: shape=(F,256), dtype=uint (4 bytes) -- small, negligible
+    double gmem_gb = (double(T) * F * 2 * 4 * 256 * sizeof(uint8_t)
+                      + double(T) * F * 2 * 4 * 256 * 2 * sizeof(__half)) / pow(2,30.);
+
+    Array<uint8_t> inputData({T, F, 2, 4, 256}, af_gpu | af_zero);
+
+    // FIXME revisit map values later (e.g. use a realistic map).
+    Array<uint> map_arr({F, 256}, af_rhost);
+    for (long i = 0; i < F * 256; i++)
+        map_arr.data[i] = i % 256;  // map[i] = i (identity-ish)
+    map_arr = map_arr.to_gpu();
+
+    Array<float> co({F, 4, 4, 2}, af_gpu | af_zero);
+    Array<__half> outputData({T, F, 2, 4, 256, 2}, af_gpu | af_zero);
+    Array<float> gains({F, 2, 4, 256, 2}, af_gpu | af_zero);
+
+    KernelTimer kt(niterations, nstreams);
+
+    while (kt.next()) {
+        launch_chime_frb_beamform(inputData, map_arr, co, outputData, gains, kt.stream);
+
+        if (kt.warmed_up && (kt.curr_iteration % 50 == 49)) {
+            double gb_per_sec = gmem_gb / kt.dt;
+            cout << "chime_frb_beamform: " << gb_per_sec << " GB/s (iteration " << kt.curr_iteration << ")" << endl;
+        }
+    }
+}
+
+
 } // namespace pirate

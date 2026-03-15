@@ -163,7 +163,7 @@ def parse_time(subparsers):
     parser.add_argument('--gldk', action='store_true', help='Runs time_lagged_downsampling_kernels()')
     parser.add_argument('--gddk', action='store_true', help='Runs time_gpu_dedispersion_kernels()')
     parser.add_argument('--casm', action='store_true', help='Runs CasmBeamformer.run_timings()')
-    parser.add_argument('--chime', action='store_true', help='Runs time_chime_frb_upchan()')
+    parser.add_argument('--chime', action='store_true', help='Runs time_chime_frb_{beamform,upchan}()')
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" timings (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time_selected()')
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
@@ -190,6 +190,7 @@ def time_command(args):
     if run_all_timings or args.casm:
         casm.CasmBeamformer.run_timings(args.ncu)
     if run_all_timings or args.chime:
+        chime.time_chime_frb_beamform()
         chime.time_chime_frb_upchan()
     if run_all_timings or args.zomb:
         loose_ends.time_cpu_downsample(nthreads)
