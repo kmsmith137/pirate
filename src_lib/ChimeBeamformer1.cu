@@ -36,38 +36,42 @@ namespace pirate {
 //  'outputData': shape (T,F,2,4,256), dtype float16+16, axes (time,freq,pol,ew,ns)
 //  'gains':      shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
 //
-// Computational steps are as follows. Each (time,freq,pol) is processed independently,
-// so we streamline notation by omitting those axes.
+// Computational steps are as follows. Each (time,freq,pol) is processed independently, so
+// we streamline notation by omitting those axes, and only keeping track of ew,ns axes.
 //
-//  1. Unpack each uint4+4 inputData element to a float32+32.
+//  1. Unpack each uint4+4 inputData element to a float32+32 E[ew,ns].
 //       real part = float(x >> 4) - 8.0
 //       imag part = float(x & 0xf) - 8.0
 //
-//  2. Multiply by the complex conjugate of the associated gain.
-//     (Denote the product by F = G^* E).
+//  2. Multiply by the complex conjugate of the associated gain:
 //
-//  3. East-west beamforming: for each (time,freq,pol,ns), we have a length-4
-//     complex array F[4] indexed by EW feed location (ew_in). We matrix-multiply
-//     by the 4-by-4 complex matrix co[4,4], to get a complex array H[4].
+//       F[ew,ns] = G[ew,ns]^* E[ew,ns].
 //
-//       H[ew_out] = (1/4) sum_j co[ew_out,ew_in] F[ew_in]^*
+//  3. East-west beamforming: We matrix-multiply by the 4-by-4 complex matrix co[4,4]:
 //
-//     The H-array can be interpreted as "partially beamformed electric field":
-//     beamforming has been performed along the ew-axis, but not the ns-axis.
+//       H[ew_out,ns] = (1/4) sum_j co[ew_out,ew_in] F[ew_in,ns]^*
 //
-//  4. North-south beamforming: restoring implicit axes, we now have an array
-//     H[t,f,pol,ew,ns]. For each (t,f,pol,ew), we have an array H[256].
-//     We zero-pad to length 512 and take an FFT:
+//     Note that in this step, we notationally distinguish the length-4 input
+//     axis (ew_in) and the length-4 output axis (ew_out). The H-array can be
+//     interpreted as "partially beamformed electric field": beamforming has
+//     been performed along the ew-axis, but not the ns-axis.
 //
-//       J[j] = sum_k exp(2pi * i * j * k / 512) H[k]
+//  4. North-south beamforming: we zero-pad the ns axis to length-512 and
+//     take an FFT.
 //
-//  5. Clamping: here is where the 'map' argument comes in. We reduce J
-//     from length-512 to length-256 by selecting indices as follows:
+//       J[ew,ns_out] = sum_{ns_in=0}^255 H[ew,ns_in]
+//                         * exp(2pi * i * ns_in * ns_out / 512)
 //
-//       K[i] = J[map[255-i]]   (where 0 <= i < 256, and 0 <= map[i] < 512)
+//     where 0 <= ns_in < 256, and 0 <= ns_out < 512.
 //
-//  6. Restoring implicit axes, we now have a float32+32 array K[T,F,2,4,256].
-//     All math so far has been 32-bit. We convert to float16+16 and write to
+//  5. Clamping: here is where the 'map' argument comes in. We reduce the
+//     ns_axis from length-512 to length-256 by selecting indices as follows:
+//
+//       K[ew,ns] = J[ew,map[255-ns]]
+//
+//     where 0 <= ns < 256, and 0 <= map[ns] < 512.
+//
+//  6. All math so far has been 32-bit. We convert to float16+16 and write to
 //     global GPU memory.
 //
 // Some of the conventions above are a little unusual (uint4+4 encoding in step 1,
