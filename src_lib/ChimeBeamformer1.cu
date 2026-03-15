@@ -36,8 +36,10 @@ namespace pirate {
 //  'outputData': shape (T,F,2,4,256), dtype float16+16, axes (time,freq,pol,ew,ns)
 //  'gains':      shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
 //
-// Computational steps are as follows. Each (time,freq,pol) is processed independently, so
-// we streamline notation by omitting those axes, and only keeping track of ew,ns axes.
+// Here is a specification of the kernel:
+
+//  0. Each (time,freq,pol) is processed independently, so we streamline notation
+//     by omitting those axes, and only keeping track of ew,ns axes below.
 //
 //  1. Unpack each uint4+4 inputData element to a float32+32 E[ew,ns].
 //       real part = float(x >> 4) - 8.0

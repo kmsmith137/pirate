@@ -19,6 +19,8 @@ namespace pirate {
 // -------------------------------------------------------------------------------------------------
 //
 // ChimeBeamformer1.cu: chime_frb_beamform() and friends
+//
+// For a precise description of what these functions compute, see comments in ChimeBeamformer1.cu.
 
 
 // 'inputData':  shape (T,F,2,4,256), dtype uint8_t, axes (time,freq,pol,ew,ns)
@@ -74,6 +76,8 @@ extern ksgpu::Array<uint> calculate_cl_indices(const ksgpu::Array<double> &freqs
 // -------------------------------------------------------------------------------------------------
 //
 // ChimeBeamformer2.cu: chime_frb_upchan() and friends
+//
+// For a precise description of what these functions compute, see comments in ChimeBeamformer2.cu.
 
 
 // 'data': shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)

@@ -162,28 +162,43 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
 // This is the "upchannelization" part of the CHIME FRB beamforming kernel, which
 // runs after the "beamforming" part.
 //
-// 'data': shape=(T,F,2,B), dtype=float16+16, axes (time,freq,pol,beam)
-// 'results_array': shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
+//  'data': shape=(T,F,2,B), dtype=float16+16, axes (time,freq,pol,beam)
+//  'results_array': shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
 //
-// Computational steps are as follows.
+// where in the results_array, the index 0 <= cfreq < F represents a "coarse"
+// frequency, and the index 0 <= ufreq < 16 represents an "upchannelized" frequency
+// within a coarse channel. Note that the 'data' array is indexed by a coarse
+// frequency 0 <= f < F.
 //
-//  1. Divide the data into length-128 time chunks. Let's denote this step
-//     as a logical reshaping to a shape (T/128, 128, F, 2, B) array
-//     indexed by (thi, tlo, freq, pol, beam).
+// Here is a specification of the kernel:
 //
-//  2. Fourier transform the length-128 'tlo' index, to obtain an array
-//     with the same shape (T/128, 128, F, 2, B). We interpret the
-//     length-F axis as a "coarse" frequency, and the length-128 axis
-//     as an "upchannelized" frequency, and denote the index variables
-//     (thi, ufreq, cfreq, pol, beam).
+//  0. Each (cfreq, beam) is processed independently, and each length-384 block
+//     of time indices is also processed independently. Therefore, in order to
+//     streamline notation, we can denote the input/output arrays as having the
+//     following shapes:
 //
-//     The FFT is performed with positive exponent exp(+2pi*i*j*k/128)
+//         float16+16  data[384][2];       // (time,pol)
+//         float       results_array[16];  // ufreq
+//
+//  1. Divide the data into three length-128 time chunks, i.e. reshape to
+//
+//         float16+16  data[3][128][2];    // (thi,tlo,pol)
+//
+//  2. Fourier transform the length-128 'tlo' index, to obtain an array:
+//
+//         float32+32  F[3][128][2];       // (thi,f,pol)
+//         F[thi,f,pol] = sum_{tlo} exp(+2pi*i*f*tlo/128) data[thi,tlo,pol]
+//
+//     The index 0 <= f < 128 represents a "highly upchannelized frequency".
+//     Note that the FFT is performed with positive exponent exp(+2pi*i ...)
 //     and without a (1/128) prefactor.
 //
 //  3. Take the absolute square (complex -> real), and downsample by
-//     a factor 3 in time, 8 in ufreq, 2 in polarization, to get a
-//     'results' array with shape (T/384, 16, F, B),  This is written
-//     to memory in a transposed ordering (B, F, T/384, 16).
+//     a factor 3 in time, 8 in frequency, 2 in polarization:
+//
+//         float32 results_array[16];     // ufreq
+//         results_array[ufreq] = sum_{thi=0}^{2} sum_{pol=0}^{1}
+//               sum_{f = 8*ufreq}^{8*ufreq+7} |F[thi,f,pol]|^2
 //
 // Each threadblock processes (32 beams, one coarse freq, 768 times).
 // Thus, gridDim = (B/32,F,T/768). We assume that B is a multiple of 32,
