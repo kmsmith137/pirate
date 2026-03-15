@@ -814,6 +814,7 @@ void test_chime_frb_beamform()
     Array<uint8_t> inputData_gpu = inputData_cpu.to_gpu();
 
     // map: (F,256) uint, random values in [0, 512)
+    // (In the unit test, we use a random map instead of a realistic map.)
     Array<uint> map_cpu({F, 256}, af_rhost);
     for (long i = 0; i < F * 256; i++)
         map_cpu.data[i] = rand() % 512;
@@ -862,11 +863,11 @@ void time_chime_frb_beamform()
 
     Array<uint8_t> inputData({T, F, 2, 4, 256}, af_gpu | af_zero);
 
-    // FIXME revisit map values later (e.g. use a realistic map).
-    Array<uint> map_arr({F, 256}, af_rhost);
-    for (long i = 0; i < F * 256; i++)
-        map_arr.data[i] = i % 256;  // map[i] = i (identity-ish)
-    map_arr = map_arr.to_gpu();
+    // Realistic clamping map: F frequencies linearly spaced from 400 to 800 MHz.
+    Array<double> freqs({F}, af_rhost);
+    for (long f = 0; f < F; f++)
+        freqs.data[f] = 400.0 + (800.0 - 400.0) * f / (F - 1);
+    Array<uint> map_arr = calculate_cl_indices(freqs, 60.0).to_gpu();
 
     Array<float> co({F, 4, 4, 2}, af_gpu | af_zero);
     Array<__half> outputData({T, F, 2, 4, 256, 2}, af_gpu | af_zero);
