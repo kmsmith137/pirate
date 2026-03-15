@@ -22,10 +22,6 @@ namespace pirate {
 #endif
 
 
-// Currently, the kernel doesn't compile, due to the xxx's in the code.
-// When you're ready to try compiling it, remove this #if 0 ... #endif.
-// #if 0  -- removed, kernel is now complete
-
 // This is the "beamforming" part of the CHIME FRB beamforming kernel.
 // It runs before the "upchannelization" part.
 //
@@ -617,8 +613,6 @@ chime_frb_beamform(
     }
 }
 
-// #endif  -- removed, kernel is now complete
-
 
 // 'inputData':  shape (T,F,2,4,256), dtype uint8_t, axes (time,freq,pol,ew,ns)
 // 'map':        shape (F,256), dtype uint, axes (freq,ns)
@@ -809,8 +803,9 @@ void cpu_chime_frb_beamform(
 
 void test_chime_frb_beamform()
 {
-    long T = 128;
-    long F = 2;
+    vector<long> v = ksgpu::random_integers_with_bounded_product(2, 10);
+    long T = 128 * v[0];
+    long F = v[1];
 
     cout << "test_chime_frb_beamform: T=" << T << ", F=" << F << endl;
 
@@ -842,15 +837,8 @@ void test_chime_frb_beamform()
     Array<float> outputData_cpu({T, F, 2, 4, 256, 2}, af_rhost | af_zero);
     cpu_chime_frb_beamform(inputData_cpu, map_cpu, co_cpu, outputData_cpu, gains_cpu);
 
-    // Compare with float16 tolerances.
-    Array<float> gpu_as_float = outputData_gpu.to_host().template convert<float>();
-    double epsrel = 10 * Dtype::from_str("float16").precision();
-    // Mean magnitude: FFT of 256 random complex values ~ sqrt(256) * input_rms * 0.25
-    // input_rms ~ 4.6, gain_rms ~ 0.6, so ~ 16 * 4.6 * 0.6 * 0.25 ~ 11
-    double epsabs = epsrel * 256 * 8;
-
-    assert_arrays_equal(outputData_cpu, gpu_as_float, "cpu", "gpu",
-                        {"time","freq","pol","ew","ns","ReIm"}, epsabs, epsrel);
+    assert_arrays_equal(outputData_cpu, outputData_gpu, "cpu", "gpu",
+                        {"time","freq","pol","ew","ns","ReIm"});
 
     cout << "test_chime_frb_beamform: pass" << endl;
 }
