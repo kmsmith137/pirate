@@ -21,6 +21,9 @@ namespace pirate {
 
 void register_chime_bindings(pybind11::module &m)
 {
+    m.def("test_chime_frb_beamform", &test_chime_frb_beamform,
+          "Unit test: compare GPU chime_frb_beamform against CPU reference.");
+
     m.def("test_chime_frb_upchan", &test_chime_frb_upchan,
           "Unit test: compare GPU chime_frb_upchan against CPU reference.");
 

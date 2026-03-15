@@ -126,6 +126,7 @@ def test(args):
             casm.CasmReferenceBeamformer.test_cuda_python_equivalence(linkage='pybind11')
             
         if run_all_tests or args.chime:
+            chime.test_chime_frb_beamform()
             chime.test_chime_frb_upchan()
 
         if run_all_tests or args.zomb:

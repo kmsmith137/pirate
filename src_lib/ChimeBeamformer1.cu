@@ -636,6 +636,7 @@ void launch_chime_frb_beamform(
 
     long T128 = T / 128;
 
+    CUDA_CALL(cudaFuncSetAttribute(chime_frb_beamform, cudaFuncAttributeMaxDynamicSharedMemorySize, 96*1024));
     chime_frb_beamform<<< {(uint)T128,(uint)F,2}, {64,16}, 96*1024, stream >>>
         (inputData, map, co,
          reinterpret_cast<__half2 *>(outputData),
