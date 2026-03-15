@@ -2,6 +2,7 @@
 
 #include <algorithm>   // std::max
 #include <cmath>       // cos, sin, M_PI
+#include <complex>
 #include <cuda_fp16.h>
 #include <cufftdx.hpp>
 
@@ -10,6 +11,7 @@
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/cuda_utils.hpp>   // CUDA_PEEK
 #include <ksgpu/KernelTimer.hpp>
+#include <ksgpu/test_utils.hpp>   // assert_arrays_equal
 
 using namespace std;
 using namespace ksgpu;
@@ -696,6 +698,160 @@ void launch_chime_frb_beamform(
         inputData.data, map.data, co.data,
         outputData.data, gains.data,
         T, F, stream);
+}
+
+
+// CPU reference implementation of chime_frb_beamform(), for testing.
+// Uses O(N^2) brute-force DFT (not FFT), and float32 output (not float16).
+
+void cpu_chime_frb_beamform(
+    const Array<uint8_t> &inputData,
+    const Array<uint> &map,
+    const Array<float> &co,
+    Array<float> &outputData,
+    const Array<float> &gains)
+{
+    // inputData: (T,F,2,4,256) uint8_t
+    xassert(inputData.ndim == 5);
+    long T = inputData.shape[0];
+    long F = inputData.shape[1];
+    xassert_eq(inputData.shape[2], 2);
+    xassert_eq(inputData.shape[3], 4);
+    xassert_eq(inputData.shape[4], 256);
+    xassert(inputData.on_host());
+    xassert(inputData.is_fully_contiguous());
+
+    // map: (F,256) uint
+    xassert_shape_eq(map, ({F, 256}));
+    xassert(map.on_host());
+    xassert(map.is_fully_contiguous());
+
+    // co: (F,4,4,2) float
+    xassert_shape_eq(co, ({F, 4, 4, 2}));
+    xassert(co.on_host());
+    xassert(co.is_fully_contiguous());
+
+    // outputData: (T,F,2,4,256,2) float
+    xassert_shape_eq(outputData, ({T, F, 2, 4, 256, 2}));
+    xassert(outputData.on_host());
+    xassert(outputData.is_fully_contiguous());
+
+    // gains: (F,2,4,256,2) float
+    xassert_shape_eq(gains, ({F, 2, 4, 256, 2}));
+    xassert(gains.on_host());
+    xassert(gains.is_fully_contiguous());
+
+    // Precompute twiddle factors: tw[n] = exp(2*pi*i*n/512)
+    vector<complex<float>> tw(512);
+    for (int n = 0; n < 512; n++) {
+        double phase = 2.0 * M_PI * n / 512.0;
+        tw[n] = { float(cos(phase)), float(sin(phase)) };
+    }
+
+    for (long t = 0; t < T; t++) {
+        for (long f = 0; f < F; f++) {
+            for (int pol = 0; pol < 2; pol++) {
+
+                // Steps 1-3: Unpack, gain multiply, EW beamform.
+                //   Step 1: E = unpack(inputData)
+                //   Step 2: Fval = G^* * E
+                //   Step 3: H[eo,ns] = (1/4) sum_ei co[eo,ei] * Fval[ei,ns]^*
+
+                complex<float> H[4][256];
+                for (int eo = 0; eo < 4; eo++) {
+                    for (int ns = 0; ns < 256; ns++) {
+                        complex<float> sum(0.0f, 0.0f);
+                        for (int ei = 0; ei < 4; ei++) {
+                            uint8_t x = inputData.at({t, f, pol, ei, ns});
+                            float re = float(x >> 4) - 8.0f;
+                            float im = float(x & 0xf) - 8.0f;
+                            complex<float> E(re, im);
+
+                            float gre = gains.at({f, pol, ei, ns, 0});
+                            float gim = gains.at({f, pol, ei, ns, 1});
+                            complex<float> Fval = conj(complex<float>(gre, gim)) * E;
+
+                            float core = co.at({f, eo, ei, 0});
+                            float coim = co.at({f, eo, ei, 1});
+                            sum += complex<float>(core, coim) * conj(Fval);
+                        }
+                        H[eo][ns] = sum * 0.25f;
+                    }
+                }
+
+                // Step 4: NS DFT (brute-force, zero-padded 256 -> 512).
+                //   J[eo,j] = sum_k exp(2*pi*i*j*k/512) H[eo,k]
+
+                complex<float> J[4][512];
+                for (int eo = 0; eo < 4; eo++) {
+                    for (int j = 0; j < 512; j++) {
+                        complex<float> sum(0.0f, 0.0f);
+                        for (int k = 0; k < 256; k++)
+                            sum += tw[(long(j)*k) % 512] * H[eo][k];
+                        J[eo][j] = sum;
+                    }
+                }
+
+                // Step 5+6: Clamping (map reindexing) and write output.
+                for (int eo = 0; eo < 4; eo++) {
+                    for (int ns = 0; ns < 256; ns++) {
+                        uint m = map.at({f, ns});
+                        outputData.at({t, f, pol, eo, ns, 0}) = J[eo][m].real();
+                        outputData.at({t, f, pol, eo, ns, 1}) = J[eo][m].imag();
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+void test_chime_frb_beamform()
+{
+    long T = 128;
+    long F = 2;
+
+    cout << "test_chime_frb_beamform: T=" << T << ", F=" << F << endl;
+
+    // inputData: (T,F,2,4,256) uint8_t
+    Array<uint8_t> inputData_cpu({T, F, 2, 4, 256}, af_rhost | af_random);
+    Array<uint8_t> inputData_gpu = inputData_cpu.to_gpu();
+
+    // map: (F,256) uint, random values in [0, 512)
+    Array<uint> map_cpu({F, 256}, af_rhost);
+    for (long i = 0; i < F * 256; i++)
+        map_cpu.data[i] = rand() % 512;
+    Array<uint> map_gpu = map_cpu.to_gpu();
+
+    // co: (F,4,4,2) float
+    Array<float> co_cpu({F, 4, 4, 2}, af_rhost | af_random);
+    Array<float> co_gpu = co_cpu.to_gpu();
+
+    // gains: (F,2,4,256,2) float
+    Array<float> gains_cpu({F, 2, 4, 256, 2}, af_rhost | af_random);
+    Array<float> gains_gpu = gains_cpu.to_gpu();
+
+    // GPU kernel (float16 output).
+    Array<__half> outputData_gpu({T, F, 2, 4, 256, 2}, af_gpu | af_zero);
+    launch_chime_frb_beamform(inputData_gpu, map_gpu, co_gpu, outputData_gpu, gains_gpu);
+    CUDA_PEEK("test_chime_frb_beamform");
+    CUDA_CALL(cudaDeviceSynchronize());
+
+    // CPU reference (float32 output).
+    Array<float> outputData_cpu({T, F, 2, 4, 256, 2}, af_rhost | af_zero);
+    cpu_chime_frb_beamform(inputData_cpu, map_cpu, co_cpu, outputData_cpu, gains_cpu);
+
+    // Compare with float16 tolerances.
+    Array<float> gpu_as_float = outputData_gpu.to_host().template convert<float>();
+    double epsrel = 10 * Dtype::from_str("float16").precision();
+    // Mean magnitude: FFT of 256 random complex values ~ sqrt(256) * input_rms * 0.25
+    // input_rms ~ 4.6, gain_rms ~ 0.6, so ~ 16 * 4.6 * 0.6 * 0.25 ~ 11
+    double epsabs = epsrel * 256 * 8;
+
+    assert_arrays_equal(outputData_cpu, gpu_as_float, "cpu", "gpu",
+                        {"time","freq","pol","ew","ns","ReIm"}, epsabs, epsrel);
+
+    cout << "test_chime_frb_beamform: pass" << endl;
 }
 
 

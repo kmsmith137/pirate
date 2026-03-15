@@ -34,6 +34,15 @@ extern void launch_chime_frb_beamform(
     const ksgpu::Array<float> &gains,
     cudaStream_t stream=nullptr);
 
+extern void cpu_chime_frb_beamform(
+    const ksgpu::Array<uint8_t> &inputData,
+    const ksgpu::Array<uint> &map,
+    const ksgpu::Array<float> &co,
+    ksgpu::Array<float> &outputData,
+    const ksgpu::Array<float> &gains);
+
+extern void test_chime_frb_beamform();
+
 
 // 'data': shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
 // 'results_array': shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
