@@ -75,7 +75,38 @@ namespace pirate {
 //     global GPU memory.
 //
 // Some of the conventions above are a little unusual (uint4+4 encoding in step 1,
-// complex conjugates in step 2,3) but are preserved for consistency with chime.
+// complex conjugates in step 2,3, index flip (255-ns) in step 5) but are preserved
+// for consistency with chime.
+//
+// I claim that this is equivalent to kotekan frb_beamform_amd(), but the equivalence
+// is not obvious -- here is the argument. (Note that when comparing with kotekan,
+// it's more convenient to use the reference implementation in gpuBeamformSimulate.cpp
+// than the amd gpu kernel.)
+//
+//  - Combining equations from steps 1-4, we get:
+//
+//      J[e,n] = (1/4) sum_{e',n'} e^{2pi*i*nn'/512} co[e,e'] gain[e',n'] E[e',n']^*
+//
+//   - In contrast, kotekan does the following.
+//
+//        1. Gains:  F[e,n] = gain[e,n]^* E[e,n]
+//        2. NS:     L[e,n] = sum_{n'} e^{-2pi*i*nn'/512} F[e,n']
+//        3. EW:     J[e,n] = (1/4) sum_{e'} co[e,e'] L[e',n]^*
+//
+//      Combining these equations, we get:
+//
+//       J[e,n] = (1/4) sum_{e'n'} e^{2pi*i*nn'/512} co[e,e'] gain[e',n'] E[e',n']^*
+//
+//     which agrees with our expression above, i.e. the two are equivalent in the
+//     end, although the ordering of computations and intermediate expressions are
+//     inequivalent.
+//
+//   - Note that this analysis does not compare the clamping logic. Here,
+//     Claude Code told me that the two were equivalent, but I didn't check
+//     it carefully. We should confirm with a unit test. I'm not really worried
+//     about it, since an arbitrary bug in the clamping logic should be fixable
+//     by tweaking the host-side precomputation of the map[] array, with no
+//     changes to the gpu kernel. We just need to test carefully.
 //
 // Each threadblock processes (128 times, 1 freq, 1 pol).
 // Thus, gridDim = { T/128, F, 2 }. We assume that T is a multiple of 128.
