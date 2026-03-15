@@ -14,6 +14,21 @@ namespace pirate {
 //
 //  - ChimeBeamformer1.cu: chime_frb_beamform() and friends
 //  - ChimeBeamformer2.cu: chime_frb_upchan() and friends
+//
+// These kernels are intended to be as similar as possible to the CHIME AMD kernels,
+// but there are a few differences as follows:
+//
+//  - The CHIME AMD kernels have a transpose in between:
+//
+//        frb_beamform_amd() -> transpose() -> frb_upchan_amd()
+//
+//    In the new NVIDIA kernels defined below, the transpose is coalesced into
+//    the second (upchannelization) kernel:
+//
+//        chime_frb_beamform() -> chime_frb_upchan()
+//
+// - The new kernels process multiple frequency channels per GPU, so some
+//   array arguments have an extra length-F axis.
 
 
 // -------------------------------------------------------------------------------------------------
@@ -28,6 +43,7 @@ namespace pirate {
 // 'co':         shape (F,4,4,2), dtype float, axes (freq,ewout,ewin,ReIm)
 // 'outputData': shape (T,F,2,4,256), dtype float16+16, axes (time,freq,pol,ew,ns)
 // 'gains':      shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
+
 extern void launch_chime_frb_beamform(
     const uint8_t *inputData, const uint *map, const float *co,
     __half *outputData, const float *gains,
@@ -78,6 +94,9 @@ extern ksgpu::Array<uint> calculate_cl_indices(const ksgpu::Array<double> &freqs
 // ChimeBeamformer2.cu: chime_frb_upchan() and friends
 //
 // For a precise description of what these functions compute, see comments in ChimeBeamformer2.cu.
+//
+// Reminder: chime_frb_upchan() processes the output of chime_frb_beamform(), without a transpose
+// kernel in between.
 
 
 // 'data': shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)

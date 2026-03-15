@@ -483,17 +483,19 @@ void launch_chime_frb_upchan(const Array<__half> &data, Array<float> &results_ar
 {
     // data: shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
     xassert(data.ndim == 5);
-    long T = data.shape[0];
-    long F = data.shape[1];
-    long B = data.shape[3];
     xassert_eq(data.shape[2], 2);
-    xassert_divisible(B, 32);
     xassert_eq(data.shape[4], 2);
     xassert(data.on_gpu());
     xassert(data.is_fully_contiguous());
 
-    // results_array: shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
+    long T = data.shape[0];
+    long F = data.shape[1];
+    long B = data.shape[3];
+    
     xassert_divisible(T, 768);
+    xassert_divisible(B, 32);
+    
+    // results_array: shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
     xassert_shape_eq(results_array, ({B, F, T/384, 16}));
     xassert(results_array.on_gpu());
     xassert(results_array.is_fully_contiguous());
@@ -509,14 +511,15 @@ void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
 {
     // data: shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
     xassert(data.ndim == 5);
-    long T = data.shape[0];
-    long F = data.shape[1];
-    long B = data.shape[3];
     xassert_eq(data.shape[2], 2);
     xassert_eq(data.shape[4], 2);
     xassert(data.on_host());
     xassert(data.is_fully_contiguous());
 
+    long T = data.shape[0];
+    long F = data.shape[1];
+    long B = data.shape[3];
+    
     // results_array: shape=(B,F,T/384,16), axes (beam,cfreq,time,ufreq)
     xassert_divisible(T, 384);
     xassert_shape_eq(results_array, ({B, F, T/384, 16}));
@@ -591,7 +594,7 @@ void test_chime_frb_upchan()
     cpu_chime_frb_upchan(data_cpu, results_cpu);
 
     // Call assert_arrays_equal() with thresholds that are appropriate for float16.
-    // (By default, it will use float32 thresholds, since the 'results' arrays are float32).
+    // (Otherwise, it will use float32 thresholds, since the 'results' arrays are float32).
     double epsrel = 10 * Dtype::from_str("float16").precision();
     double epsabs = epsrel * 48 * 128 * 0.67;  // mean intensity
     
@@ -610,15 +613,10 @@ void time_chime_frb_upchan()
     long niterations = 1000;
     long nstreams = 1;
 
-    // Global memory: read data + write results_array.
-    // data: shape=(T,F,2,B,2), dtype=__half (2 bytes)
-    // results_array: shape=(B,F,T/384,16), dtype=float (4 bytes)
-    double gmem_gb = (double(T) * F * 2 * B * 2 * sizeof(__half)
-                      + double(B) * F * (T/384) * 16 * sizeof(float)) / pow(2,30.);
-
     Array<__half> data({T, F, 2, B, 2}, af_gpu | af_zero);
     Array<float> results_array({B, F, T/384, 16}, af_gpu | af_zero);
 
+    double gmem_gb = 1.0e-9 * (data.nbytes() + results_array.nbytes());
     KernelTimer kt(niterations, nstreams);
 
     while (kt.next()) {

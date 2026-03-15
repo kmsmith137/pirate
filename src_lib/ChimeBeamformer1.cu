@@ -139,15 +139,21 @@ chime_frb_beamform(
     //   for each "outer" block of 32 times
     //      load uint4+4 E-array from global memory (T=32)
     //      store E-array in smem_E
+    //      syncthreads
     //      for each "inner" block of 4 times
     //          load E-array from smem_E
     //          compute H-array: convert to float32+32, apply gains, ew beamforming
     //          store in smem_H
+    //          syncthreads
     //          load from smem_H in a different ordering
+    //          syncthreads
     //          compute J-array: do NS FFT
+    //          syncthreads
     //          write to smem_J
+    //          syncthreads
     //          compute K-array: read from smem_J with 'map' reindexing
     //          write K-array to global memory
+    //          syncthreads
     //
     // Notation: in register mappings throughout the code, we use index bits (e1 e0)_2
     // for the length-4 EW axis, and index bits (n7 n6 n5 n4 n3 n2 n1 n0)_2 for the
@@ -213,13 +219,15 @@ chime_frb_beamform(
     //
     // In preparation, we precompute the A-coefficients A[eo,ns,ei] for 0 <= ei < 4
     // and the appropriate per-thread value of (eo,ns).
+    //
 
     float A0re, A0im, A1re, A1im, A2re, A2im, A3re, A3im;
 
-    // Write code here to compute the A-coefficients. For now, don't bother
-    // with code optimization -- just write something that's easy to understand.
-    // This part can be optimized later, after passing unit tests.
     {
+        // Code to compute the A-coefficients isn't particularly optimized,
+        // but I didn't bother improving it, since the kernel ended up being
+        // memory bandwidth limited anyway.
+        
         // warpId = threadIdx.y * 2 + (threadIdx.x >> 5)
         //   w0 = n5 (threadIdx.x bit 5)
         //   w1 = n6 (threadIdx.y bit 0)
@@ -485,7 +493,7 @@ chime_frb_beamform(
                 //   thread:    n4 n3 n2 n1 n0
                 //   warp:      eo1 eo0 n7 n6 n5
                 //
-                // Write to smem_H, using 64-bit, bank-conflict-free store.
+                // Write to smem_H
                 //   float2 smem_H[4][4][256];   // (tinner,ew,ns)
 
                 // 64-bit store to smem_H[tinner][eo][ns], bank-conflict-free.
@@ -499,8 +507,7 @@ chime_frb_beamform(
                 }
             }
 
-            // Load partially beamformed data from shared memory, using 64-bit,
-            // bank-conflict-free load:
+            // Load partially beamformed data from shared memory:
             //   float2 smem_H[4][4][256];   // (tinner,ew,ns)
             //
             // in the following register assignment:
@@ -527,6 +534,8 @@ chime_frb_beamform(
                 H2 = smem_H[base + 128];   // n7=1, n6=0
                 H3 = smem_H[base + 192];   // n7=1, n6=1
             }
+            
+            __syncthreads();  // smem_H loads done; reusing union memory for FFT scratch
 
             // Now do the NS FFT using cufftdx.
             // The FFT is zero-padded, and takes (length 256) -> (length 512).
@@ -569,7 +578,6 @@ chime_frb_beamform(
                 fft_data[6] = complex_t(0.0f, 0.0f);
                 fft_data[7] = complex_t(0.0f, 0.0f);
 
-                __syncthreads();  // smem_H loads done; reusing union memory for FFT scratch
                 char *smem_fft = smem_all + 32*1024;
                 FFT().execute(fft_data, smem_fft);
 
@@ -583,12 +591,14 @@ chime_frb_beamform(
                 J7 = make_float2(fft_data[7].x, fft_data[7].y);
             }
 
+            __syncthreads();  // since FFT scratch memory will be reused for smem_J
+            
             // After cufftdx, we get the J-array in register assignment:
             //   register:  n8 n7 n6 ReIm
             //   thread:    n4 n3 n2 n1 n0
             //   warp:      t1 t0 e1 e0 n5
 
-            // Write to smem_J, using 64-bit, bank-conflict-free stores:
+            // Write to smem_J:
             //   float2 smem_J[4][4][512];  // (time,ew,ns)
 
             // 64-bit stores to smem_J[t][ew][ns], bank-conflict-free.
@@ -621,9 +631,9 @@ chime_frb_beamform(
                 //
                 // This can be done by loading smem_J[] at a memory location that
                 // depends on 'mapval', using a 64-bit load instruction. This load
-                // is generally not bank conflict free (!!). This can be fixed, but
-                // it involves some nontrivial extra steps that I'll introduce later.
-                // (Let's pass unit tests first!)
+                // is generally not bank conflict free (!!). This could be improved
+                // with some nontrivial effort, but I didn't bother since the kernel
+                // turned out to be memory bandwidth limited with realistic 'map' values.
 
                 // 64-bit load from smem_J[tinner][ew][mapval].
                 // NOT bank-conflict-free (mapval is arbitrary).
@@ -634,7 +644,7 @@ chime_frb_beamform(
                     Kval = smem_J[tinner * 2048 + ew * 512 + mapval];
                 }
 
-                // Write K-array element to global memory
+                // Write K-array element to global memory.
                 
                 // Convert float32+32 -> float16+16, write to outputData.
                 // outputData shape (128,4,256), strides (F*2048, 256, 1), dtype __half2.
@@ -653,15 +663,15 @@ chime_frb_beamform(
 }
 
 
-// 'inputData':  shape (T,F,2,4,256), dtype uint8_t, axes (time,freq,pol,ew,ns)
-// 'map':        shape (F,256), dtype uint, axes (freq,ns)
-// 'co':         shape (F,4,4,2), dtype float, axes (freq,ewout,ewin,ReIm)
-// 'outputData': shape (T,F,2,4,256), dtype float16+16, axes (time,freq,pol,ew,ns)
-// 'gains':      shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
 void launch_chime_frb_beamform(
-    const uint8_t *inputData, const uint *map, const float *co,
-    __half *outputData, const float *gains,
-    long T, long F, cudaStream_t stream)
+    const uint8_t *inputData,   // shape (T,F,2,4,256), dtype uint8_t, axes (time,freq,pol,ew,ns)
+    const uint *map,            // shape (F,256), dtype uint, axes (freq,ns)
+    const float *co,            // shape (F,4,4,2), dtype float, axes (freq,ewout,ewin,ReIm)  
+    __half *outputData,         // shape (T,F,2,4,256), dtype float16+16, axes (time,freq,pol,ew,ns)
+    const float *gains,         // shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
+    long T,
+    long F,
+    cudaStream_t stream)
 {
     xassert(T > 0);
     xassert(F > 0);
@@ -670,6 +680,7 @@ void launch_chime_frb_beamform(
     long T128 = T / 128;
 
     CUDA_CALL(cudaFuncSetAttribute(chime_frb_beamform, cudaFuncAttributeMaxDynamicSharedMemorySize, 96*1024));
+    
     chime_frb_beamform<<< {(uint)T128,(uint)F,2}, {64,16}, 96*1024, stream >>>
         (inputData, map, co,
          reinterpret_cast<__half2 *>(outputData),
@@ -680,22 +691,23 @@ void launch_chime_frb_beamform(
 
 
 void launch_chime_frb_beamform(
-    const ksgpu::Array<uint8_t> &inputData,
-    const ksgpu::Array<uint> &map,
-    const ksgpu::Array<float> &co,
-    ksgpu::Array<__half> &outputData,
-    const ksgpu::Array<float> &gains,
+    const ksgpu::Array<uint8_t> &inputData,  // shape (T,F,2,4,256), dtype uint8_t, axes (time,freq,pol,ew,ns)
+    const ksgpu::Array<uint> &map,           // shape (F,256), dtype uint, axes (freq,ns)
+    const ksgpu::Array<float> &co,           // shape (F,4,4,2), dtype float, axes (freq,ewout,ewin,ReIm)
+    ksgpu::Array<__half> &outputData,        // shape (T,F,2,4,256), dtype float16+16, axes (time,freq,pol,ew,ns)
+    const ksgpu::Array<float> &gains,        // shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
     cudaStream_t stream)
 {
     // inputData: shape (T,F,2,4,256), dtype uint8_t
     xassert(inputData.ndim == 5);
-    long T = inputData.shape[0];
-    long F = inputData.shape[1];
     xassert_eq(inputData.shape[2], 2);
     xassert_eq(inputData.shape[3], 4);
     xassert_eq(inputData.shape[4], 256);
     xassert(inputData.on_gpu());
     xassert(inputData.is_fully_contiguous());
+    
+    long T = inputData.shape[0];
+    long F = inputData.shape[1];
 
     // map: shape (F,256), dtype uint
     xassert_shape_eq(map, ({F, 256}));
@@ -747,13 +759,14 @@ void cpu_chime_frb_beamform(
 {
     // inputData: (T,F,2,4,256) uint8_t
     xassert(inputData.ndim == 5);
-    long T = inputData.shape[0];
-    long F = inputData.shape[1];
     xassert_eq(inputData.shape[2], 2);
     xassert_eq(inputData.shape[3], 4);
     xassert_eq(inputData.shape[4], 256);
     xassert(inputData.on_host());
     xassert(inputData.is_fully_contiguous());
+    
+    long T = inputData.shape[0];
+    long F = inputData.shape[1];
 
     // map: (F,256) uint
     xassert_shape_eq(map, ({F, 256}));
@@ -891,27 +904,18 @@ void time_chime_frb_beamform()
     long niterations = 1000;
     long nstreams = 1;
 
-    // Global memory: read inputData + gains + co + map, write outputData.
-    // inputData: shape=(T,F,2,4,256), dtype=uint8_t (1 byte)
-    // outputData: shape=(T,F,2,4,256,2), dtype=__half (2 bytes)
-    // gains: shape=(F,2,4,256,2), dtype=float (4 bytes) -- small, negligible
-    // co: shape=(F,4,4,2), dtype=float (4 bytes) -- small, negligible
-    // map: shape=(F,256), dtype=uint (4 bytes) -- small, negligible
-    double gmem_gb = (double(T) * F * 2 * 4 * 256 * sizeof(uint8_t)
-                      + double(T) * F * 2 * 4 * 256 * 2 * sizeof(__half)) / pow(2,30.);
-
-    Array<uint8_t> inputData({T, F, 2, 4, 256}, af_gpu | af_zero);
-
     // Realistic clamping map: F frequencies linearly spaced from 400 to 800 MHz.
     Array<double> freqs({F}, af_rhost);
     for (long f = 0; f < F; f++)
         freqs.data[f] = 400.0 + (800.0 - 400.0) * f / (F - 1);
-    Array<uint> map_arr = calculate_cl_indices(freqs, 60.0).to_gpu();
 
+    Array<uint8_t> inputData({T, F, 2, 4, 256}, af_gpu | af_zero);    
+    Array<uint> map_arr = calculate_cl_indices(freqs, 60.0).to_gpu();
     Array<float> co({F, 4, 4, 2}, af_gpu | af_zero);
     Array<__half> outputData({T, F, 2, 4, 256, 2}, af_gpu | af_zero);
     Array<float> gains({F, 2, 4, 256, 2}, af_gpu | af_zero);
 
+    double gmem_gb = 1.0e-9 * (inputData.nbytes() + outputData.nbytes());
     KernelTimer kt(niterations, nstreams);
 
     while (kt.next()) {
