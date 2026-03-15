@@ -22,6 +22,37 @@ namespace pirate {
 #endif
 
 
+// Bandpass constants from kotekan (either lib/hsa/kernels/frb_upchan_amd.cl
+// or lib/testing/gpuBeamformSimulate.cpp). These are used below in the CPU
+// reference implementation.
+static const float BP[16] = {
+    0.52225748f, 0.58330915f, 0.6868705f,  0.80121821f,
+    0.89386546f, 0.95477358f, 0.98662733f, 0.99942558f,
+    0.99988676f, 0.98905127f, 0.95874124f, 0.90094667f,
+    0.81113021f, 0.6999944f,  0.59367968f, 0.52614263f
+};
+
+// In the GPU kernel, it's more convenient to use BP48 = 1/(48*BP).
+__constant__ float BP48[16] = {
+    1.0f / (48 * 0.52225748f),
+    1.0f / (48 * 0.58330915f),
+    1.0f / (48 * 0.68687050f),
+    1.0f / (48 * 0.80121821f),
+    1.0f / (48 * 0.89386546f),
+    1.0f / (48 * 0.95477358f),
+    1.0f / (48 * 0.98662733f),
+    1.0f / (48 * 0.99942558f),
+    1.0f / (48 * 0.99988676f),
+    1.0f / (48 * 0.98905127f),
+    1.0f / (48 * 0.95874124f),
+    1.0f / (48 * 0.90094667f),
+    1.0f / (48 * 0.81113021f),
+    1.0f / (48 * 0.69999440f),
+    1.0f / (48 * 0.59367968f),
+    1.0f / (48 * 0.52614263f)
+};
+
+        
 // -------------------------------------------------------------------------------------------------
 //
 // _load_half4(), _store_half4(): load/store (4xfp16) with a single 64-bit instruction.
@@ -196,9 +227,14 @@ __device__ inline float _fft128_sq(__half2 x0, __half2 x1, __half2 x2, __half2 x
 //  3. Take the absolute square (complex -> real), and downsample by
 //     a factor 3 in time, 8 in frequency, 2 in polarization:
 //
-//         float32 results_array[16];     // ufreq
-//         results_array[ufreq] = sum_{thi=0}^{2} sum_{pol=0}^{1}
-//               sum_{f = 8*ufreq}^{8*ufreq+7} |F[thi,f,pol]|^2
+//         float32 G[16];     // ufreq
+//         G[ufreq] = sum_{thi=0}^{2} sum_{pol=0}^{1}
+//                      sum_{f = 8*ufreq}^{8*ufreq+7} |F[thi,f,pol]|^2
+//
+//  4. Write to global memory with a factor (1/48), an index shift,
+//     and a bandpass correction:
+//
+//         results_array[ufreq] = G[ufreq ^ 8] / (48 * BP[ufreq]);
 //
 // Each threadblock processes (32 beams, one coarse freq, 768 times).
 // Thus, gridDim = (B/32,F,T/768). We assume that B is a multiple of 32,
@@ -250,10 +286,12 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
     results_array += (b32 * 32UL * F + f) * ulong(T768 * 32);
     results_array += 32 * t768;
 
-    // 'u' will accumulate intensity values for 32 beams, 16 ufreqs, 2 times.
+    // 'g' will accumulate intensity values for 32 beams, 16 ufreqs, 2 times.
+    // This is the quantity denoted G[] in the long comment above.
+    //
     // It's convenient to use the following weird register assignment
     //   register:  t384
-    //   thread:      f4 f3 b0 f6 f5
+    //   thread:    f4 f3 b0 f6 f5
     //   warp:      b4 b3 b2 b1
     //
     // Note that we denote the length-2 time index by 't384'.
@@ -261,8 +299,8 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
     // since it will obtained by summing a length-128 axis in consecutive groups of 8
     // (i.e. summing over f0,f1,f2). See related comment above _fft128_sq().
     
-    float u0 = 0.0f;
-    float u1 = 0.0f;
+    float g0 = 0.0f;
+    float g1 = 0.0f;
 
     // Outer loop over 6 blocks of 128 time samples (i.e. 768 time samples total)
     for (uint t128 = 0; t128 < 6; t128++) {
@@ -351,32 +389,33 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
             //   thread:    f4 f3 b0 f6 f5
             //   warp:      b4 b3 b2 b1
             //
-            // Accumulate into (u0, u1).
-            // Reminder: u register layout is
+            // Accumulate into (g0, g1).
+            // Reminder: g register layout is
             //   register:  t384
             //   thread:    f4 f3 b0 f6 f5
             //   warp:      b4 b3 b2 b1
             
-            u0 = (t128 < 3) ? (u0+t) : (u0);
-            u1 = (t128 < 3) ? (u1) : (u1+t);
+            g0 = (t128 < 3) ? (g0+t) : (g0);
+            g1 = (t128 < 3) ? (g1) : (g1+t);
         } // end of pol loop
     }     // end of t128 loop
 
-    // When we get here, the (u0,u1) registers are fully summed over 3 t128 values, 2 pols, 8 freqs.
-    // These values are ready to write to gpu global memory -- we just permute the register assignment first.
+    // When we get here, the (g0,g1) registers are fully summed over 3 t128 values, 2 pols, 8 freqs.
+    // Before writing to gpu global memory, we just need to permute the register assignment and
+    // apply the bandpass correction.
     //
-    // Reminder: u register layout is
+    // Reminder: g register layout is
     //   register:  t384
     //   thread:    f4 f3 b0 f6 f5
     //   warp:      b4 b3 b2 b1
 
     // Warp shuffle: exchange register bit with thread bit 't2'.
-    float utmp = (threadIdx.x & 0x4) ? u0 : u1;
-    utmp = __shfl_sync(~0u, utmp, threadIdx.x ^ 0x4);
-    u0 = (threadIdx.x & 0x4) ? utmp : u0;
-    u1 = (threadIdx.x & 0x4) ? u1 : utmp;
+    float gtmp = (threadIdx.x & 0x4) ? g0 : g1;
+    gtmp = __shfl_sync(~0u, gtmp, threadIdx.x ^ 0x4);
+    g0 = (threadIdx.x & 0x4) ? gtmp : g0;
+    g1 = (threadIdx.x & 0x4) ? g1 : gtmp;
 
-    // Now u register layout is:
+    // Now g register layout is:
     //   register:  b0
     //   thread:    f4 f3 t384 f6 f5
     //   warp:      b4 b3 b2 b1
@@ -385,23 +424,37 @@ chime_frb_upchan(const __half2 *__restrict__ data, float *__restrict__ results_a
     uint lane = (threadIdx.x & 0x1c) >> 2;  // t384 f6 f5
     lane |= (threadIdx.x & 0x3) << 3;       // f4 f3
 
-    u0 = __shfl_sync(~0u, u0, lane);
-    u1 = __shfl_sync(~0u, u1, lane);
+    g0 = __shfl_sync(~0u, g0, lane);
+    g1 = __shfl_sync(~0u, g1, lane);
     
-    // Now u register layout is:
+    // Now g register layout is:
     //   register:  b0
     //   thread:    t384 f6 f5 f4 f3
     //   warp:      b4 b3 b2 b1
 
-    // Apply per-warp and per-thread offsets to results_array.
+    // Apply the index shift ufreq -> (ufreq ^ 8). (See step 4 in the long comment above.)
+    // This could be coalesced with the previous permutation, but we keep it separate
+    // for clarity, since the kernel is memory bandwidth limited anyway.
+
+    g0 = __shfl_sync(~0u, g0, threadIdx.x ^ 0x8);
+    g1 = __shfl_sync(~0u, g1, threadIdx.x ^ 0x8);
+
+    // Multiply by 1 / (48 * BP[ufreq]). (See step 4 in the long comment above.)
+    
+    float bp48 = BP48[threadIdx.x & 0xf];
+    g0 *= bp48;
+    g1 *= bp48;
+
+    // Before writing to global gpu memory ('results_array'),
+    // apply per-warp and per-thread offsets to results_array.
     //   before: shape (32,2,16), strides (32*F*T768, 16, 1)
     //   after:  shape (2,), stride (32*F*T768)
 
     ulong bstride = 32 * ulong(F) * ulong(T768);
     results_array += threadIdx.y * (2 * bstride) + (threadIdx.x);
     
-    results_array[0] = u0;
-    results_array[bstride] = u1;
+    results_array[0] = g0;
+    results_array[bstride] = g1;
 }
 
 // 'data': shape=(T,F,2,B,2), axes (time,freq,pol,beam,ReIm)
@@ -494,16 +547,19 @@ void cpu_chime_frb_upchan(const Array<float> &data, Array<float> &results_array)
                     for (long t = 0; t < 128; t++)
                         v[t] = { psrc[t*tstride], psrc[t*tstride+1] };
 
-                    for (int t = 0; t < 128; t++) {
+                    for (int f = 0; f < 128; f++) {
                         complex<float> x = { 0.0f, 0.0f };
                         
                         // DFT with positive exponent (no 1/N prefactor):
-                        //   X[ufreq] = sum_{tlo} x[tlo] * exp(+2*pi*i*tlo*ufreq/128)
-                        for (int u = 0; u < 128; u++)
-                            x += ei[(t*u) & 127] * v[u];
+                        //   F[f] = sum_{t} data[t] * exp(+2*pi*i*f*t/128)
+                        for (int t = 0; t < 128; t++)
+                            x += ei[(f*t) & 127] * v[t];
 
                         float intensity = x.real() * x.real() + x.imag() * x.imag();
-                        pdst[t >> 3] += intensity;
+
+                        // Accumulate.
+                        int u = (f >> 3) ^ 8;  // output index including shift u -> (u ^ 8).
+                        pdst[u] += intensity / (48.0f * BP[u]);
                     }
                 }
             }
