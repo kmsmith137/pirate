@@ -618,4 +618,85 @@ chime_frb_beamform(
 // #endif  -- removed, kernel is now complete
 
 
+// 'inputData':  shape (T,F,2,4,256), dtype uint8_t, axes (time,freq,pol,ew,ns)
+// 'map':        shape (F,256), dtype uint, axes (freq,ns)
+// 'co':         shape (F,4,4,2), dtype float, axes (freq,ewout,ewin,ReIm)
+// 'outputData': shape (T,F,2,4,256), dtype float16+16, axes (time,freq,pol,ew,ns)
+// 'gains':      shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
+void launch_chime_frb_beamform(
+    const uint8_t *inputData, const uint *map, const float *co,
+    __half *outputData, const float *gains,
+    long T, long F, cudaStream_t stream)
+{
+    xassert(T > 0);
+    xassert(F > 0);
+    xassert_divisible(T, 128);
+
+    long T128 = T / 128;
+
+    chime_frb_beamform<<< {(uint)T128,(uint)F,2}, {64,16}, 96*1024, stream >>>
+        (inputData, map, co,
+         reinterpret_cast<__half2 *>(outputData),
+         reinterpret_cast<const float2 *>(gains));
+
+    CUDA_PEEK("chime_frb_beamform");
+}
+
+
+void launch_chime_frb_beamform(
+    const ksgpu::Array<uint8_t> &inputData,
+    const ksgpu::Array<uint> &map,
+    const ksgpu::Array<float> &co,
+    ksgpu::Array<__half> &outputData,
+    const ksgpu::Array<float> &gains,
+    cudaStream_t stream)
+{
+    // inputData: shape (T,F,2,4,256), dtype uint8_t
+    xassert(inputData.ndim == 5);
+    long T = inputData.shape[0];
+    long F = inputData.shape[1];
+    xassert_eq(inputData.shape[2], 2);
+    xassert_eq(inputData.shape[3], 4);
+    xassert_eq(inputData.shape[4], 256);
+    xassert(inputData.on_gpu());
+    xassert(inputData.is_fully_contiguous());
+
+    // map: shape (F,256), dtype uint
+    xassert_shape_eq(map, ({F, 256}));
+    xassert(map.on_gpu());
+    xassert(map.is_fully_contiguous());
+
+    // co: shape (F,4,4,2), dtype float
+    xassert_shape_eq(co, ({F, 4, 4, 2}));
+    xassert(co.on_gpu());
+    xassert(co.is_fully_contiguous());
+
+    // outputData: shape (T,F,2,4,256), dtype __half (stored as float16+16, so shape has extra dim 2)
+    xassert(outputData.ndim == 6);
+    xassert_eq(outputData.shape[0], T);
+    xassert_eq(outputData.shape[1], F);
+    xassert_eq(outputData.shape[2], 2);
+    xassert_eq(outputData.shape[3], 4);
+    xassert_eq(outputData.shape[4], 256);
+    xassert_eq(outputData.shape[5], 2);
+    xassert(outputData.on_gpu());
+    xassert(outputData.is_fully_contiguous());
+
+    // gains: shape (F,2,4,256), dtype float (stored as float32+32, so shape has extra dim 2)
+    xassert(gains.ndim == 5);
+    xassert_eq(gains.shape[0], F);
+    xassert_eq(gains.shape[1], 2);
+    xassert_eq(gains.shape[2], 4);
+    xassert_eq(gains.shape[3], 256);
+    xassert_eq(gains.shape[4], 2);
+    xassert(gains.on_gpu());
+    xassert(gains.is_fully_contiguous());
+
+    launch_chime_frb_beamform(
+        inputData.data, map.data, co.data,
+        outputData.data, gains.data,
+        T, F, stream);
+}
+
+
 } // namespace pirate
