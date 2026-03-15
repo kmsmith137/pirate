@@ -22,7 +22,7 @@ namespace pirate {
 
 // Currently, the kernel doesn't compile, due to the xxx's in the code.
 // When you're ready to try compiling it, remove this #if 0 ... #endif.
-#if 0
+// #if 0  -- removed, kernel is now complete
 
 // This is the "beamforming" part of the CHIME FRB beamforming kernel.
 // It runs before the "upchannelization" part.
@@ -122,7 +122,32 @@ chime_frb_beamform(
     extern __shared__ char smem_all[];
 
     // First, apply per-block pointer offsets to all pointer arguments.
-    xxx;     // apply per-block pointer offsets to all pointer arguments.
+    uint F = gridDim.y;
+
+    // inputData: shape (T,F,2,4,256), dtype uint8_t
+    //   before: shape (T,F,2,4,256), contiguous
+    //   after: shape (128,4,256), strides (F*2048, 256, 1)
+    inputData += (128UL * blockIdx.x * F * 2 + blockIdx.y * 2 + blockIdx.z) * 1024;
+
+    // map: shape (F,256), dtype uint
+    //   before: shape (F,256), contiguous
+    //   after: shape (256,), contiguous
+    map += blockIdx.y * 256;
+
+    // co: shape (F,4,4,2), dtype float
+    //   before: shape (F,4,4,2), contiguous
+    //   after: shape (4,4,2), contiguous
+    co += blockIdx.y * 32;
+
+    // outputData: shape (T,F,2,4,256), dtype __half2
+    //   before: shape (T,F,2,4,256), contiguous
+    //   after: shape (128,4,256), strides (F*2048, 256, 1)
+    outputData += (128UL * blockIdx.x * F * 2 + blockIdx.y * 2 + blockIdx.z) * 1024;
+
+    // gains: shape (F,2,4,256), dtype float2
+    //   before: shape (F,2,4,256), contiguous
+    //   after: shape (4,256), contiguous
+    gains += (blockIdx.y * 2UL + blockIdx.z) * 1024;
 
     // Initialize "mapval" (1 register/thread).
     // This is the value of map[ns], for a specific value of ns that will be
@@ -159,7 +184,39 @@ chime_frb_beamform(
     // Write code here to compute the A-coefficients. For now, don't bother
     // with code optimization -- just write something that's easy to understand.
     // This part can be optimized later, after passing unit tests.
-    xxx;
+    {
+        // warpId = threadIdx.y * 2 + (threadIdx.x >> 5)
+        //   w0 = n5 (threadIdx.x bit 5)
+        //   w1 = n6 (threadIdx.y bit 0)
+        //   w2 = n7 (threadIdx.y bit 1)
+        //   w3 = eo0 (threadIdx.y bit 2)
+        //   w4 = eo1 (threadIdx.y bit 3)
+        uint eo = (threadIdx.y >> 2) & 3;
+        uint ns = ((threadIdx.y & 3) << 6) | threadIdx.x;
+
+        // gains: shape (4,256), dtype float2, after per-block offset
+        float2 g0 = gains[ns];
+        float2 g1 = gains[256 + ns];
+        float2 g2 = gains[512 + ns];
+        float2 g3 = gains[768 + ns];
+
+        // co: shape (4,4,2), dtype float, after per-block offset
+        // co[eo,ei] is at offset eo*8 + ei*2 (+0 for re, +1 for im)
+        float co0re = co[eo*8];     float co0im = co[eo*8 + 1];
+        float co1re = co[eo*8 + 2]; float co1im = co[eo*8 + 3];
+        float co2re = co[eo*8 + 4]; float co2im = co[eo*8 + 5];
+        float co3re = co[eo*8 + 6]; float co3im = co[eo*8 + 7];
+
+        // A[eo,ns,ei] = (1/4) co[eo,ei] * gain[ei,ns]   (complex multiply)
+        A0re = 0.25f * (co0re * g0.x - co0im * g0.y);
+        A0im = 0.25f * (co0re * g0.y + co0im * g0.x);
+        A1re = 0.25f * (co1re * g1.x - co1im * g1.y);
+        A1im = 0.25f * (co1re * g1.y + co1im * g1.x);
+        A2re = 0.25f * (co2re * g2.x - co2im * g2.y);
+        A2im = 0.25f * (co2re * g2.y + co2im * g2.x);
+        A3re = 0.25f * (co3re * g3.x - co3im * g3.y);
+        A3im = 0.25f * (co3re * g3.y + co3im * g3.x);
+    }
         
     for (int touter = 0; touter < 128; touter += 32) {
         
@@ -172,12 +229,48 @@ chime_frb_beamform(
 
         uint E0, E1, E2, E3, E4, E5, E6, E7;
 
-        xxx;  // load E0..E7 from 'inputData'. Use 64-bit load instructions.
+        {
+            uint laneId = threadIdx.x & 31;
+            uint warpId = threadIdx.y * 2 + (threadIdx.x >> 5);
+
+            // t_local = (t4 t3 t2 t1 t0)_2, range 0..31
+            uint t_local = (warpId & 0x1e) | (laneId >> 4);
+
+            // ns_base = (n7 n6 n5 n4 n3 0 0 0)_2
+            uint ns_base = ((warpId & 1) << 7) | ((laneId & 0xf) << 3);
+
+            // Pointer to inputData[touter + t_local, ew=0, ns_base]
+            //   inputData shape (128,4,256), strides (F*2048, 256, 1)
+            const uint8_t *p = inputData + (touter + t_local) * (ulong(F) * 2048) + ns_base;
+
+            // 64-bit loads, one per ew value (ew stride = 256 bytes)
+            uint2 tmp;
+            tmp = *reinterpret_cast<const uint2 *>(p);       E0 = tmp.x; E1 = tmp.y;
+            tmp = *reinterpret_cast<const uint2 *>(p + 256); E2 = tmp.x; E3 = tmp.y;
+            tmp = *reinterpret_cast<const uint2 *>(p + 512); E4 = tmp.x; E5 = tmp.y;
+            tmp = *reinterpret_cast<const uint2 *>(p + 768); E6 = tmp.x; E7 = tmp.y;
+        }
 
         // Now we do a lot of shuffling operations, to change the register assignment.
 
-        xxx;  // local transpose (simd s0) <-> (register r1)
-        xxx;  // local transpose (simd s1) <-> (register r2)
+        // local transpose (simd s0) <-> (register r1)
+        // Pairs differing in r1: (E0,E2), (E1,E3), (E4,E6), (E5,E7)
+        {
+            uint t0 = __byte_perm(E0, E2, 0x6240); uint t2 = __byte_perm(E0, E2, 0x7351);
+            uint t1 = __byte_perm(E1, E3, 0x6240); uint t3 = __byte_perm(E1, E3, 0x7351);
+            uint t4 = __byte_perm(E4, E6, 0x6240); uint t6 = __byte_perm(E4, E6, 0x7351);
+            uint t5 = __byte_perm(E5, E7, 0x6240); uint t7 = __byte_perm(E5, E7, 0x7351);
+            E0=t0; E1=t1; E2=t2; E3=t3; E4=t4; E5=t5; E6=t6; E7=t7;
+        }
+        // local transpose (simd s1) <-> (register r2)
+        // Pairs differing in r2: (E0,E4), (E1,E5), (E2,E6), (E3,E7)
+        {
+            uint t0 = __byte_perm(E0, E4, 0x5410); uint t4 = __byte_perm(E0, E4, 0x7632);
+            uint t1 = __byte_perm(E1, E5, 0x5410); uint t5 = __byte_perm(E1, E5, 0x7632);
+            uint t2 = __byte_perm(E2, E6, 0x5410); uint t6 = __byte_perm(E2, E6, 0x7632);
+            uint t3 = __byte_perm(E3, E7, 0x5410); uint t7 = __byte_perm(E3, E7, 0x7632);
+            E0=t0; E1=t1; E2=t2; E3=t3; E4=t4; E5=t5; E6=t6; E7=t7;
+        }
 
         // At this point, the register assignment is (dtype uint4+4):
         //  simd:      e1 e0
@@ -185,8 +278,56 @@ chime_frb_beamform(
         //  thread:    t0 n6 n5 n4 n3
         //  warp:      t4 t3 t2 t1 n7
 
-        xxx;  // warp transpose (register r0) <-> (thread t4)
-        xxx;  // warp transpose (register r2) <-> (thread t3)
+        // warp transpose (register r0) <-> (thread t4)
+        // Pairs differing in r0: (E0,E1), (E2,E3), (E4,E5), (E6,E7)
+        // t4 = laneId bit 4, mask = 0x10
+        {
+            uint tmp;
+            tmp = (threadIdx.x & 0x10) ? E0 : E1;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x10);
+            E0 = (threadIdx.x & 0x10) ? tmp : E0;
+            E1 = (threadIdx.x & 0x10) ? E1 : tmp;
+
+            tmp = (threadIdx.x & 0x10) ? E2 : E3;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x10);
+            E2 = (threadIdx.x & 0x10) ? tmp : E2;
+            E3 = (threadIdx.x & 0x10) ? E3 : tmp;
+
+            tmp = (threadIdx.x & 0x10) ? E4 : E5;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x10);
+            E4 = (threadIdx.x & 0x10) ? tmp : E4;
+            E5 = (threadIdx.x & 0x10) ? E5 : tmp;
+
+            tmp = (threadIdx.x & 0x10) ? E6 : E7;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x10);
+            E6 = (threadIdx.x & 0x10) ? tmp : E6;
+            E7 = (threadIdx.x & 0x10) ? E7 : tmp;
+        }
+        // warp transpose (register r2) <-> (thread t3)
+        // Pairs differing in r2: (E0,E4), (E1,E5), (E2,E6), (E3,E7)
+        // t3 = laneId bit 3, mask = 0x08
+        {
+            uint tmp;
+            tmp = (threadIdx.x & 0x08) ? E0 : E4;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x08);
+            E0 = (threadIdx.x & 0x08) ? tmp : E0;
+            E4 = (threadIdx.x & 0x08) ? E4 : tmp;
+
+            tmp = (threadIdx.x & 0x08) ? E1 : E5;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x08);
+            E1 = (threadIdx.x & 0x08) ? tmp : E1;
+            E5 = (threadIdx.x & 0x08) ? E5 : tmp;
+
+            tmp = (threadIdx.x & 0x08) ? E2 : E6;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x08);
+            E2 = (threadIdx.x & 0x08) ? tmp : E2;
+            E6 = (threadIdx.x & 0x08) ? E6 : tmp;
+
+            tmp = (threadIdx.x & 0x08) ? E3 : E7;
+            tmp = __shfl_sync(~0u, tmp, threadIdx.x ^ 0x08);
+            E3 = (threadIdx.x & 0x08) ? tmp : E3;
+            E7 = (threadIdx.x & 0x08) ? E7 : tmp;
+        }
 
         // At this point, the register assignment is (dtype uint4+4):
         //  simd:      e1 e0
@@ -197,11 +338,25 @@ chime_frb_beamform(
         // We now call __shfl_sync() on each register, to permute threads
         // (n2 n1 n5 n4 n3) -> (n5 n4 n3 n2 n1).
         
-        xxx;  // compute lane permutation, call __shfl_sync()
+        // Permute threads: (n2 n1 n5 n4 n3) -> (n5 n4 n3 n2 n1)
+        // Thread at lane L (new encoding: n5 n4 n3 n2 n1) reads from
+        // old lane (n2 n1 n5 n4 n3) = ((L & 0x3) << 3) | ((L >> 2) & 0x7)
+        {
+            uint laneId = threadIdx.x & 31;
+            uint src = ((laneId & 0x3) << 3) | ((laneId >> 2) & 0x7);
+            E0 = __shfl_sync(~0u, E0, src);
+            E1 = __shfl_sync(~0u, E1, src);
+            E2 = __shfl_sync(~0u, E2, src);
+            E3 = __shfl_sync(~0u, E3, src);
+            E4 = __shfl_sync(~0u, E4, src);
+            E5 = __shfl_sync(~0u, E5, src);
+            E6 = __shfl_sync(~0u, E6, src);
+            E7 = __shfl_sync(~0u, E7, src);
+        }
 
         // At this point, the register assignment is (dtype uint4+4)
         //  simd:      e1 e0
-        //  register:  n0 n6 t0
+        //  register:  n6 n0 t0
         //  thread:    n5 n4 n3 n2 n1
         //  warp:      t4 t3 t2 t1 n7
 
@@ -212,7 +367,32 @@ chime_frb_beamform(
         // into a uint, with simd (s1 s0) <-> (e1 e0). We can use a 64-bit,
         // bank-conflict-free store instruction here.
 
-        xxx;   // store to smem_E
+        // Store to smem_E using 64-bit, bank-conflict-free stores.
+        // Register assignment:
+        //   simd:      e1 e0       (packed in uint)
+        //   register:  r2 r1 r0  <->  n6 n0 t0
+        //   thread:    n5 n4 n3 n2 n1
+        //   warp:      t4 t3 t2 t1 n7
+        //
+        // 64-bit store pairs registers differing in r1 (= n0):
+        //   (E0,E2), (E1,E3), (E4,E6), (E5,E7)
+        {
+            uint *smem_E = reinterpret_cast<uint *>(smem_all);  // [32][256]
+            uint laneId = threadIdx.x & 31;
+            uint warpId = threadIdx.y * 2 + (threadIdx.x >> 5);
+
+            uint time0 = warpId & 0x1e;       // t0=0
+            uint time1 = time0 | 1;            // t0=1
+            uint ns_lo = ((warpId & 1) << 7) | (laneId << 1);             // n6=0
+            uint ns_hi = ns_lo | (1 << 6);                                 // n6=1
+
+            *reinterpret_cast<uint2 *>(smem_E + time0 * 256 + ns_lo) = make_uint2(E0, E2);
+            *reinterpret_cast<uint2 *>(smem_E + time0 * 256 + ns_hi) = make_uint2(E4, E6);
+            *reinterpret_cast<uint2 *>(smem_E + time1 * 256 + ns_lo) = make_uint2(E1, E3);
+            *reinterpret_cast<uint2 *>(smem_E + time1 * 256 + ns_hi) = make_uint2(E5, E7);
+        }
+
+        __syncthreads();
 
         for (int tmid = 0; tmid < 32; tmid += 4) {
 
@@ -231,11 +411,38 @@ chime_frb_beamform(
                 //   thread:  n4 n3 n2 n1 n0
                 //   warp:    eo1 eo0 n7 n6 n5
 
-                xxx;  // load from smem_E (32-bit load, bank-conflict-free)
+                // 32-bit load from smem_E[time][ns], bank-conflict-free.
+                // ns = (n7 n6 n5 from warpId bits 2..0) | (n4..n0 from laneId)
+                // eo bits in warpId don't affect the address (ew packed in simd).
+                uint Eval;
+                {
+                    const uint *smem_E = reinterpret_cast<const uint *>(smem_all);
+                    uint laneId = threadIdx.x & 31;
+                    uint warpId = threadIdx.y * 2 + (threadIdx.x >> 5);
+                    uint ns = ((warpId & 7) << 5) | laneId;
+                    Eval = smem_E[(tmid + tinner) * 256 + ns];
+                }
 
                 // Convert uint4+4 -> float32+32, multiply by A-matrix.
 
-                xxx;  // convert uint4+4 -> float32+32, multiply by A-matrix
+                // Unpack uint4+4 -> float32+32 for all 4 EW feeds (ei=0,1,2,3).
+                // Each byte: real = (byte >> 4) - 8, imag = (byte & 0xf) - 8.
+                float e0re = float((Eval >> 4) & 0xf) - 8.0f;
+                float e0im = float(Eval & 0xf) - 8.0f;
+                float e1re = float((Eval >> 12) & 0xf) - 8.0f;
+                float e1im = float((Eval >> 8) & 0xf) - 8.0f;
+                float e2re = float((Eval >> 20) & 0xf) - 8.0f;
+                float e2im = float((Eval >> 16) & 0xf) - 8.0f;
+                float e3re = float((Eval >> 28) & 0xf) - 8.0f;
+                float e3im = float((Eval >> 24) & 0xf) - 8.0f;
+
+                // H = sum_ei A[ei] * E[ei]^*
+                // A * E^* = (Are+i*Aim)(re-i*im) = (Are*re+Aim*im) + i*(Aim*re-Are*im)
+                float Hre = A0re*e0re + A0im*e0im + A1re*e1re + A1im*e1im
+                          + A2re*e2re + A2im*e2im + A3re*e3re + A3im*e3im;
+                float Him = A0im*e0re - A0re*e0im + A1im*e1re - A1re*e1im
+                          + A2im*e2re - A2re*e2im + A3im*e3re - A3re*e3im;
+                float2 Hval = make_float2(Hre, Him);
 
                 // Now we have a float2 on each thread, corresponding to the H-array in
                 // register assigment:
@@ -246,7 +453,15 @@ chime_frb_beamform(
                 // Write to smem_H, using 64-bit, bank-conflict-free store.
                 //   float2 smem_H[4][4][256];   // (tinner,ew,ns)
 
-                xxx;   // store to smem_H
+                // 64-bit store to smem_H[tinner][eo][ns], bank-conflict-free.
+                {
+                    float2 *smem_H = reinterpret_cast<float2 *>(smem_all + 32*1024);
+                    uint laneId = threadIdx.x & 31;
+                    uint warpId = threadIdx.y * 2 + (threadIdx.x >> 5);
+                    uint eo = (warpId >> 3) & 3;
+                    uint ns = ((warpId & 7) << 5) | laneId;
+                    smem_H[tinner * 1024 + eo * 256 + ns] = Hval;
+                }
             }
 
             // Load partially beamformed data from shared memory, using 64-bit,
@@ -258,13 +473,80 @@ chime_frb_beamform(
             //   thread:    n4 n3 n2 n1 n0
             //   warp:      t1 t0 e1 e0 n5
 
-            xxx;  // load from smem_H
+            __syncthreads();
+
+            // 64-bit loads from smem_H[tinner_idx][ew][ns], bank-conflict-free.
+            // Warp mapping: w4=t1, w3=t0, w2=e1, w1=e0, w0=n5
+            float2 H0, H1, H2, H3;
+            {
+                const float2 *smem_H = reinterpret_cast<const float2 *>(smem_all + 32*1024);
+                uint laneId = threadIdx.x & 31;
+                uint warpId = threadIdx.y * 2 + (threadIdx.x >> 5);
+                uint tinner_idx = (threadIdx.y >> 2) & 3;
+                uint ew = threadIdx.y & 3;
+                uint ns_base = ((warpId & 1) << 5) | laneId;  // (n5, n4..n0)
+
+                uint base = tinner_idx * 1024 + ew * 256 + ns_base;
+                H0 = smem_H[base];         // n7=0, n6=0
+                H1 = smem_H[base + 64];    // n7=0, n6=1
+                H2 = smem_H[base + 128];   // n7=1, n6=0
+                H3 = smem_H[base + 192];   // n7=1, n6=1
+            }
 
             // Now do the NS FFT using cufftdx.
             // The FFT is zero-padded, and takes (length 256) -> (length 512).
             // This adds an 'n8' bit to the register assignment.
 
-            xxx;  // cufftdx
+            // Zero-padded 512-point FFT using cufftdx.
+            // Direction: inverse (positive exponent, exp(+2pi*i*j*k/512)).
+            // 16 independent FFTs per block (one per threadIdx.y).
+            // Each FFT uses 64 threads (threadIdx.x = 0..63).
+            // Input registers 0..3 = H0..H3 (256 ns values), registers 4..7 = zero padding.
+            float2 J0, J1, J2, J3, J4, J5, J6, J7;
+            {
+                using FFT = decltype(
+                    cufftdx::Size<512>()
+                    + cufftdx::Precision<float>()
+                    + cufftdx::Type<cufftdx::fft_type::c2c>()
+                    + cufftdx::Direction<cufftdx::fft_direction::inverse>()
+                    + cufftdx::ElementsPerThread<8>()
+                    + cufftdx::FFTsPerBlock<16>()
+#ifdef __CUDA_ARCH__
+                    + cufftdx::SM<__CUDA_ARCH__>()
+#else
+                    + cufftdx::SM<890>()
+#endif
+                    + cufftdx::Block()
+                );
+
+                using complex_t = typename FFT::value_type;
+                static_assert(sizeof(complex_t) == 8);
+                static_assert(FFT::storage_size == 8);
+                static_assert(FFT::shared_memory_size <= 64*1024);
+
+                complex_t fft_data[8];
+                fft_data[0] = complex_t(H0.x, H0.y);
+                fft_data[1] = complex_t(H1.x, H1.y);
+                fft_data[2] = complex_t(H2.x, H2.y);
+                fft_data[3] = complex_t(H3.x, H3.y);
+                fft_data[4] = complex_t(0.0f, 0.0f);
+                fft_data[5] = complex_t(0.0f, 0.0f);
+                fft_data[6] = complex_t(0.0f, 0.0f);
+                fft_data[7] = complex_t(0.0f, 0.0f);
+
+                __syncthreads();  // smem_H loads done; reusing union memory for FFT scratch
+                char *smem_fft = smem_all + 32*1024;
+                FFT().execute(fft_data, smem_fft);
+
+                J0 = make_float2(fft_data[0].x, fft_data[0].y);
+                J1 = make_float2(fft_data[1].x, fft_data[1].y);
+                J2 = make_float2(fft_data[2].x, fft_data[2].y);
+                J3 = make_float2(fft_data[3].x, fft_data[3].y);
+                J4 = make_float2(fft_data[4].x, fft_data[4].y);
+                J5 = make_float2(fft_data[5].x, fft_data[5].y);
+                J6 = make_float2(fft_data[6].x, fft_data[6].y);
+                J7 = make_float2(fft_data[7].x, fft_data[7].y);
+            }
 
             // After cufftdx, we get the J-array in register assignment:
             //   register:  n8 n7 n6 ReIm
@@ -274,7 +556,26 @@ chime_frb_beamform(
             // Write to smem_J, using 64-bit, bank-conflict-free stores:
             //   float2 smem_J[4][4][512];  // (time,ew,ns)
 
-            xxx;   // write smem_J
+            // 64-bit stores to smem_J[t][ew][ns], bank-conflict-free.
+            // ns = r * 64 + threadIdx.x, where r (0..7) encodes (n8 n7 n6).
+            {
+                float2 *smem_J = reinterpret_cast<float2 *>(smem_all + 32*1024);
+                uint t = (threadIdx.y >> 2) & 3;
+                uint ew = threadIdx.y & 3;
+                uint base = t * 2048 + ew * 512 + threadIdx.x;
+
+                __syncthreads();  // FFT done; reusing union memory for smem_J
+                smem_J[base]       = J0;
+                smem_J[base + 64]  = J1;
+                smem_J[base + 128] = J2;
+                smem_J[base + 192] = J3;
+                smem_J[base + 256] = J4;
+                smem_J[base + 320] = J5;
+                smem_J[base + 384] = J6;
+                smem_J[base + 448] = J7;
+            }
+
+            __syncthreads();  // ensure all smem_J writes complete before K-array reads
 
             for (int tinner = 0; tinner < 4; tinner++) {
                 
@@ -289,17 +590,32 @@ chime_frb_beamform(
                 // it involves some nontrivial extra steps that I'll introduce later.
                 // (Let's pass unit tests first!)
 
-                xxx;  // load K-array
+                // 64-bit load from smem_J[tinner][ew][mapval].
+                // NOT bank-conflict-free (mapval is arbitrary).
+                float2 Kval;
+                {
+                    const float2 *smem_J = reinterpret_cast<const float2 *>(smem_all + 32*1024);
+                    uint ew = (threadIdx.y >> 2) & 3;
+                    Kval = smem_J[tinner * 2048 + ew * 512 + mapval];
+                }
 
                 // Write K-array element to global memory
                 
-                xxx;  // store K-array
+                // Convert float32+32 -> float16+16, write to outputData.
+                // outputData shape (128,4,256), strides (F*2048, 256, 1), dtype __half2.
+                {
+                    __half2 Kout = __floats2half2_rn(Kval.x, Kval.y);
+                    uint time = touter + tmid + tinner;
+                    uint ew = (threadIdx.y >> 2) & 3;
+                    uint ns = ((threadIdx.y & 3) << 6) | threadIdx.x;
+                    outputData[time * ulong(F * 2048) + ew * 256 + ns] = Kout;
+                }
             }
         }
     }
 }
 
-#endif
+// #endif  -- removed, kernel is now complete
 
 
 } // namespace pirate
