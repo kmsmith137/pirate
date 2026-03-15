@@ -646,6 +646,8 @@ chime_frb_beamform(
                     outputData[time * ulong(F * 2048) + ew * 256 + ns] = Kout;
                 }
             }
+
+            __syncthreads();  // smem_J reads done; next tmid iteration writes smem_H (same union)
         }
     }
 }
