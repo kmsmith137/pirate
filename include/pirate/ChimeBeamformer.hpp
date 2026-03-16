@@ -9,7 +9,7 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
-// CHIME beamformer is split between two source files, in order to parallelize computation.
+// CHIME beamformer is split between two source files, in order to parallelize compilation.
 // (Compile times are high since we use cufftdx.)
 //
 //  - ChimeBeamformer1.cu: chime_frb_beamform() and friends
@@ -35,7 +35,8 @@ namespace pirate {
 //
 // ChimeBeamformer1.cu: chime_frb_beamform() and friends
 //
-// For a precise description of what these functions compute, see comments in ChimeBeamformer1.cu.
+// For a precise description of what these functions compute, search ChimeBeamformer1.cu for the
+// word "specification".
 
 
 // 'inputData':  shape (T,F,2,4,256), dtype uint8_t, axes (time,freq,pol,ew,ns)
@@ -93,7 +94,8 @@ extern ksgpu::Array<uint> calculate_cl_indices(const ksgpu::Array<double> &freqs
 //
 // ChimeBeamformer2.cu: chime_frb_upchan() and friends
 //
-// For a precise description of what these functions compute, see comments in ChimeBeamformer2.cu.
+// For a precise description of what these functions compute, search ChimeBeamformer2.cu for the
+// word "specification".
 //
 // Reminder: chime_frb_upchan() processes the output of chime_frb_beamform(), without a transpose
 // kernel in between.

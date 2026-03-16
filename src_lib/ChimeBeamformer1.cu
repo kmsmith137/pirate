@@ -37,7 +37,7 @@ namespace pirate {
 //  'gains':      shape (F,2,4,256), dtype float32+32, axes (freq,pol,ew,ns)
 //
 // Here is a specification of the kernel:
-
+//
 //  0. Each (time,freq,pol) is processed independently, so we streamline notation
 //     by omitting those axes, and only keeping track of ew,ns axes below.
 //
