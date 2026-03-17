@@ -11,7 +11,7 @@ The network protocol for each of these connections is as follows:
 
 - Everything is little-endian. (You can assume that all code is running on a little-endian architecture.)
 
-- A persistent TCP connection is opened. The first 4 bytes are `0xf4bf4b01` where the `01` is the protocol version number.
+- A persistent TCP connection is opened. The first 4 bytes are `0xf4bf4b02` where the `02` is the protocol version number.
 
 - The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.
 
@@ -21,12 +21,13 @@ The network protocol for each of these connections is as follows:
   beams sent to the FRB search node, and `nfreq = len(freq_channels)` is the (sender-dependent) number of frequency 
   channels sent by the X-engine node.
 
-- Next, a sequence of (`uint64`, `(nbeams, nfreq, 256)` int4) pairs is sent.
-  Each uint64 is FPGA sequence number (seq) corresponding to the beginning of
-  the following array.
-  Each array represents 256 time samples of intensity data (one "minichunk").
-  The value (-8) indicates "this sample is masked". 
-  We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
+- Next a sequence of "minichunks" is sent. Each minichunk represents 256 time samples of intensity data.
+  It consists of the following data, sent "back-to-back" with no padding or alignment:
 
-NOTE: future versions of this file format will add float16 offsets and scales, so that the int4 data can be
-converted to intensities (which are always positive). Version 1 of this file format is a placeholder.
+    - A `uint64` FPGA sequence number (seq) corresponding to the beginning of the minichunk,.
+
+    - An `(nbeams, nfreq, 2)` float16 array, where the length-2 axis is `{scales,offsets}`.
+    
+    - An `(nbeams, nfreq, 256)` int4 array, containing intensity data.
+      The value (-8) indicates "this sample is masked". 
+      We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
