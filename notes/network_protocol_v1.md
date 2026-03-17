@@ -1,0 +1,32 @@
+# X->FRB network protocol (v1)
+
+## This is the old (v1) protocol, not the current protocol.
+
+This document describes the network protocol used in the CHORD radio telescope, to send beamformed
+intensity data from the X-engine (a 64-node cluster) to the FRB search backend (a 14-node cluster).
+
+The intensity data is a 3-d "data cube" with axes `(frequency channel, beam, time)`.
+Each X-engine sends a subset of the frequency channels (for all beams and times).
+Each FRB search node receives a subset of the beams (for all frequency channels and times).
+The data is sent over persistent TCP connections (one connection per sender/receiver node pair).
+The network protocol for each of these connections is as follows:
+
+- Everything is little-endian. (You can assume that all code is running on a little-endian architecture.)
+
+- A persistent TCP connection is opened. The first 4 bytes are `0xf4bf4b01` where the `01` is the protocol version number.
+
+- The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.
+
+- A zero-terminated ascii string follows, containing metadata in the format defined by [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml). There is a C++ class `XEngineMetadata` for parsing this string.
+
+  Note that the metadata includes `freq_channels` and `nbeams`. Here, `nbeams` is the (receiver-dependent) number of 
+  beams sent to the FRB search node, and `nfreq = len(freq_channels)` is the (sender-dependent) number of frequency 
+  channels sent by the X-engine node.
+
+- Next, a sequence of shape `(nbeams, nfreq, 256)` int4 arrays is sent.
+  Each such array represents 256 time samples of intensity data (one "minichunk").
+  The value (-8) indicates "this sample is masked". 
+  We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
+
+NOTE: future versions of this file format will add float16 offsets and scales, so that the int4 data can be
+converted to intensities (which are always positive). Version 1 of this file format is a placeholder.
