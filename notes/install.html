@@ -209,13 +209,14 @@
 <li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++/cuda guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
 <li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 </ul>
@@ -265,16 +266,18 @@ linux machine with <strong>a physical GPU</strong>, and the cuda toolkit install
 I hope to improve this in the future!</p>
 <ol class="arabic simple">
 <li><p>Make sure you have cuda, cupy, curand, pybind11, yaml-cpp, asdf installed.
-On a CHIME/CHORD machine, this conda environment works for me:</p></li>
+On a CHIME/CHORD machine, this conda environment works for me (alternately,
+you can use <code class="docutils literal notranslate"><span class="pre">environment.yml</span></code> in the top-level pirate directory):</p></li>
 </ol>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>    <span class="c1"># Note: currently falls back to python 3.11 due to messy cupy/grpc tension!</span>
-    <span class="c1"># Note: last two lines are optional (scipy, sphinx, etc)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>    <span class="c1"># Note: due to messy cupy/grpc tension, falls back to python 3.11</span>
+    <span class="c1"># and grpc 1.51. Must specify an old setuptools (=80) to make this work.</span>
+    <span class="c1"># Last two lines are optional (scipy, sphinx, etc). </span>
 
     <span class="n">conda</span> <span class="n">create</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="o">-</span><span class="n">n</span> <span class="n">ENVNAME</span> \
-    <span class="n">grpc</span><span class="o">-</span><span class="n">cpp</span> <span class="n">grpcio</span> <span class="n">grpcio</span><span class="o">-</span><span class="n">tools</span> <span class="n">protoletariat</span> \
-    <span class="n">cupy</span> <span class="n">pybind11</span> <span class="n">yaml</span><span class="o">-</span><span class="n">cpp</span> <span class="n">asdf</span> \
-    <span class="n">scipy</span> <span class="n">matplotlib</span> <span class="n">ipykernel</span> <span class="n">argcomplete</span> \
-    <span class="n">sphinx</span> <span class="n">sphinx</span><span class="o">-</span><span class="n">argparse</span> <span class="n">furo</span> <span class="n">myst</span><span class="o">-</span><span class="n">parser</span> <span class="n">emacs</span>
+      <span class="n">grpc</span><span class="o">-</span><span class="n">cpp</span> <span class="n">grpcio</span> <span class="n">grpcio</span><span class="o">-</span><span class="n">tools</span> <span class="n">protoletariat</span> \
+      <span class="n">cupy</span> <span class="n">mathdx</span> <span class="n">pybind11</span> <span class="n">yaml</span><span class="o">-</span><span class="n">cpp</span> <span class="n">asdf</span> \
+      <span class="n">scipy</span> <span class="n">matplotlib</span> <span class="n">ipykernel</span> <span class="n">argcomplete</span> <span class="n">setuptools</span><span class="o">=</span><span class="mi">80</span> \
+      <span class="n">sphinx</span> <span class="n">sphinx</span><span class="o">-</span><span class="n">argparse</span> <span class="n">furo</span> <span class="n">myst</span><span class="o">-</span><span class="n">parser</span> <span class="n">emacs</span>
 </pre></div>
 </div>
 <p>Note: I recommend the <code class="docutils literal notranslate"><span class="pre">miniforge</span></code> fork of conda, not the original conda.</p>

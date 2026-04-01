@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../../genindex.html" /><link rel="search" title="Search" href="../../search.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
-        <title>cf05_production.yml - pirate_frb 1.0.0 documentation</title>
+        <title>xengine_metadata_v2.yml - pirate_frb 1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=302659d7" />
@@ -210,7 +210,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
@@ -239,7 +239,7 @@
         </a>
         <div class="content-icon-container">
           <div class="view-this-page">
-  <a class="muted-link" href="../../_sources/configs/frb_server/cf05_production.yml.md.txt" title="View this page">
+  <a class="muted-link" href="../../_sources/configs/xengine/xengine_metadata_v2.yml.md.txt" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
@@ -259,105 +259,19 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="cf05-production-yml">
-<h1>cf05_production.yml<a class="headerlink" href="#cf05-production-yml" title="Link to this heading">¶</a></h1>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># This file starts a full-node (i.e. both CPUs) production server with full CHORD parameters.</span>
-<span class="c1"># Files are written through local SSD cache to a real NFS server (/mnt/cs00/data).</span>
+          <section id="xengine-metadata-v2-yml">
+<h1>xengine_metadata_v2.yml<a class="headerlink" href="#xengine-metadata-v2-yml" title="Link to this heading">¶</a></h1>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># The purpose of this &quot;X-engine metadata&quot; file is to document the file format.</span>
+<span class="c1"># It will be used in two contexts:</span>
 <span class="c1">#</span>
-<span class="c1"># To start server on cf05:</span>
-<span class="c1">#   pirate_frb run_server configs/frb_server/cf05_production.yml</span>
+<span class="c1">#  1. Every X-engine node sends this file to every FRB node, at the beginning</span>
+<span class="c1">#    of the TCP stream.</span>
 <span class="c1">#</span>
-<span class="c1"># To send data from cf00 to cf05:</span>
-<span class="c1">#   pirate_frb run_server -s configs/frb_server/cf05_production.yml</span>
-
-
-<span class="c1">########################################  General config  ########################################</span>
-
-
-<span class="c1"># Under the hood, the frb search may consist of multiple servers (class FrbServer in the code).</span>
-<span class="c1"># Each server processes a disjoint set of beams, and receives data from a disjoint set of TCP</span>
-<span class="c1"># connections. In a multi-CPU machine, each server &quot;lives&quot; on a specific CPU. The mapping between</span>
-<span class="c1"># servers in the config file, and physical CPUs, is determined by &#39;server_cpus&#39;. (A many-to-one</span>
-<span class="c1"># mapping is allowed, i.e. multiple servers per CPU.)</span>
-
-<span class="nt">num_servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
-<span class="nt">server_cpus</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1</span><span class="w"> </span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># length num_servers</span>
-
-<span class="c1"># Memory is fully allocated and zeroed before the server starts (with scattered</span>
-<span class="c1"># small exceptions where we do call malloc()).</span>
-
-<span class="nt">memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;256</span><span class="nv"> </span><span class="s">GB&#39;</span>
-<span class="nt">use_hugepages</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-
-<span class="c1"># The time &quot;chunk&quot; size sets cadence throughout the FRB search, and the number</span>
-<span class="c1"># of time samples per output file. Must be a multiple of 256.</span>
-
-<span class="nt">time_samples_per_chunk</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span><span class="w"> </span>
-
-
-<span class="c1">########################################  Network config  ########################################</span>
-
-
-<span class="c1"># &#39;data_ip_addrs&#39; is a list (length num_servers). Each entry is either an &#39;ip_addr:tcp_port&#39;</span>
-<span class="c1"># string, or a list of such strings. The latter case arises if a server receives data from</span>
-<span class="c1"># multiple IP addresses. We expect this to happen in full CHORD. (Under the hood, each IP</span>
-<span class="c1"># address corresponds to one &#39;class Receiver&#39;, and an FrbServer can have multiple Receivers.)</span>
-
-<span class="nt">data_ip_addrs</span><span class="p">:</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;10.0.0.2:5000&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;10.0.1.2:5000&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;10.0.2.2:5000&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;10.0.3.2:5000&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
-
-<span class="c1"># &#39;rpc_ip_addrs&#39; is a list of &#39;ip_addr:tcp_port&#39; strings. Currently, RPC threads are</span>
-<span class="c1"># not pinned to a specific CPU. This is fine for now, since all RPCs are &quot;lightweight&quot;.</span>
-<span class="c1"># We may revisit in the future, when we define &quot;heavyweight&quot; RPCs for e.g. injections.</span>
-<span class="c1"># See discussion in include/pirate/FrbServer.hpp.</span>
-
-<span class="nt">rpc_ip_addrs</span><span class="p">:</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.5:6000&#39;</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.5:6001&#39;</span>
-
-
-<span class="c1">#####################################  File-writing config  ######################################</span>
-
-
-<span class="c1"># &#39;ssd_dirs&#39; and &#39;ssd_devices&#39; are lists of length num_servers.</span>
-<span class="c1"># If an ssd_dir isn&#39;t backed by the corresponding ssd_device, then an exception is thrown.</span>
-<span class="c1"># (This is intended to catch misconfiguration where an SSD is not mounted.)</span>
+<span class="c1">#  2. As a configuration file for the &quot;fake correlator&quot; used for testing.</span>
 <span class="c1">#</span>
-<span class="c1"># Note: on the chord frb nodes, /dev/nvme1n1 is on CPU0, and /dev/nvme0n1 is on CPU1.</span>
+<span class="c1"># This is a minimal &quot;version 0&quot;, and will be extended later.</span>
 
-<span class="nt">ssd_dirs</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;/scratch2&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;/scratch&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
-<span class="nt">ssd_devices</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;/dev/nvme1n1p1&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;/dev/nvme0n1p2&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
-<span class="nt">ssd_threads_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
-
-<span class="c1"># Currently, all servers write to the same nfs_dir (i.e. &#39;nfs_dir&#39; is a string,</span>
-<span class="c1"># not a list of strings). The &#39;nfs_dir&#39; member supports string interpolations</span>
-<span class="c1"># {user} and {date}. The nfs_dir will be created if it doesn&#39;t already exist.</span>
-
-<span class="nt">nfs_dir</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;/mnt/cs00/data/{user}/{date}&#39;</span>
-<span class="nt">nfs_threads_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
-
-
-<span class="c1">###################################  &quot;Fake X-engine&quot; config  #####################################</span>
-<span class="c1">#</span>
-<span class="c1"># This optional section is only needed if you want to send &quot;fake X-engine&quot; data</span>
-<span class="c1"># (pirate_frb run_server -s).</span>
-
-
-<span class="c1"># Note: The X-engine determines the beam configuration, and the FRB server</span>
-<span class="c1"># receives it dynamically at runtime.</span>
-
-<span class="nt">beams_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
-<span class="nt">base_beam_id</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">100</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">200</span><span class="w"> </span><span class="p p-Indicator">]</span><span class="w">    </span><span class="c1"># length num_servers</span>
-
-<span class="c1"># In the real system, each X-engine &quot;half-node&quot; (i.e. numa domain) opens a separate</span>
-<span class="c1"># TCP connection (128 TCP connections in full CHORD).</span>
-<span class="c1">#</span>
-<span class="c1"># The &quot;fake X-engine&quot; uses many TCP connections in order to mimic this behavior, but</span>
-<span class="c1"># they all originate from the same physical node. (Detail: if the server has multiple</span>
-<span class="c1"># data_ip_addrs, then the TCP connections are assigned round-robin.)</span>
-
-<span class="nt">tcp_connections_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
+<span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
 
 <span class="c1"># Frequency channels. The observed frequency band is divided into &quot;zones&quot;.</span>
 <span class="c1"># Within each zone, all frequency channels have the same width, but the</span>
@@ -374,6 +288,105 @@
 
 <span class="nt">zone_nfreq</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">8192</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">8192</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">6144</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">2048</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">3584</span><span class="p p-Indicator">]</span>
 <span class="nt">zone_freq_edges</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">300</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">350</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">450</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">600</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">800</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1500</span><span class="p p-Indicator">]</span>
+
+<span class="c1"># Optional: which frequency channels are present?</span>
+<span class="c1"># A list of distinct integers 0 &lt;= (channel_id) &lt; (total frequency channels).</span>
+<span class="c1"># Only makes sense in &quot;context 1&quot; (see above), to indicate which frequency channels</span>
+<span class="c1"># are sent by a particular X-engine node.</span>
+
+<span class="nt">freq_channels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">10000</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">20000</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">28159</span><span class="w"> </span><span class="p p-Indicator">]</span>
+
+<span class="c1"># Data for each beam recieved by this node, all fields required. An opaque id and sky coordinates,</span>
+<span class="c1"># given as direction cosines in the grid frame.  The grid frame is defined by x &amp; y unit vectors</span>
+<span class="c1"># which are orthogonal and lie along (or close to) the axes of the telescope grid. Each</span>
+<span class="c1"># beam has a skywards-directed unit vector b.  The grid_x and grid_y values are the x &amp; y direction</span>
+<span class="c1"># cosines: b.x and b.y.</span>
+<span class="nt">beams</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span>
+<span class="w">  </span><span class="p p-Indicator">{</span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="nv">100</span><span class="p p-Indicator">,</span><span class="nt"> grid_x</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="nt"> grid_y</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">},</span>
+<span class="w">  </span><span class="p p-Indicator">{</span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="nv">200</span><span class="p p-Indicator">,</span><span class="nt"> grid_x</span><span class="p">:</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">,</span><span class="nt"> grid_y</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">},</span>
+<span class="w">  </span><span class="p p-Indicator">{</span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="nv">300</span><span class="p p-Indicator">,</span><span class="nt"> grid_x</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="nt"> grid_y</span><span class="p">:</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">},</span>
+<span class="p p-Indicator">]</span>
+
+<span class="c1">#############</span>
+<span class="c1"># Timekeeping</span>
+<span class="c1">#############</span>
+
+
+<span class="c1"># Each frame from the X-engine will come with the fpga sequence number (seq) at the beginning of the frame.</span>
+<span class="c1"># To keep time in pirate, we need to know:</span>
+<span class="c1"># - unix_ns_at_seq_0: the epoch (the UNIX time at seq = 0, in nanoseconds).</span>
+<span class="c1"># - dt_ns_per_seq: the rate at which seqs tick, number of nanoseconds per seq tick.</span>
+<span class="c1"># - seq_per_frame: the number of seq ticks covered by a data frame.</span>
+<span class="c1">#</span>
+<span class="c1"># In Kotekan language:</span>
+<span class="c1"># unix_nx_at_seq_0 = time0_ns</span>
+<span class="c1"># dt_ns_per_seq = fengine_fft_length / ADC_sampling_rate_GHz</span>
+<span class="c1"># seq_per_frame = 256 * frb_downsampling_factor (not sure if this exists)</span>
+<span class="c1">#</span>
+<span class="c1"># The sifter will need Earth Orientation Parameters (EOP) (which change in time and Kotekan has) and</span>
+<span class="c1"># a precession/nutation model (which Kotekan does *not* have) to compute RA/DEC for the beams.</span>
+<span class="c1"># Since the sifter has to do this calculation anyways, I propose we *don&#39;t* sent UT1 or EOP data</span>
+<span class="c1"># from Kotekan to Pirate, and instead rely on the sifter to make the astropy calls itself.</span>
+<span class="c1">#</span>
+<span class="c1"># This means the sifter may infer a *slightly* different UT1 for the same seq number compared to </span>
+<span class="c1"># the X-engine (if it has more up-to-date EOP data).  The difference will be sub-ms, which I think is</span>
+<span class="c1"># acceptable?</span>
+<span class="c1">#</span>
+<span class="c1"># unix_ns_at_seq_0 will change whenever the F-engine reboots, which will also require a reboot of</span>
+<span class="c1"># the X-engine.</span>
+
+<span class="nt">unix_ns_at_seq_0</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1772483060000000000</span>
+<span class="nt">dt_ns_per_seq</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5120</span>
+<span class="nt">seq_per_frame</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
+
+<span class="c1">###########</span>
+<span class="c1"># Telescope alignment and localization parameters.</span>
+<span class="c1">###########</span>
+
+<span class="c1"># Coordinate Systems</span>
+<span class="c1">#</span>
+<span class="c1"># Topocentric: origin at the given lat/lon. x-axis is directed exactly East (increasing Longitude),</span>
+<span class="c1">#   y-axis is directed exactly North (increasing Latitude), z-axis is directed exactly &quot;up&quot; (increasing</span>
+<span class="c1">#   altitude). orthogonal, Z = X x Y.</span>
+<span class="c1">#</span>
+<span class="c1"># Grid: origin at SW corner of Dish Array, aligned with Dish Array.  x-axis directed &quot;east-ish&quot;</span>
+<span class="c1">#   parallel to dish &quot;e/w&quot; separatation vector.  y-axis directed &quot;north-ish&quot; parallel to &quot;n/s&quot;</span>
+<span class="c1">#   separation vector.  Z = X x Y points normal to grid plane.  Dish grid lives in x-y plane at a</span>
+<span class="c1">#   constant Z. Orthogonal. Rotated by O(1) degrees from &quot;Topocentric&quot;</span>
+<span class="c1">#</span>
+<span class="c1"># Dish Elevation Axis: The axis around which the dishes pivot. positive is in the east direction.</span>
+<span class="c1">#   *Not* parallel to the dish grid &quot;e/w&quot; separation. &quot;Coelevation&quot; pointing measures an angle around</span>
+<span class="c1">#   this axis.</span>
+<span class="c1">#</span>
+<span class="c1"># Dish Vertical Axis: Local &quot;up/zenith&quot; for the dishes. The direction which has coelevation = 0.0.</span>
+<span class="c1">#   Orthogonal to the Dish Elevation axis.</span>
+
+<span class="c1"># Position on the Earth in degrees</span>
+<span class="nt">tel_origin_itrs_lat_deg</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">49.32075144444</span>
+<span class="nt">tel_origin_itrs_lon_deg</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">-119.62081125</span>
+
+<span class="c1"># Unit vectors in the x &amp; y grid directions, in topocentric coordinates.</span>
+<span class="nt">tel_grid_x_axis</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">0.999974342398359362</span><span class="p p-Indicator">,</span>
+<span class="w">                </span><span class="nv">-0.000037539331442772</span><span class="p p-Indicator">,</span>
+<span class="w">                </span><span class="nv">-0.007163318767675494</span><span class="p p-Indicator">]</span>
+<span class="nt">tel_grid_y_axis</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.000065403387739210</span><span class="p p-Indicator">,</span>
+<span class="w">                </span><span class="nv">0.999992433220348809</span><span class="p p-Indicator">,</span>
+<span class="w">                </span><span class="nv">0.003889630373557614</span><span class="p p-Indicator">]</span>
+
+<span class="c1"># Unit vectors for the dish frame, the elevation axis and vertical axis, in</span>
+<span class="c1"># topocentric coordinates.</span>
+<span class="nt">tel_dish_elev_axis</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.99999999838132391</span><span class="p p-Indicator">,</span>
+<span class="w">                </span><span class="nv">-0.000056897733584327</span><span class="p p-Indicator">,</span>
+<span class="w">                </span><span class="nv">0.0</span><span class="p p-Indicator">]</span>
+<span class="nt">tel_dish_vert_axis</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1.0</span><span class="p p-Indicator">]</span>
+
+<span class="c1"># The dish pointing angle, co-elevation in degrees: angle away from vertical,</span>
+<span class="c1"># north is positive</span>
+<span class="nt">tel_dish_coelev_deg</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0</span>
+
+<span class="c1"># Values of dish separation in x and y directions in meters.</span>
+<span class="nt">tel_dish_separation_x_m</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6.300156854906823</span>
+<span class="nt">tel_dish_separation_y_m</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8.500057809796308</span>
 </pre></div>
 </div>
 </section>

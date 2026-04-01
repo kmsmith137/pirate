@@ -209,13 +209,14 @@
 <li class="toctree-l1"><a class="reference internal" href="cli.html">CLI reference</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="notes/cpp.html">C++/cuda guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 </ul>
@@ -273,7 +274,7 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="notes/developer.html">Developer notes</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="notes/developer.html#some-fun-cli-examples">Some fun CLI examples:</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/developer.html#some-fun-cli-examples">Some fun CLI examples</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/developer.html#ksgpu-helper-library">ksgpu helper library</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/developer.html#chunks-batches-frames-and-segments">Chunks, batches, frames, and segments</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/developer.html#allocators">Allocators</a></li>
@@ -299,7 +300,7 @@
 <li class="toctree-l2"><a class="reference internal" href="notes/hardware.html#drao-backend">DRAO backend</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
@@ -307,9 +308,17 @@
 <div class="toctree-wrapper compound">
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="notes/cpp.html">C++/cuda guidelines</a><ul>
+<li class="toctree-l1"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="notes/cpp.html#ksgpu">ksgpu</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/cpp.html#xassert-macros">xassert macros</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#register-assignment-notation">Register assignment notation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#local-transpose">Local transpose</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#warp-transpose">Warp transpose</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#pointer-offsets">Pointer offsets</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#performance-guidelines">Performance guidelines</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="notes/pybind11.html">Pybind11</a><ul>

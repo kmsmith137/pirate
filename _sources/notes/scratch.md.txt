@@ -1,0 +1,27 @@
+ 
+### Reviewing GPU kernels
+
+If you're asked to review
+
+ - **Important.** in all cases where 
+ 
+ - Check that all global memory loads/stores are "cache-friendly", i.e. each instruction
+   operates on either 1, 2, or 4 entire cache lines per warp (depending on whether the
+   load/store is 32-bit, or "wide" 64/128-bit instruction), unless a comment explicitly
+   indicates otherwise.
+
+ - Check that all shared memory loads/stores are bank conflict free, unless a comment
+   explicitly indicates otherwise.
+
+ - Are there enough calls to `__syncthreads()`? Are there more calls than necessary?
+ 
+ - In addition to checking for bugs, please also check for typos, especially in comments
+   where a register assignment is declared.
+
+ - Check for 32-bit overflows in
+ 
+ - Unintentional use of double precision
+
+ - __launch_bounds__
+ 
+ - Also check carefully for bugs that are not in the list above.

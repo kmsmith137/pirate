@@ -5,6 +5,8 @@ orphan: true
 # xengine_metadata_v1.yml
 
 ```yaml
+# THIS IS THE OLD (V1) METADATA FORMAT, NOT THE CURRENT FORMAT
+#
 # The purpose of this "X-engine metadata" file is to document the file format.
 # It will be used in two contexts:
 #

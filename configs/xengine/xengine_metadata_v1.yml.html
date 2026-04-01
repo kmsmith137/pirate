@@ -3,7 +3,7 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../../genindex.html" /><link rel="search" title="Search" href="../../search.html" /><link rel="next" title="gRPC Protocol Definitions" href="../../_grpc_generated.html" /><link rel="prev" title="X-&gt;FRB network protocol (v1)" href="../../notes/network_protocol.html" />
+<link rel="index" title="Index" href="../../genindex.html" /><link rel="search" title="Search" href="../../search.html" /><link rel="next" title="gRPC Protocol Definitions" href="../../_grpc_generated.html" /><link rel="prev" title="X-&gt;FRB network protocol (v2)" href="../../notes/network_protocol.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
         <title>xengine_metadata_v1.yml - pirate_frb 1.0.0 documentation</title>
@@ -209,13 +209,14 @@
 <li class="toctree-l1"><a class="reference internal" href="../../cli.html">CLI reference</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">X-&gt;FRB metadata (v1)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/cpp.html">C++/cuda guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/pybind11.html">Pybind11</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 </ul>
@@ -260,7 +261,9 @@
         <article role="main" id="furo-main-content">
           <section id="xengine-metadata-v1-yml">
 <h1>xengine_metadata_v1.yml<a class="headerlink" href="#xengine-metadata-v1-yml" title="Link to this heading">¶</a></h1>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># The purpose of this &quot;X-engine metadata&quot; file is to document the file format.</span>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># THIS IS THE OLD (V1) METADATA FORMAT, NOT THE CURRENT FORMAT</span>
+<span class="c1">#</span>
+<span class="c1"># The purpose of this &quot;X-engine metadata&quot; file is to document the file format.</span>
 <span class="c1"># It will be used in two contexts:</span>
 <span class="c1">#</span>
 <span class="c1">#  1. Every X-engine node sends this file to every FRB node, at the beginning</span>
@@ -337,7 +340,7 @@
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">X-&gt;FRB network protocol (v1)</div>
+                <div class="title">X-&gt;FRB network protocol (v2)</div>
                 
               </div>
             </a>

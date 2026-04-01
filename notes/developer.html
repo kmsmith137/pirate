@@ -209,13 +209,14 @@
 <li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++/cuda guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
 <li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 </ul>
@@ -261,7 +262,7 @@
           <section id="developer-notes">
 <h1>Developer notes<a class="headerlink" href="#developer-notes" title="Link to this heading">¶</a></h1>
 <section id="some-fun-cli-examples">
-<h2>Some fun CLI examples:<a class="headerlink" href="#some-fun-cli-examples" title="Link to this heading">¶</a></h2>
+<h2>Some fun CLI examples<a class="headerlink" href="#some-fun-cli-examples" title="Link to this heading">¶</a></h2>
 <section id="run-unit-tests">
 <h3>Run unit tests<a class="headerlink" href="#run-unit-tests" title="Link to this heading">¶</a></h3>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Run all unit tests 5 times (default is 100!)</span>
@@ -552,7 +553,7 @@ get “baked in”.</p></li>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Developer notes</a><ul>
-<li><a class="reference internal" href="#some-fun-cli-examples">Some fun CLI examples:</a><ul>
+<li><a class="reference internal" href="#some-fun-cli-examples">Some fun CLI examples</a><ul>
 <li><a class="reference internal" href="#run-unit-tests">Run unit tests</a></li>
 <li><a class="reference internal" href="#running-a-toy-server">Running a toy server</a></li>
 <li><a class="reference internal" href="#running-a-production-server-cf00-cf05">Running a production server (cf00/cf05)</a></li>

@@ -25,6 +25,7 @@ maxdepth: 2
 caption: "Appendix: Context Files for LLMs"
 ---
 notes/cpp
+notes/gpu_kernels
 notes/pybind11
 notes/thread_backed_class
 ```

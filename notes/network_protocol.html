@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="xengine_metadata_v1.yml" href="../configs/xengine/xengine_metadata_v1.yml.html" /><link rel="prev" title="Hardware" href="hardware.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
-        <title>X-&gt;FRB network protocol (v1) - pirate_frb 1.0.0 documentation</title>
+        <title>X-&gt;FRB network protocol (v2) - pirate_frb 1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
@@ -209,13 +209,14 @@
 <li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">X-&gt;FRB network protocol (v1)</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++/cuda guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
 <li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
 </ul>
@@ -258,8 +259,8 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="x-frb-network-protocol-v1">
-<h1>X-&gt;FRB network protocol (v1)<a class="headerlink" href="#x-frb-network-protocol-v1" title="Link to this heading">¶</a></h1>
+          <section id="x-frb-network-protocol-v2">
+<h1>X-&gt;FRB network protocol (v2)<a class="headerlink" href="#x-frb-network-protocol-v2" title="Link to this heading">¶</a></h1>
 <p>This document describes the network protocol used in the CHORD radio telescope, to send beamformed
 intensity data from the X-engine (a 64-node cluster) to the FRB search backend (a 14-node cluster).</p>
 <p>The intensity data is a 3-d “data cube” with axes <code class="docutils literal notranslate"><span class="pre">(frequency</span> <span class="pre">channel,</span> <span class="pre">beam,</span> <span class="pre">time)</span></code>.
@@ -269,20 +270,24 @@ The data is sent over persistent TCP connections (one connection per sender/rece
 The network protocol for each of these connections is as follows:</p>
 <ul>
 <li><p>Everything is little-endian. (You can assume that all code is running on a little-endian architecture.)</p></li>
-<li><p>A persistent TCP connection is opened. The first 4 bytes are <code class="docutils literal notranslate"><span class="pre">0xf4bf4b01</span></code> where the <code class="docutils literal notranslate"><span class="pre">01</span></code> is the protocol version number.</p></li>
+<li><p>A persistent TCP connection is opened. The first 4 bytes are <code class="docutils literal notranslate"><span class="pre">0xf4bf4b02</span></code> where the <code class="docutils literal notranslate"><span class="pre">02</span></code> is the protocol version number.</p></li>
 <li><p>The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.</p></li>
-<li><p>A zero-terminated ascii string follows, containing metadata in the format defined by <a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>. There is a C++ class <code class="docutils literal notranslate"><span class="pre">XEngineMetadata</span></code> for parsing this string.</p>
+<li><p>A zero-terminated ascii string follows, containing metadata in the format defined by <a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>. There is a C++ class <code class="docutils literal notranslate"><span class="pre">XEngineMetadata</span></code> for parsing this string.</p>
 <p>Note that the metadata includes <code class="docutils literal notranslate"><span class="pre">freq_channels</span></code> and <code class="docutils literal notranslate"><span class="pre">nbeams</span></code>. Here, <code class="docutils literal notranslate"><span class="pre">nbeams</span></code> is the (receiver-dependent) number of
 beams sent to the FRB search node, and <code class="docutils literal notranslate"><span class="pre">nfreq</span> <span class="pre">=</span> <span class="pre">len(freq_channels)</span></code> is the (sender-dependent) number of frequency
 channels sent by the X-engine node.</p>
 </li>
-<li><p>Next, a sequence of shape <code class="docutils literal notranslate"><span class="pre">(nbeams,</span> <span class="pre">nfreq,</span> <span class="pre">256)</span></code> int4 arrays is sent.
-Each such array represents 256 time samples of intensity data (one “minichunk”).
+<li><p>Next a sequence of “minichunks” is sent. Each minichunk represents 256 time samples of intensity data.
+It consists of the following data, sent “back-to-back” with no padding or alignment:</p>
+<ul class="simple">
+<li><p>A <code class="docutils literal notranslate"><span class="pre">uint64</span></code> FPGA sequence number (seq) corresponding to the beginning of the minichunk,.</p></li>
+<li><p>An <code class="docutils literal notranslate"><span class="pre">(nbeams,</span> <span class="pre">nfreq,</span> <span class="pre">2)</span></code> float16 array, where the length-2 axis is <code class="docutils literal notranslate"><span class="pre">{scales,offsets}</span></code>.</p></li>
+<li><p>An <code class="docutils literal notranslate"><span class="pre">(nbeams,</span> <span class="pre">nfreq,</span> <span class="pre">256)</span></code> int4 array, containing intensity data.
 The value (-8) indicates “this sample is masked”.
 We pack two int4s into a byte as (<code class="docutils literal notranslate"><span class="pre">(x[1]</span> <span class="pre">&lt;&lt;</span> <span class="pre">4)</span> <span class="pre">|</span> <span class="pre">x[0]</span></code>).</p></li>
 </ul>
-<p>NOTE: future versions of this file format will add float16 offsets and scales, so that the int4 data can be
-converted to intensities (which are always positive). Version 1 of this file format is a placeholder.</p>
+</li>
+</ul>
 </section>
 
         </article>

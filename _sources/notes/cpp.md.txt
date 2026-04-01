@@ -1,4 +1,4 @@
-# C++/cuda guidelines
+# C++ guidelines
 
 - Prefer private (or static) functions over anonymous scopes `{ ... }`.
 

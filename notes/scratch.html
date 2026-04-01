@@ -3,10 +3,10 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Developer notes" href="developer.html" /><link rel="prev" title="Introduction" href="intro.html" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
-        <title>To do list - pirate_frb 1.0.0 documentation</title>
+        <title>Reviewing GPU kernels - pirate_frb 1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
@@ -180,7 +180,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
         <div class="visually-hidden">Toggle table of contents sidebar</div>
         <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
       </label>
@@ -201,10 +201,10 @@
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
-<ul class="current">
+<ul>
 <li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
@@ -239,7 +239,7 @@
         </a>
         <div class="content-icon-container">
           <div class="view-this-page">
-  <a class="muted-link" href="../_sources/notes/todo.md.txt" title="View this page">
+  <a class="muted-link" href="../_sources/notes/scratch.md.txt" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
@@ -253,86 +253,31 @@
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
             <div class="visually-hidden">Toggle table of contents sidebar</div>
             <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="to-do-list">
-<h1>To do list<a class="headerlink" href="#to-do-list" title="Link to this heading">¶</a></h1>
-<section id="immediate-concrete-tasks">
-<h2>Immediate concrete tasks<a class="headerlink" href="#immediate-concrete-tasks" title="Link to this heading">¶</a></h2>
-<ul>
-<li><p>Iterate on <a class="reference internal" href="network_protocol.html"><span class="std std-doc">network protocol</span></a>.
-(At minimum, need to include offsets, scales, UT1 timestamps.)</p></li>
-<li><p>Iterate on metadata sent by X-engine
-(<a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>).
-(Note that the metadata is part of the network protocol.)</p></li>
-<li><p>In particular, decide how timestamps should be represented in the
-metadata.</p></li>
-<li><p>Currently there is a placeholder <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code>, which sends garbage
-data to the FRB server. It would be really valuable to have a more
-interesting FakeXEngine, for a few reasons:</p>
-<ul>
-<li><p>The networking/file-writing code currently has no unit tests!
-One approach is an “end-to-end” test, where the <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code>
-sends random data to the FRB server, asks the FRB server to
-save a random subset of its data to disk (via RPCs), and
-compares the data files with the input.</p></li>
-<li><p>Eventually I’d like to extend this end-to-end test to include
-tests of corner cases in the FRB server logic, such as X-engine
-nodes that disconnect and reconnect.</p></li>
-<li><p>Injecting simulated pulses! I’d like to do this by May (see below).
-Pulses can be simulated with <a class="reference external" href="https://github.com/kmsmith137/simpulse">simpulse</a>.
-We should brainstorm possible designs (e.g. do we simulate pulses “offline”
-and save them to disk first? What does the <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code> config file look
-like?)</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code> is intended for testing/debugging, but we should
-try to write it in a way where some of the code can be recycled later
-when we implement injections (which will be part of the production
-real-time system).</p>
-</li>
-<li><p>Injecting some form of simplified RFI would be useful for early testing.</p></li>
-<li><p>Feel free to make big changes to (or even rewrite) the current
-<code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code>. I’m looking for someone to take “ownership” of
-this code.</p></li>
-</ul>
-</li>
-<li><p>Feel free to dive in and make miscellaneous improvements to the code
-(random example: use spdlog for logging)</p></li>
-</ul>
-</section>
-<section id="goals-by-end-of-may">
-<h2>Goals by end of May<a class="headerlink" href="#goals-by-end-of-may" title="Link to this heading">¶</a></h2>
-<p>Goal here is to develop an end-to-end system where we can send simulated
-pulses from a <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code>, and watch the pulses arrive in a web viewer.
-No RFI for now!</p>
-<p>There are a lot of design decisions to be made – here are some high-level
-bullet points:</p>
+          <section id="reviewing-gpu-kernels">
+<h1>Reviewing GPU kernels<a class="headerlink" href="#reviewing-gpu-kernels" title="Link to this heading">¶</a></h1>
+<p>If you’re asked to review</p>
 <ul class="simple">
-<li><p>Finish GPU dedispersion in the RFI-free case. (Currently 95% done.)</p></li>
-<li><p>Design interface between GPU dedisperser and downstream grouping
-code. (Dustin and I have had some blackboard brainstorms here, and
-and we have a pretty concrete design in mind.)</p></li>
-<li><p>Write placeholder grouping code. Since there is no RFI for now, this
-can be pretty trivial.</p></li>
-<li><p>Design the gRPC interface between grouping code and the downstream
-sifting code. (Or did Dustin do this already?)</p></li>
-<li><p>There are a lot of todo items related to the sifting code, database,
-and web viewer. Dustin is keeping track of those – please ask Dustin
-if you’re interested!</p></li>
-<li><p>There are a lot of todo items on the X-engine, needed to generate
-and send beamformed data. (This is being handled by some combination
-of Erik, Geoff, Dustin, Andre, Jim.)</p></li>
+<li><p><strong>Important.</strong> in all cases where</p></li>
+<li><p>Check that all global memory loads/stores are “cache-friendly”, i.e. each instruction
+operates on either 1, 2, or 4 entire cache lines per warp (depending on whether the
+load/store is 32-bit, or “wide” 64/128-bit instruction), unless a comment explicitly
+indicates otherwise.</p></li>
+<li><p>Check that all shared memory loads/stores are bank conflict free, unless a comment
+explicitly indicates otherwise.</p></li>
+<li><p>Are there enough calls to <code class="docutils literal notranslate"><span class="pre">__syncthreads()</span></code>? Are there more calls than necessary?</p></li>
+<li><p>In addition to checking for bugs, please also check for typos, especially in comments
+where a register assignment is declared.</p></li>
+<li><p>Check for 32-bit overflows in</p></li>
+<li><p>Unintentional use of double precision</p></li>
+<li><p><strong>launch_bounds</strong></p></li>
+<li><p>Also check carefully for bugs that are not in the list above.</p></li>
 </ul>
-</section>
-<section id="goals-for-a-pathfinder-search">
-<h2>Goals for a pathfinder search<a class="headerlink" href="#goals-for-a-pathfinder-search" title="Link to this heading">¶</a></h2>
-<p>Everything needed for the CHORD pathfinder: dedisperser should handle an
-RFI mask, library of RFI transforms, non-placeholder grouping code, lots
-of work on sifter/database/web.</p>
-</section>
 </section>
 
         </article>
@@ -340,26 +285,8 @@ of work on sifter/database/web.</p>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="developer.html">
-              <div class="page-info">
-                <div class="context">
-                  <span>Next</span>
-                </div>
-                <div class="title">Developer notes</div>
-              </div>
-              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
-            </a>
-          <a class="prev-page" href="intro.html">
-              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
-              <div class="page-info">
-                <div class="context">
-                  <span>Previous</span>
-                </div>
-                
-                <div class="title">Introduction</div>
-                
-              </div>
-            </a>
+          
+          
         </div>
         <div class="bottom-of-page">
           <div class="left-details">
@@ -378,29 +305,8 @@ of work on sifter/database/web.</p>
         
       </footer>
     </div>
-    <aside class="toc-drawer">
+    <aside class="toc-drawer no-toc">
       
-      
-      <div class="toc-sticky toc-scroll">
-        <div class="toc-title-container">
-          <span class="toc-title">
-            On this page
-          </span>
-        </div>
-        <div class="toc-tree-container">
-          <div class="toc-tree">
-            <ul>
-<li><a class="reference internal" href="#">To do list</a><ul>
-<li><a class="reference internal" href="#immediate-concrete-tasks">Immediate concrete tasks</a></li>
-<li><a class="reference internal" href="#goals-by-end-of-may">Goals by end of May</a></li>
-<li><a class="reference internal" href="#goals-for-a-pathfinder-search">Goals for a pathfinder search</a></li>
-</ul>
-</li>
-</ul>
-
-          </div>
-        </div>
-      </div>
       
       
     </aside>

@@ -1,6 +1,6 @@
 # Developer notes
 
-## Some fun CLI examples:
+## Some fun CLI examples
 
 ### Run unit tests
 
