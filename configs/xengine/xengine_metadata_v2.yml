@@ -36,14 +36,16 @@ freq_channels: [ 0, 10000, 20000, 28159 ]
 # Data for each beam recieved by this node.
 # beamset: an integer identifier for this set of beams
 # beam_ids: length Nbeams; integer id
-# beam_positions: float, length 2 x Nbeams;
+# beam_positions_x: float, length Nbeams &
+# beam_positions_y: float, length Nbeams;
 # direction cosines in the grid frame.  The grid frame is defined by x & y unit vectors
 # which are orthogonal and lie along (or close to) the axes of the telescope grid. Each
 # beam has a skywards-directed unit vector b.  The grid_x and grid_y values are the x & y direction
 # cosines: b.x and b.y.
 beamset: 42
 beam_ids: [ 100, 200, 300 ]
-beam_positions: [0.0, 0.0, 0.1, 0.0, 0.0, 0.1 ]
+beam_positions_x: [0.0, 0.1, 0.0 ]
+beam_positions_y: [0.0, 0.0, 0.1 ]
 
 #############
 # Timekeeping
