@@ -33,16 +33,19 @@ zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 
 freq_channels: [ 0, 10000, 20000, 28159 ]
 
-# Data for each beam recieved by this node, all fields required. An opaque id and sky coordinates,
-# given as direction cosines in the grid frame.  The grid frame is defined by x & y unit vectors
+# Data for each beam recieved by this node.
+# beamset: an integer identifier for this set of beams
+# beam_ids: length Nbeams; integer id
+# beam_positions_x: float, length Nbeams &
+# beam_positions_y: float, length Nbeams;
+# direction cosines in the grid frame.  The grid frame is defined by x & y unit vectors
 # which are orthogonal and lie along (or close to) the axes of the telescope grid. Each
 # beam has a skywards-directed unit vector b.  The grid_x and grid_y values are the x & y direction
 # cosines: b.x and b.y.
-beams: [
-  {id: 100, grid_x: 0.0, grid_y: 0.0},
-  {id: 200, grid_x: 0.1, grid_y: 0.0},
-  {id: 300, grid_x: 0.0, grid_y: 0.1},
-]
+beamset: 42
+beam_ids: [ 100, 200, 300 ]
+beam_positions_x: [0.0, 0.1, 0.0 ]
+beam_positions_y: [0.0, 0.0, 0.1 ]
 
 #############
 # Timekeeping
