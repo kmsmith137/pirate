@@ -4,7 +4,8 @@
 linux machine with **a physical GPU**, and the cuda toolkit installed.
 I hope to improve this in the future!
 
-1. Make sure you have cuda, cupy, curand, pybind11, yaml-cpp, asdf installed.
+1. Make sure you have cuda, cupy, curand, cufftdx (provided by the `mathdx`
+conda package), pybind11, yaml-cpp, asdf installed.
 On a CHIME/CHORD machine, this conda environment works for me (alternately,
 you can use `environment.yml` in the top-level pirate directory):
 ```
