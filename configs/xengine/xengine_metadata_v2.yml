@@ -51,17 +51,17 @@ beam_positions_y: [0.0, 0.0, 0.1 ]
 # Timekeeping
 #############
 
-
-# Each frame from the X-engine will come with the fpga sequence number (seq) at the beginning of the frame.
+# The X-engine uses fpga sequence number (seq) to keep track of time.
 # To keep time in pirate, we need to know:
+#
 # - unix_ns_at_seq_0: the epoch (the UNIX time at seq = 0, in nanoseconds).
 # - dt_ns_per_seq: the rate at which seqs tick, number of nanoseconds per seq tick.
-# - seq_per_frame: the number of seq ticks covered by a data frame.
+# - seq_per_frb_time_sample: the number of seq ticks covered by an frb time sample.
 #
 # In Kotekan language:
-# unix_ns_at_seq_0 = time0_ns
-# dt_ns_per_seq = fengine_fft_length / ADC_sampling_rate_GHz
-# seq_per_frame = 256 * frb_downsampling_factor (not sure if this exists)
+#  - unix_ns_at_seq_0 = time0_ns
+#  - dt_ns_per_seq = fengine_fft_length / ADC_sampling_rate_GHz
+#  - seq_per_frb_time_sample = upchanelization factor * frb_downsampling_factor (not sure if this exists)
 #
 # The sifter will need Earth Orientation Parameters (EOP) (which change in time and Kotekan has) and
 # a precession/nutation model (which Kotekan does *not* have) to compute RA/DEC for the beams.
@@ -76,8 +76,8 @@ beam_positions_y: [0.0, 0.0, 0.1 ]
 # the X-engine.
 
 unix_ns_at_seq_0: 1772483060000000000
-dt_ns_per_seq: 5120
-seq_per_frame: 256
+dt_ns_per_seq: 5120    # note long, not double
+seq_per_frb_time_sample: 256
 
 ##################################################
 # Telescope alignment and localization parameters.
@@ -127,3 +127,20 @@ tel_dish_coelev_deg: 0.0
 # Values of dish separation in x and y directions in meters.
 tel_dish_separation_x_m: 6.300156854906823
 tel_dish_separation_y_m: 8.500057809796308
+
+#####################################################
+# Temporary kludge: per-frequency-zone noise variance
+#####################################################
+
+# For now, the FRB server assumes that the noise is mean-zero, uncorrelated
+# between samples, with variance known in advance! We assume that the noise
+# variance is constant in time, and depends only on frequency "zone" (see above).
+# (A per-frequency-channel variance was awkward to implement.)
+#
+# In a future revision, this will be generalized, and the 'noise_variance'
+# metadata will go away.
+# 
+# noise_variance: an array of length nzones (=len(zone_nfreq)). If a scalar is
+# specified, then all frequency zones are assumed to have the same variance.
+
+noise_variance: 1.0
