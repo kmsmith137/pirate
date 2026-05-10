@@ -22,3 +22,12 @@
 - Don't git commit unless explicitly requested.
 - Please write comments to explain big-picture functionality or non-obvious issues, but avoid superficial comments. 
 - Please ask me questions in the chat if my instructions are incomplete or unclear.
+
+### Misc
+
+  - Put all plans in plans/*.md, and don't add them to git.
+    Assume plans are ephemereal -- don't reference them in documentation (including docstrings).
+
+  - Don't add memories to MEMORY.md. Instead, if there is something non-obvious about the code that we should
+    remember in the future, add comments to the code (or edit documentation / docstrings) as appropriate.
+    
