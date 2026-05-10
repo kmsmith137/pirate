@@ -195,8 +195,8 @@ void FrbServer::_worker_main(int receiver_index)
 
     // Get metadata from receiver (blocking).
     XEngineMetadata m = receiver->get_metadata(true);  // blocking=true
-    long rb_size = FrbServer::ringbuf_nchunks * m.nbeams;
-    long nbeams = m.nbeams;
+    long nbeams = m.get_nbeams();
+    long rb_size = FrbServer::ringbuf_nchunks * nbeams;
 
     // Check consistency with other receivers.
     unique_lock<std::mutex> lock(mutex);
@@ -303,9 +303,9 @@ void FrbServer::_reaper_thread_main()
 
     lock.unlock();
 
-    // It's okay to access metadata.nbeams and frame_ringbuf.size() after dropping
+    // It's okay to access metadata and frame_ringbuf.size() after dropping
     // the lock, since these are initialized once and constant thereafter.
-    long nbeams = metadata.nbeams;
+    long nbeams = metadata.get_nbeams();
     long rb_size = frame_ringbuf.size();
 
     // Get total number of frames (blocking until allocator is initialized).
@@ -496,7 +496,7 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
 
     unique_lock<std::mutex> server_lock(s->mutex);
 
-    long rb_nbeams = s->metadata.nbeams;
+    long rb_nbeams = s->metadata.get_nbeams();
     long rb_size = s->frame_ringbuf.size();
     long rb_start = s->rb_start;
     long rb_end = s->rb_end;

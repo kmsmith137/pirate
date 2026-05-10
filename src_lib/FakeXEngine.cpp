@@ -119,14 +119,8 @@ XEngineMetadata FakeXEngine::make_worker_metadata(int thread_id) const
     for (long ch = thread_id; ch < total_nfreq; ch += nthreads)
         freq_channels.push_back(ch);
 
-    XEngineMetadata ret;
-    ret.version = xmd.version;
-    ret.zone_nfreq = xmd.zone_nfreq;
-    ret.zone_freq_edges = xmd.zone_freq_edges;
-    ret.freq_channels = freq_channels;
-    ret.nbeams = xmd.nbeams;
-    ret.beam_ids = xmd.beam_ids;
-
+    XEngineMetadata ret = xmd;
+    ret.freq_channels = std::move(freq_channels);
     return ret;
 }
 
@@ -174,7 +168,7 @@ void FakeXEngine::_worker_main(int thread_id)
     // Create worker-specific metadata.
     XEngineMetadata worker_xmd = make_worker_metadata(thread_id);
     long nfreq = worker_xmd.freq_channels.size();
-    long nbeams = worker_xmd.nbeams;
+    long nbeams = worker_xmd.get_nbeams();
 
     // Data array size: shape (nbeams, nfreq, 256) int4, packed 2 per byte.
     // = nbeams * nfreq * 256 / 2 = nbeams * nfreq * 128 bytes.

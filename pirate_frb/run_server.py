@@ -3,6 +3,7 @@
 import os
 import re
 import time
+import random
 import datetime
 
 import yaml
@@ -354,18 +355,57 @@ def _parse_fake_xengine_config(filename, config):
     return {k: config[k] for k in fxe_keys}
 
 
-def _make_xengine_metadata(fxe_config, server_index):
-    """Create an XEngineMetadata for one FakeXEngine instance."""
+# Hardcoded placeholder telescope/timekeeping values for the FakeXEngine path.
+# These mirror configs/xengine/xengine_metadata_v2.yml. They're arbitrary
+# placeholders -- the FakeXEngine doesn't actually point at the sky -- but the
+# values pass XEngineMetadata::validate() and check_sender_consistency().
+_FAKE_XENGINE_PLACEHOLDERS = {
+    'unix_ns_at_seq_0': 1772483060000000000,
+    'dt_ns_per_seq': 5120,
+    'seq_per_frb_time_sample': 256,
+    'tel_origin_itrs_lat_deg': 49.32075144444,
+    'tel_origin_itrs_lon_deg': -119.62081125,
+    'tel_grid_x_axis': [0.999974342398359362, -0.000037539331442772, -0.007163318767675494],
+    'tel_grid_y_axis': [0.000065403387739210,  0.999992433220348809,  0.003889630373557614],
+    'tel_dish_elev_axis': [0.99999999838132391, -0.000056897733584327, 0.0],
+    'tel_dish_vert_axis': [0.0, 0.0, 1.0],
+    'tel_dish_coelev_deg': 0.0,
+    'tel_dish_separation_x_m': 6.300156854906823,
+    'tel_dish_separation_y_m': 8.500057809796308,
+}
 
-    xmd = XEngineMetadata()
-    xmd.version = 1
-    xmd.zone_nfreq = fxe_config['zone_nfreq']
-    xmd.zone_freq_edges = [float(x) for x in fxe_config['zone_freq_edges']]
+
+def _make_xengine_metadata(fxe_config, server_index):
+    """Create an XEngineMetadata for one FakeXEngine instance.
+
+    The "Fake X-engine" run_server config supplies only beam_ids/freq config;
+    everything else is filled in with placeholder values (see above). Beam
+    positions are randomized per server_index, so each server gets a distinct
+    layout but the layout is deterministic across runs.
+    """
 
     nbeams = fxe_config['beams_per_server']
     base = fxe_config['base_beam_id'][server_index]
-    xmd.nbeams = nbeams
+
+    # Per-server RNG so beam layouts differ across servers but are reproducible.
+    # Direction cosines drawn from uniform(-0.5, 0.5) keep bx**2 + by**2 well
+    # inside the unit disk required by validate().
+    rng = random.Random(server_index)
+    beam_positions_x = [rng.uniform(-0.5, 0.5) for _ in range(nbeams)]
+    beam_positions_y = [rng.uniform(-0.5, 0.5) for _ in range(nbeams)]
+
+    xmd = XEngineMetadata()
+    xmd.version = 2
+    xmd.zone_nfreq = fxe_config['zone_nfreq']
+    xmd.zone_freq_edges = [float(x) for x in fxe_config['zone_freq_edges']]
+    xmd.beamset = server_index
     xmd.beam_ids = list(range(base, base + nbeams))
+    xmd.beam_positions_x = beam_positions_x
+    xmd.beam_positions_y = beam_positions_y
+    xmd.noise_variance = [1.0] * len(fxe_config['zone_nfreq'])
+
+    for k, v in _FAKE_XENGINE_PLACEHOLDERS.items():
+        setattr(xmd, k, v)
 
     xmd.validate()
     return xmd
@@ -412,7 +452,7 @@ def run_fake_xengine(config_filename):
             print(f"\nFakeXEngine {i}:")
             print(f"  ip_addrs = {ip_addrs}")
             print(f"  nthreads = {nthreads}")
-            print(f"  nbeams = {xmd.nbeams}, beam_ids = {xmd.beam_ids}")
+            print(f"  nbeams = {xmd.get_nbeams()}, beam_ids = {xmd.beam_ids}")
             print(f"  total_nfreq = {xmd.get_total_nfreq()}")
 
             # Pin thread to sender NIC's CPU for NUMA-local thread creation.

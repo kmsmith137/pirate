@@ -421,14 +421,46 @@ void register_core_bindings(pybind11::module &m)
                "Frequency band edges in MHz (length nzones+1, monotone increasing)")
           .def_readwrite("freq_channels", &XEngineMetadata::freq_channels,
                "Which frequency channels are present (optional)")
-          .def_readwrite("nbeams", &XEngineMetadata::nbeams,
-               "Number of beams")
+          .def_readwrite("beamset", &XEngineMetadata::beamset,
+               "Integer identifier for this set of beams")
           .def_readwrite("beam_ids", &XEngineMetadata::beam_ids,
-               "Beam identifiers (defaults to [0, 1, ..., nbeams-1] if empty)")
+               "Beam identifiers (length nbeams)")
+          .def_readwrite("beam_positions_x", &XEngineMetadata::beam_positions_x,
+               "Direction cosine b.x in grid frame, length nbeams")
+          .def_readwrite("beam_positions_y", &XEngineMetadata::beam_positions_y,
+               "Direction cosine b.y in grid frame, length nbeams")
+          .def_readwrite("unix_ns_at_seq_0", &XEngineMetadata::unix_ns_at_seq_0,
+               "UNIX nanoseconds at FPGA seq=0")
+          .def_readwrite("dt_ns_per_seq", &XEngineMetadata::dt_ns_per_seq,
+               "Nanoseconds per FPGA seq tick")
+          .def_readwrite("seq_per_frb_time_sample", &XEngineMetadata::seq_per_frb_time_sample,
+               "FPGA seq ticks per FRB time sample")
+          .def_readwrite("tel_origin_itrs_lat_deg", &XEngineMetadata::tel_origin_itrs_lat_deg,
+               "Telescope ITRS latitude in degrees")
+          .def_readwrite("tel_origin_itrs_lon_deg", &XEngineMetadata::tel_origin_itrs_lon_deg,
+               "Telescope ITRS longitude in degrees")
+          .def_readwrite("tel_grid_x_axis", &XEngineMetadata::tel_grid_x_axis,
+               "Grid x-axis unit vector (topocentric, length 3)")
+          .def_readwrite("tel_grid_y_axis", &XEngineMetadata::tel_grid_y_axis,
+               "Grid y-axis unit vector (topocentric, length 3)")
+          .def_readwrite("tel_dish_elev_axis", &XEngineMetadata::tel_dish_elev_axis,
+               "Dish elevation-axis unit vector (topocentric, length 3)")
+          .def_readwrite("tel_dish_vert_axis", &XEngineMetadata::tel_dish_vert_axis,
+               "Dish vertical-axis unit vector (topocentric, length 3)")
+          .def_readwrite("tel_dish_coelev_deg", &XEngineMetadata::tel_dish_coelev_deg,
+               "Dish coelevation in degrees (angle from vertical, north positive)")
+          .def_readwrite("tel_dish_separation_x_m", &XEngineMetadata::tel_dish_separation_x_m,
+               "Dish separation along grid x-axis in meters")
+          .def_readwrite("tel_dish_separation_y_m", &XEngineMetadata::tel_dish_separation_y_m,
+               "Dish separation along grid y-axis in meters")
+          .def_readwrite("noise_variance", &XEngineMetadata::noise_variance,
+               "Per-zone noise variance, length nzones (=len(zone_nfreq))")
           .def("validate", &XEngineMetadata::validate,
                "Validate that all members have sensible values")
           .def("get_total_nfreq", &XEngineMetadata::get_total_nfreq,
                "Returns sum of zone_nfreq (total frequency channels)")
+          .def("get_nbeams", &XEngineMetadata::get_nbeams,
+               "Returns the number of beams (= len(beam_ids))")
           .def("to_yaml_string", &XEngineMetadata::to_yaml_string,
                py::arg("verbose") = false,
                "Serialize to YAML string.\n\n"

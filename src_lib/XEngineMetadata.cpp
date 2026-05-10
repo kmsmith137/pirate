@@ -1,6 +1,7 @@
 #include "../include/pirate/XEngineMetadata.hpp"
 #include "../include/pirate/YamlFile.hpp"
 
+#include <cmath>
 #include <sstream>
 #include <unordered_set>
 #include <ksgpu/xassert.hpp>
@@ -12,6 +13,69 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+
+// Tolerances used by validate() and check_sender_consistency().
+static constexpr double cosine_eps = 1.0e-9;     // direction-cosine sanity / equality
+static constexpr double unit_vec_eps = 1.0e-6;   // |v|^2 - 1 tolerance
+static constexpr double angle_eps = 1.0e-6;      // lat/lon/coelev equality
+static constexpr double freq_eps = 1.0e-3;       // MHz, zone_freq_edges
+static constexpr double dish_sep_eps = 1.0e-6;   // meters, dish separations
+static constexpr double variance_eps = 1.0e-12;  // noise_variance equality
+
+
+// Throws if x is NaN or +/-Inf.
+static void _check_finite(double x, const char *name)
+{
+    if (!std::isfinite(x)) {
+        stringstream ss;
+        ss << "XEngineMetadata::validate(): " << name << " = " << x << " is not finite";
+        throw runtime_error(ss.str());
+    }
+}
+
+
+// Throws if any element of 'v' is NaN or +/-Inf. Templated so std::vector<double> and std::array<double, N>
+// (and any other container with size()/operator[]/double-convertible elements) all work.
+template<typename Vec>
+static void _check_finite(const Vec &v, const char *name)
+{
+    for (size_t i = 0; i < v.size(); i++) {
+        if (!std::isfinite(v[i])) {
+            stringstream ss;
+            ss << "XEngineMetadata::validate(): " << name << "[" << i << "] = " << v[i] << " is not finite";
+            throw runtime_error(ss.str());
+        }
+    }
+}
+
+
+static void _check_unit_vector(const std::array<double, 3> &v, const char *name)
+{
+    _check_finite(v, name);
+
+    double norm2 = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
+    if (std::abs(norm2 - 1.0) > unit_vec_eps) {
+        stringstream ss;
+        ss << "XEngineMetadata::validate(): " << name << " is not a unit vector (|v|^2 = " << norm2 << ")";
+        throw runtime_error(ss.str());
+    }
+}
+
+
+// Throws if the two unit vectors are not orthogonal (dot product within unit_vec_eps of 0).
+// Caller should verify each is finite (via _check_unit_vector) before calling.
+static void _check_orthogonal(const std::array<double, 3> &a, const std::array<double, 3> &b,
+                              const char *name_a, const char *name_b)
+{
+    double dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+    if (std::abs(dot) > unit_vec_eps) {
+        stringstream ss;
+        ss << "XEngineMetadata::validate(): " << name_a << " and " << name_b
+           << " are not orthogonal (dot product = " << dot << ")";
+        throw runtime_error(ss.str());
+    }
+}
 
 
 long XEngineMetadata::get_total_nfreq() const
@@ -26,7 +90,7 @@ long XEngineMetadata::get_total_nfreq() const
 void XEngineMetadata::validate() const
 {
     // Check version.
-    xassert(version > 0);
+    xassert_eq(version, 2L);
 
     // Validate zone_nfreq and zone_freq_edges.
     xassert(zone_nfreq.size() > 0);
@@ -35,13 +99,15 @@ void XEngineMetadata::validate() const
     for (size_t i = 0; i < zone_nfreq.size(); i++)
         xassert(zone_nfreq[i] > 0);
 
+    _check_finite(zone_freq_edges, "zone_freq_edges");
     for (size_t i = 0; i+1 < zone_freq_edges.size(); i++) {
         xassert(zone_freq_edges[i] > 0.0);
         xassert(zone_freq_edges[i] < zone_freq_edges[i+1]);
     }
 
-    // Validate freq_channels (if present).
+    // Validate freq_channels (if present): each value in range, no duplicates.
     long total_nfreq = get_total_nfreq();
+    std::unordered_set<long> seen_channels;
     for (long ch: freq_channels) {
         if ((ch < 0) || (ch >= total_nfreq)) {
             stringstream ss;
@@ -49,46 +115,120 @@ void XEngineMetadata::validate() const
                << ch << " (total_nfreq=" << total_nfreq << ")";
             throw runtime_error(ss.str());
         }
-    }
-
-    // Validate nbeams and beam_ids.
-    xassert(nbeams > 0);
-
-    if (beam_ids.size() > 0) {
-        if (long(beam_ids.size()) != nbeams) {
+        if (!seen_channels.insert(ch).second) {
             stringstream ss;
-            ss << "XEngineMetadata::validate(): beam_ids.size()=" << beam_ids.size()
-               << " does not match nbeams=" << nbeams;
+            ss << "XEngineMetadata::validate(): duplicate freq_channel " << ch;
             throw runtime_error(ss.str());
         }
+    }
 
-        // Check for duplicate beam_ids.
-        std::unordered_set<long> seen;
-        for (long id : beam_ids) {
-            if (!seen.insert(id).second) {
-                stringstream ss;
-                ss << "XEngineMetadata::validate(): duplicate beam_id " << id;
-                throw runtime_error(ss.str());
-            }
+    // Validate beam_ids (must be present, unique).
+    long nbeams = long(beam_ids.size());
+    xassert(nbeams > 0);
+
+    std::unordered_set<long> seen;
+    for (long id : beam_ids) {
+        if (!seen.insert(id).second) {
+            stringstream ss;
+            ss << "XEngineMetadata::validate(): duplicate beam_id " << id;
+            throw runtime_error(ss.str());
         }
     }
 
-    // Validate initial_time_sample.
-    xassert_ge(initial_time_sample, 0);
-    xassert_divisible(initial_time_sample, 256);
+    // Validate beam_positions_x / beam_positions_y.
+    if (long(beam_positions_x.size()) != nbeams) {
+        stringstream ss;
+        ss << "XEngineMetadata::validate(): beam_positions_x.size()=" << beam_positions_x.size()
+           << " does not match nbeams=" << nbeams;
+        throw runtime_error(ss.str());
+    }
+    if (long(beam_positions_y.size()) != nbeams) {
+        stringstream ss;
+        ss << "XEngineMetadata::validate(): beam_positions_y.size()=" << beam_positions_y.size()
+           << " does not match nbeams=" << nbeams;
+        throw runtime_error(ss.str());
+    }
+    _check_finite(beam_positions_x, "beam_positions_x");
+    _check_finite(beam_positions_y, "beam_positions_y");
+    for (long i = 0; i < nbeams; i++) {
+        double bx = beam_positions_x[i];
+        double by = beam_positions_y[i];
+        if (bx*bx + by*by > 1.0 + cosine_eps) {
+            stringstream ss;
+            ss << "XEngineMetadata::validate(): beam " << i << " has direction cosines outside the unit disk: ("
+               << bx << ", " << by << ")";
+            throw runtime_error(ss.str());
+        }
+    }
+
+    // Validate timekeeping.
+    xassert_gt(unix_ns_at_seq_0, 0L);
+    xassert_gt(dt_ns_per_seq, 0L);
+    xassert_gt(seq_per_frb_time_sample, 0L);
+
+    // Validate telescope params.
+    xassert_ge(tel_origin_itrs_lat_deg, -90.0);
+    xassert_le(tel_origin_itrs_lat_deg,  90.0);
+    xassert_ge(tel_origin_itrs_lon_deg, -180.0);
+    xassert_le(tel_origin_itrs_lon_deg,  360.0);
+
+    _check_unit_vector(tel_grid_x_axis,    "tel_grid_x_axis");
+    _check_unit_vector(tel_grid_y_axis,    "tel_grid_y_axis");
+    _check_unit_vector(tel_dish_elev_axis, "tel_dish_elev_axis");
+    _check_unit_vector(tel_dish_vert_axis, "tel_dish_vert_axis");
+
+    _check_orthogonal(tel_grid_x_axis,    tel_grid_y_axis,    "tel_grid_x_axis",    "tel_grid_y_axis");
+    _check_orthogonal(tel_dish_elev_axis, tel_dish_vert_axis, "tel_dish_elev_axis", "tel_dish_vert_axis");
+
+    xassert_ge(tel_dish_coelev_deg, -90.0);
+    xassert_le(tel_dish_coelev_deg,  90.0);
+
+    _check_finite(tel_dish_separation_x_m, "tel_dish_separation_x_m");
+    _check_finite(tel_dish_separation_y_m, "tel_dish_separation_y_m");
+    xassert_gt(tel_dish_separation_x_m, 0.0);
+    xassert_gt(tel_dish_separation_y_m, 0.0);
+
+    // Validate noise_variance.
+    if (long(noise_variance.size()) != long(zone_nfreq.size())) {
+        stringstream ss;
+        ss << "XEngineMetadata::validate(): noise_variance.size()=" << noise_variance.size()
+           << " does not match nzones=" << zone_nfreq.size();
+        throw runtime_error(ss.str());
+    }
+    _check_finite(noise_variance, "noise_variance");
+    for (size_t i = 0; i < noise_variance.size(); i++) {
+        if (!(noise_variance[i] > 0.0)) {
+            stringstream ss;
+            ss << "XEngineMetadata::validate(): noise_variance[" << i << "]=" << noise_variance[i]
+               << " must be positive";
+            throw runtime_error(ss.str());
+        }
+    }
 }
 
 
 // -------------------------------------------------------------------------------------------------
 
 
+// Helper: emit a length-3 unit vector as a flow-style sequence of doubles.
+static void _emit_axis(YAML::Emitter &emitter, const char *key, const std::array<double, 3> &v)
+{
+    emitter << YAML::Key << key
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (double x: v)
+        emitter << x;
+    emitter << YAML::EndSeq;
+}
+
+
 void XEngineMetadata::to_yaml(YAML::Emitter &emitter, bool verbose) const
 {
     this->validate();
+    long nbeams = get_nbeams();
 
     emitter << YAML::BeginMap;
 
-    // ---- Version ----
+    // ---- Header / version ----
 
     if (verbose) {
         emitter << YAML::Comment(
@@ -97,7 +237,7 @@ void XEngineMetadata::to_yaml(YAML::Emitter &emitter, bool verbose) const
             " 1. Every X-engine node sends this file to every FRB node, at the beginning\n"
             "   of the TCP stream.\n"
             "\n"
-            " 2. As a configuration file for the \"fake correlator\" used for testing."
+            " 2. As a configuration file for the \"fake X-engine\" used for testing."
         ) << YAML::Newline << YAML::Newline;
     }
 
@@ -150,7 +290,7 @@ void XEngineMetadata::to_yaml(YAML::Emitter &emitter, bool verbose) const
                 "are sent by a particular X-engine node."
             ) << YAML::Newline << YAML::Newline;
         }
-        
+
         emitter << YAML::Key << "freq_channels"
                 << YAML::Value << YAML::Flow << YAML::BeginSeq;
         for (long ch: freq_channels)
@@ -162,33 +302,85 @@ void XEngineMetadata::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     if (verbose) {
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "Number of beams, and their \"beam ids\" (opaque integer identifiers).\n"
-            "If beam_ids is absent, it defaults to [ 0, 1, ..., (nbeams-1) ].\n"
-            "Future versions of this file format will include more beam info (e.g. sky coordinates)."
+            "Beams: an integer 'beamset' identifier, plus per-beam id and position.\n"
+            "  beam_ids:         length nbeams, integer ids.\n"
+            "  beam_positions_x: length nbeams, direction cosine b.x in grid frame.\n"
+            "  beam_positions_y: length nbeams, direction cosine b.y in grid frame."
         ) << YAML::Newline << YAML::Newline;
     }
 
-    emitter << YAML::Key << "nbeams" << YAML::Value << nbeams;
+    emitter << YAML::Key << "beamset" << YAML::Value << beamset;
 
-    if (beam_ids.size() > 0) {
-        emitter << YAML::Key << "beam_ids"
-                << YAML::Value << YAML::Flow << YAML::BeginSeq;
-        for (long id: beam_ids)
-            emitter << id;
-        emitter << YAML::EndSeq;
-    }
+    emitter << YAML::Key << "beam_ids"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (long id: beam_ids)
+        emitter << id;
+    emitter << YAML::EndSeq;
 
-    // ---- initial_time_sample ----
+    emitter << YAML::Key << "beam_positions_x"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (double x: beam_positions_x)
+        emitter << x;
+    emitter << YAML::EndSeq;
+
+    emitter << YAML::Key << "beam_positions_y"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (double y: beam_positions_y)
+        emitter << y;
+    emitter << YAML::EndSeq;
+
+    (void) nbeams;  // currently unused outside validate(); silence unused-warn
+
+    // ---- Timekeeping ----
 
     if (verbose) {
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "When an X-engine node sends metadata to an FRB search node, it indicates the starting time\n"
-            "of the data stream that will follow. Currently, we represent the starting time by a sample\n"
-            "count, which must be a multiple of 256."
+            "Timekeeping: the X-engine uses an FPGA seq number to track time.\n"
+            "  unix_ns_at_seq_0:        UNIX nanoseconds at seq=0.\n"
+            "  dt_ns_per_seq:           nanoseconds per seq tick.\n"
+            "  seq_per_frb_time_sample: seq ticks per FRB time sample."
         ) << YAML::Newline << YAML::Newline;
     }
 
-    emitter << YAML::Key << "initial_time_sample" << YAML::Value << initial_time_sample;
+    emitter << YAML::Key << "unix_ns_at_seq_0" << YAML::Value << unix_ns_at_seq_0;
+    emitter << YAML::Key << "dt_ns_per_seq" << YAML::Value << dt_ns_per_seq;
+    emitter << YAML::Key << "seq_per_frb_time_sample" << YAML::Value << seq_per_frb_time_sample;
+
+    // ---- Telescope ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Telescope alignment / localization parameters."
+        ) << YAML::Newline << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "tel_origin_itrs_lat_deg" << YAML::Value << tel_origin_itrs_lat_deg;
+    emitter << YAML::Key << "tel_origin_itrs_lon_deg" << YAML::Value << tel_origin_itrs_lon_deg;
+
+    _emit_axis(emitter, "tel_grid_x_axis",    tel_grid_x_axis);
+    _emit_axis(emitter, "tel_grid_y_axis",    tel_grid_y_axis);
+    _emit_axis(emitter, "tel_dish_elev_axis", tel_dish_elev_axis);
+    _emit_axis(emitter, "tel_dish_vert_axis", tel_dish_vert_axis);
+
+    emitter << YAML::Key << "tel_dish_coelev_deg" << YAML::Value << tel_dish_coelev_deg;
+    emitter << YAML::Key << "tel_dish_separation_x_m" << YAML::Value << tel_dish_separation_x_m;
+    emitter << YAML::Key << "tel_dish_separation_y_m" << YAML::Value << tel_dish_separation_y_m;
+
+    // ---- Noise variance ----
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Per-frequency-zone noise variance, length nzones (=len(zone_nfreq)).\n"
+            "Temporary kludge: the FRB server assumes mean-zero, time-uncorrelated\n"
+            "noise with this variance. Will be generalized in a future revision."
+        ) << YAML::Newline << YAML::Newline;
+    }
+
+    emitter << YAML::Key << "noise_variance"
+            << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (double v: noise_variance)
+        emitter << v;
+    emitter << YAML::EndSeq;
 
     emitter << YAML::EndMap;
 }
@@ -231,15 +423,34 @@ XEngineMetadata XEngineMetadata::from_yaml(const YamlFile &f)
     ret.zone_nfreq = f.get_vector<long> ("zone_nfreq");
     ret.zone_freq_edges = f.get_vector<double> ("zone_freq_edges");
     ret.freq_channels = f.get_vector<long> ("freq_channels", std::vector<long>());
-    ret.nbeams = f.get_scalar<long> ("nbeams");
-    ret.beam_ids = f.get_vector<long> ("beam_ids", std::vector<long>());
-    ret.initial_time_sample = f.get_scalar<long> ("initial_time_sample");
 
-    // If beam_ids is absent, default to [ 0, 1, ..., (nbeams-1) ].
-    if (ret.beam_ids.empty()) {
-        ret.beam_ids.resize(ret.nbeams);
-        for (long i = 0; i < ret.nbeams; i++)
-            ret.beam_ids[i] = i;
+    ret.beamset = f.get_scalar<long> ("beamset");
+    ret.beam_ids = f.get_vector<long> ("beam_ids");
+    ret.beam_positions_x = f.get_vector<double> ("beam_positions_x");
+    ret.beam_positions_y = f.get_vector<double> ("beam_positions_y");
+
+    ret.unix_ns_at_seq_0 = f.get_scalar<long> ("unix_ns_at_seq_0");
+    ret.dt_ns_per_seq = f.get_scalar<long> ("dt_ns_per_seq");
+    ret.seq_per_frb_time_sample = f.get_scalar<long> ("seq_per_frb_time_sample");
+
+    ret.tel_origin_itrs_lat_deg = f.get_scalar<double> ("tel_origin_itrs_lat_deg");
+    ret.tel_origin_itrs_lon_deg = f.get_scalar<double> ("tel_origin_itrs_lon_deg");
+    ret.tel_grid_x_axis = f.get_array<double, 3> ("tel_grid_x_axis");
+    ret.tel_grid_y_axis = f.get_array<double, 3> ("tel_grid_y_axis");
+    ret.tel_dish_elev_axis = f.get_array<double, 3> ("tel_dish_elev_axis");
+    ret.tel_dish_vert_axis = f.get_array<double, 3> ("tel_dish_vert_axis");
+    ret.tel_dish_coelev_deg = f.get_scalar<double> ("tel_dish_coelev_deg");
+    ret.tel_dish_separation_x_m = f.get_scalar<double> ("tel_dish_separation_x_m");
+    ret.tel_dish_separation_y_m = f.get_scalar<double> ("tel_dish_separation_y_m");
+
+    // noise_variance can be either a scalar (broadcast to all zones) or a sequence of length nzones.
+    YamlFile nv_node = f["noise_variance"];
+    long nzones = long(ret.zone_nfreq.size());
+    if (nv_node.type() == YAML::NodeType::Scalar) {
+        double v = nv_node.as_scalar<double>();
+        ret.noise_variance.assign(nzones, v);
+    } else {
+        ret.noise_variance = nv_node.as_vector<double>();
     }
 
     f.check_for_invalid_keys();
@@ -249,39 +460,98 @@ XEngineMetadata XEngineMetadata::from_yaml(const YamlFile &f)
 }
 
 
+// -------------------------------------------------------------------------------------------------
+
+
+// Helper: throw a check_sender_consistency mismatch with a formatted message.
+[[noreturn]] static void _consistency_throw(const string &msg)
+{
+    throw runtime_error("XEngineMetadata::check_sender_consistency: " + msg);
+}
+
+
+static void _check_double_eq(double a, double b, double eps, const char *name)
+{
+    if (std::abs(a - b) > eps) {
+        stringstream ss;
+        ss << "mismatch in " << name << ": got " << a << ", expected " << b;
+        _consistency_throw(ss.str());
+    }
+}
+
+
+// Templated so both std::vector<double> and std::array<double, N> work.
+template<typename Vec>
+static void _check_double_vec_eq(const Vec &a, const Vec &b, double eps, const char *name)
+{
+    if (a.size() != b.size()) {
+        stringstream ss;
+        ss << "mismatch in " << name << " (different sizes: " << a.size() << " vs " << b.size() << ")";
+        _consistency_throw(ss.str());
+    }
+    for (size_t i = 0; i < a.size(); i++) {
+        if (std::abs(a[i] - b[i]) > eps) {
+            stringstream ss;
+            ss << "mismatch in " << name << "[" << i << "]: got " << a[i] << ", expected " << b[i];
+            _consistency_throw(ss.str());
+        }
+    }
+}
+
+
 // static member function
 void XEngineMetadata::check_sender_consistency(const XEngineMetadata &ref, const XEngineMetadata &m)
 {
-    if (m.zone_nfreq != ref.zone_nfreq) {
+    if (m.version != ref.version) {
         stringstream ss;
-        ss << "XEngineMetadata::check_sender_consistency: mismatch in zone_nfreq";
-        throw runtime_error(ss.str());
+        ss << "mismatch in version: got " << m.version << ", expected " << ref.version;
+        _consistency_throw(ss.str());
     }
-    if (m.zone_freq_edges.size() != ref.zone_freq_edges.size()) {
+    if (m.zone_nfreq != ref.zone_nfreq)
+        _consistency_throw("mismatch in zone_nfreq");
+
+    _check_double_vec_eq(m.zone_freq_edges, ref.zone_freq_edges, freq_eps, "zone_freq_edges");
+
+    if (m.beamset != ref.beamset) {
         stringstream ss;
-        ss << "XEngineMetadata::check_sender_consistency: mismatch in zone_freq_edges (different sizes)";
-        throw runtime_error(ss.str());
+        ss << "mismatch in beamset: got " << m.beamset << ", expected " << ref.beamset;
+        _consistency_throw(ss.str());
     }
-    for (size_t i = 0; i < m.zone_freq_edges.size(); i++) {
-        double diff = m.zone_freq_edges[i] - ref.zone_freq_edges[i];
-        if ((diff < -1.0e-3) || (diff > 1.0e-3)) {
-            stringstream ss;
-            ss << "XEngineMetadata::check_sender_consistency: mismatch in zone_freq_edges[" << i << "]: got "
-               << m.zone_freq_edges[i] << ", expected " << ref.zone_freq_edges[i];
-            throw runtime_error(ss.str());
-        }
-    }
-    if (m.nbeams != ref.nbeams) {
+    if (m.beam_ids != ref.beam_ids)
+        _consistency_throw("mismatch in beam_ids");
+    _check_double_vec_eq(m.beam_positions_x, ref.beam_positions_x, cosine_eps, "beam_positions_x");
+    _check_double_vec_eq(m.beam_positions_y, ref.beam_positions_y, cosine_eps, "beam_positions_y");
+
+    if (m.unix_ns_at_seq_0 != ref.unix_ns_at_seq_0) {
         stringstream ss;
-        ss << "XEngineMetadata::check_sender_consistency: mismatch in nbeams: got " << m.nbeams
-           << ", expected " << ref.nbeams;
-        throw runtime_error(ss.str());
+        ss << "mismatch in unix_ns_at_seq_0: got " << m.unix_ns_at_seq_0
+           << ", expected " << ref.unix_ns_at_seq_0;
+        _consistency_throw(ss.str());
     }
-    if (m.beam_ids != ref.beam_ids) {
+    if (m.dt_ns_per_seq != ref.dt_ns_per_seq) {
         stringstream ss;
-        ss << "XEngineMetadata::check_sender_consistency: mismatch in beam_ids";
-        throw runtime_error(ss.str());
+        ss << "mismatch in dt_ns_per_seq: got " << m.dt_ns_per_seq
+           << ", expected " << ref.dt_ns_per_seq;
+        _consistency_throw(ss.str());
     }
+    if (m.seq_per_frb_time_sample != ref.seq_per_frb_time_sample) {
+        stringstream ss;
+        ss << "mismatch in seq_per_frb_time_sample: got " << m.seq_per_frb_time_sample
+           << ", expected " << ref.seq_per_frb_time_sample;
+        _consistency_throw(ss.str());
+    }
+
+    _check_double_eq(m.tel_origin_itrs_lat_deg, ref.tel_origin_itrs_lat_deg, angle_eps, "tel_origin_itrs_lat_deg");
+    _check_double_eq(m.tel_origin_itrs_lon_deg, ref.tel_origin_itrs_lon_deg, angle_eps, "tel_origin_itrs_lon_deg");
+    _check_double_vec_eq(m.tel_grid_x_axis,    ref.tel_grid_x_axis,    cosine_eps, "tel_grid_x_axis");
+    _check_double_vec_eq(m.tel_grid_y_axis,    ref.tel_grid_y_axis,    cosine_eps, "tel_grid_y_axis");
+    _check_double_vec_eq(m.tel_dish_elev_axis, ref.tel_dish_elev_axis, cosine_eps, "tel_dish_elev_axis");
+    _check_double_vec_eq(m.tel_dish_vert_axis, ref.tel_dish_vert_axis, cosine_eps, "tel_dish_vert_axis");
+    _check_double_eq(m.tel_dish_coelev_deg,    ref.tel_dish_coelev_deg, angle_eps,    "tel_dish_coelev_deg");
+    _check_double_eq(m.tel_dish_separation_x_m, ref.tel_dish_separation_x_m, dish_sep_eps, "tel_dish_separation_x_m");
+    _check_double_eq(m.tel_dish_separation_y_m, ref.tel_dish_separation_y_m, dish_sep_eps, "tel_dish_separation_y_m");
+
+    _check_double_vec_eq(m.noise_variance, ref.noise_variance, variance_eps, "noise_variance");
 }
 
 

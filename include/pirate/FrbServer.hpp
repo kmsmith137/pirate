@@ -84,7 +84,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     std::unordered_map<long,int> beam_id_to_index;
 
     // The frame_ringbuf is initialized at the same time as the metadata.
-    // Ring buffer has length (ringbuf_nchunks * metadata.nbeams).
+    // Ring buffer has length (ringbuf_nchunks * metadata.get_nbeams()).
     static constexpr int ringbuf_nchunks = 512;
     std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
 

@@ -1,6 +1,7 @@
 #ifndef _PIRATE_XENGINE_METADATA_HPP
 #define _PIRATE_XENGINE_METADATA_HPP
 
+#include <array>
 #include <vector>
 #include <string>
 
@@ -28,9 +29,13 @@ namespace pirate {
 struct XEngineMetadata
 {
     // Version number of the metadata format.
+    // Initialized to 0 (an invalid value) so default-constructed instances must be
+    // explicitly populated -- guards against forgetting to set 'version' or other fields.
     long version = 0;
 
-    // Frequency channels. The observed frequency band is divided into "zones".
+    // ---- Frequency channels ----
+    //
+    // The observed frequency band is divided into "zones".
     // Within each zone, all frequency channels have the same width, but the
     // channel width may differ between zones. For example:
     //
@@ -46,18 +51,66 @@ struct XEngineMetadata
     // are sent by a particular X-engine node.
     std::vector<long> freq_channels;
 
-    // Number of beams.
-    long nbeams = 0;
+    // ---- Beams ----
+    //
+    // 'beamset' is an opaque integer identifier for this set of beams.
+    // 'beam_ids' (length nbeams) holds opaque integer beam identifiers.
+    // 'beam_positions_x' and 'beam_positions_y' (length nbeams) are direction cosines
+    // b.x and b.y in the grid frame; the grid frame is defined by orthogonal unit vectors
+    // along (or close to) the telescope grid axes.
 
-    // Beam identifiers (opaque integer identifiers).
-    // If empty when read from YAML, defaults to [ 0, 1, ..., (nbeams-1) ].
+    long beamset = 0;
     std::vector<long> beam_ids;
+    std::vector<double> beam_positions_x;
+    std::vector<double> beam_positions_y;
 
-    // When an X-engine node sends metadata to an FRB search node, it indicates the starting time
-    // of the data stream that will follow. Currently, we represent the starting time by a sample
-    // count, which must be a multiple of 256.
-    long initial_time_sample = 0;
-    
+    // ---- Timekeeping ----
+    //
+    // The X-engine uses an FPGA sequence number ('seq') to keep track of time.
+    // To keep time in pirate, we need:
+    //   unix_ns_at_seq_0:         UNIX time at seq=0, in nanoseconds.
+    //   dt_ns_per_seq:            nanoseconds per seq tick.
+    //   seq_per_frb_time_sample:  seq ticks per FRB time sample.
+    //
+    // These fields are currently opaque to pirate (passed through the protocol
+    // for downstream code).
+
+    long unix_ns_at_seq_0 = 0;
+    long dt_ns_per_seq = 0;
+    long seq_per_frb_time_sample = 0;
+
+    // ---- Telescope alignment / localization ----
+    //
+    // 'tel_origin_itrs_*' give the telescope position on Earth in degrees.
+    // 'tel_grid_x_axis' and 'tel_grid_y_axis' are unit vectors aligned with the dish
+    // grid, expressed in topocentric coordinates (East, North, Up).
+    // 'tel_dish_elev_axis' is the axis around which the dishes pivot (positive in the
+    // east direction); 'tel_dish_vert_axis' is the dish "up/zenith" direction (the
+    // direction of zero coelevation). Both are expressed in topocentric coordinates.
+    // 'tel_dish_coelev_deg' is the dish pointing angle (angle from vertical, north positive).
+    // 'tel_dish_separation_{x,y}_m' are the dish separations along the grid axes in meters.
+
+    double tel_origin_itrs_lat_deg = 0.0;
+    double tel_origin_itrs_lon_deg = 0.0;
+    std::array<double, 3> tel_grid_x_axis    {};
+    std::array<double, 3> tel_grid_y_axis    {};
+    std::array<double, 3> tel_dish_elev_axis {};
+    std::array<double, 3> tel_dish_vert_axis {};
+    double tel_dish_coelev_deg = 0.0;
+    double tel_dish_separation_x_m = 0.0;
+    double tel_dish_separation_y_m = 0.0;
+
+    // ---- Noise variance (temporary kludge) ----
+    //
+    // Per-frequency-zone noise variance, length len(zone_nfreq). The FRB server
+    // currently assumes the noise is mean-zero, uncorrelated between samples,
+    // constant in time, and depends only on frequency zone. In the YAML, a
+    // scalar may be specified instead of a list -- in that case all zones are
+    // assigned the same variance (broadcast at parse time, so this field is
+    // always length-nzones in C++). This will go away in a future revision.
+
+    std::vector<double> noise_variance;
+
     // -------------------------------- Member functions --------------------------------
 
     // Validate that all members have been initialized with sensible values.
@@ -65,6 +118,9 @@ struct XEngineMetadata
 
     // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
     long get_total_nfreq() const;
+
+    // Number of beams (= length of beam_ids).
+    long get_nbeams() const { return long(beam_ids.size()); }
 
     // Write in YAML format.
     // If 'verbose' is true, include comments explaining the meaning of each field.
@@ -77,8 +133,9 @@ struct XEngineMetadata
     static XEngineMetadata from_yaml(const YamlFile &file);
 
     // Check that two XEngineMetadata objects (from different senders) have consistent fields.
-    // Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels or
-    // initial_time_sample. Throws exception on mismatch.
+    // Checks zone_nfreq, zone_freq_edges, beamset, beam_ids, beam_positions_x/y, all timekeeping
+    // fields, all tel_* fields, and noise_variance. Does NOT check freq_channels (which legitimately
+    // differ across X-engine nodes). Throws exception on mismatch.
     static void check_sender_consistency(const XEngineMetadata &ref, const XEngineMetadata &m);
 };
 

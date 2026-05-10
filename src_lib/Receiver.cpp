@@ -440,11 +440,10 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     peer->metadata.validate();
 
     long nfreq = peer->metadata.freq_channels.size();
-    long nbeams = peer->metadata.nbeams;
+    long nbeams = peer->metadata.get_nbeams();
 
     xassert(nfreq > 0);
     xassert(nbeams > 0);
-    xassert(peer->metadata.initial_time_sample == 0);  // FIXME for now!
 
     peer->bytes_per_minichunk = nbeams * nfreq * 128;
     peer->minichunks_per_chunk = xdiv(params.time_samples_per_chunk, 256);
@@ -566,7 +565,7 @@ void Receiver::_assembler_main()
     
     // Initialize 'curr_frames' (not lock-protected).
 
-    long nbeams = metadata.nbeams;
+    long nbeams = metadata.get_nbeams();
     this->curr_frames.resize(2*nbeams);
 
     for (long ichunk = 0; ichunk < 2; ichunk++) {
@@ -608,7 +607,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
 {
     const long *freq_channels = &peer->metadata.freq_channels[0];
     long nfreq = peer->metadata.freq_channels.size();
-    long nbeams = peer->metadata.nbeams;
+    long nbeams = peer->metadata.get_nbeams();
     long nt_chunk = params.time_samples_per_chunk;
     long rb_capacity = peer->rb_capacity;
     long bmc = peer->bytes_per_minichunk;

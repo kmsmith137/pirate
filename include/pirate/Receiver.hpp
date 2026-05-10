@@ -106,7 +106,7 @@ struct Receiver
 
     // Reference metadata from first peer.
     // Used to check that all peers send consistent metadata.
-    // (Checks zone_nfreq, zone_freq_edges, nbeams, beam_ids. Does NOT check freq_channels.)
+    // (See XEngineMetadata::check_sender_consistency for the exact field set.)
 
     bool has_metadata = false;
     XEngineMetadata metadata;
@@ -159,7 +159,7 @@ private:
     // 'curr_frames' is a ring buffer of length (2 * nbeams).
     // It contains data for (curr_base_chunk) <= ichunk < (curr_base_chunk + 2).
 
-    std::vector<std::shared_ptr<AssembledFrame>> curr_frames;  // length (2 * metadata.nbeams)
+    std::vector<std::shared_ptr<AssembledFrame>> curr_frames;  // length (2 * metadata.get_nbeams())
     long curr_base_chunk = 0;
 };
 

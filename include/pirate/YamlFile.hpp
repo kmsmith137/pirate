@@ -1,6 +1,7 @@
 #ifndef _PIRATE_YAML_FILE_HPP
 #define _PIRATE_YAML_FILE_HPP
 
+#include <array>
 #include <string>
 #include <stdexcept>
 #include <unordered_set>
@@ -73,15 +74,22 @@ struct YamlFile {
 
     template<typename T> inline T as_scalar() const;
     template<typename T> inline std::vector<T> as_vector() const;
-                                            
+
+    // Fixed-size sequence read. Throws if the node is not a Sequence of length exactly N.
+    // Reads directly into the std::array (no intermediate std::vector).
+    template<typename T, std::size_t N> inline std::array<T, N> as_array() const;
+
     template<typename T> inline T get_scalar(const std::string &k) const;
     template<typename T> inline T get_scalar(const std::string &k, const T &default_value) const;
-    
+
     template<typename T> inline std::vector<T> get_vector(const std::string &k) const;
 
     // Returns default_value only if key is absent. If key is present but maps to an
     // empty sequence, returns an empty vector (not default_value).
     template<typename T> inline std::vector<T> get_vector(const std::string &k, const std::vector<T> &default_value) const;
+
+    // Fixed-size analog of get_vector(). Throws if the value is not a length-N sequence.
+    template<typename T, std::size_t N> inline std::array<T, N> get_array(const std::string &k) const;
 
     // If these asserts fail, they will throw a "verbose" exception, intended to facilitate error-checking.
     void assert_type_is(Type type) const;
@@ -146,6 +154,31 @@ inline std::vector<T> YamlFile::as_vector() const
 }
 
 
+template<typename T, std::size_t N>
+inline std::array<T, N> YamlFile::as_array() const
+{
+    this->assert_type_is(Type::Sequence);
+
+    long n = size();
+    if (n != long(N)) {
+        throw std::runtime_error(name + ": expected length " + std::to_string(N)
+                                 + ", got " + std::to_string(n));
+    }
+
+    std::array<T, N> ret;
+    for (std::size_t i = 0; i < N; i++) {
+        YAML::Node child_node = node[i];
+
+        if (!child_node.IsScalar() || !_yaml_node_to_scalar<T> (child_node, ret[i])) {
+            throw std::runtime_error(name + "[" + std::to_string(i) + "]: parse failure (expected type "
+                                     + ksgpu::type_name<T>() + ")");
+        }
+    }
+
+    return ret;
+}
+
+
 template<typename T>
 inline T YamlFile::get_scalar(const std::string &k) const
 {
@@ -181,6 +214,13 @@ inline std::vector<T> YamlFile::get_vector(const std::string &k, const std::vect
         return child.as_vector<T> ();
 
     return default_value;
+}
+
+
+template<typename T, std::size_t N>
+inline std::array<T, N> YamlFile::get_array(const std::string &k) const
+{
+    return (*this)[k].as_array<T, N> ();
 }
 
 
