@@ -1,9 +1,11 @@
 #include "../include/pirate/XEngineMetadata.hpp"
 #include "../include/pirate/YamlFile.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <unordered_set>
+#include <ksgpu/rand_utils.hpp>
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/yaml.h>
 
@@ -552,6 +554,215 @@ void XEngineMetadata::check_sender_consistency(const XEngineMetadata &ref, const
     _check_double_eq(m.tel_dish_separation_y_m, ref.tel_dish_separation_y_m, dish_sep_eps, "tel_dish_separation_y_m");
 
     _check_double_vec_eq(m.noise_variance, ref.noise_variance, variance_eps, "noise_variance");
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Placeholder constants and factories for test / fixture use.
+
+
+// Placeholder telescope and timekeeping values used by make_test_instance().
+// Mirrors pirate_frb/run_server.py:_FAKE_XENGINE_PLACEHOLDERS so that C++ and
+// Python test fixtures agree on a "reasonable" baseline. These values are
+// chosen to pass validate() and check_sender_consistency() -- they do not
+// represent any real telescope pointing.
+static constexpr long _PH_unix_ns_at_seq_0 = 1772483060000000000L;
+static constexpr long _PH_dt_ns_per_seq = 5120L;
+static constexpr long _PH_seq_per_frb_time_sample = 256L;
+static constexpr double _PH_tel_origin_itrs_lat_deg = 49.32075144444;
+static constexpr double _PH_tel_origin_itrs_lon_deg = -119.62081125;
+static constexpr std::array<double, 3> _PH_tel_grid_x_axis    {0.999974342398359362, -0.000037539331442772, -0.007163318767675494};
+static constexpr std::array<double, 3> _PH_tel_grid_y_axis    {0.000065403387739210,  0.999992433220348809,  0.003889630373557614};
+static constexpr std::array<double, 3> _PH_tel_dish_elev_axis {0.99999999838132391,  -0.000056897733584327,  0.0};
+static constexpr std::array<double, 3> _PH_tel_dish_vert_axis {0.0, 0.0, 1.0};
+static constexpr double _PH_tel_dish_coelev_deg = 0.0;
+static constexpr double _PH_tel_dish_separation_x_m = 6.300156854906823;
+static constexpr double _PH_tel_dish_separation_y_m = 8.500057809796308;
+
+
+// Helper: fills beam_positions_{x,y} with a deterministic 2D grid spanning
+// [-0.1, +0.1] in both coordinates. Beams are placed row-major into the
+// smallest enclosing square grid (g x g where g = ceil(sqrt(nbeams))), with
+// extreme positions at +/-0.1. Single-beam case maps to (0, 0).
+static void _fill_test_beam_positions(std::vector<double> &bx, std::vector<double> &by, long nbeams)
+{
+    xassert(nbeams > 0);
+    bx.assign(nbeams, 0.0);
+    by.assign(nbeams, 0.0);
+
+    long g = std::max(1L, long(std::ceil(std::sqrt(double(nbeams)))));
+    if (g <= 1)
+        return;  // single beam stays at origin
+
+    double step = 0.2 / double(g - 1);
+    for (long i = 0; i < nbeams; i++) {
+        long row = i / g;
+        long col = i % g;
+        bx[i] = -0.1 + double(col) * step;
+        by[i] = -0.1 + double(row) * step;
+    }
+}
+
+
+// static member function
+std::shared_ptr<XEngineMetadata>
+XEngineMetadata::make_test_instance(const std::vector<long> &zone_nfreq_,
+                                    const std::vector<double> &zone_freq_edges_,
+                                    const std::vector<long> &beam_ids_)
+{
+    xassert(zone_nfreq_.size() > 0);
+    xassert(beam_ids_.size() > 0);
+
+    auto ret = std::make_shared<XEngineMetadata>();
+    ret->version = 2;
+    ret->zone_nfreq = zone_nfreq_;
+    ret->zone_freq_edges = zone_freq_edges_;
+    // freq_channels left empty (default).
+    ret->beamset = 0;
+    ret->beam_ids = beam_ids_;
+    _fill_test_beam_positions(ret->beam_positions_x, ret->beam_positions_y, long(beam_ids_.size()));
+    ret->noise_variance.assign(zone_nfreq_.size(), 1.0);
+
+    ret->unix_ns_at_seq_0 = _PH_unix_ns_at_seq_0;
+    ret->dt_ns_per_seq = _PH_dt_ns_per_seq;
+    ret->seq_per_frb_time_sample = _PH_seq_per_frb_time_sample;
+
+    ret->tel_origin_itrs_lat_deg = _PH_tel_origin_itrs_lat_deg;
+    ret->tel_origin_itrs_lon_deg = _PH_tel_origin_itrs_lon_deg;
+    ret->tel_grid_x_axis    = _PH_tel_grid_x_axis;
+    ret->tel_grid_y_axis    = _PH_tel_grid_y_axis;
+    ret->tel_dish_elev_axis = _PH_tel_dish_elev_axis;
+    ret->tel_dish_vert_axis = _PH_tel_dish_vert_axis;
+    ret->tel_dish_coelev_deg = _PH_tel_dish_coelev_deg;
+    ret->tel_dish_separation_x_m = _PH_tel_dish_separation_x_m;
+    ret->tel_dish_separation_y_m = _PH_tel_dish_separation_y_m;
+
+    ret->validate();
+    return ret;
+}
+
+
+// Helper: returns a random unit 3-vector (isotropically distributed).
+// Rejection samples in the cube [-1, 1]^3 to avoid pole bias, then normalizes.
+static std::array<double, 3> _rand_unit_vec()
+{
+    while (true) {
+        double x = ksgpu::rand_uniform(-1.0, 1.0);
+        double y = ksgpu::rand_uniform(-1.0, 1.0);
+        double z = ksgpu::rand_uniform(-1.0, 1.0);
+        double n2 = x*x + y*y + z*z;
+        if ((n2 > 1.0e-6) && (n2 <= 1.0)) {
+            double n = std::sqrt(n2);
+            return { x/n, y/n, z/n };
+        }
+    }
+}
+
+
+// Helper: returns a random unit 3-vector orthogonal to 'a'.
+// Generates a candidate random unit vector, subtracts its projection on 'a',
+// and re-normalizes. Loops in the unlikely event of degeneracy.
+static std::array<double, 3> _rand_orthogonal_unit_vec(const std::array<double, 3> &a)
+{
+    while (true) {
+        std::array<double, 3> v = _rand_unit_vec();
+        double dot = a[0]*v[0] + a[1]*v[1] + a[2]*v[2];
+        v[0] -= dot * a[0];
+        v[1] -= dot * a[1];
+        v[2] -= dot * a[2];
+        double n2 = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
+        if (n2 > 1.0e-6) {
+            double n = std::sqrt(n2);
+            return { v[0]/n, v[1]/n, v[2]/n };
+        }
+    }
+}
+
+
+// static member function
+std::shared_ptr<XEngineMetadata> XEngineMetadata::make_random()
+{
+    using ksgpu::rand_int;
+    using ksgpu::rand_uniform;
+
+    auto ret = std::make_shared<XEngineMetadata>();
+    ret->version = 2;
+
+    // ---- Frequency zones ----
+
+    long nzones = rand_int(1, 5);
+    ret->zone_nfreq.resize(nzones);
+    for (long i = 0; i < nzones; i++)
+        ret->zone_nfreq[i] = rand_int(16, 257);
+
+    // zone_freq_edges: nzones+1 sorted distinct values in [100, 1500] MHz.
+    // freq_eps = 1e-3 in validate(); easily exceeded by uniform samples in this range.
+    ret->zone_freq_edges.resize(nzones + 1);
+    for (long i = 0; i < nzones + 1; i++)
+        ret->zone_freq_edges[i] = rand_uniform(100.0, 1500.0);
+    std::sort(ret->zone_freq_edges.begin(), ret->zone_freq_edges.end());
+
+    // freq_channels left empty (its content is only meaningful in receiver context).
+
+    // ---- Beams ----
+
+    ret->beamset = rand_int(0, 1024);
+
+    long nbeams = rand_int(1, 9);
+
+    // Distinct beam_ids drawn from [0, 1024). Reject-loop until all distinct.
+    std::unordered_set<long> seen;
+    ret->beam_ids.clear();
+    while (long(ret->beam_ids.size()) < nbeams) {
+        long id = rand_int(0, 1024);
+        if (seen.insert(id).second)
+            ret->beam_ids.push_back(id);
+    }
+
+    // beam_positions in the unit disk: rejection sample.
+    ret->beam_positions_x.resize(nbeams);
+    ret->beam_positions_y.resize(nbeams);
+    for (long i = 0; i < nbeams; i++) {
+        while (true) {
+            double bx = rand_uniform(-1.0, 1.0);
+            double by = rand_uniform(-1.0, 1.0);
+            if (bx*bx + by*by < 1.0) {
+                ret->beam_positions_x[i] = bx;
+                ret->beam_positions_y[i] = by;
+                break;
+            }
+        }
+    }
+
+    // ---- Timekeeping ----
+
+    ret->unix_ns_at_seq_0 = rand_int(long(1e18), long(2e18));
+    ret->dt_ns_per_seq = rand_int(1, long(1e6));
+    ret->seq_per_frb_time_sample = rand_int(1, long(1e4));
+
+    // ---- Telescope geometry ----
+
+    ret->tel_origin_itrs_lat_deg = rand_uniform(-90.0, 90.0);
+    ret->tel_origin_itrs_lon_deg = rand_uniform(-180.0, 180.0);
+
+    ret->tel_grid_x_axis    = _rand_unit_vec();
+    ret->tel_grid_y_axis    = _rand_orthogonal_unit_vec(ret->tel_grid_x_axis);
+    ret->tel_dish_elev_axis = _rand_unit_vec();
+    ret->tel_dish_vert_axis = _rand_orthogonal_unit_vec(ret->tel_dish_elev_axis);
+
+    ret->tel_dish_coelev_deg = rand_uniform(0.0, 90.0);
+    ret->tel_dish_separation_x_m = rand_uniform(1.0, 20.0);
+    ret->tel_dish_separation_y_m = rand_uniform(1.0, 20.0);
+
+    // ---- Noise ----
+
+    ret->noise_variance.resize(nzones);
+    for (long i = 0; i < nzones; i++)
+        ret->noise_variance[i] = rand_uniform(0.1, 10.0);
+
+    ret->validate();
+    return ret;
 }
 
 

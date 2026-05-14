@@ -557,10 +557,9 @@ void Receiver::_assembler_main()
 
     // The assembler thread is responsible for calling AssembledFrameAllocator::initialize().
     this->params.allocator->initialize(
-        this->params.consumer_id,
-        metadata.get_total_nfreq(),
-        this->params.time_samples_per_chunk, 
-        metadata.beam_ids
+        metadata,
+        this->params.time_samples_per_chunk,
+        this->params.consumer_id
     );
     
     // Initialize 'curr_frames' (not lock-protected).

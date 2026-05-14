@@ -2,6 +2,7 @@
 #define _PIRATE_XENGINE_METADATA_HPP
 
 #include <array>
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -25,6 +26,18 @@ namespace pirate {
 //   2. As a configuration file for the "fake X-engine" used for testing.
 //
 // Reference: pirate/configs/xengine/xengine_metadata_*.yml
+//
+// Serialization formats:
+//
+//   - YAML (to_yaml / from_yaml*) is the full-fidelity format -- every member
+//     round-trips bit-exactly.
+//
+//   - ASDF (via AssembledFrame::write_asdf / from_asdf) is a *projected*
+//     format. A saved ASDF file describes a single (beam, time-chunk), so
+//     four metadata members are handled specially: freq_channels is dropped,
+//     and beam_ids / beam_positions_x / beam_positions_y are projected to
+//     length-1 vectors holding the single saved beam's data. The remaining
+//     ~17 members round-trip bit-exactly through ASDF.
 
 struct XEngineMetadata
 {
@@ -137,6 +150,30 @@ struct XEngineMetadata
     // fields, all tel_* fields, and noise_variance. Does NOT check freq_channels (which legitimately
     // differ across X-engine nodes). Throws exception on mismatch.
     static void check_sender_consistency(const XEngineMetadata &ref, const XEngineMetadata &m);
+
+    // -------------------------------- Test/fixture factories --------------------------------
+
+    // Returns a fully-valid XEngineMetadata with placeholder telescope and timekeeping
+    // values. Caller supplies the frequency-zone structure and beam_ids; everything else
+    // is filled in with sensible defaults: noise_variance = {1.0, ...} of length nzones,
+    // beamset = 0, and beam_positions_{x,y} arranged on a deterministic 2D grid spanning
+    // [-0.1, +0.1] in both coordinates. Caller may further patch fields (e.g. beamset)
+    // before calling validate(). Calls validate() before returning.
+    //
+    // Used by: pirate_frb/run_server.py:_make_xengine_metadata, the FakeXEngine /
+    // FrbServer test paths, and the C++ Hwtest benchmark setup.
+    static std::shared_ptr<XEngineMetadata>
+    make_test_instance(const std::vector<long> &zone_nfreq,
+                       const std::vector<double> &zone_freq_edges,
+                       const std::vector<long> &beam_ids);
+
+    // Returns a fully-valid XEngineMetadata with all fields randomized within validity
+    // bounds (small scale, not CHIME/CHORD-scale: 1-4 zones, 1-8 beams, etc.). Useful
+    // for fuzz-style coverage of code paths that consume XEngineMetadata. Calls
+    // validate() before returning.
+    //
+    // Used by: the Python ASDF round-trip test in pirate_frb/tests/__init__.py.
+    static std::shared_ptr<XEngineMetadata> make_random();
 };
 
 

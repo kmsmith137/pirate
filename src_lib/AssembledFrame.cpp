@@ -35,11 +35,182 @@ void AssembledFrame::_reap_locked()
 }
 
 
+// ASDF metadata (de)serialization helpers.
+//
+// XEngineMetadata is written field-by-field into a nested ASDF group with
+// the keys mirroring the C++ member names. Four members are handled
+// specially in AssembledFrame::{write,from}_asdf -- see XEngineMetadata.hpp
+// for the rationale.
+
+static shared_ptr<ASDF::sequence> _make_int_seq(const vector<long> &v)
+{
+    auto seq = make_shared<ASDF::sequence>();
+    for (long x : v)
+        seq->push_back(make_shared<ASDF::int_entry>(int64_t(x)));
+    return seq;
+}
+
+
+static shared_ptr<ASDF::sequence> _make_float_seq(const vector<double> &v)
+{
+    auto seq = make_shared<ASDF::sequence>();
+    for (double x : v)
+        seq->push_back(make_shared<ASDF::float_entry>(x));
+    return seq;
+}
+
+
+static shared_ptr<ASDF::sequence> _make_float_seq(const std::array<double, 3> &v)
+{
+    auto seq = make_shared<ASDF::sequence>();
+    for (double x : v)
+        seq->push_back(make_shared<ASDF::float_entry>(x));
+    return seq;
+}
+
+
+static long _read_int(const shared_ptr<ASDF::group> &grp, const string &key)
+{
+    auto e = grp->at(key);
+    auto v = e->get_maybe_int();
+    if (!v.has_value())
+        throw runtime_error("AssembledFrame::from_asdf(): expected int entry for '" + key + "'");
+    return long(v.value());
+}
+
+
+static double _read_float(const shared_ptr<ASDF::group> &grp, const string &key)
+{
+    auto e = grp->at(key);
+    auto v = e->get_maybe_float();
+    if (!v.has_value())
+        throw runtime_error("AssembledFrame::from_asdf(): expected float entry for '" + key + "'");
+    return v.value();
+}
+
+
+static vector<long> _read_int_vec(const shared_ptr<ASDF::group> &grp, const string &key)
+{
+    auto e = grp->at(key);
+    auto seq = e->get_maybe_sequence();
+    if (!seq)
+        throw runtime_error("AssembledFrame::from_asdf(): expected sequence for '" + key + "'");
+    vector<long> ret;
+    ret.reserve(seq->size());
+    for (const auto &elt : *seq) {
+        auto v = elt->get_maybe_int();
+        if (!v.has_value())
+            throw runtime_error("AssembledFrame::from_asdf(): non-int element in sequence '" + key + "'");
+        ret.push_back(long(v.value()));
+    }
+    return ret;
+}
+
+
+static vector<double> _read_float_vec(const shared_ptr<ASDF::group> &grp, const string &key)
+{
+    auto e = grp->at(key);
+    auto seq = e->get_maybe_sequence();
+    if (!seq)
+        throw runtime_error("AssembledFrame::from_asdf(): expected sequence for '" + key + "'");
+    vector<double> ret;
+    ret.reserve(seq->size());
+    for (const auto &elt : *seq) {
+        auto v = elt->get_maybe_float();
+        if (!v.has_value())
+            throw runtime_error("AssembledFrame::from_asdf(): non-float element in sequence '" + key + "'");
+        ret.push_back(v.value());
+    }
+    return ret;
+}
+
+
+static std::array<double, 3> _read_float_arr3(const shared_ptr<ASDF::group> &grp, const string &key)
+{
+    vector<double> v = _read_float_vec(grp, key);
+    if (v.size() != 3) {
+        stringstream ss;
+        ss << "AssembledFrame::from_asdf(): expected length-3 sequence for '" << key
+           << "', got length " << v.size();
+        throw runtime_error(ss.str());
+    }
+    return { v[0], v[1], v[2] };
+}
+
+
+// Build the "xengine_metadata" sub-group for an outgoing ASDF file.
+// Skips freq_channels, beam_ids, beam_positions_{x,y} -- those are handled
+// per-frame at the top level by AssembledFrame::write_asdf.
+static shared_ptr<ASDF::group> _metadata_to_asdf_group(const XEngineMetadata &m)
+{
+    auto g = make_shared<ASDF::group>();
+
+    g->emplace("version", make_shared<ASDF::int_entry>(int64_t(m.version)));
+    g->emplace("zone_nfreq", _make_int_seq(m.zone_nfreq));
+    g->emplace("zone_freq_edges", _make_float_seq(m.zone_freq_edges));
+    g->emplace("beamset", make_shared<ASDF::int_entry>(int64_t(m.beamset)));
+
+    g->emplace("unix_ns_at_seq_0", make_shared<ASDF::int_entry>(int64_t(m.unix_ns_at_seq_0)));
+    g->emplace("dt_ns_per_seq", make_shared<ASDF::int_entry>(int64_t(m.dt_ns_per_seq)));
+    g->emplace("seq_per_frb_time_sample", make_shared<ASDF::int_entry>(int64_t(m.seq_per_frb_time_sample)));
+
+    g->emplace("tel_origin_itrs_lat_deg", make_shared<ASDF::float_entry>(m.tel_origin_itrs_lat_deg));
+    g->emplace("tel_origin_itrs_lon_deg", make_shared<ASDF::float_entry>(m.tel_origin_itrs_lon_deg));
+    g->emplace("tel_grid_x_axis", _make_float_seq(m.tel_grid_x_axis));
+    g->emplace("tel_grid_y_axis", _make_float_seq(m.tel_grid_y_axis));
+    g->emplace("tel_dish_elev_axis", _make_float_seq(m.tel_dish_elev_axis));
+    g->emplace("tel_dish_vert_axis", _make_float_seq(m.tel_dish_vert_axis));
+    g->emplace("tel_dish_coelev_deg", make_shared<ASDF::float_entry>(m.tel_dish_coelev_deg));
+    g->emplace("tel_dish_separation_x_m", make_shared<ASDF::float_entry>(m.tel_dish_separation_x_m));
+    g->emplace("tel_dish_separation_y_m", make_shared<ASDF::float_entry>(m.tel_dish_separation_y_m));
+
+    g->emplace("noise_variance", _make_float_seq(m.noise_variance));
+
+    return g;
+}
+
+
+// Inverse of _metadata_to_asdf_group(). Reads the ~17 round-trip-stable
+// fields back from the sub-group. Does NOT populate freq_channels / beam_ids
+// / beam_positions_{x,y} (those are reconstructed from per-frame data by
+// AssembledFrame::from_asdf), and does NOT call validate() (the returned
+// object is intentionally incomplete).
+static XEngineMetadata _metadata_from_asdf_group(const shared_ptr<ASDF::group> &g)
+{
+    XEngineMetadata m;
+    m.version = _read_int(g, "version");
+    m.zone_nfreq = _read_int_vec(g, "zone_nfreq");
+    m.zone_freq_edges = _read_float_vec(g, "zone_freq_edges");
+    m.beamset = _read_int(g, "beamset");
+    // freq_channels / beam_ids / beam_positions_{x,y} reconstructed by caller
+
+    m.unix_ns_at_seq_0 = _read_int(g, "unix_ns_at_seq_0");
+    m.dt_ns_per_seq = _read_int(g, "dt_ns_per_seq");
+    m.seq_per_frb_time_sample = _read_int(g, "seq_per_frb_time_sample");
+
+    m.tel_origin_itrs_lat_deg = _read_float(g, "tel_origin_itrs_lat_deg");
+    m.tel_origin_itrs_lon_deg = _read_float(g, "tel_origin_itrs_lon_deg");
+    m.tel_grid_x_axis    = _read_float_arr3(g, "tel_grid_x_axis");
+    m.tel_grid_y_axis    = _read_float_arr3(g, "tel_grid_y_axis");
+    m.tel_dish_elev_axis = _read_float_arr3(g, "tel_dish_elev_axis");
+    m.tel_dish_vert_axis = _read_float_arr3(g, "tel_dish_vert_axis");
+    m.tel_dish_coelev_deg = _read_float(g, "tel_dish_coelev_deg");
+    m.tel_dish_separation_x_m = _read_float(g, "tel_dish_separation_x_m");
+    m.tel_dish_separation_y_m = _read_float(g, "tel_dish_separation_y_m");
+
+    m.noise_variance = _read_float_vec(g, "noise_variance");
+    return m;
+}
+
+
 void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
 {
     xassert(nfreq > 0);
     xassert(ntime > 0);
     xassert((ntime % 2) == 0);
+
+    if (!metadata)
+        throw runtime_error("AssembledFrame::write_asdf(): metadata is null");
 
     // Acquire lock and copy data to local variable, to avoid racing against reaper thread.
     // Copying the Array also copies the shared_ptr in 'base', keeping the memory alive.
@@ -59,22 +230,48 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
     xassert(local_data.shape[1] == ntime);
     xassert(local_data.is_fully_contiguous());
 
+    // Look up beam_position_{x,y} for this frame's beam in the metadata.
+    // beam_ids / beam_positions_* are NOT written to ASDF (they would be
+    // redundant for a single-frame file); instead we emit per-frame scalars.
+    long beam_idx = -1;
+    for (size_t i = 0; i < metadata->beam_ids.size(); i++) {
+        if (metadata->beam_ids[i] == beam_id) {
+            beam_idx = long(i);
+            break;
+        }
+    }
+    if (beam_idx < 0) {
+        stringstream ss;
+        ss << "AssembledFrame::write_asdf(): frame->beam_id=" << beam_id
+           << " not found in metadata->beam_ids";
+        throw runtime_error(ss.str());
+    }
+    xassert(long(metadata->beam_positions_x.size()) > beam_idx);
+    xassert(long(metadata->beam_positions_y.size()) > beam_idx);
+    double bx = metadata->beam_positions_x[beam_idx];
+    double by = metadata->beam_positions_y[beam_idx];
+
     // Create ASDF group with metadata and array.
     auto grp = make_shared<ASDF::group>();
-    
-    // Add scalar metadata.
+
+    // Add scalar per-frame metadata.
     grp->emplace("nfreq", make_shared<ASDF::int_entry>(int64_t(nfreq)));
     grp->emplace("ntime", make_shared<ASDF::int_entry>(int64_t(ntime)));
     grp->emplace("beam_id", make_shared<ASDF::int_entry>(int64_t(beam_id)));
     grp->emplace("time_chunk_index", make_shared<ASDF::int_entry>(int64_t(time_chunk_index)));
-    
+    grp->emplace("beam_position_x", make_shared<ASDF::float_entry>(bx));
+    grp->emplace("beam_position_y", make_shared<ASDF::float_entry>(by));
+
+    // Add the XEngineMetadata sub-group (everything else).
+    grp->emplace("xengine_metadata", _metadata_to_asdf_group(*metadata));
+
     // Create ndarray for data.
     // int4 dtype (4 bits per element) is stored as uint8 with shape (nfreq, ntime/2).
     // Use ptr_block_t to avoid copying data.
     long nbytes = nfreq * (ntime / 2);
     auto block = make_shared<ASDF::ptr_block_t>(local_data.data, nbytes);
     auto mblock = ASDF::make_constant_memoized(shared_ptr<ASDF::block_t>(block));
-    
+
     auto arr = make_shared<ASDF::ndarray>(
         mblock,
         std::optional<ASDF::block_info_t>(),
@@ -87,7 +284,7 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
         vector<int64_t>{nfreq, ntime/2}
     );
     grp->emplace("data", arr);
-    
+
     // Write to file.
     auto project = make_shared<ASDF::asdf>(map<string, string>(), grp);
     project->write(filename);
@@ -112,60 +309,70 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
     ASDF::asdf project(filename);
     auto grp = project.get_group();
     xassert(grp != nullptr);
-    
-    // Read scalar metadata.
-    auto nfreq_entry = grp->at("nfreq");
-    auto ntime_entry = grp->at("ntime");
-    auto beam_id_entry = grp->at("beam_id");
-    auto time_chunk_index_entry = grp->at("time_chunk_index");
-    
-    auto nfreq_opt = nfreq_entry->get_maybe_int();
-    auto ntime_opt = ntime_entry->get_maybe_int();
-    auto beam_id_opt = beam_id_entry->get_maybe_int();
-    auto time_chunk_index_opt = time_chunk_index_entry->get_maybe_int();
-    
-    xassert(nfreq_opt.has_value());
-    xassert(ntime_opt.has_value());
-    xassert(beam_id_opt.has_value());
-    xassert(time_chunk_index_opt.has_value());
-    
-    long nfreq = nfreq_opt.value();
-    long ntime = ntime_opt.value();
-    long beam_id = beam_id_opt.value();
-    long time_chunk_index = time_chunk_index_opt.value();
-    
+
+    // Read per-frame scalars.
+    long nfreq = _read_int(grp, "nfreq");
+    long ntime = _read_int(grp, "ntime");
+    long beam_id = _read_int(grp, "beam_id");
+    long time_chunk_index = _read_int(grp, "time_chunk_index");
+    double beam_position_x = _read_float(grp, "beam_position_x");
+    double beam_position_y = _read_float(grp, "beam_position_y");
+
     xassert(nfreq > 0);
     xassert(ntime > 0);
     xassert((ntime % 2) == 0);
-    
+
+    // Read xengine_metadata sub-group and reconstruct the projected fields.
+    auto md_entry = grp->at("xengine_metadata");
+    auto md_grp_inner = md_entry->get_maybe_group();
+    if (!md_grp_inner)
+        throw runtime_error("AssembledFrame::from_asdf(): 'xengine_metadata' is not a group");
+    // get_maybe_group returns a shared_ptr<map>; we need a shared_ptr<group>.
+    // Easiest: dynamic_pointer_cast on the entry.
+    auto md_grp = std::dynamic_pointer_cast<ASDF::group>(md_entry);
+    if (!md_grp)
+        throw runtime_error("AssembledFrame::from_asdf(): 'xengine_metadata' is not a group entry");
+
+    XEngineMetadata md = _metadata_from_asdf_group(md_grp);
+
+    // Per-frame projection: rebuild the four special members from frame data.
+    // (An ASDF file describes one (beam, time-chunk), so these are length-1 / empty.)
+    md.freq_channels.clear();
+    md.beam_ids = { beam_id };
+    md.beam_positions_x = { beam_position_x };
+    md.beam_positions_y = { beam_position_y };
+
+    md.validate();
+
     // Read data array.
     auto data_entry = grp->at("data");
     auto arr = data_entry->get_maybe_ndarray();
     xassert(arr != nullptr);
-    
+
     // Verify shape: uint8 with shape (nfreq, ntime/2).
     auto shape = arr->get_shape();
     xassert(shape.size() == 2);
     xassert(shape[0] == nfreq);
     xassert(shape[1] == ntime/2);
-    
+
     // Get data pointer.
     auto mdata = arr->get_data();
     const void *src_ptr = mdata->ptr();
     size_t nbytes = mdata->nbytes();
     xassert(nbytes == (size_t)(nfreq * (ntime / 2)));
-    
+
     // Allocate AssembledFrame with host memory.
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = ntime;
     frame->beam_id = beam_id;
     frame->time_chunk_index = time_chunk_index;
+    frame->metadata = make_shared<XEngineMetadata>(std::move(md));
     frame->data = Array<void>(Dtype(df_int, 4), {nfreq, ntime}, af_rhost);
-    
+
     // Copy data from ASDF file.
     memcpy(frame->data.data, src_ptr, nbytes);
-    
+
     return frame;
 }
 
@@ -176,96 +383,49 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 
 
 // Static member function.
-shared_ptr<AssembledFrame> AssembledFrame::make_random(long nfreq, long ntime, long beam_id, long time_chunk_index)
+shared_ptr<AssembledFrame> AssembledFrame::make_random(
+    const shared_ptr<const XEngineMetadata> &xmd,
+    long ntime, long beam_id, long time_chunk_index)
 {
+    if (!xmd)
+        throw runtime_error("AssembledFrame::make_random(): xmd is null");
+
+    // Check that beam_id appears in xmd->beam_ids.
+    bool found = false;
+    for (long b : xmd->beam_ids) {
+        if (b == beam_id) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        stringstream ss;
+        ss << "AssembledFrame::make_random(): beam_id=" << beam_id
+           << " is not in xmd->beam_ids";
+        throw runtime_error(ss.str());
+    }
+
+    long nfreq = xmd->get_total_nfreq();
     xassert(nfreq > 0);
     xassert(ntime > 0);
     xassert((ntime % 2) == 0);
-    
+
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = ntime;
     frame->beam_id = beam_id;
     frame->time_chunk_index = time_chunk_index;
+    frame->metadata = xmd;
     frame->data = Array<void>(Dtype(df_int, 4), {nfreq, ntime}, af_rhost);
-    
+
     // Fill data with random bytes.
     // (int4 dtype packs 2 elements per byte, so nbytes = nfreq * ntime / 2)
     long nbytes = nfreq * (ntime / 2);
     char *p = static_cast<char *>(frame->data.data);
     for (long i = 0; i < nbytes; i++)
         p[i] = (char) rand_int(0, 256);
-    
+
     return frame;
-}
-
-
-// Static member function.
-shared_ptr<AssembledFrame> AssembledFrame::make_random()
-{
-    // Random parameters (ntime must be even).
-    long nfreq = rand_int(10, 200);
-    long ntime = 2 * rand_int(10, 200);
-    long beam_id = rand_int(0, 1000);
-    long time_chunk_index = rand_int(0, 1000);
-    
-    return make_random(nfreq, ntime, beam_id, time_chunk_index);
-}
-
-
-// Static member function.
-void AssembledFrame::test_asdf()
-{
-    cout << "AssembledFrame::test_asdf()..." << endl;
-    
-    auto frame1 = AssembledFrame::make_random();
-    long nfreq = frame1->nfreq;
-    long ntime = frame1->ntime;
-    long nbytes = nfreq * (ntime / 2);
-    
-    cout << "  nfreq=" << nfreq << ", ntime=" << ntime
-         << ", beam_id=" << frame1->beam_id << ", time_chunk_index=" << frame1->time_chunk_index << endl;
-    
-    // Generate random filename in /dev/shm.
-    string filename = "/dev/shm/test_assembled_frame_" + make_random_hex_string(8) + ".asdf";
-    cout << "  filename=" << filename << endl;
-    
-    // RemoveGuard ensures temp file gets cleaned up (no commit()).
-    RemoveGuard guard(filename, /*exist_ok=*/ true);
-    
-    // Write to ASDF file.
-    frame1->write_asdf(filename);
-    
-    // Read back from ASDF file.
-    auto frame2 = AssembledFrame::from_asdf(filename);
-    
-    // Verify metadata matches.
-    xassert_eq(frame2->nfreq, nfreq);
-    xassert_eq(frame2->ntime, ntime);
-    xassert_eq(frame2->beam_id, frame1->beam_id);
-    xassert_eq(frame2->time_chunk_index, frame1->time_chunk_index);
-    
-    // Verify data matches.
-    xassert(frame2->data.data != nullptr);
-    xassert_eq(frame2->data.ndim, 2);
-    xassert_eq(frame2->data.shape[0], nfreq);
-    xassert_eq(frame2->data.shape[1], ntime);
-    xassert(frame2->data.is_fully_contiguous());
-    
-    const char *p1 = static_cast<const char *>(frame1->data.data);
-    const char *p2 = static_cast<const char *>(frame2->data.data);
-    
-    for (long i = 0; i < nbytes; i++) {
-        if (p1[i] != p2[i]) {
-            stringstream ss;
-            ss << "AssembledFrame::test_asdf(): data mismatch at byte " << i
-               << ": expected " << (int)(unsigned char)p1[i]
-               << ", got " << (int)(unsigned char)p2[i];
-            throw runtime_error(ss.str());
-        }
-    }
-    
-    cout << "AssembledFrame::test_asdf() passed!" << endl;
 }
 
 
@@ -405,6 +565,7 @@ void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = time_samples_per_chunk;
+    frame->metadata = metadata;  // shared, immutable; non-null after initialize()
     
     // Initialize ksgpu::Array<void> manually.
     frame->data.data = slab.get();
@@ -442,15 +603,15 @@ void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
 // initialize() - Entry point
 
 
-void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const vector<long> &beam_ids_)
+void AssembledFrameAllocator::initialize(const XEngineMetadata &metadata_, long time_samples_per_chunk_, int consumer_id)
 {
     {
         unique_lock<mutex> guard(lock);
         _throw_if_stopped("AssembledFrameAllocator::initialize");
     }
-    
+
     try {
-        _initialize(consumer_id, nfreq_, time_samples_per_chunk_, beam_ids_);
+        _initialize(metadata_, time_samples_per_chunk_, consumer_id);
     } catch (...) {
         this->stop(current_exception());
         throw;
@@ -458,37 +619,42 @@ void AssembledFrameAllocator::initialize(int consumer_id, long nfreq_, long time
 }
 
 
-void AssembledFrameAllocator::_initialize(int consumer_id, long nfreq_, long time_samples_per_chunk_, const vector<long> &beam_ids_)
+void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_, long time_samples_per_chunk_, int consumer_id)
 {
     xassert_ge(consumer_id, 0);
     xassert_lt(consumer_id, num_consumers);
-    xassert_gt(nfreq_, 0L);
     xassert_gt(time_samples_per_chunk_, 0L);
-    xassert(!beam_ids_.empty());
-    
+
+    // Validate the supplied metadata up-front. validate() catches any internal
+    // inconsistency before we let the metadata propagate into per-frame state.
+    metadata_.validate();
+
     unique_lock<mutex> guard(lock);
-    
+
     // Check for double initialization
     if (is_initialized[consumer_id]) {
         stringstream ss;
         ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id << " already initialized";
         throw runtime_error(ss.str());
     }
-    
+
     if (num_initialized == 0) {
-        // First consumer: establish parameters
-        nfreq = nfreq_;
+        // First consumer: establish parameters. Make a private shared_ptr copy
+        // of the metadata so the allocator (and all frames it creates) keeps it
+        // alive independently of any caller-owned object.
+        auto md = std::make_shared<XEngineMetadata>(metadata_);
+        nfreq = md->get_total_nfreq();
         time_samples_per_chunk = time_samples_per_chunk_;
-        beam_ids = beam_ids_;
+        beam_ids = md->beam_ids;
+        metadata = md;
     }
     else {
-        // Subsequent consumers: validate parameters match
-        if (nfreq_ != nfreq) {
-            stringstream ss;
-            ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
-               << " has nfreq=" << nfreq_ << ", expected " << nfreq;
-            throw runtime_error(ss.str());
-        }
+        // Subsequent consumers: validate against the stored metadata. We compare
+        // the X-engine metadata via check_sender_consistency, and check
+        // time_samples_per_chunk separately (it's not part of XEngineMetadata).
+        xassert(metadata);  // non-null invariant after first consumer
+        XEngineMetadata::check_sender_consistency(*metadata, metadata_);
+
         if (time_samples_per_chunk_ != time_samples_per_chunk) {
             stringstream ss;
             ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
@@ -496,17 +662,11 @@ void AssembledFrameAllocator::_initialize(int consumer_id, long nfreq_, long tim
                << ", expected " << time_samples_per_chunk;
             throw runtime_error(ss.str());
         }
-        if (beam_ids_ != beam_ids) {
-            stringstream ss;
-            ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
-               << " has mismatched beam_ids";
-            throw runtime_error(ss.str());
-        }
     }
-    
+
     is_initialized[consumer_id] = true;
     num_initialized++;
-    
+
     // Notify worker thread that initialization is complete.
     cv.notify_all();
 }

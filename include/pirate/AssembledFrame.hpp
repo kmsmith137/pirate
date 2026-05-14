@@ -2,6 +2,7 @@
 #define _PIRATE_ASSEMBLED_FRAME_HPP
 
 #include "SlabAllocator.hpp"
+#include "XEngineMetadata.hpp"
 
 #include <ksgpu/Array.hpp>
 
@@ -29,6 +30,19 @@ struct AssembledFrame
     long beam_id = 0;
     long time_chunk_index = 0;   // 0, 1, 2, ...
     // time_chunk_index will be replaced by an FPGA count in the future (?)
+
+    // Shared X-engine metadata for this frame. Set at frame creation by
+    // AssembledFrameAllocator::_create_frame (or by AssembledFrame::make_random
+    // / AssembledFrame::from_asdf for non-allocator code paths). Treated as
+    // immutable after creation -- all frames from one allocator share a single
+    // XEngineMetadata instance via this shared_ptr. INVARIANT: non-null on
+    // every constructed AssembledFrame.
+    //
+    // Note: XEngineMetadata round-trips bit-exactly through YAML, but is
+    // projected through ASDF (see XEngineMetadata.hpp for details). After a
+    // from_asdf() the metadata's beam_ids / beam_positions_x / beam_positions_y
+    // are length-1 (just this frame's beam), and freq_channels is empty.
+    std::shared_ptr<const XEngineMetadata> metadata;
 
     // dtype int4, shape (nfreq, ntime).
     // Newly allocated frames have all 'data' elements set to (-8).
@@ -80,17 +94,18 @@ struct AssembledFrame
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);    // Call without lock held.
 
     // --------------------  private/internal  --------------------
-    
+
     // Call with lock held!
     // Called by reaper thread, or ssd writer thread.
     void _reap_locked();
 
     // Create a random AssembledFrame (for testing). Note: ntime must be even.
-    static std::shared_ptr<AssembledFrame> make_random(long nfreq, long ntime, long beam_id, long time_chunk_index);
-    static std::shared_ptr<AssembledFrame> make_random();  // randomizes all parameters
-    
-    // Unit test for ASDF I/O.
-    static void test_asdf();
+    // Throws if 'xmd' is null. Throws if 'beam_id' is not in 'xmd->beam_ids'.
+    // The returned frame's metadata is set to 'xmd' (shared, no copy);
+    // data is filled with random bytes. nfreq is taken from xmd->get_total_nfreq().
+    static std::shared_ptr<AssembledFrame>
+    make_random(const std::shared_ptr<const XEngineMetadata> &xmd,
+                long ntime, long beam_id, long time_chunk_index);
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.
@@ -146,16 +161,24 @@ struct AssembledFrameAllocator
     long time_samples_per_chunk = 0;
     std::vector<long> beam_ids;
 
-    // Each consumer calls initalize() once, to establish the number of frequency channels,
-    // number of time samples per chunk, and a list of beam IDs. If any of this data mismatches
-    // between two consumers, an exception is thrown. In particular, each consumer must process
-    // the same beam_ids in the same order.
+    // Shared X-engine metadata for this allocator. Set on the first call to
+    // initialize() (by the first consumer); subsequent consumers must provide
+    // a metadata that passes XEngineMetadata::check_sender_consistency against
+    // this one. Propagated by _create_frame() into every AssembledFrame via
+    // AssembledFrame::metadata.
+    std::shared_ptr<const XEngineMetadata> metadata;
+
+    // Each consumer calls initalize() once, providing an XEngineMetadata and a
+    // time_samples_per_chunk. The metadata is validated, and (for consumers
+    // after the first) must pass XEngineMetadata::check_sender_consistency
+    // against the metadata from the first consumer. time_samples_per_chunk
+    // must match across consumers.
     //
     // Consumers run in different threads, so everything needs to be thread-safe.
     //
     // Entry point: throws if stopped, calls stop() on exception.
 
-    void initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<long> &beam_ids);
+    void initialize(const XEngineMetadata &metadata, long time_samples_per_chunk, int consumer_id);
 
     // Each consumer calls get_frame() in a loop.
     // Frames are returned in the following ordering:
@@ -248,7 +271,7 @@ private:
     void worker_main();
     
     // Internal implementations of entry points.
-    void _initialize(int consumer_id, long nfreq, long time_samples_per_chunk, const std::vector<long> &beam_ids);
+    void _initialize(const XEngineMetadata &metadata, long time_samples_per_chunk, int consumer_id);
     std::shared_ptr<AssembledFrame> _get_frame(int consumer_id);
     void _block_until_low_memory(long nframe_threshold);
 };

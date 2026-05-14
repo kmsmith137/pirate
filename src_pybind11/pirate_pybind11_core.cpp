@@ -110,6 +110,13 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("ntime", &AssembledFrame::ntime)
         .def_readonly("beam_id", &AssembledFrame::beam_id)
         .def_readonly("time_chunk_index", &AssembledFrame::time_chunk_index)
+        .def_property_readonly("metadata",
+            [](const AssembledFrame &self) {
+                return std::const_pointer_cast<XEngineMetadata>(self.metadata);
+            },
+            "Shared XEngineMetadata for this frame. Read-only by convention --\n"
+            "do not mutate the returned object, since it is shared with all\n"
+            "sibling frames from the same allocator.")
         .def_property_readonly("data",
             [](const AssembledFrame &self) {
                 // Convert int4 array (nfreq, ntime) to uint8 array (nfreq, ntime/2).
@@ -129,10 +136,22 @@ void register_core_bindings(pybind11::module &m)
             },
             "Data as uint8 array with shape (nfreq, ntime/2).\n\n"
             "The underlying data is int4 (nfreq, ntime), packed as uint8.")
-        .def_static("test_asdf", &AssembledFrame::test_asdf,
-            "Unit test for ASDF file I/O.\n\n"
-            "Creates a random AssembledFrame, writes to temp file, reads back,\n"
-            "and verifies the data matches.")
+        .def("write_asdf", &AssembledFrame::write_asdf,
+            py::arg("filename"), py::arg("sync") = true,
+            "Write this AssembledFrame to an ASDF file.\n\n"
+            "If sync=True (default), fsync() the file after writing to avoid\n"
+            "runaway page cache usage.")
+        .def_static("make_random", &AssembledFrame::make_random,
+            py::arg("xmd"), py::arg("ntime"), py::arg("beam_id"), py::arg("time_chunk_index"),
+            "Create a random AssembledFrame backed by the given XEngineMetadata.\n\n"
+            "Throws if xmd is None or if beam_id is not in xmd.beam_ids.\n"
+            "Data is filled with random bytes. nfreq is taken from xmd.get_total_nfreq().")
+        .def_static("from_asdf", &AssembledFrame::from_asdf,
+            py::arg("filename"),
+            "Read an AssembledFrame back from an ASDF file.\n\n"
+            "Note: XEngineMetadata is projected through ASDF -- after reading, the\n"
+            "metadata's beam_ids / beam_positions_{x,y} are length-1 (just this\n"
+            "frame's beam) and freq_channels is empty. See XEngineMetadata.hpp.")
     ;
 
     // AssembledFrameAllocator: allocates AssembledFrames for multiple consumers.
@@ -146,11 +165,19 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("nfreq", &AssembledFrameAllocator::nfreq)
         .def_readonly("time_samples_per_chunk", &AssembledFrameAllocator::time_samples_per_chunk)
         .def_readonly("beam_ids", &AssembledFrameAllocator::beam_ids)
+        .def_property_readonly("metadata",
+            [](const AssembledFrameAllocator &self) {
+                return std::const_pointer_cast<XEngineMetadata>(self.metadata);
+            },
+            "Shared XEngineMetadata, set on first initialize(). None before any\n"
+            "consumer has initialized. Read-only by convention.")
         .def("initialize", &AssembledFrameAllocator::initialize,
-            py::arg("consumer_id"), py::arg("nfreq"),
-            py::arg("time_samples_per_chunk"), py::arg("beam_ids"),
+            py::arg("metadata"), py::arg("time_samples_per_chunk"), py::arg("consumer_id"),
             "Initialize a consumer. Must be called once per consumer before get_frame().\n\n"
-            "All consumers must provide the same nfreq, time_samples_per_chunk, and beam_ids.")
+            "The first consumer's metadata is stored on the allocator and propagated\n"
+            "to every frame. Subsequent consumers must provide a metadata that\n"
+            "matches via XEngineMetadata.check_sender_consistency, and the same\n"
+            "time_samples_per_chunk.")
         .def("get_frame", &AssembledFrameAllocator::get_frame,
             py::arg("consumer_id"),
             "Get the next frame for this consumer.\n\n"
@@ -407,11 +434,14 @@ void register_core_bindings(pybind11::module &m)
 
     // XEngineMetadata: documents file format for communication between X-engine and FRB nodes.
     // Skipped methods: to_yaml() [YAML::Emitter arg], from_yaml() [YamlFile arg]
-    py::class_<XEngineMetadata>(m, "XEngineMetadata",
+    py::class_<XEngineMetadata, std::shared_ptr<XEngineMetadata>>(m, "XEngineMetadata",
         "Metadata for X-engine to FRB node communication.\n\n"
         "Used in two contexts:\n"
         "  1. Sent by X-engine nodes to FRB nodes at start of TCP stream\n"
-        "  2. Configuration for the fake correlator in testing")
+        "  2. Configuration for the fake correlator in testing\n\n"
+        "Note: YAML is the full-fidelity serialization. ASDF (via\n"
+        "AssembledFrame.write_asdf) drops/projects 4 members per-frame --\n"
+        "see the C++ header for details.")
           .def(py::init<>())
           .def_readwrite("version", &XEngineMetadata::version,
                "Version number of the metadata format")
@@ -472,6 +502,17 @@ void register_core_bindings(pybind11::module &m)
           .def_static("from_yaml_file", &XEngineMetadata::from_yaml_file,
                py::arg("filename"),
                "Parse XEngineMetadata from a YAML file")
+          .def_static("make_test_instance", &XEngineMetadata::make_test_instance,
+               py::arg("zone_nfreq"), py::arg("zone_freq_edges"), py::arg("beam_ids"),
+               "Return a fully-valid XEngineMetadata with placeholder telescope and\n"
+               "timekeeping values. noise_variance defaults to {1.0, ...} of length\n"
+               "nzones, beamset defaults to 0, and beam_positions_{x,y} are arranged\n"
+               "on a deterministic 2D grid spanning [-0.1, +0.1]. Caller may further\n"
+               "patch fields before calling validate().")
+          .def_static("make_random", &XEngineMetadata::make_random,
+               "Return a fully-valid XEngineMetadata with all fields randomized\n"
+               "within validity bounds (small scale: 1-4 zones, 1-8 beams, etc.).\n"
+               "Used for fuzz-style coverage of code paths that consume metadata.")
     ;
 
     // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a receiver.
