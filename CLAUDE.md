@@ -23,6 +23,21 @@
 - Please write comments to explain big-picture functionality or non-obvious issues, but avoid superficial comments. 
 - Please ask me questions in the chat if my instructions are incomplete or unclear.
 
+### Markdown style
+
+- Use ASCII characters only in markdown files (plans, docs). No Unicode
+  arrows (->), math symbols (<=, perpendicular, x, *, ~=), em dashes (--),
+  or superscripts (^2). Use ASCII equivalents: `->` for arrows, `<=`/`>=`
+  for inequalities, `x` or `*` for multiplication, `^2` for superscripts,
+  `--` for em dashes, words like "orthogonal to" instead of symbols.
+  Reason: some Chrome markdown viewers use fonts without glyphs for these
+  characters and render them as boxes.
+  
+- Exception: when a plan or doc contains equations, MathJax / LaTeX-style
+  math is fine (e.g. `$x^2 + y^2 < 1$` or `$$ ... $$`). The MathJax
+  renderer handles its own glyph coverage. Please use MathJax freely,
+  in markdown plans that contain equations.
+
 ### Misc
 
   - Put all plans in plans/*.md, and don't add them to git.
