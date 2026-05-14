@@ -29,7 +29,6 @@ struct AssembledFrame
     long ntime = 0;
     long beam_id = 0;
     long time_chunk_index = 0;   // 0, 1, 2, ...
-    // time_chunk_index will be replaced by an FPGA count in the future (?)
 
     // Shared X-engine metadata for this frame. Set at frame creation by
     // AssembledFrameAllocator::_create_frame (or by AssembledFrame::make_random

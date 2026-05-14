@@ -15,7 +15,9 @@ The network protocol for each of these connections is as follows:
 
 - The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.
 
-- A zero-terminated ascii string follows, containing metadata in the format defined by [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml). There is a C++ class `XEngineMetadata` for parsing this string.
+- A zero-terminated ascii string follows, containing metadata in the format defined by
+  [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml).
+  There is a C++ class `XEngineMetadata` for parsing this string.
 
   Note that the metadata includes `freq_channels` and `nbeams`. Here, `nbeams` is the (receiver-dependent) number of 
   beams sent to the FRB search node, and `nfreq = len(freq_channels)` is the (sender-dependent) number of frequency 
@@ -24,10 +26,21 @@ The network protocol for each of these connections is as follows:
 - Next a sequence of "minichunks" is sent. Each minichunk represents 256 time samples of intensity data.
   It consists of the following data, sent "back-to-back" with no padding or alignment:
 
-    - A `uint64` FPGA sequence number (seq) corresponding to the beginning of the minichunk,.
-
-    - An `(nbeams, nfreq, 2)` float16 array, where the length-2 axis is `{scales,offsets}`.
+    - A `uint32` containing `0xf4bf4b02` where the `02` is the protocol version number.
+    
+    - A `uint64` FPGA sequence number (seq) corresponding to the beginning of the minichunk.
     
     - An `(nbeams, nfreq, 256)` int4 array, containing intensity data.
       The value (-8) indicates "this sample is masked". 
       We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
+
+  NOTE 1: in normal operation, the server will send consecutive minichunks. In this case, 
+  sequence numbers are separated by (256 * xengine_metadata.seq_per_frb_time_sample).
+  However, the sender may choose to skip minichunks, by appropriately setting sequence numbers.
+  In this case, the server should treat the skipped data as masked.
+
+  NOTE 2: the first sequence number sent by the server need not be 0, but much be a multiple
+  of (256 * xengine_metadata.seq_per_frb_time_sample), where 256 is the number of time samples
+  per minichunk.
+
+  
