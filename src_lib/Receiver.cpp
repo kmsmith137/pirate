@@ -22,6 +22,19 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
+// Protocol constants (v2). See notes/network_protocol.md.
+//
+// magic_v2 is used twice: as the 4-byte handshake magic at the start of each
+// TCP connection (read by _read_ini), and as the per-minichunk magic at the
+// start of every minichunk's 12-byte header (read by _process_data).
+
+
+static constexpr uint32_t magic_v2 = 0xf4bf4b02;
+static constexpr long minichunk_header_nbytes = 12;   // uint32 magic + uint64 seq
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // Receiver::Peer
 
 
@@ -411,12 +424,11 @@ void Receiver::_read_ini(const shared_ptr<Peer> &peer)
 
     // Read 4-byte little-endian magic number.
     uint32_t magic = *((uint32_t *) peer->ini_buf);
-    static constexpr uint32_t magic_v1 = 0xf4bf4b01;
-    
-    if (magic != magic_v1) {
+
+    if (magic != magic_v2) {
         stringstream ss;
-        ss << "Receiver::Peer: invalid magic number 0x" << hex << magic
-            << " (expected 0x" << magic_v1 << ")";
+        ss << "Receiver::Peer: invalid handshake magic 0x" << hex << magic
+            << " (expected 0x" << magic_v2 << ")";
         throw runtime_error(ss.str());
     }
 
@@ -466,7 +478,9 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     xassert(nfreq > 0);
     xassert(nbeams > 0);
 
-    peer->bytes_per_minichunk = nbeams * nfreq * 128;
+    // v2: each minichunk is prefixed with a 12-byte header
+    // (uint32 magic + uint64 seq), then (nbeams, nfreq, 256) int4 = 128*nbeams*nfreq bytes.
+    peer->bytes_per_minichunk = minichunk_header_nbytes + nbeams * nfreq * 128;
     peer->minichunks_per_chunk = xdiv(params.time_samples_per_chunk, 256);
 
     // Receive buffer size is either 64KB or two minichunks, whichever is larger.
@@ -667,6 +681,33 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
 
         long imc = rb_start / bmc;
         xassert(rb_start == imc * bmc);
+
+        // v2 per-minichunk header (12 bytes): uint32 magic + uint64 seq.
+        // After the header is parsed and validated, advance `src` past it
+        // so the data-copy loop below sees only the (nbeams, nfreq, 256)
+        // int4 payload (pirate is little-endian -- no byteswap needed).
+        uint32_t mc_magic;
+        uint64_t mc_seq;
+        memcpy(&mc_magic, src,     4);
+        memcpy(&mc_seq,   src + 4, 8);
+
+        if (mc_magic != magic_v2) {
+            stringstream ss;
+            ss << "Receiver::Peer: bad per-minichunk magic 0x" << hex << mc_magic
+               << " at minichunk index " << dec << imc
+               << " (expected 0x" << hex << magic_v2 << ")";
+            throw runtime_error(ss.str());
+        }
+
+        // For this milestone we require seq=0 at start and strict
+        // consecutive minichunks (see plans/network_protocol_v2_minimal.md).
+        // NOTE 1 (skipped minichunks) and NOTE 2 (non-zero initial seq) from
+        // notes/network_protocol.md are deferred -- this xassert will need
+        // to be relaxed when we implement them.
+        long expected_seq = imc * 256L * peer->metadata.seq_per_frb_time_sample;
+        xassert_eq(long(mc_seq), expected_seq);
+
+        src += minichunk_header_nbytes;
 
         long ichunk = imc / peer->minichunks_per_chunk;
         imc -= ichunk * peer->minichunks_per_chunk;

@@ -38,7 +38,9 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 // Worker threads are created in start(), not the constructor. Each worker thread:
 //   - Opens a TCP connection to the receiver
 //   - Sends protocol header (magic number + YAML metadata)
-//   - Sends shape-(nbeams, nfreq, 256) int4 data arrays (all zeros for now)
+//   - Sends a sequence of minichunks. Each minichunk is a 12-byte header
+//     (uint32 magic + uint64 seq) followed by a shape-(nbeams, nfreq, 256)
+//     int4 data array (all zeros for now).
 //
 // Threads are assigned round-robin to IP addresses (nthreads must be a multiple
 // of ip_addrs.size()). Frequency channels are assigned round-robin to worker
@@ -51,8 +53,9 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 
 struct FakeXEngine
 {
-    // Protocol magic number (little-endian): 0xf4bf4b01 where 01 is the version number.
-    static constexpr uint32_t protocol_magic = 0xf4bf4b01;
+    // Protocol magic number (little-endian): 0xf4bf4b02 where 02 is the version number.
+    // Used both for the initial handshake AND for the header of every minichunk.
+    static constexpr uint32_t protocol_magic = 0xf4bf4b02;
     // Timeout for send operations (milliseconds).
     static constexpr int send_timeout_ms = 10;
 

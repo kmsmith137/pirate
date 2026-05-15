@@ -557,7 +557,7 @@ void register_core_bindings(pybind11::module &m)
                "Number of worker threads")
           .def_property_readonly_static("protocol_magic",
                [](py::object) { return FakeXEngine::protocol_magic; },
-               "Protocol magic number (0xf4bf4b01)")
+               "Protocol magic number (0xf4bf4b02)")
           .def_property_readonly_static("send_timeout_ms",
                [](py::object) { return FakeXEngine::send_timeout_ms; },
                "Timeout for send operations in milliseconds")

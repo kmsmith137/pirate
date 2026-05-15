@@ -170,10 +170,17 @@ void FakeXEngine::_worker_main(int thread_id)
     long nfreq = worker_xmd.freq_channels.size();
     long nbeams = worker_xmd.get_nbeams();
 
-    // Data array size: shape (nbeams, nfreq, 256) int4, packed 2 per byte.
-    // = nbeams * nfreq * 256 / 2 = nbeams * nfreq * 128 bytes.
+    // Each v2 minichunk is a 12-byte header (uint32 magic + uint64 seq)
+    // followed by an (nbeams, nfreq, 256) int4 data array (packed 2 per byte,
+    // = nbeams * nfreq * 128 bytes). See notes/network_protocol.md.
+    static constexpr long minichunk_header_nbytes = 12;
     long data_nbytes = nbeams * nfreq * 128;
-    vector<char> data_buf(data_nbytes, 0);  // all zeros for now
+    long minichunk_nbytes = minichunk_header_nbytes + data_nbytes;
+    vector<char> minichunk_buf(minichunk_nbytes, 0);  // header zeroed; data is all zeros
+
+    // Stamp the per-minichunk magic once; the seq is rewritten each iteration.
+    uint32_t mc_magic = protocol_magic;
+    memcpy(minichunk_buf.data(), &mc_magic, 4);
 
     // Open TCP connection (threads assigned round-robin to IP addresses).
     string ip_addr;
@@ -225,8 +232,17 @@ void FakeXEngine::_worker_main(int thread_id)
 
         lock.unlock();
 
-        // Send data array. Checks 'is_stopped'.
-        if (!_send_all(sock, data_buf.data(), data_nbytes))
+        // Stamp the v2 per-minichunk seq for this iteration. The minichunk
+        // covers 256 time samples, each spanning seq_per_frb_time_sample
+        // seq ticks; for this milestone (NOTE 1 + NOTE 2 deferred) the
+        // first minichunk starts at seq=0 and minichunks are sent strictly
+        // consecutively. See plans/network_protocol_v2_minimal.md.
+        uint64_t mc_seq = uint64_t(array_index) * 256ULL
+                        * uint64_t(worker_xmd.seq_per_frb_time_sample);
+        memcpy(minichunk_buf.data() + 4, &mc_seq, 8);
+
+        // Send the full minichunk (header + data). Checks 'is_stopped'.
+        if (!_send_all(sock, minichunk_buf.data(), minichunk_nbytes))
             return;
 
         // Increment barrier and notify waiting threads.
