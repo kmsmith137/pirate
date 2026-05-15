@@ -194,6 +194,27 @@ shared_ptr<AssembledFrame> Receiver::get_frame()
 }
 
 
+// Entry point: schedule eviction of all chunks with chunk_index <= evicted_chunk.
+// Asynchronous: sets the target and wakes the assembler. See header comment for
+// details.
+//
+// Note: the parameter 'evicted_chunk' shadows the member of the same name.
+// Inside this function we refer to the member via 'this->evicted_chunk'.
+void Receiver::evict(long evicted_chunk)
+{
+    unique_lock<std::mutex> lock(mutex);
+
+    if (is_stopped)
+        return;  // tolerate post-stop calls
+
+    if (evicted_chunk > this->evicted_chunk) {
+        this->evicted_chunk = evicted_chunk;
+        lock.unlock();
+        cv.notify_all();
+    }
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // Listener thread
@@ -576,26 +597,43 @@ void Receiver::_assembler_main()
         }
     }
 
-    // Receive Peers from reader thread (via assembler_peer_queue),
-    // and call this->_process_data().
+    // Main loop. We have two kinds of work:
+    //  - process peers handed off from the reader thread (via assembler_peer_queue),
+    //  - advance curr_base_chunk in response to evict() calls from external threads.
+    // The cv.wait predicate covers both, plus the is_stopped exit.
 
     unique_lock<std::mutex> lock(mutex);
 
     for (;;) {
+        cv.wait(lock, [&]() {
+            return is_stopped
+                || !assembler_peer_queue.empty()
+                || (evicted_chunk >= curr_base_chunk);
+        });
+
         if (is_stopped)
             return;
-        
-        if (assembler_peer_queue.empty()) {
-            cv.wait(lock);
-            continue;  // back to top of loop, with lock held.
-        }
 
-        shared_ptr<Peer> peer = assembler_peer_queue.front();
-        assembler_peer_queue.pop_front();
+        // Snapshot this iteration's work under the lock.
+        long target = evicted_chunk;
+        shared_ptr<Peer> peer;
+        if (!assembler_peer_queue.empty()) {
+            peer = assembler_peer_queue.front();
+            assembler_peer_queue.pop_front();
+        }
         lock.unlock();
 
-        this->_process_data(peer);
-        
+        // Eviction first: advance curr_base_chunk past any chunks that
+        // evict() has scheduled. Loop condition: while there is still some
+        // chunk <= target sitting in curr_frames (i.e. curr_base_chunk has
+        // not yet advanced past target), evict one more.
+        while (curr_base_chunk <= target)
+            _advance_one_chunk();
+
+        // Then process peer data, if any.
+        if (peer)
+            this->_process_data(peer);
+
         // Back to top of loop with lock held.
         lock.lock();
     }
@@ -643,33 +681,12 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         }
 
         if (ichunk >= curr_base_chunk + 2) {
-            // Since chunks are processed sequentially, we should never need to advance
-            // the ring buffer by more than one chunk. If this ever fails, it's an internal
-            // server error, so throw an exception to flag it for debugging.
-
+            // Under v1, peers send consecutive minichunks, so the assembler
+            // should never need to advance the ring buffer by more than one
+            // chunk per minichunk processed. If this ever fails, it's an
+            // internal server error -- throw to flag for debugging.
             xassert(ichunk == curr_base_chunk + 2);
-            
-            // Advance the ring buffer. Evicted frames are transferred to completed_frames queue.
-
-            for (long b = 0; b < nbeams; b++) {
-                long i = (ichunk & 1) * nbeams + b;
-                
-                // Transfer evicted frame to completed_frames queue.
-                // Note this->lock (protects completed_frames) here, not peer->lock
-                unique_lock<std::mutex> rlock(mutex);
-                _throw_if_stopped("Receiver::_process_data");
-                this->completed_frames.push(std::move(this->curr_frames[i]));
-                rlock.unlock();
-                this->cv.notify_all();
-                
-                // Replace with new frame from allocator.
-                shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
-                xassert(frame->time_chunk_index == ichunk);
-                xassert(frame->beam_id == metadata.beam_ids.at(b));
-                this->curr_frames[i] = std::move(frame);
-            }
-
-            this->curr_base_chunk++;
+            _advance_one_chunk();
         }
 
         // The rest of _process_data() copies one minichunk of data
@@ -680,6 +697,13 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             long i = (ichunk & 1) * nbeams + b;
             shared_ptr<AssembledFrame> frame = this->curr_frames[i];
             xassert(frame);
+
+            // Note: `frame` here is the post-eviction frame for `ichunk`.
+            // The critical invariant (see _advance_one_chunk's comment) is
+            // that the assembler never memcpy's into an evicted frame -- the
+            // eviction logic moves the old frame out of curr_frames[i] before
+            // we get here, so this read always returns the current/replacement
+            // frame.
 
             // The destination "base" pointer includes a time offset
             // (128 bytes per minichunk), but no (beam, frequency) offset.
@@ -701,6 +725,66 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         rb_end = peer->rb_end;
         plock.unlock();
     }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// _advance_one_chunk: factored out of _process_data, also called by _assembler_main
+// to service external evict() requests.
+//
+// Pull fresh frames for the chunk that is about to enter the top of the 2-chunk
+// window. Before this call:
+//     curr_frames holds chunks [curr_base_chunk, curr_base_chunk+1].
+// After this call:
+//     curr_frames holds chunks [curr_base_chunk+1, curr_base_chunk+2],
+//     curr_base_chunk has been incremented by 1.
+//
+// CRITICAL INVARIANT: once a frame has been std::move'd out of curr_frames[i]
+// into completed_frames, the assembler thread MUST NOT perform any further
+// write (in particular, no memcpy) to that frame's data buffer. After the
+// push, the frame may be concurrently read by FrbServer workers / gRPC /
+// FileWriter, or reaped (data cleared) by the FrbServer reaper thread.
+//
+// We satisfy this invariant by:
+//   (1) std::move clears curr_frames[i] (the source shared_ptr becomes null).
+//   (2) The fresh allocator frame pulled below immediately replaces
+//       curr_frames[i]. Any subsequent assembler write reads curr_frames[i]
+//       again -- which now refers to the new frame, not the just-evicted one.
+// The assembler holds no other shared_ptr to the moved-out frame (only
+// function-local references inside _process_data and _advance_one_chunk,
+// both of which go out of scope before the next assembler-main iteration).
+
+
+void Receiver::_advance_one_chunk()
+{
+    long ichunk_new = curr_base_chunk + 2;
+    long nbeams = metadata.get_nbeams();
+
+    for (long b = 0; b < nbeams; b++) {
+        long i = (curr_base_chunk & 1) * nbeams + b;
+
+        // Transfer evicted frame to completed_frames queue. After this push
+        // the assembler thread will not write to the just-evicted frame
+        // again -- see the critical invariant in the comment block above.
+        {
+            unique_lock<std::mutex> lock(mutex);
+            _throw_if_stopped("Receiver::_advance_one_chunk");
+            this->completed_frames.push(std::move(this->curr_frames[i]));
+        }
+        xassert(!this->curr_frames[i]);   // defense in depth: std::move did clear the slot
+        this->cv.notify_all();
+
+        // Pull a fresh frame for the chunk newly entering the top of the
+        // 2-chunk window. allocator->get_frame() may block briefly while
+        // the allocator's worker thread refills the slab pool.
+        shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
+        xassert(frame->time_chunk_index == ichunk_new);
+        xassert(frame->beam_id == metadata.beam_ids.at(b));
+        this->curr_frames[i] = std::move(frame);
+    }
+
+    this->curr_base_chunk++;
 }
 
 

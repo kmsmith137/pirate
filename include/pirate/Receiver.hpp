@@ -34,6 +34,11 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 // (not the Receiver constructor!). Python callers should call Receiver.start()
 // within a ThreadAffinity context manager.
 //
+// External-thread cross-coordination: evict(K) can be called from a non-
+// Receiver thread (in practice, a FrbServer worker) to ask the assembler to
+// force-advance its 2-chunk window past chunk K. Used by FrbServer to keep
+// multiple Receivers synchronized -- see FrbServer::_worker_main.
+//
 // See notes/network_protocol.md for the network protocol parsed by the Receiver.
 
 struct Receiver
@@ -73,6 +78,17 @@ struct Receiver
 
     // If blocking=false and metadata has not been initialized, return a default-constructed XEngineMetadata.
     XEngineMetadata get_metadata(bool blocking) const;
+
+    // Entry point: schedule the assembler thread to evict all chunks with
+    // chunk_index <= evicted_chunk (i.e., advance curr_base_chunk past
+    // evicted_chunk).
+    //
+    // Non-blocking -- returns immediately after setting state and notifying.
+    // Thread-safe; intended to be called from non-Receiver threads (in
+    // practice, FrbServer worker threads). Idempotent / monotone: only
+    // ratchets the internal target upward. No-op (silently) if the Receiver
+    // is already stopped.
+    void evict(long evicted_chunk);
 
     // ----- Noncopyable, nonmoveable -----
 
@@ -122,6 +138,13 @@ struct Receiver
     std::vector<std::shared_ptr<Peer>> reader_peer_queue;     // handoff listener -> reader
     std::deque<std::shared_ptr<Peer>> assembler_peer_queue;   // handoff reader -> assembler
 
+    // Eviction coordination: target chunk index for external-thread-
+    // initiated eviction. Written by evict() (from external threads),
+    // read by the assembler thread to decide how far to advance
+    // curr_base_chunk. Sentinel value -1 = "no eviction has been
+    // requested". Protected by 'mutex'.
+    long evicted_chunk = -1;
+
 private:
     // Worker thread main functions.
     void _listener_main();
@@ -138,14 +161,25 @@ private:
     void _read_yaml(const std::shared_ptr<Peer> &peer);
     void _read_data(const std::shared_ptr<Peer> &peer);
 
-    // Helper called by assembler thread.
+    // Helpers called by assembler thread.
     void _process_data(const std::shared_ptr<Peer> &peer);
+
+    // Advance curr_base_chunk by 1: evict the nbeams frames in the "old"
+    // slot to completed_frames, replace them with fresh frames pulled from
+    // the allocator. Caller (assembler thread) must NOT hold Receiver::mutex.
+    //
+    // CRITICAL INVARIANT: after std::move(curr_frames[i]) into completed_frames,
+    // the assembler thread must not perform any further write to the just-
+    // evicted frame. See Receiver.cpp for the full discussion.
+    void _advance_one_chunk();
 
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name) const;
 
-    // curr_frames, curr_base_ichunk: not lock-protected!
-    // Only accessed by assembler thread.
+    // curr_frames, curr_base_chunk: not lock-protected -- only modified by
+    // the assembler thread. The assembler does read curr_base_chunk while
+    // holding 'mutex' (for its wait predicate); this is safe because the
+    // assembler itself is the only writer.
     //
     // The Receiver incrementally receives a data "cube" indexed by (beam, freq, time).
     // Time indices are divided into "chunks" (of size Params::time_samples_per_chunk),
@@ -153,6 +187,8 @@ private:
     //
     // At any time, the Receiver holds a two-chunk subset of the data cube.
     // When the first bit of data is received for chunk N, it evicts chunk (N-2).
+    // (As a second trigger, the assembler also evicts chunks in response to
+    //  external evict() calls -- see the 'evicted_chunk' member above.)
     // This is represented by a ring buffer 'curr_frames' of length (2 * nbeams).
     // (Recall that an AssembledFrame represetns one time chunk and one beam).
     //

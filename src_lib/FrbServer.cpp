@@ -218,6 +218,8 @@ void FrbServer::_worker_main(int receiver_index)
 
     lock.unlock();
 
+    long prev_chunk = -1;
+
     for (long frame_id = 0; true; frame_id++) {
         long rb_slot = frame_id % rb_size;
         long expected_time_chunk_index = frame_id / nbeams;
@@ -226,6 +228,21 @@ void FrbServer::_worker_main(int receiver_index)
         shared_ptr<AssembledFrame> frame = receiver->get_frame();
         xassert(frame->time_chunk_index == expected_time_chunk_index);
         xassert(frame->beam_id == expected_beam_id);
+
+        // First frame of a new time chunk from this Receiver: ask every
+        // other Receiver to evict the same chunk index, so the system
+        // stays synchronized and chunk `ichunk` gets finalized promptly
+        // in the FrbServer ring buffer downstream. evict() is non-blocking
+        // and idempotent / monotone.
+        long ichunk = frame->time_chunk_index;
+        if (ichunk != prev_chunk) {
+            prev_chunk = ichunk;
+            for (size_t j = 0; j < params.receivers.size(); j++) {
+                if (j == size_t(receiver_index))
+                    continue;
+                params.receivers.at(j)->evict(ichunk);
+            }
+        }
 
         // Insert the new frame into frame_ringbuf. Note that each frame
         // must be received from all Receivers before it is "finalized".
