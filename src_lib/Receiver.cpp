@@ -64,8 +64,22 @@ struct Receiver::Peer
 
     // All following members are initialized when state ReadYaml -> ReadData.
     XEngineMetadata metadata;
-    long bytes_per_minichunk = 0;   // = nbeams * nfreq * 128
+    long bytes_per_minichunk = 0;   // = 12 + nbeams * nfreq * 128 (v2)
     long minichunks_per_chunk = 0;  // = Receiver::Params::time_samples_per_chunk / 256
+
+    // Minichunk-sequence tracking. Touched only by the assembler thread (in
+    // _process_data); no lock needed.
+    //
+    // next_expected_imc: smallest minichunk index (mc_seq / seq_per_minichunk)
+    //   the assembler will accept on the next minichunk. Initialized to 0;
+    //   bumped to (imc + 1) after each accepted minichunk. Strictly monotonic
+    //   -- senders cannot rewind the stream, but may skip ahead (NOTE 1).
+    //
+    // seen_first_minichunk: false until the first minichunk has been processed.
+    //   Used to enforce the NOTE-2-deferred "first seq must be 0" invariant
+    //   exactly once per connection.
+    long next_expected_imc = 0;
+    bool seen_first_minichunk = false;
 
     Array<char> rb_buf;           // length (rb_capacity)
     long rb_capacity = 0;
@@ -679,8 +693,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         xassert(rb_end >= rb_start + bmc);
         xassert(rb_capacity >= rb_pos + bmc);
 
-        long imc = rb_start / bmc;
-        xassert(rb_start == imc * bmc);
+        xassert_divisible(rb_start, bmc);   // rb-position alignment (defensive)
 
         // v2 per-minichunk header (12 bytes): uint32 magic + uint64 seq.
         // After the header is parsed and validated, advance `src` past it
@@ -690,25 +703,42 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         uint64_t mc_seq;
         memcpy(&mc_magic, src,     4);
         memcpy(&mc_seq,   src + 4, 8);
+        src += minichunk_header_nbytes;
 
         if (mc_magic != magic_v2) {
             stringstream ss;
             ss << "Receiver::Peer: bad per-minichunk magic 0x" << hex << mc_magic
-               << " at minichunk index " << dec << imc
+               << " at rb minichunk index " << dec << (rb_start / bmc)
                << " (expected 0x" << hex << magic_v2 << ")";
             throw runtime_error(ss.str());
         }
 
-        // For this milestone we require seq=0 at start and strict
-        // consecutive minichunks (see plans/network_protocol_v2_minimal.md).
-        // NOTE 1 (skipped minichunks) and NOTE 2 (non-zero initial seq) from
-        // notes/network_protocol.md are deferred -- this xassert will need
-        // to be relaxed when we implement them.
-        long expected_seq = imc * 256L * peer->metadata.seq_per_frb_time_sample;
-        xassert_eq(long(mc_seq), expected_seq);
+        // Decode the minichunk index from seq. The seq must lie on a
+        // minichunk boundary; the wire spec guarantees this.
+        long seq_per_minichunk = 256L * peer->metadata.seq_per_frb_time_sample;
+        xassert_divisible(long(mc_seq), seq_per_minichunk);
+        long imc = long(mc_seq) / seq_per_minichunk;
 
-        src += minichunk_header_nbytes;
+        // NOTE 2 is still deferred -- first minichunk on the connection
+        // must have seq = 0 (i.e. imc = 0). When NOTE 2 is implemented,
+        // replace this with a per-Peer "first imc" capture and downstream
+        // offset.
+        if (!peer->seen_first_minichunk) {
+            xassert_eq(imc, 0L);
+            peer->seen_first_minichunk = true;
+        }
 
+        // Strict monotonicity (skips OK -- NOTE 1 -- rewinds not).
+        // next_expected_imc was set to (prev_imc + 1) after the previous
+        // accepted minichunk, so (imc == next_expected_imc) means "no
+        // skip" and (imc > next_expected_imc) means "sender skipped some".
+        xassert(imc >= peer->next_expected_imc);
+        peer->next_expected_imc = imc + 1;
+
+        // Derive chunk index and within-chunk minichunk index. (NOT from
+        // rb_start anymore -- the two decouple once skipping is allowed.)
+        // After this point 'imc' is the within-chunk minichunk index,
+        // matching the v1/v2-strict pattern this block replaces.
         long ichunk = imc / peer->minichunks_per_chunk;
         imc -= ichunk * peer->minichunks_per_chunk;
 
@@ -721,14 +751,14 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             goto minichunk_done;  // hmmm
         }
 
-        if (ichunk >= curr_base_chunk + 2) {
-            // Under v1, peers send consecutive minichunks, so the assembler
-            // should never need to advance the ring buffer by more than one
-            // chunk per minichunk processed. If this ever fails, it's an
-            // internal server error -- throw to flag for debugging.
-            xassert(ichunk == curr_base_chunk + 2);
+        // If the sender skipped one or more entire chunks (NOTE 1), advance
+        // the 2-chunk window enough to bring the current minichunk's chunk
+        // into the top of the window. Each _advance_one_chunk call pushes
+        // nbeams AssembledFrames to completed_frames whose data is the
+        // default-allocator 0x88 = masked int4 (-8) -- which is exactly
+        // what NOTE 1 says missing samples should look like at the output.
+        while (ichunk >= curr_base_chunk + 2)
             _advance_one_chunk();
-        }
 
         // The rest of _process_data() copies one minichunk of data
         // (all beams, per-sender frequency subset, 256 time samples)
