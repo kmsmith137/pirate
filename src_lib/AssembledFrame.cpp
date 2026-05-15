@@ -443,7 +443,6 @@ AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator>
     if (!ksgpu::af_on_host(slab_allocator->aflags))
         throw runtime_error("AssembledFrameAllocator: slab_allocator must be on host");
     
-    is_initialized.resize(num_consumers, false);
     consumer_next_index.resize(num_consumers, 0);
     
     // Spawn worker thread if not in dummy mode.
@@ -517,7 +516,7 @@ void AssembledFrameAllocator::_worker_main()
         
     // Wait until: stopped, or initialization is complete.
     // We need nfreq, time_samples_per_chunk, beam_ids to create frames.
-    while (!is_stopped && (num_initialized == 0))
+    while (!is_stopped && !is_initialized)
         cv.wait(guard);
         
     // Main loop: create frames and add directly to frame_queue.
@@ -545,7 +544,7 @@ void AssembledFrameAllocator::worker_main()
 
 void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
 {
-    xassert(num_initialized > 0);
+    xassert(is_initialized);
 
     // If two threads are creating a frame simultaneously, then something is wrong.
     xassert(!frame_creation_underway);
@@ -631,28 +630,31 @@ void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_, long
 
     unique_lock<mutex> guard(lock);
 
-    // Check for double initialization
-    if (is_initialized[consumer_id]) {
-        stringstream ss;
-        ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id << " already initialized";
-        throw runtime_error(ss.str());
-    }
-
-    if (num_initialized == 0) {
-        // First consumer: establish parameters. Make a private shared_ptr copy
-        // of the metadata so the allocator (and all frames it creates) keeps it
-        // alive independently of any caller-owned object.
+    if (!is_initialized) {
+        // First call (from any consumer): establish parameters. Make a private
+        // shared_ptr copy of the metadata so the allocator (and all frames it
+        // creates) keeps it alive independently of any caller-owned object.
         auto md = std::make_shared<XEngineMetadata>(metadata_);
+
+        // Project away freq_channels: the canonical metadata is the consensus
+        // across senders, and freq_channels deliberately differs per sender
+        // (each sender sends a subset). Storing one arbitrary sender's
+        // freq_channels would be more confusing than helpful for downstream
+        // callers of get_metadata(). (Mirrors the pre-consolidation behavior
+        // that Receiver::_read_yaml used to do on its own private copy.)
+        md->freq_channels.clear();
+
         nfreq = md->get_total_nfreq();
         time_samples_per_chunk = time_samples_per_chunk_;
         beam_ids = md->beam_ids;
         metadata = md;
+        is_initialized = true;
     }
     else {
-        // Subsequent consumers: validate against the stored metadata. We compare
+        // Subsequent calls: validate against the stored metadata. We compare
         // the X-engine metadata via check_sender_consistency, and check
         // time_samples_per_chunk separately (it's not part of XEngineMetadata).
-        xassert(metadata);  // non-null invariant after first consumer
+        xassert(metadata);  // non-null invariant after first init
         XEngineMetadata::check_sender_consistency(*metadata, metadata_);
 
         if (time_samples_per_chunk_ != time_samples_per_chunk) {
@@ -664,11 +666,27 @@ void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_, long
         }
     }
 
-    is_initialized[consumer_id] = true;
-    num_initialized++;
-
-    // Notify worker thread that initialization is complete.
+    // Notify worker thread and any get_metadata() waiters.
     cv.notify_all();
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// get_metadata() - Entry point
+
+
+shared_ptr<const XEngineMetadata> AssembledFrameAllocator::get_metadata(bool blocking)
+{
+    unique_lock<mutex> guard(lock);
+    for (;;) {
+        _throw_if_stopped("AssembledFrameAllocator::get_metadata");
+        if (metadata)
+            return metadata;
+        if (!blocking)
+            return nullptr;
+        cv.wait(guard);
+    }
 }
 
 
@@ -700,11 +718,14 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
     
     unique_lock<mutex> guard(lock);
     
-    // Check that this consumer has been initialized
-    if (!is_initialized[consumer_id]) {
+    // Check that the allocator has been initialized at all. (Per-consumer
+    // initialization tracking was dropped when we consolidated metadata
+    // ownership; the bool 'is_initialized' flips on the first call to
+    // initialize() from any consumer.)
+    if (!is_initialized) {
         stringstream ss;
         ss << "AssembledFrameAllocator::get_frame(): consumer_id=" << consumer_id
-           << " has not called initialize()";
+           << " called before any initialize()";
         throw runtime_error(ss.str());
     }
 
@@ -777,10 +798,10 @@ long AssembledFrameAllocator::num_free_frames(bool permissive) const
         throw runtime_error("AssembledFrameAllocator::num_free_frames(): not available in dummy mode");
     }
 
-    // Check num_initialized and compute num_preinitialized under lock.
+    // Check is_initialized and compute num_preinitialized under lock.
     unique_lock<mutex> guard(lock);
 
-    if (num_initialized == 0) {
+    if (!is_initialized) {
         if (permissive)
             return 0;
         throw runtime_error("AssembledFrameAllocator::num_free_frames(): allocator not initialized");

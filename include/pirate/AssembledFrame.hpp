@@ -179,6 +179,21 @@ struct AssembledFrameAllocator
 
     void initialize(const XEngineMetadata &metadata, long time_samples_per_chunk, int consumer_id);
 
+    // Returns the shared XEngineMetadata pointer once it has been set
+    // (i.e. once any consumer has called initialize()).
+    //
+    // If blocking=true: blocks until metadata is available, or throws
+    //   if the allocator is stopped.
+    // If blocking=false: returns nullptr if metadata is not yet available.
+    //
+    // The returned shared_ptr points at the canonical (shared, immutable)
+    // metadata. The 'freq_channels' field is cleared on the canonical copy --
+    // see _initialize() for rationale -- so callers should not look there
+    // for the per-sender frequency subset.
+    //
+    // Entry point: throws if stopped (in blocking=true case).
+    std::shared_ptr<const XEngineMetadata> get_metadata(bool blocking);
+
     // Each consumer calls get_frame() in a loop.
     // Frames are returned in the following ordering:
     //
@@ -238,10 +253,13 @@ private:
     std::exception_ptr error;
     std::thread worker_thread;
     
-    // Per-consumer state
-    std::vector<bool> is_initialized;      // has consumer called initialize()?
-    std::vector<long> consumer_next_index; // next sequence index for each consumer
-    int num_initialized = 0;               // count of consumers that have initialized
+    // Initialization state. Set to true the first time any consumer calls
+    // initialize(); subsequent initialize() calls go through the consistency-
+    // check path. Protected by 'lock'.
+    bool is_initialized = false;
+
+    // Per-consumer next-sequence-index for the get_frame() sequencing logic.
+    std::vector<long> consumer_next_index;
     
     // Queue of frames: (frame, num_consumers_received).
     // In non-dummy mode, the worker thread pushes pre-initialized frames to the back.

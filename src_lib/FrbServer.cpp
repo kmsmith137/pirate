@@ -193,26 +193,26 @@ void FrbServer::_worker_main(int receiver_index)
     auto &receiver = params.receivers.at(receiver_index);
     long num_receivers = params.receivers.size();
 
-    // Get metadata from receiver (blocking).
-    XEngineMetadata m = receiver->get_metadata(true);  // blocking=true
-    long nbeams = m.get_nbeams();
+    // Get the canonical metadata from the allocator (blocking until some
+    // Receiver's reader thread has parsed its first peer's YAML). The
+    // allocator's initialize() has already enforced cross-sender
+    // consistency, so no check_sender_consistency() call is needed here.
+    shared_ptr<const XEngineMetadata> m = allocator->get_metadata(true);
+    long nbeams = m->get_nbeams();
     long rb_size = FrbServer::ringbuf_nchunks * nbeams;
 
-    // Check consistency with other receivers.
     unique_lock<std::mutex> lock(mutex);
 
-    if (!has_metadata) {
+    if (!metadata) {
         metadata = m;
-        has_metadata = true;
         // The frame_ringbuf and beam_id_to_index are initialized at the same time
         // as the metadata, without dropping the lock in between. Correctness of
         // worker_main() and reaper_main() depend on this property.
         frame_ringbuf.resize(rb_size);
         for (int i = 0; i < nbeams; i++)
-            beam_id_to_index[m.beam_ids[i]] = i;
-        cv.notify_all();  // wake up reaper thread
+            beam_id_to_index[m->beam_ids[i]] = i;
+        cv.notify_all();
     } else {
-        XEngineMetadata::check_sender_consistency(metadata, m);
         xassert(long(frame_ringbuf.size()) == rb_size);
     }
 
@@ -223,7 +223,7 @@ void FrbServer::_worker_main(int receiver_index)
     for (long frame_id = 0; true; frame_id++) {
         long rb_slot = frame_id % rb_size;
         long expected_time_chunk_index = frame_id / nbeams;
-        long expected_beam_id = m.beam_ids.at(frame_id % nbeams);
+        long expected_beam_id = m->beam_ids.at(frame_id % nbeams);
 
         shared_ptr<AssembledFrame> frame = receiver->get_frame();
         xassert(frame->time_chunk_index == expected_time_chunk_index);
@@ -307,23 +307,20 @@ void FrbServer::worker_main(int receiver_index)
 
 void FrbServer::_reaper_thread_main()
 {
-    unique_lock<std::mutex> lock(mutex);
+    // Wait for the canonical metadata via the allocator. (Blocks until some
+    // Receiver's reader thread has parsed its first peer's YAML and called
+    // allocator->initialize().)
+    shared_ptr<const XEngineMetadata> m = allocator->get_metadata(true);
+    long nbeams = m->get_nbeams();
 
-    // Wait for metadata.
-    for (;;) {
-        if (is_stopped)
-            return;
-        if (has_metadata)
-            break;
-        cv.wait(lock);
-    }
-
-    lock.unlock();
-
-    // It's okay to access metadata and frame_ringbuf.size() after dropping
-    // the lock, since these are initialized once and constant thereafter.
-    long nbeams = metadata.get_nbeams();
-    long rb_size = frame_ringbuf.size();
+    // Compute rb_size from nbeams directly. Reading frame_ringbuf.size()
+    // would be racy here: a FrbServer worker is responsible for the
+    // frame_ringbuf.resize() call, and that may not have happened yet at
+    // this point. The frame_ringbuf[rb_slot] access further down is still
+    // safe because it sits inside the cv-wait on (rb_reaped < rb_finalized)
+    // -- for that to become true, some worker has finalized a frame, which
+    // means the first worker has already executed its resize.
+    long rb_size = FrbServer::ringbuf_nchunks * nbeams;
 
     // Get total number of frames (blocking until allocator is initialized).
     long total_frames = allocator->num_total_frames(/*blocking=*/ true);
@@ -433,20 +430,14 @@ void FrbRpcService::_GetMetadata(const fs::GetMetadataRequest *request, fs::GetM
 {
     shared_ptr<FrbServer> s = _lock_state();
 
-    // Check has_metadata under lock, then release.
-    // Safe because has_metadata transitions false->true exactly once,
-    // and metadata is immutable after being set.
-    bool has_metadata;
-    {
-        lock_guard<std::mutex> lock(s->mutex);
-        has_metadata = s->has_metadata;
-    }
-
-    if (has_metadata) {
-        response->set_yaml_string(s->metadata.to_yaml_string(request->verbose()));
-    } else {
+    // Pull the canonical metadata from the allocator (non-blocking; if no
+    // peer has yet sent YAML, returns nullptr and we return an empty
+    // yaml_string to the RPC client).
+    shared_ptr<const XEngineMetadata> m = s->allocator->get_metadata(/*blocking=*/false);
+    if (m)
+        response->set_yaml_string(m->to_yaml_string(request->verbose()));
+    else
         response->set_yaml_string("");
-    }
 }
 
 grpc::Status FrbRpcService::GetMetadata(
@@ -511,9 +502,16 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
     long num_time_chunks = max_time_chunk_index - min_time_chunk_index + 1;
     local_frames.reserve(num_time_chunks * beam_indices.size());
 
+    // Pull nbeams from the canonical metadata (allocator) before taking
+    // FrbServer::mutex. If metadata is not yet available, there are no
+    // frames to write and the filename list returned to the client is empty.
+    shared_ptr<const XEngineMetadata> m = s->allocator->get_metadata(/*blocking=*/false);
+    if (!m)
+        return;
+    long rb_nbeams = m->get_nbeams();
+
     unique_lock<std::mutex> server_lock(s->mutex);
 
-    long rb_nbeams = s->metadata.get_nbeams();
     long rb_size = s->frame_ringbuf.size();
     long rb_start = s->rb_start;
     long rb_end = s->rb_end;

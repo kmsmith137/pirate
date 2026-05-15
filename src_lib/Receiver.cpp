@@ -185,23 +185,6 @@ void Receiver::_throw_if_stopped(const char *method_name) const
 }
 
 
-XEngineMetadata Receiver::get_metadata(bool blocking) const
-{
-    unique_lock<std::mutex> lock(mutex);
-
-    for (;;) {
-        _throw_if_stopped("Receiver::get_metadata");
-
-        if (has_metadata)
-            return metadata;
-        if (!blocking)
-            return XEngineMetadata();
-
-        cv.wait(lock);
-    }
-}
-
-
 // Entry point: retrieve an assembled frame from the queue (blocking).
 shared_ptr<AssembledFrame> Receiver::get_frame()
 {
@@ -504,30 +487,25 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     peer->rb_buf = Array<char> ({peer->rb_capacity}, af_uhost);
     peer->state = Peer::State::ReadData;
 
-    // Lock this->mutex, not peer->mutex!
-    unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("Receiver::_read_yaml");
-
-    if (this->has_metadata) {
-        // It's okay to access this->metadata after dropping the lock, since this->metadata
-        // is constant after initialization.
-        lock.unlock();
-        XEngineMetadata::check_sender_consistency(this->metadata, peer->metadata);
-        return;
+    // The reader thread (this one) is responsible for handing the parsed
+    // YAML to the AssembledFrameAllocator. The allocator's initialize()
+    // method does first-vs-subsequent branching internally:
+    //   - first call (from any consumer): stores the metadata, projects
+    //     away freq_channels, fills nfreq / beam_ids / etc.
+    //   - subsequent calls: validates via check_sender_consistency() and
+    //     errors if time_samples_per_chunk doesn't match.
+    // It also throws if the allocator is stopped (which is cascaded from
+    // Receiver::stop()), so the _throw_if_stopped() below is logically
+    // redundant -- we keep it for clarity in the reader-thread path.
+    {
+        unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("Receiver::_read_yaml");
     }
 
-    // If we get here, then we're seeing the X-engine metadata for the first time.
-    // This triggers a lot of initialization logic!
-
-    this->metadata = peer->metadata;
-    this->has_metadata = true;
-
-    // We clear metadata.freq_channels, since it would otherwise contain the frequency channels
-    // sent by one arbitrarily selected peer, which would be more confusing than helpful.
-    this->metadata.freq_channels.clear();
-
-    lock.unlock();
-    cv.notify_all();  // wake up any threads waiting for metadata (including assembler thread)
+    params.allocator->initialize(
+        peer->metadata,
+        params.time_samples_per_chunk,
+        params.consumer_id);
 }
 
 
@@ -601,26 +579,23 @@ void Receiver::assembler_main()
 
 void Receiver::_assembler_main()
 {
-    // Wait for yaml metadata to be parsed, by calling get_metadata(blocking=true) .
-    XEngineMetadata metadata = this->get_metadata(true);
+    // Wait for the canonical metadata to be parsed by SOME reader thread
+    // (which calls allocator->initialize() once it has parsed a peer's
+    // YAML). The allocator handles the cross-thread/cross-receiver
+    // coordination internally. We cache the shared_ptr in this->metadata
+    // so _advance_one_chunk doesn't have to re-acquire the allocator lock.
+    this->metadata = params.allocator->get_metadata(true);
 
-    // The assembler thread is responsible for calling AssembledFrameAllocator::initialize().
-    this->params.allocator->initialize(
-        metadata,
-        this->params.time_samples_per_chunk,
-        this->params.consumer_id
-    );
-    
     // Initialize 'curr_frames' (not lock-protected).
 
-    long nbeams = metadata.get_nbeams();
+    long nbeams = this->metadata->get_nbeams();
     this->curr_frames.resize(2*nbeams);
 
     for (long ichunk = 0; ichunk < 2; ichunk++) {
         for (long ibeam = 0; ibeam < nbeams; ibeam++) {
             auto frame = params.allocator->get_frame(params.consumer_id);
             xassert(frame->time_chunk_index == ichunk);
-            xassert(frame->beam_id == metadata.beam_ids.at(ibeam));
+            xassert(frame->beam_id == this->metadata->beam_ids.at(ibeam));
             this->curr_frames[ichunk*nbeams + ibeam] = frame;
         }
     }
@@ -830,7 +805,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
 void Receiver::_advance_one_chunk()
 {
     long ichunk_new = curr_base_chunk + 2;
-    long nbeams = metadata.get_nbeams();
+    long nbeams = metadata->get_nbeams();
 
     for (long b = 0; b < nbeams; b++) {
         long i = (curr_base_chunk & 1) * nbeams + b;
@@ -851,7 +826,7 @@ void Receiver::_advance_one_chunk()
         // the allocator's worker thread refills the slab pool.
         shared_ptr<AssembledFrame> frame = params.allocator->get_frame(params.consumer_id);
         xassert(frame->time_chunk_index == ichunk_new);
-        xassert(frame->beam_id == metadata.beam_ids.at(b));
+        xassert(frame->beam_id == metadata->beam_ids.at(b));
         this->curr_frames[i] = std::move(frame);
     }
 

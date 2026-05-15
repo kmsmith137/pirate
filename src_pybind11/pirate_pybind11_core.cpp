@@ -182,6 +182,18 @@ void register_core_bindings(pybind11::module &m)
             py::arg("consumer_id"),
             "Get the next frame for this consumer.\n\n"
             "Frames cycle through beam_ids for each time_chunk_index.")
+        .def("get_metadata",
+            [](AssembledFrameAllocator &self, bool blocking) {
+                auto m = self.get_metadata(blocking);
+                return std::const_pointer_cast<XEngineMetadata>(m);
+            },
+            py::arg("blocking"),
+            "Get the canonical XEngineMetadata pointer.\n\n"
+            "Args:\n"
+            "    blocking: If True, wait until any consumer has called initialize().\n\n"
+            "Returns:\n"
+            "    XEngineMetadata object (or None if non-blocking and not yet set).\n"
+            "    Note: freq_channels is cleared on the canonical copy.")
         .def("num_free_frames", &AssembledFrameAllocator::num_free_frames,
             py::arg("permissive") = false,
             "Number of frames currently available in the pool.\n\n"
@@ -600,13 +612,6 @@ void register_core_bindings(pybind11::module &m)
           }, "Returns (num_connections, num_bytes) tuple.")
           .def("stop", [](Receiver &self) { self.stop(); },
                "Signal worker threads to stop. Safe to call multiple times.")
-          .def("get_metadata", &Receiver::get_metadata,
-               py::arg("blocking"),
-               "Get metadata from peers.\n\n"
-               "Args:\n"
-               "    blocking: If True, wait until metadata is available.\n\n"
-               "Returns:\n"
-               "    XEngineMetadata object (default-constructed if non-blocking and not available).")
           .def_property_readonly("address", [](const Receiver &self) { return self.params.address; },
                "Address bound to (e.g. '127.0.0.1:5000')")
     ;

@@ -39,6 +39,11 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 // force-advance its 2-chunk window past chunk K. Used by FrbServer to keep
 // multiple Receivers synchronized -- see FrbServer::_worker_main.
 //
+// XEngineMetadata ownership: the Receiver does NOT own the consensus
+// metadata. The reader thread hands each peer's parsed YAML to
+// AssembledFrameAllocator::initialize(); other callers (assembler,
+// FrbServer, RPC) read it back via AssembledFrameAllocator::get_metadata().
+//
 // See notes/network_protocol.md for the network protocol parsed by the Receiver.
 
 struct Receiver
@@ -75,9 +80,6 @@ struct Receiver
     // Put Receiver into stopped state. Worker threads exit promptly.
     // If 'e' is non-null, it represents an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr);
-
-    // If blocking=false and metadata has not been initialized, return a default-constructed XEngineMetadata.
-    XEngineMetadata get_metadata(bool blocking) const;
 
     // Entry point: schedule the assembler thread to evict all chunks with
     // chunk_index <= evicted_chunk (i.e., advance curr_base_chunk past
@@ -119,13 +121,6 @@ struct Receiver
     std::exception_ptr error;
 
     // All public members after this point are protected by 'mutex'.
-
-    // Reference metadata from first peer.
-    // Used to check that all peers send consistent metadata.
-    // (See XEngineMetadata::check_sender_consistency for the exact field set.)
-
-    bool has_metadata = false;
-    XEngineMetadata metadata;
 
     // Queue of completed frames ready for retrieval via get_frame().
     std::queue<std::shared_ptr<AssembledFrame>> completed_frames;
@@ -195,8 +190,19 @@ private:
     // 'curr_frames' is a ring buffer of length (2 * nbeams).
     // It contains data for (curr_base_chunk) <= ichunk < (curr_base_chunk + 2).
 
-    std::vector<std::shared_ptr<AssembledFrame>> curr_frames;  // length (2 * metadata.get_nbeams())
+    std::vector<std::shared_ptr<AssembledFrame>> curr_frames;  // length (2 * metadata->get_nbeams())
     long curr_base_chunk = 0;
+
+    // Cached metadata pointer, set once by the assembler thread at startup
+    // (via params.allocator->get_metadata(true)) and treated as immutable
+    // thereafter. The Receiver does not own metadata: the canonical copy
+    // lives in the AssembledFrameAllocator. This cache only exists so that
+    // _advance_one_chunk can read get_nbeams() / beam_ids without taking
+    // the allocator's lock on every advance.
+    //
+    // Not lock-protected -- only the assembler thread reads or writes this,
+    // and it's set before any _advance_one_chunk call.
+    std::shared_ptr<const XEngineMetadata> metadata;
 };
 
 

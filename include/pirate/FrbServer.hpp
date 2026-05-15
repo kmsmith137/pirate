@@ -75,10 +75,13 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     bool is_stopped = false;
     std::exception_ptr error;
 
-    // Metadata from receivers (protected by 'mutex').
-    // Used to check that all receivers send consistent metadata.
-    bool has_metadata = false;
-    XEngineMetadata metadata;
+    // Cached metadata pointer (canonical copy lives in the
+    // AssembledFrameAllocator; this is the snapshot the FIRST worker thread
+    // captured when it sized frame_ringbuf). Set under 'mutex' by the first
+    // worker that completes its init block; null before that. Used by the
+    // worker's "is this the first init?" check; the reaper and RPC handlers
+    // read metadata via allocator->get_metadata() instead.
+    std::shared_ptr<const XEngineMetadata> metadata;
 
     // Maps (beam id) -> (position in metadata.beam_ids).
     std::unordered_map<long,int> beam_id_to_index;
