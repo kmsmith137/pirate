@@ -520,9 +520,10 @@ void AssembledFrameAllocator::_worker_main()
 {
     unique_lock<mutex> guard(lock);
         
-    // Wait until: stopped, or initialization is complete.
-    // We need nfreq, time_samples_per_chunk, beam_ids to create frames.
-    while (!is_stopped && !is_initialized)
+    // Wait until: stopped, or both initialization phases are complete.
+    // We need metadata (nfreq, beam_ids) to size and stamp frames, AND
+    // we need initial_time_chunk to stamp the first frame's chunk index.
+    while (!is_stopped && !(metadata_is_initialized && initial_chunk_set))
         cv.wait(guard);
         
     // Main loop: create frames and add directly to frame_queue.
@@ -550,7 +551,8 @@ void AssembledFrameAllocator::worker_main()
 
 void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
 {
-    xassert(is_initialized);
+    xassert(metadata_is_initialized);
+    xassert(initial_chunk_set);
 
     // If two threads are creating a frame simultaneously, then something is wrong.
     xassert(!frame_creation_underway);
@@ -593,7 +595,7 @@ void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
     long nbeams = beam_ids.size();
     long seq_index = queue_start_index + frame_queue.size();
 
-    frame->time_chunk_index = seq_index / nbeams;
+    frame->time_chunk_index = initial_time_chunk + seq_index / nbeams;
     frame->beam_id = beam_ids[seq_index % nbeams];
 
     this->frame_queue.push_back({frame, 0});
@@ -605,18 +607,18 @@ void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
 
 // -------------------------------------------------------------------------------------------------
 //
-// initialize() - Entry point
+// initialize_metadata() - Entry point
 
 
-void AssembledFrameAllocator::initialize(const XEngineMetadata &metadata_)
+void AssembledFrameAllocator::initialize_metadata(const XEngineMetadata &metadata_)
 {
     {
         unique_lock<mutex> guard(lock);
-        _throw_if_stopped("AssembledFrameAllocator::initialize");
+        _throw_if_stopped("AssembledFrameAllocator::initialize_metadata");
     }
 
     try {
-        _initialize(metadata_);
+        _initialize_metadata(metadata_);
     } catch (...) {
         this->stop(current_exception());
         throw;
@@ -624,7 +626,7 @@ void AssembledFrameAllocator::initialize(const XEngineMetadata &metadata_)
 }
 
 
-void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_)
+void AssembledFrameAllocator::_initialize_metadata(const XEngineMetadata &metadata_)
 {
     // Validate the supplied metadata up-front. validate() catches any internal
     // inconsistency before we let the metadata propagate into per-frame state.
@@ -632,7 +634,7 @@ void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_)
 
     unique_lock<mutex> guard(lock);
 
-    if (!is_initialized) {
+    if (!metadata_is_initialized) {
         // First call (from any caller): establish parameters. Make a private
         // shared_ptr copy of the metadata so the allocator (and all frames it
         // creates) keeps it alive independently of any caller-owned object.
@@ -649,7 +651,7 @@ void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_)
         nfreq = md->get_total_nfreq();
         beam_ids = md->beam_ids;
         metadata = md;
-        is_initialized = true;
+        metadata_is_initialized = true;
     }
     else {
         // Subsequent calls: validate the supplied metadata against the
@@ -662,6 +664,67 @@ void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_)
 
     // Notify worker thread and any get_metadata() waiters.
     cv.notify_all();
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// initialize_initial_chunk() / wait_for_initial_chunk() - Entry points
+
+
+long AssembledFrameAllocator::initialize_initial_chunk(long target_time_chunk)
+{
+    {
+        unique_lock<mutex> guard(lock);
+        _throw_if_stopped("AssembledFrameAllocator::initialize_initial_chunk");
+    }
+
+    try {
+        return _initialize_initial_chunk(target_time_chunk);
+    } catch (...) {
+        this->stop(current_exception());
+        throw;
+    }
+}
+
+
+long AssembledFrameAllocator::_initialize_initial_chunk(long target_time_chunk)
+{
+    // Defensive guard: chunk indices are non-negative. A negative value here
+    // most likely indicates a uint64_t->long wrap on a bogus seq from the
+    // wire, so we'd rather throw than silently store a meaningless offset.
+    xassert_ge(target_time_chunk, 0L);
+
+    unique_lock<mutex> guard(lock);
+    _throw_if_stopped("AssembledFrameAllocator::_initialize_initial_chunk");
+
+    bool just_set = false;
+    if (!initial_chunk_set) {
+        // First call from any caller establishes the canonical value.
+        initial_time_chunk = target_time_chunk;
+        initial_chunk_set = true;
+        just_set = true;
+    }
+    long ret = initial_time_chunk;
+    guard.unlock();
+
+    // Notify worker thread (which waits for BOTH metadata_is_initialized and
+    // initial_chunk_set) and any wait_for_initial_chunk() waiters.
+    if (just_set)
+        cv.notify_all();
+    return ret;
+}
+
+
+long AssembledFrameAllocator::wait_for_initial_chunk()
+{
+    unique_lock<mutex> guard(lock);
+    for (;;) {
+        _throw_if_stopped("AssembledFrameAllocator::wait_for_initial_chunk");
+        if (initial_chunk_set)
+            return initial_time_chunk;
+        cv.wait(guard);
+    }
 }
 
 
@@ -712,14 +775,19 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
     
     unique_lock<mutex> guard(lock);
     
-    // Check that the allocator has been initialized at all. (Per-consumer
-    // initialization tracking was dropped when we consolidated metadata
-    // ownership; the bool 'is_initialized' flips on the first call to
-    // initialize() from any consumer.)
-    if (!is_initialized) {
+    // Check that both initialization phases have completed. The allocator
+    // needs metadata (for nfreq, beam_ids) AND the initial_time_chunk
+    // (which stamps frame->time_chunk_index) before it can mint frames.
+    if (!metadata_is_initialized) {
         stringstream ss;
         ss << "AssembledFrameAllocator::get_frame(): consumer_id=" << consumer_id
-           << " called before any initialize()";
+           << " called before any initialize_metadata()";
+        throw runtime_error(ss.str());
+    }
+    if (!initial_chunk_set) {
+        stringstream ss;
+        ss << "AssembledFrameAllocator::get_frame(): consumer_id=" << consumer_id
+           << " called before any initialize_initial_chunk()";
         throw runtime_error(ss.str());
     }
 
@@ -792,10 +860,14 @@ long AssembledFrameAllocator::num_free_frames(bool permissive) const
         throw runtime_error("AssembledFrameAllocator::num_free_frames(): not available in dummy mode");
     }
 
-    // Check is_initialized and compute num_preinitialized under lock.
+    // Check that metadata has been set, then compute num_preinitialized
+    // under lock. (We only require metadata_is_initialized here -- frames
+    // can't be pre-created without initial_chunk_set too, but if the latter
+    // is missing we still return slab_allocator->num_free_slabs() below,
+    // which is a meaningful "no preinit yet" answer.)
     unique_lock<mutex> guard(lock);
 
-    if (!is_initialized) {
+    if (!metadata_is_initialized) {
         if (permissive)
             return 0;
         throw runtime_error("AssembledFrameAllocator::num_free_frames(): allocator not initialized");

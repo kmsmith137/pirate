@@ -178,13 +178,23 @@ void register_core_bindings(pybind11::module &m)
             "Shared XEngineMetadata, set the first time initialize() is called.\n"
             "None if no consumer has called initialize() yet. Read-only by\n"
             "convention. (Note: freq_channels is cleared on the canonical copy.)")
-        .def("initialize", &AssembledFrameAllocator::initialize,
+        .def("initialize_metadata", &AssembledFrameAllocator::initialize_metadata,
             py::arg("metadata"),
             "Set the canonical XEngineMetadata on the allocator. The first call\n"
             "stores the metadata (with freq_channels cleared); subsequent calls\n"
             "validate consistency via XEngineMetadata.check_sender_consistency.\n"
             "Typically called by each Receiver's reader thread as it parses a\n"
             "peer's YAML, so many calls per allocator are expected.")
+        .def("initialize_initial_chunk", &AssembledFrameAllocator::initialize_initial_chunk,
+            py::arg("target_time_chunk"),
+            "Establish (on the first call from any caller) the canonical\n"
+            "initial_time_chunk for the whole pipeline. The first frame\n"
+            "returned by get_frame() has time_chunk_index = initial_time_chunk.\n"
+            "Returns the established value (target_time_chunk on the first call,\n"
+            "previously-established value on subsequent calls).")
+        .def("wait_for_initial_chunk", &AssembledFrameAllocator::wait_for_initial_chunk,
+            "Block until some caller has invoked initialize_initial_chunk(),\n"
+            "then return the established initial_time_chunk.")
         .def("get_frame", &AssembledFrameAllocator::get_frame,
             py::arg("consumer_id"),
             "Get the next frame for this consumer.\n\n"

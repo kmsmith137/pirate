@@ -195,11 +195,20 @@ void FrbServer::_worker_main(int receiver_index)
 
     // Get the canonical metadata from the allocator (blocking until some
     // Receiver's reader thread has parsed its first peer's YAML). The
-    // allocator's initialize() has already enforced cross-sender
+    // allocator's initialize_metadata() has already enforced cross-sender
     // consistency, so no check_sender_consistency() call is needed here.
     shared_ptr<const XEngineMetadata> m = allocator->get_metadata(true);
+
+    // Also wait for the canonical initial_time_chunk to be established
+    // (set by the first Receiver-reader to parse a per-minichunk header).
+    // Frame ids in the FrbServer ringbuf are absolute -- frame_id =
+    // time_chunk_index * nbeams + ibeam -- so the very first frame has
+    // frame_id = initial_time_chunk * nbeams. We seed rb_* with that
+    // offset below; the worker's frame_id loop starts there too.
+    long initial_time_chunk = allocator->wait_for_initial_chunk();
     long nbeams = m->get_nbeams();
     long rb_size = FrbServer::ringbuf_nchunks * nbeams;
+    long initial_frame_id = initial_time_chunk * nbeams;
 
     unique_lock<std::mutex> lock(mutex);
 
@@ -211,6 +220,15 @@ void FrbServer::_worker_main(int receiver_index)
         frame_ringbuf.resize(rb_size);
         for (int i = 0; i < nbeams; i++)
             beam_id_to_index[m->beam_ids[i]] = i;
+
+        // Seed the ring-buffer indices at initial_frame_id (rather than 0).
+        // Otherwise the worker's first install would fail the xassert
+        // rb_end == frame_id below.
+        rb_start     = initial_frame_id;
+        rb_reaped    = initial_frame_id;
+        rb_finalized = initial_frame_id;
+        rb_end       = initial_frame_id;
+
         cv.notify_all();
     } else {
         xassert(long(frame_ringbuf.size()) == rb_size);
@@ -220,7 +238,7 @@ void FrbServer::_worker_main(int receiver_index)
 
     long prev_chunk = -1;
 
-    for (long frame_id = 0; true; frame_id++) {
+    for (long frame_id = initial_frame_id; true; frame_id++) {
         long rb_slot = frame_id % rb_size;
         long expected_time_chunk_index = frame_id / nbeams;
         long expected_beam_id = m->beam_ids.at(frame_id % nbeams);

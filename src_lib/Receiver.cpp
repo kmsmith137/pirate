@@ -74,12 +74,13 @@ struct Receiver::Peer
     //   the assembler will accept on the next minichunk. Initialized to 0;
     //   bumped to (imc + 1) after each accepted minichunk. Strictly monotonic
     //   -- senders cannot rewind the stream, but may skip ahead (NOTE 1).
-    //
-    // seen_first_minichunk: false until the first minichunk has been processed.
-    //   Used to enforce the NOTE-2-deferred "first seq must be 0" invariant
-    //   exactly once per connection.
     long next_expected_imc = 0;
-    bool seen_first_minichunk = false;
+
+    // Reader-thread flag: set to true once the first 12-byte minichunk
+    // header has been observed on this peer's TCP stream and forwarded to
+    // AssembledFrameAllocator::initialize_initial_chunk(). Touched only by
+    // the reader thread; no lock needed.
+    bool reader_seen_first_mc_header = false;
 
     Array<char> rb_buf;           // length (rb_capacity)
     long rb_capacity = 0;
@@ -497,15 +498,8 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     //     away freq_channels, fills nfreq / beam_ids / etc.
     //   - subsequent calls: validates via check_sender_consistency() and
     //     errors if time_samples_per_chunk doesn't match.
-    // It also throws if the allocator is stopped (which is cascaded from
-    // Receiver::stop()), so the _throw_if_stopped() below is logically
-    // redundant -- we keep it for clarity in the reader-thread path.
-    {
-        unique_lock<std::mutex> lock(mutex);
-        _throw_if_stopped("Receiver::_read_yaml");
-    }
 
-    params.allocator->initialize(peer->metadata);
+    params.allocator->initialize_metadata(peer->metadata);
 }
 
 
@@ -547,8 +541,42 @@ void Receiver::_read_data(const shared_ptr<Peer> &peer)
     plock.lock();
     xassert(peer->rb_end == rb_end);
     peer->rb_end += nbytes_read;
-    bool enqueue = (peer->rb_end >= peer->rb_start + peer->bytes_per_minichunk);
+    long updated_rb_end = peer->rb_end;
+    long updated_rb_start = peer->rb_start;
+    bool enqueue = (updated_rb_end >= updated_rb_start + peer->bytes_per_minichunk);
     plock.unlock();
+
+    // First-minichunk-header notification to the allocator. As soon as the
+    // first 12 bytes are buffered we can parse the per-minichunk header and
+    // tell the allocator the canonical initial_time_chunk. The assembler
+    // hasn't run yet on this peer (it's still blocked on get_metadata() /
+    // wait_for_initial_chunk()), so rb_start is guaranteed to be 0 here and
+    // the header lives at rb_buf[0..11].
+    if (!peer->reader_seen_first_mc_header
+        && updated_rb_end >= updated_rb_start + minichunk_header_nbytes)
+    {
+        xassert(updated_rb_start == 0);
+        uint32_t mc_magic;
+        uint64_t mc_seq;
+        memcpy(&mc_magic, peer->rb_buf.data,     4);
+        memcpy(&mc_seq,   peer->rb_buf.data + 4, 8);
+
+        if (mc_magic != magic_v2) {
+            stringstream ss;
+            ss << "Receiver::Peer: bad first-minichunk magic 0x" << hex << mc_magic
+               << " (expected 0x" << magic_v2 << ")";
+            throw runtime_error(ss.str());
+        }
+
+        long seq_per_mc = 256L * peer->metadata.seq_per_frb_time_sample;
+        xassert_divisible(long(mc_seq), seq_per_mc);
+        long mc_index = long(mc_seq) / seq_per_mc;
+        long received_chunk = mc_index / peer->minichunks_per_chunk;
+
+        params.allocator->initialize_initial_chunk(received_chunk);
+
+        peer->reader_seen_first_mc_header = true;
+    }
 
     if (enqueue) {
         // Enqueue 'peer' for processing by assembler thread.
@@ -580,11 +608,20 @@ void Receiver::assembler_main()
 void Receiver::_assembler_main()
 {
     // Wait for the canonical metadata to be parsed by SOME reader thread
-    // (which calls allocator->initialize() once it has parsed a peer's
-    // YAML). The allocator handles the cross-thread/cross-receiver
+    // (which calls allocator->initialize_metadata() once it has parsed a
+    // peer's YAML). The allocator handles the cross-thread / cross-receiver
     // coordination internally. We cache the shared_ptr in this->metadata
     // so _advance_one_chunk doesn't have to re-acquire the allocator lock.
     this->metadata = params.allocator->get_metadata(true);
+
+    // Wait for the canonical initial_time_chunk to be established (the
+    // first 12 bytes of a minichunk arriving on ANY peer of ANY Receiver
+    // calls allocator->initialize_initial_chunk()). The 2-chunk window
+    // 'curr_frames' is anchored at this value, so a Receiver that never
+    // gets data of its own still has a coherent starting point and is
+    // dragged forward by FrbServer's evict() chain.
+    long initial_time_chunk = params.allocator->wait_for_initial_chunk();
+    this->curr_base_chunk = initial_time_chunk;
 
     // Initialize 'curr_frames' (not lock-protected).
 
@@ -594,7 +631,7 @@ void Receiver::_assembler_main()
     for (long ichunk = 0; ichunk < 2; ichunk++) {
         for (long ibeam = 0; ibeam < nbeams; ibeam++) {
             auto frame = params.allocator->get_frame(params.consumer_id);
-            xassert(frame->time_chunk_index == ichunk);
+            xassert(frame->time_chunk_index == initial_time_chunk + ichunk);
             xassert(frame->beam_id == this->metadata->beam_ids.at(ibeam));
             this->curr_frames[ichunk*nbeams + ibeam] = frame;
         }
@@ -694,16 +731,11 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         xassert_divisible(long(mc_seq), seq_per_minichunk);
         long imc = long(mc_seq) / seq_per_minichunk;
 
-        // NOTE 2 is still deferred -- first minichunk on the connection
-        // must have seq = 0 (i.e. imc = 0). When NOTE 2 is implemented,
-        // replace this with a per-Peer "first imc" capture and downstream
-        // offset.
-        if (!peer->seen_first_minichunk) {
-            xassert_eq(imc, 0L);
-            peer->seen_first_minichunk = true;
-        }
-
         // Strict monotonicity (skips OK -- NOTE 1 -- rewinds not).
+        // The NOTE-2 "first seq must be 0" deferral is gone: the canonical
+        // initial_time_chunk is set by the reader thread on the first
+        // 12-byte header (see _read_data) and propagated to the assembler
+        // via allocator->wait_for_initial_chunk().
         // next_expected_imc was set to (prev_imc + 1) after the previous
         // accepted minichunk, so (imc == next_expected_imc) means "no
         // skip" and (imc > next_expected_imc) means "sender skipped some".

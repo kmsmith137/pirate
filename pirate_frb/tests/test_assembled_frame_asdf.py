@@ -73,7 +73,8 @@ def test_assembled_frame_asdf():
     slab_capacity = nbeams * nfreq * (ntime // 2) * 2
     slab = SlabAllocator("af_rhost", slab_capacity)
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime)
-    alloc.initialize(md)
+    alloc.initialize_metadata(md)
+    alloc.initialize_initial_chunk(0)
 
     frame = alloc.get_frame(0)
 

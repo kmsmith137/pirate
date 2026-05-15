@@ -184,10 +184,10 @@ struct AssembledFrameAllocator
     //
     // Entry point: throws if stopped, calls stop() on exception.
 
-    void initialize(const XEngineMetadata &metadata);
+    void initialize_metadata(const XEngineMetadata &metadata);
 
     // Returns the shared XEngineMetadata pointer once it has been set
-    // (i.e. once any consumer has called initialize()).
+    // (i.e. once any caller has called initialize_metadata()).
     //
     // If blocking=true: blocks until metadata is available, or throws
     //   if the allocator is stopped.
@@ -195,11 +195,32 @@ struct AssembledFrameAllocator
     //
     // The returned shared_ptr points at the canonical (shared, immutable)
     // metadata. The 'freq_channels' field is cleared on the canonical copy --
-    // see _initialize() for rationale -- so callers should not look there
-    // for the per-sender frequency subset.
+    // see _initialize_metadata() for rationale -- so callers should not look
+    // there for the per-sender frequency subset.
     //
     // Entry point: throws if stopped (in blocking=true case).
     std::shared_ptr<const XEngineMetadata> get_metadata(bool blocking);
+
+    // Establishes (on the first call from any caller) the canonical
+    // 'initial_time_chunk' for the whole pipeline. Returns the established
+    // value: on the first call the return value is target_time_chunk; on
+    // subsequent calls target_time_chunk is ignored and the previously-
+    // established value is returned.
+    //
+    // The first frame returned by get_frame() has time_chunk_index =
+    // initial_time_chunk. Typically called by each Receiver's reader thread
+    // after it has parsed the first per-minichunk header.
+    //
+    // Thread-safe.
+    //
+    // Entry point: throws if stopped, calls stop() on exception.
+    long initialize_initial_chunk(long target_time_chunk);
+
+    // Blocks until some caller has invoked initialize_initial_chunk(), then
+    // returns the established initial_time_chunk.
+    //
+    // Entry point: throws if stopped.
+    long wait_for_initial_chunk();
 
     // Each consumer calls get_frame() in a loop.
     // Frames are returned in the following ordering:
@@ -260,10 +281,17 @@ private:
     std::exception_ptr error;
     std::thread worker_thread;
     
-    // Initialization state. Set to true the first time any consumer calls
-    // initialize(); subsequent initialize() calls go through the consistency-
-    // check path. Protected by 'lock'.
-    bool is_initialized = false;
+    // Metadata-initialization state. Set to true the first time any caller
+    // invokes initialize_metadata(); subsequent calls go through the
+    // consistency-check path. Protected by 'lock'.
+    bool metadata_is_initialized = false;
+
+    // Initial-chunk state. Set to true the first time any caller invokes
+    // initialize_initial_chunk(); immutable after that. The first frame
+    // returned by get_frame() has time_chunk_index = initial_time_chunk.
+    // Both members protected by 'lock'.
+    bool initial_chunk_set = false;
+    long initial_time_chunk = 0;
 
     // Per-consumer next-sequence-index for the get_frame() sequencing logic.
     std::vector<long> consumer_next_index;
@@ -295,7 +323,8 @@ private:
     void worker_main();
     
     // Internal implementations of entry points.
-    void _initialize(const XEngineMetadata &metadata);
+    void _initialize_metadata(const XEngineMetadata &metadata);
+    long _initialize_initial_chunk(long target_time_chunk);
     std::shared_ptr<AssembledFrame> _get_frame(int consumer_id);
     void _block_until_low_memory(long nframe_threshold);
 };
