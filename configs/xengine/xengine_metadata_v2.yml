@@ -144,3 +144,46 @@ tel_dish_separation_y_m: 8.500057809796308
 # specified, then all frequency zones are assumed to have the same variance.
 
 noise_variance: 1.0
+
+
+###############################################
+# Sender-consistency rules
+###############################################
+
+# When multiple X-engine nodes connect to a single FRB node, the FRB
+# receiver enforces that all senders agree on (almost all of) the
+# metadata above. The check is implemented in
+# XEngineMetadata::check_sender_consistency() (in
+# src_lib/XEngineMetadata.cpp). Every field above falls into one of
+# three groups:
+#
+# 1. NOT checked across senders:
+#       freq_channels       (each sender deliberately sends a different
+#                            subset of the frequency channels)
+#
+# 2. Required to be bit-identical across senders (compared with ==):
+#       version
+#       zone_nfreq
+#       beamset
+#       beam_ids
+#       unix_ns_at_seq_0
+#       dt_ns_per_seq
+#       seq_per_frb_time_sample
+#
+# 3. Required to match within an absolute tolerance |a - b| <= eps
+#    (NOT bit-identical). All tolerances are hard-coded near the top
+#    of src_lib/XEngineMetadata.cpp:
+#
+#       zone_freq_edges           eps = 1.0e-3    MHz
+#       beam_positions_x          eps = 1.0e-9    (direction cosine)
+#       beam_positions_y          eps = 1.0e-9    (direction cosine)
+#       tel_origin_itrs_lat_deg   eps = 1.0e-6    degrees
+#       tel_origin_itrs_lon_deg   eps = 1.0e-6    degrees
+#       tel_grid_x_axis           eps = 1.0e-9    (direction cosine)
+#       tel_grid_y_axis           eps = 1.0e-9    (direction cosine)
+#       tel_dish_elev_axis        eps = 1.0e-9    (direction cosine)
+#       tel_dish_vert_axis        eps = 1.0e-9    (direction cosine)
+#       tel_dish_coelev_deg       eps = 1.0e-6    degrees
+#       tel_dish_separation_x_m   eps = 1.0e-6    meters
+#       tel_dish_separation_y_m   eps = 1.0e-6    meters
+#       noise_variance            eps = 1.0e-12
