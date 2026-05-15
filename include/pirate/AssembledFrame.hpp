@@ -147,7 +147,9 @@ struct AssembledFrame
 
 struct AssembledFrameAllocator
 {
-    AssembledFrameAllocator(const std::shared_ptr<SlabAllocator> &slab_allocator, int num_consumers);
+    AssembledFrameAllocator(const std::shared_ptr<SlabAllocator> &slab_allocator,
+                            int num_consumers,
+                            long time_samples_per_chunk);
     ~AssembledFrameAllocator();
 
     // Non-copyable, non-movable (required for thread-backed class pattern).
@@ -167,17 +169,22 @@ struct AssembledFrameAllocator
     // AssembledFrame::metadata.
     std::shared_ptr<const XEngineMetadata> metadata;
 
-    // Each consumer calls initalize() once, providing an XEngineMetadata and a
-    // time_samples_per_chunk. The metadata is validated, and (for consumers
-    // after the first) must pass XEngineMetadata::check_sender_consistency
-    // against the metadata from the first consumer. time_samples_per_chunk
-    // must match across consumers.
+    // Sets the canonical (consensus-across-senders) XEngineMetadata on the
+    // allocator. Typically called by each Receiver's reader thread once it
+    // has parsed a peer's YAML metadata -- so many calls per allocator are
+    // expected, not just one per consumer.
     //
-    // Consumers run in different threads, so everything needs to be thread-safe.
+    // The first call (from any caller) stores the metadata (with
+    // freq_channels cleared, since the canonical copy is the consensus and
+    // freq_channels deliberately differs per sender). Subsequent calls run
+    // XEngineMetadata::check_sender_consistency() against the canonical
+    // copy and throw if the new metadata is inconsistent.
+    //
+    // Thread-safe.
     //
     // Entry point: throws if stopped, calls stop() on exception.
 
-    void initialize(const XEngineMetadata &metadata, long time_samples_per_chunk, int consumer_id);
+    void initialize(const XEngineMetadata &metadata);
 
     // Returns the shared XEngineMetadata pointer once it has been set
     // (i.e. once any consumer has called initialize()).
@@ -288,7 +295,7 @@ private:
     void worker_main();
     
     // Internal implementations of entry points.
-    void _initialize(const XEngineMetadata &metadata, long time_samples_per_chunk, int consumer_id);
+    void _initialize(const XEngineMetadata &metadata);
     std::shared_ptr<AssembledFrame> _get_frame(int consumer_id);
     void _block_until_low_memory(long nframe_threshold);
 };

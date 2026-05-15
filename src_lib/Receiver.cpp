@@ -65,7 +65,7 @@ struct Receiver::Peer
     // All following members are initialized when state ReadYaml -> ReadData.
     XEngineMetadata metadata;
     long bytes_per_minichunk = 0;   // = 12 + nbeams * nfreq * 128 (v2)
-    long minichunks_per_chunk = 0;  // = Receiver::Params::time_samples_per_chunk / 256
+    long minichunks_per_chunk = 0;  // = allocator->time_samples_per_chunk / 256
 
     // Minichunk-sequence tracking. Touched only by the assembler thread (in
     // _process_data); no lock needed.
@@ -113,8 +113,11 @@ Receiver::Receiver(const Params &p) : params(p)
 
     xassert(params.allocator);
     xassert(params.consumer_id >= 0);
-    xassert(params.time_samples_per_chunk > 0);
-    xassert_divisible(params.time_samples_per_chunk, 256);
+    // time_samples_per_chunk lives on the allocator (validated > 0 at
+    // allocator construction). The divisibility-by-256 check is specific
+    // to the network protocol's minichunk size, so we enforce it here at
+    // the Receiver rather than at the allocator.
+    xassert_divisible(params.allocator->time_samples_per_chunk, 256);
 }
 
 
@@ -478,7 +481,7 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     // v2: each minichunk is prefixed with a 12-byte header
     // (uint32 magic + uint64 seq), then (nbeams, nfreq, 256) int4 = 128*nbeams*nfreq bytes.
     peer->bytes_per_minichunk = minichunk_header_nbytes + nbeams * nfreq * 128;
-    peer->minichunks_per_chunk = xdiv(params.time_samples_per_chunk, 256);
+    peer->minichunks_per_chunk = xdiv(params.allocator->time_samples_per_chunk, 256);
 
     // Receive buffer size is either 64KB or two minichunks, whichever is larger.
     long nmc = max((64*1024) / peer->bytes_per_minichunk, 2L);
@@ -502,10 +505,7 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
         _throw_if_stopped("Receiver::_read_yaml");
     }
 
-    params.allocator->initialize(
-        peer->metadata,
-        params.time_samples_per_chunk,
-        params.consumer_id);
+    params.allocator->initialize(peer->metadata);
 }
 
 
@@ -648,7 +648,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
     const long *freq_channels = &peer->metadata.freq_channels[0];
     long nfreq = peer->metadata.freq_channels.size();
     long nbeams = peer->metadata.get_nbeams();
-    long nt_chunk = params.time_samples_per_chunk;
+    long nt_chunk = params.allocator->time_samples_per_chunk;
     long rb_capacity = peer->rb_capacity;
     long bmc = peer->bytes_per_minichunk;
 

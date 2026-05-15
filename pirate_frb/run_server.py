@@ -244,7 +244,11 @@ def run_server(config_filename):
 
                 # AssembledFrameAllocator: manages frame allocation for receivers.
                 # Spawns 1 worker thread (inherits vCPU affinity for CPU {cpus[i]}).
-                allocator = AssembledFrameAllocator(slab_allocator, num_consumers=num_addrs)
+                allocator = AssembledFrameAllocator(
+                    slab_allocator,
+                    num_consumers=num_addrs,
+                    time_samples_per_chunk=config['time_samples_per_chunk'],
+                )
 
                 # FileWriter: writes frames to SSD and copies to NFS.
                 # Spawns ssd_threads + nfs_threads worker threads
@@ -261,7 +265,6 @@ def run_server(config_filename):
                 for j, addr in enumerate(config['data_ip_addrs'][i]):
                     receiver = Receiver(
                         address=addr,
-                        time_samples_per_chunk=config['time_samples_per_chunk'],
                         allocator=allocator,
                         consumer_id=j,
                     )

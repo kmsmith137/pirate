@@ -40,8 +40,8 @@ def test_frame_properties():
     beam_ids = [10, 20, 30]
     
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1)
-    alloc.initialize(_test_metadata(nfreq, beam_ids), time_samples_per_chunk, 0)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk)
+    alloc.initialize(_test_metadata(nfreq, beam_ids))
     
     # Get first frame and check properties
     frame = alloc.get_frame(0)
@@ -89,8 +89,8 @@ def test_sequence_ordering():
     num_chunks = 4
     
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1)
-    alloc.initialize(_test_metadata(nfreq, beam_ids), time_samples_per_chunk, 0)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk)
+    alloc.initialize(_test_metadata(nfreq, beam_ids))
     
     # Verify allocator state after initialization
     assert alloc.nfreq == nfreq, f"Allocator nfreq mismatch: expected {nfreq}, got {alloc.nfreq}"
@@ -125,8 +125,8 @@ def test_single_beam_sequence():
     beam_ids = [42]
     
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=1)
-    alloc.initialize(_test_metadata(nfreq, beam_ids), time_samples_per_chunk, 0)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=time_samples_per_chunk)
+    alloc.initialize(_test_metadata(nfreq, beam_ids))
     
     # With single beam, each frame should have beam_id=42 and incrementing time_chunk_index
     for chunk_idx in range(5):
@@ -153,11 +153,11 @@ def test_multi_consumer_frame_identity():
     num_consumers = 3
     
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
     
     # Initialize all consumers with same parameters
     for consumer_id in range(num_consumers):
-        alloc.initialize(_test_metadata(nfreq, beam_ids), time_samples_per_chunk, consumer_id)
+        alloc.initialize(_test_metadata(nfreq, beam_ids))
     
     # Get first frame from all consumers and verify identity
     frames = [alloc.get_frame(consumer_id) for consumer_id in range(num_consumers)]
@@ -201,10 +201,10 @@ def test_multi_consumer_independent_progress():
     num_consumers = 2
     
     slab = make_slab_allocator()
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
     
     for consumer_id in range(num_consumers):
-        alloc.initialize(_test_metadata(nfreq, beam_ids), time_samples_per_chunk, consumer_id)
+        alloc.initialize(_test_metadata(nfreq, beam_ids))
     
     # Consumer 0 gets 4 frames (2 chunks * 2 beams)
     frames_c0 = [alloc.get_frame(0) for _ in range(4)]
@@ -271,10 +271,10 @@ def test_frame_recycling():
     # Add some margin for alignment (SlabAllocator aligns to 128 bytes)
     capacity = slab_size * 3 + 1024
     slab = make_slab_allocator(capacity=capacity)
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
     
     for consumer_id in range(num_consumers):
-        alloc.initialize(_test_metadata(nfreq, beam_ids), time_samples_per_chunk, consumer_id)
+        alloc.initialize(_test_metadata(nfreq, beam_ids))
     
     # Verify total slabs after first allocation
     frame0_c0 = alloc.get_frame(0)
@@ -337,10 +337,10 @@ def test_frame_recycling_with_held_reference():
     slab_size = (nfreq * time_samples_per_chunk) // 2
     capacity = slab_size * 4 + 1024  # 4 slabs
     slab = make_slab_allocator(capacity=capacity)
-    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers)
+    alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
     
     for consumer_id in range(num_consumers):
-        alloc.initialize(_test_metadata(nfreq, beam_ids), time_samples_per_chunk, consumer_id)
+        alloc.initialize(_test_metadata(nfreq, beam_ids))
     
     # Consumer 0 gets frames 0, 1, 2 (first get_frame establishes slab size)
     frame0 = alloc.get_frame(0)

@@ -72,8 +72,8 @@ def test_assembled_frame_asdf():
     # Use slab capacity large enough for at least one frame.
     slab_capacity = nbeams * nfreq * (ntime // 2) * 2
     slab = SlabAllocator("af_rhost", slab_capacity)
-    alloc = AssembledFrameAllocator(slab, num_consumers=1)
-    alloc.initialize(md, ntime, 0)
+    alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime)
+    alloc.initialize(md)
 
     frame = alloc.get_frame(0)
 

@@ -56,7 +56,6 @@ struct Receiver
     // Constructor args.
     struct Params {
         std::string address;               // "ip:port" format, e.g. "127.0.0.1:5000"
-        long time_samples_per_chunk = 0;   // must be a multiple of 256
         std::shared_ptr<AssembledFrameAllocator> allocator;
         long consumer_id = -1;
     };

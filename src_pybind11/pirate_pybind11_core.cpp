@@ -160,8 +160,10 @@ void register_core_bindings(pybind11::module &m)
         "Allocates AssembledFrames for multiple consumers.\n\n"
         "Each consumer calls initialize() once, then get_frame() in a loop.\n"
         "All consumers receive the same sequence of frames (same shared_ptr).")
-        .def(py::init<const std::shared_ptr<SlabAllocator> &, int>(),
-            py::arg("slab_allocator"), py::arg("num_consumers"))
+        .def(py::init<const std::shared_ptr<SlabAllocator> &, int, long>(),
+            py::arg("slab_allocator"),
+            py::arg("num_consumers"),
+            py::arg("time_samples_per_chunk"))
         .def_readonly("nfreq", &AssembledFrameAllocator::nfreq)
         .def_readonly("time_samples_per_chunk", &AssembledFrameAllocator::time_samples_per_chunk)
         .def_readonly("beam_ids", &AssembledFrameAllocator::beam_ids)
@@ -172,12 +174,12 @@ void register_core_bindings(pybind11::module &m)
             "Shared XEngineMetadata, set on first initialize(). None before any\n"
             "consumer has initialized. Read-only by convention.")
         .def("initialize", &AssembledFrameAllocator::initialize,
-            py::arg("metadata"), py::arg("time_samples_per_chunk"), py::arg("consumer_id"),
-            "Initialize a consumer. Must be called once per consumer before get_frame().\n\n"
-            "The first consumer's metadata is stored on the allocator and propagated\n"
-            "to every frame. Subsequent consumers must provide a metadata that\n"
-            "matches via XEngineMetadata.check_sender_consistency, and the same\n"
-            "time_samples_per_chunk.")
+            py::arg("metadata"),
+            "Set the canonical XEngineMetadata on the allocator. The first call\n"
+            "stores the metadata (with freq_channels cleared); subsequent calls\n"
+            "validate consistency via XEngineMetadata.check_sender_consistency.\n"
+            "Typically called by each Receiver's reader thread as it parses a\n"
+            "peer's YAML, so many calls per allocator are expected.")
         .def("get_frame", &AssembledFrameAllocator::get_frame,
             py::arg("consumer_id"),
             "Get the next frame for this consumer.\n\n"
@@ -584,22 +586,21 @@ void register_core_bindings(pybind11::module &m)
         "A thread-backed class with two worker threads:\n"
         "  - listener: accepts incoming connections\n"
         "  - reader: reads data from all open connections using epoll")
-          .def(py::init([](const std::string &address, long time_samples_per_chunk,
+          .def(py::init([](const std::string &address,
                            std::shared_ptr<AssembledFrameAllocator> allocator, long consumer_id) {
                Receiver::Params params;
                params.address = address;
-               params.time_samples_per_chunk = time_samples_per_chunk;
                params.allocator = allocator;
                params.consumer_id = consumer_id;
                return std::make_shared<Receiver>(params);
           }),
-               py::arg("address"), py::arg("time_samples_per_chunk"),
+               py::arg("address"),
                py::arg("allocator"), py::arg("consumer_id"),
                "Create a Receiver (does not start worker threads).\n\n"
                "Args:\n"
                "    address: Address to bind to (e.g. '127.0.0.1:5000')\n"
-               "    time_samples_per_chunk: Number of time samples per assembled chunk\n"
                "    allocator: AssembledFrameAllocator for output frames\n"
+               "        (time_samples_per_chunk is taken from the allocator).\n"
                "    consumer_id: Consumer ID for the allocator")
           .def("start", &Receiver::start,
                "Start the worker threads.\n\n"

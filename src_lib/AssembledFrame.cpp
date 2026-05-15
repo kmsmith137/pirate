@@ -434,17 +434,23 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
 // Constructor
 
 
-AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator> &slab_allocator_, int num_consumers_)
-    : slab_allocator(slab_allocator_), num_consumers(num_consumers_), is_dummy_mode(slab_allocator_->is_dummy())
+AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator> &slab_allocator_,
+                                                 int num_consumers_,
+                                                 long time_samples_per_chunk_)
+    : time_samples_per_chunk(time_samples_per_chunk_),
+      slab_allocator(slab_allocator_),
+      num_consumers(num_consumers_),
+      is_dummy_mode(slab_allocator_->is_dummy())
 {
     xassert(slab_allocator);
     xassert_gt(num_consumers, 0);
+    xassert_gt(time_samples_per_chunk, 0L);
 
     if (!ksgpu::af_on_host(slab_allocator->aflags))
         throw runtime_error("AssembledFrameAllocator: slab_allocator must be on host");
-    
+
     consumer_next_index.resize(num_consumers, 0);
-    
+
     // Spawn worker thread if not in dummy mode.
     if (!is_dummy_mode)
         worker_thread = thread(&AssembledFrameAllocator::worker_main, this);
@@ -602,7 +608,7 @@ void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
 // initialize() - Entry point
 
 
-void AssembledFrameAllocator::initialize(const XEngineMetadata &metadata_, long time_samples_per_chunk_, int consumer_id)
+void AssembledFrameAllocator::initialize(const XEngineMetadata &metadata_)
 {
     {
         unique_lock<mutex> guard(lock);
@@ -610,7 +616,7 @@ void AssembledFrameAllocator::initialize(const XEngineMetadata &metadata_, long 
     }
 
     try {
-        _initialize(metadata_, time_samples_per_chunk_, consumer_id);
+        _initialize(metadata_);
     } catch (...) {
         this->stop(current_exception());
         throw;
@@ -618,12 +624,8 @@ void AssembledFrameAllocator::initialize(const XEngineMetadata &metadata_, long 
 }
 
 
-void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_, long time_samples_per_chunk_, int consumer_id)
+void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_)
 {
-    xassert_ge(consumer_id, 0);
-    xassert_lt(consumer_id, num_consumers);
-    xassert_gt(time_samples_per_chunk_, 0L);
-
     // Validate the supplied metadata up-front. validate() catches any internal
     // inconsistency before we let the metadata propagate into per-frame state.
     metadata_.validate();
@@ -631,7 +633,7 @@ void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_, long
     unique_lock<mutex> guard(lock);
 
     if (!is_initialized) {
-        // First call (from any consumer): establish parameters. Make a private
+        // First call (from any caller): establish parameters. Make a private
         // shared_ptr copy of the metadata so the allocator (and all frames it
         // creates) keeps it alive independently of any caller-owned object.
         auto md = std::make_shared<XEngineMetadata>(metadata_);
@@ -645,25 +647,17 @@ void AssembledFrameAllocator::_initialize(const XEngineMetadata &metadata_, long
         md->freq_channels.clear();
 
         nfreq = md->get_total_nfreq();
-        time_samples_per_chunk = time_samples_per_chunk_;
         beam_ids = md->beam_ids;
         metadata = md;
         is_initialized = true;
     }
     else {
-        // Subsequent calls: validate against the stored metadata. We compare
-        // the X-engine metadata via check_sender_consistency, and check
-        // time_samples_per_chunk separately (it's not part of XEngineMetadata).
+        // Subsequent calls: validate the supplied metadata against the
+        // canonical copy via XEngineMetadata::check_sender_consistency.
+        // (time_samples_per_chunk is fixed at allocator construction time;
+        // there's nothing further to cross-check here.)
         xassert(metadata);  // non-null invariant after first init
         XEngineMetadata::check_sender_consistency(*metadata, metadata_);
-
-        if (time_samples_per_chunk_ != time_samples_per_chunk) {
-            stringstream ss;
-            ss << "AssembledFrameAllocator::initialize(): consumer_id=" << consumer_id
-               << " has time_samples_per_chunk=" << time_samples_per_chunk_
-               << ", expected " << time_samples_per_chunk;
-            throw runtime_error(ss.str());
-        }
     }
 
     // Notify worker thread and any get_metadata() waiters.
