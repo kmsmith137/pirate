@@ -168,11 +168,16 @@ void register_core_bindings(pybind11::module &m)
         .def_readonly("time_samples_per_chunk", &AssembledFrameAllocator::time_samples_per_chunk)
         .def_readonly("beam_ids", &AssembledFrameAllocator::beam_ids)
         .def_property_readonly("metadata",
-            [](const AssembledFrameAllocator &self) {
-                return std::const_pointer_cast<XEngineMetadata>(self.metadata);
+            [](AssembledFrameAllocator &self) {
+                // Route through get_metadata(blocking=false) so the read is
+                // properly lock-synchronized; pybind11 maps a null shared_ptr
+                // to Python None automatically.
+                auto m = self.get_metadata(/*blocking=*/false);
+                return std::const_pointer_cast<XEngineMetadata>(m);
             },
-            "Shared XEngineMetadata, set on first initialize(). None before any\n"
-            "consumer has initialized. Read-only by convention.")
+            "Shared XEngineMetadata, set the first time initialize() is called.\n"
+            "None if no consumer has called initialize() yet. Read-only by\n"
+            "convention. (Note: freq_channels is cleared on the canonical copy.)")
         .def("initialize", &AssembledFrameAllocator::initialize,
             py::arg("metadata"),
             "Set the canonical XEngineMetadata on the allocator. The first call\n"
