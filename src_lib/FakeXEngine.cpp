@@ -190,7 +190,9 @@ void FakeXEngine::_worker_main(int thread_id)
     Socket sock(PF_INET, SOCK_STREAM);
     sock.connect(ip_addr, port);
 
-    // Build protocol header: magic (4 bytes) + string length (4 bytes) + YAML string.
+    // Build protocol header: magic (4 bytes) + flags (4 bytes) + string length
+    // (4 bytes) + YAML string. FakeXEngine always sends flags=0 -- the
+    // FLAG_ACK back-channel is not supported here (see FakeXEngine.hpp).
     string yaml_str = worker_xmd.to_yaml_string();
 
     // Pad YAML string to include null terminator and 4-byte alignment.
@@ -198,12 +200,14 @@ void FakeXEngine::_worker_main(int thread_id)
     long padded_len = ((str_len + 3) / 4) * 4;
 
     // Build contiguous header buffer.
-    vector<char> header_buf(8 + padded_len, '\0');
+    vector<char> header_buf(12 + padded_len, '\0');
     uint32_t magic = protocol_magic;
+    uint32_t flags = 0;
     uint32_t len32 = static_cast<uint32_t>(padded_len);
-    memcpy(header_buf.data(), &magic, 4);
-    memcpy(header_buf.data() + 4, &len32, 4);
-    memcpy(header_buf.data() + 8, yaml_str.data(), yaml_str.size());
+    memcpy(header_buf.data() + 0, &magic, 4);
+    memcpy(header_buf.data() + 4, &flags, 4);
+    memcpy(header_buf.data() + 8, &len32, 4);
+    memcpy(header_buf.data() + 12, yaml_str.data(), yaml_str.size());
 
     // Send protocol header in a single call.
     if (!_send_all(sock, header_buf.data(), header_buf.size()))

@@ -2,6 +2,7 @@
 #include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/inlines.hpp"  // xdiv()
 
+#include <chrono>
 #include <cstring>    // memcpy
 #include <sstream>
 #include <stdexcept>
@@ -31,6 +32,16 @@ namespace pirate {
 
 static constexpr uint32_t magic_v2 = 0xf4bf4b02;
 static constexpr long minichunk_header_nbytes = 12;   // uint32 magic + uint64 seq
+static constexpr long handshake_nbytes = 12;          // uint32 magic + uint32 flags + uint32 yaml_len
+
+// v2 handshake flag bits. Currently one defined:
+//   FLAG_ACK: server sends a 1-byte ack per minichunk back to the sender.
+//     For testing/debugging only.
+// Any flag bit set in the handshake's flags field but not in
+// flags_supported_mask causes _read_ini to throw (fail-fast on
+// protocol drift).
+static constexpr uint32_t FLAG_ACK = 0x1;
+static constexpr uint32_t flags_supported_mask = FLAG_ACK;
 
 
 // -------------------------------------------------------------------------------------------------
@@ -52,10 +63,20 @@ struct Receiver::Peer
     };
 
     State state = State::ReadIni;
-    
-    // First 8 bytes (read during State::ReadIni)
-    char ini_buf[8];
+
+    // First 12 bytes (read during State::ReadIni):
+    //   bytes 0-3:  uint32 magic
+    //   bytes 4-7:  uint32 flags
+    //   bytes 8-11: uint32 yaml_len
+    char ini_buf[handshake_nbytes];
     long ini_nbytes = 0;  // bytes read so far
+
+    // Parsed handshake flags. Written by the reader thread in _read_ini
+    // (single thread until the peer transitions to ReadData); after that
+    // the assembler thread tests (flags & FLAG_ACK) inline in _process_data.
+    // Publication to the assembler happens via the enqueue under
+    // Receiver::mutex (same pattern as other ReadYaml->ReadData state).
+    uint32_t flags = 0;
 
     // These members are initialized when state ReadIni -> ReadYaml.
     Array<char> yaml_buf;         // length (yaml_string_len + 1)
@@ -407,10 +428,10 @@ void Receiver::_reader_main()
 
 void Receiver::_read_ini(const shared_ptr<Peer> &peer)
 {
-    xassert(peer->ini_nbytes < 8);
+    xassert(peer->ini_nbytes < handshake_nbytes);
 
     char *buf = peer->ini_buf + peer->ini_nbytes;
-    long bufsize = 8 - peer->ini_nbytes;
+    long bufsize = handshake_nbytes - peer->ini_nbytes;
     long nbytes_read = peer->socket.read(buf, bufsize);
 
     // If nbytes_read == 0 and !sock.eof, it's just "would block" - do nothing.
@@ -420,11 +441,19 @@ void Receiver::_read_ini(const shared_ptr<Peer> &peer)
     peer->ini_nbytes += nbytes_read;
     this->nbytes_cumul.fetch_add(nbytes_read);
 
-    if (peer->ini_nbytes < 8)
+    if (peer->ini_nbytes < handshake_nbytes)
         return;
 
-    // Read 4-byte little-endian magic number.
-    uint32_t magic = *((uint32_t *) peer->ini_buf);
+    // Parse the 12-byte handshake:
+    //   bytes 0-3:  uint32 magic
+    //   bytes 4-7:  uint32 flags
+    //   bytes 8-11: uint32 yaml_len
+    uint32_t magic;
+    uint32_t flags;
+    int32_t yaml_len;
+    memcpy(&magic,    peer->ini_buf,     4);
+    memcpy(&flags,    peer->ini_buf + 4, 4);
+    memcpy(&yaml_len, peer->ini_buf + 8, 4);
 
     if (magic != magic_v2) {
         stringstream ss;
@@ -433,11 +462,20 @@ void Receiver::_read_ini(const shared_ptr<Peer> &peer)
         throw runtime_error(ss.str());
     }
 
-    // Read 4-byte little-endian string length.
-    int32_t yaml_len = *((int32_t *) (peer->ini_buf + 4));
+    // Reject any flag bits we don't understand. Forward-compat / fail-fast
+    // on protocol drift.
+    if (flags & ~flags_supported_mask) {
+        stringstream ss;
+        ss << "Receiver::Peer: handshake flags 0x" << hex << flags
+           << " contain unknown bits 0x" << (flags & ~flags_supported_mask)
+           << " (supported mask: 0x" << flags_supported_mask << ")";
+        throw runtime_error(ss.str());
+    }
+    peer->flags = flags;
+
     xassert_gt(yaml_len, 0);
     xassert_le(yaml_len, 1024*1024);
-    
+
     peer->yaml_string_len = yaml_len;
     peer->yaml_buf = Array<char> ({yaml_len+1}, af_uhost);
     peer->yaml_buf.data[yaml_len] = 0;
@@ -752,6 +790,11 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         // Note: this->curr_base_chunk and this->curr_frame are not lock-protected.
         // (These members are only accessed by the assembler thread.)
 
+        // 'retained' tracks whether this minichunk's data made it into a
+        // curr_frames AssembledFrame (true) or was dropped (false). Used
+        // by the FLAG_ACK back-channel at the bottom of the loop.
+        bool retained = false;
+
         if (ichunk < curr_base_chunk) {
             // Target chunk is no longer in buffer (peer is running slow).
             // In this case, we silently drop the data.
@@ -794,6 +837,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
                 src += 128;
             }
         }
+        retained = true;
 
     minichunk_done:
         plock.lock();
@@ -802,6 +846,15 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         rb_start = peer->rb_start;
         rb_end = peer->rb_end;
         plock.unlock();
+
+        // If the peer opted into FLAG_ACK in the handshake, send a 1-byte
+        // ack per minichunk: 1 = data was retained (memcpy'd into a frame
+        // that will eventually flow to the ringbuf), 0 = received but
+        // dropped (e.g. ichunk < curr_base_chunk).
+        if (peer->flags & FLAG_ACK) {
+            char ack = retained ? char(1) : char(0);
+            this->_send_ack(peer, ack);
+        }
     }
 }
 
@@ -863,6 +916,44 @@ void Receiver::_advance_one_chunk()
     }
 
     this->curr_base_chunk++;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// _send_ack: FLAG_ACK back-channel write.
+//
+// Sends a single byte (0 = dropped, 1 = retained) on the peer's TCP socket.
+// Loops calling Socket::send_with_timeout(10ms) so Receiver::stop() propagates
+// promptly. If the client doesn't drain the byte within 1 second total wall-
+// clock, throws -- the assembler thread can stall for up to 1 second per peer,
+// but that's acceptable because FLAG_ACK is opted into only by test clients.
+
+void Receiver::_send_ack(const shared_ptr<Peer> &peer, char ack_byte)
+{
+    static constexpr int ack_inner_timeout_ms = 10;
+    static constexpr auto ack_total_timeout = std::chrono::seconds(1);
+
+    auto deadline = std::chrono::steady_clock::now() + ack_total_timeout;
+
+    while (true) {
+        {
+            unique_lock<std::mutex> lock(mutex);
+            _throw_if_stopped("Receiver::_send_ack");
+        }
+
+        long n = peer->socket.send_with_timeout(&ack_byte, 1, ack_inner_timeout_ms);
+        if (n == 1)
+            return;
+        if (peer->socket.connreset)
+            return;  // client gave up reading acks; let the peer drop naturally
+
+        // n == 0 (poll timeout or EAGAIN); retry until deadline.
+        if (std::chrono::steady_clock::now() >= deadline) {
+            throw runtime_error(
+                "Receiver::_send_ack: FLAG_ACK client did not drain ack byte within 1 second");
+        }
+    }
 }
 
 

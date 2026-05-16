@@ -37,7 +37,10 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 //
 // Worker threads are created in start(), not the constructor. Each worker thread:
 //   - Opens a TCP connection to the receiver
-//   - Sends protocol header (magic number + YAML metadata)
+//   - Sends protocol header (magic number + flags + YAML metadata).
+//     FakeXEngine always sends flags=0; the FLAG_ACK back-channel is NOT
+//     supported here (a real test client that wants FLAG_ACK lives outside
+//     FakeXEngine).
 //   - Sends a sequence of minichunks. Each minichunk is a 12-byte header
 //     (uint32 magic + uint64 seq) followed by a shape-(nbeams, nfreq, 256)
 //     int4 data array (all zeros for now).

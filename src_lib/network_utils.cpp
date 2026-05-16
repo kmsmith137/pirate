@@ -393,6 +393,8 @@ long Socket::send_with_timeout(const void *buf, long count, int timeout_ms)
 
     if (nbytes < 0) {
         // Would block (shouldn't happen after poll, but handle it).
+        // Note: if zerocopy is set, then this isn't a totally crazy possibility.
+        // Otherwise, it only happens in corner cases (e.g. signal handling paths).
         if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
             errno = 0;
             return 0;

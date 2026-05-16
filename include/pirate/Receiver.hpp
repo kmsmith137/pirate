@@ -167,6 +167,14 @@ private:
     // evicted frame. See Receiver.cpp for the full discussion.
     void _advance_one_chunk();
 
+    // Send a 1-byte FLAG_ACK reply (0 = dropped, 1 = retained) on the
+    // peer's TCP socket. Used only when the peer enabled FLAG_ACK in the
+    // handshake; called from the assembler thread per minichunk in
+    // _process_data. Loops with a 10ms inner timeout (for prompt
+    // is_stopped checks) and throws if the client doesn't drain the
+    // byte within 1 second.
+    void _send_ack(const std::shared_ptr<Peer> &peer, char ack_byte);
+
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name) const;
 

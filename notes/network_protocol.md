@@ -13,6 +13,12 @@ The network protocol for each of these connections is as follows:
 
 - A persistent TCP connection is opened. The first 4 bytes are `0xf4bf4b02` where the `02` is the protocol version number.
 
+- The next 4 bytes are a 32-bit integer, representing flags. Currently, only one flag is defined:
+
+    - `FLAG_ACK (0x1)`: if set, then the FRB search backend will send per-minichunk
+      acknowledgements back to the sender (see below). This adds network traffic and
+      is intended only for testing.
+
 - The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.
 
 - A zero-terminated ascii string follows, containing metadata in the format defined by
@@ -34,13 +40,16 @@ The network protocol for each of these connections is as follows:
       The value (-8) indicates "this sample is masked". 
       We pack two int4s into a byte as (`(x[1] << 4) | x[0]`).
 
-  NOTE 1: in normal operation, the server will send consecutive minichunks. In this case, 
+  NOTE 1: in normal operation, the sender will send consecutive minichunks. In this case, 
   sequence numbers are separated by (256 * xengine_metadata.seq_per_frb_time_sample).
   However, the sender may choose to skip minichunks, by appropriately setting sequence numbers.
-  In this case, the server should treat the skipped data as masked.
+  In this case, the sender should treat the skipped data as masked.
 
-  NOTE 2: the first sequence number sent by the server need not be 0, but much be a multiple
+  NOTE 2: the first sequence number sent by the sender need not be 0, but must be a multiple
   of (256 * xengine_metadata.seq_per_frb_time_sample), where 256 is the number of time samples
   per minichunk.
 
-  
+- If `FLAG_ACK` is set (see above), then after each minichunk, the receiver sends a single
+  byte back to the sender. The byte is `0` if the minichunk was received, but the data was
+  not retained (i.e. written to the frb search node's ring buffer). The byte is `1` if the
+  data was retained. This flag adds network traffic and is intended only for testing.
