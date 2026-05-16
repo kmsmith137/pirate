@@ -790,10 +790,10 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         // Note: this->curr_base_chunk and this->curr_frame_sets are not lock-protected.
         // (These members are only accessed by the assembler thread.)
 
-        // 'retained' tracks whether this minichunk's data made it into a
+        // 'assembled' tracks whether this minichunk's data made it into a
         // curr_frame_sets AssembledFrame (true) or was dropped (false). Used
         // by the FLAG_ACK back-channel at the bottom of the loop.
-        bool retained = false;
+        bool assembled = false;
 
         if (ichunk < curr_base_chunk) {
             // Target chunk is no longer in buffer (peer is running slow).
@@ -842,7 +842,7 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
                     src += 128;
                 }
             }
-            retained = true;
+            assembled = true;
         }
 
     minichunk_done:
@@ -854,11 +854,11 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         plock.unlock();
 
         // If the peer opted into FLAG_ACK in the handshake, send a 1-byte
-        // ack per minichunk: 1 = data was retained (memcpy'd into a frame
+        // ack per minichunk: 1 = data was assembled (memcpy'd into a frame
         // that will eventually flow to the ringbuf), 0 = received but
         // dropped (e.g. ichunk < curr_base_chunk).
         if (peer->flags & FLAG_ACK) {
-            char ack = retained ? char(1) : char(0);
+            char ack = assembled ? char(1) : char(0);
             this->_send_ack(peer, ack);
         }
     }
@@ -928,7 +928,7 @@ void Receiver::_advance_one_chunk()
 //
 // _send_ack: FLAG_ACK back-channel write.
 //
-// Sends a single byte (0 = dropped, 1 = retained) on the peer's TCP socket.
+// Sends a single byte (0 = dropped, 1 = assembled) on the peer's TCP socket.
 // Loops calling Socket::send_with_timeout(10ms) so Receiver::stop() propagates
 // promptly. If the client doesn't drain the byte within 1 second total wall-
 // clock, throws -- the assembler thread can stall for up to 1 second per peer,

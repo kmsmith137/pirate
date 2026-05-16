@@ -51,5 +51,5 @@ The network protocol for each of these connections is as follows:
 
 - If `FLAG_ACK` is set (see above), then after each minichunk, the receiver sends a single
   byte back to the sender. The byte is `0` if the minichunk was received, but the data was
-  not retained (i.e. written to the frb search node's ring buffer). The byte is `1` if the
-  data was retained. This flag adds network traffic and is intended only for testing.
+  not assembled (i.e. copied to the frb search node's ring buffer). The byte is `1` if the
+  data was assembled. This flag adds network traffic and is intended only for testing.
