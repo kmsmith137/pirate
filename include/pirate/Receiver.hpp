@@ -1,6 +1,7 @@
 #ifndef _PIRATE_RECEIVER_HPP
 #define _PIRATE_RECEIVER_HPP
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <exception>
@@ -20,6 +21,7 @@ namespace pirate {
 #endif
 
 struct AssembledFrame;           // AssembledFrame.hpp
+struct AssembledFrameSet;        // AssembledFrame.hpp
 struct AssembledFrameAllocator;  // AssembledFrame.hpp
 
 // Receiver: a thread-backed class that listens for TCP connections
@@ -41,8 +43,9 @@ struct AssembledFrameAllocator;  // AssembledFrame.hpp
 //
 // XEngineMetadata ownership: the Receiver does NOT own the consensus
 // metadata. The reader thread hands each peer's parsed YAML to
-// AssembledFrameAllocator::initialize(); other callers (assembler,
-// FrbServer, RPC) read it back via AssembledFrameAllocator::get_metadata().
+// AssembledFrameAllocator::initialize_metadata(); other callers
+// (assembler, FrbServer, RPC) read it back via
+// AssembledFrameAllocator::get_metadata().
 //
 // See notes/network_protocol.md for the network protocol parsed by the Receiver.
 
@@ -72,9 +75,12 @@ struct Receiver
     // Thread-safe: returns current number of active TCP connections, and total bytes read.
     void get_status(long &num_connections, long &nbytes_cumul);
 
-    // Entry point: retrieve an assembled frame from the queue (blocking).
-    // This blocks until a frame is available, or throws if Receiver is stopped.
-    std::shared_ptr<AssembledFrame> get_frame();
+    // Entry point: retrieve an assembled frame set (= one time chunk, all
+    // beams) from the queue (blocking). Blocks until a set is available,
+    // or throws if the Receiver is stopped. The returned set corresponds
+    // to one AssembledFrameAllocator::get_frame_set() call on the
+    // assembler side.
+    std::shared_ptr<AssembledFrameSet> get_frame_set();
 
     // Put Receiver into stopped state. Worker threads exit promptly.
     // If 'e' is non-null, it represents an error; otherwise normal termination.
@@ -121,8 +127,8 @@ struct Receiver
 
     // All public members after this point are protected by 'mutex'.
 
-    // Queue of completed frames ready for retrieval via get_frame().
-    std::queue<std::shared_ptr<AssembledFrame>> completed_frames;
+    // Queue of completed frame sets ready for retrieval via get_frame_set().
+    std::queue<std::shared_ptr<AssembledFrameSet>> completed_frame_sets;
 
     // Peer: per-sender state for an active TCP connection.
     // Parses the network protocol described in notes/network_protocol.md.
@@ -158,13 +164,15 @@ private:
     // Helpers called by assembler thread.
     void _process_data(const std::shared_ptr<Peer> &peer);
 
-    // Advance curr_base_chunk by 1: evict the nbeams frames in the "old"
-    // slot to completed_frames, replace them with fresh frames pulled from
-    // the allocator. Caller (assembler thread) must NOT hold Receiver::mutex.
+    // Advance curr_base_chunk by 1: evict the AssembledFrameSet in the
+    // "old" slot to completed_frame_sets, replace it with a fresh set
+    // pulled from the allocator. Caller (assembler thread) must NOT hold
+    // Receiver::mutex.
     //
-    // CRITICAL INVARIANT: after std::move(curr_frames[i]) into completed_frames,
-    // the assembler thread must not perform any further write to the just-
-    // evicted frame. See Receiver.cpp for the full discussion.
+    // CRITICAL INVARIANT: after std::move(curr_frame_sets[slot]) into
+    // completed_frame_sets, the assembler thread must not perform any
+    // further write to any frame inside the just-evicted set. See
+    // Receiver.cpp for the full discussion.
     void _advance_one_chunk();
 
     // Send a 1-byte FLAG_ACK reply (0 = dropped, 1 = retained) on the
@@ -178,10 +186,10 @@ private:
     // Helper for entry points. Caller must hold mutex.
     void _throw_if_stopped(const char *method_name) const;
 
-    // curr_frames, curr_base_chunk: not lock-protected -- only modified by
-    // the assembler thread. The assembler does read curr_base_chunk while
-    // holding 'mutex' (for its wait predicate); this is safe because the
-    // assembler itself is the only writer.
+    // curr_frame_sets, curr_base_chunk: not lock-protected -- only
+    // modified by the assembler thread. The assembler does read
+    // curr_base_chunk while holding 'mutex' (for its wait predicate);
+    // this is safe because the assembler itself is the only writer.
     //
     // The Receiver incrementally receives a data "cube" indexed by (beam, freq, time).
     // Time indices are divided into "chunks" (of size Params::time_samples_per_chunk),
@@ -191,25 +199,14 @@ private:
     // When the first bit of data is received for chunk N, it evicts chunk (N-2).
     // (As a second trigger, the assembler also evicts chunks in response to
     //  external evict() calls -- see the 'evicted_chunk' member above.)
-    // This is represented by a ring buffer 'curr_frames' of length (2 * nbeams).
-    // (Recall that an AssembledFrame represetns one time chunk and one beam).
-    //
-    // 'curr_frames' is a ring buffer of length (2 * nbeams).
-    // It contains data for (curr_base_chunk) <= ichunk < (curr_base_chunk + 2).
+    // Each of the two live chunks is represented by one AssembledFrameSet
+    // (one frame per beam), so curr_frame_sets has length 2:
+    // curr_frame_sets[k] is the live set for ichunk = curr_base_chunk + k,
+    // where k in {0,1}. (Rotation uses ichunk & 1 as the slot index.)
 
-    std::vector<std::shared_ptr<AssembledFrame>> curr_frames;  // length (2 * metadata->get_nbeams())
+    std::array<std::shared_ptr<AssembledFrameSet>, 2> curr_frame_sets;
     long curr_base_chunk = 0;
 
-    // Cached metadata pointer, set once by the assembler thread at startup
-    // (via params.allocator->get_metadata(true)) and treated as immutable
-    // thereafter. The Receiver does not own metadata: the canonical copy
-    // lives in the AssembledFrameAllocator. This cache only exists so that
-    // _advance_one_chunk can read get_nbeams() / beam_ids without taking
-    // the allocator's lock on every advance.
-    //
-    // Not lock-protected -- only the assembler thread reads or writes this,
-    // and it's set before any _advance_one_chunk call.
-    std::shared_ptr<const XEngineMetadata> metadata;
 };
 
 

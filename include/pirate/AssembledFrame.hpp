@@ -22,13 +22,27 @@ namespace pirate {
 #endif
 
 
+// AssembledFrame: This central data structure represents one data frame on the server,
+// after they have been received from the X-engine and "assembled" (parsed/reordered).
+//
+// Reminders:
+//
+//  - A "frame" is a (time_chunk, beam_id) pair.
+//
+//  - A "chunk", aka "time chunk", is a fixed number of samples, defined in
+//      a high-level parameter file (yaml key 'time_samples_per_chunk')
+//
+//  - A "minichunk" is 256 time samples. This is the time cadence of the network
+//      protocol, and is used throughout the network receive code, before chunks
+//      are "assembled".
+
 struct AssembledFrame
 {
     // Initialized at creation, not protected by lock.
     long nfreq = 0;
     long ntime = 0;
     long beam_id = 0;
-    long time_chunk_index = 0;   // 0, 1, 2, ...
+    long time_chunk_index = 0;
 
     // Shared X-engine metadata for this frame. Set at frame creation by
     // AssembledFrameAllocator::_create_frame (or by AssembledFrame::make_random
@@ -131,19 +145,60 @@ struct AssembledFrame
 };
 
 
-// AssembledFrameAllocator: Thread-backed class that allocates AssembledFrames.
+// AssembledFrameSet: container class containing (nbeams) AssembledFrames.
+// Represents one time chunk, and all beams.
+//
+// This is a thin aggregate -- all members are immutable after construction
+// and there is no internal locking. Default copy/move semantics. Callers
+// typically manipulate AssembledFrameSets via shared_ptr (held in the
+// allocator's frame_set_queue, in Receiver::curr_frame_sets, etc.).
+
+struct AssembledFrameSet
+{
+    // Initialized at creation, not protected by lock.
+    long nfreq = 0;
+    long ntime = 0;
+    long nbeams = 0;  // = metadata->beam_ids.size()
+    long time_chunk_index = 0;
+
+    // Nonempty pointer, initialized at creation, not protected by lock.
+    std::shared_ptr<const XEngineMetadata> metadata;
+
+    // Length nbeams, all pointers nonempty, initialized at creation, not protected by lock.
+    std::vector<std::shared_ptr<AssembledFrame>> frames;
+
+    // Defensive consistency check. Throws if any member is inconsistent:
+    //   - metadata is null
+    //   - nbeams != metadata->beam_ids.size()
+    //   - frames.size() != nbeams
+    //   - any frames[i] is null
+    //   - any frames[i] does not agree with the set on
+    //     (metadata, time_chunk_index, nfreq, ntime), or with beam_ids[i]
+    // Cheap: O(nbeams). Called by AssembledFrameAllocator after constructing
+    // a fresh set.
+    void validate() const;
+
+    // Convenience accessor (bounds-checked). Equivalent to frames.at(ibeam).
+    const std::shared_ptr<AssembledFrame> &get_frame(long ibeam) const;
+};
+
+
+// AssembledFrameAllocator: Thread-backed class that allocates AssembledFrames,
+// handed out one AssembledFrameSet (= nbeams frames for one time chunk) at a
+// time via get_frame_set().
 //
 // In non-dummy mode, a worker thread pre-initializes frames (calls memset to fill
-// with 0x88) to reduce latency for callers of get_frame(). The worker thread
+// with 0x88) to reduce latency for callers of get_frame_set(). The worker thread
 // inherits its vcpu affinity from the caller of the constructor. Python callers
 // should call the AssembledFrameAllocator constructor within a ThreadAffinity
 // context manager.
 //
 // In dummy mode (slab_allocator->is_dummy()), no worker thread is created, and
-// frames are initialized synchronously by the caller of get_frame().
+// frame sets are initialized synchronously by the caller of get_frame_set().
 //
-// Entry points (following thread-backed class pattern): initialize(), get_frame().
-// These will throw if the allocator is stopped, and will call stop() on exception.
+// Entry points (following thread-backed class pattern): initialize_metadata(),
+// initialize_initial_chunk(), get_frame_set(). These will throw if the
+// allocator is stopped, and will call stop() on exception.
 
 struct AssembledFrameAllocator
 {
@@ -207,7 +262,7 @@ struct AssembledFrameAllocator
     // subsequent calls target_time_chunk is ignored and the previously-
     // established value is returned.
     //
-    // The first frame returned by get_frame() has time_chunk_index =
+    // The first set returned by get_frame_set() has time_chunk_index =
     // initial_time_chunk. Typically called by each Receiver's reader thread
     // after it has parsed the first per-minichunk header.
     //
@@ -222,26 +277,29 @@ struct AssembledFrameAllocator
     // Entry point: throws if stopped.
     long wait_for_initial_chunk();
 
-    // Each consumer calls get_frame() in a loop.
-    // Frames are returned in the following ordering:
+    // Each consumer calls get_frame_set() in a loop.
+    // The N-th call (N=0,1,2,...) returns the AssembledFrameSet for
+    // time_chunk_index = initial_time_chunk + N. The returned set contains
+    // one AssembledFrame per beam (in beam_ids order), all sharing this
+    // allocator's metadata pointer.
     //
-    //   for i in 0,1,2,...
-    //      for j in 0,...,B-1,  where B=beam_ids.size()
-    //          The (i*B+j)-th call to get_frame() returns time_chunk_index=i, beam_id=beam_ids[j]
+    // All consumers receive the same sequence of sets, and the set object
+    // itself is shared: the N-th call returns the same shared_ptr<
+    // AssembledFrameSet> for all consumers (not a copy). (And therefore
+    // the same shared_ptr<AssembledFrame> for each beam inside the set.)
     //
-    // All consumers receive the same sequence of frames, and corresponding frames are
-    // shared: the N-th call to get_frame() returns the same shared_ptr<AssembledFrame>
-    // for all consumers (not a copy).
+    // The allocator holds a reference to each set until all consumers have
+    // received it. When the last consumer receives a set, the allocator
+    // drops its reference. (If all consumers have also dropped their
+    // references, then the underlying frames are deallocated.)
     //
-    // The allocator holds a reference to each frame until all consumers have received it.
-    // When the last consumer receives a frame, the allocator drops its reference. (If all
-    // consumers have also dropped their references, then the frame is deallocated.)
-    //
-    // Frame memory is allocated from 'slab_allocator', with nbytes = (nfreq * time_samples_per_chunk) / 2.
+    // Frame memory is allocated from 'slab_allocator', with nbytes =
+    // (nfreq * time_samples_per_chunk) / 2 per frame. One get_frame_set()
+    // call therefore corresponds to nbeams slab allocations.
     //
     // Entry point: throws if stopped, calls stop() on exception.
 
-    std::shared_ptr<AssembledFrame> get_frame(int consumer_id);
+    std::shared_ptr<AssembledFrameSet> get_frame_set(int consumer_id);
 
     // Returns the number of "available" frames: pre-initialized frames waiting for their first
     // consumer, plus free slabs in the underlying slab_allocator.
@@ -287,45 +345,59 @@ private:
     bool metadata_is_initialized = false;
 
     // Initial-chunk state. Set to true the first time any caller invokes
-    // initialize_initial_chunk(); immutable after that. The first frame
-    // returned by get_frame() has time_chunk_index = initial_time_chunk.
+    // initialize_initial_chunk(); immutable after that. The first set
+    // returned by get_frame_set() has time_chunk_index = initial_time_chunk.
     // Both members protected by 'lock'.
+    //
+    // When initial_chunk_set transitions to true (inside
+    // _initialize_initial_chunk), we seed queue_start_chunk_index,
+    // first_unreceived_chunk_index, and consumer_next_chunk_index[*] to
+    // initial_time_chunk -- so all chunk-indexed counters below are only
+    // meaningful once initial_chunk_set is true.
     bool initial_chunk_set = false;
     long initial_time_chunk = 0;
 
-    // Per-consumer next-sequence-index for the get_frame() sequencing logic.
-    std::vector<long> consumer_next_index;
-    
-    // Queue of frames: (frame, num_consumers_received).
-    // In non-dummy mode, the worker thread pushes pre-initialized frames to the back.
-    // In dummy mode, get_frame() creates frames synchronously and pushes to the back.
-    // Frames are popped from the front when all consumers have received them.
-    //
-    // The early part of the queue contains frames with (num_consumers_received > 0) that
-    // are waiting for subsequent consumers. The later part contains frames with
-    // (num_consumers_received == 0) that have been pre-initialized, waiting for their
-    // first consumer. The boundary between these regions is at first_unreceived_index.
-    std::deque<std::pair<std::shared_ptr<AssembledFrame>, int>> frame_queue;
-    long queue_start_index = 0;             // sequence index of first frame in queue
-    long first_unreceived_index = 0;        // sequence index of first frame not yet received by any consumer
-    bool frame_creation_underway = false;   // is there a thread in the process of creating a new frame?
+    // Per-consumer next-chunk-index for the get_frame_set() sequencing
+    // logic. Each entry is the time_chunk_index of the set this consumer
+    // will receive on its next get_frame_set() call.
+    std::vector<long> consumer_next_chunk_index;
 
-    // Create a new frame and add it to the queue.
-    // Caller must currently hold lock via 'guard'.
-    // The lock will be dropped and re-acquired.
-    void _create_frame(std::unique_lock<std::mutex> &lock);
-    
+    // Queue of sets: (set, num_consumers_received).
+    // In non-dummy mode, the worker thread pushes pre-initialized sets to the back.
+    // In dummy mode, get_frame_set() creates sets synchronously and pushes to the back.
+    // Sets are popped from the front when all consumers have received them.
+    //
+    // The early part of the queue contains sets with (num_consumers_received > 0) that
+    // are waiting for subsequent consumers. The later part contains sets with
+    // (num_consumers_received == 0) that have been pre-initialized, waiting for their
+    // first consumer. The boundary between these regions is at first_unreceived_chunk_index.
+    std::deque<std::pair<std::shared_ptr<AssembledFrameSet>, int>> frame_set_queue;
+    long queue_start_chunk_index = 0;          // time_chunk_index of first set in queue
+    long first_unreceived_chunk_index = 0;     // time_chunk_index of first set not yet received by any consumer
+    bool frame_creation_underway = false;      // is there a thread in the process of creating a new set?
+
+    // Create a new AssembledFrameSet (= nbeams AssembledFrames) and add it
+    // to the queue. Caller must currently hold lock via 'guard'. The lock
+    // will be dropped (during slab acquisition + memset of the nbeams
+    // frames) and re-acquired.
+    //
+    // Slab-pool sizing assumption: this function holds up to nbeams slabs
+    // simultaneously while assembling one set. The slab pool must be sized
+    // for at least nbeams slabs total; this is already a hard prerequisite
+    // for the Receiver's 2-chunk window (which pins 2*nbeams slabs).
+    void _create_frame_set(std::unique_lock<std::mutex> &lock);
+
     // Helper for entry points. Caller must hold lock.
     void _throw_if_stopped(const char *method_name);
-    
+
     // Worker thread functions (non-dummy mode only).
     void _worker_main();
     void worker_main();
-    
+
     // Internal implementations of entry points.
     void _initialize_metadata(const XEngineMetadata &metadata);
     long _initialize_initial_chunk(long target_time_chunk);
-    std::shared_ptr<AssembledFrame> _get_frame(int consumer_id);
+    std::shared_ptr<AssembledFrameSet> _get_frame_set(int consumer_id);
     void _block_until_low_memory(long nframe_threshold);
 };
 

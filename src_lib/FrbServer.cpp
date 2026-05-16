@@ -236,74 +236,85 @@ void FrbServer::_worker_main(int receiver_index)
 
     lock.unlock();
 
-    long prev_chunk = -1;
+    // The Receiver now hands us one whole AssembledFrameSet (= one time
+    // chunk, all beams) per call. Each outer iteration of the loop
+    // processes one set: we fire cross-Receiver evict() once (each set
+    // is a new time chunk by construction), then iterate the set's
+    // nbeams frames into frame_ringbuf.
+    long expected_frame_id = initial_frame_id;
 
-    for (long frame_id = initial_frame_id; true; frame_id++) {
-        long rb_slot = frame_id % rb_size;
-        long expected_time_chunk_index = frame_id / nbeams;
-        long expected_beam_id = m->beam_ids.at(frame_id % nbeams);
+    for (;;) {
+        shared_ptr<AssembledFrameSet> set = receiver->get_frame_set();
+        long ichunk = set->time_chunk_index;
+        xassert(ichunk == expected_frame_id / nbeams);
+        xassert(long(set->frames.size()) == nbeams);
 
-        shared_ptr<AssembledFrame> frame = receiver->get_frame();
-        xassert(frame->time_chunk_index == expected_time_chunk_index);
-        xassert(frame->beam_id == expected_beam_id);
+        // Each get_frame_set() returns a fresh time chunk from this
+        // Receiver, so we ask every other Receiver to evict the same
+        // chunk index (keeping multiple Receivers synchronized so
+        // chunk `ichunk` gets finalized promptly in the FrbServer
+        // ring buffer downstream). evict() is non-blocking and
+        // idempotent / monotone.
+        for (size_t j = 0; j < params.receivers.size(); j++) {
+            if (j == size_t(receiver_index))
+                continue;
+            params.receivers.at(j)->evict(ichunk);
+        }
 
-        // First frame of a new time chunk from this Receiver: ask every
-        // other Receiver to evict the same chunk index, so the system
-        // stays synchronized and chunk `ichunk` gets finalized promptly
-        // in the FrbServer ring buffer downstream. evict() is non-blocking
-        // and idempotent / monotone.
-        long ichunk = frame->time_chunk_index;
-        if (ichunk != prev_chunk) {
-            prev_chunk = ichunk;
-            for (size_t j = 0; j < params.receivers.size(); j++) {
-                if (j == size_t(receiver_index))
-                    continue;
-                params.receivers.at(j)->evict(ichunk);
+        // Insert this set's nbeams frames into frame_ringbuf. Each
+        // frame must be received from all Receivers before it is
+        // "finalized".
+        for (long b = 0; b < nbeams; b++) {
+            long frame_id = expected_frame_id + b;
+            long rb_slot = frame_id % rb_size;
+            long expected_beam_id = m->beam_ids.at(b);
+
+            shared_ptr<AssembledFrame> frame = set->frames[b];
+            xassert(frame->time_chunk_index == ichunk);
+            xassert(frame->beam_id == expected_beam_id);
+
+            lock.lock();
+
+            // In principle, this assert can fail if one Receiver is running far behind.
+            // I decided it was best to "handle" this condition by throwing an exception,
+            // since something has gone off the rails, and needs human debugging.
+            xassert(rb_finalized >= frame_id - rb_size + 1);
+
+            unique_lock<std::mutex> frame_lock(frame->mutex);
+            frame->finalize_count++;
+
+            if (frame->finalize_count == 1) {
+                // Frame received from first Receiver. Check that it is not in
+                // the ringbuf already, and put it at the end of the ringbuf.
+                xassert(rb_end == frame_id);
+                frame_ringbuf[rb_slot] = frame;
+                rb_start = max(frame_id - rb_size + 1, 0L);
+                rb_reaped = max(rb_start, rb_reaped);
+                rb_end = frame_id + 1;
+                // Note that frame is not finalized yet (see below).
             }
+            else {
+                // Frame has previously been received from another Receiver.
+                // Check that it is already in the ringbuf, but not finalized yet.
+                xassert(frame_id >= rb_finalized);
+                xassert(frame_id < rb_end);
+                xassert(frame_ringbuf[rb_slot] == frame);
+            }
+
+            if (frame->finalize_count == num_receivers) {
+                // Frame received from last Receiver, so finalize it.
+                xassert(rb_finalized == frame_id);
+                rb_finalized++;
+            }
+
+            _check_rb_invariants();
+
+            lock.unlock();
+            frame_lock.unlock();
+            cv.notify_all();
         }
 
-        // Insert the new frame into frame_ringbuf. Note that each frame
-        // must be received from all Receivers before it is "finalized".
-
-        lock.lock();
-
-        // In principle, this assert can fail if one Receiver is running far behind.
-        // I decided it was best to "handle" this condition by throwing an exception,
-        // since something has gone off the rails, and needs human debugging.
-        xassert(rb_finalized >= frame_id - rb_size + 1);
-
-        unique_lock<std::mutex> frame_lock(frame->mutex);
-        frame->finalize_count++;
-
-        if (frame->finalize_count == 1) {
-            // Frame received from first Receiver. Check that it is not in
-            // the ringbuf already, and put it at the end of the ringbuf.
-            xassert(rb_end == frame_id);
-            frame_ringbuf[rb_slot] = frame;
-            rb_start = max(frame_id - rb_size + 1, 0L);
-            rb_reaped = max(rb_start, rb_reaped);
-            rb_end = frame_id + 1;
-            // Note that frame is not finalized yet (see below).
-        }
-        else {
-            // Frame has previously been received from another Receiver.
-            // Check that it is already in the ringbuf, but not finalized yet.
-            xassert(frame_id >= rb_finalized);
-            xassert(frame_id < rb_end);
-            xassert(frame_ringbuf[rb_slot] == frame);
-        }
-
-        if (frame->finalize_count == num_receivers) {
-            // Frame received from last Receiver, so finalize it.
-            xassert(rb_finalized == frame_id);
-            rb_finalized++;
-        }
-
-        _check_rb_invariants();
-
-        lock.unlock();
-        frame_lock.unlock();
-        cv.notify_all();
+        expected_frame_id += nbeams;
     }
 }
 

@@ -379,6 +379,73 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 
 // -------------------------------------------------------------------------------------------------
 //
+// AssembledFrameSet methods.
+
+
+void AssembledFrameSet::validate() const
+{
+    if (!metadata)
+        throw runtime_error("AssembledFrameSet::validate(): metadata is null");
+
+    long md_nbeams = long(metadata->beam_ids.size());
+    if (nbeams != md_nbeams) {
+        stringstream ss;
+        ss << "AssembledFrameSet::validate(): nbeams=" << nbeams
+           << " disagrees with metadata->beam_ids.size()=" << md_nbeams;
+        throw runtime_error(ss.str());
+    }
+    if (long(frames.size()) != nbeams) {
+        stringstream ss;
+        ss << "AssembledFrameSet::validate(): frames.size()=" << frames.size()
+           << " disagrees with nbeams=" << nbeams;
+        throw runtime_error(ss.str());
+    }
+
+    for (long b = 0; b < nbeams; b++) {
+        const auto &f = frames[b];
+        if (!f) {
+            stringstream ss;
+            ss << "AssembledFrameSet::validate(): frames[" << b << "] is null";
+            throw runtime_error(ss.str());
+        }
+        if (f->metadata != metadata)
+            throw runtime_error("AssembledFrameSet::validate(): frame metadata pointer disagrees with set");
+        if (f->time_chunk_index != time_chunk_index) {
+            stringstream ss;
+            ss << "AssembledFrameSet::validate(): frames[" << b << "]->time_chunk_index=" << f->time_chunk_index
+               << " disagrees with set's time_chunk_index=" << time_chunk_index;
+            throw runtime_error(ss.str());
+        }
+        if (f->nfreq != nfreq) {
+            stringstream ss;
+            ss << "AssembledFrameSet::validate(): frames[" << b << "]->nfreq=" << f->nfreq
+               << " disagrees with set's nfreq=" << nfreq;
+            throw runtime_error(ss.str());
+        }
+        if (f->ntime != ntime) {
+            stringstream ss;
+            ss << "AssembledFrameSet::validate(): frames[" << b << "]->ntime=" << f->ntime
+               << " disagrees with set's ntime=" << ntime;
+            throw runtime_error(ss.str());
+        }
+        if (f->beam_id != metadata->beam_ids[b]) {
+            stringstream ss;
+            ss << "AssembledFrameSet::validate(): frames[" << b << "]->beam_id=" << f->beam_id
+               << " disagrees with metadata->beam_ids[" << b << "]=" << metadata->beam_ids[b];
+            throw runtime_error(ss.str());
+        }
+    }
+}
+
+
+const shared_ptr<AssembledFrame> &AssembledFrameSet::get_frame(long ibeam) const
+{
+    return frames.at(ibeam);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // Static AssembledFrame member functions, for testing.
 
 
@@ -449,7 +516,11 @@ AssembledFrameAllocator::AssembledFrameAllocator(const shared_ptr<SlabAllocator>
     if (!ksgpu::af_on_host(slab_allocator->aflags))
         throw runtime_error("AssembledFrameAllocator: slab_allocator must be on host");
 
-    consumer_next_index.resize(num_consumers, 0);
+    // Initialized to 0 here; overwritten with initial_time_chunk by
+    // _initialize_initial_chunk on the first call (see comment in
+    // AssembledFrame.hpp). The values are only consulted after
+    // initial_chunk_set is true.
+    consumer_next_chunk_index.resize(num_consumers, 0);
 
     // Spawn worker thread if not in dummy mode.
     if (!is_dummy_mode)
@@ -512,23 +583,25 @@ void AssembledFrameAllocator::_throw_if_stopped(const char *method_name)
 //
 // Worker thread (non-dummy mode only)
 //
-// The worker thread pre-initializes frames and pushes them directly to frame_queue.
-// This reduces latency for callers of get_frame(), since the memset() is already done.
+// The worker thread pre-initializes whole frame sets (memsets nbeams slabs
+// to 0x88) and pushes them directly to frame_set_queue. This reduces
+// latency for callers of get_frame_set(), since the memsets are already
+// done.
 
 
 void AssembledFrameAllocator::_worker_main()
 {
     unique_lock<mutex> guard(lock);
-        
+
     // Wait until: stopped, or both initialization phases are complete.
     // We need metadata (nfreq, beam_ids) to size and stamp frames, AND
-    // we need initial_time_chunk to stamp the first frame's chunk index.
+    // we need initial_time_chunk to stamp the first set's chunk index.
     while (!is_stopped && !(metadata_is_initialized && initial_chunk_set))
         cv.wait(guard);
-        
-    // Main loop: create frames and add directly to frame_queue.
+
+    // Main loop: create sets and add directly to frame_set_queue.
     while (!is_stopped)
-        _create_frame(guard);
+        _create_frame_set(guard);
 }
 
 
@@ -544,64 +617,92 @@ void AssembledFrameAllocator::worker_main()
 
 // -------------------------------------------------------------------------------------------------
 //
-// Create a new frame and add it to the queue.
-// Caller must currently hold lock via 'guard'.
-// The lock will be dropped and re-acquired.
+// Create a new AssembledFrameSet (= nbeams AssembledFrames) and add it to
+// the queue. Caller must currently hold lock via 'guard'. The lock will be
+// dropped (during slab acquisition + memset) and re-acquired.
 
 
-void AssembledFrameAllocator::_create_frame(unique_lock<mutex> &guard)
+void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
 {
     xassert(metadata_is_initialized);
     xassert(initial_chunk_set);
 
-    // If two threads are creating a frame simultaneously, then something is wrong.
+    // If two threads are creating a frame set simultaneously, then something is wrong.
     xassert(!frame_creation_underway);
     frame_creation_underway = true;
 
-    // Drop lock while allocating.
+    // Snapshot the loop bounds and shape under the lock.
+    long nbeams = beam_ids.size();
+    long nbytes = nfreq * xdiv(time_samples_per_chunk, 2);
+
+    // Drop lock while allocating + memsetting the nbeams slabs.
     guard.unlock();
 
-    // Allocate data using slab allocator.
-    // int4 dtype means 4 bits per element, so nbytes = (nfreq * ntime) / 2.
-    // Array is initialized to all (-8) values.
-    long nbytes = nfreq * xdiv(time_samples_per_chunk, 2);
-    shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
-    memset(slab.get(), 0x88, nbytes);
+    // Allocate nbeams frames, all backed by independent slabs. Each frame
+    // is fully initialized except for beam_id / time_chunk_index, which
+    // are stamped once we've re-acquired the lock (so the set's chunk
+    // index is consistent with the current queue state).
+    //
+    // Slab-pool sizing: this loop holds up to nbeams slabs at a time. The
+    // pool must have at least nbeams total slabs to make progress, which
+    // is also a hard prerequisite for the Receiver's 2-chunk window.
+    vector<shared_ptr<AssembledFrame>> new_frames;
+    new_frames.reserve(nbeams);
 
-    // Note that frame->{beam_id, time_chunk_index} are initialized later.
-    auto frame = make_shared<AssembledFrame>();
-    frame->nfreq = nfreq;
-    frame->ntime = time_samples_per_chunk;
-    frame->metadata = metadata;  // shared, immutable; non-null after initialize()
-    
-    // Initialize ksgpu::Array<void> manually.
-    frame->data.data = slab.get();
-    frame->data.ndim = 2;
-    frame->data.shape[0] = nfreq;
-    frame->data.shape[1] = time_samples_per_chunk;
-    frame->data.size = nfreq * time_samples_per_chunk;
-    frame->data.strides[0] = time_samples_per_chunk;
-    frame->data.strides[1] = 1;
-    frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
-    frame->data.aflags = slab_allocator->aflags;
-    frame->data.base = slab;
-    frame->data.check_invariants("AssembledFrameAllocator::create_frame_unlocked()");
-    
+    for (long b = 0; b < nbeams; b++) {
+        shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
+        memset(slab.get(), 0x88, nbytes);
+
+        auto frame = make_shared<AssembledFrame>();
+        frame->nfreq = nfreq;
+        frame->ntime = time_samples_per_chunk;
+        frame->metadata = metadata;  // shared, immutable; non-null after initialize_metadata()
+
+        // Initialize ksgpu::Array<void> manually.
+        frame->data.data = slab.get();
+        frame->data.ndim = 2;
+        frame->data.shape[0] = nfreq;
+        frame->data.shape[1] = time_samples_per_chunk;
+        frame->data.size = nfreq * time_samples_per_chunk;
+        frame->data.strides[0] = time_samples_per_chunk;
+        frame->data.strides[1] = 1;
+        frame->data.dtype = ksgpu::Dtype(ksgpu::df_int, 4);
+        frame->data.aflags = slab_allocator->aflags;
+        frame->data.base = slab;
+        frame->data.check_invariants("AssembledFrameAllocator::_create_frame_set()");
+
+        new_frames.push_back(std::move(frame));
+    }
+
     guard.lock();
 
-    // Get seq_index at end of queue, after acquiring the lock 
-    // (in case seq_index changed while the lock was dropped).
+    // Compute the chunk_index after re-acquiring the lock (in case the
+    // queue size changed while the lock was dropped -- e.g. consumers
+    // popping fully-consumed sets off the front does not change
+    // queue_start_chunk_index + frame_set_queue.size() though, since both
+    // change together; this is mostly defensive).
+    long chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
 
-    long nbeams = beam_ids.size();
-    long seq_index = queue_start_index + frame_queue.size();
+    // Stamp each frame with its beam_id / time_chunk_index.
+    for (long b = 0; b < nbeams; b++) {
+        new_frames[b]->time_chunk_index = chunk_index;
+        new_frames[b]->beam_id = beam_ids[b];
+    }
 
-    frame->time_chunk_index = initial_time_chunk + seq_index / nbeams;
-    frame->beam_id = beam_ids[seq_index % nbeams];
+    // Build the AssembledFrameSet.
+    auto set = make_shared<AssembledFrameSet>();
+    set->nfreq = nfreq;
+    set->ntime = time_samples_per_chunk;
+    set->nbeams = nbeams;
+    set->time_chunk_index = chunk_index;
+    set->metadata = metadata;
+    set->frames = std::move(new_frames);
+    set->validate();  // cheap defensive check
 
-    this->frame_queue.push_back({frame, 0});
+    this->frame_set_queue.push_back({std::move(set), 0});
     this->frame_creation_underway = false;
 
-    cv.notify_all();  // Wake up any waiting get_frame() callers
+    cv.notify_all();  // Wake up any waiting get_frame_set() callers
 }
 
 
@@ -704,6 +805,15 @@ long AssembledFrameAllocator::_initialize_initial_chunk(long target_time_chunk)
         initial_time_chunk = target_time_chunk;
         initial_chunk_set = true;
         just_set = true;
+
+        // Seed all chunk-indexed counters to initial_time_chunk. (See
+        // AssembledFrame.hpp -- these counters track "time chunk index of
+        // the next set in queue / received / created" and are only
+        // meaningful once initial_chunk_set is true.)
+        queue_start_chunk_index = initial_time_chunk;
+        first_unreceived_chunk_index = initial_time_chunk;
+        for (long &c : consumer_next_chunk_index)
+            c = initial_time_chunk;
     }
     long ret = initial_time_chunk;
     guard.unlock();
@@ -749,18 +859,18 @@ shared_ptr<const XEngineMetadata> AssembledFrameAllocator::get_metadata(bool blo
 
 // -------------------------------------------------------------------------------------------------
 //
-// get_frame() - Entry point
+// get_frame_set() - Entry point
 
 
-shared_ptr<AssembledFrame> AssembledFrameAllocator::get_frame(int consumer_id)
+shared_ptr<AssembledFrameSet> AssembledFrameAllocator::get_frame_set(int consumer_id)
 {
     {
         unique_lock<mutex> guard(lock);
-        _throw_if_stopped("AssembledFrameAllocator::get_frame");
+        _throw_if_stopped("AssembledFrameAllocator::get_frame_set");
     }
-    
+
     try {
-        return _get_frame(consumer_id);
+        return _get_frame_set(consumer_id);
     } catch (...) {
         this->stop(current_exception());
         throw;
@@ -768,79 +878,79 @@ shared_ptr<AssembledFrame> AssembledFrameAllocator::get_frame(int consumer_id)
 }
 
 
-shared_ptr<AssembledFrame> AssembledFrameAllocator::_get_frame(int consumer_id)
+shared_ptr<AssembledFrameSet> AssembledFrameAllocator::_get_frame_set(int consumer_id)
 {
     xassert_ge(consumer_id, 0);
     xassert_lt(consumer_id, num_consumers);
-    
+
     unique_lock<mutex> guard(lock);
-    
+
     // Check that both initialization phases have completed. The allocator
     // needs metadata (for nfreq, beam_ids) AND the initial_time_chunk
-    // (which stamps frame->time_chunk_index) before it can mint frames.
+    // (which stamps set->time_chunk_index) before it can mint sets.
     if (!metadata_is_initialized) {
         stringstream ss;
-        ss << "AssembledFrameAllocator::get_frame(): consumer_id=" << consumer_id
+        ss << "AssembledFrameAllocator::get_frame_set(): consumer_id=" << consumer_id
            << " called before any initialize_metadata()";
         throw runtime_error(ss.str());
     }
     if (!initial_chunk_set) {
         stringstream ss;
-        ss << "AssembledFrameAllocator::get_frame(): consumer_id=" << consumer_id
+        ss << "AssembledFrameAllocator::get_frame_set(): consumer_id=" << consumer_id
            << " called before any initialize_initial_chunk()";
         throw runtime_error(ss.str());
     }
 
     for (;;) {
         if (is_stopped)
-            _throw_if_stopped("AssembledFrameAllocator::get_frame");
+            _throw_if_stopped("AssembledFrameAllocator::get_frame_set");
 
-        // Get this consumer's next sequence index.
+        // Get this consumer's next chunk index.
         // Note that we re-read this data in each iteration of the for-loop,
         // in case values changed while we dropped the lock.
 
-        long seq_index = consumer_next_index[consumer_id];
-        long queue_pos = seq_index - queue_start_index; 
-        long queue_size = frame_queue.size();
+        long chunk_index = consumer_next_chunk_index[consumer_id];
+        long queue_pos = chunk_index - queue_start_chunk_index;
+        long queue_size = frame_set_queue.size();
 
         xassert(queue_pos >= 0);
         xassert(queue_pos <= queue_size);
 
         if (queue_pos >= queue_size) {
-            // Frame is not in queue. If another thread is currently creating a new frame, then
-            // wait for that thread to finish. Otherwise, current thread creates a new frame.
+            // Set is not in queue. If another thread is currently creating a new set, then
+            // wait for that thread to finish. Otherwise, current thread creates a new set.
 
             if (!is_dummy_mode || frame_creation_underway)
                 cv.wait(guard);
             else
-                _create_frame(guard);
+                _create_frame_set(guard);
 
-            // Back to top of loop, since lock was dropped in either cv.wait() or _create_frame().
+            // Back to top of loop, since lock was dropped in either cv.wait() or _create_frame_set().
             continue;
         }
 
-        // Get frame and increment receive count.
-        auto &[frame_ref, num_received] = frame_queue[queue_pos];
+        // Get set and increment receive count.
+        auto &[set_ref, num_received] = frame_set_queue[queue_pos];
         num_received++;
-        
+
         // IMPORTANT: Make a copy of the shared_ptr BEFORE popping from queue!
-        // frame_ref becomes a dangling reference after pop_front().
-        auto result = frame_ref;
-    
-        // Increment this consumer's sequence index, and update first_unreceived_index.
-        // (first_unreceived_index is the max of all consumer_next_index values.)
-        consumer_next_index[consumer_id]++;
-        if (consumer_next_index[consumer_id] > first_unreceived_index) {
-            first_unreceived_index = consumer_next_index[consumer_id];
+        // set_ref becomes a dangling reference after pop_front().
+        auto result = set_ref;
+
+        // Increment this consumer's chunk index, and update first_unreceived_chunk_index.
+        // (first_unreceived_chunk_index is the max of all consumer_next_chunk_index values.)
+        consumer_next_chunk_index[consumer_id]++;
+        if (consumer_next_chunk_index[consumer_id] > first_unreceived_chunk_index) {
+            first_unreceived_chunk_index = consumer_next_chunk_index[consumer_id];
             cv.notify_all();  // Wake up block_until_low_memory() if waiting
         }
-    
-        // Pop frames from front that all consumers have received.
-        while (!frame_queue.empty() && (frame_queue.front().second == num_consumers)) {
-            frame_queue.pop_front();
-            queue_start_index++;
+
+        // Pop sets from front that all consumers have received.
+        while (!frame_set_queue.empty() && (frame_set_queue.front().second == num_consumers)) {
+            frame_set_queue.pop_front();
+            queue_start_chunk_index++;
         }
-    
+
         return result;
     }
 }
@@ -873,11 +983,15 @@ long AssembledFrameAllocator::num_free_frames(bool permissive) const
         throw runtime_error("AssembledFrameAllocator::num_free_frames(): allocator not initialized");
     }
 
-    long queue_end_index = queue_start_index + frame_queue.size();
-    long num_preinitialized = queue_end_index - first_unreceived_index;
-    guard.unlock();    
+    // Public API is in *frame* units; internally we count sets (= chunks)
+    // and multiply by nbeams. nbeams is fixed once metadata is set.
+    long nbeams = long(beam_ids.size());
+    long queue_end_chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
+    long num_preinitialized_chunks = queue_end_chunk_index - first_unreceived_chunk_index;
+    long num_preinitialized_frames = num_preinitialized_chunks * nbeams;
+    guard.unlock();
 
-    return num_preinitialized + slab_allocator->num_free_slabs();
+    return num_preinitialized_frames + slab_allocator->num_free_slabs();
 }
 
 
@@ -918,9 +1032,14 @@ void AssembledFrameAllocator::_block_until_low_memory(long nframe_threshold)
         guard.lock();
         _throw_if_stopped("AssembledFrameAllocator::block_until_low_memory");
         
-        long queue_end_index = queue_start_index + frame_queue.size();
-        long num_preinitialized = queue_end_index - first_unreceived_index;
-        
+        // num_preinitialized is in *frame* units (to match the
+        // nframe_threshold argument's units), so we multiply chunks by
+        // nbeams here, same as num_free_frames().
+        long nbeams = long(beam_ids.size());
+        long queue_end_chunk_index = queue_start_chunk_index + long(frame_set_queue.size());
+        long num_preinitialized_chunks = queue_end_chunk_index - first_unreceived_chunk_index;
+        long num_preinitialized = num_preinitialized_chunks * nbeams;
+
         if (num_preinitialized <= nframe_threshold)
             return;
         

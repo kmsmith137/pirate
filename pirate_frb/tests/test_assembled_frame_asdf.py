@@ -76,13 +76,16 @@ def test_assembled_frame_asdf():
     alloc.initialize_metadata(md)
     alloc.initialize_initial_chunk(0)
 
-    frame = alloc.get_frame(0)
+    fset = alloc.get_frame_set(0)
+    # Use frames[0] for the round-trip test; the allocator guarantees
+    # frames[ibeam].beam_id == metadata.beam_ids[ibeam].
+    frame = fset.frames[0]
 
     # Sanity checks on the frame we built.
     assert frame.nfreq == nfreq
     assert frame.ntime == ntime
-    assert frame.beam_id in md.beam_ids
-    idx = list(md.beam_ids).index(frame.beam_id)
+    assert frame.beam_id == md.beam_ids[0]
+    idx = 0
 
     # Mutate the data so the round-trip check isn't trivial (frames come from
     # the allocator pre-filled with 0x88; rewrite with random bytes).

@@ -154,12 +154,34 @@ void register_core_bindings(pybind11::module &m)
             "frame's beam) and freq_channels is empty. See XEngineMetadata.hpp.")
     ;
 
-    // AssembledFrameAllocator: allocates AssembledFrames for multiple consumers.
+    // AssembledFrameSet: container of (nbeams) AssembledFrames for one time chunk.
+    py::class_<AssembledFrameSet, std::shared_ptr<AssembledFrameSet>>(m, "AssembledFrameSet",
+        "Container of (nbeams) AssembledFrames for one time chunk.")
+        .def_readonly("nfreq", &AssembledFrameSet::nfreq)
+        .def_readonly("ntime", &AssembledFrameSet::ntime)
+        .def_readonly("nbeams", &AssembledFrameSet::nbeams)
+        .def_readonly("time_chunk_index", &AssembledFrameSet::time_chunk_index)
+        .def_property_readonly("metadata",
+            [](const AssembledFrameSet &self) {
+                return std::const_pointer_cast<XEngineMetadata>(self.metadata);
+            },
+            "Shared XEngineMetadata for this set. Read-only by convention.")
+        .def_readonly("frames", &AssembledFrameSet::frames,
+            "Length-nbeams list of AssembledFrame, in metadata.beam_ids order.")
+        .def("get_frame", &AssembledFrameSet::get_frame,
+            py::arg("ibeam"),
+            "Bounds-checked accessor for frames[ibeam].")
+        .def("validate", &AssembledFrameSet::validate,
+            "Defensive consistency check; throws on inconsistency. Cheap.")
+    ;
+
+    // AssembledFrameAllocator: allocates AssembledFrameSets for multiple consumers.
     // Designed for multi-threaded use, but works fine with a single Python consumer.
     py::class_<AssembledFrameAllocator, std::shared_ptr<AssembledFrameAllocator>>(m, "AssembledFrameAllocator",
-        "Allocates AssembledFrames for multiple consumers.\n\n"
-        "Each consumer calls initialize() once, then get_frame() in a loop.\n"
-        "All consumers receive the same sequence of frames (same shared_ptr).")
+        "Allocates AssembledFrameSets for multiple consumers.\n\n"
+        "Each consumer calls initialize_metadata() / initialize_initial_chunk()\n"
+        "once (or waits for someone else to), then get_frame_set() in a loop.\n"
+        "All consumers receive the same sequence of sets (same shared_ptr).")
         .def(py::init<const std::shared_ptr<SlabAllocator> &, int, long>(),
             py::arg("slab_allocator"),
             py::arg("num_consumers"),
@@ -188,17 +210,18 @@ void register_core_bindings(pybind11::module &m)
         .def("initialize_initial_chunk", &AssembledFrameAllocator::initialize_initial_chunk,
             py::arg("target_time_chunk"),
             "Establish (on the first call from any caller) the canonical\n"
-            "initial_time_chunk for the whole pipeline. The first frame\n"
-            "returned by get_frame() has time_chunk_index = initial_time_chunk.\n"
+            "initial_time_chunk for the whole pipeline. The first set\n"
+            "returned by get_frame_set() has time_chunk_index = initial_time_chunk.\n"
             "Returns the established value (target_time_chunk on the first call,\n"
             "previously-established value on subsequent calls).")
         .def("wait_for_initial_chunk", &AssembledFrameAllocator::wait_for_initial_chunk,
             "Block until some caller has invoked initialize_initial_chunk(),\n"
             "then return the established initial_time_chunk.")
-        .def("get_frame", &AssembledFrameAllocator::get_frame,
+        .def("get_frame_set", &AssembledFrameAllocator::get_frame_set,
             py::arg("consumer_id"),
-            "Get the next frame for this consumer.\n\n"
-            "Frames cycle through beam_ids for each time_chunk_index.")
+            "Get the next AssembledFrameSet (one time chunk, all beams) for\n"
+            "this consumer. The N-th call returns time_chunk_index =\n"
+            "initial_time_chunk + N.")
         .def("get_metadata",
             [](AssembledFrameAllocator &self, bool blocking) {
                 auto m = self.get_metadata(blocking);
