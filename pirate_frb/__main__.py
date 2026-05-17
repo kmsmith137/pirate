@@ -149,6 +149,7 @@ def test(args):
             if i == 0:
                 tests.test_assembled_frame_allocator()
             tests.test_assembled_frame_asdf()
+            tests.test_network()
 
 
 #########################################   time command  ##########################################
