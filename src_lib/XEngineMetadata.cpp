@@ -692,15 +692,17 @@ std::shared_ptr<XEngineMetadata> XEngineMetadata::make_random()
     // ---- Frequency zones ----
 
     long nzones = rand_int(1, 5);
+    long max_nfreq_per_zone = 100 / nzones;
+    
     ret->zone_nfreq.resize(nzones);
     for (long i = 0; i < nzones; i++)
-        ret->zone_nfreq[i] = rand_int(16, 257);
+        ret->zone_nfreq[i] = rand_int(max_nfreq_per_zone/2, max_nfreq_per_zone+1);
 
-    // zone_freq_edges: nzones+1 sorted distinct values in [100, 1500] MHz.
+    // zone_freq_edges: nzones+1 sorted distinct values in [300, 1500] MHz.
     // freq_eps = 1e-3 in validate(); easily exceeded by uniform samples in this range.
     ret->zone_freq_edges.resize(nzones + 1);
     for (long i = 0; i < nzones + 1; i++)
-        ret->zone_freq_edges[i] = rand_uniform(100.0, 1500.0);
+        ret->zone_freq_edges[i] = rand_uniform(300.0, 1500.0);
     std::sort(ret->zone_freq_edges.begin(), ret->zone_freq_edges.end());
 
     // freq_channels left empty (its content is only meaningful in receiver context).
