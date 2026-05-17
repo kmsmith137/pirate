@@ -13,15 +13,13 @@
 #include <vector>
 
 #include "XEngineMetadata.hpp"
+#include "network_utils.hpp"   // Socket (Worker holds one by value)
 
 
 namespace pirate {
 #if 0
 }   // pacify editor auto-indent
 #endif
-
-
-struct Socket;  // forward declaration (defined in network_utils.hpp)
 
 
 // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a
@@ -134,6 +132,47 @@ struct FakeXEngine
 
         std::thread worker_thread;
 
+        // ---- Worker-thread-only state. Initialized in _initialize()
+        // (called at the top of _worker_main) and modified only by
+        // _send_junk(). No other thread reads or writes these, so they
+        // need no synchronization. ----
+
+        // Per-worker XEngineMetadata, with the round-robin subset of
+        // freq_channels assigned to this thread.
+        XEngineMetadata xmd;
+
+        // Send buffer laid out as:
+        //   [ 12-byte conn header + padded YAML ][ 12-byte mc header + (nbeams,nfreq,256) int4 data ]
+        //   ^                                    ^
+        //   send_buf.data()                      send_buf.data() + header_nbytes
+        //
+        // The first SEND_JUNK sends the whole buffer in one _send_all()
+        // call; subsequent SEND_JUNKs send only the minichunk portion.
+        // The minichunk's magic byte is stamped once in _initialize();
+        // only the 8-byte seq field at offset (header_nbytes + 4) is
+        // rewritten per SEND_JUNK.
+        std::vector<char> send_buf;
+
+        // Byte offset of the minichunk portion of send_buf.
+        long header_nbytes = 0;
+
+        // Size in bytes of the minichunk portion (= send_buf.size() - header_nbytes).
+        long mc_nbytes = 0;
+
+        // Parsed destination address (round-robin: thread_id % ip_addrs.size()).
+        std::string ip_addr;
+        uint16_t port = 0;
+
+        // TCP socket. Default-constructed (fd == -1) at Worker creation;
+        // reassigned via sock = Socket(PF_INET, SOCK_STREAM) on the first
+        // SEND_JUNK before sock.connect().
+        Socket sock;
+
+        // False until sock.connect() has succeeded. The discriminator
+        // between "first SEND_JUNK" (open + send conn header + first mc)
+        // and "subsequent SEND_JUNK" (just send the mc).
+        bool connected = false;
+
         // Worker is neither copyable nor movable -- std::mutex and
         // std::condition_variable are non-copyable AND non-movable.
         // FakeXEngine therefore holds workers as
@@ -225,11 +264,30 @@ private:
     // a runtime_error including method_name.
     void _throw_if_stopped(Worker &w, const char *method_name);
 
-    // Worker thread main function.
+    // Worker thread main function. Calls _initialize() once, then loops
+    // popping commands off the worker's queue and dispatching them.
     void _worker_main(int thread_id);
 
     // Wrapper that catches exceptions and calls stop().
     void worker_main(int thread_id);
+
+    // One-time setup at the top of the worker thread: builds workers[id]'s
+    // xmd, send_buf (with the connection header stamped and the per-
+    // minichunk magic stamped), header_nbytes, mc_nbytes, ip_addr, port.
+    // Does NOT open the TCP connection -- that happens lazily on the
+    // first SEND_JUNK inside _send_junk().
+    void _initialize(int thread_id);
+
+    // Process one SEND_JUNK command on workers[thread_id]. On the first
+    // call (worker not yet connected), opens the TCP socket and sends
+    // [connection header + first minichunk] in one _send_all() call.
+    // On subsequent calls, asserts strict +1 monotonic minichunk_index
+    // and sends only the minichunk portion of send_buf.
+    //
+    // Returns false if _send_all() bailed out (stop or peer connreset).
+    // The caller (_worker_main) should treat that as a signal to exit
+    // the worker loop. Returns true on success.
+    bool _send_junk(int thread_id, const Command &cmd);
 
     // Helper: send all bytes from buffer, using short send_with_timeout
     // calls so we can periodically re-check w.is_stopped under w.mutex

@@ -248,45 +248,48 @@ void FakeXEngine::wait_for_send(long worker_id, long minichunk_index)
 
 // -------------------------------------------------------------------------------------------------
 //
-// Worker main loop. Drained by external controller thread(s) via send_junk().
+// _initialize: one-time setup, called from the top of _worker_main.
+//
+// Populates the worker's per-thread state (xmd, send_buf, header_nbytes,
+// mc_nbytes, ip_addr, port). The TCP socket is NOT opened here -- that
+// happens lazily on the first SEND_JUNK inside _send_junk().
+//
+// Combined "send buffer" laid out as:
+//
+//   [ 12-byte conn header + padded YAML ][ 12-byte mc header + (nbeams,nfreq,256) int4 data ]
+//   ^                                    ^
+//   send_buf.data()                      send_buf.data() + header_nbytes
+//
+// The first SEND_JUNK sends the whole buffer in one _send_all() call
+// (connection header + first minichunk); subsequent SEND_JUNKs send only
+// the minichunk portion. Combining the two saves a _send_all() call on
+// the first send and avoids a TCP-level Nagle round-trip between the
+// header and the first minichunk.
+//
+// The data is "junk" -- all zeros -- and stays that way; only the
+// minichunk's seq field (at offset header_nbytes + 4) is rewritten per
+// SEND_JUNK. See notes/network_protocol.md for the v2 wire format.
 
 
-void FakeXEngine::_worker_main(int thread_id)
+void FakeXEngine::_initialize(int thread_id)
 {
     Worker &w = *workers[thread_id];
 
-    // -- One-time setup (constants for the lifetime of this worker thread). --
+    // Per-worker metadata (round-robin freq-channel subset for this thread).
+    w.xmd = make_worker_metadata(thread_id);
+    long nfreq = w.xmd.freq_channels.size();
+    long nbeams = w.xmd.get_nbeams();
 
-    // Per-worker metadata (with the round-robin freq-channel subset for this thread).
-    XEngineMetadata worker_xmd = make_worker_metadata(thread_id);
-    long nfreq = worker_xmd.freq_channels.size();
-    long nbeams = worker_xmd.get_nbeams();
-
-    // Combined "send buffer" laid out as:
-    //
-    //   [ 12-byte conn header + padded YAML ][ 12-byte mc header + (nbeams,nfreq,256) int4 data ]
-    //   ^                                    ^
-    //   send_buf.data()                      send_buf.data() + header_nbytes (= mc_ptr)
-    //
-    // The first SEND_JUNK sends the whole buffer in one _send_all() call
-    // (connection header + first minichunk); subsequent SEND_JUNKs send
-    // only the minichunk portion. Combining the two buffers saves a
-    // _send_all() call on the first send and avoids a TCP-level Nagle
-    // round-trip between the header and the first minichunk.
-    //
-    // The data is "junk" -- all zeros -- and stays that way; only the
-    // minichunk's seq field is rewritten per iteration. See
-    // notes/network_protocol.md for the v2 wire format.
     static constexpr long mc_header_nbytes = 12;
     long data_nbytes = nbeams * nfreq * 128;
-    long mc_nbytes = mc_header_nbytes + data_nbytes;
+    w.mc_nbytes = mc_header_nbytes + data_nbytes;
 
-    string yaml_str = worker_xmd.to_yaml_string();
-    long str_len = yaml_str.size() + 1;           // +1 for the null terminator
+    string yaml_str = w.xmd.to_yaml_string();
+    long str_len = long(yaml_str.size()) + 1;     // +1 for the null terminator
     long padded_len = ((str_len + 3) / 4) * 4;    // 4-byte align
-    long header_nbytes = 12 + padded_len;
+    w.header_nbytes = 12 + padded_len;
 
-    vector<char> send_buf(header_nbytes + mc_nbytes, 0);
+    w.send_buf.assign(w.header_nbytes + w.mc_nbytes, 0);
 
     // Stamp the connection header (one-time fields: protocol magic +
     // flags=0 + yaml_len + padded YAML).
@@ -294,37 +297,99 @@ void FakeXEngine::_worker_main(int thread_id)
         uint32_t magic = protocol_magic;
         uint32_t flags = 0;
         uint32_t len32 = static_cast<uint32_t>(padded_len);
-        std::memcpy(send_buf.data() + 0, &magic, 4);
-        std::memcpy(send_buf.data() + 4, &flags, 4);
-        std::memcpy(send_buf.data() + 8, &len32, 4);
-        std::memcpy(send_buf.data() + 12, yaml_str.data(), yaml_str.size());
+        std::memcpy(w.send_buf.data() + 0, &magic, 4);
+        std::memcpy(w.send_buf.data() + 4, &flags, 4);
+        std::memcpy(w.send_buf.data() + 8, &len32, 4);
+        std::memcpy(w.send_buf.data() + 12, yaml_str.data(), yaml_str.size());
     }
 
-    // Pointer to the minichunk portion of send_buf. The mc magic is
-    // constant for this thread's lifetime; only the seq field (mc_ptr+4)
-    // is rewritten per SEND_JUNK.
-    char *mc_ptr = send_buf.data() + header_nbytes;
+    // Stamp the per-minichunk magic. Constant for this thread's lifetime;
+    // only the seq field at offset (header_nbytes + 4) is rewritten per
+    // SEND_JUNK.
     {
         uint32_t mc_magic = protocol_magic;
-        std::memcpy(mc_ptr, &mc_magic, 4);
+        std::memcpy(w.send_buf.data() + w.header_nbytes, &mc_magic, 4);
     }
 
     // Parsed destination (ip:port). Round-robin: threads share IPs cyclically.
-    string ip_addr;
-    uint16_t port;
-    parse_ip_address(ip_addrs[thread_id % ip_addrs.size()], ip_addr, port);
+    parse_ip_address(ip_addrs[thread_id % ip_addrs.size()], w.ip_addr, w.port);
 
-    // TCP socket -- opened lazily on the first SEND_JUNK. Socket is
-    // default-constructible and move-only, so we hold one slot and
-    // overwrite it once on first send.
-    Socket sock;
-    bool connected = false;
+    // w.sock stays default-constructed (fd == -1); w.connected stays false.
+    // _send_junk's first call performs the connect().
+}
 
-    // -- Main command-processing loop. --
+
+// -------------------------------------------------------------------------------------------------
+//
+// _send_junk: handler for one SEND_JUNK command. See header for contract.
+
+
+bool FakeXEngine::_send_junk(int thread_id, const Command &cmd)
+{
+    Worker &w = *workers[thread_id];
+
+    bool first_send = !w.connected;
+
+    if (first_send) {
+        // First SEND_JUNK on this worker: open the TCP connection.
+        // connect() may throw on ECONNREFUSED etc.; worker_main's catch
+        // handler then calls FakeXEngine::stop() with the exception.
+        //
+        // Safe to read w.last_minichunk_sent without the lock: the
+        // worker thread is the sole writer of this field.
+        xassert_eq(w.last_minichunk_sent, -1L);
+        w.sock = Socket(PF_INET, SOCK_STREAM);
+        w.sock.connect(w.ip_addr, w.port);
+        w.connected = true;
+    } else {
+        // Subsequent SEND_JUNK: strict +1 monotonic advance.
+        // Same "sole writer" argument applies for the unlocked read.
+        xassert_eq(cmd.minichunk_index, w.last_minichunk_sent + 1L);
+    }
+
+    // Stamp the wire-seq for this minichunk. (typical first
+    // minichunk_index is 0, or initial_time_chunk * minichunks_per_chunk
+    // for NOTE-2 tests.)
+    char *mc_ptr = w.send_buf.data() + w.header_nbytes;
+    uint64_t mc_seq = uint64_t(cmd.minichunk_index) * 256ULL
+                    * uint64_t(w.xmd.seq_per_frb_time_sample);
+    std::memcpy(mc_ptr + 4, &mc_seq, 8);
+
+    // First send: connection header + first minichunk in one shot.
+    // Subsequent sends: just the minichunk portion of send_buf.
+    const char *send_ptr = first_send ? w.send_buf.data() : mc_ptr;
+    long send_nbytes = first_send ? long(w.send_buf.size()) : w.mc_nbytes;
+
+    if (!_send_all(w, w.sock, send_ptr, send_nbytes))
+        return false;
+
+    // Publish last_minichunk_sent and wake any wait_for_send waiters for
+    // this worker. (No cross-worker notify is needed -- each
+    // wait_for_send is bound to a specific worker_id and waits on that
+    // worker's own cv.)
+    {
+        std::lock_guard<std::mutex> lock(w.mutex);
+        w.last_minichunk_sent = cmd.minichunk_index;
+    }
+    w.cv.notify_all();
+
+    return true;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Worker main loop. Drained by external controller thread(s) via send_junk().
+
+
+void FakeXEngine::_worker_main(int thread_id)
+{
+    Worker &w = *workers[thread_id];
+
+    _initialize(thread_id);
+
     for (;;) {
         Command cmd;
-        long prev_minichunk;
-
         {
             std::unique_lock<std::mutex> lock(w.mutex);
             while (!w.is_stopped && w.command_queue.empty())
@@ -333,10 +398,14 @@ void FakeXEngine::_worker_main(int thread_id)
 
             cmd = w.command_queue.front();
             w.command_queue.pop_front();
-            prev_minichunk = w.last_minichunk_sent;
         }
 
-        if (cmd.kind != Command::Kind::SEND_JUNK) {
+        switch (cmd.kind) {
+        case Command::Kind::SEND_JUNK:
+            if (!_send_junk(thread_id, cmd))
+                return;
+            break;
+        default: {
             // Defensive -- UNINITIALIZED Commands should never be enqueued.
             stringstream ss;
             ss << "FakeXEngine worker " << thread_id
@@ -344,47 +413,7 @@ void FakeXEngine::_worker_main(int thread_id)
                << " (expected SEND_JUNK)";
             throw runtime_error(ss.str());
         }
-
-        bool first_send = !connected;
-
-        if (first_send) {
-            // First SEND_JUNK on this worker: open the TCP connection.
-            // connect() may throw on ECONNREFUSED etc.; the wrapping
-            // worker_main catches and calls stop() which surfaces the
-            // failure through the FakeXEngine's normal exception path.
-            xassert_eq(prev_minichunk, -1L);
-            sock = Socket(PF_INET, SOCK_STREAM);
-            sock.connect(ip_addr, port);
-            connected = true;
-        } else {
-            // Subsequent SEND_JUNK: strict monotonic advance by 1.
-            xassert_eq(cmd.minichunk_index, prev_minichunk + 1L);
         }
-
-        // Stamp the wire-seq for this minichunk. (typical first
-        // minichunk_index is 0, or initial_time_chunk *
-        // minichunks_per_chunk for NOTE-2 tests.)
-        uint64_t mc_seq = uint64_t(cmd.minichunk_index) * 256ULL
-                        * uint64_t(worker_xmd.seq_per_frb_time_sample);
-        std::memcpy(mc_ptr + 4, &mc_seq, 8);
-
-        // First send: connection header + first minichunk in one shot.
-        // Subsequent sends: just the minichunk portion of send_buf.
-        const char *send_ptr = first_send ? send_buf.data() : mc_ptr;
-        long send_nbytes = first_send ? long(send_buf.size()) : mc_nbytes;
-
-        if (!_send_all(w, sock, send_ptr, send_nbytes))
-            return;
-
-        // Publish last_minichunk_sent and wake any wait_for_send waiters
-        // for this worker. (No cross-worker notify is needed -- each
-        // wait_for_send is bound to a specific worker_id and waits on
-        // that worker's own cv.)
-        {
-            std::lock_guard<std::mutex> lock(w.mutex);
-            w.last_minichunk_sent = cmd.minichunk_index;
-        }
-        w.cv.notify_all();
     }
 }
 
