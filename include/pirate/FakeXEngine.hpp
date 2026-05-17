@@ -1,6 +1,7 @@
 #ifndef _PIRATE_FAKE_XENGINE_HPP
 #define _PIRATE_FAKE_XENGINE_HPP
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -443,6 +444,21 @@ struct FakeXEngine
     // would miss those sends. The global aggregate captures them all.
     std::atomic<long> max_sent_minichunk{-1};
 
+    // Per-outcome counters for the three-way ack-prediction check in
+    // _read_acks. Incremented once per ack byte processed when
+    // debug=true (always zero when debug=false, since no acks arrive).
+    // Indices:
+    //   0 = unambiguous, DROPPED    (ii <  cbcp_lower; ack was DROPPED)
+    //   1 = unambiguous, ASSEMBLED  (ii >= cbcp_upper; ack was ASSEMBLED)
+    //   2 = ambiguous, DROPPED      (ambiguous band; ack == DROPPED)
+    //   3 = ambiguous, ASSEMBLED    (ambiguous band; ack == ASSEMBLED)
+    //
+    // Initialized to zero in the constructor body. Updated with
+    // memory_order_relaxed; read back via get_debug_counters() for
+    // diagnostic purposes only (no synchronization relationship with
+    // anything else).
+    std::array<std::atomic<long>, 4> debug_counters;
+
     // ----- Public interface -----
 
     // Constructor: validates args, then spawns nworkers worker threads.
@@ -599,6 +615,15 @@ struct FakeXEngine
     // stopped FakeXEngine. No GIL release (cheap atomic load
     // + mutex acquire + array read).
     unsigned char get_minichunk_status(long worker_id, long minichunk_index) const;
+
+    // Entry point: snapshot the four debug_counters (see the member
+    // declaration above for index meanings). Cheap atomic loads with
+    // relaxed ordering. The snapshot is "consistent" only insofar as
+    // nothing is actively being acked concurrently -- callers typically
+    // call this after synchronize() has drained all in-flight acks.
+    // Does NOT throw, even on a stopped FakeXEngine or when debug=false
+    // (in which case all four entries are zero).
+    std::array<long, 4> get_debug_counters() const;
 
     // Put FakeXEngine into stopped state. First caller's compare-exchange
     // on is_stopped_cache wins; subsequent concurrent calls return

@@ -118,6 +118,11 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     for (long i = 0; i < num_receivers; i++)
         max_acked_minichunk[i].store(-1, std::memory_order_relaxed);
 
+    // Zero the debug counters (default-constructed std::atomic has
+    // indeterminate initial value pre-C++20).
+    for (auto &c : debug_counters)
+        c.store(0, std::memory_order_relaxed);
+
     // Allocate Worker objects first (heap-allocated, stable address --
     // Worker embeds std::mutex / std::condition_variable, which are
     // neither copyable nor movable). Then spawn the worker threads.
@@ -538,6 +543,15 @@ unsigned char FakeXEngine::get_minichunk_status(long worker_id, long minichunk_i
 }
 
 
+std::array<long, 4> FakeXEngine::get_debug_counters() const
+{
+    std::array<long, 4> out;
+    for (size_t i = 0; i < out.size(); i++)
+        out[i] = debug_counters[i].load(std::memory_order_relaxed);
+    return out;
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // _initialize: one-time setup, called from the top of _worker_main.
@@ -893,6 +907,7 @@ void FakeXEngine::_read_acks(Worker &w, bool blocking)
                            << "), got ack=" << int(ack);
                         throw runtime_error(ss.str());
                     }
+                    debug_counters[1].fetch_add(1, std::memory_order_relaxed);
                 } else if (ii < cbcp_lower) {
                     if (ack != STATUS_DROPPED) {
                         std::stringstream ss;
@@ -905,8 +920,13 @@ void FakeXEngine::_read_acks(Worker &w, bool blocking)
                            << "), got ack=" << int(ack);
                         throw runtime_error(ss.str());
                     }
+                    debug_counters[0].fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    // Ambiguous band: no assertion fires; bucket by the
+                    // actual ack value (2 = DROPPED, 3 = ASSEMBLED).
+                    debug_counters[(ack == STATUS_ASSEMBLED) ? 3 : 2]
+                        .fetch_add(1, std::memory_order_relaxed);
                 }
-                // else: ambiguous, no assertion fires.
             }
         }
         need -= n;

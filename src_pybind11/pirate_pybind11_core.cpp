@@ -774,6 +774,19 @@ void register_core_bindings(pybind11::module &m)
                "    if worker_id is out of range; if no state-advancing\n"
                "    commands have been enqueued yet on this worker; or if\n"
                "    minichunk_index is out of range.")
+          .def("get_debug_counters", &FakeXEngine::get_debug_counters,
+               "Snapshot the four ack-prediction outcome counters as a\n"
+               "tuple (length 4). Indices:\n"
+               "    [0] unambiguous, DROPPED   (predicted + got DROPPED)\n"
+               "    [1] unambiguous, ASSEMBLED (predicted + got ASSEMBLED)\n"
+               "    [2] ambiguous,   DROPPED   (no prediction; got DROPPED)\n"
+               "    [3] ambiguous,   ASSEMBLED (no prediction; got ASSEMBLED)\n\n"
+               "Each ack byte processed in debug=True mode bumps exactly\n"
+               "one entry. With debug=False, all four entries are zero\n"
+               "(no acks ever arrive). Cheap relaxed-atomic loads; the\n"
+               "snapshot is only 'consistent' if no acks are arriving\n"
+               "concurrently -- typically call after synchronize() has\n"
+               "drained all in-flight acks. Does NOT throw.")
           .def("stop", [](FakeXEngine &self) { self.stop(); },
                "Signal worker threads to stop. Any in-flight wait_until_processed\n"
                "/ enqueue_send_junk calls throw RuntimeError. Safe to call\n"

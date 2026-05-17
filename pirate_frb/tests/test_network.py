@@ -126,6 +126,17 @@ def test_network():
             # to this thread.
             for w in range(p['nworkers']):
                 fxe.synchronize(w)
+
+            # All acks drained; the counters are now a stable snapshot.
+            counters = fxe.get_debug_counters()
+            labels = [
+                "unambiguous, DROPPED",
+                "unambiguous, ASSEMBLED",
+                "ambiguous,   DROPPED",
+                "ambiguous,   ASSEMBLED",
+            ]
+            for label, count in zip(labels, counters):
+                print(f"    {label}: {count}")
         finally:
             fxe.stop()
             server.stop()
