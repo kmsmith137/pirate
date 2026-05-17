@@ -569,7 +569,7 @@ void register_core_bindings(pybind11::module &m)
 
     // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a receiver.
     // Driven externally by a controller thread that submits SEND_JUNK commands
-    // via send_junk() and synchronizes via wait_for_send().
+    // via send_junk() and synchronizes via wait_until_processed().
     // Skipped members: mutex, cv, error, workers (internal state)
     // Skipped methods: _throw_if_stopped, make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine>(m, "FakeXEngine",
@@ -577,7 +577,7 @@ void register_core_bindings(pybind11::module &m)
         "Creates 'nthreads' worker threads in the constructor; each worker\n"
         "waits on a per-worker command queue. An external controller thread\n"
         "drives the workers by calling send_junk(worker_id, minichunk_index)\n"
-        "and wait_for_send(worker_id, minichunk_index).\n\n"
+        "and wait_until_processed(worker_id, minichunk_index).\n\n"
         "Threads are assigned round-robin to IP addresses. nthreads must be a\n"
         "multiple of len(ip_addrs). Worker threads inherit the vcpu affinity\n"
         "of the thread that calls the constructor -- Python callers MUST\n"
@@ -587,7 +587,7 @@ void register_core_bindings(pybind11::module &m)
         "    with ThreadAffinity(vcpu_list):\n"
         "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64)\n"
         "        # Spawn a controller thread (under the same affinity) that\n"
-        "        # calls fxe.send_junk / fxe.wait_for_send in a loop.\n"
+        "        # calls fxe.send_junk / fxe.wait_until_processed in a loop.\n"
         "    # ... wait ...\n"
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
           .def(py::init<const XEngineMetadata &, const std::vector<std::string> &, int>(),
@@ -604,31 +604,44 @@ void register_core_bindings(pybind11::module &m)
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a SEND_JUNK(minichunk_index) command to worker_id's queue.\n\n"
-               "Non-blocking. minichunk_index must be exactly one greater than the\n"
-               "last command (any kind) submitted to this worker -- with one\n"
-               "exception: the very first command on a worker may pick any\n"
-               "minichunk_index >= 0 (for NOTE-2 nonzero-initial-chunk tests).\n\n"
+               "Non-blocking. minichunk_index must be exactly one greater than\n"
+               "the last state-advancing command (SEND_JUNK / SKIP_MINICHUNK /\n"
+               "SEND_MINICHUNK) submitted to this worker -- with one exception:\n"
+               "the very first state-advancing command on a worker may pick any\n"
+               "minichunk_index >= 0 (for NOTE-2 nonzero-initial-chunk tests).\n"
+               "DISCONNECT commands do not participate in the chain.\n\n"
+               "The sequentiality check fires synchronously at submit time;\n"
+               "a bad index raises RuntimeError to this caller rather than\n"
+               "tearing down the FakeXEngine.\n\n"
                "Wire effect: the worker sends one minichunk worth of all-zero\n"
                "data. The protocol handshake is sent ahead of the first\n"
                "SEND_JUNK or SEND_MINICHUNK on this worker.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped or arguments are out of range.")
+               "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
+               "    out of range, or minichunk_index is not the +1 successor of\n"
+               "    the most recently enqueued state-advancing command on this\n"
+               "    worker (with the first-command exemption).")
           .def("skip_minichunk", &FakeXEngine::skip_minichunk,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a SKIP_MINICHUNK(minichunk_index) command to worker_id's queue.\n\n"
-               "Non-blocking. Same monotonicity rules as send_junk.\n\n"
-               "Wire effect: NONE. Advances last_minichunk_sent past\n"
+               "Non-blocking. Same queue-time sequentiality rules as send_junk\n"
+               "(strict +1 from the most recently enqueued state-advancing\n"
+               "command on this worker, with the first-command exemption).\n\n"
+               "Wire effect: NONE. Advances last_minichunk_processed past\n"
                "minichunk_index without putting any bytes on the wire.\n"
                "A worker whose only commands are SKIPs never opens its TCP\n"
                "connection -- useful for 'silent peer' tests.\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped or arguments are out of range.")
+               "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
+               "    out of range, or minichunk_index violates the +1 chain.")
           .def("send_minichunk", &FakeXEngine::send_minichunk,
                py::arg("worker_id"), py::arg("minichunk_index"), py::arg("frame_set"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a SEND_MINICHUNK(minichunk_index, frame_set) command.\n\n"
-               "Non-blocking. Same monotonicity rules as send_junk.\n\n"
+               "Non-blocking. Same queue-time sequentiality rules as send_junk\n"
+               "(strict +1 from the most recently enqueued state-advancing\n"
+               "command on this worker, with the first-command exemption).\n\n"
                "Wire effect: gather the per-(beam, freq) int4 data for the\n"
                "minichunk at offset (minichunk_index - frame_set.time_chunk_index\n"
                "* minichunks_per_chunk) within the set, then send one minichunk.\n\n"
@@ -636,8 +649,8 @@ void register_core_bindings(pybind11::module &m)
                "its frames' data buffers) alive throughout the SEND_MINICHUNK\n"
                "processing. The worker holds a shared_ptr while the Command sits\n"
                "in the queue + is being processed, so the typical pattern (hold\n"
-               "the same Python reference until wait_for_send returns for this\n"
-               "minichunk_index) is sufficient.\n\n"
+               "the same Python reference until wait_until_processed returns for\n"
+               "this minichunk_index) is sufficient.\n\n"
                "REAPER RACE WARNING: the worker reads the frames' data buffers\n"
                "WITHOUT taking frame.mutex, so it races the AssembledFrame reaper.\n"
                "The reaper currently lives in FrbServer, not FakeXEngine, and the\n"
@@ -646,21 +659,26 @@ void register_core_bindings(pybind11::module &m)
                "practice. If we ever want to colocate the two, the gather loop\n"
                "needs lock acquisition (one per beam).\n\n"
                "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped, arguments are out of\n"
-               "    range, or frame_set is None.")
+               "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
+               "    out of range, frame_set is None, or minichunk_index violates\n"
+               "    the +1 chain.")
           .def("disconnect", &FakeXEngine::disconnect,
                py::arg("worker_id"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a DISCONNECT command to worker_id's queue.\n\n"
                "Non-blocking (fire-and-forget). The worker closes its TCP socket\n"
-               "on receipt. last_minichunk_sent is NOT touched; the next\n"
-               "send_junk or send_minichunk on this worker transparently reopens\n"
-               "the connection and re-sends the protocol handshake.\n\n"
+               "on receipt. last_minichunk_processed and last_queued_minichunk\n"
+               "are NOT touched; the next send_junk or send_minichunk on this\n"
+               "worker transparently reopens the connection and re-sends the\n"
+               "protocol handshake.\n\n"
                "SKIP_MINICHUNK commands continue to work normally while\n"
-               "disconnected (they advance last_minichunk_sent without touching\n"
-               "the socket). If you want the next reconnect to start at a higher\n"
-               "minichunk_index, bridge the gap yourself with skip_minichunk\n"
-               "calls.\n\n"
+               "disconnected (they advance last_minichunk_processed without\n"
+               "touching the socket). If you want the next reconnect to start at\n"
+               "a higher minichunk_index, bridge the gap yourself with\n"
+               "skip_minichunk calls.\n\n"
+               "DISCONNECT does NOT participate in the +1 sequentiality chain,\n"
+               "so it can be submitted at any time relative to the state-\n"
+               "advancing commands.\n\n"
                "DISCONNECT on an already-disconnected (or never-connected)\n"
                "worker is a no-op.\n\n"
                "Raises:\n"
@@ -676,18 +694,23 @@ void register_core_bindings(pybind11::module &m)
                "is still meaningful for diagnostics). Throws only on worker_id\n"
                "out of range.\n\n"
                "O(1) atomic load; the GIL is NOT released for this call.")
-          .def("wait_for_send", &FakeXEngine::wait_for_send,
+          .def("wait_until_processed", &FakeXEngine::wait_until_processed,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
-               "Block until worker_id has finished sending minichunk_index (or a later one).\n\n"
-               "Returns immediately if minichunk_index is negative (since per-worker\n"
-               "last_minichunk_sent starts at -1, this lets the controller call\n"
-               "wait_for_send(w, n-2) unconditionally for n in {0, 1}).\n\n"
+               "Block until worker_id has finished processing minichunk_index\n"
+               "(or a later one). 'Processed' means a state-advancing command\n"
+               "(SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK) with the given\n"
+               "minichunk_index has been fully handled by the worker -- bytes\n"
+               "actually on the wire for SEND_*, or just state-advance for SKIP.\n\n"
+               "Returns immediately if minichunk_index is negative (since per-\n"
+               "worker last_minichunk_processed starts at -1, this lets the\n"
+               "controller call wait_until_processed(w, n-2) unconditionally for\n"
+               "n in {0, 1}).\n\n"
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine is stopped.")
           .def("stop", [](FakeXEngine &self) { self.stop(); },
-               "Signal worker threads to stop. Any in-flight wait_for_send /\n"
-               "send_junk calls throw RuntimeError. Safe to call multiple times.")
+               "Signal worker threads to stop. Any in-flight wait_until_processed\n"
+               "/ send_junk calls throw RuntimeError. Safe to call multiple times.")
           .def_property_readonly("is_stopped",
                [](FakeXEngine &self) {
                    // O(1) atomic load -- the property's "true" value just

@@ -52,7 +52,7 @@ namespace pirate {
 // multiple of ip_addrs.size()). Frequency channels are assigned round-
 // robin to worker threads. There is NO internal cross-worker barrier --
 // the controller thread is responsible for any "minichunk N waits for
-// (N-2)" style serialization by interleaving wait_for_send() and
+// (N-2)" style serialization by interleaving wait_until_processed() and
 // send_junk() calls. See plans/fake_xengine_command_queue.md for the
 // canonical controller pseudocode.
 //
@@ -64,7 +64,7 @@ namespace pirate {
 //   with ThreadAffinity(vcpu_list):
 //       fxe = FakeXEngine(xmd, ["10.0.0.2:5000", "10.0.1.2:5000"], 64)
 //       # Spawn a controller thread (under the same affinity) that calls
-//       # fxe.send_junk / fxe.wait_for_send in a loop.
+//       # fxe.send_junk / fxe.wait_until_processed in a loop.
 //   ...
 //   fxe.stop()   # signals workers and any in-flight entry points to exit.
 
@@ -91,13 +91,17 @@ struct FakeXEngine
         } kind = Kind::UNINITIALIZED;
 
         // Used by all of {SEND_JUNK, SKIP_MINICHUNK, SEND_MINICHUNK}.
-        // Ignored by DISCONNECT (which does not touch last_minichunk_sent).
+        // Ignored by DISCONNECT (which does not touch
+        // last_minichunk_processed or last_queued_minichunk).
         // Wire seq = minichunk_index * 256 * xmd.seq_per_frb_time_sample.
         // Successive state-advancing commands on a worker must have
         // strictly +1 monotonic minichunk_index, with one exception:
         // the very FIRST such command may pick any minichunk_index >= 0
         // -- this is what makes NOTE-2-style nonzero-initial-chunk tests
-        // work.
+        // work. The check fires at *queue time* in FakeXEngine::_enqueue
+        // (raising runtime_error to the caller); a redundant defense-
+        // in-depth check also fires at *processing time* in
+        // _skip_or_send.
         long minichunk_index = -1;
 
         // Required for SEND_MINICHUNK; an empty pointer otherwise. The
@@ -128,19 +132,52 @@ struct FakeXEngine
         // ---- All of these are protected by 'mutex'. ----
 
         std::mutex mutex;
-        // Notified by: send_junk (after enqueue), the worker thread (after
-        // a successful send updates last_minichunk_sent), and stop() (when
-        // is_stopped transitions to true).
+        // Notified by: send_junk / skip_minichunk / send_minichunk /
+        // disconnect (after enqueue), the worker thread (after a
+        // successful command processed-step updates
+        // last_minichunk_processed), and stop() (when is_stopped
+        // transitions to true).
         std::condition_variable cv;
 
         // Commands waiting to be processed by this worker, FIFO.
         std::deque<Command> command_queue;
 
-        // Latest minichunk_index this worker has finished sending, or -1
-        // if no SEND_JUNK has completed yet. Only the worker thread
-        // writes this; external threads read it (under 'mutex') via
-        // wait_for_send().
-        long last_minichunk_sent = -1;
+        // Latest minichunk_index this worker has finished *processing*
+        // for a state-advancing command (SEND_JUNK / SKIP_MINICHUNK /
+        // SEND_MINICHUNK), or -1 if no such command has completed yet.
+        // Only the worker thread writes this; external threads read it
+        // (under 'mutex') via wait_until_processed(). (Name reflects
+        // that SKIP_MINICHUNK *processes* a command without actually
+        // sending anything.)
+        long last_minichunk_processed = -1;
+
+        // Latest minichunk_index that has been *enqueued* on this
+        // worker for a state-advancing command, or -1 if no such
+        // command has been queued yet. DISCONNECT commands do not
+        // touch this field. Used in FakeXEngine::_enqueue to enforce
+        // strict +1 monotonic submission ordering at queue time
+        // (analogous to the processing-time check in _skip_or_send,
+        // but with the friendlier semantics of throwing
+        // runtime_error to the offending caller rather than tripping
+        // an internal xassert + stop()).
+        //
+        // Protected by 'mutex'. _enqueue holds the mutex continuously
+        // across (a) the sequentiality check, (b) this counter's
+        // update, and (c) command_queue.push_back -- so the recorded
+        // counter is always consistent with the FIFO order of the
+        // queue.
+        long last_queued_minichunk = -1;
+
+        // The minichunk_index of the very first state-advancing
+        // command queued on this worker, or -1 if no such command has
+        // ever been queued. Set exactly once (when
+        // last_queued_minichunk transitions from -1 to its first
+        // value) and immutable thereafter. DISCONNECT commands do
+        // not touch this field.
+        //
+        // Protected by 'mutex' (set inside _enqueue under the same
+        // lock that holds last_queued_minichunk consistent).
+        long first_minichunk = -1;
 
         // Per-worker stopped flag. Workers and entry points synchronize
         // exclusively through this flag (NOT FakeXEngine::is_stopped_cache).
@@ -276,10 +313,11 @@ struct FakeXEngine
     // Entry point: submit a SKIP_MINICHUNK(minichunk_index) command.
     // Non-blocking; same lock discipline as send_junk.
     //
-    // Wire effect: NONE. Advances last_minichunk_sent past minichunk_index
-    // (per the usual +1 monotonicity rule, with the first-command
-    // exception). A worker whose only commands are SKIPs never opens its
-    // TCP connection -- useful for "silent peer" tests.
+    // Wire effect: NONE. Advances last_minichunk_processed past
+    // minichunk_index (per the usual +1 monotonicity rule, with the
+    // first-command exception, enforced at queue time -- see
+    // send_junk). A worker whose only commands are SKIPs never opens
+    // its TCP connection -- useful for "silent peer" tests.
     void skip_minichunk(long worker_id, long minichunk_index);
 
     // Entry point: submit a SEND_MINICHUNK(minichunk_index, frame_set)
@@ -294,8 +332,8 @@ struct FakeXEngine
     // its frames' data buffers) alive throughout SEND_MINICHUNK
     // processing -- the worker holds a shared_ptr while the Command sits
     // in the queue + is being processed, so the typical pattern (hold
-    // the same Python reference until wait_for_send returns for this
-    // minichunk_index) is sufficient.
+    // the same Python reference until wait_until_processed returns for
+    // this minichunk_index) is sufficient.
     //
     // WARNING: the worker reads the frames' data buffers WITHOUT taking
     // frame.mutex, so it races the AssembledFrame reaper. The reaper
@@ -312,9 +350,10 @@ struct FakeXEngine
 
     // Entry point: submit a DISCONNECT command. Non-blocking
     // (fire-and-forget); the worker closes its TCP socket on receipt.
-    // last_minichunk_sent is NOT touched. The next SEND_JUNK or
-    // SEND_MINICHUNK on this worker transparently reopens the connection
-    // AND re-sends the protocol handshake.
+    // last_minichunk_processed and last_queued_minichunk are NOT
+    // touched. The next SEND_JUNK or SEND_MINICHUNK on this worker
+    // transparently reopens the connection AND re-sends the protocol
+    // handshake.
     //
     // SKIP_MINICHUNK commands continue to work normally while
     // disconnected. If the caller wants the next reconnect to start at
@@ -338,18 +377,19 @@ struct FakeXEngine
     // (the load is faster than the GIL ops that would protect it).
     bool is_connected(long worker_id) const;
 
-    // Entry point: block until workers[worker_id]->last_minichunk_sent >=
-    // minichunk_index, or throw if stopped. Returns immediately for
-    // minichunk_index < 0 (since last_minichunk_sent starts at -1) -- this
-    // is what makes the controller's "wait_for_send(w, n-2)" call work for
-    // n in {0, 1}. The pybind11 wrapper releases the GIL.
-    void wait_for_send(long worker_id, long minichunk_index);
+    // Entry point: block until
+    // workers[worker_id]->last_minichunk_processed >= minichunk_index,
+    // or throw if stopped. Returns immediately for minichunk_index < 0
+    // (since last_minichunk_processed starts at -1) -- this is what
+    // makes the controller's "wait_until_processed(w, n-2)" call work
+    // for n in {0, 1}. The pybind11 wrapper releases the GIL.
+    void wait_until_processed(long worker_id, long minichunk_index);
 
     // Put FakeXEngine into stopped state. First caller's compare-exchange
     // on is_stopped_cache wins; subsequent concurrent calls return
     // immediately. The winner sweeps every worker, locking each one's
     // mutex briefly to set is_stopped + error and notify its cv. Any
-    // in-flight entry-point calls (wait_for_send / send_junk) then throw
+    // in-flight entry-point calls (wait_until_processed / send_junk) then throw
     // on their next predicate re-check. If 'e' is non-null, it represents
     // an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr);
@@ -385,11 +425,12 @@ private:
     void _initialize(int thread_id);
 
     // Combined handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
-    // Performs the strict-+1 monotonicity check (with the first-command
-    // exception), lazily connects on the first SEND_*, gathers data
-    // into the minichunk_buf for SEND_MINICHUNK, stamps the wire-seq,
-    // calls _send_all(), and finally publishes last_minichunk_sent +
-    // notifies the worker's cv.
+    // Performs a defense-in-depth strict-+1 monotonicity check
+    // against last_minichunk_processed (redundant with the queue-time
+    // check in _enqueue), lazily connects on the first SEND_*, gathers
+    // data into the minichunk_buf for SEND_MINICHUNK, stamps the
+    // wire-seq, calls _send_all(), and finally publishes
+    // last_minichunk_processed + notifies the worker's cv.
     //
     // Returns false if _send_all() bailed out (stop or peer connreset);
     // the caller (_worker_main) should treat that as a signal to exit
@@ -398,8 +439,9 @@ private:
 
     // Handler for DISCONNECT. Idempotent: closes the worker's socket
     // and flips w.connected to false (no-op if already disconnected).
-    // Does NOT touch w.last_minichunk_sent. Does NOT call cv.notify_all
-    // (no state that wait_for_send waiters care about has changed).
+    // Does NOT touch w.last_minichunk_processed or
+    // w.last_queued_minichunk. Does NOT call cv.notify_all (no state
+    // that wait_until_processed waiters care about has changed).
     void _disconnect(int thread_id);
 
     // Helper called by _skip_or_send for SEND_MINICHUNK: gather one
@@ -415,12 +457,27 @@ private:
     void _populate_minichunk_buf(Worker &w, const AssembledFrameSet &fset,
                                  long minichunk_index);
 
-    // Helper for the send_junk / skip_minichunk / send_minichunk entry
-    // points. Validates worker_id, takes workers[worker_id]->mutex,
-    // throws-if-stopped, pushes the Command, drops the lock, notifies
-    // the worker's cv. method_name is passed through to
-    // _throw_if_stopped for diagnostics.
-    void _enqueue(long worker_id, Command &&cmd, const char *method_name);
+    // Helper for the send_junk / skip_minichunk / send_minichunk /
+    // disconnect entry points. Validates worker_id, takes
+    // workers[worker_id]->mutex, throws-if-stopped, performs the
+    // queue-time sequentiality check (only if is_state_advancing is
+    // true), updates last_queued_minichunk and (on the very first
+    // call) first_minichunk, pushes the Command, drops the lock,
+    // notifies the worker's cv. method_name is passed through to
+    // _throw_if_stopped and to the sequentiality-check error
+    // message for diagnostics.
+    //
+    // Callers MUST pass is_state_advancing = true for SEND_JUNK,
+    // SKIP_MINICHUNK, SEND_MINICHUNK; and false for DISCONNECT.
+    // (We pass this as a separate argument rather than inspecting
+    // cmd.kind, so it's explicit at every call site.)
+    //
+    // CRITICAL: the mutex is held continuously across the check,
+    // the counter updates, and the queue push -- so the recorded
+    // last_queued_minichunk is always consistent with the FIFO
+    // ordering of command_queue.
+    void _enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
+                  const char *method_name);
 
     // Helper: send all bytes from buffer, using short send_with_timeout
     // calls so we can periodically re-check w.is_stopped under w.mutex

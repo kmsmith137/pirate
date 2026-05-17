@@ -387,16 +387,17 @@ def _fake_xengine_controller_main(fxe):
     Reproduces the cross-worker "minichunk N waits for (N-2)" serialization
     that the C++ FakeXEngine used to enforce internally with its barrier.
     Runs until fxe.stop() is called (from anywhere), at which point the
-    next wait_for_send() / send_junk() call raises RuntimeError and the
-    function returns via exception.
+    next wait_until_processed() / send_junk() call raises RuntimeError and
+    the function returns via exception.
     """
     nthreads = fxe.nthreads
     n = 0
     while True:
         # Wait for every worker to have caught up to (n-2). Negative
-        # indices return immediately (last_minichunk_sent starts at -1).
+        # indices return immediately (per-worker last_minichunk_processed
+        # starts at -1).
         for w in range(nthreads):
-            fxe.wait_for_send(w, n - 2)
+            fxe.wait_until_processed(w, n - 2)
         # Then submit minichunk n on every worker.
         for w in range(nthreads):
             fxe.send_junk(w, n)

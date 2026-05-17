@@ -198,12 +198,17 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
 // -------------------------------------------------------------------------------------------------
 //
 // External-thread entry points: send_junk(), skip_minichunk(),
-// send_minichunk(), wait_for_send(). The first three share an
-// _enqueue() helper that does the worker_id range check + lock +
-// throw-if-stopped + push + notify pattern.
+// send_minichunk(), disconnect(), wait_until_processed(). All but the
+// last share an _enqueue() helper that does the worker_id range
+// check + lock + throw-if-stopped + (for state-advancing commands)
+// queue-time sequentiality check + push + notify pattern. The
+// is_state_advancing argument is passed explicitly per call rather
+// than inspected from cmd.kind, so each call site documents its
+// intent.
 
 
-void FakeXEngine::_enqueue(long worker_id, Command &&cmd, const char *method_name)
+void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
+                           const char *method_name)
 {
     if (worker_id < 0 || worker_id >= long(nthreads)) {
         stringstream ss;
@@ -216,7 +221,36 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, const char *method_nam
 
     std::unique_lock<std::mutex> lock(w.mutex);
     _throw_if_stopped(w, method_name);
+
+    // Queue-time sequentiality check for state-advancing commands
+    // (SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK). DISCONNECT does
+    // not participate -- its minichunk_index is unused.
+    if (is_state_advancing) {
+        if (w.last_queued_minichunk < 0) {
+            // First state-advancing command on this worker. Any
+            // minichunk_index >= 0 is allowed (supports NOTE-2-style
+            // nonzero-initial-chunk tests). The entry-point
+            // xassert_ge already enforced cmd.minichunk_index >= 0.
+            w.first_minichunk = cmd.minichunk_index;
+        } else if (cmd.minichunk_index != w.last_queued_minichunk + 1L) {
+            stringstream ss;
+            ss << method_name << ": worker_id=" << worker_id
+               << " expected minichunk_index="
+               << (w.last_queued_minichunk + 1L)
+               << " (strict +1 monotonicity), got "
+               << cmd.minichunk_index;
+            throw runtime_error(ss.str());
+        }
+        w.last_queued_minichunk = cmd.minichunk_index;
+    }
+
     w.command_queue.push_back(std::move(cmd));
+
+    // The lock has been held continuously from is_stopped check
+    // through the queue-time check, the counter updates, and the
+    // push -- so the recorded last_queued_minichunk is consistent
+    // with the FIFO position of this command in command_queue. Now
+    // drop it and wake the worker.
     lock.unlock();
     w.cv.notify_all();   // wakes only this worker
 }
@@ -229,7 +263,8 @@ void FakeXEngine::send_junk(long worker_id, long minichunk_index)
     Command cmd;
     cmd.kind = Command::Kind::SEND_JUNK;
     cmd.minichunk_index = minichunk_index;
-    _enqueue(worker_id, std::move(cmd), "FakeXEngine::send_junk");
+    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+             "FakeXEngine::send_junk");
 }
 
 
@@ -240,7 +275,8 @@ void FakeXEngine::skip_minichunk(long worker_id, long minichunk_index)
     Command cmd;
     cmd.kind = Command::Kind::SKIP_MINICHUNK;
     cmd.minichunk_index = minichunk_index;
-    _enqueue(worker_id, std::move(cmd), "FakeXEngine::skip_minichunk");
+    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+             "FakeXEngine::skip_minichunk");
 }
 
 
@@ -255,7 +291,8 @@ void FakeXEngine::send_minichunk(long worker_id, long minichunk_index,
     cmd.kind = Command::Kind::SEND_MINICHUNK;
     cmd.minichunk_index = minichunk_index;
     cmd.frame_set = std::move(frame_set);
-    _enqueue(worker_id, std::move(cmd), "FakeXEngine::send_minichunk");
+    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
+             "FakeXEngine::send_minichunk");
 }
 
 
@@ -265,7 +302,8 @@ void FakeXEngine::disconnect(long worker_id)
     cmd.kind = Command::Kind::DISCONNECT;
     // minichunk_index stays -1; frame_set stays null. Neither is read
     // by _disconnect.
-    _enqueue(worker_id, std::move(cmd), "FakeXEngine::disconnect");
+    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
+             "FakeXEngine::disconnect");
 }
 
 
@@ -284,11 +322,11 @@ bool FakeXEngine::is_connected(long worker_id) const
 }
 
 
-void FakeXEngine::wait_for_send(long worker_id, long minichunk_index)
+void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 {
     if (worker_id < 0 || worker_id >= long(nthreads)) {
         stringstream ss;
-        ss << "FakeXEngine::wait_for_send: worker_id=" << worker_id
+        ss << "FakeXEngine::wait_until_processed: worker_id=" << worker_id
            << " out of range [0, " << nthreads << ")";
         throw runtime_error(ss.str());
     }
@@ -297,8 +335,8 @@ void FakeXEngine::wait_for_send(long worker_id, long minichunk_index)
 
     std::unique_lock<std::mutex> lock(w.mutex);
     for (;;) {
-        _throw_if_stopped(w, "FakeXEngine::wait_for_send");
-        if (w.last_minichunk_sent >= minichunk_index)
+        _throw_if_stopped(w, "FakeXEngine::wait_until_processed");
+        if (w.last_minichunk_processed >= minichunk_index)
             return;
         w.cv.wait(lock);
     }
@@ -475,12 +513,13 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 // and resets fd back to -1) and flips the atomic flag. Idempotent --
 // repeated DISCONNECTs on an already-disconnected worker are no-ops.
 //
-// Crucially, does NOT touch w.last_minichunk_sent; the next SEND_* on
-// this worker will hit the !w.connected branch in _skip_or_send and
-// transparently reopen the connection + re-send the protocol header
-// (bundled with the next minichunk in one _send_all). Also does NOT
-// call cv.notify_all: nothing in any wait_for_send predicate depends
-// on the connected flag.
+// Crucially, does NOT touch w.last_minichunk_processed or
+// w.last_queued_minichunk; the next SEND_* on this worker will hit
+// the !w.connected branch in _skip_or_send and transparently reopen
+// the connection + re-send the protocol header (bundled with the
+// next minichunk in one _send_all). Also does NOT call
+// cv.notify_all: nothing in any wait_until_processed predicate
+// depends on the connected flag.
 
 
 void FakeXEngine::_disconnect(int thread_id)
@@ -499,7 +538,7 @@ void FakeXEngine::_disconnect(int thread_id)
 // _skip_or_send: handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
 // See header for contract. Three discriminators:
 //
-//   - first_command (last_minichunk_sent == -1): the very first
+//   - first_command (last_minichunk_processed == -1): the very first
 //     state-advancing command on this worker may pick any
 //     minichunk_index >= 0 (for NOTE-2 nonzero-initial-chunk tests).
 //     Subsequent state-advancing commands must advance by exactly +1.
@@ -520,11 +559,21 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
 {
     Worker &w = *workers[thread_id];
 
-    // Monotonicity check. Safe to read w.last_minichunk_sent without
-    // w.mutex: the worker thread is the sole writer.
-    bool first_command = (w.last_minichunk_sent == -1);
+    // Defense-in-depth monotonicity check. In principle this is
+    // redundant with the queue-time sequentiality check that
+    // _enqueue has already performed on every state-advancing
+    // command (queue-time + FIFO ordering of command_queue together
+    // guarantee that the order observed here matches the order
+    // submitted), but we keep the processing-time check out of
+    // caution -- the cost is negligible, and a violation would
+    // immediately surface a queue-time logic bug as a worker-thread
+    // exception via the existing stop() cascade.
+    //
+    // Safe to read w.last_minichunk_processed without w.mutex: the
+    // worker thread is the sole writer.
+    bool first_command = (w.last_minichunk_processed == -1);
     if (!first_command)
-        xassert_eq(cmd.minichunk_index, w.last_minichunk_sent + 1L);
+        xassert_eq(cmd.minichunk_index, w.last_minichunk_processed + 1L);
     xassert_ge(cmd.minichunk_index, 0L);
 
     bool need_send = (cmd.kind == Command::Kind::SEND_JUNK ||
@@ -578,13 +627,13 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
     // SKIP_MINICHUNK falls through here -- no wire activity, just
     // advance state below.
 
-    // Publish last_minichunk_sent and wake any wait_for_send waiters
-    // for this worker. (No cross-worker notify is needed -- each
-    // wait_for_send is bound to a specific worker_id and waits on that
-    // worker's own cv.)
+    // Publish last_minichunk_processed and wake any
+    // wait_until_processed waiters for this worker. (No cross-worker
+    // notify is needed -- each wait_until_processed is bound to a
+    // specific worker_id and waits on that worker's own cv.)
     {
         std::lock_guard<std::mutex> lock(w.mutex);
-        w.last_minichunk_sent = cmd.minichunk_index;
+        w.last_minichunk_processed = cmd.minichunk_index;
     }
     w.cv.notify_all();
 
