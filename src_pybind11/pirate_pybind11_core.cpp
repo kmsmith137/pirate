@@ -568,33 +568,59 @@ void register_core_bindings(pybind11::module &m)
     ;
 
     // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a receiver.
-    // Skipped members: mutex, cv, error, workers, barrier (internal state)
+    // Driven externally by a controller thread that submits SEND_JUNK commands
+    // via send_junk() and synchronizes via wait_for_send().
+    // Skipped members: mutex, cv, error, workers (internal state)
     // Skipped methods: _throw_if_stopped, make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
-        "Creates multiple worker threads, each sending data over a TCP connection\n"
-        "following the X->FRB network protocol.\n\n"
+        "Creates 'nthreads' worker threads in the constructor; each worker\n"
+        "waits on a per-worker command queue. An external controller thread\n"
+        "drives the workers by calling send_junk(worker_id, minichunk_index)\n"
+        "and wait_for_send(worker_id, minichunk_index).\n\n"
         "Threads are assigned round-robin to IP addresses. nthreads must be a\n"
-        "multiple of len(ip_addrs).\n\n"
+        "multiple of len(ip_addrs). Worker threads inherit the vcpu affinity\n"
+        "of the thread that calls the constructor -- Python callers MUST\n"
+        "instantiate FakeXEngine inside a ThreadAffinity context manager.\n\n"
         "Usage:\n"
         "    xmd = XEngineMetadata.from_yaml_file('...')\n"
-        "    fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64)\n"
-        "    fxe.start()  # creates threads and begins sending\n"
+        "    with ThreadAffinity(vcpu_list):\n"
+        "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64)\n"
+        "        # Spawn a controller thread (under the same affinity) that\n"
+        "        # calls fxe.send_junk / fxe.wait_for_send in a loop.\n"
         "    # ... wait ...\n"
-        "    fxe.stop()   # signals threads to stop")
+        "    fxe.stop()   # signals workers and any in-flight entry points to exit")
           .def(py::init<const XEngineMetadata &, const std::vector<std::string> &, int>(),
                py::arg("xmd"), py::arg("ip_addrs"), py::arg("nthreads"),
-               "Create a FakeXEngine (does not start sending until start() is called).\n\n"
+               "Create a FakeXEngine and spawn 'nthreads' worker threads.\n\n"
+               "Workers inherit the vcpu affinity of the calling thread, so the\n"
+               "Python caller MUST invoke this constructor inside a ThreadAffinity\n"
+               "context manager.\n\n"
                "Args:\n"
                "    xmd: X-engine metadata defining frequency channels and beams\n"
                "    ip_addrs: List of receiver addresses in 'ip:port' format\n"
                "    nthreads: Number of worker threads (must be a multiple of len(ip_addrs))")
-          .def("start", &FakeXEngine::start,
-               "Create worker threads and begin sending data.\n\n"
+          .def("send_junk", &FakeXEngine::send_junk,
+               py::arg("worker_id"), py::arg("minichunk_index"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Submit a SEND_JUNK(minichunk_index) command to worker_id's queue.\n\n"
+               "Non-blocking. minichunk_index must be exactly one greater than the\n"
+               "last SEND_JUNK submitted to this worker (workers assert strict +1\n"
+               "monotonicity when they process the command).\n\n"
                "Raises:\n"
-               "    RuntimeError: If already started or stopped")
+               "    RuntimeError: If the FakeXEngine is stopped or arguments are out of range.")
+          .def("wait_for_send", &FakeXEngine::wait_for_send,
+               py::arg("worker_id"), py::arg("minichunk_index"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Block until worker_id has finished sending minichunk_index (or a later one).\n\n"
+               "Returns immediately if minichunk_index is negative (since per-worker\n"
+               "last_minichunk_sent starts at -1, this lets the controller call\n"
+               "wait_for_send(w, n-2) unconditionally for n in {0, 1}).\n\n"
+               "Raises:\n"
+               "    RuntimeError: If the FakeXEngine is stopped.")
           .def("stop", [](FakeXEngine &self) { self.stop(); },
-               "Signal worker threads to stop. Safe to call multiple times.")
+               "Signal worker threads to stop. Any in-flight wait_for_send /\n"
+               "send_junk calls throw RuntimeError. Safe to call multiple times.")
           .def_property_readonly("is_stopped",
                [](FakeXEngine &self) {
                    std::lock_guard<std::mutex> lock(self.mutex);
@@ -649,6 +675,13 @@ void register_core_bindings(pybind11::module &m)
                self.get_status(num_conn, num_bytes);
                return py::make_tuple(num_conn, num_bytes);
           }, "Returns (num_connections, num_bytes) tuple.")
+          .def("get_frame_set", &Receiver::get_frame_set,
+               py::call_guard<py::gil_scoped_release>(),
+               "Retrieve the next assembled frame set (one time chunk, all beams)\n"
+               "from the queue, blocking until a set is available. The GIL is\n"
+               "released for the duration of the call.\n\n"
+               "Raises:\n"
+               "    RuntimeError: If the Receiver is stopped.")
           .def("stop", [](Receiver &self) { self.stop(); },
                "Signal worker threads to stop. Safe to call multiple times.")
           .def_property_readonly("address", [](const Receiver &self) { return self.params.address; },

@@ -34,7 +34,7 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
         throw runtime_error(ss.str());
     }
 
-    // Validate all addresses (parse early to catch errors before start()).
+    // Validate all addresses (parse early to catch errors before threads spawn).
     for (const auto &addr : ip_addrs) {
         string ip;
         uint16_t port;
@@ -51,6 +51,27 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     }
 
     xmd.validate();
+
+    // Spawn worker threads. workers.resize default-constructs nthreads Worker
+    // objects (with non-joinable std::thread members); the per-worker thread
+    // is move-assigned in the loop below. Workers inherit the vcpu affinity
+    // of the caller (the documented constructor contract).
+    workers.resize(nthreads);
+
+    try {
+        for (int i = 0; i < nthreads; i++)
+            workers[i].worker_thread = std::thread(&FakeXEngine::worker_main, this, i);
+    } catch (...) {
+        // Partial-spawn cleanup: signal stop, then join whichever workers
+        // did start, so the destructor's joinable-thread invariant holds
+        // even if std::thread construction throws partway through.
+        stop(std::current_exception());
+        for (auto &w : workers) {
+            if (w.worker_thread.joinable())
+                w.worker_thread.join();
+        }
+        throw;
+    }
 }
 
 
@@ -59,8 +80,8 @@ FakeXEngine::~FakeXEngine()
     this->stop();
 
     for (auto &w : workers) {
-        if (w.joinable())
-            w.join();
+        if (w.worker_thread.joinable())
+            w.worker_thread.join();
     }
 }
 
@@ -73,23 +94,6 @@ void FakeXEngine::_throw_if_stopped(const char *method_name)
 
     if (is_stopped)
         throw runtime_error(string(method_name) + " called on stopped instance");
-}
-
-
-void FakeXEngine::start()
-{
-    std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("FakeXEngine::start");
-
-    if (!workers.empty())
-        throw runtime_error("FakeXEngine::start() called but workers already exist");
-
-    lock.unlock();
-
-    // Create worker threads.
-    workers.resize(nthreads);
-    for (int i = 0; i < nthreads; i++)
-        workers[i] = std::thread(&FakeXEngine::worker_main, this, i);
 }
 
 
@@ -152,7 +156,7 @@ bool FakeXEngine::_send_all(Socket &sock, const void *buf, long nbytes)
         long n = sock.send_with_timeout(ptr + pos, nbytes - pos, send_timeout_ms);
 
         if (sock.connreset) {
-            stop();  // wake up other threads waiting at the barrier
+            stop();  // wake up other workers
             return false;
         }
 
@@ -163,99 +167,176 @@ bool FakeXEngine::_send_all(Socket &sock, const void *buf, long nbytes)
 }
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// send_junk() / wait_for_send() - external-thread entry points.
+
+
+void FakeXEngine::send_junk(long worker_id, long minichunk_index)
+{
+    if (worker_id < 0 || worker_id >= long(nthreads)) {
+        stringstream ss;
+        ss << "FakeXEngine::send_junk: worker_id=" << worker_id
+           << " out of range [0, " << nthreads << ")";
+        throw runtime_error(ss.str());
+    }
+    xassert_ge(minichunk_index, 0L);
+
+    std::unique_lock<std::mutex> lock(mutex);
+    _throw_if_stopped("FakeXEngine::send_junk");
+
+    Command cmd;
+    cmd.kind = Command::Kind::SEND_JUNK;
+    cmd.minichunk_index = minichunk_index;
+    workers[worker_id].command_queue.push_back(cmd);
+
+    lock.unlock();
+    // Single shared cv: notify_all wakes every worker (only the target
+    // one has new work). This is wasteful at high nthreads; a future
+    // commit splits to per-worker cv to fix it.
+    cv.notify_all();
+}
+
+
+void FakeXEngine::wait_for_send(long worker_id, long minichunk_index)
+{
+    if (worker_id < 0 || worker_id >= long(nthreads)) {
+        stringstream ss;
+        ss << "FakeXEngine::wait_for_send: worker_id=" << worker_id
+           << " out of range [0, " << nthreads << ")";
+        throw runtime_error(ss.str());
+    }
+
+    std::unique_lock<std::mutex> lock(mutex);
+    for (;;) {
+        _throw_if_stopped("FakeXEngine::wait_for_send");
+        if (workers[worker_id].last_minichunk_sent >= minichunk_index)
+            return;
+        cv.wait(lock);
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Worker main loop. Drained by external controller thread(s) via send_junk().
+
+
 void FakeXEngine::_worker_main(int thread_id)
 {
-    // Create worker-specific metadata.
+    Worker &w = workers[thread_id];
+
+    // -- One-time setup (constants for the lifetime of this worker thread). --
+
+    // Per-worker metadata (with the round-robin freq-channel subset for this thread).
     XEngineMetadata worker_xmd = make_worker_metadata(thread_id);
     long nfreq = worker_xmd.freq_channels.size();
     long nbeams = worker_xmd.get_nbeams();
 
     // Each v2 minichunk is a 12-byte header (uint32 magic + uint64 seq)
-    // followed by an (nbeams, nfreq, 256) int4 data array (packed 2 per byte,
-    // = nbeams * nfreq * 128 bytes). See notes/network_protocol.md.
-    static constexpr long minichunk_header_nbytes = 12;
+    // followed by an (nbeams, nfreq, 256) int4 data array (packed 2 per
+    // byte = nbeams*nfreq*128 bytes). The data is "junk" -- all zeros --
+    // and stays that way; only the seq field is rewritten per minichunk.
+    // See notes/network_protocol.md.
+    static constexpr long mc_header_nbytes = 12;
     long data_nbytes = nbeams * nfreq * 128;
-    long minichunk_nbytes = minichunk_header_nbytes + data_nbytes;
-    vector<char> minichunk_buf(minichunk_nbytes, 0);  // header zeroed; data is all zeros
+    long mc_nbytes = mc_header_nbytes + data_nbytes;
+    vector<char> minichunk_buf(mc_nbytes, 0);
 
-    // Stamp the per-minichunk magic once; the seq is rewritten each iteration.
-    uint32_t mc_magic = protocol_magic;
-    memcpy(minichunk_buf.data(), &mc_magic, 4);
+    {
+        uint32_t mc_magic = protocol_magic;
+        std::memcpy(minichunk_buf.data(), &mc_magic, 4);
+    }
 
-    // Open TCP connection (threads assigned round-robin to IP addresses).
+    // Protocol header buffer (sent once on the first SEND_JUNK):
+    //   uint32 magic + uint32 flags (always 0) + uint32 yaml_len + padded yaml.
+    string yaml_str = worker_xmd.to_yaml_string();
+    long str_len = yaml_str.size() + 1;           // +1 for the null terminator
+    long padded_len = ((str_len + 3) / 4) * 4;    // 4-byte align
+
+    vector<char> header_buf(12 + padded_len, '\0');
+    {
+        uint32_t magic = protocol_magic;
+        uint32_t flags = 0;
+        uint32_t len32 = static_cast<uint32_t>(padded_len);
+        std::memcpy(header_buf.data() + 0, &magic, 4);
+        std::memcpy(header_buf.data() + 4, &flags, 4);
+        std::memcpy(header_buf.data() + 8, &len32, 4);
+        std::memcpy(header_buf.data() + 12, yaml_str.data(), yaml_str.size());
+    }
+
+    // Parsed destination (ip:port). Round-robin: threads share IPs cyclically.
     string ip_addr;
     uint16_t port;
     parse_ip_address(ip_addrs[thread_id % ip_addrs.size()], ip_addr, port);
 
-    Socket sock(PF_INET, SOCK_STREAM);
-    sock.connect(ip_addr, port);
+    // TCP socket -- opened lazily on the first SEND_JUNK. Socket is
+    // default-constructible and move-only, so we hold one slot and
+    // overwrite it once on first send.
+    Socket sock;
+    bool connected = false;
 
-    // Build protocol header: magic (4 bytes) + flags (4 bytes) + string length
-    // (4 bytes) + YAML string. FakeXEngine always sends flags=0 -- the
-    // FLAG_ACK back-channel is not supported here (see FakeXEngine.hpp).
-    string yaml_str = worker_xmd.to_yaml_string();
+    // -- Main command-processing loop. --
+    for (;;) {
+        Command cmd;
+        long prev_minichunk;
 
-    // Pad YAML string to include null terminator and 4-byte alignment.
-    long str_len = yaml_str.size() + 1;
-    long padded_len = ((str_len + 3) / 4) * 4;
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            while (!is_stopped && w.command_queue.empty())
+                cv.wait(lock);
+            if (is_stopped) return;
 
-    // Build contiguous header buffer.
-    vector<char> header_buf(12 + padded_len, '\0');
-    uint32_t magic = protocol_magic;
-    uint32_t flags = 0;
-    uint32_t len32 = static_cast<uint32_t>(padded_len);
-    memcpy(header_buf.data() + 0, &magic, 4);
-    memcpy(header_buf.data() + 4, &flags, 4);
-    memcpy(header_buf.data() + 8, &len32, 4);
-    memcpy(header_buf.data() + 12, yaml_str.data(), yaml_str.size());
-
-    // Send protocol header in a single call.
-    if (!_send_all(sock, header_buf.data(), header_buf.size()))
-        return;
-
-    // Send data arrays in a loop.
-    long array_index = 0;
-
-    while (true) {
-        // Synchronization: before sending array N, wait until all threads
-        // have finished sending array N-2. Uses even/odd barrier counters.
-        // barrier[slot] counts completions of arrays with (index % 2 == slot).
-        // "All threads finished array K" means barrier[K%2] >= nthreads * (K/2 + 1).
-        // For array N-2: barrier[N%2] >= nthreads * ((N-2)/2 + 1) = nthreads * (N/2).
-
-        int slot = array_index % 2;
-        long required = long(nthreads) * (array_index / 2);
-
-        std::unique_lock<std::mutex> lock(mutex);
-
-        while (barrier[slot] < required) {
-            if (is_stopped)
-                return;
-            cv.wait(lock);
+            cmd = w.command_queue.front();
+            w.command_queue.pop_front();
+            prev_minichunk = w.last_minichunk_sent;
         }
 
-        lock.unlock();
+        if (cmd.kind != Command::Kind::SEND_JUNK) {
+            // Defensive -- UNINITIALIZED Commands should never be enqueued.
+            stringstream ss;
+            ss << "FakeXEngine worker " << thread_id
+               << ": got Command with kind=" << uint32_t(cmd.kind)
+               << " (expected SEND_JUNK)";
+            throw runtime_error(ss.str());
+        }
 
-        // Stamp the v2 per-minichunk seq for this iteration. The minichunk
-        // covers 256 time samples, each spanning seq_per_frb_time_sample
-        // seq ticks; for this milestone (NOTE 1 + NOTE 2 deferred) the
-        // first minichunk starts at seq=0 and minichunks are sent strictly
-        // consecutively. See plans/network_protocol_v2_minimal.md.
-        uint64_t mc_seq = uint64_t(array_index) * 256ULL
+        if (!connected) {
+            // First SEND_JUNK on this worker: open the TCP connection and
+            // send the protocol header. connect() may throw on
+            // ECONNREFUSED etc.; the wrapping worker_main catches and
+            // calls stop() which surfaces the failure through the
+            // FakeXEngine's normal exception path.
+            xassert_eq(prev_minichunk, -1L);
+            sock = Socket(PF_INET, SOCK_STREAM);
+            sock.connect(ip_addr, port);
+            connected = true;
+
+            if (!_send_all(sock, header_buf.data(), header_buf.size()))
+                return;
+        } else {
+            // Subsequent SEND_JUNK: strict monotonic advance by 1.
+            xassert_eq(cmd.minichunk_index, prev_minichunk + 1L);
+        }
+
+        // Stamp the wire-seq for this minichunk and send. (The first
+        // SEND_JUNK falls through here too -- it sends the minichunk for
+        // whatever minichunk_index the controller chose, typically 0 or
+        // the initial_time_chunk * minichunks_per_chunk offset for NOTE-2
+        // tests.)
+        uint64_t mc_seq = uint64_t(cmd.minichunk_index) * 256ULL
                         * uint64_t(worker_xmd.seq_per_frb_time_sample);
-        memcpy(minichunk_buf.data() + 4, &mc_seq, 8);
+        std::memcpy(minichunk_buf.data() + 4, &mc_seq, 8);
 
-        // Send the full minichunk (header + data). Checks 'is_stopped'.
-        if (!_send_all(sock, minichunk_buf.data(), minichunk_nbytes))
+        if (!_send_all(sock, minichunk_buf.data(), mc_nbytes))
             return;
 
-        // Increment barrier and notify waiting threads.
-        lock.lock();
-        barrier[slot]++;
-        lock.unlock();
-        
+        // Publish last_minichunk_sent and wake any wait_for_send waiters.
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            w.last_minichunk_sent = cmd.minichunk_index;
+        }
         cv.notify_all();
-        array_index++;
     }
 }
 

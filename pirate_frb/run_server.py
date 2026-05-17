@@ -4,6 +4,7 @@ import os
 import re
 import time
 import datetime
+import threading
 
 import yaml
 import ksgpu
@@ -379,8 +380,66 @@ def _make_xengine_metadata(fxe_config, server_index):
     return xmd
 
 
+def _fake_xengine_controller_main(fxe):
+    """
+    Drive one FakeXEngine in 'send-junk-forever' mode.
+
+    Reproduces the cross-worker "minichunk N waits for (N-2)" serialization
+    that the C++ FakeXEngine used to enforce internally with its barrier.
+    Runs until fxe.stop() is called (from anywhere), at which point the
+    next wait_for_send() / send_junk() call raises RuntimeError and the
+    function returns via exception.
+    """
+    nthreads = fxe.nthreads
+    n = 0
+    while True:
+        # Wait for every worker to have caught up to (n-2). Negative
+        # indices return immediately (last_minichunk_sent starts at -1).
+        for w in range(nthreads):
+            fxe.wait_for_send(w, n - 2)
+        # Then submit minichunk n on every worker.
+        for w in range(nthreads):
+            fxe.send_junk(w, n)
+        n += 1
+
+
+def _fake_xengine_controller_wrapper(fxe, all_fxes, exc_list, exc_lock):
+    """
+    Wraps _fake_xengine_controller_main. On exit (normal or exceptional),
+    stops every FakeXEngine so sibling controllers exit promptly via the
+    "called on stopped instance" cascade.
+
+    Exceptions are stored in exc_list (a list of (fxe, exception) pairs)
+    under exc_lock; the main thread re-raises the most informative one
+    once all controllers have joined.
+    """
+    try:
+        _fake_xengine_controller_main(fxe)
+    except BaseException as e:
+        with exc_lock:
+            exc_list.append((fxe, e))
+    finally:
+        # Cascade: stop every FakeXEngine. stop() is idempotent, so this
+        # is harmless even for the FakeXEngine that originated the
+        # exception (it's already stopped) and for FakeXEngines whose
+        # controllers exited via this same path moments earlier.
+        for other in all_fxes:
+            try:
+                other.stop()
+            except Exception:
+                pass
+
+
 def run_fake_xengine(config_filename):
-    """Main entry point for 'pirate_frb run_server -s'."""
+    """Main entry point for 'pirate_frb run_server -s'.
+
+    Spawns one FakeXEngine per server (each with its own worker threads
+    pinned via ThreadAffinity) plus one Python controller thread per
+    FakeXEngine that drives the SEND_JUNK loop. If any controller's
+    FakeXEngine errors out (e.g. the receiver goes away), every other
+    FakeXEngine is stopped via cascade in
+    _fake_xengine_controller_wrapper.
+    """
 
     config = _parse_config(config_filename)
     n = config['num_servers']
@@ -393,9 +452,15 @@ def run_fake_xengine(config_filename):
     print(f"  num_servers = {n}")
     print(f"  tcp_connections_per_server = {nthreads}")
 
-    fake_xengines = []
+    fake_xengines = []   # list[FakeXEngine]
+    fxe_vcpus = []       # list[list[int]], parallel to fake_xengines
+    controllers = []     # list[threading.Thread]
+    exc_list = []        # list[tuple[FakeXEngine, BaseException]]
+    exc_lock = threading.Lock()
 
     try:
+        # Phase 1: construct all FakeXEngines (workers spawn in the
+        # constructor, pinned via ThreadAffinity).
         for i in range(n):
             ip_addrs = config['data_ip_addrs'][i]
 
@@ -423,26 +488,65 @@ def run_fake_xengine(config_filename):
             print(f"  nbeams = {xmd.get_nbeams()}, beam_ids = {xmd.beam_ids}")
             print(f"  total_nfreq = {xmd.get_total_nfreq()}")
 
-            # Pin thread to sender NIC's CPU for NUMA-local thread creation.
+            # Pin thread to sender NIC's CPU so worker threads spawned by
+            # the FakeXEngine constructor inherit the same affinity.
             with ThreadAffinity(vcpu_list):
                 fxe = FakeXEngine(xmd, ip_addrs, nthreads)
-                fxe.start()
-
             fake_xengines.append(fxe)
-            print(f"  FakeXEngine {i} started.")
+            fxe_vcpus.append(vcpu_list)
+            print(f"  FakeXEngine {i} workers spawned.")
 
-        print(f"\nAll {n} FakeXEngine(s) started. Press Ctrl-C to stop.")
+        # Phase 2: spawn one controller thread per FakeXEngine, each
+        # inside its own ThreadAffinity scope so the controller is
+        # pinned to the same vcpu list as its FakeXEngine's workers.
+        # We spawn all controllers in phase 2 (not interleaved with
+        # construction) so the cascade in _fake_xengine_controller_wrapper
+        # sees the complete fake_xengines list from the moment the first
+        # controller runs.
+        for fxe, vcpu_list in zip(fake_xengines, fxe_vcpus):
+            with ThreadAffinity(vcpu_list):
+                t = threading.Thread(
+                    target=_fake_xengine_controller_wrapper,
+                    args=(fxe, fake_xengines, exc_list, exc_lock),
+                    daemon=True,
+                )
+                t.start()
+            controllers.append(t)
 
-        while True:
-            time.sleep(1)
-            # Exit if all FakeXEngines stopped (e.g. server went away).
-            if all(fxe.is_stopped for fxe in fake_xengines):
-                print("\nAll connections lost (server exited?).")
-                break
+        print(f"\nAll {n} FakeXEngine(s) running. Press Ctrl-C to stop.")
 
-    except KeyboardInterrupt:
-        print("\nStopping...")
-    finally:
+        # Block until either Ctrl-C or all controllers exit (e.g. because
+        # all receivers went away and the cascade ran).
+        try:
+            while any(t.is_alive() for t in controllers):
+                time.sleep(0.2)
+        except KeyboardInterrupt:
+            print("\nStopping...")
+
+        # Make sure everything is stopped, then join.
         for fxe in fake_xengines:
             fxe.stop()
+        for t in controllers:
+            t.join(timeout=5.0)
+
+        # Surface the most-informative exception, if any.
+        with exc_lock:
+            if exc_list:
+                # Prefer an exception that isn't a "called on stopped
+                # instance" cascade artefact; those are useful only as a
+                # fallback (e.g. for a clean Ctrl-C with no underlying error).
+                primary = next(
+                    (e for (_, e) in exc_list
+                     if "called on stopped instance" not in str(e)),
+                    exc_list[0][1],
+                )
+                raise primary
+
+    finally:
+        # Defensive cleanup -- harmless if the main path already ran it.
+        for fxe in fake_xengines:
+            try:
+                fxe.stop()
+            except Exception:
+                pass
         print("All FakeXEngine(s) stopped.")
