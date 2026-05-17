@@ -262,36 +262,51 @@ void FakeXEngine::_worker_main(int thread_id)
     long nfreq = worker_xmd.freq_channels.size();
     long nbeams = worker_xmd.get_nbeams();
 
-    // Each v2 minichunk is a 12-byte header (uint32 magic + uint64 seq)
-    // followed by an (nbeams, nfreq, 256) int4 data array (packed 2 per
-    // byte = nbeams*nfreq*128 bytes). The data is "junk" -- all zeros --
-    // and stays that way; only the seq field is rewritten per minichunk.
-    // See notes/network_protocol.md.
+    // Combined "send buffer" laid out as:
+    //
+    //   [ 12-byte conn header + padded YAML ][ 12-byte mc header + (nbeams,nfreq,256) int4 data ]
+    //   ^                                    ^
+    //   send_buf.data()                      send_buf.data() + header_nbytes (= mc_ptr)
+    //
+    // The first SEND_JUNK sends the whole buffer in one _send_all() call
+    // (connection header + first minichunk); subsequent SEND_JUNKs send
+    // only the minichunk portion. Combining the two buffers saves a
+    // _send_all() call on the first send and avoids a TCP-level Nagle
+    // round-trip between the header and the first minichunk.
+    //
+    // The data is "junk" -- all zeros -- and stays that way; only the
+    // minichunk's seq field is rewritten per iteration. See
+    // notes/network_protocol.md for the v2 wire format.
     static constexpr long mc_header_nbytes = 12;
     long data_nbytes = nbeams * nfreq * 128;
     long mc_nbytes = mc_header_nbytes + data_nbytes;
-    vector<char> minichunk_buf(mc_nbytes, 0);
 
-    {
-        uint32_t mc_magic = protocol_magic;
-        std::memcpy(minichunk_buf.data(), &mc_magic, 4);
-    }
-
-    // Protocol header buffer (sent once on the first SEND_JUNK):
-    //   uint32 magic + uint32 flags (always 0) + uint32 yaml_len + padded yaml.
     string yaml_str = worker_xmd.to_yaml_string();
     long str_len = yaml_str.size() + 1;           // +1 for the null terminator
     long padded_len = ((str_len + 3) / 4) * 4;    // 4-byte align
+    long header_nbytes = 12 + padded_len;
 
-    vector<char> header_buf(12 + padded_len, '\0');
+    vector<char> send_buf(header_nbytes + mc_nbytes, 0);
+
+    // Stamp the connection header (one-time fields: protocol magic +
+    // flags=0 + yaml_len + padded YAML).
     {
         uint32_t magic = protocol_magic;
         uint32_t flags = 0;
         uint32_t len32 = static_cast<uint32_t>(padded_len);
-        std::memcpy(header_buf.data() + 0, &magic, 4);
-        std::memcpy(header_buf.data() + 4, &flags, 4);
-        std::memcpy(header_buf.data() + 8, &len32, 4);
-        std::memcpy(header_buf.data() + 12, yaml_str.data(), yaml_str.size());
+        std::memcpy(send_buf.data() + 0, &magic, 4);
+        std::memcpy(send_buf.data() + 4, &flags, 4);
+        std::memcpy(send_buf.data() + 8, &len32, 4);
+        std::memcpy(send_buf.data() + 12, yaml_str.data(), yaml_str.size());
+    }
+
+    // Pointer to the minichunk portion of send_buf. The mc magic is
+    // constant for this thread's lifetime; only the seq field (mc_ptr+4)
+    // is rewritten per SEND_JUNK.
+    char *mc_ptr = send_buf.data() + header_nbytes;
+    {
+        uint32_t mc_magic = protocol_magic;
+        std::memcpy(mc_ptr, &mc_magic, 4);
     }
 
     // Parsed destination (ip:port). Round-robin: threads share IPs cyclically.
@@ -330,34 +345,35 @@ void FakeXEngine::_worker_main(int thread_id)
             throw runtime_error(ss.str());
         }
 
-        if (!connected) {
-            // First SEND_JUNK on this worker: open the TCP connection and
-            // send the protocol header. connect() may throw on
-            // ECONNREFUSED etc.; the wrapping worker_main catches and
-            // calls stop() which surfaces the failure through the
-            // FakeXEngine's normal exception path.
+        bool first_send = !connected;
+
+        if (first_send) {
+            // First SEND_JUNK on this worker: open the TCP connection.
+            // connect() may throw on ECONNREFUSED etc.; the wrapping
+            // worker_main catches and calls stop() which surfaces the
+            // failure through the FakeXEngine's normal exception path.
             xassert_eq(prev_minichunk, -1L);
             sock = Socket(PF_INET, SOCK_STREAM);
             sock.connect(ip_addr, port);
             connected = true;
-
-            if (!_send_all(w, sock, header_buf.data(), header_buf.size()))
-                return;
         } else {
             // Subsequent SEND_JUNK: strict monotonic advance by 1.
             xassert_eq(cmd.minichunk_index, prev_minichunk + 1L);
         }
 
-        // Stamp the wire-seq for this minichunk and send. (The first
-        // SEND_JUNK falls through here too -- it sends the minichunk for
-        // whatever minichunk_index the controller chose, typically 0 or
-        // the initial_time_chunk * minichunks_per_chunk offset for NOTE-2
-        // tests.)
+        // Stamp the wire-seq for this minichunk. (typical first
+        // minichunk_index is 0, or initial_time_chunk *
+        // minichunks_per_chunk for NOTE-2 tests.)
         uint64_t mc_seq = uint64_t(cmd.minichunk_index) * 256ULL
                         * uint64_t(worker_xmd.seq_per_frb_time_sample);
-        std::memcpy(minichunk_buf.data() + 4, &mc_seq, 8);
+        std::memcpy(mc_ptr + 4, &mc_seq, 8);
 
-        if (!_send_all(w, sock, minichunk_buf.data(), mc_nbytes))
+        // First send: connection header + first minichunk in one shot.
+        // Subsequent sends: just the minichunk portion of send_buf.
+        const char *send_ptr = first_send ? send_buf.data() : mc_ptr;
+        long send_nbytes = first_send ? long(send_buf.size()) : mc_nbytes;
+
+        if (!_send_all(w, sock, send_ptr, send_nbytes))
             return;
 
         // Publish last_minichunk_sent and wake any wait_for_send waiters
