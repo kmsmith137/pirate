@@ -2,6 +2,7 @@
 #include "../include/pirate/network_utils.hpp"
 
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -216,8 +217,16 @@ void FakeXEngine::worker_main(int worker_id)
 
 bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbytes)
 {
+    using clock = std::chrono::steady_clock;
+    static constexpr auto stall_period = std::chrono::seconds(1);
+
     const char *ptr = static_cast<const char *>(buf);
     long pos = 0;
+
+    // Wall-clock budget for finishing this _send_all (without making
+    // any further progress). Reset after each stall-detection print
+    // in the non-debug branch below.
+    auto stall_deadline = clock::now() + stall_period;
 
     while (pos < nbytes) {
         // Check this worker's stopped flag periodically (bounded by
@@ -239,6 +248,33 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
         }
 
         pos += n;
+
+        // Stall detection. If _send_all has been running for >1s
+        // without returning, the receiver is either down or very
+        // slow. In debug mode, this is a hard failure (we only run
+        // debug=true in controlled subscale unit tests, where a 1-
+        // second stall almost certainly means something has
+        // deadlocked). In production (debug=false), print a one-line
+        // warning to cout and reset the timer so we'll print again
+        // after each additional 1s of stuckness.
+        if (clock::now() >= stall_deadline) {
+            if (debug) {
+                std::stringstream ss;
+                ss << "FakeXEngine::_send_all: stalled >1s sending to "
+                   << w.ip_addr << ":" << w.port
+                   << " (sent " << pos << " of " << nbytes
+                   << " bytes); treating as deadlock in debug mode";
+                throw runtime_error(ss.str());
+            }
+            // std::endl flushes; we want the warning visible
+            // immediately even if cout is fully buffered (e.g. when
+            // redirected to a file).
+            std::cout << "FakeXEngine: receiver " << w.ip_addr << ":" << w.port
+                      << " is down or very slow (sent " << pos << " of "
+                      << nbytes << " bytes in 1s)"
+                      << std::endl;
+            stall_deadline = clock::now() + stall_period;
+        }
     }
 
     return true;
