@@ -2,9 +2,10 @@
 Network test: FakeXEngine -> FrbServer over 127.0.0.1 loopback.
 
 Constructs an FrbServer (dummy-mode allocator) and a FakeXEngine
-(debug=True) in a single Python process, sends 100 minichunks per
-worker, and verifies that none of the real-time debug-mode asserts
-trigger. Random subscale parameters per call (see _random_params).
+(debug=True) in a single Python process, runs a randomized 1000-turn
+send loop that produces ragged per-worker progress, and verifies that
+none of the real-time debug-mode asserts trigger. Random subscale
+parameters per call (see _random_params).
 
 Run via: python -m pirate_frb test --net
 """
@@ -13,6 +14,8 @@ import os
 import random
 import secrets
 import shutil
+
+import numpy as np
 
 from ..core import (
     AssembledFrameAllocator,
@@ -110,13 +113,24 @@ def test_network():
         )
 
         try:
-            # Blast 100 minichunks per worker. No cross-worker barrier --
-            # the FakeXEngine enforces per-worker strict +1 monotonicity
-            # at enqueue time, which this loop satisfies. Workers drain
-            # at their own pace.
-            for minichunk_index in range(100):
-                for w in range(p['nworkers']):
-                    fxe.enqueue_send_junk(w, minichunk_index)
+            # Randomized send loop: 1000 turns, each turn picks a
+            # random worker, occasionally synchronizes it, and
+            # enqueues a Poisson-sized batch of SEND_JUNK commands.
+            # The Poisson mean is (1 + 0.1 * lag), where
+            # lag = max(wpos) - wpos[worker] -- so workers that
+            # have fallen behind catch up faster. This produces
+            # ragged per-worker progress (good coverage for the
+            # ambiguous band of the ack-prediction check).
+            wpos = np.zeros(p['nworkers'], dtype=np.int64)
+            for _ in range(1000):
+                worker_id = random.randrange(p['nworkers'])
+                if random.random() < 0.1:
+                    fxe.synchronize(worker_id)
+                lag = int(np.max(wpos) - wpos[worker_id])
+                n = int(np.random.poisson(1.0 + 0.1 * lag))
+                for k in range(n):
+                    fxe.enqueue_send_junk(worker_id, int(wpos[worker_id]) + k)
+                wpos[worker_id] += n
 
             # synchronize(w) blocks until worker w's command queue is
             # empty; in debug=True mode it also enqueues WAIT_FOR_ACKS
