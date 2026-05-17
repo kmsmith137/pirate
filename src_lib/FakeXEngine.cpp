@@ -197,31 +197,65 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
 
 // -------------------------------------------------------------------------------------------------
 //
-// send_junk() / wait_for_send() - external-thread entry points.
+// External-thread entry points: send_junk(), skip_minichunk(),
+// send_minichunk(), wait_for_send(). The first three share an
+// _enqueue() helper that does the worker_id range check + lock +
+// throw-if-stopped + push + notify pattern.
 
 
-void FakeXEngine::send_junk(long worker_id, long minichunk_index)
+void FakeXEngine::_enqueue(long worker_id, Command &&cmd, const char *method_name)
 {
     if (worker_id < 0 || worker_id >= long(nthreads)) {
         stringstream ss;
-        ss << "FakeXEngine::send_junk: worker_id=" << worker_id
+        ss << method_name << ": worker_id=" << worker_id
            << " out of range [0, " << nthreads << ")";
         throw runtime_error(ss.str());
     }
-    xassert_ge(minichunk_index, 0L);
 
     Worker &w = *workers[worker_id];
 
     std::unique_lock<std::mutex> lock(w.mutex);
-    _throw_if_stopped(w, "FakeXEngine::send_junk");
+    _throw_if_stopped(w, method_name);
+    w.command_queue.push_back(std::move(cmd));
+    lock.unlock();
+    w.cv.notify_all();   // wakes only this worker
+}
+
+
+void FakeXEngine::send_junk(long worker_id, long minichunk_index)
+{
+    xassert_ge(minichunk_index, 0L);
 
     Command cmd;
     cmd.kind = Command::Kind::SEND_JUNK;
     cmd.minichunk_index = minichunk_index;
-    w.command_queue.push_back(cmd);
+    _enqueue(worker_id, std::move(cmd), "FakeXEngine::send_junk");
+}
 
-    lock.unlock();
-    w.cv.notify_all();   // wakes only this worker
+
+void FakeXEngine::skip_minichunk(long worker_id, long minichunk_index)
+{
+    xassert_ge(minichunk_index, 0L);
+
+    Command cmd;
+    cmd.kind = Command::Kind::SKIP_MINICHUNK;
+    cmd.minichunk_index = minichunk_index;
+    _enqueue(worker_id, std::move(cmd), "FakeXEngine::skip_minichunk");
+}
+
+
+void FakeXEngine::send_minichunk(long worker_id, long minichunk_index,
+                                 std::shared_ptr<AssembledFrameSet> frame_set)
+{
+    xassert_ge(minichunk_index, 0L);
+    if (!frame_set)
+        throw runtime_error("FakeXEngine::send_minichunk: frame_set is null");
+
+    Command cmd;
+    cmd.kind = Command::Kind::SEND_MINICHUNK;
+    cmd.minichunk_index = minichunk_index;
+    cmd.frame_set = std::move(frame_set);
+    _enqueue(worker_id, std::move(cmd), "FakeXEngine::send_minichunk");
 }
 
 
@@ -321,50 +355,168 @@ void FakeXEngine::_initialize(int thread_id)
 
 // -------------------------------------------------------------------------------------------------
 //
-// _send_junk: handler for one SEND_JUNK command. See header for contract.
+// _populate_minichunk_buf: gather one minichunk's worth of (beam, freq,
+// 256-time-sample) int4 data from an AssembledFrameSet into the
+// worker's send_buf. Hot path.
+//
+// Loop structure: outer over beams, inner over freqs, with
+// memcpy(dst, src, 128) per (beam, freq). The 128 is a literal so the
+// compiler lowers it to a small fixed sequence of SIMD load/store
+// pairs (4x 32-byte on AVX2; 2x 64-byte on AVX-512). The destination
+// pointer is contiguous within each beam's slab, which is friendly to
+// the hardware prefetcher.
+//
+// REAPER RACE WARNING (see header): this function reads each frame's
+// data buffer WITHOUT taking frame.mutex. The AssembledFrame reaper
+// can concurrently zero data.size and release the underlying slab,
+// which would make the const-char-* read here a use-after-free. We
+// rely on the assumption that the reaper (which lives in FrbServer)
+// is NEVER colocated with FakeXEngine in the same process. The
+// defensive xassert_gt(frame.data.size, 0) below catches "frame was
+// reaped before this call started", but is NOT a guard against an
+// actively-running reaper that races us mid-loop. If we ever want to
+// colocate FakeXEngine with a reaper, replace the unlocked read with
+// a per-beam acquire of frame.mutex.
 
 
-bool FakeXEngine::_send_junk(int thread_id, const Command &cmd)
+void FakeXEngine::_populate_minichunk_buf(Worker &w,
+                                          const AssembledFrameSet &fset,
+                                          long minichunk_index)
+{
+    // Number of bytes on the wire per (beam, freq) for one minichunk:
+    // 256 int4 samples = 128 bytes. Compile-time constant for the
+    // memcpy lowering.
+    static constexpr long mc_time_bytes = 128;
+
+    long worker_nfreq = long(w.xmd.freq_channels.size());
+    long nbeams = fset.nbeams;
+    long ntime = fset.ntime;
+
+    // Cheap defensive consistency checks.
+    xassert_eq(nbeams, w.xmd.get_nbeams());
+    xassert((ntime % 256) == 0);
+
+    long minichunks_per_chunk = ntime / 256;
+    long imc_within_chunk = minichunk_index
+                          - fset.time_chunk_index * minichunks_per_chunk;
+    xassert_ge(imc_within_chunk, 0L);
+    xassert_lt(imc_within_chunk, minichunks_per_chunk);
+
+    // Source-side layout: each AssembledFrame's data is int4 with shape
+    // (nfreq_total, ntime), packed as (nfreq_total, ntime/2) bytes. Per-
+    // freq row stride is ntime/2 bytes. Per-minichunk offset within a
+    // freq row is imc_within_chunk * 128 bytes.
+    long src_freq_stride = ntime / 2;
+    long src_time_offset = imc_within_chunk * mc_time_bytes;
+
+    // Destination-side layout in send_buf: wire data starts at
+    // (send_buf + header_nbytes + 12), with shape
+    // (nbeams, worker_nfreq, 128 bytes). The outer loop over beams
+    // matches that layout, so each beam's destination is a contiguous
+    // (worker_nfreq * 128)-byte slab.
+    char *dst_data = w.send_buf.data() + w.header_nbytes + 12;
+
+    const long *freq_channels = w.xmd.freq_channels.data();
+
+    for (long ibeam = 0; ibeam < nbeams; ibeam++) {
+        const AssembledFrame &frame = *fset.frames[ibeam];
+
+        // Defense-in-depth: a reaped frame has data.size == 0. NOT a
+        // safe guard against a concurrently-running reaper -- see the
+        // race warning at the top of this function -- but cheap and
+        // catches "frame was already reaped before this call started".
+        xassert_gt(frame.data.size, 0L);
+
+        const char *frame_data = static_cast<const char *>(frame.data.data);
+        char *dst_beam = dst_data + ibeam * worker_nfreq * mc_time_bytes;
+
+        for (long ifreq_local = 0; ifreq_local < worker_nfreq; ifreq_local++) {
+            long freq_global = freq_channels[ifreq_local];
+            const char *src = frame_data
+                            + freq_global * src_freq_stride
+                            + src_time_offset;
+            char *dst = dst_beam + ifreq_local * mc_time_bytes;
+            std::memcpy(dst, src, 128);
+        }
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// _skip_or_send: handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
+// See header for contract. Three discriminators:
+//
+//   - first_command (last_minichunk_sent == -1): the very first command
+//     on this worker may pick any minichunk_index >= 0 (for NOTE-2
+//     nonzero-initial-chunk tests). Subsequent commands must advance
+//     by exactly +1.
+//
+//   - need_send (kind in {SEND_JUNK, SEND_MINICHUNK}): does this
+//     command put bytes on the wire?
+//
+//   - first_send_after_connect: did this _skip_or_send call open the
+//     TCP socket? If so, the conn header rides along in the same
+//     _send_all call as the first minichunk.
+
+
+bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
 {
     Worker &w = *workers[thread_id];
 
-    bool first_send = !w.connected;
-
-    if (first_send) {
-        // First SEND_JUNK on this worker: open the TCP connection.
-        // connect() may throw on ECONNREFUSED etc.; worker_main's catch
-        // handler then calls FakeXEngine::stop() with the exception.
-        //
-        // Safe to read w.last_minichunk_sent without the lock: the
-        // worker thread is the sole writer of this field.
-        xassert_eq(w.last_minichunk_sent, -1L);
-        w.sock = Socket(PF_INET, SOCK_STREAM);
-        w.sock.connect(w.ip_addr, w.port);
-        w.connected = true;
-    } else {
-        // Subsequent SEND_JUNK: strict +1 monotonic advance.
-        // Same "sole writer" argument applies for the unlocked read.
+    // Monotonicity check. Safe to read w.last_minichunk_sent without
+    // w.mutex: the worker thread is the sole writer.
+    bool first_command = (w.last_minichunk_sent == -1);
+    if (!first_command)
         xassert_eq(cmd.minichunk_index, w.last_minichunk_sent + 1L);
+    xassert_ge(cmd.minichunk_index, 0L);
+
+    bool need_send = (cmd.kind == Command::Kind::SEND_JUNK ||
+                      cmd.kind == Command::Kind::SEND_MINICHUNK);
+
+    if (need_send) {
+        // Lazy connect: the first SEND_* opens the socket. SKIP_MINICHUNK
+        // never opens the socket -- so a worker that only ever sees
+        // SKIPs leaves its TCP connection un-established.
+        bool first_send_after_connect = false;
+        if (!w.connected) {
+            // connect() may throw on ECONNREFUSED etc.; worker_main's
+            // catch handler then calls FakeXEngine::stop().
+            w.sock = Socket(PF_INET, SOCK_STREAM);
+            w.sock.connect(w.ip_addr, w.port);
+            w.connected = true;
+            first_send_after_connect = true;
+        }
+
+        // SEND_MINICHUNK: gather real data into the minichunk_buf.
+        // SEND_JUNK: leave the data area as the all-zero initialization
+        // from _initialize().
+        if (cmd.kind == Command::Kind::SEND_MINICHUNK) {
+            // _enqueue() already rejected null frame_set, but
+            // defense-in-depth in case a future caller bypasses it.
+            xassert(cmd.frame_set);
+            _populate_minichunk_buf(w, *cmd.frame_set, cmd.minichunk_index);
+        }
+
+        // Stamp the wire-seq for this minichunk.
+        char *mc_ptr = w.send_buf.data() + w.header_nbytes;
+        uint64_t mc_seq = uint64_t(cmd.minichunk_index) * 256ULL
+                        * uint64_t(w.xmd.seq_per_frb_time_sample);
+        std::memcpy(mc_ptr + 4, &mc_seq, 8);
+
+        // First send after connect: conn header + minichunk in one shot.
+        // Subsequent sends: just the minichunk portion of send_buf.
+        const char *send_ptr = first_send_after_connect ? w.send_buf.data() : mc_ptr;
+        long send_nbytes = first_send_after_connect ? long(w.send_buf.size()) : w.mc_nbytes;
+
+        if (!_send_all(w, w.sock, send_ptr, send_nbytes))
+            return false;
     }
+    // SKIP_MINICHUNK falls through here -- no wire activity, just
+    // advance state below.
 
-    // Stamp the wire-seq for this minichunk. (typical first
-    // minichunk_index is 0, or initial_time_chunk * minichunks_per_chunk
-    // for NOTE-2 tests.)
-    char *mc_ptr = w.send_buf.data() + w.header_nbytes;
-    uint64_t mc_seq = uint64_t(cmd.minichunk_index) * 256ULL
-                    * uint64_t(w.xmd.seq_per_frb_time_sample);
-    std::memcpy(mc_ptr + 4, &mc_seq, 8);
-
-    // First send: connection header + first minichunk in one shot.
-    // Subsequent sends: just the minichunk portion of send_buf.
-    const char *send_ptr = first_send ? w.send_buf.data() : mc_ptr;
-    long send_nbytes = first_send ? long(w.send_buf.size()) : w.mc_nbytes;
-
-    if (!_send_all(w, w.sock, send_ptr, send_nbytes))
-        return false;
-
-    // Publish last_minichunk_sent and wake any wait_for_send waiters for
-    // this worker. (No cross-worker notify is needed -- each
+    // Publish last_minichunk_sent and wake any wait_for_send waiters
+    // for this worker. (No cross-worker notify is needed -- each
     // wait_for_send is bound to a specific worker_id and waits on that
     // worker's own cv.)
     {
@@ -402,7 +554,9 @@ void FakeXEngine::_worker_main(int thread_id)
 
         switch (cmd.kind) {
         case Command::Kind::SEND_JUNK:
-            if (!_send_junk(thread_id, cmd))
+        case Command::Kind::SKIP_MINICHUNK:
+        case Command::Kind::SEND_MINICHUNK:
+            if (!_skip_or_send(thread_id, cmd))
                 return;
             break;
         default: {

@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "AssembledFrame.hpp"   // AssembledFrameSet (Command holds a shared_ptr<>)
 #include "XEngineMetadata.hpp"
 #include "network_utils.hpp"   // Socket (Worker holds one by value)
 
@@ -78,19 +79,41 @@ struct FakeXEngine
     // ----- Nested types -----
 
     // Command: a unit of work submitted by an external controller thread
-    // to a worker's queue. Room for future kinds (SEND_DATA, RECONNECT, ...).
+    // to a worker's queue.
     struct Command
     {
         enum class Kind : uint32_t {
-            UNINITIALIZED = 0,
-            SEND_JUNK     = 1,   // sends current contents of the worker's minichunk_buf
+            UNINITIALIZED  = 0,
+            SEND_JUNK      = 1,   // send minichunk_buf with all-zero ("junk") data
+            SKIP_MINICHUNK = 2,   // advance state, send nothing on the wire
+            SEND_MINICHUNK = 3,   // gather data from frame_set, then send
         } kind = Kind::UNINITIALIZED;
 
-        // Used by SEND_JUNK: index in "minichunk units" (256 time samples).
+        // Used by all of {SEND_JUNK, SKIP_MINICHUNK, SEND_MINICHUNK}.
         // Wire seq = minichunk_index * 256 * xmd.seq_per_frb_time_sample.
-        // The worker asserts that successive SEND_JUNK commands have
-        // exactly-monotonic minichunk_index (last_minichunk_sent + 1).
+        // Successive commands on a worker must have strictly +1 monotonic
+        // minichunk_index, with one exception: the very FIRST command
+        // (any kind) may pick any minichunk_index >= 0 -- this is what
+        // makes NOTE-2-style nonzero-initial-chunk tests work.
         long minichunk_index = -1;
+
+        // Required for SEND_MINICHUNK; an empty pointer otherwise. The
+        // set's frames supply the int4 data to gather into the wire
+        // minichunk; its time_chunk_index and ntime determine which
+        // minichunk-within-the-chunk we're sending. The set's metadata
+        // is expected to be consistent with the worker's xmd (same
+        // total_nfreq, same nbeams, same ntime).
+        //
+        // WARNING: the SEND_MINICHUNK gather loop reads frame.data WITHOUT
+        // acquiring frame.mutex. This races the AssembledFrame reaper.
+        // The reaper currently runs in FrbServer (not FakeXEngine), and
+        // the assumption is that FrbServer and FakeXEngine are NEVER
+        // colocated in the same process -- so the race doesn't occur in
+        // practice. A defensive xassert_gt(frame.data.size, 0) catches
+        // gross misuse (calling SEND_MINICHUNK on a reaped frame) but is
+        // not safe against an actively-running reaper. See also the
+        // identical warning on the send_minichunk() entry point below.
+        std::shared_ptr<AssembledFrameSet> frame_set;
     };
 
     // Worker: per-worker state and synchronization. Each Worker is an
@@ -230,7 +253,49 @@ struct FakeXEngine
     // Entry point: submit a SEND_JUNK(minichunk_index) command to
     // workers[worker_id]->command_queue. Non-blocking. Throws if stopped
     // or worker_id is out of range. The pybind11 wrapper releases the GIL.
+    //
+    // Wire effect: the worker sends one minichunk worth of all-zero data.
+    // (The protocol handshake is sent ahead of the first SEND_JUNK or
+    // SEND_MINICHUNK on this worker; SKIP_MINICHUNK never triggers
+    // connect/handshake.)
     void send_junk(long worker_id, long minichunk_index);
+
+    // Entry point: submit a SKIP_MINICHUNK(minichunk_index) command.
+    // Non-blocking; same lock discipline as send_junk.
+    //
+    // Wire effect: NONE. Advances last_minichunk_sent past minichunk_index
+    // (per the usual +1 monotonicity rule, with the first-command
+    // exception). A worker whose only commands are SKIPs never opens its
+    // TCP connection -- useful for "silent peer" tests.
+    void skip_minichunk(long worker_id, long minichunk_index);
+
+    // Entry point: submit a SEND_MINICHUNK(minichunk_index, frame_set)
+    // command. Non-blocking; same lock discipline as send_junk. Throws
+    // if frame_set is null.
+    //
+    // Wire effect: gather the per-(beam, freq) int4 data for the
+    // minichunk at offset (minichunk_index - frame_set->time_chunk_index
+    // * minichunks_per_chunk) within the set, then send one minichunk.
+    //
+    // The caller is responsible for keeping the AssembledFrameSet (and
+    // its frames' data buffers) alive throughout SEND_MINICHUNK
+    // processing -- the worker holds a shared_ptr while the Command sits
+    // in the queue + is being processed, so the typical pattern (hold
+    // the same Python reference until wait_for_send returns for this
+    // minichunk_index) is sufficient.
+    //
+    // WARNING: the worker reads the frames' data buffers WITHOUT taking
+    // frame.mutex, so it races the AssembledFrame reaper. The reaper
+    // currently lives in FrbServer (not FakeXEngine), and the assumption
+    // is that FakeXEngine and FrbServer never run in the same process,
+    // so the race doesn't actually occur. A defensive
+    // xassert_gt(frame.data.size, 0) inside the gather loop catches
+    // calls against an already-reaped frame; it does NOT protect against
+    // an actively-running reaper. If we ever want to colocate
+    // FakeXEngine with a reaper, the gather loop needs lock acquisition
+    // (one-per-beam) -- see plans/fake_xengine_skip_and_send_minichunk.md.
+    void send_minichunk(long worker_id, long minichunk_index,
+                        std::shared_ptr<AssembledFrameSet> frame_set);
 
     // Entry point: block until workers[worker_id]->last_minichunk_sent >=
     // minichunk_index, or throw if stopped. Returns immediately for
@@ -275,19 +340,40 @@ private:
     // xmd, send_buf (with the connection header stamped and the per-
     // minichunk magic stamped), header_nbytes, mc_nbytes, ip_addr, port.
     // Does NOT open the TCP connection -- that happens lazily on the
-    // first SEND_JUNK inside _send_junk().
+    // first SEND_JUNK or SEND_MINICHUNK inside _skip_or_send().
     void _initialize(int thread_id);
 
-    // Process one SEND_JUNK command on workers[thread_id]. On the first
-    // call (worker not yet connected), opens the TCP socket and sends
-    // [connection header + first minichunk] in one _send_all() call.
-    // On subsequent calls, asserts strict +1 monotonic minichunk_index
-    // and sends only the minichunk portion of send_buf.
+    // Combined handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
+    // Performs the strict-+1 monotonicity check (with the first-command
+    // exception), lazily connects on the first SEND_*, gathers data
+    // into the minichunk_buf for SEND_MINICHUNK, stamps the wire-seq,
+    // calls _send_all(), and finally publishes last_minichunk_sent +
+    // notifies the worker's cv.
     //
-    // Returns false if _send_all() bailed out (stop or peer connreset).
-    // The caller (_worker_main) should treat that as a signal to exit
+    // Returns false if _send_all() bailed out (stop or peer connreset);
+    // the caller (_worker_main) should treat that as a signal to exit
     // the worker loop. Returns true on success.
-    bool _send_junk(int thread_id, const Command &cmd);
+    bool _skip_or_send(int thread_id, const Command &cmd);
+
+    // Helper called by _skip_or_send for SEND_MINICHUNK: gather one
+    // minichunk's worth of int4 data from the set's per-beam frames
+    // into the worker's send_buf. Outer loop over beams, inner loop
+    // over freqs, with memcpy(dst, src, 128) per (beam, freq) so the
+    // compiler can lower to SIMD load/store pairs.
+    //
+    // WARNING (reaper race): reads each frame's data without taking
+    // frame.mutex. Safe today only because the AssembledFrame reaper
+    // runs exclusively in FrbServer, never in the same process as
+    // FakeXEngine. See the warning block on send_minichunk().
+    void _populate_minichunk_buf(Worker &w, const AssembledFrameSet &fset,
+                                 long minichunk_index);
+
+    // Helper for the send_junk / skip_minichunk / send_minichunk entry
+    // points. Validates worker_id, takes workers[worker_id]->mutex,
+    // throws-if-stopped, pushes the Command, drops the lock, notifies
+    // the worker's cv. method_name is passed through to
+    // _throw_if_stopped for diagnostics.
+    void _enqueue(long worker_id, Command &&cmd, const char *method_name);
 
     // Helper: send all bytes from buffer, using short send_with_timeout
     // calls so we can periodically re-check w.is_stopped under w.mutex

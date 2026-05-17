@@ -605,10 +605,49 @@ void register_core_bindings(pybind11::module &m)
                py::call_guard<py::gil_scoped_release>(),
                "Submit a SEND_JUNK(minichunk_index) command to worker_id's queue.\n\n"
                "Non-blocking. minichunk_index must be exactly one greater than the\n"
-               "last SEND_JUNK submitted to this worker (workers assert strict +1\n"
-               "monotonicity when they process the command).\n\n"
+               "last command (any kind) submitted to this worker -- with one\n"
+               "exception: the very first command on a worker may pick any\n"
+               "minichunk_index >= 0 (for NOTE-2 nonzero-initial-chunk tests).\n\n"
+               "Wire effect: the worker sends one minichunk worth of all-zero\n"
+               "data. The protocol handshake is sent ahead of the first\n"
+               "SEND_JUNK or SEND_MINICHUNK on this worker.\n\n"
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine is stopped or arguments are out of range.")
+          .def("skip_minichunk", &FakeXEngine::skip_minichunk,
+               py::arg("worker_id"), py::arg("minichunk_index"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Submit a SKIP_MINICHUNK(minichunk_index) command to worker_id's queue.\n\n"
+               "Non-blocking. Same monotonicity rules as send_junk.\n\n"
+               "Wire effect: NONE. Advances last_minichunk_sent past\n"
+               "minichunk_index without putting any bytes on the wire.\n"
+               "A worker whose only commands are SKIPs never opens its TCP\n"
+               "connection -- useful for 'silent peer' tests.\n\n"
+               "Raises:\n"
+               "    RuntimeError: If the FakeXEngine is stopped or arguments are out of range.")
+          .def("send_minichunk", &FakeXEngine::send_minichunk,
+               py::arg("worker_id"), py::arg("minichunk_index"), py::arg("frame_set"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Submit a SEND_MINICHUNK(minichunk_index, frame_set) command.\n\n"
+               "Non-blocking. Same monotonicity rules as send_junk.\n\n"
+               "Wire effect: gather the per-(beam, freq) int4 data for the\n"
+               "minichunk at offset (minichunk_index - frame_set.time_chunk_index\n"
+               "* minichunks_per_chunk) within the set, then send one minichunk.\n\n"
+               "The caller is responsible for keeping the AssembledFrameSet (and\n"
+               "its frames' data buffers) alive throughout the SEND_MINICHUNK\n"
+               "processing. The worker holds a shared_ptr while the Command sits\n"
+               "in the queue + is being processed, so the typical pattern (hold\n"
+               "the same Python reference until wait_for_send returns for this\n"
+               "minichunk_index) is sufficient.\n\n"
+               "REAPER RACE WARNING: the worker reads the frames' data buffers\n"
+               "WITHOUT taking frame.mutex, so it races the AssembledFrame reaper.\n"
+               "The reaper currently lives in FrbServer, not FakeXEngine, and the\n"
+               "design assumption is that FakeXEngine and FrbServer are never\n"
+               "colocated in the same process -- so the race does not occur in\n"
+               "practice. If we ever want to colocate the two, the gather loop\n"
+               "needs lock acquisition (one per beam).\n\n"
+               "Raises:\n"
+               "    RuntimeError: If the FakeXEngine is stopped, arguments are out of\n"
+               "    range, or frame_set is None.")
           .def("wait_for_send", &FakeXEngine::wait_for_send,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
