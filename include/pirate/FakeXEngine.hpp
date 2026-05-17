@@ -76,6 +76,26 @@ struct FakeXEngine
     // Timeout for send operations (milliseconds).
     static constexpr int send_timeout_ms = 10;
 
+    // Bit set in the 32-bit "flags" field of the connection header
+    // when the FakeXEngine is constructed with flag_ack=true. Mirror
+    // of the receiver-side FLAG_ACK in Receiver.cpp.
+    static constexpr uint32_t FLAG_ACK = 0x1;
+
+    // Per-minichunk status codes stored in Worker::minichunk_status
+    // (one byte per state-advancing command queued on the worker,
+    // in queue order). The codes for "wire-acked" outcomes
+    // (DROPPED=0, ASSEMBLED=1) match the 1-byte ack values sent
+    // by the receiver on the wire -- see notes/network_protocol.md.
+    //
+    // TESTING ONLY: minichunk_status is appended-only and grows
+    // without bound, so the FLAG_ACK back-channel must NOT be used
+    // in long-running production senders.
+    static constexpr unsigned char STATUS_DROPPED   = 0;  // sent, ack=0 received
+    static constexpr unsigned char STATUS_ASSEMBLED = 1;  // sent, ack=1 received
+    static constexpr unsigned char STATUS_SENT      = 2;  // sent, ack not received yet
+    static constexpr unsigned char STATUS_QUEUED    = 3;  // in command_queue, not processed yet
+    static constexpr unsigned char STATUS_SKIPPED   = 4;  // SKIP_MINICHUNK processed
+
     // ----- Nested types -----
 
     // Command: a unit of work submitted by an external controller thread
@@ -88,6 +108,8 @@ struct FakeXEngine
             SKIP_MINICHUNK = 2,   // advance state, send nothing on the wire
             SEND_MINICHUNK = 3,   // gather data from frame_set, then send
             DISCONNECT     = 4,   // close the worker's TCP socket
+            WAIT_FOR_ACKS  = 5,   // worker calls _read_acks(blocking=true). Only
+                                  // enqueued via FakeXEngine::wait_for_acks().
         } kind = Kind::UNINITIALIZED;
 
         // Used by all of {SEND_JUNK, SKIP_MINICHUNK, SEND_MINICHUNK}.
@@ -131,7 +153,7 @@ struct FakeXEngine
     {
         // ---- All of these are protected by 'mutex'. ----
 
-        std::mutex mutex;
+        mutable std::mutex mutex;
         // Notified by: send_junk / skip_minichunk / send_minichunk /
         // disconnect (after enqueue), the worker thread (after a
         // successful command processed-step updates
@@ -190,6 +212,35 @@ struct FakeXEngine
         // and entry-point throws are "called on stopped instance"
         // runtime_errors.
         std::exception_ptr error;
+
+        // FLAG_ACK back-channel state. Both empty unless
+        // FakeXEngine::flag_ack == true.
+        //
+        // Per-minichunk status code (one of FakeXEngine::STATUS_X).
+        // Indexed by (minichunk_index - first_minichunk). Invariant
+        // (held whenever 'mutex' is dropped):
+        //     minichunk_status.size() == (last_queued_minichunk >= 0)
+        //         ? (last_queued_minichunk - first_minichunk + 1)
+        //         : 0
+        //
+        // Both the vector AND ITS CONTENTS are protected by 'mutex'
+        // (single-byte reads + writes go through the lock). TESTING
+        // ONLY: appended-only and grows without bound; do not enable
+        // FLAG_ACK in a long-running production sender.
+        std::vector<unsigned char> minichunk_status;
+
+        // minichunk_index values for commands awaiting ack reception.
+        // When a SEND_JUNK or SEND_MINICHUNK is sent successfully on
+        // the wire, the worker pushes the minichunk_index here (under
+        // 'mutex'); when an ack byte arrives, _read_acks pops the
+        // front and uses (minichunk_index - first_minichunk) to find
+        // the right minichunk_status slot.
+        //
+        // Stored as `long` (not as a full Command) -- _read_acks only
+        // needs the minichunk_index, so we save the per-Command bytes
+        // and avoid extending the lifetime of any shared_ptr<
+        // AssembledFrameSet> held by the originating Command.
+        std::deque<long> ack_queue;
 
         // ---- Constant after construction, not lock-protected. ----
 
@@ -265,6 +316,14 @@ struct FakeXEngine
     const std::vector<std::string> ip_addrs;  // each element is "ip:port"
     const int nthreads;
 
+    // If true, the connection header is sent with FLAG_ACK set, the
+    // receiver sends a 1-byte ack per minichunk (0=dropped, 1=
+    // assembled), and Worker::minichunk_status records the lifecycle
+    // of every state-advancing command. TESTING ONLY -- the status
+    // vector grows without bound per state-advancing command, so do
+    // NOT enable flag_ack in a long-running production sender.
+    const bool flag_ack;
+
     // ----- Stop-state cache -----
 
     // O(1) cache for the pybind11 'is_stopped' property reader, and the
@@ -292,10 +351,17 @@ struct FakeXEngine
     // element of 'ip_addrs' is "ip:port" format. nthreads must be a
     // multiple of ip_addrs.size().
     //
+    // flag_ack (default false) enables the FLAG_ACK back-channel:
+    // the connection header advertises FLAG_ACK, the receiver
+    // sends a 1-byte ack per minichunk, and Worker::minichunk_status
+    // records per-minichunk lifecycle. TESTING ONLY -- the status
+    // vector grows without bound (see field doc).
+    //
     // Python callers MUST call the constructor inside a ThreadAffinity
     // context manager so the spawned worker threads are pinned to the
     // intended vcpus.
-    FakeXEngine(const XEngineMetadata &xmd, const std::vector<std::string> &ip_addrs, int nthreads);
+    FakeXEngine(const XEngineMetadata &xmd, const std::vector<std::string> &ip_addrs,
+                int nthreads, bool flag_ack = false);
 
     // Destructor calls stop() and joins worker threads.
     ~FakeXEngine();
@@ -384,6 +450,52 @@ struct FakeXEngine
     // makes the controller's "wait_until_processed(w, n-2)" call work
     // for n in {0, 1}. The pybind11 wrapper releases the GIL.
     void wait_until_processed(long worker_id, long minichunk_index);
+
+    // Entry point: enqueue a WAIT_FOR_ACKS command on
+    // workers[worker_id]'s queue. Non-blocking (fire-and-forget):
+    // when the worker eventually pops the command, it calls
+    // _read_acks(blocking=true) -- which drains all outstanding
+    // acks (or throws after the 1-second per-call deadline).
+    //
+    // Throws if FakeXEngine was constructed with flag_ack=false (a
+    // programming error to ask for acks when there are none), or
+    // if worker_id is out of range, or the FakeXEngine is stopped.
+    // The pybind11 wrapper releases the GIL.
+    void wait_for_acks(long worker_id);
+
+    // Entry point: block the CALLING thread until
+    // workers[worker_id]->command_queue has been fully drained.
+    // If flag_ack is true, additionally enqueue a WAIT_FOR_ACKS
+    // (via wait_for_acks() above) BEFORE waiting -- so the wait
+    // also covers all outstanding acks.
+    //
+    // SEMANTICS: this is a "drain everything in the queue"
+    // barrier, NOT a "drain everything that was in the queue at
+    // the moment I was called" barrier. If another thread is
+    // concurrently enqueueing commands, synchronize() waits for
+    // THEIR commands too -- the wait predicate is
+    // `command_queue.empty()`, which is sensitive to any future
+    // pushes. Document this in your test code.
+    //
+    // Throws on stopped FakeXEngine and on out-of-range worker_id.
+    // The pybind11 wrapper releases the GIL.
+    void synchronize(long worker_id);
+
+    // Entry point: snapshot the per-minichunk status byte for
+    // workers[worker_id]->minichunk_status[minichunk_index -
+    // first_minichunk]. Returns one of the STATUS_X constants.
+    //
+    // Throws if flag_ack is false, if worker_id is out of range,
+    // if no state-advancing commands have been enqueued yet on
+    // this worker, or if minichunk_index is outside the range
+    // [first_minichunk, first_minichunk + minichunk_status.size()).
+    //
+    // Snapshot semantic: the returned byte may already be stale
+    // by the time the caller observes it (the worker thread or
+    // an ack may have advanced the state). Does NOT throw on a
+    // stopped FakeXEngine. No GIL release (cheap atomic load
+    // + mutex acquire + array read).
+    unsigned char get_minichunk_status(long worker_id, long minichunk_index) const;
 
     // Put FakeXEngine into stopped state. First caller's compare-exchange
     // on is_stopped_cache wins; subsequent concurrent calls return
@@ -485,6 +597,21 @@ private:
     // reset. On connection reset, also calls FakeXEngine::stop() so that
     // sibling workers exit too.
     bool _send_all(Worker &w, Socket &sock, const void *buf, long nbytes);
+
+    // Drain FLAG_ACK ack bytes from the worker's socket and update
+    // Worker::minichunk_status / Worker::ack_queue accordingly.
+    // Runs on the worker thread. xassert(flag_ack) at top -- never
+    // call this method when flag_ack is false.
+    //
+    // blocking=false: a single non-blocking recv attempt (one
+    // syscall). Returns whatever's available (possibly zero bytes
+    // -- not an error).
+    //
+    // blocking=true: loops with 10ms inner timeouts and a 1-second
+    // outer deadline. Throws on (a) peer EOF before ack_queue is
+    // drained, (b) invalid ack byte (not 0 or 1), (c) the deadline.
+    // The throw propagates via worker_main's catch -> stop(e).
+    void _read_acks(int thread_id, bool blocking);
 };
 
 

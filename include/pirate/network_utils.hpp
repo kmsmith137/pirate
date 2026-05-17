@@ -60,6 +60,19 @@ struct Socket
     // To distinguish these cases, check Socket::eof after read() returns zero.
     long read(void *buf, long maxbytes);
 
+    // read() with timeout. Returns the number of bytes read (possibly
+    // zero if the timeout expires before data arrives). Use timeout_ms=0
+    // for a single non-blocking attempt (skips the poll, does one
+    // recv(MSG_DONTWAIT) in one syscall, returns 0 if no data ready).
+    // Use timeout_ms > 0 to poll(POLLIN) up to that long, then a
+    // single recv(MSG_DONTWAIT). A negative timeout is blocking
+    // (same as read()).
+    //
+    // On EOF: returns 0 and sets Socket::eof = true. Distinguish
+    // "timeout / no-data" (returns 0, eof=false) from "EOF"
+    // (returns 0, eof=true) by checking the eof flag.
+    long read_with_timeout(void *buf, long count, int timeout_ms);
+
     // If receiver closes connection, then send() returns zero and sets Socket::connreset = true.
     // If send() is called subsequently (with Socket::connreset == true), then an exception is thrown.
     // This provides a mechanism for the sender to detect a closed connection.

@@ -32,10 +32,12 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 }
 
 
-FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_, int nthreads_) :
+FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_,
+                         int nthreads_, bool flag_ack_) :
     xmd(xmd_),
     ip_addrs(ip_addrs_),
-    nthreads(nthreads_)
+    nthreads(nthreads_),
+    flag_ack(flag_ack_)
 {
     if (ip_addrs.empty())
         throw runtime_error("FakeXEngine: ip_addrs is empty");
@@ -242,6 +244,17 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
             throw runtime_error(ss.str());
         }
         w.last_queued_minichunk = cmd.minichunk_index;
+
+        // FLAG_ACK back-channel: append STATUS_QUEUED. This
+        // push_back may reallocate w.minichunk_status WITH THE LOCK
+        // HELD -- normally a performance smell, but acceptable here
+        // because FLAG_ACK is testing-only and the worker thread
+        // isn't on the latency-critical path. After the push, the
+        // invariant
+        //   minichunk_status.size() == last_queued_minichunk - first_minichunk + 1
+        // holds.
+        if (flag_ack)
+            w.minichunk_status.push_back(STATUS_QUEUED);
     }
 
     w.command_queue.push_back(std::move(cmd));
@@ -343,6 +356,102 @@ void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 }
 
 
+void FakeXEngine::wait_for_acks(long worker_id)
+{
+    if (!flag_ack)
+        throw runtime_error(
+            "FakeXEngine::wait_for_acks: FakeXEngine was not constructed"
+            " with flag_ack=true (so there are no acks to wait for)");
+
+    Command cmd;
+    cmd.kind = Command::Kind::WAIT_FOR_ACKS;
+    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
+             "FakeXEngine::wait_for_acks");
+}
+
+
+void FakeXEngine::synchronize(long worker_id)
+{
+    if (worker_id < 0 || worker_id >= long(nthreads)) {
+        stringstream ss;
+        ss << "FakeXEngine::synchronize: worker_id=" << worker_id
+           << " out of range [0, " << nthreads << ")";
+        throw runtime_error(ss.str());
+    }
+
+    // If flag_ack is enabled, enqueue a WAIT_FOR_ACKS first. The
+    // worker eventually pops it and calls _read_acks(blocking=true);
+    // when that finishes the centralized cv.notify_all in
+    // _worker_main fires, which wakes us from cv.wait below.
+    if (flag_ack)
+        wait_for_acks(worker_id);
+
+    // Wait for the queue to drain. Predicate is (command_queue.empty()
+    // && ack_queue.empty()):
+    //
+    //   - command_queue.empty() is the basic "all commands processed"
+    //     barrier. Sensitive to ANY commands in the queue, including
+    //     ones enqueued by other threads AFTER we called wait_for_acks
+    //     above (synchronize is a "drain everything in the queue"
+    //     barrier, not "drain everything as of when I was called").
+    //
+    //   - ack_queue.empty() is required for the flag_ack case to
+    //     close the small window where the worker has popped
+    //     WAIT_FOR_ACKS (making command_queue.empty() == true) but
+    //     is still inside its blocking _read_acks call (so ack_queue
+    //     is not yet empty). Without the second clause, a spurious
+    //     cv wakeup in that window would let synchronize observe the
+    //     transient empty-but-not-drained state.
+    //
+    //   - When flag_ack=false, ack_queue is always empty, so the
+    //     predicate reduces to command_queue.empty().
+    Worker &w = *workers[worker_id];
+    std::unique_lock<std::mutex> lock(w.mutex);
+    for (;;) {
+        _throw_if_stopped(w, "FakeXEngine::synchronize");
+        if (w.command_queue.empty() && w.ack_queue.empty())
+            return;
+        w.cv.wait(lock);
+    }
+}
+
+
+unsigned char FakeXEngine::get_minichunk_status(long worker_id, long minichunk_index) const
+{
+    if (worker_id < 0 || worker_id >= long(nthreads)) {
+        stringstream ss;
+        ss << "FakeXEngine::get_minichunk_status: worker_id=" << worker_id
+           << " out of range [0, " << nthreads << ")";
+        throw runtime_error(ss.str());
+    }
+    if (!flag_ack)
+        throw runtime_error(
+            "FakeXEngine::get_minichunk_status: FakeXEngine was not"
+            " constructed with flag_ack=true");
+
+    const Worker &w = *workers[worker_id];
+
+    std::lock_guard<std::mutex> lock(w.mutex);
+
+    if (w.first_minichunk < 0)
+        throw runtime_error(
+            "FakeXEngine::get_minichunk_status: no state-advancing"
+            " commands have been enqueued yet on this worker");
+
+    long idx = minichunk_index - w.first_minichunk;
+    if (idx < 0 || idx >= long(w.minichunk_status.size())) {
+        stringstream ss;
+        ss << "FakeXEngine::get_minichunk_status: minichunk_index="
+           << minichunk_index << " out of range ["
+           << w.first_minichunk << ", "
+           << (w.first_minichunk + long(w.minichunk_status.size()))
+           << ") for worker_id=" << worker_id;
+        throw runtime_error(ss.str());
+    }
+    return w.minichunk_status[idx];
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // _initialize: one-time setup, called from the top of _worker_main.
@@ -389,10 +498,11 @@ void FakeXEngine::_initialize(int thread_id)
     w.send_buf.assign(w.header_nbytes + w.mc_nbytes, 0);
 
     // Stamp the connection header (one-time fields: protocol magic +
-    // flags=0 + yaml_len + padded YAML).
+    // flags + yaml_len + padded YAML). 'flags' carries FLAG_ACK if
+    // the FakeXEngine was constructed with flag_ack=true.
     {
         uint32_t magic = protocol_magic;
-        uint32_t flags = 0;
+        uint32_t flags = flag_ack ? FLAG_ACK : 0u;
         uint32_t len32 = static_cast<uint32_t>(padded_len);
         std::memcpy(w.send_buf.data() + 0, &magic, 4);
         std::memcpy(w.send_buf.data() + 4, &flags, 4);
@@ -522,9 +632,137 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 // depends on the connected flag.
 
 
+// -------------------------------------------------------------------------------------------------
+//
+// _read_acks: drain FLAG_ACK ack bytes from the worker's socket and
+// update Worker::minichunk_status / Worker::ack_queue. Runs on the
+// worker thread.
+//
+// blocking=false: a single non-blocking recv attempt (one syscall).
+// Returns whatever's available -- zero bytes is fine.
+//
+// blocking=true: loops with 10ms inner timeouts (so is_stopped is
+// observed within ~10ms of being set) and a 1-second outer deadline.
+// On any of:
+//   - peer EOF before ack_queue is drained
+//   - invalid ack byte (not 0 or 1)
+//   - the 1-second deadline expires
+// _read_acks THROWS rather than recovering gracefully -- worker_main's
+// catch handler calls stop(e) and the existing cascade tears down all
+// controllers + workers with a descriptive error. This matches the
+// "throw on anything wrong" policy for the FLAG_ACK test-only path.
+
+
+void FakeXEngine::_read_acks(int thread_id, bool blocking)
+{
+    // ensures that we never call Socket.read() in production (when
+    // no acks will be sent)
+    xassert(flag_ack);
+
+    Worker &w = *workers[thread_id];
+
+    if (!w.connected.load(std::memory_order_relaxed))
+        return;
+
+    // Snapshot the number of acks we need under the lock.
+    long need;
+    {
+        std::lock_guard<std::mutex> lock(w.mutex);
+        need = long(w.ack_queue.size());
+    }
+    if (need == 0) return;
+
+    using clock = std::chrono::steady_clock;
+    static constexpr auto blocking_deadline = std::chrono::seconds(1);
+    static constexpr int blocking_inner_ms = 10;   // is_stopped check granularity
+    auto deadline = clock::now() + blocking_deadline;
+
+    char buf[256];
+
+    while (need > 0) {
+        // Stop-responsiveness: short-circuit if a sibling worker
+        // or external thread has called stop().
+        {
+            std::lock_guard<std::mutex> lock(w.mutex);
+            if (w.is_stopped) return;
+        }
+
+        long max_read = std::min<long>(long(sizeof(buf)), need);
+        int inner_timeout = blocking ? blocking_inner_ms : 0;
+        long n = w.sock.read_with_timeout(buf, max_read, inner_timeout);
+
+        if (w.sock.eof) {
+            // Peer closed before we received all expected acks.
+            // Per the FLAG_ACK policy, throw rather than try to
+            // recover -- worker_main's catch will call stop(e) and
+            // propagate via the existing cascade.
+            std::stringstream ss;
+            ss << "FakeXEngine::_read_acks: receiver closed connection"
+               << " with " << need << " ack(s) still expected";
+            throw runtime_error(ss.str());
+        }
+
+        if (n == 0) {
+            if (!blocking) return;   // single-shot non-blocking: empty is fine
+            if (clock::now() >= deadline)
+                throw runtime_error(
+                    "FakeXEngine::_read_acks: timeout (1s) waiting for FLAG_ACK acks");
+            continue;
+        }
+
+        // Process the n bytes under the lock.
+        {
+            std::lock_guard<std::mutex> lock(w.mutex);
+            // Defense-in-depth invariants. Should never trip under
+            // correct locking discipline (only the worker thread
+            // pops ack_queue and changes minichunk_status), but
+            // they're cheap and would catch a queue/status drift.
+            xassert(long(w.ack_queue.size()) == need);
+            xassert(long(w.minichunk_status.size()) ==
+                    w.last_queued_minichunk - w.first_minichunk + 1);
+
+            for (long i = 0; i < n; i++) {
+                if (w.ack_queue.empty())
+                    throw runtime_error(
+                        "FakeXEngine::_read_acks: received more ack bytes than expected");
+                long mc_index = w.ack_queue.front();
+                unsigned char ack = static_cast<unsigned char>(buf[i]);
+                if (ack != STATUS_DROPPED && ack != STATUS_ASSEMBLED) {
+                    std::stringstream ss;
+                    ss << "FakeXEngine::_read_acks: invalid ack byte "
+                       << int(ack) << " from receiver (expected 0 or 1)";
+                    throw runtime_error(ss.str());
+                }
+                long idx = mc_index - w.first_minichunk;
+                xassert_ge(idx, 0L);
+                xassert_lt(idx, long(w.minichunk_status.size()));
+                xassert_eq(w.minichunk_status[idx], STATUS_SENT);
+
+                // The STATUS_DROPPED == 0 and STATUS_ASSEMBLED == 1
+                // numeric coincidence with the wire's ack-byte
+                // values lets us assign minichunk_status[idx] = ack
+                // directly.
+                w.minichunk_status[idx] = ack;
+                w.ack_queue.pop_front();
+            }
+        }
+        need -= n;
+    }
+}
+
+
 void FakeXEngine::_disconnect(int thread_id)
 {
     Worker &w = *workers[thread_id];
+
+    // Drain remaining acks BEFORE closing. If anything goes wrong
+    // during the drain (peer EOF / invalid ack byte / 1-second
+    // deadline), _read_acks throws -- worker_main's catch handler
+    // calls stop(e) and the cascade tears down. No defensive
+    // ack_queue.clear() is needed: either we drained successfully
+    // (ack_queue is empty) or we threw (the worker is exiting).
+    if (flag_ack)
+        _read_acks(thread_id, /*blocking=*/true);
 
     if (w.connected.load(std::memory_order_relaxed)) {
         w.sock.close();
@@ -627,15 +865,43 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
     // SKIP_MINICHUNK falls through here -- no wire activity, just
     // advance state below.
 
-    // Publish last_minichunk_processed and wake any
-    // wait_until_processed waiters for this worker. (No cross-worker
-    // notify is needed -- each wait_until_processed is bound to a
-    // specific worker_id and waits on that worker's own cv.)
+    // Determine the new minichunk_status entry for this cmd.
+    // Successful SEND_* -> STATUS_SENT (the wire bytes went out;
+    // the ack hasn't arrived yet). SKIP_MINICHUNK -> STATUS_SKIPPED.
+    unsigned char new_status;
+    bool push_ack;
+    if (cmd.kind == Command::Kind::SKIP_MINICHUNK) {
+        new_status = STATUS_SKIPPED;
+        push_ack = false;
+    } else {
+        new_status = STATUS_SENT;
+        push_ack = true;
+    }
+
+    // Publish last_minichunk_processed + (if flag_ack) update
+    // status / push ack_queue under lock. (cv.notify_all is
+    // centralized in _worker_main, fired once per command dispatched
+    // -- so wait_until_processed AND synchronize waiters wake
+    // together after each command is fully processed.)
     {
         std::lock_guard<std::mutex> lock(w.mutex);
+        if (flag_ack) {
+            long idx = cmd.minichunk_index - w.first_minichunk;
+            xassert_ge(idx, 0L);
+            xassert_lt(idx, long(w.minichunk_status.size()));
+            xassert_eq(w.minichunk_status[idx], STATUS_QUEUED);
+            w.minichunk_status[idx] = new_status;
+            if (push_ack)
+                w.ack_queue.push_back(cmd.minichunk_index);
+        }
         w.last_minichunk_processed = cmd.minichunk_index;
     }
-    w.cv.notify_all();
+
+    // Drain any acks that arrived while we were sending. Cheap
+    // single-syscall non-blocking attempt -- if no bytes are
+    // queued, the recv returns 0 and we proceed.
+    if (flag_ack)
+        _read_acks(thread_id, /*blocking=*/false);
 
     return true;
 }
@@ -656,14 +922,32 @@ void FakeXEngine::_worker_main(int thread_id)
         Command cmd;
         {
             std::unique_lock<std::mutex> lock(w.mutex);
-            while (!w.is_stopped && w.command_queue.empty())
-                w.cv.wait(lock);
-            if (w.is_stopped) return;
+            for (;;) {
+                if (w.is_stopped) return;
+                if (!w.command_queue.empty()) break;
+
+                // When ack_queue is empty (always so when flag_ack=
+                // false), wait unbounded -- no spurious wakeups.
+                // When ack_queue is non-empty, periodically drain
+                // acks so we don't let the receiver's send buffer
+                // for FLAG_ACK bytes fill up.
+                if (w.ack_queue.empty()) {
+                    w.cv.wait(lock);
+                } else {
+                    auto status = w.cv.wait_for(lock, std::chrono::milliseconds(1));
+                    if (status == std::cv_status::timeout) {
+                        lock.unlock();
+                        _read_acks(thread_id, /*blocking=*/false);
+                        lock.lock();
+                    }
+                }
+            }
 
             cmd = w.command_queue.front();
             w.command_queue.pop_front();
         }
 
+        // Dispatch.
         switch (cmd.kind) {
         case Command::Kind::SEND_JUNK:
         case Command::Kind::SKIP_MINICHUNK:
@@ -674,15 +958,29 @@ void FakeXEngine::_worker_main(int thread_id)
         case Command::Kind::DISCONNECT:
             _disconnect(thread_id);
             break;
+        case Command::Kind::WAIT_FOR_ACKS:
+            // WAIT_FOR_ACKS is enqueued only by wait_for_acks() /
+            // synchronize(), both of which check flag_ack first.
+            // xassert here as a defense-in-depth invariant.
+            xassert(flag_ack);
+            _read_acks(thread_id, /*blocking=*/true);
+            break;
         default: {
             // Defensive -- UNINITIALIZED Commands should never be enqueued.
             stringstream ss;
             ss << "FakeXEngine worker " << thread_id
-               << ": got Command with kind=" << uint32_t(cmd.kind)
-               << " (expected SEND_JUNK)";
+               << ": got Command with kind=" << uint32_t(cmd.kind);
             throw runtime_error(ss.str());
         }
         }
+
+        // Centralized notify, one per command dispatched. Wakes both
+        // wait_until_processed waiters (whenever last_minichunk_
+        // processed advanced) AND synchronize() waiters (whenever
+        // command_queue empties or shrinks). Notifying *after* the
+        // dispatch returns is what makes synchronize() wait for
+        // WAIT_FOR_ACKS's blocking drain to finish before returning.
+        w.cv.notify_all();
     }
 }
 

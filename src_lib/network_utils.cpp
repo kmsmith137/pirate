@@ -161,6 +161,61 @@ long Socket::read(void *buf, long count)
 }
 
 
+long Socket::read_with_timeout(void *buf, long count, int timeout_ms)
+{
+    if (_unlikely(fd < 0))
+        throw runtime_error("Socket::read_with_timeout() called on uninitialized socket");
+
+    xassert(count > 0);
+
+    // Negative timeout means blocking (same as read()).
+    if (timeout_ms < 0)
+        return this->read(buf, count);
+
+    // For timeout_ms > 0, poll first. For timeout_ms == 0, skip the
+    // poll and just attempt a single non-blocking recv -- one syscall.
+    if (timeout_ms > 0) {
+        struct pollfd pfd;
+        pfd.fd = this->fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+
+        int ret = poll(&pfd, 1, timeout_ms);
+
+        if (_unlikely(ret < 0))
+            throw runtime_error(errstr(fd, "Socket::read_with_timeout: poll"));
+
+        if (ret == 0)
+            return 0;   // timeout, eof stays false
+    }
+
+    // Single non-blocking recv. MSG_DONTWAIT lets us read without
+    // changing the socket's blocking mode -- a fresh non-blocking
+    // attempt either way (no poll wait so we don't sit, post-poll
+    // we still want non-blocking semantics in case the data
+    // disappeared between poll and recv -- unlikely but possible).
+    long nbytes = ::recv(this->fd, buf, count, MSG_DONTWAIT);
+
+    if (nbytes < 0) {
+        // No data ready right now. After a successful poll this is
+        // unexpected (data was advertised and then vanished), but
+        // it can happen with e.g. SO_RCVLOWAT or signal-handling
+        // edge cases. Treat as "no data, try again later".
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+            errno = 0;
+            return 0;
+        }
+        throw runtime_error(errstr(fd, "Socket::read_with_timeout: recv"));
+    }
+
+    if (nbytes == 0)
+        this->eof = true;  // peer closed connection (EOF)
+
+    xassert(nbytes <= count);
+    return nbytes;
+}
+
+
 long Socket::send(const void *buf, long count, int flags)
 {
     if (_unlikely(fd < 0))
