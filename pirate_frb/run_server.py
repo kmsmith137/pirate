@@ -387,20 +387,20 @@ def _fake_xengine_controller_main(fxe):
     Reproduces the cross-worker "minichunk N waits for (N-2)" serialization
     that the C++ FakeXEngine used to enforce internally with its barrier.
     Runs until fxe.stop() is called (from anywhere), at which point the
-    next wait_until_processed() / send_junk() call raises RuntimeError and
-    the function returns via exception.
+    next wait_until_processed() / enqueue_send_junk() call raises
+    RuntimeError and the function returns via exception.
     """
-    nthreads = fxe.nthreads
+    nworkers = fxe.nworkers
     n = 0
     while True:
         # Wait for every worker to have caught up to (n-2). Negative
-        # indices return immediately (per-worker last_minichunk_processed
+        # indices return immediately (per-worker last_processed_minichunk
         # starts at -1).
-        for w in range(nthreads):
+        for w in range(nworkers):
             fxe.wait_until_processed(w, n - 2)
         # Then submit minichunk n on every worker.
-        for w in range(nthreads):
-            fxe.send_junk(w, n)
+        for w in range(nworkers):
+            fxe.enqueue_send_junk(w, n)
         n += 1
 
 
@@ -447,11 +447,11 @@ def run_fake_xengine(config_filename):
     fxe_config = _parse_fake_xengine_config(config_filename, config)
 
     hw = Hardware()
-    nthreads = fxe_config['tcp_connections_per_server']
+    nworkers = fxe_config['tcp_connections_per_server']
 
     print(f"Parsed config: {config_filename}")
     print(f"  num_servers = {n}")
-    print(f"  tcp_connections_per_server = {nthreads}")
+    print(f"  tcp_connections_per_server = {nworkers}")
 
     fake_xengines = []   # list[FakeXEngine]
     fxe_vcpus = []       # list[list[int]], parallel to fake_xengines
@@ -485,7 +485,7 @@ def run_fake_xengine(config_filename):
 
             print(f"\nFakeXEngine {i}:")
             print(f"  ip_addrs = {ip_addrs}")
-            print(f"  nthreads = {nthreads}")
+            print(f"  nworkers = {nworkers}")
             print(f"  nbeams = {xmd.get_nbeams()}, beam_ids = {xmd.beam_ids}")
             print(f"  total_nfreq = {xmd.get_total_nfreq()}")
 
@@ -493,7 +493,7 @@ def run_fake_xengine(config_filename):
             # the FakeXEngine constructor inherit the same affinity.
             with ThreadAffinity(vcpu_list):
                 fxe = FakeXEngine(
-                    xmd, ip_addrs, nthreads,
+                    xmd, ip_addrs, nworkers,
                     time_samples_per_chunk=config['time_samples_per_chunk'])
             fake_xengines.append(fxe)
             fxe_vcpus.append(vcpu_list)

@@ -57,18 +57,18 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 
 
 FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_,
-                         int nthreads_, long time_samples_per_chunk_, bool flag_ack_) :
+                         int nworkers_, long time_samples_per_chunk_, bool debug_) :
     xmd(xmd_),
     ip_addrs(ip_addrs_),
-    nthreads(nthreads_),
+    nworkers(nworkers_),
     time_samples_per_chunk(time_samples_per_chunk_),
-    flag_ack(flag_ack_),
+    debug(debug_),
     minichunks_per_chunk(time_samples_per_chunk_ / 256),
     num_receivers(long(ip_addrs_.size()))
 {
     if (ip_addrs.empty())
         throw runtime_error("FakeXEngine: ip_addrs is empty");
-    xassert(nthreads > 0);
+    xassert(nworkers > 0);
 
     if (time_samples_per_chunk <= 0) {
         stringstream ss;
@@ -84,9 +84,9 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     }
 
     long naddrs = ip_addrs.size();
-    if (nthreads % naddrs != 0) {
+    if (nworkers % naddrs != 0) {
         stringstream ss;
-        ss << "FakeXEngine: nthreads=" << nthreads
+        ss << "FakeXEngine: nworkers=" << nworkers
            << " is not a multiple of ip_addrs.size()=" << naddrs;
         throw runtime_error(ss.str());
     }
@@ -98,11 +98,11 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
         parse_ip_address(addr, ip, port);
     }
 
-    // Validate that XEngineMetadata has enough frequency channels for all threads.
+    // Validate that XEngineMetadata has enough frequency channels for all workers.
     long total_nfreq = xmd.get_total_nfreq();
-    if (total_nfreq < nthreads) {
+    if (total_nfreq < nworkers) {
         stringstream ss;
-        ss << "FakeXEngine: nthreads=" << nthreads
+        ss << "FakeXEngine: nworkers=" << nworkers
            << " but total frequency channels=" << total_nfreq;
         throw runtime_error(ss.str());
     }
@@ -122,12 +122,12 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     // neither copyable nor movable). Then spawn the worker threads.
     // Workers inherit the vcpu affinity of the caller (the documented
     // constructor contract).
-    workers.reserve(nthreads);
-    for (int i = 0; i < nthreads; i++)
+    workers.reserve(nworkers);
+    for (int i = 0; i < nworkers; i++)
         workers.push_back(std::make_unique<Worker>());
 
     try {
-        for (int i = 0; i < nthreads; i++)
+        for (int i = 0; i < nworkers; i++)
             workers[i]->worker_thread = std::thread(&FakeXEngine::worker_main, this, i);
     } catch (...) {
         // Partial-spawn cleanup: signal stop so any workers that did start
@@ -185,17 +185,17 @@ void FakeXEngine::stop(std::exception_ptr e)
 }
 
 
-XEngineMetadata FakeXEngine::make_worker_metadata(int thread_id) const
+XEngineMetadata FakeXEngine::make_worker_metadata(int worker_id) const
 {
-    xassert(thread_id >= 0);
-    xassert(thread_id < nthreads);
+    xassert(worker_id >= 0);
+    xassert(worker_id < nworkers);
 
     long total_nfreq = xmd.get_total_nfreq();
 
-    // Assign frequency channels round-robin to this thread.
-    // Thread 'thread_id' gets channels: thread_id, thread_id + nthreads, thread_id + 2*nthreads, ...
+    // Assign frequency channels round-robin to this worker.
+    // Worker 'worker_id' gets channels: worker_id, worker_id + nworkers, worker_id + 2*nworkers, ...
     vector<long> freq_channels;
-    for (long ch = thread_id; ch < total_nfreq; ch += nthreads)
+    for (long ch = worker_id; ch < total_nfreq; ch += nworkers)
         freq_channels.push_back(ch);
 
     XEngineMetadata ret = xmd;
@@ -204,10 +204,10 @@ XEngineMetadata FakeXEngine::make_worker_metadata(int thread_id) const
 }
 
 
-void FakeXEngine::worker_main(int thread_id)
+void FakeXEngine::worker_main(int worker_id)
 {
     try {
-        _worker_main(thread_id);
+        _worker_main(worker_id);
     } catch (...) {
         stop(std::current_exception());
     }
@@ -247,10 +247,11 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
 
 // -------------------------------------------------------------------------------------------------
 //
-// External-thread entry points: send_junk(), skip_minichunk(),
-// send_minichunk(), disconnect(), wait_until_processed(). All but the
-// last share an _enqueue() helper that does the worker_id range
-// check + lock + throw-if-stopped + (for state-advancing commands)
+// External-thread entry points: enqueue_send_junk(),
+// enqueue_skip_minichunk(), enqueue_send_minichunk(),
+// enqueue_disconnect(), wait_until_processed(). All but the last
+// share an _enqueue() helper that does the worker_id range check +
+// lock + throw-if-stopped + (for state-advancing commands)
 // queue-time sequentiality check + push + notify pattern. The
 // is_state_advancing argument is passed explicitly per call rather
 // than inspected from cmd.kind, so each call site documents its
@@ -260,10 +261,10 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
 void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancing,
                            const char *method_name)
 {
-    if (worker_id < 0 || worker_id >= long(nthreads)) {
+    if (worker_id < 0 || worker_id >= long(nworkers)) {
         stringstream ss;
         ss << method_name << ": worker_id=" << worker_id
-           << " out of range [0, " << nthreads << ")";
+           << " out of range [0, " << nworkers << ")";
         throw runtime_error(ss.str());
     }
 
@@ -293,15 +294,15 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
         }
         w.last_queued_minichunk = cmd.minichunk_index;
 
-        // FLAG_ACK back-channel: append STATUS_QUEUED. This
+        // Debug-mode back-channel: append STATUS_QUEUED. This
         // push_back may reallocate w.minichunk_status WITH THE LOCK
         // HELD -- normally a performance smell, but acceptable here
-        // because FLAG_ACK is testing-only and the worker thread
+        // because debug mode is testing-only and the worker thread
         // isn't on the latency-critical path. After the push, the
         // invariant
         //   minichunk_status.size() == last_queued_minichunk - first_minichunk + 1
         // holds.
-        if (flag_ack)
+        if (debug)
             w.minichunk_status.push_back(STATUS_QUEUED);
     }
 
@@ -317,7 +318,7 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
 }
 
 
-void FakeXEngine::send_junk(long worker_id, long minichunk_index)
+void FakeXEngine::enqueue_send_junk(long worker_id, long minichunk_index)
 {
     xassert_ge(minichunk_index, 0L);
 
@@ -325,11 +326,11 @@ void FakeXEngine::send_junk(long worker_id, long minichunk_index)
     cmd.kind = Command::Kind::SEND_JUNK;
     cmd.minichunk_index = minichunk_index;
     _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-             "FakeXEngine::send_junk");
+             "FakeXEngine::enqueue_send_junk");
 }
 
 
-void FakeXEngine::skip_minichunk(long worker_id, long minichunk_index)
+void FakeXEngine::enqueue_skip_minichunk(long worker_id, long minichunk_index)
 {
     xassert_ge(minichunk_index, 0L);
 
@@ -337,43 +338,43 @@ void FakeXEngine::skip_minichunk(long worker_id, long minichunk_index)
     cmd.kind = Command::Kind::SKIP_MINICHUNK;
     cmd.minichunk_index = minichunk_index;
     _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-             "FakeXEngine::skip_minichunk");
+             "FakeXEngine::enqueue_skip_minichunk");
 }
 
 
-void FakeXEngine::send_minichunk(long worker_id, long minichunk_index,
-                                 std::shared_ptr<AssembledFrameSet> frame_set)
+void FakeXEngine::enqueue_send_minichunk(long worker_id, long minichunk_index,
+                                         std::shared_ptr<AssembledFrameSet> frame_set)
 {
     xassert_ge(minichunk_index, 0L);
     if (!frame_set)
-        throw runtime_error("FakeXEngine::send_minichunk: frame_set is null");
+        throw runtime_error("FakeXEngine::enqueue_send_minichunk: frame_set is null");
 
     Command cmd;
     cmd.kind = Command::Kind::SEND_MINICHUNK;
     cmd.minichunk_index = minichunk_index;
     cmd.frame_set = std::move(frame_set);
     _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-             "FakeXEngine::send_minichunk");
+             "FakeXEngine::enqueue_send_minichunk");
 }
 
 
-void FakeXEngine::disconnect(long worker_id)
+void FakeXEngine::enqueue_disconnect(long worker_id)
 {
     Command cmd;
     cmd.kind = Command::Kind::DISCONNECT;
     // minichunk_index stays -1; frame_set stays null. Neither is read
     // by _disconnect.
     _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
-             "FakeXEngine::disconnect");
+             "FakeXEngine::enqueue_disconnect");
 }
 
 
 bool FakeXEngine::is_connected(long worker_id) const
 {
-    if (worker_id < 0 || worker_id >= long(nthreads)) {
+    if (worker_id < 0 || worker_id >= long(nworkers)) {
         stringstream ss;
         ss << "FakeXEngine::is_connected: worker_id=" << worker_id
-           << " out of range [0, " << nthreads << ")";
+           << " out of range [0, " << nworkers << ")";
         throw runtime_error(ss.str());
     }
     // No _throw_if_stopped: this is an informational query, and the
@@ -385,10 +386,10 @@ bool FakeXEngine::is_connected(long worker_id) const
 
 void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
 {
-    if (worker_id < 0 || worker_id >= long(nthreads)) {
+    if (worker_id < 0 || worker_id >= long(nworkers)) {
         stringstream ss;
         ss << "FakeXEngine::wait_until_processed: worker_id=" << worker_id
-           << " out of range [0, " << nthreads << ")";
+           << " out of range [0, " << nworkers << ")";
         throw runtime_error(ss.str());
     }
 
@@ -397,61 +398,62 @@ void FakeXEngine::wait_until_processed(long worker_id, long minichunk_index)
     std::unique_lock<std::mutex> lock(w.mutex);
     for (;;) {
         _throw_if_stopped(w, "FakeXEngine::wait_until_processed");
-        if (w.last_minichunk_processed >= minichunk_index)
+        if (w.last_processed_minichunk >= minichunk_index)
             return;
         w.cv.wait(lock);
     }
 }
 
 
-void FakeXEngine::wait_for_acks(long worker_id)
+void FakeXEngine::enqueue_wait_for_acks(long worker_id)
 {
-    if (!flag_ack)
+    if (!debug)
         throw runtime_error(
-            "FakeXEngine::wait_for_acks: FakeXEngine was not constructed"
-            " with flag_ack=true (so there are no acks to wait for)");
+            "FakeXEngine::enqueue_wait_for_acks: FakeXEngine was not"
+            " constructed with debug=true (so there are no acks to wait for)");
 
     Command cmd;
     cmd.kind = Command::Kind::WAIT_FOR_ACKS;
     _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/false,
-             "FakeXEngine::wait_for_acks");
+             "FakeXEngine::enqueue_wait_for_acks");
 }
 
 
 void FakeXEngine::synchronize(long worker_id)
 {
-    if (worker_id < 0 || worker_id >= long(nthreads)) {
+    if (worker_id < 0 || worker_id >= long(nworkers)) {
         stringstream ss;
         ss << "FakeXEngine::synchronize: worker_id=" << worker_id
-           << " out of range [0, " << nthreads << ")";
+           << " out of range [0, " << nworkers << ")";
         throw runtime_error(ss.str());
     }
 
-    // If flag_ack is enabled, enqueue a WAIT_FOR_ACKS first. The
+    // If debug mode is enabled, enqueue a WAIT_FOR_ACKS first. The
     // worker eventually pops it and calls _read_acks(blocking=true);
     // when that finishes the centralized cv.notify_all in
     // _worker_main fires, which wakes us from cv.wait below.
-    if (flag_ack)
-        wait_for_acks(worker_id);
+    if (debug)
+        enqueue_wait_for_acks(worker_id);
 
     // Wait for the queue to drain. Predicate is (command_queue.empty()
     // && ack_queue.empty()):
     //
     //   - command_queue.empty() is the basic "all commands processed"
     //     barrier. Sensitive to ANY commands in the queue, including
-    //     ones enqueued by other threads AFTER we called wait_for_acks
-    //     above (synchronize is a "drain everything in the queue"
-    //     barrier, not "drain everything as of when I was called").
+    //     ones enqueued by other threads AFTER we called
+    //     enqueue_wait_for_acks above (synchronize is a "drain
+    //     everything in the queue" barrier, not "drain everything as
+    //     of when I was called").
     //
-    //   - ack_queue.empty() is required for the flag_ack case to
-    //     close the small window where the worker has popped
-    //     WAIT_FOR_ACKS (making command_queue.empty() == true) but
-    //     is still inside its blocking _read_acks call (so ack_queue
-    //     is not yet empty). Without the second clause, a spurious
-    //     cv wakeup in that window would let synchronize observe the
-    //     transient empty-but-not-drained state.
+    //   - ack_queue.empty() is required for the debug case to close
+    //     the small window where the worker has popped WAIT_FOR_ACKS
+    //     (making command_queue.empty() == true) but is still inside
+    //     its blocking _read_acks call (so ack_queue is not yet
+    //     empty). Without the second clause, a spurious cv wakeup in
+    //     that window would let synchronize observe the transient
+    //     empty-but-not-drained state.
     //
-    //   - When flag_ack=false, ack_queue is always empty, so the
+    //   - When debug=false, ack_queue is always empty, so the
     //     predicate reduces to command_queue.empty().
     Worker &w = *workers[worker_id];
     std::unique_lock<std::mutex> lock(w.mutex);
@@ -466,16 +468,16 @@ void FakeXEngine::synchronize(long worker_id)
 
 unsigned char FakeXEngine::get_minichunk_status(long worker_id, long minichunk_index) const
 {
-    if (worker_id < 0 || worker_id >= long(nthreads)) {
+    if (worker_id < 0 || worker_id >= long(nworkers)) {
         stringstream ss;
         ss << "FakeXEngine::get_minichunk_status: worker_id=" << worker_id
-           << " out of range [0, " << nthreads << ")";
+           << " out of range [0, " << nworkers << ")";
         throw runtime_error(ss.str());
     }
-    if (!flag_ack)
+    if (!debug)
         throw runtime_error(
             "FakeXEngine::get_minichunk_status: FakeXEngine was not"
-            " constructed with flag_ack=true");
+            " constructed with debug=true");
 
     const Worker &w = *workers[worker_id];
 
@@ -525,17 +527,17 @@ unsigned char FakeXEngine::get_minichunk_status(long worker_id, long minichunk_i
 // SEND_JUNK. See notes/network_protocol.md for the v2 wire format.
 
 
-void FakeXEngine::_initialize(int thread_id)
+void FakeXEngine::_initialize(int worker_id)
 {
-    Worker &w = *workers[thread_id];
+    Worker &w = *workers[worker_id];
 
     // Round-robin assignment of worker -> Receiver, matching the
     // round-robin ip_addr assignment below. Indexes
     // max_acked_minichunk[] from _skip_or_send / _read_acks.
-    w.receiver_id = long(thread_id) % num_receivers;
+    w.receiver_id = long(worker_id) % num_receivers;
 
-    // Per-worker metadata (round-robin freq-channel subset for this thread).
-    w.xmd = make_worker_metadata(thread_id);
+    // Per-worker metadata (round-robin freq-channel subset for this worker).
+    w.xmd = make_worker_metadata(worker_id);
     long nfreq = w.xmd.freq_channels.size();
     long nbeams = w.xmd.get_nbeams();
 
@@ -552,10 +554,10 @@ void FakeXEngine::_initialize(int thread_id)
 
     // Stamp the connection header (one-time fields: protocol magic +
     // flags + yaml_len + padded YAML). 'flags' carries FLAG_ACK if
-    // the FakeXEngine was constructed with flag_ack=true.
+    // the FakeXEngine was constructed with debug=true.
     {
         uint32_t magic = protocol_magic;
-        uint32_t flags = flag_ack ? FLAG_ACK : 0u;
+        uint32_t flags = debug ? FLAG_ACK : 0u;
         uint32_t len32 = static_cast<uint32_t>(padded_len);
         std::memcpy(w.send_buf.data() + 0, &magic, 4);
         std::memcpy(w.send_buf.data() + 4, &flags, 4);
@@ -563,7 +565,7 @@ void FakeXEngine::_initialize(int thread_id)
         std::memcpy(w.send_buf.data() + 12, yaml_str.data(), yaml_str.size());
     }
 
-    // Stamp the per-minichunk magic. Constant for this thread's lifetime;
+    // Stamp the per-minichunk magic. Constant for this worker's lifetime;
     // only the seq field at offset (header_nbytes + 4) is rewritten per
     // SEND_JUNK.
     {
@@ -571,11 +573,11 @@ void FakeXEngine::_initialize(int thread_id)
         std::memcpy(w.send_buf.data() + w.header_nbytes, &mc_magic, 4);
     }
 
-    // Parsed destination (ip:port). Round-robin: threads share IPs cyclically.
-    parse_ip_address(ip_addrs[thread_id % ip_addrs.size()], w.ip_addr, w.port);
+    // Parsed destination (ip:port). Round-robin: workers share IPs cyclically.
+    parse_ip_address(ip_addrs[worker_id % ip_addrs.size()], w.ip_addr, w.port);
 
     // w.sock stays default-constructed (fd == -1); w.connected stays false.
-    // _send_junk's first call performs the connect().
+    // _skip_or_send's first need_send branch performs the connect().
 }
 
 
@@ -676,7 +678,7 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 // and resets fd back to -1) and flips the atomic flag. Idempotent --
 // repeated DISCONNECTs on an already-disconnected worker are no-ops.
 //
-// Crucially, does NOT touch w.last_minichunk_processed or
+// Crucially, does NOT touch w.last_processed_minichunk or
 // w.last_queued_minichunk; the next SEND_* on this worker will hit
 // the !w.connected branch in _skip_or_send and transparently reopen
 // the connection + re-send the protocol header (bundled with the
@@ -687,9 +689,9 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 
 // -------------------------------------------------------------------------------------------------
 //
-// _read_acks: drain FLAG_ACK ack bytes from the worker's socket and
-// update Worker::minichunk_status / Worker::ack_queue. Runs on the
-// worker thread.
+// _read_acks: drain ack bytes from the worker's socket and update
+// Worker::minichunk_status / Worker::ack_queue. Runs on the worker
+// thread.
 //
 // blocking=false: a single non-blocking recv attempt (one syscall).
 // Returns whatever's available -- zero bytes is fine.
@@ -703,16 +705,14 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 // _read_acks THROWS rather than recovering gracefully -- worker_main's
 // catch handler calls stop(e) and the existing cascade tears down all
 // controllers + workers with a descriptive error. This matches the
-// "throw on anything wrong" policy for the FLAG_ACK test-only path.
+// "throw on anything wrong" policy for the debug-mode test-only path.
 
 
-void FakeXEngine::_read_acks(int thread_id, bool blocking)
+void FakeXEngine::_read_acks(Worker &w, bool blocking)
 {
     // ensures that we never call Socket.read() in production (when
     // no acks will be sent)
-    xassert(flag_ack);
-
-    Worker &w = *workers[thread_id];
+    xassert(debug);
 
     if (!w.connected.load(std::memory_order_relaxed))
         return;
@@ -878,18 +878,16 @@ void FakeXEngine::_read_acks(int thread_id, bool blocking)
 }
 
 
-void FakeXEngine::_disconnect(int thread_id)
+void FakeXEngine::_disconnect(Worker &w)
 {
-    Worker &w = *workers[thread_id];
-
     // Drain remaining acks BEFORE closing. If anything goes wrong
     // during the drain (peer EOF / invalid ack byte / 1-second
     // deadline), _read_acks throws -- worker_main's catch handler
     // calls stop(e) and the cascade tears down. No defensive
     // ack_queue.clear() is needed: either we drained successfully
     // (ack_queue is empty) or we threw (the worker is exiting).
-    if (flag_ack)
-        _read_acks(thread_id, /*blocking=*/true);
+    if (debug)
+        _read_acks(w, /*blocking=*/true);
 
     if (w.connected.load(std::memory_order_relaxed)) {
         w.sock.close();
@@ -903,7 +901,7 @@ void FakeXEngine::_disconnect(int thread_id)
 // _skip_or_send: handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
 // See header for contract. Three discriminators:
 //
-//   - first_command (last_minichunk_processed == -1): the very first
+//   - first_command (last_processed_minichunk == -1): the very first
 //     state-advancing command on this worker may pick any
 //     minichunk_index >= 0 (for NOTE-2 nonzero-initial-chunk tests).
 //     Subsequent state-advancing commands must advance by exactly +1.
@@ -920,10 +918,8 @@ void FakeXEngine::_disconnect(int thread_id)
 //     handshake transparently to the controller).
 
 
-bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
+bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
 {
-    Worker &w = *workers[thread_id];
-
     // Defense-in-depth monotonicity check. In principle this is
     // redundant with the queue-time sequentiality check that
     // _enqueue has already performed on every state-advancing
@@ -934,11 +930,11 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
     // immediately surface a queue-time logic bug as a worker-thread
     // exception via the existing stop() cascade.
     //
-    // Safe to read w.last_minichunk_processed without w.mutex: the
+    // Safe to read w.last_processed_minichunk without w.mutex: the
     // worker thread is the sole writer.
-    bool first_command = (w.last_minichunk_processed == -1);
+    bool first_command = (w.last_processed_minichunk == -1);
     if (!first_command)
-        xassert_eq(cmd.minichunk_index, w.last_minichunk_processed + 1L);
+        xassert_eq(cmd.minichunk_index, w.last_processed_minichunk + 1L);
     xassert_ge(cmd.minichunk_index, 0L);
 
     bool need_send = (cmd.kind == Command::Kind::SEND_JUNK ||
@@ -1064,14 +1060,14 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
         push_ack = true;
     }
 
-    // Publish last_minichunk_processed + (if flag_ack) update
-    // status / push ack_queue under lock. (cv.notify_all is
-    // centralized in _worker_main, fired once per command dispatched
-    // -- so wait_until_processed AND synchronize waiters wake
-    // together after each command is fully processed.)
+    // Publish last_processed_minichunk + (if debug) update status /
+    // push ack_queue under lock. (cv.notify_all is centralized in
+    // _worker_main, fired once per command dispatched -- so
+    // wait_until_processed AND synchronize waiters wake together
+    // after each command is fully processed.)
     {
         std::lock_guard<std::mutex> lock(w.mutex);
-        if (flag_ack) {
+        if (debug) {
             long idx = cmd.minichunk_index - w.first_minichunk;
             xassert_ge(idx, 0L);
             xassert_lt(idx, long(w.minichunk_status.size()));
@@ -1080,14 +1076,14 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
             if (push_ack)
                 w.ack_queue.push_back({cmd.minichunk_index, max_ack_at_submission});
         }
-        w.last_minichunk_processed = cmd.minichunk_index;
+        w.last_processed_minichunk = cmd.minichunk_index;
     }
 
     // Drain any acks that arrived while we were sending. Cheap
     // single-syscall non-blocking attempt -- if no bytes are
     // queued, the recv returns 0 and we proceed.
-    if (flag_ack)
-        _read_acks(thread_id, /*blocking=*/false);
+    if (debug)
+        _read_acks(w, /*blocking=*/false);
 
     return true;
 }
@@ -1095,14 +1091,15 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
 
 // -------------------------------------------------------------------------------------------------
 //
-// Worker main loop. Drained by external controller thread(s) via send_junk().
+// Worker main loop. Drained by external controller thread(s) via
+// enqueue_send_junk().
 
 
-void FakeXEngine::_worker_main(int thread_id)
+void FakeXEngine::_worker_main(int worker_id)
 {
-    Worker &w = *workers[thread_id];
+    Worker &w = *workers[worker_id];
 
-    _initialize(thread_id);
+    _initialize(worker_id);
 
     for (;;) {
         Command cmd;
@@ -1112,18 +1109,18 @@ void FakeXEngine::_worker_main(int thread_id)
                 if (w.is_stopped) return;
                 if (!w.command_queue.empty()) break;
 
-                // When ack_queue is empty (always so when flag_ack=
+                // When ack_queue is empty (always so when debug=
                 // false), wait unbounded -- no spurious wakeups.
                 // When ack_queue is non-empty, periodically drain
                 // acks so we don't let the receiver's send buffer
-                // for FLAG_ACK bytes fill up.
+                // for ack bytes fill up.
                 if (w.ack_queue.empty()) {
                     w.cv.wait(lock);
                 } else {
                     auto status = w.cv.wait_for(lock, std::chrono::milliseconds(1));
                     if (status == std::cv_status::timeout) {
                         lock.unlock();
-                        _read_acks(thread_id, /*blocking=*/false);
+                        _read_acks(w, /*blocking=*/false);
                         lock.lock();
                     }
                 }
@@ -1138,34 +1135,35 @@ void FakeXEngine::_worker_main(int thread_id)
         case Command::Kind::SEND_JUNK:
         case Command::Kind::SKIP_MINICHUNK:
         case Command::Kind::SEND_MINICHUNK:
-            if (!_skip_or_send(thread_id, cmd))
+            if (!_skip_or_send(w, cmd))
                 return;
             break;
         case Command::Kind::DISCONNECT:
-            _disconnect(thread_id);
+            _disconnect(w);
             break;
         case Command::Kind::WAIT_FOR_ACKS:
-            // WAIT_FOR_ACKS is enqueued only by wait_for_acks() /
-            // synchronize(), both of which check flag_ack first.
-            // xassert here as a defense-in-depth invariant.
-            xassert(flag_ack);
-            _read_acks(thread_id, /*blocking=*/true);
+            // WAIT_FOR_ACKS is enqueued only by
+            // enqueue_wait_for_acks() / synchronize(), both of which
+            // check debug first. xassert here as a defense-in-depth
+            // invariant.
+            xassert(debug);
+            _read_acks(w, /*blocking=*/true);
             break;
         default: {
             // Defensive -- UNINITIALIZED Commands should never be enqueued.
             stringstream ss;
-            ss << "FakeXEngine worker " << thread_id
+            ss << "FakeXEngine worker " << worker_id
                << ": got Command with kind=" << uint32_t(cmd.kind);
             throw runtime_error(ss.str());
         }
         }
 
         // Centralized notify, one per command dispatched. Wakes both
-        // wait_until_processed waiters (whenever last_minichunk_
-        // processed advanced) AND synchronize() waiters (whenever
-        // command_queue empties or shrinks). Notifying *after* the
-        // dispatch returns is what makes synchronize() wait for
-        // WAIT_FOR_ACKS's blocking drain to finish before returning.
+        // wait_until_processed waiters (whenever last_processed_minichunk
+        // advanced) AND synchronize() waiters (whenever command_queue
+        // empties or shrinks). Notifying *after* the dispatch returns
+        // is what makes synchronize() wait for WAIT_FOR_ACKS's
+        // blocking drain to finish before returning.
         w.cv.notify_all();
     }
 }

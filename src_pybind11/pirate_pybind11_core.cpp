@@ -569,16 +569,16 @@ void register_core_bindings(pybind11::module &m)
 
     // FakeXEngine: simulates multiple upstream X-engine nodes sending data to a receiver.
     // Driven externally by a controller thread that submits SEND_JUNK commands
-    // via send_junk() and synchronizes via wait_until_processed().
+    // via enqueue_send_junk() and synchronizes via wait_until_processed().
     // Skipped members: mutex, cv, error, workers (internal state)
     // Skipped methods: _throw_if_stopped, make_worker_metadata, worker_main, _worker_main, _send_all (private)
     py::class_<FakeXEngine>(m, "FakeXEngine",
         "Simulates multiple upstream X-engine nodes sending data to a receiver.\n\n"
-        "Creates 'nthreads' worker threads in the constructor; each worker\n"
+        "Creates 'nworkers' worker threads in the constructor; each worker\n"
         "waits on a per-worker command queue. An external controller thread\n"
-        "drives the workers by calling send_junk(worker_id, minichunk_index)\n"
+        "drives the workers by calling enqueue_send_junk(worker_id, minichunk_index)\n"
         "and wait_until_processed(worker_id, minichunk_index).\n\n"
-        "Threads are assigned round-robin to IP addresses. nthreads must be a\n"
+        "Workers are assigned round-robin to IP addresses. nworkers must be a\n"
         "multiple of len(ip_addrs). Worker threads inherit the vcpu affinity\n"
         "of the thread that calls the constructor -- Python callers MUST\n"
         "instantiate FakeXEngine inside a ThreadAffinity context manager.\n\n"
@@ -588,33 +588,29 @@ void register_core_bindings(pybind11::module &m)
         "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64,\n"
         "                          time_samples_per_chunk=32768)\n"
         "        # Spawn a controller thread (under the same affinity) that\n"
-        "        # calls fxe.send_junk / fxe.wait_until_processed in a loop.\n"
+        "        # calls fxe.enqueue_send_junk / fxe.wait_until_processed in a loop.\n"
         "    # ... wait ...\n"
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
           .def(py::init<const XEngineMetadata &, const std::vector<std::string> &,
                         int, long, bool>(),
-               py::arg("xmd"), py::arg("ip_addrs"), py::arg("nthreads"),
+               py::arg("xmd"), py::arg("ip_addrs"), py::arg("nworkers"),
                py::arg("time_samples_per_chunk"),
-               py::arg("flag_ack") = false,
-               "Create a FakeXEngine and spawn 'nthreads' worker threads.\n\n"
+               py::arg("debug") = false,
+               "Create a FakeXEngine and spawn 'nworkers' worker threads.\n\n"
                "Workers inherit the vcpu affinity of the calling thread, so the\n"
                "Python caller MUST invoke this constructor inside a ThreadAffinity\n"
                "context manager.\n\n"
                "Args:\n"
                "    xmd: X-engine metadata defining frequency channels and beams\n"
                "    ip_addrs: List of receiver addresses in 'ip:port' format\n"
-               "    nthreads: Number of worker threads (must be a multiple of len(ip_addrs))\n"
+               "    nworkers: Number of worker threads (must be a multiple of len(ip_addrs))\n"
                "    time_samples_per_chunk: Receiver-side chunk size (must equal\n"
                "        the FrbServer's AssembledFrameAllocator.time_samples_per_chunk).\n"
                "        Must be positive and a multiple of 256.\n"
-               "    flag_ack: If True, the connection header is sent with FLAG_ACK\n"
-               "        set, the receiver sends a 1-byte ack per minichunk\n"
-               "        (0=dropped, 1=assembled), and per-minichunk lifecycle is\n"
-               "        recorded for inspection via get_minichunk_status(). TESTING\n"
-               "        ONLY -- the per-worker status vector grows without bound\n"
-               "        per state-advancing command, so do NOT enable flag_ack in a\n"
-               "        long-running production sender.")
-          .def("send_junk", &FakeXEngine::send_junk,
+               "    debug: Adds real-time debugging checks with nontrivial\n"
+               "        cpu/network cost, and unbounded memory usage. Useful for\n"
+               "        unit tests, but don't use in production!")
+          .def("enqueue_send_junk", &FakeXEngine::enqueue_send_junk,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a SEND_JUNK(minichunk_index) command to worker_id's queue.\n\n"
@@ -635,27 +631,29 @@ void register_core_bindings(pybind11::module &m)
                "    out of range, or minichunk_index is not the +1 successor of\n"
                "    the most recently enqueued state-advancing command on this\n"
                "    worker (with the first-command exemption).")
-          .def("skip_minichunk", &FakeXEngine::skip_minichunk,
+          .def("enqueue_skip_minichunk", &FakeXEngine::enqueue_skip_minichunk,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a SKIP_MINICHUNK(minichunk_index) command to worker_id's queue.\n\n"
-               "Non-blocking. Same queue-time sequentiality rules as send_junk\n"
-               "(strict +1 from the most recently enqueued state-advancing\n"
-               "command on this worker, with the first-command exemption).\n\n"
-               "Wire effect: NONE. Advances last_minichunk_processed past\n"
+               "Non-blocking. Same queue-time sequentiality rules as\n"
+               "enqueue_send_junk (strict +1 from the most recently enqueued\n"
+               "state-advancing command on this worker, with the first-command\n"
+               "exemption).\n\n"
+               "Wire effect: NONE. Advances last_processed_minichunk past\n"
                "minichunk_index without putting any bytes on the wire.\n"
                "A worker whose only commands are SKIPs never opens its TCP\n"
                "connection -- useful for 'silent peer' tests.\n\n"
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
                "    out of range, or minichunk_index violates the +1 chain.")
-          .def("send_minichunk", &FakeXEngine::send_minichunk,
+          .def("enqueue_send_minichunk", &FakeXEngine::enqueue_send_minichunk,
                py::arg("worker_id"), py::arg("minichunk_index"), py::arg("frame_set"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a SEND_MINICHUNK(minichunk_index, frame_set) command.\n\n"
-               "Non-blocking. Same queue-time sequentiality rules as send_junk\n"
-               "(strict +1 from the most recently enqueued state-advancing\n"
-               "command on this worker, with the first-command exemption).\n\n"
+               "Non-blocking. Same queue-time sequentiality rules as\n"
+               "enqueue_send_junk (strict +1 from the most recently enqueued\n"
+               "state-advancing command on this worker, with the first-command\n"
+               "exemption).\n\n"
                "Wire effect: gather the per-(beam, freq) int4 data for the\n"
                "minichunk at offset (minichunk_index - frame_set.time_chunk_index\n"
                "* minichunks_per_chunk) within the set, then send one minichunk.\n\n"
@@ -676,20 +674,20 @@ void register_core_bindings(pybind11::module &m)
                "    RuntimeError: If the FakeXEngine is stopped, arguments are\n"
                "    out of range, frame_set is None, or minichunk_index violates\n"
                "    the +1 chain.")
-          .def("disconnect", &FakeXEngine::disconnect,
+          .def("enqueue_disconnect", &FakeXEngine::enqueue_disconnect,
                py::arg("worker_id"),
                py::call_guard<py::gil_scoped_release>(),
                "Submit a DISCONNECT command to worker_id's queue.\n\n"
                "Non-blocking (fire-and-forget). The worker closes its TCP socket\n"
-               "on receipt. last_minichunk_processed and last_queued_minichunk\n"
-               "are NOT touched; the next send_junk or send_minichunk on this\n"
-               "worker transparently reopens the connection and re-sends the\n"
-               "protocol handshake.\n\n"
+               "on receipt. last_processed_minichunk and last_queued_minichunk\n"
+               "are NOT touched; the next enqueue_send_junk or\n"
+               "enqueue_send_minichunk on this worker transparently reopens the\n"
+               "connection and re-sends the protocol handshake.\n\n"
                "SKIP_MINICHUNK commands continue to work normally while\n"
-               "disconnected (they advance last_minichunk_processed without\n"
+               "disconnected (they advance last_processed_minichunk without\n"
                "touching the socket). If you want the next reconnect to start at\n"
                "a higher minichunk_index, bridge the gap yourself with\n"
-               "skip_minichunk calls.\n\n"
+               "enqueue_skip_minichunk calls.\n\n"
                "DISCONNECT does NOT participate in the +1 sequentiality chain,\n"
                "so it can be submitted at any time relative to the state-\n"
                "advancing commands.\n\n"
@@ -717,31 +715,31 @@ void register_core_bindings(pybind11::module &m)
                "minichunk_index has been fully handled by the worker -- bytes\n"
                "actually on the wire for SEND_*, or just state-advance for SKIP.\n\n"
                "Returns immediately if minichunk_index is negative (since per-\n"
-               "worker last_minichunk_processed starts at -1, this lets the\n"
+               "worker last_processed_minichunk starts at -1, this lets the\n"
                "controller call wait_until_processed(w, n-2) unconditionally for\n"
                "n in {0, 1}).\n\n"
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine is stopped.")
-          .def("wait_for_acks", &FakeXEngine::wait_for_acks,
+          .def("enqueue_wait_for_acks", &FakeXEngine::enqueue_wait_for_acks,
                py::arg("worker_id"),
                py::call_guard<py::gil_scoped_release>(),
                "Enqueue a WAIT_FOR_ACKS command on worker_id's queue. Non-\n"
                "blocking (fire-and-forget) at the API level; when the worker\n"
-               "eventually pops the command, it drains all outstanding FLAG_ACK\n"
-               "acks (blocking, with a 1-second per-call deadline).\n\n"
+               "eventually pops the command, it drains all outstanding\n"
+               "debug-mode acks (blocking, with a 1-second per-call deadline).\n\n"
                "Useful when you want to issue a barrier without waiting for it\n"
                "to complete. To wait for all acks too, call synchronize() or\n"
                "poll get_minichunk_status().\n\n"
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine was not constructed with\n"
-               "    flag_ack=True (no acks to wait for), if worker_id is out\n"
+               "    debug=True (no acks to wait for), if worker_id is out\n"
                "    of range, or if the FakeXEngine is stopped.")
           .def("synchronize", &FakeXEngine::synchronize,
                py::arg("worker_id"),
                py::call_guard<py::gil_scoped_release>(),
                "Block the calling thread until worker_id's command_queue is\n"
                "fully drained. If the FakeXEngine was constructed with\n"
-               "flag_ack=True, this additionally enqueues a WAIT_FOR_ACKS\n"
+               "debug=True, this additionally enqueues a WAIT_FOR_ACKS\n"
                "before waiting -- so the wait also covers all outstanding acks.\n\n"
                "SEMANTICS: this is a 'drain everything in the queue' barrier,\n"
                "NOT a 'drain everything that was in the queue at the moment I\n"
@@ -763,21 +761,23 @@ void register_core_bindings(pybind11::module &m)
                "advanced the state). Does NOT throw on a stopped FakeXEngine.\n\n"
                "Example:\n"
                "    fxe = FakeXEngine(xmd, ip_addrs, 1,\n"
-               "                      time_samples_per_chunk=32768, flag_ack=True)\n"
-               "    fxe.send_junk(0, 0)\n"
+               "                      time_samples_per_chunk=32768, debug=True)\n"
+               "    fxe.enqueue_send_junk(0, 0)\n"
                "    fxe.synchronize(0)\n"
                "    s = fxe.get_minichunk_status(0, 0)\n"
                "    assert s == FakeXEngine.STATUS_ASSEMBLED\n\n"
-               "TESTING ONLY: the FakeXEngine's per-worker status vector grows\n"
-               "without bound per state-advancing command (when flag_ack=True).\n\n"
+               "The FakeXEngine's per-worker status vector grows without bound\n"
+               "per state-advancing command (when debug=True), so don't use\n"
+               "debug mode in production.\n\n"
                "Raises:\n"
-               "    RuntimeError: If flag_ack was not True at construction;\n"
+               "    RuntimeError: If debug was not True at construction;\n"
                "    if worker_id is out of range; if no state-advancing\n"
                "    commands have been enqueued yet on this worker; or if\n"
                "    minichunk_index is out of range.")
           .def("stop", [](FakeXEngine &self) { self.stop(); },
                "Signal worker threads to stop. Any in-flight wait_until_processed\n"
-               "/ send_junk calls throw RuntimeError. Safe to call multiple times.")
+               "/ enqueue_send_junk calls throw RuntimeError. Safe to call\n"
+               "multiple times.")
           .def_property_readonly("is_stopped",
                [](FakeXEngine &self) {
                    // O(1) atomic load -- the property's "true" value just
@@ -794,14 +794,14 @@ void register_core_bindings(pybind11::module &m)
                "X-engine metadata")
           .def_readonly("ip_addrs", &FakeXEngine::ip_addrs,
                "Receiver addresses in 'ip:port' format")
-          .def_readonly("nthreads", &FakeXEngine::nthreads,
+          .def_readonly("nworkers", &FakeXEngine::nworkers,
                "Number of worker threads")
           .def_readonly("time_samples_per_chunk", &FakeXEngine::time_samples_per_chunk,
                "Receiver-side chunk size in samples")
           .def_readonly("minichunks_per_chunk", &FakeXEngine::minichunks_per_chunk,
                "= time_samples_per_chunk / 256")
-          .def_readonly("flag_ack", &FakeXEngine::flag_ack,
-               "True if the FakeXEngine was constructed with flag_ack=True.\n"
+          .def_readonly("debug", &FakeXEngine::debug,
+               "True if the FakeXEngine was constructed with debug=True.\n"
                "Read-only after construction.")
           .def_property_readonly_static("protocol_magic",
                [](py::object) { return FakeXEngine::protocol_magic; },
