@@ -17,6 +17,30 @@ namespace pirate {
 #endif
 
 
+// File-scope helper: atomically sets dst = max(dst, src). Portable
+// C++17 CAS-loop equivalent of C++26 std::atomic::fetch_max. Used by
+// the FLAG_ACK ack-prediction tracking (max_sent_minichunk and
+// max_acked_minichunk).
+//
+// Memory ordering: relaxed throughout. These atomics are running
+// counters with no synchronization relationship to other state. The
+// happens-before relation that makes the ack-prediction bounds hold
+// goes THROUGH the network (worker A sends bytes -> server processes
+// -> worker B receives ack), which the C++ memory model doesn't
+// capture anyway -- any reasonable ordering works in practice.
+static inline void fetch_max(std::atomic<long> &dst, long src)
+{
+    long expected = dst.load(std::memory_order_relaxed);
+    while (expected < src) {
+        if (dst.compare_exchange_weak(expected, src,
+                                      std::memory_order_relaxed,
+                                      std::memory_order_relaxed))
+            return;
+        // CAS failed; `expected` was updated to the current value of dst.
+    }
+}
+
+
 // File-scope helper: sets w.is_stopped, w.error, notifies w.cv. Idempotent
 // (no-op if w.is_stopped is already true). Used by FakeXEngine::stop()'s
 // per-worker sweep; never called from anywhere else.
@@ -33,15 +57,31 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 
 
 FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_,
-                         int nthreads_, bool flag_ack_) :
+                         int nthreads_, long time_samples_per_chunk_, bool flag_ack_) :
     xmd(xmd_),
     ip_addrs(ip_addrs_),
     nthreads(nthreads_),
-    flag_ack(flag_ack_)
+    time_samples_per_chunk(time_samples_per_chunk_),
+    flag_ack(flag_ack_),
+    minichunks_per_chunk(time_samples_per_chunk_ / 256),
+    num_receivers(long(ip_addrs_.size()))
 {
     if (ip_addrs.empty())
         throw runtime_error("FakeXEngine: ip_addrs is empty");
     xassert(nthreads > 0);
+
+    if (time_samples_per_chunk <= 0) {
+        stringstream ss;
+        ss << "FakeXEngine: time_samples_per_chunk=" << time_samples_per_chunk
+           << " must be positive";
+        throw runtime_error(ss.str());
+    }
+    if ((time_samples_per_chunk % 256) != 0) {
+        stringstream ss;
+        ss << "FakeXEngine: time_samples_per_chunk=" << time_samples_per_chunk
+           << " must be a multiple of 256";
+        throw runtime_error(ss.str());
+    }
 
     long naddrs = ip_addrs.size();
     if (nthreads % naddrs != 0) {
@@ -68,6 +108,14 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     }
 
     xmd.validate();
+
+    // Size the per-Receiver ack high-water-mark vector and seed each
+    // entry to -1. Can't use std::vector(n, atomic<long>{-1}) because
+    // std::atomic is not copyable; have to default-construct then
+    // explicitly store.
+    max_acked_minichunk = std::vector<std::atomic<long>>(num_receivers);
+    for (long i = 0; i < num_receivers; i++)
+        max_acked_minichunk[i].store(-1, std::memory_order_relaxed);
 
     // Allocate Worker objects first (heap-allocated, stable address --
     // Worker embeds std::mutex / std::condition_variable, which are
@@ -481,6 +529,11 @@ void FakeXEngine::_initialize(int thread_id)
 {
     Worker &w = *workers[thread_id];
 
+    // Round-robin assignment of worker -> Receiver, matching the
+    // round-robin ip_addr assignment below. Indexes
+    // max_acked_minichunk[] from _skip_or_send / _read_acks.
+    w.receiver_id = long(thread_id) % num_receivers;
+
     // Per-worker metadata (round-robin freq-channel subset for this thread).
     w.xmd = make_worker_metadata(thread_id);
     long nfreq = w.xmd.freq_channels.size();
@@ -725,7 +778,7 @@ void FakeXEngine::_read_acks(int thread_id, bool blocking)
                 if (w.ack_queue.empty())
                     throw runtime_error(
                         "FakeXEngine::_read_acks: received more ack bytes than expected");
-                long mc_index = w.ack_queue.front();
+                PendingAck done = w.ack_queue.front();
                 unsigned char ack = static_cast<unsigned char>(buf[i]);
                 if (ack != STATUS_DROPPED && ack != STATUS_ASSEMBLED) {
                     std::stringstream ss;
@@ -733,7 +786,7 @@ void FakeXEngine::_read_acks(int thread_id, bool blocking)
                        << int(ack) << " from receiver (expected 0 or 1)";
                     throw runtime_error(ss.str());
                 }
-                long idx = mc_index - w.first_minichunk;
+                long idx = done.minichunk_index - w.first_minichunk;
                 xassert_ge(idx, 0L);
                 xassert_lt(idx, long(w.minichunk_status.size()));
                 xassert_eq(w.minichunk_status[idx], STATUS_SENT);
@@ -744,6 +797,80 @@ void FakeXEngine::_read_acks(int thread_id, bool blocking)
                 // directly.
                 w.minichunk_status[idx] = ack;
                 w.ack_queue.pop_front();
+
+                // Update per-Receiver ack high-water mark: an ack for
+                // done.minichunk_index from THIS worker's Receiver B
+                // implies B has processed that minichunk.
+                fetch_max(max_acked_minichunk[w.receiver_id],
+                          done.minichunk_index);
+
+                // Three-way ack-prediction assertion. Bounds the
+                // receiver-side curr_base_chunk just BEFORE B
+                // processed done.minichunk_index, then checks ack
+                // against the prediction:
+                //
+                //   cbcp_lower = ichunk(done.max_ack_at_submission) - 1
+                //     LOWER BOUND on B's cbc at processing time. Since
+                //     B had processed done.max_ack_at_submission BEFORE
+                //     this worker sent done.minichunk_index (the
+                //     snapshot was taken before the send), B's cbc was
+                //     >= ichunk(snapshot) - 1 by the time it processed
+                //     done.minichunk_index.
+                //   cbcp_upper = ichunk(max_sent_minichunk_now) - 1
+                //     UPPER BOUND. Every advance to B's cbc (via B's
+                //     own _process_data OR via cross-Receiver evict
+                //     cascade from FrbServer) traces back to some
+                //     sent minichunk m_trigger, and
+                //     fetch_max(max_sent_minichunk, m_trigger + shift)
+                //     ran BEFORE m_trigger left the kernel. The +mpc
+                //     shift on first sends folds the receiver's
+                //     initial_time_chunk into max_sent so this bound
+                //     covers the init state too (see _skip_or_send).
+                //
+                // Three cases:
+                //   i = ichunk(done.minichunk_index)
+                //   i >= cbcp_upper -> B definitely processed with
+                //                       cbc <= i -> must be ASSEMBLED.
+                //   i < cbcp_lower  -> B definitely processed with
+                //                       cbc > i  -> must be DROPPED.
+                //   otherwise        -> ambiguous, no assertion.
+                long imc = done.minichunk_index;
+                long max_sent_now = max_sent_minichunk.load(std::memory_order_relaxed);
+
+                auto ichunk_of = [this](long x) -> long {
+                    return (x >= 0) ? (x / minichunks_per_chunk) : -1L;
+                };
+
+                long ii         = imc / minichunks_per_chunk;
+                long cbcp_lower = ichunk_of(done.max_ack_at_submission) - 1L;
+                long cbcp_upper = ichunk_of(max_sent_now) - 1L;
+
+                if (ii >= cbcp_upper) {
+                    if (ack != STATUS_ASSEMBLED) {
+                        std::stringstream ss;
+                        ss << "FakeXEngine::_read_acks: ack-prediction"
+                           << " mismatch: minichunk_index=" << imc
+                           << " predicted ASSEMBLED (ichunk=" << ii
+                           << " >= cbcp_upper=" << cbcp_upper
+                           << ", max_ack_at_submission=" << done.max_ack_at_submission
+                           << ", max_sent=" << max_sent_now
+                           << "), got ack=" << int(ack);
+                        throw runtime_error(ss.str());
+                    }
+                } else if (ii < cbcp_lower) {
+                    if (ack != STATUS_DROPPED) {
+                        std::stringstream ss;
+                        ss << "FakeXEngine::_read_acks: ack-prediction"
+                           << " mismatch: minichunk_index=" << imc
+                           << " predicted DROPPED (ichunk=" << ii
+                           << " < cbcp_lower=" << cbcp_lower
+                           << ", max_ack_at_submission=" << done.max_ack_at_submission
+                           << ", max_sent=" << max_sent_now
+                           << "), got ack=" << int(ack);
+                        throw runtime_error(ss.str());
+                    }
+                }
+                // else: ambiguous, no assertion fires.
             }
         }
         need -= n;
@@ -817,6 +944,13 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
     bool need_send = (cmd.kind == Command::Kind::SEND_JUNK ||
                       cmd.kind == Command::Kind::SEND_MINICHUNK);
 
+    // Snapshot of max_acked_minichunk[receiver_id] taken just before
+    // _send_all. Attached to the PendingAck pushed at the bottom of
+    // this function. Only set in the need_send branch below; the
+    // SKIP_MINICHUNK path leaves it at -1 (which is never read,
+    // since SKIP doesn't push to ack_queue).
+    long max_ack_at_submission = -1;
+
     if (need_send) {
         // Lazy connect: the first SEND_* opens the socket. SKIP_MINICHUNK
         // never opens the socket -- so a worker that only ever sees
@@ -859,11 +993,63 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
         const char *send_ptr = first_send_after_connect ? w.send_buf.data() : mc_ptr;
         long send_nbytes = first_send_after_connect ? long(w.send_buf.size()) : w.mc_nbytes;
 
+        // FLAG_ACK ack-prediction bookkeeping. Snapshot the per-Receiver
+        // ack high-water mark BEFORE the wire send, then update the
+        // global "max sent" mark (also BEFORE the send). Both timings
+        // are load-bearing for the bounds used by _read_acks's
+        // ack-prediction assertion (see _read_acks for the full
+        // assertion logic).
+        max_ack_at_submission =
+            max_acked_minichunk[w.receiver_id].load(std::memory_order_relaxed);
+
+        // SHIFT TRICK for first send: a worker's very first SEND
+        // contributes (cmd.minichunk_index + minichunks_per_chunk) to
+        // max_sent_minichunk; subsequent sends contribute just
+        // cmd.minichunk_index. Non-obvious; here's why:
+        //
+        // The receiver-side Receiver::curr_base_chunk (cbc) starts at
+        // `initial_time_chunk`, which is set on the first per-minichunk
+        // header to arrive at ANY peer of ANY Receiver -- i.e. by the
+        // chunk-index of WHICHEVER worker's first SEND lands first. We
+        // (the FakeXEngine) don't know which worker that is.
+        //
+        // The ack-prediction upper bound on cbc_B uses
+        //    cbcp_upper = ichunk(max_sent_minichunk) - 1
+        // (where ichunk(x) = x / minichunks_per_chunk). For this to be
+        // a valid upper bound at the moment the receiver's cbc is just
+        // sitting at init (no minichunks processed yet), we need
+        //    ichunk(max_sent_minichunk) - 1 >= init.
+        // Without the shift, max_sent_minichunk >= m_init_setter and
+        // ichunk(max_sent) - 1 = init - 1 < init -- BOUND BREAKS, can
+        // produce false-positive ASSEMBLED assertions.
+        //
+        // With the shift, the init-setter worker's contribution is
+        //    m_init_setter + minichunks_per_chunk,
+        // so ichunk(max_sent) - 1 >= ichunk(m_init_setter) = init.
+        // Bound holds.
+        //
+        // We apply the shift to EVERY worker's first send because we
+        // don't know at runtime which worker won the init race -- the
+        // shift is the same whether it's the init-setter or not, and
+        // overestimating max_sent_minichunk only makes the upper bound
+        // looser (safe direction).
+        //
+        // first_send_done persists across DISCONNECT/reconnect cycles
+        // -- the receiver's initial_time_chunk is set ONCE per server
+        // process and never reset, so re-shifting on reconnect would
+        // be incorrect bookkeeping (still safe but pointless).
+        long shift = w.first_send_done ? 0L : minichunks_per_chunk;
+        fetch_max(max_sent_minichunk, cmd.minichunk_index + shift);
+        w.first_send_done = true;
+
         if (!_send_all(w, w.sock, send_ptr, send_nbytes))
             return false;
     }
     // SKIP_MINICHUNK falls through here -- no wire activity, just
-    // advance state below.
+    // advance state below. SKIPs do NOT touch max_sent_minichunk,
+    // max_ack_at_submission, or first_send_done: nothing went on
+    // the wire, so the server cannot have seen this minichunk from
+    // us and cannot ever ack it.
 
     // Determine the new minichunk_status entry for this cmd.
     // Successful SEND_* -> STATUS_SENT (the wire bytes went out;
@@ -892,7 +1078,7 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
             xassert_eq(w.minichunk_status[idx], STATUS_QUEUED);
             w.minichunk_status[idx] = new_status;
             if (push_ack)
-                w.ack_queue.push_back(cmd.minichunk_index);
+                w.ack_queue.push_back({cmd.minichunk_index, max_ack_at_submission});
         }
         w.last_minichunk_processed = cmd.minichunk_index;
     }

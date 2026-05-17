@@ -492,7 +492,9 @@ def run_fake_xengine(config_filename):
             # Pin thread to sender NIC's CPU so worker threads spawned by
             # the FakeXEngine constructor inherit the same affinity.
             with ThreadAffinity(vcpu_list):
-                fxe = FakeXEngine(xmd, ip_addrs, nthreads)
+                fxe = FakeXEngine(
+                    xmd, ip_addrs, nthreads,
+                    time_samples_per_chunk=config['time_samples_per_chunk'])
             fake_xengines.append(fxe)
             fxe_vcpus.append(vcpu_list)
             print(f"  FakeXEngine {i} workers spawned.")

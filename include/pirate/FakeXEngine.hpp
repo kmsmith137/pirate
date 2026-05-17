@@ -62,7 +62,8 @@ namespace pirate {
 //
 // Usage:
 //   with ThreadAffinity(vcpu_list):
-//       fxe = FakeXEngine(xmd, ["10.0.0.2:5000", "10.0.1.2:5000"], 64)
+//       fxe = FakeXEngine(xmd, {"10.0.0.2:5000", "10.0.1.2:5000"}, 64,
+//                         /*time_samples_per_chunk=*/32768)
 //       # Spawn a controller thread (under the same affinity) that calls
 //       # fxe.send_junk / fxe.wait_until_processed in a loop.
 //   ...
@@ -143,6 +144,26 @@ struct FakeXEngine
         // not safe against an actively-running reaper. See also the
         // identical warning on the send_minichunk() entry point below.
         std::shared_ptr<AssembledFrameSet> frame_set;
+    };
+
+    // PendingAck: one entry per in-flight wire minichunk awaiting an
+    // ack byte from the receiver. Pushed into Worker::ack_queue by
+    // _skip_or_send after a successful SEND_*; popped by _read_acks
+    // when the receiver's ack byte arrives. Used by the FLAG_ACK
+    // back-channel only.
+    struct PendingAck
+    {
+        // The wire minichunk_index this ack corresponds to.
+        long minichunk_index;
+        // Snapshot of FakeXEngine::max_acked_minichunk[w.receiver_id]
+        // taken JUST BEFORE _send_all() for this minichunk. Used in
+        // _read_acks to lower-bound the receiver's curr_base_chunk
+        // at the time it processed this minichunk: any ack-arrival
+        // observed at snapshot time implies the receiver had already
+        // processed (and emitted that ack for) some minichunk by then,
+        // so its curr_base_chunk is at least one chunk-index below the
+        // acked minichunk's chunk-index.
+        long max_ack_at_submission;
     };
 
     // Worker: per-worker state and synchronization. Each Worker is an
@@ -229,18 +250,20 @@ struct FakeXEngine
         // FLAG_ACK in a long-running production sender.
         std::vector<unsigned char> minichunk_status;
 
-        // minichunk_index values for commands awaiting ack reception.
+        // Pending acks (one entry per in-flight wire minichunk).
         // When a SEND_JUNK or SEND_MINICHUNK is sent successfully on
-        // the wire, the worker pushes the minichunk_index here (under
+        // the wire, the worker pushes a PendingAck here (under
         // 'mutex'); when an ack byte arrives, _read_acks pops the
         // front and uses (minichunk_index - first_minichunk) to find
         // the right minichunk_status slot.
         //
-        // Stored as `long` (not as a full Command) -- _read_acks only
-        // needs the minichunk_index, so we save the per-Command bytes
-        // and avoid extending the lifetime of any shared_ptr<
-        // AssembledFrameSet> held by the originating Command.
-        std::deque<long> ack_queue;
+        // Each PendingAck also carries 'max_ack_at_submission' -- a
+        // snapshot of FakeXEngine::max_acked_minichunk[receiver_id]
+        // taken just before the wire send. The ack-prediction
+        // assertion in _read_acks uses this snapshot to lower-bound
+        // the receiver's curr_base_chunk at the moment it processed
+        // this minichunk. See PendingAck doc + _skip_or_send.
+        std::deque<PendingAck> ack_queue;
 
         // ---- Constant after construction, not lock-protected. ----
 
@@ -250,6 +273,20 @@ struct FakeXEngine
         // (called at the top of _worker_main) and modified only by
         // _send_junk(). No other thread reads or writes these, so they
         // need no synchronization. ----
+
+        // Index into FakeXEngine::max_acked_minichunk that maps this
+        // worker to its Receiver on the server side. Set in
+        // _initialize() to (thread_id % ip_addrs.size()), matching
+        // the round-robin assignment of worker -> ip_addrs.
+        long receiver_id = -1;
+
+        // False until this worker has performed its very first SEND_JUNK
+        // or SEND_MINICHUNK; flipped to true inside _skip_or_send the
+        // first time the need_send branch is taken. Used to apply the
+        // "+minichunks_per_chunk" shift to max_sent_minichunk on the
+        // first send only (see the long comment in _skip_or_send).
+        // Persists across DISCONNECT/reconnect cycles.
+        bool first_send_done = false;
 
         // Per-worker XEngineMetadata, with the round-robin subset of
         // freq_channels assigned to this thread.
@@ -316,6 +353,15 @@ struct FakeXEngine
     const std::vector<std::string> ip_addrs;  // each element is "ip:port"
     const int nthreads;
 
+    // Receiver-side time_samples_per_chunk (from the FrbServer's
+    // AssembledFrameAllocator). Required for the FLAG_ACK ack-
+    // prediction assertion in _read_acks: it maps wire
+    // minichunk_index -> chunk index via
+    //   minichunks_per_chunk = time_samples_per_chunk / 256.
+    // Non-optional. Validated in the constructor to be > 0 and a
+    // multiple of 256.
+    const long time_samples_per_chunk;
+
     // If true, the connection header is sent with FLAG_ACK set, the
     // receiver sends a 1-byte ack per minichunk (0=dropped, 1=
     // assembled), and Worker::minichunk_status records the lifecycle
@@ -323,6 +369,21 @@ struct FakeXEngine
     // vector grows without bound per state-advancing command, so do
     // NOT enable flag_ack in a long-running production sender.
     const bool flag_ack;
+
+    // ----- Derived from time_samples_per_chunk -----
+
+    // = time_samples_per_chunk / 256. Number of wire minichunks per
+    // assembled chunk on the receiver side. Used by the ack-prediction
+    // assertion to convert minichunk_index -> chunk_index.
+    const long minichunks_per_chunk;
+
+    // ----- Derived from ip_addrs -----
+
+    // = long(ip_addrs.size()). Each ip_addr corresponds to one
+    // Receiver on the FrbServer; each worker is assigned to one
+    // Receiver via round-robin (worker.receiver_id = thread_id %
+    // num_receivers, set in _initialize).
+    const long num_receivers;
 
     // ----- Stop-state cache -----
 
@@ -344,12 +405,62 @@ struct FakeXEngine
     // This avoids any need to make Worker movable.
     std::vector<std::unique_ptr<Worker>> workers;
 
+    // ----- FLAG_ACK back-channel state (used iff flag_ack=true) -----
+
+    // Per-Receiver max minichunk_index acked, over all workers
+    // connected to that Receiver. Vector of length num_receivers;
+    // each entry init to -1 in the constructor body. Updated in
+    // _read_acks via fetch_max(max_acked_minichunk[w.receiver_id],
+    // done.minichunk_index) after each ack byte is processed.
+    //
+    // PER-RECEIVER (not per-server-aggregate) for correctness of the
+    // lower bound on the receiver's cbc_B: an ack from Receiver A for
+    // minichunk N tells us about A's cbc_A, NOT B's cbc_B. The
+    // cross-Receiver evict mechanism (Receiver::evict from FrbServer
+    // worker threads when frame_sets are pulled from sibling
+    // Receivers) is an async thread-handoff that lags, so a global
+    // "max ack" doesn't bound any specific Receiver's cbc.
+    //
+    // Read via fetch_max + load with memory_order_relaxed (the
+    // happens-before chain that makes the bound hold goes through
+    // the network, which the C++ memory model doesn't capture).
+    std::vector<std::atomic<long>> max_acked_minichunk;
+
+    // Max (over all workers, all Receivers) "shifted" minichunk_index
+    // contribution. Updated in _skip_or_send via fetch_max JUST
+    // BEFORE the call to _send_all (before, not after, to ensure
+    // every receiver-processable minichunk is captured by the time
+    // any later reader observes max_sent_minichunk -- otherwise an
+    // ack-back-to-FakeXEngine could race the local atomic update).
+    //
+    // SHIFT: a worker's VERY FIRST SEND contributes
+    //    cmd.minichunk_index + minichunks_per_chunk
+    // (one full chunk ahead); subsequent sends contribute just
+    // cmd.minichunk_index. This folds the receiver's
+    // initial_time_chunk (which equals the chunk-index of whichever
+    // worker's first send arrived first) into max_sent_minichunk,
+    // so the upper bound on the receiver's cbc_B doesn't need a
+    // separate init bracket. See the long comment in _skip_or_send.
+    //
+    // GLOBAL (not per-Receiver) is REQUIRED for the upper bound to
+    // hold in multi-Receiver setups: cross-Receiver evict() from
+    // FrbServer can advance cbc_B based on a minichunk sent to a
+    // SIBLING Receiver, not to B itself. A per-Receiver max_sent[B]
+    // would miss those sends. The global aggregate captures them all.
+    std::atomic<long> max_sent_minichunk{-1};
+
     // ----- Public interface -----
 
     // Constructor: validates args, then spawns nthreads worker threads.
     // Each worker thread inherits the vcpu affinity of the caller. Each
     // element of 'ip_addrs' is "ip:port" format. nthreads must be a
     // multiple of ip_addrs.size().
+    //
+    // time_samples_per_chunk: receiver-side chunk size (in samples).
+    // Must equal the FrbServer's
+    // AssembledFrameAllocator::time_samples_per_chunk; required to
+    // run the FLAG_ACK ack-prediction assertion in _read_acks.
+    // Must be positive and a multiple of 256.
     //
     // flag_ack (default false) enables the FLAG_ACK back-channel:
     // the connection header advertises FLAG_ACK, the receiver
@@ -361,7 +472,7 @@ struct FakeXEngine
     // context manager so the spawned worker threads are pinned to the
     // intended vcpus.
     FakeXEngine(const XEngineMetadata &xmd, const std::vector<std::string> &ip_addrs,
-                int nthreads, bool flag_ack = false);
+                int nthreads, long time_samples_per_chunk, bool flag_ack = false);
 
     // Destructor calls stop() and joins worker threads.
     ~FakeXEngine();

@@ -585,13 +585,16 @@ void register_core_bindings(pybind11::module &m)
         "Usage:\n"
         "    xmd = XEngineMetadata.from_yaml_file('...')\n"
         "    with ThreadAffinity(vcpu_list):\n"
-        "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64)\n"
+        "        fxe = FakeXEngine(xmd, ['10.0.0.2:5000', '10.0.1.2:5000'], 64,\n"
+        "                          time_samples_per_chunk=32768)\n"
         "        # Spawn a controller thread (under the same affinity) that\n"
         "        # calls fxe.send_junk / fxe.wait_until_processed in a loop.\n"
         "    # ... wait ...\n"
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
-          .def(py::init<const XEngineMetadata &, const std::vector<std::string> &, int, bool>(),
+          .def(py::init<const XEngineMetadata &, const std::vector<std::string> &,
+                        int, long, bool>(),
                py::arg("xmd"), py::arg("ip_addrs"), py::arg("nthreads"),
+               py::arg("time_samples_per_chunk"),
                py::arg("flag_ack") = false,
                "Create a FakeXEngine and spawn 'nthreads' worker threads.\n\n"
                "Workers inherit the vcpu affinity of the calling thread, so the\n"
@@ -601,6 +604,9 @@ void register_core_bindings(pybind11::module &m)
                "    xmd: X-engine metadata defining frequency channels and beams\n"
                "    ip_addrs: List of receiver addresses in 'ip:port' format\n"
                "    nthreads: Number of worker threads (must be a multiple of len(ip_addrs))\n"
+               "    time_samples_per_chunk: Receiver-side chunk size (must equal\n"
+               "        the FrbServer's AssembledFrameAllocator.time_samples_per_chunk).\n"
+               "        Must be positive and a multiple of 256.\n"
                "    flag_ack: If True, the connection header is sent with FLAG_ACK\n"
                "        set, the receiver sends a 1-byte ack per minichunk\n"
                "        (0=dropped, 1=assembled), and per-minichunk lifecycle is\n"
@@ -756,7 +762,8 @@ void register_core_bindings(pybind11::module &m)
                "the caller observes it (the worker thread or an ack may have\n"
                "advanced the state). Does NOT throw on a stopped FakeXEngine.\n\n"
                "Example:\n"
-               "    fxe = FakeXEngine(xmd, ip_addrs, 1, flag_ack=True)\n"
+               "    fxe = FakeXEngine(xmd, ip_addrs, 1,\n"
+               "                      time_samples_per_chunk=32768, flag_ack=True)\n"
                "    fxe.send_junk(0, 0)\n"
                "    fxe.synchronize(0)\n"
                "    s = fxe.get_minichunk_status(0, 0)\n"
@@ -789,6 +796,10 @@ void register_core_bindings(pybind11::module &m)
                "Receiver addresses in 'ip:port' format")
           .def_readonly("nthreads", &FakeXEngine::nthreads,
                "Number of worker threads")
+          .def_readonly("time_samples_per_chunk", &FakeXEngine::time_samples_per_chunk,
+               "Receiver-side chunk size in samples")
+          .def_readonly("minichunks_per_chunk", &FakeXEngine::minichunks_per_chunk,
+               "= time_samples_per_chunk / 256")
           .def_readonly("flag_ack", &FakeXEngine::flag_ack,
                "True if the FakeXEngine was constructed with flag_ack=True.\n"
                "Read-only after construction.")
