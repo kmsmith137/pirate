@@ -648,6 +648,34 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine is stopped, arguments are out of\n"
                "    range, or frame_set is None.")
+          .def("disconnect", &FakeXEngine::disconnect,
+               py::arg("worker_id"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Submit a DISCONNECT command to worker_id's queue.\n\n"
+               "Non-blocking (fire-and-forget). The worker closes its TCP socket\n"
+               "on receipt. last_minichunk_sent is NOT touched; the next\n"
+               "send_junk or send_minichunk on this worker transparently reopens\n"
+               "the connection and re-sends the protocol handshake.\n\n"
+               "SKIP_MINICHUNK commands continue to work normally while\n"
+               "disconnected (they advance last_minichunk_sent without touching\n"
+               "the socket). If you want the next reconnect to start at a higher\n"
+               "minichunk_index, bridge the gap yourself with skip_minichunk\n"
+               "calls.\n\n"
+               "DISCONNECT on an already-disconnected (or never-connected)\n"
+               "worker is a no-op.\n\n"
+               "Raises:\n"
+               "    RuntimeError: If the FakeXEngine is stopped or worker_id is\n"
+               "    out of range.")
+          .def("is_connected", &FakeXEngine::is_connected,
+               py::arg("worker_id"),
+               "Return True iff this worker has an open TCP connection to its\n"
+               "receiver right now.\n\n"
+               "The result is a snapshot -- by the time the caller observes it,\n"
+               "the worker thread may have already flipped the flag. Does NOT\n"
+               "throw on a stopped FakeXEngine (the last-known per-worker state\n"
+               "is still meaningful for diagnostics). Throws only on worker_id\n"
+               "out of range.\n\n"
+               "O(1) atomic load; the GIL is NOT released for this call.")
           .def("wait_for_send", &FakeXEngine::wait_for_send,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),

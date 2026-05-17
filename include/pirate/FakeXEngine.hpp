@@ -87,14 +87,17 @@ struct FakeXEngine
             SEND_JUNK      = 1,   // send minichunk_buf with all-zero ("junk") data
             SKIP_MINICHUNK = 2,   // advance state, send nothing on the wire
             SEND_MINICHUNK = 3,   // gather data from frame_set, then send
+            DISCONNECT     = 4,   // close the worker's TCP socket
         } kind = Kind::UNINITIALIZED;
 
         // Used by all of {SEND_JUNK, SKIP_MINICHUNK, SEND_MINICHUNK}.
+        // Ignored by DISCONNECT (which does not touch last_minichunk_sent).
         // Wire seq = minichunk_index * 256 * xmd.seq_per_frb_time_sample.
-        // Successive commands on a worker must have strictly +1 monotonic
-        // minichunk_index, with one exception: the very FIRST command
-        // (any kind) may pick any minichunk_index >= 0 -- this is what
-        // makes NOTE-2-style nonzero-initial-chunk tests work.
+        // Successive state-advancing commands on a worker must have
+        // strictly +1 monotonic minichunk_index, with one exception:
+        // the very FIRST such command may pick any minichunk_index >= 0
+        // -- this is what makes NOTE-2-style nonzero-initial-chunk tests
+        // work.
         long minichunk_index = -1;
 
         // Required for SEND_MINICHUNK; an empty pointer otherwise. The
@@ -191,10 +194,20 @@ struct FakeXEngine
         // SEND_JUNK before sock.connect().
         Socket sock;
 
-        // False until sock.connect() has succeeded. The discriminator
-        // between "first SEND_JUNK" (open + send conn header + first mc)
-        // and "subsequent SEND_JUNK" (just send the mc).
-        bool connected = false;
+        // False until sock.connect() has succeeded; flipped back to false
+        // by _disconnect() when a DISCONNECT command is processed. The
+        // discriminator between "first send-after-connect" (open + send
+        // conn header + first mc) and "subsequent send" (just send the
+        // mc).
+        //
+        // Atomic so external threads can sample it via the
+        // FakeXEngine::is_connected() entry point without locking. The
+        // worker thread is the sole writer; all accesses (worker and
+        // external) use memory_order_relaxed -- the flag has no
+        // synchronization relationship with any other Worker state, so
+        // there's nothing to acquire/release. A stale snapshot from an
+        // external reader is acceptable (this is an informational query).
+        std::atomic<bool> connected{false};
 
         // Worker is neither copyable nor movable -- std::mutex and
         // std::condition_variable are non-copyable AND non-movable.
@@ -297,6 +310,34 @@ struct FakeXEngine
     void send_minichunk(long worker_id, long minichunk_index,
                         std::shared_ptr<AssembledFrameSet> frame_set);
 
+    // Entry point: submit a DISCONNECT command. Non-blocking
+    // (fire-and-forget); the worker closes its TCP socket on receipt.
+    // last_minichunk_sent is NOT touched. The next SEND_JUNK or
+    // SEND_MINICHUNK on this worker transparently reopens the connection
+    // AND re-sends the protocol handshake.
+    //
+    // SKIP_MINICHUNK commands continue to work normally while
+    // disconnected. If the caller wants the next reconnect to start at
+    // a higher minichunk_index, it's the caller's responsibility to
+    // bridge the gap with SKIP_MINICHUNK commands. (DISCONNECT itself
+    // is socket-level only.)
+    //
+    // DISCONNECT on an already-disconnected (or never-connected) worker
+    // is a no-op. The pybind11 wrapper releases the GIL.
+    void disconnect(long worker_id);
+
+    // Entry point: returns true iff workers[worker_id] has an open TCP
+    // connection to its receiver right now. The result is a snapshot --
+    // by the time the caller observes it, the worker thread may have
+    // already flipped the flag. is_connected() does NOT throw on a
+    // stopped FakeXEngine (the last-known per-worker state is still
+    // meaningful for diagnostics). Throws only on out-of-range
+    // worker_id.
+    //
+    // O(1) atomic load. The pybind11 wrapper does NOT release the GIL
+    // (the load is faster than the GIL ops that would protect it).
+    bool is_connected(long worker_id) const;
+
     // Entry point: block until workers[worker_id]->last_minichunk_sent >=
     // minichunk_index, or throw if stopped. Returns immediately for
     // minichunk_index < 0 (since last_minichunk_sent starts at -1) -- this
@@ -354,6 +395,12 @@ private:
     // the caller (_worker_main) should treat that as a signal to exit
     // the worker loop. Returns true on success.
     bool _skip_or_send(int thread_id, const Command &cmd);
+
+    // Handler for DISCONNECT. Idempotent: closes the worker's socket
+    // and flips w.connected to false (no-op if already disconnected).
+    // Does NOT touch w.last_minichunk_sent. Does NOT call cv.notify_all
+    // (no state that wait_for_send waiters care about has changed).
+    void _disconnect(int thread_id);
 
     // Helper called by _skip_or_send for SEND_MINICHUNK: gather one
     // minichunk's worth of int4 data from the set's per-beam frames

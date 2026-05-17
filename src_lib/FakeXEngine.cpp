@@ -259,6 +259,31 @@ void FakeXEngine::send_minichunk(long worker_id, long minichunk_index,
 }
 
 
+void FakeXEngine::disconnect(long worker_id)
+{
+    Command cmd;
+    cmd.kind = Command::Kind::DISCONNECT;
+    // minichunk_index stays -1; frame_set stays null. Neither is read
+    // by _disconnect.
+    _enqueue(worker_id, std::move(cmd), "FakeXEngine::disconnect");
+}
+
+
+bool FakeXEngine::is_connected(long worker_id) const
+{
+    if (worker_id < 0 || worker_id >= long(nthreads)) {
+        stringstream ss;
+        ss << "FakeXEngine::is_connected: worker_id=" << worker_id
+           << " out of range [0, " << nthreads << ")";
+        throw runtime_error(ss.str());
+    }
+    // No _throw_if_stopped: this is an informational query, and the
+    // last-known per-worker connected state is meaningful even after
+    // FakeXEngine::stop(). Same semantics as the is_stopped property.
+    return workers[worker_id]->connected.load(std::memory_order_relaxed);
+}
+
+
 void FakeXEngine::wait_for_send(long worker_id, long minichunk_index)
 {
     if (worker_id < 0 || worker_id >= long(nthreads)) {
@@ -444,20 +469,51 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 
 // -------------------------------------------------------------------------------------------------
 //
+// _disconnect: handler for DISCONNECT.
+//
+// Closes the worker's TCP socket (Socket::close() is public, idempotent,
+// and resets fd back to -1) and flips the atomic flag. Idempotent --
+// repeated DISCONNECTs on an already-disconnected worker are no-ops.
+//
+// Crucially, does NOT touch w.last_minichunk_sent; the next SEND_* on
+// this worker will hit the !w.connected branch in _skip_or_send and
+// transparently reopen the connection + re-send the protocol header
+// (bundled with the next minichunk in one _send_all). Also does NOT
+// call cv.notify_all: nothing in any wait_for_send predicate depends
+// on the connected flag.
+
+
+void FakeXEngine::_disconnect(int thread_id)
+{
+    Worker &w = *workers[thread_id];
+
+    if (w.connected.load(std::memory_order_relaxed)) {
+        w.sock.close();
+        w.connected.store(false, std::memory_order_relaxed);
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // _skip_or_send: handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
 // See header for contract. Three discriminators:
 //
-//   - first_command (last_minichunk_sent == -1): the very first command
-//     on this worker may pick any minichunk_index >= 0 (for NOTE-2
-//     nonzero-initial-chunk tests). Subsequent commands must advance
-//     by exactly +1.
+//   - first_command (last_minichunk_sent == -1): the very first
+//     state-advancing command on this worker may pick any
+//     minichunk_index >= 0 (for NOTE-2 nonzero-initial-chunk tests).
+//     Subsequent state-advancing commands must advance by exactly +1.
+//     (DISCONNECT is not state-advancing -- it lives in _disconnect.)
 //
 //   - need_send (kind in {SEND_JUNK, SEND_MINICHUNK}): does this
 //     command put bytes on the wire?
 //
 //   - first_send_after_connect: did this _skip_or_send call open the
 //     TCP socket? If so, the conn header rides along in the same
-//     _send_all call as the first minichunk.
+//     _send_all call as the first minichunk. Note this branch is
+//     taken both on the very first SEND_* AND after a DISCONNECT (in
+//     which case it opens a fresh TCP connection + re-sends the
+//     handshake transparently to the controller).
 
 
 bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
@@ -479,12 +535,19 @@ bool FakeXEngine::_skip_or_send(int thread_id, const Command &cmd)
         // never opens the socket -- so a worker that only ever sees
         // SKIPs leaves its TCP connection un-established.
         bool first_send_after_connect = false;
-        if (!w.connected) {
+        if (!w.connected.load(std::memory_order_relaxed)) {
             // connect() may throw on ECONNREFUSED etc.; worker_main's
             // catch handler then calls FakeXEngine::stop().
+            //
+            // This branch is also entered after a DISCONNECT command
+            // has flipped w.connected back to false -- in that case
+            // the same lazy-connect path opens a fresh TCP connection
+            // and re-sends the protocol handshake (since the
+            // first_send_after_connect=true branch packs both the
+            // connection header and this minichunk into one _send_all).
             w.sock = Socket(PF_INET, SOCK_STREAM);
             w.sock.connect(w.ip_addr, w.port);
-            w.connected = true;
+            w.connected.store(true, std::memory_order_relaxed);
             first_send_after_connect = true;
         }
 
@@ -558,6 +621,9 @@ void FakeXEngine::_worker_main(int thread_id)
         case Command::Kind::SEND_MINICHUNK:
             if (!_skip_or_send(thread_id, cmd))
                 return;
+            break;
+        case Command::Kind::DISCONNECT:
+            _disconnect(thread_id);
             break;
         default: {
             // Defensive -- UNINITIALIZED Commands should never be enqueued.
