@@ -2,6 +2,7 @@
 #include "../include/pirate/network_utils.hpp"
 
 #include <cstring>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 
@@ -15,6 +16,20 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+
+// File-scope helper: sets w.is_stopped, w.error, notifies w.cv. Idempotent
+// (no-op if w.is_stopped is already true). Used by FakeXEngine::stop()'s
+// per-worker sweep; never called from anywhere else.
+static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
+{
+    {
+        std::lock_guard<std::mutex> lock(w.mutex);
+        if (w.is_stopped) return;
+        w.is_stopped = true;
+        w.error = e;
+    }
+    w.cv.notify_all();
+}
 
 
 FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_, int nthreads_) :
@@ -52,23 +67,28 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
 
     xmd.validate();
 
-    // Spawn worker threads. workers.resize default-constructs nthreads Worker
-    // objects (with non-joinable std::thread members); the per-worker thread
-    // is move-assigned in the loop below. Workers inherit the vcpu affinity
-    // of the caller (the documented constructor contract).
-    workers.resize(nthreads);
+    // Allocate Worker objects first (heap-allocated, stable address --
+    // Worker embeds std::mutex / std::condition_variable, which are
+    // neither copyable nor movable). Then spawn the worker threads.
+    // Workers inherit the vcpu affinity of the caller (the documented
+    // constructor contract).
+    workers.reserve(nthreads);
+    for (int i = 0; i < nthreads; i++)
+        workers.push_back(std::make_unique<Worker>());
 
     try {
         for (int i = 0; i < nthreads; i++)
-            workers[i].worker_thread = std::thread(&FakeXEngine::worker_main, this, i);
+            workers[i]->worker_thread = std::thread(&FakeXEngine::worker_main, this, i);
     } catch (...) {
-        // Partial-spawn cleanup: signal stop, then join whichever workers
-        // did start, so the destructor's joinable-thread invariant holds
-        // even if std::thread construction throws partway through.
+        // Partial-spawn cleanup: signal stop so any workers that did start
+        // exit promptly, then join whichever ones are joinable. stop()'s
+        // atomic CAS ensures only the first call sweeps; the destructor
+        // (which also calls stop()) will then be a no-op for the atomic
+        // and the per-worker sweep is idempotent.
         stop(std::current_exception());
-        for (auto &w : workers) {
-            if (w.worker_thread.joinable())
-                w.worker_thread.join();
+        for (auto &wp : workers) {
+            if (wp->worker_thread.joinable())
+                wp->worker_thread.join();
         }
         throw;
     }
@@ -79,34 +99,39 @@ FakeXEngine::~FakeXEngine()
 {
     this->stop();
 
-    for (auto &w : workers) {
-        if (w.worker_thread.joinable())
-            w.worker_thread.join();
+    for (auto &wp : workers) {
+        if (wp->worker_thread.joinable())
+            wp->worker_thread.join();
     }
 }
 
 
-void FakeXEngine::_throw_if_stopped(const char *method_name)
+void FakeXEngine::_throw_if_stopped(Worker &w, const char *method_name)
 {
-    // Caller must hold mutex.
-    if (error)
-        std::rethrow_exception(error);
+    // Caller must hold w.mutex.
+    if (w.error)
+        std::rethrow_exception(w.error);
 
-    if (is_stopped)
+    if (w.is_stopped)
         throw runtime_error(string(method_name) + " called on stopped instance");
 }
 
 
 void FakeXEngine::stop(std::exception_ptr e)
 {
-    std::lock_guard<std::mutex> lock(mutex);
-
-    if (is_stopped)
+    // Re-entry guard: only the first caller's compare-exchange wins.
+    // Subsequent concurrent or later callers see the cache already true
+    // and return immediately, so 'e' from the first caller is the one
+    // propagated to every Worker::error.
+    bool expected = false;
+    if (!is_stopped_cache.compare_exchange_strong(expected, true))
         return;
 
-    is_stopped = true;
-    error = e;
-    cv.notify_all();
+    // Per-worker sweep. Each iteration takes one Worker's mutex briefly
+    // to set is_stopped+error and notify its cv. No nested locks; no
+    // possibility of deadlock with anything else in this class.
+    for (auto &wp : workers)
+        _stop_one_worker(*wp, e);
 }
 
 
@@ -139,24 +164,27 @@ void FakeXEngine::worker_main(int thread_id)
 }
 
 
-bool FakeXEngine::_send_all(Socket &sock, const void *buf, long nbytes)
+bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbytes)
 {
     const char *ptr = static_cast<const char *>(buf);
     long pos = 0;
 
     while (pos < nbytes) {
-        // Check if stopped.
+        // Check this worker's stopped flag periodically (bounded by
+        // send_timeout_ms = 10ms granularity). Locks only w.mutex.
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            if (is_stopped)
-                return false;
+            std::lock_guard<std::mutex> lock(w.mutex);
+            if (w.is_stopped) return false;
         }
 
-        // Try to send with short timeout.
         long n = sock.send_with_timeout(ptr + pos, nbytes - pos, send_timeout_ms);
 
         if (sock.connreset) {
-            stop();  // wake up other workers
+            // Receiver hung up. Surface to the whole FakeXEngine so
+            // sibling workers exit too. stop()'s atomic CAS makes
+            // repeated connreset->stop() calls cheap (only the first
+            // one actually sweeps).
+            stop();
             return false;
         }
 
@@ -182,19 +210,18 @@ void FakeXEngine::send_junk(long worker_id, long minichunk_index)
     }
     xassert_ge(minichunk_index, 0L);
 
-    std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("FakeXEngine::send_junk");
+    Worker &w = *workers[worker_id];
+
+    std::unique_lock<std::mutex> lock(w.mutex);
+    _throw_if_stopped(w, "FakeXEngine::send_junk");
 
     Command cmd;
     cmd.kind = Command::Kind::SEND_JUNK;
     cmd.minichunk_index = minichunk_index;
-    workers[worker_id].command_queue.push_back(cmd);
+    w.command_queue.push_back(cmd);
 
     lock.unlock();
-    // Single shared cv: notify_all wakes every worker (only the target
-    // one has new work). This is wasteful at high nthreads; a future
-    // commit splits to per-worker cv to fix it.
-    cv.notify_all();
+    w.cv.notify_all();   // wakes only this worker
 }
 
 
@@ -207,12 +234,14 @@ void FakeXEngine::wait_for_send(long worker_id, long minichunk_index)
         throw runtime_error(ss.str());
     }
 
-    std::unique_lock<std::mutex> lock(mutex);
+    Worker &w = *workers[worker_id];
+
+    std::unique_lock<std::mutex> lock(w.mutex);
     for (;;) {
-        _throw_if_stopped("FakeXEngine::wait_for_send");
-        if (workers[worker_id].last_minichunk_sent >= minichunk_index)
+        _throw_if_stopped(w, "FakeXEngine::wait_for_send");
+        if (w.last_minichunk_sent >= minichunk_index)
             return;
-        cv.wait(lock);
+        w.cv.wait(lock);
     }
 }
 
@@ -224,7 +253,7 @@ void FakeXEngine::wait_for_send(long worker_id, long minichunk_index)
 
 void FakeXEngine::_worker_main(int thread_id)
 {
-    Worker &w = workers[thread_id];
+    Worker &w = *workers[thread_id];
 
     // -- One-time setup (constants for the lifetime of this worker thread). --
 
@@ -282,10 +311,10 @@ void FakeXEngine::_worker_main(int thread_id)
         long prev_minichunk;
 
         {
-            std::unique_lock<std::mutex> lock(mutex);
-            while (!is_stopped && w.command_queue.empty())
-                cv.wait(lock);
-            if (is_stopped) return;
+            std::unique_lock<std::mutex> lock(w.mutex);
+            while (!w.is_stopped && w.command_queue.empty())
+                w.cv.wait(lock);
+            if (w.is_stopped) return;
 
             cmd = w.command_queue.front();
             w.command_queue.pop_front();
@@ -312,7 +341,7 @@ void FakeXEngine::_worker_main(int thread_id)
             sock.connect(ip_addr, port);
             connected = true;
 
-            if (!_send_all(sock, header_buf.data(), header_buf.size()))
+            if (!_send_all(w, sock, header_buf.data(), header_buf.size()))
                 return;
         } else {
             // Subsequent SEND_JUNK: strict monotonic advance by 1.
@@ -328,15 +357,18 @@ void FakeXEngine::_worker_main(int thread_id)
                         * uint64_t(worker_xmd.seq_per_frb_time_sample);
         std::memcpy(minichunk_buf.data() + 4, &mc_seq, 8);
 
-        if (!_send_all(sock, minichunk_buf.data(), mc_nbytes))
+        if (!_send_all(w, sock, minichunk_buf.data(), mc_nbytes))
             return;
 
-        // Publish last_minichunk_sent and wake any wait_for_send waiters.
+        // Publish last_minichunk_sent and wake any wait_for_send waiters
+        // for this worker. (No cross-worker notify is needed -- each
+        // wait_for_send is bound to a specific worker_id and waits on
+        // that worker's own cv.)
         {
-            std::lock_guard<std::mutex> lock(mutex);
+            std::lock_guard<std::mutex> lock(w.mutex);
             w.last_minichunk_sent = cmd.minichunk_index;
         }
-        cv.notify_all();
+        w.cv.notify_all();
     }
 }
 

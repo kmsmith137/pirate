@@ -28,8 +28,16 @@ struct Socket;  // forward declaration (defined in network_utils.hpp)
 // single receiver. Driven externally by a controller thread that submits
 // Command objects to per-worker queues.
 //
-// This class is a "thread-backed class" (see notes/thread_backed_class.md)
-// that spawns 'nthreads' worker threads in its constructor. Each worker:
+// This class follows the "thread-backed class" pattern (see
+// notes/thread_backed_class.md), but with the synchronization state moved
+// *into* each Worker rather than shared across workers. FakeXEngine itself
+// holds no mutex / cv / is_stopped bool / error slot of its own. The only
+// FakeXEngine-level "stopped" representation is the atomic
+// 'is_stopped_cache', which is purely an O(1) cache for the pybind11
+// 'is_stopped' property reader and a re-entry guard for stop(); workers
+// and entry points synchronize through each Worker's own mutex+cv+flag.
+//
+// Each worker thread:
 //   - Waits on its per-worker command queue for SEND_JUNK commands.
 //   - On the first SEND_JUNK, opens a TCP connection to its assigned
 //     receiver IP and sends the protocol header (magic + flags + YAML
@@ -87,31 +95,56 @@ struct FakeXEngine
         long minichunk_index = -1;
     };
 
-    // Worker: per-worker state. command_queue and last_minichunk_sent are
-    // protected by FakeXEngine::mutex; worker_thread is constant after
-    // construction.
+    // Worker: per-worker state and synchronization. Each Worker is an
+    // independent "thread-backed" unit -- mutex, cv, and is_stopped/error
+    // are all per-worker, so there is no cross-worker contention on the
+    // hot path.
     struct Worker
     {
-        // Protected by FakeXEngine::mutex.
+        // ---- All of these are protected by 'mutex'. ----
+
+        std::mutex mutex;
+        // Notified by: send_junk (after enqueue), the worker thread (after
+        // a successful send updates last_minichunk_sent), and stop() (when
+        // is_stopped transitions to true).
+        std::condition_variable cv;
+
+        // Commands waiting to be processed by this worker, FIFO.
         std::deque<Command> command_queue;
 
         // Latest minichunk_index this worker has finished sending, or -1
-        // if no SEND_JUNK has completed yet on this worker. Only the
-        // worker thread writes this; external threads read it (under
-        // FakeXEngine::mutex) via wait_for_send().
+        // if no SEND_JUNK has completed yet. Only the worker thread
+        // writes this; external threads read it (under 'mutex') via
+        // wait_for_send().
         long last_minichunk_sent = -1;
 
-        // Constant after construction, not lock-protected.
+        // Per-worker stopped flag. Workers and entry points synchronize
+        // exclusively through this flag (NOT FakeXEngine::is_stopped_cache).
+        // Set by stop()'s per-worker sweep.
+        bool is_stopped = false;
+
+        // Per-worker error slot. On a successful sweep from
+        // FakeXEngine::stop(e), every worker's error is set to e; on a
+        // clean shutdown (e == nullptr) every worker's error stays null
+        // and entry-point throws are "called on stopped instance"
+        // runtime_errors.
+        std::exception_ptr error;
+
+        // ---- Constant after construction, not lock-protected. ----
+
         std::thread worker_thread;
 
-        // Move-only (std::thread is move-only). std::vector<Worker>::resize(n)
-        // default-constructs Worker; the thread is assigned by move in the
-        // FakeXEngine constructor body.
+        // Worker is neither copyable nor movable -- std::mutex and
+        // std::condition_variable are non-copyable AND non-movable.
+        // FakeXEngine therefore holds workers as
+        // std::vector<std::unique_ptr<Worker>> rather than
+        // std::vector<Worker>, so each Worker lives at a stable heap
+        // address.
         Worker() = default;
         Worker(const Worker &) = delete;
         Worker &operator=(const Worker &) = delete;
-        Worker(Worker &&) = default;
-        Worker &operator=(Worker &&) = default;
+        Worker(Worker &&) = delete;
+        Worker &operator=(Worker &&) = delete;
     };
 
     // ----- Constructor args -----
@@ -120,18 +153,25 @@ struct FakeXEngine
     const std::vector<std::string> ip_addrs;  // each element is "ip:port"
     const int nthreads;
 
-    // ----- Thread-backed class state (protected by 'mutex') -----
+    // ----- Stop-state cache -----
 
-    std::mutex mutex;
-    std::condition_variable cv;   // notified on: enqueue, last_minichunk_sent update, stop
-    bool is_stopped = false;
-    std::exception_ptr error;
+    // O(1) cache for the pybind11 'is_stopped' property reader, and the
+    // re-entry guard for stop() (first compare_exchange_strong wins; later
+    // callers return immediately). Set by FakeXEngine::stop() *before*
+    // the per-worker sweep, so any property reader between the atomic
+    // store and the last per-worker notify observes "stopped" correctly.
+    //
+    // NOT load-bearing for synchronization with worker threads -- those
+    // synchronize through each Worker::is_stopped under its own mutex.
+    std::atomic<bool> is_stopped_cache{false};
 
     // ----- Worker state -----
 
-    // Length nthreads. Resized once in the constructor; each worker_thread
-    // is then move-assigned in.
-    std::vector<Worker> workers;
+    // Length nthreads, but exposed as a vector of unique_ptr<Worker> so
+    // that the Worker objects (which embed non-movable std::mutex and
+    // std::condition_variable) are heap-allocated and stable in memory.
+    // This avoids any need to make Worker movable.
+    std::vector<std::unique_ptr<Worker>> workers;
 
     // ----- Public interface -----
 
@@ -149,20 +189,24 @@ struct FakeXEngine
     ~FakeXEngine();
 
     // Entry point: submit a SEND_JUNK(minichunk_index) command to
-    // workers[worker_id].command_queue. Non-blocking. Throws if stopped
+    // workers[worker_id]->command_queue. Non-blocking. Throws if stopped
     // or worker_id is out of range. The pybind11 wrapper releases the GIL.
     void send_junk(long worker_id, long minichunk_index);
 
-    // Entry point: block until workers[worker_id].last_minichunk_sent >=
+    // Entry point: block until workers[worker_id]->last_minichunk_sent >=
     // minichunk_index, or throw if stopped. Returns immediately for
     // minichunk_index < 0 (since last_minichunk_sent starts at -1) -- this
     // is what makes the controller's "wait_for_send(w, n-2)" call work for
     // n in {0, 1}. The pybind11 wrapper releases the GIL.
     void wait_for_send(long worker_id, long minichunk_index);
 
-    // Put FakeXEngine into stopped state. Worker threads exit promptly.
-    // Any in-flight entry-point calls (wait_for_send / send_junk) throw.
-    // If 'e' is non-null, it represents an error; otherwise normal termination.
+    // Put FakeXEngine into stopped state. First caller's compare-exchange
+    // on is_stopped_cache wins; subsequent concurrent calls return
+    // immediately. The winner sweeps every worker, locking each one's
+    // mutex briefly to set is_stopped + error and notify its cv. Any
+    // in-flight entry-point calls (wait_for_send / send_junk) then throw
+    // on their next predicate re-check. If 'e' is non-null, it represents
+    // an error; otherwise normal termination.
     void stop(std::exception_ptr e = nullptr);
 
     // ----- Noncopyable, nonmoveable -----
@@ -176,8 +220,10 @@ private:
     // Helper: create XEngineMetadata for a specific worker thread (with subset of freq channels).
     XEngineMetadata make_worker_metadata(int thread_id) const;
 
-    // Helper: check if stopped, with lock held by caller.
-    void _throw_if_stopped(const char *method_name);
+    // Helper: check if the given Worker is stopped; throw if so. Caller
+    // must hold w.mutex. Rethrows w.error if non-null; otherwise throws
+    // a runtime_error including method_name.
+    void _throw_if_stopped(Worker &w, const char *method_name);
 
     // Worker thread main function.
     void _worker_main(int thread_id);
@@ -185,9 +231,12 @@ private:
     // Wrapper that catches exceptions and calls stop().
     void worker_main(int thread_id);
 
-    // Helper: send all bytes from buffer, using short timeouts to allow prompt exit.
-    // Returns false if stopped or connection reset.
-    bool _send_all(Socket &sock, const void *buf, long nbytes);
+    // Helper: send all bytes from buffer, using short send_with_timeout
+    // calls so we can periodically re-check w.is_stopped under w.mutex
+    // and bail out promptly. Returns false on stop or peer connection
+    // reset. On connection reset, also calls FakeXEngine::stop() so that
+    // sibling workers exit too.
+    bool _send_all(Worker &w, Socket &sock, const void *buf, long nbytes);
 };
 
 

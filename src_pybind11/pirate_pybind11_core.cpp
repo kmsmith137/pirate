@@ -623,10 +623,16 @@ void register_core_bindings(pybind11::module &m)
                "send_junk calls throw RuntimeError. Safe to call multiple times.")
           .def_property_readonly("is_stopped",
                [](FakeXEngine &self) {
-                   std::lock_guard<std::mutex> lock(self.mutex);
-                   return self.is_stopped;
+                   // O(1) atomic load -- the property's "true" value just
+                   // means stop() has been called; worker threads may
+                   // still be exiting. Wait for the destructor (or a
+                   // join) if you need to know they're fully done.
+                   return self.is_stopped_cache.load(std::memory_order_acquire);
                },
-               "True if stop() has been called (e.g. due to connection reset).")
+               "True if stop() has been called (e.g. due to connection reset).\n"
+               "Note: workers may still be in the process of exiting at the moment\n"
+               "this returns true. Rely on the destructor's thread join if you need\n"
+               "to know they've fully finished.")
           .def_readonly("xmd", &FakeXEngine::xmd,
                "X-engine metadata")
           .def_readonly("ip_addrs", &FakeXEngine::ip_addrs,
