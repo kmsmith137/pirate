@@ -123,12 +123,16 @@ def test_network():
             # ambiguous band of the ack-prediction check).
 
             nworkers = p['nworkers']
-            ipos = np.random.randint(10**10)
-            wpos = np.random.randint(ipos, ipos+10, size=nworkers, dtype=np.int64)
+            ipos0 = np.random.randint(10**10)
+            ipos = np.random.randint(ipos0, ipos0+10, size=nworkers, dtype=np.int64)
+            wpos = np.copy(ipos)
+
+            # Workers can be in a temporary "disconnected" state (dstate).
+            dstate = np.random.random(nworkers) < np.random.uniform(0,1)
             
             for _ in range(1000):
                 worker_id = random.randrange(nworkers)
-                skip = (random.random() < 0.1)
+                skip = dstate[worker_id] or (random.random() < 0.1)
                 
                 if random.random() < 0.1:
                     fxe.synchronize(worker_id)
@@ -143,6 +147,12 @@ def test_network():
                         fxe.enqueue_send_junk(worker_id, int(wpos[worker_id]) + k)
                 
                 wpos[worker_id] += n
+
+                if dstate[worker_id]:
+                    dstate[worker_id] = (random.random() < 0.8)   # 20% reconnection probability
+                elif (random.random() < 0.01):                    # 1% disconnection probability
+                    fxe.enqueue_disconnect(worker_id)
+                    dstate[worker_id] = False
 
             # synchronize(w) blocks until worker w's command queue is
             # empty; in debug=True mode it also enqueues WAIT_FOR_ACKS
