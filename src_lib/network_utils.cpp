@@ -121,21 +121,39 @@ void Socket::listen(int backlog)
 }
 
 
-void Socket::close()
+void Socket::close() noexcept
 {
     if (fd < 0)
         return;
 
     int err = ::close(fd);
-    
+
     this->fd = -1;
     this->zerocopy = false;
     this->connreset = false;
     this->nonblocking = false;
     this->eof = false;
 
-    if (_unlikely(err < 0))
-        cout << errstr("Socket::close") << endl;
+    // Reset test-instrumentation state too, for symmetry with the
+    // other bool resets. (We don't bother resetting `rng` itself;
+    // rng_is_initialized=false means the next misbehaving read will
+    // seed afresh, overwriting any leftover state.)
+    this->reads_are_misbehaving = false;
+    this->rng_is_initialized = false;
+
+    if (_unlikely(err < 0)) {
+        // Best-effort logging: errstr() allocates a stringstream
+        // and string (can throw bad_alloc), and 'cout' could throw
+        // if a caller has enabled its exception mask. Swallow those
+        // so close() stays noexcept and is safe to call from the
+        // destructor / move-assignment.
+        try {
+            cout << errstr("Socket::close") << endl;
+        } catch (...) {
+            // Nothing useful to do; close() is already past the
+            // syscall and the bool state is reset.
+        }
+    }
 }
 
     
@@ -486,7 +504,7 @@ long Socket::send_with_timeout(const void *buf, long count, int timeout_ms)
 
 
 // Move constructor.
-Socket::Socket(Socket &&s)
+Socket::Socket(Socket &&s) noexcept
     : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking), eof(s.eof),
       reads_are_misbehaving(s.reads_are_misbehaving),
       rng_is_initialized(s.rng_is_initialized),
@@ -497,7 +515,7 @@ Socket::Socket(Socket &&s)
 
 
 // Move assignment-operator.
-Socket &Socket::operator=(Socket &&s)
+Socket &Socket::operator=(Socket &&s) noexcept
 {
     this->close();
     this->fd = s.fd;

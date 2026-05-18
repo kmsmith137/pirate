@@ -73,7 +73,13 @@ struct Socket
     void connect(const std::string &ip_addr, uint16_t port);
     void bind(const std::string &ip_addr, uint16_t port);
     void listen(int backlog=128);
-    void close();
+
+    // noexcept so it's safe to call from the destructor and from
+    // move-assignment without bringing down the program if a
+    // logging-time allocation fails. Any error from ::close() is
+    // best-effort logged to stdout, and logging exceptions are
+    // swallowed.
+    void close() noexcept;
 
     // read() returns zero if connection ended (EOF), or if socket is nonblocking and no data is ready.
     // To distinguish these cases, check Socket::eof after read() returns zero.
@@ -132,8 +138,8 @@ struct Socket
     Socket(const Socket &) = delete;
     Socket &operator=(const Socket &) = delete;
 
-    Socket(Socket &&s);
-    Socket &operator=(Socket &&s);
+    Socket(Socket &&s) noexcept;
+    Socket &operator=(Socket &&s) noexcept;
 
 private:
     // Helper for read() / read_with_timeout(). Called only when
