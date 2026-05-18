@@ -12,6 +12,8 @@ makefile_helper.out
 sdist_files.txt
 wheel_files.txt
 plans/
+extern/
+prompts/
 
 # GRPC
 grpc/*.pb.h
