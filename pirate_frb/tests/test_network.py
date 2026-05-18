@@ -112,6 +112,31 @@ def test_network():
             debug = True,
         )
 
+        # Per-worker positions (minichunk indices)
+        nworkers = p['nworkers']
+        ipos0 = np.random.randint(10**10)
+        ipos = np.random.randint(ipos0, ipos0+10, size=nworkers, dtype=np.int64)
+        wpos = np.copy(ipos)
+
+        # Per-worker "dstate": workers can can be in a temporary "disconnected" state.
+        dstate = np.random.random(nworkers) < np.random.uniform(0,1)
+
+        # Client-side AssembledFrameSets
+        mpc = p['time_samples_per_chunk'] // 256   # minichunks per chunk
+        framesets = dict()     # ichunk -> AssembledFrameSet
+        fspos = ipos0 // mpc   # chunk index
+
+        # Client-side allocators (distinct from server)
+        client_slab_allocator = SlabAllocator("af_rhost", -1)
+        client_allocator = AssembledFrameAllocator(
+            client_slab_allocator,
+            num_consumers = 1,
+            time_samples_per_chunk = p['time_samples_per_chunk']
+        )
+
+        client_allocator.initialize_metadata(xmd)
+        client_allocator.initialize_initial_chunk(fspos)
+        
         try:
             # Randomized send loop: 1000 turns, each turn picks a
             # random worker, occasionally synchronizes it, and
@@ -121,38 +146,43 @@ def test_network():
             # have fallen behind catch up faster. This produces
             # ragged per-worker progress (good coverage for the
             # ambiguous band of the ack-prediction check).
-
-            nworkers = p['nworkers']
-            ipos0 = np.random.randint(10**10)
-            ipos = np.random.randint(ipos0, ipos0+10, size=nworkers, dtype=np.int64)
-            wpos = np.copy(ipos)
-
-            # Workers can be in a temporary "disconnected" state (dstate).
-            dstate = np.random.random(nworkers) < np.random.uniform(0,1)
             
             for _ in range(1000):
                 worker_id = random.randrange(nworkers)
                 skip = dstate[worker_id] or (random.random() < 0.1)
-                
+
+                # Ocassionally synchronize, to prevent workers from getting too out-of-snyc
                 if random.random() < 0.1:
                     fxe.synchronize(worker_id)
-                    
+
+                # n = Number of minichunks to advance.
+                # Computed in a way that biases workers toward catching up with the leader.
                 lag = int(np.max(wpos) - wpos[worker_id])
                 n = int(np.random.poisson(1.0 + 0.1 * lag))
-                
+
+                # Advance (either skip or send) by n minichunks.
                 for k in range(n):
+                    imc = int(wpos[worker_id]) + k   # minichunk index
+                    ichunk = imc // mpc              # chunk index
+                    
+                    while fspos <= ichunk:
+                        framesets[fspos] = client_allocator.get_frame_set(consumer_id=0)
+                        assert framesets[fspos].time_chunk_index == fspos
+                        fspos += 1
+
                     if skip:
-                        fxe.enqueue_skip_minichunk(worker_id, int(wpos[worker_id]) + k)
+                        fxe.enqueue_skip_minichunk(worker_id, imc)
                     else:
-                        fxe.enqueue_send_junk(worker_id, int(wpos[worker_id]) + k)
+                        fxe.enqueue_send_minichunk(worker_id, imc, framesets[ichunk])
                 
                 wpos[worker_id] += n
 
+                # Randomly toggle dstate.
                 if dstate[worker_id]:
                     dstate[worker_id] = (random.random() < 0.8)   # 20% reconnection probability
                 elif (random.random() < 0.01):                    # 1% disconnection probability
                     fxe.enqueue_disconnect(worker_id)
-                    dstate[worker_id] = False
+                    dstate[worker_id] = True
 
             # synchronize(w) blocks until worker w's command queue is
             # empty; in debug=True mode it also enqueues WAIT_FOR_ACKS
