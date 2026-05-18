@@ -44,7 +44,23 @@ class FrbClient:
         """
         request = frb_search_pb2.GetStatusRequest()
         return self.stub.GetStatus(request)
-    
+
+    def get_config(self):
+        """Query the server for its run-time configuration.
+
+        Returns:
+            GetConfigResponse protobuf message with fields:
+            - rpc_ip_addr: "ip:port" this server's RPC is bound to
+            - data_ip_addrs: list of "ip:port" strings, one per Receiver
+            - time_samples_per_chunk: int
+            - ssd_dir: SSD cache directory
+            - nfs_dir: NFS output directory (already interpolated for {user}/{date})
+            - ssd_threads: number of FileWriter SSD threads
+            - nfs_threads: number of FileWriter NFS threads
+        """
+        request = frb_search_pb2.GetConfigRequest()
+        return self.stub.GetConfig(request)
+
     def get_metadata(self, verbose: bool = False) -> str:
         """Query the server for metadata as a YAML string.
 

@@ -31,6 +31,7 @@ public:
     void _GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response);
     void _WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response);
     void _SubscribeFiles(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer);
+    void _GetConfig(const fs::GetConfigRequest *request, fs::GetConfigResponse *response);
 
     // Helper to lock the weak_ptr. Throws if the server is exiting.
     inline shared_ptr<FrbServer> _lock_state();
@@ -57,6 +58,11 @@ public:
         grpc::ServerContext* context,
         const fs::SubscribeFilesRequest* request,
         grpc::ServerWriter<fs::SubscribeFilesResponse>* writer) override;
+
+    grpc::Status GetConfig(
+        grpc::ServerContext* context,
+        const fs::GetConfigRequest* request,
+        fs::GetConfigResponse* response) override;
 };
 
 
@@ -681,7 +687,7 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, grpc::ServerWr
 grpc::Status FrbRpcService::SubscribeFiles(
     grpc::ServerContext* context,
     const fs::SubscribeFilesRequest* request,
-    grpc::ServerWriter<fs::SubscribeFilesResponse>* writer) 
+    grpc::ServerWriter<fs::SubscribeFilesResponse>* writer)
 {
     try {
         _SubscribeFiles(context, writer);
@@ -692,6 +698,41 @@ grpc::Status FrbRpcService::SubscribeFiles(
         return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in SubscribeFiles");
     }
 }
-    
+
+// ---- GetConfig ----
+
+void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfigResponse *response)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+
+    response->set_rpc_ip_addr(s->params.rpc_server_address);
+
+    for (auto &r : s->params.receivers)
+        response->add_data_ip_addrs(r->params.address);
+
+    response->set_time_samples_per_chunk(s->allocator->time_samples_per_chunk);
+
+    const auto &fwp = s->params.file_writer->params;
+    response->set_ssd_dir(fwp.ssd_root.string());
+    response->set_nfs_dir(fwp.nfs_root.string());
+    response->set_ssd_threads(fwp.num_ssd_threads);
+    response->set_nfs_threads(fwp.num_nfs_threads);
+}
+
+grpc::Status FrbRpcService::GetConfig(
+    grpc::ServerContext* context,
+    const fs::GetConfigRequest* request,
+    fs::GetConfigResponse* response)
+{
+    try {
+        _GetConfig(request, response);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetConfig");
+    }
+}
+
 
 }  // namespace pirate

@@ -77,8 +77,11 @@ public:
 
     // --------------------------------------------------
 
-private:
+    // Public so the FrbServer RPC handler (e.g. GetConfig) can read the
+    // construction-time config. Field is const, so external reads are safe.
     const Params params;
+
+private:
 
     std::mutex mutex;
     std::condition_variable cv;

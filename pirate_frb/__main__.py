@@ -819,6 +819,21 @@ def rpc_status(args):
         clients.append((addr, FrbClient(addr)))
 
     print(f"RPC client(s) connected to {', '.join(args.server_addresses)}")
+    print()
+
+    # One-shot startup dump: print each server's configuration (GetConfig).
+    for addr, client in clients:
+        cfg = client.get_config()
+        print(f"[{addr}] config:")
+        print(f"  rpc_ip_addr = {cfg.rpc_ip_addr}")
+        print(f"  data_ip_addrs = {list(cfg.data_ip_addrs)}")
+        print(f"  time_samples_per_chunk = {cfg.time_samples_per_chunk}")
+        print(f"  ssd_dir = {cfg.ssd_dir}")
+        print(f"  nfs_dir = {cfg.nfs_dir}")
+        print(f"  ssd_threads = {cfg.ssd_threads}")
+        print(f"  nfs_threads = {cfg.nfs_threads}")
+    print()
+
     print("Running get_status (1/sec) and subscribe_files. Press Ctrl-C to stop.")
     print()
 
