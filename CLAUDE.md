@@ -7,7 +7,7 @@
 
 ### Links to more rules
 
-- If a task involves `.hpp`, `.cpp`, or `.cu' files, then read `notes/cpp.md` into context.
+- If a task involves `.hpp`, `.cpp`, or `.cu` files, then read `notes/cpp.md` into context.
 - If a task involves reviewing or editing gpu kernels, then read `notes/gpu_kernels.md` into context.
   This file is large, so only read it into context if you're reviewing/editing `__device__` or `__global__` functions.
   If you're only reviewing/editing host code in a `.cu` source file, then there's no need to read `notes/gpu_kernels.md`.

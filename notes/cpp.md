@@ -9,15 +9,15 @@
 - Use spaces, not tabs.
 
 - Functions which take an `ostream &` argument should not modify stream state in the caller.
-`
-- If a class `X` derives from `std::enable_shared_from_this`, then its constructor(s() must be protected, and the class must define `create()` static method(s) that return `shared_ptr<X>`.
+
+- If a class `X` derives from `std::enable_shared_from_this`, then its constructor(s) must be protected, and the class must define `create()` static method(s) that return `shared_ptr<X>`.
 
 ## ksgpu
 
 Uses the `ksgpu` helper library, especially the Array class (ksgpu/Array.hpp), memory managment (ksgpu/mem_utils.hpp),
 and xassert macros (ksgpu/xassert.hpp, see below).
 
-CRITIAL: please complain if you don't see the ksgpu library in the cursor/claude workspace.
+CRITICAL: please complain if you don't see the ksgpu library in the cursor/claude workspace.
 
 ## xassert macros
 
@@ -54,7 +54,7 @@ void f(int x, int y, int z)
 
     if ((x+y) >= z) {
         stringstream ss;
-        ss << "f(): expected (x+y) < z, got x=" << x << ", y=" << ", z=" << z;
+        ss << "f(): expected (x+y) < z, got x=" << x << ", y=" << y << ", z=" << z;
         throw runtime_error(ss.str());
     }
 

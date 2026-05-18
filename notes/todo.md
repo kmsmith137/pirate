@@ -6,25 +6,19 @@
    (At minimum, need to include offsets, scales, UT1 timestamps.)
 
  - Iterate on metadata sent by X-engine
-   ([`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml)).
+   ([`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml)).
    (Note that the metadata is part of the network protocol.)
 
  - In particular, decide how timestamps should be represented in the
    metadata.
 
- - Currently there is a placeholder `FakeXEngine`, which sends garbage
-   data to the FRB server. It would be really valuable to have a more
-   interesting FakeXEngine, for a few reasons:
+ - Currently there is a `class FakeXEngine` in progress, which serves
+   as an "end-to-end" test of the networking code. It sends random data
+   to the FRB server, saves it back to disk with RPCs, and verifies that
+   the contents are as expected. It also misbehaves in as many ways as
+   possible, to test corner cases (e.g. disconnect-reconnect, stalls).
 
-     - The networking/file-writing code currently has no unit tests!
-       One approach is an "end-to-end" test, where the `FakeXEngine`
-       sends random data to the FRB server, asks the FRB server to
-       save a random subset of its data to disk (via RPCs), and
-       compares the data files with the input.
-
-     - Eventually I'd like to extend this end-to-end test to include
-       tests of corner cases in the FRB server logic, such as X-engine
-       nodes that disconnect and reconnect.
+   In the near future, I'd like to extend `class FakeXEngine` as follows:
 
      - Injecting simulated pulses! I'd like to do this by May (see below).
        Pulses can be simulated with [simpulse](https://github.com/kmsmith137/simpulse).
@@ -46,7 +40,7 @@
  - Feel free to dive in and make miscellaneous improvements to the code
    (random example: use spdlog for logging)
  
-## Goals by end of May
+## Short-term goals
 
 Goal here is to develop an end-to-end system where we can send simulated
 pulses from a `FakeXEngine`, and watch the pulses arrive in a web viewer.

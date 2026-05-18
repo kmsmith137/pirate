@@ -64,7 +64,7 @@ or C++ builds with `make`. Here's what I recommend:
     # 'pirate_frb' shell command, do one of these:
 
        # Option 1: modifies global .bashrc
-       echo '"$(register-python-argcomplete pirate_frb)"' > ~/.bashrc
+       echo 'eval "$(register-python-argcomplete pirate_frb)"' >> ~/.bashrc
     
        # Option 2: modifies activate hook in current conda env 
        mkdir -p $CONDA_PREFIX/etc/conda/activate.d
