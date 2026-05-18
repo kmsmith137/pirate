@@ -668,11 +668,19 @@ void Receiver::_assembler_main()
     // Initialize 'curr_frame_sets' (not lock-protected). One set per live
     // chunk; the set's frames[] vector is in beam_ids order with internal
     // (metadata, time_chunk_index) consistency validated by the allocator.
+    //
+    // Slots are indexed by chunk PARITY (chunk_idx & 1), matching the slot
+    // lookup in _process_data (slot = ichunk & 1) and in _advance_one_chunk
+    // (slot = curr_base_chunk & 1, with the replacement chunk_idx + 2
+    // having the same parity). When initial_time_chunk is odd, putting
+    // chunk_init in slot 0 would swap the parity convention and corrupt
+    // every subsequent slot lookup -- so we explicitly slot by parity.
 
-    for (long ichunk = 0; ichunk < 2; ichunk++) {
+    for (long offset = 0; offset < 2; offset++) {
+        long chunk_idx = initial_time_chunk + offset;
         auto set = params.allocator->get_frame_set(params.consumer_id);
-        xassert(set->time_chunk_index == initial_time_chunk + ichunk);
-        this->curr_frame_sets[ichunk] = std::move(set);
+        xassert(set->time_chunk_index == chunk_idx);
+        this->curr_frame_sets[chunk_idx & 1] = std::move(set);
     }
 
     // Main loop. We have two kinds of work:
