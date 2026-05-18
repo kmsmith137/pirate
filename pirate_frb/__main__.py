@@ -767,12 +767,23 @@ def rpc_status(args):
     from .rpc import FrbClient
 
     def status_thread(addr, client, stop_event):
-        """Poll get_status once per second and print summary."""
+        """Poll get_status once per second and print summary.
+        Also tries get_xengine_metadata once per second until it returns
+        a non-empty YAML string, then prints it (once) and stops trying.
+        """
         try:
             prev_time = None
             prev_bytes = None
+            metadata_printed = False
 
             while not stop_event.is_set():
+                if not metadata_printed:
+                    xmd_yaml = client.get_xengine_metadata(verbose=False)
+                    if xmd_yaml:
+                        print(f"[{addr}] xengine_metadata:")
+                        print(xmd_yaml)
+                        metadata_printed = True
+
                 status = client.get_status()
                 now = time.monotonic()
 
@@ -884,8 +895,8 @@ def _rpc_write_one(addr):
     print(f"[{addr}] Connected")
 
     try:
-        # Get metadata to obtain beam IDs.
-        metadata_yaml = client.get_metadata(verbose=False)
+        # Get XEngine metadata to obtain beam IDs.
+        metadata_yaml = client.get_xengine_metadata(verbose=False)
         if not metadata_yaml:
             print(f"[{addr}] Error: metadata not yet available")
             return

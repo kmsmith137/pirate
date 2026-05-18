@@ -28,7 +28,7 @@ public:
 
     // These functions implement the individual RPCs.
     void _GetStatus(const fs::GetStatusRequest *request, fs::GetStatusResponse *response);
-    void _GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response);
+    void _GetXEngineMetadata(const fs::GetXEngineMetadataRequest *request, fs::GetXEngineMetadataResponse *response);
     void _WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response);
     void _SubscribeFiles(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer);
     void _GetConfig(const fs::GetConfigRequest *request, fs::GetConfigResponse *response);
@@ -44,10 +44,10 @@ public:
         const fs::GetStatusRequest* request,
         fs::GetStatusResponse* response) override;
 
-    grpc::Status GetMetadata(
+    grpc::Status GetXEngineMetadata(
         grpc::ServerContext* context,
-        const fs::GetMetadataRequest* request,
-        fs::GetMetadataResponse* response) override;
+        const fs::GetXEngineMetadataRequest* request,
+        fs::GetXEngineMetadataResponse* response) override;
 
     grpc::Status WriteFiles(
         grpc::ServerContext* context,
@@ -459,9 +459,9 @@ grpc::Status FrbRpcService::GetStatus(
     }
 }
 
-// ---- GetMetadata ----
+// ---- GetXEngineMetadata ----
 
-void FrbRpcService::_GetMetadata(const fs::GetMetadataRequest *request, fs::GetMetadataResponse *response)
+void FrbRpcService::_GetXEngineMetadata(const fs::GetXEngineMetadataRequest *request, fs::GetXEngineMetadataResponse *response)
 {
     shared_ptr<FrbServer> s = _lock_state();
 
@@ -475,18 +475,18 @@ void FrbRpcService::_GetMetadata(const fs::GetMetadataRequest *request, fs::GetM
         response->set_yaml_string("");
 }
 
-grpc::Status FrbRpcService::GetMetadata(
+grpc::Status FrbRpcService::GetXEngineMetadata(
     grpc::ServerContext* context,
-    const fs::GetMetadataRequest* request,
-    fs::GetMetadataResponse* response) 
+    const fs::GetXEngineMetadataRequest* request,
+    fs::GetXEngineMetadataResponse* response)
 {
     try {
-        _GetMetadata(request, response);
+        _GetXEngineMetadata(request, response);
         return grpc::Status::OK;
     } catch (const std::exception &e) {
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
     } catch (...) {
-        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetMetadata");
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetXEngineMetadata");
     }
 }
 

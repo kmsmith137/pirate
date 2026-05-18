@@ -12,8 +12,8 @@ service FrbSearch {
   // Returns the current status of the search engine
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
 
-  // Returns metadata as a YAML string (empty if metadata not yet available)
-  rpc GetMetadata (GetMetadataRequest) returns (GetMetadataResponse);
+  // Returns XEngine metadata as a YAML string (empty if metadata not yet available)
+  rpc GetXEngineMetadata (GetXEngineMetadataRequest) returns (GetXEngineMetadataResponse);
 
   // Write files to disk for specified beams and time range
   rpc WriteFiles (WriteFilesRequest) returns (WriteFilesResponse);
@@ -41,13 +41,13 @@ message GetStatusResponse {
   int64 num_free_frames = 7;  // Number of available frames in AssembledFrameAllocator
 }
 
-// Request message for GetMetadata
-message GetMetadataRequest {
+// Request message for GetXEngineMetadata
+message GetXEngineMetadataRequest {
   bool verbose = 1;  // If true, include comments explaining each field
 }
 
-// Response message for GetMetadata
-message GetMetadataResponse {
+// Response message for GetXEngineMetadata
+message GetXEngineMetadataResponse {
   string yaml_string = 1;  // Empty string if metadata not yet available
 }
 

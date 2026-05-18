@@ -61,18 +61,18 @@ class FrbClient:
         request = frb_search_pb2.GetConfigRequest()
         return self.stub.GetConfig(request)
 
-    def get_metadata(self, verbose: bool = False) -> str:
-        """Query the server for metadata as a YAML string.
+    def get_xengine_metadata(self, verbose: bool = False) -> str:
+        """Query the server for XEngine metadata as a YAML string.
 
         Args:
             verbose: If True, include comments explaining each field.
 
         Returns:
-            YAML string representation of metadata, or empty string if
-            metadata is not yet available.
+            YAML string representation of XEngine metadata, or empty string
+            if metadata is not yet available.
         """
-        request = frb_search_pb2.GetMetadataRequest(verbose=verbose)
-        response = self.stub.GetMetadata(request)
+        request = frb_search_pb2.GetXEngineMetadataRequest(verbose=verbose)
+        response = self.stub.GetXEngineMetadata(request)
         return response.yaml_string
 
     def write_files(
