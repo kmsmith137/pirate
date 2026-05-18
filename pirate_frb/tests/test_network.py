@@ -121,9 +121,13 @@ def test_network():
             # have fallen behind catch up faster. This produces
             # ragged per-worker progress (good coverage for the
             # ambiguous band of the ack-prediction check).
-            wpos = np.zeros(p['nworkers'], dtype=np.int64)
+
+            nworkers = p['nworkers']
+            ipos = np.random.randint(10**10)
+            wpos = np.random.randint(ipos, ipos+10, size=nworkers, dtype=np.int64)
+            
             for _ in range(1000):
-                worker_id = random.randrange(p['nworkers'])
+                worker_id = random.randrange(nworkers)
                 if random.random() < 0.1:
                     fxe.synchronize(worker_id)
                 lag = int(np.max(wpos) - wpos[worker_id])
@@ -138,7 +142,7 @@ def test_network():
             # If a debug-mode assertion inside _read_acks fired, the
             # worker latched that error -- synchronize() rethrows it
             # to this thread.
-            for w in range(p['nworkers']):
+            for w in range(nworkers):
                 fxe.synchronize(w)
 
             # All acks drained; the counters are now a stable snapshot.
