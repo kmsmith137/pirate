@@ -68,10 +68,31 @@ message WriteFilesResponse {
 message SubscribeFilesRequest {}
 
 // Response message for SubscribeFiles (streamed).
-// An empty error_message indicates success; non-empty indicates an error.
+//
+// The FIRST response on every stream is a ReadySentinel, emitted by
+// the server immediately after registering the subscription. The
+// client SubscribeFiles RPC entry point is expected to read this
+// synchronously before returning to its caller, so that any WriteFiles
+// call issued after the client-side subscription handle is returned
+// is guaranteed to enqueue a notification onto this stream.
+//
+// Every subsequent response is a WriteNotification carrying one
+// completed file's filename + error_message.
 message SubscribeFilesResponse {
-  string filename = 1;       // A single filename (valid only if error_message is empty)
-  string error_message = 2;  // Empty string indicates success; non-empty indicates error
+  oneof kind {
+    ReadySentinel     ready        = 1;
+    WriteNotification notification = 2;
+  }
+}
+
+// Marker message: the act of receiving one of these on the stream is
+// the signal. No fields.
+message ReadySentinel {}
+
+// One completed file's write status.
+message WriteNotification {
+  string filename      = 1;  // Valid only when error_message is empty.
+  string error_message = 2;  // Empty = success; non-empty = error string.
 }
 
 // Request message for GetConfig (currently empty, but extensible)

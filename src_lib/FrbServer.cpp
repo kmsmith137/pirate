@@ -628,6 +628,20 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, grpc::ServerWr
     auto subscriber = make_shared<FileWriter::RpcSubscriber>();
     file_writer->add_subscriber(subscriber);
 
+    // Ready sentinel. Must be the FIRST response on every stream --
+    // the client constructor reads this synchronously to confirm
+    // subscription before returning. Ordering matters: add_subscriber()
+    // runs before this Write(), so every notification that pops out of
+    // subscriber->queue below was enqueued by a write that completed
+    // AFTER the client had a chance to issue (and observe) any
+    // subsequent WriteFiles call.
+    {
+        fs::SubscribeFilesResponse ready;
+        ready.mutable_ready();          // sets the oneof variant
+        if (!writer->Write(ready))
+            return;
+    }
+
     // Loop over entries in subscriber's queue.
     for (;;) {
         // Check if client has disconnected.
@@ -659,10 +673,12 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, grpc::ServerWr
 
         subscriber_lock.unlock();
 
-        // Build response with (filename, error_message).
-        // Empty error_message indicates success.
+        // Build response with (filename, error_message) inside the
+        // 'notification' arm of the oneof. Empty error_message
+        // indicates success.
         fs::SubscribeFilesResponse response;
-        response.set_filename(write_status.save_path.string());
+        auto *notif = response.mutable_notification();
+        notif->set_filename(write_status.save_path.string());
 
         if (write_status.error) {
             try {
@@ -670,12 +686,12 @@ void FrbRpcService::_SubscribeFiles(grpc::ServerContext* context, grpc::ServerWr
             } catch (const std::exception &e) {
                 // e.what() may return empty string; replace with "Unknown error".
                 const char *msg = e.what();
-                response.set_error_message((msg && msg[0]) ? msg : "Unknown error");
+                notif->set_error_message((msg && msg[0]) ? msg : "Unknown error");
             } catch (...) {
-                response.set_error_message("Unknown error");
+                notif->set_error_message("Unknown error");
             }
         } else {
-            response.set_error_message("");  // Empty error_message indicates success.
+            notif->set_error_message("");  // Empty error_message indicates success.
         }
 
         // Write() returns false if the stream has been closed by the client.

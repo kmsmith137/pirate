@@ -6,6 +6,7 @@ import textwrap
 import argparse
 
 import argcomplete
+import grpc
 import ksgpu
 
 from . import pirate_pybind11
@@ -814,15 +815,26 @@ def rpc_status(args):
     def subscribe_thread(addr, client, stop_event):
         """Subscribe to filenames and print as they arrive."""
         try:
-            # subscribe_files() yields (filename, error_message) pairs.
-            # Empty error_message indicates success; non-empty indicates error.
-            for filename, error_message in client.subscribe_files():
-                if stop_event.is_set():
-                    return
-                if error_message:
-                    print(f"[{addr}] {filename} failed: {error_message}")
-                else:
-                    print(f"[{addr}] {filename} received")
+            # subscribe_files() returns a FileSubscriber whose
+            # constructor has already opened the stream and consumed
+            # the server's ready sentinel; iteration yields
+            # (filename, error_message) pairs.
+            with client.subscribe_files() as sub:
+                for filename, error_message in sub:
+                    if stop_event.is_set():
+                        return
+                    if error_message:
+                        print(f"[{addr}] {filename} failed: {error_message}")
+                    else:
+                        print(f"[{addr}] {filename} received")
+        except grpc.RpcError as e:
+            # CANCELLED here is from something OTHER than our own
+            # close() (which the FileSubscriber converts to clean
+            # StopIteration). In practice: server graceful shutdown.
+            # Silence it; surface anything else.
+            if e.code() != grpc.StatusCode.CANCELLED:
+                print(f"[{addr}] subscribe_files ERROR: {e}", file=sys.stderr)
+                stop_event.set()
         except Exception as e:
             print(f"[{addr}] subscribe_files ERROR: {e}", file=sys.stderr)
             stop_event.set()
