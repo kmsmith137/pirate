@@ -1,6 +1,7 @@
 #ifndef _PIRATE_NETWORK_UTILS_HPP
 #define _PIRATE_NETWORK_UTILS_HPP
 
+#include <random>
 #include <string>
 #include <vector>
 #include <sys/socket.h>  // socklen_t
@@ -37,6 +38,9 @@ namespace pirate {
 //   long nbytes_received = s.read(buf, maxbytes);
 
 
+// Note: Socket is not thread-safe!
+// (May be fixed in the future, but nontrivial since std::mutex
+// and std::atomic are non-moveable.)
 struct Socket
 {
     int fd = -1;
@@ -44,6 +48,21 @@ struct Socket
     bool connreset = false;    // set by send() if receiver closes connection, see below.
     bool nonblocking = false;  // set by set_nonblocking(), modifies behavior of read(), send().
     bool eof = false;          // set by read() when connection is closed (EOF).
+
+    // Test-only short-read injection. When reads_are_misbehaving is
+    // true, read() and read_with_timeout() truncate the caller-
+    // specified count to a log-uniform integer in [1, count) with
+    // probability 0.5. All three fields below are plain (non-atomic,
+    // non-locked); like the rest of Socket they rely on the caller
+    // for cross-thread synchronization (see the "not thread-safe"
+    // note above). Intended for testing; never set in production.
+    //
+    // We don't use ksgpu::default_rng for the RNG because that
+    // generator is not currently thread-safe. (If/when ksgpu makes
+    // it thread-safe, this can move over.)
+    bool reads_are_misbehaving = false;
+    bool rng_is_initialized = false;     // only meaningful when reads_are_misbehaving == true
+    std::minstd_rand rng;                // ditto
 
     // For TCP, use (domain,type) = (PF_INET,SOCK_STREAM). See "cheat sheet" above.
     Socket(int domain, int type, int protocol=0);
@@ -100,14 +119,27 @@ struct Socket
     void set_nonblocking();  // fcntl(O_NONBLOCK)
     void set_pacing_rate(double bytes_per_sec);  // setsockopt(SOL_SOCKET, SO_MAX_PACING_RATE)
     void set_zerocopy();     // setsockopt(SOL_SOCKET, SO_ZEROCOPY) + (MSG_ZEROCOPY on future send() calls)
-    
+
+    // Intended for testing. Idempotent. After this returns, subsequent
+    // read() / read_with_timeout() calls on this Socket may return
+    // short -- with probability 0.5, the caller-specified count is
+    // truncated to a log-uniform integer in [1, count). The per-Socket
+    // RNG is lazy-seeded from std::random_device on first use.
+    void set_misbehaving_reads();
+
     // Socket is noncopyable but moveable (can always do shared_ptr<Socket> to avoid copies).
-    
+
     Socket(const Socket &) = delete;
     Socket &operator=(const Socket &) = delete;
-    
+
     Socket(Socket &&s);
     Socket &operator=(Socket &&s);
+
+private:
+    // Helper for read() / read_with_timeout(). Called only when
+    // reads_are_misbehaving == true. Lazy-seeds the RNG on first
+    // call. Returns the possibly-reduced maxbytes to use.
+    long _misbehave_maxbytes(long maxbytes);
 };
 
 

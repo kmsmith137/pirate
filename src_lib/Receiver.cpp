@@ -287,6 +287,10 @@ void Receiver::_listener_main()
         if (new_socket.fd < 0)
             continue;
 
+        // Test-only short-read injection on every peer socket.
+        if (params.misbehaving_reads)
+            new_socket.set_misbehaving_reads();
+
         // Create Peer (which owns the Socket) and hand off to reader thread.
         auto peer_ptr = make_shared<Peer> (std::move(new_socket));
 

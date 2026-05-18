@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
+#include <algorithm>
+#include <cmath>
 #include <sstream>
 #include <iostream>
 #include <stdexcept>
@@ -143,6 +145,10 @@ long Socket::read(void *buf, long count)
         throw runtime_error("Socket::read() called on uninitialized socket");
 
     xassert(count > 0);
+
+    if (reads_are_misbehaving)
+        count = _misbehave_maxbytes(count);
+
     long nbytes = ::read(this->fd, buf, count);
 
     if (nbytes < 0) {
@@ -169,8 +175,13 @@ long Socket::read_with_timeout(void *buf, long count, int timeout_ms)
     xassert(count > 0);
 
     // Negative timeout means blocking (same as read()).
+    // Defer misbehavior to read() in that case, to avoid applying
+    // it twice (compound truncation).
     if (timeout_ms < 0)
         return this->read(buf, count);
+
+    if (reads_are_misbehaving)
+        count = _misbehave_maxbytes(count);
 
     // For timeout_ms > 0, poll first. For timeout_ms == 0, skip the
     // poll and just attempt a single non-blocking recv -- one syscall.
@@ -476,7 +487,10 @@ long Socket::send_with_timeout(const void *buf, long count, int timeout_ms)
 
 // Move constructor.
 Socket::Socket(Socket &&s)
-    : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking), eof(s.eof)
+    : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking), eof(s.eof),
+      reads_are_misbehaving(s.reads_are_misbehaving),
+      rng_is_initialized(s.rng_is_initialized),
+      rng(std::move(s.rng))
 {
     s.fd = -1;
 }
@@ -491,9 +505,47 @@ Socket &Socket::operator=(Socket &&s)
     this->connreset = s.connreset;
     this->nonblocking = s.nonblocking;
     this->eof = s.eof;
-    
+    this->reads_are_misbehaving = s.reads_are_misbehaving;
+    this->rng_is_initialized = s.rng_is_initialized;
+    this->rng = std::move(s.rng);
+
     s.fd = -1;
     return *this;
+}
+
+
+void Socket::set_misbehaving_reads()
+{
+    reads_are_misbehaving = true;
+}
+
+
+long Socket::_misbehave_maxbytes(long maxbytes)
+{
+    if (!rng_is_initialized) {
+        std::random_device rd;
+        rng.seed(rd());
+        rng_is_initialized = true;
+    }
+
+    // Coin flip: 50% leave maxbytes alone.
+    std::uniform_real_distribution<double> coin(0.0, 1.0);
+    if (coin(rng) >= 0.5)
+        return maxbytes;
+
+    // Replacement is in [1, maxbytes); skip when [1, 1) is empty.
+    if (maxbytes <= 1)
+        return maxbytes;
+
+    // Log-uniform in [1, maxbytes): u ~ Uniform[0, log(maxbytes)),
+    // result = floor(exp(u)) which lies in [1, maxbytes-1].
+    std::uniform_real_distribution<double> log_dist(
+        0.0, std::log(static_cast<double>(maxbytes)));
+    double u = log_dist(rng);
+    long new_max = static_cast<long>(std::floor(std::exp(u)));
+    // Defensive clamp: floating-point edge cases could otherwise
+    // produce 0 or maxbytes exactly.
+    return std::max(1L, std::min(maxbytes - 1L, new_max));
 }
 
 

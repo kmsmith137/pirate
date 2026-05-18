@@ -846,21 +846,31 @@ void register_core_bindings(pybind11::module &m)
         "  - listener: accepts incoming connections\n"
         "  - reader: reads data from all open connections using epoll")
           .def(py::init([](const std::string &address,
-                           std::shared_ptr<AssembledFrameAllocator> allocator, long consumer_id) {
+                           std::shared_ptr<AssembledFrameAllocator> allocator,
+                           long consumer_id,
+                           bool misbehaving_reads) {
                Receiver::Params params;
                params.address = address;
                params.allocator = allocator;
                params.consumer_id = consumer_id;
+               params.misbehaving_reads = misbehaving_reads;
                return std::make_shared<Receiver>(params);
           }),
                py::arg("address"),
-               py::arg("allocator"), py::arg("consumer_id"),
+               py::arg("allocator"),
+               py::arg("consumer_id"),
+               py::arg("misbehaving_reads") = false,
                "Create a Receiver (does not start worker threads).\n\n"
                "Args:\n"
                "    address: Address to bind to (e.g. '127.0.0.1:5000')\n"
                "    allocator: AssembledFrameAllocator for output frames\n"
                "        (time_samples_per_chunk is taken from the allocator).\n"
-               "    consumer_id: Consumer ID for the allocator")
+               "    consumer_id: Consumer ID for the allocator\n"
+               "    misbehaving_reads: If True, peer sockets accepted by\n"
+               "        this Receiver will have set_misbehaving_reads()\n"
+               "        called on them, which truncates each read() to a\n"
+               "        log-uniform smaller size with probability 0.5.\n"
+               "        Test-only -- do NOT enable in production.")
           .def("start", &Receiver::start,
                "Start the worker threads.\n\n"
                "Raises:\n"

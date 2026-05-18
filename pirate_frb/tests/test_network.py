@@ -88,6 +88,12 @@ def test_network():
                 address     = f"127.0.0.1:{p['data_base_port'] + j}",
                 allocator   = allocator,
                 consumer_id = j,
+                # Per-Socket short-read misbehavior on every accepted
+                # peer socket. Strengthens the test by exercising the
+                # incremental-parse path against pathological short
+                # reads (1 byte at a time, etc.) that production
+                # traffic rarely produces.
+                misbehaving_reads = True,
             )
             for j in range(p['num_receivers'])
         ]

@@ -61,6 +61,11 @@ struct Receiver
         std::string address;               // "ip:port" format, e.g. "127.0.0.1:5000"
         std::shared_ptr<AssembledFrameAllocator> allocator;
         long consumer_id = -1;
+        // If true, every peer socket accepted by the listener thread
+        // has Socket::set_misbehaving_reads() called on it before
+        // being handed to the reader thread. Test-only -- never set
+        // in production.
+        bool misbehaving_reads = false;
     };
 
     // Constructor initializes state but does not start worker threads.
