@@ -128,12 +128,20 @@ def test_network():
             
             for _ in range(1000):
                 worker_id = random.randrange(nworkers)
+                skip = (random.random() < 0.1)
+                
                 if random.random() < 0.1:
                     fxe.synchronize(worker_id)
+                    
                 lag = int(np.max(wpos) - wpos[worker_id])
                 n = int(np.random.poisson(1.0 + 0.1 * lag))
+                
                 for k in range(n):
-                    fxe.enqueue_send_junk(worker_id, int(wpos[worker_id]) + k)
+                    if skip:
+                        fxe.enqueue_skip_minichunk(worker_id, int(wpos[worker_id]) + k)
+                    else:
+                        fxe.enqueue_send_junk(worker_id, int(wpos[worker_id]) + k)
+                
                 wpos[worker_id] += n
 
             # synchronize(w) blocks until worker w's command queue is
