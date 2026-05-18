@@ -174,6 +174,13 @@ def test_network():
                     while fspos <= ichunk:
                         framesets[fspos] = client_allocator.get_frame_set(consumer_id=0)
                         assert framesets[fspos].time_chunk_index == fspos
+                        # Randomize so SEND_MINICHUNK puts non-trivial
+                        # bytes on the wire (the allocator's default
+                        # fill is all-0x88 = -8). Test thread is the
+                        # only writer; the FakeXEngine workers will
+                        # later read this frame via enqueue_send_
+                        # minichunk's mutex handoff.
+                        framesets[fspos].randomize()
                         fspos += 1
 
                     if skip:

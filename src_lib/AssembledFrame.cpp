@@ -11,7 +11,10 @@
 #include <fcntl.h>     // open(), O_RDONLY
 #include <unistd.h>    // fsync(), close()
 
+#include <cstring>
 #include <map>
+#include <mutex>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 
@@ -22,6 +25,18 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+
+// File-scope global RNG for AssembledFrame::randomize(). Thread-safe
+// via _randomize_rng_mutex. Lazy-seeded from std::random_device on
+// first use. We don't use ksgpu::default_rng because it isn't
+// currently thread-safe; this hack can go away when ksgpu's RNG is
+// fixed.
+namespace {
+    std::mutex   _randomize_rng_mutex;
+    std::mt19937 _randomize_rng;
+    bool         _randomize_rng_initialized = false;
+}  // anonymous namespace
 
 
 // Call with lock held!
@@ -493,6 +508,51 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
         p[i] = (char) rand_int(0, 256);
 
     return frame;
+}
+
+
+void AssembledFrame::randomize()
+{
+    // int4 dtype packs 2 elements per byte, so nbytes = data.size / 2.
+    // (data.size is the int4 element count, not the byte count -- see
+    // AssembledFrameAllocator::_create_frame_set in this file.)
+    long nbytes = data.size / 2;
+    if (nbytes <= 0)
+        return;  // empty (e.g. reaped) frame -- nothing to do.
+
+    xassert(data.data != nullptr);
+    char *p = static_cast<char *>(data.data);
+
+    std::lock_guard<std::mutex> lk(_randomize_rng_mutex);
+
+    if (!_randomize_rng_initialized) {
+        std::random_device rd;
+        _randomize_rng.seed(rd());
+        _randomize_rng_initialized = true;
+    }
+
+    // mt19937 yields uint32_t (4 random bytes per call). The final
+    // 1-3 bytes (if nbytes % 4 != 0) get the low bytes of a fresh
+    // uint32 via a short-memcpy.
+    long i = 0;
+    while (i + 4 <= nbytes) {
+        uint32_t r = _randomize_rng();
+        std::memcpy(p + i, &r, 4);
+        i += 4;
+    }
+    if (i < nbytes) {
+        uint32_t r = _randomize_rng();
+        std::memcpy(p + i, &r, nbytes - i);
+    }
+}
+
+
+void AssembledFrameSet::randomize()
+{
+    for (const auto &f : frames) {
+        xassert(f);   // AssembledFrameSet invariant: all frames[i] non-null
+        f->randomize();
+    }
 }
 
 

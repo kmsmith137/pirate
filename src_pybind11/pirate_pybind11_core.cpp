@@ -152,6 +152,14 @@ void register_core_bindings(pybind11::module &m)
             "Note: XEngineMetadata is projected through ASDF -- after reading, the\n"
             "metadata's beam_ids / beam_positions_{x,y} are length-1 (just this\n"
             "frame's beam) and freq_channels is empty. See XEngineMetadata.hpp.")
+        .def("randomize", &AssembledFrame::randomize,
+            py::call_guard<py::gil_scoped_release>(),
+            "Fill the frame's data buffer with uniformly random bytes.\n"
+            "Each int4 sample is uniform over [-8, +7]. Thread-safe via a\n"
+            "private global mutex; intended for testing.\n\n"
+            "Caller must ensure that no other thread is concurrently reading\n"
+            "or writing the same frame's data -- the global mutex only\n"
+            "protects the RNG, not the destination buffer.")
     ;
 
     // AssembledFrameSet: container of (nbeams) AssembledFrames for one time chunk.
@@ -173,6 +181,10 @@ void register_core_bindings(pybind11::module &m)
             "Bounds-checked accessor for frames[ibeam].")
         .def("validate", &AssembledFrameSet::validate,
             "Defensive consistency check; throws on inconsistency. Cheap.")
+        .def("randomize", &AssembledFrameSet::randomize,
+            py::call_guard<py::gil_scoped_release>(),
+            "Call AssembledFrame.randomize() on every contained frame.\n"
+            "See AssembledFrame.randomize() for thread-safety caveats.")
     ;
 
     // AssembledFrameAllocator: allocates AssembledFrameSets for multiple consumers.

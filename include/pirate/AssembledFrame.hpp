@@ -119,6 +119,20 @@ struct AssembledFrame
     static std::shared_ptr<AssembledFrame>
     make_random(const std::shared_ptr<const XEngineMetadata> &xmd,
                 long ntime, long beam_id, long time_chunk_index);
+
+    // Fill the data buffer with uniformly random bytes (each int4
+    // sample uniform over [-8, +7]). Thread-safe via a private
+    // global mutex; intended for testing.
+    //
+    // Caller must ensure that no other thread is concurrently
+    // reading or writing this frame's data -- the global mutex
+    // only protects the RNG, not the destination buffer. In
+    // particular, this is NOT safe to call concurrently with an
+    // active reaper or with FakeXEngine's SEND_MINICHUNK gather.
+    //
+    // Uses its own global RNG instead of ksgpu::default_rng
+    // because the latter is not currently thread-safe.
+    void randomize();
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.
@@ -180,6 +194,10 @@ struct AssembledFrameSet
 
     // Convenience accessor (bounds-checked). Equivalent to frames.at(ibeam).
     const std::shared_ptr<AssembledFrame> &get_frame(long ibeam) const;
+
+    // Call AssembledFrame::randomize() on every contained frame.
+    // See AssembledFrame::randomize() for thread-safety caveats.
+    void randomize();
 };
 
 
