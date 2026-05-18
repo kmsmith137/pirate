@@ -780,8 +780,10 @@ def rpc_status(args):
                 if not metadata_printed:
                     xmd_yaml = client.get_xengine_metadata(verbose=False)
                     if xmd_yaml:
+                        print()
                         print(f"[{addr}] xengine_metadata:")
-                        print(xmd_yaml)
+                        print(textwrap.indent(xmd_yaml.rstrip(), "  "))
+                        print()
                         metadata_printed = True
 
                 status = client.get_status()
