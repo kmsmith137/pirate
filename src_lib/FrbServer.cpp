@@ -587,8 +587,16 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
 
         unique_lock<std::mutex> frame_lock(frame->mutex);
 
-        // Skip if frame has already been reaped.
-        if (frame->data.size == 0)
+        // Skip if frame has been reaped without ever being written.
+        // If save_paths is non-empty, then either the data is still
+        // in memory (data.size > 0), or it's on disk (on_ssd, or
+        // copied to NFS and tracked via nfs_count). In the latter
+        // case FileWriter's NFS thread can hardlink from the
+        // primary save_path to a new save_path (see _nfs_thread_main
+        // -- both _hardlink_in_nfs and the save_error path operate
+        // off save_paths[0]). So we should only skip when save_paths
+        // is empty AND data has been reaped.
+        if (frame->data.size == 0 && frame->save_paths.empty())
             continue;
 
         string filename = filename_pattern.expand(frame);

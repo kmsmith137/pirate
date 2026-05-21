@@ -164,14 +164,6 @@ def test_network():
         # Filenames returned by write_files RPCs across all iouter turns.
         expected_filenames = set()
 
-        # Track chunks we've already written via write_files. The SSD
-        # thread reaps frame->data after writing, and the WriteFiles
-        # RPC handler silently skips frames with data.size==0 -- so a
-        # repeat write_files for an already-written chunk returns
-        # fewer filenames than expected, tripping our sanity check.
-        # We avoid that by never re-requesting a used chunk.
-        used_chunks = set()
-
         try:
             # Randomized send loop: 1000 turns, each turn picks a
             # random worker, occasionally synchronizes it, and
@@ -271,11 +263,6 @@ def test_network():
                 chunk_min = random.randint(safe_lower, safe_upper - selected_nchunks + 1)
                 chunk_max = chunk_min + selected_nchunks - 1
 
-                # If any chunk in the range has already been written via
-                # write_files, skip this turn (see used_chunks doc above).
-                if any(c in used_chunks for c in range(chunk_min, chunk_max + 1)):
-                    continue
-
                 # Pick 1-3 random beams.
                 all_beam_ids = list(range(p['base_beam_id'], p['base_beam_id'] + p['nbeams']))
                 selected_nbeams = random.randint(1, min(3, p['nbeams']))
@@ -308,7 +295,6 @@ def test_network():
                     )
 
                 expected_filenames.update(filenames)
-                used_chunks.update(range(chunk_min, chunk_max + 1))
 
             for worker_id in range(nworkers):
                 # Block until worker thread has processed all commands,
