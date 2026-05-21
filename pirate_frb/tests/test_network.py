@@ -228,7 +228,7 @@ def test_network():
                     continue
 
                 status = rpc_client.get_status()
-                rb_reaped    = status.rb_reaped
+                rb_start     = status.rb_start
                 rb_finalized = status.rb_finalized
                 rb_end       = status.rb_end
 
@@ -241,21 +241,13 @@ def test_network():
                 # but still being written by the receivers that haven't
                 # delivered yet.
                 #
-                # LOWER: chunks must be in the ringbuf at SERVER-
-                # processing time, not just snapshot time. The
-                # FrbServer worker advances rb_start as new chunks
-                # arrive (advancing the ringbuf's tail). We bound the
+                # LOWER (rb_start, plus a future-bound): chunks must
+                # be in the ringbuf at SERVER-processing time, not
+                # just snapshot time. The FrbServer worker advances
+                # rb_start as new chunks arrive. We bound the
                 # worst-case rb_start at server time using:
                 #   max_future_rb_end <= (max_wpos // mpc - 1) * nbeams
                 #   max_future_rb_start <= max_future_rb_end - rb_size
-                # We use rb_reaped (NOT rb_start) as the snapshot
-                # base, because rb_start can transiently undershoot
-                # rb_reaped during ringbuf warm-up -- the FrbServer
-                # worker computes rb_start = max(frame_id - rb_size +
-                # 1, 0), which can lie below initial_frame_id.
-                # [rb_start, rb_end) can therefore include null slots;
-                # [rb_reaped, rb_end) cannot. (The existing rpc_write
-                # in __main__.py uses the same convention.)
                 RB_NCHUNKS = 512   # = FrbServer::ringbuf_nchunks (constant in FrbServer.hpp)
                 rb_size = RB_NCHUNKS * p['nbeams']
 
@@ -265,10 +257,10 @@ def test_network():
                     rb_end_upper = max(rb_end, (highest_enqueued_chunk - 1) * p['nbeams'])
                 else:
                     rb_end_upper = rb_end
-                rb_reaped_upper = max(rb_reaped, max(0, rb_end_upper - rb_size))
+                rb_start_upper = max(rb_start, max(0, rb_end_upper - rb_size))
 
-                safe_lower = (rb_reaped_upper + p['nbeams'] - 1) // p['nbeams']   # ceil
-                safe_upper = (rb_finalized // p['nbeams']) - 1                    # fully-finalized
+                safe_lower = (rb_start_upper + p['nbeams'] - 1) // p['nbeams']   # ceil
+                safe_upper = (rb_finalized // p['nbeams']) - 1                   # fully-finalized
 
                 if safe_lower > safe_upper:
                     continue   # no safe chunks this turn
@@ -311,8 +303,8 @@ def test_network():
                         f"write_files at iouter={iouter}: got {len(filenames)} filenames, "
                         f"expected {expected_count}. chunks=[{chunk_min}, {chunk_max}], "
                         f"beams={selected_beams}, "
-                        f"rb=(reaped={rb_reaped}, finalized={rb_finalized}, end={rb_end}), "
-                        f"rb_reaped_upper={rb_reaped_upper}, max_wpos={max_wpos}"
+                        f"rb=(start={rb_start}, finalized={rb_finalized}, end={rb_end}), "
+                        f"rb_start_upper={rb_start_upper}, max_wpos={max_wpos}"
                     )
 
                 expected_filenames.update(filenames)

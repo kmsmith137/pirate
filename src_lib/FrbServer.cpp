@@ -294,7 +294,16 @@ void FrbServer::_worker_main(int receiver_index)
                 // the ringbuf already, and put it at the end of the ringbuf.
                 xassert(rb_end == frame_id);
                 frame_ringbuf[rb_slot] = frame;
-                rb_start = max(frame_id - rb_size + 1, 0L);
+                // Floor rb_start at initial_frame_id (not 0). Otherwise,
+                // during ringbuf warm-up, rb_start would point below the
+                // oldest actually-populated slot -- the formula
+                // 'frame_id - rb_size + 1' assumes the ringbuf has been
+                // filling since frame_id 0, but our worker seeds rb_start
+                // at initial_frame_id (which can be large, e.g. when the
+                // sender starts at a nonzero minichunk index). Floor at
+                // initial_frame_id makes [rb_start, rb_end) contain only
+                // populated slots in every phase.
+                rb_start = max(frame_id - rb_size + 1, initial_frame_id);
                 rb_reaped = max(rb_start, rb_reaped);
                 rb_end = frame_id + 1;
                 // Note that frame is not finalized yet (see below).
