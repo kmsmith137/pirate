@@ -558,15 +558,15 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
 
     long rb_size = s->frame_ringbuf.size();
     long rb_start = s->rb_start;
-    long rb_end = s->rb_end;
+    long rb_finalized = s->rb_finalized;
 
     min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
-    max_time_chunk_index = min(max_time_chunk_index, rb_end / rb_nbeams);
+    max_time_chunk_index = min(max_time_chunk_index, rb_finalized / rb_nbeams);
 
     for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
         for (int b : beam_indices) {
             long frame_id = t * rb_nbeams + b;
-            if ((frame_id >= rb_start) && (frame_id < rb_end)) {
+            if ((frame_id >= rb_start) && (frame_id < rb_finalized)) {
                 long rb_slot = frame_id % rb_size;
                 local_frames.push_back(s->frame_ringbuf[rb_slot]);
             }
