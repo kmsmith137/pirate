@@ -127,6 +127,9 @@ def test_network():
         # Per-worker "dstate": workers can can be in a temporary "disconnected" state.
         dstate = np.random.random(nworkers) < np.random.uniform(0,1)
 
+        # Keeps track of which (worker_id, minichunk_index) pairs have been skipped.
+        skipped = set()
+
         # Client-side AssembledFrameSets
         mpc = p['time_samples_per_chunk'] // 256   # minichunks per chunk
         framesets = dict()     # ichunk -> AssembledFrameSet
@@ -173,18 +176,15 @@ def test_network():
                     
                     while fspos <= ichunk:
                         framesets[fspos] = client_allocator.get_frame_set(consumer_id=0)
-                        assert framesets[fspos].time_chunk_index == fspos
-                        # Randomize so SEND_MINICHUNK puts non-trivial
-                        # bytes on the wire (the allocator's default
-                        # fill is all-0x88 = -8). Test thread is the
-                        # only writer; the FakeXEngine workers will
-                        # later read this frame via enqueue_send_
-                        # minichunk's mutex handoff.
                         framesets[fspos].randomize()
+                        
+                        assert framesets[fspos].time_chunk_index == fspos
                         fspos += 1
 
                     if skip:
                         fxe.enqueue_skip_minichunk(worker_id, imc)
+                        skipped.add((worker_id, imc))
+                        
                     else:
                         fxe.enqueue_send_minichunk(worker_id, imc, framesets[ichunk])
                 
@@ -197,14 +197,18 @@ def test_network():
                     fxe.enqueue_disconnect(worker_id)
                     dstate[worker_id] = True
 
-            # synchronize(w) blocks until worker w's command queue is
-            # empty; in debug=True mode it also enqueues WAIT_FOR_ACKS
-            # first, so the wait covers all outstanding FLAG_ACK acks.
-            # If a debug-mode assertion inside _read_acks fired, the
-            # worker latched that error -- synchronize() rethrows it
-            # to this thread.
-            for w in range(nworkers):
-                fxe.synchronize(w)
+            for worker_id in range(nworkers):
+                # Block until worker thread has processed all commands,
+                # and received all acks.
+                fxe.synchronize(worker_id)
+
+                # Check status for each minichunk.
+                for imc in range(ipos[worker_id], wpos[worker_id]):
+                    status = fxe.get_minichunk_status(worker_id, imc)
+                    if (worker_id,imc) in skipped:
+                        assert status == FakeXEngine.STATUS_SKIPPED
+                    else:
+                        assert (status == FakeXEngine.STATUS_DROPPED) or (status == FakeXEngine.STATUS_ASSEMBLED)
 
             # All acks drained; the counters are now a stable snapshot.
             counters = fxe.get_debug_counters()
