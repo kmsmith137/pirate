@@ -799,6 +799,15 @@ void register_core_bindings(pybind11::module &m)
                "snapshot is only 'consistent' if no acks are arriving\n"
                "concurrently -- typically call after synchronize() has\n"
                "drained all in-flight acks. Does NOT throw.")
+          .def("get_worker_freq_channels",
+               &FakeXEngine::get_worker_freq_channels,
+               py::arg("worker_id"),
+               "Return the round-robin subset of total frequency channels\n"
+               "assigned to workers[worker_id]: channels worker_id,\n"
+               "worker_id + nworkers, worker_id + 2*nworkers, ... (intersected\n"
+               "with [0, total_nfreq)). Same content as Worker::xmd.freq_channels.\n\n"
+               "Raises:\n"
+               "    RuntimeError: If worker_id is out of range.")
           .def("stop", [](FakeXEngine &self) { self.stop(); },
                "Signal worker threads to stop. Any in-flight wait_until_processed\n"
                "/ enqueue_send_junk calls throw RuntimeError. Safe to call\n"
