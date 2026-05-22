@@ -625,6 +625,16 @@ struct FakeXEngine
     // (in which case all four entries are zero).
     std::array<long, 4> get_debug_counters() const;
 
+    // Return the round-robin subset of total frequency channels assigned
+    // to workers[worker_id]: { worker_id, worker_id + nworkers,
+    // worker_id + 2*nworkers, ... } intersected with [0, total_nfreq).
+    // This is the same content that _initialize() writes into
+    // Worker::xmd.freq_channels; we compute it from FakeXEngine::xmd
+    // and nworkers so the answer is well-defined whether or not the
+    // worker thread has reached _initialize() yet. Throws on
+    // out-of-range worker_id.
+    std::vector<long> get_worker_freq_channels(long worker_id) const;
+
     // Put FakeXEngine into stopped state. First caller's compare-exchange
     // on is_stopped_cache wins; subsequent concurrent calls return
     // immediately. The winner sweeps every worker, locking each one's

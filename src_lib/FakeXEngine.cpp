@@ -191,7 +191,7 @@ void FakeXEngine::stop(std::exception_ptr e)
 }
 
 
-XEngineMetadata FakeXEngine::make_worker_metadata(int worker_id) const
+vector<long> FakeXEngine::get_worker_freq_channels(long worker_id) const
 {
     xassert(worker_id >= 0);
     xassert(worker_id < nworkers);
@@ -204,8 +204,14 @@ XEngineMetadata FakeXEngine::make_worker_metadata(int worker_id) const
     for (long ch = worker_id; ch < total_nfreq; ch += nworkers)
         freq_channels.push_back(ch);
 
+    return freq_channels;
+}
+
+
+XEngineMetadata FakeXEngine::make_worker_metadata(int worker_id) const
+{
     XEngineMetadata ret = xmd;
-    ret.freq_channels = std::move(freq_channels);
+    ret.freq_channels = get_worker_freq_channels(worker_id);
     return ret;
 }
 
