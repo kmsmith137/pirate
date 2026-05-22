@@ -94,13 +94,18 @@ static long _read_int(const shared_ptr<ASDF::group> &grp, const string &key)
 }
 
 
+// Accept either a float YAML scalar or an int YAML scalar: yaml-cpp's emitter
+// strips the trailing ".0" from whole-number doubles, so a double like 400.0
+// round-trips through ASDF as the int_entry `400`. Every int64 is exactly
+// representable as a double, so the widening is lossless.
 static double _read_float(const shared_ptr<ASDF::group> &grp, const string &key)
 {
     auto e = grp->at(key);
-    auto v = e->get_maybe_float();
-    if (!v.has_value())
-        throw runtime_error("AssembledFrame::from_asdf(): expected float entry for '" + key + "'");
-    return v.value();
+    if (auto v = e->get_maybe_float(); v.has_value())
+        return v.value();
+    if (auto v = e->get_maybe_int(); v.has_value())
+        return double(v.value());
+    throw runtime_error("AssembledFrame::from_asdf(): expected float or int entry for '" + key + "'");
 }
 
 
@@ -122,6 +127,7 @@ static vector<long> _read_int_vec(const shared_ptr<ASDF::group> &grp, const stri
 }
 
 
+// See _read_float for the int-fallback rationale.
 static vector<double> _read_float_vec(const shared_ptr<ASDF::group> &grp, const string &key)
 {
     auto e = grp->at(key);
@@ -131,10 +137,12 @@ static vector<double> _read_float_vec(const shared_ptr<ASDF::group> &grp, const 
     vector<double> ret;
     ret.reserve(seq->size());
     for (const auto &elt : *seq) {
-        auto v = elt->get_maybe_float();
-        if (!v.has_value())
-            throw runtime_error("AssembledFrame::from_asdf(): non-float element in sequence '" + key + "'");
-        ret.push_back(v.value());
+        if (auto v = elt->get_maybe_float(); v.has_value())
+            ret.push_back(v.value());
+        else if (auto v = elt->get_maybe_int(); v.has_value())
+            ret.push_back(double(v.value()));
+        else
+            throw runtime_error("AssembledFrame::from_asdf(): non-numeric element in sequence '" + key + "'");
     }
     return ret;
 }
