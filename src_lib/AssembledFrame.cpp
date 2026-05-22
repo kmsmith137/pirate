@@ -308,13 +308,8 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
     grp->emplace("xengine_metadata", _metadata_to_asdf_group(*metadata));
 
     // Create ndarray for scales_offsets (emit before "data" so its binary
-    // block lands first in the file).
-    //
-    // float16 dtype is stored as uint8 with shape (nfreq, mpc, 4) (4 bytes
-    // per (freq, minichunk) for two float16 values {scale, offset}). The
-    // ASDF build has ASDF_HAVE_FLOAT16 #undef-ed (see asdf-cxx/config.hxx),
-    // so we fall back to raw bytes -- analogous to how the int4 data array
-    // is stored as uint8 (nfreq, ntime/2).
+    // block lands first in the file). Stored natively as float16 with shape
+    // (nfreq, mpc, 2); the last axis is {scale, offset}.
     long so_nbytes = nfreq * mpc * 4;
     auto so_block = make_shared<ASDF::ptr_block_t>(local_scales_offsets.data, so_nbytes);
     auto so_mblock = ASDF::make_constant_memoized(shared_ptr<ASDF::block_t>(so_block));
@@ -326,9 +321,9 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
         ASDF::compression_t::none,
         0,  // compression_level
         vector<bool>(),  // mask
-        make_shared<ASDF::datatype_t>(ASDF::id_uint8),
+        make_shared<ASDF::datatype_t>(ASDF::id_float16),
         ASDF::host_byteorder(),
-        vector<int64_t>{nfreq, mpc, 4}
+        vector<int64_t>{nfreq, mpc, 2}
     );
     grp->emplace("scales_offsets", so_arr);
 
@@ -424,8 +419,7 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
     frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
     frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
 
-    // Read scales_offsets array (stored as uint8 shape (nfreq, mpc, 4); see
-    // write_asdf for rationale).
+    // Read scales_offsets array (float16, shape (nfreq, mpc, 2)).
     {
         auto so_entry = grp->at("scales_offsets");
         auto so_ndarr = so_entry->get_maybe_ndarray();
@@ -435,12 +429,12 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
         xassert(so_shape.size() == 3);
         xassert(so_shape[0] == nfreq);
         xassert(so_shape[1] == mpc);
-        xassert(so_shape[2] == 4);
+        xassert(so_shape[2] == 2);
 
         auto so_mdata = so_ndarr->get_data();
         const void *so_src = so_mdata->ptr();
         size_t so_nbytes = so_mdata->nbytes();
-        xassert(so_nbytes == (size_t)(nfreq * mpc * 4));
+        xassert(so_nbytes == (size_t)(nfreq * mpc * 4));   // 2 float16 = 4 bytes per (freq, imc)
 
         memcpy(frame->scales_offsets.data, so_src, so_nbytes);
     }

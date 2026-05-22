@@ -40,10 +40,11 @@ int asdf_cxx_version_patch();
 
 std::string asdf_cxx_version();
 
-// Support for some types (check at compile time)
-// These are disabled for pirate builds because nvcc doesn't fully support them.
-// _Float16 and __int128 are available on modern GCC but nvcc has issues with them.
-#undef ASDF_HAVE_FLOAT16
+// FLOAT16 is enabled: older nvcc had issues, but recent versions
+// (as of May 2026) handle _Float16 fine. INT128 stays disabled --
+// libstdc++'s std::is_integral<__int128> is false, which trips
+// asdf-cxx's get_scalar_type_id<int128_t> static_assert.
+#define ASDF_HAVE_FLOAT16
 #undef ASDF_HAVE_INT128
 
 // blosc support - disabled
