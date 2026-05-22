@@ -522,9 +522,12 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     xassert(nfreq > 0);
     xassert(nbeams > 0);
 
-    // v2: each minichunk is prefixed with a 12-byte header
-    // (uint32 magic + uint64 seq), then (nbeams, nfreq, 256) int4 = 128*nbeams*nfreq bytes.
-    peer->bytes_per_minichunk = minichunk_header_nbytes + nbeams * nfreq * 128;
+    // v2 per-minichunk layout: 12-byte header (uint32 magic + uint64 seq), then
+    //   (nbeams, nfreq, 2) float16  = 4*nbeams*nfreq bytes scales_offsets, then
+    //   (nbeams, nfreq, 256) int4   = 128*nbeams*nfreq bytes data.
+    peer->bytes_per_minichunk = minichunk_header_nbytes
+                              + nbeams * nfreq * 4
+                              + nbeams * nfreq * 128;
     peer->minichunks_per_chunk = xdiv(params.allocator->time_samples_per_chunk, 256);
 
     // Receive buffer size is either 64KB or two minichunks, whichever is larger.
@@ -822,9 +825,10 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         while (ichunk >= curr_base_chunk + 2)
             _advance_one_chunk();
 
-        // The rest of _process_data() copies one minichunk of data
-        // (all beams, per-sender frequency subset, 256 time samples)
-        // into the AssembledFrames inside curr_frame_sets[ichunk & 1].
+        // The rest of _process_data() copies one minichunk (scales_offsets
+        // and int4 data, in that order to match the wire layout) for all
+        // beams and the per-sender frequency subset into the AssembledFrames
+        // inside curr_frame_sets[ichunk & 1].
         //
         // Wrapped in a block so the local variables don't trip the
         // 'goto minichunk_done' jump above (which is taken when the
@@ -834,7 +838,11 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
             xassert(this->curr_frame_sets[slot]);
             const auto &frames_vec = this->curr_frame_sets[slot]->frames;
             xassert(long(frames_vec.size()) == nbeams);
+            long mpc = peer->minichunks_per_chunk;
 
+            // First pass: scales_offsets (4 bytes per (beam, freq)).
+            // Frame buffer layout is (nfreq, mpc, 2) float16, so per-freq row
+            // stride is (mpc * 4) bytes and per-minichunk slice is 4 bytes.
             for (long b = 0; b < nbeams; b++) {
                 // `frame` here is the post-eviction frame for `ichunk`. Only
                 // the assembler thread writes to curr_frame_sets, so we don't
@@ -842,6 +850,20 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
                 // set for ichunk. (See _advance_one_chunk's invariant comment.)
                 shared_ptr<AssembledFrame> frame = frames_vec[b];
                 xassert(frame);
+
+                char *so_base = (char *)frame->scales_offsets.data + imc * 4;
+
+                for (long ifreq = 0; ifreq < nfreq; ifreq++) {
+                    long freq_index = freq_channels[ifreq];
+                    char *dst = so_base + freq_index * (mpc * 4);
+                    memcpy(dst, src, 4);
+                    src += 4;
+                }
+            }
+
+            // Second pass: int4 data (128 bytes per (beam, freq)).
+            for (long b = 0; b < nbeams; b++) {
+                shared_ptr<AssembledFrame> frame = frames_vec[b];
 
                 // The destination "base" pointer includes a time offset
                 // (128 bytes per minichunk), but no (beam, frequency) offset.

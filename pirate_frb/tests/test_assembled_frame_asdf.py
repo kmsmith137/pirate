@@ -67,10 +67,13 @@ def test_assembled_frame_asdf():
 
     nbeams = len(md.beam_ids)
     nfreq = md.get_total_nfreq()
-    ntime = 64  # small for a fast test
+    ntime = 256  # minimum multiple of 256 (one minichunk)
+    mpc   = ntime // 256
 
     # Use slab capacity large enough for at least one frame.
-    slab_capacity = nbeams * nfreq * (ntime // 2) * 2
+    # Per-frame footprint = scales_offsets ((nfreq, mpc, 2) float16) + int4 data.
+    per_frame_nbytes = nfreq * mpc * 4 + nfreq * (ntime // 2)
+    slab_capacity = nbeams * per_frame_nbytes * 2
     slab = SlabAllocator("af_rhost", slab_capacity)
     alloc = AssembledFrameAllocator(slab, num_consumers=1, time_samples_per_chunk=ntime)
     alloc.initialize_metadata(md)
@@ -92,6 +95,13 @@ def test_assembled_frame_asdf():
     data = np.asarray(frame.data)
     data[:] = np.random.randint(0, 256, size=data.shape, dtype=np.uint8)
     data_copy = data.copy()
+
+    # Same for scales_offsets (pre-filled with 0x00 bytes / float16 0.0). Use
+    # random bytes via uint8 view so the comparison is byte-exact regardless
+    # of float16 NaN bit patterns.
+    so_view = np.asarray(frame.scales_offsets).view(np.uint8)
+    so_view[:] = np.random.randint(0, 256, size=so_view.shape, dtype=np.uint8)
+    so_copy = so_view.copy()
 
     # Generate temp filename in /dev/shm so the test doesn't touch persistent storage.
     filename = f"/dev/shm/test_assembled_frame_asdf_{secrets.token_hex(8)}.asdf"
@@ -117,6 +127,12 @@ def test_assembled_frame_asdf():
     assert data2.shape == data_copy.shape
     assert data2.dtype == data_copy.dtype
     assert np.array_equal(data2, data_copy), "ASDF round-trip changed data bytes"
+
+    # scales_offsets bytes match (byte-exact via uint8 view; bypasses any
+    # float16 NaN-equality weirdness).
+    so2 = np.asarray(frame2.scales_offsets).view(np.uint8)
+    assert so2.shape == so_copy.shape
+    assert np.array_equal(so2, so_copy), "ASDF round-trip changed scales_offsets bytes"
 
     # ---- XEngineMetadata projection ----
     md2 = frame2.metadata

@@ -6,6 +6,8 @@
 #include <ksgpu/mem_utils.hpp>
 #include <ksgpu/rand_utils.hpp>    // rand_int()
 
+#include <cuda_fp16.h>             // __half, __float2half_rn
+
 #include <asdf/asdf.hxx>
 
 #include <fcntl.h>     // open(), O_RDONLY
@@ -46,7 +48,10 @@ void AssembledFrame::_reap_locked()
         return;  // already reaped
     if (save_paths.size() && !on_ssd)
         return;  // unreapable (until written to ssd)
-    this->data = Array<void> ();
+    // scales_offsets and data share a slab via a common base shared_ptr;
+    // dropping both Array<void>s drops the last refs and frees the slab.
+    this->scales_offsets = Array<void> ();
+    this->data           = Array<void> ();
 }
 
 
@@ -235,16 +240,22 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
     if (!metadata)
         throw runtime_error("AssembledFrame::write_asdf(): metadata is null");
 
+    long mpc = xdiv(ntime, 256);
+
     // Acquire lock and copy data to local variable, to avoid racing against reaper thread.
     // Copying the Array also copies the shared_ptr in 'base', keeping the memory alive.
+    Array<void> local_scales_offsets;
     Array<void> local_data;
 
     unique_lock<std::mutex> guard(mutex);
-    local_data = data;
+    local_scales_offsets = scales_offsets;
+    local_data           = data;
     guard.unlock();
 
     if (local_data.size == 0)
         throw runtime_error("internal error: attempt to write empty/reaped frame");
+    if (local_scales_offsets.size == 0)
+        throw runtime_error("internal error: attempt to write empty/reaped scales_offsets");
 
     // Verify data array is valid and contiguous.
     xassert(local_data.data != nullptr);
@@ -252,6 +263,14 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
     xassert(local_data.shape[0] == nfreq);
     xassert(local_data.shape[1] == ntime);
     xassert(local_data.is_fully_contiguous());
+
+    // Verify scales_offsets array is valid and contiguous.
+    xassert(local_scales_offsets.data != nullptr);
+    xassert(local_scales_offsets.ndim == 3);
+    xassert(local_scales_offsets.shape[0] == nfreq);
+    xassert(local_scales_offsets.shape[1] == mpc);
+    xassert(local_scales_offsets.shape[2] == 2);
+    xassert(local_scales_offsets.is_fully_contiguous());
 
     // Look up beam_position_{x,y} for this frame's beam in the metadata.
     // beam_ids / beam_positions_* are NOT written to ASDF (they would be
@@ -287,6 +306,31 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
 
     // Add the XEngineMetadata sub-group (everything else).
     grp->emplace("xengine_metadata", _metadata_to_asdf_group(*metadata));
+
+    // Create ndarray for scales_offsets (emit before "data" so its binary
+    // block lands first in the file).
+    //
+    // float16 dtype is stored as uint8 with shape (nfreq, mpc, 4) (4 bytes
+    // per (freq, minichunk) for two float16 values {scale, offset}). The
+    // ASDF build has ASDF_HAVE_FLOAT16 #undef-ed (see asdf-cxx/config.hxx),
+    // so we fall back to raw bytes -- analogous to how the int4 data array
+    // is stored as uint8 (nfreq, ntime/2).
+    long so_nbytes = nfreq * mpc * 4;
+    auto so_block = make_shared<ASDF::ptr_block_t>(local_scales_offsets.data, so_nbytes);
+    auto so_mblock = ASDF::make_constant_memoized(shared_ptr<ASDF::block_t>(so_block));
+
+    auto so_arr = make_shared<ASDF::ndarray>(
+        so_mblock,
+        std::optional<ASDF::block_info_t>(),
+        ASDF::block_format_t::block,
+        ASDF::compression_t::none,
+        0,  // compression_level
+        vector<bool>(),  // mask
+        make_shared<ASDF::datatype_t>(ASDF::id_uint8),
+        ASDF::host_byteorder(),
+        vector<int64_t>{nfreq, mpc, 4}
+    );
+    grp->emplace("scales_offsets", so_arr);
 
     // Create ndarray for data.
     // int4 dtype (4 bits per element) is stored as uint8 with shape (nfreq, ntime/2).
@@ -367,34 +411,60 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 
     md.validate();
 
-    // Read data array.
-    auto data_entry = grp->at("data");
-    auto arr = data_entry->get_maybe_ndarray();
-    xassert(arr != nullptr);
+    long mpc = ntime / 256;
 
-    // Verify shape: uint8 with shape (nfreq, ntime/2).
-    auto shape = arr->get_shape();
-    xassert(shape.size() == 2);
-    xassert(shape[0] == nfreq);
-    xassert(shape[1] == ntime/2);
-
-    // Get data pointer.
-    auto mdata = arr->get_data();
-    const void *src_ptr = mdata->ptr();
-    size_t nbytes = mdata->nbytes();
-    xassert(nbytes == (size_t)(nfreq * (ntime / 2)));
-
-    // Allocate AssembledFrame with host memory.
+    // Allocate AssembledFrame with host memory (allocate scales_offsets
+    // before data, mirroring slab order in the allocator).
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = ntime;
     frame->beam_id = beam_id;
     frame->time_chunk_index = time_chunk_index;
     frame->metadata = make_shared<XEngineMetadata>(std::move(md));
-    frame->data = Array<void>(Dtype(df_int, 4), {nfreq, ntime}, af_rhost);
+    frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
+    frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
 
-    // Copy data from ASDF file.
-    memcpy(frame->data.data, src_ptr, nbytes);
+    // Read scales_offsets array (stored as uint8 shape (nfreq, mpc, 4); see
+    // write_asdf for rationale).
+    {
+        auto so_entry = grp->at("scales_offsets");
+        auto so_ndarr = so_entry->get_maybe_ndarray();
+        xassert(so_ndarr != nullptr);
+
+        auto so_shape = so_ndarr->get_shape();
+        xassert(so_shape.size() == 3);
+        xassert(so_shape[0] == nfreq);
+        xassert(so_shape[1] == mpc);
+        xassert(so_shape[2] == 4);
+
+        auto so_mdata = so_ndarr->get_data();
+        const void *so_src = so_mdata->ptr();
+        size_t so_nbytes = so_mdata->nbytes();
+        xassert(so_nbytes == (size_t)(nfreq * mpc * 4));
+
+        memcpy(frame->scales_offsets.data, so_src, so_nbytes);
+    }
+
+    // Read data array.
+    {
+        auto data_entry = grp->at("data");
+        auto arr = data_entry->get_maybe_ndarray();
+        xassert(arr != nullptr);
+
+        // Verify shape: uint8 with shape (nfreq, ntime/2).
+        auto shape = arr->get_shape();
+        xassert(shape.size() == 2);
+        xassert(shape[0] == nfreq);
+        xassert(shape[1] == ntime/2);
+
+        // Get data pointer.
+        auto mdata = arr->get_data();
+        const void *src_ptr = mdata->ptr();
+        size_t nbytes = mdata->nbytes();
+        xassert(nbytes == (size_t)(nfreq * (ntime / 2)));
+
+        memcpy(frame->data.data, src_ptr, nbytes);
+    }
 
     return frame;
 }
@@ -499,6 +569,8 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     xassert(nfreq > 0);
     xassert(ntime > 0);
     xassert((ntime % 2) == 0);
+    xassert((ntime % 256) == 0);
+    long mpc = ntime / 256;
 
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
@@ -506,7 +578,19 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     frame->beam_id = beam_id;
     frame->time_chunk_index = time_chunk_index;
     frame->metadata = xmd;
-    frame->data = Array<void>(Dtype(df_int, 4), {nfreq, ntime}, af_rhost);
+    frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
+    frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
+
+    // Fill scales_offsets: scales[:, :, 0] in [0, 1], offsets[:, :, 1] in [-1, 1].
+    {
+        __half *so = static_cast<__half *>(frame->scales_offsets.data);
+        for (long f = 0; f < nfreq; f++) {
+            for (long m = 0; m < mpc; m++) {
+                so[(f * mpc + m) * 2 + 0] = __float2half_rn(float(rand_uniform( 0.0,  1.0)));
+                so[(f * mpc + m) * 2 + 1] = __float2half_rn(float(rand_uniform(-1.0,  1.0)));
+            }
+        }
+    }
 
     // Fill data with random bytes.
     // (int4 dtype packs 2 elements per byte, so nbytes = nfreq * ntime / 2)
@@ -524,12 +608,11 @@ void AssembledFrame::randomize()
     // int4 dtype packs 2 elements per byte, so nbytes = data.size / 2.
     // (data.size is the int4 element count, not the byte count -- see
     // AssembledFrameAllocator::_create_frame_set in this file.)
-    long nbytes = data.size / 2;
-    if (nbytes <= 0)
-        return;  // empty (e.g. reaped) frame -- nothing to do.
+    long data_nbytes = data.size / 2;
+    long so_nelts    = scales_offsets.size;  // (nfreq, mpc, 2) flat count
 
-    xassert(data.data != nullptr);
-    char *p = static_cast<char *>(data.data);
+    if ((data_nbytes <= 0) && (so_nelts <= 0))
+        return;  // empty (e.g. reaped) frame -- nothing to do.
 
     std::lock_guard<std::mutex> lk(_randomize_rng_mutex);
 
@@ -539,18 +622,38 @@ void AssembledFrame::randomize()
         _randomize_rng_initialized = true;
     }
 
-    // mt19937 yields uint32_t (4 random bytes per call). The final
-    // 1-3 bytes (if nbytes % 4 != 0) get the low bytes of a fresh
-    // uint32 via a short-memcpy.
-    long i = 0;
-    while (i + 4 <= nbytes) {
-        uint32_t r = _randomize_rng();
-        std::memcpy(p + i, &r, 4);
-        i += 4;
+    // Fill scales_offsets first (matches slab order). Scales (last-axis index 0)
+    // uniform in [0, 1]; offsets (last-axis index 1) uniform in [-1, 1].
+    if (so_nelts > 0) {
+        xassert(scales_offsets.data != nullptr);
+        xassert((so_nelts % 2) == 0);
+        std::uniform_real_distribution<float> dist_scale ( 0.0f, 1.0f);
+        std::uniform_real_distribution<float> dist_offset(-1.0f, 1.0f);
+        __half *so = static_cast<__half *>(scales_offsets.data);
+        long npairs = so_nelts / 2;
+        for (long i = 0; i < npairs; i++) {
+            so[2*i + 0] = __float2half_rn(dist_scale (_randomize_rng));
+            so[2*i + 1] = __float2half_rn(dist_offset(_randomize_rng));
+        }
     }
-    if (i < nbytes) {
-        uint32_t r = _randomize_rng();
-        std::memcpy(p + i, &r, nbytes - i);
+
+    if (data_nbytes > 0) {
+        xassert(data.data != nullptr);
+        char *p = static_cast<char *>(data.data);
+
+        // mt19937 yields uint32_t (4 random bytes per call). The final
+        // 1-3 bytes (if data_nbytes % 4 != 0) get the low bytes of a
+        // fresh uint32 via a short-memcpy.
+        long i = 0;
+        while (i + 4 <= data_nbytes) {
+            uint32_t r = _randomize_rng();
+            std::memcpy(p + i, &r, 4);
+            i += 4;
+        }
+        if (i < data_nbytes) {
+            uint32_t r = _randomize_rng();
+            std::memcpy(p + i, &r, data_nbytes - i);
+        }
     }
 }
 
@@ -701,7 +804,10 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
 
     // Snapshot the loop bounds and shape under the lock.
     long nbeams = beam_ids.size();
-    long nbytes = nfreq * xdiv(time_samples_per_chunk, 2);
+    long mpc = xdiv(time_samples_per_chunk, 256);
+    long scales_offsets_nbytes = nfreq * mpc * 4;          // (nfreq, mpc, 2) float16
+    long data_nbytes = nfreq * xdiv(time_samples_per_chunk, 2);
+    long nbytes = scales_offsets_nbytes + data_nbytes;
 
     // Drop lock while allocating + memsetting the nbeams slabs.
     guard.unlock();
@@ -711,6 +817,9 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
     // are stamped once we've re-acquired the lock (so the set's chunk
     // index is consistent with the current queue state).
     //
+    // Slab layout: scales_offsets at offset 0, data after. Both arrays share
+    // a single slab shared_ptr; _reap_locked() drops both refs to free.
+    //
     // Slab-pool sizing: this loop holds up to nbeams slabs at a time. The
     // pool must have at least nbeams total slabs to make progress, which
     // is also a hard prerequisite for the Receiver's 2-chunk window.
@@ -719,15 +828,34 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
 
     for (long b = 0; b < nbeams; b++) {
         shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
-        memset(slab.get(), 0x88, nbytes);
+
+        // scales_offsets initial: float16 0.0 (bytes 0x00).
+        // data initial:           int4 -8     (bytes 0x88, two -8 nibbles per byte).
+        memset(slab.get(), 0x00, scales_offsets_nbytes);
+        memset((char *)slab.get() + scales_offsets_nbytes, 0x88, data_nbytes);
 
         auto frame = make_shared<AssembledFrame>();
         frame->nfreq = nfreq;
         frame->ntime = time_samples_per_chunk;
         frame->metadata = metadata;  // shared, immutable; non-null after initialize_metadata()
 
-        // Initialize ksgpu::Array<void> manually.
-        frame->data.data = slab.get();
+        // Initialize frame->scales_offsets at slab offset 0.
+        frame->scales_offsets.data = slab.get();
+        frame->scales_offsets.ndim = 3;
+        frame->scales_offsets.shape[0] = nfreq;
+        frame->scales_offsets.shape[1] = mpc;
+        frame->scales_offsets.shape[2] = 2;
+        frame->scales_offsets.size = nfreq * mpc * 2;
+        frame->scales_offsets.strides[0] = mpc * 2;
+        frame->scales_offsets.strides[1] = 2;
+        frame->scales_offsets.strides[2] = 1;
+        frame->scales_offsets.dtype = ksgpu::Dtype(ksgpu::df_float, 16);
+        frame->scales_offsets.aflags = slab_allocator->aflags;
+        frame->scales_offsets.base = slab;   // shares slab with data
+        frame->scales_offsets.check_invariants("AssembledFrameAllocator::_create_frame_set()");
+
+        // Initialize frame->data at slab offset scales_offsets_nbytes.
+        frame->data.data = (char *)slab.get() + scales_offsets_nbytes;
         frame->data.ndim = 2;
         frame->data.shape[0] = nfreq;
         frame->data.shape[1] = time_samples_per_chunk;

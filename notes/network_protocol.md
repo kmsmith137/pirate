@@ -35,6 +35,8 @@ The network protocol for each of these connections is as follows:
     - A `uint32` containing `0xf4bf4b02` where the `02` is the protocol version number.
     
     - A `uint64` FPGA sequence number (seq) corresponding to the beginning of the minichunk.
+
+    - An (nbeams, nfreq, 2) float16 array, where the length-2 axis is {scales,offsets}.
     
     - An `(nbeams, nfreq, 256)` int4 array, containing intensity data.
       The value (-8) indicates "this sample is masked". 

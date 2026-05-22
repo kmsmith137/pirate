@@ -136,6 +136,14 @@ void register_core_bindings(pybind11::module &m)
             },
             "Data as uint8 array with shape (nfreq, ntime/2).\n\n"
             "The underlying data is int4 (nfreq, ntime), packed as uint8.")
+        .def_property_readonly("scales_offsets",
+            [](const AssembledFrame &self) {
+                // The Array<void> already carries dtype Dtype(df_float, 16);
+                // ksgpu's pybind11 type_caster maps that to numpy np.float16.
+                return self.scales_offsets;
+            },
+            "Scales/offsets as float16 array with shape (nfreq, mpc, 2),\n"
+            "where mpc = ntime / 256. The last axis is {scale, offset}.")
         .def("write_asdf", &AssembledFrame::write_asdf,
             py::arg("filename"), py::arg("sync") = true,
             "Write this AssembledFrame to an ASDF file.\n\n"

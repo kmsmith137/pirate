@@ -33,20 +33,24 @@ from ..rpc import FrbClient
 def _compute_expected_data(chunk_idx, beam_id, framesets, ipos, wpos, fxe, p, mpc):
     """Reconstruct the byte-exact contents of a written frame file.
 
-    Returns a numpy uint8 array of shape (total_nfreq, time_samples_per_chunk // 2),
-    filled with 0x88 except for (worker_freq_channels, 128-byte time slice)
-    regions whose (worker_id, global_minichunk_index) is in STATUS_ASSEMBLED --
-    those are copied from the client-side framesets[chunk_idx] frame for beam_id.
+    Returns (expected_data, expected_scales_offsets) where:
+      - expected_data is uint8 shape (total_nfreq, time_samples_per_chunk // 2),
+        filled with 0x88 except for (worker_freq_channels, 128-byte time slice)
+        regions whose (worker, global_minichunk) is in STATUS_ASSEMBLED;
+      - expected_scales_offsets is uint8 shape (total_nfreq, mpc, 4)
+        (= float16 (total_nfreq, mpc, 2) viewed as bytes), filled with 0x00
+        except for analogous ASSEMBLED slots.
 
     Caller must ensure statuses are terminal (post-synchronize); STATUS_DROPPED
-    and STATUS_SKIPPED both leave the 0x88 mask in place. Minichunks outside
+    and STATUS_SKIPPED both leave the default mask in place. Minichunks outside
     a worker's submitted range [ipos[w], wpos[w]) also leave the mask.
     """
     total_nfreq = p['total_nfreq']
     tspc        = p['time_samples_per_chunk']
     nworkers    = p['nworkers']
 
-    expected = np.full((total_nfreq, tspc // 2), 0x88, dtype=np.uint8)
+    expected_data = np.full((total_nfreq, tspc // 2), 0x88, dtype=np.uint8)
+    expected_so   = np.zeros((total_nfreq, mpc, 4), dtype=np.uint8)
 
     # framesets[chunk_idx] is guaranteed populated for any chunk the server
     # wrote: the receiver only pushes a chunk into the ringbuf in response
@@ -54,7 +58,11 @@ def _compute_expected_data(chunk_idx, beam_id, framesets, ipos, wpos, fxe, p, mp
     # enqueue_send_minichunk call already advanced fspos past chunk_idx.
     frame_set = framesets[chunk_idx]
     b_idx = beam_id - p['base_beam_id']
-    source = np.asarray(frame_set.frames[b_idx].data)
+    source_data = np.asarray(frame_set.frames[b_idx].data)
+    # scales_offsets is float16 (nfreq, mpc, 2); view as uint8 (nfreq, mpc, 4)
+    # for byte-exact assembly.
+    source_so = np.asarray(frame_set.frames[b_idx].scales_offsets).view(np.uint8)
+    assert source_so.shape == (total_nfreq, mpc, 4)
 
     for imc in range(mpc):
         global_mc = chunk_idx * mpc + imc
@@ -66,9 +74,10 @@ def _compute_expected_data(chunk_idx, beam_id, framesets, ipos, wpos, fxe, p, mp
             if fxe.get_minichunk_status(w, global_mc) != FakeXEngine.STATUS_ASSEMBLED:
                 continue
             for f in fxe.get_worker_freq_channels(w):
-                expected[f, t0:t1] = source[f, t0:t1]
+                expected_data[f, t0:t1] = source_data[f, t0:t1]
+                expected_so[f, imc, :]  = source_so[f, imc, :]
 
-    return expected
+    return expected_data, expected_so
 
 
 def _random_params():
@@ -429,7 +438,7 @@ def test_network():
             # fxe.synchronize() calls (already asserted above).
             for filename in sorted(scheduled):
                 chunk_idx, beam_id = filename_meta[filename]
-                expected = _compute_expected_data(
+                expected_data, expected_so = _compute_expected_data(
                     chunk_idx, beam_id, framesets, ipos, wpos, fxe, p, mpc,
                 )
                 path = os.path.join(nfs_dir, filename)
@@ -440,17 +449,32 @@ def test_network():
                 assert frame.nfreq            == p['total_nfreq']
                 assert frame.ntime            == p['time_samples_per_chunk']
 
-                actual = np.asarray(frame.data)
-                if not np.array_equal(actual, expected):
-                    mismatch = np.argwhere(actual != expected)
+                actual_data = np.asarray(frame.data)
+                if not np.array_equal(actual_data, expected_data):
+                    mismatch = np.argwhere(actual_data != expected_data)
                     first = tuple(mismatch[0])
                     raise RuntimeError(
-                        f"file content mismatch for {filename!r} "
+                        f"data mismatch for {filename!r} "
                         f"(chunk={chunk_idx}, beam={beam_id}): "
                         f"{len(mismatch)} mismatching bytes, first at "
                         f"index {first}: "
-                        f"actual=0x{actual[first]:02x}, "
-                        f"expected=0x{expected[first]:02x}"
+                        f"actual=0x{actual_data[first]:02x}, "
+                        f"expected=0x{expected_data[first]:02x}"
+                    )
+
+                # scales_offsets: byte-exact compare via uint8 view (avoids
+                # any float-equality ambiguity from possibly-NaN bit patterns).
+                actual_so = np.asarray(frame.scales_offsets).view(np.uint8)
+                if not np.array_equal(actual_so, expected_so):
+                    mismatch = np.argwhere(actual_so != expected_so)
+                    first = tuple(mismatch[0])
+                    raise RuntimeError(
+                        f"scales_offsets mismatch for {filename!r} "
+                        f"(chunk={chunk_idx}, beam={beam_id}): "
+                        f"{len(mismatch)} mismatching bytes, first at "
+                        f"index {first}: "
+                        f"actual=0x{actual_so[first]:02x}, "
+                        f"expected=0x{expected_so[first]:02x}"
                     )
         finally:
             file_sub.close()

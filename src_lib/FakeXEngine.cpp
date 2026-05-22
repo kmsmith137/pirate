@@ -598,8 +598,9 @@ void FakeXEngine::_initialize(int worker_id)
     long nbeams = w.xmd.get_nbeams();
 
     static constexpr long mc_header_nbytes = 12;
-    long data_nbytes = nbeams * nfreq * 128;
-    w.mc_nbytes = mc_header_nbytes + data_nbytes;
+    long scales_offsets_nbytes = nbeams * nfreq * 4;     // (nbeams, nfreq, 2) float16
+    long data_nbytes           = nbeams * nfreq * 128;   // (nbeams, nfreq, 256) int4
+    w.mc_nbytes = mc_header_nbytes + scales_offsets_nbytes + data_nbytes;
 
     string yaml_str = w.xmd.to_yaml_string();
     long str_len = long(yaml_str.size()) + 1;     // +1 for the null terminator
@@ -671,6 +672,7 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
     // 256 int4 samples = 128 bytes. Compile-time constant for the
     // memcpy lowering.
     static constexpr long mc_time_bytes = 128;
+    static constexpr long mc_so_bytes   = 4;     // 2 float16 = 4 bytes
 
     long worker_nfreq = long(w.xmd.freq_channels.size());
     long nbeams = fset.nbeams;
@@ -686,22 +688,45 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
     xassert_ge(imc_within_chunk, 0L);
     xassert_lt(imc_within_chunk, minichunks_per_chunk);
 
-    // Source-side layout: each AssembledFrame's data is int4 with shape
-    // (nfreq_total, ntime), packed as (nfreq_total, ntime/2) bytes. Per-
-    // freq row stride is ntime/2 bytes. Per-minichunk offset within a
-    // freq row is imc_within_chunk * 128 bytes.
-    long src_freq_stride = ntime / 2;
-    long src_time_offset = imc_within_chunk * mc_time_bytes;
+    // Source-side layouts:
+    //   data:           (nfreq_total, ntime) int4, packed as (nfreq_total, ntime/2) bytes.
+    //                   per-freq row stride = ntime/2; per-minichunk offset = imc * 128.
+    //   scales_offsets: (nfreq_total, mpc, 2) float16, packed as (nfreq_total, mpc, 4) bytes.
+    //                   per-freq row stride = mpc * 4; per-minichunk offset = imc * 4.
+    long src_freq_stride    = ntime / 2;
+    long src_time_offset    = imc_within_chunk * mc_time_bytes;
+    long src_so_freq_stride = minichunks_per_chunk * mc_so_bytes;
+    long src_so_offset      = imc_within_chunk * mc_so_bytes;
 
-    // Destination-side layout in send_buf: wire data starts at
-    // (send_buf + header_nbytes + 12), with shape
-    // (nbeams, worker_nfreq, 128 bytes). The outer loop over beams
-    // matches that layout, so each beam's destination is a contiguous
-    // (worker_nfreq * 128)-byte slab.
-    char *dst_data = w.send_buf.data() + w.header_nbytes + 12;
+    // Destination-side layout in send_buf, starting at (header_nbytes + 12):
+    //   [nbeams * worker_nfreq * 4 bytes scales_offsets][nbeams * worker_nfreq * 128 bytes data].
+    char *dst_so   = w.send_buf.data() + w.header_nbytes + 12;
+    char *dst_data = dst_so + nbeams * worker_nfreq * mc_so_bytes;
 
     const long *freq_channels = w.xmd.freq_channels.data();
 
+    // First pass: scales_offsets (4 bytes per (beam, freq)).
+    for (long ibeam = 0; ibeam < nbeams; ibeam++) {
+        const AssembledFrame &frame = *fset.frames[ibeam];
+
+        // Defense-in-depth: a reaped frame has scales_offsets.size == 0.
+        // Same caveat as for data below (see the race warning above).
+        xassert_gt(frame.scales_offsets.size, 0L);
+
+        const char *frame_so = static_cast<const char *>(frame.scales_offsets.data);
+        char *dst_beam_so = dst_so + ibeam * worker_nfreq * mc_so_bytes;
+
+        for (long ifreq_local = 0; ifreq_local < worker_nfreq; ifreq_local++) {
+            long freq_global = freq_channels[ifreq_local];
+            const char *src = frame_so
+                            + freq_global * src_so_freq_stride
+                            + src_so_offset;
+            char *dst = dst_beam_so + ifreq_local * mc_so_bytes;
+            std::memcpy(dst, src, 4);
+        }
+    }
+
+    // Second pass: int4 data (128 bytes per (beam, freq)).
     for (long ibeam = 0; ibeam < nbeams; ibeam++) {
         const AssembledFrame &frame = *fset.frames[ibeam];
 

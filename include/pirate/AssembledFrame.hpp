@@ -57,13 +57,23 @@ struct AssembledFrame
     // are length-1 (just this frame's beam), and freq_channels is empty.
     std::shared_ptr<const XEngineMetadata> metadata;
 
-    // dtype int4, shape (nfreq, ntime).
-    // Newly allocated frames have all 'data' elements set to (-8).
+    // 'scales_offsets' and 'data' share a single slab. 'scales_offsets' is
+    // at slab offset 0; 'data' is at slab offset (nfreq * mpc * 4) where
+    // mpc = ntime / 256. This ordering matches the per-minichunk wire layout
+    // (scales_offsets precedes the int4 payload). _reap_locked() releases
+    // both arrays together by dropping the slab shared_ptr.
     //
     // Warning: if the AssembledFrame has been "reaped" under memory pressure,
-    // then 'data' is an empty array. The array state (empty vs nonempty) is
-    // protected by the lock, but the array contents are not lock-protected.
+    // then both 'scales_offsets' and 'data' are empty arrays. The array state
+    // (empty vs nonempty) is protected by the lock, but the array contents
+    // are not lock-protected.
 
+    // dtype float16, shape (nfreq, mpc, 2) where mpc = ntime / 256. The last
+    // axis is {scale, offset}. Newly allocated frames have all elements zero.
+    ksgpu::Array<void> scales_offsets;
+
+    // dtype int4, shape (nfreq, ntime). Newly allocated frames have all
+    // 'data' elements set to (-8) (the "missing sample" mask).
     ksgpu::Array<void> data;
 
     // ASDF file I/O.

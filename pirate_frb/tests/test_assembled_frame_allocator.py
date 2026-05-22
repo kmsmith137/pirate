@@ -100,7 +100,7 @@ def test_sequence_ordering():
     print("  test_sequence_ordering()...")
 
     nfreq = 64
-    time_samples_per_chunk = 128
+    time_samples_per_chunk = 256
     beam_ids = [5, 15, 25]
     num_chunks = 4
 
@@ -138,7 +138,7 @@ def test_single_beam_sequence():
     print("  test_single_beam_sequence()...")
 
     nfreq = 32
-    time_samples_per_chunk = 64
+    time_samples_per_chunk = 256
     beam_ids = [42]
 
     slab = make_slab_allocator()
@@ -168,7 +168,7 @@ def test_multi_consumer_frame_identity():
     print("  test_multi_consumer_frame_identity()...")
 
     nfreq = 64
-    time_samples_per_chunk = 128
+    time_samples_per_chunk = 256
     beam_ids = [1, 2]
     num_consumers = 3
 
@@ -218,7 +218,7 @@ def test_multi_consumer_independent_progress():
     print("  test_multi_consumer_independent_progress()...")
 
     nfreq = 32
-    time_samples_per_chunk = 64
+    time_samples_per_chunk = 256
     beam_ids = [100, 200]
     num_consumers = 2
 
@@ -273,12 +273,15 @@ def test_frame_recycling():
     print("  test_frame_recycling()...")
 
     nfreq = 64
-    time_samples_per_chunk = 128
+    time_samples_per_chunk = 256
     beam_ids = [1]  # Single beam: one slab per set.
     num_consumers = 2
 
     # Per-frame slab size; with nbeams=1, also the per-set slab footprint.
-    slab_size = (nfreq * time_samples_per_chunk) // 2  # 4096 bytes
+    # Each slab holds scales_offsets (nfreq, mpc, 2) float16 = nfreq*mpc*4 bytes
+    # plus int4 data (nfreq, tspc) = nfreq*tspc/2 bytes.
+    mpc = time_samples_per_chunk // 256
+    slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
 
     # Create allocator with capacity for exactly 3 slabs (= 3 sets).
     capacity = slab_size * 3 + 1024  # +margin for alignment
@@ -339,11 +342,13 @@ def test_frame_recycling_with_held_reference():
     print("  test_frame_recycling_with_held_reference()...")
 
     nfreq = 64
-    time_samples_per_chunk = 128
+    time_samples_per_chunk = 256
     beam_ids = [1]  # Single beam: one slab per set.
     num_consumers = 2
 
-    slab_size = (nfreq * time_samples_per_chunk) // 2
+    # See test_frame_recycling for slab_size derivation.
+    mpc = time_samples_per_chunk // 256
+    slab_size = nfreq * mpc * 4 + (nfreq * time_samples_per_chunk) // 2
     capacity = slab_size * 4 + 1024  # 4 slabs
     slab = make_slab_allocator(capacity=capacity)
     alloc = AssembledFrameAllocator(slab, num_consumers=num_consumers, time_samples_per_chunk=time_samples_per_chunk)
