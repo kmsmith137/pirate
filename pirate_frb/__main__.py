@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 import random
@@ -1100,15 +1101,31 @@ def run_server_command(args):
 ####################################################################################################
 
 
+class _PirateParser(argparse.ArgumentParser):
+    """ArgumentParser variant that swallows argparse's auto-appended
+    '(choose from {...})' in invalid-choice errors and points the user at
+    --help instead. Pairs with metavar='command' on add_subparsers() so
+    the run-on choices listing also disappears from --help / usage."""
+    def error(self, message):
+        # Strip the "(choose from ...)" suffix argparse appends on
+        # invalid-subcommand errors. Wording is fragile across Python
+        # versions; falls through harmlessly if argparse changes it.
+        message = re.sub(r" \(choose from .*\)$", "", message)
+        self.print_usage(sys.stderr)
+        sys.stderr.write(f"{self.prog}: error: {message}\n")
+        sys.stderr.write(f"For a list of all commands, see '{self.prog} --help'.\n")
+        sys.exit(2)
+
+
 def get_parser():
     """
     Create and return the argument parser for pirate_frb.
-    
+
     This function is separate from main() so that sphinx-argparse can
     introspect the parser without actually parsing command-line arguments.
     """
-    parser = argparse.ArgumentParser(description="pirate_frb command-line driver (use --help for more info)")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = _PirateParser(description="pirate_frb command-line driver (use --help for more info)")
+    subparsers = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     parse_run_server(subparsers)
     parse_rpc_status(subparsers)
