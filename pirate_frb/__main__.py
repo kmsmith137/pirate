@@ -755,6 +755,45 @@ def show_asdf(args):
     _show_asdf(args.asdf_file)
 
 
+######################################   make_asdf_header command  ##################################
+
+
+def parse_make_asdf_header(subparsers):
+    help_text = "Make an asdf file from an xengine_metadata YAML file, and write the header to stdout."
+    parser = subparsers.add_parser("make_asdf_header", help=help_text, description=help_text)
+    parser.add_argument('metadata_yaml', help="Path to xengine_metadata YAML file")
+
+
+def make_asdf_header(args):
+    import tempfile
+    from .utils import show_asdf as _show_asdf
+
+    xmd = core.XEngineMetadata.from_yaml_file(args.metadata_yaml)
+    if not xmd.beam_ids:
+        raise RuntimeError(f"{args.metadata_yaml}: xengine_metadata has no beam_ids; "
+                           f"cannot construct an AssembledFrame")
+
+    # ntime=256 (one minichunk) is the smallest valid value -- keeps the binary
+    # blob small since we don't actually look at it.
+    #
+    # Note: existing AssembledFrame.make_random() is convenient here, but the randomness
+    # is a red herring: only the data (which gets thrown away) is randomized.
+
+    frame = core.AssembledFrame.make_random(
+        xmd, ntime=256, beam_id=xmd.beam_ids[0], time_chunk_index=0)
+
+    # Random filename + try/finally so concurrent invocations don't race on
+    # the same path and so we don't leave the binary blob behind on /dev/shm.
+    fd, filename = tempfile.mkstemp(
+        dir='/dev/shm', prefix='pirate_make_asdf_header_', suffix='.asdf')
+    os.close(fd)
+    try:
+        frame.write_asdf(filename)
+        _show_asdf(filename)
+    finally:
+        os.remove(filename)
+
+
 ########################################   rpc_status command  ######################################
 
 
@@ -1136,6 +1175,7 @@ def get_parser():
     parse_time_dedisperser(subparsers)
     
     parse_show_asdf(subparsers)
+    parse_make_asdf_header(subparsers)
     parse_show_dedisperser(subparsers)
     parse_show_hardware(subparsers)
     parse_show_kernels(subparsers)
@@ -1184,6 +1224,8 @@ def main():
         random_kernels(args)
     elif args.command == "show_asdf":
         show_asdf(args)
+    elif args.command == "make_asdf_header":
+        make_asdf_header(args)
     elif args.command == "rpc_status":
         rpc_status(args)
     elif args.command == "rpc_write":
