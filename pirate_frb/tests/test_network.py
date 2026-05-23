@@ -7,6 +7,24 @@ send loop that produces ragged per-worker progress, and verifies that
 none of the real-time debug-mode asserts trigger. Random subscale
 parameters per call (see NetworkTester._random_params).
 
+Goals of the network test:
+
+ - end-to-end test of receive -> write -> read code, by sending random data
+      to the server, writing to disk, reading it back, and checking that
+      contents are as expected.
+
+ - stress-test data-dropping/eviction logic, in situations where some clients
+     are ahead of others.
+
+ - test handling of "skipped" minichunks (allowed by network protocol, see
+     NOTE 1 in notes/network_protocol.md).
+
+ - test (initial sequence number != 0), see NOTE 2.
+
+ - test short-read logic (via Socket.misbehaving_reads).
+
+ - test disconnect/reconnect logic and "missing" clients.
+
 Run via: python -m pirate_frb test --net
 """
 
