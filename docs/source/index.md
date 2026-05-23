@@ -15,7 +15,7 @@ cli
 notes/build
 notes/hardware
 notes/network_protocol
-X->FRB metadata (v1) <configs/xengine/xengine_metadata_v1.yml>
+X->FRB metadata (v2) <configs/xengine/xengine_metadata_v2.yml>
 ASDF file format <configs/asdf_header.yml>
 _grpc_generated
 ```

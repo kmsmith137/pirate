@@ -28,8 +28,8 @@ or browse the `.md` files below:
 - [Developer notes](notes/developer.md)
 - [Build system](notes/build.md)
 - [Hardware](notes/hardware.md)
-- [X->FRB network protocol (v1)](notes/network_protocol.md)
-- [X->FRB metadata (v1)](configs/xengine/xengine_metadata_v1.yml)
+- [X->FRB network protocol (v2)](notes/network_protocol.md)
+- [X->FRB metadata (v2)](configs/xengine/xengine_metadata_v2.yml)
 - [gRPC protocol definitions](grpc/)
 
 Contact: Kendrick Smith <kmsmith@perimeterinstitute.ca>

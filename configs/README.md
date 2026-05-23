@@ -56,5 +56,5 @@ by hand; regenerate by running `make`.
   To inspect:
 
   ```
-  pirate_frb show_xengine_metadata [-v] configs/xengine/xengine_metadata_v1.yml
+  pirate_frb show_xengine_metadata [-v] configs/xengine/xengine_metadata_v2.yml
   ```
