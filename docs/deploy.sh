@@ -41,10 +41,10 @@ touch "$WORKTREE_DIR/.nojekyll"
 
 cd "$WORKTREE_DIR"
 git add -A
-if git diff --cached --quiet; then
-    echo "==> No changes to deploy."
-else
-    git commit -m "Deploy docs"
-    git push origin gh-pages
-    echo "==> Deployed to gh-pages"
-fi
+# Always commit (--allow-empty) and push, so 'git push' fires unconditionally
+# (and thus always prompts for credentials). This matches the user expectation
+# that running deploy.sh produces a deploy; otherwise an unmodified rerun is
+# silent, which can leave the operator unsure whether anything happened.
+git commit --allow-empty -m "Deploy docs"
+git push origin gh-pages
+echo "==> Deployed to gh-pages"
