@@ -95,6 +95,12 @@ class Hardware:
         raise RuntimeError(f"Couldn't associate IP address {ip_addr} with a NIC")
 
     @functools.cache
+    def mtu_from_nic(self, nic):
+        """MTU for a NIC (e.g. 'eno8303' or 'lo'). Reads /sys/class/net/<nic>/mtu."""
+        with open(f'/sys/class/net/{nic}/mtu') as f:
+            return int(f.read().strip())
+
+    @functools.cache
     def vcpu_list_from_nic(self, nic):
         bus_id = self._pcie_bus_id_from_nic(nic)   # can be None, for loopback interface 
         return self._vcpu_list_from_pcie_bus_id(bus_id, allow_none=True)
@@ -176,8 +182,9 @@ class Hardware:
             bus_id = self._pcie_bus_id_from_nic(nic)
             description = self._description_from_pcie_bus_id(bus_id)
             vcpu_list = self.vcpu_list_from_ip_addr(ip_addr)
+            mtu = self.mtu_from_nic(nic)
             print(f'IP addr {ip_addr}')
-            print(f'   nic = {nic}, pcie = {bus_id}  ({description})')
+            print(f'   nic = {nic}, mtu = {mtu}, pcie = {bus_id}  ({description})')
             print(f'   {vcpu_list = }\n')
 
         for disk in self.disks:
