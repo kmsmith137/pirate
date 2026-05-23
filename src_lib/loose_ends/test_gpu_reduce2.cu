@@ -30,13 +30,14 @@ static void test_gpu_reduce2(int nblocks, int nwarps)
     Array<float> num_cpu({nblocks,nthreads}, af_rhost | af_random);
     Array<float> den_cpu({nblocks,nthreads}, af_rhost | af_random);
     Array<float> res_cpu({nblocks,nthreads}, af_rhost);
-        
+
+    std::mt19937 &rng = ksgpu::default_rng();
     for (int i = 0; i < nblocks; i++) {
         float *np = num_cpu.data + i*nthreads;
         float *dp = den_cpu.data + i*nthreads;
         float *rp = res_cpu.data + i*nthreads;
-        
-        bool zero = (rand_uniform() < 0.05);
+
+        bool zero = (rand_uniform(0.0, 1.0, rng) < 0.05);
         float nsum = 0.0;
         float dsum = 0.0;
         

@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <sstream>
 #include <iostream>
 #include <stdexcept>
 
 #include <ksgpu/xassert.hpp>  // note: defines _unlikely()
+#include <ksgpu/rand_utils.hpp>  // ksgpu::default_rng()
 
 using namespace std;
 
@@ -135,11 +137,8 @@ void Socket::close() noexcept
     this->eof = false;
 
     // Reset test-instrumentation state too, for symmetry with the
-    // other bool resets. (We don't bother resetting `rng` itself;
-    // rng_is_initialized=false means the next misbehaving read will
-    // seed afresh, overwriting any leftover state.)
+    // other bool resets.
     this->reads_are_misbehaving = false;
-    this->rng_is_initialized = false;
 
     if (_unlikely(err < 0)) {
         // Best-effort logging: errstr() allocates a stringstream
@@ -506,9 +505,7 @@ long Socket::send_with_timeout(const void *buf, long count, int timeout_ms)
 // Move constructor.
 Socket::Socket(Socket &&s) noexcept
     : fd(s.fd), zerocopy(s.zerocopy), connreset(s.connreset), nonblocking(s.nonblocking), eof(s.eof),
-      reads_are_misbehaving(s.reads_are_misbehaving),
-      rng_is_initialized(s.rng_is_initialized),
-      rng(std::move(s.rng))
+      reads_are_misbehaving(s.reads_are_misbehaving)
 {
     s.fd = -1;
 }
@@ -524,8 +521,6 @@ Socket &Socket::operator=(Socket &&s) noexcept
     this->nonblocking = s.nonblocking;
     this->eof = s.eof;
     this->reads_are_misbehaving = s.reads_are_misbehaving;
-    this->rng_is_initialized = s.rng_is_initialized;
-    this->rng = std::move(s.rng);
 
     s.fd = -1;
     return *this;
@@ -540,11 +535,7 @@ void Socket::set_misbehaving_reads()
 
 long Socket::_misbehave_maxbytes(long maxbytes)
 {
-    if (!rng_is_initialized) {
-        std::random_device rd;
-        rng.seed(rd());
-        rng_is_initialized = true;
-    }
+    std::mt19937 &rng = ksgpu::default_rng();
 
     // Coin flip: 50% leave maxbytes alone.
     std::uniform_real_distribution<double> coin(0.0, 1.0);

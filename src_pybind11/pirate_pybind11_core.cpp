@@ -163,11 +163,11 @@ void register_core_bindings(pybind11::module &m)
         .def("randomize", &AssembledFrame::randomize,
             py::call_guard<py::gil_scoped_release>(),
             "Fill the frame's data buffer with uniformly random bytes.\n"
-            "Each int4 sample is uniform over [-8, +7]. Thread-safe via a\n"
-            "private global mutex; intended for testing.\n\n"
-            "Caller must ensure that no other thread is concurrently reading\n"
-            "or writing the same frame's data -- the global mutex only\n"
-            "protects the RNG, not the destination buffer.")
+            "Each int4 sample is uniform over [-8, +7]. Intended for testing.\n\n"
+            "Thread-safe with respect to the RNG (uses ksgpu's per-thread\n"
+            "default RNG), but the caller must ensure that no other thread is\n"
+            "concurrently reading or writing the same frame's data buffer --\n"
+            "only the RNG is protected, not the destination buffer.")
     ;
 
     // AssembledFrameSet: container of (nbeams) AssembledFrames for one time chunk.
@@ -192,7 +192,7 @@ void register_core_bindings(pybind11::module &m)
         .def("randomize", &AssembledFrameSet::randomize,
             py::call_guard<py::gil_scoped_release>(),
             "Call AssembledFrame.randomize() on every contained frame.\n"
-            "See AssembledFrame.randomize() for thread-safety caveats.")
+            "See AssembledFrame.randomize() for the thread-safety contract.")
     ;
 
     // AssembledFrameAllocator: allocates AssembledFrameSets for multiple consumers.

@@ -1165,8 +1165,11 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 // Simulate dedispersion input.
                 // Random values uniform over [-1.0, 1.0].
                 xassert(dd_in_cpu.is_fully_contiguous());
-                for (long i = 0; i < ns * beams_per_batch * nfreq * nt_in; i++)
-                    dd_in_cpu.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
+                {
+                    std::mt19937 &rng = ksgpu::default_rng();
+                    for (long i = 0; i < ns * beams_per_batch * nfreq * nt_in; i++)
+                        dd_in_cpu.data[i] = ksgpu::rand_uniform(-1.0, 1.0, rng);
+                }
 
                 // Copy dedispersion input to GPU.
                 if (!host_only) {

@@ -645,12 +645,12 @@ XEngineMetadata::make_test_instance(const std::vector<long> &zone_nfreq_,
 
 // Helper: returns a random unit 3-vector (isotropically distributed).
 // Rejection samples in the cube [-1, 1]^3 to avoid pole bias, then normalizes.
-static std::array<double, 3> _rand_unit_vec()
+static std::array<double, 3> _rand_unit_vec(std::mt19937 &rng)
 {
     while (true) {
-        double x = ksgpu::rand_uniform(-1.0, 1.0);
-        double y = ksgpu::rand_uniform(-1.0, 1.0);
-        double z = ksgpu::rand_uniform(-1.0, 1.0);
+        double x = ksgpu::rand_uniform(-1.0, 1.0, rng);
+        double y = ksgpu::rand_uniform(-1.0, 1.0, rng);
+        double z = ksgpu::rand_uniform(-1.0, 1.0, rng);
         double n2 = x*x + y*y + z*z;
         if ((n2 > 1.0e-6) && (n2 <= 1.0)) {
             double n = std::sqrt(n2);
@@ -663,10 +663,10 @@ static std::array<double, 3> _rand_unit_vec()
 // Helper: returns a random unit 3-vector orthogonal to 'a'.
 // Generates a candidate random unit vector, subtracts its projection on 'a',
 // and re-normalizes. Loops in the unlikely event of degeneracy.
-static std::array<double, 3> _rand_orthogonal_unit_vec(const std::array<double, 3> &a)
+static std::array<double, 3> _rand_orthogonal_unit_vec(const std::array<double, 3> &a, std::mt19937 &rng)
 {
     while (true) {
-        std::array<double, 3> v = _rand_unit_vec();
+        std::array<double, 3> v = _rand_unit_vec(rng);
         double dot = a[0]*v[0] + a[1]*v[1] + a[2]*v[2];
         v[0] -= dot * a[0];
         v[1] -= dot * a[1];
@@ -686,38 +686,40 @@ std::shared_ptr<XEngineMetadata> XEngineMetadata::make_random()
     using ksgpu::rand_int;
     using ksgpu::rand_uniform;
 
+    std::mt19937 &rng = ksgpu::default_rng();
+
     auto ret = std::make_shared<XEngineMetadata>();
     ret->version = 2;
 
     // ---- Frequency zones ----
 
-    long nzones = rand_int(1, 5);
+    long nzones = rand_int(1, 5, rng);
     long max_nfreq_per_zone = 100 / nzones;
-    
+
     ret->zone_nfreq.resize(nzones);
     for (long i = 0; i < nzones; i++)
-        ret->zone_nfreq[i] = rand_int(max_nfreq_per_zone/2, max_nfreq_per_zone+1);
+        ret->zone_nfreq[i] = rand_int(max_nfreq_per_zone/2, max_nfreq_per_zone+1, rng);
 
     // zone_freq_edges: nzones+1 sorted distinct values in [300, 1500] MHz.
     // freq_eps = 1e-3 in validate(); easily exceeded by uniform samples in this range.
     ret->zone_freq_edges.resize(nzones + 1);
     for (long i = 0; i < nzones + 1; i++)
-        ret->zone_freq_edges[i] = rand_uniform(300.0, 1500.0);
+        ret->zone_freq_edges[i] = rand_uniform(300.0, 1500.0, rng);
     std::sort(ret->zone_freq_edges.begin(), ret->zone_freq_edges.end());
 
     // freq_channels left empty (its content is only meaningful in receiver context).
 
     // ---- Beams ----
 
-    ret->beamset = rand_int(0, 1024);
+    ret->beamset = rand_int(0, 1024, rng);
 
-    long nbeams = rand_int(1, 9);
+    long nbeams = rand_int(1, 9, rng);
 
     // Distinct beam_ids drawn from [0, 1024). Reject-loop until all distinct.
     std::unordered_set<long> seen;
     ret->beam_ids.clear();
     while (long(ret->beam_ids.size()) < nbeams) {
-        long id = rand_int(0, 1024);
+        long id = rand_int(0, 1024, rng);
         if (seen.insert(id).second)
             ret->beam_ids.push_back(id);
     }
@@ -727,8 +729,8 @@ std::shared_ptr<XEngineMetadata> XEngineMetadata::make_random()
     ret->beam_positions_y.resize(nbeams);
     for (long i = 0; i < nbeams; i++) {
         while (true) {
-            double bx = rand_uniform(-1.0, 1.0);
-            double by = rand_uniform(-1.0, 1.0);
+            double bx = rand_uniform(-1.0, 1.0, rng);
+            double by = rand_uniform(-1.0, 1.0, rng);
             if (bx*bx + by*by < 1.0) {
                 ret->beam_positions_x[i] = bx;
                 ret->beam_positions_y[i] = by;
@@ -739,29 +741,29 @@ std::shared_ptr<XEngineMetadata> XEngineMetadata::make_random()
 
     // ---- Timekeeping ----
 
-    ret->unix_ns_at_seq_0 = rand_int(long(1e18), long(2e18));
-    ret->dt_ns_per_seq = rand_int(1, long(1e6));
-    ret->seq_per_frb_time_sample = rand_int(1, long(1e4));
+    ret->unix_ns_at_seq_0 = rand_int(long(1e18), long(2e18), rng);
+    ret->dt_ns_per_seq = rand_int(1, long(1e6), rng);
+    ret->seq_per_frb_time_sample = rand_int(1, long(1e4), rng);
 
     // ---- Telescope geometry ----
 
-    ret->tel_origin_itrs_lat_deg = rand_uniform(-90.0, 90.0);
-    ret->tel_origin_itrs_lon_deg = rand_uniform(-180.0, 180.0);
+    ret->tel_origin_itrs_lat_deg = rand_uniform(-90.0, 90.0, rng);
+    ret->tel_origin_itrs_lon_deg = rand_uniform(-180.0, 180.0, rng);
 
-    ret->tel_grid_x_axis    = _rand_unit_vec();
-    ret->tel_grid_y_axis    = _rand_orthogonal_unit_vec(ret->tel_grid_x_axis);
-    ret->tel_dish_elev_axis = _rand_unit_vec();
-    ret->tel_dish_vert_axis = _rand_orthogonal_unit_vec(ret->tel_dish_elev_axis);
+    ret->tel_grid_x_axis    = _rand_unit_vec(rng);
+    ret->tel_grid_y_axis    = _rand_orthogonal_unit_vec(ret->tel_grid_x_axis, rng);
+    ret->tel_dish_elev_axis = _rand_unit_vec(rng);
+    ret->tel_dish_vert_axis = _rand_orthogonal_unit_vec(ret->tel_dish_elev_axis, rng);
 
-    ret->tel_dish_coelev_deg = rand_uniform(0.0, 90.0);
-    ret->tel_dish_separation_x_m = rand_uniform(1.0, 20.0);
-    ret->tel_dish_separation_y_m = rand_uniform(1.0, 20.0);
+    ret->tel_dish_coelev_deg = rand_uniform(0.0, 90.0, rng);
+    ret->tel_dish_separation_x_m = rand_uniform(1.0, 20.0, rng);
+    ret->tel_dish_separation_y_m = rand_uniform(1.0, 20.0, rng);
 
     // ---- Noise ----
 
     ret->noise_variance.resize(nzones);
     for (long i = 0; i < nzones; i++)
-        ret->noise_variance[i] = rand_uniform(0.1, 10.0);
+        ret->noise_variance[i] = rand_uniform(0.1, 10.0, rng);
 
     ret->validate();
     return ret;

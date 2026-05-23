@@ -20,8 +20,9 @@ namespace pirate {
 inline std::vector<bool> make_bitvec(int nbits)
 {
     std::vector<bool> ret(nbits);
+    std::mt19937 &rng = ksgpu::default_rng();
     for (int i = 0; i < nbits; i++)
-        ret[i] = (ksgpu::rand_uniform() > 0.5);
+        ret[i] = (ksgpu::rand_uniform(0.0, 1.0, rng) > 0.5);
     return ret;
 }
 

@@ -1133,9 +1133,11 @@ def get_parser():
 
 
 def main():
+    ksgpu.seed_default_rng(137)   # reproducible run; remove for full randomness
+
     parser = get_parser()
     argcomplete.autocomplete(parser)
-    
+
     args = parser.parse_args()
 
     if args.command == "test":

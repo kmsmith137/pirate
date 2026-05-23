@@ -404,8 +404,11 @@ void GpuRingbufCopyKernel::test_random()
     // Randomize hbuf
     uint *p = reinterpret_cast<uint *> (hbuf.data);
     long nuint_tot = nseg_tot * (128 / sizeof(uint));
-    for (long i = 0; i < nuint_tot; i++)
-        p[i] = default_rng();
+    {
+        std::mt19937 &rng = ksgpu::default_rng();
+        for (long i = 0; i < nuint_tot; i++)
+            p[i] = rng();
+    }
     
     // Copy to GPU before running copy kernel
     Array<void> gbuf = hbuf.to_gpu();

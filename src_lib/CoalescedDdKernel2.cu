@@ -321,8 +321,11 @@ void CoalescedDdKernel2::test_random()
 
     // Fill input ring buffer with fixed random data.
     // Some data may be "replayed" across multiple time chunks, but that's okay.
-    for (long i = 0; i < rb_nelts; i++)
-        in_cpu.data[i] = rand_uniform(-1.0f, 1.0f);
+    {
+        std::mt19937 &rng = ksgpu::default_rng();
+        for (long i = 0; i < rb_nelts; i++)
+            in_cpu.data[i] = rand_uniform(-1.0f, 1.0f, rng);
+    }
 
     // Copy to GPU (converting dtype if necessary)
     Array<void> in_gpu = in_cpu.to_gpu(dtype);

@@ -29,18 +29,6 @@ namespace pirate {
 #endif
 
 
-// File-scope global RNG for AssembledFrame::randomize(). Thread-safe
-// via _randomize_rng_mutex. Lazy-seeded from std::random_device on
-// first use. We don't use ksgpu::default_rng because it isn't
-// currently thread-safe; this hack can go away when ksgpu's RNG is
-// fixed.
-namespace {
-    std::mutex   _randomize_rng_mutex;
-    std::mt19937 _randomize_rng;
-    bool         _randomize_rng_initialized = false;
-}  // anonymous namespace
-
-
 // Call with lock held!
 void AssembledFrame::_reap_locked()
 {
@@ -575,13 +563,15 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
     frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
 
+    std::mt19937 &rng = ksgpu::default_rng();
+
     // Fill scales_offsets: scales[:, :, 0] in [0, 1], offsets[:, :, 1] in [-1, 1].
     {
         __half *so = static_cast<__half *>(frame->scales_offsets.data);
         for (long f = 0; f < nfreq; f++) {
             for (long m = 0; m < mpc; m++) {
-                so[(f * mpc + m) * 2 + 0] = __float2half_rn(float(rand_uniform( 0.0,  1.0)));
-                so[(f * mpc + m) * 2 + 1] = __float2half_rn(float(rand_uniform(-1.0,  1.0)));
+                so[(f * mpc + m) * 2 + 0] = __float2half_rn(float(rand_uniform( 0.0,  1.0, rng)));
+                so[(f * mpc + m) * 2 + 1] = __float2half_rn(float(rand_uniform(-1.0,  1.0, rng)));
             }
         }
     }
@@ -591,7 +581,7 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     long nbytes = nfreq * (ntime / 2);
     char *p = static_cast<char *>(frame->data.data);
     for (long i = 0; i < nbytes; i++)
-        p[i] = (char) rand_int(0, 256);
+        p[i] = (char) rand_int(0, 256, rng);
 
     return frame;
 }
@@ -608,13 +598,11 @@ void AssembledFrame::randomize()
     if ((data_nbytes <= 0) && (so_nelts <= 0))
         return;  // empty (e.g. reaped) frame -- nothing to do.
 
-    std::lock_guard<std::mutex> lk(_randomize_rng_mutex);
-
-    if (!_randomize_rng_initialized) {
-        std::random_device rd;
-        _randomize_rng.seed(rd());
-        _randomize_rng_initialized = true;
-    }
+    // ksgpu's default_rng() is per-thread, so concurrent calls from different
+    // threads do not race on RNG state. Callers still must not concurrently
+    // read/write the same frame's data buffer -- the destination buffer is
+    // not protected.
+    std::mt19937 &rng = ksgpu::default_rng();
 
     // Fill scales_offsets first (matches slab order). Scales (last-axis index 0)
     // uniform in [0, 1]; offsets (last-axis index 1) uniform in [-1, 1].
@@ -626,8 +614,8 @@ void AssembledFrame::randomize()
         __half *so = static_cast<__half *>(scales_offsets.data);
         long npairs = so_nelts / 2;
         for (long i = 0; i < npairs; i++) {
-            so[2*i + 0] = __float2half_rn(dist_scale (_randomize_rng));
-            so[2*i + 1] = __float2half_rn(dist_offset(_randomize_rng));
+            so[2*i + 0] = __float2half_rn(dist_scale (rng));
+            so[2*i + 1] = __float2half_rn(dist_offset(rng));
         }
     }
 
@@ -640,12 +628,12 @@ void AssembledFrame::randomize()
         // fresh uint32 via a short-memcpy.
         long i = 0;
         while (i + 4 <= data_nbytes) {
-            uint32_t r = _randomize_rng();
+            uint32_t r = rng();
             std::memcpy(p + i, &r, 4);
             i += 4;
         }
         if (i < data_nbytes) {
-            uint32_t r = _randomize_rng();
+            uint32_t r = rng();
             std::memcpy(p + i, &r, data_nbytes - i);
         }
     }

@@ -934,8 +934,11 @@ void GpuDedispersionKernel::test_random()
     // Randomize (cpu_arrs.big_inbuf).
     Array<float> arr = cpu_arrs.big_inbuf.template cast<float>();
     xassert(arr.is_fully_contiguous());
-    for (long i = 0; i < arr.size; i++)
-        arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0);
+    {
+        std::mt19937 &rng = ksgpu::default_rng();
+        for (long i = 0; i < arr.size; i++)
+            arr.data[i] = ksgpu::rand_uniform(-1.0, 1.0, rng);
+    }
 
     // Copy (cpu_arrs.big_inbuf) -> (gpu_arrs.big_inbuf), converting dtype if necessary.
     // FIXME ksgpu should contain a function for this.

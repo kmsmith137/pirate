@@ -1,7 +1,6 @@
 #ifndef _PIRATE_NETWORK_UTILS_HPP
 #define _PIRATE_NETWORK_UTILS_HPP
 
-#include <random>
 #include <string>
 #include <vector>
 #include <sys/socket.h>  // socklen_t
@@ -52,17 +51,13 @@ struct Socket
     // Test-only short-read injection. When reads_are_misbehaving is
     // true, read() and read_with_timeout() truncate the caller-
     // specified count to a log-uniform integer in [1, count) with
-    // probability 0.5. All three fields below are plain (non-atomic,
-    // non-locked); like the rest of Socket they rely on the caller
-    // for cross-thread synchronization (see the "not thread-safe"
-    // note above). Intended for testing; never set in production.
-    //
-    // We don't use ksgpu::default_rng for the RNG because that
-    // generator is not currently thread-safe. (If/when ksgpu makes
-    // it thread-safe, this can move over.)
+    // probability 0.5. The flag itself is plain (non-atomic, non-
+    // locked); like the rest of Socket it relies on the caller for
+    // cross-thread synchronization (see the "not thread-safe" note
+    // above). Intended for testing; never set in production. The RNG
+    // samples come from ksgpu::default_rng(), which is per-thread,
+    // so two Sockets on different OS threads draw independently.
     bool reads_are_misbehaving = false;
-    bool rng_is_initialized = false;     // only meaningful when reads_are_misbehaving == true
-    std::minstd_rand rng;                // ditto
 
     // For TCP, use (domain,type) = (PF_INET,SOCK_STREAM). See "cheat sheet" above.
     Socket(int domain, int type, int protocol=0);
@@ -129,8 +124,8 @@ struct Socket
     // Intended for testing. Idempotent. After this returns, subsequent
     // read() / read_with_timeout() calls on this Socket may return
     // short -- with probability 0.5, the caller-specified count is
-    // truncated to a log-uniform integer in [1, count). The per-Socket
-    // RNG is lazy-seeded from std::random_device on first use.
+    // truncated to a log-uniform integer in [1, count). Samples come
+    // from ksgpu::default_rng() (per-thread).
     void set_misbehaving_reads();
 
     // Socket is noncopyable but moveable (can always do shared_ptr<Socket> to avoid copies).
@@ -143,8 +138,8 @@ struct Socket
 
 private:
     // Helper for read() / read_with_timeout(). Called only when
-    // reads_are_misbehaving == true. Lazy-seeds the RNG on first
-    // call. Returns the possibly-reduced maxbytes to use.
+    // reads_are_misbehaving == true. Returns the possibly-reduced
+    // maxbytes to use.
     long _misbehave_maxbytes(long maxbytes);
 };
 

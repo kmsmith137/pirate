@@ -22,9 +22,10 @@ static Array<float> make_random_weights(const vector<long> &shape)
     Array<float> ret(shape, af_rhost);
     xassert(ret.is_fully_contiguous());
 
+    std::mt19937 &rng = ksgpu::default_rng();
     for (long i = 0; i < ret.size; i++)
-        ret.data[i] = rand_uniform();
-    
+        ret.data[i] = rand_uniform(0.0, 1.0, rng);
+
     return ret;
 }
 

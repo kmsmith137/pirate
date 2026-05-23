@@ -534,8 +534,11 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
     long M = fs.M;
 
     Array<float> ret({B,D,M,T}, af_rhost);
-    for (long i = 0; i < ret.size; i++)
-        ret.data[i] = rand_uniform(-1.0f, 1.0f);
+    {
+        std::mt19937 &rng = ksgpu::default_rng();
+        for (long i = 0; i < ret.size; i++)
+            ret.data[i] = rand_uniform(-1.0f, 1.0f, rng);
+    }
 
     return ret;
 }
@@ -573,23 +576,24 @@ void ReferencePeakFindingKernel::make_random_weights(Array<float> &out, const Ar
     vector<float> wf(F);
 
     long nouter = B*D*T;
+    std::mt19937 &rng = ksgpu::default_rng();
 
     for (long i = 0; i < nouter; i++) {
-        float p0 = rand_uniform(0.1f, 1.1f);
-        
+        float p0 = rand_uniform(0.1f, 1.1f, rng);
+
         for (long f = 0; f < F; f++)
-            wf[f] = (rand_uniform() < p0) ? (rand_uniform() * w0[f]) : 0.0f;
-        
-        wp[0] = (rand_uniform() < p0) ? rand_uniform() : 0.0f;
+            wf[f] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * w0[f]) : 0.0f;
+
+        wp[0] = (rand_uniform(0.0, 1.0, rng) < p0) ? rand_uniform(0.0, 1.0, rng) : 0.0f;
         for (long l = 0; l < (P/3); l++) {
-            wp[3*l+1] = (rand_uniform() < p0) ? (rand_uniform() * rsqrtf(2.0f * pow2(l))) : 0.0f;
-            wp[3*l+2] = (rand_uniform() < p0) ? (rand_uniform() * rsqrtf(1.5f * pow2(l))) : 0.0f;
-            wp[3*l+3] = (rand_uniform() < p0) ? (rand_uniform() * rsqrtf(2.5f * pow2(l))) : 0.0f;
+            wp[3*l+1] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * rsqrtf(2.0f * pow2(l))) : 0.0f;
+            wp[3*l+2] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * rsqrtf(1.5f * pow2(l))) : 0.0f;
+            wp[3*l+3] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * rsqrtf(2.5f * pow2(l))) : 0.0f;
         }
 
         for (long p = 0; p < P; p++)
             for (long f = 0; f < F; f++)
-                out.data[i*P*F + p*F + f] = rand_uniform(1.0f, 2.0f) * wf[f] * wp[p];
+                out.data[i*P*F + p*F + f] = rand_uniform(1.0f, 2.0f, rng) * wf[f] * wp[p];
     }
 }
 
@@ -1228,11 +1232,12 @@ void PfOutputMicrokernel::test_random()
     //   - ain_cpu: inverse (s,tin) -> (token)
 
     std::unordered_map<uint, std::pair<uint,uint>> token_mapping;
+    std::mt19937 &rng = ksgpu::default_rng();
 
     for (uint s = 0; s < 4; s++) {
         for (uint tin = 0; tin < nt_in; tin++) {
             for (;;) {
-                uint token = ksgpu::default_rng();
+                uint token = rng();
                 if (token_mapping.find(token) == token_mapping.end()) {
                     token_mapping[token] = std::pair<int,int> (s,tin);
                     ain_cpu.at({s,tin}) = token;
