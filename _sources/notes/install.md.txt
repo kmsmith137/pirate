@@ -4,7 +4,8 @@
 linux machine with **a physical GPU**, and the cuda toolkit installed.
 I hope to improve this in the future!
 
-1. Make sure you have cuda, cupy, curand, pybind11, yaml-cpp, asdf installed.
+1. Make sure you have cuda, cupy, curand, cufftdx (provided by the `mathdx`
+conda package), pybind11, yaml-cpp, asdf installed.
 On a CHIME/CHORD machine, this conda environment works for me (alternately,
 you can use `environment.yml` in the top-level pirate directory):
 ```
@@ -63,7 +64,7 @@ or C++ builds with `make`. Here's what I recommend:
     # 'pirate_frb' shell command, do one of these:
 
        # Option 1: modifies global .bashrc
-       echo '"$(register-python-argcomplete pirate_frb)"' > ~/.bashrc
+       echo 'eval "$(register-python-argcomplete pirate_frb)"' >> ~/.bashrc
     
        # Option 2: modifies activate hook in current conda env 
        mkdir -p $CONDA_PREFIX/etc/conda/activate.d

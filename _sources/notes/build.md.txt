@@ -33,8 +33,8 @@ pirate_frb/cuda_generator/*.py      - Python code that generates CUDA kernels
 pirate_frb/*.py                     - High-level python interface
 pirate_frb/rpc/                     - RPC client code (FrbClient.py)
 pirate_frb/rpc/grpc/                - Generated Python protobuf/gRPC stubs
-grpc/*.proto                        - Protocol buffer definitions
-grpc/*.pb.{h,cc}                    - Generated C++ protobuf/gRPC code
-bin/                                - Compiled executables
+grpc/                               - gRPC .proto sources and generated C++ stubs (*.pb.{h,cc})
+configs/                            - YAML config files (frb_server, xengine, hwtest, dedispersion)
+notes/                              - Developer-facing markdown notes
 lib/libpirate.so                    - Shared library
 ```

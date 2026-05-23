@@ -19,8 +19,8 @@ service FrbSearch {
   // Returns the current status of the search engine
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
 
-  // Returns metadata as a YAML string (empty if metadata not yet available)
-  rpc GetMetadata (GetMetadataRequest) returns (GetMetadataResponse);
+  // Returns XEngine metadata as a YAML string (empty if metadata not yet available)
+  rpc GetXEngineMetadata (GetXEngineMetadataRequest) returns (GetXEngineMetadataResponse);
 
   // Write files to disk for specified beams and time range
   rpc WriteFiles (WriteFilesRequest) returns (WriteFilesResponse);
@@ -28,6 +28,10 @@ service FrbSearch {
   // Subscribe to a stream of filenames. The connection can be closed by the client
   // at any time, or by the server on shutdown or exception.
   rpc SubscribeFiles (SubscribeFilesRequest) returns (stream SubscribeFilesResponse);
+
+  // Returns the per-server configuration this server was started with.
+  // Loosely mirrors the run_server YAML config (flattened to a single server).
+  rpc GetConfig (GetConfigRequest) returns (GetConfigResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -44,13 +48,13 @@ message GetStatusResponse {
   int64 num_free_frames = 7;  // Number of available frames in AssembledFrameAllocator
 }
 
-// Request message for GetMetadata
-message GetMetadataRequest {
+// Request message for GetXEngineMetadata
+message GetXEngineMetadataRequest {
   bool verbose = 1;  // If true, include comments explaining each field
 }
 
-// Response message for GetMetadata
-message GetMetadataResponse {
+// Response message for GetXEngineMetadata
+message GetXEngineMetadataResponse {
   string yaml_string = 1;  // Empty string if metadata not yet available
 }
 
@@ -71,9 +75,44 @@ message WriteFilesResponse {
 message SubscribeFilesRequest {}
 
 // Response message for SubscribeFiles (streamed).
-// An empty error_message indicates success; non-empty indicates an error.
+//
+// The FIRST response on every stream is a ReadySentinel, emitted by
+// the server immediately after registering the subscription. The
+// client SubscribeFiles RPC entry point is expected to read this
+// synchronously before returning to its caller, so that any WriteFiles
+// call issued after the client-side subscription handle is returned
+// is guaranteed to enqueue a notification onto this stream.
+//
+// Every subsequent response is a WriteNotification carrying one
+// completed file's filename + error_message.
 message SubscribeFilesResponse {
-  string filename = 1;       // A single filename (valid only if error_message is empty)
-  string error_message = 2;  // Empty string indicates success; non-empty indicates error
+  oneof kind {
+    ReadySentinel     ready        = 1;
+    WriteNotification notification = 2;
+  }
+}
+
+// Marker message: the act of receiving one of these on the stream is
+// the signal. No fields.
+message ReadySentinel {}
+
+// One completed file's write status.
+message WriteNotification {
+  string filename      = 1;  // Valid only when error_message is empty.
+  string error_message = 2;  // Empty = success; non-empty = error string.
+}
+
+// Request message for GetConfig (currently empty, but extensible)
+message GetConfigRequest {}
+
+// Response message containing the per-server config.
+message GetConfigResponse {
+  string rpc_ip_addr = 1;              // "ip:port" string this server is listening on for RPC
+  repeated string data_ip_addrs = 2;   // "ip:port" string per Receiver (one per data IP)
+  int64 time_samples_per_chunk = 3;    // Time samples per chunk (from AssembledFrameAllocator)
+  string ssd_dir = 4;                  // SSD cache directory for this server
+  string nfs_dir = 5;                  // NFS output directory (already interpolated for {user}/{date})
+  int64 ssd_threads = 6;               // Number of FileWriter SSD threads
+  int64 nfs_threads = 7;               // Number of FileWriter NFS threads
 }
 ```

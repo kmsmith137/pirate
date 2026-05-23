@@ -267,22 +267,17 @@
 <li><p>Iterate on <a class="reference internal" href="network_protocol.html"><span class="std std-doc">network protocol</span></a>.
 (At minimum, need to include offsets, scales, UT1 timestamps.)</p></li>
 <li><p>Iterate on metadata sent by X-engine
-(<a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>).
+(<a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v2.yml</span></code></span></a>).
 (Note that the metadata is part of the network protocol.)</p></li>
 <li><p>In particular, decide how timestamps should be represented in the
 metadata.</p></li>
-<li><p>Currently there is a placeholder <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code>, which sends garbage
-data to the FRB server. It would be really valuable to have a more
-interesting FakeXEngine, for a few reasons:</p>
+<li><p>Currently there is a <code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">FakeXEngine</span></code> in progress, which serves
+as an “end-to-end” test of the networking code. It sends random data
+to the FRB server, saves it back to disk with RPCs, and verifies that
+the contents are as expected. It also misbehaves in as many ways as
+possible, to test corner cases (e.g. disconnect-reconnect, stalls).</p>
+<p>In the near future, I’d like to extend <code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">FakeXEngine</span></code> as follows:</p>
 <ul>
-<li><p>The networking/file-writing code currently has no unit tests!
-One approach is an “end-to-end” test, where the <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code>
-sends random data to the FRB server, asks the FRB server to
-save a random subset of its data to disk (via RPCs), and
-compares the data files with the input.</p></li>
-<li><p>Eventually I’d like to extend this end-to-end test to include
-tests of corner cases in the FRB server logic, such as X-engine
-nodes that disconnect and reconnect.</p></li>
 <li><p>Injecting simulated pulses! I’d like to do this by May (see below).
 Pulses can be simulated with <a class="reference external" href="https://github.com/kmsmith137/simpulse">simpulse</a>.
 We should brainstorm possible designs (e.g. do we simulate pulses “offline”
@@ -303,8 +298,8 @@ this code.</p></li>
 (random example: use spdlog for logging)</p></li>
 </ul>
 </section>
-<section id="goals-by-end-of-may">
-<h2>Goals by end of May<a class="headerlink" href="#goals-by-end-of-may" title="Link to this heading">¶</a></h2>
+<section id="short-term-goals">
+<h2>Short-term goals<a class="headerlink" href="#short-term-goals" title="Link to this heading">¶</a></h2>
 <p>Goal here is to develop an end-to-end system where we can send simulated
 pulses from a <code class="docutils literal notranslate"><span class="pre">FakeXEngine</span></code>, and watch the pulses arrive in a web viewer.
 No RFI for now!</p>
@@ -392,7 +387,7 @@ of work on sifter/database/web.</p>
             <ul>
 <li><a class="reference internal" href="#">To do list</a><ul>
 <li><a class="reference internal" href="#immediate-concrete-tasks">Immediate concrete tasks</a></li>
-<li><a class="reference internal" href="#goals-by-end-of-may">Goals by end of May</a></li>
+<li><a class="reference internal" href="#short-term-goals">Short-term goals</a></li>
 <li><a class="reference internal" href="#goals-for-a-pathfinder-search">Goals for a pathfinder search</a></li>
 </ul>
 </li>

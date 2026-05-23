@@ -296,32 +296,35 @@
 
 <span class="nt">freq_channels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">10000</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">20000</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">28159</span><span class="w"> </span><span class="p p-Indicator">]</span>
 
-<span class="c1"># Data for each beam recieved by this node, all fields required. An opaque id and sky coordinates,</span>
-<span class="c1"># given as direction cosines in the grid frame.  The grid frame is defined by x &amp; y unit vectors</span>
+<span class="c1"># Data for each beam received by this node.</span>
+<span class="c1"># beamset: an integer identifier for this set of beams</span>
+<span class="c1"># beam_ids: length Nbeams; integer id</span>
+<span class="c1"># beam_positions_x: float, length Nbeams &amp;</span>
+<span class="c1"># beam_positions_y: float, length Nbeams;</span>
+<span class="c1"># direction cosines in the grid frame.  The grid frame is defined by x &amp; y unit vectors</span>
 <span class="c1"># which are orthogonal and lie along (or close to) the axes of the telescope grid. Each</span>
 <span class="c1"># beam has a skywards-directed unit vector b.  The grid_x and grid_y values are the x &amp; y direction</span>
 <span class="c1"># cosines: b.x and b.y.</span>
-<span class="nt">beams</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span>
-<span class="w">  </span><span class="p p-Indicator">{</span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="nv">100</span><span class="p p-Indicator">,</span><span class="nt"> grid_x</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="nt"> grid_y</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">},</span>
-<span class="w">  </span><span class="p p-Indicator">{</span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="nv">200</span><span class="p p-Indicator">,</span><span class="nt"> grid_x</span><span class="p">:</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">,</span><span class="nt"> grid_y</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">},</span>
-<span class="w">  </span><span class="p p-Indicator">{</span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="nv">300</span><span class="p p-Indicator">,</span><span class="nt"> grid_x</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="nt"> grid_y</span><span class="p">:</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">},</span>
-<span class="p p-Indicator">]</span>
+<span class="nt">beamset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">42</span>
+<span class="nt">beam_ids</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">100</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">200</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">300</span><span class="w"> </span><span class="p p-Indicator">]</span>
+<span class="nt">beam_positions_x</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.0</span><span class="w"> </span><span class="p p-Indicator">]</span>
+<span class="nt">beam_positions_y</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="w"> </span><span class="p p-Indicator">]</span>
 
 <span class="c1">#############</span>
 <span class="c1"># Timekeeping</span>
 <span class="c1">#############</span>
 
-
-<span class="c1"># Each frame from the X-engine will come with the fpga sequence number (seq) at the beginning of the frame.</span>
+<span class="c1"># The X-engine uses fpga sequence number (seq) to keep track of time.</span>
 <span class="c1"># To keep time in pirate, we need to know:</span>
+<span class="c1">#</span>
 <span class="c1"># - unix_ns_at_seq_0: the epoch (the UNIX time at seq = 0, in nanoseconds).</span>
 <span class="c1"># - dt_ns_per_seq: the rate at which seqs tick, number of nanoseconds per seq tick.</span>
-<span class="c1"># - seq_per_frame: the number of seq ticks covered by a data frame.</span>
+<span class="c1"># - seq_per_frb_time_sample: the number of seq ticks covered by an frb time sample.</span>
 <span class="c1">#</span>
 <span class="c1"># In Kotekan language:</span>
-<span class="c1"># unix_nx_at_seq_0 = time0_ns</span>
-<span class="c1"># dt_ns_per_seq = fengine_fft_length / ADC_sampling_rate_GHz</span>
-<span class="c1"># seq_per_frame = 256 * frb_downsampling_factor (not sure if this exists)</span>
+<span class="c1">#  - unix_ns_at_seq_0 = time0_ns</span>
+<span class="c1">#  - dt_ns_per_seq = fengine_fft_length / ADC_sampling_rate_GHz</span>
+<span class="c1">#  - seq_per_frb_time_sample = upchanelization factor * frb_downsampling_factor (not sure if this exists)</span>
 <span class="c1">#</span>
 <span class="c1"># The sifter will need Earth Orientation Parameters (EOP) (which change in time and Kotekan has) and</span>
 <span class="c1"># a precession/nutation model (which Kotekan does *not* have) to compute RA/DEC for the beams.</span>
@@ -336,12 +339,12 @@
 <span class="c1"># the X-engine.</span>
 
 <span class="nt">unix_ns_at_seq_0</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1772483060000000000</span>
-<span class="nt">dt_ns_per_seq</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5120</span>
-<span class="nt">seq_per_frame</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
+<span class="nt">dt_ns_per_seq</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5120</span><span class="w">    </span><span class="c1"># note long, not double</span>
+<span class="nt">seq_per_frb_time_sample</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
 
-<span class="c1">###########</span>
+<span class="c1">##################################################</span>
 <span class="c1"># Telescope alignment and localization parameters.</span>
-<span class="c1">###########</span>
+<span class="c1">##################################################</span>
 
 <span class="c1"># Coordinate Systems</span>
 <span class="c1">#</span>
@@ -387,6 +390,66 @@
 <span class="c1"># Values of dish separation in x and y directions in meters.</span>
 <span class="nt">tel_dish_separation_x_m</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6.300156854906823</span>
 <span class="nt">tel_dish_separation_y_m</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8.500057809796308</span>
+
+<span class="c1">#####################################################</span>
+<span class="c1"># Temporary kludge: per-frequency-zone noise variance</span>
+<span class="c1">#####################################################</span>
+
+<span class="c1"># For now, the FRB server assumes that the noise is mean-zero, uncorrelated</span>
+<span class="c1"># between samples, with variance known in advance! We assume that the noise</span>
+<span class="c1"># variance is constant in time, and depends only on frequency &quot;zone&quot; (see above).</span>
+<span class="c1"># (A per-frequency-channel variance was awkward to implement.)</span>
+<span class="c1">#</span>
+<span class="c1"># In a future revision, this will be generalized, and the &#39;noise_variance&#39;</span>
+<span class="c1"># metadata will go away.</span>
+<span class="c1"># </span>
+<span class="c1"># noise_variance: an array of length nzones (=len(zone_nfreq)). If a scalar is</span>
+<span class="c1"># specified, then all frequency zones are assumed to have the same variance.</span>
+
+<span class="nt">noise_variance</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.0</span>
+
+
+<span class="c1">###############################################</span>
+<span class="c1"># Sender-consistency rules</span>
+<span class="c1">###############################################</span>
+
+<span class="c1"># When multiple X-engine nodes connect to a single FRB node, the FRB</span>
+<span class="c1"># receiver enforces that all senders agree on (almost all of) the</span>
+<span class="c1"># metadata above. The check is implemented in</span>
+<span class="c1"># XEngineMetadata::check_sender_consistency() (in</span>
+<span class="c1"># src_lib/XEngineMetadata.cpp). Every field above falls into one of</span>
+<span class="c1"># three groups:</span>
+<span class="c1">#</span>
+<span class="c1"># 1. NOT checked across senders:</span>
+<span class="c1">#       freq_channels       (each sender deliberately sends a different</span>
+<span class="c1">#                            subset of the frequency channels)</span>
+<span class="c1">#</span>
+<span class="c1"># 2. Required to be bit-identical across senders (compared with ==):</span>
+<span class="c1">#       version</span>
+<span class="c1">#       zone_nfreq</span>
+<span class="c1">#       beamset</span>
+<span class="c1">#       beam_ids</span>
+<span class="c1">#       unix_ns_at_seq_0</span>
+<span class="c1">#       dt_ns_per_seq</span>
+<span class="c1">#       seq_per_frb_time_sample</span>
+<span class="c1">#</span>
+<span class="c1"># 3. Required to match within an absolute tolerance |a - b| &lt;= eps</span>
+<span class="c1">#    (NOT bit-identical). All tolerances are hard-coded near the top</span>
+<span class="c1">#    of src_lib/XEngineMetadata.cpp:</span>
+<span class="c1">#</span>
+<span class="c1">#       zone_freq_edges           eps = 1.0e-3    MHz</span>
+<span class="c1">#       beam_positions_x          eps = 1.0e-9    (direction cosine)</span>
+<span class="c1">#       beam_positions_y          eps = 1.0e-9    (direction cosine)</span>
+<span class="c1">#       tel_origin_itrs_lat_deg   eps = 1.0e-6    degrees</span>
+<span class="c1">#       tel_origin_itrs_lon_deg   eps = 1.0e-6    degrees</span>
+<span class="c1">#       tel_grid_x_axis           eps = 1.0e-9    (direction cosine)</span>
+<span class="c1">#       tel_grid_y_axis           eps = 1.0e-9    (direction cosine)</span>
+<span class="c1">#       tel_dish_elev_axis        eps = 1.0e-9    (direction cosine)</span>
+<span class="c1">#       tel_dish_vert_axis        eps = 1.0e-9    (direction cosine)</span>
+<span class="c1">#       tel_dish_coelev_deg       eps = 1.0e-6    degrees</span>
+<span class="c1">#       tel_dish_separation_x_m   eps = 1.0e-6    meters</span>
+<span class="c1">#       tel_dish_separation_y_m   eps = 1.0e-6    meters</span>
+<span class="c1">#       noise_variance            eps = 1.0e-12</span>
 </pre></div>
 </div>
 </section>

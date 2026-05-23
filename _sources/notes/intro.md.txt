@@ -20,11 +20,11 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
 
   - Receives data via TCP from the "upstream" X-engine. The network protocol
     is [here](network_protocol.md). The protocol includes metadata -- the
-    format is defined by [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml.md).
+    format is defined by [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml.md).
     Details of the protocol and metadata will change in the future.
 
   - Dynamic configuration: the X-engine metadata
-    (see [`configs/xengine/xengine_metadata_v1.yml`](../configs/xengine/xengine_metadata_v1.yml.md))
+    (see [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml.md))
     includes important parameters such as the frequency upchannelization and beam layout.
     The FRB search "dynamically" configures itself when this data is
     received from the X-engine.
@@ -50,7 +50,7 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
   
   - The FRB server defines [gRPC service(s)](../grpc/frb_search.proto.md) for things like control, monitoring,
     and triggered data writes. All interaction with a running server is via gRPC.
-    There is a python client (`pirate_frb.RpcClient`) but not a C++ client
+    There is a python client (`pirate_frb.rpc.FrbClient`) but not a C++ client
     (not sure if we'll need one).
     
   - The FRB server stores data sent by the X-engine in a ring buffer, and defines

@@ -32,6 +32,7 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 Pybind11 code is in the following source files:
 ```
    src_pybind11/pirate_pybind11_casm.cpp
+   src_pybind11/pirate_pybind11_chime.cpp
    src_pybind11/pirate_pybind11_core.cpp
    src_pybind11/pirate_pybind11_kernels.cpp
    src_pybind11/pirate_pybind11_loose_ends.cpp
@@ -41,9 +42,9 @@ These get compiled into a single extension module `pirate_pybind11.so`.
 
 On the python side, the `pirate_frb` toplevel package is divided into subpackages `pirate_frb.casm`, `pirate_frb.core`, etc.
 Each subpackage imports the contents of the corresponding pybind11 file.
-For example, `pirate_frb/casm/__init__.py` contains the line:
+For example, `pirate_frb/casm/__init__.py` contains the lines:
 ```py
-# Note: CasmBeamformer is the only class in src_pybind11/pirate_pybind11_casm.cu.
+# Import C++ class from pirate_pybind11
 from ..pirate_pybind11 import CasmBeamformer
 ```
 Note that each pybind11 class will appear with two names -- for example `pirate_frb.pirate_pybind11.CasmBeamformer`

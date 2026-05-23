@@ -266,15 +266,14 @@
 <li><p>Use <code class="docutils literal notranslate"><span class="pre">//</span></code> comments, not <code class="docutils literal notranslate"><span class="pre">/*</span> <span class="pre">*/</span></code></p></li>
 <li><p>Use <code class="docutils literal notranslate"><span class="pre">long</span></code> for sizes and indices, not <code class="docutils literal notranslate"><span class="pre">int</span></code> or <code class="docutils literal notranslate"><span class="pre">size_t</span></code></p></li>
 <li><p>Use spaces, not tabs.</p></li>
-<li><p>Functions which take an <code class="docutils literal notranslate"><span class="pre">ostream</span> <span class="pre">&amp;</span></code> argument should not modify stream state in the caller.
-`</p></li>
-<li><p>If a class <code class="docutils literal notranslate"><span class="pre">X</span></code> derives from <code class="docutils literal notranslate"><span class="pre">std::enable_shared_from_this</span></code>, then its constructor(s() must be protected, and the class must define <code class="docutils literal notranslate"><span class="pre">create()</span></code> static method(s) that return <code class="docutils literal notranslate"><span class="pre">shared_ptr&lt;X&gt;</span></code>.</p></li>
+<li><p>Functions which take an <code class="docutils literal notranslate"><span class="pre">ostream</span> <span class="pre">&amp;</span></code> argument should not modify stream state in the caller.</p></li>
+<li><p>If a class <code class="docutils literal notranslate"><span class="pre">X</span></code> derives from <code class="docutils literal notranslate"><span class="pre">std::enable_shared_from_this</span></code>, then its constructor(s) must be protected, and the class must define <code class="docutils literal notranslate"><span class="pre">create()</span></code> static method(s) that return <code class="docutils literal notranslate"><span class="pre">shared_ptr&lt;X&gt;</span></code>.</p></li>
 </ul>
 <section id="ksgpu">
 <h2>ksgpu<a class="headerlink" href="#ksgpu" title="Link to this heading">¶</a></h2>
 <p>Uses the <code class="docutils literal notranslate"><span class="pre">ksgpu</span></code> helper library, especially the Array class (ksgpu/Array.hpp), memory managment (ksgpu/mem_utils.hpp),
 and xassert macros (ksgpu/xassert.hpp, see below).</p>
-<p>CRITIAL: please complain if you don’t see the ksgpu library in the cursor/claude workspace.</p>
+<p>CRITICAL: please complain if you don’t see the ksgpu library in the cursor/claude workspace.</p>
 </section>
 <section id="xassert-macros">
 <h2>xassert macros<a class="headerlink" href="#xassert-macros" title="Link to this heading">¶</a></h2>
@@ -309,7 +308,7 @@ For example:</p>
 
     <span class="k">if</span> <span class="p">((</span><span class="n">x</span><span class="o">+</span><span class="n">y</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">z</span><span class="p">)</span> <span class="p">{</span>
         <span class="n">stringstream</span> <span class="n">ss</span><span class="p">;</span>
-        <span class="n">ss</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;f(): expected (x+y) &lt; z, got x=&quot;</span> <span class="o">&lt;&lt;</span> <span class="n">x</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;, y=&quot;</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;, z=&quot;</span> <span class="o">&lt;&lt;</span> <span class="n">z</span><span class="p">;</span>
+        <span class="n">ss</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;f(): expected (x+y) &lt; z, got x=&quot;</span> <span class="o">&lt;&lt;</span> <span class="n">x</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;, y=&quot;</span> <span class="o">&lt;&lt;</span> <span class="n">y</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;, z=&quot;</span> <span class="o">&lt;&lt;</span> <span class="n">z</span><span class="p">;</span>
         <span class="n">throw</span> <span class="n">runtime_error</span><span class="p">(</span><span class="n">ss</span><span class="o">.</span><span class="n">str</span><span class="p">());</span>
     <span class="p">}</span>
 

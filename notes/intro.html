@@ -279,10 +279,10 @@ day.)</p></li>
 <ul>
 <li><p>Receives data via TCP from the “upstream” X-engine. The network protocol
 is <a class="reference internal" href="network_protocol.html"><span class="std std-doc">here</span></a>. The protocol includes metadata – the
-format is defined by <a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>.
+format is defined by <a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v2.yml</span></code></span></a>.
 Details of the protocol and metadata will change in the future.</p></li>
 <li><p>Dynamic configuration: the X-engine metadata
-(see <a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>)
+(see <a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v2.yml</span></code></span></a>)
 includes important parameters such as the frequency upchannelization and beam layout.
 The FRB search “dynamically” configures itself when this data is
 received from the X-engine.</p>
@@ -305,7 +305,7 @@ and we just call C++ for low-level compute kernels.</p>
 For more info, see <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">pirate_frb</span> <span class="pre">--help</span></code> or the HTML docs.</p></li>
 <li><p>The FRB server defines <a class="reference internal" href="../grpc/frb_search.proto.html"><span class="std std-doc">gRPC service(s)</span></a> for things like control, monitoring,
 and triggered data writes. All interaction with a running server is via gRPC.
-There is a python client (<code class="docutils literal notranslate"><span class="pre">pirate_frb.RpcClient</span></code>) but not a C++ client
+There is a python client (<code class="docutils literal notranslate"><span class="pre">pirate_frb.rpc.FrbClient</span></code>) but not a C++ client
 (not sure if we’ll need one).</p></li>
 <li><p>The FRB server stores data sent by the X-engine in a ring buffer, and defines
 RPCs for saving data to disk, via a two-stage process where data is written

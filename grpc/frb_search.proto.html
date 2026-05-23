@@ -275,8 +275,8 @@
 <span class="w">  </span><span class="c1">// Returns the current status of the search engine</span>
 <span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">GetStatus</span><span class="w"> </span><span class="p">(</span><span class="n">GetStatusRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">GetStatusResponse</span><span class="p">);</span>
 
-<span class="w">  </span><span class="c1">// Returns metadata as a YAML string (empty if metadata not yet available)</span>
-<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">GetMetadata</span><span class="w"> </span><span class="p">(</span><span class="n">GetMetadataRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">GetMetadataResponse</span><span class="p">);</span>
+<span class="w">  </span><span class="c1">// Returns XEngine metadata as a YAML string (empty if metadata not yet available)</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">GetXEngineMetadata</span><span class="w"> </span><span class="p">(</span><span class="n">GetXEngineMetadataRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">GetXEngineMetadataResponse</span><span class="p">);</span>
 
 <span class="w">  </span><span class="c1">// Write files to disk for specified beams and time range</span>
 <span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">WriteFiles</span><span class="w"> </span><span class="p">(</span><span class="n">WriteFilesRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">WriteFilesResponse</span><span class="p">);</span>
@@ -284,6 +284,10 @@
 <span class="w">  </span><span class="c1">// Subscribe to a stream of filenames. The connection can be closed by the client</span>
 <span class="w">  </span><span class="c1">// at any time, or by the server on shutdown or exception.</span>
 <span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">SubscribeFiles</span><span class="w"> </span><span class="p">(</span><span class="n">SubscribeFilesRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">stream</span><span class="w"> </span><span class="n">SubscribeFilesResponse</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// Returns the per-server configuration this server was started with.</span>
+<span class="w">  </span><span class="c1">// Loosely mirrors the run_server YAML config (flattened to a single server).</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">GetConfig</span><span class="w"> </span><span class="p">(</span><span class="n">GetConfigRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">GetConfigResponse</span><span class="p">);</span>
 <span class="p">}</span>
 
 <span class="c1">// Request message (currently empty, but extensible)</span>
@@ -300,13 +304,13 @@
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">num_free_frames</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span><span class="w">  </span><span class="c1">// Number of available frames in AssembledFrameAllocator</span>
 <span class="p">}</span>
 
-<span class="c1">// Request message for GetMetadata</span>
-<span class="kd">message</span><span class="w"> </span><span class="nc">GetMetadataRequest</span><span class="w"> </span><span class="p">{</span>
+<span class="c1">// Request message for GetXEngineMetadata</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">GetXEngineMetadataRequest</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="na">verbose</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// If true, include comments explaining each field</span>
 <span class="p">}</span>
 
-<span class="c1">// Response message for GetMetadata</span>
-<span class="kd">message</span><span class="w"> </span><span class="nc">GetMetadataResponse</span><span class="w"> </span><span class="p">{</span>
+<span class="c1">// Response message for GetXEngineMetadata</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">GetXEngineMetadataResponse</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">yaml_string</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// Empty string if metadata not yet available</span>
 <span class="p">}</span>
 
@@ -327,10 +331,45 @@
 <span class="kd">message</span><span class="w"> </span><span class="nc">SubscribeFilesRequest</span><span class="w"> </span><span class="p">{}</span>
 
 <span class="c1">// Response message for SubscribeFiles (streamed).</span>
-<span class="c1">// An empty error_message indicates success; non-empty indicates an error.</span>
+<span class="c1">//</span>
+<span class="c1">// The FIRST response on every stream is a ReadySentinel, emitted by</span>
+<span class="c1">// the server immediately after registering the subscription. The</span>
+<span class="c1">// client SubscribeFiles RPC entry point is expected to read this</span>
+<span class="c1">// synchronously before returning to its caller, so that any WriteFiles</span>
+<span class="c1">// call issued after the client-side subscription handle is returned</span>
+<span class="c1">// is guaranteed to enqueue a notification onto this stream.</span>
+<span class="c1">//</span>
+<span class="c1">// Every subsequent response is a WriteNotification carrying one</span>
+<span class="c1">// completed file&#39;s filename + error_message.</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">SubscribeFilesResponse</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">filename</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">       </span><span class="c1">// A single filename (valid only if error_message is empty)</span>
-<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">error_message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">  </span><span class="c1">// Empty string indicates success; non-empty indicates error</span>
+<span class="w">  </span><span class="k">oneof</span><span class="w"> </span><span class="n">kind</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">ReadySentinel</span><span class="w">     </span><span class="na">ready</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="n">WriteNotification</span><span class="w"> </span><span class="na">notification</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1">// Marker message: the act of receiving one of these on the stream is</span>
+<span class="c1">// the signal. No fields.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">ReadySentinel</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="c1">// One completed file&#39;s write status.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">WriteNotification</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">filename</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// Valid only when error_message is empty.</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">error_message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">  </span><span class="c1">// Empty = success; non-empty = error string.</span>
+<span class="p">}</span>
+
+<span class="c1">// Request message for GetConfig (currently empty, but extensible)</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">GetConfigRequest</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="c1">// Response message containing the per-server config.</span>
+<span class="kd">message</span><span class="w"> </span><span class="nc">GetConfigResponse</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">rpc_ip_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">              </span><span class="c1">// &quot;ip:port&quot; string this server is listening on for RPC</span>
+<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="na">data_ip_addrs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">   </span><span class="c1">// &quot;ip:port&quot; string per Receiver (one per data IP)</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">time_samples_per_chunk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">    </span><span class="c1">// Time samples per chunk (from AssembledFrameAllocator)</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">ssd_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">                  </span><span class="c1">// SSD cache directory for this server</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">nfs_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span><span class="w">                  </span><span class="c1">// NFS output directory (already interpolated for {user}/{date})</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">ssd_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span><span class="w">               </span><span class="c1">// Number of FileWriter SSD threads</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">nfs_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span><span class="w">               </span><span class="c1">// Number of FileWriter NFS threads</span>
 <span class="p">}</span>
 </pre></div>
 </div>
