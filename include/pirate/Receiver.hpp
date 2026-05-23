@@ -207,7 +207,8 @@ private:
     // Each of the two live chunks is represented by one AssembledFrameSet
     // (one frame per beam), so curr_frame_sets has length 2:
     // curr_frame_sets[k] is the live set for ichunk = curr_base_chunk + k,
-    // where k in {0,1}. (Rotation uses ichunk & 1 as the slot index.)
+    // where k in {0,1}. Rotation in _advance_one_chunk evicts slot 0, shifts
+    // slot 1 -> slot 0, and pulls a fresh allocator set into slot 1.
 
     std::array<std::shared_ptr<AssembledFrameSet>, 2> curr_frame_sets;
     long curr_base_chunk = 0;

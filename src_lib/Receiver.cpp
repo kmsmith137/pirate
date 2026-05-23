@@ -676,18 +676,16 @@ void Receiver::_assembler_main()
     // chunk; the set's frames[] vector is in beam_ids order with internal
     // (metadata, time_chunk_index) consistency validated by the allocator.
     //
-    // Slots are indexed by chunk PARITY (chunk_idx & 1), matching the slot
-    // lookup in _process_data (slot = ichunk & 1) and in _advance_one_chunk
-    // (slot = curr_base_chunk & 1, with the replacement chunk_idx + 2
-    // having the same parity). When initial_time_chunk is odd, putting
-    // chunk_init in slot 0 would swap the parity convention and corrupt
-    // every subsequent slot lookup -- so we explicitly slot by parity.
+    // Straight slot indexing: curr_frame_sets[k] holds the set for ichunk =
+    // curr_base_chunk + k, where k in {0,1}. Slot lookup in _process_data
+    // uses (ichunk - curr_base_chunk); rotation in _advance_one_chunk shifts
+    // slot 1 -> slot 0 and pulls a fresh set into slot 1.
 
     for (long offset = 0; offset < 2; offset++) {
         long chunk_idx = initial_time_chunk + offset;
         auto set = params.allocator->get_frame_set(params.consumer_id);
         xassert(set->time_chunk_index == chunk_idx);
-        this->curr_frame_sets[chunk_idx & 1] = std::move(set);
+        this->curr_frame_sets[offset] = std::move(set);
     }
 
     // Main loop. We have two kinds of work:
@@ -828,13 +826,14 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
         // The rest of _process_data() copies one minichunk (scales_offsets
         // and int4 data, in that order to match the wire layout) for all
         // beams and the per-sender frequency subset into the AssembledFrames
-        // inside curr_frame_sets[ichunk & 1].
+        // inside curr_frame_sets[ichunk - curr_base_chunk].
         //
         // Wrapped in a block so the local variables don't trip the
         // 'goto minichunk_done' jump above (which is taken when the
         // minichunk is dropped for ichunk < curr_base_chunk).
         {
-            long slot = ichunk & 1;
+            long slot = ichunk - curr_base_chunk;
+            xassert((slot == 0) || (slot == 1));
             xassert(this->curr_frame_sets[slot]);
             const auto &frames_vec = this->curr_frame_sets[slot]->frames;
             xassert(long(frames_vec.size()) == nbeams);
@@ -912,47 +911,55 @@ void Receiver::_process_data(const shared_ptr<Peer> &peer)
 //     curr_base_chunk has been incremented by 1.
 //
 // CRITICAL INVARIANT: once an AssembledFrameSet has been std::move'd out
-// of curr_frame_sets[slot] into completed_frame_sets, the assembler thread
+// of curr_frame_sets[0] into completed_frame_sets, the assembler thread
 // MUST NOT perform any further write (in particular, no memcpy) to any
 // frame inside the just-evicted set. After the push, the set's frames may
 // be concurrently read by FrbServer workers / gRPC / FileWriter, or reaped
 // (data cleared) by the FrbServer reaper thread.
 //
 // We satisfy this invariant by:
-//   (1) std::move clears curr_frame_sets[slot] (the source shared_ptr
-//       becomes null).
-//   (2) The fresh allocator set pulled below immediately replaces
-//       curr_frame_sets[slot]. Any subsequent assembler write reads
-//       curr_frame_sets[slot] again -- which now refers to the new set,
-//       not the just-evicted one.
-// The assembler holds no other shared_ptr to the moved-out set (only
-// function-local references inside _process_data and _advance_one_chunk,
-// both of which go out of scope before the next assembler-main iteration).
+//   (1) std::move into completed_frame_sets clears curr_frame_sets[0]
+//       (the source shared_ptr becomes null).
+//   (2) The shift curr_frame_sets[0] = std::move(curr_frame_sets[1])
+//       immediately replaces slot 0 with the set that was already live in
+//       slot 1 (still safe to write to -- not yet evicted).
+//   (3) A fresh allocator set replaces the now-empty curr_frame_sets[1].
+// After this and curr_base_chunk++, _process_data's slot lookup
+// (ichunk - curr_base_chunk) only resolves to the shifted-down or freshly-
+// pulled sets, never the just-evicted one. The assembler holds no other
+// shared_ptr to the moved-out set (only function-local references inside
+// _process_data and _advance_one_chunk, both of which go out of scope
+// before the next assembler-main iteration).
 
 
 void Receiver::_advance_one_chunk()
 {
     long ichunk_new = curr_base_chunk + 2;
-    long slot = curr_base_chunk & 1;
 
-    // Transfer the evicted set to the completed-set queue. After this
+    // Step 1: transfer the evicted set (chunk curr_base_chunk, always in
+    // slot 0 under straight indexing) to the completed-set queue. After this
     // push the assembler thread will not write to any frame in the
     // just-evicted set -- see the critical invariant in the comment block
     // above.
     {
         unique_lock<std::mutex> lock(mutex);
         _throw_if_stopped("Receiver::_advance_one_chunk");
-        this->completed_frame_sets.push(std::move(this->curr_frame_sets[slot]));
+        this->completed_frame_sets.push(std::move(this->curr_frame_sets[0]));
     }
-    xassert(!this->curr_frame_sets[slot]);   // defense in depth: std::move did clear the slot
+    xassert(!this->curr_frame_sets[0]);   // defense in depth: std::move did clear the slot
     this->cv.notify_all();
 
-    // Pull a fresh set for the chunk newly entering the top of the
+    // Step 2: shift slot 1 down to slot 0 (the now-vacant slot). The set
+    // moving down was already live -- still safe to write to.
+    this->curr_frame_sets[0] = std::move(this->curr_frame_sets[1]);
+    xassert(!this->curr_frame_sets[1]);
+
+    // Step 3: pull a fresh set for the chunk newly entering the top of the
     // 2-chunk window. allocator->get_frame_set() may block briefly while
     // the allocator's worker thread refills the slab pool.
     shared_ptr<AssembledFrameSet> fresh = params.allocator->get_frame_set(params.consumer_id);
     xassert(fresh->time_chunk_index == ichunk_new);
-    this->curr_frame_sets[slot] = std::move(fresh);
+    this->curr_frame_sets[1] = std::move(fresh);
 
     this->curr_base_chunk++;
 }
