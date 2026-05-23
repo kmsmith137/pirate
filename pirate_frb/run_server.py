@@ -148,7 +148,7 @@ def _parse_config(filename):
                 raise RuntimeError(f"{filename}: {key}[{i}] must be a string, got {type(v).__name__}")
 
     for key in ('ssd_threads_per_server', 'nfs_threads_per_server',
-                'min_data_mtu', 'min_rpc_mtu'):
+                'min_data_mtu', 'min_rpc_mtu', 'ringbuf_nchunks'):
         val = config[key]
         if not isinstance(val, int) or val <= 0:
             raise RuntimeError(f"{filename}: '{key}' must be a positive integer, got {val!r}")
@@ -305,7 +305,8 @@ def run_server(config_filename):
                 # No threads spawned in constructor.
                 # (Imported here to avoid circular import with __init__.py.)
                 from . import FrbServer
-                server = FrbServer(receivers, file_writer, config['rpc_ip_addrs'][i])
+                server = FrbServer(receivers, file_writer, config['rpc_ip_addrs'][i],
+                                   config['ringbuf_nchunks'])
 
                 # server.start(): spawns worker/reaper threads and calls
                 # receiver.start() for each receiver (3 threads each).

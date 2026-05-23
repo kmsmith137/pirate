@@ -50,6 +50,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         std::vector<std::shared_ptr<Receiver>> receivers;
         std::shared_ptr<FileWriter> file_writer;
         std::string rpc_server_address;
+        int ringbuf_nchunks = 0;  // logical ring buffer length in time chunks
     };
 
     // Factory method (constructor is private).
@@ -87,8 +88,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     std::unordered_map<long,int> beam_id_to_index;
 
     // The frame_ringbuf is initialized at the same time as the metadata.
-    // Ring buffer has length (ringbuf_nchunks * metadata.get_nbeams()).
-    static constexpr int ringbuf_nchunks = 512;
+    // Ring buffer has length (params.ringbuf_nchunks * metadata.get_nbeams()).
     std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
 
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).

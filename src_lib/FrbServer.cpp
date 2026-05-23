@@ -83,6 +83,7 @@ FrbServer::FrbServer(const Params &p) : params(p)
     xassert(params.file_writer);
     xassert(params.receivers.size() > 0);
     xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
+    xassert(params.ringbuf_nchunks > 0);
 
     // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
     for (uint i = 0; i < params.receivers.size(); i++) {
@@ -213,7 +214,7 @@ void FrbServer::_worker_main(int receiver_index)
     // offset below; the worker's frame_id loop starts there too.
     long initial_time_chunk = allocator->wait_for_initial_chunk();
     long nbeams = m->get_nbeams();
-    long rb_size = FrbServer::ringbuf_nchunks * nbeams;
+    long rb_size = params.ringbuf_nchunks * nbeams;
     long initial_frame_id = initial_time_chunk * nbeams;
 
     unique_lock<std::mutex> lock(mutex);
@@ -364,7 +365,7 @@ void FrbServer::_reaper_thread_main()
     // safe because it sits inside the cv-wait on (rb_reaped < rb_finalized)
     // -- for that to become true, some worker has finalized a frame, which
     // means the first worker has already executed its resize.
-    long rb_size = FrbServer::ringbuf_nchunks * nbeams;
+    long rb_size = params.ringbuf_nchunks * nbeams;
 
     // Get total number of frames (blocking until allocator is initialized).
     long total_frames = allocator->num_total_frames(/*blocking=*/ true);
@@ -744,6 +745,7 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
         response->add_data_ip_addrs(r->params.address);
 
     response->set_time_samples_per_chunk(s->allocator->time_samples_per_chunk);
+    response->set_ringbuf_nchunks(s->params.ringbuf_nchunks);
 
     const auto &fwp = s->params.file_writer->params;
     response->set_ssd_dir(fwp.ssd_root.string());

@@ -931,19 +931,23 @@ void register_core_bindings(pybind11::module &m)
         "Wraps multiple Receivers and exposes their status via gRPC.")
           .def(py::init([](std::vector<std::shared_ptr<Receiver>> receivers,
                            std::shared_ptr<FileWriter> file_writer,
-                           const std::string &rpc_server_address) {
+                           const std::string &rpc_server_address,
+                           int ringbuf_nchunks) {
                FrbServer::Params params;
                params.receivers = std::move(receivers);
                params.file_writer = std::move(file_writer);
                params.rpc_server_address = rpc_server_address;
+               params.ringbuf_nchunks = ringbuf_nchunks;
                return FrbServer::create(params);
           }),
-               py::arg("receivers"), py::arg("file_writer"), py::arg("rpc_server_address"),
+               py::arg("receivers"), py::arg("file_writer"),
+               py::arg("rpc_server_address"), py::arg("ringbuf_nchunks"),
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    receivers: List of Receiver objects to query\n"
                "    file_writer: FileWriter for saving frames to disk\n"
-               "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')")
+               "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')\n"
+               "    ringbuf_nchunks: Logical ring buffer length in time chunks")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"

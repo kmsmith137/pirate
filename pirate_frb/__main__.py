@@ -853,6 +853,7 @@ def rpc_status(args):
         print(f"  rpc_ip_addr = {cfg.rpc_ip_addr}")
         print(f"  data_ip_addrs = {list(cfg.data_ip_addrs)}")
         print(f"  time_samples_per_chunk = {cfg.time_samples_per_chunk}")
+        print(f"  ringbuf_nchunks = {cfg.ringbuf_nchunks}")
         print(f"  ssd_dir = {cfg.ssd_dir}")
         print(f"  nfs_dir = {cfg.nfs_dir}")
         print(f"  ssd_threads = {cfg.ssd_threads}")

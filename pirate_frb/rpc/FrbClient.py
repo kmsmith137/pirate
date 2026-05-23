@@ -209,6 +209,7 @@ class FrbClient:
             - rpc_ip_addr: "ip:port" this server's RPC is bound to
             - data_ip_addrs: list of "ip:port" strings, one per Receiver
             - time_samples_per_chunk: int
+            - ringbuf_nchunks: logical ring buffer length (in time chunks)
             - ssd_dir: SSD cache directory
             - nfs_dir: NFS output directory (already interpolated for {user}/{date})
             - ssd_threads: number of FileWriter SSD threads

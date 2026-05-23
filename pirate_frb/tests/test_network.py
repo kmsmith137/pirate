@@ -79,6 +79,7 @@ class NetworkTester:
             base_beam_id           = random.randint(0, 10000),
             data_base_port         = 5000,
             rpc_port               = 6000,
+            ringbuf_nchunks        = random.randint(50, 100),
         )
 
     def __init__(self):
@@ -194,7 +195,8 @@ class NetworkTester:
         ]
 
         self.server = FrbServer(self.receivers, self.file_writer,
-                                f"127.0.0.1:{p['rpc_port']}")
+                                f"127.0.0.1:{p['rpc_port']}",
+                                p['ringbuf_nchunks'])
         self.server.start()
 
     def _build_client(self):
@@ -358,8 +360,7 @@ class NetworkTester:
         # worst-case rb_start at server time using:
         #   max_future_rb_end <= (max_wpos // mpc - 1) * nbeams
         #   max_future_rb_start <= max_future_rb_end - rb_size
-        RB_NCHUNKS = 512   # = FrbServer::ringbuf_nchunks (constant in FrbServer.hpp)
-        rb_size = RB_NCHUNKS * p['nbeams']
+        rb_size = p['ringbuf_nchunks'] * p['nbeams']
 
         max_wpos = int(np.max(self.wpos))
         if max_wpos > 0:
