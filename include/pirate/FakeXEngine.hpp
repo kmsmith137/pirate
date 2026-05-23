@@ -286,8 +286,12 @@ struct FakeXEngine
         // Persists across DISCONNECT/reconnect cycles.
         bool first_send_done = false;
 
-        // Per-worker XEngineMetadata, with the round-robin subset of
-        // freq_channels assigned to this thread.
+        // Per-worker XEngineMetadata, MEANINGFUL: freq_channels holds the
+        // round-robin subset of channels this worker sends on the wire.
+        // Built by make_worker_metadata() from FakeXEngine::xmd at worker
+        // init time -- this is the form transmitted in the per-connection
+        // YAML handshake (the receiver treats each TCP connection as one
+        // X-engine node with a specific freq_channels subset).
         XEngineMetadata xmd;
 
         // Send buffer laid out as:
@@ -347,6 +351,11 @@ struct FakeXEngine
 
     // ----- Constructor args -----
 
+    // Top-level metadata template; the constructor copies it from the ctor
+    // arg. freq_channels: typically FREQUENCY-SCRUBBED (empty) on the way in
+    // -- it's IGNORED here regardless, because make_worker_metadata() builds
+    // each Worker's xmd by copying this template and overwriting freq_channels
+    // with the per-worker round-robin subset (see Worker::xmd above).
     const XEngineMetadata xmd;
     const std::vector<std::string> ip_addrs;  // each element is "ip:port"
     const int nworkers;
@@ -478,6 +487,10 @@ struct FakeXEngine
     // Python callers MUST call the constructor inside a ThreadAffinity
     // context manager so the spawned worker threads are pinned to the
     // intended vcpus.
+    // xmd.freq_channels: IGNORED. make_worker_metadata() will overwrite
+    // freq_channels per-worker, so the caller can pass either a meaningful
+    // or frequency-scrubbed xmd (the latter is the typical case, e.g. from
+    // XEngineMetadata::make_test_instance).
     FakeXEngine(const XEngineMetadata &xmd, const std::vector<std::string> &ip_addrs,
                 int nworkers, long time_samples_per_chunk, bool debug = false);
 

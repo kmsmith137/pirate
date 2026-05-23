@@ -51,10 +51,14 @@ struct AssembledFrame
     // XEngineMetadata instance via this shared_ptr. INVARIANT: non-null on
     // every constructed AssembledFrame.
     //
+    // freq_channels: always FREQUENCY-SCRUBBED (empty). The allocator path
+    // scrubs in AssembledFrameAllocator::_initialize_metadata; the make_random
+    // and from_asdf paths produce frames whose metadata starts scrubbed.
+    //
     // Note: XEngineMetadata round-trips bit-exactly through YAML, but is
     // projected through ASDF (see XEngineMetadata.hpp for details). After a
     // from_asdf() the metadata's beam_ids / beam_positions_x / beam_positions_y
-    // are length-1 (just this frame's beam), and freq_channels is empty.
+    // are length-1 (just this frame's beam).
     std::shared_ptr<const XEngineMetadata> metadata;
 
     // 'scales_offsets' and 'data' share a single slab. 'scales_offsets' is
@@ -130,6 +134,11 @@ struct AssembledFrame
     // Throws if 'xmd' is null. Throws if 'beam_id' is not in 'xmd->beam_ids'.
     // The returned frame's metadata is set to 'xmd' (shared, no copy);
     // data is filled with random bytes. nfreq is taken from xmd->get_total_nfreq().
+    //
+    // xmd.freq_channels: IGNORED (only beam_ids / beam_positions_* / zone_nfreq /
+    // zone_freq_edges are read out of xmd here). Callers should typically pass a
+    // frequency-scrubbed xmd, so the returned frame's metadata matches the
+    // "always frequency-scrubbed" invariant on AssembledFrame::metadata.
     static std::shared_ptr<AssembledFrame>
     make_random(const std::shared_ptr<const XEngineMetadata> &xmd,
                 long ntime, long beam_id, long time_chunk_index);
@@ -187,6 +196,8 @@ struct AssembledFrameSet
     long time_chunk_index = 0;
 
     // Nonempty pointer, initialized at creation, not protected by lock.
+    // Same shared pointer as AssembledFrameAllocator::metadata, so always
+    // FREQUENCY-SCRUBBED.
     std::shared_ptr<const XEngineMetadata> metadata;
 
     // Length nbeams, all pointers nonempty, initialized at creation, not protected by lock.
@@ -251,6 +262,10 @@ struct AssembledFrameAllocator
     // a metadata that passes XEngineMetadata::check_sender_consistency against
     // this one. Propagated by _create_frame() into every AssembledFrame via
     // AssembledFrame::metadata.
+    //
+    // freq_channels: always FREQUENCY-SCRUBBED (empty). The canonical copy
+    // represents consensus across senders; senders disagree on freq_channels
+    // by design, so it is explicitly cleared in _initialize_metadata.
     std::shared_ptr<const XEngineMetadata> metadata;
 
     // Sets the canonical (consensus-across-senders) XEngineMetadata on the
@@ -258,10 +273,13 @@ struct AssembledFrameAllocator
     // has parsed a peer's YAML metadata -- so many calls per allocator are
     // expected, not just one per consumer.
     //
-    // The first call (from any caller) stores the metadata (with
-    // freq_channels cleared, since the canonical copy is the consensus and
-    // freq_channels deliberately differs per sender). Subsequent calls run
-    // XEngineMetadata::check_sender_consistency() against the canonical
+    // metadata.freq_channels: expected MEANINGFUL on input (one specific
+    // sender's frequency-channel subset). EXPLICITLY SCRUBBED internally on
+    // first init before being stored as the canonical copy -- senders disagree
+    // on freq_channels by design.
+    //
+    // The first call (from any caller) stores the metadata. Subsequent calls
+    // run XEngineMetadata::check_sender_consistency() against the canonical
     // copy and throw if the new metadata is inconsistent.
     //
     // Thread-safe.
@@ -278,8 +296,8 @@ struct AssembledFrameAllocator
     // If blocking=false: returns nullptr if metadata is not yet available.
     //
     // The returned shared_ptr points at the canonical (shared, immutable)
-    // metadata. The 'freq_channels' field is cleared on the canonical copy --
-    // see _initialize_metadata() for rationale -- so callers should not look
+    // metadata. Always FREQUENCY-SCRUBBED (freq_channels is empty) -- see
+    // _initialize_metadata() for rationale -- so callers should not look
     // there for the per-sender frequency subset.
     //
     // Entry point: throws if stopped (in blocking=true case).

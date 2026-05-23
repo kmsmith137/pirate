@@ -16,16 +16,15 @@ namespace pirate {
 #endif
 
 
-// XEngineMetadata: documents file format for communication between X-engine and FRB nodes.
+
+// XEngineMetadata: this metadata is sent "over the wire" by the X-engine nodes
+// to the FRB nodes, at the beginning of every TCP stream.
 //
-// This metadata is used in two contexts:
+// References:
+//   - configs/xengine/xengine_metadata_v2.yml
+//   - notes/network_protocol.md
 //
-//   1. Every X-engine node sends this file to every FRB node, at the beginning
-//      of the TCP stream.
-//
-//   2. As a configuration file for the "fake X-engine" used for testing.
-//
-// Reference: pirate/configs/xengine/xengine_metadata_*.yml
+// The C++ class 'XEngineMetadata' is also used for bookkeeping in several places.
 //
 // Serialization formats:
 //
@@ -57,11 +56,19 @@ struct XEngineMetadata
 
     std::vector<long> zone_nfreq;         // length (nzones)
     std::vector<double> zone_freq_edges;  // length (nzones+1), monotone increasing, in MHz.
-
-    // Optional: which frequency channels are present?
-    // A list of distinct integers 0 <= (channel_id) < (total frequency channels).
-    // Only makes sense in "context 1" (see above), to indicate which frequency channels
-    // are sent by a particular X-engine node.
+    
+    // The 'freq_channels' member deserves special discussion.
+    //
+    // The wire protocol defines 'freq_channels' to be a list of frequency channels sent
+    // by a specific X-engine node. This also makes sense in a bookkeeping context where a
+    // specific X-engine node is distinguished (e.g. Receiver::Peer).
+    //
+    // In other bookkeeping contexts, no specific X-engine node is distinguished
+    // (e.g. Receiver), and 'freq_channels' is not meaningful. In such cases, we
+    // set freq_channels to an empty vector to avoid confusion. We say that an
+    // XEngineMetadata instance is "frequency-scrubbed" if 'freq_channels' has been
+    // set to an empty vector.
+    
     std::vector<long> freq_channels;
 
     // ---- Beams ----

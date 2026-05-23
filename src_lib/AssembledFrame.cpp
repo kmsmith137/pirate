@@ -160,7 +160,7 @@ static std::array<double, 3> _read_float_arr3(const shared_ptr<ASDF::group> &grp
 // (not ASDF::group) so the order is preserved -- group::to_yaml is backed
 // by std::map and would alphabetize keys. Skips freq_channels, beam_ids,
 // and beam_positions_{x,y}; those are handled per-frame at the top level
-// by AssembledFrame::write_asdf.
+// by AssembledFrame::write_asdf. m.freq_channels: IGNORED (skipped on emit).
 //
 // If verbose, emits explanatory comments. Section breakdown matches
 // configs/xengine/xengine_metadata_v2.yml; comments here are terse since

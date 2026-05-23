@@ -84,6 +84,10 @@ struct Receiver::Peer
     long yaml_string_len = 0;     // total bytes expected from sender
 
     // All following members are initialized when state ReadYaml -> ReadData.
+    // metadata: MEANINGFUL freq_channels here -- this Peer represents one
+    // specific X-engine sender, and freq_channels is the channel subset it
+    // sends. (Contrast with the allocator's canonical metadata, which is
+    // frequency-scrubbed; see AssembledFrameAllocator::metadata.)
     XEngineMetadata metadata;
     long bytes_per_minichunk = 0;   // = 12 + nbeams * nfreq * 128 (v2)
     long minichunks_per_chunk = 0;  // = allocator->time_samples_per_chunk / 256

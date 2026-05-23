@@ -116,7 +116,8 @@ void register_core_bindings(pybind11::module &m)
             },
             "Shared XEngineMetadata for this frame. Read-only by convention --\n"
             "do not mutate the returned object, since it is shared with all\n"
-            "sibling frames from the same allocator.")
+            "sibling frames from the same allocator.\n\n"
+            "Always frequency-scrubbed: metadata.freq_channels is empty.")
         .def_property_readonly("data",
             [](const AssembledFrame &self) {
                 // Convert int4 array (nfreq, ntime) to uint8 array (nfreq, ntime/2).
@@ -157,7 +158,10 @@ void register_core_bindings(pybind11::module &m)
             py::arg("xmd"), py::arg("ntime"), py::arg("beam_id"), py::arg("time_chunk_index"),
             "Create a random AssembledFrame backed by the given XEngineMetadata.\n\n"
             "Throws if xmd is None or if beam_id is not in xmd.beam_ids.\n"
-            "Data is filled with random bytes. nfreq is taken from xmd.get_total_nfreq().")
+            "Data is filled with random bytes. nfreq is taken from xmd.get_total_nfreq().\n\n"
+            "xmd.freq_channels is ignored. Callers should typically pass a\n"
+            "frequency-scrubbed xmd so the returned frame matches the\n"
+            "'always frequency-scrubbed' invariant on AssembledFrame.metadata.")
         .def_static("from_asdf", &AssembledFrame::from_asdf,
             py::arg("filename"),
             "Read an AssembledFrame back from an ASDF file.\n\n"
@@ -185,7 +189,8 @@ void register_core_bindings(pybind11::module &m)
             [](const AssembledFrameSet &self) {
                 return std::const_pointer_cast<XEngineMetadata>(self.metadata);
             },
-            "Shared XEngineMetadata for this set. Read-only by convention.")
+            "Shared XEngineMetadata for this set. Read-only by convention.\n\n"
+            "Always frequency-scrubbed: metadata.freq_channels is empty.")
         .def_readonly("frames", &AssembledFrameSet::frames,
             "Length-nbeams list of AssembledFrame, in metadata.beam_ids order.")
         .def("get_frame", &AssembledFrameSet::get_frame,
@@ -511,10 +516,13 @@ void register_core_bindings(pybind11::module &m)
     // XEngineMetadata: documents file format for communication between X-engine and FRB nodes.
     // Skipped methods: to_yaml() [YAML::Emitter arg], from_yaml() [YamlFile arg]
     py::class_<XEngineMetadata, std::shared_ptr<XEngineMetadata>>(m, "XEngineMetadata",
-        "Metadata for X-engine to FRB node communication.\n\n"
-        "Used in two contexts:\n"
-        "  1. Sent by X-engine nodes to FRB nodes at start of TCP stream\n"
-        "  2. Configuration for the fake correlator in testing\n\n"
+        "Metadata sent over the wire by X-engine nodes to FRB nodes at the\n"
+        "start of every TCP stream. Also used for bookkeeping in several\n"
+        "places (allocator's canonical copy, per-frame ASDF projection, etc).\n\n"
+        "See configs/xengine/xengine_metadata_v2.yml for field-by-field\n"
+        "documentation. The freq_channels member has two distinct meanings\n"
+        "depending on context -- see the 'freq_channels' attribute docstring\n"
+        "and XEngineMetadata.hpp for the 'frequency-scrubbed' convention.\n\n"
         "Note: YAML is the full-fidelity serialization. ASDF (via\n"
         "AssembledFrame.write_asdf) drops/projects 4 members per-frame --\n"
         "see the C++ header for details.")
@@ -526,7 +534,13 @@ void register_core_bindings(pybind11::module &m)
           .def_readwrite("zone_freq_edges", &XEngineMetadata::zone_freq_edges,
                "Frequency band edges in MHz (length nzones+1, monotone increasing)")
           .def_readwrite("freq_channels", &XEngineMetadata::freq_channels,
-               "Which frequency channels are present (optional)")
+               "Which frequency channels are present. MEANINGFUL when the\n"
+               "metadata is associated with one specific X-engine sender\n"
+               "(the wire-protocol case, or a FakeXEngine Worker). Otherwise\n"
+               "(bookkeeping contexts where no specific sender is distinguished,\n"
+               "e.g. the allocator's canonical copy, FrbServer, AssembledFrame's\n"
+               "metadata) the convention is to set this to an empty list, which\n"
+               "we call 'frequency-scrubbed'. See XEngineMetadata.hpp.")
           .def_readwrite("beamset", &XEngineMetadata::beamset,
                "Integer identifier for this set of beams")
           .def_readwrite("beam_ids", &XEngineMetadata::beam_ids,
@@ -625,7 +639,10 @@ void register_core_bindings(pybind11::module &m)
                "Python caller MUST invoke this constructor inside a ThreadAffinity\n"
                "context manager.\n\n"
                "Args:\n"
-               "    xmd: X-engine metadata defining frequency channels and beams\n"
+               "    xmd: X-engine metadata defining frequency zones and beams.\n"
+               "        xmd.freq_channels is ignored -- per-worker freq_channels\n"
+               "        is built internally by round-robin assignment of channels\n"
+               "        to workers.\n"
                "    ip_addrs: List of receiver addresses in 'ip:port' format\n"
                "    nworkers: Number of worker threads (must be a multiple of len(ip_addrs))\n"
                "    time_samples_per_chunk: Receiver-side chunk size (must equal\n"
