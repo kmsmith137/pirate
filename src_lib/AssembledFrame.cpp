@@ -563,26 +563,7 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
     frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
 
-    std::mt19937 &rng = ksgpu::default_rng();
-
-    // Fill scales_offsets: scales[:, :, 0] in [0, 1], offsets[:, :, 1] in [-1, 1].
-    {
-        __half *so = static_cast<__half *>(frame->scales_offsets.data);
-        for (long f = 0; f < nfreq; f++) {
-            for (long m = 0; m < mpc; m++) {
-                so[(f * mpc + m) * 2 + 0] = __float2half_rn(float(rand_uniform( 0.0,  1.0, rng)));
-                so[(f * mpc + m) * 2 + 1] = __float2half_rn(float(rand_uniform(-1.0,  1.0, rng)));
-            }
-        }
-    }
-
-    // Fill data with random bytes.
-    // (int4 dtype packs 2 elements per byte, so nbytes = nfreq * ntime / 2)
-    long nbytes = nfreq * (ntime / 2);
-    char *p = static_cast<char *>(frame->data.data);
-    for (long i = 0; i < nbytes; i++)
-        p[i] = (char) rand_int(0, 256, rng);
-
+    frame->randomize();
     return frame;
 }
 
