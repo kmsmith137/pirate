@@ -14,6 +14,7 @@
 #include <unistd.h>    // fsync(), close()
 
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <random>
@@ -154,35 +155,127 @@ static std::array<double, 3> _read_float_arr3(const shared_ptr<ASDF::group> &grp
 }
 
 
-// Build the "xengine_metadata" sub-group for an outgoing ASDF file.
-// Skips freq_channels, beam_ids, beam_positions_{x,y} -- those are handled
-// per-frame at the top level by AssembledFrame::write_asdf.
-static shared_ptr<ASDF::group> _metadata_to_asdf_group(const XEngineMetadata &m)
+// Write the "xengine_metadata" sub-map directly to an ASDF::writer. Key
+// order follows configs/xengine/xengine_metadata_v2.yml. Emits via writer
+// (not ASDF::group) so the order is preserved -- group::to_yaml is backed
+// by std::map and would alphabetize keys. Skips freq_channels, beam_ids,
+// and beam_positions_{x,y}; those are handled per-frame at the top level
+// by AssembledFrame::write_asdf.
+//
+// If verbose, emits explanatory comments. Section breakdown matches
+// configs/xengine/xengine_metadata_v2.yml; comments here are terse since
+// the top-level write_asdf() comment block points readers at that file
+// for field-by-field detail.
+static void _emit_metadata_yaml(ASDF::writer &w, const XEngineMetadata &m, bool verbose)
 {
-    auto g = make_shared<ASDF::group>();
+    w << YAML::BeginMap;
 
-    g->emplace("version", make_shared<ASDF::int_entry>(int64_t(m.version)));
-    g->emplace("zone_nfreq", _make_int_seq(m.zone_nfreq));
-    g->emplace("zone_freq_edges", _make_float_seq(m.zone_freq_edges));
-    g->emplace("beamset", make_shared<ASDF::int_entry>(int64_t(m.beamset)));
+    w << YAML::Key << "version" << YAML::Value << ASDF::int_entry(int64_t(m.version));
 
-    g->emplace("unix_ns_at_seq_0", make_shared<ASDF::int_entry>(int64_t(m.unix_ns_at_seq_0)));
-    g->emplace("dt_ns_per_seq", make_shared<ASDF::int_entry>(int64_t(m.dt_ns_per_seq)));
-    g->emplace("seq_per_frb_time_sample", make_shared<ASDF::int_entry>(int64_t(m.seq_per_frb_time_sample)));
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Frequency zones. The observed frequency band is divided into\n"
+            "zones; within a zone all channels have the same width, but width\n"
+            "may differ between zones.\n"
+            "  zone_nfreq:      number of channels in each zone.\n"
+            "  zone_freq_edges: zone boundary frequencies in MHz; length (len(zone_nfreq) + 1)."
+        ) << YAML::Newline << YAML::Newline;
+    }
+    w << YAML::Key << "zone_nfreq" << YAML::Value << *_make_int_seq(m.zone_nfreq);
+    w << YAML::Key << "zone_freq_edges" << YAML::Value << *_make_float_seq(m.zone_freq_edges);
 
-    g->emplace("tel_origin_itrs_lat_deg", make_shared<ASDF::float_entry>(m.tel_origin_itrs_lat_deg));
-    g->emplace("tel_origin_itrs_lon_deg", make_shared<ASDF::float_entry>(m.tel_origin_itrs_lon_deg));
-    g->emplace("tel_grid_x_axis", _make_float_seq(m.tel_grid_x_axis));
-    g->emplace("tel_grid_y_axis", _make_float_seq(m.tel_grid_y_axis));
-    g->emplace("tel_dish_elev_axis", _make_float_seq(m.tel_dish_elev_axis));
-    g->emplace("tel_dish_vert_axis", _make_float_seq(m.tel_dish_vert_axis));
-    g->emplace("tel_dish_coelev_deg", make_shared<ASDF::float_entry>(m.tel_dish_coelev_deg));
-    g->emplace("tel_dish_separation_x_m", make_shared<ASDF::float_entry>(m.tel_dish_separation_x_m));
-    g->emplace("tel_dish_separation_y_m", make_shared<ASDF::float_entry>(m.tel_dish_separation_y_m));
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "integer identifier for this set of beams (sent by X-engine, opqaue to FRB search)"
+        ) << YAML::Newline;
+    }
+    w << YAML::Key << "beamset" << YAML::Value << ASDF::int_entry(int64_t(m.beamset));
 
-    g->emplace("noise_variance", _make_float_seq(m.noise_variance));
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Timekeeping: the X-engine uses an FPGA sequence number ('seq') to\n"
+            "track time. To compute absolute time of an FRB time sample with\n"
+            "index 't' (within a chunk) and given top-level time_chunk_index:\n"
+            "  seq = (time_chunk_index * ntime + t) * seq_per_frb_time_sample\n"
+            "  unix_ns = unix_ns_at_seq_0 + seq * dt_ns_per_seq"
+        ) << YAML::Newline << YAML::Newline;
+    }
+    w << YAML::Key << "unix_ns_at_seq_0" << YAML::Value << ASDF::int_entry(int64_t(m.unix_ns_at_seq_0));
+    w << YAML::Key << "dt_ns_per_seq" << YAML::Value << ASDF::int_entry(int64_t(m.dt_ns_per_seq));
+    w << YAML::Key << "seq_per_frb_time_sample" << YAML::Value << ASDF::int_entry(int64_t(m.seq_per_frb_time_sample));
 
-    return g;
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Telescope alignment and localization.\n"
+            "\n"
+            "Coordinate Systems\n"
+            "\n"
+            "Topocentric: origin at the given lat/lon. x-axis is directed exactly East (increasing Longitude),\n"
+            "  y-axis is directed exactly North (increasing Latitude), z-axis is directed exactly \"up\" (increasing\n"
+            "  altitude). orthogonal, Z = X x Y.\n"
+            "\n"
+            "Grid: origin at SW corner of Dish Array, aligned with Dish Array.  x-axis directed \"east-ish\"\n"
+            "  parallel to dish \"e/w\" separatation vector.  y-axis directed \"north-ish\" parallel to \"n/s\"\n"
+            "  separation vector.  Z = X x Y points normal to grid plane.  Dish grid lives in x-y plane at a\n"
+            "  constant Z. Orthogonal. Rotated by O(1) degrees from \"Topocentric\"\n"
+            "\n"
+            "Dish Elevation Axis: The axis around which the dishes pivot. positive is in the east direction.\n"
+            "  *Not* parallel to the dish grid \"e/w\" separation. \"Coelevation\" pointing measures an angle around\n"
+            "  this axis.\n"
+            "\n"
+            "Dish Vertical Axis: Local \"up/zenith\" for the dishes. The direction which has coelevation = 0.0.\n"
+            "  Orthogonal to the Dish Elevation axis."
+        ) << YAML::Newline;
+        w << YAML::Newline << YAML::Comment(
+            "Position on the Earth in degrees."
+        ) << YAML::Newline;
+    }
+    w << YAML::Key << "tel_origin_itrs_lat_deg" << YAML::Value << ASDF::float_entry(m.tel_origin_itrs_lat_deg);
+    w << YAML::Key << "tel_origin_itrs_lon_deg" << YAML::Value << ASDF::float_entry(m.tel_origin_itrs_lon_deg);
+
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Unit vectors in the x & y grid directions, in topocentric coordinates."
+        ) << YAML::Newline;
+    }
+    w << YAML::Key << "tel_grid_x_axis" << YAML::Value << *_make_float_seq(m.tel_grid_x_axis);
+    w << YAML::Key << "tel_grid_y_axis" << YAML::Value << *_make_float_seq(m.tel_grid_y_axis);
+
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Unit vectors for the dish frame, the elevation axis and vertical axis, in\n"
+            "topocentric coordinates."
+        ) << YAML::Newline;
+    }
+    w << YAML::Key << "tel_dish_elev_axis" << YAML::Value << *_make_float_seq(m.tel_dish_elev_axis);
+    w << YAML::Key << "tel_dish_vert_axis" << YAML::Value << *_make_float_seq(m.tel_dish_vert_axis);
+
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "The dish pointing angle, co-elevation in degrees: angle away from vertical,\n"
+            "north is positive."
+        ) << YAML::Newline;
+    }
+    w << YAML::Key << "tel_dish_coelev_deg" << YAML::Value << ASDF::float_entry(m.tel_dish_coelev_deg);
+
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Values of dish separation in x and y directions in meters."
+        ) << YAML::Newline;
+    }
+    w << YAML::Key << "tel_dish_separation_x_m" << YAML::Value << ASDF::float_entry(m.tel_dish_separation_x_m);
+    w << YAML::Key << "tel_dish_separation_y_m" << YAML::Value << ASDF::float_entry(m.tel_dish_separation_y_m);
+
+    if (verbose) {
+        w << YAML::Newline << YAML::Newline << YAML::Comment(
+            "Per-zone noise variance; length nzones (= len(zone_nfreq)).\n"
+            "Temporary kludge: the FRB server assumes mean-zero, time-uncorrelated\n"
+            "noise with this variance. Will be generalized later."
+        ) << YAML::Newline;
+    }
+    w << YAML::Key << "noise_variance" << YAML::Value << *_make_float_seq(m.noise_variance);
+
+    w << YAML::EndMap;
 }
 
 
@@ -219,7 +312,7 @@ static XEngineMetadata _metadata_from_asdf_group(const shared_ptr<ASDF::group> &
 }
 
 
-void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
+void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool verbose) const
 {
     xassert(nfreq > 0);
     xassert(ntime > 0);
@@ -281,27 +374,14 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
     double bx = metadata->beam_positions_x[beam_idx];
     double by = metadata->beam_positions_y[beam_idx];
 
-    // Create ASDF group with metadata and array.
-    auto grp = make_shared<ASDF::group>();
-
-    // Add scalar per-frame metadata.
-    grp->emplace("nfreq", make_shared<ASDF::int_entry>(int64_t(nfreq)));
-    grp->emplace("ntime", make_shared<ASDF::int_entry>(int64_t(ntime)));
-    grp->emplace("beam_id", make_shared<ASDF::int_entry>(int64_t(beam_id)));
-    grp->emplace("time_chunk_index", make_shared<ASDF::int_entry>(int64_t(time_chunk_index)));
-    grp->emplace("beam_position_x", make_shared<ASDF::float_entry>(bx));
-    grp->emplace("beam_position_y", make_shared<ASDF::float_entry>(by));
-
-    // Add the XEngineMetadata sub-group (everything else).
-    grp->emplace("xengine_metadata", _metadata_to_asdf_group(*metadata));
-
-    // Create ndarray for scales_offsets (emit before "data" so its binary
-    // block lands first in the file). Stored natively as float16 with shape
-    // (nfreq, mpc, 2); the last axis is {scale, offset}.
+    // Build ndarrays for scales_offsets and data. We attach the underlying
+    // memory via ptr_block_t (no copy); the local Array shared_ptrs above
+    // keep the storage alive through w.flush() below.
+    //
+    // scales_offsets: shape (nfreq, mpc, 2) float16; last axis is {scale, offset}.
     long so_nbytes = nfreq * mpc * 4;
     auto so_block = make_shared<ASDF::ptr_block_t>(local_scales_offsets.data, so_nbytes);
     auto so_mblock = ASDF::make_constant_memoized(shared_ptr<ASDF::block_t>(so_block));
-
     auto so_arr = make_shared<ASDF::ndarray>(
         so_mblock,
         std::optional<ASDF::block_info_t>(),
@@ -313,15 +393,11 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
         ASDF::host_byteorder(),
         vector<int64_t>{nfreq, mpc, 2}
     );
-    grp->emplace("scales_offsets", so_arr);
 
-    // Create ndarray for data.
-    // int4 dtype (4 bits per element) is stored as uint8 with shape (nfreq, ntime/2).
-    // Use ptr_block_t to avoid copying data.
+    // data: int4 dtype (4 bits per element) stored as uint8 with shape (nfreq, ntime/2).
     long nbytes = nfreq * (ntime / 2);
     auto block = make_shared<ASDF::ptr_block_t>(local_data.data, nbytes);
     auto mblock = ASDF::make_constant_memoized(shared_ptr<ASDF::block_t>(block));
-
     auto arr = make_shared<ASDF::ndarray>(
         mblock,
         std::optional<ASDF::block_info_t>(),
@@ -333,11 +409,122 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync) const
         ASDF::host_byteorder(),
         vector<int64_t>{nfreq, ntime/2}
     );
-    grp->emplace("data", arr);
 
-    // Write to file.
-    auto project = make_shared<ASDF::asdf>(map<string, string>(), grp);
-    project->write(filename);
+    // Emit the file manually via ASDF::writer rather than going through
+    // ASDF::asdf + ASDF::group. The group representation is backed by
+    // std::map, which alphabetizes keys; we want a custom order
+    // (resembling configs/xengine/xengine_metadata_v2.yml: freq -> beams ->
+    // time -> nested xengine_metadata -> ndarrays). scales_offsets is
+    // emitted before data so its binary block lands first in the file.
+    {
+        ofstream os(filename, ios::binary | ios::trunc | ios::out);
+        ASDF::writer w(os, map<string, string>());
+
+        w << YAML::LocalTag("core/asdf-1.1.0");
+        w << YAML::Indent(4);    // 4-space (not yaml-cpp default 2-space) indent throughout
+        w << YAML::BeginMap;
+
+        if (verbose) {
+            w << YAML::Newline << YAML::Comment(
+                "This file contains FRB intensity data for one \"frame\":\n"
+                "  - one beam\n"
+                "  - all frequency channels\n"
+                "  - a specific time range (or time \"chunk\")\n"
+                "\n"
+                "Written by pirate::AssembedFrame::write_asdf().\n"
+                "Note that we define a \"minichunk\" to be 256 time samples.\n"
+                "\n"
+                "References:\n"
+                "  configs/xengine/xengine_metadata_v2.yml -- xengine_metadata fields\n"
+                "  notes/network_protocol.md               -- wire protocol"
+            ) << YAML::Newline << YAML::Newline;
+        }
+
+        // asdf-cxx library tag (matches ASDF::asdf::to_yaml).
+        w << YAML::Key << "asdf/library" << YAML::Value
+          << ASDF::software(ASDF_CXX_NAME, ASDF_CXX_AUTHOR, ASDF_CXX_HOMEPAGE, ASDF_CXX_VERSION);
+
+        if (verbose) {
+            w << YAML::Newline << YAML::Newline << YAML::Comment(
+                "Per-frame scalar metadata.\n"
+                "  nfreq:            total frequency channels across all zones; equals\n"
+                "                    sum(xengine_metadata.zone_nfreq) below.\n"
+                "  beam_id:          integer id of this beam (an entry of the X-engine's\n"
+                "                    beam_ids).\n"
+                "  beam_position_x:  see below.\n"
+                "  beam_position_y:  see below.\n"
+                "  ntime:            number of time samples in this frame (a multiple of 256;\n"
+                "                    equals the server's 'time_samples_per_chunk' parameter).\n"
+                "  time_chunk_index: chunk index of this frame's first time sample, in units\n"
+                "                    of ntime samples.\n"
+                "  fpga_seq:         X-engine FPGA sequence number at the beginning of this frame.\n"
+                "                    Equals time_chunk_index * ntime * xengine_metadata.seq_per_frb_time_sample.\n"
+                "  unix_time_ns:     UNIX time in nanoseconds at the beginning of this frame.\n"
+                "                    Equals xengine_metadata.unix_ns_at_seq_0 + fpga_seq * dt_ns_per_seq.\n"
+                "\n"
+                "beam_position_{x,y} are direction cosines in the grid frame.\n"
+                "The grid frame is defined by x & y unit vectors which are orthogonal\n"
+                "and lie along (or close to) the axes of the telescope grid. Each beam\n"
+                "has a skywards-directed unit vector b.  The grid_x and grid_y values\n"
+                "are the x & y direction cosines: b.x and b.y."
+            ) << YAML::Newline << YAML::Newline;
+        }
+        w << YAML::Key << "nfreq" << YAML::Value << ASDF::int_entry(int64_t(nfreq));
+        w << YAML::Key << "beam_id" << YAML::Value << ASDF::int_entry(int64_t(beam_id));
+        w << YAML::Key << "beam_position_x" << YAML::Value << ASDF::float_entry(bx);
+        w << YAML::Key << "beam_position_y" << YAML::Value << ASDF::float_entry(by);
+        w << YAML::Key << "ntime" << YAML::Value << ASDF::int_entry(int64_t(ntime));
+        w << YAML::Key << "time_chunk_index" << YAML::Value << ASDF::int_entry(int64_t(time_chunk_index));
+
+        // Derived per-frame timing (not stored on AssembledFrame; computed from
+        // metadata + time_chunk_index). Surfaced as ASDF keys so a reader can
+        // look up the FPGA seq / UNIX timestamp without redoing the arithmetic.
+        long fpga_seq = time_chunk_index * ntime * metadata->seq_per_frb_time_sample;
+        long unix_time_ns = metadata->unix_ns_at_seq_0 + fpga_seq * metadata->dt_ns_per_seq;
+        w << YAML::Key << "fpga_seq" << YAML::Value << ASDF::int_entry(int64_t(fpga_seq));
+        w << YAML::Key << "unix_time_ns" << YAML::Value << ASDF::int_entry(int64_t(unix_time_ns));
+
+        if (verbose) {
+            w << YAML::Newline << YAML::Newline << YAML::Comment(
+                "xengine_metadata: subset of the YAML the X-engine sent over the\n"
+                "wire when this frame's data arrived (see notes/network_protocol.md).\n"
+                "\n"
+                "Reproduced verbatim except for three projections in this single-frame view:\n"
+                "  freq_channels:    omitted (one ASDF file aggregates all sender subsets);\n"
+                "  beam_ids:         not emitted (the top-level beam_id supersedes it);\n"
+                "  beam_positions_*: not emitted (see top-level beam_position_x / _y)."
+            ) << YAML::Newline << YAML::Newline;
+        }
+
+        // XEngineMetadata sub-map (inner key order also follows xengine_metadata_v2.yml).
+        w << YAML::Key << "xengine_metadata" << YAML::Value;
+        _emit_metadata_yaml(w, *metadata, verbose);
+
+        if (verbose) {
+            w << YAML::Newline << YAML::Newline << YAML::Comment(
+                "scales_offsets: per-(freq, minichunk) dequantization parameters as a\n"
+                "(nfreq, ntime/256, 2) float16 ndarray. The last axis is (scale, offset).\n"
+                "One (scale, offset) pair is applied to every int4 sample in the matching\n"
+                "(freq, minichunk) slice of 'data' below. Sent over the wire as a\n"
+                "(nbeams, nfreq, 2) float16 array per minichunk; this file aggregates\n"
+                "(ntime/256) minichunks for a single beam."
+            ) << YAML::Newline << YAML::Newline;
+        }
+        w << YAML::Key << "scales_offsets" << YAML::Value << *so_arr;
+
+        if (verbose) {
+            w << YAML::Newline << YAML::Newline << YAML::Comment(
+                "data: int4 intensity samples, shape (nfreq, ntime). int4 is stored on\n"
+                "disk as uint8 with shape (nfreq, ntime/2): two int4 values are packed\n"
+                "per byte as ((x[1] << 4) | x[0]). Each int4 holds a value in [-8, +7];\n"
+                "the reserved value -8 (encoded as 0x8) indicates a masked sample."
+            ) << YAML::Newline << YAML::Newline;
+        }
+        w << YAML::Key << "data" << YAML::Value << *arr;
+
+        w << YAML::EndMap;
+        w.flush();
+    }
 
     // Re-open and fsync to ensure data is flushed to disk.
     if (sync) {

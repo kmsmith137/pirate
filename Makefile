@@ -388,9 +388,17 @@ WHEEL_FILES := $(PYFILES) $(CUDAGEN_PYFILES) $(GRPC_PYFILES) $(PIRATE_PYEXT) pir
 WHEEL_FILES += $(HFILES:%=pirate_frb/%)
 
 # Phony targets. The special targets 'build_wheel' and 'build_sdist' are needed by pip/pipmake.
-lib: $(PIRATE_LIB) $(PIRATE_PYEXT)
+lib: $(PIRATE_LIB) $(PIRATE_PYEXT) configs/asdf_header.yml
 build_wheel: wheel_files.txt $(PIRATE_LIB) $(PIRATE_PYEXT)
 build_sdist: sdist_files.txt
+
+# Auto-generated snapshot of the verbose ASDF YAML header emitted by
+# AssembledFrame::write_asdf(). Checked into git and included in the Sphinx
+# docs. Depends on 'show_file_format' defaulting to verbose=true (a one-line
+# contract noted in pirate_frb/__main__.py). If you change write_asdf(),
+# rerun 'make' so the regenerated file shows up in 'git status'.
+configs/asdf_header.yml: configs/xengine/xengine_metadata_v2.yml $(PIRATE_PYEXT) $(PIRATE_LIB)
+	$(PYTHON) -m pirate_frb show_file_format $< > $@
 
 # Symlink {include,lib} into python directory 'pirate_frb'.
 pirate_frb/include:

@@ -145,10 +145,14 @@ void register_core_bindings(pybind11::module &m)
             "Scales/offsets as float16 array with shape (nfreq, mpc, 2),\n"
             "where mpc = ntime / 256. The last axis is {scale, offset}.")
         .def("write_asdf", &AssembledFrame::write_asdf,
-            py::arg("filename"), py::arg("sync") = true,
+            py::arg("filename"), py::arg("sync") = true, py::arg("verbose") = false,
             "Write this AssembledFrame to an ASDF file.\n\n"
             "If sync=True (default), fsync() the file after writing to avoid\n"
-            "runaway page cache usage.")
+            "runaway page cache usage.\n\n"
+            "If verbose=True, emit comments throughout the YAML header. The\n"
+            "comments are detailed enough that the header serves as self-\n"
+            "contained documentation of the file format. Intended for use\n"
+            "with 'pirate_frb show_file_format'.")
         .def_static("make_random", &AssembledFrame::make_random,
             py::arg("xmd"), py::arg("ntime"), py::arg("beam_id"), py::arg("time_chunk_index"),
             "Create a random AssembledFrame backed by the given XEngineMetadata.\n\n"

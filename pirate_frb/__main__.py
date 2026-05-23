@@ -755,16 +755,21 @@ def show_asdf(args):
     _show_asdf(args.asdf_file)
 
 
-######################################   make_asdf_header command  ##################################
+######################################   show_file_format command  ##################################
 
 
-def parse_make_asdf_header(subparsers):
+def parse_show_file_format(subparsers):
     help_text = "Make an asdf file from an xengine_metadata YAML file, and write the header to stdout."
-    parser = subparsers.add_parser("make_asdf_header", help=help_text, description=help_text)
+    parser = subparsers.add_parser("show_file_format", help=help_text, description=help_text)
     parser.add_argument('metadata_yaml', help="Path to xengine_metadata YAML file")
+    parser.add_argument('-n', '--non-verbose', action='store_true',
+                        help="Emit the YAML header without the documentation comments (verbose=False).")
 
 
-def make_asdf_header(args):
+def show_file_format(args):
+    # NOTE: the 'configs/asdf_header.yml' Makefile rule depends on
+    # this command defaulting to verbose=True (no -n flag).
+    # Do not flip that default without updating the Makefile rule.
     import tempfile
     from .utils import show_asdf as _show_asdf
 
@@ -785,10 +790,10 @@ def make_asdf_header(args):
     # Random filename + try/finally so concurrent invocations don't race on
     # the same path and so we don't leave the binary blob behind on /dev/shm.
     fd, filename = tempfile.mkstemp(
-        dir='/dev/shm', prefix='pirate_make_asdf_header_', suffix='.asdf')
+        dir='/dev/shm', prefix='pirate_show_file_format_', suffix='.asdf')
     os.close(fd)
     try:
-        frame.write_asdf(filename)
+        frame.write_asdf(filename, verbose=not args.non_verbose)
         _show_asdf(filename)
     finally:
         os.remove(filename)
@@ -1175,7 +1180,7 @@ def get_parser():
     parse_time_dedisperser(subparsers)
     
     parse_show_asdf(subparsers)
-    parse_make_asdf_header(subparsers)
+    parse_show_file_format(subparsers)
     parse_show_dedisperser(subparsers)
     parse_show_hardware(subparsers)
     parse_show_kernels(subparsers)
@@ -1224,8 +1229,8 @@ def main():
         random_kernels(args)
     elif args.command == "show_asdf":
         show_asdf(args)
-    elif args.command == "make_asdf_header":
-        make_asdf_header(args)
+    elif args.command == "show_file_format":
+        show_file_format(args)
     elif args.command == "rpc_status":
         rpc_status(args)
     elif args.command == "rpc_write":

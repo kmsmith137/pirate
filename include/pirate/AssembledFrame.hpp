@@ -113,7 +113,11 @@ struct AssembledFrame
     //  - Note: according to google gemini, to determine the O_DIRECT page alignment
     //    requirement, you should call ioctl(fd, BLKPBSZGET), not BLKSSZGET.
     
-    void write_asdf(const std::string &filename, bool sync=true) const;
+    // If verbose=true, write_asdf() emits comments throughout the YAML header.
+    // The comments should be detailed enough that the header can serve as
+    // self-contained documentation of the file format. Intended for use
+    // with the 'pirate_frb show_file_format' CLI hook.
+    void write_asdf(const std::string &filename, bool sync=true, bool verbose=false) const;
     static std::shared_ptr<AssembledFrame> from_asdf(const std::string &filename);    // Call without lock held.
 
     // --------------------  private/internal  --------------------
