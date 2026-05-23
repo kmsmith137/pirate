@@ -53,6 +53,13 @@ rpc_ip_addrs:
   - '10.222.3.5:6000'
   - '10.222.3.5:6001'
 
+# The FRB server (and fake X-engine) will throw exceptions if the MTUs are below these thresholds.
+# Intended as a defensive check against forgetting to enable jumbo MTUs.
+# Note: only enforced in python API, not low-level C++ classes.
+
+min_data_mtu: 9000
+min_rpc_mtu: 1500
+
 
 #####################################  File-writing config  ######################################
 

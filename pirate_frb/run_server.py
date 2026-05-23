@@ -45,6 +45,27 @@ def _resolve_nfs_dir(template):
     return template.replace('{user}', user).replace('{date}', date)
 
 
+def _check_mtu(hw, label, ip_addr, min_mtu, min_mtu_param, is_dst_addr=False):
+    """Raise RuntimeError if the NIC routing for 'ip_addr' has MTU below min_mtu.
+
+    'label' is a free-form descriptor (e.g. 'FrbServer 0 data[1]') shown in
+    the exception text. 'min_mtu_param' is the YAML key name (e.g.
+    'min_data_mtu') so the error message points the user at the right knob.
+    Set is_dst_addr=True for FakeXEngine destinations.
+    """
+    nic = hw.nic_from_ip_addr(ip_addr, is_dst_addr=is_dst_addr)
+    mtu = hw.mtu_from_nic(nic)
+    if mtu < min_mtu:
+        raise RuntimeError(
+            f"{label}: NIC {nic!r} ({ip_addr}) has MTU {mtu}, below the required "
+            f"minimum {min_mtu} (config param {min_mtu_param!r}).\n"
+            f"  - If the small MTU is intentional, lower {min_mtu_param!r} in the "
+            f"server YAML config to <= {mtu}.\n"
+            f"  - If the small MTU is unintentional, reconfigure the NIC to MTU "
+            f">= {min_mtu} (e.g. 'sudo ip link set {nic} mtu {min_mtu}')."
+        )
+
+
 def _parse_config(filename):
     """Parse and validate a run_server YAML config file. Returns a dict."""
 
@@ -126,7 +147,8 @@ def _parse_config(filename):
             if not isinstance(v, str):
                 raise RuntimeError(f"{filename}: {key}[{i}] must be a string, got {type(v).__name__}")
 
-    for key in ('ssd_threads_per_server', 'nfs_threads_per_server'):
+    for key in ('ssd_threads_per_server', 'nfs_threads_per_server',
+                'min_data_mtu', 'min_rpc_mtu'):
         val = config[key]
         if not isinstance(val, int) or val <= 0:
             raise RuntimeError(f"{filename}: '{key}' must be a positive integer, got {val!r}")
@@ -229,6 +251,14 @@ def run_server(config_filename):
             print(f"  data_ip_addrs = {config['data_ip_addrs'][i]}")
             print(f"  rpc_ip_addr = {config['rpc_ip_addrs'][i]}")
             print(f"  ssd_dir = {config['ssd_dirs'][i]}")
+
+            # Enforce minimum MTU on the local data and RPC NICs.
+            for j, addr in enumerate(config['data_ip_addrs'][i]):
+                _check_mtu(hw, f"FrbServer {i} data[{j}]", _extract_ip(addr),
+                           config['min_data_mtu'], 'min_data_mtu')
+            _check_mtu(hw, f"FrbServer {i} rpc",
+                       _extract_ip(config['rpc_ip_addrs'][i]),
+                       config['min_rpc_mtu'], 'min_rpc_mtu')
 
             # Pin the calling thread to this CPU's vCPUs. Objects created
             # within the context manager (BumpAllocator, SlabAllocator,
@@ -471,6 +501,9 @@ def run_fake_xengine(config_filename):
             for addr in ip_addrs:
                 ip = _extract_ip(addr)
                 vl = hw.vcpu_list_from_ip_addr(ip, is_dst_addr=True)
+                _check_mtu(hw, f"FakeXEngine {i} -> {addr}", ip,
+                           config['min_data_mtu'], 'min_data_mtu',
+                           is_dst_addr=True)
                 cpu = hw.cpu_from_vcpu_list(vl)
                 if vcpu_list is None:
                     vcpu_list = vl
