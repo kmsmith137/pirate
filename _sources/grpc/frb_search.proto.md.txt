@@ -114,5 +114,6 @@ message GetConfigResponse {
   string nfs_dir = 5;                  // NFS output directory (already interpolated for {user}/{date})
   int64 ssd_threads = 6;               // Number of FileWriter SSD threads
   int64 nfs_threads = 7;               // Number of FileWriter NFS threads
+  int64 ringbuf_nchunks = 8;           // Logical ring buffer length in time chunks
 }
 ```

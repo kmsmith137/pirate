@@ -210,7 +210,8 @@
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
@@ -360,7 +361,7 @@ to <code class="docutils literal notranslate"><span class="pre">malloc()</span><
 by this giant memory region, and memory is recycled internally without needing to call
 <code class="docutils literal notranslate"><span class="pre">free()</span> <span class="pre">+</span> <span class="pre">malloc()</span></code>.</p>
 <p>This is challenging in part because of <strong>dynamic configuration</strong>: the X-engine metadata
-(see <a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>)
+(see <a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v2.yml</span></code></span></a>)
 includes important parameters such as the frequency upchannelization and beam layout.
 The FRB search “dynamically” configures itself when this data is received from the X-engine.</p>
 <p>Currently, we implement the following Allocator classes for managing memory internally.
@@ -384,7 +385,7 @@ data received from the X-engine.</p></li>
 <li><p><strong><code class="docutils literal notranslate"><span class="pre">Receiver</span></code></strong>: Listens for TCP connections from upstream X-engine nodes and assembles
 incoming data into <code class="docutils literal notranslate"><span class="pre">AssembledFrame</span></code> objects. Implements the
 <a class="reference internal" href="network_protocol.html"><span class="std std-doc">X-&gt;FRB network protocol</span></a>, which includes YAML
-metadata (<a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>).
+metadata (<a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v2.yml</span></code></span></a>).
 Each <code class="docutils literal notranslate"><span class="pre">Receiver</span></code> corresponds to one <code class="docutils literal notranslate"><span class="pre">(ip_addr,</span> <span class="pre">tcp_port)</span></code> pair.</p></li>
 <li><p><strong><code class="docutils literal notranslate"><span class="pre">FrbServer</span></code></strong>: High-level orchestrator that manages one or more <code class="docutils literal notranslate"><span class="pre">Receiver</span></code> instances,
 a ring buffer of assembled frames, and a <code class="docutils literal notranslate"><span class="pre">FileWriter</span></code> for persistence. Exposes the

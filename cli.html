@@ -210,7 +210,8 @@
 <li class="toctree-l1"><a class="reference internal" href="notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configs/asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l1"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
@@ -297,31 +298,34 @@
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">show_asdf</span></code></p></td>
 <td><p>Print the YAML header of an ASDF file. (Note: ‘asdftool –info’ is also useful)</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">show_dedisperser</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">show_file_format</span></code></p></td>
+<td><p>Make an asdf file from an <code class="docutils literal notranslate"><span class="pre">xengine_metadata</span></code> YAML file, and write the header to stdout.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">show_dedisperser</span></code></p></td>
 <td><p>Parse a dedisperser .yml file and write info to stdout</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">show_hardware</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">show_hardware</span></code></p></td>
 <td><p>Show hardware information, including cpu affinity</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">show_kernels</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">show_kernels</span></code></p></td>
 <td><p>Show registered cuda kernels (use flags to select specific registries)</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">show_random_config</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">show_random_config</span></code></p></td>
 <td><p>For debugging: generate random DedispersionConfig(s) and print as YAML</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">show_xengine_metadata</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">show_xengine_metadata</span></code></p></td>
 <td><p>Parse <code class="docutils literal notranslate"><span class="pre">xengine_metadata</span></code> yml file and write info to stdout</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">hwtest</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">hwtest</span></code></p></td>
 <td><p>Run hardware test from hwtest.yml (use -s to send data instead of receiving)</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">make_subbands</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">make_subbands</span></code></p></td>
 <td><p>A utility for maintaining <code class="docutils literal notranslate"><span class="pre">makefile_helper</span></code>.py</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">random_kernels</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">random_kernels</span></code></p></td>
 <td><p>A utility for maintaining <code class="docutils literal notranslate"><span class="pre">makefile_helper</span></code>.py</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">scratch</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">scratch</span></code></p></td>
 <td><p>For debugging: run whatever code is currently in <code class="docutils literal notranslate"><span class="pre">src_lib</span></code>/scratch.cu)</p></td>
 </tr>
 </tbody>
@@ -459,6 +463,21 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
+</pre></div>
+</div>
+</section>
+<section id="show-file-format">
+<h3>show_file_format<a class="headerlink" href="#show-file-format" title="Link to this heading">¶</a></h3>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb show_file_format [-h] [-n] metadata_yaml
+
+Make an asdf file from an xengine_metadata YAML file, and write the header to stdout.
+
+positional arguments:
+  metadata_yaml      Path to xengine_metadata YAML file
+
+options:
+  -h, --help         show this help message and exit
+  -n, --non-verbose  Emit the YAML header without the documentation comments (verbose=False).
 </pre></div>
 </div>
 </section>
@@ -697,6 +716,7 @@ options:
 <li><a class="reference internal" href="#time">time</a></li>
 <li><a class="reference internal" href="#time-dedisperser">time_dedisperser</a></li>
 <li><a class="reference internal" href="#show-asdf">show_asdf</a></li>
+<li><a class="reference internal" href="#show-file-format">show_file_format</a></li>
 <li><a class="reference internal" href="#show-dedisperser">show_dedisperser</a></li>
 <li><a class="reference internal" href="#show-hardware">show_hardware</a></li>
 <li><a class="reference internal" href="#show-kernels">show_kernels</a></li>

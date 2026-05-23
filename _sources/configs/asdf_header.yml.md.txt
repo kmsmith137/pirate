@@ -1,0 +1,199 @@
+---
+orphan: true
+---
+
+# asdf_header.yml
+
+```yaml
+#ASDF 1.0.0
+#ASDF_STANDARD 1.2.0
+# This is an ASDF file <https://asdf-standard.readthedocs.io/>
+%YAML 1.1
+%TAG ! tag:stsci.edu:asdf/
+---
+!core/asdf-1.1.0
+
+# This file contains FRB intensity data for one "frame":
+#   - one beam
+#   - all frequency channels
+#   - a specific time range (or time "chunk")
+# 
+# Written by pirate::AssembedFrame::write_asdf().
+# Note that we define a "minichunk" to be 256 time samples.
+# 
+# References:
+#   configs/xengine/xengine_metadata_v2.yml -- xengine_metadata fields
+#   notes/network_protocol.md               -- wire protocol
+
+asdf/library: !core/software-1.0.0
+    name: asdf-cxx
+    author: Erik Schnetter
+    homepage: https://github.com/eschnett/asdf-cxx
+    version: 8.0.0
+
+# Per-frame scalar metadata.
+#   nfreq:            total frequency channels across all zones; equals
+#                     sum(xengine_metadata.zone_nfreq) below.
+#   beam_id:          integer id of this beam (an entry of the X-engine's
+#                     beam_ids).
+#   beam_position_x:  see below.
+#   beam_position_y:  see below.
+#   ntime:            number of time samples in this frame (a multiple of 256;
+#                     equals the server's 'time_samples_per_chunk' parameter).
+#   time_chunk_index: chunk index of this frame's first time sample, in units
+#                     of ntime samples.
+#   fpga_seq:         X-engine FPGA sequence number at the beginning of this frame.
+#                     Equals time_chunk_index * ntime * xengine_metadata.seq_per_frb_time_sample.
+#   unix_time_ns:     UNIX time in nanoseconds at the beginning of this frame.
+#                     Equals xengine_metadata.unix_ns_at_seq_0 + fpga_seq * dt_ns_per_seq.
+# 
+# beam_position_{x,y} are direction cosines in the grid frame.
+# The grid frame is defined by x & y unit vectors which are orthogonal
+# and lie along (or close to) the axes of the telescope grid. Each beam
+# has a skywards-directed unit vector b.  The grid_x and grid_y values
+# are the x & y direction cosines: b.x and b.y.
+
+nfreq: 28160
+beam_id: 100
+beam_position_x: 0
+beam_position_y: 0
+ntime: 256
+time_chunk_index: 0
+fpga_seq: 0
+unix_time_ns: 1772483060000000000
+
+# xengine_metadata: subset of the YAML the X-engine sent over the
+# wire when this frame's data arrived (see notes/network_protocol.md).
+# 
+# Reproduced verbatim except for three projections in this single-frame view:
+#   freq_channels:    omitted (one ASDF file aggregates all sender subsets);
+#   beam_ids:         not emitted (the top-level beam_id supersedes it);
+#   beam_positions_*: not emitted (see top-level beam_position_x / _y).
+
+xengine_metadata:
+    version: 2
+
+# Frequency zones. The observed frequency band is divided into
+# zones; within a zone all channels have the same width, but width
+# may differ between zones.
+#   zone_nfreq:      number of channels in each zone.
+#   zone_freq_edges: zone boundary frequencies in MHz; length (len(zone_nfreq) + 1).
+
+    zone_nfreq:
+        -   8192
+        -   8192
+        -   6144
+        -   2048
+        -   3584
+    zone_freq_edges:
+        -   300
+        -   350
+        -   450
+        -   600
+        -   800
+        -   1500
+
+# integer identifier for this set of beams (sent by X-engine, opqaue to FRB search)
+    beamset: 42
+
+# Timekeeping: the X-engine uses an FPGA sequence number ('seq') to
+# track time. To compute absolute time of an FRB time sample with
+# index 't' (within a chunk) and given top-level time_chunk_index:
+#   seq = (time_chunk_index * ntime + t) * seq_per_frb_time_sample
+#   unix_ns = unix_ns_at_seq_0 + seq * dt_ns_per_seq
+
+    unix_ns_at_seq_0: 1772483060000000000
+    dt_ns_per_seq: 5120
+    seq_per_frb_time_sample: 256
+
+# Telescope alignment and localization.
+# 
+# Coordinate Systems
+# 
+# Topocentric: origin at the given lat/lon. x-axis is directed exactly East (increasing Longitude),
+#   y-axis is directed exactly North (increasing Latitude), z-axis is directed exactly "up" (increasing
+#   altitude). orthogonal, Z = X x Y.
+# 
+# Grid: origin at SW corner of Dish Array, aligned with Dish Array.  x-axis directed "east-ish"
+#   parallel to dish "e/w" separatation vector.  y-axis directed "north-ish" parallel to "n/s"
+#   separation vector.  Z = X x Y points normal to grid plane.  Dish grid lives in x-y plane at a
+#   constant Z. Orthogonal. Rotated by O(1) degrees from "Topocentric"
+# 
+# Dish Elevation Axis: The axis around which the dishes pivot. positive is in the east direction.
+#   *Not* parallel to the dish grid "e/w" separation. "Coelevation" pointing measures an angle around
+#   this axis.
+# 
+# Dish Vertical Axis: Local "up/zenith" for the dishes. The direction which has coelevation = 0.0.
+#   Orthogonal to the Dish Elevation axis.
+
+# Position on the Earth in degrees.
+    tel_origin_itrs_lat_deg: 49.320751444439999
+    tel_origin_itrs_lon_deg: -119.62081125
+
+# Unit vectors in the x & y grid directions, in topocentric coordinates.
+    tel_grid_x_axis:
+        -   0.99997434239835936
+        -   -3.7539331442771999e-05
+        -   -0.0071633187676754936
+    tel_grid_y_axis:
+        -   6.5403387739209999e-05
+        -   0.99999243322034881
+        -   0.0038896303735576139
+
+# Unit vectors for the dish frame, the elevation axis and vertical axis, in
+# topocentric coordinates.
+    tel_dish_elev_axis:
+        -   0.99999999838132392
+        -   -5.6897733584326999e-05
+        -   0
+    tel_dish_vert_axis:
+        -   0
+        -   0
+        -   1
+
+# The dish pointing angle, co-elevation in degrees: angle away from vertical,
+# north is positive.
+    tel_dish_coelev_deg: 0
+
+# Values of dish separation in x and y directions in meters.
+    tel_dish_separation_x_m: 6.300156854906823
+    tel_dish_separation_y_m: 8.5000578097963082
+
+# Per-zone noise variance; length nzones (= len(zone_nfreq)).
+# Temporary kludge: the FRB server assumes mean-zero, time-uncorrelated
+# noise with this variance. Will be generalized later.
+    noise_variance:
+        -   1
+        -   1
+        -   1
+        -   1
+        -   1
+
+# scales_offsets: per-(freq, minichunk) dequantization parameters as a
+# (nfreq, ntime/256, 2) float16 ndarray. The last axis is (scale, offset).
+# One (scale, offset) pair is applied to every int4 sample in the matching
+# (freq, minichunk) slice of 'data' below. Sent over the wire as a
+# (nbeams, nfreq, 2) float16 array per minichunk; this file aggregates
+# (ntime/256) minichunks for a single beam.
+
+scales_offsets: !core/ndarray-1.0.0
+    source: 0
+    datatype: float16
+    byteorder: little
+    shape: [28160, 1, 2]
+    offset: 0
+    strides: [4, 4, 2]
+
+# data: int4 intensity samples, shape (nfreq, ntime). int4 is stored on
+# disk as uint8 with shape (nfreq, ntime/2): two int4 values are packed
+# per byte as ((x[1] << 4) | x[0]). Each int4 holds a value in [-8, +7];
+# the reserved value -8 (encoded as 0x8) indicates a masked sample.
+
+data: !core/ndarray-1.0.0
+    source: 1
+    datatype: uint8
+    byteorder: little
+    shape: [28160, 128]
+    offset: 0
+    strides: [128, 1]
+```

@@ -26,6 +26,7 @@ memory_per_server: '10 GB'
 use_hugepages: true
 
 time_samples_per_chunk: 1024
+ringbuf_nchunks: 512
 
 
 ########################################  Network config  ########################################
@@ -36,6 +37,9 @@ data_ip_addrs:
 
 rpc_ip_addrs:
   - '127.0.0.1:6000'
+
+min_data_mtu: 1500
+min_rpc_mtu: 1500
 
 
 #####################################  File-writing config  ######################################

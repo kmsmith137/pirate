@@ -210,7 +210,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
@@ -283,6 +284,7 @@
 <span class="nt">use_hugepages</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 
 <span class="nt">time_samples_per_chunk</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+<span class="nt">ringbuf_nchunks</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 
 
 <span class="c1">########################################  Network config  ########################################</span>
@@ -294,6 +296,9 @@
 
 <span class="nt">rpc_ip_addrs</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;127.0.0.1:6000&#39;</span>
+
+<span class="nt">min_data_mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1500</span>
+<span class="nt">min_rpc_mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1500</span>
 
 
 <span class="c1">#####################################  File-writing config  ######################################</span>

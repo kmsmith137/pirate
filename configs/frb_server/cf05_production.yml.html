@@ -210,7 +210,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
@@ -294,6 +295,13 @@
 
 <span class="nt">time_samples_per_chunk</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span><span class="w"> </span>
 
+<span class="c1"># Logical length of ring buffer (in time &quot;chunks&quot;, not time+beam &quot;frames&quot;).</span>
+<span class="c1"># In principle, this is an independent parameter from &#39;memory_per_server&#39;.</span>
+<span class="c1"># However, if memory is a limiting factor, then the logical ring buffer will</span>
+<span class="c1"># be partially populated by &quot;reaped&quot; chunks, which are only useful in corner</span>
+<span class="c1"># cases (duplicate write -&gt; copy or hardlink).</span>
+
+<span class="nt">ringbuf_nchunks</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 
 <span class="c1">########################################  Network config  ########################################</span>
 
@@ -315,6 +323,13 @@
 <span class="nt">rpc_ip_addrs</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.5:6000&#39;</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.5:6001&#39;</span>
+
+<span class="c1"># The FRB server (and fake X-engine) will throw exceptions if the MTUs are below these thresholds.</span>
+<span class="c1"># Intended as a defensive check against forgetting to enable jumbo MTUs.</span>
+<span class="c1"># Note: only enforced in python API, not low-level C++ classes.</span>
+
+<span class="nt">min_data_mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span>
+<span class="nt">min_rpc_mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1500</span>
 
 
 <span class="c1">#####################################  File-writing config  ######################################</span>

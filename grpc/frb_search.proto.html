@@ -210,7 +210,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html">X-&gt;FRB metadata (v1)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
@@ -370,6 +371,7 @@
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">nfs_dir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span><span class="w">                  </span><span class="c1">// NFS output directory (already interpolated for {user}/{date})</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">ssd_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span><span class="w">               </span><span class="c1">// Number of FileWriter SSD threads</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">nfs_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span><span class="w">               </span><span class="c1">// Number of FileWriter NFS threads</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">ringbuf_nchunks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span><span class="w">           </span><span class="c1">// Logical ring buffer length in time chunks</span>
 <span class="p">}</span>
 </pre></div>
 </div>

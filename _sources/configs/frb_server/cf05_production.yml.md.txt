@@ -38,6 +38,13 @@ use_hugepages: true
 
 time_samples_per_chunk: 1024 
 
+# Logical length of ring buffer (in time "chunks", not time+beam "frames").
+# In principle, this is an independent parameter from 'memory_per_server'.
+# However, if memory is a limiting factor, then the logical ring buffer will
+# be partially populated by "reaped" chunks, which are only useful in corner
+# cases (duplicate write -> copy or hardlink).
+
+ringbuf_nchunks: 512
 
 ########################################  Network config  ########################################
 
@@ -59,6 +66,13 @@ data_ip_addrs:
 rpc_ip_addrs:
   - '10.222.3.5:6000'
   - '10.222.3.5:6001'
+
+# The FRB server (and fake X-engine) will throw exceptions if the MTUs are below these thresholds.
+# Intended as a defensive check against forgetting to enable jumbo MTUs.
+# Note: only enforced in python API, not low-level C++ classes.
+
+min_data_mtu: 9000
+min_rpc_mtu: 1500
 
 
 #####################################  File-writing config  ######################################
