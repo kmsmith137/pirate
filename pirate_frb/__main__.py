@@ -593,7 +593,10 @@ def show_dedisperser(args):
     
     if not args.config_only:
         print_separator('DedispersionPlan starts here')
+        t0 = time.time()
         plan = DedispersionPlan(config)
+        plan_dt = time.time() - t0
+        print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n')
         plan_yaml = plan.to_yaml_string(args.verbose)
         if args.verbose:
             plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
