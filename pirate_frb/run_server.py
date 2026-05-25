@@ -310,7 +310,8 @@ def run_server(server_config_filename, dedispersion_config_filename):
                 from . import FrbServer
                 server = FrbServer(dedisp_config, receivers, file_writer,
                                    config['rpc_ip_addrs'][i],
-                                   config['ringbuf_nchunks'])
+                                   config['ringbuf_nchunks'],
+                                   min_data_mtu=config['min_data_mtu'])
 
                 # server.start(): spawns worker/reaper threads and calls
                 # receiver.start() for each receiver (3 threads each).
@@ -321,7 +322,9 @@ def run_server(server_config_filename, dedispersion_config_filename):
             print(f"  Server {i} started.")
 
         rpc_addrs = ' '.join(config['rpc_ip_addrs'])
-        print(f"\nTo send fake data to server(s):  pirate_frb run_fake_xengine {server_config_filename}")
+        print()
+        for addr in config['rpc_ip_addrs']:
+            print(f"To send fake data to {addr}:  pirate_frb run_fake_xengine {addr}")
         print(f"To monitor status:               pirate_frb rpc_status {rpc_addrs}")
         print(f"To write random data:            pirate_frb rpc_write {rpc_addrs}")
         
@@ -337,82 +340,6 @@ def run_server(server_config_filename, dedispersion_config_filename):
         for server in servers:
             server.stop()
         print("All servers stopped.")
-
-
-def _parse_fake_xengine_config(filename, config):
-    """Parse and validate the 'Fake X-engine' section of a run_server config.
-
-    Returns a dict with keys: beams_per_server, base_beam_id,
-    tcp_connections_per_server, zone_nfreq, zone_freq_edges.
-    """
-
-    n = config['num_servers']
-    fxe_keys = ['beams_per_server', 'base_beam_id', 'tcp_connections_per_server',
-                'zone_nfreq', 'zone_freq_edges']
-
-    missing = [k for k in fxe_keys if k not in config]
-    if missing:
-        raise RuntimeError(
-            f"{filename}: fake X-engine config requires key(s): {', '.join(missing)}\n"
-            f"  (needed for 'pirate_frb run_server -s')"
-        )
-
-    bps = config['beams_per_server']
-    if not isinstance(bps, int) or bps <= 0:
-        raise RuntimeError(f"{filename}: 'beams_per_server' must be a positive integer, got {bps!r}")
-
-    bbi = config['base_beam_id']
-    if not isinstance(bbi, list) or len(bbi) != n:
-        raise RuntimeError(f"{filename}: 'base_beam_id' must be a list of length {n}")
-    for i, v in enumerate(bbi):
-        if not isinstance(v, int) or isinstance(v, bool):
-            raise RuntimeError(f"{filename}: base_beam_id[{i}] must be an integer, got {v!r}")
-
-    tcs = config['tcp_connections_per_server']
-    if not isinstance(tcs, int) or tcs <= 0:
-        raise RuntimeError(f"{filename}: 'tcp_connections_per_server' must be a positive integer, got {tcs!r}")
-
-    znf = config['zone_nfreq']
-    if not isinstance(znf, list) or len(znf) == 0:
-        raise RuntimeError(f"{filename}: 'zone_nfreq' must be a non-empty list of positive integers")
-    for i, v in enumerate(znf):
-        if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
-            raise RuntimeError(f"{filename}: zone_nfreq[{i}] must be a positive integer, got {v!r}")
-
-    zfe = config['zone_freq_edges']
-    if not isinstance(zfe, list) or len(zfe) != len(znf) + 1:
-        raise RuntimeError(f"{filename}: 'zone_freq_edges' must be a list of length {len(znf)+1} (len(zone_nfreq)+1)")
-    for i, v in enumerate(zfe):
-        if not isinstance(v, (int, float)):
-            raise RuntimeError(f"{filename}: zone_freq_edges[{i}] must be a number, got {v!r}")
-    for i in range(len(zfe) - 1):
-        if zfe[i] >= zfe[i+1]:
-            raise RuntimeError(f"{filename}: 'zone_freq_edges' must be monotonically increasing, "
-                               f"but zone_freq_edges[{i}]={zfe[i]} >= zone_freq_edges[{i+1}]={zfe[i+1]}")
-
-    return {k: config[k] for k in fxe_keys}
-
-
-def _make_xengine_metadata(fxe_config, server_index):
-    """Create an XEngineMetadata for one FakeXEngine instance.
-
-    Delegates to XEngineMetadata.make_test_instance for the bulk of the
-    placeholder values (telescope/timekeeping/noise_variance/beam_positions),
-    then patches `beamset` to distinguish per-server metadata. Beam positions
-    are deterministic across servers (no longer randomized per server_index)
-    -- they're placeholder values, not real sky positions.
-    """
-
-    nbeams = fxe_config['beams_per_server']
-    base = fxe_config['base_beam_id'][server_index]
-    beam_ids = list(range(base, base + nbeams))
-
-    zone_freq_edges = [float(x) for x in fxe_config['zone_freq_edges']]
-    xmd = XEngineMetadata.make_test_instance(
-        fxe_config['zone_nfreq'], zone_freq_edges, beam_ids, 1.0)
-    xmd.beamset = server_index
-    xmd.validate()
-    return xmd
 
 
 def _fake_xengine_controller_main(fxe):
@@ -439,188 +366,118 @@ def _fake_xengine_controller_main(fxe):
         n += 1
 
 
-def _fake_xengine_controller_wrapper(fxe, all_fxes, exc_list, exc_lock):
-    """
-    Wraps _fake_xengine_controller_main. On exit (normal or exceptional),
-    stops every FakeXEngine so sibling controllers exit promptly via the
-    "called on stopped instance" cascade.
-
-    Exceptions are stored in exc_list (a list of (fxe, exception) pairs)
-    under exc_lock; the main thread re-raises the most informative one
-    once all controllers have joined.
+def _fake_xengine_controller_wrapper(fxe, exc_list, exc_lock):
+    """Wraps _fake_xengine_controller_main. On exit (normal or exceptional),
+    stops the FakeXEngine and captures any exception under exc_lock for
+    the main thread to re-raise.
     """
     try:
         _fake_xengine_controller_main(fxe)
     except BaseException as e:
         with exc_lock:
-            exc_list.append((fxe, e))
+            exc_list.append(e)
     finally:
-        # Cascade: stop every FakeXEngine. stop() is idempotent, so this
-        # is harmless even for the FakeXEngine that originated the
-        # exception (it's already stopped) and for FakeXEngines whose
-        # controllers exited via this same path moments earlier.
-        for other in all_fxes:
-            try:
-                other.stop()
-            except Exception:
-                pass
+        try:
+            fxe.stop()
+        except Exception:
+            pass
 
 
-def _query_tsc_from_servers(config):
-    """Connect to each FrbServer's RPC endpoint, call GetConfig, and return
-    the common time_samples_per_chunk. Raises if any server reports a
-    different value, or if any RPC connection fails.
-
-    The receivers' time_samples_per_chunk is set when they construct their
-    AssembledFrameAllocator (from the dedispersion config), and is the
-    authoritative source for the sender. Querying every server (instead
-    of just the first) catches misconfiguration where servers were
-    started with mismatched dedispersion configs.
-    """
-    tsc_values = []
-    for addr in config['rpc_ip_addrs']:
-        with closing(FrbClient(addr)) as c:
-            tsc_values.append(c.get_config().time_samples_per_chunk)
-    if len(set(tsc_values)) != 1:
-        raise RuntimeError(
-            f"run_fake_xengine: FrbServers report inconsistent "
-            f"time_samples_per_chunk: {dict(zip(config['rpc_ip_addrs'], tsc_values))}"
-        )
-    return tsc_values[0]
-
-
-def run_fake_xengine(config_filename):
+def run_fake_xengine(rpc_addr, nworkers=128):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
-    Spawns one FakeXEngine per server (each with its own worker threads
-    pinned via ThreadAffinity) plus one Python controller thread per
-    FakeXEngine that drives the SEND_JUNK loop. If any controller's
-    FakeXEngine errors out (e.g. the receiver goes away), every other
-    FakeXEngine is stopped via cascade in
-    _fake_xengine_controller_wrapper.
-
-    time_samples_per_chunk is no longer in the server YAML -- it lives
-    in the dedispersion config used by the receivers. We learn it from
-    the receivers via the GetConfig RPC, which requires the receivers
-    to be running already.
+    Connects to the receiver at 'rpc_addr', sends a GetConfig RPC to
+    learn data_ip_addrs, time_samples_per_chunk, min_data_mtu, and the
+    fake_* fields needed to synthesize an XEngineMetadata. Then pins to
+    the data NIC's CPU and spawns one FakeXEngine plus one controller
+    thread that drives the SEND_JUNK loop.
     """
 
-    config = _parse_config(config_filename)
-    n = config['num_servers']
-    fxe_config = _parse_fake_xengine_config(config_filename, config)
+    # ---- Phase 1: GetConfig ----
+    print(f"Connecting to receiver at {rpc_addr} ...")
+    with closing(FrbClient(rpc_addr)) as c:
+        cfg = c.get_config()
 
-    # Learn time_samples_per_chunk from the running receivers. Fails fast
-    # (with a gRPC error) if any receiver isn't running.
-    time_samples_per_chunk = _query_tsc_from_servers(config)
+    ip_addrs = list(cfg.data_ip_addrs)
+    if not ip_addrs:
+        raise RuntimeError(f"run_fake_xengine: receiver at {rpc_addr} reported empty data_ip_addrs")
+    time_samples_per_chunk = cfg.time_samples_per_chunk
+    min_data_mtu = cfg.min_data_mtu
 
+    # Synthesize XEngineMetadata from the receiver's prefilled config.
+    # beam_ids = {0, 1, ..., nbeams-1} -- the receiver records whatever
+    # we send, so no cross-X-engine consensus to satisfy.
+    nbeams = cfg.fake_nbeams
+    beam_ids = list(range(nbeams))
+    xmd = XEngineMetadata.make_test_instance(
+        list(cfg.fake_zone_nfreq),
+        list(cfg.fake_zone_freq_edges),
+        beam_ids,
+        cfg.fake_time_sample_ms,
+    )
+
+    actual_time_sample_ms = (xmd.dt_ns_per_seq * xmd.seq_per_frb_time_sample) / 1.0e6
+    print(f"  data_ip_addrs = {ip_addrs}")
+    print(f"  time_samples_per_chunk = {time_samples_per_chunk}")
+    print(f"  min_data_mtu = {min_data_mtu}")
+    print(f"  nbeams = {nbeams}, total_nfreq = {xmd.get_total_nfreq()}")
+    print(f"  time_sample_ms = {actual_time_sample_ms}")
+    print(f"  dt_ns_per_seq = {xmd.dt_ns_per_seq}")
+    print(f"  seq_per_frb_time_sample = {xmd.seq_per_frb_time_sample}")
+
+    # ---- Phase 2: hardware checks + CPU affinity ----
     hw = Hardware()
-    nworkers = fxe_config['tcp_connections_per_server']
+    vcpu_list = None
+    first_cpu = None
+    for addr in ip_addrs:
+        ip = _extract_ip(addr)
+        vl = hw.vcpu_list_from_ip_addr(ip, is_dst_addr=True)
+        _check_mtu(hw, f"FakeXEngine -> {addr}", ip,
+                   min_data_mtu, 'min_data_mtu', is_dst_addr=True)
+        cpu = hw.cpu_from_vcpu_list(vl)
+        if vcpu_list is None:
+            vcpu_list = vl
+            first_cpu = cpu
+        elif cpu != first_cpu:
+            raise RuntimeError(
+                f"FakeXEngine: destination IPs {ip_addrs} route through "
+                f"NICs on different CPUs (need all on one CPU)"
+            )
 
-    print(f"Parsed config: {config_filename}")
-    print(f"  num_servers = {n}")
-    print(f"  tcp_connections_per_server = {nworkers}")
-    print(f"  time_samples_per_chunk = {time_samples_per_chunk}  (queried from server)")
-
-    fake_xengines = []   # list[FakeXEngine]
-    fxe_vcpus = []       # list[list[int]], parallel to fake_xengines
-    controllers = []     # list[threading.Thread]
-    exc_list = []        # list[tuple[FakeXEngine, BaseException]]
+    # ---- Phase 3: build the FakeXEngine + controller under affinity ----
+    exc_list = []   # list[BaseException]
     exc_lock = threading.Lock()
+    with ThreadAffinity(vcpu_list):
+        fxe = FakeXEngine(
+            xmd, ip_addrs, nworkers,
+            time_samples_per_chunk=time_samples_per_chunk)
+        t = threading.Thread(
+            target=_fake_xengine_controller_wrapper,
+            args=(fxe, exc_list, exc_lock),
+            daemon=True,
+        )
+        t.start()
+
+    print(f"\nFakeXEngine running ({nworkers} workers). Press Ctrl-C to stop.")
 
     try:
-        # Phase 1: construct all FakeXEngines (workers spawn in the
-        # constructor, pinned via ThreadAffinity).
-        for i in range(n):
-            ip_addrs = config['data_ip_addrs'][i]
+        while t.is_alive():
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        print("\nStopping...")
 
-            # Check that all destination IPs for this server route through
-            # NICs on the same physical CPU.
-            vcpu_list = None
-            for addr in ip_addrs:
-                ip = _extract_ip(addr)
-                vl = hw.vcpu_list_from_ip_addr(ip, is_dst_addr=True)
-                _check_mtu(hw, f"FakeXEngine {i} -> {addr}", ip,
-                           config['min_data_mtu'], 'min_data_mtu',
-                           is_dst_addr=True)
-                cpu = hw.cpu_from_vcpu_list(vl)
-                if vcpu_list is None:
-                    vcpu_list = vl
-                    first_cpu = cpu
-                elif cpu != first_cpu:
-                    raise RuntimeError(
-                        f"FakeXEngine {i}: destination IPs {ip_addrs} route through "
-                        f"NICs on different CPUs (need all on one CPU)"
-                    )
+    try:
+        fxe.stop()
+    except Exception:
+        pass
+    t.join(timeout=5.0)
 
-            xmd = _make_xengine_metadata(fxe_config, i)
+    with exc_lock:
+        # A "called on stopped instance" RuntimeError is the controller's
+        # natural teardown artefact: stop() invalidates the next
+        # enqueue_send_junk() call. Re-raise only "real" exceptions.
+        real = [e for e in exc_list if "called on stopped instance" not in str(e)]
+        if real:
+            raise real[0]
 
-            print(f"\nFakeXEngine {i}:")
-            print(f"  ip_addrs = {ip_addrs}")
-            print(f"  nworkers = {nworkers}")
-            print(f"  nbeams = {xmd.get_nbeams()}, beam_ids = {xmd.beam_ids}")
-            print(f"  total_nfreq = {xmd.get_total_nfreq()}")
-
-            # Pin thread to sender NIC's CPU so worker threads spawned by
-            # the FakeXEngine constructor inherit the same affinity.
-            with ThreadAffinity(vcpu_list):
-                fxe = FakeXEngine(
-                    xmd, ip_addrs, nworkers,
-                    time_samples_per_chunk=time_samples_per_chunk)
-            fake_xengines.append(fxe)
-            fxe_vcpus.append(vcpu_list)
-            print(f"  FakeXEngine {i} workers spawned.")
-
-        # Phase 2: spawn one controller thread per FakeXEngine, each
-        # inside its own ThreadAffinity scope so the controller is
-        # pinned to the same vcpu list as its FakeXEngine's workers.
-        # We spawn all controllers in phase 2 (not interleaved with
-        # construction) so the cascade in _fake_xengine_controller_wrapper
-        # sees the complete fake_xengines list from the moment the first
-        # controller runs.
-        for fxe, vcpu_list in zip(fake_xengines, fxe_vcpus):
-            with ThreadAffinity(vcpu_list):
-                t = threading.Thread(
-                    target=_fake_xengine_controller_wrapper,
-                    args=(fxe, fake_xengines, exc_list, exc_lock),
-                    daemon=True,
-                )
-                t.start()
-            controllers.append(t)
-
-        print(f"\nAll {n} FakeXEngine(s) running. Press Ctrl-C to stop.")
-
-        # Block until either Ctrl-C or all controllers exit (e.g. because
-        # all receivers went away and the cascade ran).
-        try:
-            while any(t.is_alive() for t in controllers):
-                time.sleep(0.2)
-        except KeyboardInterrupt:
-            print("\nStopping...")
-
-        # Make sure everything is stopped, then join.
-        for fxe in fake_xengines:
-            fxe.stop()
-        for t in controllers:
-            t.join(timeout=5.0)
-
-        # Surface the most-informative exception, if any.
-        with exc_lock:
-            if exc_list:
-                # Prefer an exception that isn't a "called on stopped
-                # instance" cascade artefact; those are useful only as a
-                # fallback (e.g. for a clean Ctrl-C with no underlying error).
-                primary = next(
-                    (e for (_, e) in exc_list
-                     if "called on stopped instance" not in str(e)),
-                    exc_list[0][1],
-                )
-                raise primary
-
-    finally:
-        # Defensive cleanup -- harmless if the main path already ran it.
-        for fxe in fake_xengines:
-            try:
-                fxe.stop()
-            except Exception:
-                pass
-        print("All FakeXEngine(s) stopped.")
+    print("FakeXEngine stopped.")

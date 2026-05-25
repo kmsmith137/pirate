@@ -89,6 +89,7 @@ FrbServer::FrbServer(const Params &p) : params(p)
     xassert(params.receivers.size() > 0);
     xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
     xassert(params.ringbuf_nchunks > 0);
+    xassert(params.min_data_mtu > 0);
 
     // Fail fast on a malformed user-supplied config. (The four metadata-
     // dependent members are overwritten later by the processing thread,
@@ -870,6 +871,7 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
 
     response->set_time_samples_per_chunk(s->allocator->time_samples_per_chunk);
     response->set_ringbuf_nchunks(s->params.ringbuf_nchunks);
+    response->set_min_data_mtu(s->params.min_data_mtu);
 
     const auto &fwp = s->params.file_writer->params;
     response->set_ssd_dir(fwp.ssd_root.string());

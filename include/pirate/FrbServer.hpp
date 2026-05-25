@@ -65,6 +65,11 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         std::shared_ptr<FileWriter> file_writer;
         std::string rpc_server_address;
         int ringbuf_nchunks = 0;  // logical ring buffer length in time chunks
+
+        // Minimum data-NIC MTU expected by the receiver. Used (only) on
+        // the sender side: surfaced via the GetConfig RPC so a fake X-engine
+        // sender can check that its outgoing NIC has MTU >= this value.
+        int min_data_mtu = 0;
     };
 
     // Factory method (constructor is private).

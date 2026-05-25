@@ -216,6 +216,7 @@ class FrbClient:
             - nfs_threads: number of FileWriter NFS threads
             - tree_rank: from config_prefilled
             - beams_per_batch: from config_prefilled
+            - min_data_mtu: minimum data-NIC MTU expected on the sender side
             - fake_zone_nfreq: list[int] from config_prefilled.zone_nfreq (pre-metadata)
             - fake_zone_freq_edges: list[float] from config_prefilled.zone_freq_edges (pre-metadata)
             - fake_time_sample_ms: float from config_prefilled.time_sample_ms (pre-metadata)

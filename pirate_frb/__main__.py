@@ -908,6 +908,7 @@ def rpc_status(args):
         print(f"  nfs_threads = {cfg.nfs_threads}")
         print(f"  tree_rank = {cfg.tree_rank}")
         print(f"  beams_per_batch = {cfg.beams_per_batch}")
+        print(f"  min_data_mtu = {cfg.min_data_mtu}")
         print(f"  fake_zone_nfreq = {list(cfg.fake_zone_nfreq)}")
         print(f"  fake_zone_freq_edges = {list(cfg.fake_zone_freq_edges)}")
         print(f"  fake_time_sample_ms = {cfg.fake_time_sample_ms}")
@@ -1150,14 +1151,16 @@ def run_server_command(args):
 
 
 def parse_run_fake_xengine(subparsers):
-    help_text = "Send fake X-engine data to a running FrbServer (queries GetConfig RPC for time_samples_per_chunk)"
+    help_text = "Send fake X-engine data to a running FrbServer (self-configures via GetConfig RPC)"
     parser = subparsers.add_parser("run_fake_xengine", help=help_text, description=help_text)
-    parser.add_argument('config', help='Path to FrbServer YAML config file (the same file used to start the server)')
+    parser.add_argument('rpc_addr', help='ip:port of the running FrbServer (e.g. 127.0.0.1:6000)')
+    parser.add_argument('-w', '--workers', type=int, default=128,
+                        help='Number of worker threads (default 128)')
 
 
 def run_fake_xengine_command(args):
     from .run_server import run_fake_xengine
-    run_fake_xengine(args.config)
+    run_fake_xengine(args.rpc_addr, nworkers=args.workers)
 
 
 

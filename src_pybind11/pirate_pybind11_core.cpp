@@ -963,18 +963,21 @@ void register_core_bindings(pybind11::module &m)
                            std::vector<std::shared_ptr<Receiver>> receivers,
                            std::shared_ptr<FileWriter> file_writer,
                            const std::string &rpc_server_address,
-                           int ringbuf_nchunks) {
+                           int ringbuf_nchunks,
+                           int min_data_mtu) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
                params.file_writer = std::move(file_writer);
                params.rpc_server_address = rpc_server_address;
                params.ringbuf_nchunks = ringbuf_nchunks;
+               params.min_data_mtu = min_data_mtu;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
                py::arg("receivers"), py::arg("file_writer"),
                py::arg("rpc_server_address"), py::arg("ringbuf_nchunks"),
+               py::arg("min_data_mtu"),
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -987,7 +990,9 @@ void register_core_bindings(pybind11::module &m)
                "    receivers: List of Receiver objects to query\n"
                "    file_writer: FileWriter for saving frames to disk\n"
                "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')\n"
-               "    ringbuf_nchunks: Logical ring buffer length in time chunks")
+               "    ringbuf_nchunks: Logical ring buffer length in time chunks\n"
+               "    min_data_mtu: Minimum data-NIC MTU expected on the sender\n"
+               "        side; surfaced via the GetConfig RPC.")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"

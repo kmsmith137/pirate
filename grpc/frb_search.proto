@@ -63,10 +63,11 @@ message GetConfigResponse {
   int64 ringbuf_nchunks = 8;           // Logical ring buffer length in time chunks
   int64 tree_rank = 9;                 // From config_prefilled.tree_rank
   int64 beams_per_batch = 10;          // From config_prefilled.beams_per_batch
-  repeated int64 fake_zone_nfreq = 11; // From config_prefilled.zone_nfreq (pre-metadata)
-  repeated double fake_zone_freq_edges = 12;  // From config_prefilled.zone_freq_edges (pre-metadata)
-  double fake_time_sample_ms = 13;     // From config_prefilled.time_sample_ms (pre-metadata)
-  int64 fake_nbeams = 14;              // From config_prefilled.beams_per_gpu (pre-metadata)
+  int64 min_data_mtu = 11;             // Mirrors the server YAML 'min_data_mtu' key
+  repeated int64 fake_zone_nfreq = 12; // From config_prefilled.zone_nfreq (pre-metadata)
+  repeated double fake_zone_freq_edges = 13;  // From config_prefilled.zone_freq_edges (pre-metadata)
+  double fake_time_sample_ms = 14;     // From config_prefilled.time_sample_ms (pre-metadata)
+  int64 fake_nbeams = 15;              // From config_prefilled.beams_per_gpu (pre-metadata)
 }
 
 // Request message for GetXEngineMetadata

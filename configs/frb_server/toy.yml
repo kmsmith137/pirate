@@ -6,7 +6,7 @@
 #   pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
 #
 # To send fake X-engine data (in a separate terminal):
-#   pirate_frb run_fake_xengine configs/frb_server/toy.yml
+#   pirate_frb run_fake_xengine 127.0.0.1:6000
 
 
 ########################################  General config  ########################################
@@ -48,19 +48,3 @@ ssd_threads_per_server: 4
 
 nfs_dir: '/dev/shm/pirate_nfs'
 nfs_threads_per_server: 2
-
-
-###################################  "Fake X-engine" config  #####################################
-#
-# This optional section is only needed if you want to send "fake X-engine" data
-# (pirate_frb run_fake_xengine).
-
-
-beams_per_server: 3
-base_beam_id: [ 100 ]    # length num_servers
-
-tcp_connections_per_server: 64
-
-# Frequency channels from xengine_metadata_v1.yml.
-zone_nfreq: [8192, 8192, 6144, 2048, 3584]
-zone_freq_edges: [300, 350, 450, 600, 800, 1500]

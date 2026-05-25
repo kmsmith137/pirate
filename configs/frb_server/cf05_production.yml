@@ -4,8 +4,9 @@
 # To start server on cf05:
 #   pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml
 #
-# To send data from cf00 to cf05:
-#   pirate_frb run_fake_xengine configs/frb_server/cf05_production.yml
+# To send data from cf00 to cf05 (one invocation per receiver server):
+#   pirate_frb run_fake_xengine 10.222.3.5:6000
+#   pirate_frb run_fake_xengine 10.222.3.5:6001
 
 
 ########################################  General config  ########################################
@@ -87,41 +88,3 @@ ssd_threads_per_server: 4
 
 nfs_dir: '/mnt/cs00/data/{user}/{date}'
 nfs_threads_per_server: 2
-
-
-###################################  "Fake X-engine" config  #####################################
-#
-# This optional section is only needed if you want to send "fake X-engine" data
-# (pirate_frb run_fake_xengine).
-
-
-# Note: The X-engine determines the beam configuration, and the FRB server
-# receives it dynamically at runtime.
-
-beams_per_server: 60
-base_beam_id: [ 100, 200 ]    # length num_servers
-
-# In the real system, each X-engine "half-node" (i.e. numa domain) opens a separate
-# TCP connection (128 TCP connections in full CHORD).
-#
-# The "fake X-engine" uses many TCP connections in order to mimic this behavior, but
-# they all originate from the same physical node. (Detail: if the server has multiple
-# data_ip_addrs, then the TCP connections are assigned round-robin.)
-
-tcp_connections_per_server: 128
-
-# Frequency channels. The observed frequency band is divided into "zones".
-# Within each zone, all frequency channels have the same width, but the
-# channel width may differ between zones.
-#   zone_nfreq: number of frequency channels in each zone.
-#   zone_freq_edges: frequency band edges in MHz.
-# For example:
-#   zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz
-#   zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band
-#
-# In this config, we have:
-#  Total frequency channels: 28160
-#  Channel widths (MHz): [ 0.00610352, 0.012207, 0.0244141, 0.0976562, 0.195312 ]
-
-zone_nfreq: [8192, 8192, 6144, 2048, 3584]
-zone_freq_edges: [300, 350, 450, 600, 800, 1500]

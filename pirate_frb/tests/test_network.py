@@ -227,7 +227,8 @@ class NetworkTester:
 
         self.server = FrbServer(p['config'], self.receivers, self.file_writer,
                                 f"127.0.0.1:{p['rpc_port']}",
-                                p['ringbuf_nchunks'])
+                                p['ringbuf_nchunks'],
+                                min_data_mtu=1500)
         self.server.start()
 
     def _build_client(self):
