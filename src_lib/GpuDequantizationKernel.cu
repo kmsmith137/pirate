@@ -22,159 +22,110 @@ namespace pirate {
 //
 // GPU Kernels
 //
-// Each warp processes 256 consecutive int4 elements for one (beam, freq, time_chunk).
-// One (scale, offset) fp16 pair is shared by the 256 samples in the chunk; the
-// pair is loaded once per warp as a single __half2.
+// Threadblocking scheme (shared by both fp32 and fp16 kernels):
 //
-// Perf optimization (e.g. wider scoff load patterns, scoff caching across
-// time_chunks for the same (beam, freq)) is deferred -- this pass is for
-// correctness only.
+//   - All arrays are contiguous, so we flatten (beam, freq, time_chunk) into a
+//     single "spectator" index 'spec' (nspec = nbeams * nfreq * (ntime/256))
+//     and view the arrays as:
+//
+//        scales_offsets: (nspec, 2)   fp16   one (scale, offset) per spec
+//        data:           (nspec, 256) int4   256 time samples per spec
+//        out:            (nspec, 256) T      256 output samples per spec
+//
+//   - 1D grid, 1D blocks. blockDim.x = 256 (= 8 warps x 32 threads).
+//     Each block handles 32 consecutive spectator indices.
+//     gridDim.x = (nspec + 31) / 32.
+//
+//   - Warp w (0..7) of a block handles the 4 specs [32*b + 4*w, 32*b + 4*w + 4).
+//     Within each spec, each of the 32 threads loads one uint32 (= 8 packed
+//     int4 nibbles) and writes 8 output elements.
+//
+//   - Per-block global memory traffic:
+//       scoff: 32 specs x 4 B (one __half2 each) = 128 B  = 1 cache line
+//       data:  32 specs x 128 B (256 int4 each)  = 4096 B = 32 cache lines
+//       out:   32 specs x 256 x sizeof(T)
+//                 fp32 -> 32 KB = 256 cache lines
+//                 fp16 -> 16 KB = 128 cache lines
+//
+// This pass focuses on the threadblocking scheme; the per-thread arithmetic is
+// straightforward (1 uint32 load + 8 unrolled scalar stores). Perf tuning of
+// the inner work -- wider stores, shuffle-based int4 -> fp conversion, etc.
+// -- is deferred to a follow-up.
 
 
-// Float32 kernel: 2 shuffles, 2 x 128-bit write transactions using float4
-// Block dims: (32, 8, 1) - threadIdx.y runs over frequency for better occupancy
-// scales_offsets is converted from fp16 to fp32 immediately, before any arithmetic.
+__launch_bounds__(256)
 __global__ void gpu_dequantize_fp32_kernel(
-    float4 *out,
-    const __half2 *scoff,   // packed (scale, offset) pairs
-    const uint32_t *in,
-    long out_stride,        // stride between (beam,freq) rows in output (in float4 units)
-    long scoff_stride,      // stride between (beam,freq) rows in scoff (in __half2 / pair units)
-    long in_stride,         // stride between (beam,freq) rows in input (in uint32 units)
-    int nfreq)              // total number of frequencies (for bounds checking)
+    float *out,
+    const __half2 *scoff,    // (nspec, 2) fp16 viewed as (nspec,) __half2
+    const uint32_t *data,    // (nspec, 32) uint32 (each uint32 = 8 packed int4 nibbles)
+    long nspec)
 {
-    // Grid mapping: blockIdx = (freq/8, time_chunk, beam), threadIdx.y = freq%8
-    int freq = blockIdx.x * 8 + threadIdx.y;
-    int time_chunk = blockIdx.y;
-    int beam = blockIdx.z;
-    int thread_id = threadIdx.x;  // 0-31
+    int warp_id = threadIdx.x >> 5;   // 0..7
+    int lane    = threadIdx.x & 31;   // 0..31
 
-    // Bounds check: nfreq may not be a multiple of 8
-    if (freq >= nfreq)
-        return;
+    long warp_first_spec = long(blockIdx.x) * 32 + warp_id * 4;
 
-    // Pointers to this warp's data
-    // Input: 32 uint32 values = 128 bytes = 256 int4 values
-    // Output: 64 float4 values = 256 float32 values
-    long bf_idx = long(beam) * nfreq + freq;
-    const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
-    float4 *outp = out + bf_idx * out_stride + time_chunk * 64;
+    // Length-4 loop over this warp's 4 spectator indices.
+    for (int i = 0; i < 4; i++) {
+        long spec = warp_first_spec + i;
+        if (spec >= nspec)
+            return;   // warp-uniform: all 32 lanes see the same spec/nspec
 
-    // Load the (scale, offset) pair for this (beam, freq, time_chunk) and convert
-    // fp16 -> fp32 BEFORE any arithmetic.
-    __half2 sc_off = scoff[bf_idx * scoff_stride + time_chunk];
-    float scale  = __half2float(__low2half(sc_off));
-    float offset = __half2float(__high2half(sc_off));
+        // (scale, offset) for this spec. Convert fp16 -> fp32 BEFORE any
+        // arithmetic, per GpuDequantizationKernel contract.
+        __half2 sc_off = scoff[spec];
+        float scale  = __half2float(__low2half(sc_off));
+        float offset = __half2float(__high2half(sc_off));
 
-    // Step 1: Coalesced read (32 threads x 4 bytes = 128 bytes)
-    uint32_t packed = inp[thread_id];
+        // Coalesced read: 32 threads x 4 B = 128 B = 1 cache line per spec.
+        uint32_t packed = data[spec * 32 + lane];
 
-    // Step 2: Only 2 shuffles needed for 128-bit stores!
-    // Thread t writes elements [4t, 4t+3] and [128+4t, 128+4t+3]
-    // Elements [4t, 4t+3] are 4 consecutive nibbles in thread t/2
-    // Elements [128+4t, 128+4t+3] are 4 consecutive nibbles in thread 16+t/2
-    int src_thread_lo = thread_id / 2;        // 0,0,1,1,2,2,...,15,15
-    int src_thread_hi = 16 + thread_id / 2;   // 16,16,17,17,...,31,31
-    int nibble_base = (thread_id % 2) * 4;    // 0,4,0,4,0,4,...
-
-    uint32_t data_lo = __shfl_sync(~0u, packed, src_thread_lo);
-    uint32_t data_hi = __shfl_sync(~0u, packed, src_thread_hi);
-
-    // Extract 4 nibbles from data_lo, convert to float4 with scale*x + offset
-    int nib0 = (data_lo >> (nibble_base * 4)) & 0xF;
-    int nib1 = (data_lo >> ((nibble_base + 1) * 4)) & 0xF;
-    int nib2 = (data_lo >> ((nibble_base + 2) * 4)) & 0xF;
-    int nib3 = (data_lo >> ((nibble_base + 3) * 4)) & 0xF;
-
-    float4 out_lo;
-    out_lo.x = scale * (float)((nib0 >= 8) ? (nib0 - 16) : nib0) + offset;
-    out_lo.y = scale * (float)((nib1 >= 8) ? (nib1 - 16) : nib1) + offset;
-    out_lo.z = scale * (float)((nib2 >= 8) ? (nib2 - 16) : nib2) + offset;
-    out_lo.w = scale * (float)((nib3 >= 8) ? (nib3 - 16) : nib3) + offset;
-
-    // Extract 4 nibbles from data_hi, convert to float4 with scale*x + offset
-    nib0 = (data_hi >> (nibble_base * 4)) & 0xF;
-    nib1 = (data_hi >> ((nibble_base + 1) * 4)) & 0xF;
-    nib2 = (data_hi >> ((nibble_base + 2) * 4)) & 0xF;
-    nib3 = (data_hi >> ((nibble_base + 3) * 4)) & 0xF;
-
-    float4 out_hi;
-    out_hi.x = scale * (float)((nib0 >= 8) ? (nib0 - 16) : nib0) + offset;
-    out_hi.y = scale * (float)((nib1 >= 8) ? (nib1 - 16) : nib1) + offset;
-    out_hi.z = scale * (float)((nib2 >= 8) ? (nib2 - 16) : nib2) + offset;
-    out_hi.w = scale * (float)((nib3 >= 8) ? (nib3 - 16) : nib3) + offset;
-
-    // Step 3: 128-bit coalesced writes (2 transactions x 512 bytes = 1024 bytes = 256 floats)
-    outp[thread_id] = out_lo;        // elements [4t, 4t+3]
-    outp[32 + thread_id] = out_hi;   // elements [128+4t, 128+4t+3]
+        // Each thread writes 8 consecutive output elements (out[spec, lane*8 ..]).
+        float *out_p = out + spec * 256 + lane * 8;
+        #pragma unroll
+        for (int k = 0; k < 8; k++) {
+            int nibble = (packed >> (k * 4)) & 0xF;
+            int value  = (nibble >= 8) ? (nibble - 16) : nibble;
+            out_p[k] = scale * (float) value + offset;
+        }
+    }
 }
 
 
-// Float16 kernel: 0 shuffles, 1 x 128-bit write transaction using uint4
-// Thread t already has elements [8t, 8t+7] after the read - no shuffle needed!
-// Block dims: (32, 8, 1) - threadIdx.y runs over frequency for better occupancy
-// scales_offsets is kept in fp16 throughout (matches output dtype).
+__launch_bounds__(256)
 __global__ void gpu_dequantize_fp16_kernel(
-    uint4 *out,
-    const __half2 *scoff,   // packed (scale, offset) pairs
-    const uint32_t *in,
-    long out_stride,        // stride between (beam,freq) rows in output (in uint4 units)
-    long scoff_stride,      // stride between (beam,freq) rows in scoff (in __half2 / pair units)
-    long in_stride,         // stride between (beam,freq) rows in input (in uint32 units)
-    int nfreq)              // total number of frequencies (for bounds checking)
+    __half *out,
+    const __half2 *scoff,
+    const uint32_t *data,
+    long nspec)
 {
-    // Grid mapping: blockIdx = (freq/8, time_chunk, beam), threadIdx.y = freq%8
-    int freq = blockIdx.x * 8 + threadIdx.y;
-    int time_chunk = blockIdx.y;
-    int beam = blockIdx.z;
-    int thread_id = threadIdx.x;  // 0-31
+    int warp_id = threadIdx.x >> 5;
+    int lane    = threadIdx.x & 31;
 
-    // Bounds check: nfreq may not be a multiple of 8
-    if (freq >= nfreq)
-        return;
+    long warp_first_spec = long(blockIdx.x) * 32 + warp_id * 4;
 
-    // Pointers to this warp's data
-    // Input: 32 uint32 values = 128 bytes = 256 int4 values
-    // Output: 32 uint4 values = 512 bytes = 256 float16 values
-    long bf_idx = long(beam) * nfreq + freq;
-    const uint32_t *inp = in + bf_idx * in_stride + time_chunk * 32;
-    uint4 *outp = out + bf_idx * out_stride + time_chunk * 32;
+    for (int i = 0; i < 4; i++) {
+        long spec = warp_first_spec + i;
+        if (spec >= nspec)
+            return;
 
-    // Load the (scale, offset) pair for this (beam, freq, time_chunk). Keep in fp16
-    // and broadcast each into a __half2 for fp16 fused-multiply-add.
-    __half2 sc_off = scoff[bf_idx * scoff_stride + time_chunk];
-    __half2 scale2  = __half2half2(__low2half(sc_off));   // (scale, scale)
-    __half2 offset2 = __half2half2(__high2half(sc_off));  // (offset, offset)
+        // Keep (scale, offset) in fp16 -- the fp16 kernel uses fp16 arithmetic
+        // throughout, matching the output dtype.
+        __half2 sc_off = scoff[spec];
+        __half scale  = __low2half(sc_off);
+        __half offset = __high2half(sc_off);
 
-    // Step 1: Coalesced read (32 threads x 4 bytes = 128 bytes)
-    uint32_t packed = inp[thread_id];
+        uint32_t packed = data[spec * 32 + lane];
 
-    // Step 2: NO shuffles needed! Thread t already has elements [8t, 8t+7]
-    // Extract all 8 nibbles and convert to signed values
-    int n0 = (packed >> 0) & 0xF;   int n1 = (packed >> 4) & 0xF;
-    int n2 = (packed >> 8) & 0xF;   int n3 = (packed >> 12) & 0xF;
-    int n4 = (packed >> 16) & 0xF;  int n5 = (packed >> 20) & 0xF;
-    int n6 = (packed >> 24) & 0xF;  int n7 = (packed >> 28) & 0xF;
-
-    int s0 = (n0 >= 8) ? (n0 - 16) : n0;  int s1 = (n1 >= 8) ? (n1 - 16) : n1;
-    int s2 = (n2 >= 8) ? (n2 - 16) : n2;  int s3 = (n3 >= 8) ? (n3 - 16) : n3;
-    int s4 = (n4 >= 8) ? (n4 - 16) : n4;  int s5 = (n5 >= 8) ? (n5 - 16) : n5;
-    int s6 = (n6 >= 8) ? (n6 - 16) : n6;  int s7 = (n7 >= 8) ? (n7 - 16) : n7;
-
-    // Pack pairs into __half2
-    __half2 h01 = __halves2half2(__int2half_rn(s0), __int2half_rn(s1));
-    __half2 h23 = __halves2half2(__int2half_rn(s2), __int2half_rn(s3));
-    __half2 h45 = __halves2half2(__int2half_rn(s4), __int2half_rn(s5));
-    __half2 h67 = __halves2half2(__int2half_rn(s6), __int2half_rn(s7));
-
-    // Apply affine transform in fp16: h = scale * h + offset
-    h01 = __hfma2(h01, scale2, offset2);
-    h23 = __hfma2(h23, scale2, offset2);
-    h45 = __hfma2(h45, scale2, offset2);
-    h67 = __hfma2(h67, scale2, offset2);
-
-    // Step 3: Single 128-bit coalesced write (1 transaction x 512 bytes = 256 float16)
-    half8_store(&outp[thread_id], h01, h23, h45, h67);
+        __half *out_p = out + spec * 256 + lane * 8;
+        #pragma unroll
+        for (int k = 0; k < 8; k++) {
+            int nibble = (packed >> (k * 4)) & 0xF;
+            int value  = (nibble >= 8) ? (nibble - 16) : nibble;
+            __half h = __int2half_rn(value);
+            out_p[k] = __hfma(scale, h, offset);
+        }
+    }
 }
 
 
@@ -203,11 +154,13 @@ GpuDequantizationKernel::GpuDequantizationKernel(Dtype dtype_, long nbeams_, lon
     long nbytes_out      = nbeams * nfreq * ntime * (dtype.nbits / 8);
     resource_tracker.add_kernel("dequantization", nbytes_in + nbytes_out);
 
-    // Kernel config: each warp handles 256 time samples for one (beam, freq)
-    // Block: (32, 8, 1) - threadIdx.y runs over frequency for better occupancy
-    // Grid: (ceil(freq/8), time_chunk, beam) - freq in x since it can be large
-    nthreads = dim3(32, 8, 1);
-    nblocks = dim3((nfreq + 7) / 8, ntime / 256, nbeams);
+    // Threadblocking: 1D grid, 1D blocks of 256 threads (= 8 warps x 32 threads).
+    // Each block processes 32 spectator indices, where
+    //     nspec = nbeams * nfreq * (ntime / 256).
+    // See the comment above the GPU kernels for the full scheme.
+    long nspec = nbeams * nfreq * (ntime / 256);
+    nthreads = dim3(256, 1, 1);
+    nblocks  = dim3((nspec + 31) / 32, 1, 1);
 }
 
 
@@ -304,40 +257,24 @@ void GpuDequantizationKernel::launch(Array<void> &out,
     xassert_shape_eq(out, ({nbeams, nfreq, ntime}));
     xassert(out.is_fully_contiguous());
 
-    // Input stride: stride between (beam,freq) rows in uint32 units
-    // Each row has ntime int4 elements = ntime/2 bytes = ntime/8 uint32 values
-    long in_stride = ntime / 8;
-
-    // scales_offsets stride: stride between (beam,freq) rows in __half2 / pair units.
-    // Each row has (ntime/256) (scale, offset) pairs.
-    long scoff_stride = ntime / 256;
+    // Flatten (beam, freq, time_chunk) into a single 1D spectator index for
+    // the GPU kernel. Since all arrays are contiguous, no strides are needed.
+    long nspec = nbeams * nfreq * (ntime / 256);
 
     if (dtype == fp32) {
-        // Output stride in float4 units (each float4 holds 4 float32 values)
-        long out_stride = ntime / 4;
-
         gpu_dequantize_fp32_kernel <<< nblocks, nthreads, 0, stream >>> (
-            reinterpret_cast<float4 *>(out.data),
+            reinterpret_cast<float *>(out.data),
             reinterpret_cast<const __half2 *>(scales_offsets.data),
             reinterpret_cast<const uint32_t *>(data.data),
-            out_stride,
-            scoff_stride,
-            in_stride,
-            nfreq
+            nspec
         );
     }
     else if (dtype == fp16) {
-        // Output stride in uint4 units (each uint4 holds 8 float16 values)
-        long out_stride = ntime / 8;
-
         gpu_dequantize_fp16_kernel <<< nblocks, nthreads, 0, stream >>> (
-            reinterpret_cast<uint4 *>(out.data),
+            reinterpret_cast<__half *>(out.data),
             reinterpret_cast<const __half2 *>(scales_offsets.data),
             reinterpret_cast<const uint32_t *>(data.data),
-            out_stride,
-            scoff_stride,
-            in_stride,
-            nfreq
+            nspec
         );
     }
     else {
