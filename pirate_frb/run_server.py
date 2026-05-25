@@ -1,10 +1,11 @@
-"""Implementation of 'pirate_frb run_server <config.yml>' subcommand."""
+"""Implementation of 'pirate_frb run_server' and 'pirate_frb run_fake_xengine' subcommands."""
 
 import os
 import re
 import time
 import datetime
 import threading
+from contextlib import closing
 
 import yaml
 import ksgpu
@@ -13,6 +14,8 @@ from .Hardware import Hardware
 from .utils.ThreadAffinity import ThreadAffinity
 from .core import BumpAllocator, SlabAllocator, AssembledFrameAllocator, FileWriter, Receiver
 from .core import FakeXEngine, XEngineMetadata
+from .pirate_pybind11 import DedispersionConfig
+from .rpc import FrbClient
 
 
 def _parse_memory_string(s):
@@ -76,9 +79,13 @@ def _parse_config(filename):
         raise RuntimeError(f"{filename}: expected YAML mapping at top level, got {type(config).__name__}")
 
     # --- Required keys and their types ---
+    #
+    # Note: 'time_samples_per_chunk' used to live here, but now belongs to the
+    # DedispersionConfig. run_server() reads it from the dedispersion YAML;
+    # run_fake_xengine() queries it from the running server via GetConfig RPC.
 
     required_keys = [
-        'num_servers', 'server_cpus', 'time_samples_per_chunk',
+        'num_servers', 'server_cpus',
         'memory_per_server', 'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs',
         'ssd_dirs', 'ssd_devices', 'ssd_threads_per_server',
         'nfs_dir', 'nfs_threads_per_server',
@@ -101,12 +108,6 @@ def _parse_config(filename):
     for i, cpu in enumerate(sc):
         if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 0:
             raise RuntimeError(f"{filename}: server_cpus[{i}] must be a non-negative integer, got {cpu!r}")
-
-    tsc = config['time_samples_per_chunk']
-    if not isinstance(tsc, int) or tsc <= 0:
-        raise RuntimeError(f"{filename}: 'time_samples_per_chunk' must be a positive integer, got {tsc!r}")
-    if tsc % 256 != 0:
-        raise RuntimeError(f"{filename}: 'time_samples_per_chunk' must be a multiple of 256, got {tsc}")
 
     mps = config['memory_per_server']
     if not isinstance(mps, str):
@@ -210,15 +211,17 @@ def _validate_hardware(config, hw):
             )
 
 
-def run_server(config_filename):
+def run_server(server_config_filename, dedispersion_config_filename):
     """Main entry point for 'pirate_frb run_server'."""
 
-    config = _parse_config(config_filename)
+    config = _parse_config(server_config_filename)
+    dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
     n = config['num_servers']
 
-    print(f"Parsed config: {config_filename}")
+    print(f"Parsed server config: {server_config_filename}")
+    print(f"Parsed dedispersion config: {dedispersion_config_filename}")
     print(f"  num_servers = {n}")
-    print(f"  time_samples_per_chunk = {config['time_samples_per_chunk']}")
+    print(f"  time_samples_per_chunk = {dedisp_config.time_samples_per_chunk}  (from dedispersion config)")
     print(f"  memory_per_server = {config['memory_per_server']}")
     print(f"  use_hugepages = {config['use_hugepages']}")
 
@@ -278,7 +281,7 @@ def run_server(config_filename):
                 allocator = AssembledFrameAllocator(
                     slab_allocator,
                     num_consumers=num_addrs,
-                    time_samples_per_chunk=config['time_samples_per_chunk'],
+                    time_samples_per_chunk=dedisp_config.time_samples_per_chunk,
                 )
 
                 # FileWriter: writes frames to SSD and copies to NFS.
@@ -305,7 +308,8 @@ def run_server(config_filename):
                 # No threads spawned in constructor.
                 # (Imported here to avoid circular import with __init__.py.)
                 from . import FrbServer
-                server = FrbServer(receivers, file_writer, config['rpc_ip_addrs'][i],
+                server = FrbServer(dedisp_config, receivers, file_writer,
+                                   config['rpc_ip_addrs'][i],
                                    config['ringbuf_nchunks'])
 
                 # server.start(): spawns worker/reaper threads and calls
@@ -317,7 +321,7 @@ def run_server(config_filename):
             print(f"  Server {i} started.")
 
         rpc_addrs = ' '.join(config['rpc_ip_addrs'])
-        print(f"\nTo send fake data to server(s):  pirate_frb run_server -s {config_filename}")
+        print(f"\nTo send fake data to server(s):  pirate_frb run_fake_xengine {server_config_filename}")
         print(f"To monitor status:               pirate_frb rpc_status {rpc_addrs}")
         print(f"To write random data:            pirate_frb rpc_write {rpc_addrs}")
         
@@ -462,8 +466,31 @@ def _fake_xengine_controller_wrapper(fxe, all_fxes, exc_list, exc_lock):
                 pass
 
 
+def _query_tsc_from_servers(config):
+    """Connect to each FrbServer's RPC endpoint, call GetConfig, and return
+    the common time_samples_per_chunk. Raises if any server reports a
+    different value, or if any RPC connection fails.
+
+    The receivers' time_samples_per_chunk is set when they construct their
+    AssembledFrameAllocator (from the dedispersion config), and is the
+    authoritative source for the sender. Querying every server (instead
+    of just the first) catches misconfiguration where servers were
+    started with mismatched dedispersion configs.
+    """
+    tsc_values = []
+    for addr in config['rpc_ip_addrs']:
+        with closing(FrbClient(addr)) as c:
+            tsc_values.append(c.get_config().time_samples_per_chunk)
+    if len(set(tsc_values)) != 1:
+        raise RuntimeError(
+            f"run_fake_xengine: FrbServers report inconsistent "
+            f"time_samples_per_chunk: {dict(zip(config['rpc_ip_addrs'], tsc_values))}"
+        )
+    return tsc_values[0]
+
+
 def run_fake_xengine(config_filename):
-    """Main entry point for 'pirate_frb run_server -s'.
+    """Main entry point for 'pirate_frb run_fake_xengine'.
 
     Spawns one FakeXEngine per server (each with its own worker threads
     pinned via ThreadAffinity) plus one Python controller thread per
@@ -471,11 +498,20 @@ def run_fake_xengine(config_filename):
     FakeXEngine errors out (e.g. the receiver goes away), every other
     FakeXEngine is stopped via cascade in
     _fake_xengine_controller_wrapper.
+
+    time_samples_per_chunk is no longer in the server YAML -- it lives
+    in the dedispersion config used by the receivers. We learn it from
+    the receivers via the GetConfig RPC, which requires the receivers
+    to be running already.
     """
 
     config = _parse_config(config_filename)
     n = config['num_servers']
     fxe_config = _parse_fake_xengine_config(config_filename, config)
+
+    # Learn time_samples_per_chunk from the running receivers. Fails fast
+    # (with a gRPC error) if any receiver isn't running.
+    time_samples_per_chunk = _query_tsc_from_servers(config)
 
     hw = Hardware()
     nworkers = fxe_config['tcp_connections_per_server']
@@ -483,6 +519,7 @@ def run_fake_xengine(config_filename):
     print(f"Parsed config: {config_filename}")
     print(f"  num_servers = {n}")
     print(f"  tcp_connections_per_server = {nworkers}")
+    print(f"  time_samples_per_chunk = {time_samples_per_chunk}  (queried from server)")
 
     fake_xengines = []   # list[FakeXEngine]
     fxe_vcpus = []       # list[list[int]], parallel to fake_xengines
@@ -528,7 +565,7 @@ def run_fake_xengine(config_filename):
             with ThreadAffinity(vcpu_list):
                 fxe = FakeXEngine(
                     xmd, ip_addrs, nworkers,
-                    time_samples_per_chunk=config['time_samples_per_chunk'])
+                    time_samples_per_chunk=time_samples_per_chunk)
             fake_xengines.append(fxe)
             fxe_vcpus.append(vcpu_list)
             print(f"  FakeXEngine {i} workers spawned.")

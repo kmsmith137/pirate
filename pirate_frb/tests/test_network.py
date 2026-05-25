@@ -44,7 +44,7 @@ from ..core import (
     SlabAllocator,
     XEngineMetadata,
 )
-from ..pirate_pybind11 import FrbServer
+from ..pirate_pybind11 import DedispersionConfig, FrbServer
 from ..rpc import FrbClient
 
 
@@ -62,19 +62,50 @@ class NetworkTester:
 
     @staticmethod
     def _random_params():
-        """Return one random subscale config (a plain dict)."""
+        """Return one random subscale config (a plain dict).
+
+        The DedispersionConfig is built FIRST (via make_random + rejection
+        sampling for test-friendly constraints), and the rest of the test
+        params are derived from it. This way, the four metadata-dependent
+        members of the config (zone_nfreq, zone_freq_edges, time_sample_ms,
+        beams_per_gpu) that the FrbServer's processing thread overwrites
+        with XMD-derived values land on values that match the random
+        config -- so config_postfilled.validate() trivially succeeds.
+
+        Rejection-sample constraints:
+          - time_samples_per_chunk % 256 == 0 (network protocol cadence)
+          - beams_per_gpu <= 8 (keep frame count manageable for the test)
+
+        max_rank=6 is the smallest value compatible with the precompiled
+        cdd2 kernel registry (which has dd_rank in {3,4,5}, requiring
+        max_stage2_rank = (max_rank+1)/2 >= 3, i.e. max_rank >= 5).
+        """
+        for _ in range(200):
+            config = DedispersionConfig.make_random(max_rank=6)
+            if config.time_samples_per_chunk % 256 != 0:
+                continue
+            if config.beams_per_gpu > 8:
+                continue
+            break
+        else:
+            raise RuntimeError(
+                "test_network: failed to generate a random DedispersionConfig "
+                "satisfying (tsc%256==0 and beams_per_gpu<=8) in 200 attempts"
+            )
+
         num_receivers = random.randint(1, 5)
-        nworkers      = num_receivers * random.randint(1, 5)
-        # total_nfreq must be >= nworkers (FakeXEngine ctor) since
+        total_nfreq   = sum(config.zone_nfreq)
+        # nworkers must be <= total_nfreq (FakeXEngine ctor) since
         # frequency channels are assigned round-robin to workers.
-        total_nfreq   = max(nworkers, random.randint(8, 32))
+        nworkers      = min(num_receivers * random.randint(1, 5), total_nfreq)
         return dict(
+            config                 = config,
             num_receivers          = num_receivers,
             nworkers               = nworkers,
             num_ssd_threads        = random.randint(1, 5),
             num_nfs_threads        = random.randint(1, 5),
-            time_samples_per_chunk = 256 * random.randint(1, 5),
-            nbeams                 = random.randint(1, 4),
+            time_samples_per_chunk = config.time_samples_per_chunk,
+            nbeams                 = config.beams_per_gpu,
             total_nfreq            = total_nfreq,
             base_beam_id           = random.randint(0, 10000),
             data_base_port         = 5000,
@@ -194,7 +225,7 @@ class NetworkTester:
             for j in range(p['num_receivers'])
         ]
 
-        self.server = FrbServer(self.receivers, self.file_writer,
+        self.server = FrbServer(p['config'], self.receivers, self.file_writer,
                                 f"127.0.0.1:{p['rpc_port']}",
                                 p['ringbuf_nchunks'])
         self.server.start()
@@ -207,7 +238,7 @@ class NetworkTester:
                                    p['base_beam_id'] + p['nbeams']))
 
         self.xmd = XEngineMetadata.make_test_instance(
-            [p['total_nfreq']], [400.0, 800.0], self.beam_ids,
+            p['config'].zone_nfreq, p['config'].zone_freq_edges, self.beam_ids,
         )
 
         ip_addrs = [f"127.0.0.1:{p['data_base_port'] + j}"
@@ -598,6 +629,13 @@ def test_network():
     """One iteration of the FakeXEngine <-> FrbServer loopback test."""
     print("  test_network()...")
     with NetworkTester() as t:
-        print(f"    params: {t.p}")
+        # The DedispersionConfig is verbose; print other params and a
+        # one-line config summary separately.
+        params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
+        print(f"    params: {params_no_config}")
+        c = t.p['config']
+        print(f"    config: tree_rank={c.tree_rank}, num_downsampling_levels={c.num_downsampling_levels},"
+              f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
+              f" dtype={c.dtype}")
         t.run()
     print("    PASSED")

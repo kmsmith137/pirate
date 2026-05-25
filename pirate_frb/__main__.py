@@ -1129,21 +1129,31 @@ def random_kernels(args):
 
 
 def parse_run_server(subparsers):
-    help_text = "Start FRB server(s) from an frb_server .yml file"
+    help_text = "Start FRB server(s) from an frb_server .yml file and a dedispersion .yml file"
     parser = subparsers.add_parser("run_server", help=help_text, description=help_text)
-    parser.add_argument('config', help='Path to YAML config file')
-    # -s flag reserved for future use (fake X-engine sender mode).
-    parser.add_argument('-s', '--send', action='store_true', help='(not yet implemented) Send fake X-engine data')
+    parser.add_argument('server_config', help='Path to FrbServer YAML config file')
+    parser.add_argument('dedispersion_config', help='Path to DedispersionConfig YAML file')
 
 
 def run_server_command(args):
-    if args.send:
-        from .run_server import run_fake_xengine
-        run_fake_xengine(args.config)
-    else:
-        from .run_server import run_server
-        run_server(args.config)
-    
+    from .run_server import run_server
+    run_server(args.server_config, args.dedispersion_config)
+
+
+######################################  run_fake_xengine command  #####################################
+
+
+def parse_run_fake_xengine(subparsers):
+    help_text = "Send fake X-engine data to a running FrbServer (queries GetConfig RPC for time_samples_per_chunk)"
+    parser = subparsers.add_parser("run_fake_xengine", help=help_text, description=help_text)
+    parser.add_argument('config', help='Path to FrbServer YAML config file (the same file used to start the server)')
+
+
+def run_fake_xengine_command(args):
+    from .run_server import run_fake_xengine
+    run_fake_xengine(args.config)
+
+
 
 ####################################################################################################
 
@@ -1175,6 +1185,7 @@ def get_parser():
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     parse_run_server(subparsers)
+    parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
     parse_rpc_write(subparsers)
     
@@ -1240,6 +1251,8 @@ def main():
         rpc_write(args)
     elif args.command == "run_server":
         run_server_command(args)
+    elif args.command == "run_fake_xengine":
+        run_fake_xengine_command(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)

@@ -14,6 +14,7 @@
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"  // for PeakFindingConfig, EarlyTrigger
+#include "../include/pirate/DedispersionPlan.hpp"     // FrbServer.plan property
 #include "../include/pirate/DedispersionTree.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/ResourceTracker.hpp"
@@ -949,22 +950,34 @@ void register_core_bindings(pybind11::module &m)
     // Note: FrbServer::create() is used internally, but appears as a constructor to Python.
     py::class_<FrbServer, std::shared_ptr<FrbServer>>(m, "FrbServer",
         "gRPC server that queries Receivers via RPC.\n\n"
-        "Wraps multiple Receivers and exposes their status via gRPC.")
-          .def(py::init([](std::vector<std::shared_ptr<Receiver>> receivers,
+        "Wraps multiple Receivers and exposes their status via gRPC. Also\n"
+        "builds a DedispersionPlan (via a dedicated processing thread) once\n"
+        "X-engine metadata arrives -- accessible via the 'plan' property.")
+          .def(py::init([](const DedispersionConfig &config_prefilled,
+                           std::vector<std::shared_ptr<Receiver>> receivers,
                            std::shared_ptr<FileWriter> file_writer,
                            const std::string &rpc_server_address,
                            int ringbuf_nchunks) {
                FrbServer::Params params;
+               params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
                params.file_writer = std::move(file_writer);
                params.rpc_server_address = rpc_server_address;
                params.ringbuf_nchunks = ringbuf_nchunks;
                return FrbServer::create(params);
           }),
+               py::arg("config_prefilled"),
                py::arg("receivers"), py::arg("file_writer"),
                py::arg("rpc_server_address"), py::arg("ringbuf_nchunks"),
                "Create an FrbServer.\n\n"
                "Args:\n"
+               "    config_prefilled: DedispersionConfig. Four members\n"
+               "        (zone_nfreq, zone_freq_edges, time_sample_ms,\n"
+               "        beams_per_gpu) will be overwritten by the processing\n"
+               "        thread once X-engine metadata arrives; the rest\n"
+               "        (including time_samples_per_chunk) are taken as-is.\n"
+               "        The 'filled' config is available as server.plan.config\n"
+               "        once the plan has been built.\n"
                "    receivers: List of Receiver objects to query\n"
                "    file_writer: FileWriter for saving frames to disk\n"
                "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')\n"
@@ -975,6 +988,10 @@ void register_core_bindings(pybind11::module &m)
                "    RuntimeError: If called twice or after stop().")
           .def("stop", [](FrbServer &self) { self.stop(); },
                "Stop the server and all Receivers. Safe to call multiple times.")
+          .def_property_readonly("plan", [](FrbServer &self) {
+               std::lock_guard<std::mutex> lock(self.mutex);
+               return self.plan;
+          }, "DedispersionPlan built by the processing thread, or None if not yet constructed.")
     ;
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.

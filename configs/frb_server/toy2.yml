@@ -4,10 +4,10 @@
 #
 # To start the server:
 #   mkdir -p /dev/shm/pirate_ssd /dev/shm/pirate_nfs
-#   pirate_frb run_server configs/frb_server/toy2.yml
+#   pirate_frb run_server configs/frb_server/toy2.yml configs/dedispersion/toy.yml
 #
 # To send fake X-engine data (in a separate terminal):
-#   pirate_frb run_server -s configs/frb_server/toy2.yml
+#   pirate_frb run_fake_xengine configs/frb_server/toy2.yml
 
 
 ########################################  General config  ########################################
@@ -19,7 +19,11 @@ server_cpus: [ 0 ]   # length num_servers
 memory_per_server: '10 GB'
 use_hugepages: true
 
-time_samples_per_chunk: 1024
+# time_samples_per_chunk is no longer specified here -- it lives in the
+# DedispersionConfig YAML passed to 'pirate_frb run_server' as the second
+# positional arg. 'pirate_frb run_fake_xengine' learns it from the running
+# server via the GetConfig RPC.
+
 ringbuf_nchunks: 512
 
 
@@ -51,7 +55,7 @@ nfs_threads_per_server: 2
 ###################################  "Fake X-engine" config  #####################################
 #
 # This optional section is only needed if you want to send "fake X-engine" data
-# (pirate_frb run_server -s).
+# (pirate_frb run_fake_xengine).
 
 
 beams_per_server: 3

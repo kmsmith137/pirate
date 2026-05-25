@@ -1,6 +1,11 @@
 #include "../include/pirate/FrbServer.hpp"
 #include "../include/pirate/FileWriter.hpp"
+#include "../include/pirate/DedispersionPlan.hpp"
 
+#include <ksgpu/string_utils.hpp>  // tuple_str()
+
+#include <iostream>
+#include <sstream>
 #include <stdexcept>
 
 #include "../grpc/frb_search.grpc.pb.h"
@@ -78,12 +83,19 @@ std::shared_ptr<FrbServer> FrbServer::create(const Params &params)
 }
 
 
-FrbServer::FrbServer(const Params &p) : params(p) 
-{ 
+FrbServer::FrbServer(const Params &p) : params(p)
+{
     xassert(params.file_writer);
     xassert(params.receivers.size() > 0);
     xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
     xassert(params.ringbuf_nchunks > 0);
+
+    // Fail fast on a malformed user-supplied config. (The four metadata-
+    // dependent members are overwritten later by the processing thread,
+    // but params.config_prefilled must already be self-consistent enough
+    // to pass validate() -- DedispersionConfig::from_yaml requires those
+    // members to be present in the YAML.)
+    params.config_prefilled.validate();
 
     // Check that all recivers use the same allocator, and consumer IDs are consistent with ordering.
     for (uint i = 0; i < params.receivers.size(); i++) {
@@ -93,6 +105,19 @@ FrbServer::FrbServer(const Params &p) : params(p)
     }
 
     this->allocator = params.receivers[0]->params.allocator;
+
+    // Verbose consistency check: the dedispersion config and the allocator
+    // must agree on time_samples_per_chunk. In the normal run_server.py
+    // path the allocator is constructed FROM the dedispersion config, so
+    // this guards against future mis-wiring or direct Python callers.
+    if (params.config_prefilled.time_samples_per_chunk != allocator->time_samples_per_chunk) {
+        stringstream ss;
+        ss << "FrbServer: DedispersionConfig::time_samples_per_chunk ("
+           << params.config_prefilled.time_samples_per_chunk
+           << ") does not match AssembledFrameAllocator::time_samples_per_chunk ("
+           << allocator->time_samples_per_chunk << ")";
+        throw runtime_error(ss.str());
+    }
 
     // Note: rpc_service is created in start(), not here, because we need shared_from_this().
 }
@@ -108,6 +133,9 @@ FrbServer::~FrbServer()
 
     if (reaper_thread.joinable())
         reaper_thread.join();
+
+    if (processing_thread.joinable())
+        processing_thread.join();
 
     if (rpc_server)
         rpc_server->Wait();
@@ -158,6 +186,10 @@ void FrbServer::start()
         // Spawn reaper thread iff allocator is not in dummy mode.
         if (!allocator->is_dummy())
             reaper_thread = std::thread(&FrbServer::reaper_thread_main, this);
+
+        // Spawn processing thread (builds DedispersionPlan once metadata arrives).
+        // Spawned unconditionally -- doesn't depend on dummy/non-dummy mode.
+        processing_thread = std::thread(&FrbServer::processing_thread_main, this);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -402,6 +434,98 @@ void FrbServer::reaper_thread_main()
 {
     try {
         _reaper_thread_main();
+    } catch (...) {
+        stop(std::current_exception());
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Processing thread
+//
+// Once the X-engine metadata is available, this thread overwrites the four
+// metadata-dependent members of params.config_prefilled (zone_nfreq,
+// zone_freq_edges, time_sample_ms, beams_per_gpu) to build a "postfilled"
+// DedispersionConfig, validates it, and constructs a DedispersionPlan. The
+// plan is then published via the lock-protected 'plan' member.
+//
+// More processing steps will be added in a future prompt; for now, the
+// thread just exits cleanly after publishing the plan.
+
+
+void FrbServer::_processing_thread_main()
+{
+    // Block until X-engine metadata is available. allocator->get_metadata()
+    // is an entry point: it throws if the allocator has been stopped (which
+    // happens via cascade from FrbServer::stop()), so we get a clean exit
+    // path through processing_thread_main()'s try/catch.
+    shared_ptr<const XEngineMetadata> m = allocator->get_metadata(/*blocking=*/true);
+
+    // Build config_postfilled by copying config_prefilled and overwriting the
+    // four metadata-dependent members. Print a one-line message when an
+    // overwrite changes the value.
+    DedispersionConfig config_postfilled = params.config_prefilled;
+
+    if (config_postfilled.zone_nfreq != m->zone_nfreq) {
+        cout << "FrbServer: config_postfilled.zone_nfreq changed from "
+             << tuple_str(config_postfilled.zone_nfreq) << " to "
+             << tuple_str(m->zone_nfreq) << endl;
+        config_postfilled.zone_nfreq = m->zone_nfreq;
+    }
+
+    if (config_postfilled.zone_freq_edges != m->zone_freq_edges) {
+        cout << "FrbServer: config_postfilled.zone_freq_edges changed from "
+             << tuple_str(config_postfilled.zone_freq_edges) << " to "
+             << tuple_str(m->zone_freq_edges) << endl;
+        config_postfilled.zone_freq_edges = m->zone_freq_edges;
+    }
+
+    // time_sample_ms is derived from XMD's seq-based timekeeping.
+    double new_time_sample_ms = (double(m->dt_ns_per_seq) * double(m->seq_per_frb_time_sample)) / 1.0e6;
+    if (config_postfilled.time_sample_ms != new_time_sample_ms) {
+        cout << "FrbServer: config_postfilled.time_sample_ms changed from "
+             << config_postfilled.time_sample_ms << " to " << new_time_sample_ms << endl;
+        config_postfilled.time_sample_ms = new_time_sample_ms;
+    }
+
+    // beams_per_gpu = number of beams in the XMD.
+    long new_beams_per_gpu = m->get_nbeams();
+    if (config_postfilled.beams_per_gpu != new_beams_per_gpu) {
+        cout << "FrbServer: config_postfilled.beams_per_gpu changed from "
+             << config_postfilled.beams_per_gpu << " to " << new_beams_per_gpu << endl;
+        config_postfilled.beams_per_gpu = new_beams_per_gpu;
+    }
+
+    // Will throw if (e.g.) beams_per_gpu is not divisible by beams_per_batch,
+    // or if num_active_batches * beams_per_batch > beams_per_gpu. Exception
+    // propagates to the wrapper which calls stop().
+    config_postfilled.validate();
+
+    // Construct the DedispersionPlan OUTSIDE the mutex -- this is the slow
+    // step (can take seconds), and we don't want to block other threads
+    // (e.g. RPC handlers reading 'plan' or 'is_stopped') while it runs.
+    auto p = make_shared<DedispersionPlan>(config_postfilled);
+
+    // Publish the plan under the mutex. Notify cv so future waiters (if any)
+    // observe the new value.
+    {
+        lock_guard<std::mutex> lock(mutex);
+        plan = p;
+        cv.notify_all();
+    }
+
+    cout << "FrbServer: DedispersionPlan constructed"
+         << " (nfreq=" << p->nfreq << ", ntrees=" << p->ntrees << ")" << endl;
+
+    // Exit for now. More processing steps will be added in a future prompt.
+}
+
+
+void FrbServer::processing_thread_main()
+{
+    try {
+        _processing_thread_main();
     } catch (...) {
         stop(std::current_exception());
     }

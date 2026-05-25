@@ -3,6 +3,7 @@
 
 #include "Receiver.hpp"
 #include "AssembledFrame.hpp"
+#include "DedispersionConfig.hpp"
 #include "XEngineMetadata.hpp"
 
 #include <ksgpu/xassert.hpp>
@@ -25,16 +26,24 @@ namespace pirate {
 #endif
 
 
-struct FileWriter;     // FileWriter.hpp
-struct FrbRpcService;  // defined in FrbServer.cpp
+struct FileWriter;        // FileWriter.hpp
+struct DedispersionPlan;  // DedispersionPlan.hpp
+struct FrbRpcService;     // defined in FrbServer.cpp
 
 
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
 //
-// Backing threads: one worker thread per Receiver, plus a reaper thread.
-// These threads inherit their vcpu affinity from the caller of FrbServer::start().
-// Python callers should call FrbServer.start() within a ThreadAffinity context
-// manager.
+// Backing threads: one worker thread per Receiver, a reaper thread, and a
+// processing thread (which builds a DedispersionPlan once X-engine metadata
+// has arrived). These threads inherit their vcpu affinity from the caller
+// of FrbServer::start(). Python callers should call FrbServer.start() within
+// a ThreadAffinity context manager.
+//
+// FrbServer construction takes a DedispersionConfig (params.config_prefilled)
+// whose four metadata-dependent members (zone_nfreq, zone_freq_edges,
+// time_sample_ms, beams_per_gpu) will be overwritten by the processing
+// thread once XEngineMetadata is available. The "filled" config is
+// reachable as FrbServer::plan->config after the plan has been built.
 //
 // Note that FrbServer::start() also spawns a grpc service with its own worker
 // threads. These threads will be unpinned (default system-wide affinity), since
@@ -47,6 +56,11 @@ struct FrbRpcService;  // defined in FrbServer.cpp
 struct FrbServer : public std::enable_shared_from_this<FrbServer>
 {
     struct Params {
+        // Dedispersion config specified at construction.
+        // Some members (zone_nfreq, zone_freq_edges, time_sample_ms, beams_per_gpu)
+        // will be overwritten ("filled") later. (The "filled" DedispersionConfig
+        // is available as FrbServer::plan->config.)
+        DedispersionConfig config_prefilled;
         std::vector<std::shared_ptr<Receiver>> receivers;
         std::shared_ptr<FileWriter> file_writer;
         std::string rpc_server_address;
@@ -94,6 +108,11 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // Ring buffer has length (params.ringbuf_nchunks * metadata.get_nbeams()).
     std::vector<std::shared_ptr<AssembledFrame>> frame_ringbuf;
 
+    // Dedispersion plan built by the processing thread once X-engine metadata
+    // is available. Null before that; non-null once the plan is announced.
+    // Protected by 'mutex'.
+    std::shared_ptr<DedispersionPlan> plan;
+
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
     // See below for invariants.
     long rb_start = 0;       // (first frame_id in ringbuf)
@@ -106,6 +125,10 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
 
     // Reaper thread (only spawned in non-dummy mode).
     std::thread reaper_thread;
+
+    // Processing thread: builds a DedispersionPlan once X-engine metadata
+    // has arrived, then exits (more steps to be added later).
+    std::thread processing_thread;
 
     // ----- Noncopyable, nonmoveable -----
 
@@ -138,6 +161,10 @@ private:
     // Reaper thread functions.
     void _reaper_thread_main();
     void reaper_thread_main();
+
+    // Processing thread functions.
+    void _processing_thread_main();
+    void processing_thread_main();
 };
 
 
