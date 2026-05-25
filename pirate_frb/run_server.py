@@ -409,7 +409,7 @@ def _make_xengine_metadata(fxe_config, server_index):
 
     zone_freq_edges = [float(x) for x in fxe_config['zone_freq_edges']]
     xmd = XEngineMetadata.make_test_instance(
-        fxe_config['zone_nfreq'], zone_freq_edges, beam_ids)
+        fxe_config['zone_nfreq'], zone_freq_edges, beam_ids, 1.0)
     xmd.beamset = server_index
     xmd.validate()
     return xmd

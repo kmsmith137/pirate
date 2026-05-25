@@ -239,6 +239,7 @@ class NetworkTester:
 
         self.xmd = XEngineMetadata.make_test_instance(
             p['config'].zone_nfreq, p['config'].zone_freq_edges, self.beam_ids,
+            1.0,
         )
 
         ip_addrs = [f"127.0.0.1:{p['data_base_port'] + j}"

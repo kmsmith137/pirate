@@ -160,19 +160,25 @@ struct XEngineMetadata
 
     // -------------------------------- Test/fixture factories --------------------------------
 
-    // Returns a fully-valid XEngineMetadata with placeholder telescope and timekeeping
-    // values. Caller supplies the frequency-zone structure and beam_ids; everything else
-    // is filled in with sensible defaults: noise_variance = {1.0, ...} of length nzones,
-    // beamset = 0, and beam_positions_{x,y} arranged on a deterministic 2D grid spanning
-    // [-0.1, +0.1] in both coordinates. Caller may further patch fields (e.g. beamset)
-    // before calling validate(). Calls validate() before returning.
+    // Returns a fully-valid XEngineMetadata with placeholder telescope values.
+    // Caller supplies the frequency-zone structure, beam_ids, and time sample
+    // length (in ms); everything else is filled in with sensible defaults:
+    // noise_variance = {1.0, ...} of length nzones, beamset = 0, and
+    // beam_positions_{x,y} arranged on a deterministic 2D grid spanning
+    // [-0.1, +0.1] in both coordinates. The seq-based timekeeping fields
+    // are chosen so the resulting time sample length matches time_sample_ms
+    // (dt_ns_per_seq is fixed at 5120; seq_per_frb_time_sample is the
+    // closest integer that matches the requested time_sample_ms). Caller
+    // may further patch fields (e.g. beamset) before calling validate().
+    // Calls validate() before returning. Throws if time_sample_ms < 0.5.
     //
     // Used by: pirate_frb/run_server.py:_make_xengine_metadata, the FakeXEngine /
     // FrbServer test paths, and the C++ Hwtest benchmark setup.
     static std::shared_ptr<XEngineMetadata>
     make_test_instance(const std::vector<long> &zone_nfreq,
                        const std::vector<double> &zone_freq_edges,
-                       const std::vector<long> &beam_ids);
+                       const std::vector<long> &beam_ids,
+                       double time_sample_ms);
 
     // Returns a fully-valid XEngineMetadata with all fields randomized within validity
     // bounds (small scale, not CHIME/CHORD-scale: 1-4 zones, 1-8 beams, etc.). Useful

@@ -590,10 +590,18 @@ static void _fill_test_beam_positions(std::vector<double> &bx, std::vector<doubl
 std::shared_ptr<XEngineMetadata>
 XEngineMetadata::make_test_instance(const std::vector<long> &zone_nfreq_,
                                     const std::vector<double> &zone_freq_edges_,
-                                    const std::vector<long> &beam_ids_)
+                                    const std::vector<long> &beam_ids_,
+                                    double time_sample_ms)
 {
     xassert(zone_nfreq_.size() > 0);
     xassert(beam_ids_.size() > 0);
+
+    if (time_sample_ms < 0.5) {
+        std::stringstream ss;
+        ss << "XEngineMetadata::make_test_instance: time_sample_ms="
+           << time_sample_ms << " must be >= 0.5";
+        throw std::runtime_error(ss.str());
+    }
 
     auto ret = std::make_shared<XEngineMetadata>();
     ret->version = 2;
@@ -607,10 +615,12 @@ XEngineMetadata::make_test_instance(const std::vector<long> &zone_nfreq_,
 
     // Placeholder telescope and timekeeping values: chosen to pass validate()
     // and check_sender_consistency(); they do not represent any real telescope
-    // pointing.
+    // pointing. dt_ns_per_seq is fixed at 5120 ns and seq_per_frb_time_sample
+    // is rounded so that (dt_ns_per_seq * seq_per_frb_time_sample) matches
+    // the caller-supplied time_sample_ms as closely as an integer allows.
     ret->unix_ns_at_seq_0 = 1772483060000000000L;
     ret->dt_ns_per_seq = 5120L;
-    ret->seq_per_frb_time_sample = 256L;
+    ret->seq_per_frb_time_sample = std::lround(time_sample_ms * 1.0e6 / double(ret->dt_ns_per_seq));
 
     ret->tel_origin_itrs_lat_deg = 49.32075144444;
     ret->tel_origin_itrs_lon_deg = -119.62081125;

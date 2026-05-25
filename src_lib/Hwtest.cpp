@@ -888,7 +888,7 @@ struct SsdWorker : public Hwtest::Worker
     {
         if (write_asdf) {
             // Create a random AssembledFrame for repeated writing.
-            auto xmd = XEngineMetadata::make_test_instance({32768}, {400.0, 800.0}, {0});
+            auto xmd = XEngineMetadata::make_test_instance({32768}, {400.0, 800.0}, {0}, 1.0);
             asdf_frame = AssembledFrame::make_random(xmd, 2048, 0, 0);
             asdf_nbytes = asdf_frame->nfreq * asdf_frame->ntime / 2;
         }

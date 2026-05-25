@@ -595,11 +595,15 @@ void register_core_bindings(pybind11::module &m)
                "Parse XEngineMetadata from a YAML file")
           .def_static("make_test_instance", &XEngineMetadata::make_test_instance,
                py::arg("zone_nfreq"), py::arg("zone_freq_edges"), py::arg("beam_ids"),
+               py::arg("time_sample_ms"),
                "Return a fully-valid XEngineMetadata with placeholder telescope and\n"
                "timekeeping values. noise_variance defaults to {1.0, ...} of length\n"
                "nzones, beamset defaults to 0, and beam_positions_{x,y} are arranged\n"
-               "on a deterministic 2D grid spanning [-0.1, +0.1]. Caller may further\n"
-               "patch fields before calling validate().")
+               "on a deterministic 2D grid spanning [-0.1, +0.1]. The timekeeping\n"
+               "fields are chosen so the resulting time sample length matches\n"
+               "time_sample_ms (rounded to the closest integer seq tick count).\n"
+               "Throws if time_sample_ms < 0.5. Caller may further patch fields\n"
+               "before calling validate().")
           .def_static("make_random", &XEngineMetadata::make_random,
                "Return a fully-valid XEngineMetadata with all fields randomized\n"
                "within validity bounds (small scale: 1-4 zones, 1-8 beams, etc.).\n"
