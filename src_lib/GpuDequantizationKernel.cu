@@ -98,14 +98,29 @@ __global__ void gpu_dequantize_fp32_kernel(
         float scale  = __half2float(__low2half(sc_off));
         float offset = __half2float(__high2half(sc_off));
 
-        // Coalesced read: 32 threads x 4 B = 128 B = 1 cache line per spec.        
+        // Offset-binary unpacking trick: instead of
+        //     out = scale * ((n>=8) ? n-16 : n) + offset       (signed int4)
+        // we flip the high bit of every nibble (XOR with 0x88888888 below),
+        // which maps signed int4 in [-8,7] to unsigned in [0,15] with the
+        // relation unsigned = signed + 8. Then
+        //     out = scale * (unsigned - 8) + offset
+        //         = scale * unsigned + (offset - 8*scale)
+        //         = scale * unsigned + offset_adj
+        // i.e. a single FFMA per element, no conditional.
+        float offset_adj = -8.0f * scale + offset;
+
+        // Coalesced read: 32 threads x 4 B = 128 B = 1 cache line per spec.
         uint32_t packed = data[spec * 32 + lane];
-        
+
+        // Twos-complement -> offset-binary (see offset_adj comment above).
+        // XOR commutes with the shuffle/shift below, so we do it once here.
+        packed ^= 0x88888888U;
+
         // At this point, the warp holds int4 values for 256 time samples,
         // in register assignment (1 register/threads):
         //   simd:   t2 t1 t0
         //   thread: t7 t6 t5 t4 t3
-        
+
         uint32_t p0 = __shfl_sync(~0u, packed, (lane >> 1));
         uint32_t p1 = __shfl_sync(~0u, packed, (lane >> 1) | 16);
 
@@ -133,20 +148,20 @@ __global__ void gpu_dequantize_fp32_kernel(
         // Write t7=0
         {
             float4 v;
-            int n0 = (p0 >>  0) & 0xF;  v.x = scale * (float)((n0 >= 8) ? (n0 - 16) : n0) + offset;
-            int n1 = (p0 >>  4) & 0xF;  v.y = scale * (float)((n1 >= 8) ? (n1 - 16) : n1) + offset;
-            int n2 = (p0 >>  8) & 0xF;  v.z = scale * (float)((n2 >= 8) ? (n2 - 16) : n2) + offset;
-            int n3 = (p0 >> 12) & 0xF;  v.w = scale * (float)((n3 >= 8) ? (n3 - 16) : n3) + offset;
+            int n0 = (p0 >>  0) & 0xF;  v.x = scale * (float) n0 + offset_adj;
+            int n1 = (p0 >>  4) & 0xF;  v.y = scale * (float) n1 + offset_adj;
+            int n2 = (p0 >>  8) & 0xF;  v.z = scale * (float) n2 + offset_adj;
+            int n3 = (p0 >> 12) & 0xF;  v.w = scale * (float) n3 + offset_adj;
             out_p[0] = v;
         }
 
         // Write t7=1
         {
             float4 v;
-            int n0 = (p1 >>  0) & 0xF;  v.x = scale * (float)((n0 >= 8) ? (n0 - 16) : n0) + offset;
-            int n1 = (p1 >>  4) & 0xF;  v.y = scale * (float)((n1 >= 8) ? (n1 - 16) : n1) + offset;
-            int n2 = (p1 >>  8) & 0xF;  v.z = scale * (float)((n2 >= 8) ? (n2 - 16) : n2) + offset;
-            int n3 = (p1 >> 12) & 0xF;  v.w = scale * (float)((n3 >= 8) ? (n3 - 16) : n3) + offset;
+            int n0 = (p1 >>  0) & 0xF;  v.x = scale * (float) n0 + offset_adj;
+            int n1 = (p1 >>  4) & 0xF;  v.y = scale * (float) n1 + offset_adj;
+            int n2 = (p1 >>  8) & 0xF;  v.z = scale * (float) n2 + offset_adj;
+            int n3 = (p1 >> 12) & 0xF;  v.w = scale * (float) n3 + offset_adj;
             out_p[32] = v;
         }
     }
@@ -179,35 +194,40 @@ __global__ void gpu_dequantize_fp16_kernel(
 
         __half2 sc_off = __shfl_sync(~0u, my_sc_off, spec);
 
-        // Broadcast scale/offset into a packed __half2 so we can apply __hfma2
-        // (vectorized fp16 fused-multiply-add) on pairs at a time. fp16
-        // arithmetic throughout matches the output dtype.
-        __half2 scale2  = __half2half2(__low2half(sc_off));
-        __half2 offset2 = __half2half2(__high2half(sc_off));
+        // Offset-binary unpacking trick (same as fp32 kernel above): flipping
+        // the high bit of every nibble (XOR 0x88888888 below) turns signed
+        // int4 in [-8,7] into unsigned 0..15 = signed + 8. Then
+        //   out = scale * unsigned + (offset - 8*scale) = fma(scale, u, offset_adj)
+        // i.e. a single __hfma2 per pair, no conditional. fp16 arithmetic
+        // throughout to match the output dtype.
+        __half scale  = __low2half(sc_off);
+        __half offset = __high2half(sc_off);
+        __half offset_adj = __hfma(__float2half(-8.0f), scale, offset);
+
+        __half2 scale2      = __half2half2(scale);
+        __half2 offset_adj2 = __half2half2(offset_adj);
 
         uint32_t packed = data[spec * 32 + lane];
 
-        // Extract 8 nibbles, convert each to signed int4 (range [-8, 7]).
+        // Twos-complement -> offset-binary (see offset_adj comment above).
+        packed ^= 0x88888888U;
+
+        // Extract 8 unsigned nibbles (0..15).
         int n0 = (packed >>  0) & 0xF;  int n1 = (packed >>  4) & 0xF;
         int n2 = (packed >>  8) & 0xF;  int n3 = (packed >> 12) & 0xF;
         int n4 = (packed >> 16) & 0xF;  int n5 = (packed >> 20) & 0xF;
         int n6 = (packed >> 24) & 0xF;  int n7 = (packed >> 28) & 0xF;
 
-        int s0 = (n0 >= 8) ? (n0 - 16) : n0;  int s1 = (n1 >= 8) ? (n1 - 16) : n1;
-        int s2 = (n2 >= 8) ? (n2 - 16) : n2;  int s3 = (n3 >= 8) ? (n3 - 16) : n3;
-        int s4 = (n4 >= 8) ? (n4 - 16) : n4;  int s5 = (n5 >= 8) ? (n5 - 16) : n5;
-        int s6 = (n6 >= 8) ? (n6 - 16) : n6;  int s7 = (n7 >= 8) ? (n7 - 16) : n7;
+        // Pack consecutive pairs into __half2, apply h = scale*h + offset_adj.
+        __half2 h01 = __halves2half2(__int2half_rn(n0), __int2half_rn(n1));
+        __half2 h23 = __halves2half2(__int2half_rn(n2), __int2half_rn(n3));
+        __half2 h45 = __halves2half2(__int2half_rn(n4), __int2half_rn(n5));
+        __half2 h67 = __halves2half2(__int2half_rn(n6), __int2half_rn(n7));
 
-        // Pack consecutive pairs into __half2, apply h = scale*h + offset.
-        __half2 h01 = __halves2half2(__int2half_rn(s0), __int2half_rn(s1));
-        __half2 h23 = __halves2half2(__int2half_rn(s2), __int2half_rn(s3));
-        __half2 h45 = __halves2half2(__int2half_rn(s4), __int2half_rn(s5));
-        __half2 h67 = __halves2half2(__int2half_rn(s6), __int2half_rn(s7));
-
-        h01 = __hfma2(h01, scale2, offset2);
-        h23 = __hfma2(h23, scale2, offset2);
-        h45 = __hfma2(h45, scale2, offset2);
-        h67 = __hfma2(h67, scale2, offset2);
+        h01 = __hfma2(h01, scale2, offset_adj2);
+        h23 = __hfma2(h23, scale2, offset_adj2);
+        h45 = __hfma2(h45, scale2, offset_adj2);
+        h67 = __hfma2(h67, scale2, offset_adj2);
 
         // Single 128-bit coalesced store: 4 __half2 (= 8 __half = 16 B) per
         // thread, 32 threads x 16 B = 512 B = 4 cache lines per spec.
