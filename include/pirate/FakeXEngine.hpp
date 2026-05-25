@@ -492,7 +492,7 @@ struct FakeXEngine
     // xmd: required, non-null. xmd->freq_channels is IGNORED --
     // make_worker_metadata() overwrites freq_channels per-worker, so the
     // caller can pass either a meaningful or frequency-scrubbed xmd (the
-    // latter is the typical case, e.g. from XEngineMetadata::make_test_instance).
+    // latter is the typical case, e.g. from XEngineMetadata::make_fiducial).
     FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd,
                 const std::vector<std::string> &ip_addrs,
                 int nworkers, long time_samples_per_chunk, bool debug = false);

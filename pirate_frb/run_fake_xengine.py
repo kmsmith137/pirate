@@ -114,7 +114,7 @@ def run_fake_xengine(rpc_addrs, nworkers=128):
             # whatever we send, so no cross-X-engine consensus to satisfy.
             nbeams = cfg.fake_nbeams
             beam_ids = list(range(nbeams))
-            xmd = XEngineMetadata.make_test_instance(
+            xmd = XEngineMetadata.make_fiducial(
                 list(cfg.fake_zone_nfreq),
                 list(cfg.fake_zone_freq_edges),
                 beam_ids,

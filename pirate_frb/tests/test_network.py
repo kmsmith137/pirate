@@ -238,7 +238,7 @@ class NetworkTester:
         self.beam_ids = list(range(p['base_beam_id'],
                                    p['base_beam_id'] + p['nbeams']))
 
-        self.xmd = XEngineMetadata.make_test_instance(
+        self.xmd = XEngineMetadata.make_fiducial(
             p['config'].zone_nfreq, p['config'].zone_freq_edges, self.beam_ids,
             1.0,
         )

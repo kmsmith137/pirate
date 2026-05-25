@@ -593,7 +593,7 @@ void register_core_bindings(pybind11::module &m)
           .def_static("from_yaml_file", &XEngineMetadata::from_yaml_file,
                py::arg("filename"),
                "Parse XEngineMetadata from a YAML file")
-          .def_static("make_test_instance", &XEngineMetadata::make_test_instance,
+          .def_static("make_fiducial", &XEngineMetadata::make_fiducial,
                py::arg("zone_nfreq"), py::arg("zone_freq_edges"), py::arg("beam_ids"),
                py::arg("time_sample_ms"),
                "Return a fully-valid XEngineMetadata with placeholder telescope and\n"

@@ -588,17 +588,17 @@ static void _fill_test_beam_positions(std::vector<double> &bx, std::vector<doubl
 
 // static member function
 std::shared_ptr<XEngineMetadata>
-XEngineMetadata::make_test_instance(const std::vector<long> &zone_nfreq_,
-                                    const std::vector<double> &zone_freq_edges_,
-                                    const std::vector<long> &beam_ids_,
-                                    double time_sample_ms)
+XEngineMetadata::make_fiducial(const std::vector<long> &zone_nfreq_,
+                               const std::vector<double> &zone_freq_edges_,
+                               const std::vector<long> &beam_ids_,
+                               double time_sample_ms)
 {
     xassert(zone_nfreq_.size() > 0);
     xassert(beam_ids_.size() > 0);
 
     if (time_sample_ms < 0.5) {
         std::stringstream ss;
-        ss << "XEngineMetadata::make_test_instance: time_sample_ms="
+        ss << "XEngineMetadata::make_fiducial: time_sample_ms="
            << time_sample_ms << " must be >= 0.5";
         throw std::runtime_error(ss.str());
     }

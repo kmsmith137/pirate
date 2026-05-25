@@ -172,13 +172,13 @@ struct XEngineMetadata
     // may further patch fields (e.g. beamset) before calling validate().
     // Calls validate() before returning. Throws if time_sample_ms < 0.5.
     //
-    // Used by: pirate_frb/run_server.py:_make_xengine_metadata, the FakeXEngine /
+    // Used by: pirate_frb/run_fake_xengine.py, the FakeXEngine /
     // FrbServer test paths, and the C++ Hwtest benchmark setup.
     static std::shared_ptr<XEngineMetadata>
-    make_test_instance(const std::vector<long> &zone_nfreq,
-                       const std::vector<double> &zone_freq_edges,
-                       const std::vector<long> &beam_ids,
-                       double time_sample_ms);
+    make_fiducial(const std::vector<long> &zone_nfreq,
+                  const std::vector<double> &zone_freq_edges,
+                  const std::vector<long> &beam_ids,
+                  double time_sample_ms);
 
     // Returns a fully-valid XEngineMetadata with all fields randomized within validity
     // bounds (small scale, not CHIME/CHORD-scale: 1-4 zones, 1-8 beams, etc.). Useful

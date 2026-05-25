@@ -25,7 +25,7 @@ def make_slab_allocator(capacity=4*1024*1024, aflags='af_rhost'):
 
 def _test_metadata(nfreq, beam_ids):
     """Helper: construct a fully-valid XEngineMetadata for one-zone tests."""
-    return XEngineMetadata.make_test_instance([nfreq], [400.0, 800.0], beam_ids, 1.0)
+    return XEngineMetadata.make_fiducial([nfreq], [400.0, 800.0], beam_ids, 1.0)
 
 
 def test_frame_properties():
