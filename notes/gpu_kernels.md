@@ -118,6 +118,39 @@ uint y1 = __byte_perm(x0, x1, 0x7351);
 // constants (0x6240, 0x7351) with (0x5410, 0x7632).
 ```
 
+And one more local transpose example, using 4-bit data packed into `uint`
+registers. The bitwise helper `bit_select(a, mask, b) = (a & mask) | (b & ~mask)`
+compiles to a single LOP3 instruction (LUT 0xe2):
+```cpp
+// Helper: bit_select(a, mask, b) returns (a & mask) | (b & ~mask).
+// This can be done with one LOP3. Surprisingly, nvcc 13.2 compiles it
+// (suboptimally) to two LOP3s, so we use inline PTX as a workaround!
+__device__ __forceinline__ uint bit_select(uint a, uint mask, uint b)
+{
+    uint r;
+    asm("lop3.b32 %0, %1, %2, %3, 0xe2;" : "=r"(r) : "r"(a), "r"(mask), "r"(b));
+    return r;
+}
+
+// In this example, suppose we have a 4-bit array which has been packed into
+// uint registers (i.e. 8 simd lanes per register), with register assignment:
+//   simd:      i2 i1 i0
+//   register:  i3
+
+uint x0, x1;
+
+// The following "local transpose" operation exchanges physical bits s0 (simd)
+// with r0 (register). Unlike the 8-bit case above, __byte_perm can't help:
+// s0 selects between the low and high nibble within a byte, not whole bytes.
+
+uint y0 = bit_select(x0,      0x0F0F0F0FU, x1 << 4);
+uint y1 = bit_select(x0 >> 4, 0x0F0F0F0FU, x1);
+
+// Now the y-array has a new register assignment:
+//   simd:      i2 i1 i3
+//   register:  i0
+```
+
 ## Warp transpose
 
 The "warp transpose" is a warp-local operation which exchanges a "register" bit
