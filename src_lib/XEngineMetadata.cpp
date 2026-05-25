@@ -562,25 +562,6 @@ void XEngineMetadata::check_sender_consistency(const XEngineMetadata &ref, const
 // Placeholder constants and factories for test / fixture use.
 
 
-// Placeholder telescope and timekeeping values used by make_test_instance().
-// Mirrors pirate_frb/run_server.py:_FAKE_XENGINE_PLACEHOLDERS so that C++ and
-// Python test fixtures agree on a "reasonable" baseline. These values are
-// chosen to pass validate() and check_sender_consistency() -- they do not
-// represent any real telescope pointing.
-static constexpr long _PH_unix_ns_at_seq_0 = 1772483060000000000L;
-static constexpr long _PH_dt_ns_per_seq = 5120L;
-static constexpr long _PH_seq_per_frb_time_sample = 256L;
-static constexpr double _PH_tel_origin_itrs_lat_deg = 49.32075144444;
-static constexpr double _PH_tel_origin_itrs_lon_deg = -119.62081125;
-static constexpr std::array<double, 3> _PH_tel_grid_x_axis    {0.999974342398359362, -0.000037539331442772, -0.007163318767675494};
-static constexpr std::array<double, 3> _PH_tel_grid_y_axis    {0.000065403387739210,  0.999992433220348809,  0.003889630373557614};
-static constexpr std::array<double, 3> _PH_tel_dish_elev_axis {0.99999999838132391,  -0.000056897733584327,  0.0};
-static constexpr std::array<double, 3> _PH_tel_dish_vert_axis {0.0, 0.0, 1.0};
-static constexpr double _PH_tel_dish_coelev_deg = 0.0;
-static constexpr double _PH_tel_dish_separation_x_m = 6.300156854906823;
-static constexpr double _PH_tel_dish_separation_y_m = 8.500057809796308;
-
-
 // Helper: fills beam_positions_{x,y} with a deterministic 2D grid spanning
 // [-0.1, +0.1] in both coordinates. Beams are placed row-major into the
 // smallest enclosing square grid (g x g where g = ceil(sqrt(nbeams))), with
@@ -624,19 +605,22 @@ XEngineMetadata::make_test_instance(const std::vector<long> &zone_nfreq_,
     _fill_test_beam_positions(ret->beam_positions_x, ret->beam_positions_y, long(beam_ids_.size()));
     ret->noise_variance.assign(zone_nfreq_.size(), 1.0);
 
-    ret->unix_ns_at_seq_0 = _PH_unix_ns_at_seq_0;
-    ret->dt_ns_per_seq = _PH_dt_ns_per_seq;
-    ret->seq_per_frb_time_sample = _PH_seq_per_frb_time_sample;
+    // Placeholder telescope and timekeeping values: chosen to pass validate()
+    // and check_sender_consistency(); they do not represent any real telescope
+    // pointing.
+    ret->unix_ns_at_seq_0 = 1772483060000000000L;
+    ret->dt_ns_per_seq = 5120L;
+    ret->seq_per_frb_time_sample = 256L;
 
-    ret->tel_origin_itrs_lat_deg = _PH_tel_origin_itrs_lat_deg;
-    ret->tel_origin_itrs_lon_deg = _PH_tel_origin_itrs_lon_deg;
-    ret->tel_grid_x_axis    = _PH_tel_grid_x_axis;
-    ret->tel_grid_y_axis    = _PH_tel_grid_y_axis;
-    ret->tel_dish_elev_axis = _PH_tel_dish_elev_axis;
-    ret->tel_dish_vert_axis = _PH_tel_dish_vert_axis;
-    ret->tel_dish_coelev_deg = _PH_tel_dish_coelev_deg;
-    ret->tel_dish_separation_x_m = _PH_tel_dish_separation_x_m;
-    ret->tel_dish_separation_y_m = _PH_tel_dish_separation_y_m;
+    ret->tel_origin_itrs_lat_deg = 49.32075144444;
+    ret->tel_origin_itrs_lon_deg = -119.62081125;
+    ret->tel_grid_x_axis    = { 0.999974342398359362, -0.000037539331442772, -0.007163318767675494 };
+    ret->tel_grid_y_axis    = { 0.000065403387739210,  0.999992433220348809,  0.003889630373557614 };
+    ret->tel_dish_elev_axis = { 0.99999999838132391,  -0.000056897733584327,  0.0                  };
+    ret->tel_dish_vert_axis = { 0.0, 0.0, 1.0 };
+    ret->tel_dish_coelev_deg = 0.0;
+    ret->tel_dish_separation_x_m = 6.300156854906823;
+    ret->tel_dish_separation_y_m = 8.500057809796308;
 
     ret->validate();
     return ret;
