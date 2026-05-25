@@ -22,7 +22,7 @@ __half2 x1 = *((__half2 *) (p+s+64));
 __half2 x2 = *((__half2 *) (p+s+128));
 __half2 x3 = *((__half2 *) (p+s+192));
 
-// x has the following register assigment.
+// x has the following register assignment.
 // See below for an explanation of this "register assignment" notation.
 //   simd:      s0              <->  k0
 //   register:  r1 r0           <->  j3 j2
@@ -31,7 +31,7 @@ __half2 x3 = *((__half2 *) (p+s+192));
 ```
 The meaning of the register assignment notation is as follows.
 Each 16-bit element of the array p[i,j,k] has a "logical" location which is parameterized
-by four integers (i,j,k), whose base-2 representations consist of four bits each:
+by three integers (i,j,k), whose base-2 representations consist of four bits each:
 ```
 i = (i3 i2 i1 i0)_2    j = (j3 j2 j1 j0)_2    k = (k3 k2 k1 k0)_2
 ```
