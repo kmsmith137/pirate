@@ -123,22 +123,31 @@ __global__ void gpu_dequantize_fp32_kernel(
         //   thread: t6 t5 t4 t3 t2
         //   register: t7
 
-        float *out_p = out + spec * 256 + lane * 4;
+        // Each thread writes 8 fp32 = 32 B per spec, split into two 128-bit
+        // (float4) stores: 4 floats for t7=0 at out_p[0], 4 floats for t7=1
+        // at out_p[32] (i.e. 128 floats = 32 float4s downstream). 32 threads
+        // x 16 B per store = 512 B = 4 cache lines per store; 8 cache lines
+        // per spec, matching the per-block accounting documented above.
+        float4 *out_p = reinterpret_cast<float4 *>(out + spec * 256) + lane;
 
         // Write t7=0
-        #pragma unroll
-        for (int k = 0; k < 4; k++) {
-            int nibble = (p0 >> (k * 4)) & 0xF;
-            int value  = (nibble >= 8) ? (nibble - 16) : nibble;
-            out_p[k] = scale * (float) value + offset;
+        {
+            float4 v;
+            int n0 = (p0 >>  0) & 0xF;  v.x = scale * (float)((n0 >= 8) ? (n0 - 16) : n0) + offset;
+            int n1 = (p0 >>  4) & 0xF;  v.y = scale * (float)((n1 >= 8) ? (n1 - 16) : n1) + offset;
+            int n2 = (p0 >>  8) & 0xF;  v.z = scale * (float)((n2 >= 8) ? (n2 - 16) : n2) + offset;
+            int n3 = (p0 >> 12) & 0xF;  v.w = scale * (float)((n3 >= 8) ? (n3 - 16) : n3) + offset;
+            out_p[0] = v;
         }
 
         // Write t7=1
-        #pragma unroll
-        for (int k = 0; k < 4; k++) {
-            int nibble = (p1 >> (k * 4)) & 0xF;
-            int value  = (nibble >= 8) ? (nibble - 16) : nibble;
-            out_p[k+128] = scale * (float) value + offset;
+        {
+            float4 v;
+            int n0 = (p1 >>  0) & 0xF;  v.x = scale * (float)((n0 >= 8) ? (n0 - 16) : n0) + offset;
+            int n1 = (p1 >>  4) & 0xF;  v.y = scale * (float)((n1 >= 8) ? (n1 - 16) : n1) + offset;
+            int n2 = (p1 >>  8) & 0xF;  v.z = scale * (float)((n2 >= 8) ? (n2 - 16) : n2) + offset;
+            int n3 = (p1 >> 12) & 0xF;  v.w = scale * (float)((n3 >= 8) ? (n3 - 16) : n3) + offset;
+            out_p[32] = v;
         }
     }
 }
