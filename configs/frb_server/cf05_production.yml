@@ -4,9 +4,8 @@
 # To start server on cf05:
 #   pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml
 #
-# To send data from cf00 to cf05 (one invocation per receiver server):
-#   pirate_frb run_fake_xengine 10.222.3.5:6000
-#   pirate_frb run_fake_xengine 10.222.3.5:6001
+# To send data from cf00 to cf05:
+#   pirate_frb run_fake_xengine 10.222.3.5:6000 10.222.3.5:6001
 
 
 ########################################  General config  ########################################

@@ -1151,16 +1151,17 @@ def run_server_command(args):
 
 
 def parse_run_fake_xengine(subparsers):
-    help_text = "Send fake X-engine data to a running FrbServer (self-configures via GetConfig RPC)"
+    help_text = "Send fake X-engine data to one or more running FrbServers"
     parser = subparsers.add_parser("run_fake_xengine", help=help_text, description=help_text)
-    parser.add_argument('rpc_addr', help='ip:port of the running FrbServer (e.g. 127.0.0.1:6000)')
+    parser.add_argument('rpc_addrs', nargs='+', metavar='RPC_ADDR',
+                        help='One or more "ip:port" strings (one per receiver)')
     parser.add_argument('-w', '--workers', type=int, default=128,
-                        help='Number of worker threads (default 128)')
+                        help='Number of worker threads per FakeXEngine (default 128)')
 
 
 def run_fake_xengine_command(args):
     from .run_server import run_fake_xengine
-    run_fake_xengine(args.rpc_addr, nworkers=args.workers)
+    run_fake_xengine(args.rpc_addrs, nworkers=args.workers)
 
 
 
