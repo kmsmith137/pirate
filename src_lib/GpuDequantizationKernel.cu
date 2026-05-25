@@ -139,21 +139,41 @@ __global__ void gpu_dequantize_fp16_kernel(
 
         __half2 sc_off = __shfl_sync(~0u, my_sc_off, spec);
 
-        // Keep (scale, offset) in fp16 -- the fp16 kernel uses fp16 arithmetic
-        // throughout, matching the output dtype.
-        __half scale  = __low2half(sc_off);
-        __half offset = __high2half(sc_off);
+        // Broadcast scale/offset into a packed __half2 so we can apply __hfma2
+        // (vectorized fp16 fused-multiply-add) on pairs at a time. fp16
+        // arithmetic throughout matches the output dtype.
+        __half2 scale2  = __half2half2(__low2half(sc_off));
+        __half2 offset2 = __half2half2(__high2half(sc_off));
 
         uint32_t packed = data[spec * 32 + lane];
 
-        __half *out_p = out + spec * 256 + lane * 8;
-        #pragma unroll
-        for (int k = 0; k < 8; k++) {
-            int nibble = (packed >> (k * 4)) & 0xF;
-            int value  = (nibble >= 8) ? (nibble - 16) : nibble;
-            __half h = __int2half_rn(value);
-            out_p[k] = __hfma(scale, h, offset);
-        }
+        // Extract 8 nibbles, convert each to signed int4 (range [-8, 7]).
+        int n0 = (packed >>  0) & 0xF;  int n1 = (packed >>  4) & 0xF;
+        int n2 = (packed >>  8) & 0xF;  int n3 = (packed >> 12) & 0xF;
+        int n4 = (packed >> 16) & 0xF;  int n5 = (packed >> 20) & 0xF;
+        int n6 = (packed >> 24) & 0xF;  int n7 = (packed >> 28) & 0xF;
+
+        int s0 = (n0 >= 8) ? (n0 - 16) : n0;  int s1 = (n1 >= 8) ? (n1 - 16) : n1;
+        int s2 = (n2 >= 8) ? (n2 - 16) : n2;  int s3 = (n3 >= 8) ? (n3 - 16) : n3;
+        int s4 = (n4 >= 8) ? (n4 - 16) : n4;  int s5 = (n5 >= 8) ? (n5 - 16) : n5;
+        int s6 = (n6 >= 8) ? (n6 - 16) : n6;  int s7 = (n7 >= 8) ? (n7 - 16) : n7;
+
+        // Pack consecutive pairs into __half2, apply h = scale*h + offset.
+        __half2 h01 = __halves2half2(__int2half_rn(s0), __int2half_rn(s1));
+        __half2 h23 = __halves2half2(__int2half_rn(s2), __int2half_rn(s3));
+        __half2 h45 = __halves2half2(__int2half_rn(s4), __int2half_rn(s5));
+        __half2 h67 = __halves2half2(__int2half_rn(s6), __int2half_rn(s7));
+
+        h01 = __hfma2(h01, scale2, offset2);
+        h23 = __hfma2(h23, scale2, offset2);
+        h45 = __hfma2(h45, scale2, offset2);
+        h67 = __hfma2(h67, scale2, offset2);
+
+        // Single 128-bit coalesced store: 4 __half2 (= 8 __half = 16 B) per
+        // thread, 32 threads x 16 B = 512 B = 4 cache lines per spec.
+        // out + spec*256 is 512-byte aligned; +lane*16 stays 16-byte aligned.
+        uint4 *out_p = reinterpret_cast<uint4 *>(out + spec * 256) + lane;
+        half8_store(out_p, h01, h23, h45, h67);
     }
 }
 
