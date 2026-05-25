@@ -98,16 +98,47 @@ __global__ void gpu_dequantize_fp32_kernel(
         float scale  = __half2float(__low2half(sc_off));
         float offset = __half2float(__high2half(sc_off));
 
-        // Coalesced read: 32 threads x 4 B = 128 B = 1 cache line per spec.
+        // Coalesced read: 32 threads x 4 B = 128 B = 1 cache line per spec.        
         uint32_t packed = data[spec * 32 + lane];
+        
+        // At this point, the warp holds int4 values for 256 time samples,
+        // in register assignment (1 register/threads):
+        //   simd:   t2 t1 t0
+        //   thread: t7 t6 t5 t4 t3
+        
+        uint32_t p0 = __shfl_sync(~0u, packed, (lane >> 1));
+        uint32_t p1 = __shfl_sync(~0u, packed, (lane >> 1) | 16);
 
-        // Each thread writes 8 consecutive output elements (out[spec, lane*8 ..]).
-        float *out_p = out + spec * 256 + lane * 8;
+        // At this point, {p0,p1} contain:
+        //   simd:   t2 t1 t0
+        //   thread: t6 t5 t4 t3 [unused]
+        //   register: t7
+
+        uint s = (lane & 1) << 4;
+        p0 >>= s;
+        p1 >>= s;
+        
+        // At this point, {p0,p1} contain:
+        //   simd:   [junk] t1 t0
+        //   thread: t6 t5 t4 t3 t2
+        //   register: t7
+
+        float *out_p = out + spec * 256 + lane * 4;
+
+        // Write t7=0
         #pragma unroll
-        for (int k = 0; k < 8; k++) {
-            int nibble = (packed >> (k * 4)) & 0xF;
+        for (int k = 0; k < 4; k++) {
+            int nibble = (p0 >> (k * 4)) & 0xF;
             int value  = (nibble >= 8) ? (nibble - 16) : nibble;
             out_p[k] = scale * (float) value + offset;
+        }
+
+        // Write t7=1
+        #pragma unroll
+        for (int k = 0; k < 4; k++) {
+            int nibble = (p1 >> (k * 4)) & 0xF;
+            int value  = (nibble >= 8) ? (nibble - 16) : nibble;
+            out_p[k+128] = scale * (float) value + offset;
         }
     }
 }
@@ -173,7 +204,7 @@ __global__ void gpu_dequantize_fp16_kernel(
         // thread, 32 threads x 16 B = 512 B = 4 cache lines per spec.
         // out + spec*256 is 512-byte aligned; +lane*16 stays 16-byte aligned.
         uint4 *out_p = reinterpret_cast<uint4 *>(out + spec * 256) + lane;
-        half8_store(out_p, h01, h23, h45, h67);
+        ksgpu::half8_store(out_p, h01, h23, h45, h67);
     }
 }
 
