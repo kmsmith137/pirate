@@ -351,12 +351,14 @@ struct FakeXEngine
 
     // ----- Constructor args -----
 
-    // Top-level metadata template; the constructor copies it from the ctor
-    // arg. freq_channels: typically FREQUENCY-SCRUBBED (empty) on the way in
-    // -- it's IGNORED here regardless, because make_worker_metadata() builds
-    // each Worker's xmd by copying this template and overwriting freq_channels
-    // with the per-worker round-robin subset (see Worker::xmd above).
-    const XEngineMetadata xmd;
+    // Top-level metadata template; the constructor stores the shared_ptr
+    // handed in by the caller. freq_channels: typically FREQUENCY-SCRUBBED
+    // (empty) on the way in -- it's IGNORED here regardless, because
+    // make_worker_metadata() builds each Worker's xmd by copying this
+    // template and overwriting freq_channels with the per-worker
+    // round-robin subset (see Worker::xmd above). Non-null (the
+    // constructor throws if the caller passes nullptr).
+    const std::shared_ptr<const XEngineMetadata> xmd;
     const std::vector<std::string> ip_addrs;  // each element is "ip:port"
     const int nworkers;
 
@@ -487,11 +489,12 @@ struct FakeXEngine
     // Python callers MUST call the constructor inside a ThreadAffinity
     // context manager so the spawned worker threads are pinned to the
     // intended vcpus.
-    // xmd.freq_channels: IGNORED. make_worker_metadata() will overwrite
-    // freq_channels per-worker, so the caller can pass either a meaningful
-    // or frequency-scrubbed xmd (the latter is the typical case, e.g. from
-    // XEngineMetadata::make_test_instance).
-    FakeXEngine(const XEngineMetadata &xmd, const std::vector<std::string> &ip_addrs,
+    // xmd: required, non-null. xmd->freq_channels is IGNORED --
+    // make_worker_metadata() overwrites freq_channels per-worker, so the
+    // caller can pass either a meaningful or frequency-scrubbed xmd (the
+    // latter is the typical case, e.g. from XEngineMetadata::make_test_instance).
+    FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd,
+                const std::vector<std::string> &ip_addrs,
                 int nworkers, long time_samples_per_chunk, bool debug = false);
 
     // Destructor calls stop() and joins worker threads.

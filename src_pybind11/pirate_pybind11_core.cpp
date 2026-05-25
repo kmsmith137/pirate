@@ -630,7 +630,8 @@ void register_core_bindings(pybind11::module &m)
         "        # calls fxe.enqueue_send_junk / fxe.wait_until_processed in a loop.\n"
         "    # ... wait ...\n"
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
-          .def(py::init<const XEngineMetadata &, const std::vector<std::string> &,
+          .def(py::init<const std::shared_ptr<const XEngineMetadata> &,
+                        const std::vector<std::string> &,
                         int, long, bool>(),
                py::arg("xmd"), py::arg("ip_addrs"), py::arg("nworkers"),
                py::arg("time_samples_per_chunk"),
@@ -641,9 +642,10 @@ void register_core_bindings(pybind11::module &m)
                "context manager.\n\n"
                "Args:\n"
                "    xmd: X-engine metadata defining frequency zones and beams.\n"
-               "        xmd.freq_channels is ignored -- per-worker freq_channels\n"
-               "        is built internally by round-robin assignment of channels\n"
-               "        to workers.\n"
+               "        Passed as a shared_ptr -- the FakeXEngine retains a\n"
+               "        non-mutating reference. xmd.freq_channels is ignored --\n"
+               "        per-worker freq_channels is built internally by\n"
+               "        round-robin assignment of channels to workers.\n"
                "    ip_addrs: List of receiver addresses in 'ip:port' format\n"
                "    nworkers: Number of worker threads (must be a multiple of len(ip_addrs))\n"
                "    time_samples_per_chunk: Receiver-side chunk size (must equal\n"

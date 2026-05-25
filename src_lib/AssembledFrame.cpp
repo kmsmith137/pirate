@@ -284,30 +284,30 @@ static void _emit_metadata_yaml(ASDF::writer &w, const XEngineMetadata &m, bool 
 // / beam_positions_{x,y} (those are reconstructed from per-frame data by
 // AssembledFrame::from_asdf), and does NOT call validate() (the returned
 // object is intentionally incomplete).
-static XEngineMetadata _metadata_from_asdf_group(const shared_ptr<ASDF::group> &g)
+static shared_ptr<XEngineMetadata> _metadata_from_asdf_group(const shared_ptr<ASDF::group> &g)
 {
-    XEngineMetadata m;
-    m.version = _read_int(g, "version");
-    m.zone_nfreq = _read_int_vec(g, "zone_nfreq");
-    m.zone_freq_edges = _read_float_vec(g, "zone_freq_edges");
-    m.beamset = _read_int(g, "beamset");
+    auto m = make_shared<XEngineMetadata>();
+    m->version = _read_int(g, "version");
+    m->zone_nfreq = _read_int_vec(g, "zone_nfreq");
+    m->zone_freq_edges = _read_float_vec(g, "zone_freq_edges");
+    m->beamset = _read_int(g, "beamset");
     // freq_channels / beam_ids / beam_positions_{x,y} reconstructed by caller
 
-    m.unix_ns_at_seq_0 = _read_int(g, "unix_ns_at_seq_0");
-    m.dt_ns_per_seq = _read_int(g, "dt_ns_per_seq");
-    m.seq_per_frb_time_sample = _read_int(g, "seq_per_frb_time_sample");
+    m->unix_ns_at_seq_0 = _read_int(g, "unix_ns_at_seq_0");
+    m->dt_ns_per_seq = _read_int(g, "dt_ns_per_seq");
+    m->seq_per_frb_time_sample = _read_int(g, "seq_per_frb_time_sample");
 
-    m.tel_origin_itrs_lat_deg = _read_float(g, "tel_origin_itrs_lat_deg");
-    m.tel_origin_itrs_lon_deg = _read_float(g, "tel_origin_itrs_lon_deg");
-    m.tel_grid_x_axis    = _read_float_arr3(g, "tel_grid_x_axis");
-    m.tel_grid_y_axis    = _read_float_arr3(g, "tel_grid_y_axis");
-    m.tel_dish_elev_axis = _read_float_arr3(g, "tel_dish_elev_axis");
-    m.tel_dish_vert_axis = _read_float_arr3(g, "tel_dish_vert_axis");
-    m.tel_dish_coelev_deg = _read_float(g, "tel_dish_coelev_deg");
-    m.tel_dish_separation_x_m = _read_float(g, "tel_dish_separation_x_m");
-    m.tel_dish_separation_y_m = _read_float(g, "tel_dish_separation_y_m");
+    m->tel_origin_itrs_lat_deg = _read_float(g, "tel_origin_itrs_lat_deg");
+    m->tel_origin_itrs_lon_deg = _read_float(g, "tel_origin_itrs_lon_deg");
+    m->tel_grid_x_axis    = _read_float_arr3(g, "tel_grid_x_axis");
+    m->tel_grid_y_axis    = _read_float_arr3(g, "tel_grid_y_axis");
+    m->tel_dish_elev_axis = _read_float_arr3(g, "tel_dish_elev_axis");
+    m->tel_dish_vert_axis = _read_float_arr3(g, "tel_dish_vert_axis");
+    m->tel_dish_coelev_deg = _read_float(g, "tel_dish_coelev_deg");
+    m->tel_dish_separation_x_m = _read_float(g, "tel_dish_separation_x_m");
+    m->tel_dish_separation_y_m = _read_float(g, "tel_dish_separation_y_m");
 
-    m.noise_variance = _read_float_vec(g, "noise_variance");
+    m->noise_variance = _read_float_vec(g, "noise_variance");
     return m;
 }
 
@@ -570,16 +570,16 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
     if (!md_grp)
         throw runtime_error("AssembledFrame::from_asdf(): 'xengine_metadata' is not a group entry");
 
-    XEngineMetadata md = _metadata_from_asdf_group(md_grp);
+    auto md = _metadata_from_asdf_group(md_grp);
 
     // Per-frame projection: rebuild the four special members from frame data.
     // (An ASDF file describes one (beam, time-chunk), so these are length-1 / empty.)
-    md.freq_channels.clear();
-    md.beam_ids = { beam_id };
-    md.beam_positions_x = { beam_position_x };
-    md.beam_positions_y = { beam_position_y };
+    md->freq_channels.clear();
+    md->beam_ids = { beam_id };
+    md->beam_positions_x = { beam_position_x };
+    md->beam_positions_y = { beam_position_y };
 
-    md.validate();
+    md->validate();
 
     long mpc = ntime / 256;
 
@@ -590,7 +590,7 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
     frame->ntime = ntime;
     frame->beam_id = beam_id;
     frame->time_chunk_index = time_chunk_index;
-    frame->metadata = make_shared<XEngineMetadata>(std::move(md));
+    frame->metadata = std::move(md);
     frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
     frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
 

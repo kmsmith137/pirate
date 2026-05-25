@@ -57,7 +57,8 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 }
 
 
-FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::string> &ip_addrs_,
+FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
+                         const std::vector<std::string> &ip_addrs_,
                          int nworkers_, long time_samples_per_chunk_, bool debug_) :
     xmd(xmd_),
     ip_addrs(ip_addrs_),
@@ -67,6 +68,8 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     minichunks_per_chunk(time_samples_per_chunk_ / 256),
     num_receivers(long(ip_addrs_.size()))
 {
+    if (!xmd)
+        throw runtime_error("FakeXEngine: xmd is null");
     if (ip_addrs.empty())
         throw runtime_error("FakeXEngine: ip_addrs is empty");
     xassert(nworkers > 0);
@@ -100,7 +103,7 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
     }
 
     // Validate that XEngineMetadata has enough frequency channels for all workers.
-    long total_nfreq = xmd.get_total_nfreq();
+    long total_nfreq = xmd->get_total_nfreq();
     if (total_nfreq < nworkers) {
         stringstream ss;
         ss << "FakeXEngine: nworkers=" << nworkers
@@ -108,7 +111,7 @@ FakeXEngine::FakeXEngine(const XEngineMetadata &xmd_, const std::vector<std::str
         throw runtime_error(ss.str());
     }
 
-    xmd.validate();
+    xmd->validate();
 
     // Size the per-Receiver ack high-water-mark vector and seed each
     // entry to -1. Can't use std::vector(n, atomic<long>{-1}) because
@@ -196,7 +199,7 @@ vector<long> FakeXEngine::get_worker_freq_channels(long worker_id) const
     xassert(worker_id >= 0);
     xassert(worker_id < nworkers);
 
-    long total_nfreq = xmd.get_total_nfreq();
+    long total_nfreq = xmd->get_total_nfreq();
 
     // Assign frequency channels round-robin to this worker.
     // Worker 'worker_id' gets channels: worker_id, worker_id + nworkers, worker_id + 2*nworkers, ...
@@ -210,7 +213,8 @@ vector<long> FakeXEngine::get_worker_freq_channels(long worker_id) const
 
 XEngineMetadata FakeXEngine::make_worker_metadata(int worker_id) const
 {
-    XEngineMetadata ret = xmd;
+    // Copy the master metadata, patch freq_channels for this worker, return.
+    XEngineMetadata ret = *xmd;
     ret.freq_channels = get_worker_freq_channels(worker_id);
     return ret;
 }
