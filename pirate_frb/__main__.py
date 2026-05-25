@@ -906,6 +906,12 @@ def rpc_status(args):
         print(f"  nfs_dir = {cfg.nfs_dir}")
         print(f"  ssd_threads = {cfg.ssd_threads}")
         print(f"  nfs_threads = {cfg.nfs_threads}")
+        print(f"  tree_rank = {cfg.tree_rank}")
+        print(f"  beams_per_batch = {cfg.beams_per_batch}")
+        print(f"  fake_zone_nfreq = {list(cfg.fake_zone_nfreq)}")
+        print(f"  fake_zone_freq_edges = {list(cfg.fake_zone_freq_edges)}")
+        print(f"  fake_time_sample_ms = {cfg.fake_time_sample_ms}")
+        print(f"  fake_nbeams = {cfg.fake_nbeams}")
     print()
 
     print("Running get_status (1/sec) and subscribe_files. Press Ctrl-C to stop.")

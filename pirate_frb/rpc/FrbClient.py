@@ -214,6 +214,16 @@ class FrbClient:
             - nfs_dir: NFS output directory (already interpolated for {user}/{date})
             - ssd_threads: number of FileWriter SSD threads
             - nfs_threads: number of FileWriter NFS threads
+            - tree_rank: from config_prefilled
+            - beams_per_batch: from config_prefilled
+            - fake_zone_nfreq: list[int] from config_prefilled.zone_nfreq (pre-metadata)
+            - fake_zone_freq_edges: list[float] from config_prefilled.zone_freq_edges (pre-metadata)
+            - fake_time_sample_ms: float from config_prefilled.time_sample_ms (pre-metadata)
+            - fake_nbeams: int from config_prefilled.beams_per_gpu (pre-metadata)
+
+        The 'fake_*' fields are what a fake X-engine sender should mimic;
+        they're the pre-metadata values the receiver was started with, not
+        what a real X-engine subsequently sent.
         """
         request = frb_search_pb2.GetConfigRequest()
         return self.stub.GetConfig(request)

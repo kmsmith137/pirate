@@ -876,6 +876,20 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
     response->set_nfs_dir(fwp.nfs_root.string());
     response->set_ssd_threads(fwp.num_ssd_threads);
     response->set_nfs_threads(fwp.num_nfs_threads);
+
+    // Dedispersion / fake X-engine fields from the pre-metadata config.
+    // (The processing thread overwrites four members of config_prefilled
+    // into a local config_postfilled; the prefilled values are what the
+    // fake X-engine sender should mimic.)
+    const DedispersionConfig &c = s->params.config_prefilled;
+    response->set_tree_rank(c.tree_rank);
+    response->set_beams_per_batch(c.beams_per_batch);
+    for (long v : c.zone_nfreq)
+        response->add_fake_zone_nfreq(v);
+    for (double v : c.zone_freq_edges)
+        response->add_fake_zone_freq_edges(v);
+    response->set_fake_time_sample_ms(c.time_sample_ms);
+    response->set_fake_nbeams(c.beams_per_gpu);
 }
 
 grpc::Status FrbRpcService::GetConfig(

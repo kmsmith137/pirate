@@ -99,6 +99,13 @@ message WriteNotification {
 message GetConfigRequest {}
 
 // Response message containing the per-server config.
+//
+// Fields 9-14 come from the FrbServer's "prefilled" DedispersionConfig
+// (params.config_prefilled), as supplied at server construction time.
+// They are NOT updated by the processing thread when X-engine metadata
+// arrives -- the four 'fake_*' fields specifically describe what the
+// fake X-engine sender should mimic (i.e. the pre-metadata config values
+// the receiver was started with), not what a real X-engine actually sent.
 message GetConfigResponse {
   string rpc_ip_addr = 1;              // "ip:port" string this server is listening on for RPC
   repeated string data_ip_addrs = 2;   // "ip:port" string per Receiver (one per data IP)
@@ -108,4 +115,10 @@ message GetConfigResponse {
   int64 ssd_threads = 6;               // Number of FileWriter SSD threads
   int64 nfs_threads = 7;               // Number of FileWriter NFS threads
   int64 ringbuf_nchunks = 8;           // Logical ring buffer length in time chunks
+  int64 tree_rank = 9;                 // From config_prefilled.tree_rank
+  int64 beams_per_batch = 10;          // From config_prefilled.beams_per_batch
+  repeated int64 fake_zone_nfreq = 11; // From config_prefilled.zone_nfreq (pre-metadata)
+  repeated double fake_zone_freq_edges = 12;  // From config_prefilled.zone_freq_edges (pre-metadata)
+  double fake_time_sample_ms = 13;     // From config_prefilled.time_sample_ms (pre-metadata)
+  int64 fake_nbeams = 14;              // From config_prefilled.beams_per_gpu (pre-metadata)
 }
