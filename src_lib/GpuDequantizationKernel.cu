@@ -47,10 +47,16 @@ namespace pirate {
 //                 fp32 -> 32 KB = 256 cache lines
 //                 fp16 -> 16 KB = 128 cache lines
 //
-// This pass focuses on the threadblocking scheme; the per-thread arithmetic is
-// straightforward (1 uint32 load + 8 unrolled scalar stores). Perf tuning of
-// the inner work -- wider stores, shuffle-based int4 -> fp conversion, etc.
-// -- is deferred to a follow-up.
+// scoff is read once per block (1 cache line) at kernel entry: each warp does
+// a coalesced 128-byte load that fills my_sc_off across its 32 lanes. Inside
+// the length-4 loop we use __shfl_sync to broadcast scoff[spec] from the
+// lane that pre-loaded it, avoiding the 4 separate global reads of the
+// naive version. The 8 warps in a block redundantly issue the same load,
+// but lookups after the first hit L1.
+//
+// The per-thread inner arithmetic is still a straightforward unrolled scalar
+// loop (1 uint32 load + 8 stores per spec). Wider stores and shuffle-based
+// int4 -> fp conversion are deferred to a later pass.
 
 
 __launch_bounds__(256)
@@ -63,7 +69,20 @@ __global__ void gpu_dequantize_fp32_kernel(
     int warp_id = threadIdx.x >> 5;   // 0..7
     int lane    = threadIdx.x & 31;   // 0..31
 
-    long warp_first_spec = long(blockIdx.x) * 32 + warp_id * 4;
+    long block_first_spec = long(blockIdx.x) * 32;
+
+    // Pre-load: lane L of every warp loads scoff[block_first_spec + L]. One
+    // coalesced 128-byte (= 1 cache line) load per warp; redundant across
+    // the 8 warps in a block but the 2nd..8th loads hit L1.
+    //
+    // min() clamps OOB lanes on the final block (when nspec is not a multiple
+    // of 32) to a safe in-bounds index. Those clamped values are never
+    // consumed by the shfl below (since the consuming lane indices map only
+    // to specs with spec < nspec, which were loaded by valid lanes).
+    long pre_spec = min(block_first_spec + lane, nspec - 1);
+    __half2 my_sc_off = scoff[pre_spec];
+
+    long warp_first_spec = block_first_spec + warp_id * 4;
 
     // Length-4 loop over this warp's 4 spectator indices.
     for (int i = 0; i < 4; i++) {
@@ -71,9 +90,11 @@ __global__ void gpu_dequantize_fp32_kernel(
         if (spec >= nspec)
             return;   // warp-uniform: all 32 lanes see the same spec/nspec
 
-        // (scale, offset) for this spec. Convert fp16 -> fp32 BEFORE any
-        // arithmetic, per GpuDequantizationKernel contract.
-        __half2 sc_off = scoff[spec];
+        // Broadcast scoff[spec] from the lane that pre-loaded it.
+        __half2 sc_off = __shfl_sync(~0u, my_sc_off, spec);
+
+        // Convert fp16 -> fp32 BEFORE any arithmetic, per
+        // GpuDequantizationKernel contract.
         float scale  = __half2float(__low2half(sc_off));
         float offset = __half2float(__high2half(sc_off));
 
@@ -102,16 +123,24 @@ __global__ void gpu_dequantize_fp16_kernel(
     int warp_id = threadIdx.x >> 5;
     int lane    = threadIdx.x & 31;
 
-    long warp_first_spec = long(blockIdx.x) * 32 + warp_id * 4;
+    long block_first_spec = long(blockIdx.x) * 32;
+
+    // Pre-load scoff into registers across the warp. See the fp32 kernel above
+    // for the full description.
+    long pre_spec = min(block_first_spec + lane, nspec - 1);
+    __half2 my_sc_off = scoff[pre_spec];
+
+    long warp_first_spec = block_first_spec + warp_id * 4;
 
     for (int i = 0; i < 4; i++) {
         long spec = warp_first_spec + i;
         if (spec >= nspec)
             return;
 
+        __half2 sc_off = __shfl_sync(~0u, my_sc_off, spec);
+
         // Keep (scale, offset) in fp16 -- the fp16 kernel uses fp16 arithmetic
         // throughout, matching the output dtype.
-        __half2 sc_off = scoff[spec];
         __half scale  = __low2half(sc_off);
         __half offset = __high2half(sc_off);
 
