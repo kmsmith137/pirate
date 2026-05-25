@@ -1165,7 +1165,7 @@ def parse_run_fake_xengine(subparsers):
 
 
 def run_fake_xengine_command(args):
-    from .run_server import run_fake_xengine
+    from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers)
 
 
