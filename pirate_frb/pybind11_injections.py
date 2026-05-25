@@ -433,17 +433,24 @@ class SlabAllocatorInjections:
 @ksgpu.inject_methods(pirate_pybind11.GpuDequantizationKernel)
 class GpuDequantizationKernelInjections:
     """Python extensions for GpuDequantizationKernel.
-    
+
     Adds dtype conversion for constructor and stream argument support for launch.
     """
-    
+
     # Save references to C++ methods
     _cpp_init = pirate_pybind11.GpuDequantizationKernel.__init__
     _cpp_launch = pirate_pybind11.GpuDequantizationKernel.launch
-    
+
     def __init__(self, dtype, nbeams, nfreq, ntime):
         """Create a GpuDequantizationKernel.
-        
+
+        Applies the per-(beam, freq, minichunk) affine transform
+
+            out[b,f,t] = scales_offsets[b,f,t//256,0] * data[b,f,t]
+                       + scales_offsets[b,f,t//256,1]
+
+        during int4 -> float32/float16 conversion.
+
         Parameters
         ----------
         dtype : str, numpy.dtype, cupy.dtype, or ksgpu.Dtype
@@ -457,34 +464,38 @@ class GpuDequantizationKernelInjections:
         """
         dtype = ksgpu.Dtype(dtype)
         self._cpp_init(dtype, nbeams, nfreq, ntime)
-    
-    def launch(self, out, in_uint8, stream=None):
+
+    def launch(self, out, scales_offsets, data_uint8, stream=None):
         """GPU kernel launch (async, does not sync stream).
-        
+
         Parameters
         ----------
         out : ksgpu.Array
             Output array, shape (nbeams, nfreq, ntime), dtype matches
-            kernel's dtype (float32 or float16), fully contiguous, on GPU
-        in_uint8 : ksgpu.Array
-            Input array, shape (nbeams, nfreq, ntime//2), dtype uint8,
-            fully contiguous, on GPU. This is reinterpreted as int4
-            with shape (nbeams, nfreq, ntime).
+            kernel's dtype (float32 or float16), fully contiguous, on GPU.
+        scales_offsets : ksgpu.Array
+            Shape (nbeams, nfreq, ntime//256, 2), dtype float16, fully
+            contiguous, on GPU. Last axis is (scale, offset); one pair is
+            applied to every int4 sample in the matching (beam, freq,
+            minichunk) slice of data_uint8.
+        data_uint8 : ksgpu.Array
+            Shape (nbeams, nfreq, ntime//2), dtype uint8, fully contiguous,
+            on GPU. Reinterpreted as int4 with shape (nbeams, nfreq, ntime).
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
-        
+
         Note
         ----
-        The input is passed as uint8 because numpy/cupy don't support int4
+        The data array is passed as uint8 because numpy/cupy don't support int4
         (all dtypes must be at least 8 bits). Each uint8 element contains two
         int4 values: low nibble = even index, high nibble = odd index.
         """
         import cupy as cp
-        
+
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        
-        self._cpp_launch(out, in_uint8, stream.ptr)
+
+        self._cpp_launch(out, scales_offsets, data_uint8, stream.ptr)
 
 
 @ksgpu.inject_methods(pirate_pybind11.DedispersionConfig)

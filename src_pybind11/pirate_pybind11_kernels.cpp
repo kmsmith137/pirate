@@ -47,15 +47,24 @@ void register_kernel_bindings(pybind11::module &m)
     //   - __init__: converts dtype argument via ksgpu.Dtype()
     //   - launch: converts stream=None to current cupy stream
     py::class_<GpuDequantizationKernel>(m, "GpuDequantizationKernel",
-        "GPU kernel to convert int4 array to float32 or float16.\n\n"
-        "Input: contiguous array of shape (nbeams, nfreq, ntime), dtype int4.\n"
-        "Output: contiguous array of shape (nbeams, nfreq, ntime), dtype float32 or float16.\n\n"
-        "The int4 values are interpreted as signed two's complement (-8 to +7).\n"
-        "Nibble packing: low nibble = even index, high nibble = odd index.\n\n"
+        "GPU kernel to convert int4 array to float32 or float16, applying a\n"
+        "per-(beam, freq, minichunk) affine transform during conversion.\n\n"
+        "Inputs:\n"
+        "    scales_offsets: shape (nbeams, nfreq, ntime//256, 2), dtype float16\n"
+        "    data:           shape (nbeams, nfreq, ntime),         dtype int4\n"
+        "Output:\n"
+        "    out:            shape (nbeams, nfreq, ntime),         dtype float32 or float16\n\n"
+        "Output formula:\n"
+        "    out[b,f,t] = scales_offsets[b,f,t//256,0] * data[b,f,t]\n"
+        "               + scales_offsets[b,f,t//256,1]\n\n"
+        "The int4 'data' values are interpreted as signed two's complement (-8 to +7).\n"
+        "Nibble packing in 'data': low nibble = even index, high nibble = odd index.\n"
+        "The last axis of 'scales_offsets' is (scale, offset); one pair is shared by\n"
+        "256 consecutive time samples of a single (beam, freq).\n\n"
         "IMPORTANT: Since numpy/cupy don't support int4 dtype (dtypes must be at least 8 bits),\n"
-        "the Python wrappers for apply_reference() and launch() accept a uint8 array of\n"
-        "shape (nbeams, nfreq, ntime//2), which is reinterpreted as int4 with shape\n"
-        "(nbeams, nfreq, ntime). The uint8 array must be fully contiguous.")
+        "the Python wrappers for apply_reference() and launch() accept the data array as\n"
+        "uint8 of shape (nbeams, nfreq, ntime//2), which is reinterpreted as int4 with\n"
+        "shape (nbeams, nfreq, ntime). The uint8 array must be fully contiguous.")
           .def(py::init<Dtype, long, long, long>(),
                py::arg("dtype"), py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"),
                "Create a GpuDequantizationKernel.\n\n"
@@ -77,37 +86,60 @@ void register_kernel_bindings(pybind11::module &m)
           .def_readonly("resource_tracker", &GpuDequantizationKernel::resource_tracker,
                "ResourceTracker for memory/bandwidth accounting")
           .def("apply_reference",
-               [](const GpuDequantizationKernel &self, Array<float> &out, const Array<void> &in_uint8) {
-                   Array<void> in_int4 = self.convert_uint8_to_int4(in_uint8);
-                   self.apply_reference(out, in_int4);
+               [](const GpuDequantizationKernel &self,
+                  Array<float> &out,
+                  const Array<void> &scales_offsets,
+                  const Array<void> &data_uint8) {
+                   // Array<void> on the Python boundary (numpy/cupy float16);
+                   // cast<__half>() does a runtime dtype check.
+                   const Array<__half> &scoff = scales_offsets.cast<__half>(
+                       "GpuDequantizationKernel.apply_reference: scales_offsets");
+                   Array<void> data_int4 = self.convert_uint8_to_int4(data_uint8);
+                   self.apply_reference(out, scoff, data_int4);
                },
-               py::arg("out"), py::arg("in_uint8"),
+               py::arg("out"), py::arg("scales_offsets"), py::arg("data_uint8"),
                "Reference implementation (CPU, always outputs float32).\n\n"
                "Args:\n"
                "    out: Output array, shape (nbeams, nfreq, ntime), dtype float32,\n"
                "         fully contiguous, on host\n"
-               "    in_uint8: Input array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
-               "              fully contiguous, on host. This is reinterpreted as int4\n"
-               "              with shape (nbeams, nfreq, ntime).\n\n"
-               "Note: The input is passed as uint8 because numpy/cupy don't support int4\n"
+               "    scales_offsets: Array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
+               "                    fully contiguous, on host. Last axis is (scale, offset).\n"
+               "    data_uint8: Array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
+               "                fully contiguous, on host. Reinterpreted as int4 with shape\n"
+               "                (nbeams, nfreq, ntime).\n\n"
+               "Each (scale, offset) pair is converted from fp16 to fp32 immediately,\n"
+               "before any arithmetic.\n\n"
+               "Note: The data array is passed as uint8 because numpy/cupy don't support int4\n"
                "(all dtypes must be at least 8 bits). Each uint8 element contains two\n"
                "int4 values: low nibble = even index, high nibble = odd index.")
           .def("launch",
-               [](const GpuDequantizationKernel &self, Array<void> &out, const Array<void> &in_uint8, uintptr_t stream_ptr) {
-                   Array<void> in_int4 = self.convert_uint8_to_int4(in_uint8);
+               [](const GpuDequantizationKernel &self,
+                  Array<void> &out,
+                  const Array<void> &scales_offsets,
+                  const Array<void> &data_uint8,
+                  uintptr_t stream_ptr) {
+                   // Array<void> on the Python boundary (numpy/cupy float16);
+                   // cast<__half>() does a runtime dtype check.
+                   const Array<__half> &scoff = scales_offsets.cast<__half>(
+                       "GpuDequantizationKernel.launch: scales_offsets");
+                   Array<void> data_int4 = self.convert_uint8_to_int4(data_uint8);
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   self.launch(out, in_int4, stream);
+                   self.launch(out, scoff, data_int4, stream);
                },
-               py::arg("out"), py::arg("in_uint8"), py::arg("stream_ptr"),
+               py::arg("out"), py::arg("scales_offsets"), py::arg("data_uint8"), py::arg("stream_ptr"),
                "GPU kernel launch (async, does not sync stream).\n\n"
                "Args:\n"
                "    out: Output array, shape (nbeams, nfreq, ntime), dtype matches\n"
                "         kernel's dtype (float32 or float16), fully contiguous, on GPU\n"
-               "    in_uint8: Input array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
-               "              fully contiguous, on GPU. This is reinterpreted as int4\n"
-               "              with shape (nbeams, nfreq, ntime).\n"
+               "    scales_offsets: Array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
+               "                    fully contiguous, on GPU. Last axis is (scale, offset).\n"
+               "    data_uint8: Array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
+               "                fully contiguous, on GPU. Reinterpreted as int4 with shape\n"
+               "                (nbeams, nfreq, ntime).\n"
                "    stream_ptr: CUDA stream pointer (integer, e.g. from cupy stream.ptr)\n\n"
-               "Note: The input is passed as uint8 because numpy/cupy don't support int4\n"
+               "The float32 kernel converts (scale, offset) from fp16 to fp32 before any\n"
+               "arithmetic; the float16 kernel performs the affine math natively in fp16.\n\n"
+               "Note: The data array is passed as uint8 because numpy/cupy don't support int4\n"
                "(all dtypes must be at least 8 bits). Each uint8 element contains two\n"
                "int4 values: low nibble = even index, high nibble = odd index.")
           .def_static("test_random", &GpuDequantizationKernel::test_random,

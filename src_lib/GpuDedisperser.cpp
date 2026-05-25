@@ -1346,14 +1346,18 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
     long S = nstreams;
     double Tc = 1.0e-3 * T * config.time_sample_ms;
 
+    xassert_divisible(T, 256);
+
     Dtype dt_int4 = Dtype::from_str("int4");
     GpuDequantizationKernel dequantization_kernel(dtype, B, F, T);
 
     ResourceTracker rt = resource_tracker;  // copy
     rt += dequantization_kernel.resource_tracker;
 
-    long raw_nbytes = xdiv(B * F * T, 2);
-    rt.add_memcpy_h2g("raw_data", raw_nbytes);
+    long raw_nbytes   = xdiv(B * F * T, 2);
+    long scoff_nbytes = B * F * xdiv(T, 256) * 2 * sizeof(__half);
+    rt.add_memcpy_h2g("raw_data",       raw_nbytes);
+    rt.add_memcpy_h2g("scales_offsets", scoff_nbytes);
 
     double h2g_bw = rt.get_h2g_bw();
     double g2h_bw = rt.get_g2h_bw();
@@ -1361,17 +1365,19 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
     double hmem_bw = rt.get_hmem_bw();
 
     // The "multi_" prefix means "one array per stream".
-    cout << "GpuDedisperser::time(): allocating raw data arrays" << endl;
-    Array<void> multi_raw_cpu = cpu_allocator.allocate_array<void>(dt_int4, {S,B,F,T});
-    Array<void> multi_raw_gpu = gpu_allocator.allocate_array<void>(dt_int4, {S,B,F,T});
+    cout << "GpuDedisperser::time(): allocating raw data + scales_offsets arrays" << endl;
+    Array<void>   multi_raw_cpu   = cpu_allocator.allocate_array<void>(dt_int4, {S,B,F,T});
+    Array<void>   multi_raw_gpu   = gpu_allocator.allocate_array<void>(dt_int4, {S,B,F,T});
+    Array<__half> multi_scoff_cpu = cpu_allocator.allocate_array<__half>({S,B,F,T/256,2});
+    Array<__half> multi_scoff_gpu = gpu_allocator.allocate_array<__half>({S,B,F,T/256,2});
 
-    CudaEventRingbuf evrb_raw("raw", 2);  // copy raw data from cpu->gpu
+    CudaEventRingbuf evrb_raw("raw", 2);  // copy raw data + scales_offsets from cpu->gpu
     CudaEventRingbuf evrb_dq("dq", 1);    // dequantization kernel
 
     // We use a ksgpu::KernelTimer in the timing loop
 
     KernelTimer kt(niterations, S);
-    
+
     cout << "GpuDedisperser::time(): running" << endl;
     while (kt.next()) {
         long seq_id = kt.curr_iteration;
@@ -1381,26 +1387,29 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
         cudaStream_t h2g_stream = stream_pool->high_priority_h2g_stream;
         cudaStream_t compute_stream = stream_pool->compute_streams.at(kt.istream);
 
-        Array<void> raw_cpu = multi_raw_cpu.slice(0, kt.istream);
-        Array<void> raw_gpu = multi_raw_gpu.slice(0, kt.istream);
+        Array<void>   raw_cpu   = multi_raw_cpu.slice(0, kt.istream);
+        Array<void>   raw_gpu   = multi_raw_gpu.slice(0, kt.istream);
+        Array<__half> scoff_cpu = multi_scoff_cpu.slice(0, kt.istream);
+        Array<__half> scoff_gpu = multi_scoff_gpu.slice(0, kt.istream);
 
-        // Copy raw data cpu->gpu. 
+        // Copy raw data + scales_offsets cpu->gpu.
         // First, wait on the dequantization consumer.
         evrb_dq.wait(h2g_stream, seq_id - S);
-        CUDA_CALL(cudaMemcpyAsync(raw_gpu.data, raw_cpu.data, raw_nbytes, cudaMemcpyHostToDevice, h2g_stream));
+        CUDA_CALL(cudaMemcpyAsync(raw_gpu.data,   raw_cpu.data,   raw_nbytes,   cudaMemcpyHostToDevice, h2g_stream));
+        CUDA_CALL(cudaMemcpyAsync(scoff_gpu.data, scoff_cpu.data, scoff_nbytes, cudaMemcpyHostToDevice, h2g_stream));
         evrb_raw.record(h2g_stream, seq_id);
 
         // I decided to synchronize the KernelTimer stream at this point.
         // This is done by making the KernelTimer stream a consumer of 'evrb_raw' (a CudaEventRingbuf).
         evrb_raw.wait(kt.stream, seq_id);
 
-        // Run dequantization kernel on compute stream. 
+        // Run dequantization kernel on compute stream.
         // First, wait on the producer (the cpu->gpu copy).
         // Then, wait on the consumer (the dedisperser), by calling this->acquire_input().
         evrb_raw.wait(compute_stream, seq_id);
         acquire_input(ichunk, ibatch, compute_stream);
         Array<void> dd_in = view_input(ichunk, ibatch);
-        dequantization_kernel.launch(dd_in, raw_gpu, compute_stream);
+        dequantization_kernel.launch(dd_in, scoff_gpu, raw_gpu, compute_stream);
         evrb_dq.record(compute_stream, seq_id);
 
         // Launch all the dedispersion kernels.

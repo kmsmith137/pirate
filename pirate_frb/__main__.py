@@ -622,12 +622,17 @@ def show_dedisperser(args):
         nin = plan.beams_per_batch * plan.nfreq * plan.nt_in
         nbits = plan.nbits
 
-        # Add a dequantizer and raw-data h2g copy, to give a more realistic accounting of cost.
+        # Add a dequantizer and h2g copies (raw_data + scales_offsets), to give
+        # a more realistic accounting of cost. Matches GpuDedisperser::time().
+        raw_bytes   = (nin * 4) // 8      # int4 input
+        out_bytes   = (nin * nbits) // 8  # fp16/fp32 output
+        scoff_bytes = nin // 64           # 4 bytes per (scale, offset) pair, one pair per 256 samples
         stream_pool = core.CudaStreamPool.create(plan.num_active_batches)
         dedisperser = GpuDedisperser(plan, stream_pool)
         rt = dedisperser.resource_tracker.clone()
-        rt.add_kernel('dequantizer', (nin * (nbits+4)) // 8)
-        rt.add_memcpy_h2g('raw_data', (nin*4) // 8)
+        rt.add_kernel('dequantizer',        raw_bytes + scoff_bytes + out_bytes)
+        rt.add_memcpy_h2g('raw_data',       raw_bytes)
+        rt.add_memcpy_h2g('scales_offsets', scoff_bytes)
 
         multiplier = (config.beams_per_gpu / config.beams_per_batch) / (1.0e-3 * config.time_samples_per_chunk * config.time_sample_ms)
         fine_grained = args.fine_grained_resources
