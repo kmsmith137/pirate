@@ -1,6 +1,8 @@
 #include "../include/pirate/FrbServer.hpp"
 #include "../include/pirate/FileWriter.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/Dedisperser.hpp"        // GpuDedisperser
+#include "../include/pirate/CudaStreamPool.hpp"
 
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
@@ -448,11 +450,13 @@ void FrbServer::reaper_thread_main()
 // Once the X-engine metadata is available, this thread overwrites the four
 // metadata-dependent members of params.config_prefilled (zone_nfreq,
 // zone_freq_edges, time_sample_ms, beams_per_gpu) to build a "postfilled"
-// DedispersionConfig, validates it, and constructs a DedispersionPlan. The
-// plan is then published via the lock-protected 'plan' member.
+// DedispersionConfig, validates it, and constructs a DedispersionPlan. It
+// then builds a CudaStreamPool and a GpuDedisperser on top of the plan.
+// All three are published via the lock-protected 'plan' / 'dedisperser'
+// members in a single critical section.
 //
 // More processing steps will be added in a future prompt; for now, the
-// thread just exits cleanly after publishing the plan.
+// thread just exits cleanly after publishing the plan + dedisperser.
 
 
 void FrbServer::_processing_thread_main()
@@ -506,18 +510,45 @@ void FrbServer::_processing_thread_main()
     // Construct the DedispersionPlan OUTSIDE the mutex -- this is the slow
     // step (can take seconds), and we don't want to block other threads
     // (e.g. RPC handlers reading 'plan' or 'is_stopped') while it runs.
-    auto p = make_shared<DedispersionPlan>(config_postfilled);
+    auto plan_p = make_shared<DedispersionPlan>(config_postfilled);
 
-    // Publish the plan under the mutex. Notify cv so future waiters (if any)
-    // observe the new value.
+    // Build the CudaStreamPool and GpuDedisperser (also OUTSIDE the mutex;
+    // these create CUDA streams and other GPU-side resources, so they should
+    // not block lock-only RPC handlers).
+    //
+    // num_compute_streams = nstreams = config.num_active_batches by design:
+    // one compute stream per active batch lets the dedispersion pipeline
+    // overlap a batch's compute with the next batch's I/O. compute_stream_priority
+    // = -1 (high priority) -- dedispersion compute is the time-critical path,
+    // and the host<->device copy streams in the pool already run at the
+    // default priority of 0.
+    auto stream_pool = CudaStreamPool::create(
+        /*num_compute_streams=*/ config_postfilled.num_active_batches,
+        /*compute_stream_priority=*/ -1);
+
+    // detect_deadlocks=false: the FrbServer's processing thread drives
+    // acquire_input / release_input, and a separate downstream consumer
+    // (added in a future prompt) drives acquire_output / release_output --
+    // so the deadlock-detector's same-thread assumption would fire spuriously.
+    GpuDedisperser::Params dd_params;
+    dd_params.plan = plan_p;
+    dd_params.stream_pool = stream_pool;
+    dd_params.nbatches_out = config_postfilled.num_active_batches;
+    dd_params.detect_deadlocks = false;
+    auto dedisperser_p = GpuDedisperser::create(dd_params);
+
+    // Publish plan + dedisperser atomically under the mutex. Notify cv so
+    // future waiters (if any) observe the new values.
     {
         lock_guard<std::mutex> lock(mutex);
-        plan = p;
+        plan = plan_p;
+        dedisperser = dedisperser_p;
         cv.notify_all();
     }
 
-    cout << "FrbServer: DedispersionPlan constructed"
-         << " (nfreq=" << p->nfreq << ", ntrees=" << p->ntrees << ")" << endl;
+    cout << "FrbServer: DedispersionPlan + GpuDedisperser constructed"
+         << " (nfreq=" << plan_p->nfreq << ", ntrees=" << plan_p->ntrees
+         << ", nstreams=" << dedisperser_p->nstreams << ")" << endl;
 
     // Exit for now. More processing steps will be added in a future prompt.
 }

@@ -28,6 +28,8 @@ namespace pirate {
 
 struct FileWriter;        // FileWriter.hpp
 struct DedispersionPlan;  // DedispersionPlan.hpp
+struct GpuDedisperser;    // Dedisperser.hpp
+struct CudaStreamPool;    // CudaStreamPool.hpp
 struct FrbRpcService;     // defined in FrbServer.cpp
 
 
@@ -44,6 +46,10 @@ struct FrbRpcService;     // defined in FrbServer.cpp
 // time_sample_ms, beams_per_gpu) will be overwritten by the processing
 // thread once XEngineMetadata is available. The "filled" config is
 // reachable as FrbServer::plan->config after the plan has been built.
+//
+// The processing thread also builds a GpuDedisperser (alongside a private
+// CudaStreamPool) once the plan exists. Both 'plan' and 'dedisperser'
+// become non-null atomically (published in the same critical section).
 //
 // Note that FrbServer::start() also spawns a grpc service with its own worker
 // threads. These threads will be unpinned (default system-wide affinity), since
@@ -118,6 +124,11 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // Protected by 'mutex'.
     std::shared_ptr<DedispersionPlan> plan;
 
+    // GpuDedisperser built by the processing thread immediately after 'plan'.
+    // Published atomically with 'plan' (same critical section), so both
+    // members transition from null to non-null together. Protected by 'mutex'.
+    std::shared_ptr<GpuDedisperser> dedisperser;
+
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
     // See below for invariants.
     long rb_start = 0;       // (first frame_id in ringbuf)
@@ -131,8 +142,9 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // Reaper thread (only spawned in non-dummy mode).
     std::thread reaper_thread;
 
-    // Processing thread: builds a DedispersionPlan once X-engine metadata
-    // has arrived, then exits (more steps to be added later).
+    // Processing thread: builds a DedispersionPlan and GpuDedisperser
+    // once X-engine metadata has arrived, then exits (more steps to be
+    // added later).
     std::thread processing_thread;
 
     // ----- Noncopyable, nonmoveable -----

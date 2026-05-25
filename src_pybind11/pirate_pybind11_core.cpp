@@ -15,6 +15,7 @@
 #include "../include/pirate/SlabAllocator.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"  // for PeakFindingConfig, EarlyTrigger
 #include "../include/pirate/DedispersionPlan.hpp"     // FrbServer.plan property
+#include "../include/pirate/Dedisperser.hpp"           // FrbServer.dedisperser property
 #include "../include/pirate/DedispersionTree.hpp"
 #include "../include/pirate/FrequencySubbands.hpp"
 #include "../include/pirate/ResourceTracker.hpp"
@@ -1003,6 +1004,11 @@ void register_core_bindings(pybind11::module &m)
                std::lock_guard<std::mutex> lock(self.mutex);
                return self.plan;
           }, "DedispersionPlan built by the processing thread, or None if not yet constructed.")
+          .def_property_readonly("dedisperser", [](FrbServer &self) {
+               std::lock_guard<std::mutex> lock(self.mutex);
+               return self.dedisperser;
+          }, "GpuDedisperser built by the processing thread (alongside .plan),\n"
+             "or None if not yet constructed.")
     ;
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.
