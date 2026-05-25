@@ -44,6 +44,11 @@
   - Put all plans in plans/*.md, and don't add them to git.
     Assume plans are ephemereal -- don't reference them in documentation (including docstrings).
 
+  - When I ask for a plan, write a markdown file directly to plans/<topic>.md.
+    Don't use Claude Code's interactive plan mode (EnterPlanMode/ExitPlanMode)
+    unless I explicitly ask for it. You may still ask clarifying questions
+    (AskUserQuestion) before/while drafting the plan.
+
   - Don't add memories to MEMORY.md. Instead, if there is something non-obvious about the code that we should
     remember in the future, add comments to the code (or edit documentation / docstrings) as appropriate.
     
