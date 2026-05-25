@@ -177,131 +177,163 @@ def _validate_hardware(config, hw):
             )
 
 
-def run_server(server_config_filename, dedispersion_config_filename):
-    """Main entry point for 'pirate_frb run_server'."""
+class RunServerHelper:
+    """Encapsulates state and logic for 'pirate_frb run_server'.
 
-    config = _parse_config(server_config_filename)
-    dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
-    n = config['num_servers']
+    Constructed once per invocation; call .run() to drive the full
+    lifecycle (config parsing happens in __init__; hardware checks,
+    construction, and the Ctrl-C wait loop happen in run()).
+    """
 
-    print(f"Parsed server config: {server_config_filename}")
-    print(f"Parsed dedispersion config: {dedispersion_config_filename}")
-    print(f"  num_servers = {n}")
-    print(f"  time_samples_per_chunk = {dedisp_config.time_samples_per_chunk}  (from dedispersion config)")
-    print(f"  memory_per_server = {config['memory_per_server']}")
-    print(f"  use_hugepages = {config['use_hugepages']}")
+    def __init__(self, server_config_filename, dedispersion_config_filename):
+        self.config = _parse_config(server_config_filename)
+        self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
+        self.n = self.config['num_servers']
+        self.hw = Hardware()
+        # Populated later by run() -> _prepare_directories / _setup_memory.
+        self.nfs_dir = None
+        self.capacity = None
+        self.aflags = None
+        self.servers = []
+        self._print_config_summary(server_config_filename, dedispersion_config_filename)
 
-    # Resolve NFS dir and create SSD/NFS dirs if needed.
-    # (Must happen before _validate_hardware, which calls os.stat on ssd_dirs.)
-    nfs_dir = _resolve_nfs_dir(config['nfs_dir'])
-    os.makedirs(nfs_dir, exist_ok=True)
-    for ssd_dir in config['ssd_dirs']:
-        os.makedirs(ssd_dir, exist_ok=True)
-    print(f"  nfs_dir = {nfs_dir}")
+    def run(self):
+        """Top-level lifecycle: prepare, build all servers, wait for Ctrl-C,
+        then stop everything (including any partially-built state)."""
+        self._prepare_directories()
+        self._run_hardware_check()
+        self._setup_memory()
+        try:
+            self._build_all_servers()
+            self._print_help_lines()
+            self._wait_forever()
+        except KeyboardInterrupt:
+            print("\nStopping servers...")
+        finally:
+            self._stop_all_servers()
 
-    hw = Hardware()
-    cpus = config['server_cpus']
-    _validate_hardware(config, hw)
-    print(f"Hardware validation passed: server CPUs = {cpus}")
+    def _print_config_summary(self, server_config_filename, dedispersion_config_filename):
+        print(f"Parsed server config: {server_config_filename}")
+        print(f"Parsed dedispersion config: {dedispersion_config_filename}")
+        print(f"  num_servers = {self.n}")
+        print(f"  time_samples_per_chunk = {self.dedisp_config.time_samples_per_chunk}  (from dedispersion config)")
+        print(f"  memory_per_server = {self.config['memory_per_server']}")
+        print(f"  use_hugepages = {self.config['use_hugepages']}")
 
-    capacity = config['memory_per_server_bytes']
-    aflags = ksgpu.af_uhost
-    if config['use_hugepages']:
-        aflags |= ksgpu.af_mmap_huge
+    def _prepare_directories(self):
+        # Resolve NFS dir and create SSD/NFS dirs if needed.
+        # (Must happen before _run_hardware_check, which calls os.stat on ssd_dirs.)
+        self.nfs_dir = _resolve_nfs_dir(self.config['nfs_dir'])
+        os.makedirs(self.nfs_dir, exist_ok=True)
+        for ssd_dir in self.config['ssd_dirs']:
+            os.makedirs(ssd_dir, exist_ok=True)
+        print(f"  nfs_dir = {self.nfs_dir}")
 
-    servers = []
+    def _run_hardware_check(self):
+        _validate_hardware(self.config, self.hw)
+        print(f"Hardware validation passed: server CPUs = {self.config['server_cpus']}")
 
-    try:
-        for i in range(n):
-            vcpu_list = hw.vcpu_list_from_cpu(cpus[i])
-            num_addrs = len(config['data_ip_addrs'][i])
+    def _setup_memory(self):
+        self.capacity = self.config['memory_per_server_bytes']
+        self.aflags = ksgpu.af_uhost
+        if self.config['use_hugepages']:
+            self.aflags |= ksgpu.af_mmap_huge
 
-            print(f"\nServer {i}: CPU {cpus[i]}, vcpu_list = {vcpu_list}")
-            print(f"  data_ip_addrs = {config['data_ip_addrs'][i]}")
-            print(f"  rpc_ip_addr = {config['rpc_ip_addrs'][i]}")
-            print(f"  ssd_dir = {config['ssd_dirs'][i]}")
+    def _build_all_servers(self):
+        for i in range(self.n):
+            self._build_server(i)
 
-            # Enforce minimum MTU on the local data and RPC NICs.
-            for j, addr in enumerate(config['data_ip_addrs'][i]):
-                check_mtu(hw, f"FrbServer {i} data[{j}]", extract_ip(addr),
-                           config['min_data_mtu'], 'min_data_mtu')
-            check_mtu(hw, f"FrbServer {i} rpc",
-                       extract_ip(config['rpc_ip_addrs'][i]),
-                       config['min_rpc_mtu'], 'min_rpc_mtu')
+    def _build_server(self, i):
+        cpus = self.config['server_cpus']
+        vcpu_list = self.hw.vcpu_list_from_cpu(cpus[i])
 
-            # Pin the calling thread to this CPU's vCPUs. Objects created
-            # within the context manager (BumpAllocator, SlabAllocator,
-            # AssembledFrameAllocator, FileWriter) will inherit this affinity
-            # for any worker threads they spawn.
-            with ThreadAffinity(vcpu_list):
-                # BumpAllocator: pre-allocates memory (NUMA-aware due to thread affinity).
-                # No threads spawned.
-                bump_allocator = BumpAllocator(aflags, capacity)
+        self._print_server_details(i, vcpu_list)
+        self._check_mtus_for_server(i)
 
-                # SlabAllocator: carves bump allocator into fixed-size slabs.
-                # No threads spawned.
-                slab_allocator = SlabAllocator(bump_allocator, capacity)
+        # Pin the calling thread to this CPU's vCPUs. Objects created
+        # within the context manager (BumpAllocator, SlabAllocator,
+        # AssembledFrameAllocator, FileWriter) will inherit this affinity
+        # for any worker threads they spawn.
+        with ThreadAffinity(vcpu_list):
+            num_addrs = len(self.config['data_ip_addrs'][i])
+            # BumpAllocator: pre-allocates memory (NUMA-aware due to thread
+            # affinity). No threads spawned.
+            bump_allocator = BumpAllocator(self.aflags, self.capacity)
+            # SlabAllocator: carves bump allocator into fixed-size slabs.
+            # No threads spawned.
+            slab_allocator = SlabAllocator(bump_allocator, self.capacity)
+            # AssembledFrameAllocator: manages frame allocation for receivers.
+            # Spawns 1 worker thread (inherits vCPU affinity).
+            allocator = AssembledFrameAllocator(
+                slab_allocator,
+                num_consumers=num_addrs,
+                time_samples_per_chunk=self.dedisp_config.time_samples_per_chunk,
+            )
+            # FileWriter: writes frames to SSD and copies to NFS.
+            # Spawns ssd_threads + nfs_threads worker threads.
+            file_writer = FileWriter(
+                self.config['ssd_dirs'][i],
+                self.nfs_dir,
+                num_ssd_threads=self.config['ssd_threads_per_server'],
+                num_nfs_threads=self.config['nfs_threads_per_server'],
+            )
+            # Receivers: one per data IP address. No threads spawned in ctor.
+            receivers = [
+                Receiver(address=addr, allocator=allocator, consumer_id=j)
+                for j, addr in enumerate(self.config['data_ip_addrs'][i])
+            ]
+            # FrbServer: ties together receivers, file writer, and RPC.
+            # (Imported here to avoid circular import with __init__.py.)
+            from . import FrbServer
+            server = FrbServer(self.dedisp_config, receivers, file_writer,
+                               self.config['rpc_ip_addrs'][i],
+                               self.config['ringbuf_nchunks'],
+                               min_data_mtu=self.config['min_data_mtu'])
+            # server.start(): spawns worker/reaper/processing threads and
+            # calls receiver.start() for each receiver. All threads inherit
+            # the vCPU affinity for this CPU.
+            server.start()
 
-                # AssembledFrameAllocator: manages frame allocation for receivers.
-                # Spawns 1 worker thread (inherits vCPU affinity for CPU {cpus[i]}).
-                allocator = AssembledFrameAllocator(
-                    slab_allocator,
-                    num_consumers=num_addrs,
-                    time_samples_per_chunk=dedisp_config.time_samples_per_chunk,
-                )
+        self.servers.append(server)
+        print(f"  Server {i} started.")
 
-                # FileWriter: writes frames to SSD and copies to NFS.
-                # Spawns ssd_threads + nfs_threads worker threads
-                # (inherit vCPU affinity for CPU {cpus[i]}).
-                file_writer = FileWriter(
-                    config['ssd_dirs'][i],
-                    nfs_dir,
-                    num_ssd_threads=config['ssd_threads_per_server'],
-                    num_nfs_threads=config['nfs_threads_per_server'],
-                )
+    def _print_server_details(self, i, vcpu_list):
+        cpus = self.config['server_cpus']
+        print(f"\nServer {i}: CPU {cpus[i]}, vcpu_list = {vcpu_list}")
+        print(f"  data_ip_addrs = {self.config['data_ip_addrs'][i]}")
+        print(f"  rpc_ip_addr = {self.config['rpc_ip_addrs'][i]}")
+        print(f"  ssd_dir = {self.config['ssd_dirs'][i]}")
 
-                # Receivers: one per data IP address. No threads spawned in constructor.
-                receivers = []
-                for j, addr in enumerate(config['data_ip_addrs'][i]):
-                    receiver = Receiver(
-                        address=addr,
-                        allocator=allocator,
-                        consumer_id=j,
-                    )
-                    receivers.append(receiver)
+    def _check_mtus_for_server(self, i):
+        # Enforce minimum MTU on the local data and RPC NICs.
+        for j, addr in enumerate(self.config['data_ip_addrs'][i]):
+            check_mtu(self.hw, f"FrbServer {i} data[{j}]", extract_ip(addr),
+                      self.config['min_data_mtu'], 'min_data_mtu')
+        check_mtu(self.hw, f"FrbServer {i} rpc",
+                  extract_ip(self.config['rpc_ip_addrs'][i]),
+                  self.config['min_rpc_mtu'], 'min_rpc_mtu')
 
-                # FrbServer: ties together receivers, file writer, and RPC.
-                # No threads spawned in constructor.
-                # (Imported here to avoid circular import with __init__.py.)
-                from . import FrbServer
-                server = FrbServer(dedisp_config, receivers, file_writer,
-                                   config['rpc_ip_addrs'][i],
-                                   config['ringbuf_nchunks'],
-                                   min_data_mtu=config['min_data_mtu'])
-
-                # server.start(): spawns worker/reaper threads and calls
-                # receiver.start() for each receiver (3 threads each).
-                # All threads inherit vCPU affinity for CPU {cpus[i]}.
-                server.start()
-
-            servers.append(server)
-            print(f"  Server {i} started.")
-
-        rpc_addrs = ' '.join(config['rpc_ip_addrs'])
+    def _print_help_lines(self):
+        rpc_addrs = ' '.join(self.config['rpc_ip_addrs'])
         print(f"\nTo send fake data to server(s):  pirate_frb run_fake_xengine {rpc_addrs}")
         print(f"To monitor status:               pirate_frb rpc_status {rpc_addrs}")
         print(f"To write random data:            pirate_frb rpc_write {rpc_addrs}")
-        
-        print(f"\nReminder: the only way to interact with running server(s) is via RPC, see above.")
-        print(f"All {n} server(s) started. Press Ctrl-C to stop.")
 
+        print(f"\nReminder: the only way to interact with running server(s) is via RPC, see above.")
+        print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")
+
+    def _wait_forever(self):
         while True:
             time.sleep(1)
 
-    except KeyboardInterrupt:
-        print("\nStopping servers...")
-    finally:
-        for server in servers:
+    def _stop_all_servers(self):
+        for server in self.servers:
             server.stop()
         print("All servers stopped.")
+
+
+def run_server(server_config_filename, dedispersion_config_filename):
+    """Main entry point for 'pirate_frb run_server'."""
+    helper = RunServerHelper(server_config_filename, dedispersion_config_filename)
+    helper.run()
 
