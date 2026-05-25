@@ -12,7 +12,12 @@ service FrbSearch {
   // Returns the current status of the search engine
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
 
-  // Returns XEngine metadata as a YAML string (empty if metadata not yet available)
+  // Returns the per-server configuration this server was started with.
+  // Loosely mirrors the run_server YAML config (flattened to a single server).
+  rpc GetConfig (GetConfigRequest) returns (GetConfigResponse);
+
+  // Returns XEngine metadata as a YAML string. Empty if metadata not yet available (the
+  // (metadata is sent by the X-engine, and is not available until the X-engine connects).
   rpc GetXEngineMetadata (GetXEngineMetadataRequest) returns (GetXEngineMetadataResponse);
 
   // Write files to disk for specified beams and time range
@@ -21,10 +26,6 @@ service FrbSearch {
   // Subscribe to a stream of filenames. The connection can be closed by the client
   // at any time, or by the server on shutdown or exception.
   rpc SubscribeFiles (SubscribeFilesRequest) returns (stream SubscribeFilesResponse);
-
-  // Returns the per-server configuration this server was started with.
-  // Loosely mirrors the run_server YAML config (flattened to a single server).
-  rpc GetConfig (GetConfigRequest) returns (GetConfigResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -39,6 +40,34 @@ message GetStatusResponse {
   int64 rb_finalized = 5;     // (Last finalized frame_id) + 1
   int64 rb_end = 6;           // (Last frame_id in ring buffer) + 1
   int64 num_free_frames = 7;  // Number of available frames in AssembledFrameAllocator
+}
+
+// Request message for GetConfig (currently empty, but extensible)
+message GetConfigRequest {}
+
+// Response message containing the per-server config.
+//
+// Fields 9-14 come from the FrbServer's "prefilled" DedispersionConfig
+// (params.config_prefilled), as supplied at server construction time.
+// They are NOT updated by the processing thread when X-engine metadata
+// arrives -- the four 'fake_*' fields specifically describe what the
+// fake X-engine sender should mimic (i.e. the pre-metadata config values
+// the receiver was started with), not what a real X-engine actually sent.
+message GetConfigResponse {
+  string rpc_ip_addr = 1;              // "ip:port" string this server is listening on for RPC
+  repeated string data_ip_addrs = 2;   // "ip:port" string per Receiver (one per data IP)
+  int64 time_samples_per_chunk = 3;    // Time samples per chunk (from AssembledFrameAllocator)
+  string ssd_dir = 4;                  // SSD cache directory for this server
+  string nfs_dir = 5;                  // NFS output directory (already interpolated for {user}/{date})
+  int64 ssd_threads = 6;               // Number of FileWriter SSD threads
+  int64 nfs_threads = 7;               // Number of FileWriter NFS threads
+  int64 ringbuf_nchunks = 8;           // Logical ring buffer length in time chunks
+  int64 tree_rank = 9;                 // From config_prefilled.tree_rank
+  int64 beams_per_batch = 10;          // From config_prefilled.beams_per_batch
+  repeated int64 fake_zone_nfreq = 11; // From config_prefilled.zone_nfreq (pre-metadata)
+  repeated double fake_zone_freq_edges = 12;  // From config_prefilled.zone_freq_edges (pre-metadata)
+  double fake_time_sample_ms = 13;     // From config_prefilled.time_sample_ms (pre-metadata)
+  int64 fake_nbeams = 14;              // From config_prefilled.beams_per_gpu (pre-metadata)
 }
 
 // Request message for GetXEngineMetadata
@@ -93,32 +122,4 @@ message ReadySentinel {}
 message WriteNotification {
   string filename      = 1;  // Valid only when error_message is empty.
   string error_message = 2;  // Empty = success; non-empty = error string.
-}
-
-// Request message for GetConfig (currently empty, but extensible)
-message GetConfigRequest {}
-
-// Response message containing the per-server config.
-//
-// Fields 9-14 come from the FrbServer's "prefilled" DedispersionConfig
-// (params.config_prefilled), as supplied at server construction time.
-// They are NOT updated by the processing thread when X-engine metadata
-// arrives -- the four 'fake_*' fields specifically describe what the
-// fake X-engine sender should mimic (i.e. the pre-metadata config values
-// the receiver was started with), not what a real X-engine actually sent.
-message GetConfigResponse {
-  string rpc_ip_addr = 1;              // "ip:port" string this server is listening on for RPC
-  repeated string data_ip_addrs = 2;   // "ip:port" string per Receiver (one per data IP)
-  int64 time_samples_per_chunk = 3;    // Time samples per chunk (from AssembledFrameAllocator)
-  string ssd_dir = 4;                  // SSD cache directory for this server
-  string nfs_dir = 5;                  // NFS output directory (already interpolated for {user}/{date})
-  int64 ssd_threads = 6;               // Number of FileWriter SSD threads
-  int64 nfs_threads = 7;               // Number of FileWriter NFS threads
-  int64 ringbuf_nchunks = 8;           // Logical ring buffer length in time chunks
-  int64 tree_rank = 9;                 // From config_prefilled.tree_rank
-  int64 beams_per_batch = 10;          // From config_prefilled.beams_per_batch
-  repeated int64 fake_zone_nfreq = 11; // From config_prefilled.zone_nfreq (pre-metadata)
-  repeated double fake_zone_freq_edges = 12;  // From config_prefilled.zone_freq_edges (pre-metadata)
-  double fake_time_sample_ms = 13;     // From config_prefilled.time_sample_ms (pre-metadata)
-  int64 fake_nbeams = 14;              // From config_prefilled.beams_per_gpu (pre-metadata)
 }
