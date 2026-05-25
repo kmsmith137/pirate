@@ -2,7 +2,6 @@
 
 import time
 import threading
-from contextlib import closing
 
 from .Hardware import Hardware
 from .utils import ThreadAffinity, extract_ip, check_mtu
@@ -101,7 +100,7 @@ def run_fake_xengine(rpc_addrs, nworkers=128):
         # half-built state running in the background.
         for rpc_addr in rpc_addrs:
             print(f"\n[{rpc_addr}] Connecting ...")
-            with closing(FrbClient(rpc_addr)) as c:
+            with FrbClient(rpc_addr) as c:
                 cfg = c.get_config()
 
             ip_addrs = list(cfg.data_ip_addrs)
