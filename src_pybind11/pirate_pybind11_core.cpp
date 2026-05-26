@@ -1069,8 +1069,8 @@ void register_core_bindings(pybind11::module &m)
                return self.params.gpu_allocator;
           }, "BumpAllocator for GPU memory. May be async; call\n"
              "wait_until_initialized() before start() if so.")
-          .def_property_readonly("allocator", [](FrbServer &self) {
-               return self.allocator;
+          .def_property_readonly("frame_allocator", [](FrbServer &self) {
+               return self.frame_allocator;
           }, "AssembledFrameAllocator (backs the receivers). Underlying memory\n"
              "is from the ring-buffer host BumpAllocator; may be async.")
     ;

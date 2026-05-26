@@ -99,7 +99,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     void stop(std::exception_ptr e = nullptr);  // idempotent
 
     Params params;
-    std::shared_ptr<AssembledFrameAllocator> allocator;
+    std::shared_ptr<AssembledFrameAllocator> frame_allocator;
 
     std::unique_ptr<FrbRpcService> rpc_service;
     std::unique_ptr<grpc::Server> rpc_server;
@@ -116,10 +116,10 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // captured when it sized frame_ringbuf). Set under 'mutex' by the first
     // worker that completes its init block; null before that. Used by the
     // worker's "is this the first init?" check; the reaper and RPC handlers
-    // read metadata via allocator->get_metadata() instead.
+    // read metadata via frame_allocator->get_metadata() instead.
     //
     // freq_channels: always FREQUENCY-SCRUBBED (empty), inherited from the
-    // allocator's canonical copy.
+    // frame_allocator's canonical copy.
     std::shared_ptr<const XEngineMetadata> metadata;
 
     // Maps (beam id) -> (position in metadata.beam_ids).

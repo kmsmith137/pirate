@@ -112,18 +112,19 @@ FrbServer::FrbServer(const Params &p) : params(p)
         xassert(params.receivers[i]->params.consumer_id == i);
     }
 
-    this->allocator = params.receivers[0]->params.allocator;
+    this->frame_allocator = params.receivers[0]->params.allocator;
 
-    // Verbose consistency check: the dedispersion config and the allocator
-    // must agree on time_samples_per_chunk. In the normal run_server.py
-    // path the allocator is constructed FROM the dedispersion config, so
-    // this guards against future mis-wiring or direct Python callers.
-    if (params.config_prefilled.time_samples_per_chunk != allocator->time_samples_per_chunk) {
+    // Verbose consistency check: the dedispersion config and the
+    // frame_allocator must agree on time_samples_per_chunk. In the normal
+    // run_server.py path the frame_allocator is constructed FROM the
+    // dedispersion config, so this guards against future mis-wiring or
+    // direct Python callers.
+    if (params.config_prefilled.time_samples_per_chunk != frame_allocator->time_samples_per_chunk) {
         stringstream ss;
         ss << "FrbServer: DedispersionConfig::time_samples_per_chunk ("
            << params.config_prefilled.time_samples_per_chunk
            << ") does not match AssembledFrameAllocator::time_samples_per_chunk ("
-           << allocator->time_samples_per_chunk << ")";
+           << frame_allocator->time_samples_per_chunk << ")";
         throw runtime_error(ss.str());
     }
 
@@ -185,7 +186,7 @@ void FrbServer::start()
     // forgot to call wait_until_initialized() before start() -- async-init
     // failures would surface from the processing/receiver threads later
     // rather than cleanly from the build path.
-    xassert(allocator->is_initialized());
+    xassert(frame_allocator->is_initialized());
     xassert(params.host_allocator->is_initialized());
     xassert(params.gpu_allocator->is_initialized());
 
@@ -211,8 +212,8 @@ void FrbServer::start()
         for (int i = 0; i < nreceivers; i++)
             workers.emplace_back(&FrbServer::worker_main, this, i);
 
-        // Spawn reaper thread iff allocator is not in dummy mode.
-        if (!allocator->is_dummy())
+        // Spawn reaper thread iff frame_allocator is not in dummy mode.
+        if (!frame_allocator->is_dummy())
             reaper_thread = std::thread(&FrbServer::reaper_thread_main, this);
 
         // Spawn processing thread (builds DedispersionPlan once metadata arrives).
@@ -241,8 +242,8 @@ void FrbServer::stop(std::exception_ptr e)
     for (auto &r : params.receivers)
         r->stop();
 
-    // Stop the allocator (which will unblock num_total_frames).
-    allocator->stop();
+    // Stop the frame_allocator (which will unblock num_total_frames).
+    frame_allocator->stop();
 
     // Shutdown RPC server.
     if (rpc_server)
@@ -260,11 +261,12 @@ void FrbServer::_worker_main(int receiver_index)
     auto &receiver = params.receivers.at(receiver_index);
     long num_receivers = params.receivers.size();
 
-    // Get the canonical metadata from the allocator (blocking until some
-    // Receiver's reader thread has parsed its first peer's YAML). The
-    // allocator's initialize_metadata() has already enforced cross-sender
-    // consistency, so no check_sender_consistency() call is needed here.
-    shared_ptr<const XEngineMetadata> m = allocator->get_metadata(true);
+    // Get the canonical metadata from the frame_allocator (blocking until
+    // some Receiver's reader thread has parsed its first peer's YAML). The
+    // frame_allocator's initialize_metadata() has already enforced
+    // cross-sender consistency, so no check_sender_consistency() call is
+    // needed here.
+    shared_ptr<const XEngineMetadata> m = frame_allocator->get_metadata(true);
 
     // Also wait for the canonical initial_time_chunk to be established
     // (set by the first Receiver-reader to parse a per-minichunk header).
@@ -272,7 +274,7 @@ void FrbServer::_worker_main(int receiver_index)
     // time_chunk_index * nbeams + ibeam -- so the very first frame has
     // frame_id = initial_time_chunk * nbeams. We seed rb_* with that
     // offset below; the worker's frame_id loop starts there too.
-    long initial_time_chunk = allocator->wait_for_initial_chunk();
+    long initial_time_chunk = frame_allocator->wait_for_initial_chunk();
     long nbeams = m->get_nbeams();
     long rb_size = params.ringbuf_nchunks * nbeams;
     long initial_frame_id = initial_time_chunk * nbeams;
@@ -423,10 +425,10 @@ void FrbServer::worker_main(int receiver_index)
 
 void FrbServer::_reaper_thread_main()
 {
-    // Wait for the canonical metadata via the allocator. (Blocks until some
-    // Receiver's reader thread has parsed its first peer's YAML and called
-    // allocator->initialize().)
-    shared_ptr<const XEngineMetadata> m = allocator->get_metadata(true);
+    // Wait for the canonical metadata via the frame_allocator. (Blocks
+    // until some Receiver's reader thread has parsed its first peer's
+    // YAML and called frame_allocator->initialize().)
+    shared_ptr<const XEngineMetadata> m = frame_allocator->get_metadata(true);
     long nbeams = m->get_nbeams();
 
     // Compute rb_size from nbeams directly. Reading frame_ringbuf.size()
@@ -439,12 +441,12 @@ void FrbServer::_reaper_thread_main()
     // worker has already executed its resize.
     long rb_size = params.ringbuf_nchunks * nbeams;
 
-    // Get total number of frames (blocking until allocator is initialized).
-    long total_frames = allocator->num_total_frames(/*blocking=*/ true);
+    // Get total number of frames (blocking until frame_allocator is initialized).
+    long total_frames = frame_allocator->num_total_frames(/*blocking=*/ true);
     xassert(total_frames >= 6 * nbeams);
 
     for (;;) {
-        allocator->block_until_low_memory(2 * nbeams);
+        frame_allocator->block_until_low_memory(2 * nbeams);
 
         unique_lock<std::mutex> lock(mutex);
 
@@ -520,11 +522,12 @@ void FrbServer::_processing_thread_main()
     // blocked in get_metadata() below; harmless but consistent.)
     CUDA_CALL(cudaSetDevice(params.cuda_device_id));
 
-    // Block until X-engine metadata is available. allocator->get_metadata()
-    // is an entry point: it throws if the allocator has been stopped (which
-    // happens via cascade from FrbServer::stop()), so we get a clean exit
-    // path through processing_thread_main()'s try/catch.
-    shared_ptr<const XEngineMetadata> m = allocator->get_metadata(/*blocking=*/true);
+    // Block until X-engine metadata is available.
+    // frame_allocator->get_metadata() is an entry point: it throws if the
+    // frame_allocator has been stopped (which happens via cascade from
+    // FrbServer::stop()), so we get a clean exit path through
+    // processing_thread_main()'s try/catch.
+    shared_ptr<const XEngineMetadata> m = frame_allocator->get_metadata(/*blocking=*/true);
 
     // Build config_postfilled by copying config_prefilled and overwriting the
     // four metadata-dependent members. Print a one-line message when an
@@ -733,7 +736,7 @@ void FrbRpcService::_GetXEngineMetadata(const fs::GetXEngineMetadataRequest *req
     // Pull the canonical metadata from the allocator (non-blocking; if no
     // peer has yet sent YAML, returns nullptr and we return an empty
     // yaml_string to the RPC client).
-    shared_ptr<const XEngineMetadata> m = s->allocator->get_metadata(/*blocking=*/false);
+    shared_ptr<const XEngineMetadata> m = s->frame_allocator->get_metadata(/*blocking=*/false);
     if (m)
         response->set_yaml_string(m->to_yaml_string(request->verbose()));
     else
@@ -802,10 +805,11 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
     long num_time_chunks = max_time_chunk_index - min_time_chunk_index + 1;
     local_frames.reserve(num_time_chunks * beam_indices.size());
 
-    // Pull nbeams from the canonical metadata (allocator) before taking
-    // FrbServer::mutex. If metadata is not yet available, there are no
-    // frames to write and the filename list returned to the client is empty.
-    shared_ptr<const XEngineMetadata> m = s->allocator->get_metadata(/*blocking=*/false);
+    // Pull nbeams from the canonical metadata (frame_allocator) before
+    // taking FrbServer::mutex. If metadata is not yet available, there are
+    // no frames to write and the filename list returned to the client is
+    // empty.
+    shared_ptr<const XEngineMetadata> m = s->frame_allocator->get_metadata(/*blocking=*/false);
     if (!m)
         return;
     long rb_nbeams = m->get_nbeams();
@@ -1002,7 +1006,7 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
     for (auto &r : s->params.receivers)
         response->add_data_ip_addrs(r->params.address);
 
-    response->set_time_samples_per_chunk(s->allocator->time_samples_per_chunk);
+    response->set_time_samples_per_chunk(s->frame_allocator->time_samples_per_chunk);
     response->set_ringbuf_nchunks(s->params.ringbuf_nchunks);
     response->set_min_data_mtu(s->params.min_data_mtu);
 
