@@ -64,7 +64,7 @@ struct BumpAllocator
     void *allocate_bytes(long nbytes);
 
     // Allocate an Array with the given shape and default (contiguous) strides.
-    // If T==void, throws an exception (use the version with explicit dtype).
+    // static_asserts at compile time if T==void (use the version with explicit dtype).
     // The returned ksgpu::Array keeps a reference to the BumpAllocator base shared_ptr.
     template<typename T>
     ksgpu::Array<T> allocate_array(std::initializer_list<long> shape);
@@ -76,7 +76,7 @@ struct BumpAllocator
     ksgpu::Array<T> allocate_array(ksgpu::Dtype dtype, std::initializer_list<long> shape);
 
     // Allocate an Array with explicit shape and strides.
-    // If T==void, throws an exception (use the version with explicit dtype).
+    // static_asserts at compile time if T==void (use the version with explicit dtype).
     template<typename T>
     ksgpu::Array<T> allocate_array(const std::vector<long> &shape, const std::vector<long> &strides);
 

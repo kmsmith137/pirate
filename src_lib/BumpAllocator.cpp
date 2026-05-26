@@ -20,7 +20,7 @@ BumpAllocator::BumpAllocator(int aflags_, long capacity_)
         throw std::runtime_error("BumpAllocator constructor: af_random flag is not supported");
     
     if (aflags & ksgpu::af_guard)
-        throw std::runtime_error("BumpAllocator constructor: af_guard flags is not supported");
+        throw std::runtime_error("BumpAllocator constructor: af_guard flag is not supported");
 
     if (capacity >= 0) {
         // Round capacity up to alignment boundary.
@@ -61,21 +61,25 @@ void *BumpAllocator::allocate_bytes(long nbytes)
 
     // Round up to alignment boundary.
     long aligned_nbytes = align_up(nbytes, nalign);
-    
-    // Atomically claim space from the buffer.
-    long old_offset = nbytes_allocated.fetch_add(aligned_nbytes);
-    long new_offset = old_offset + aligned_nbytes;
-    
-    if (new_offset > capacity) {
-        // Roll back the allocation.
-        nbytes_allocated.fetch_sub(aligned_nbytes);
-        
-        std::stringstream ss;
-        ss << "BumpAllocator::allocate_bytes(): allocation of " << nbytes << " bytes would exceed capacity "
-           << capacity << " (currently allocated: " << old_offset << ")";
-        throw std::runtime_error(ss.str());
-    }
-    
+
+    // Atomically claim space using a compare-exchange loop. A simpler
+    // fetch_add(aligned_nbytes) + roll-back-on-overflow pattern is racy:
+    // the failing thread's transient over-increment of 'nbytes_allocated'
+    // can cause concurrent allocations that would have fit to be rejected.
+    // The CAS loop only advances 'nbytes_allocated' when the allocation
+    // succeeds.
+    long old_offset = nbytes_allocated.load(std::memory_order_relaxed);
+    long new_offset;
+    do {
+        new_offset = old_offset + aligned_nbytes;
+        if (new_offset > capacity) {
+            std::stringstream ss;
+            ss << "BumpAllocator::allocate_bytes(): allocation of " << nbytes << " bytes would exceed capacity "
+               << capacity << " (currently allocated: " << old_offset << ")";
+            throw std::runtime_error(ss.str());
+        }
+    } while (!nbytes_allocated.compare_exchange_weak(old_offset, new_offset));
+
     char *base_ptr = static_cast<char *>(base.get());
     return base_ptr + old_offset;
 }
