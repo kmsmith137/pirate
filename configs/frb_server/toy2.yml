@@ -16,13 +16,11 @@
 num_servers: 1
 server_cpus: [ 0 ]   # length num_servers
 
-memory_per_server: '10 GB'
-use_hugepages: true
 
-# time_samples_per_chunk is no longer specified here -- it lives in the
-# DedispersionConfig YAML passed to 'pirate_frb run_server' as the second
-# positional arg. 'pirate_frb run_fake_xengine' learns it from the running
-# server via the GetConfig RPC.
+rb_host_memory_per_server: '1 GB'
+dd_host_memory_per_server: '1 GB'
+gpu_memory_per_server: '1 GB'
+use_hugepages: true
 
 ringbuf_nchunks: 512
 

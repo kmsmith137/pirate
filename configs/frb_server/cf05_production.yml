@@ -20,16 +20,14 @@
 num_servers: 2
 server_cpus: [ 0, 1 ]   # length num_servers
 
-# Memory is fully allocated and zeroed before the server starts (with scattered
-# small exceptions where we do call malloc()).
+# For now, the config file must declare upper bounds on the amount of memory needed
+# for dedispersion and ring buffering. This is a hack, and I'll implement better
+# memory management in the future!
 
-memory_per_server: '256 GB'
+rb_host_memory_per_server: '256 GB'
+dd_host_memory_per_server: '420 GB'
+gpu_memory_per_server: '40 GB'
 use_hugepages: true
-
-# time_samples_per_chunk is no longer specified here -- it lives in the
-# DedispersionConfig YAML passed to 'pirate_frb run_server' as the second
-# positional arg. 'pirate_frb run_fake_xengine' learns it from the running
-# server via the GetConfig RPC.
 
 # Logical length of ring buffer (in time "chunks", not time+beam "frames").
 # In principle, this is an independent parameter from 'memory_per_server'.

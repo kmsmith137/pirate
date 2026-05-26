@@ -4,6 +4,8 @@
 #include "../include/pirate/Dedisperser.hpp"        // GpuDedisperser
 #include "../include/pirate/CudaStreamPool.hpp"
 
+#include <cstring>   // strstr
+
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
 #include <iostream>
@@ -92,6 +94,9 @@ FrbServer::FrbServer(const Params &p) : params(p)
     xassert(params.rpc_server_address.size() > 0);  // check that string was initialized
     xassert(params.ringbuf_nchunks > 0);
     xassert(params.min_data_mtu > 0);
+    xassert(params.host_allocator);
+    xassert(params.gpu_allocator);
+    xassert(params.cuda_device_id >= 0);
 
     // Fail fast on a malformed user-supplied config. (The four metadata-
     // dependent members are overwritten later by the processing thread,
@@ -142,6 +147,17 @@ FrbServer::~FrbServer()
 
     if (rpc_server)
         rpc_server->Wait();
+}
+
+
+// Helper: returns true if the exception is a "normal shutdown signaling"
+// exception (i.e., "called on stopped instance"). These get thrown by entry
+// points like Receiver::get_frame_set / AssembledFrameAllocator::* once
+// FrbServer::stop() has cascaded, and they're how the worker/reaper threads
+// notice the shutdown and exit. We don't want to print them as errors.
+static bool _is_cascade_stop_exception(const std::exception &e)
+{
+    return std::strstr(e.what(), "called on stopped instance") != nullptr;
 }
 
 
@@ -374,7 +390,15 @@ void FrbServer::worker_main(int receiver_index)
 {
     try {
         _worker_main(receiver_index);
+    } catch (const std::exception &e) {
+        if (!_is_cascade_stop_exception(e)) {
+            std::cerr << "FrbServer: worker thread " << receiver_index
+                      << " terminated with exception: " << e.what() << std::endl;
+        }
+        stop(std::current_exception());
     } catch (...) {
+        std::cerr << "FrbServer: worker thread " << receiver_index
+                  << " terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }
@@ -437,7 +461,14 @@ void FrbServer::reaper_thread_main()
 {
     try {
         _reaper_thread_main();
+    } catch (const std::exception &e) {
+        if (!_is_cascade_stop_exception(e)) {
+            std::cerr << "FrbServer: reaper thread terminated with exception: "
+                      << e.what() << std::endl;
+        }
+        stop(std::current_exception());
     } catch (...) {
+        std::cerr << "FrbServer: reaper thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }
@@ -447,13 +478,15 @@ void FrbServer::reaper_thread_main()
 //
 // Processing thread
 //
-// Once the X-engine metadata is available, this thread overwrites the four
-// metadata-dependent members of params.config_prefilled (zone_nfreq,
-// zone_freq_edges, time_sample_ms, beams_per_gpu) to build a "postfilled"
-// DedispersionConfig, validates it, and constructs a DedispersionPlan. It
-// then builds a CudaStreamPool and a GpuDedisperser on top of the plan.
-// All three are published via the lock-protected 'plan' / 'dedisperser'
-// members in a single critical section.
+// Pins to params.cuda_device_id first thing, then blocks until X-engine
+// metadata is available. After metadata arrives, this thread overwrites
+// the four metadata-dependent members of params.config_prefilled
+// (zone_nfreq, zone_freq_edges, time_sample_ms, beams_per_gpu) to build a
+// "postfilled" DedispersionConfig, validates it, and constructs a
+// DedispersionPlan. It then builds a CudaStreamPool and a GpuDedisperser
+// on top of the plan and calls allocate() to attach the FrbServer's
+// host/gpu allocators. All three are published via the lock-protected
+// 'plan' / 'dedisperser' members in a single critical section.
 //
 // More processing steps will be added in a future prompt; for now, the
 // thread just exits cleanly after publishing the plan + dedisperser.
@@ -461,6 +494,13 @@ void FrbServer::reaper_thread_main()
 
 void FrbServer::_processing_thread_main()
 {
+    // Pin this thread to the right CUDA device BEFORE any CudaStreamPool /
+    // CudaEventRingbuf / cudaMemcpyAsync calls below: those all bind to
+    // the "current device" of the thread that issues them. (Setting it
+    // here also means the thread is parked on the correct device while
+    // blocked in get_metadata() below; harmless but consistent.)
+    CUDA_CALL(cudaSetDevice(params.cuda_device_id));
+
     // Block until X-engine metadata is available. allocator->get_metadata()
     // is an entry point: it throws if the allocator has been stopped (which
     // happens via cascade from FrbServer::stop()), so we get a clean exit
@@ -511,6 +551,8 @@ void FrbServer::_processing_thread_main()
     // step (can take seconds), and we don't want to block other threads
     // (e.g. RPC handlers reading 'plan' or 'is_stopped') while it runs.
     auto plan_p = make_shared<DedispersionPlan>(config_postfilled);
+    cout << "FrbServer: DedispersionPlan constructed"
+         << " (nfreq=" << plan_p->nfreq << ", ntrees=" << plan_p->ntrees << ")" << endl;
 
     // Build the CudaStreamPool and GpuDedisperser (also OUTSIDE the mutex;
     // these create CUDA streams and other GPU-side resources, so they should
@@ -535,7 +577,18 @@ void FrbServer::_processing_thread_main()
     dd_params.stream_pool = stream_pool;
     dd_params.nbatches_out = config_postfilled.num_active_batches;
     dd_params.detect_deadlocks = false;
+    dd_params.cuda_device_id = params.cuda_device_id;
     auto dedisperser_p = GpuDedisperser::create(dd_params);
+    cout << "FrbServer: GpuDedisperser constructed"
+         << " (nstreams=" << dedisperser_p->nstreams << ")" << endl;
+
+    // Allocate GpuDedisperser resources from the FrbServer's dedicated
+    // host/gpu BumpAllocators. allocate() also spawns the GpuDedisperser
+    // worker thread, which sets cudaSetDevice on itself.
+    dedisperser_p->allocate(*params.gpu_allocator, *params.host_allocator);
+    cout << "FrbServer: GpuDedisperser::allocate() done"
+         << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
+         << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)" << endl;
 
     // Publish plan + dedisperser atomically under the mutex. Notify cv so
     // future waiters (if any) observe the new values.
@@ -546,10 +599,6 @@ void FrbServer::_processing_thread_main()
         cv.notify_all();
     }
 
-    cout << "FrbServer: DedispersionPlan + GpuDedisperser constructed"
-         << " (nfreq=" << plan_p->nfreq << ", ntrees=" << plan_p->ntrees
-         << ", nstreams=" << dedisperser_p->nstreams << ")" << endl;
-
     // Exit for now. More processing steps will be added in a future prompt.
 }
 
@@ -558,7 +607,14 @@ void FrbServer::processing_thread_main()
 {
     try {
         _processing_thread_main();
+    } catch (const std::exception &e) {
+        if (!_is_cascade_stop_exception(e)) {
+            std::cerr << "FrbServer: processing thread terminated with exception: "
+                      << e.what() << std::endl;
+        }
+        stop(std::current_exception());
     } catch (...) {
+        std::cerr << "FrbServer: processing thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }

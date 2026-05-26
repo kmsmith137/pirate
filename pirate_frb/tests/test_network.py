@@ -33,11 +33,13 @@ import random
 import secrets
 import shutil
 
+import ksgpu
 import numpy as np
 
 from ..core import (
     AssembledFrame,
     AssembledFrameAllocator,
+    BumpAllocator,
     FakeXEngine,
     FileWriter,
     Receiver,
@@ -225,10 +227,20 @@ class NetworkTester:
             for j in range(p['num_receivers'])
         ]
 
+        # Dummy-mode BumpAllocators for the FrbServer's dedispersion host /
+        # GPU buffers. With capacity=-1 each allocate_array() call allocates
+        # its own backing memory via af_alloc, which is what
+        # GpuDedisperser::allocate exclusively uses.
+        host_alloc = BumpAllocator(ksgpu.af_rhost | ksgpu.af_zero, -1)
+        gpu_alloc  = BumpAllocator(ksgpu.af_gpu   | ksgpu.af_zero, -1)
+
         self.server = FrbServer(p['config'], self.receivers, self.file_writer,
                                 f"127.0.0.1:{p['rpc_port']}",
                                 p['ringbuf_nchunks'],
-                                min_data_mtu=1500)
+                                min_data_mtu=1500,
+                                host_allocator=host_alloc,
+                                gpu_allocator=gpu_alloc,
+                                cuda_device_id=0)
         self.server.start()
 
     def _build_client(self):

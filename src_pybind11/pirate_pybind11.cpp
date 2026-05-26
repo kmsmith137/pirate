@@ -287,12 +287,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
           .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
                           std::shared_ptr<CudaStreamPool> stream_pool,
+                          int cuda_device_id,
                           long nbatches_out,
                           long nbatches_wt,
                           bool detect_deadlocks) {
               GpuDedisperser::Params params;
               params.plan = plan;
               params.stream_pool = stream_pool;
+              params.cuda_device_id = cuda_device_id;
               params.nbatches_out = nbatches_out;
               params.nbatches_wt = nbatches_wt;
               params.detect_deadlocks = detect_deadlocks;
@@ -300,6 +302,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           }),
           py::arg("plan"),
           py::arg("stream_pool"),
+          py::arg("cuda_device_id"),
           py::arg("nbatches_out") = 0,
           py::arg("nbatches_wt") = 0,
           py::arg("detect_deadlocks") = true)

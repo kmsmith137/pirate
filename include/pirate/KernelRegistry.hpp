@@ -137,7 +137,7 @@ struct KernelRegistry
             this->deferred_initialization(e->val);
             e->initialized_devices.insert(device);
         }
-        
+
         Val ret = e->val;
         lk.unlock();
         return ret;

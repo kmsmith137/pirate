@@ -63,6 +63,13 @@ struct GpuDedisperser
         // deadlock-checking logic is disabled.
 
         bool detect_deadlocks = true;
+
+        // CUDA device id. The GpuDedisperser's worker thread will call
+        // cudaSetDevice(cuda_device_id) on entry, so all kernel launches
+        // and async copies driven by the worker thread hit the right
+        // device. ~GpuDedisperser also temporarily switches to this device
+        // for its cleanup work. Required (constructor asserts >= 0).
+        int cuda_device_id = -1;
     };
 
     // Factory function to create GpuDedisperser (preferred over direct construction).

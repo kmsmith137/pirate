@@ -965,7 +965,10 @@ void register_core_bindings(pybind11::module &m)
                            std::shared_ptr<FileWriter> file_writer,
                            const std::string &rpc_server_address,
                            int ringbuf_nchunks,
-                           int min_data_mtu) {
+                           int min_data_mtu,
+                           std::shared_ptr<BumpAllocator> host_allocator,
+                           std::shared_ptr<BumpAllocator> gpu_allocator,
+                           int cuda_device_id) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -973,12 +976,18 @@ void register_core_bindings(pybind11::module &m)
                params.rpc_server_address = rpc_server_address;
                params.ringbuf_nchunks = ringbuf_nchunks;
                params.min_data_mtu = min_data_mtu;
+               params.host_allocator = std::move(host_allocator);
+               params.gpu_allocator = std::move(gpu_allocator);
+               params.cuda_device_id = cuda_device_id;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
                py::arg("receivers"), py::arg("file_writer"),
                py::arg("rpc_server_address"), py::arg("ringbuf_nchunks"),
                py::arg("min_data_mtu"),
+               py::arg("host_allocator"),
+               py::arg("gpu_allocator"),
+               py::arg("cuda_device_id"),
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -993,7 +1002,14 @@ void register_core_bindings(pybind11::module &m)
                "    rpc_server_address: gRPC server address (e.g. 'localhost:50051')\n"
                "    ringbuf_nchunks: Logical ring buffer length in time chunks\n"
                "    min_data_mtu: Minimum data-NIC MTU expected on the sender\n"
-               "        side; surfaced via the GetConfig RPC.")
+               "        side; surfaced via the GetConfig RPC.\n"
+               "    host_allocator: BumpAllocator with af_rhost | af_zero, used by\n"
+               "        the processing thread to back GpuDedisperser host buffers.\n"
+               "    gpu_allocator: BumpAllocator with af_gpu | af_zero, used by\n"
+               "        the processing thread to back GpuDedisperser GPU buffers.\n"
+               "    cuda_device_id: CUDA device index. The processing thread and\n"
+               "        the GpuDedisperser worker thread both call cudaSetDevice\n"
+               "        with this value.")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"
@@ -1009,6 +1025,13 @@ void register_core_bindings(pybind11::module &m)
                return self.dedisperser;
           }, "GpuDedisperser built by the processing thread (alongside .plan),\n"
              "or None if not yet constructed.")
+          .def_property_readonly("is_stopped", [](FrbServer &self) {
+               std::lock_guard<std::mutex> lock(self.mutex);
+               return self.is_stopped;
+          }, "True if the server has been stopped, either by a stop() call or because\n"
+             "a worker/reaper/processing thread threw an exception. When this transitions\n"
+             "to True due to an internal error, the C++ side prints the exception message\n"
+             "to stderr (see FrbServer.cpp's thread-main wrappers).")
     ;
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.

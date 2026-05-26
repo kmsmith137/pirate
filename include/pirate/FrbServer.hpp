@@ -67,6 +67,11 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // will be overwritten ("filled") later. (The "filled" DedispersionConfig
         // is available as FrbServer::plan->config.)
         DedispersionConfig config_prefilled;
+
+        std::shared_ptr<BumpAllocator> host_allocator;
+        std::shared_ptr<BumpAllocator> gpu_allocator;
+        int cuda_device_id = -1;
+        
         std::vector<std::shared_ptr<Receiver>> receivers;
         std::shared_ptr<FileWriter> file_writer;
         std::string rpc_server_address;

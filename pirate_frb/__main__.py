@@ -628,7 +628,7 @@ def show_dedisperser(args):
         out_bytes   = (nin * nbits) // 8  # fp16/fp32 output
         scoff_bytes = nin // 64           # 4 bytes per (scale, offset) pair, one pair per 256 samples
         stream_pool = core.CudaStreamPool.create(plan.num_active_batches)
-        dedisperser = GpuDedisperser(plan, stream_pool)
+        dedisperser = GpuDedisperser(plan, stream_pool, cuda_device_id=0)
         rt = dedisperser.resource_tracker.clone()
         rt.add_kernel('dequantizer',        raw_bytes + scoff_bytes + out_bytes)
         rt.add_memcpy_h2g('raw_data',       raw_bytes)
@@ -715,7 +715,7 @@ def time_dedisperser(args):
     # Create GpuDedisperser (unallocated, to get resource tracking)
     print(f'Creating GpuDedisperser...')
     stream_pool = core.CudaStreamPool(plan.num_active_batches)
-    dedisperser = GpuDedisperser(plan, stream_pool, detect_deadlocks=True)
+    dedisperser = GpuDedisperser(plan, stream_pool, cuda_device_id=0, detect_deadlocks=True)
     
     # Calculate total memory needed.
     # Dedisperser memory footprints come from resource tracking.

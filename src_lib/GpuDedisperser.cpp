@@ -53,6 +53,7 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 {
     xassert(params.plan);
     xassert(params.stream_pool);
+    xassert(params.cuda_device_id >= 0);
     xassert_eq(params.plan->num_active_batches, params.stream_pool->num_compute_streams);
 
     if (params.nbatches_out == 0)
@@ -325,6 +326,16 @@ void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_
 
 GpuDedisperser::~GpuDedisperser()
 {
+    // Save the calling thread's current CUDA device so we can restore it
+    // on exit. We switch to params.cuda_device_id for the CudaEventRingbuf::stop
+    // and cudaStreamSynchronize calls below, since those interact with events
+    // and streams that were created on that device. cudaGetDevice and
+    // cudaSetDevice are called without CUDA_CALL so we never raise from
+    // inside a destructor.
+    int saved_device = -1;
+    bool saved = (cudaGetDevice(&saved_device) == cudaSuccess);
+    cudaSetDevice(params.cuda_device_id);
+
     // Stop the worker thread.
     this->stop();
 
@@ -355,6 +366,12 @@ GpuDedisperser::~GpuDedisperser()
         for (auto &s : stream_pool->compute_streams)
             cudaStreamSynchronize(s);
     }
+
+    // Restore the caller-thread's prior CUDA device. (Member destructors that
+    // run after this point will see the restored device; if any of them
+    // invoke CUDA APIs they'll do so on the caller's context.)
+    if (saved)
+        cudaSetDevice(saved_device);
 }
 
 
@@ -386,6 +403,7 @@ void GpuDedisperser::_throw_if_stopped(const char *method_name)
 void GpuDedisperser::worker_main()
 {
     try {
+        CUDA_CALL(cudaSetDevice(params.cuda_device_id));
         _worker_main();  // only returns if GpuDedisperser::is_stopped
     } catch (...) {
         stop(std::current_exception());
@@ -1091,6 +1109,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         params.nbatches_out = nbatches_out;
         params.nbatches_wt = nbatches_out;
         params.detect_deadlocks = true;
+        params.cuda_device_id = 0;
 
         gdd = GpuDedisperser::create(params);
         BumpAllocator gpu_allocator(af_gpu | af_zero, -1);     // dummy allocator

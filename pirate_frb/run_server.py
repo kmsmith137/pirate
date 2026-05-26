@@ -5,6 +5,7 @@ import re
 import time
 import datetime
 
+import cupy as cp
 import yaml
 import ksgpu
 
@@ -35,6 +36,44 @@ def _resolve_nfs_dir(template):
     return template.replace('{user}', user).replace('{date}', date)
 
 
+def _cuda_device_from_cpu(hw, cpu_id):
+    """Return the unique CUDA device on physical CPU `cpu_id`.
+
+    Throws a verbose RuntimeError if zero or two-or-more GPUs are
+    associated with the CPU.
+
+    Assumes a one-GPU-per-CPU topology, which is true for the CHORD FRB
+    nodes today. If a future deployment has multiple GPUs per CPU (or
+    zero GPUs on a server's pinned CPU), the operator will need a
+    per-server `cuda_devices` YAML field; until then we auto-derive.
+    """
+    matches = []
+    for gpu in range(hw.num_gpus):
+        vcpu_list = hw.vcpu_list_from_gpu(gpu)
+        if hw.cpu_from_vcpu_list(vcpu_list) == cpu_id:
+            matches.append(gpu)
+
+    if len(matches) == 0:
+        gpu_summary = ", ".join(
+            f"GPU {g}->CPU {hw.cpu_from_vcpu_list(hw.vcpu_list_from_gpu(g))}"
+            for g in range(hw.num_gpus)
+        )
+        raise RuntimeError(
+            f"_cuda_device_from_cpu(cpu_id={cpu_id}): no CUDA devices "
+            f"found on CPU {cpu_id}. "
+            f"Available: {gpu_summary or '(no GPUs)'}"
+        )
+
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"_cuda_device_from_cpu(cpu_id={cpu_id}): expected exactly "
+            f"one CUDA device on CPU {cpu_id}, found {matches} "
+            f"(this helper assumes one GPU per CPU)"
+        )
+
+    return matches[0]
+
+
 def _parse_config(filename):
     """Parse and validate a run_server YAML config file. Returns a dict."""
 
@@ -52,7 +91,9 @@ def _parse_config(filename):
 
     required_keys = [
         'num_servers', 'server_cpus',
-        'memory_per_server', 'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs',
+        'rb_host_memory_per_server', 'dd_host_memory_per_server',
+        'gpu_memory_per_server',
+        'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs',
         'ssd_dirs', 'ssd_devices', 'ssd_threads_per_server',
         'nfs_dir', 'nfs_threads_per_server',
     ]
@@ -75,10 +116,15 @@ def _parse_config(filename):
         if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 0:
             raise RuntimeError(f"{filename}: server_cpus[{i}] must be a non-negative integer, got {cpu!r}")
 
-    mps = config['memory_per_server']
-    if not isinstance(mps, str):
-        raise RuntimeError(f"{filename}: 'memory_per_server' must be a string like '256 GB', got {mps!r}")
-    config['memory_per_server_bytes'] = _parse_memory_string(mps)
+    for key in ('rb_host_memory_per_server',
+                'dd_host_memory_per_server',
+                'gpu_memory_per_server'):
+        val = config[key]
+        if not isinstance(val, str):
+            raise RuntimeError(
+                f"{filename}: {key!r} must be a string like '256 GB', got {val!r}"
+            )
+        config[f'{key}_bytes'] = _parse_memory_string(val)
 
     if not isinstance(config['use_hugepages'], bool):
         raise RuntimeError(f"{filename}: 'use_hugepages' must be a boolean, got {config['use_hugepages']!r}")
@@ -139,6 +185,11 @@ def _validate_hardware(config, hw):
 
     for i in range(n):
         expected_cpu = cpus[i]
+
+        # Fail-fast check that there's exactly one CUDA device on this CPU.
+        # The same call happens again in _build_server (cheap; the underlying
+        # Hardware accessors are cached) when we actually need the value.
+        _cuda_device_from_cpu(hw, expected_cpu)
 
         # Check data IP addresses.
         for addr in config['data_ip_addrs'][i]:
@@ -217,7 +268,9 @@ class RunServerHelper:
         print(f"Parsed dedispersion config: {dedispersion_config_filename}")
         print(f"  num_servers = {self.n}")
         print(f"  time_samples_per_chunk = {self.dedisp_config.time_samples_per_chunk}  (from dedispersion config)")
-        print(f"  memory_per_server = {self.config['memory_per_server']}")
+        print(f"  rb_host_memory_per_server = {self.config['rb_host_memory_per_server']}")
+        print(f"  dd_host_memory_per_server = {self.config['dd_host_memory_per_server']}")
+        print(f"  gpu_memory_per_server    = {self.config['gpu_memory_per_server']}")
         print(f"  use_hugepages = {self.config['use_hugepages']}")
 
     def _prepare_directories(self):
@@ -234,10 +287,19 @@ class RunServerHelper:
         print(f"Hardware validation passed: server CPUs = {self.config['server_cpus']}")
 
     def _setup_memory(self):
-        self.capacity = self.config['memory_per_server_bytes']
-        self.aflags = ksgpu.af_uhost
+        # rb_host (ring buffer): af_rhost so the buffer is CUDA-registered
+        # in anticipation of future edits that read it from the GPU. NO
+        # af_zero -- the receiver overwrites the memory anyway, and zeroing
+        # a 256 GB buffer would stall startup unnecessarily.
+        self.rb_host_aflags = ksgpu.af_rhost
+        # dd_host (GpuDedisperser host buffers): af_rhost + af_zero, per
+        # GpuDedisperser::allocate()'s requirement.
+        self.dd_host_aflags = ksgpu.af_rhost | ksgpu.af_zero
         if self.config['use_hugepages']:
-            self.aflags |= ksgpu.af_mmap_huge
+            self.rb_host_aflags |= ksgpu.af_mmap_huge
+            self.dd_host_aflags |= ksgpu.af_mmap_huge
+        # gpu: af_gpu + af_zero, per GpuDedisperser::allocate()'s requirement.
+        self.gpu_aflags = ksgpu.af_gpu | ksgpu.af_zero
 
     def _build_all_servers(self):
         for i in range(self.n):
@@ -246,22 +308,29 @@ class RunServerHelper:
     def _build_server(self, i):
         cpus = self.config['server_cpus']
         vcpu_list = self.hw.vcpu_list_from_cpu(cpus[i])
+        cuda_device_id = _cuda_device_from_cpu(self.hw, cpus[i])
 
-        self._print_server_details(i, vcpu_list)
+        self._print_server_details(i, vcpu_list, cuda_device_id)
         self._check_mtus_for_server(i)
 
-        # Pin the calling thread to this CPU's vCPUs. Objects created
-        # within the context manager (BumpAllocator, SlabAllocator,
-        # AssembledFrameAllocator, FileWriter) will inherit this affinity
-        # for any worker threads they spawn.
-        with ThreadAffinity(vcpu_list):
+        # Pin the calling thread to this CPU's vCPUs AND set the current
+        # CUDA device. Objects created within the context manager
+        # (BumpAllocators, SlabAllocator, AssembledFrameAllocator,
+        # FileWriter) will inherit this affinity for any worker threads
+        # they spawn; the gpu_alloc's cudaMalloc will land on the correct
+        # device. cp.cuda.Device restores the previous device on exit, so
+        # subsequent server builds (num_servers > 1) start clean.
+        with ThreadAffinity(vcpu_list), cp.cuda.Device(cuda_device_id):
             num_addrs = len(self.config['data_ip_addrs'][i])
-            # BumpAllocator: pre-allocates memory (NUMA-aware due to thread
-            # affinity). No threads spawned.
-            bump_allocator = BumpAllocator(self.aflags, self.capacity)
+
+            # Ring-buffer host memory (backs the AssembledFrameAllocator).
+            # No threads spawned.
+            rb_bump = BumpAllocator(self.rb_host_aflags,
+                                    self.config['rb_host_memory_per_server_bytes'])
             # SlabAllocator: carves bump allocator into fixed-size slabs.
             # No threads spawned.
-            slab_allocator = SlabAllocator(bump_allocator, self.capacity)
+            slab_allocator = SlabAllocator(rb_bump,
+                                           self.config['rb_host_memory_per_server_bytes'])
             # AssembledFrameAllocator: manages frame allocation for receivers.
             # Spawns 1 worker thread (inherits vCPU affinity).
             allocator = AssembledFrameAllocator(
@@ -269,6 +338,16 @@ class RunServerHelper:
                 num_consumers=num_addrs,
                 time_samples_per_chunk=self.dedisp_config.time_samples_per_chunk,
             )
+
+            # Dedispersion host memory (passed to FrbServer; used by the
+            # processing thread's GpuDedisperser::allocate call).
+            host_alloc = BumpAllocator(self.dd_host_aflags,
+                                       self.config['dd_host_memory_per_server_bytes'])
+
+            # GPU memory (likewise).
+            gpu_alloc = BumpAllocator(self.gpu_aflags,
+                                      self.config['gpu_memory_per_server_bytes'])
+
             # FileWriter: writes frames to SSD and copies to NFS.
             # Spawns ssd_threads + nfs_threads worker threads.
             file_writer = FileWriter(
@@ -288,7 +367,10 @@ class RunServerHelper:
             server = FrbServer(self.dedisp_config, receivers, file_writer,
                                self.config['rpc_ip_addrs'][i],
                                self.config['ringbuf_nchunks'],
-                               min_data_mtu=self.config['min_data_mtu'])
+                               min_data_mtu=self.config['min_data_mtu'],
+                               host_allocator=host_alloc,
+                               gpu_allocator=gpu_alloc,
+                               cuda_device_id=cuda_device_id)
             # server.start(): spawns worker/reaper/processing threads and
             # calls receiver.start() for each receiver. All threads inherit
             # the vCPU affinity for this CPU.
@@ -297,9 +379,10 @@ class RunServerHelper:
         self.servers.append(server)
         print(f"  Server {i} started.")
 
-    def _print_server_details(self, i, vcpu_list):
+    def _print_server_details(self, i, vcpu_list, cuda_device_id):
         cpus = self.config['server_cpus']
         print(f"\nServer {i}: CPU {cpus[i]}, vcpu_list = {vcpu_list}")
+        print(f"  cuda_device_id = {cuda_device_id}")
         print(f"  data_ip_addrs = {self.config['data_ip_addrs'][i]}")
         print(f"  rpc_ip_addr = {self.config['rpc_ip_addrs'][i]}")
         print(f"  ssd_dir = {self.config['ssd_dirs'][i]}")
@@ -323,7 +406,15 @@ class RunServerHelper:
         print(f"All {self.n} server(s) started. Press Ctrl-C to stop.")
 
     def _wait_forever(self):
+        # Poll for two things: Ctrl-C (KeyboardInterrupt, raised out of
+        # time.sleep), and any FrbServer transitioning to is_stopped=True
+        # via an internal error (in which case the C++ side has already
+        # printed the exception message to stderr).
         while True:
+            for i, server in enumerate(self.servers):
+                if server.is_stopped:
+                    print(f"FrbServer {i} stopped (internal error -- see stderr above). Exiting.")
+                    return
             time.sleep(1)
 
     def _stop_all_servers(self):
