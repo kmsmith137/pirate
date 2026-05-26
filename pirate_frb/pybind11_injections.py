@@ -446,10 +446,14 @@ class GpuDequantizationKernelInjections:
 
         Applies the per-(beam, freq, minichunk) affine transform
 
+            out[b,f,t] = 0                                       if data[b,f,t] == -8
             out[b,f,t] = scales_offsets[b,f,t//256,0] * data[b,f,t]
-                       + scales_offsets[b,f,t//256,1]
+                       + scales_offsets[b,f,t//256,1]            otherwise
 
-        during int4 -> float32/float16 conversion.
+        during int4 -> float32/float16 conversion. data == -8 is the
+        "missing sample" sentinel (matching the convention of
+        AssembledFrame.data) and is always mapped to 0 in the output,
+        regardless of scale and offset.
 
         Parameters
         ----------
@@ -489,6 +493,9 @@ class GpuDequantizationKernelInjections:
         The data array is passed as uint8 because numpy/cupy don't support int4
         (all dtypes must be at least 8 bits). Each uint8 element contains two
         int4 values: low nibble = even index, high nibble = odd index.
+
+        data == -8 is mapped to 0 in the output regardless of scale and
+        offset; see the __init__ docstring above.
         """
         import cupy as cp
 

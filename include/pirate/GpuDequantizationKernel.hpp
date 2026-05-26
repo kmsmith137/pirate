@@ -24,10 +24,17 @@ namespace pirate {
 //   out:            shape (nbeams, nfreq, ntime),       dtype float32 or float16
 //
 // Output formula:
-//   out[b,f,t] = scales_offsets[b,f,t/256,0] * data[b,f,t]
-//              + scales_offsets[b,f,t/256,1]
+//
+//                 { 0                                                 if data[b,f,t] == -8
+//   out[b,f,t] = {
+//                 { scales_offsets[b,f,t/256,0] * data[b,f,t]
+//                 +    scales_offsets[b,f,t/256,1]                    otherwise
 //
 // The int4 'data' values are interpreted as signed two's complement (-8 to +7).
+// data == -8 (bit pattern 0b1000) is the "missing sample" sentinel and is
+// always mapped to 0 in the output, regardless of scale and offset; this
+// matches the convention used by AssembledFrame::data.
+//
 // Nibble packing in 'data': low nibble = even index, high nibble = odd index.
 // The last axis of 'scales_offsets' is {scale, offset}; one (scale, offset)
 // pair is shared by 256 consecutive time samples of a single (beam, freq).

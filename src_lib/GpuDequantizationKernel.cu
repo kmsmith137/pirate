@@ -20,6 +20,49 @@ namespace pirate {
 
 // -------------------------------------------------------------------------------------------------
 //
+// Per-element unpack helpers (used by the GPU kernels below)
+//
+// Both kernels apply the twos-complement -> offset-binary mapping
+// (XOR with 0x88888888) before calling these helpers. Under that mapping,
+// the unsigned nibble value 0 corresponds to the original signed value -8,
+// which we treat as a "missing sample" sentinel and return 0 for. Otherwise
+// the output is the FMA scale*unsigned + offset_adj (where the caller has
+// already precomputed offset_adj = offset - 8*scale).
+
+
+// dq_fp32: dequantize one int4 nibble (already in offset-binary) to fp32.
+// 'shift' selects the nibble (0, 4, 8, ..., 28).
+__device__ __forceinline__
+float dq_fp32(uint32_t p, int shift, float scale, float offset_adj)
+{
+    uint32_t n = (p >> shift) & 0xfU;
+    return n ? (scale * (float) n + offset_adj) : 0.0f;
+}
+
+
+// dq_fp16: dequantize two consecutive int4 nibbles (already in offset-binary)
+// to a packed __half2. 'shift' selects the LOW nibble's bit position; the
+// HIGH nibble is at shift+4. 'offset_adj2' is (offset - 8*scale) broadcast
+// to both lanes. Per-lane mask is applied AFTER the __hfma2, so we keep the
+// vectorized FMA throughput.
+__device__ __forceinline__
+__half2 dq_fp16(uint32_t p, int shift, __half2 scale2, __half2 offset_adj2)
+{
+    uint32_t n_lo = (p >> shift)       & 0xfU;
+    uint32_t n_hi = (p >> (shift + 4)) & 0xfU;
+
+    __half2 h = __halves2half2(__int2half_rn((int) n_lo), __int2half_rn((int) n_hi));
+    h = __hfma2(h, scale2, offset_adj2);
+
+    // Mask -8 (= unsigned 0) lanes to 0.0h.
+    __half zero = __float2half(0.0f);
+    return __halves2half2(n_lo ? __low2half(h)  : zero,
+                          n_hi ? __high2half(h) : zero);
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
 // GPU Kernels
 //
 // Threadblocking scheme (shared by both fp32 and fp16 kernels):
@@ -54,9 +97,10 @@ namespace pirate {
 // naive version. The 8 warps in a block redundantly issue the same load,
 // but lookups after the first hit L1.
 //
-// The per-thread inner arithmetic is still a straightforward unrolled scalar
-// loop (1 uint32 load + 8 stores per spec). Wider stores and shuffle-based
-// int4 -> fp conversion are deferred to a later pass.
+// Output semantics: out = scale * data + offset, EXCEPT that data == -8
+// (the "missing sample" sentinel; see AssembledFrame::data) is mapped to 0
+// regardless of scale and offset. Implemented via the offset-binary
+// unpacking trick + the dq_fp32 / dq_fp16 helpers above.
 
 
 __launch_bounds__(256)
@@ -145,23 +189,22 @@ __global__ void gpu_dequantize_fp32_kernel(
         // per spec, matching the per-block accounting documented above.
         float4 *out_p = reinterpret_cast<float4 *>(out + spec * 256) + lane;
 
-        // Write t7=0
+        // Write t7=0 / t7=1. dq_fp32() applies the offset-binary FFMA, and
+        // maps the -8 sentinel (= unsigned nibble 0) to 0.0f per element.
         {
             float4 v;
-            int n0 = (p0 >>  0) & 0xF;  v.x = scale * (float) n0 + offset_adj;
-            int n1 = (p0 >>  4) & 0xF;  v.y = scale * (float) n1 + offset_adj;
-            int n2 = (p0 >>  8) & 0xF;  v.z = scale * (float) n2 + offset_adj;
-            int n3 = (p0 >> 12) & 0xF;  v.w = scale * (float) n3 + offset_adj;
+            v.x = dq_fp32(p0,  0, scale, offset_adj);
+            v.y = dq_fp32(p0,  4, scale, offset_adj);
+            v.z = dq_fp32(p0,  8, scale, offset_adj);
+            v.w = dq_fp32(p0, 12, scale, offset_adj);
             out_p[0] = v;
         }
-
-        // Write t7=1
         {
             float4 v;
-            int n0 = (p1 >>  0) & 0xF;  v.x = scale * (float) n0 + offset_adj;
-            int n1 = (p1 >>  4) & 0xF;  v.y = scale * (float) n1 + offset_adj;
-            int n2 = (p1 >>  8) & 0xF;  v.z = scale * (float) n2 + offset_adj;
-            int n3 = (p1 >> 12) & 0xF;  v.w = scale * (float) n3 + offset_adj;
+            v.x = dq_fp32(p1,  0, scale, offset_adj);
+            v.y = dq_fp32(p1,  4, scale, offset_adj);
+            v.z = dq_fp32(p1,  8, scale, offset_adj);
+            v.w = dq_fp32(p1, 12, scale, offset_adj);
             out_p[32] = v;
         }
     }
@@ -212,22 +255,13 @@ __global__ void gpu_dequantize_fp16_kernel(
         // Twos-complement -> offset-binary (see offset_adj comment above).
         packed ^= 0x88888888U;
 
-        // Extract 8 unsigned nibbles (0..15).
-        int n0 = (packed >>  0) & 0xF;  int n1 = (packed >>  4) & 0xF;
-        int n2 = (packed >>  8) & 0xF;  int n3 = (packed >> 12) & 0xF;
-        int n4 = (packed >> 16) & 0xF;  int n5 = (packed >> 20) & 0xF;
-        int n6 = (packed >> 24) & 0xF;  int n7 = (packed >> 28) & 0xF;
-
-        // Pack consecutive pairs into __half2, apply h = scale*h + offset_adj.
-        __half2 h01 = __halves2half2(__int2half_rn(n0), __int2half_rn(n1));
-        __half2 h23 = __halves2half2(__int2half_rn(n2), __int2half_rn(n3));
-        __half2 h45 = __halves2half2(__int2half_rn(n4), __int2half_rn(n5));
-        __half2 h67 = __halves2half2(__int2half_rn(n6), __int2half_rn(n7));
-
-        h01 = __hfma2(h01, scale2, offset_adj2);
-        h23 = __hfma2(h23, scale2, offset_adj2);
-        h45 = __hfma2(h45, scale2, offset_adj2);
-        h67 = __hfma2(h67, scale2, offset_adj2);
+        // dq_fp16() extracts a pair of nibbles, applies __hfma2 (scale*h +
+        // offset_adj), and maps the -8 sentinel (= unsigned nibble 0) to 0.0h
+        // per lane.
+        __half2 h01 = dq_fp16(packed,  0, scale2, offset_adj2);
+        __half2 h23 = dq_fp16(packed,  8, scale2, offset_adj2);
+        __half2 h45 = dq_fp16(packed, 16, scale2, offset_adj2);
+        __half2 h67 = dq_fp16(packed, 24, scale2, offset_adj2);
 
         // Single 128-bit coalesced store: 4 __half2 (= 8 __half = 16 B) per
         // thread, 32 threads x 16 B = 512 B = 4 cache lines per spec.
@@ -327,7 +361,9 @@ void GpuDequantizationKernel::apply_reference(Array<float> &out,
                     // Convert to signed two's complement: range [-8, 7]
                     int value = (nibble >= 8) ? (nibble - 16) : nibble;
 
-                    outp[i] = scale * (float) value + offset;
+                    // value == -8 is the "missing sample" sentinel:
+                    // output 0 regardless of scale and offset.
+                    outp[i] = (value == -8) ? 0.0f : (scale * (float) value + offset);
                 }
             }
         }
