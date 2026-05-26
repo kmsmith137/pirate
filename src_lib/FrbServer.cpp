@@ -293,7 +293,8 @@ void FrbServer::_worker_main(int receiver_index)
         // rb_end == frame_id below.
         rb_start     = initial_frame_id;
         rb_reaped    = initial_frame_id;
-        rb_finalized = initial_frame_id;
+        rb_processed = initial_frame_id;
+        rb_assembled = initial_frame_id;
         rb_end       = initial_frame_id;
 
         cv.notify_all();
@@ -342,10 +343,12 @@ void FrbServer::_worker_main(int receiver_index)
 
             lock.lock();
 
-            // In principle, this assert can fail if one Receiver is running far behind.
-            // I decided it was best to "handle" this condition by throwing an exception,
-            // since something has gone off the rails, and needs human debugging.
-            xassert(rb_finalized >= frame_id - rb_size + 1);
+            // In principle, this assert can fail if one Receiver is running far
+            // behind, OR if the GPU processing thread is running far behind. Either
+            // way, something has gone off the rails and needs human debugging.
+            // (Note: rb_processed <= rb_assembled, so asserting on rb_processed
+            // subsumes the older "assembly keeps up" assertion as well.)
+            xassert(rb_processed >= frame_id - rb_size + 1);
 
             unique_lock<std::mutex> frame_lock(frame->mutex);
             frame->finalize_count++;
@@ -371,16 +374,16 @@ void FrbServer::_worker_main(int receiver_index)
             }
             else {
                 // Frame has previously been received from another Receiver.
-                // Check that it is already in the ringbuf, but not finalized yet.
-                xassert(frame_id >= rb_finalized);
+                // Check that it is already in the ringbuf, but not assembled yet.
+                xassert(frame_id >= rb_assembled);
                 xassert(frame_id < rb_end);
                 xassert(frame_ringbuf[rb_slot] == frame);
             }
 
             if (frame->finalize_count == num_receivers) {
-                // Frame received from last Receiver, so finalize it.
-                xassert(rb_finalized == frame_id);
-                rb_finalized++;
+                // Frame received from last Receiver, so mark it assembled.
+                xassert(rb_assembled == frame_id);
+                rb_assembled++;
             }
 
             _check_rb_invariants();
@@ -430,9 +433,10 @@ void FrbServer::_reaper_thread_main()
     // would be racy here: a FrbServer worker is responsible for the
     // frame_ringbuf.resize() call, and that may not have happened yet at
     // this point. The frame_ringbuf[rb_slot] access further down is still
-    // safe because it sits inside the cv-wait on (rb_reaped < rb_finalized)
-    // -- for that to become true, some worker has finalized a frame, which
-    // means the first worker has already executed its resize.
+    // safe because it sits inside the cv-wait on (rb_reaped < rb_processed)
+    // -- for that to become true, some worker has assembled and the
+    // processing thread has advanced past a frame, which means the first
+    // worker has already executed its resize.
     long rb_size = params.ringbuf_nchunks * nbeams;
 
     // Get total number of frames (blocking until allocator is initialized).
@@ -444,12 +448,15 @@ void FrbServer::_reaper_thread_main()
 
         unique_lock<std::mutex> lock(mutex);
 
-        // Wait for a reapable frame (i.e. rb_reaped < rb_finalized).
-        // Note that worker_main() signals the condition_variable when new frames are added.
+        // Wait for a reapable frame (i.e. rb_reaped < rb_processed). The
+        // processing thread signals the cv when it advances rb_processed.
+        // Worker threads also signal on every frame insertion, but those
+        // wakeups only become actionable for the reaper once the processing
+        // thread has caught up (rb_processed has advanced).
         for (;;) {
             if (is_stopped)
                 return;
-            if (rb_reaped < rb_finalized)
+            if (rb_reaped < rb_processed)
                 break;
             cv.wait(lock);
         }
@@ -497,8 +504,11 @@ void FrbServer::reaper_thread_main()
 // host/gpu allocators. All three are published via the lock-protected
 // 'plan' / 'dedisperser' members in a single critical section.
 //
-// More processing steps will be added in a future prompt; for now, the
-// thread just exits cleanly after publishing the plan + dedisperser.
+// After publishing plan + dedisperser, the thread enters a wait-and-advance
+// loop: it blocks on cv until rb_processed < rb_assembled, advances
+// rb_processed by one, and notifies cv (waking the reaper). The "processing"
+// itself is trivial for now -- a future prompt will pull the current frame
+// off the ringbuf and do real GPU work off-lock before advancing the counter.
 
 
 void FrbServer::_processing_thread_main()
@@ -608,7 +618,30 @@ void FrbServer::_processing_thread_main()
         cv.notify_all();
     }
 
-    // Exit for now. More processing steps will be added in a future prompt.
+    // Wait-and-advance loop. Mirrors the reaper pattern: cv-wait until
+    // either is_stopped or rb_processed < rb_assembled, then bump
+    // rb_processed by one and notify cv (waking the reaper). The
+    // "processing" is trivial for now; a future prompt will pull
+    // frame_ringbuf[rb_processed % rb_size] under the lock, drop the
+    // lock to issue real GPU work off-lock, then re-take the lock to
+    // advance rb_processed.
+    for (;;) {
+        unique_lock<std::mutex> lock(mutex);
+
+        for (;;) {
+            if (is_stopped)
+                return;
+            if (rb_processed < rb_assembled)
+                break;
+            cv.wait(lock);
+        }
+
+        rb_processed++;
+        _check_rb_invariants();
+
+        lock.unlock();
+        cv.notify_all();
+    }
 }
 
 
@@ -666,7 +699,8 @@ void FrbRpcService::_GetStatus(const fs::GetStatusRequest *request, fs::GetStatu
         lock_guard<std::mutex> lock(s->mutex);
         response->set_rb_start(s->rb_start);
         response->set_rb_reaped(s->rb_reaped);
-        response->set_rb_finalized(s->rb_finalized);
+        response->set_rb_processed(s->rb_processed);
+        response->set_rb_assembled(s->rb_assembled);
         response->set_rb_end(s->rb_end);
     }
 
@@ -778,17 +812,20 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
 
     unique_lock<std::mutex> server_lock(s->mutex);
 
-    long rb_size = s->frame_ringbuf.size();
-    long rb_start = s->rb_start;
-    long rb_finalized = s->rb_finalized;
+    // Use rb_processed (not rb_assembled) as the upper bound: frames in
+    // [rb_processed, rb_assembled) are fully assembled but the GPU may
+    // still be mutating them, so they are NOT rpc-writeable.
+    long rb_size      = s->frame_ringbuf.size();
+    long rb_start     = s->rb_start;
+    long rb_processed = s->rb_processed;
 
     min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
-    max_time_chunk_index = min(max_time_chunk_index, rb_finalized / rb_nbeams);
+    max_time_chunk_index = min(max_time_chunk_index, rb_processed / rb_nbeams);
 
     for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
         for (int b : beam_indices) {
             long frame_id = t * rb_nbeams + b;
-            if ((frame_id >= rb_start) && (frame_id < rb_finalized)) {
+            if ((frame_id >= rb_start) && (frame_id < rb_processed)) {
                 long rb_slot = frame_id % rb_size;
                 local_frames.push_back(s->frame_ringbuf[rb_slot]);
             }
