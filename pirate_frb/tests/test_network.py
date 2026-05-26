@@ -390,17 +390,18 @@ class NetworkTester:
         p = self.p
         status = self.rpc_client.get_status()
         rb_start     = status.rb_start
-        rb_finalized = status.rb_finalized
+        rb_processed = status.rb_processed
+        rb_assembled = status.rb_assembled
         rb_end       = status.rb_end
 
         # Compute "safe" chunk range. Two bounds:
         #
-        # UPPER (rb_finalized): chunks must be FULLY FINALIZED
-        # (received from every receiver). Why not just "in
-        # ringbuf": frame data is shared across receivers, so
-        # a chunk in [rb_finalized, rb_end) is in the ringbuf
-        # but still being written by the receivers that haven't
-        # delivered yet.
+        # UPPER (rb_processed): chunks must be FULLY GPU-PROCESSED
+        # (every beam in the chunk satisfies frame_id < rb_processed).
+        # A chunk in [rb_processed, rb_assembled) is fully assembled
+        # but the GPU may still be modifying frames there, so it is
+        # NOT rpc-writeable. A chunk in [rb_assembled, rb_end) is in
+        # the ringbuf but still being assembled by some receivers.
         #
         # LOWER (rb_start, plus a future-bound): chunks must
         # be in the ringbuf at SERVER-processing time, not
@@ -419,8 +420,8 @@ class NetworkTester:
             rb_end_upper = rb_end
         rb_start_upper = max(rb_start, max(0, rb_end_upper - rb_size))
 
-        safe_lower = (rb_start_upper + p['nbeams'] - 1) // p['nbeams']   # ceil
-        safe_upper = (rb_finalized // p['nbeams']) - 1                   # fully-finalized
+        safe_lower = (rb_start_upper + p['nbeams'] - 1) // p['nbeams']  # ceil
+        safe_upper = (rb_processed   // p['nbeams']) - 1                # fully GPU-processed
 
         # Widen the requested chunk range to also exercise "unsafe"
         # chunks (which may or may not still be in the ringbuf at
@@ -478,7 +479,7 @@ class NetworkTester:
                 f"write_files at iouter={iouter}: missing safe filenames {missing_safe}, "
                 f"chunks=[{chunk_min}, {chunk_max}], beams={selected_beams}, "
                 f"safe range=[{safe_lower}, {safe_upper}], "
-                f"rb=(start={rb_start}, finalized={rb_finalized}, end={rb_end}), "
+                f"rb=(start={rb_start}, processed={rb_processed}, assembled={rb_assembled}, end={rb_end}), "
                 f"rb_start_upper={rb_start_upper}, max_wpos={max_wpos}"
             )
 

@@ -854,7 +854,7 @@ def rpc_status(args):
                 prev_bytes = status.num_bytes
 
                 print(f"[{addr}] connections={status.num_connections}, bytes={status.num_bytes}{bw_str}, "
-                      f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_finalized},{status.rb_end}], "
+                      f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_assembled},{status.rb_end}], "
                       f"free={status.num_free_frames}")
 
                 for _ in range(10):
@@ -989,18 +989,20 @@ def _rpc_write_one(addr):
         # Loop until we have frames available.
         while True:
             status = client.get_status()
-            rb_reaped = status.rb_reaped
-            rb_end = status.rb_end
+            rb_reaped    = status.rb_reaped
+            rb_processed = status.rb_processed
 
             # Convert frame IDs to time_chunk_index range.
             # frame_id = time_chunk_index * nbeams + beam_index
             # So time_chunk_index = frame_id // nbeams
             # rb_t0: first fully available time chunk (round up)
             # rb_t1: last available time chunk + 1 (round down)
-            rb_t0 = (rb_reaped + nbeams - 1) // nbeams  # round up
-            rb_t1 = rb_end // nbeams  # round down
+            # Upper bound is rb_processed (not rb_end): frames in
+            # [rb_processed, rb_end) are not rpc-writeable.
+            rb_t0 = (rb_reaped    + nbeams - 1) // nbeams  # round up
+            rb_t1 =  rb_processed // nbeams                # round down
 
-            print(f"[{addr}] Status: rb_reaped={rb_reaped}, rb_end={rb_end} -> time_chunk_index range [{rb_t0}, {rb_t1})")
+            print(f"[{addr}] Status: rb_reaped={rb_reaped}, rb_processed={rb_processed} -> time_chunk_index range [{rb_t0}, {rb_t1})")
 
             if rb_t0 >= rb_t1:
                 print(f"[{addr}] No frames available yet, sleeping 1 second...")

@@ -50,6 +50,11 @@ struct FrbRpcService;     // defined in FrbServer.cpp
 // The processing thread also builds a GpuDedisperser (alongside a private
 // CudaStreamPool) once the plan exists. Both 'plan' and 'dedisperser'
 // become non-null atomically (published in the same critical section).
+// After publishing, the processing thread enters a wait-and-advance loop:
+// it blocks on cv until at least one frame has been fully assembled
+// (rb_processed < rb_assembled), advances rb_processed by one, notifies
+// cv (waking the reaper), and repeats. The "processing" work is trivial
+// for now and will be replaced with real GPU work in a future prompt.
 //
 // Note that FrbServer::start() also spawns a grpc service with its own worker
 // threads. These threads will be unpinned (default system-wide affinity), since
@@ -136,10 +141,11 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
 
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
     // See below for invariants.
-    long rb_start = 0;       // (first frame_id in ringbuf)
-    long rb_reaped = 0;      // (last reaped frame_id in ringbuf) + 1
-    long rb_finalized = 0;   // (last finalized frame_id in ringbuf) + 1
-    long rb_end = 0;         // (last frame_id in ringbuf) + 1
+    long rb_start     = 0;   // (first frame_id in ringbuf)
+    long rb_reaped    = 0;   // (last reaped frame_id) + 1
+    long rb_processed = 0;   // (last GPU-processed frame_id) + 1
+    long rb_assembled = 0;   // (last fully-assembled frame_id) + 1
+    long rb_end       = 0;   // (last frame_id in ringbuf) + 1
 
     // Worker threads (one per receiver).
     std::vector<std::thread> workers;
@@ -163,9 +169,10 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     inline void _check_rb_invariants()
     {
         xassert(rb_start >= 0);
-        xassert(rb_start <= rb_reaped);
-        xassert(rb_reaped <= rb_finalized);
-        xassert(rb_finalized <= rb_end);
+        xassert(rb_start     <= rb_reaped);
+        xassert(rb_reaped    <= rb_processed);
+        xassert(rb_processed <= rb_assembled);
+        xassert(rb_assembled <= rb_end);
         xassert(rb_end <= rb_start + long(frame_ringbuf.size()));
     }
 

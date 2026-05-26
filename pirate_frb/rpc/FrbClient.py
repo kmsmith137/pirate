@@ -194,7 +194,8 @@ class FrbClient:
             - num_bytes: Total bytes received (summed over receivers)
             - rb_start: First frame_id in ring buffer
             - rb_reaped: (Last reaped frame_id) + 1
-            - rb_finalized: (Last finalized frame_id) + 1
+            - rb_processed: (Last GPU-processed frame_id) + 1; rpc-writeable upper bound
+            - rb_assembled: (Last fully-assembled frame_id) + 1
             - rb_end: (Last frame_id in ring buffer) + 1
             - num_free_frames: Number of available frames in AssembledFrameAllocator
         """
