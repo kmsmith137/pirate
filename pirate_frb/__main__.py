@@ -627,7 +627,7 @@ def show_dedisperser(args):
         raw_bytes   = (nin * 4) // 8      # int4 input
         out_bytes   = (nin * nbits) // 8  # fp16/fp32 output
         scoff_bytes = nin // 64           # 4 bytes per (scale, offset) pair, one pair per 256 samples
-        stream_pool = core.CudaStreamPool.create(plan.num_active_batches)
+        stream_pool = core.CudaStreamPool(plan.num_active_batches)
         dedisperser = GpuDedisperser(plan, stream_pool, cuda_device_id=0)
         rt = dedisperser.resource_tracker.clone()
         rt.add_kernel('dequantizer',        raw_bytes + scoff_bytes + out_bytes)
