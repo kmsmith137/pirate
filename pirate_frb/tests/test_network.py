@@ -95,11 +95,15 @@ class NetworkTester:
                 "satisfying (tsc%256==0 and beams_per_gpu<=8) in 200 attempts"
             )
 
-        num_receivers = random.randint(1, 5)
-        total_nfreq   = sum(config.zone_nfreq)
-        # nworkers must be <= total_nfreq (FakeXEngine ctor) since
-        # frequency channels are assigned round-robin to workers.
-        nworkers      = min(num_receivers * random.randint(1, 5), total_nfreq)
+        total_nfreq = sum(config.zone_nfreq)
+        # FakeXEngine imposes two constraints on nworkers:
+        #   - nworkers <= total_nfreq        (freq channels are assigned round-robin)
+        #   - nworkers % num_receivers == 0  (ip_addrs distributed evenly across workers)
+        # Pick num_receivers and workers_per_receiver so both hold by construction,
+        # rather than clamping nworkers after-the-fact (which can break divisibility).
+        num_receivers        = random.randint(1, min(5, total_nfreq))
+        workers_per_receiver = random.randint(1, min(5, total_nfreq // num_receivers))
+        nworkers             = workers_per_receiver * num_receivers
         return dict(
             config                 = config,
             num_receivers          = num_receivers,
