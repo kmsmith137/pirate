@@ -287,11 +287,14 @@ class RunServerHelper:
         print(f"Hardware validation passed: server CPUs = {self.config['server_cpus']}")
 
     def _setup_memory(self):
-        # rb_host (ring buffer): af_rhost so the buffer is CUDA-registered
-        # in anticipation of future edits that read it from the GPU. NO
-        # af_zero -- the receiver overwrites the memory anyway, and zeroing
-        # a 256 GB buffer would stall startup unnecessarily.
-        self.rb_host_aflags = ksgpu.af_rhost
+        # All three host/GPU BumpAllocators are constructed in async mode so
+        # they initialize concurrently (zeroing + cudaHostRegister + cudaMalloc
+        # overlap across servers). Async mode requires af_zero, so we add it
+        # to rb_host (the receiver overwrites the memory, so zeroing isn't
+        # functionally required -- but with async zeroing the cost is hidden
+        # behind concurrent inits, so the previous concern about startup
+        # stalls no longer applies).
+        self.rb_host_aflags = ksgpu.af_rhost | ksgpu.af_zero
         # dd_host (GpuDedisperser host buffers): af_rhost + af_zero, per
         # GpuDedisperser::allocate()'s requirement.
         self.dd_host_aflags = ksgpu.af_rhost | ksgpu.af_zero
@@ -301,9 +304,38 @@ class RunServerHelper:
         # gpu: af_gpu + af_zero, per GpuDedisperser::allocate()'s requirement.
         self.gpu_aflags = ksgpu.af_gpu | ksgpu.af_zero
 
+    @staticmethod
+    def _compute_nthreads(vcpu_list, nbytes):
+        """nthreads = max(2, min(len(vcpu_list)//2, nbytes // 128MiB))."""
+        nthreads = len(vcpu_list) // 2
+        nthreads = min(nthreads, nbytes // (128 * 2**20))
+        return max(2, nthreads)
+
     def _build_all_servers(self):
+        # Phase 1 happens inside _build_server: all 3 async BumpAllocators per
+        # server kick off and return immediately. SlabAllocator and
+        # AssembledFrameAllocator are also constructed (their ctors don't
+        # block because the SlabAllocator defers its allocate_bytes call to
+        # first get_slab(), which won't happen until server.start()).
         for i in range(self.n):
             self._build_server(i)
+
+        # Phase 2: wait for all 3 * num_servers async BumpAllocators to
+        # finish initializing. Any async-init failures surface here with a
+        # clean stack trace through run_server rather than from a server
+        # worker thread later.
+        for i, server in enumerate(self.servers):
+            print(f"Waiting for server {i}'s async BumpAllocators to initialize...")
+            server.host_allocator.wait_until_initialized()
+            server.gpu_allocator.wait_until_initialized()
+            # rb_bump is held in self._rb_bumps[i] so we can wait on it here.
+            self._rb_bumps[i].wait_until_initialized()
+            print(f"  Server {i} ready.")
+
+        # Phase 3: start all servers.
+        for i, server in enumerate(self.servers):
+            server.start()
+            print(f"  Server {i} started.")
 
     def _build_server(self, i):
         cpus = self.config['server_cpus']
@@ -323,16 +355,26 @@ class RunServerHelper:
         with ThreadAffinity(vcpu_list), cp.cuda.Device(cuda_device_id):
             num_addrs = len(self.config['data_ip_addrs'][i])
 
-            # Ring-buffer host memory (backs the AssembledFrameAllocator).
-            # No threads spawned.
-            rb_bump = BumpAllocator(self.rb_host_aflags,
-                                    self.config['rb_host_memory_per_server_bytes'])
-            # SlabAllocator: carves bump allocator into fixed-size slabs.
-            # No threads spawned.
-            slab_allocator = SlabAllocator(rb_bump,
-                                           self.config['rb_host_memory_per_server_bytes'])
-            # AssembledFrameAllocator: manages frame allocation for receivers.
-            # Spawns 1 worker thread (inherits vCPU affinity).
+            rb_nbytes = self.config['rb_host_memory_per_server_bytes']
+            dd_nbytes = self.config['dd_host_memory_per_server_bytes']
+            gpu_nbytes = self.config['gpu_memory_per_server_bytes']
+
+            # Ring-buffer host memory: async, so the ctor returns immediately
+            # and workers handle zero (+ register, in hugepage case).
+            rb_bump = BumpAllocator(
+                self.rb_host_aflags, rb_nbytes,
+                is_async=True,
+                nthreads=self._compute_nthreads(vcpu_list, rb_nbytes),
+                cuda_device=cuda_device_id)
+            # SlabAllocator: async-aware. Returns immediately; defers the
+            # allocate_bytes() call to first get_slab() (which happens after
+            # server.start()).
+            slab_allocator = SlabAllocator(rb_bump, rb_nbytes)
+            # AssembledFrameAllocator: spawns its own worker thread; that
+            # worker calls into slab_allocator and will block on the
+            # BumpAllocator's init if it tries to call get_slab() before
+            # phase 2 (our wait loop) completes. In practice the AFA worker
+            # is waiting for a request to land, so it's fine.
             allocator = AssembledFrameAllocator(
                 slab_allocator,
                 num_consumers=num_addrs,
@@ -340,13 +382,20 @@ class RunServerHelper:
             )
 
             # Dedispersion host memory (passed to FrbServer; used by the
-            # processing thread's GpuDedisperser::allocate call).
-            host_alloc = BumpAllocator(self.dd_host_aflags,
-                                       self.config['dd_host_memory_per_server_bytes'])
+            # processing thread's GpuDedisperser::allocate call). Async.
+            host_alloc = BumpAllocator(
+                self.dd_host_aflags, dd_nbytes,
+                is_async=True,
+                nthreads=self._compute_nthreads(vcpu_list, dd_nbytes),
+                cuda_device=cuda_device_id)
 
-            # GPU memory (likewise).
-            gpu_alloc = BumpAllocator(self.gpu_aflags,
-                                      self.config['gpu_memory_per_server_bytes'])
+            # GPU memory (cudaMalloc + cudaMemset). Async; nthreads ignored
+            # for case 3 but we pass it for uniformity.
+            gpu_alloc = BumpAllocator(
+                self.gpu_aflags, gpu_nbytes,
+                is_async=True,
+                nthreads=self._compute_nthreads(vcpu_list, gpu_nbytes),
+                cuda_device=cuda_device_id)
 
             # FileWriter: writes frames to SSD and copies to NFS.
             # Spawns ssd_threads + nfs_threads worker threads.
@@ -371,13 +420,20 @@ class RunServerHelper:
                                host_allocator=host_alloc,
                                gpu_allocator=gpu_alloc,
                                cuda_device_id=cuda_device_id)
-            # server.start(): spawns worker/reaper/processing threads and
-            # calls receiver.start() for each receiver. All threads inherit
-            # the vCPU affinity for this CPU.
-            server.start()
+            # server.start() is NOT called here. We defer all server.start()
+            # calls to _build_all_servers's phase 3 so that the async
+            # BumpAllocators across all servers can initialize concurrently
+            # (rather than getting blocked on the first server's startup).
 
         self.servers.append(server)
-        print(f"  Server {i} started.")
+        # Stash rb_bump for the wait-until-initialized loop in phase 2.
+        # (FrbServer doesn't store rb_bump itself; the SlabAllocator above
+        # holds a shared_ptr to it which would keep it alive transitively,
+        # but we want explicit access for the wait loop.)
+        if not hasattr(self, '_rb_bumps'):
+            self._rb_bumps = []
+        self._rb_bumps.append(rb_bump)
+        print(f"  Server {i} built (async init in progress).")
 
     def _print_server_details(self, i, vcpu_list, cuda_device_id):
         cpus = self.config['server_cpus']

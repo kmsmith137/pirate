@@ -368,6 +368,13 @@ struct AssembledFrameAllocator
     // Returns true if in dummy mode.
     bool is_dummy() const { return is_dummy_mode; }
 
+    // Returns true if the underlying memory is ready to serve allocations.
+    // Delegates to slab_allocator->is_initialized(), which in turn delegates
+    // to bump_allocator->is_initialized(). Use for sanity-checking that
+    // wait_until_initialized() has been called on all the async
+    // BumpAllocators upstream before kicking off pipeline activity.
+    bool is_initialized() const;
+
     // Stop the allocator. After calling stop(), entry points will throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
     // Thread-safe; first call sets the error.

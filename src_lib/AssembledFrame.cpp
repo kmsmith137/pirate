@@ -876,12 +876,19 @@ void AssembledFrameAllocator::stop(exception_ptr e)
 
     error = e;
     is_stopped = true;
-    
+
     guard.unlock();
     cv.notify_all();
 
     // Propagate stop to SlabAllocator (wakes up worker thread if blocked in get_slab).
     slab_allocator->stop(e);
+}
+
+
+bool AssembledFrameAllocator::is_initialized() const
+{
+    // Delegates to slab_allocator, which delegates to bump_allocator.
+    return slab_allocator->is_initialized();
 }
 
 

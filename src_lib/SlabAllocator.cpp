@@ -23,7 +23,7 @@ std::shared_ptr<SlabAllocator> SlabAllocator::create(int aflags, long capacity)
 }
 
 
-std::shared_ptr<SlabAllocator> SlabAllocator::create(BumpAllocator &b, long nbytes)
+std::shared_ptr<SlabAllocator> SlabAllocator::create(const std::shared_ptr<BumpAllocator> &b, long nbytes)
 {
     return std::shared_ptr<SlabAllocator>(new SlabAllocator(b, nbytes));
 }
@@ -55,30 +55,23 @@ SlabAllocator::SlabAllocator(int aflags_, long capacity_)
 }
 
 
-SlabAllocator::SlabAllocator(BumpAllocator &b, long nbytes)
-    : aflags(b.aflags), capacity(nbytes)
+SlabAllocator::SlabAllocator(const std::shared_ptr<BumpAllocator> &b, long nbytes)
+    : aflags(b->aflags), capacity(nbytes), bump_allocator(b)
 {
     if (nbytes <= 0) {
         std::stringstream ss;
         ss << "SlabAllocator constructor: nbytes=" << nbytes << " must be positive";
         throw std::runtime_error(ss.str());
     }
-    
-    if (b.capacity < 0)
+
+    if (b->capacity < 0)
         throw std::runtime_error("SlabAllocator constructor: BumpAllocator is in dummy mode");
-    
-    // Get memory from the BumpAllocator.
-    long aligned_capacity = align_up(capacity, nalign);
-    void *ptr = b.allocate_bytes(aligned_capacity);
-    
-    // Verify alignment.
-    uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
-    xassert((p % nalign) == 0);
-    
-    // Create a shared_ptr that keeps the BumpAllocator's base alive.
-    // The deleter is a no-op since BumpAllocator manages the lifetime.
-    std::shared_ptr<void> bump_base = b.get_base();
-    this->base = std::shared_ptr<void>(bump_base, ptr);
+
+    // Lazy init: defer b->allocate_bytes() and b->get_base() to first
+    // get_slab(). This way the SlabAllocator constructor doesn't block on
+    // the BumpAllocator's async init, allowing multiple async BumpAllocators
+    // to be constructed concurrently without serialization on the
+    // SlabAllocator's init step.
 }
 
 
@@ -89,12 +82,36 @@ SlabAllocator::SlabAllocator(BumpAllocator &b, long nbytes)
 
 void SlabAllocator::stop(std::exception_ptr e)
 {
-    std::lock_guard<std::mutex> guard(lock);
-    if (is_stopped)
+    // Snapshot the bump_allocator pointer under the lock, then release the
+    // lock before propagating stop() downstream -- avoids holding two
+    // locks at once. (No actual deadlock is reachable since BumpAllocator's
+    // stop never calls back into SlabAllocator, but the discipline keeps
+    // lock-order reasoning trivially correct.)
+    std::shared_ptr<BumpAllocator> ba_to_notify;
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        if (is_stopped)
+            return;
+        is_stopped = true;
+        error = e;
+        ba_to_notify = bump_allocator;  // may be null in dummy mode
+        cv.notify_all();
+    }
+    if (ba_to_notify)
+        ba_to_notify->stop(e);
+}
+
+
+void SlabAllocator::wait_until_initialized()
+{
+    // No-op in dummy mode (no underlying BumpAllocator).
+    if (!bump_allocator)
         return;
-    is_stopped = true;
-    error = e;
-    cv.notify_all();
+    // Delegates to the BumpAllocator's wait. Does NOT trigger the deferred
+    // b->allocate_bytes() / b->get_base() calls -- those happen on first
+    // get_slab(). The purpose of explicit wait is to surface async-init
+    // failures eagerly.
+    bump_allocator->wait_until_initialized();
 }
 
 
@@ -155,7 +172,32 @@ std::shared_ptr<void> SlabAllocator::get_slab(long nbytes, bool blocking)
         guard.unlock();
         return ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint,8), slab_size, aflags);
     }
-    
+
+    // Lazy init from the BumpAllocator (deferred from the constructor so
+    // multiple async BumpAllocators can be constructed without
+    // serialization). First-caller does the b->allocate_bytes(); subsequent
+    // callers see `base` already set.
+    if (!base) {
+        long aligned_capacity = align_up(capacity, nalign);
+        try {
+            // b->allocate_bytes() blocks on async init and rethrows on
+            // async-init failure.
+            void *ptr = bump_allocator->allocate_bytes(aligned_capacity);
+            uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
+            xassert((p % nalign) == 0);
+            std::shared_ptr<void> bump_base = bump_allocator->get_base();
+            this->base = std::shared_ptr<void>(bump_base, ptr);
+        } catch (...) {
+            // Surface the failure to this SlabAllocator's subsequent callers
+            // and propagate to the BumpAllocator. Drop the lock first
+            // since stop() needs to acquire it.
+            auto e = std::current_exception();
+            guard.unlock();
+            this->stop(e);
+            std::rethrow_exception(e);
+        }
+    }
+
     if (slab_size < 0) {
         slab_size = aligned_nbytes;
 
@@ -271,8 +313,14 @@ long SlabAllocator::get_slab_size() const
 
 bool SlabAllocator::is_initialized() const
 {
-    std::lock_guard<std::mutex> guard(lock);
-    return slab_size >= 0;
+    // Dummy mode: no underlying BumpAllocator; always "ready" (each
+    // get_slab call allocates fresh memory).
+    if (!bump_allocator)
+        return true;
+    // Non-dummy: delegate to the underlying BumpAllocator. (Note: we do
+    // NOT check whether this->base has been set -- that happens lazily
+    // on first get_slab(), after the BumpAllocator is initialized.)
+    return bump_allocator->is_initialized();
 }
 
 

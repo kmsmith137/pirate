@@ -19,10 +19,10 @@ class BumpAllocatorInjections:
     # Save original C++ constructor
     _cpp_init = pirate_pybind11.BumpAllocator.__init__
     
-    def __init__(self, aflags, capacity):
+    def __init__(self, aflags, capacity, is_async=False, nthreads=0, cuda_device=-1):
         """
         Create a BumpAllocator.
-        
+
         Parameters
         ----------
         aflags : int, str, or ksgpu flags
@@ -34,20 +34,33 @@ class BumpAllocatorInjections:
             Capacity in bytes.
             - If >= 0: pre-allocates this many bytes
             - If < 0: dummy mode (each array gets independent allocation)
-        
+        is_async : bool
+            If True, constructor returns immediately; allocation/zeroing
+            happens on worker threads. Public methods (allocate_array,
+            get_base) block until init complete; failures rethrow.
+            Async mode supports exactly these aflag combinations:
+              - af_mmap_huge | af_rhost | af_zero (mmap + chunked register)
+              - af_rhost | af_zero (cudaHostAlloc + parallel zero)
+              - af_gpu | af_zero (cudaMalloc + cudaMemset)
+            cuda_device is required (>= 0). nthreads >= 2 for cases 1 and 2;
+            ignored for case 3 (af_gpu).
+        nthreads : int
+            Number of worker threads (async mode only).
+        cuda_device : int
+            CUDA device id (async mode only; required >= 0).
+
         Examples
         --------
-        >>> # GPU allocator with 1 GB capacity
+        >>> # GPU allocator with 1 GB capacity (sync)
         >>> alloc = BumpAllocator('gpu', 1024**3)
-        >>> 
-        >>> # Host allocator (registered) with 100 MB
-        >>> alloc = BumpAllocator('rhost', 100 * 1024**2)
-        >>> 
-        >>> # Dummy mode
-        >>> alloc = BumpAllocator('gpu', -1)
+        >>>
+        >>> # Async host allocator with hugepages
+        >>> alloc = BumpAllocator(ksgpu.af_mmap_huge | ksgpu.af_rhost | ksgpu.af_zero,
+        ...                       100 * 1024**3, is_async=True, nthreads=8, cuda_device=0)
+        >>> alloc.wait_until_initialized()
         """
         aflags = ksgpu.parse_aflags(aflags)
-        self._cpp_init(aflags, capacity)
+        self._cpp_init(aflags, capacity, is_async, nthreads, cuda_device)
     
     def allocate_array(self, dtype, shape):
         """

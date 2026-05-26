@@ -54,7 +54,12 @@ public:
     // Factory method: create SlabAllocator that gets memory from an existing BumpAllocator.
     // The aflags are inherited from the BumpAllocator.
     // Throws exception if BumpAllocator is in dummy mode.
-    static std::shared_ptr<SlabAllocator> create(BumpAllocator &b, long nbytes);
+    //
+    // If the BumpAllocator is async, the SlabAllocator is itself "async":
+    // its constructor returns immediately, and the b->allocate_bytes() call
+    // is deferred to the first get_slab(). Async-init failures from `b`
+    // surface from either get_slab() or wait_until_initialized().
+    static std::shared_ptr<SlabAllocator> create(const std::shared_ptr<BumpAllocator> &b, long nbytes);
     
     // Non-copyable, non-movable.
     SlabAllocator(const SlabAllocator &) = delete;
@@ -90,7 +95,13 @@ public:
     // Throws exception if not initialized.
     long get_slab_size() const;
     
-    // Returns true if the slab size has been established.
+    // Returns true if the SlabAllocator is ready to serve get_slab() calls
+    // without blocking on async init. Semantics:
+    //   - Dummy mode (no underlying BumpAllocator): always true.
+    //   - Non-dummy mode: delegates to bump_allocator->is_initialized().
+    //
+    // Note: does NOT check whether slab_size has been established (that's
+    // user-pattern state, established on the first get_slab() call).
     bool is_initialized() const;
     
     // Returns true if in dummy mode (capacity < 0).
@@ -101,9 +112,22 @@ public:
     // Throws exception in dummy mode, or if stop() is called from another thread.
     void block_until_empty();
 
+    // In async-aware mode (underlying BumpAllocator was constructed async),
+    // delegates to bump_allocator->wait_until_initialized(). In dummy mode
+    // (no underlying BumpAllocator), no-op. In sync mode (BumpAllocator was
+    // sync), bump_allocator's wait is a no-op too.
+    //
+    // Note: this does NOT trigger the deferred b->allocate_bytes() call; the
+    // first get_slab() does that. The purpose of calling this method
+    // explicitly is to surface async-init failures eagerly rather than from
+    // the first get_slab() (which may run later, from a worker thread).
+    void wait_until_initialized();
+
     // Stop the allocator. Any thread blocked in get_slab() will wake up and throw.
     // If 'e' is non-null, it represents an error; if null, it's normal termination.
     // Thread-safe; first call sets the error.
+    // In non-dummy mode, also propagates stop(e) to the underlying BumpAllocator
+    // (per the thread-backed-class pattern).
     void stop(std::exception_ptr e = nullptr);
 
     const int aflags;           // allocation flags from ksgpu
@@ -112,12 +136,21 @@ public:
 protected:
     // Protected constructors - use create() factory methods instead.
     SlabAllocator(int aflags, long capacity);
-    SlabAllocator(BumpAllocator &b, long nbytes);
+    SlabAllocator(const std::shared_ptr<BumpAllocator> &b, long nbytes);
 
 private:
-    // The underlying memory region (empty in dummy mode).
+    // The underlying memory region. Set in the constructor for the
+    // (aflags, capacity) factory; set lazily on first get_slab() for the
+    // BumpAllocator-backed factory (so the constructor doesn't block on
+    // an async BumpAllocator's init).
     std::shared_ptr<void> base;
-    
+
+    // Held only in non-dummy BumpAllocator-backed mode. Keeps the
+    // BumpAllocator alive until first get_slab() does the deferred
+    // allocate_bytes(). Stays alive afterward for the SlabAllocator's
+    // lifetime (cheap; one shared_ptr).
+    std::shared_ptr<BumpAllocator> bump_allocator;
+
     // Slab management. These are protected by 'lock'.
     mutable std::mutex lock;
     mutable std::condition_variable cv;  // signaled when a slab is returned, initialized, or stop() is called

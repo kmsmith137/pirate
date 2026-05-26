@@ -46,12 +46,22 @@ void register_core_bindings(pybind11::module &m)
         "Modes:\n"
         "  - capacity >= 0: Pre-allocates base region, allocations share this memory\n"
         "  - capacity < 0: Dummy mode, each allocation gets independent memory")
-        .def(py::init<int, long>(),
+        .def(py::init<int, long, bool, int, int>(),
             py::arg("aflags"), py::arg("capacity"),
+            py::arg("is_async") = false,
+            py::arg("nthreads") = 0,
+            py::arg("cuda_device") = -1,
             "Create allocator.\n\n"
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
-            "    capacity: Bytes to pre-allocate (>= 0) or -1 for dummy mode")
+            "    capacity: Bytes to pre-allocate (>= 0) or -1 for dummy mode\n"
+            "    is_async: If True, constructor returns immediately and the\n"
+            "        allocation/zeroing happens on worker threads. Public\n"
+            "        methods block until init complete. nthreads and\n"
+            "        cuda_device are then required.\n"
+            "    nthreads: Number of worker threads (>= 2 for case 1 and 2;\n"
+            "        ignored for case 3 / af_gpu).\n"
+            "    cuda_device: CUDA device id (>= 0 required in async mode).")
         .def_property_readonly("nbytes_allocated",
             [](const BumpAllocator &self) { return self.nbytes_allocated.load(); },
             "Bytes allocated so far (aligned to 128-byte cache lines)")
@@ -59,6 +69,12 @@ void register_core_bindings(pybind11::module &m)
             "Memory allocation flags")
         .def_readonly("capacity", &BumpAllocator::capacity,
             "Total capacity in bytes, or -1 for dummy mode")
+        .def("wait_until_initialized", &BumpAllocator::wait_until_initialized,
+            "In async mode: block until init complete, or rethrow async-init "
+            "exception. In sync mode: no-op.")
+        .def("is_initialized", &BumpAllocator::is_initialized,
+            "Non-blocking poll: True iff init has completed and the allocator "
+            "has not been stopped.")
         .def("_allocate_array_raw",
             [](std::shared_ptr<BumpAllocator> self, ksgpu::Dtype dtype, const std::vector<long> &shape) {
                 return self->_allocate_array_internal(dtype, shape.size(), shape.data(), nullptr);
@@ -83,12 +99,22 @@ void register_core_bindings(pybind11::module &m)
             "Args:\n"
             "    aflags: Memory allocation flags (af_gpu, af_rhost, etc.)\n"
             "    capacity: Bytes to pre-allocate (>= 0) or < 0 for dummy mode")
-        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(BumpAllocator &, long)>(&SlabAllocator::create)),
+        .def(py::init(static_cast<std::shared_ptr<SlabAllocator>(*)(const std::shared_ptr<BumpAllocator> &, long)>(&SlabAllocator::create)),
             py::arg("bump_allocator"), py::arg("nbytes"),
             "Create allocator using memory from a BumpAllocator.\n\n"
             "Args:\n"
             "    bump_allocator: Source of memory (must not be in dummy mode)\n"
-            "    nbytes: Bytes to allocate from the BumpAllocator")
+            "    nbytes: Bytes to allocate from the BumpAllocator\n\n"
+            "If the BumpAllocator is async, the SlabAllocator is itself async:\n"
+            "constructor returns immediately, and the bump_allocator.allocate_bytes()\n"
+            "call is deferred to the first get_slab().")
+        .def("wait_until_initialized", &SlabAllocator::wait_until_initialized,
+            "If backed by an async BumpAllocator: block until it's initialized\n"
+            "(or rethrow async-init exception). Otherwise no-op.")
+        .def("is_initialized", &SlabAllocator::is_initialized,
+            "Non-blocking poll: True iff the underlying BumpAllocator is ready\n"
+            "to serve allocations (delegates to bump_allocator.is_initialized()).\n"
+            "Always True in dummy mode.")
         .def("num_free_slabs", &SlabAllocator::num_free_slabs,
             "Number of slabs currently available. Throws in dummy mode.")
         .def("num_total_slabs", &SlabAllocator::num_total_slabs,
@@ -273,6 +299,9 @@ void register_core_bindings(pybind11::module &m)
             py::arg("blocking") = false,
             "Total number of frames in the pool.\n\n"
             "Throws in dummy mode or if not initialized.")
+        .def("is_initialized", &AssembledFrameAllocator::is_initialized,
+            "Non-blocking poll: True iff the underlying memory is ready to\n"
+            "serve allocations (delegates through SlabAllocator to BumpAllocator).")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.
@@ -1032,6 +1061,18 @@ void register_core_bindings(pybind11::module &m)
              "a worker/reaper/processing thread threw an exception. When this transitions\n"
              "to True due to an internal error, the C++ side prints the exception message\n"
              "to stderr (see FrbServer.cpp's thread-main wrappers).")
+          .def_property_readonly("host_allocator", [](FrbServer &self) {
+               return self.params.host_allocator;
+          }, "BumpAllocator for host (dd_host) memory. May be async; call\n"
+             "wait_until_initialized() before start() if so.")
+          .def_property_readonly("gpu_allocator", [](FrbServer &self) {
+               return self.params.gpu_allocator;
+          }, "BumpAllocator for GPU memory. May be async; call\n"
+             "wait_until_initialized() before start() if so.")
+          .def_property_readonly("allocator", [](FrbServer &self) {
+               return self.allocator;
+          }, "AssembledFrameAllocator (backs the receivers). Underlying memory\n"
+             "is from the ring-buffer host BumpAllocator; may be async.")
     ;
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.

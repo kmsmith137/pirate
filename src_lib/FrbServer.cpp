@@ -180,6 +180,15 @@ void FrbServer::start()
     if (is_started)
         throw runtime_error("FrbServer::start() called twice");
 
+    // Sanity check: all three async-eligible allocators must have finished
+    // initializing before start(). If any of these is false the build code
+    // forgot to call wait_until_initialized() before start() -- async-init
+    // failures would surface from the processing/receiver threads later
+    // rather than cleanly from the build path.
+    xassert(allocator->is_initialized());
+    xassert(params.host_allocator->is_initialized());
+    xassert(params.gpu_allocator->is_initialized());
+
     is_started = true;
     lock.unlock();
 
