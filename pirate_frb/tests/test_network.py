@@ -104,6 +104,11 @@ class NetworkTester:
         num_receivers        = random.randint(1, min(5, total_nfreq))
         workers_per_receiver = random.randint(1, min(5, total_nfreq // num_receivers))
         nworkers             = workers_per_receiver * num_receivers
+        # Exercise the FakeXEngine pacing path 20% of the time. Default
+        # paced=False because pacing throttles the sender, which masks
+        # the real-time eviction races and FLAG_ACK ack-prediction
+        # checks that this test was designed for.
+        paced = (random.random() < 0.2)
         return dict(
             config                 = config,
             num_receivers          = num_receivers,
@@ -117,6 +122,7 @@ class NetworkTester:
             data_base_port         = 5000,
             rpc_port               = 6000,
             ringbuf_nchunks        = random.randint(50, 100),
+            paced                  = paced,
         )
 
     def __init__(self):
@@ -262,14 +268,18 @@ class NetworkTester:
         ip_addrs = [f"127.0.0.1:{p['data_base_port'] + j}"
                     for j in range(p['num_receivers'])]
 
-        # paced=False: this test exercises real-time eviction races and
-        # FLAG_ACK ack-prediction, which pacing would mask by holding
-        # the sender back. rpc_address is unused (and harmless) here.
+        # Pacing is randomized in _random_params (20% chance True).
+        # Most iterations run paced=False so the test continues to
+        # exercise real-time eviction races and FLAG_ACK ack-prediction
+        # at full throughput; the occasional paced=True iteration
+        # exercises the FakeXEngine pacing-thread path against a live
+        # MonitorRingbuf stream from the in-process FrbServer.
         self.fxe = FakeXEngine(
             self.xmd, ip_addrs, self.nworkers,
             time_samples_per_chunk = p['time_samples_per_chunk'],
             debug = True,
-            paced = False,
+            paced = p['paced'],
+            rpc_address = f"127.0.0.1:{p['rpc_port']}",
         )
 
         # Per-worker positions (minichunk indices).
