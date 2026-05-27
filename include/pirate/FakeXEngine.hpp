@@ -18,6 +18,16 @@
 #include "network_utils.hpp"   // Socket (Worker holds one by value)
 
 
+// Forward-declare grpc::ClientContext so we can hold a
+// std::unique_ptr<grpc::ClientContext> as a FakeXEngine member without
+// pulling the heavy grpc++ headers into every translation unit that
+// includes FakeXEngine.hpp. (The FrbSearch::Stub used by the pacing
+// thread is nested -- not forward-declarable in standard C++ -- so
+// the Stub is created as a local in _pacing_thread_main rather than
+// held as a member; see the paced-mode section below.)
+namespace grpc { class ClientContext; }
+
+
 namespace pirate {
 #if 0
 }   // pacify editor auto-indent
@@ -58,6 +68,18 @@ namespace pirate {
 // Worker threads inherit the vcpu affinity of the thread that calls the
 // FakeXEngine constructor. Python callers MUST call the constructor
 // inside a ThreadAffinity context manager.
+//
+// Paced mode (paced=true, the default): the FakeXEngine spawns one
+// extra "pacing thread" that holds a streaming MonitorRingbuf RPC to
+// the FrbServer and broadcasts each pushed rb_processed value to all
+// workers (Worker::rb_processed under each Worker::mutex). Worker
+// threads gate their sends so the sender stays at most 5 time chunks
+// ahead of the server: before each SEND_JUNK / SEND_MINICHUNK, the
+// worker blocks on its cv until Worker::rb_processed >= (ichunk - 5)
+// * nbeams, where ichunk = cmd.minichunk_index / minichunks_per_chunk.
+// A bootstrap floor (FakeXEngine::rb_processed_floor) covers the
+// gap before the server has received enough data to publish its
+// first rb_processed value. See plans/fake_xengine_pacing.md.
 //
 // Usage:
 //   with ThreadAffinity(vcpu_list):
@@ -263,6 +285,17 @@ struct FakeXEngine
         // this minichunk. See PendingAck doc + _skip_or_send.
         std::deque<PendingAck> ack_queue;
 
+        // Latest "effective" rb_processed observed for this worker
+        // (paced mode only). Written by (a) the pacing thread on each
+        // server-pushed update, and (b) the worker thread itself on
+        // its first SEND_*, seeded from FakeXEngine::rb_processed_floor.
+        // Read by the worker thread in the paced-mode gate inside
+        // _skip_or_send. Monotone-nondecreasing -- both writers use
+        // std::max on update. Zero (and unused) in non-paced mode.
+        //
+        // Protected by 'mutex'.
+        long rb_processed = 0;
+
         // ---- Constant after construction, not lock-protected. ----
 
         std::thread worker_thread;
@@ -376,6 +409,24 @@ struct FakeXEngine
     // don't use in production!
     const bool debug;
 
+    // ----- Paced-mode config (constants after ctor) -----
+    //
+    // When true, FakeXEngine spawns a pacing thread that opens a
+    // MonitorRingbuf streaming RPC to the FrbServer and gates each
+    // worker's sends to stay <=5 chunks ahead of server-side
+    // rb_processed. See class doc-comment + plans/fake_xengine_pacing.md.
+    const bool paced;
+
+    // gRPC address ("ip:port") of the FrbServer's RPC endpoint. Required
+    // (non-empty) when paced=true; ignored when paced=false (a non-empty
+    // value is silently accepted).
+    const std::string rpc_address;
+
+    // = xmd->get_nbeams(). Cached at construction for use in the
+    // paced-mode gate (which computes 5-chunks-ahead in units of
+    // frames = chunks * nbeams).
+    const long nbeams;
+
     // ----- Derived from time_samples_per_chunk -----
 
     // = time_samples_per_chunk / 256. Number of wire minichunks per
@@ -470,6 +521,28 @@ struct FakeXEngine
     // anything else).
     std::array<std::atomic<long>, 4> debug_counters;
 
+    // ----- Paced-mode state -----
+
+    // Bootstrap floor for paced mode. Initialized to -1; CAS-set ONCE by
+    // whichever worker performs its first SEND_*, to (ichunk * nbeams)
+    // where ichunk = cmd.minichunk_index / minichunks_per_chunk. Every
+    // worker reads this on its own first SEND_* (whether or not it won
+    // the CAS) and seeds its Worker::rb_processed to at least this
+    // value. Covers the latency gap before the server has received
+    // enough data to publish its first rb_processed via MonitorRingbuf.
+    std::atomic<long> rb_processed_floor{-1};
+
+    // MonitorRingbuf context. Owned here so FakeXEngine::stop() can
+    // TryCancel() the streaming RPC to unblock the pacing thread's
+    // Read(). The corresponding gRPC Stub is not a member -- it lives
+    // as a local in _pacing_thread_main, since FrbSearch::Stub is a
+    // nested class that can't be forward-declared in C++ and we don't
+    // want grpc++ headers in this .hpp. Constructed only when paced=true.
+    std::unique_ptr<grpc::ClientContext> pacing_ctx;
+
+    // Pacing thread. Joinable only when paced=true.
+    std::thread pacing_thread;
+
     // ----- Public interface -----
 
     // Constructor: validates args, then spawns nworkers worker threads.
@@ -493,9 +566,21 @@ struct FakeXEngine
     // make_worker_metadata() overwrites freq_channels per-worker, so the
     // caller can pass either a meaningful or frequency-scrubbed xmd (the
     // latter is the typical case, e.g. from XEngineMetadata::make_fiducial).
+    //
+    // paced (default true): if true, also spawns a pacing thread that
+    // holds a MonitorRingbuf streaming RPC to the FrbServer at
+    // rpc_address. Worker threads gate sends to stay <=5 chunks ahead
+    // of server-side rb_processed. rpc_address must be non-empty when
+    // paced=true; ignored (silently accepted) when paced=false.
+    //
+    // rpc_address: "ip:port" of the FrbServer's gRPC endpoint. Required
+    // when paced=true; pass empty string when paced=false.
     FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd,
                 const std::vector<std::string> &ip_addrs,
-                int nworkers, long time_samples_per_chunk, bool debug = false);
+                int nworkers, long time_samples_per_chunk,
+                bool debug = false,
+                bool paced = true,
+                const std::string &rpc_address = "");
 
     // Destructor calls stop() and joins worker threads.
     ~FakeXEngine();
@@ -768,6 +853,13 @@ private:
     // drained, (b) invalid ack byte (not 0 or 1), (c) the deadline.
     // The throw propagates via worker_main's catch -> stop(e).
     void _read_acks(Worker &w, bool blocking);
+
+    // Pacing thread (paced=true only). Holds a MonitorRingbuf
+    // streaming RPC to the FrbServer; for each pushed rb_processed
+    // value, sweeps workers and updates Worker::rb_processed under
+    // each Worker::mutex.
+    void _pacing_thread_main();
+    void pacing_thread_main();   // try/catch wrapper, calls stop() on throw
 };
 
 

@@ -17,7 +17,7 @@ class RunFakeXEngineHelper:
     spawn controllers; wait for Ctrl-C; cleanup).
     """
 
-    def __init__(self, rpc_addrs, nworkers=128):
+    def __init__(self, rpc_addrs, nworkers=128, paced=True):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -35,6 +35,7 @@ class RunFakeXEngineHelper:
 
         self.rpc_addrs = rpc_addrs
         self.nworkers = nworkers
+        self.paced = paced
         self.hw = Hardware()
         self.fake_xengines = []   # parallel to rpc_addrs (Phase 1 fills this)
         self.fxe_vcpus = []       # parallel
@@ -94,10 +95,12 @@ class RunFakeXEngineHelper:
         with ThreadAffinity(vcpu_list):
             fxe = FakeXEngine(
                 xmd, list(cfg.data_ip_addrs), self.nworkers,
-                time_samples_per_chunk=cfg.time_samples_per_chunk)
+                time_samples_per_chunk=cfg.time_samples_per_chunk,
+                paced=self.paced, rpc_address=rpc_addr)
         self.fake_xengines.append(fxe)
         self.fxe_vcpus.append(vcpu_list)
-        print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers).")
+        paced_note = "paced" if self.paced else "unpaced"
+        print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, {paced_note}).")
 
     def _print_receiver_details(self, rpc_addr, cfg, xmd):
         ip_addrs = list(cfg.data_ip_addrs)
@@ -224,7 +227,7 @@ class RunFakeXEngineHelper:
                 pass
 
 
-def run_fake_xengine(rpc_addrs, nworkers=128):
+def run_fake_xengine(rpc_addrs, nworkers=128, paced=True):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -238,6 +241,10 @@ def run_fake_xengine(rpc_addrs, nworkers=128):
             rejected (use [addr], not addr).
         nworkers: worker threads per FakeXEngine (not aggregate across
             receivers).
+        paced: if True (default), each FakeXEngine spawns a pacing
+            thread that subscribes to MonitorRingbuf and gates each
+            worker's sends to stay <=5 chunks ahead of server-side
+            rb_processed. If False, the sender runs unthrottled.
     """
-    helper = RunFakeXEngineHelper(rpc_addrs, nworkers)
+    helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced)
     helper.run()

@@ -1,6 +1,7 @@
 #include "../include/pirate/FakeXEngine.hpp"
 #include "../include/pirate/network_utils.hpp"
 
+#include <algorithm>     // std::max (paced-mode bootstrap)
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -8,6 +9,11 @@
 #include <stdexcept>
 
 #include <ksgpu/xassert.hpp>
+
+// gRPC client + generated stubs for the paced-mode pacing thread.
+// Kept out of FakeXEngine.hpp -- see the forward-decl comment there.
+#include "../grpc/frb_search.grpc.pb.h"
+#include <grpcpp/grpcpp.h>
 
 using namespace std;
 
@@ -59,12 +65,17 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 
 FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
                          const std::vector<std::string> &ip_addrs_,
-                         int nworkers_, long time_samples_per_chunk_, bool debug_) :
+                         int nworkers_, long time_samples_per_chunk_,
+                         bool debug_, bool paced_,
+                         const std::string &rpc_address_) :
     xmd(xmd_),
     ip_addrs(ip_addrs_),
     nworkers(nworkers_),
     time_samples_per_chunk(time_samples_per_chunk_),
     debug(debug_),
+    paced(paced_),
+    rpc_address(rpc_address_),
+    nbeams(xmd_ ? xmd_->get_nbeams() : 0),  // null xmd is rejected below; guard avoids null-deref
     minichunks_per_chunk(time_samples_per_chunk_ / 256),
     num_receivers(long(ip_addrs_.size()))
 {
@@ -73,6 +84,13 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
     if (ip_addrs.empty())
         throw runtime_error("FakeXEngine: ip_addrs is empty");
     xassert(nworkers > 0);
+
+    // Paced mode requires an rpc_address. Non-paced silently accepts a
+    // non-empty rpc_address (and ignores it).
+    if (paced && rpc_address.empty()) {
+        throw runtime_error(
+            "FakeXEngine: paced=true requires a non-empty rpc_address");
+    }
 
     if (time_samples_per_chunk <= 0) {
         stringstream ss;
@@ -135,9 +153,23 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
     for (int i = 0; i < nworkers; i++)
         workers.push_back(std::make_unique<Worker>());
 
+    // In paced mode, allocate the MonitorRingbuf ClientContext before
+    // spawning any threads, so stop() (which TryCancels via this ctx)
+    // is safe to call from any of them. The channel + Stub are NOT
+    // members -- they live as locals in _pacing_thread_main; see
+    // FakeXEngine.hpp for the forward-decl rationale.
+    if (paced)
+        pacing_ctx = std::make_unique<grpc::ClientContext>();
+
     try {
         for (int i = 0; i < nworkers; i++)
             workers[i]->worker_thread = std::thread(&FakeXEngine::worker_main, this, i);
+
+        // Spawn the pacing thread after the workers so that any incoming
+        // MonitorRingbuf message can immediately broadcast to a fully
+        // populated 'workers' vector.
+        if (paced)
+            pacing_thread = std::thread(&FakeXEngine::pacing_thread_main, this);
     } catch (...) {
         // Partial-spawn cleanup: signal stop so any workers that did start
         // exit promptly, then join whichever ones are joinable. stop()'s
@@ -149,6 +181,8 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
             if (wp->worker_thread.joinable())
                 wp->worker_thread.join();
         }
+        if (pacing_thread.joinable())
+            pacing_thread.join();
         throw;
     }
 }
@@ -162,6 +196,16 @@ FakeXEngine::~FakeXEngine()
         if (wp->worker_thread.joinable())
             wp->worker_thread.join();
     }
+
+    // Join the pacing thread AFTER the workers -- the pacing thread's
+    // critical section iterates over 'workers' under each Worker::mutex,
+    // and the workers are easier to reason about as "fully stopped"
+    // before we let the pacing thread's destructor implicitly run.
+    // (Both orders are correct given stop()'s independent signaling of
+    // each thread, but joining workers first matches the ctor's spawn
+    // order in reverse, which is the conventional pattern.)
+    if (pacing_thread.joinable())
+        pacing_thread.join();
 }
 
 
@@ -191,6 +235,13 @@ void FakeXEngine::stop(std::exception_ptr e)
     // possibility of deadlock with anything else in this class.
     for (auto &wp : workers)
         _stop_one_worker(*wp, e);
+
+    // Paced mode: cancel the MonitorRingbuf streaming RPC so the
+    // pacing thread's blocked Read() returns false. TryCancel is
+    // safe to call concurrently with any gRPC operation; it's a
+    // no-op if the call has already completed.
+    if (paced && pacing_ctx)
+        pacing_ctx->TryCancel();
 }
 
 
@@ -1039,6 +1090,53 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
     long max_ack_at_submission = -1;
 
     if (need_send) {
+        // Paced-mode bootstrap + gate. See plans/fake_xengine_pacing.md.
+        // The bootstrap runs only on this worker's very first SEND_*
+        // (!first_send_done). The gate runs on every SEND_*.
+        if (paced) {
+            long ichunk = cmd.minichunk_index / minichunks_per_chunk;
+
+            if (!w.first_send_done) {
+                // CAS the engine-wide floor from -1 to (ichunk * nbeams).
+                // First-worker-to-send wins; later workers' CAS fails and
+                // their `expected` is loaded with the winner's value. We
+                // then re-load explicitly for clarity and use std::max
+                // when seeding our own Worker::rb_processed.
+                //
+                // Safe to read w.first_send_done without w.mutex: only
+                // the worker thread writes it (existing invariant; see
+                // Worker doc-comment in FakeXEngine.hpp).
+                long my_floor = ichunk * nbeams;
+                long expected = -1;
+                rb_processed_floor.compare_exchange_strong(
+                    expected, my_floor,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire);
+                long current_floor =
+                    rb_processed_floor.load(std::memory_order_acquire);
+
+                std::lock_guard<std::mutex> lk(w.mutex);
+                w.rb_processed = std::max(w.rb_processed, current_floor);
+                // No cv.notify needed -- this worker is the only thread
+                // that would be waiting on its own cv for an
+                // rb_processed change, and it's not waiting; it's
+                // running this code.
+            }
+
+            // Gate: wait until rb_processed catches up to within 5
+            // chunks of this send, or stop. The required > 0 fast path
+            // skips the lock for the (rare) case where ichunk < 5.
+            long required = (ichunk - 5) * nbeams;
+            if (required > 0) {
+                std::unique_lock<std::mutex> lk(w.mutex);
+                w.cv.wait(lk, [&] {
+                    return w.is_stopped || w.rb_processed >= required;
+                });
+                if (w.is_stopped)
+                    return false;
+            }
+        }
+
         // Lazy connect: the first SEND_* opens the socket. SKIP_MINICHUNK
         // never opens the socket -- so a worker that only ever sees
         // SKIPs leaves its TCP connection un-established.
@@ -1256,6 +1354,96 @@ void FakeXEngine::_worker_main(int worker_id)
         // is what makes synchronize() wait for WAIT_FOR_ACKS's
         // blocking drain to finish before returning.
         w.cv.notify_all();
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Pacing thread (paced=true only). Holds a MonitorRingbuf streaming RPC
+// to the FrbServer at rpc_address. For each pushed rb_processed value,
+// sweeps `workers` and monotonically advances each Worker::rb_processed
+// (under each Worker::mutex), notifying its cv so any worker blocked in
+// the paced-mode gate wakes up to re-check the predicate.
+//
+// The channel + Stub are LOCALS in this function, not FakeXEngine
+// members. Only the ClientContext is a member (so FakeXEngine::stop()
+// can TryCancel it). See FakeXEngine.hpp for why the Stub isn't a
+// member (nested-class forward-decl issue).
+//
+// Stream termination:
+//   - We cancelled (stop() called TryCancel): silent exit.
+//   - Server-initiated close or network error: throw runtime_error;
+//     the wrapper catches and calls stop(current_exception()), which
+//     cascades to all workers.
+
+
+void FakeXEngine::_pacing_thread_main()
+{
+    using namespace frb::search::v1;
+
+    // Local channel + stub: the pacing thread is the sole user.
+    auto channel = grpc::CreateChannel(rpc_address,
+                                       grpc::InsecureChannelCredentials());
+    auto stub = FrbSearch::NewStub(channel);
+
+    auto reader = stub->MonitorRingbuf(pacing_ctx.get(),
+                                       MonitorRingbufRequest());
+
+    MonitorRingbufResponse resp;
+    while (reader->Read(&resp)) {
+        long v = resp.rb_processed();
+
+        // Broadcast to every Worker. One Worker mutex at a time; never
+        // hold more than one. The pacing thread and FakeXEngine::stop()
+        // both take Worker mutexes one at a time -- their per-worker
+        // critical sections interleave freely.
+        for (auto &wp : workers) {
+            Worker &w = *wp;
+            std::lock_guard<std::mutex> lk(w.mutex);
+            long new_val = std::max(w.rb_processed, v);
+            if (new_val != w.rb_processed) {
+                w.rb_processed = new_val;
+                w.cv.notify_all();
+            }
+        }
+    }
+
+    // Stream ended. Finish() returns the final Status.
+    grpc::Status status = reader->Finish();
+
+    // Acquire so we synchronize with stop()'s release-ordered write of
+    // is_stopped_cache. A relaxed load could miss a just-completed
+    // stop() call and produce a spurious "stream closed unexpectedly"
+    // stderr line.
+    if (is_stopped_cache.load(std::memory_order_acquire))
+        return;   // we cancelled via stop(); silent exit
+
+    // Server-initiated close, network error, or shutdown race. Convert
+    // to an exception so the wrapper propagates via
+    // stop(current_exception()).
+    stringstream ss;
+    ss << "FakeXEngine pacing: MonitorRingbuf stream closed unexpectedly";
+    if (!status.ok()) {
+        ss << " (code=" << status.error_code()
+           << ", message='" << status.error_message() << "')";
+    }
+    throw runtime_error(ss.str());
+}
+
+
+void FakeXEngine::pacing_thread_main()
+{
+    try {
+        _pacing_thread_main();
+    } catch (const std::exception &e) {
+        cerr << "FakeXEngine pacing thread terminated with exception: "
+             << e.what() << endl;
+        stop(std::current_exception());
+    } catch (...) {
+        cerr << "FakeXEngine pacing thread terminated with unknown exception"
+             << endl;
+        stop(std::current_exception());
     }
 }
 

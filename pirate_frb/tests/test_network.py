@@ -262,10 +262,14 @@ class NetworkTester:
         ip_addrs = [f"127.0.0.1:{p['data_base_port'] + j}"
                     for j in range(p['num_receivers'])]
 
+        # paced=False: this test exercises real-time eviction races and
+        # FLAG_ACK ack-prediction, which pacing would mask by holding
+        # the sender back. rpc_address is unused (and harmless) here.
         self.fxe = FakeXEngine(
             self.xmd, ip_addrs, self.nworkers,
             time_samples_per_chunk = p['time_samples_per_chunk'],
             debug = True,
+            paced = False,
         )
 
         # Per-worker positions (minichunk indices).

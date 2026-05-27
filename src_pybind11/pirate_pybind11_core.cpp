@@ -666,10 +666,12 @@ void register_core_bindings(pybind11::module &m)
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
           .def(py::init<const std::shared_ptr<const XEngineMetadata> &,
                         const std::vector<std::string> &,
-                        int, long, bool>(),
+                        int, long, bool, bool, const std::string &>(),
                py::arg("xmd"), py::arg("ip_addrs"), py::arg("nworkers"),
                py::arg("time_samples_per_chunk"),
                py::arg("debug") = false,
+               py::arg("paced") = true,
+               py::arg("rpc_address") = "",
                "Create a FakeXEngine and spawn 'nworkers' worker threads.\n\n"
                "Workers inherit the vcpu affinity of the calling thread, so the\n"
                "Python caller MUST invoke this constructor inside a ThreadAffinity\n"
@@ -687,7 +689,14 @@ void register_core_bindings(pybind11::module &m)
                "        Must be positive and a multiple of 256.\n"
                "    debug: Adds real-time debugging checks with nontrivial\n"
                "        cpu/network cost, and unbounded memory usage. Useful for\n"
-               "        unit tests, but don't use in production!")
+               "        unit tests, but don't use in production!\n"
+               "    paced (default True): Spawn a pacing thread that subscribes\n"
+               "        to the FrbServer's MonitorRingbuf push stream and gates\n"
+               "        each worker's sends to stay <=5 chunks ahead of\n"
+               "        server-side rb_processed. Requires rpc_address.\n"
+               "    rpc_address: 'ip:port' of the FrbServer's gRPC endpoint.\n"
+               "        Required (non-empty) when paced=True; ignored (silently\n"
+               "        accepted) when paced=False.")
           .def("enqueue_send_junk", &FakeXEngine::enqueue_send_junk,
                py::arg("worker_id"), py::arg("minichunk_index"),
                py::call_guard<py::gil_scoped_release>(),
