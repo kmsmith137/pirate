@@ -270,6 +270,7 @@ PYFILES = \
   pirate_frb/utils/__init__.py \
   pirate_frb/utils/ThreadAffinity.py \
   pirate_frb/utils/ToyGrouper.py \
+  pirate_frb/utils/network.py \
   pirate_frb/utils/time_cupy_dedisperser.py \
   pirate_frb/utils/show_asdf.py \
   pirate_frb/rpc/__init__.py \
