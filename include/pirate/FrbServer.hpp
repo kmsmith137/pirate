@@ -141,11 +141,12 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
 
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
     // See below for invariants.
-    long rb_start     = 0;   // (first frame_id in ringbuf)
-    long rb_reaped    = 0;   // (last reaped frame_id) + 1
-    long rb_processed = 0;   // (last GPU-processed frame_id) + 1
-    long rb_assembled = 0;   // (last fully-assembled frame_id) + 1
-    long rb_end       = 0;   // (last frame_id in ringbuf) + 1
+    long rb_start        = 0;   // (first frame_id in ringbuf)
+    long rb_reaped       = 0;   // (last reaped frame_id) + 1
+    long rb_processed    = 0;   // (last GPU-processed frame_id) + 1
+    long rb_assembled    = 0;   // (last fully-assembled frame_id) + 1
+    long rb_end          = 0;   // (last frame_id in ringbuf) + 1
+    bool rb_initialized  = false;
 
     // Worker threads (one per receiver).
     std::vector<std::thread> workers;

@@ -26,6 +26,19 @@ service FrbSearch {
   // Subscribe to a stream of filenames. The connection can be closed by the client
   // at any time, or by the server on shutdown or exception.
   rpc SubscribeFiles (SubscribeFilesRequest) returns (stream SubscribeFilesResponse);
+
+  // Push stream of rb_processed updates. The server sends one message as
+  // soon as the ring buffer is initialized (carrying the current value),
+  // then one message per change. The stream ends when the client closes
+  // the connection or when FrbServer::stop() is called.
+  //
+  // SPECIAL-PURPOSE: this RPC is intended for use by the FakeXEngine
+  // "pacing" feature (see plans/fake_xengine_pacing.md), which uses a
+  // persistent push stream to gate the sender's chunk rate against the
+  // server's GPU processing rate. Don't use this from new code without
+  // a similar push-based use case in mind -- general status polling
+  // should use GetStatus instead.
+  rpc MonitorRingbuf (MonitorRingbufRequest) returns (stream MonitorRingbufResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -123,4 +136,12 @@ message ReadySentinel {}
 message WriteNotification {
   string filename      = 1;  // Valid only when error_message is empty.
   string error_message = 2;  // Empty = success; non-empty = error string.
+}
+
+// Request message for MonitorRingbuf (currently empty, but extensible).
+message MonitorRingbufRequest {}
+
+// Streamed update for MonitorRingbuf. One message per change in rb_processed.
+message MonitorRingbufResponse {
+  int64 rb_processed = 1;
 }

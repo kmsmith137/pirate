@@ -8,6 +8,7 @@
 
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
+#include <chrono>    // milliseconds (MonitorRingbuf cancellation-check timeout)
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -41,6 +42,7 @@ public:
     void _WriteFiles(const fs::WriteFilesRequest *request, fs::WriteFilesResponse *response);
     void _SubscribeFiles(grpc::ServerContext* context, grpc::ServerWriter<fs::SubscribeFilesResponse>* writer);
     void _GetConfig(const fs::GetConfigRequest *request, fs::GetConfigResponse *response);
+    void _MonitorRingbuf(grpc::ServerContext* context, grpc::ServerWriter<fs::MonitorRingbufResponse>* writer);
 
     // Helper to lock the weak_ptr. Throws if the server is exiting.
     inline shared_ptr<FrbServer> _lock_state();
@@ -72,6 +74,11 @@ public:
         grpc::ServerContext* context,
         const fs::GetConfigRequest* request,
         fs::GetConfigResponse* response) override;
+
+    grpc::Status MonitorRingbuf(
+        grpc::ServerContext* context,
+        const fs::MonitorRingbufRequest* request,
+        grpc::ServerWriter<fs::MonitorRingbufResponse>* writer) override;
 };
 
 
@@ -293,11 +300,12 @@ void FrbServer::_worker_main(int receiver_index)
         // Seed the ring-buffer indices at initial_frame_id (rather than 0).
         // Otherwise the worker's first install would fail the xassert
         // rb_end == frame_id below.
-        rb_start     = initial_frame_id;
-        rb_reaped    = initial_frame_id;
-        rb_processed = initial_frame_id;
-        rb_assembled = initial_frame_id;
-        rb_end       = initial_frame_id;
+        rb_start        = initial_frame_id;
+        rb_reaped       = initial_frame_id;
+        rb_processed    = initial_frame_id;
+        rb_assembled    = initial_frame_id;
+        rb_end          = initial_frame_id;
+        rb_initialized  = true;
 
         cv.notify_all();
     } else {
@@ -1043,6 +1051,82 @@ grpc::Status FrbRpcService::GetConfig(
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
     } catch (...) {
         return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in GetConfig");
+    }
+}
+
+// ---- MonitorRingbuf ----
+//
+// Special-purpose push stream of rb_processed updates, intended for use by
+// the FakeXEngine "pacing" feature (see plans/fake_xengine_pacing.md). The
+// handler sends one message as soon as rb_initialized becomes true (carrying
+// the current value of rb_processed), then one message per change. The stream
+// ends when the client closes the connection or when FrbServer::stop() is
+// called.
+//
+// Synchronization: reuses FrbServer::mutex + FrbServer::cv. The cv is already
+// notified on every event that matters (rb_initialized flip, rb_processed
+// advance, stop). Spurious wake-ups (e.g., from worker frame-insert notifies)
+// just re-check the predicate and re-wait; the cost is microseconds per notify.
+//
+// The 500ms wait timeout is a safety net for "silent disconnect during an
+// idle server" -- if a client disconnects with no Cancel() call AND
+// rb_processed is not advancing, we'd otherwise block forever on cv.wait.
+// The timeout lets us periodically re-poll context->IsCancelled().
+void FrbRpcService::_MonitorRingbuf(
+    grpc::ServerContext* context,
+    grpc::ServerWriter<fs::MonitorRingbufResponse>* writer)
+{
+    shared_ptr<FrbServer> s = _lock_state();
+
+    // rb_processed is always >= 0; -1 is a safe sentinel for "no value sent yet".
+    long last_sent = -1;
+
+    for (;;) {
+        if (context->IsCancelled())
+            return;
+
+        long current;
+        {
+            unique_lock<std::mutex> lock(s->mutex);
+
+            // Wait for: stop, OR (initialized AND value changed). Timeout
+            // bounds the latency of silent-disconnect detection.
+            s->cv.wait_for(lock, std::chrono::milliseconds(500), [&]() {
+                return s->is_stopped
+                    || (s->rb_initialized && s->rb_processed != last_sent);
+            });
+
+            if (s->is_stopped)
+                return;
+            if (!s->rb_initialized)
+                continue;   // pre-init: timeout fired, nothing to send
+            if (s->rb_processed == last_sent)
+                continue;   // timeout fired but value unchanged
+
+            current = s->rb_processed;
+        }
+
+        // Send outside the lock (Write is blocking I/O).
+        fs::MonitorRingbufResponse response;
+        response.set_rb_processed(current);
+        if (!writer->Write(response))
+            return;   // client closed the stream
+        last_sent = current;
+    }
+}
+
+grpc::Status FrbRpcService::MonitorRingbuf(
+    grpc::ServerContext* context,
+    const fs::MonitorRingbufRequest* request,
+    grpc::ServerWriter<fs::MonitorRingbufResponse>* writer)
+{
+    try {
+        _MonitorRingbuf(context, writer);
+        return grpc::Status::OK;
+    } catch (const std::exception &e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    } catch (...) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, "Unknown error in MonitorRingbuf");
     }
 }
 

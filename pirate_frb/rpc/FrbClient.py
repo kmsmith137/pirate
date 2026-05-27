@@ -286,6 +286,28 @@ class FrbClient:
         """
         return FileSubscriber(self.stub)
 
+    def monitor_ringbuf(self):
+        """Subscribe to a server push stream of rb_processed updates.
+
+        SPECIAL-PURPOSE: this RPC exists for the FakeXEngine "pacing"
+        feature, which gates the sender's chunk rate against the
+        server's GPU processing rate. Don't use it from new code
+        without a similar push-based use case in mind -- for general
+        status polling, use get_status() instead.
+
+        Yields int64 rb_processed values, one per change. The stream
+        starts with the current value, sent by the server as soon as
+        the ring buffer is initialized. Iteration ends when the
+        server closes the stream (e.g. FrbServer::stop() was called).
+
+        Raises grpc.RpcError on transport failure. To end the stream
+        cleanly, break out of the for-loop and let the generator go
+        out of scope -- gRPC cancels the underlying call on GC.
+        """
+        request = frb_search_pb2.MonitorRingbufRequest()
+        for response in self.stub.MonitorRingbuf(request):
+            yield response.rb_processed
+
     def close(self):
         """Close the gRPC channel."""
         self.channel.close()
