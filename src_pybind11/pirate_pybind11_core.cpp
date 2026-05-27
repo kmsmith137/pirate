@@ -1006,7 +1006,8 @@ void register_core_bindings(pybind11::module &m)
                            int min_data_mtu,
                            std::shared_ptr<BumpAllocator> host_allocator,
                            std::shared_ptr<BumpAllocator> gpu_allocator,
-                           int cuda_device_id) {
+                           int cuda_device_id,
+                           double processing_delay_sec) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -1017,6 +1018,7 @@ void register_core_bindings(pybind11::module &m)
                params.host_allocator = std::move(host_allocator);
                params.gpu_allocator = std::move(gpu_allocator);
                params.cuda_device_id = cuda_device_id;
+               params.processing_delay_sec = processing_delay_sec;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
@@ -1026,6 +1028,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("host_allocator"),
                py::arg("gpu_allocator"),
                py::arg("cuda_device_id"),
+               py::arg("processing_delay_sec") = 0.0,
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -1047,7 +1050,10 @@ void register_core_bindings(pybind11::module &m)
                "        the processing thread to back GpuDedisperser GPU buffers.\n"
                "    cuda_device_id: CUDA device index. The processing thread and\n"
                "        the GpuDedisperser worker thread both call cudaSetDevice\n"
-               "        with this value.")
+               "        with this value.\n"
+               "    processing_delay_sec (default 0): Artificial per-frame\n"
+               "        delay (in seconds) injected by the processing thread,\n"
+               "        for simulating slow GPU work in pacing tests.")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"

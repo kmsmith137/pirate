@@ -1147,11 +1147,16 @@ def parse_run_server(subparsers):
     parser = subparsers.add_parser("run_server", help=help_text, description=help_text)
     parser.add_argument('server_config', help='Path to FrbServer YAML config file')
     parser.add_argument('dedispersion_config', help='Path to DedispersionConfig YAML file')
+    parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
+                        help='Artificial per-frame delay in the processing thread '
+                             '(seconds; default 0). Used to simulate slow GPU work '
+                             'for testing FakeXEngine pacing.')
 
 
 def run_server_command(args):
     from .run_server import run_server
-    run_server(args.server_config, args.dedispersion_config)
+    run_server(args.server_config, args.dedispersion_config,
+               processing_delay_sec=args.delay)
 
 
 ######################################  run_fake_xengine command  #####################################

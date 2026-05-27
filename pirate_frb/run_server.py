@@ -236,11 +236,13 @@ class RunServerHelper:
     construction, and the Ctrl-C wait loop happen in run()).
     """
 
-    def __init__(self, server_config_filename, dedispersion_config_filename):
+    def __init__(self, server_config_filename, dedispersion_config_filename,
+                 processing_delay_sec=0.0):
         self.config = _parse_config(server_config_filename)
         self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
         self.n = self.config['num_servers']
         self.hw = Hardware()
+        self.processing_delay_sec = processing_delay_sec
         # Populated later by run() -> _prepare_directories / _setup_memory.
         self.nfs_dir = None
         self.capacity = None
@@ -272,6 +274,8 @@ class RunServerHelper:
         print(f"  dd_host_memory_per_server = {self.config['dd_host_memory_per_server']}")
         print(f"  gpu_memory_per_server    = {self.config['gpu_memory_per_server']}")
         print(f"  use_hugepages = {self.config['use_hugepages']}")
+        if self.processing_delay_sec > 0.0:
+            print(f"  processing_delay_sec = {self.processing_delay_sec}  (artificial per-frame delay)")
 
     def _prepare_directories(self):
         # Resolve NFS dir and create SSD/NFS dirs if needed.
@@ -419,7 +423,8 @@ class RunServerHelper:
                                min_data_mtu=self.config['min_data_mtu'],
                                host_allocator=host_alloc,
                                gpu_allocator=gpu_alloc,
-                               cuda_device_id=cuda_device_id)
+                               cuda_device_id=cuda_device_id,
+                               processing_delay_sec=self.processing_delay_sec)
             # server.start() is NOT called here. We defer all server.start()
             # calls to _build_all_servers's phase 3 so that the async
             # BumpAllocators across all servers can initialize concurrently
@@ -479,8 +484,15 @@ class RunServerHelper:
         print("All servers stopped.")
 
 
-def run_server(server_config_filename, dedispersion_config_filename):
-    """Main entry point for 'pirate_frb run_server'."""
-    helper = RunServerHelper(server_config_filename, dedispersion_config_filename)
+def run_server(server_config_filename, dedispersion_config_filename,
+               processing_delay_sec=0.0):
+    """Main entry point for 'pirate_frb run_server'.
+
+    processing_delay_sec (default 0): artificial per-frame delay (seconds)
+    injected by the FrbServer processing thread. Used to simulate slow
+    GPU work for testing the FakeXEngine pacing path.
+    """
+    helper = RunServerHelper(server_config_filename, dedispersion_config_filename,
+                             processing_delay_sec=processing_delay_sec)
     helper.run()
 

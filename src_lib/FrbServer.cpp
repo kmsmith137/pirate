@@ -8,7 +8,8 @@
 
 #include <ksgpu/string_utils.hpp>  // tuple_str()
 
-#include <chrono>    // milliseconds (MonitorRingbuf cancellation-check timeout)
+#include <chrono>    // duration<double> (processing-thread delay) + ms (MonitorRingbuf timeout)
+#include <thread>    // this_thread::sleep_for (processing-thread delay)
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -645,6 +646,17 @@ void FrbServer::_processing_thread_main()
             if (rb_processed < rb_assembled)
                 break;
             cv.wait(lock);
+        }
+
+        // Optional artificial per-frame delay (config: processing_delay_sec).
+        // Used to simulate slow GPU processing for testing the FakeXEngine
+        // pacing path. Done off-lock so workers can keep advancing
+        // rb_assembled during the "work".
+        if (params.processing_delay_sec > 0.0) {
+            lock.unlock();
+            std::this_thread::sleep_for(
+                std::chrono::duration<double>(params.processing_delay_sec));
+            lock.lock();
         }
 
         rb_processed++;

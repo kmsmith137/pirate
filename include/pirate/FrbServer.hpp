@@ -86,6 +86,13 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // the sender side: surfaced via the GetConfig RPC so a fake X-engine
         // sender can check that its outgoing NIC has MTU >= this value.
         int min_data_mtu = 0;
+
+        // Artificial per-frame delay injected by the processing thread,
+        // in seconds. Used to simulate slow GPU processing for testing
+        // the FakeXEngine pacing path; defaults to 0 (no delay).
+        // Applied off-lock so worker threads can keep advancing
+        // rb_assembled during the "work".
+        double processing_delay_sec = 0.0;
     };
 
     // Factory method (constructor is private).
