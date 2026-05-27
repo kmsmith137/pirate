@@ -9,7 +9,9 @@
 
 #include <cuda_runtime.h>         // cudaIpcGetMemHandle, cudaIpcMemHandle_t
 
+#include <chrono>
 #include <cstring>                // strstr
+#include <iomanip>                // setprecision
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -249,11 +251,14 @@ void ToyIPC::send()
     try {
         // 1. Wait for a free slot. rb_end - rb_start is the number of
         // occupied slots; we need at least one free, i.e. (rb_end -
-        // rb_start) <= 4.
+        // rb_start) <= 4. Time the wait so we can report it below.
+        auto wait_start = std::chrono::steady_clock::now();
         while (rb_end - rb_start > 4) {
             cv.wait(lock);
             _throw_if_stopped("ToyIPC::send");
         }
+        double wait_sec = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - wait_start).count();
 
         // 2. Capture the slot index and a couple of random values.
         // (send() is single-threaded by contract, so rb_end won't move
@@ -292,9 +297,14 @@ void ToyIPC::send()
                              cudaMemcpyHostToDevice));
 
         // Mirror the values to stdout so the human running the toy
-        // can compare them against the consumer's print.
+        // can compare them against the consumer's print. Format the
+        // wait-time into its own stringstream to avoid leaving fixed/
+        // setprecision flags set on std::cout.
+        std::ostringstream wait_str;
+        wait_str << std::fixed << std::setprecision(3) << wait_sec;
         std::cout << "ToyIPC::send: produced slot=" << slot
                   << " values=(" << v[0] << ", " << v[1] << ")"
+                  << " (waited " << wait_str.str() << " sec)"
                   << std::endl;
 
         // 4. Send PRODUCED(n).

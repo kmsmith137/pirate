@@ -18,6 +18,7 @@ the slot and enqueues a CONSUMED(N) notification.
 
 import queue
 import threading
+import time
 from concurrent import futures
 
 import cupy
@@ -122,6 +123,8 @@ class ToyGrouper:
         pb_grpc.add_ToyIpcStreamServicer_to_server(_ToyIpcServicer(self), self._server)
         self._server.add_insecure_port(listen_address)
         self._server.start()
+        print(f"ToyGrouper: gRPC server listening on {listen_address}, "
+              "waiting for a client to connect...")
 
     # ---- Public API ----
 
@@ -129,7 +132,10 @@ class ToyGrouper:
         """Consume one produced ring-buffer slot. Blocks if necessary."""
         # 1. Wait for the IPC handshake to complete. _handle_ready is
         # also set by stop() / by _reader_main on error, so we always
-        # re-check is_stopped after wake-up.
+        # re-check is_stopped after wake-up. Time spent here counts
+        # toward 'wait for peer' on the first receive() call (when the
+        # producer hasn't connected yet); on subsequent calls it's ~0.
+        wait_start = time.monotonic()
         self._handle_ready.wait()
 
         # 2. Wait for at least one produced slot. Verify invariants.
@@ -143,10 +149,12 @@ class ToyGrouper:
                 f"(rb_start={self.rb_start}, rb_end={self.rb_end})"
             n = self.rb_start
             slot = n % 5
+            wait_sec = time.monotonic() - wait_start
 
         # 3. Print the slot. cupy auto-syncs on copy-to-host (the
         # ndarray.__repr__ path calls asnumpy under the hood).
-        print(f"ToyGrouper.receive: slot={slot} value={self.ringbuf[slot]}")
+        print(f"ToyGrouper.receive: slot={slot} value={self.ringbuf[slot]} "
+              f"(waited {wait_sec:.3f} sec)")
 
         # 4. Enqueue CONSUMED(n) for the handler thread to yield.
         # Do this BEFORE bumping rb_start so that on a queue.put
