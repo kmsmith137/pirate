@@ -74,9 +74,22 @@ namespace pirate {
 // the FrbServer and broadcasts each pushed rb_processed value to all
 // workers (Worker::rb_processed under each Worker::mutex). Worker
 // threads gate their sends so the sender stays at most 5 time chunks
-// ahead of the server: before each SEND_JUNK / SEND_MINICHUNK, the
-// worker blocks on its cv until Worker::rb_processed >= (ichunk - 5)
-// * nbeams, where ichunk = cmd.minichunk_index / minichunks_per_chunk.
+// ahead of the server, MEASURED AGAINST THE WORKER'S MOST RECENT
+// SUCCESSFUL SEND (Worker::last_ichunk_sent), not against the pending
+// command's ichunk. Before each SEND_JUNK / SEND_MINICHUNK, the
+// worker blocks on its cv until Worker::rb_processed >=
+// (Worker::last_ichunk_sent - 5) * nbeams.
+//
+// Why "last_ichunk_sent" and not "ichunk-of-pending-send": SKIPs let a
+// worker's ichunk race arbitrarily far ahead of its actual SENDs
+// without contributing data that would advance the server, so a gate
+// referenced to the pending ichunk would block indefinitely after a
+// SKIP-heavy stretch (the server has nothing to process; the receiver
+// has no new data to evict; nothing advances rb_processed). Gating
+// against last_ichunk_sent decouples SKIPs from the pacing budget --
+// each successful SEND advances the receiver and the server, so the
+// gate's horizon ratchets forward by SEND, not by SKIP.
+//
 // A bootstrap floor (FakeXEngine::rb_processed_floor) covers the
 // gap before the server has received enough data to publish its
 // first rb_processed value. See plans/fake_xengine_pacing.md.
@@ -318,6 +331,16 @@ struct FakeXEngine
         // first send only (see the long comment in _skip_or_send).
         // Persists across DISCONNECT/reconnect cycles.
         bool first_send_done = false;
+
+        // Chunk index of this worker's most recent successful SEND_JUNK /
+        // SEND_MINICHUNK, or 0 if the worker has never sent. Updated in
+        // _skip_or_send after _send_all() returns true. Read by the same
+        // worker thread when computing the paced-mode gate horizon (see
+        // the paced-mode section in the class doc-comment for why the
+        // gate references last_ichunk_sent rather than the pending
+        // command's ichunk). SKIPs and DISCONNECTs do NOT modify this
+        // field. Unused when paced=false.
+        long last_ichunk_sent = 0;
 
         // Per-worker XEngineMetadata, MEANINGFUL: freq_channels holds the
         // round-robin subset of channels this worker sends on the wire.

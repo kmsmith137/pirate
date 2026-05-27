@@ -1124,9 +1124,17 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             }
 
             // Gate: wait until rb_processed catches up to within 5
-            // chunks of this send, or stop. The required > 0 fast path
-            // skips the lock for the (rare) case where ichunk < 5.
-            long required = (ichunk - 5) * nbeams;
+            // chunks of this worker's most recent successful SEND, or
+            // stop. The required > 0 fast path skips the lock for the
+            // (common) case where last_ichunk_sent <= 5 (worker hasn't
+            // sent enough yet for the gate to bite). See the paced-mode
+            // section of FakeXEngine.hpp's class doc-comment for why
+            // the horizon is last_ichunk_sent rather than the pending
+            // command's ichunk: SKIPs let a worker's pending ichunk
+            // run arbitrarily far ahead of its actual SENDs without
+            // advancing the server, so gating against the pending
+            // ichunk would deadlock after a SKIP-heavy stretch.
+            long required = (w.last_ichunk_sent - 5) * nbeams;
             if (required > 0) {
                 std::unique_lock<std::mutex> lk(w.mutex);
                 w.cv.wait(lk, [&] {
@@ -1229,12 +1237,22 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
 
         if (!_send_all(w, w.sock, send_ptr, send_nbytes))
             return false;
+
+        // Record this send's chunk index for the paced-mode gate. Only
+        // meaningful when paced=true, but cheap and harmless otherwise.
+        // Set AFTER _send_all() so a stop / connreset-bailed send isn't
+        // counted -- the worker is exiting anyway and the value would
+        // not be referenced again. See the paced-mode section of
+        // FakeXEngine.hpp's class doc-comment for the role of this
+        // field in the gate predicate.
+        w.last_ichunk_sent = cmd.minichunk_index / minichunks_per_chunk;
     }
     // SKIP_MINICHUNK falls through here -- no wire activity, just
     // advance state below. SKIPs do NOT touch max_sent_minichunk,
-    // max_ack_at_submission, or first_send_done: nothing went on
-    // the wire, so the server cannot have seen this minichunk from
-    // us and cannot ever ack it.
+    // max_ack_at_submission, first_send_done, or last_ichunk_sent:
+    // nothing went on the wire, so the server cannot have seen this
+    // minichunk from us and cannot ever ack it (and the paced gate
+    // explicitly ignores SKIP-driven ichunk advances).
 
     // Determine the new minichunk_status entry for this cmd.
     // Successful SEND_* -> STATUS_SENT (the wire bytes went out;
