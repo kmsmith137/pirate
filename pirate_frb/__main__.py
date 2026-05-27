@@ -1171,6 +1171,51 @@ def run_fake_xengine_command(args):
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers)
 
 
+######################################  toy_ipc command  ########################################
+
+
+def parse_toy_ipc(subparsers):
+    help_text = "Toy CUDA-IPC producer (pairs with 'toy_grouper'). See plans/grouper.md."
+    parser = subparsers.add_parser("toy_ipc", help=help_text, description=help_text)
+    parser.add_argument('sec', type=float, help='Seconds to sleep between send() calls')
+    parser.add_argument('-a', '--address', default='127.0.0.1:6817',
+                        help="ToyGrouper listen address (default '127.0.0.1:6817')")
+    parser.add_argument('-g', '--gpu', type=int, default=0,
+                        help='CUDA device id (default 0). Must match toy_grouper.')
+
+
+def toy_ipc_command(args):
+    from .utils import ToyIPC
+    ksgpu.set_cuda_device(args.gpu)
+    ipc = ToyIPC(args.address, args.gpu)
+    try:
+        while True:
+            ipc.send()
+            time.sleep(args.sec)
+    finally:
+        ipc.stop()
+
+
+######################################  toy_grouper command  ####################################
+
+
+def parse_toy_grouper(subparsers):
+    help_text = "Toy CUDA-IPC consumer (pairs with 'toy_ipc'). See plans/grouper.md."
+    parser = subparsers.add_parser("toy_grouper", help=help_text, description=help_text)
+    parser.add_argument('sec', type=float, help='Seconds to sleep between receive() calls')
+    parser.add_argument('-a', '--address', default='127.0.0.1:6817',
+                        help="gRPC listen address (default '127.0.0.1:6817')")
+    parser.add_argument('-g', '--gpu', type=int, default=0,
+                        help='CUDA device id (default 0). Must match toy_ipc.')
+
+
+def toy_grouper_command(args):
+    from .utils import ToyGrouper
+    with ToyGrouper(args.address, cuda_device_id=args.gpu) as g:
+        while True:
+            g.receive()
+            time.sleep(args.sec)
+
 
 ####################################################################################################
 
@@ -1203,6 +1248,8 @@ def get_parser():
 
     parse_run_server(subparsers)
     parse_run_fake_xengine(subparsers)
+    parse_toy_ipc(subparsers)
+    parse_toy_grouper(subparsers)
     parse_rpc_status(subparsers)
     parse_rpc_write(subparsers)
     
@@ -1270,6 +1317,10 @@ def main():
         run_server_command(args)
     elif args.command == "run_fake_xengine":
         run_fake_xengine_command(args)
+    elif args.command == "toy_ipc":
+        toy_ipc_command(args)
+    elif args.command == "toy_grouper":
+        toy_grouper_command(args)
     else:
         print(f"Command '{args.command}' not recognized", file=sys.stderr)
         sys.exit(2)

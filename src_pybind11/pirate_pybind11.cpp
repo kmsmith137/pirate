@@ -34,6 +34,7 @@ namespace pirate {
     void register_casm_bindings(pybind11::module &m);
     void register_chime_bindings(pybind11::module &m);
     void register_loose_ends_bindings(pybind11::module &m);
+    void register_utils_bindings(pybind11::module &m);
 }
 
 
@@ -50,12 +51,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         return;
     }
 
-    // Register bindings from other files, in order: core, kernels, casm, loose_ends
+    // Register bindings from other files, in order: core, kernels, casm, loose_ends, utils
     register_core_bindings(m);
     register_kernel_bindings(m);
     register_casm_bindings(m);
     register_chime_bindings(m);
     register_loose_ends_bindings(m);
+    register_utils_bindings(m);
 
     // Main dedispersion classes defined here
     

@@ -4,8 +4,10 @@ from .ThreadAffinity import ThreadAffinity
 from .time_cupy_dedisperser import time_cupy_dedisperser
 from .show_asdf import show_asdf
 from .network import extract_ip, check_mtu
-from ..pirate_pybind11 import get_thread_affinity, set_thread_affinity
+from .ToyGrouper import ToyGrouper
+from ..pirate_pybind11 import get_thread_affinity, set_thread_affinity, ToyIPC
 
 __all__ = ['ThreadAffinity', 'get_thread_affinity', 'set_thread_affinity',
            'time_cupy_dedisperser', 'show_asdf',
-           'extract_ip', 'check_mtu']
+           'extract_ip', 'check_mtu',
+           'ToyIPC', 'ToyGrouper']
