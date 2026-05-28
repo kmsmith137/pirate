@@ -11,6 +11,7 @@
 #include "../include/pirate/GpuDequantizationKernel.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
+#include "../include/pirate/utils.hpp"    // safe_memcpy_*
 
 #include <ksgpu/rand_utils.hpp>
 #include <ksgpu/test_utils.hpp>
@@ -476,7 +477,7 @@ void GpuDedisperser::_launch_et_h2g(long ichunk, long ibatch, cudaStream_t strea
     char *src = (char *) this->host_ringbuf.data + (soff * SB);
     char *dst = (char *) this->gpu_ringbuf.data + (doff * SB);
     long nbytes = beams_per_batch * etg_zone.segments_per_frame * SB;
-    CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, stream));
+    safe_memcpy_h2g_async(dst, src, nbytes, stream);
 }
 
 
@@ -496,7 +497,7 @@ void GpuDedisperser::_launch_g2h(long ichunk, long ibatch, cudaStream_t stream)
             char *src = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (soff * SB);
             char *dst = reinterpret_cast<char *> (this->host_ringbuf.data) + (doff * SB);
             long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
-            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyDeviceToHost, stream));
+            safe_memcpy_g2h_async(dst, src, nbytes, stream);
         }
     }
 }
@@ -518,7 +519,7 @@ void GpuDedisperser::_launch_h2g(long ichunk, long ibatch, cudaStream_t stream)
             char *src = reinterpret_cast<char *> (this->host_ringbuf.data) + (soff * SB);
             char *dst = reinterpret_cast<char *> (this->gpu_ringbuf.data) + (doff * SB);
             long nbytes = beams_per_batch * host_zone.segments_per_frame * SB;
-            CUDA_CALL(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyHostToDevice, stream));
+            safe_memcpy_h2g_async(dst, src, nbytes, stream);
         }
     }
 }
@@ -1414,8 +1415,8 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
         // Copy raw data + scales_offsets cpu->gpu.
         // First, wait on the dequantization consumer.
         evrb_dq.wait(h2g_stream, seq_id - S);
-        CUDA_CALL(cudaMemcpyAsync(raw_gpu.data,   raw_cpu.data,   raw_nbytes,   cudaMemcpyHostToDevice, h2g_stream));
-        CUDA_CALL(cudaMemcpyAsync(scoff_gpu.data, scoff_cpu.data, scoff_nbytes, cudaMemcpyHostToDevice, h2g_stream));
+        safe_memcpy_h2g_async(raw_gpu.data,   raw_cpu.data,   raw_nbytes,   h2g_stream);
+        safe_memcpy_h2g_async(scoff_gpu.data, scoff_cpu.data, scoff_nbytes, h2g_stream);
         evrb_raw.record(h2g_stream, seq_id);
 
         // I decided to synchronize the KernelTimer stream at this point.

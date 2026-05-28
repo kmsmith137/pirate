@@ -2,10 +2,13 @@
 #include "../include/pirate/inlines.hpp"    // pow2(), xdiv()
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
 
+#include <algorithm>
+#include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
 
+#include <ksgpu/cuda_utils.hpp>   // CUDA_CALL
 #include <ksgpu/xassert.hpp>
 
 using namespace std;
@@ -15,6 +18,83 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// safe_memcpy_*: split host<->device copies at absolute
+// cuda_host_register_chunk_size-aligned host addresses, to work around
+// the cudaMemcpyAsync()-spanning-two-registrations failure. See comments
+// in utils.hpp and constants.hpp.
+
+
+// 'host_ptr' is the host side of the copy (src for h2g, dst for g2h).
+// 'dev_ptr' is the device side. 'do_one' is invoked once per piece with
+// (host_p, dev_p, this_nbytes), where the piece [host_p, host_p+this_nbytes)
+// is guaranteed not to straddle a chunk boundary.
+template<typename Fn>
+static inline void _split_at_chunk_boundaries(void *host_ptr, void *dev_ptr,
+                                              long nbytes, Fn &&do_one)
+{
+    constexpr long chunk = constants::cuda_host_register_chunk_size;
+    constexpr long mask  = chunk - 1;
+
+    char *h = static_cast<char *>(host_ptr);
+    char *d = static_cast<char *>(dev_ptr);
+    long  n = nbytes;
+
+    while (n > 0) {
+        // Bytes from h to the next chunk boundary at or after h+1.
+        // (If h is already on a boundary, this is exactly 'chunk'.)
+        uintptr_t up = reinterpret_cast<uintptr_t>(h);
+        long to_bdy  = static_cast<long>(chunk - (up & mask));
+        long this_sz = std::min(n, to_bdy);
+        do_one(h, d, this_sz);
+        h += this_sz; d += this_sz; n -= this_sz;
+    }
+}
+
+
+void safe_memcpy_h2g_sync(void *dst, const void *src, long nbytes)
+{
+    xassert(nbytes >= 0);
+    _split_at_chunk_boundaries(const_cast<void *>(src), dst, nbytes,
+        [](char *h, char *d, long n) {
+            CUDA_CALL(cudaMemcpy(d, h, n, cudaMemcpyHostToDevice));
+        });
+}
+
+
+void safe_memcpy_g2h_sync(void *dst, const void *src, long nbytes)
+{
+    xassert(nbytes >= 0);
+    _split_at_chunk_boundaries(dst, const_cast<void *>(src), nbytes,
+        [](char *h, char *d, long n) {
+            CUDA_CALL(cudaMemcpy(h, d, n, cudaMemcpyDeviceToHost));
+        });
+}
+
+
+void safe_memcpy_h2g_async(void *dst, const void *src, long nbytes,
+                            cudaStream_t stream)
+{
+    xassert(nbytes >= 0);
+    _split_at_chunk_boundaries(const_cast<void *>(src), dst, nbytes,
+        [stream](char *h, char *d, long n) {
+            CUDA_CALL(cudaMemcpyAsync(d, h, n, cudaMemcpyHostToDevice, stream));
+        });
+}
+
+
+void safe_memcpy_g2h_async(void *dst, const void *src, long nbytes,
+                            cudaStream_t stream)
+{
+    xassert(nbytes >= 0);
+    _split_at_chunk_boundaries(dst, const_cast<void *>(src), nbytes,
+        [stream](char *h, char *d, long n) {
+            CUDA_CALL(cudaMemcpyAsync(h, d, n, cudaMemcpyDeviceToHost, stream));
+        });
+}
 
 
 int bit_reverse_slow(int i, int nbits)

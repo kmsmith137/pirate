@@ -25,7 +25,8 @@ namespace pirate {
 struct AsyncDeleterState {
     long size = 0;
     int cuda_device = -1;
-    std::atomic<int> n_registered{0};   // case 1 only; always 0 in cases 2, 3
+    std::atomic<int> n_registered{0};            // case 1 only; always 0 in cases 2, 3
+    std::vector<long> reg_chunk_offsets;         // case 1 only; size n_registered_chunks + 1
 };
 
 
@@ -143,7 +144,17 @@ struct BumpAllocator
     std::atomic<int> _workers_remaining{0};      // case 2: last-out-finalizes counter
     long _nzero_chunks = 0;
     long _nreg_chunks = 0;
-    int  _n_zero_chunks_in_last_super = 0;
+    // Case 1 only: register chunks aligned to absolute
+    // constants::cuda_host_register_chunk_size-aligned host addresses
+    // (so the head and tail register chunks may be partial). Zero chunks
+    // are inserted not to straddle register-chunk boundaries; entries are
+    // monotonic with _zero_chunk_starts[0] = 0 and
+    // _zero_chunk_starts[_nzero_chunks] = size. _super_of_zero_chunk[i]
+    // maps each zero chunk to the register chunk it lies within.
+    // _zero_chunks_per_super[s] holds the count for completion-tracking.
+    std::vector<long> _zero_chunk_starts;
+    std::vector<int>  _super_of_zero_chunk;
+    std::vector<int>  _zero_chunks_per_super;
 
     // Blocking helper for async mode (no-op in sync mode).
     void _block_until_ready_or_throw() const;

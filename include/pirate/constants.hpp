@@ -29,11 +29,37 @@ struct constants
     // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
     static constexpr int cuda_max_y_blocks = 65535;
     static constexpr int cuda_max_z_blocks = 65535;
-    
+
     // These assumptions are made all over the place.
     // (Placement of static_asserts in this source file is arbitrary.)
     static_assert(sizeof(int) == 4);
     static_assert(sizeof(long) == 8);
+
+    // The CUDA driver caps a single cudaHostRegister() call at ~511 GiB
+    // (undocumented! not sure if this is only true with hugepages).
+    //
+    // Calling cudaHostRegister() in chunks works, but creates a new problem:
+    // calls to cudaMemcpy[Async] fail if they cross chunk boundaries.
+    //
+    // In pirate::BumpAllocator, we implement a complicated workaround:
+    //
+    //   - register BumpAllocator backing memory in chunks aligned
+    //     to absolute host addresses.
+    //
+    //   - in situations where a cudaMemcpy* may be backed by a BumpAllocator,
+    //     we call safe_memcpy_{h2g,g2h}_{sync,async}() (see utils.hpp) which
+    //     splits host<->device copies at chunk boundaries.
+
+    // Chunk size for cudaHostRegister().
+    static constexpr long cuda_host_register_chunk_size = 64L << 30;  // 64 GiB
+    
+    // The constant is power-of-two so the splitter can use bit-arithmetic.
+    static_assert((cuda_host_register_chunk_size
+                   & (cuda_host_register_chunk_size - 1)) == 0,
+                  "cuda_host_register_chunk_size must be a power of two");
+    
+    static_assert(cuda_host_register_chunk_size <= (511L << 30),
+                  "cuda_host_register_chunk_size must be <= 511 GiB");
 };
 
 
