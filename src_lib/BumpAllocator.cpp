@@ -27,8 +27,9 @@ namespace pirate {
 
 
 // Async mode constants. Worker chunking parameters.
+// Note that reg_chunk_bytes is 64 GiB by default, but we sometimes lower the value for stress testing.
+static constexpr long reg_chunk_bytes = constants::cuda_host_register_chunk_size;
 static constexpr long zero_chunk_bytes = 128L << 20;     // 128 MiB
-static constexpr long reg_chunk_bytes = constants::cuda_host_register_chunk_size;  // 64 GiB
 static constexpr long hugepage_size = 2L << 20;          // 2 MiB
 
 

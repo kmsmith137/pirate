@@ -6,6 +6,7 @@ import numpy as np
 import cupy as cp
 
 from ..pirate_pybind11 import GpuDequantizationKernel
+from .safe_memcpy import safe_h2g_copy
 
 
 def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations):
@@ -112,9 +113,13 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
         scoff_gpu = multi_scoff_gpu[istream]
 
         # Copy raw data + scales_offsets from CPU to GPU on h2g_stream
-        # (back-to-back; the stream sequences them).
-        raw_gpu.set(raw_cpu, stream=h2g_stream)
-        scoff_gpu.set(scoff_cpu, stream=h2g_stream)
+        # (back-to-back; the stream sequences them). Use safe_h2g_copy
+        # instead of cupy's .set() because raw_cpu / scoff_cpu may live in
+        # hugepage-backed BumpAllocator memory whose chunked
+        # cudaHostRegister layout breaks an unsplit cudaMemcpyAsync.
+        # See plans/python_h2g_chunking.md.
+        safe_h2g_copy(raw_gpu,   raw_cpu,   h2g_stream)
+        safe_h2g_copy(scoff_gpu, scoff_cpu, h2g_stream)
 
         # Synchronize compute_stream before recording timestamp.
         # This ensures we measure wall-clock time for the previous iteration's work.
