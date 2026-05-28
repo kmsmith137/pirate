@@ -66,12 +66,23 @@ namespace pirate {
 //     the device for cudaMalloc / cudaMemset).
 //   - cuda_device >= 0 if (af_rhost) AND async (the registrar worker
 //     calls cudaSetDevice).
-//   - nthreads >= 2 if af_zero AND (af_uhost OR af_rhost) AND async
-//     (parallel-memset path). Otherwise nthreads is ignored.
+//   - For sync mode + af_rhost, cuda_device is ignored: the chunked
+//     register runs on the main thread against the caller's current
+//     CUDA device.
+//   - nthreads >= 2 if af_zero AND af_rhost AND async (1 registrar
+//     thread + >= 1 zero worker).
+//   - nthreads >= 1 if af_zero AND af_uhost AND async (>= 1 zero
+//     worker; no registrar).
+//   - Otherwise nthreads is ignored.
 //
 // aflags must be: exactly one of {af_uhost, af_rhost, af_gpu}, plus an
 // optional subset of {af_mmap_huge, af_zero}. Any other flag triggers
-// a constructor error.
+// a constructor error. af_mmap_huge is rejected with af_gpu.
+//
+// Note: after construction, the `capacity` member may be larger than
+// the value passed in. It is rounded up to a multiple of
+// max(nalign, page-size implied by aflags) (4 KiB for af_uhost/af_rhost
+// without af_mmap_huge, 2 MiB with af_mmap_huge, nalign=128 B for af_gpu).
 
 
 struct BumpAllocator
@@ -93,8 +104,10 @@ struct BumpAllocator
     // This counter is always valid, even in dummy mode.
     std::atomic<long> nbytes_allocated{0};
 
-    // Returns the base shared_ptr. Throws in dummy mode. In async mode,
-    // blocks until init complete (or rethrows async-init exception).
+    // Returns the base shared_ptr. Throws in dummy mode (capacity < 0).
+    // For capacity == 0 ("empty" mode), returns a null shared_ptr (no
+    // backing memory was allocated). In async mode, blocks until init
+    // complete (or rethrows async-init exception).
     std::shared_ptr<void> get_base() const;
 
     // Allocates 'nbytes' from the base region, returns pointer.
@@ -106,7 +119,7 @@ struct BumpAllocator
     // In async mode: blocks until init complete (returns) or async init
     // failed (rethrows the captured exception). In sync mode: returns
     // immediately. Safe to call any number of times.
-    void wait_until_initialized();
+    void wait_until_initialized() const;
 
     // Returns true if the allocator is ready to serve allocations (sync
     // mode: always true after ctor returns; async mode: true after workers
@@ -137,9 +150,31 @@ struct BumpAllocator
 
     // ----- Internals -----
 
-    int aflags = 0;
-    long capacity = -1;      // -1 means dummy mode
-    std::shared_ptr<void> base;
+    const int aflags;
+    const long capacity;      // -1 means dummy mode
+
+    // State held by the base shared_ptr's deleter. Captured by value
+    // into the deleter so it outlives BumpAllocator if needed (e.g., a
+    // SlabAllocator still holds a reference to base after BumpAllocator
+    // dies).
+    struct DeleterState {
+        std::atomic<int> n_registered{0};            // chunked-register paths only
+        std::vector<long> reg_chunk_offsets;         // chunked-register paths only
+    };
+
+    // _nreg_chunks and _deleter_state are declared before `base`
+    // because they are written by _allocate_base() (which initializes
+    // `base` from the ctor's init list). Member init order follows
+    // declaration order, so they must precede `base`.
+    //
+    // _nreg_chunks > 0 iff af_rhost (set by _setup_rhost_deleter).
+    // _deleter_state is non-null iff af_rhost, in both sync and async
+    // modes; non-rhost paths rely on ksgpu's own deleter.
+    long _nreg_chunks = 0;
+    std::shared_ptr<DeleterState> _deleter_state;
+
+    // const after ctor: assigned exactly once via the init list.
+    const std::shared_ptr<void> base;
 
     // Helper: allocates array, used by all allocate_array() overloads.
     // Handles both normal mode and dummy mode.
@@ -158,46 +193,22 @@ struct BumpAllocator
     // Async worker threads. Empty in sync mode.
     std::vector<std::thread> _workers;
     int _async_cuda_device = -1;     // captured by workers for cudaSetDevice()
-    bool _has_registrar = false;     // controls who finalizes _is_initialized
 
-    // Async chunking state. _nreg_chunks > 0 iff af_rhost. The zero-chunk
-    // partition is built so no zero chunk straddles a register-chunk
-    // boundary: _zero_chunk_starts[i+1] - _zero_chunk_starts[i] is at
-    // most zero_chunk_bytes, and _super_of_zero_chunk[i] is the register
+    // Async chunking state. The zero-chunk partition is built so no
+    // zero chunk straddles a register-chunk boundary:
+    // _zero_chunk_starts[i+1] - _zero_chunk_starts[i] is at most
+    // zero_chunk_bytes, and _super_of_zero_chunk[i] is the register
     // chunk index that contains zero chunk i. _zero_chunks_per_super[s]
     // is the count the registrar waits for. When there is no registrar
-    // (zero workers only), reg_chunk_offsets/_super_done are empty and
-    // _super_of_zero_chunk is empty too (zero workers skip the signal).
+    // (zero workers only), _super_done is empty and _super_of_zero_chunk
+    // is empty too (zero workers skip the signal).
     std::atomic<long> _next_zero_chunk{0};
     std::vector<std::atomic<int>> _super_done;
     std::atomic<int>  _workers_remaining{0};   // last-out-finalizes counter (zero-only path)
     long _nzero_chunks = 0;
-    long _nreg_chunks  = 0;
     std::vector<long> _zero_chunk_starts;
     std::vector<int>  _super_of_zero_chunk;
     std::vector<int>  _zero_chunks_per_super;
-
-    // State held by the base shared_ptr's deleter. Captured by value into
-    // the deleter so it outlives BumpAllocator if needed (e.g., a
-    // SlabAllocator still holds a reference to base after BumpAllocator
-    // dies). Used by:
-    //   - sync mode with (af_mmap_huge | af_rhost): chunked register, only
-    //     n_registered + reg_chunk_offsets are used.
-    //   - async case 1 (af_mmap_huge | af_rhost | af_zero): chunked register,
-    //     all fields used.
-    //   - async cases 2 and 3: only size + cuda_device are used.
-    
-    struct DeleterState {
-        long size = 0;
-        int cuda_device = -1;
-        std::atomic<int> n_registered{0};            // chunked-register paths only
-        std::vector<long> reg_chunk_offsets;         // chunked-register paths only
-    };
-    
-    // Held in async mode (null in sync mode). Captured by value into base's
-    // deleter so the counter + size outlive BumpAllocator if external refs
-    // (e.g. a SlabAllocator slab) keep `base` alive.
-    std::shared_ptr<DeleterState> _deleter_state;
 
     // Blocking helper for async mode (no-op in sync mode).
     void _block_until_ready_or_throw() const;
@@ -206,18 +217,25 @@ struct BumpAllocator
     // not part of the user API).
     void _finalize_initialized();
 
-    // Init paths (called from the ctor).
+    // Allocates the backing region (using ksgpu) and, for af_rhost,
+    // wraps it in a chained shared_ptr whose deleter unregisters the
+    // successfully-registered chunks before dropping the ksgpu keepalive.
+    // Writes _nreg_chunks and _deleter_state (for the af_rhost path).
+    // Called from the ctor's init list; reads `this->aflags` and
+    // `this->capacity` (initialized first per declaration order).
+    // Returns null for dummy/empty mode (capacity <= 0).
+    std::shared_ptr<void> _allocate_base(int cuda_device);
+
+    // Init paths (called from the ctor body, after `base` is set).
     void _init_sync(int cuda_device);
     void _init_async(int nthreads, int cuda_device);
 
-    // Shared helper for both init paths: when af_rhost is set, wrap
-    // this->base in a chained shared_ptr whose deleter unregisters the
-    // successfully-registered chunks and then drops a captured
-    // keepalive so the ksgpu deleter (munmap) fires. Initializes
-    // _deleter_state and _nreg_chunks. The keepalive parameter is the
-    // shared_ptr<void> returned by ksgpu::_af_alloc that this method
-    // takes ownership of.
-    void _setup_rhost_deleter(std::shared_ptr<void> ksgpu_base);
+    // Wraps `ksgpu_base` in a chained shared_ptr whose deleter
+    // unregisters the successfully-registered chunks, then drops a
+    // captured keepalive so the ksgpu deleter (munmap) fires.
+    // Initializes _deleter_state and _nreg_chunks. Returns the chained
+    // shared_ptr (used to initialize `base` in the init list).
+    std::shared_ptr<void> _setup_rhost_deleter(std::shared_ptr<void> ksgpu_base);
 
     // Serial chunked-register loop, used by the sync path. Throws on
     // cudaHostRegister failure; the chained deleter (already installed
@@ -227,9 +245,11 @@ struct BumpAllocator
 
     // Build _zero_chunk_starts / _super_of_zero_chunk /
     // _zero_chunks_per_super / _super_done for the async path. If
-    // has_registrar is false, _super_of_zero_chunk and _super_done are
-    // left empty (zero workers don't signal anything).
-    void _build_async_chunk_layout(bool has_registrar);
+    // has_zero_workers is false, only _super_done is sized (when a
+    // registrar is present): _zero_chunk_starts, _super_of_zero_chunk,
+    // and _zero_chunks_per_super stay empty, so no zero work is
+    // dispatched.
+    void _build_async_chunk_layout(bool has_zero_workers);
 
     // Worker bodies.
     void _zero_worker();

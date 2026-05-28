@@ -1,5 +1,4 @@
 #include "../include/pirate/BumpAllocator.hpp"
-#include "../include/pirate/constants.hpp"  // cuda_host_register_chunk_size
 #include "../include/pirate/inlines.hpp"    // align_up()
 
 #include <algorithm>
@@ -10,6 +9,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -47,7 +47,10 @@ static constexpr long host_page_size = 4096L;            // 4 KiB
 
 // Validate aflags: exactly one of {af_uhost, af_rhost, af_gpu}, plus an
 // optional subset of {af_mmap_huge, af_zero}. No other flags allowed.
-static void _validate_aflags(int aflags)
+// af_mmap_huge is not meaningful for af_gpu and is rejected if combined.
+// Returns the validated aflags so callers can invoke this from the ctor's
+// initializer list.
+static int _validate_aflags(int aflags)
 {
     const int allowed = ksgpu::af_uhost | ksgpu::af_rhost | ksgpu::af_gpu
                       | ksgpu::af_mmap_huge | ksgpu::af_zero;
@@ -66,6 +69,11 @@ static void _validate_aflags(int aflags)
         throw std::runtime_error(
             "BumpAllocator: aflags must contain exactly one of "
             "{af_uhost, af_rhost, af_gpu}");
+    if ((aflags & ksgpu::af_gpu) && (aflags & ksgpu::af_mmap_huge))
+        throw std::runtime_error(
+            "BumpAllocator: af_mmap_huge cannot be combined with af_gpu "
+            "(huge-page mapping is a host-memory concept)");
+    return aflags;
 }
 
 
@@ -96,50 +104,38 @@ static long _alloc_align(int aflags)
 }
 
 
+// Validate sync/async + dummy combination, and align capacity to the
+// page/cache-line size implied by aflags. Returns capacity unchanged
+// for capacity <= 0 (dummy or empty modes). Called from the ctor init
+// list so that the const `capacity` member can be initialized directly.
+static long _validate_and_align_capacity(int aflags, long capacity, bool async)
+{
+    if (async && capacity < 0)
+        throw std::runtime_error(
+            "BumpAllocator(async): capacity must be >= 0 (dummy mode not supported)");
+    if (capacity <= 0)
+        return capacity;
+    return align_up(capacity,
+                    std::max((long) BumpAllocator::nalign, _alloc_align(aflags)));
+}
+
+
 // -------------------------------------------------------------------------------------------------
 // Constructor / destructor
 
 
 BumpAllocator::BumpAllocator(int aflags_, long capacity_, bool async,
                               int nthreads, int cuda_device)
-    : aflags(aflags_), capacity(capacity_)
+    : aflags(_validate_aflags(aflags_)),
+      capacity(_validate_and_align_capacity(aflags_, capacity_, async)),
+      base(_allocate_base(cuda_device))
 {
-    _validate_aflags(aflags);
-
-    if (async && capacity < 0)
-        throw std::runtime_error(
-            "BumpAllocator(async): capacity must be >= 0 (dummy mode not supported)");
-
     if (capacity <= 0) {
-        // capacity < 0: sync dummy mode.  capacity == 0: empty.
-        // Either way, `base` stays null.
+        // capacity < 0: dummy mode (sync only). capacity == 0: empty.
+        // Either way, `base` is null and there is no work to do.
         _is_initialized = true;
         return;
     }
-
-    const bool is_gpu    = aflags & ksgpu::af_gpu;
-    const bool is_uhost  = aflags & ksgpu::af_uhost;
-    const bool is_rhost  = aflags & ksgpu::af_rhost;
-    const bool need_zero = aflags & ksgpu::af_zero;
-
-    // cuda_device is required whenever we'll call a CUDA API. For
-    // af_gpu this is always (cudaMalloc and cudaMemset on a specific
-    // device). For af_rhost only in async mode (the registrar worker
-    // sets the device on entry).
-    if (is_gpu && cuda_device < 0)
-        throw std::runtime_error(
-            "BumpAllocator: cuda_device must be >= 0 when af_gpu is set");
-
-    if (async) {
-        if (is_rhost && cuda_device < 0)
-            throw std::runtime_error(
-                "BumpAllocator(async): cuda_device must be >= 0 when af_rhost is set");
-        if (need_zero && (is_uhost || is_rhost) && nthreads < 2)
-            throw std::runtime_error(
-                "BumpAllocator(async): nthreads must be >= 2 for parallel-zero path");
-    }
-
-    capacity = align_up(capacity, std::max((long) nalign, _alloc_align(aflags)));
 
     if (async)
         _init_async(nthreads, cuda_device);
@@ -163,36 +159,52 @@ BumpAllocator::~BumpAllocator()
 // Init paths
 
 
+std::shared_ptr<void> BumpAllocator::_allocate_base(int cuda_device)
+{
+    // Called from the ctor init list: this->aflags and this->capacity are
+    // already initialized (preceding members in declaration order), but
+    // every member declared after `base` is not yet constructed.
+    // _nreg_chunks and _deleter_state are declared before `base`
+    // specifically so this function may write to them.
+
+    if (capacity <= 0)
+        return nullptr;     // dummy mode (< 0) or empty (== 0): no allocation.
+
+    const bool is_gpu = aflags & ksgpu::af_gpu;
+    const bool is_rhost = aflags & ksgpu::af_rhost;
+
+    if (is_gpu && cuda_device < 0)
+        throw std::runtime_error(
+            "BumpAllocator: cuda_device must be >= 0 when af_gpu is set");
+
+    // Allocate. For af_gpu, ensure cudaMalloc happens on the requested
+    // device (ksgpu records this as the free-time device too).
+    int alloc_flags = _compute_alloc_flags(aflags);
+    std::optional<ksgpu::CudaSetDevice> _scoped;
+    if (is_gpu)
+        _scoped.emplace(cuda_device);
+    std::shared_ptr<void> ksgpu_base = ksgpu::_af_alloc(
+        ksgpu::Dtype(ksgpu::df_uint, 8), capacity, alloc_flags);
+
+    uintptr_t p = reinterpret_cast<uintptr_t>(ksgpu_base.get());
+    xassert((p % nalign) == 0);
+
+    if (is_rhost)
+        return _setup_rhost_deleter(std::move(ksgpu_base));
+    return ksgpu_base;
+}
+
+
 void BumpAllocator::_init_sync(int cuda_device)
 {
     const bool is_gpu    = aflags & ksgpu::af_gpu;
     const bool is_rhost  = aflags & ksgpu::af_rhost;
     const bool need_zero = aflags & ksgpu::af_zero;
 
-    // Allocate. For af_gpu, ensure cudaMalloc happens on the requested
-    // device (ksgpu records this as the free-time device too).
-    int alloc_flags = _compute_alloc_flags(aflags);
-    std::shared_ptr<void> ksgpu_base;
-    if (is_gpu) {
-        ksgpu::CudaSetDevice _scoped(cuda_device);
-        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
-                                       capacity, alloc_flags);
-    } else {
-        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
-                                       capacity, alloc_flags);
-    }
-
-    if (is_rhost)
-        _setup_rhost_deleter(std::move(ksgpu_base));   // sets this->base via chained deleter
-    else
-        this->base = std::move(ksgpu_base);
-
-    uintptr_t p = reinterpret_cast<uintptr_t>(base.get());
-    xassert((p % nalign) == 0);
-
     // Chunked register on the main thread. A throw mid-loop unwinds the
-    // ctor; the chained deleter installed above unregisters successful
-    // chunks and then triggers the ksgpu deleter (munmap).
+    // ctor; the chained deleter installed by _allocate_base unregisters
+    // the successfully-registered chunks and then triggers the ksgpu
+    // deleter (munmap).
     if (is_rhost)
         _register_chunks_serially();
 
@@ -215,25 +227,17 @@ void BumpAllocator::_init_async(int nthreads, int cuda_device)
     const bool is_rhost  = aflags & ksgpu::af_rhost;
     const bool need_zero = aflags & ksgpu::af_zero;
 
-    // Allocate (synchronous, even in async mode).
-    int alloc_flags = _compute_alloc_flags(aflags);
-    std::shared_ptr<void> ksgpu_base;
-    if (is_gpu) {
-        ksgpu::CudaSetDevice _scoped(cuda_device);
-        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
-                                       capacity, alloc_flags);
-    } else {
-        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
-                                       capacity, alloc_flags);
-    }
-
-    if (is_rhost)
-        _setup_rhost_deleter(std::move(ksgpu_base));
-    else
-        this->base = std::move(ksgpu_base);
-
-    uintptr_t p = reinterpret_cast<uintptr_t>(base.get());
-    xassert((p % nalign) == 0);
+    // Async-specific argument validation.
+    if (is_rhost && cuda_device < 0)
+        throw std::runtime_error(
+            "BumpAllocator(async): cuda_device must be >= 0 when af_rhost is set");
+    if (need_zero && is_rhost && nthreads < 2)
+        throw std::runtime_error(
+            "BumpAllocator(async): nthreads must be >= 2 for af_rhost + af_zero "
+            "(1 registrar + >= 1 zero worker)");
+    if (need_zero && is_uhost && nthreads < 1)
+        throw std::runtime_error(
+            "BumpAllocator(async): nthreads must be >= 1 for af_uhost + af_zero");
 
     // Async work to do (some combination of these may be needed).
     const bool host_memset = need_zero && (is_uhost || is_rhost);
@@ -314,22 +318,26 @@ BumpAllocator::_build_reg_chunk_offsets(const void *base_raw, long size)
 }
 
 
-void BumpAllocator::_setup_rhost_deleter(std::shared_ptr<void> ksgpu_base)
+std::shared_ptr<void> BumpAllocator::_setup_rhost_deleter(std::shared_ptr<void> ksgpu_base)
 {
     std::vector<long> reg_offsets =
         _build_reg_chunk_offsets(ksgpu_base.get(), capacity);
     _nreg_chunks = static_cast<long>(reg_offsets.size()) - 1;
 
     _deleter_state = std::make_shared<DeleterState>();
-    _deleter_state->size = capacity;
     _deleter_state->reg_chunk_offsets = reg_offsets;
 
     // Wrap base in a chained shared_ptr whose deleter unregisters
     // successful chunks, then drops the captured keepalive (ksgpu's
     // shared_ptr) so ksgpu's deleter (munmap) fires.
-    this->base = std::shared_ptr<void>(
-        ksgpu_base.get(),
-        [state = _deleter_state, keepalive = ksgpu_base](void *p) {
+    //
+    // Read the raw pointer BEFORE std::move'ing ksgpu_base into the
+    // lambda capture, since std::move leaves the source in a moved-from
+    // (empty) state where .get() may return nullptr.
+    void *raw = ksgpu_base.get();
+    return std::shared_ptr<void>(
+        raw,
+        [state = _deleter_state, keepalive = std::move(ksgpu_base)](void *p) {
             int n = state->n_registered.load(std::memory_order_acquire);
             char *cp = static_cast<char *>(p);
             for (int s = 0; s < n; s++) {
@@ -373,6 +381,10 @@ void BumpAllocator::_build_async_chunk_layout(bool has_zero_workers)
     // workers may or may not be present; the registrar still reads it).
     if (_nreg_chunks > 0) {
         _super_done = std::vector<std::atomic<int>>(_nreg_chunks);
+        // Explicit zero-init: std::atomic<int>'s default ctor does
+        // value-initialize to 0 (so the vector ctor leaves these at 0),
+        // but that corner of the spec is easy to forget -- make the
+        // invariant visible.
         for (long s = 0; s < _nreg_chunks; s++)
             _super_done[s].store(0, std::memory_order_relaxed);
     }
@@ -512,20 +524,26 @@ void BumpAllocator::_gpu_memset_worker()
 
 void BumpAllocator::stop(std::exception_ptr e)
 {
-    std::lock_guard<std::mutex> guard(_mutex);
-    if (_is_stopped) return;       // first stop wins
-    _is_stopped = true;
-    _error = e;                    // may be null (normal stop) or non-null (error)
-    _stop_flag.store(true, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        if (_is_stopped) return;       // first stop wins
+        _is_stopped = true;
+        _error = e;                    // may be null (normal stop) or non-null (error)
+        _stop_flag.store(true, std::memory_order_relaxed);
+    }
+    // Notify after releasing the mutex so woken threads aren't immediately
+    // blocked re-acquiring it.
     _cv.notify_all();
 }
 
 
 void BumpAllocator::_finalize_initialized()
 {
-    std::lock_guard<std::mutex> guard(_mutex);
-    if (_is_stopped) return;       // a worker errored out and stopped us
-    _is_initialized = true;
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        if (_is_stopped) return;       // a worker errored out and stopped us
+        _is_initialized = true;
+    }
     _cv.notify_all();
 }
 
@@ -542,7 +560,7 @@ void BumpAllocator::_block_until_ready_or_throw() const
 }
 
 
-void BumpAllocator::wait_until_initialized()
+void BumpAllocator::wait_until_initialized() const
 {
     _block_until_ready_or_throw();
 }
@@ -627,18 +645,18 @@ ksgpu::Array<void> BumpAllocator::_allocate_array_internal(ksgpu::Dtype dtype, i
     long nbytes = (nalloc * dtype.nbits + 7) / 8;
 
     if (ret.size > 0) {
+        // Block (and throw) on stop in both branches. In dummy mode
+        // (sync-only) this is a non-blocking check: it returns
+        // immediately unless stop() has been called.
+        _block_until_ready_or_throw();
         if (capacity < 0) {
-            // In dummy mode, allocate a fresh array with af_alloc().
-            // Dummy mode is sync-only (precondition rejects async + dummy),
-            // so no need to block here.
+            // Dummy mode: allocate a fresh array with af_alloc().
             ret.base = ksgpu::_af_alloc(dtype, nalloc, aflags);
             ret.data = ret.base.get();
             nbytes_allocated.fetch_add(align_up(nbytes, nalign));
         }
         else {
-            // Normal mode: allocate from bump allocator. Blocks until ready
-            // in async mode.
-            _block_until_ready_or_throw();
+            // Normal mode: allocate from bump allocator.
             ret.base = this->base;
             ret.data = this->allocate_bytes(nbytes);
         }
