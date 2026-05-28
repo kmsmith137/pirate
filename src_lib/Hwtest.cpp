@@ -657,6 +657,7 @@ struct ChimeWorker : public Hwtest::Worker
         GpuDedisperser::Params gdd_params;
         gdd_params.plan = dedispersion_plan;
         gdd_params.stream_pool = cuda_stream_pool;
+        gdd_params.num_consumers = 1;
         gpu_dedisperser = GpuDedisperser::create(gdd_params);
 
         // Allocate GpuDedisperser using dummy-mode BumpAllocators.
@@ -687,8 +688,8 @@ struct ChimeWorker : public Hwtest::Worker
             gpu_dedisperser->acquire_input(ichunk, ibatch, compute_stream);
             gpu_dedisperser->release_input_and_launch_dedispersion_kernels(ichunk, ibatch, compute_stream);
             
-            gpu_dedisperser->acquire_output(ichunk, ibatch, compute_stream);
-            gpu_dedisperser->release_output(ichunk, ibatch, compute_stream);
+            gpu_dedisperser->acquire_output(0, ichunk, ibatch, compute_stream);
+            gpu_dedisperser->release_output(0, ichunk, ibatch, compute_stream);
         }
 
         // Reminder: ResourceTracker counts are "per batch".

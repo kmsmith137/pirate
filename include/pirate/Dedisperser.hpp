@@ -64,6 +64,14 @@ struct GpuDedisperser
 
         bool detect_deadlocks = true;
 
+        // Number of independent downstream consumers of the dedispersion
+        // output. Each consumer drives its own acquire_output / release_output
+        // progress cursor and back-pressure. num_consumers == 0 is allowed
+        // (the dedisperser drops outputs as soon as cdd2 produces them).
+        // Constructor throws if num_consumers < 0; the default of -1 is a
+        // "you forgot to set it" sentinel.
+        long num_consumers = -1;
+
         // CUDA device id. The GpuDedisperser's worker thread will call
         // cudaSetDevice(cuda_device_id) on entry, so all kernel launches
         // and async copies driven by the worker thread hit the right
@@ -103,16 +111,20 @@ struct GpuDedisperser
 
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
-    // acquire_input():  after call, 'stream' sees empty input buffer.
-    //                   Returns the input buffer as ksgpu::Array<void> with
-    //                   shape (beams_per_batch, nfreq, nt_in), valid until the
-    //                   matching release_input_and_launch_dedispersion_kernels() call.
-    // release_input_and_launch_dedispersion_kernels():  before call, 'stream' must see full input buffer.
-    // acquire_output(): after call, 'stream' sees full output buffer.
-    //                   Returns a GpuDedisperser::Outputs struct holding
-    //                   list-of-Array views of out_max and out_argmax,
-    //                   valid until the matching release_output() call.
-    // release_output(): before call, 'stream' must see empty output buffer.
+    // acquire_input(): after call, 'stream' sees empty input buffer.
+    //                  Returns the input buffer as ksgpu::Array<void> with
+    //                  shape (beams_per_batch, nfreq, nt_in), valid until the
+    //                  matching release_input_and_launch_dedispersion_kernels() call.
+    // release_input_and_launch_dedispersion_kernels(): before call, 'stream' must see full input buffer.
+    // acquire_output(consumer_id, ichunk, ibatch, stream):
+    //                  after call, 'stream' sees full output buffer.
+    //                  Returns a GpuDedisperser::Outputs struct holding
+    //                  list-of-Array views of out_max and out_argmax, valid
+    //                  until the matching release_output() call. consumer_id
+    //                  must be in [0, params.num_consumers).
+    // release_output(consumer_id, ichunk, ibatch, stream):
+    //                  before call, 'stream' must see empty output buffer.
+    //                  consumer_id must be in [0, params.num_consumers).
     //
     // FIXME: currently there's no explicit API protecting the pf_weights.
     // The caller is responsible for thinking through race conditions involving
@@ -137,8 +149,8 @@ struct GpuDedisperser
     ksgpu::Array<void> acquire_input (long ichunk, long ibatch, cudaStream_t stream);
     void               release_input_and_launch_dedispersion_kernels (long ichunk, long ibatch, cudaStream_t stream);
 
-    Outputs            acquire_output(long ichunk, long ibatch, cudaStream_t stream);
-    void               release_output(long ichunk, long ibatch, cudaStream_t stream);
+    Outputs            acquire_output(long consumer_id, long ichunk, long ibatch, cudaStream_t stream);
+    void               release_output(long consumer_id, long ichunk, long ibatch, cudaStream_t stream);
 
     // (No separate view methods; both input and output return their views
     // directly from acquire.)
@@ -244,7 +256,10 @@ public:
     std::shared_ptr<CudaEventRingbuf> evrb_h2g;
     std::shared_ptr<CudaEventRingbuf> evrb_cdd2;
     std::shared_ptr<CudaEventRingbuf> evrb_et_h2g;
-    std::shared_ptr<CudaEventRingbuf> evrb_release_output;
+
+    // Length params.num_consumers. Each consumer's release_output() events
+    // go into its own ring; the cdd2 kernel waits on all N rings.
+    std::vector<std::shared_ptr<CudaEventRingbuf>> evrb_release_output;
 
     // These members help keep track of lags between kernels.
     long host_seq_lag = 0;     // has_host_ringbuf ? (mega_ringbuf->min_host_clag * nbatches) : (2*nstreams)
@@ -257,9 +272,11 @@ public:
     long curr_input_ibatch = 0;
     bool curr_input_acquired = false;
 
-    long curr_output_ichunk = 0;
-    long curr_output_ibatch = 0;
-    bool curr_output_acquired = false;
+    // Per-consumer progress cursors and acquire flags.
+    // Each vector has length params.num_consumers.
+    std::vector<long> curr_output_ichunk;
+    std::vector<long> curr_output_ibatch;
+    std::vector<bool> curr_output_acquired;
 
     // Thread-backed class pattern: worker thread and stopped state.
     // Note: no condition_variable needed to wake up worker thread, since the worker does

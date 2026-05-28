@@ -283,7 +283,7 @@ class GpuDedisperserInjections:
             stream = cp.cuda.get_current_stream()
         self._cpp_release_input_and_launch_dedispersion_kernels(ichunk, ibatch, stream.ptr)
     
-    def acquire_output(self, ichunk, ibatch, stream=None):
+    def acquire_output(self, ichunk, ibatch, stream=None, consumer_id=0):
         """Acquire output buffer for reading and return Outputs views.
 
         After this call returns, 'stream' sees a full output buffer ready
@@ -300,6 +300,9 @@ class GpuDedisperserInjections:
             Batch index
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
+        consumer_id : int, optional
+            Output consumer id in [0, num_consumers). Defaults to 0, which
+            is correct for the typical num_consumers=1 case.
 
         Returns
         -------
@@ -309,13 +312,13 @@ class GpuDedisperserInjections:
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        return self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
-    
-    def release_output(self, ichunk, ibatch, stream=None):
+        return self._cpp_acquire_output(consumer_id, ichunk, ibatch, stream.ptr)
+
+    def release_output(self, ichunk, ibatch, stream=None, consumer_id=0):
         """Release output buffer after reading.
-        
+
         Before calling this, 'stream' must see an empty output buffer.
-        
+
         Parameters
         ----------
         ichunk : int
@@ -324,11 +327,13 @@ class GpuDedisperserInjections:
             Batch index
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
+        consumer_id : int, optional
+            Output consumer id in [0, num_consumers). Defaults to 0.
         """
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        self._cpp_release_output(ichunk, ibatch, stream.ptr)
+        self._cpp_release_output(consumer_id, ichunk, ibatch, stream.ptr)
     
     @contextmanager
     def get_input(self, ichunk, ibatch, stream=None):
@@ -367,7 +372,7 @@ class GpuDedisperserInjections:
             self._cpp_release_input_and_launch_dedispersion_kernels(ichunk, ibatch, stream.ptr)
     
     @contextmanager
-    def get_output(self, ichunk, ibatch, stream=None):
+    def get_output(self, ichunk, ibatch, stream=None, consumer_id=0):
         """Context manager for acquiring and releasing output buffer.
 
         Acquires the output buffer on entry and yields the Outputs object;
@@ -381,6 +386,9 @@ class GpuDedisperserInjections:
             Batch index
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
+        consumer_id : int, optional
+            Output consumer id in [0, num_consumers). Defaults to 0, which
+            is correct for the typical num_consumers=1 case.
 
         Yields
         ------
@@ -391,7 +399,7 @@ class GpuDedisperserInjections:
 
         Examples
         --------
-        >>> g = GpuDedisperser(plan, stream_pool)
+        >>> g = GpuDedisperser(plan, stream_pool, cuda_device_id=0, num_consumers=1)
         >>> g.allocate(gpu_alloc, host_alloc)
         >>> with g.get_output(ichunk=0, ibatch=0) as outputs:
         ...     for itree in range(g.ntrees):
@@ -400,11 +408,11 @@ class GpuDedisperserInjections:
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        outputs = self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
+        outputs = self._cpp_acquire_output(consumer_id, ichunk, ibatch, stream.ptr)
         try:
             yield outputs
         finally:
-            self._cpp_release_output(ichunk, ibatch, stream.ptr)
+            self._cpp_release_output(consumer_id, ichunk, ibatch, stream.ptr)
 
 
 @ksgpu.inject_methods(pirate_pybind11.SlabAllocator)

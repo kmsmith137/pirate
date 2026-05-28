@@ -301,6 +301,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
                           std::shared_ptr<CudaStreamPool> stream_pool,
                           int cuda_device_id,
+                          long num_consumers,
                           long nbatches_out,
                           long nbatches_wt,
                           bool detect_deadlocks) {
@@ -308,6 +309,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
               params.plan = plan;
               params.stream_pool = stream_pool;
               params.cuda_device_id = cuda_device_id;
+              params.num_consumers = num_consumers;
               params.nbatches_out = nbatches_out;
               params.nbatches_wt = nbatches_wt;
               params.detect_deadlocks = detect_deadlocks;
@@ -316,6 +318,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           py::arg("plan"),
           py::arg("stream_pool"),
           py::arg("cuda_device_id"),
+          py::arg("num_consumers") = -1,
           py::arg("nbatches_out") = 0,
           py::arg("nbatches_wt") = 0,
           py::arg("detect_deadlocks") = true)
@@ -355,21 +358,22 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                },
                py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
           .def("acquire_output",
-               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+               [](GpuDedisperser &self, long consumer_id, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   return self.acquire_output(ichunk, ibatch, stream);
+                   return self.acquire_output(consumer_id, ichunk, ibatch, stream);
                },
-               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"),
-               "Acquire the output buffer for (ichunk, ibatch) and return an\n"
-               "Outputs object holding list-of-Array views of out_max and out_argmax.\n"
+               py::arg("consumer_id"), py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"),
+               "Acquire the output buffer for (consumer_id, ichunk, ibatch) and return\n"
+               "an Outputs object holding list-of-Array views of out_max and out_argmax.\n"
                "After this call 'stream' sees a full output buffer ready for reading;\n"
-               "the returned views are valid until the matching release_output() call.")
+               "the returned views are valid until the matching release_output() call.\n"
+               "consumer_id must be in [0, num_consumers).")
           .def("release_output",
-               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+               [](GpuDedisperser &self, long consumer_id, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   self.release_output(ichunk, ibatch, stream);
+                   self.release_output(consumer_id, ichunk, ibatch, stream);
                },
-               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+               py::arg("consumer_id"), py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
                py::arg("config"), 
