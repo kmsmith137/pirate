@@ -34,7 +34,104 @@ class Hardware:
     def num_gpus(self):
         return ksgpu.get_cuda_num_devices()
 
-    
+
+    # ----- NUMA node accessors -----
+
+    @functools.cached_property
+    def numa_nodes(self):
+        """Sorted list of NUMA node ids found in /sys/devices/system/node/.
+        Returns [] on a system without a NUMA sysfs tree."""
+
+        base = '/sys/devices/system/node'
+        if not os.path.isdir(base):
+            return []
+        ret = []
+        for name in os.listdir(base):
+            m = re.fullmatch(r'node(\d+)', name)
+            if m:
+                ret.append(int(m.group(1)))
+        return sorted(ret)
+
+    @functools.cache
+    def vcpu_list_from_numa_node(self, node):
+        """vCPU list (e.g. [0,1,2,...]) for the given NUMA node id."""
+        assert node in self.numa_nodes, f'unknown NUMA node {node}'
+        with open(f'/sys/devices/system/node/node{node}/cpulist') as f:
+            return self._parse_vcpu_list(f.read())
+
+
+    # ----- Hugepage accessors -----
+    #
+    # Read directly from sysfs each time the cache is cold. Values can
+    # change at runtime (admin writes to sysfs), but show_hardware is a
+    # snapshot tool so caching once is fine.
+
+    @functools.cached_property
+    def hugepage_sizes(self):
+        """Sorted list of hugepage sizes (BYTES) found in
+        /sys/kernel/mm/hugepages/. Returns [] if HugeTLB is unconfigured."""
+
+        base = '/sys/kernel/mm/hugepages'
+        if not os.path.isdir(base):
+            return []
+        ret = []
+        for name in os.listdir(base):
+            m = re.fullmatch(r'hugepages-(\d+)kB', name)
+            if m:
+                ret.append(int(m.group(1)) * 1024)
+        return sorted(ret)
+
+    @functools.cache
+    def hugepage_pool(self, size):
+        """System-wide hugepage pool for the given page size (in bytes).
+        Returns dict {'nr', 'free', 'surplus'}. Raises if 'size' is not
+        in self.hugepage_sizes."""
+
+        assert size in self.hugepage_sizes, f'unknown hugepage size {size}'
+        d = f'/sys/kernel/mm/hugepages/hugepages-{size // 1024}kB'
+        return self._read_hugepage_dir(d)
+
+    @functools.cache
+    def hugepage_pool_per_node(self, size, node):
+        """Per-NUMA-node hugepage pool. Returns dict {'nr', 'free',
+        'surplus'} -- same keys as hugepage_pool()."""
+
+        assert size in self.hugepage_sizes, f'unknown hugepage size {size}'
+        assert node in self.numa_nodes,     f'unknown NUMA node {node}'
+        d = f'/sys/devices/system/node/node{node}/hugepages/hugepages-{size // 1024}kB'
+        return self._read_hugepage_dir(d)
+
+    @staticmethod
+    def _read_hugepage_dir(dirname):
+        # Helper for hugepage_pool[*_per_node]. surplus_hugepages exists in
+        # both system-wide and per-node trees; the other admin/policy
+        # files (resv_hugepages, nr_overcommit_hugepages,
+        # nr_hugepages_mempolicy) are system-wide only and not surfaced
+        # here.
+        def _read_int(fn):
+            with open(fn) as f:
+                return int(f.read().strip())
+        return {
+            'nr':      _read_int(f'{dirname}/nr_hugepages'),
+            'free':    _read_int(f'{dirname}/free_hugepages'),
+            'surplus': _read_int(f'{dirname}/surplus_hugepages'),
+        }
+
+    @staticmethod
+    def _fmt_bytes(n):
+        """Format byte count as e.g. '2 MiB', '1.50 GiB', '768 GiB', '0 B'.
+        Integers stay integer; non-integers print with 2 decimals."""
+        if n == 0:
+            return '0 B'
+        for unit_bytes, unit_name in [(1<<30, 'GiB'), (1<<20, 'MiB'), (1<<10, 'KiB')]:
+            if abs(n) >= unit_bytes:
+                q, r = divmod(n, unit_bytes)
+                if r == 0:
+                    return f'{q} {unit_name}'
+                return f'{n / unit_bytes:.2f} {unit_name}'
+        return f'{n} B'
+
+
     @functools.cache
     def vcpu_list_from_cpu(self, cpu):
         assert 0 <= cpu < self.num_cpus
@@ -194,6 +291,61 @@ class Hardware:
             print(f'Disk {disk}')
             print(f'   pcie = {bus_id}  ({description})')
             print(f'   {vcpu_list = }\n')
+
+        self._show_hugepages()
+
+
+    def _show_hugepages(self):
+        """Print hugepage pool sizes per page-size and per-NUMA-node.
+
+        'unpinned' is the system-wide nr_hugepages minus the sum over
+        NUMA nodes. The kernel always places each hugepage on some node,
+        so this should be 0 in a healthy configuration; surfacing the
+        discrepancy makes misconfigurations visible at a glance."""
+
+        sizes = self.hugepage_sizes
+        if not sizes:
+            print('hugepages: not configured (no /sys/kernel/mm/hugepages tree)\n')
+            return
+
+        nodes = self.numa_nodes
+        print('hugepages:')
+        # Label width: 'system total', 'system surplus', 'unpinned',
+        # 'node<N>'. 'system surplus' is the longest at 14 chars.
+        lw = 14
+        for size in sizes:
+            size_str = self._fmt_bytes(size)
+            pool = self.hugepage_pool(size)
+            total_bytes = pool['nr']   * size
+            free_bytes  = pool['free'] * size
+
+            print(f'  page_size = {size_str}:')
+            print(f'    {"system total":<{lw}} = {pool["nr"]} ({self._fmt_bytes(total_bytes)}),'
+                  f' free = {pool["free"]} ({self._fmt_bytes(free_bytes)})')
+
+            if pool['nr'] == 0 and pool['surplus'] == 0:
+                # Skip per-node breakdown when nothing is configured.
+                continue
+
+            sum_nr = 0
+            for node in nodes:
+                npool = self.hugepage_pool_per_node(size, node)
+                sum_nr += npool['nr']
+                label = f'node{node}'
+                nr_bytes = npool['nr'] * size
+                line = (f'    {label:<{lw}} = {npool["nr"]} ({self._fmt_bytes(nr_bytes)}),'
+                        f' free = {npool["free"]}')
+                if npool['surplus']:
+                    line += f', surplus = {npool["surplus"]}'
+                print(line)
+
+            unpinned = pool['nr'] - sum_nr
+            print(f'    {"unpinned":<{lw}} = {unpinned}  '
+                  f'(system total - sum over NUMA nodes)')
+
+            if pool['surplus']:
+                print(f'    {"system surplus":<{lw}} = {pool["surplus"]}')
+        print()
 
 
     ################################################################################################
