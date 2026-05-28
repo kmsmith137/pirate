@@ -285,6 +285,17 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    YAML string representation of the plan")
     ;
 
+    // Returned by GpuDedisperser.acquire_output(). Must be registered
+    // before the GpuDedisperser class_ block, so pybind11 knows how to
+    // convert the return value when acquire_output's lambda is bound below.
+    py::class_<GpuDedisperser::Outputs>(m, "_GpuDedisperserOutputs",
+        "Returned by GpuDedisperser.acquire_output(). Holds list-of-Array views\n"
+        "of the dedispersion output buffers for an acquired (ichunk, ibatch).")
+        .def_readonly("out_max", &GpuDedisperser::Outputs::out_max,
+            "List of length ntrees, peak-finding maximum values.")
+        .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax,
+            "List of length ntrees, peak-finding argmax tokens.");
+
     // GpuDedisperser: pybind11_injections.py adds stream=None wrappers for acquire/release methods
     py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
           .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
@@ -346,25 +357,19 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def("acquire_output",
                [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   self.acquire_output(ichunk, ibatch, stream);
+                   return self.acquire_output(ichunk, ibatch, stream);
                },
-               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"),
+               "Acquire the output buffer for (ichunk, ibatch) and return an\n"
+               "Outputs object holding list-of-Array views of out_max and out_argmax.\n"
+               "After this call 'stream' sees a full output buffer ready for reading;\n"
+               "the returned views are valid until the matching release_output() call.")
           .def("release_output",
                [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.release_output(ichunk, ibatch, stream);
                },
                py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
-          .def("view_out_max", &GpuDedisperser::view_out_max,
-               py::arg("ichunk"), py::arg("ibatch"),
-               "Return list of out_max buffer views for acquired (ichunk, ibatch).\n\n"
-               "Returns a list of length ntrees, indexed by itree.\n"
-               "Throws exception unless (ichunk, ibatch) has been acquired but not released.")
-          .def("view_out_argmax", &GpuDedisperser::view_out_argmax,
-               py::arg("ichunk"), py::arg("ibatch"),
-               "Return list of out_argmax buffer views for acquired (ichunk, ibatch).\n\n"
-               "Returns a list of length ntrees, indexed by itree.\n"
-               "Throws exception unless (ichunk, ibatch) has been acquired but not released.")
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
                py::arg("config"), 

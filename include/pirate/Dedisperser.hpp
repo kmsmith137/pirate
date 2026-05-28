@@ -109,8 +109,9 @@ struct GpuDedisperser
     //                   matching release_input() call.
     // release_input():  before call, 'stream' must see full input buffer.
     // acquire_output(): after call, 'stream' sees full output buffer.
-    //                   Caller should use view_out_max() / view_out_argmax()
-    //                   to read the acquired output buffers.
+    //                   Returns a GpuDedisperser::Outputs struct holding
+    //                   list-of-Array views of out_max and out_argmax,
+    //                   valid until the matching release_output() call.
     // release_output(): before call, 'stream' must see empty output buffer.
     //
     // FIXME: currently there's no explicit API protecting the pf_weights.
@@ -120,17 +121,27 @@ struct GpuDedisperser
     // since my tentative long-term plan is to generate the pf_weights
     // "dynamically" as part of the compute graph.
 
-    ksgpu::Array<void> acquire_input(long ichunk, long ibatch, cudaStream_t stream);
-    void               release_input(long ichunk, long ibatch, cudaStream_t stream);
+    // Returned by acquire_output(). See acquire_output() docs above.
+    // The field names match the GpuDedisperser::out_max / out_argmax
+    // members that these views slice into.
+    struct Outputs {
+        // Length ntrees. Inner Array shape (beams_per_batch, t.ndm_out, t.nt_out)
+        // with t = plan->trees.at(itree). Dtype = config.dtype.
+        std::vector<ksgpu::Array<void>> out_max;
 
-    void acquire_output(long ichunk, long ibatch, cudaStream_t stream);
-    void release_output(long ichunk, long ibatch, cudaStream_t stream);
+        // Length ntrees. Inner Array shape identical to out_max.
+        // Dtype = uint.
+        std::vector<ksgpu::Array<uint>> out_argmax;
+    };
 
-    // "View" methods: return array slices for acquired output buffers.
-    // Throw exceptions unless (ichunk, ibatch) has been acquired but not released.
-    // (The input buffer view is returned directly from acquire_input above.)
-    std::vector<ksgpu::Array<void>> view_out_max(long ichunk, long ibatch);
-    std::vector<ksgpu::Array<uint>> view_out_argmax(long ichunk, long ibatch);
+    ksgpu::Array<void> acquire_input (long ichunk, long ibatch, cudaStream_t stream);
+    void               release_input (long ichunk, long ibatch, cudaStream_t stream);
+
+    Outputs            acquire_output(long ichunk, long ibatch, cudaStream_t stream);
+    void               release_output(long ichunk, long ibatch, cudaStream_t stream);
+
+    // (No separate view methods; both input and output return their views
+    // directly from acquire.)
 
     // Thread-backed class pattern: stop the worker thread and put the object
     // into a "stopped" state. The first caller sets 'error'. If e is null,

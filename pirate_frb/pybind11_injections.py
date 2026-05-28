@@ -284,10 +284,14 @@ class GpuDedisperserInjections:
         self._cpp_release_input(ichunk, ibatch, stream.ptr)
     
     def acquire_output(self, ichunk, ibatch, stream=None):
-        """Acquire output buffer for reading.
-        
-        After this call returns, 'stream' sees a full output buffer ready for reading.
-        
+        """Acquire output buffer for reading and return Outputs views.
+
+        After this call returns, 'stream' sees a full output buffer ready
+        for reading. The returned object has two attributes:
+          .out_max     list of ntrees ksgpu.Arrays (peak-finding max values)
+          .out_argmax  list of ntrees ksgpu.Arrays (peak-finding argmax tokens)
+        The views are valid until the matching release_output() call.
+
         Parameters
         ----------
         ichunk : int
@@ -296,11 +300,16 @@ class GpuDedisperserInjections:
             Batch index
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
+
+        Returns
+        -------
+        GpuDedisperser.Outputs
+            Holds list-of-Array views of the acquired output buffers.
         """
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
+        return self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
     
     def release_output(self, ichunk, ibatch, stream=None):
         """Release output buffer after reading.
@@ -360,9 +369,10 @@ class GpuDedisperserInjections:
     @contextmanager
     def get_output(self, ichunk, ibatch, stream=None):
         """Context manager for acquiring and releasing output buffer.
-        
-        Acquires the output buffer on entry and releases it on exit.
-        
+
+        Acquires the output buffer on entry and yields the Outputs object;
+        releases the buffer on exit.
+
         Parameters
         ----------
         ichunk : int
@@ -371,31 +381,28 @@ class GpuDedisperserInjections:
             Batch index
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
-            
+
         Yields
         ------
-        tuple (out_max, out_argmax)
-            out_max : list of ksgpu.Array
-                Peak-finding maximum values, one array per tree.
-            out_argmax : list of ksgpu.Array
-                Peak-finding argmax tokens, one array per tree.
-            
+        GpuDedisperser.Outputs
+            Object with attributes:
+              out_max    : list of ntrees ksgpu.Arrays (peak-finding max values)
+              out_argmax : list of ntrees ksgpu.Arrays (peak-finding argmax tokens)
+
         Examples
         --------
         >>> g = GpuDedisperser(plan, stream_pool)
         >>> g.allocate(gpu_alloc, host_alloc)
-        >>> with g.get_output(ichunk=0, ibatch=0) as (out_max, out_argmax):
+        >>> with g.get_output(ichunk=0, ibatch=0) as outputs:
         ...     for itree in range(g.ntrees):
-        ...         process_tree(out_max[itree], out_argmax[itree])
+        ...         process_tree(outputs.out_max[itree], outputs.out_argmax[itree])
         """
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
-        out_max = self.view_out_max(ichunk, ibatch)
-        out_argmax = self.view_out_argmax(ichunk, ibatch)
+        outputs = self._cpp_acquire_output(ichunk, ibatch, stream.ptr)
         try:
-            yield (out_max, out_argmax)
+            yield outputs
         finally:
             self._cpp_release_output(ichunk, ibatch, stream.ptr)
 

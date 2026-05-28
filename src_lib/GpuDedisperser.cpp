@@ -651,55 +651,72 @@ void GpuDedisperser::release_input(long ichunk, long ibatch, cudaStream_t stream
 }
 
 
-void GpuDedisperser::acquire_output(long ichunk, long ibatch, cudaStream_t stream)
+GpuDedisperser::Outputs GpuDedisperser::acquire_output(long ichunk, long ibatch, cudaStream_t stream)
 {
     xassert(ichunk >= 0);
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(is_allocated);
 
-    std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("acquire_output");
+    long seq_id = ichunk * nbatches + ibatch;
+    long iout = seq_id % params.nbatches_out;
+    Outputs outputs;
 
-    if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch)) {
-        stringstream ss;
-        ss << "GpuDedisperser::acquire_output(): expected (ichunk,ibatch)=(" 
-           << curr_output_ichunk << "," << curr_output_ibatch << "), got ("
-           << ichunk << "," << ibatch << ")";
-        throw runtime_error(ss.str());
-    }
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("acquire_output");
 
-    if (curr_output_acquired) {
-        stringstream ss;
-        ss << "GpuDedisperser::acquire_output(): double call to acquire_output()"
-           << " with (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
-        throw runtime_error(ss.str());
-    }
+        if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch)) {
+            stringstream ss;
+            ss << "GpuDedisperser::acquire_output(): expected (ichunk,ibatch)=("
+               << curr_output_ichunk << "," << curr_output_ibatch << "), got ("
+               << ichunk << "," << ibatch << ")";
+            throw runtime_error(ss.str());
+        }
 
-    if (params.detect_deadlocks) {
-        long input_seq_id = curr_input_ichunk * nbatches + curr_input_ibatch;
-        long output_seq_id = ichunk * nbatches + ibatch;
+        if (curr_output_acquired) {
+            stringstream ss;
+            ss << "GpuDedisperser::acquire_output(): double call to acquire_output()"
+               << " with (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
+            throw runtime_error(ss.str());
+        }
 
-        if (output_seq_id >= input_seq_id) {
-            throw runtime_error("GpuDedisperser: deadlock detected (calls to acquire_output()"
-                " are ahead of calls to release_input(). If the input/output arrays"
-                " are handled in different threads, then this error is a false alarm, and you"
-                " can suppress it by setting GpuDedisperser::Params::detect_deadlocks = false.");
+        if (params.detect_deadlocks) {
+            long input_seq_id = curr_input_ichunk * nbatches + curr_input_ibatch;
+            long output_seq_id = ichunk * nbatches + ibatch;
+
+            if (output_seq_id >= input_seq_id) {
+                throw runtime_error("GpuDedisperser: deadlock detected (calls to acquire_output()"
+                    " are ahead of calls to release_input(). If the input/output arrays"
+                    " are handled in different threads, then this error is a false alarm, and you"
+                    " can suppress it by setting GpuDedisperser::Params::detect_deadlocks = false.");
+            }
+        }
+
+        curr_output_acquired = true;
+
+        // Compute the views under the lock, matching the precondition checks
+        // that the (now-removed) view_out_max() / view_out_argmax() methods
+        // used to do. Slicing is pointer arithmetic + metadata copy, no
+        // allocation.
+        outputs.out_max.resize(ntrees);
+        outputs.out_argmax.resize(ntrees);
+        for (long itree = 0; itree < ntrees; itree++) {
+            outputs.out_max[itree]    = this->out_max.at(itree).slice(0, iout);
+            outputs.out_argmax[itree] = this->out_argmax.at(itree).slice(0, iout);
         }
     }
-
-    curr_output_acquired = true;
-    lock.unlock();
 
     // Argument checking ends here. If an exception is thrown below, call stop().
     // The caller-specified stream waits for 'cdd2' to produce outputs.
     try {
-        long seq_id = ichunk * nbatches + ibatch;
         bool blocking = !params.detect_deadlocks;
         evrb_cdd2->wait(stream, seq_id, blocking);
     } catch (...) {
         stop(std::current_exception());
         throw;
     }
+
+    return outputs;
 }
 
 
@@ -747,56 +764,6 @@ void GpuDedisperser::release_output(long ichunk, long ibatch, cudaStream_t strea
         stop(std::current_exception());
         throw;
     }
-}
-
-
-vector<Array<void>> GpuDedisperser::view_out_max(long ichunk, long ibatch)
-{
-    xassert(ichunk >= 0);
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(is_allocated);
-
-    std::unique_lock<std::mutex> lock(mutex);
-
-    if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch) || !curr_output_acquired) {
-        stringstream ss;
-        ss << "GpuDedisperser::view_out_max(): (ichunk,ibatch)=(" << ichunk << "," << ibatch
-           << ") is not currently acquired";
-        throw runtime_error(ss.str());
-    }
-
-    long seq_id = ichunk * nbatches + ibatch;
-    long iout = seq_id % params.nbatches_out;
-
-    vector<Array<void>> ret(ntrees);
-    for (long itree = 0; itree < ntrees; itree++)
-        ret[itree] = out_max.at(itree).slice(0, iout);
-    return ret;
-}
-
-
-vector<Array<uint>> GpuDedisperser::view_out_argmax(long ichunk, long ibatch)
-{
-    xassert(ichunk >= 0);
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(is_allocated);
-
-    std::unique_lock<std::mutex> lock(mutex);
-
-    if ((ichunk != curr_output_ichunk) || (ibatch != curr_output_ibatch) || !curr_output_acquired) {
-        stringstream ss;
-        ss << "GpuDedisperser::view_out_argmax(): (ichunk,ibatch)=(" << ichunk << "," << ibatch
-           << ") is not currently acquired";
-        throw runtime_error(ss.str());
-    }
-
-    long seq_id = ichunk * nbatches + ibatch;
-    long iout = seq_id % params.nbatches_out;
-
-    vector<Array<uint>> ret(ntrees);
-    for (long itree = 0; itree < ntrees; itree++)
-        ret[itree] = out_argmax.at(itree).slice(0, iout);
-    return ret;
 }
 
 
