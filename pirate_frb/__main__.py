@@ -717,19 +717,25 @@ def time_dedisperser(args):
     stream_pool = core.CudaStreamPool(plan.num_active_batches)
     dedisperser = GpuDedisperser(plan, stream_pool, cuda_device_id=0, detect_deadlocks=True)
     
-    # Calculate total memory needed.
-    # Dedisperser memory footprints come from resource tracking.
-    # Raw data arrays have shape (S, B, F, T // 2) with dtype uint8.
-    # BumpAllocator aligns all allocations to 128 bytes, so we add margin for alignment overhead.
+    # Calculate total memory needed. Dedisperser footprints come from
+    # resource tracking and already include BumpAllocator's 128-byte
+    # alignment. The timing loop additionally allocates four user-side
+    # arrays (matching the layouts in GpuDedisperser::time() and
+    # pirate_frb.utils.time_cupy_dedisperser()):
+    #   multi_raw_{cpu,gpu}:   (S, B, F, T) int4   ->  S*B*F*T/2 bytes each
+    #   multi_scoff_{cpu,gpu}: (S, B, F, T//256, 2) fp16 -> S*B*F*T/64 bytes each
+    # Both raw and scoff are needed on each side (cpu_allocator and
+    # gpu_allocator) -- the timing loop copies them h2g.
     S = plan.num_active_batches
     B = plan.beams_per_batch
     F = plan.nfreq
     T = plan.nt_in
-    raw_nbytes = S * B * F * (T // 2)  # multi_raw_gpu and multi_raw_cpu
-    alignment_margin = 128             # 1 MB margin for alignment overhead
-    
-    gpu_nbytes = dedisperser.resource_tracker.get_gmem_footprint() + raw_nbytes + alignment_margin
-    cpu_nbytes = dedisperser.resource_tracker.get_hmem_footprint() + raw_nbytes + alignment_margin
+    raw_nbytes   = S * B * F * (T // 2)
+    scoff_nbytes = S * B * F * (T // 256) * 2 * 2     # 2 fp16 entries per minichunk
+    alignment_margin = 256                            # 128 bytes per user-side allocation (raw + scoff)
+
+    gpu_nbytes = dedisperser.resource_tracker.get_gmem_footprint() + raw_nbytes + scoff_nbytes + alignment_margin
+    cpu_nbytes = dedisperser.resource_tracker.get_hmem_footprint() + raw_nbytes + scoff_nbytes + alignment_margin
     
     # Create allocators with pre-computed capacities and allocate
     print(f'Allocating (gpu={gpu_nbytes/1e9:.3f} GB, cpu={cpu_nbytes/1e9:.3f} GB)...')
