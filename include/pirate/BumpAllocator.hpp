@@ -22,28 +22,55 @@ namespace pirate {
 
 // BumpAllocator: A thread-safe bump allocator that supports GPU/host memory.
 //
+// Intended for allocating huge memory regions at the beginning of programs,
+// and carving them up afterwards.
+//
+// This started out simple and got complicated!
+//
+//   - The CUDA driver caps memory registrations (cudaHostAlloc(),
+//     cudaHostRegister()) at ~511 GiB (undocumented!!)
+//
+//     To work around this, we register memory in chunks
+//     (constants::cuda_host_register_chunk_size, currently 64 GiB)
+//     aligned on pointer addresses.
+//
+//   - This created a new problem: cudaMemcpy*() fails if it crosses
+//     registration chunk boundaries. We solved this problem as follows.
+//
+//      In situations where a cudaMemcpy* may be backed by a BumpAllocator,
+//      we call safe_memcpy_{h2g,g2h}_{sync,async}() (see utils.hpp) which
+//      splits host<->device copies at chunk boundaries.
+//
+//   - Initial registration and (especially) zeroing can be slow.
+//     To solve this, we implemented an 'async' mode which allows
+//     the caller to do other things in parallel, and also speeds
+//     up the initialization by dispatching multiple threads.
+//
 // Sync mode (async=false, default):
-//   - capacity >= 0: pre-allocates a "base" region via ksgpu::af_alloc().
+//   - capacity > 0: allocate, optionally register, optionally zero --
+//     all on the main thread before the ctor returns.
+//   - capacity == 0: no-op.
 //   - capacity < 0: "dummy" mode. allocate_bytes()/get_base() throw.
-//   - With (af_mmap_huge | af_rhost), cudaHostRegister() is split into
-//     chunks aligned to absolute constants::cuda_host_register_chunk_size
-//     boundaries -- same layout as async case 1, but called serially from
-//     the main thread. This works around the ~512 GiB driver per-call
-//     cap and keeps the registration layout consistent with the
-//     safe_memcpy_* splitter.
 //
 // Async mode (async=true):
-//   - constructor returns immediately; allocation + zeroing happens on
-//     worker threads.
-//   - public methods (allocate_bytes, get_base, allocate_array) block
-//     until init complete; failures rethrow.
-//   - wait_until_initialized() blocks explicitly.
-//   - aflags must equal exactly one of:
-//       * af_mmap_huge | af_rhost | af_zero  (case 1: mmap + chunked register)
-//       * af_rhost | af_zero                 (case 2: cudaHostAlloc + parallel zero)
-//       * af_gpu | af_zero                   (case 3: cudaMalloc + cudaMemset)
-//   - cuda_device must be >= 0.
-//   - nthreads must be >= 2 for cases 1 and 2; ignored for case 3.
+//   - ctor returns immediately; allocation is done synchronously but
+//     zeroing and chunked register run on worker threads. Public
+//     methods (allocate_bytes, get_base, allocate_array, ...) block
+//     until init completes; failures rethrow.
+//   - capacity >= 0 required (no dummy mode).
+//
+// Argument requirements:
+//   - cuda_device >= 0 if af_gpu is set (always: ctor uses it to pick
+//     the device for cudaMalloc / cudaMemset).
+//   - cuda_device >= 0 if (af_rhost) AND async (the registrar worker
+//     calls cudaSetDevice).
+//   - nthreads >= 2 if af_zero AND (af_uhost OR af_rhost) AND async
+//     (parallel-memset path). Otherwise nthreads is ignored.
+//
+// aflags must be: exactly one of {af_uhost, af_rhost, af_gpu}, plus an
+// optional subset of {af_mmap_huge, af_zero}. Any other flag triggers
+// a constructor error.
+
 
 struct BumpAllocator
 {
@@ -116,9 +143,9 @@ struct BumpAllocator
     // Handles both normal mode and dummy mode.
     ksgpu::Array<void> _allocate_array_internal(ksgpu::Dtype dtype, int ndim, const long *shape, const long *strides);
 
-    // Async state. Sync mode leaves these mostly unused (is_initialized
-    // is set to true at end of sync ctor, so the blocking helper is a
-    // single uncontended mutex acquire).
+    // State machine. Sync mode leaves the mutex/cv mostly unused
+    // (is_initialized is set true at end of sync ctor, so the blocking
+    // helper is a single uncontended mutex acquire).
     mutable std::mutex _mutex;
     mutable std::condition_variable _cv;
     bool _is_initialized = false;
@@ -128,23 +155,22 @@ struct BumpAllocator
 
     // Async worker threads. Empty in sync mode.
     std::vector<std::thread> _workers;
+    int _async_cuda_device = -1;     // captured by workers for cudaSetDevice()
+    bool _has_registrar = false;     // controls who finalizes _is_initialized
 
-    // Transient chunking state used by workers in cases 1 and 2.
+    // Async chunking state. _nreg_chunks > 0 iff af_rhost. The zero-chunk
+    // partition is built so no zero chunk straddles a register-chunk
+    // boundary: _zero_chunk_starts[i+1] - _zero_chunk_starts[i] is at
+    // most zero_chunk_bytes, and _super_of_zero_chunk[i] is the register
+    // chunk index that contains zero chunk i. _zero_chunks_per_super[s]
+    // is the count the registrar waits for. When there is no registrar
+    // (zero workers only), reg_chunk_offsets/_super_done are empty and
+    // _super_of_zero_chunk is empty too (zero workers skip the signal).
     std::atomic<long> _next_zero_chunk{0};
-    std::vector<std::atomic<int>> _super_done;   // case 1: per-super-chunk completion counter
-    std::atomic<int> _workers_remaining{0};      // case 2: last-out-finalizes counter
+    std::vector<std::atomic<int>> _super_done;
+    std::atomic<int>  _workers_remaining{0};   // last-out-finalizes counter (zero-only path)
     long _nzero_chunks = 0;
-    long _nreg_chunks = 0;
-    
-    // Case 1 only: register chunks aligned to absolute
-    // constants::cuda_host_register_chunk_size-aligned host addresses
-    // (so the head and tail register chunks may be partial). Zero chunks
-    // are inserted not to straddle register-chunk boundaries; entries are
-    // monotonic with _zero_chunk_starts[0] = 0 and
-    // _zero_chunk_starts[_nzero_chunks] = size. _super_of_zero_chunk[i]
-    // maps each zero chunk to the register chunk it lies within.
-    // _zero_chunks_per_super[s] holds the count for completion-tracking.
-    
+    long _nreg_chunks  = 0;
     std::vector<long> _zero_chunk_starts;
     std::vector<int>  _super_of_zero_chunk;
     std::vector<int>  _zero_chunks_per_super;
@@ -178,23 +204,35 @@ struct BumpAllocator
     // not part of the user API).
     void _finalize_initialized();
 
-    // Worker bodies (one per case).
-    void _zero_worker_case1();
-    void _registrar_worker_case1();
-    void _zero_worker_case2();
-    void _memset_worker_case3();
+    // Init paths (called from the ctor).
+    void _init_sync(int cuda_device);
+    void _init_async(int nthreads, int cuda_device);
 
-    // Per-case async init helpers (called by ctor).
-    void _async_init_case1(long capacity_arg, int nthreads, int cuda_device);
-    void _async_init_case2(long capacity_arg, int nthreads, int cuda_device);
-    void _async_init_case3(long capacity_arg, int cuda_device);
+    // Shared helper for both init paths: when af_rhost is set, wrap
+    // this->base in a chained shared_ptr whose deleter unregisters the
+    // successfully-registered chunks and then drops a captured
+    // keepalive so the ksgpu deleter (munmap) fires. Initializes
+    // _deleter_state and _nreg_chunks. The keepalive parameter is the
+    // shared_ptr<void> returned by ksgpu::_af_alloc that this method
+    // takes ownership of.
+    void _setup_rhost_deleter(std::shared_ptr<void> ksgpu_base);
 
-    // Sync-mode helper for (af_mmap_huge | af_rhost): mmap via ksgpu as
-    // af_uhost, then call cudaHostRegister() in chunks aligned to
-    // absolute constants::cuda_host_register_chunk_size host addresses.
-    // Sets up _deleter_state and replaces base's deleter so partial
-    // failures are cleaned up correctly.
-    void _sync_init_chunked();
+    // Serial chunked-register loop, used by the sync path. Throws on
+    // cudaHostRegister failure; the chained deleter (already installed
+    // by _setup_rhost_deleter) handles partial-failure cleanup during
+    // the ctor stack unwind.
+    void _register_chunks_serially();
+
+    // Build _zero_chunk_starts / _super_of_zero_chunk /
+    // _zero_chunks_per_super / _super_done for the async path. If
+    // has_registrar is false, _super_of_zero_chunk and _super_done are
+    // left empty (zero workers don't signal anything).
+    void _build_async_chunk_layout(bool has_registrar);
+
+    // Worker bodies.
+    void _zero_worker();
+    void _registrar_worker();
+    void _gpu_memset_worker();
 
     // Static helper: build the absolute-aligned register chunk offset
     // table. Returns a vector of size n_chunks + 1; chunk i covers

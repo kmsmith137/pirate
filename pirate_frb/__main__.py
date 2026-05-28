@@ -739,7 +739,7 @@ def time_dedisperser(args):
     
     # Create allocators with pre-computed capacities and allocate
     print(f'Allocating (gpu={gpu_nbytes/1e9:.3f} GB, cpu={cpu_nbytes/1e9:.3f} GB)...')
-    gpu_allocator = core.BumpAllocator(gpu_aflags, gpu_nbytes)
+    gpu_allocator = core.BumpAllocator(gpu_aflags, gpu_nbytes, cuda_device=0)
     cpu_allocator = core.BumpAllocator(cpu_aflags, cpu_nbytes)
     dedisperser.allocate(gpu_allocator, cpu_allocator)
     

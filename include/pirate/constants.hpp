@@ -35,11 +35,10 @@ struct constants
     static_assert(sizeof(int) == 4);
     static_assert(sizeof(long) == 8);
 
-    // The CUDA driver caps a single cudaHostRegister() call at ~511 GiB
-    // (undocumented! not sure if this is only true with hugepages).
+    // The CUDA driver caps a single cudaHostRegister() call at ~511 GiB (undocumented!!)
     //
     // Calling cudaHostRegister() in chunks works, but creates a new problem:
-    // calls to cudaMemcpy[Async] fail if they cross chunk boundaries.
+    // calls to cudaMemcpy*() fail if they cross chunk boundaries.
     //
     // In pirate::BumpAllocator, we implement a complicated workaround:
     //

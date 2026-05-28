@@ -25,87 +25,126 @@ namespace pirate {
 }  // editor auto-indent
 #endif
 
+// The BumpAllocator code is intended to be as simple and readable
+// as possible. We avoid special-case logic and write "unified" functions
+// which test flags in a logical sequence. We don't take different code
+// paths depending on whether nbytes >= 511 GiB. (In particular, we always
+// implement af_rhost allocations by mmap-ing a page-aligned byte count,
+// followed by "chunked" cudaHostRegister() calls aligned on pointer
+// addresses, since this is the only viable approach for nbytes > 511 GiB.)
 
-// Async mode constants. Worker chunking parameters.
-// Note that reg_chunk_bytes is 64 GiB by default, but we sometimes lower the value for stress testing.
+// Worker chunking parameters.
+// Note: reg_chunk_bytes is 64 GiB by default. Lower for stress testing.
 static constexpr long reg_chunk_bytes = constants::cuda_host_register_chunk_size;
 static constexpr long zero_chunk_bytes = 128L << 20;     // 128 MiB
 static constexpr long hugepage_size = 2L << 20;          // 2 MiB
+static constexpr long host_page_size = 4096L;            // 4 KiB
+
+
+// -------------------------------------------------------------------------------------------------
+// File-local helpers
+
+
+// Validate aflags: exactly one of {af_uhost, af_rhost, af_gpu}, plus an
+// optional subset of {af_mmap_huge, af_zero}. No other flags allowed.
+static void _validate_aflags(int aflags)
+{
+    const int allowed = ksgpu::af_uhost | ksgpu::af_rhost | ksgpu::af_gpu
+                      | ksgpu::af_mmap_huge | ksgpu::af_zero;
+    int extra = aflags & ~allowed;
+    if (extra != 0) {
+        std::stringstream ss;
+        ss << "BumpAllocator: aflags=0x" << std::hex << aflags
+           << " contains unsupported bits 0x" << extra
+           << " (allowed: af_uhost | af_rhost | af_gpu | af_mmap_huge | af_zero)";
+        throw std::runtime_error(ss.str());
+    }
+    int loc = !!(aflags & ksgpu::af_uhost)
+            + !!(aflags & ksgpu::af_rhost)
+            + !!(aflags & ksgpu::af_gpu);
+    if (loc != 1)
+        throw std::runtime_error(
+            "BumpAllocator: aflags must contain exactly one of "
+            "{af_uhost, af_rhost, af_gpu}");
+}
+
+
+// Compute the flags to pass to ksgpu::_af_alloc. For host paths we
+// substitute af_rhost -> af_uhost (we own the registration) and force
+// an mmap flag so the base is host-page-aligned (a cudaHostRegister
+// requirement). af_zero is NOT forwarded; zeroing is owned by
+// BumpAllocator.
+static int _compute_alloc_flags(int aflags)
+{
+    if (aflags & ksgpu::af_gpu)
+        return ksgpu::af_gpu;
+    int mmap_flag = (aflags & ksgpu::af_mmap_huge)
+                  ? ksgpu::af_mmap_huge
+                  : ksgpu::af_mmap_small;
+    return ksgpu::af_uhost | mmap_flag;
+}
+
+
+// Page-size alignment for the chosen allocation path.
+static long _alloc_align(int aflags)
+{
+    if (aflags & ksgpu::af_gpu)
+        return BumpAllocator::nalign;            // cudaMalloc alignment is much bigger
+    if (aflags & ksgpu::af_mmap_huge)
+        return hugepage_size;                    // 2 MiB
+    return host_page_size;                       // 4 KiB
+}
 
 
 // -------------------------------------------------------------------------------------------------
 // Constructor / destructor
 
 
-BumpAllocator::BumpAllocator(int aflags_, long capacity_, bool async, int nthreads, int cuda_device)
+BumpAllocator::BumpAllocator(int aflags_, long capacity_, bool async,
+                              int nthreads, int cuda_device)
     : aflags(aflags_), capacity(capacity_)
 {
-    ksgpu::check_aflags(aflags, "BumpAllocator constructor");
+    _validate_aflags(aflags);
 
-    if (aflags & ksgpu::af_random)
-        throw std::runtime_error("BumpAllocator constructor: af_random flag is not supported");
+    if (async && capacity < 0)
+        throw std::runtime_error(
+            "BumpAllocator(async): capacity must be >= 0 (dummy mode not supported)");
 
-    if (aflags & ksgpu::af_guard)
-        throw std::runtime_error("BumpAllocator constructor: af_guard flag is not supported");
-
-    if (!async) {
-        // ----- Sync mode. nthreads and cuda_device are ignored. -----
-        if (capacity > 0) {
-            capacity = align_up(capacity, nalign);
-            // Use the chunked-register helper for (af_mmap_huge | af_rhost)
-            // to work around the ~512 GiB per-call cudaHostRegister cap
-            // and match the safe_memcpy_* splitter's chunk layout. All
-            // other aflag combinations pass straight through to ksgpu.
-            bool chunked = (aflags & ksgpu::af_mmap_huge)
-                        && (aflags & ksgpu::af_rhost);
-            if (chunked)
-                _sync_init_chunked();
-            else
-                base = ksgpu::_af_alloc(
-                    ksgpu::Dtype(ksgpu::df_uint, 8), capacity, aflags);
-            uintptr_t p = reinterpret_cast<uintptr_t>(base.get());
-            xassert((p % nalign) == 0);
-        }
-        // capacity == 0: no allocation, base stays null.
-        // capacity <  0: dummy mode, base stays null.
+    if (capacity <= 0) {
+        // capacity < 0: sync dummy mode.  capacity == 0: empty.
+        // Either way, `base` stays null.
         _is_initialized = true;
         return;
     }
 
-    // ----- Async mode: precondition checks. -----
-    if (capacity < 0)
-        throw std::runtime_error(
-            "BumpAllocator(async): capacity must be >= 0 (dummy mode not supported in async)");
-    if (cuda_device < 0)
-        throw std::runtime_error(
-            "BumpAllocator(async): cuda_device must be >= 0; caller must specify explicitly");
+    const bool is_gpu    = aflags & ksgpu::af_gpu;
+    const bool is_uhost  = aflags & ksgpu::af_uhost;
+    const bool is_rhost  = aflags & ksgpu::af_rhost;
+    const bool need_zero = aflags & ksgpu::af_zero;
 
-    const int case1_flags = ksgpu::af_mmap_huge | ksgpu::af_rhost | ksgpu::af_zero;
-    const int case2_flags = ksgpu::af_rhost | ksgpu::af_zero;
-    const int case3_flags = ksgpu::af_gpu | ksgpu::af_zero;
+    // cuda_device is required whenever we'll call a CUDA API. For
+    // af_gpu this is always (cudaMalloc and cudaMemset on a specific
+    // device). For af_rhost only in async mode (the registrar worker
+    // sets the device on entry).
+    if (is_gpu && cuda_device < 0)
+        throw std::runtime_error(
+            "BumpAllocator: cuda_device must be >= 0 when af_gpu is set");
 
-    if (aflags == case1_flags) {
-        if (nthreads < 2)
-            throw std::runtime_error("BumpAllocator(async, case 1): nthreads must be >= 2");
-        _async_init_case1(capacity, nthreads, cuda_device);
+    if (async) {
+        if (is_rhost && cuda_device < 0)
+            throw std::runtime_error(
+                "BumpAllocator(async): cuda_device must be >= 0 when af_rhost is set");
+        if (need_zero && (is_uhost || is_rhost) && nthreads < 2)
+            throw std::runtime_error(
+                "BumpAllocator(async): nthreads must be >= 2 for parallel-zero path");
     }
-    else if (aflags == case2_flags) {
-        if (nthreads < 2)
-            throw std::runtime_error("BumpAllocator(async, case 2): nthreads must be >= 2");
-        _async_init_case2(capacity, nthreads, cuda_device);
-    }
-    else if (aflags == case3_flags) {
-        // nthreads is ignored.
-        _async_init_case3(capacity, cuda_device);
-    }
-    else {
-        std::stringstream ss;
-        ss << "BumpAllocator(async): aflags=0x" << std::hex << aflags
-           << " is not supported. Must be exactly one of: "
-           << "(af_mmap_huge|af_rhost|af_zero), (af_rhost|af_zero), or (af_gpu|af_zero). "
-           << "Generality may be added in the future.";
-        throw std::runtime_error(ss.str());
-    }
+
+    capacity = align_up(capacity, std::max((long) nalign, _alloc_align(aflags)));
+
+    if (async)
+        _init_async(nthreads, cuda_device);
+    else
+        _init_sync(cuda_device);
 }
 
 
@@ -116,25 +155,149 @@ BumpAllocator::~BumpAllocator()
         if (t.joinable())
             t.join();
     // Member destructors run after this body. The `base` shared_ptr's
-    // deleter (set in the async ctor, or by ksgpu in sync ctor) handles
-    // cleanup when the last reference drops.
+    // deleter handles cleanup when the last reference drops.
 }
 
 
 // -------------------------------------------------------------------------------------------------
-// Init helpers
+// Init paths
+
+
+void BumpAllocator::_init_sync(int cuda_device)
+{
+    const bool is_gpu    = aflags & ksgpu::af_gpu;
+    const bool is_rhost  = aflags & ksgpu::af_rhost;
+    const bool need_zero = aflags & ksgpu::af_zero;
+
+    // Allocate. For af_gpu, ensure cudaMalloc happens on the requested
+    // device (ksgpu records this as the free-time device too).
+    int alloc_flags = _compute_alloc_flags(aflags);
+    std::shared_ptr<void> ksgpu_base;
+    if (is_gpu) {
+        ksgpu::CudaSetDevice _scoped(cuda_device);
+        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
+                                       capacity, alloc_flags);
+    } else {
+        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
+                                       capacity, alloc_flags);
+    }
+
+    if (is_rhost)
+        _setup_rhost_deleter(std::move(ksgpu_base));   // sets this->base via chained deleter
+    else
+        this->base = std::move(ksgpu_base);
+
+    uintptr_t p = reinterpret_cast<uintptr_t>(base.get());
+    xassert((p % nalign) == 0);
+
+    // Chunked register on the main thread. A throw mid-loop unwinds the
+    // ctor; the chained deleter installed above unregisters successful
+    // chunks and then triggers the ksgpu deleter (munmap).
+    if (is_rhost)
+        _register_chunks_serially();
+
+    // Zero pass. For mmap-based host paths (we always force af_mmap_huge
+    // or af_mmap_small), MAP_ANONYMOUS guarantees zero, so we only need
+    // an explicit memset for af_gpu.
+    if (need_zero && is_gpu) {
+        ksgpu::CudaSetDevice _scoped(cuda_device);
+        CUDA_CALL(cudaMemset(base.get(), 0, capacity));
+    }
+
+    _is_initialized = true;
+}
+
+
+void BumpAllocator::_init_async(int nthreads, int cuda_device)
+{
+    const bool is_gpu    = aflags & ksgpu::af_gpu;
+    const bool is_uhost  = aflags & ksgpu::af_uhost;
+    const bool is_rhost  = aflags & ksgpu::af_rhost;
+    const bool need_zero = aflags & ksgpu::af_zero;
+
+    // Allocate (synchronous, even in async mode).
+    int alloc_flags = _compute_alloc_flags(aflags);
+    std::shared_ptr<void> ksgpu_base;
+    if (is_gpu) {
+        ksgpu::CudaSetDevice _scoped(cuda_device);
+        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
+                                       capacity, alloc_flags);
+    } else {
+        ksgpu_base = ksgpu::_af_alloc(ksgpu::Dtype(ksgpu::df_uint, 8),
+                                       capacity, alloc_flags);
+    }
+
+    if (is_rhost)
+        _setup_rhost_deleter(std::move(ksgpu_base));
+    else
+        this->base = std::move(ksgpu_base);
+
+    uintptr_t p = reinterpret_cast<uintptr_t>(base.get());
+    xassert((p % nalign) == 0);
+
+    // Async work to do (some combination of these may be needed).
+    const bool host_memset = need_zero && (is_uhost || is_rhost);
+    const bool registrar   = is_rhost;
+    const bool gpu_memset  = need_zero && is_gpu;
+
+    if (!host_memset && !registrar && !gpu_memset) {
+        // af_uhost or af_gpu without af_zero: nothing to do async.
+        _is_initialized = true;
+        return;
+    }
+
+    _async_cuda_device = cuda_device;
+
+    // Build _super_done (if registrar) and zero-chunk partition (if
+    // host_memset). _build_async_chunk_layout handles both based on
+    // _nreg_chunks (which is > 0 iff is_rhost, set by
+    // _setup_rhost_deleter) and the explicit has_zero_workers flag.
+    if (host_memset || registrar)
+        _build_async_chunk_layout(host_memset);
+
+    int n_zero_workers = host_memset
+                       ? (registrar ? nthreads - 1 : nthreads)
+                       : 0;
+    if (host_memset)
+        _workers_remaining.store(n_zero_workers);
+
+    int total_workers = n_zero_workers + (registrar ? 1 : 0) + (gpu_memset ? 1 : 0);
+    _workers.reserve(total_workers);
+    try {
+        if (registrar)
+            _workers.emplace_back([this, keepalive = base]() {
+                _registrar_worker();
+            });
+        for (int i = 0; i < n_zero_workers; i++)
+            _workers.emplace_back([this, keepalive = base]() {
+                _zero_worker();
+            });
+        if (gpu_memset)
+            _workers.emplace_back([this, keepalive = base]() {
+                _gpu_memset_worker();
+            });
+    } catch (...) {
+        stop(std::current_exception());
+        for (auto &t : _workers)
+            if (t.joinable()) t.join();
+        throw;
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+// Setup helpers
 
 
 std::vector<long>
 BumpAllocator::_build_reg_chunk_offsets(const void *base_raw, long size)
 {
-    // Register chunk boundaries are at absolute
-    // cuda_host_register_chunk_size-aligned host addresses. The first
-    // chunk runs from base_raw to the next aligned address (head chunk;
-    // may be partial), then full reg_chunk_bytes chunks, then a partial
-    // trailing chunk (if size isn't a multiple of reg_chunk_bytes). All
-    // entries are byte offsets relative to base_raw, with [0] == 0 and
-    // [back] == size.
+    // Register chunk boundaries at absolute reg_chunk_bytes-aligned host
+    // addresses. First chunk runs from base_raw to the next aligned
+    // address (head; possibly partial), then full chunks of
+    // reg_chunk_bytes, then a partial trailing chunk if size isn't a
+    // multiple of reg_chunk_bytes. Entries are byte offsets relative
+    // to base_raw, with offsets[0] == 0 and offsets[back] == size.
     std::vector<long> offsets;
     offsets.push_back(0);
     uintptr_t up = reinterpret_cast<uintptr_t>(base_raw);
@@ -151,28 +314,19 @@ BumpAllocator::_build_reg_chunk_offsets(const void *base_raw, long size)
 }
 
 
-void BumpAllocator::_sync_init_chunked()
+void BumpAllocator::_setup_rhost_deleter(std::shared_ptr<void> ksgpu_base)
 {
-    // Allocate via ksgpu without registration: replace af_rhost with
-    // af_uhost so _af_alloc does mmap+hugepages but no cudaHostRegister.
-    // Keep all other flags (af_mmap_huge, af_zero, af_verbose, ...).
-    int alloc_flags = (aflags & ~ksgpu::af_rhost) | ksgpu::af_uhost;
-    std::shared_ptr<void> ksgpu_base = ksgpu::_af_alloc(
-        ksgpu::Dtype(ksgpu::df_uint, 8), capacity, alloc_flags);
-
     std::vector<long> reg_offsets =
         _build_reg_chunk_offsets(ksgpu_base.get(), capacity);
+    _nreg_chunks = static_cast<long>(reg_offsets.size()) - 1;
 
     _deleter_state = std::make_shared<DeleterState>();
     _deleter_state->size = capacity;
     _deleter_state->reg_chunk_offsets = reg_offsets;
 
-    // Set base BEFORE the cudaHostRegister loop, with a deleter that
-    // unregisters all successful chunks then defers munmap to ksgpu via
-    // the captured keepalive. If a chunk register throws below, the
-    // constructor stack unwind destroys base, the deleter runs and
-    // cleans up partial registrations, and then keepalive drops to
-    // trigger the ksgpu munmap.
+    // Wrap base in a chained shared_ptr whose deleter unregisters
+    // successful chunks, then drops the captured keepalive (ksgpu's
+    // shared_ptr) so ksgpu's deleter (munmap) fires.
     this->base = std::shared_ptr<void>(
         ksgpu_base.get(),
         [state = _deleter_state, keepalive = ksgpu_base](void *p) {
@@ -183,226 +337,82 @@ void BumpAllocator::_sync_init_chunked()
                 cudaError_t err = cudaHostUnregister(cp + off);
                 if (err != cudaSuccess) {
                     std::fprintf(stderr,
-                        "BumpAllocator(sync, chunked) deleter: "
-                        "cudaHostUnregister chunk %d (offset=%ld) failed: %s\n",
+                        "BumpAllocator deleter: cudaHostUnregister chunk "
+                        "%d (offset=%ld) failed: %s\n",
                         s, off, cudaGetErrorString(err));
                 }
             }
             // keepalive drops at end of lambda -> ksgpu deleter (munmap).
         });
+}
 
-    // Serial cudaHostRegister loop from the main thread.
+
+void BumpAllocator::_register_chunks_serially()
+{
+    const auto &offsets = _deleter_state->reg_chunk_offsets;
     char *cp = static_cast<char *>(this->base.get());
-    long n_chunks = static_cast<long>(reg_offsets.size()) - 1;
+    long n_chunks = static_cast<long>(offsets.size()) - 1;
     for (long s = 0; s < n_chunks; s++) {
-        long off = reg_offsets[s];
-        long sz  = reg_offsets[s + 1] - off;
+        long off = offsets[s];
+        long sz  = offsets[s + 1] - off;
         cudaError_t err = cudaHostRegister(cp + off, sz, cudaHostRegisterDefault);
         if (err != cudaSuccess)
             throw ksgpu::make_cuda_exception(err, "cudaHostRegister",
-                                             __FILE__, __LINE__);
-        // Increment AFTER success, BEFORE the next call that might throw.
+                                              __FILE__, __LINE__);
+        // Increment AFTER success, so a throw mid-loop leaves
+        // n_registered as the count of successfully-registered chunks.
         _deleter_state->n_registered.fetch_add(1, std::memory_order_release);
     }
 }
 
 
-void BumpAllocator::_async_init_case1(long capacity_arg, int nthreads, int cuda_device)
+void BumpAllocator::_build_async_chunk_layout(bool has_zero_workers)
 {
-    capacity = align_up(capacity_arg, nalign);
-    long mmap_size = align_up(capacity, hugepage_size);
-
-    void *base_raw = mmap(nullptr, mmap_size, PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
-    if (base_raw == MAP_FAILED) {
-        int e = errno;
-        std::stringstream ss;
-        ss << "BumpAllocator(async, case 1): mmap(MAP_HUGETLB, " << mmap_size
-           << " bytes) failed: " << strerror(e);
-        throw std::runtime_error(ss.str());
+    // _nreg_chunks > 0 iff _setup_rhost_deleter was called, iff af_rhost.
+    // Size _super_done unconditionally when we have a registrar (zero
+    // workers may or may not be present; the registrar still reads it).
+    if (_nreg_chunks > 0) {
+        _super_done = std::vector<std::atomic<int>>(_nreg_chunks);
+        for (long s = 0; s < _nreg_chunks; s++)
+            _super_done[s].store(0, std::memory_order_relaxed);
     }
 
-    // RAII guard: munmap if anything between here and base setup throws.
-    std::unique_ptr<void, std::function<void(void *)>> mmap_guard(
-        base_raw, [mmap_size](void *p) { munmap(p, mmap_size); });
+    if (!has_zero_workers)
+        return;
 
-    // Register chunk boundaries: aligned to absolute
-    // cuda_host_register_chunk_size-aligned host addresses. (Shared with
-    // the sync-mode chunked path.)
-    std::vector<long> reg_offsets = _build_reg_chunk_offsets(base_raw, mmap_size);
-    _nreg_chunks = static_cast<long>(reg_offsets.size()) - 1;
-
-    _deleter_state = std::make_shared<DeleterState>();
-    _deleter_state->size = mmap_size;
-    _deleter_state->cuda_device = cuda_device;
-    _deleter_state->reg_chunk_offsets = reg_offsets;  // captured by deleter
-
-    base = std::shared_ptr<void>(base_raw, [state = _deleter_state](void *p) {
-        int n = state->n_registered.load(std::memory_order_acquire);
-        char *cp = static_cast<char *>(p);
-        for (int s = 0; s < n; s++) {
-            long off = state->reg_chunk_offsets[s];
-            cudaError_t err = cudaHostUnregister(cp + off);
-            if (err != cudaSuccess) {
-                std::fprintf(stderr,
-                    "BumpAllocator(async, case 1) deleter: cudaHostUnregister "
-                    "chunk %d (offset=%ld) failed: %s\n",
-                    s, off, cudaGetErrorString(err));
-            }
-        }
-        if (munmap(p, state->size) != 0) {
-            std::fprintf(stderr,
-                "BumpAllocator(async, case 1) deleter: munmap failed: %s\n",
-                std::strerror(errno));
-        }
-    });
-    mmap_guard.release();   // base now owns the cleanup
-
-    // Zero chunks: partition [0, mmap_size) into pieces of <= zero_chunk_bytes,
-    // making sure no zero chunk straddles a register-chunk boundary. We do
-    // this per register chunk so a straddler is split at the boundary.
     _zero_chunk_starts.clear();
     _super_of_zero_chunk.clear();
-    _zero_chunks_per_super.assign(_nreg_chunks, 0);
+    _zero_chunks_per_super.clear();
     _zero_chunk_starts.push_back(0);
-    for (long s = 0; s < _nreg_chunks; s++) {
-        long lo = reg_offsets[s];
-        long hi = reg_offsets[s + 1];
-        long cur = lo;
-        while (cur < hi) {
-            long next = std::min(cur + zero_chunk_bytes, hi);
+
+    if (_nreg_chunks > 0) {
+        // With a registrar: clip zero chunks at every register boundary
+        // so no zero chunk straddles, and each zero chunk signals
+        // exactly one _super_done counter.
+        const auto &reg_offsets = _deleter_state->reg_chunk_offsets;
+        _zero_chunks_per_super.assign(_nreg_chunks, 0);
+        for (long s = 0; s < _nreg_chunks; s++) {
+            long lo = reg_offsets[s];
+            long hi = reg_offsets[s + 1];
+            for (long cur = lo; cur < hi; ) {
+                long next = std::min(cur + zero_chunk_bytes, hi);
+                _zero_chunk_starts.push_back(next);
+                _super_of_zero_chunk.push_back(static_cast<int>(s));
+                _zero_chunks_per_super[s]++;
+                cur = next;
+            }
+        }
+    } else {
+        // No registrar: uniform zero chunks. _super_of_zero_chunk and
+        // _zero_chunks_per_super stay empty (zero workers don't signal).
+        for (long cur = 0; cur < capacity; ) {
+            long next = std::min(cur + zero_chunk_bytes, capacity);
             _zero_chunk_starts.push_back(next);
-            _super_of_zero_chunk.push_back(static_cast<int>(s));
-            _zero_chunks_per_super[s]++;
             cur = next;
         }
     }
-    _nzero_chunks = static_cast<long>(_super_of_zero_chunk.size());
+    _nzero_chunks = static_cast<long>(_zero_chunk_starts.size()) - 1;
     _next_zero_chunk.store(0);
-
-    _super_done = std::vector<std::atomic<int>>(_nreg_chunks);
-    for (long i = 0; i < _nreg_chunks; i++)
-        _super_done[i].store(0, std::memory_order_relaxed);
-
-    // Spawn workers: 1 registrar + (nthreads-1) zero workers. Each worker
-    // captures a `base` keepalive so the deleter can't fire while a worker
-    // is alive.
-    _workers.reserve(nthreads);
-    try {
-        _workers.emplace_back([this, keepalive = base]() {
-            _registrar_worker_case1();
-        });
-        for (int i = 1; i < nthreads; i++) {
-            _workers.emplace_back([this, keepalive = base]() {
-                _zero_worker_case1();
-            });
-        }
-    } catch (...) {
-        stop(std::current_exception());
-        for (auto &t : _workers)
-            if (t.joinable()) t.join();
-        throw;
-    }
-}
-
-
-void BumpAllocator::_async_init_case2(long capacity_arg, int nthreads, int cuda_device)
-{
-    capacity = align_up(capacity_arg, nalign);
-
-    void *p = nullptr;
-    {
-        ksgpu::CudaSetDevice _scoped(cuda_device);
-        cudaError_t err = cudaHostAlloc(&p, capacity, 0);
-        if (err != cudaSuccess)
-            throw ksgpu::make_cuda_exception(err, "cudaHostAlloc", __FILE__, __LINE__);
-    }
-
-    std::unique_ptr<void, std::function<void(void *)>> host_guard(
-        p, [](void *q) { cudaFreeHost(q); });
-
-    _deleter_state = std::make_shared<DeleterState>();
-    _deleter_state->size = capacity;
-    _deleter_state->cuda_device = cuda_device;
-
-    base = std::shared_ptr<void>(p, [state = _deleter_state](void *q) {
-        // cudaFreeHost doesn't require a current device on UVA systems.
-        cudaError_t err = cudaFreeHost(q);
-        if (err != cudaSuccess) {
-            fprintf(stderr,
-                    "BumpAllocator(async, case 2): cudaFreeHost failed: %s\n",
-                    cudaGetErrorString(err));
-            exit(1);
-        }
-    });
-    host_guard.release();
-
-    _nzero_chunks = (capacity + zero_chunk_bytes - 1) / zero_chunk_bytes;
-    _next_zero_chunk.store(0);
-    _workers_remaining.store(nthreads);
-
-    _workers.reserve(nthreads);
-    try {
-        for (int i = 0; i < nthreads; i++) {
-            _workers.emplace_back([this, keepalive = base]() {
-                _zero_worker_case2();
-            });
-        }
-    } catch (...) {
-        stop(std::current_exception());
-        for (auto &t : _workers)
-            if (t.joinable()) t.join();
-        throw;
-    }
-}
-
-
-void BumpAllocator::_async_init_case3(long capacity_arg, int cuda_device)
-{
-    capacity = align_up(capacity_arg, nalign);
-
-    void *p = nullptr;
-    {
-        ksgpu::CudaSetDevice _scoped(cuda_device);
-        cudaError_t err = cudaMalloc(&p, capacity);
-        if (err != cudaSuccess)
-            throw ksgpu::make_cuda_exception(err, "cudaMalloc", __FILE__, __LINE__);
-    }
-
-    std::unique_ptr<void, std::function<void(void *)>> gpu_guard(
-        p, [dev = cuda_device](void *q) {
-            ksgpu::CudaSetDevice _scoped(dev);
-            cudaFree(q);
-        });
-
-    _deleter_state = std::make_shared<DeleterState>();
-    _deleter_state->size = capacity;
-    _deleter_state->cuda_device = cuda_device;
-
-    base = std::shared_ptr<void>(p, [state = _deleter_state](void *q) {
-        ksgpu::CudaSetDevice _scoped(state->cuda_device);
-        cudaError_t err = cudaFree(q);
-        if (err != cudaSuccess) {
-            fprintf(stderr,
-                    "BumpAllocator(async, case 3): cudaFree failed: %s\n",
-                    cudaGetErrorString(err));
-            exit(1);
-        }
-    });
-    gpu_guard.release();
-
-    // Spawn exactly 1 memset worker (case 3 ignores nthreads).
-    _workers.reserve(1);
-    try {
-        _workers.emplace_back([this, keepalive = base]() {
-            _memset_worker_case3();
-        });
-    } catch (...) {
-        stop(std::current_exception());
-        for (auto &t : _workers)
-            if (t.joinable()) t.join();
-        throw;
-    }
 }
 
 
@@ -410,35 +420,52 @@ void BumpAllocator::_async_init_case3(long capacity_arg, int cuda_device)
 // Worker bodies
 
 
-void BumpAllocator::_zero_worker_case1()
+void BumpAllocator::_zero_worker()
 {
+    // _nreg_chunks > 0 iff there's a registrar worker running.
+    const bool has_registrar = (_nreg_chunks > 0);
+
     try {
         while (true) {
-            if (_stop_flag.load(std::memory_order_relaxed)) return;
+            if (_stop_flag.load(std::memory_order_relaxed)) break;
             long i = _next_zero_chunk.fetch_add(1, std::memory_order_relaxed);
-            if (i >= _nzero_chunks) return;
+            if (i >= _nzero_chunks) break;
             long off = _zero_chunk_starts[i];
             long sz  = _zero_chunk_starts[i + 1] - off;
             memset(static_cast<char *>(base.get()) + off, 0, sz);
-            _super_done[_super_of_zero_chunk[i]].fetch_add(1, std::memory_order_release);
+            if (has_registrar) {
+                int super = _super_of_zero_chunk[i];
+                _super_done[super].fetch_add(1, std::memory_order_release);
+            }
         }
     } catch (...) {
         stop(std::current_exception());
     }
+
+    if (!has_registrar) {
+        // Last-out finalizes. (When a registrar is present, the
+        // registrar finalizes after its last chunk -- by construction
+        // it finishes after all zero workers.)
+        if (_workers_remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            _finalize_initialized();
+    }
 }
 
 
-void BumpAllocator::_registrar_worker_case1()
+void BumpAllocator::_registrar_worker()
 {
     try {
         // Workers start with current device 0 by default; set explicitly.
-        CUDA_CALL(cudaSetDevice(_deleter_state->cuda_device));
+        CUDA_CALL(cudaSetDevice(_async_cuda_device));
 
         const auto &offsets = _deleter_state->reg_chunk_offsets;
-
         for (long s = 0; s < _nreg_chunks; s++) {
-            int needed = _zero_chunks_per_super[s];
-
+            // If zero workers are present, wait until they've completed
+            // all zero chunks belonging to this super. If not, needed=0
+            // and we proceed immediately.
+            int needed = _zero_chunks_per_super.empty()
+                       ? 0
+                       : _zero_chunks_per_super[s];
             while (_super_done[s].load(std::memory_order_acquire) < needed) {
                 if (_stop_flag.load(std::memory_order_relaxed)) return;
                 std::this_thread::yield();
@@ -447,19 +474,19 @@ void BumpAllocator::_registrar_worker_case1()
             long off = offsets[s];
             long sz  = offsets[s + 1] - off;
             cudaError_t err = cudaHostRegister(
-                static_cast<char *>(base.get()) + off, sz, cudaHostRegisterDefault);
+                static_cast<char *>(base.get()) + off, sz,
+                cudaHostRegisterDefault);
             if (err != cudaSuccess) {
                 stop(std::make_exception_ptr(
-                    ksgpu::make_cuda_exception(err, "cudaHostRegister", __FILE__, __LINE__)));
+                    ksgpu::make_cuda_exception(err, "cudaHostRegister",
+                                                __FILE__, __LINE__)));
                 return;
             }
-            // Always increment AFTER a successful register, BEFORE the next
-            // stop_flag check. If we increment before the cudaHostRegister
-            // or skip the increment on a late stop, we'd leak the
-            // registration.
+            // Increment AFTER success. The deleter scans
+            // n_registered chunks; an off-by-one would leak a
+            // registration or unregister a never-registered chunk.
             _deleter_state->n_registered.fetch_add(1, std::memory_order_release);
         }
-
         _finalize_initialized();
     } catch (...) {
         stop(std::current_exception());
@@ -467,34 +494,11 @@ void BumpAllocator::_registrar_worker_case1()
 }
 
 
-void BumpAllocator::_zero_worker_case2()
+void BumpAllocator::_gpu_memset_worker()
 {
     try {
-        while (true) {
-            if (_stop_flag.load(std::memory_order_relaxed)) break;
-            long i = _next_zero_chunk.fetch_add(1, std::memory_order_relaxed);
-            if (i >= _nzero_chunks) break;
-            long offset = i * zero_chunk_bytes;
-            long sz = std::min(zero_chunk_bytes, _deleter_state->size - offset);
-            memset(static_cast<char *>(base.get()) + offset, 0, sz);
-        }
-        // Last out finalizes.
-        if (_workers_remaining.fetch_sub(1, std::memory_order_acq_rel) == 1)
-            _finalize_initialized();
-    } catch (...) {
-        stop(std::current_exception());
-        // Decrement so the counter still reaches zero (other workers
-        // may also be exiting through their normal path).
-        _workers_remaining.fetch_sub(1, std::memory_order_acq_rel);
-    }
-}
-
-
-void BumpAllocator::_memset_worker_case3()
-{
-    try {
-        CUDA_CALL(cudaSetDevice(_deleter_state->cuda_device));
-        CUDA_CALL(cudaMemset(base.get(), 0, _deleter_state->size));
+        CUDA_CALL(cudaSetDevice(_async_cuda_device));
+        CUDA_CALL(cudaMemset(base.get(), 0, capacity));
         _finalize_initialized();
     } catch (...) {
         stop(std::current_exception());
