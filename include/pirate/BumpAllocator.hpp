@@ -19,22 +19,18 @@ namespace pirate {
 #endif
 
 
-// State held by the base shared_ptr's deleter in async mode. Captured by
-// value into the deleter so it outlives BumpAllocator if needed (e.g., a
-// SlabAllocator still holds a reference to base after BumpAllocator dies).
-struct AsyncDeleterState {
-    long size = 0;
-    int cuda_device = -1;
-    std::atomic<int> n_registered{0};            // case 1 only; always 0 in cases 2, 3
-    std::vector<long> reg_chunk_offsets;         // case 1 only; size n_registered_chunks + 1
-};
-
 
 // BumpAllocator: A thread-safe bump allocator that supports GPU/host memory.
 //
 // Sync mode (async=false, default):
 //   - capacity >= 0: pre-allocates a "base" region via ksgpu::af_alloc().
 //   - capacity < 0: "dummy" mode. allocate_bytes()/get_base() throw.
+//   - With (af_mmap_huge | af_rhost), cudaHostRegister() is split into
+//     chunks aligned to absolute constants::cuda_host_register_chunk_size
+//     boundaries -- same layout as async case 1, but called serially from
+//     the main thread. This works around the ~512 GiB driver per-call
+//     cap and keeps the registration layout consistent with the
+//     safe_memcpy_* splitter.
 //
 // Async mode (async=true):
 //   - constructor returns immediately; allocation + zeroing happens on
@@ -130,11 +126,6 @@ struct BumpAllocator
     std::exception_ptr _error;
     std::atomic<bool> _stop_flag{false};
 
-    // Held in async mode (null in sync mode). Captured by value into base's
-    // deleter so the counter + size outlive BumpAllocator if external refs
-    // (e.g. a SlabAllocator slab) keep `base` alive.
-    std::shared_ptr<AsyncDeleterState> _async_state;
-
     // Async worker threads. Empty in sync mode.
     std::vector<std::thread> _workers;
 
@@ -144,6 +135,7 @@ struct BumpAllocator
     std::atomic<int> _workers_remaining{0};      // case 2: last-out-finalizes counter
     long _nzero_chunks = 0;
     long _nreg_chunks = 0;
+    
     // Case 1 only: register chunks aligned to absolute
     // constants::cuda_host_register_chunk_size-aligned host addresses
     // (so the head and tail register chunks may be partial). Zero chunks
@@ -152,9 +144,32 @@ struct BumpAllocator
     // _zero_chunk_starts[_nzero_chunks] = size. _super_of_zero_chunk[i]
     // maps each zero chunk to the register chunk it lies within.
     // _zero_chunks_per_super[s] holds the count for completion-tracking.
+    
     std::vector<long> _zero_chunk_starts;
     std::vector<int>  _super_of_zero_chunk;
     std::vector<int>  _zero_chunks_per_super;
+
+    // State held by the base shared_ptr's deleter. Captured by value into
+    // the deleter so it outlives BumpAllocator if needed (e.g., a
+    // SlabAllocator still holds a reference to base after BumpAllocator
+    // dies). Used by:
+    //   - sync mode with (af_mmap_huge | af_rhost): chunked register, only
+    //     n_registered + reg_chunk_offsets are used.
+    //   - async case 1 (af_mmap_huge | af_rhost | af_zero): chunked register,
+    //     all fields used.
+    //   - async cases 2 and 3: only size + cuda_device are used.
+    
+    struct DeleterState {
+        long size = 0;
+        int cuda_device = -1;
+        std::atomic<int> n_registered{0};            // chunked-register paths only
+        std::vector<long> reg_chunk_offsets;         // chunked-register paths only
+    };
+    
+    // Held in async mode (null in sync mode). Captured by value into base's
+    // deleter so the counter + size outlive BumpAllocator if external refs
+    // (e.g. a SlabAllocator slab) keep `base` alive.
+    std::shared_ptr<DeleterState> _deleter_state;
 
     // Blocking helper for async mode (no-op in sync mode).
     void _block_until_ready_or_throw() const;
@@ -173,6 +188,21 @@ struct BumpAllocator
     void _async_init_case1(long capacity_arg, int nthreads, int cuda_device);
     void _async_init_case2(long capacity_arg, int nthreads, int cuda_device);
     void _async_init_case3(long capacity_arg, int cuda_device);
+
+    // Sync-mode helper for (af_mmap_huge | af_rhost): mmap via ksgpu as
+    // af_uhost, then call cudaHostRegister() in chunks aligned to
+    // absolute constants::cuda_host_register_chunk_size host addresses.
+    // Sets up _deleter_state and replaces base's deleter so partial
+    // failures are cleaned up correctly.
+    void _sync_init_chunked();
+
+    // Static helper: build the absolute-aligned register chunk offset
+    // table. Returns a vector of size n_chunks + 1; chunk i covers
+    // [returned[i], returned[i+1]). The first chunk may be partial; all
+    // others are constants::cuda_host_register_chunk_size except the
+    // last which may also be partial.
+    static std::vector<long>
+    _build_reg_chunk_offsets(const void *base_raw, long size);
 };
 
 
