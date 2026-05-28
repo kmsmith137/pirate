@@ -11,6 +11,7 @@
 
 #include "../include/pirate/loose_ends/tests.hpp"
 #include "../include/pirate/loose_ends/timing.hpp"
+#include "../include/pirate/utils.hpp"   // revisit_512gb_inner
 
 using namespace std;
 using namespace ksgpu;
@@ -39,6 +40,10 @@ void register_loose_ends_bindings(pybind11::module &m)
 
     // Called by 'python -m pirate_frb scratch'. Defined in src_lib/utils.cu.
     m.def("scratch", &scratch);
+
+    // Called by 'python -m pirate_frb revisit_512gb'. Defined in src_lib/utils.cpp.
+    m.def("revisit_512gb_inner", &revisit_512gb_inner,
+          py::arg("nbytes"), py::arg("use_hugepages"));
 }
 
 }  // namespace pirate

@@ -532,6 +532,105 @@ def scratch(args):
     pirate_pybind11.scratch()
 
 
+####################################   revisit_512gb command  ####################################
+
+
+def parse_revisit_512gb(subparsers):
+    help_text = "Re-test the ~511 GiB cudaHostRegister cap (failure expected)."
+    description = (
+        "Re-test the ~511 GiB single-call cudaHostRegister() cap on the current "
+        "CUDA / driver version. The cap is an undocumented driver limit that "
+        "currently forces pirate's BumpAllocator to register memory in chunks "
+        "(see comments in BumpAllocator.hpp and constants.hpp). If this command "
+        "starts succeeding on some future CUDA / driver release, the chunked-"
+        "register workaround could potentially be simplified or removed.\n\n"
+        "Test: mmap 550 GiB (hugepages with -H, 4 KiB pages otherwise), "
+        "prefault, then attempt a single cudaHostRegister() over the entire "
+        "region. Cleans up either way.\n\n"
+        "Requires ~600 GiB of free memory of the requested type."
+    )
+    parser = subparsers.add_parser(
+        "revisit_512gb", help=help_text, description=description,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('-H', '--hugepages', action='store_true',
+                        help='Use 2 MiB hugepages (default: 4 KiB regular pages).')
+
+
+def revisit_512gb(args):
+    # Test parameters.
+    test_gib = 550
+    need_gib = 600
+    test_nbytes = test_gib * (1 << 30)
+    hp2m = 2 * (1 << 20)
+
+    # Force line-buffered stdout so Python prints + the C++-helper prints
+    # appear in source order when the output is piped or redirected.
+    sys.stdout.reconfigure(line_buffering=True)
+
+    # Pin process (and any child threads) to CPU 0.
+    os.sched_setaffinity(0, {0})
+    print('Pinned process to CPU 0.')
+
+    h = Hardware()
+    print('\nHardware:')
+    for gpu in range(h.num_gpus):
+        bus_id = h._pcie_bus_id_from_gpu(gpu)
+        desc = h._description_from_pcie_bus_id(bus_id)
+        print(f'  GPU {gpu}: pcie={bus_id}  ({desc})')
+
+    # Check memory availability.
+    print()
+    if args.hugepages:
+        if hp2m not in h.hugepage_sizes:
+            raise RuntimeError(
+                "2 MiB hugepages are not configured on this system. Allocate at\n"
+                f"least {need_gib} GiB ({need_gib * 1024 // 2} pages) before re-running, e.g.:\n"
+                f"  sudo bash -c 'echo {need_gib * 1024 // 2} > "
+                f"/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages'\n"
+                "(or set per-NUMA-node nr_hugepages files.)")
+        pool = h.hugepage_pool(hp2m)
+        free_gib = pool['free'] * hp2m / (1 << 30)
+        if free_gib < need_gib:
+            raise RuntimeError(
+                f"Need >= {need_gib} GiB of 2 MiB hugepages free; only {free_gib:.1f} GiB free.\n"
+                "Free up hugepages or allocate more before re-running.")
+        print(f'  2 MiB hugepages free: {free_gib:.1f} GiB (test needs {need_gib} GiB)')
+    else:
+        # MemAvailable from /proc/meminfo (the kernel's estimate of how much
+        # we can allocate without swapping). Note: this is for regular RAM;
+        # hugepage-reserved memory is excluded.
+        with open('/proc/meminfo') as f:
+            mem_avail_kb = next(int(line.split()[1]) for line in f
+                                if line.startswith('MemAvailable:'))
+        avail_gib = mem_avail_kb / (1 << 20)
+        if avail_gib < need_gib:
+            raise RuntimeError(
+                f"Need >= {need_gib} GiB MemAvailable for 4 KiB-paged test; "
+                f"got {avail_gib:.1f} GiB.\nFree up memory (or reduce hugepage "
+                "reservations) before re-running.")
+        print(f'  MemAvailable: {avail_gib:.1f} GiB (test needs {need_gib} GiB)')
+
+    page_label = 'hugepages' if args.hugepages else '4 KiB pages'
+    print(f'\nAllocating + registering {test_gib} GiB ({page_label})...')
+    success = pirate_pybind11.revisit_512gb_inner(test_nbytes, args.hugepages)
+
+    bar = '=' * 64
+    print()
+    print(bar)
+    if success:
+        print(f'cudaHostRegister({test_gib} GiB) SUCCEEDED.')
+        print(f'On this CUDA / driver version, the ~511 GiB single-call cap')
+        print(f'appears to have been LIFTED. Pirate\'s chunked-register workaround')
+        print(f'in BumpAllocator could potentially be simplified or removed --')
+        print(f'verify on multiple hardware/driver combinations before doing so.')
+    else:
+        print(f'cudaHostRegister({test_gib} GiB) FAILED (this is the expected outcome).')
+        print(f'The ~511 GiB single-call cap is still in effect on this CUDA / driver')
+        print(f'version. Pirate\'s chunked-register workaround in BumpAllocator')
+        print(f'remains necessary.')
+    print(bar)
+
+
 ################################   show_xengine_metadata command  ##################################
 
 
@@ -1284,6 +1383,7 @@ def get_parser():
     parse_make_subbands(subparsers)
     parse_random_kernels(subparsers)
     parse_scratch(subparsers)
+    parse_revisit_512gb(subparsers)
 
     return parser
 
@@ -1318,6 +1418,8 @@ def main():
         hwtest(args)
     elif args.command == "scratch":
         scratch(args)
+    elif args.command == "revisit_512gb":
+        revisit_512gb(args)
     elif args.command == "random_kernels":
         random_kernels(args)
     elif args.command == "show_asdf":

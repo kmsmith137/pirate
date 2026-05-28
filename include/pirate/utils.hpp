@@ -33,6 +33,15 @@ extern void safe_memcpy_g2h_async(void *dst, const void *src, long nbytes,
                                    cudaStream_t stream);
 
 
+// Diagnostic for 'pirate_frb revisit_512gb': mmap nbytes (with hugepages
+// iff use_hugepages), prefault (for 4 KiB pages only -- hugepages are
+// pre-committed by mmap), and attempt a single cudaHostRegister() on
+// the entire region. Reports progress + result to stdout. Returns true
+// if cudaHostRegister succeeded (which would mean the historical
+// ~511 GiB driver cap has been lifted). Cleans up on either path.
+extern bool revisit_512gb_inner(long nbytes, bool use_hugepages);
+
+
 // Arguments must satisfy 0 <= i < pow2(nbits).
 extern int bit_reverse_slow(int i, int nbits);
 

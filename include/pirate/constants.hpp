@@ -48,6 +48,9 @@ struct constants
     //   - in situations where a cudaMemcpy* may be backed by a BumpAllocator,
     //     we call safe_memcpy_{h2g,g2h}_{sync,async}() (see utils.hpp) which
     //     splits host<->device copies at chunk boundaries.
+    //
+    // Re-test whether the 511 GiB cap is still present on a newer CUDA /
+    // driver version with: `python -m pirate_frb revisit_512gb [-H]`.
 
     // Chunk size for cudaHostRegister().
     static constexpr long cuda_host_register_chunk_size = 64L << 30;  // 64 GiB

@@ -29,6 +29,8 @@ namespace pirate {
 //
 //   - The CUDA driver caps memory registrations (cudaHostAlloc(),
 //     cudaHostRegister()) at ~511 GiB (undocumented!!)
+//     Re-test on newer CUDA / driver versions with:
+//        python -m pirate_frb revisit_512gb [-H]
 //
 //     To work around this, we register memory in chunks
 //     (constants::cuda_host_register_chunk_size, currently 64 GiB)

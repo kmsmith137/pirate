@@ -3,10 +3,18 @@
 #include "../include/pirate/constants.hpp"  // constants::max_tree_rank
 
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <iomanip>
+
+#include <sys/mman.h>
+#include <cuda_runtime.h>
 
 #include <ksgpu/cuda_utils.hpp>   // CUDA_CALL
 #include <ksgpu/xassert.hpp>
@@ -94,6 +102,87 @@ void safe_memcpy_g2h_async(void *dst, const void *src, long nbytes,
         [stream](char *h, char *d, long n) {
             CUDA_CALL(cudaMemcpyAsync(h, d, n, cudaMemcpyDeviceToHost, stream));
         });
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// revisit_512gb_inner(): diagnostic for the 'pirate_frb revisit_512gb'
+// subcommand. mmap nbytes, prefault if 4 KiB pages, attempt a single
+// cudaHostRegister(), report. Returns true if the register call
+// succeeded.
+
+
+bool revisit_512gb_inner(long nbytes, bool use_hugepages)
+{
+    using clk = std::chrono::steady_clock;
+    auto sec = [](clk::time_point t) {
+        return std::chrono::duration<double>(clk::now() - t).count();
+    };
+
+    // CUDA versions (helpful when comparing future runs to today's).
+    int rt = 0, drv = 0;
+    cudaRuntimeGetVersion(&rt);
+    cudaDriverGetVersion(&drv);
+    auto fmt = [](int v) {
+        return std::to_string(v / 1000) + "." + std::to_string((v % 1000) / 10);
+    };
+    cout << "  CUDA runtime version: " << fmt(rt) << "\n";
+    cout << "  CUDA driver version:  " << fmt(drv) << "\n";
+
+    // mmap.
+    int mflags = MAP_PRIVATE | MAP_ANONYMOUS;
+    if (use_hugepages)
+        mflags |= MAP_HUGETLB;
+    auto t = clk::now();
+    void *base = mmap(nullptr, nbytes, PROT_READ | PROT_WRITE, mflags, -1, 0);
+    if (base == MAP_FAILED) {
+        int e = errno;
+        cout << "  mmap " << (nbytes >> 30) << " GiB FAILED: "
+             << std::strerror(e) << "\n" << std::flush;
+        return false;
+    }
+    cout << "  mmap " << (nbytes >> 30) << " GiB ("
+         << (use_hugepages ? "MAP_HUGETLB" : "4 KiB pages") << "): OK in "
+         << std::fixed << std::setprecision(2) << sec(t) << "s\n" << std::flush;
+
+    // Prefault. Hugepages are pre-committed by mmap, but 4 KiB pages
+    // would otherwise be faulted lazily inside cudaHostRegister, making
+    // its timing harder to interpret.
+    if (!use_hugepages) {
+        cout << "  prefaulting 4 KiB pages..." << std::flush;
+        t = clk::now();
+        constexpr long page = 4096;
+        char *cp = static_cast<char *>(base);
+        for (long off = 0; off < nbytes; off += page)
+            cp[off] = 0;
+        cout << " done in " << std::fixed << std::setprecision(2)
+             << sec(t) << "s\n" << std::flush;
+    }
+
+    // The actual test: single cudaHostRegister() over the whole region.
+    cout << "  cudaHostRegister(" << (nbytes >> 30) << " GiB)..." << std::flush;
+    t = clk::now();
+    cudaError_t err = cudaHostRegister(base, nbytes, cudaHostRegisterDefault);
+    double reg_secs = sec(t);
+
+    bool ok = (err == cudaSuccess);
+    if (ok) {
+        cout << " OK in " << std::fixed << std::setprecision(2)
+             << reg_secs << "s\n" << std::flush;
+        cudaHostUnregister(base);
+    } else {
+        cout << " FAILED after " << std::fixed << std::setprecision(2)
+             << reg_secs << "s\n"
+             << "    err=" << int(err) << " ("
+             << cudaGetErrorString(err) << ")\n" << std::flush;
+        cudaGetLastError();   // clear sticky error
+    }
+
+    if (munmap(base, nbytes) != 0)
+        cout << "  warning: munmap failed: " << std::strerror(errno) << "\n";
+
+    return ok;
 }
 
 
