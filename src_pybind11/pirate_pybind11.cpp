@@ -327,12 +327,16 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Args:\n"
                "    gpu_allocator: BumpAllocator for GPU memory\n"
                "    host_allocator: BumpAllocator for host memory")
-          .def("acquire_input", 
+          .def("acquire_input",
                [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   self.acquire_input(ichunk, ibatch, stream);
+                   return self.acquire_input(ichunk, ibatch, stream);
                },
-               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"),
+               "Acquire the input buffer for (ichunk, ibatch) and return a\n"
+               "ksgpu.Array view of it. After this call 'stream' sees an empty\n"
+               "input buffer ready for writing; the returned view is valid until\n"
+               "the matching release_input() call.")
           .def("release_input",
                [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
@@ -351,10 +355,6 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                    self.release_output(ichunk, ibatch, stream);
                },
                py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
-          .def("view_input", &GpuDedisperser::view_input,
-               py::arg("ichunk"), py::arg("ibatch"),
-               "Return view of input buffer for acquired (ichunk, ibatch).\n\n"
-               "Throws exception unless (ichunk, ibatch) has been acquired but not released.")
           .def("view_out_max", &GpuDedisperser::view_out_max,
                py::arg("ichunk"), py::arg("ibatch"),
                "Return list of out_max buffer views for acquired (ichunk, ibatch).\n\n"

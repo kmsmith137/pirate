@@ -239,11 +239,12 @@ class GpuDedisperserInjections:
     _cpp_release_output = pirate_pybind11.GpuDedisperser.release_output
     
     def acquire_input(self, ichunk, ibatch, stream=None):
-        """Acquire input buffer for writing.
-        
-        After this call returns, 'stream' sees an empty input buffer ready for writing.
-        Use view_input() to get the input buffer array.
-        
+        """Acquire input buffer for writing and return a view of it.
+
+        After this call returns, 'stream' sees an empty input buffer ready
+        for writing. The returned array is the same view formerly obtained
+        via view_input() -- valid until the matching release_input() call.
+
         Parameters
         ----------
         ichunk : int
@@ -252,11 +253,16 @@ class GpuDedisperserInjections:
             Batch index
         stream : cupy.cuda.Stream or None, optional
             CUDA stream to use. If None, uses current cupy stream.
+
+        Returns
+        -------
+        ksgpu.Array
+            View of the input buffer, shape (beams_per_batch, nfreq, nt_in).
         """
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
+        return self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
     
     def release_input(self, ichunk, ibatch, stream=None):
         """Release input buffer after writing.
@@ -345,8 +351,7 @@ class GpuDedisperserInjections:
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
-        arr = self.view_input(ichunk, ibatch)
+        arr = self._cpp_acquire_input(ichunk, ibatch, stream.ptr)
         try:
             yield arr
         finally:

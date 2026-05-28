@@ -545,54 +545,65 @@ void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch, cudaStream_t stream)
 // -------------------------------------------------------------------------------------------------
 
 
-void GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t stream)
+Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t stream)
 {
     xassert(ichunk >= 0);
     xassert((ibatch >= 0) && (ibatch < nbatches));
     xassert(is_allocated);
 
-    std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("acquire_input");
+    long seq_id = ichunk * nbatches + ibatch;
+    long istream = seq_id % nstreams;
+    Array<void> view;
 
-    if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch)) {
-        stringstream ss;
-        ss << "GpuDedisperser::acquire_input(): expected (ichunk,ibatch)=(" 
-           << curr_input_ichunk << "," << curr_input_ibatch << "), got ("
-           << ichunk << "," << ibatch << ")";
-        throw runtime_error(ss.str());
-    }
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        _throw_if_stopped("acquire_input");
 
-    if (curr_input_acquired) {
-        stringstream ss;
-        ss << "GpuDedisperser::acquire_input(): double call to acquire_input()"
-           << " with (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
-        throw runtime_error(ss.str());
-    }
-
-    if (params.detect_deadlocks) {
-        long input_seq_id = ichunk * nbatches + ibatch;
-        long output_seq_id = curr_output_ichunk * nbatches + curr_output_ibatch;
-
-        if (input_seq_id >= output_seq_id + params.nbatches_out) {
-            throw runtime_error("GpuDedisperser: deadlock detected (calls to acquire_input()"
-                " are too far ahead of calls to release_output(). If the input/output arrays"
-                " are handled in different threads, then this error is a false alarm, and you"
-                " can suppress it by setting GpuDedisperser::Params::detect_deadlocks = false.");
+        if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch)) {
+            stringstream ss;
+            ss << "GpuDedisperser::acquire_input(): expected (ichunk,ibatch)=("
+               << curr_input_ichunk << "," << curr_input_ibatch << "), got ("
+               << ichunk << "," << ibatch << ")";
+            throw runtime_error(ss.str());
         }
-    }
 
-    curr_input_acquired = true;
-    lock.unlock();
+        if (curr_input_acquired) {
+            stringstream ss;
+            ss << "GpuDedisperser::acquire_input(): double call to acquire_input()"
+               << " with (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
+            throw runtime_error(ss.str());
+        }
+
+        if (params.detect_deadlocks) {
+            long input_seq_id = ichunk * nbatches + ibatch;
+            long output_seq_id = curr_output_ichunk * nbatches + curr_output_ibatch;
+
+            if (input_seq_id >= output_seq_id + params.nbatches_out) {
+                throw runtime_error("GpuDedisperser: deadlock detected (calls to acquire_input()"
+                    " are too far ahead of calls to release_output(). If the input/output arrays"
+                    " are handled in different threads, then this error is a false alarm, and you"
+                    " can suppress it by setting GpuDedisperser::Params::detect_deadlocks = false.");
+            }
+        }
+
+        curr_input_acquired = true;
+
+        // Compute the view under the lock, matching the precondition checks
+        // that the (now-removed) view_input() method used to do. Slicing is
+        // pointer arithmetic + metadata copy, no allocation.
+        view = input_arrays.slice(0, istream);
+    }
 
     try {
         // This call to wait() can be nonblocking, since we know that the tree_gridding
         // kernel was successfully launched by a previous call to release_input().
-        long seq_id = ichunk * nbatches + ibatch;
         evrb_tree_gridding->wait(stream, seq_id - nstreams);
     } catch (...) {
         stop(std::current_exception());
         throw;
     }
+
+    return view;
 }
 
 
@@ -736,27 +747,6 @@ void GpuDedisperser::release_output(long ichunk, long ibatch, cudaStream_t strea
         stop(std::current_exception());
         throw;
     }
-}
-
-
-Array<void> GpuDedisperser::view_input(long ichunk, long ibatch)
-{
-    xassert(ichunk >= 0);
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-    xassert(is_allocated);
-
-    std::unique_lock<std::mutex> lock(mutex);
-
-    if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch) || !curr_input_acquired) {
-        stringstream ss;
-        ss << "GpuDedisperser::view_input(): (ichunk,ibatch)=(" << ichunk << "," << ibatch
-           << ") is not currently acquired";
-        throw runtime_error(ss.str());
-    }
-
-    long seq_id = ichunk * nbatches + ibatch;
-    long istream = seq_id % nstreams;
-    return input_arrays.slice(0, istream);
 }
 
 
@@ -1236,8 +1226,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                         cudaStream_t compute_stream = gdd->stream_pool->compute_streams.at(istream);
 
                         Array<void> src = dd_in_gpu.slice(0,s);
-                        gdd->acquire_input(ichunk_gpu, ibatch_gpu, compute_stream);
-                        Array<void> dst = gdd->view_input(ichunk_gpu, ibatch_gpu);
+                        Array<void> dst = gdd->acquire_input(ichunk_gpu, ibatch_gpu, compute_stream);
 
                         // Some paranoid asserts.
                         xassert(src.dtype == dst.dtype);
@@ -1427,8 +1416,7 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
         // First, wait on the producer (the cpu->gpu copy).
         // Then, wait on the consumer (the dedisperser), by calling this->acquire_input().
         evrb_raw.wait(compute_stream, seq_id);
-        acquire_input(ichunk, ibatch, compute_stream);
-        Array<void> dd_in = view_input(ichunk, ibatch);
+        Array<void> dd_in = acquire_input(ichunk, ibatch, compute_stream);
         dequantization_kernel.launch(dd_in, scoff_gpu, raw_gpu, compute_stream);
         evrb_dq.record(compute_stream, seq_id);
 

@@ -103,13 +103,15 @@ struct GpuDedisperser
 
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
-    // acquire_input(): after call, 'stream' sees empty input buffer.
-    // release_input(): before call, 'stream' must see full input buffer.
+    // acquire_input():  after call, 'stream' sees empty input buffer.
+    //                   Returns the input buffer as ksgpu::Array<void> with
+    //                   shape (beams_per_batch, nfreq, nt_in), valid until the
+    //                   matching release_input() call.
+    // release_input():  before call, 'stream' must see full input buffer.
     // acquire_output(): after call, 'stream' sees full output buffer.
+    //                   Caller should use view_out_max() / view_out_argmax()
+    //                   to read the acquired output buffers.
     // release_output(): before call, 'stream' must see empty output buffer.
-    //
-    // Between "acquire" and "release", caller should use "view" methods
-    // (see below) to access the acquired buffers.
     //
     // FIXME: currently there's no explicit API protecting the pf_weights.
     // The caller is responsible for thinking through race conditions involving
@@ -118,15 +120,15 @@ struct GpuDedisperser
     // since my tentative long-term plan is to generate the pf_weights
     // "dynamically" as part of the compute graph.
 
-    void acquire_input(long ichunk, long ibatch, cudaStream_t stream);
-    void release_input(long ichunk, long ibatch, cudaStream_t stream);
+    ksgpu::Array<void> acquire_input(long ichunk, long ibatch, cudaStream_t stream);
+    void               release_input(long ichunk, long ibatch, cudaStream_t stream);
 
     void acquire_output(long ichunk, long ibatch, cudaStream_t stream);
     void release_output(long ichunk, long ibatch, cudaStream_t stream);
 
-    // "View" methods: return array slices for acquired buffers.
+    // "View" methods: return array slices for acquired output buffers.
     // Throw exceptions unless (ichunk, ibatch) has been acquired but not released.
-    ksgpu::Array<void> view_input(long ichunk, long ibatch);
+    // (The input buffer view is returned directly from acquire_input above.)
     std::vector<ksgpu::Array<void>> view_out_max(long ichunk, long ibatch);
     std::vector<ksgpu::Array<uint>> view_out_argmax(long ichunk, long ibatch);
 
