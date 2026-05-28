@@ -36,6 +36,20 @@ def _resolve_nfs_dir(template):
     return template.replace('{user}', user).replace('{date}', date)
 
 
+def compute_async_bump_nthreads(vcpu_list, nbytes):
+    """nthreads = max(2, min(len(vcpu_list)//2, nbytes // 128MiB)).
+
+    Worker-count formula shared between run_server and time_dedisperser
+    when constructing an async BumpAllocator. The 128 MiB lower bound on
+    bytes-per-thread keeps tiny allocators from spawning more workers
+    than they have work for; the len(vcpu_list)//2 cap leaves vCPUs free
+    for the actual server / timing-loop work.
+    """
+    nthreads = len(vcpu_list) // 2
+    nthreads = min(nthreads, nbytes // (128 * 2**20))
+    return max(2, nthreads)
+
+
 def _cuda_device_from_cpu(hw, cpu_id):
     """Return the unique CUDA device on physical CPU `cpu_id`.
 
@@ -308,13 +322,6 @@ class RunServerHelper:
         # gpu: af_gpu + af_zero, per GpuDedisperser::allocate()'s requirement.
         self.gpu_aflags = ksgpu.af_gpu | ksgpu.af_zero
 
-    @staticmethod
-    def _compute_nthreads(vcpu_list, nbytes):
-        """nthreads = max(2, min(len(vcpu_list)//2, nbytes // 128MiB))."""
-        nthreads = len(vcpu_list) // 2
-        nthreads = min(nthreads, nbytes // (128 * 2**20))
-        return max(2, nthreads)
-
     def _build_all_servers(self):
         # Phase 1 happens inside _build_server: all 3 async BumpAllocators per
         # server kick off and return immediately. SlabAllocator and
@@ -368,7 +375,7 @@ class RunServerHelper:
             rb_bump = BumpAllocator(
                 self.rb_host_aflags, rb_nbytes,
                 is_async=True,
-                nthreads=self._compute_nthreads(vcpu_list, rb_nbytes),
+                nthreads=compute_async_bump_nthreads(vcpu_list, rb_nbytes),
                 cuda_device=cuda_device_id)
             # SlabAllocator: async-aware. Returns immediately; defers the
             # allocate_bytes() call to first get_slab() (which happens after
@@ -390,7 +397,7 @@ class RunServerHelper:
             host_alloc = BumpAllocator(
                 self.dd_host_aflags, dd_nbytes,
                 is_async=True,
-                nthreads=self._compute_nthreads(vcpu_list, dd_nbytes),
+                nthreads=compute_async_bump_nthreads(vcpu_list, dd_nbytes),
                 cuda_device=cuda_device_id)
 
             # GPU memory (cudaMalloc + cudaMemset). Async; nthreads ignored
@@ -398,7 +405,7 @@ class RunServerHelper:
             gpu_alloc = BumpAllocator(
                 self.gpu_aflags, gpu_nbytes,
                 is_async=True,
-                nthreads=self._compute_nthreads(vcpu_list, gpu_nbytes),
+                nthreads=compute_async_bump_nthreads(vcpu_list, gpu_nbytes),
                 cuda_device=cuda_device_id)
 
             # FileWriter: writes frames to SSD and copies to NFS.

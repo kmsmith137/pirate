@@ -784,7 +784,8 @@ def parse_time_dedisperser(subparsers):
 
 def time_dedisperser(args):
     from . import utils
-    
+    from .run_server import compute_async_bump_nthreads
+
     # Pin thread to first CPU (for consistent timing on dual-CPU systems)
     hw = Hardware()
     vcpu_list = hw.vcpu_list_from_cpu(0)
@@ -836,10 +837,20 @@ def time_dedisperser(args):
     gpu_nbytes = dedisperser.resource_tracker.get_gmem_footprint() + raw_nbytes + scoff_nbytes + alignment_margin
     cpu_nbytes = dedisperser.resource_tracker.get_hmem_footprint() + raw_nbytes + scoff_nbytes + alignment_margin
     
-    # Create allocators with pre-computed capacities and allocate
-    print(f'Allocating (gpu={gpu_nbytes/1e9:.3f} GB, cpu={cpu_nbytes/1e9:.3f} GB)...')
+    # Create allocators with pre-computed capacities and allocate. The
+    # cpu allocator runs in async mode so its (slow) cudaHostRegister +
+    # zeroing overlaps with the gpu allocator's cudaMalloc + cudaMemset;
+    # nthreads uses the same formula as run_server. The gpu allocator
+    # stays sync (gpu init is fast enough that the async machinery
+    # isn't worth it here).
+    nthreads = compute_async_bump_nthreads(vcpu_list, cpu_nbytes)
+    print(f'Allocating (gpu={gpu_nbytes/1e9:.3f} GB sync, '
+          f'cpu={cpu_nbytes/1e9:.3f} GB async, nthreads={nthreads})...')
     gpu_allocator = core.BumpAllocator(gpu_aflags, gpu_nbytes, cuda_device=0)
-    cpu_allocator = core.BumpAllocator(cpu_aflags, cpu_nbytes)
+    cpu_allocator = core.BumpAllocator(cpu_aflags, cpu_nbytes,
+                                       is_async=True, nthreads=nthreads,
+                                       cuda_device=0)
+    cpu_allocator.wait_until_initialized()
     dedisperser.allocate(gpu_allocator, cpu_allocator)
     
     # Run timing
