@@ -23,6 +23,8 @@
 - Don't git commit unless explicitly requested.
 - Please write comments to explain big-picture functionality or non-obvious issues, but avoid superficial comments. 
 - Please ask me questions in the chat if my instructions are incomplete or unclear.
+- When planning code, always think carefully about race conditions and corner cases.
+- When planning code, always check carefully to make sure that comments stay up-to-date with code.
 
 ### Markdown style
 
