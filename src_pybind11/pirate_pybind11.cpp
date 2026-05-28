@@ -347,11 +347,11 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Acquire the input buffer for (ichunk, ibatch) and return a\n"
                "ksgpu.Array view of it. After this call 'stream' sees an empty\n"
                "input buffer ready for writing; the returned view is valid until\n"
-               "the matching release_input() call.")
-          .def("release_input",
+               "the matching release_input_and_launch_dedispersion_kernels() call.")
+          .def("release_input_and_launch_dedispersion_kernels",
                [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   self.release_input(ichunk, ibatch, stream);
+                   self.release_input_and_launch_dedispersion_kernels(ichunk, ibatch, stream);
                },
                py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
           .def("acquire_output",

@@ -106,8 +106,8 @@ struct GpuDedisperser
     // acquire_input():  after call, 'stream' sees empty input buffer.
     //                   Returns the input buffer as ksgpu::Array<void> with
     //                   shape (beams_per_batch, nfreq, nt_in), valid until the
-    //                   matching release_input() call.
-    // release_input():  before call, 'stream' must see full input buffer.
+    //                   matching release_input_and_launch_dedispersion_kernels() call.
+    // release_input_and_launch_dedispersion_kernels():  before call, 'stream' must see full input buffer.
     // acquire_output(): after call, 'stream' sees full output buffer.
     //                   Returns a GpuDedisperser::Outputs struct holding
     //                   list-of-Array views of out_max and out_argmax,
@@ -135,7 +135,7 @@ struct GpuDedisperser
     };
 
     ksgpu::Array<void> acquire_input (long ichunk, long ibatch, cudaStream_t stream);
-    void               release_input (long ichunk, long ibatch, cudaStream_t stream);
+    void               release_input_and_launch_dedispersion_kernels (long ichunk, long ibatch, cudaStream_t stream);
 
     Outputs            acquire_output(long ichunk, long ibatch, cudaStream_t stream);
     void               release_output(long ichunk, long ibatch, cudaStream_t stream);
@@ -244,7 +244,7 @@ public:
     std::shared_ptr<CudaEventRingbuf> evrb_h2g;
     std::shared_ptr<CudaEventRingbuf> evrb_cdd2;
     std::shared_ptr<CudaEventRingbuf> evrb_et_h2g;
-    std::shared_ptr<CudaEventRingbuf> evrb_output;
+    std::shared_ptr<CudaEventRingbuf> evrb_release_output;
 
     // These members help keep track of lags between kernels.
     long host_seq_lag = 0;     // has_host_ringbuf ? (mega_ringbuf->min_host_clag * nbatches) : (2*nstreams)

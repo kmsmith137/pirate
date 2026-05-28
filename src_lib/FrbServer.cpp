@@ -600,7 +600,7 @@ void FrbServer::_processing_thread_main()
         /*compute_stream_priority=*/ -1);
 
     // detect_deadlocks=false: the FrbServer's processing thread drives
-    // acquire_input / release_input, and a separate downstream consumer
+    // acquire_input / release_input_and_launch_dedispersion_kernels, and a separate downstream consumer
     // (added in a future prompt) drives acquire_output / release_output --
     // so the deadlock-detector's same-thread assumption would fire spuriously.
     GpuDedisperser::Params dd_params;
