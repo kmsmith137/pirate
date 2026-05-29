@@ -109,6 +109,7 @@ struct CoalescedDdKernel2
         // cuda_kernel(
         //     void *grb_base_, uint *grb_quads_, long grb_frame0,  // dedisperser input (ring buffer)
         //     void *out_max_, uint *out_argmax, const void *wt_,   // peak-finder output
+        //     uint out_max_bstride32, uint out_argmax_bstride32,   // output beam-strides (multiples of 32 bits)
         //     void *pstate_, int ntime,                            // shared between dedisperser and peak-finder
         //     ulong nt_cumul, bool is_downsampled_tree,            // dedisperser
         //     uint ndm_out_per_wt, uint nt_in_per_wt               // peak-finder
@@ -120,10 +121,11 @@ struct CoalescedDdKernel2
         // Launch with {32,W,1} threads/block and {Namb,Nbeams,1} threadblocks.
 
         void (*cuda_kernel)(
-            void *, uint *, long, 
-            void *, uint *, const void *, 
-            void *, int, 
-            ulong, bool, 
+            void *, uint *, long,
+            void *, uint *, const void *,
+            uint, uint,                      // out_max_bstride32, out_argmax_bstride32
+            void *, int,
+            ulong, bool,
             uint, uint
         ) = nullptr;
 

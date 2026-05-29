@@ -123,6 +123,7 @@ class CoalescedDdKernel2:
         k.emit(f'{self.kernel_name}(')
         k.emit(f'    void *grb_base_, uint *grb_quads_, long grb_frame0,    // dedisperser input (ring buffer)')
         k.emit(f'    void *out_max_, uint *out_argmax, const void *wt_,     // peak-finder output')
+        k.emit(f'    uint out_max_bstride32, uint out_argmax_bstride32,     // output beam-strides (multiples of 32 bits)')
         k.emit(f'    void *pstate_, int ntime,                              // shared between dedisperser and peak-finder')
         k.emit(f'    ulong nt_cumul, bool is_downsampled_tree,              // dedisperser')
         k.emit(f'    uint ndm_out_per_wt, uint nt_in_per_wt)                // peak-finder')

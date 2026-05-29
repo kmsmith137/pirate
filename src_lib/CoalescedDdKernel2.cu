@@ -196,12 +196,24 @@ void CoalescedDdKernel2::launch(
     long ndm_out_per_wt = xdiv(pf_params.ndm_out, pf_params.ndm_wt);
     long nt_in_per_wt = xdiv(pf_params.nt_in, pf_params.nt_wt);
 
+    // Output beam-strides (axis 0), expressed as multiples of 32 bits. We compute these directly
+    // from Array::strides, as if the output arrays could be non-contiguous, even though the
+    // is_fully_contiguous() asserts above currently require contiguity. ksgpu Array strides are in
+    // multiples of dtype size, so we convert to 32-bit units per-array:
+    //   - out_max has dtype 'this->dtype' (fp16 or fp32). For fp16, 32-bit alignment guarantees the
+    //     beam stride is even, so the division below is exact.
+    //   - out_argmax is Array<uint> (32-bit elements), so its stride is already in 32-bit units.
+    xassert((out_max.strides[0] * dtype.nbits) % 32 == 0);
+    uint out_max_bstride32 = uint(out_max.strides[0] * dtype.nbits / 32);
+    uint out_argmax_bstride32 = uint(out_argmax.strides[0]);
+
     dim3 grid_dims = { uint(pow2(dd_params.amb_rank)), uint(dd_params.beams_per_batch), 1 };
     dim3 block_dims = { 32, uint(registry_value.warps_per_threadblock), 1 };
 
     registry_value.cuda_kernel<<< grid_dims, block_dims, registry_value.shmem_nbytes, stream >>>
         (in.data, gpu_ringbuf_quadruples.data, rb_frame0,  // void *grb_base_, uint *grb_quads_, long grb_frame0,
          out_max.data, out_argmax.data, wt.data,           // void *out_max_, uint *out_argmax, const void *wt_,
+         out_max_bstride32, out_argmax_bstride32,          // uint out_max_bstride32, uint out_argmax_bstride32,
          pstate.data, dd_params.ntime,                     // void *pstate_, int ntime,
          nt_cumul, dd_params.input_is_downsampled_tree,    // ulong nt_cumul, bool input_is_downsampled_tree,
          ndm_out_per_wt, nt_in_per_wt);                    // uint ndm_out_per_wt, uint nt_in_per_wt
