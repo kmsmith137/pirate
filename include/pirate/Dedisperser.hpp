@@ -80,6 +80,37 @@ struct GpuDedisperser
         int cuda_device_id = -1;
     };
 
+    
+    // Dedisperserion output buffers (GpuDedisperser::output_ringbuf).
+    // GpuDedisperser::acquire_output() returns a per-batch slice.
+    //
+    // out_max:    length ntrees, inner Array shape (nbeams, ndm_out[i], nt_out[i]),
+    //             dtype = this->dtype (= config.dtype), t = plan->trees.at(i).
+    // out_argmax: length ntrees, inner Array shape identical to out_max, dtype = uint.
+    //
+    // Axis 0 ('nbeams') is a beam count whose value is context-dependent:
+    //   - GpuDedisperser::output_ringbuf: nbeams = nbatches_out * beams_per_batch.
+    //   - Slice returned by acquire_output(): nbeams = beams_per_batch.
+
+    struct Outputs {
+        ksgpu::Dtype dtype;            // dtype of out_max (out_argmax is always uint)
+        long nbeams = 0;               // length of axis 0 (see above)
+        std::vector<long> ndm_out;     // length ntrees
+        std::vector<long> nt_out;      // length ntrees
+
+        // "Outer" length ntrees
+        // "Inner" shape (nbeams, ndm_out[i], nt_out[i]).
+        
+        std::vector<ksgpu::Array<void>> out_max;     // config.dtype
+        std::vector<ksgpu::Array<uint>> out_argmax;  // uint dtype
+
+        // Caller must initialize {dtype, nbeams, ndm_out, nt_out} before calling.
+        void allocate(BumpAllocator &gpu_allocator);
+
+        // Slice along beam axis and return a "view".
+        Outputs slice(long start_beam_index, long end_beam_index) const;
+    };
+
     // Factory function to create GpuDedisperser (preferred over direct construction).
     static std::shared_ptr<GpuDedisperser> create(const Params &params);
     
@@ -133,19 +164,6 @@ struct GpuDedisperser
     // since my tentative long-term plan is to generate the pf_weights
     // "dynamically" as part of the compute graph.
 
-    // Returned by acquire_output(). See acquire_output() docs above.
-    // The field names match the GpuDedisperser::out_max / out_argmax
-    // members that these views slice into.
-    struct Outputs {
-        // Length ntrees. Inner Array shape (beams_per_batch, t.ndm_out, t.nt_out)
-        // with t = plan->trees.at(itree). Dtype = config.dtype.
-        std::vector<ksgpu::Array<void>> out_max;
-
-        // Length ntrees. Inner Array shape identical to out_max.
-        // Dtype = uint.
-        std::vector<ksgpu::Array<uint>> out_argmax;
-    };
-
     ksgpu::Array<void> acquire_input (long ichunk, long ibatch, cudaStream_t stream);
     void               release_input_and_launch_dedispersion_kernels (long ichunk, long ibatch, cudaStream_t stream);
 
@@ -190,12 +208,13 @@ public:
     // "inner" array shape = this->extended_wt_shapes[itree], see below
     std::vector<ksgpu::Array<void>> wt_arrays;
 
-    // "outer" vector has length ntrees
-    // "inner" array shape (nbatches_out, beams_per_batch, t.ndm_out, t.nt_out)
-    //    where t= plan->trees.at(itree)
-
-    std::vector<ksgpu::Array<void>> out_max;     // config.dtype
-    std::vector<ksgpu::Array<uint>> out_argmax;  // uint dtype
+    // GpuDedisperser-owned output ringbuf (see struct Outputs above). Its
+    // out_max/out_argmax have inner shape (nbatches_out * beams_per_batch,
+    // t.ndm_out, t.nt_out) with t = plan->trees.at(itree); the leading axis
+    // flattens (nbatches_out, beams_per_batch), so per-batch slot 'iout'
+    // occupies beam range [iout*beams_per_batch, (iout+1)*beams_per_batch),
+    // extracted via output_ringbuf.slice().
+    Outputs output_ringbuf;
 
     bool is_allocated = false;
     ResourceTracker resource_tracker;  // all rates are "per batch"

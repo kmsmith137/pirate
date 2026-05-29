@@ -164,6 +164,12 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
         this->cdd2_kernels.push_back(cdd2_kernel);
     }
 
+    // Set up the output ringbuf shape metadata (output_ringbuf.allocate() uses
+    // it later). Axis 0 has length (nbatches_out * beams_per_batch); see the
+    // doc-comment on struct Outputs.
+    output_ringbuf.dtype = dtype;
+    output_ringbuf.nbeams = params.nbatches_out * beams_per_batch;
+
     // Peak-finding weight/output arrays.
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
@@ -177,7 +183,10 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
         long wt_nbytes = params.nbatches_wt * wt_shape[0] * wt_strides[0] * bytes_per_elt;
         resource_tracker.add_gmem_footprint("wt_arrays", wt_nbytes, true);
 
-        long out_nelts = params.nbatches_out * beams_per_batch * tree.ndm_out * tree.nt_out;
+        output_ringbuf.ndm_out.push_back(tree.ndm_out);
+        output_ringbuf.nt_out.push_back(tree.nt_out);
+
+        long out_nelts = output_ringbuf.nbeams * tree.ndm_out * tree.nt_out;
         resource_tracker.add_gmem_footprint("out_max", out_nelts * bytes_per_elt, true);
         resource_tracker.add_gmem_footprint("out_argmax", out_nelts * 4, true);  // uint = 4 bytes
     }
@@ -275,72 +284,6 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 
     // Note that we don't implement any sort of prefetching for the et_h2g
     // copy, since it's launched asychronously in a worker thread anyway.
-}
-
-
-void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator)
-{
-    if (this->is_allocated)
-        throw runtime_error("double call to GpuDedisperser::allocate()");
-
-    if (!(gpu_allocator.aflags & af_gpu))
-        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_gpu");
-    if (!(gpu_allocator.aflags & af_zero))
-        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_zero");
-
-    if (!(host_allocator.aflags & af_rhost))
-        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_rhost");
-    if (!(host_allocator.aflags & af_zero))
-        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_zero");
-
-    long gpu_nbytes_before = gpu_allocator.nbytes_allocated.load();
-    long host_nbytes_before = host_allocator.nbytes_allocated.load();
-
-    input_arrays = gpu_allocator.allocate_array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in});
-
-    for (DedispersionBuffer &buf: stage1_dd_bufs)
-        buf.allocate(gpu_allocator);
-
-    // wt_arrays
-    for (long itree = 0; itree < ntrees; itree++) {
-        const vector<long> &eshape = extended_wt_shapes.at(itree);
-        const vector<long> &estrides = extended_wt_strides.at(itree);
-        wt_arrays.push_back(gpu_allocator.allocate_array<void>(dtype, eshape, estrides));
-    }
-
-    // out_max, out_argmax
-    for (long itree = 0; itree < ntrees; itree++) {
-        const DedispersionTree &tree = trees.at(itree);
-        std::initializer_list<long> shape = { params.nbatches_out, beams_per_batch, tree.ndm_out, tree.nt_out };
-        out_max.push_back(gpu_allocator.allocate_array<void>(dtype, shape));
-        out_argmax.push_back(gpu_allocator.allocate_array<uint>(shape));
-    }
-
-    this->tree_gridding_kernel->allocate(gpu_allocator);
-    
-    for (auto &kernel: this->stage1_dd_kernels)
-        kernel->allocate(gpu_allocator);
-    
-    for (auto &kernel: this->cdd2_kernels)
-        kernel->allocate(gpu_allocator);
-
-    this->gpu_ringbuf = gpu_allocator.allocate_array<void>(dtype, { gpu_ringbuf_nelts });
-    this->host_ringbuf = host_allocator.allocate_array<void>(dtype, { host_ringbuf_nelts });    
-
-    this->lds_kernel->allocate(gpu_allocator);
-    this->g2g_copy_kernel->allocate(gpu_allocator);
-
-    long gpu_nbytes_allocated = gpu_allocator.nbytes_allocated.load() - gpu_nbytes_before;
-    long host_nbytes_allocated = host_allocator.nbytes_allocated.load() - host_nbytes_before;
-    // cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
-    // cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
-    xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
-    xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
-
-    this->is_allocated = true;
-
-    // Create worker thread (thread-backed class pattern).
-    this->worker = std::thread(&GpuDedisperser::worker_main, this);
 }
 
 
@@ -570,9 +513,14 @@ void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch, cudaStream_t stream)
     long iout = seq_id % params.nbatches_out;
     long iwt = seq_id % params.nbatches_wt;
 
+    // Per-batch output views: slot 'iout' maps to the beam range
+    // [iout*beams_per_batch, (iout+1)*beams_per_batch) of output_ringbuf (whose
+    // axis 0 has length nbatches_out*beams_per_batch). slice() is metadata-only.
+    Outputs batch_out = output_ringbuf.slice(iout * beams_per_batch, (iout+1) * beams_per_batch);
+
     for (long itree = 0; itree < ntrees; itree++) {
-        Array<void> slice_max = out_max.at(itree).slice(0,iout);
-        Array<uint> slice_argmax = out_argmax.at(itree).slice(0,iout);
+        Array<void> slice_max = batch_out.out_max.at(itree);
+        Array<uint> slice_argmax = batch_out.out_argmax.at(itree);
         Array<void> slice_wt = wt_arrays.at(itree).slice(0,iwt);
 
         shared_ptr<CoalescedDdKernel2> cdd2_kernel = cdd2_kernels.at(itree);
@@ -748,16 +696,11 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long ic
 
         curr_output_acquired[consumer_id] = true;
 
-        // Compute the views under the lock, matching the precondition checks
-        // that the (now-removed) view_out_max() / view_out_argmax() methods
-        // used to do. Slicing is pointer arithmetic + metadata copy, no
-        // allocation.
-        outputs.out_max.resize(ntrees);
-        outputs.out_argmax.resize(ntrees);
-        for (long itree = 0; itree < ntrees; itree++) {
-            outputs.out_max[itree]    = this->out_max.at(itree).slice(0, iout);
-            outputs.out_argmax[itree] = this->out_argmax.at(itree).slice(0, iout);
-        }
+        // Compute the per-batch output views under the lock. Slot 'iout' maps to
+        // the beam range [iout*beams_per_batch, (iout+1)*beams_per_batch) of
+        // output_ringbuf; slice() is pointer arithmetic + metadata copy, no
+        // allocation. The returned views have nbeams = beams_per_batch.
+        outputs = output_ringbuf.slice(iout * beams_per_batch, (iout+1) * beams_per_batch);
     }
 
     // Argument checking ends here. If an exception is thrown below, call stop().
@@ -1326,8 +1269,9 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                     continue;
 
                 long iout = seq_id % nbatches_out;                
-                Array<void> gdd_max = gdd->out_max.at(itree).slice(0,iout);
-                Array<uint> gpu_tokens = gdd->out_argmax.at(itree).slice(0,iout).to_host();
+                Outputs gdd_out = gdd->output_ringbuf.slice(iout * beams_per_batch, (iout+1) * beams_per_batch);
+                Array<void> gdd_max = gdd_out.out_max.at(itree);
+                Array<uint> gpu_tokens = gdd_out.out_argmax.at(itree).to_host();
 
                 long n = tree.ds_level + tree.amb_rank + tree.early_dd_rank;
                 double eps = 3.0 * config.dtype.precision() * sqrt(n+2);
@@ -1474,5 +1418,115 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
         }
     }
 }
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// GpuDedisperser::Outputs helpers
+
+
+void GpuDedisperser::Outputs::allocate(BumpAllocator &gpu_allocator)
+{
+    long nt = ndm_out.size();
+    xassert(nbeams > 0);
+    xassert_eq(ndm_out.size(), nt_out.size());
+    xassert(out_max.empty() && out_argmax.empty());   // not already allocated
+
+    out_max.resize(nt);
+    out_argmax.resize(nt);
+
+    for (long itree = 0; itree < nt; itree++) {
+        std::initializer_list<long> shape = { nbeams, ndm_out[itree], nt_out[itree] };
+        out_max[itree]    = gpu_allocator.allocate_array<void>(dtype, shape);
+        out_argmax[itree] = gpu_allocator.allocate_array<uint>(shape);
+    }
+}
+
+
+GpuDedisperser::Outputs GpuDedisperser::Outputs::slice(long start_beam_index, long end_beam_index) const
+{
+    xassert(start_beam_index >= 0);
+    xassert(start_beam_index <= end_beam_index);
+    xassert(end_beam_index <= nbeams);
+
+    long nt = out_max.size();
+
+    Outputs ret;
+    ret.dtype = dtype;
+    ret.nbeams = end_beam_index - start_beam_index;
+    ret.ndm_out = ndm_out;
+    ret.nt_out = nt_out;
+    ret.out_max.resize(nt);
+    ret.out_argmax.resize(nt);
+
+    for (long itree = 0; itree < nt; itree++) {
+        ret.out_max[itree]    = out_max.at(itree).slice(0, start_beam_index, end_beam_index);
+        ret.out_argmax[itree] = out_argmax.at(itree).slice(0, start_beam_index, end_beam_index);
+    }
+
+    return ret;
+}
+
+
+void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator)
+{
+    if (this->is_allocated)
+        throw runtime_error("double call to GpuDedisperser::allocate()");
+
+    if (!(gpu_allocator.aflags & af_gpu))
+        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_gpu");
+    if (!(gpu_allocator.aflags & af_zero))
+        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_zero");
+
+    if (!(host_allocator.aflags & af_rhost))
+        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_rhost");
+    if (!(host_allocator.aflags & af_zero))
+        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_zero");
+
+    long gpu_nbytes_before = gpu_allocator.nbytes_allocated.load();
+    long host_nbytes_before = host_allocator.nbytes_allocated.load();
+
+    input_arrays = gpu_allocator.allocate_array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in});
+
+    for (DedispersionBuffer &buf: stage1_dd_bufs)
+        buf.allocate(gpu_allocator);
+
+    // wt_arrays
+    for (long itree = 0; itree < ntrees; itree++) {
+        const vector<long> &eshape = extended_wt_shapes.at(itree);
+        const vector<long> &estrides = extended_wt_strides.at(itree);
+        wt_arrays.push_back(gpu_allocator.allocate_array<void>(dtype, eshape, estrides));
+    }
+
+    // Output ringbuf (shape metadata was set in the constructor).
+    output_ringbuf.allocate(gpu_allocator);
+
+    this->tree_gridding_kernel->allocate(gpu_allocator);
+    
+    for (auto &kernel: this->stage1_dd_kernels)
+        kernel->allocate(gpu_allocator);
+    
+    for (auto &kernel: this->cdd2_kernels)
+        kernel->allocate(gpu_allocator);
+
+    this->gpu_ringbuf = gpu_allocator.allocate_array<void>(dtype, { gpu_ringbuf_nelts });
+    this->host_ringbuf = host_allocator.allocate_array<void>(dtype, { host_ringbuf_nelts });    
+
+    this->lds_kernel->allocate(gpu_allocator);
+    this->g2g_copy_kernel->allocate(gpu_allocator);
+
+    long gpu_nbytes_allocated = gpu_allocator.nbytes_allocated.load() - gpu_nbytes_before;
+    long host_nbytes_allocated = host_allocator.nbytes_allocated.load() - host_nbytes_before;
+    // cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
+    // cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
+    xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
+    xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
+
+    this->is_allocated = true;
+
+    // Create worker thread (thread-backed class pattern).
+    this->worker = std::thread(&GpuDedisperser::worker_main, this);
+}
+
 
 }  // namespace pirate
