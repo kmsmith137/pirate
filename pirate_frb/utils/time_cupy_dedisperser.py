@@ -139,8 +139,9 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
             # Note: exiting the context manager triggers all the dedispersion kernels.
         
         # We're throwing away the output for timing purposes, but we still call get_output()
-        # since it performs important synchronization.
-        with dedisperser.get_output(ichunk, ibatch, stream=compute_stream) as (out_max, out_argmax):
+        # since it performs important synchronization. (get_output() yields an Outputs
+        # object with .out_max / .out_argmax attributes; we don't use them here.)
+        with dedisperser.get_output(ichunk, ibatch, stream=compute_stream) as outputs:
             pass
         
         # Calculate and print timing after warmup
