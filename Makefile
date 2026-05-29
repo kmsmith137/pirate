@@ -103,8 +103,8 @@ NVCC_ARCH ?= $(DEFAULT_NVCC_ARCH)
 # gRPC code generation.
 # The .proto file generates both C++ files (in grpc/) and Python stubs (in pirate_frb/rpc/grpc/).
 
+# For now, there is only one .proto file, but more will be added later.
 GRPC_PROTO := grpc/frb_search.proto
-GRPC_PROTO += grpc/frb_grouper.proto
 
 # Sentinel files used in build process (convenient for multi-target commands)
 GRPC_SENTINELS = $(GRPC_PROTO:%.proto=%.protoc_cpp_sentinel) 
@@ -123,9 +123,6 @@ GRPC_PYFILES += pirate_frb/rpc/grpc/__init__.py
 
 # FrbServer.cpp includes gRPC headers, so must be generated first
 src_lib/FrbServer.o: $(GRPC_HFILES)
-
-# ToyIPC.cu includes gRPC headers (frb_grouper.grpc.pb.h)
-src_lib/ToyIPC.o: $(GRPC_HFILES)
 
 
 ####################################################################################################
@@ -210,7 +207,6 @@ LIB_SRCFILES = \
   src_lib/ReferenceTree.cpp \
   src_lib/ResourceTracker.cpp \
   src_lib/RingbufCopyKernel.cu \
-  src_lib/ToyIPC.cu \
   src_lib/TreeGriddingKernel.cu \
   src_lib/YamlFile.cpp \
   src_lib/file_utils.cpp \
@@ -269,7 +265,6 @@ PYFILES = \
   pirate_frb/tests/test_network.py \
   pirate_frb/utils/__init__.py \
   pirate_frb/utils/ThreadAffinity.py \
-  pirate_frb/utils/ToyGrouper.py \
   pirate_frb/utils/network.py \
   pirate_frb/utils/time_cupy_dedisperser.py \
   pirate_frb/utils/safe_memcpy.py \
@@ -332,7 +327,6 @@ HFILES = \
   include/pirate/SlabAllocator.hpp \
   include/pirate/system_utils.hpp \
   include/pirate/TreeGriddingKernel.hpp \
-  include/pirate/ToyIPC.hpp \
   include/pirate/utils.hpp \
   include/pirate/XEngineMetadata.hpp \
   include/pirate/YamlFile.hpp \
