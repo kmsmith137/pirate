@@ -217,10 +217,6 @@ void FrbServer::start()
         builder.RegisterService(rpc_service.get());
         this->rpc_server = builder.BuildAndStart();
 
-        // Start all receivers.
-        for (auto &r : params.receivers)
-            r->start();
-
         // Spawn one worker thread per receiver.
         int nreceivers = params.receivers.size();
         for (int i = 0; i < nreceivers; i++)
@@ -235,6 +231,10 @@ void FrbServer::start()
         // depend on dummy/non-dummy mode.
         processing_thread       = std::thread(&FrbServer::processing_thread_main,       this);
         frame_finalizing_thread = std::thread(&FrbServer::frame_finalizing_thread_main, this);
+
+        // Start all receivers.
+        for (auto &r : params.receivers)
+            r->start();
     } catch (...) {
         stop(std::current_exception());
         throw;
