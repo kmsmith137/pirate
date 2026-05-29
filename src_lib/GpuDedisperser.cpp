@@ -403,6 +403,25 @@ void GpuDedisperser::stop(std::exception_ptr e)
     is_stopped = true;
     error = e;
 
+    // Cascade stop() to the internal CudaEventRingbufs so that any thread
+    // parked in a blocking wait / synchronize / synchronize_with_producer
+    // (e.g. an external caller of release_input_and_launch_dedispersion_kernels,
+    // or our own et_h2h worker) throws "called on stopped instance" and exits
+    // promptly. Previously this cascade happened only in ~GpuDedisperser, which
+    // meant stop() alone could not unblock a parked caller. CudaEventRingbuf::stop()
+    // is idempotent and makes no CUDA calls, so the destructor's identical calls
+    // remain harmless. NOTE: stopping an evrb does NOT cancel in-flight GPU work
+    // or destroy the cuda events -- ~GpuDedisperser still synchronizes all streams
+    // before any GPU array is freed.
+    if (evrb_tree_gridding) evrb_tree_gridding->stop();
+    if (evrb_g2g)           evrb_g2g->stop();
+    if (evrb_g2h)           evrb_g2h->stop();
+    if (evrb_h2g)           evrb_h2g->stop();
+    if (evrb_cdd2)          evrb_cdd2->stop();
+    if (evrb_et_h2g)        evrb_et_h2g->stop();
+    for (auto &r : evrb_release_output)
+        if (r) r->stop();
+
     // GpuDedisperser doesn't currently need a condition_variable.
     // See comment in Dedisperser.hpp.
     // cv.notify_all();

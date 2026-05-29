@@ -3,6 +3,9 @@
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/Dedisperser.hpp"        // GpuDedisperser
 #include "../include/pirate/CudaStreamPool.hpp"
+#include "../include/pirate/CudaEventRingbuf.hpp"
+#include "../include/pirate/GpuDequantizationKernel.hpp"
+#include "../include/pirate/utils.hpp"               // safe_memcpy_h2g_async
 
 #include <cstring>   // strstr
 
@@ -154,6 +157,9 @@ FrbServer::~FrbServer()
     if (processing_thread.joinable())
         processing_thread.join();
 
+    if (frame_finalizing_thread.joinable())
+        frame_finalizing_thread.join();
+
     if (rpc_server)
         rpc_server->Wait();
 }
@@ -224,9 +230,11 @@ void FrbServer::start()
         if (!frame_allocator->is_dummy())
             reaper_thread = std::thread(&FrbServer::reaper_thread_main, this);
 
-        // Spawn processing thread (builds DedispersionPlan once metadata arrives).
-        // Spawned unconditionally -- doesn't depend on dummy/non-dummy mode.
-        processing_thread = std::thread(&FrbServer::processing_thread_main, this);
+        // Spawn processing thread (builds DedispersionPlan once metadata arrives)
+        // and the frame-finalizing thread. Spawned unconditionally -- don't
+        // depend on dummy/non-dummy mode.
+        processing_thread       = std::thread(&FrbServer::processing_thread_main,       this);
+        frame_finalizing_thread = std::thread(&FrbServer::frame_finalizing_thread_main, this);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -243,8 +251,21 @@ void FrbServer::stop(std::exception_ptr e)
 
     is_stopped = true;
     error = e;
+
+    // Snapshot the lock-protected shared_ptrs under the lock (the
+    // processing_thread publishes them under this same mutex). We call their
+    // stop()s below, after unlocking -- reading them outside the lock would be
+    // a data race, and we don't want to hold 'mutex' across the cascades.
+    shared_ptr<GpuDedisperser>   dd  = dedisperser;
+    shared_ptr<CudaEventRingbuf> ed  = evrb_dequant;
+    shared_ptr<CudaEventRingbuf> eff = evrb_frame_finalized;
+
     cv.notify_all();
     lock.unlock();
+
+    // Unblock the two FrbServer-owned evrbs.
+    if (ed)  ed->stop();
+    if (eff) eff->stop();
 
     // Stop all receivers.
     for (auto &r : params.receivers)
@@ -252,6 +273,13 @@ void FrbServer::stop(std::exception_ptr e)
 
     // Stop the frame_allocator (which will unblock num_total_frames).
     frame_allocator->stop();
+
+    // Cascade to the dedisperser. GpuDedisperser::stop() also stops the
+    // dedisperser's internal CudaEventRingbufs, which is how the
+    // processing_thread is unblocked if it is parked in a blocking evrb_et_h2g
+    // wait inside release_input_and_launch_dedispersion_kernels.
+    if (dd)
+        dd->stop();
 
     // Shutdown RPC server.
     if (rpc_server)
@@ -512,14 +540,18 @@ void FrbServer::reaper_thread_main()
 // "postfilled" DedispersionConfig, validates it, and constructs a
 // DedispersionPlan. It then builds a CudaStreamPool and a GpuDedisperser
 // on top of the plan and calls allocate() to attach the FrbServer's
-// host/gpu allocators. All three are published via the lock-protected
-// 'plan' / 'dedisperser' members in a single critical section.
+// host/gpu allocators. plan + dedisperser (along with evrb_dequant /
+// evrb_frame_finalized and dedisperser_is_initialized) are published via the
+// lock-protected members in a single critical section.
 //
-// After publishing plan + dedisperser, the thread enters a wait-and-advance
-// loop: it blocks on cv until rb_processed < rb_assembled, advances
-// rb_processed by one, and notifies cv (waking the reaper). The "processing"
-// itself is trivial for now -- a future prompt will pull the current frame
-// off the ringbuf and do real GPU work off-lock before advancing the counter.
+// After publishing, the thread allocates per-stream GPU scratch + a
+// GpuDequantizationKernel, snapshots rb_curr = rb_processed once
+// rb_initialized is true, then loops over (ichunk, ibatch, beam): per-beam
+// H2G copy of the assembled frame into the scratch (bumping the local
+// rb_curr), per-batch dequantization into the dedisperser input buffer, and
+// per-batch release_input_and_launch_dedispersion_kernels. It does NOT bump
+// rb_processed -- the frame_finalizing_thread does that (in batches of
+// beams_per_batch) once the H2G copies are observably complete on the GPU.
 
 
 void FrbServer::_processing_thread_main()
@@ -626,49 +658,162 @@ void FrbServer::_processing_thread_main()
          << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
          << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)" << endl;
 
-    // Publish plan + dedisperser atomically under the mutex. Notify cv so
-    // future waiters (if any) observe the new values.
+    // Per-stream GPU scratch + dequantization kernel + the two new
+    // CudaEventRingbufs. These are local to processing_thread; the evrb_*'s
+    // are "published" to FrbServer's lock-protected members below.
+    //
+    // B = beams_per_batch, F = nfreq, T = nt_in, S = nstreams.
+    const long S         = dedisperser_p->nstreams;
+    const long B         = dedisperser_p->beams_per_batch;
+    const long F         = dedisperser_p->nfreq;
+    const long T         = dedisperser_p->nt_in;
+    const long nbatches  = dedisperser_p->nbatches;
+    const Dtype dtype    = dedisperser_p->dtype;
+    const Dtype dt_int4  = Dtype::from_str("int4");
+
+    Array<void>   int4_data_gpu      = params.gpu_allocator->allocate_array<void>  (dt_int4, {S, B, F, T});
+    Array<__half> scales_offsets_gpu = params.gpu_allocator->allocate_array<__half>({S, B, F, T / 256, 2});
+
+    GpuDequantizationKernel dequantization_kernel(dtype, B, F, T);
+
+    // FIXME: using huge CudaEventRingbuf capacity for now, matching the
+    // constant in GpuDedisperser.cpp's constructor.
+    const long evrb_capacity = 1000;
+    auto evrb_dequant_p = std::make_shared<CudaEventRingbuf>(
+        "dequant", /*nconsumers=*/1, evrb_capacity, /*blocking_sync=*/true);
+    auto evrb_frame_finalized_p = std::make_shared<CudaEventRingbuf>(
+        "frame_finalized", /*nconsumers=*/1, evrb_capacity, /*blocking_sync=*/true);
+
+    // One reusable event for the per-batch h2g -> compute barrier. RAII via
+    // CudaEventWrapper so it cleans up on any exit path. ev_spin is fine here
+    // -- the event is only used with cudaStreamWaitEvent, never
+    // cudaEventSynchronize.
+    ksgpu::CudaEventWrapper h2g_done_event =
+        ksgpu::CudaEventWrapper::create(ksgpu::ev_spin);
+
+    // Publish plan + dedisperser + evrb_* atomically under the mutex, and set
+    // dedisperser_is_initialized (which wakes the frame_finalizing_thread).
     {
         lock_guard<std::mutex> lock(mutex);
-        plan = plan_p;
-        dedisperser = dedisperser_p;
+        plan                       = plan_p;
+        dedisperser                = dedisperser_p;
+        evrb_dequant               = evrb_dequant_p;
+        evrb_frame_finalized       = evrb_frame_finalized_p;
+        dedisperser_is_initialized = true;
         cv.notify_all();
     }
 
-    // Wait-and-advance loop. Mirrors the reaper pattern: cv-wait until
-    // either is_stopped or rb_processed < rb_assembled, then bump
-    // rb_processed by one and notify cv (waking the reaper). The
-    // "processing" is trivial for now; a future prompt will pull
-    // frame_ringbuf[rb_processed % rb_size] under the lock, drop the
-    // lock to issue real GPU work off-lock, then re-take the lock to
-    // advance rb_processed.
-    for (;;) {
+    // Snapshot rb_processed into rb_curr (local). Indexes the processing
+    // thread's current position in the ring buffer, in lockstep with the loop
+    // indices (ichunk, ibatch, b) below.
+    //
+    // At this point the frame_finalizing_thread (the only other writer of
+    // rb_processed) is necessarily blocked in
+    // evrb_frame_finalized->synchronize(0, true) -- we haven't called record()
+    // yet -- so rb_processed is still at its seed value and the snapshot is
+    // well-defined.
+    long rb_curr;
+    {
         unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&]{ return is_stopped || rb_initialized; });
+        if (is_stopped) return;
+        rb_curr = rb_processed;
+    }
 
-        for (;;) {
-            if (is_stopped)
-                return;
-            if (rb_processed < rb_assembled)
-                break;
-            cv.wait(lock);
+    // NOTE on chunk-index conventions:
+    //
+    // FrbServer's rb_* counters use ABSOLUTE frame IDs of the form
+    // (time_chunk_index * nbeams + ibeam), where time_chunk_index is measured
+    // from fpga_seq=0 (in general nonzero). GpuDedisperser uses ZERO-BASED
+    // chunk indices ichunk = 0, 1, 2, ...
+    //
+    // THIS PROCESSING CODE USES ZERO-BASED INDICES THROUGHOUT. ichunk, ibatch,
+    // b, and seq_id are all zero-based and are used only for the dedispersion-
+    // side arithmetic (acquire_input, evrb_*, dequant kernel). Ring-buffer
+    // access uses rb_curr % rb_size (an absolute index); the only bridge
+    // between the two worlds is the snapshot above.
+    const long rb_size = long(frame_ringbuf.size());
+
+    for (long ichunk = 0; ; ichunk++) {
+        for (long ibatch = 0; ibatch < nbatches; ibatch++) {
+            const long seq_id  = ichunk * nbatches + ibatch;
+            const long istream = seq_id % S;
+            cudaStream_t compute_stream = dedisperser_p->stream_pool->compute_streams.at(istream);
+            cudaStream_t h2g_stream     = dedisperser_p->stream_pool->high_priority_h2g_stream;
+
+            // Throttle H2G against the per-stream-slot dequant from
+            // (seq_id - nstreams) batches ago. Negative seq_id is a no-op
+            // (matches the existing GpuDedisperser pattern).
+            evrb_dequant_p->wait(h2g_stream, seq_id - S);
+
+            for (long b = 0; b < B; b++) {
+                std::shared_ptr<AssembledFrame> frame;
+                {
+                    unique_lock<std::mutex> lock(mutex);
+                    cv.wait(lock, [&]{
+                        return is_stopped || (rb_curr < rb_assembled);
+                    });
+                    if (is_stopped)
+                        return;
+                    xassert(rb_processed <= rb_curr);    // defensive
+                    frame = frame_ringbuf[rb_curr % rb_size];
+                    rb_curr++;
+                }
+
+                // Optional artificial per-frame delay, off-lock.
+                if (params.processing_delay_sec > 0.0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::duration<double>(params.processing_delay_sec));
+                }
+
+                // Defensive: the h2g copies use raw pointers + byte counts (no
+                // shape validation), so assert the frame matches the dedisperser
+                // geometry (nfreq, nt_in). A mismatch would silently corrupt GPU
+                // memory.
+                xassert_eq(frame->nfreq, F);
+                xassert_eq(frame->ntime, T);
+
+                // Per-beam destinations and byte counts.
+                Array<void>   raw_dst   = int4_data_gpu     .slice(0, istream).slice(0, b);
+                Array<__half> scoff_dst = scales_offsets_gpu.slice(0, istream).slice(0, b);
+                const long raw_nbytes   = F * (T / 2);
+                const long scoff_nbytes = F * (T / 256) * 2 * long(sizeof(__half));
+
+                safe_memcpy_h2g_async(raw_dst.data,   frame->data.data,           raw_nbytes,   h2g_stream);
+                safe_memcpy_h2g_async(scoff_dst.data, frame->scales_offsets.data, scoff_nbytes, h2g_stream);
+
+                // Note: we do NOT bump rb_processed here -- the
+                // frame_finalizing_thread does that, in batches of B, after
+                // evrb_frame_finalized fires for this seq_id.
+            }
+
+            // Signal the frame_finalizing_thread that batch seq_id's H2G copies
+            // are queued; the finalizing thread will see this event fire once
+            // the GPU has actually completed the copies.
+            //
+            // Later (post-RFI), this record will move further down the pipeline
+            // -- we'll wait until the RFI mask is copied GPU->host before
+            // finalizing.
+            evrb_frame_finalized_p->record(h2g_stream, seq_id);
+
+            // Barrier: compute_stream waits for the H2G copies. (h2g_done_event
+            // converts implicitly to cudaEvent_t; there is no .event field.)
+            CUDA_CALL(cudaEventRecord(h2g_done_event, h2g_stream));
+            CUDA_CALL(cudaStreamWaitEvent(compute_stream, h2g_done_event, 0));
+
+            // Acquire the dedisperser input slot (compute_stream waits on the
+            // slot becoming free internally), returning the per-batch view.
+            Array<void> dd_inbuf = dedisperser_p->acquire_input(ichunk, ibatch, compute_stream);
+
+            Array<void>   raw_batch   = int4_data_gpu     .slice(0, istream);
+            Array<__half> scoff_batch = scales_offsets_gpu.slice(0, istream);
+            dequantization_kernel.launch(dd_inbuf, scoff_batch, raw_batch, compute_stream);
+
+            evrb_dequant_p->record(compute_stream, seq_id);
+
+            dedisperser_p->release_input_and_launch_dedispersion_kernels(
+                ichunk, ibatch, compute_stream);
         }
-
-        // Optional artificial per-frame delay (config: processing_delay_sec).
-        // Used to simulate slow GPU processing for testing the FakeXEngine
-        // pacing path. Done off-lock so workers can keep advancing
-        // rb_assembled during the "work".
-        if (params.processing_delay_sec > 0.0) {
-            lock.unlock();
-            std::this_thread::sleep_for(
-                std::chrono::duration<double>(params.processing_delay_sec));
-            lock.lock();
-        }
-
-        rb_processed++;
-        _check_rb_invariants();
-
-        lock.unlock();
-        cv.notify_all();
     }
 }
 
@@ -685,6 +830,86 @@ void FrbServer::processing_thread_main()
         stop(std::current_exception());
     } catch (...) {
         std::cerr << "FrbServer: processing thread terminated with unknown exception" << std::endl;
+        stop(std::current_exception());
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Frame-finalizing thread
+//
+// Bridges H2G-copy completion to the FrbServer ringbuf accounting. Blocks
+// until the processing_thread publishes evrb_frame_finalized, then for each
+// seq_id = 0, 1, 2, ... blocks (on the host) in
+// evrb_frame_finalized->synchronize() until the GPU has completed batch
+// seq_id's H2G copies, then advances rb_processed by beams_per_batch.
+
+
+void FrbServer::_frame_finalizing_thread_main()
+{
+    // Wait for processing_thread to finish post-allocate setup and publish
+    // evrb_frame_finalized.
+    shared_ptr<CudaEventRingbuf> evrb_frame_finalized_p;
+    {
+        unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&]{ return is_stopped || dedisperser_is_initialized; });
+        if (is_stopped) return;
+        evrb_frame_finalized_p = evrb_frame_finalized;
+        xassert(evrb_frame_finalized_p);
+    }
+
+    // beams_per_batch is fixed at construction; cache it. (dedisperser is
+    // non-null and immutable once dedisperser_is_initialized was observed true
+    // above, so reading it here outside the lock is safe.)
+    const long B = dedisperser->beams_per_batch;
+
+    for (long seq_id = 0; ; seq_id++) {
+        // Blocks (on the host) until the GPU completes batch seq_id's H2G
+        // copies. Throws "called on stopped instance" if stop() cascaded into
+        // evrb_frame_finalized; the wrapper below catches it.
+        evrb_frame_finalized_p->synchronize(seq_id, /*blocking=*/true);
+
+        {
+            unique_lock<std::mutex> lock(mutex);
+            if (is_stopped) return;
+
+            // Each fired event was preceded by B inner-loop iterations in the
+            // processing_thread, each gated on rb_curr < rb_assembled, so this
+            // should always hold. If it doesn't, it's a logic bug.
+            if (rb_assembled < rb_processed + B) {
+                std::stringstream ss;
+                ss << "FrbServer::frame_finalizing_thread observed rb_assembled="
+                   << rb_assembled << " < rb_processed + beams_per_batch="
+                   << (rb_processed + B)
+                   << "; this should never happen and indicates a logic bug";
+                throw std::runtime_error(ss.str());
+            }
+
+            rb_processed += B;
+            _check_rb_invariants();
+        }
+        cv.notify_all();
+    }
+}
+
+
+void FrbServer::frame_finalizing_thread_main()
+{
+    try {
+        // Same cudaSetDevice as processing_thread_main: this thread calls
+        // CudaEventRingbuf::synchronize(), which dispatches to CUDA runtime
+        // calls bound to the current device.
+        CUDA_CALL(cudaSetDevice(params.cuda_device_id));
+        _frame_finalizing_thread_main();
+    } catch (const std::exception &e) {
+        if (!_is_cascade_stop_exception(e)) {
+            std::cerr << "FrbServer: frame_finalizing thread terminated with exception: "
+                      << e.what() << std::endl;
+        }
+        stop(std::current_exception());
+    } catch (...) {
+        std::cerr << "FrbServer: frame_finalizing thread terminated with unknown exception" << std::endl;
         stop(std::current_exception());
     }
 }

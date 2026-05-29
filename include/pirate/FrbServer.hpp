@@ -30,14 +30,15 @@ struct FileWriter;        // FileWriter.hpp
 struct DedispersionPlan;  // DedispersionPlan.hpp
 struct GpuDedisperser;    // Dedisperser.hpp
 struct CudaStreamPool;    // CudaStreamPool.hpp
+struct CudaEventRingbuf;  // CudaEventRingbuf.hpp
 struct FrbRpcService;     // defined in FrbServer.cpp
 
 
 // FrbServer: a thread-backed class that manages Receivers and an RPC service.
 //
-// Backing threads: one worker thread per Receiver, a reaper thread, and a
-// processing thread (which builds a DedispersionPlan once X-engine metadata
-// has arrived). These threads inherit their vcpu affinity from the caller
+// Backing threads: one worker thread per Receiver, a reaper thread, a
+// processing thread, and a frame-finalizing thread (see below). These
+// threads inherit their vcpu affinity from the caller
 // of FrbServer::start(). Python callers should call FrbServer.start() within
 // a ThreadAffinity context manager.
 //
@@ -48,13 +49,21 @@ struct FrbRpcService;     // defined in FrbServer.cpp
 // reachable as FrbServer::plan->config after the plan has been built.
 //
 // The processing thread also builds a GpuDedisperser (alongside a private
-// CudaStreamPool) once the plan exists. Both 'plan' and 'dedisperser'
-// become non-null atomically (published in the same critical section).
-// After publishing, the processing thread enters a wait-and-advance loop:
-// it blocks on cv until at least one frame has been fully assembled
-// (rb_processed < rb_assembled), advances rb_processed by one, notifies
-// cv (waking the reaper), and repeats. The "processing" work is trivial
-// for now and will be replaced with real GPU work in a future prompt.
+// CudaStreamPool) once the plan exists. 'plan' and 'dedisperser' (along with
+// evrb_dequant / evrb_frame_finalized and dedisperser_is_initialized) become
+// non-null atomically (published in the same critical section).
+//
+// processing_thread: after publishing, snapshots rb_curr = rb_processed once
+// rb_initialized is true, then loops over (ichunk, ibatch, beam) doing a
+// per-beam H2G copy of the assembled frame into per-stream GPU scratch
+// (bumping the local rb_curr), per-batch dequantization into the dedisperser
+// input buffer, and per-batch release_input_and_launch_dedispersion_kernels.
+// It does NOT bump rb_processed.
+//
+// frame_finalizing_thread: bridges H2G-copy completion (signaled via
+// evrb_frame_finalized) to the FrbServer ringbuf accounting. For each fired
+// event it bumps rb_processed by beams_per_batch under 'mutex' and notifies
+// cv (waking the reaper).
 //
 // Note that FrbServer::start() also spawns a grpc service with its own worker
 // threads. These threads will be unpinned (default system-wide affinity), since
@@ -146,6 +155,25 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // members transition from null to non-null together. Protected by 'mutex'.
     std::shared_ptr<GpuDedisperser> dedisperser;
 
+    // Lock-protected. Published by processing_thread once
+    // GpuDedisperser::allocate() returns and the post-allocate setup
+    // is complete (along with dedisperser_is_initialized = true).
+    //
+    // evrb_dequant: produced by the dequantization kernel on
+    //   compute_stream, consumed (with lag nstreams) by the H2G copies
+    //   on h2g_stream. Gates per-stream-slot scratch reuse.
+    // evrb_frame_finalized: produced by processing_thread on
+    //   h2g_stream after the per-batch H2G copies complete,
+    //   consumed by frame_finalizing_thread.
+    std::shared_ptr<CudaEventRingbuf> evrb_dequant;
+    std::shared_ptr<CudaEventRingbuf> evrb_frame_finalized;
+
+    // Lock-protected. Set to true by processing_thread once
+    // { plan, dedisperser, evrb_dequant, evrb_frame_finalized } are
+    // all assigned. Used by frame_finalizing_thread to know it's safe
+    // to read evrb_frame_finalized.
+    bool dedisperser_is_initialized = false;
+
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
     // See below for invariants.
     long rb_start        = 0;   // (first frame_id in ringbuf)
@@ -162,9 +190,15 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     std::thread reaper_thread;
 
     // Processing thread: builds a DedispersionPlan and GpuDedisperser
-    // once X-engine metadata has arrived, then exits (more steps to be
-    // added later).
+    // once X-engine metadata has arrived, then runs the dedispersion
+    // ingest pipeline (H2G copies + dequantization + dedispersion
+    // kernel launches). See top-of-file comment.
     std::thread processing_thread;
+
+    // Frame-finalizing thread: advances rb_processed by beams_per_batch
+    // each time the processing_thread's per-batch H2G copies complete
+    // (signaled via evrb_frame_finalized). See top-of-file comment.
+    std::thread frame_finalizing_thread;
 
     // ----- Noncopyable, nonmoveable -----
 
@@ -202,6 +236,10 @@ private:
     // Processing thread functions.
     void _processing_thread_main();
     void processing_thread_main();
+
+    // Frame-finalizing thread functions.
+    void _frame_finalizing_thread_main();
+    void frame_finalizing_thread_main();
 };
 
 
