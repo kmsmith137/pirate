@@ -287,6 +287,72 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 }
 
 
+void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator)
+{
+    if (this->is_allocated)
+        throw runtime_error("double call to GpuDedisperser::allocate()");
+
+    if (!(gpu_allocator.aflags & af_gpu))
+        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_gpu");
+    if (!(gpu_allocator.aflags & af_zero))
+        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_zero");
+
+    if (!(host_allocator.aflags & af_rhost))
+        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_rhost");
+    if (!(host_allocator.aflags & af_zero))
+        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_zero");
+
+    long gpu_nbytes_before = gpu_allocator.nbytes_allocated.load();
+    long host_nbytes_before = host_allocator.nbytes_allocated.load();
+
+    // Note: we allocate the output_ringbuf first, so that it will be located as
+    // close as possible to the gpu_allocator 'base' pointer. This seems preferable,
+    // since we plan to share the output_ringbuf over cuda IPC (but I'm not sure if
+    // it's really necessary.)
+    //
+    // Note: output_ringbuf shape metadata was initialized in the GpuDedisperser constructor.
+    output_ringbuf.allocate(gpu_allocator);
+
+    input_arrays = gpu_allocator.allocate_array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in});
+
+    for (DedispersionBuffer &buf: stage1_dd_bufs)
+        buf.allocate(gpu_allocator);
+
+    // wt_arrays
+    for (long itree = 0; itree < ntrees; itree++) {
+        const vector<long> &eshape = extended_wt_shapes.at(itree);
+        const vector<long> &estrides = extended_wt_strides.at(itree);
+        wt_arrays.push_back(gpu_allocator.allocate_array<void>(dtype, eshape, estrides));
+    }
+
+    this->tree_gridding_kernel->allocate(gpu_allocator);
+    
+    for (auto &kernel: this->stage1_dd_kernels)
+        kernel->allocate(gpu_allocator);
+    
+    for (auto &kernel: this->cdd2_kernels)
+        kernel->allocate(gpu_allocator);
+
+    this->gpu_ringbuf = gpu_allocator.allocate_array<void>(dtype, { gpu_ringbuf_nelts });
+    this->host_ringbuf = host_allocator.allocate_array<void>(dtype, { host_ringbuf_nelts });    
+
+    this->lds_kernel->allocate(gpu_allocator);
+    this->g2g_copy_kernel->allocate(gpu_allocator);
+
+    long gpu_nbytes_allocated = gpu_allocator.nbytes_allocated.load() - gpu_nbytes_before;
+    long host_nbytes_allocated = host_allocator.nbytes_allocated.load() - host_nbytes_before;
+    // cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
+    // cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
+    xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
+    xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
+
+    this->is_allocated = true;
+
+    // Create worker thread (thread-backed class pattern).
+    this->worker = std::thread(&GpuDedisperser::worker_main, this);
+}
+
+
 GpuDedisperser::~GpuDedisperser()
 {
     // Save the calling thread's current CUDA device so we can restore it
@@ -864,6 +930,7 @@ void GpuDedisperser::_launch_dedispersion_kernels(long ichunk, long ibatch, cuda
     cudaStream_t compute_stream = stream_pool->compute_streams.at(seq_id % nstreams);
 
     // Compute kernel waits on the caller-specified stream.
+    // Note: caller-specified stream isn't used for anything besides creating this event.
     cudaEvent_t event;
     CUDA_CALL(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
     CUDA_CALL(cudaEventRecord(event, stream));
@@ -1465,67 +1532,6 @@ GpuDedisperser::Outputs GpuDedisperser::Outputs::slice(long start_beam_index, lo
     }
 
     return ret;
-}
-
-
-void GpuDedisperser::allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator)
-{
-    if (this->is_allocated)
-        throw runtime_error("double call to GpuDedisperser::allocate()");
-
-    if (!(gpu_allocator.aflags & af_gpu))
-        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_gpu");
-    if (!(gpu_allocator.aflags & af_zero))
-        throw runtime_error("GpuDedisperser::allocate(): gpu_allocator.aflags must contain af_zero");
-
-    if (!(host_allocator.aflags & af_rhost))
-        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_rhost");
-    if (!(host_allocator.aflags & af_zero))
-        throw runtime_error("GpuDedisperser::allocate(): host_allocator.aflags must contain af_zero");
-
-    long gpu_nbytes_before = gpu_allocator.nbytes_allocated.load();
-    long host_nbytes_before = host_allocator.nbytes_allocated.load();
-
-    input_arrays = gpu_allocator.allocate_array<void>(dtype, {nstreams, beams_per_batch, nfreq, nt_in});
-
-    for (DedispersionBuffer &buf: stage1_dd_bufs)
-        buf.allocate(gpu_allocator);
-
-    // wt_arrays
-    for (long itree = 0; itree < ntrees; itree++) {
-        const vector<long> &eshape = extended_wt_shapes.at(itree);
-        const vector<long> &estrides = extended_wt_strides.at(itree);
-        wt_arrays.push_back(gpu_allocator.allocate_array<void>(dtype, eshape, estrides));
-    }
-
-    // Output ringbuf (shape metadata was set in the constructor).
-    output_ringbuf.allocate(gpu_allocator);
-
-    this->tree_gridding_kernel->allocate(gpu_allocator);
-    
-    for (auto &kernel: this->stage1_dd_kernels)
-        kernel->allocate(gpu_allocator);
-    
-    for (auto &kernel: this->cdd2_kernels)
-        kernel->allocate(gpu_allocator);
-
-    this->gpu_ringbuf = gpu_allocator.allocate_array<void>(dtype, { gpu_ringbuf_nelts });
-    this->host_ringbuf = host_allocator.allocate_array<void>(dtype, { host_ringbuf_nelts });    
-
-    this->lds_kernel->allocate(gpu_allocator);
-    this->g2g_copy_kernel->allocate(gpu_allocator);
-
-    long gpu_nbytes_allocated = gpu_allocator.nbytes_allocated.load() - gpu_nbytes_before;
-    long host_nbytes_allocated = host_allocator.nbytes_allocated.load() - host_nbytes_before;
-    // cout << "GpuDedisperser: " << gpu_nbytes_allocated << " bytes allocated on GPU" << endl;
-    // cout << "GpuDedisperser: " << host_nbytes_allocated << " bytes allocated on host" << endl;
-    xassert_eq(gpu_nbytes_allocated, resource_tracker.get_gmem_footprint());
-    xassert_eq(host_nbytes_allocated, resource_tracker.get_hmem_footprint());
-
-    this->is_allocated = true;
-
-    // Create worker thread (thread-backed class pattern).
-    this->worker = std::thread(&GpuDedisperser::worker_main, this);
 }
 
 

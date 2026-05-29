@@ -671,6 +671,11 @@ void FrbServer::_processing_thread_main()
     const Dtype dtype    = dedisperser_p->dtype;
     const Dtype dt_int4  = Dtype::from_str("int4");
 
+    // Note that we allocate these arrays after calling GpuDedisperser::allocate().
+    // This is so that GpuDedisperser::output_ringbuf will be located as close as
+    // possible to the gpu_allocator 'base' pointer. This seems preferable, since
+    // we plan to share the output_ringbuf over cuda IPC (but I'm not sure if it's
+    // really necessary.)
     Array<void>   int4_data_gpu      = params.gpu_allocator->allocate_array<void>  (dt_int4, {S, B, F, T});
     Array<__half> scales_offsets_gpu = params.gpu_allocator->allocate_array<__half>({S, B, F, T / 256, 2});
 
