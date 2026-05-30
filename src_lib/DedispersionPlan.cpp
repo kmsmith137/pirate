@@ -398,6 +398,26 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
         emitter << YAML::Key << "tree_index" << YAML::Value << tree_index;
 
+        emitter << YAML::Key << "ndm_out" << YAML::Value << tree.ndm_out;
+        if (verbose)
+            emitter << YAML::Comment("Number of output (dedispersed) DM channels");
+
+        emitter << YAML::Key << "nt_out" << YAML::Value << tree.nt_out;
+        if (verbose)
+            emitter << YAML::Comment("Number of output time samples");
+
+        emitter << YAML::Key << "dm_min" << YAML::Value << tree.dm_min;
+        if (verbose)
+            emitter << YAML::Comment("Minimum DM (pc/cm^3)");
+
+        emitter << YAML::Key << "dm_max" << YAML::Value << tree.dm_max;
+        if (verbose)
+            emitter << YAML::Comment("Maximum DM (pc/cm^3)");
+
+        emitter << YAML::Key << "trigger_frequency" << YAML::Value << tree.trigger_frequency;
+        if (verbose)
+            emitter << YAML::Comment("Early-trigger frequency (MHz)");
+
         emitter << YAML::Key << "ds_level" << YAML::Value << tree.ds_level;
         if (verbose) {
             stringstream ss;
