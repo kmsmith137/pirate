@@ -673,23 +673,20 @@ struct ChimeWorker : public Hwtest::Worker
     virtual Stats worker_body() override
     {
         const long nstreams = gpu_dedisperser->nstreams;
-        const long nbatches = gpu_dedisperser->nbatches;
         const long beams_per_batch = gpu_dedisperser->beams_per_batch;
         const long nouter = max(32/beams_per_batch, 1L);
 
         for (long iouter = 0; iouter < nouter; iouter++) {
-            long istream = seq_id % nstreams;
-            long ichunk = seq_id / nbatches;
-            long ibatch = seq_id % nbatches;
-            this->seq_id++;
+            long sid = this->seq_id++;
+            long istream = sid % nstreams;
             
             cudaStream_t compute_stream = cuda_stream_pool->compute_streams.at(istream);
 
-            gpu_dedisperser->acquire_input(ichunk, ibatch, compute_stream);
-            gpu_dedisperser->release_input_and_launch_dedispersion_kernels(ichunk, ibatch, compute_stream);
+            gpu_dedisperser->acquire_input(sid, compute_stream);
+            gpu_dedisperser->release_input_and_launch_dedispersion_kernels(sid, compute_stream);
             
-            gpu_dedisperser->acquire_output(0, ichunk, ibatch, compute_stream);
-            gpu_dedisperser->release_output(0, ichunk, ibatch, compute_stream);
+            gpu_dedisperser->acquire_output(0, sid, compute_stream);
+            gpu_dedisperser->release_output(0, sid, compute_stream);
         }
 
         // Reminder: ResourceTracker counts are "per batch".

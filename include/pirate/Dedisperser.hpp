@@ -132,18 +132,25 @@ struct GpuDedisperser
 
     void allocate(BumpAllocator &gpu_allocator, BumpAllocator &host_allocator);
 
-    // acquire_input(): after call, 'stream' sees empty input buffer.
-    //                  Returns the input buffer as ksgpu::Array<void> with
-    //                  shape (beams_per_batch, nfreq, nt_in), valid until the
-    //                  matching release_input_and_launch_dedispersion_kernels() call.
-    // release_input_and_launch_dedispersion_kernels(): before call, 'stream' must see full input buffer.
-    // acquire_output(consumer_id, ichunk, ibatch, stream):
+    // All four progress-cursor methods take a 'seq_id' argument: the global
+    // batch index 0, 1, 2, ..., related to the (ichunk, ibatch) chunk/batch
+    // pair by seq_id = ichunk*nbatches + ibatch. acquire_input / release_input
+    // (and each consumer's acquire_output / release_output) must be called with
+    // seq_id = 0, 1, 2, ... in order.
+    //
+    // acquire_input(seq_id, stream): after call, 'stream' sees empty input
+    //                  buffer. Returns the input buffer as ksgpu::Array<void>
+    //                  with shape (beams_per_batch, nfreq, nt_in), valid until
+    //                  the matching release_input_and_launch_dedispersion_kernels() call.
+    // release_input_and_launch_dedispersion_kernels(seq_id, stream): before call,
+    //                  'stream' must see full input buffer.
+    // acquire_output(consumer_id, seq_id, stream):
     //                  after call, 'stream' sees full output buffer.
     //                  Returns a GpuDedisperser::Outputs struct holding
     //                  list-of-Array views of out_max and out_argmax, valid
     //                  until the matching release_output() call. consumer_id
     //                  must be in [0, params.num_consumers).
-    // release_output(consumer_id, ichunk, ibatch, stream):
+    // release_output(consumer_id, seq_id, stream):
     //                  before call, 'stream' must see empty output buffer.
     //                  consumer_id must be in [0, params.num_consumers).
     //
@@ -154,11 +161,11 @@ struct GpuDedisperser
     // since my tentative long-term plan is to generate the pf_weights
     // "dynamically" as part of the compute graph.
 
-    ksgpu::Array<void> acquire_input (long ichunk, long ibatch, cudaStream_t stream);
-    void               release_input_and_launch_dedispersion_kernels (long ichunk, long ibatch, cudaStream_t stream);
+    ksgpu::Array<void> acquire_input (long seq_id, cudaStream_t stream);
+    void               release_input_and_launch_dedispersion_kernels (long seq_id, cudaStream_t stream);
 
-    Outputs            acquire_output(long consumer_id, long ichunk, long ibatch, cudaStream_t stream);
-    void               release_output(long consumer_id, long ichunk, long ibatch, cudaStream_t stream);
+    Outputs            acquire_output(long consumer_id, long seq_id, cudaStream_t stream);
+    void               release_output(long consumer_id, long seq_id, cudaStream_t stream);
 
     // (No separate view methods; both input and output return their views
     // directly from acquire.)
@@ -251,7 +258,7 @@ public:
     void _launch_et_h2g(long ichuink, long ibatch, cudaStream_t stream);
 
     // These methods contain the difficult code :)
-    void _launch_dedispersion_kernels(long ichunk, long ibatch, cudaStream_t stream);
+    void _launch_dedispersion_kernels(long seq_id, cudaStream_t stream);
     void _worker_main();
     void worker_main();
 
@@ -277,14 +284,12 @@ public:
 
     std::mutex mutex;
 
-    long curr_input_ichunk = 0;
-    long curr_input_ibatch = 0;
+    long curr_input_seq_id = 0;
     bool curr_input_acquired = false;
 
     // Per-consumer progress cursors and acquire flags.
     // Each vector has length params.num_consumers.
-    std::vector<long> curr_output_ichunk;
-    std::vector<long> curr_output_ibatch;
+    std::vector<long> curr_output_seq_id;
     std::vector<bool> curr_output_acquired;
 
     // Thread-backed class pattern: worker thread and stopped state.

@@ -66,8 +66,7 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 
     // Size per-consumer state vectors to params.num_consumers. evrb_release_output
     // is filled below alongside the other CudaEventRingbufs.
-    this->curr_output_ichunk.assign(params.num_consumers, 0);
-    this->curr_output_ibatch.assign(params.num_consumers, 0);
+    this->curr_output_seq_id.assign(params.num_consumers, 0);
     this->curr_output_acquired.assign(params.num_consumers, false);
     this->evrb_release_output.assign(params.num_consumers, nullptr);
 
@@ -596,13 +595,11 @@ void GpuDedisperser::_launch_cdd2(long ichunk, long ibatch, cudaStream_t stream)
 // -------------------------------------------------------------------------------------------------
 
 
-Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t stream)
+Array<void> GpuDedisperser::acquire_input(long seq_id, cudaStream_t stream)
 {
-    xassert(ichunk >= 0);
-    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(seq_id >= 0);
     xassert(is_allocated);
 
-    long seq_id = ichunk * nbatches + ibatch;
     long istream = seq_id % nstreams;
     Array<void> view;
 
@@ -610,18 +607,17 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
         std::unique_lock<std::mutex> lock(mutex);
         _throw_if_stopped("acquire_input");
 
-        if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch)) {
+        if (seq_id != curr_input_seq_id) {
             stringstream ss;
-            ss << "GpuDedisperser::acquire_input(): expected (ichunk,ibatch)=("
-               << curr_input_ichunk << "," << curr_input_ibatch << "), got ("
-               << ichunk << "," << ibatch << ")";
+            ss << "GpuDedisperser::acquire_input(): expected seq_id="
+               << curr_input_seq_id << ", got seq_id=" << seq_id;
             throw runtime_error(ss.str());
         }
 
         if (curr_input_acquired) {
             stringstream ss;
             ss << "GpuDedisperser::acquire_input(): double call to acquire_input()"
-               << " with (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
+               << " with seq_id=" << seq_id;
             throw runtime_error(ss.str());
         }
 
@@ -646,43 +642,36 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
 }
 
 
-void GpuDedisperser::release_input_and_launch_dedispersion_kernels(long ichunk, long ibatch, cudaStream_t stream)
+void GpuDedisperser::release_input_and_launch_dedispersion_kernels(long seq_id, cudaStream_t stream)
 {
-    xassert(ichunk >= 0);
-    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(seq_id >= 0);
 
     std::unique_lock<std::mutex> lock(mutex);
     _throw_if_stopped("release_input_and_launch_dedispersion_kernels");
 
-    if ((ichunk != curr_input_ichunk) || (ibatch != curr_input_ibatch)) {
+    if (seq_id != curr_input_seq_id) {
         stringstream ss;
-        ss << "GpuDedisperser::release_input_and_launch_dedispersion_kernels(): expected (ichunk,ibatch)=(" 
-           << curr_input_ichunk << "," << curr_input_ibatch << "), got ("
-           << ichunk << "," << ibatch << ")";
+        ss << "GpuDedisperser::release_input_and_launch_dedispersion_kernels(): expected seq_id="
+           << curr_input_seq_id << ", got seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
 
     if (!curr_input_acquired) {
         stringstream ss;
         ss << "GpuDedisperser::acquire_input(): release_input_and_launch_dedispersion_kernels() called without "
-           << " acquire_input(), (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
+           << " acquire_input(), seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
 
-    curr_input_ibatch++;
+    curr_input_seq_id++;
     curr_input_acquired = false;
-
-    if (curr_input_ibatch == nbatches) {
-        curr_input_ichunk++;
-        curr_input_ibatch = 0;
-    }
 
     lock.unlock();
 
     // Argument-checking ends here. If an exception is thrown below, call stop().
     // The rest of release_input_and_launch_dedispersion_kernels() is in its own method _launch_dedispersion_kernels().
     try {
-        _launch_dedispersion_kernels(ichunk, ibatch, stream);
+        _launch_dedispersion_kernels(seq_id, stream);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -690,13 +679,11 @@ void GpuDedisperser::release_input_and_launch_dedispersion_kernels(long ichunk, 
 }
 
 
-GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long ichunk, long ibatch, cudaStream_t stream)
+GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long seq_id, cudaStream_t stream)
 {
-    xassert(ichunk >= 0);
-    xassert((ibatch >= 0) && (ibatch < nbatches));
+    xassert(seq_id >= 0);
     xassert(is_allocated);
 
-    long seq_id = ichunk * nbatches + ibatch;
     long iout = seq_id % params.nbatches_out;
     Outputs outputs;
 
@@ -711,20 +698,18 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long ic
             throw runtime_error(ss.str());
         }
 
-        if ((ichunk != curr_output_ichunk[consumer_id]) || (ibatch != curr_output_ibatch[consumer_id])) {
+        if (seq_id != curr_output_seq_id[consumer_id]) {
             stringstream ss;
             ss << "GpuDedisperser::acquire_output(): consumer_id=" << consumer_id
-               << ", expected (ichunk,ibatch)=("
-               << curr_output_ichunk[consumer_id] << "," << curr_output_ibatch[consumer_id]
-               << "), got (" << ichunk << "," << ibatch << ")";
+               << ", expected seq_id=" << curr_output_seq_id[consumer_id]
+               << ", got seq_id=" << seq_id;
             throw runtime_error(ss.str());
         }
 
         if (curr_output_acquired[consumer_id]) {
             stringstream ss;
             ss << "GpuDedisperser::acquire_output(): consumer_id=" << consumer_id
-               << ", double call to acquire_output() with (ichunk,ibatch)=("
-               << ichunk << "," << ibatch << ")";
+               << ", double call to acquire_output() with seq_id=" << seq_id;
             throw runtime_error(ss.str());
         }
 
@@ -752,12 +737,9 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long ic
 }
 
 
-void GpuDedisperser::release_output(long consumer_id, long ichunk, long ibatch, cudaStream_t stream)
+void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t stream)
 {
-    xassert(ichunk >= 0);
-    xassert((ibatch >= 0) && (ibatch < nbatches));
-
-    long seq_id = ichunk * nbatches + ibatch;
+    xassert(seq_id >= 0);
 
     std::unique_lock<std::mutex> lock(mutex);
     _throw_if_stopped("release_output");
@@ -769,12 +751,11 @@ void GpuDedisperser::release_output(long consumer_id, long ichunk, long ibatch, 
         throw runtime_error(ss.str());
     }
 
-    if ((ichunk != curr_output_ichunk[consumer_id]) || (ibatch != curr_output_ibatch[consumer_id])) {
+    if (seq_id != curr_output_seq_id[consumer_id]) {
         stringstream ss;
         ss << "GpuDedisperser::release_output(): consumer_id=" << consumer_id
-           << ", expected (ichunk,ibatch)=("
-           << curr_output_ichunk[consumer_id] << "," << curr_output_ibatch[consumer_id]
-           << "), got (" << ichunk << "," << ibatch << ")";
+           << ", expected seq_id=" << curr_output_seq_id[consumer_id]
+           << ", got seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
 
@@ -782,17 +763,12 @@ void GpuDedisperser::release_output(long consumer_id, long ichunk, long ibatch, 
         stringstream ss;
         ss << "GpuDedisperser::release_output(): consumer_id=" << consumer_id
            << ", release_output() called without preceding acquire_output(),"
-           << " (ichunk,ibatch)=(" << ichunk << "," << ibatch << ")";
+           << " seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
 
-    curr_output_ibatch[consumer_id]++;
+    curr_output_seq_id[consumer_id]++;
     curr_output_acquired[consumer_id] = false;
-
-    if (curr_output_ibatch[consumer_id] == nbatches) {
-        curr_output_ichunk[consumer_id]++;
-        curr_output_ibatch[consumer_id] = 0;
-    }
 
     lock.unlock();
 
@@ -890,10 +866,12 @@ void GpuDedisperser::release_output(long consumer_id, long ichunk, long ibatch, 
 //   - evrb_et_h2g: produced in worker, consumed in main thread
 
 
-void GpuDedisperser::_launch_dedispersion_kernels(long ichunk, long ibatch, cudaStream_t stream)
+void GpuDedisperser::_launch_dedispersion_kernels(long seq_id, cudaStream_t stream)
 {
     // Argument-checking has already been done in release_input_and_launch_dedispersion_kernels().
-    long seq_id = ichunk * nbatches + ibatch;
+    // Translate seq_id -> (ichunk, ibatch) for the per-kernel _launch_* helpers below.
+    long ichunk = seq_id / nbatches;
+    long ibatch = seq_id % nbatches;
     cudaStream_t g2h_stream = stream_pool->low_priority_g2h_stream;
     cudaStream_t h2g_stream = stream_pool->low_priority_h2g_stream;
     cudaStream_t compute_stream = stream_pool->compute_streams.at(seq_id % nstreams);
@@ -1231,14 +1209,12 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
 
                     for (long s = 0; s < ns; s++) {
                         long iseq_gpu = seq_base + s;
-                        long ichunk_gpu = iseq_gpu / nbatches;
-                        long ibatch_gpu = iseq_gpu % nbatches;
 
                         long istream = iseq_gpu % nstreams;
                         cudaStream_t compute_stream = gdd->stream_pool->compute_streams.at(istream);
 
                         Array<void> src = dd_in_gpu.slice(0,s);
-                        Array<void> dst = gdd->acquire_input(ichunk_gpu, ibatch_gpu, compute_stream);
+                        Array<void> dst = gdd->acquire_input(iseq_gpu, compute_stream);
 
                         // Some paranoid asserts.
                         xassert(src.dtype == dst.dtype);
@@ -1254,7 +1230,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
 
                         long nbytes = dst.size * xdiv(dst.dtype.nbits, 8);
                         cudaMemcpyAsync(dst.data, src.data, nbytes, cudaMemcpyDeviceToDevice, compute_stream);
-                        gdd->release_input_and_launch_dedispersion_kernels(ichunk_gpu, ibatch_gpu, compute_stream);
+                        gdd->release_input_and_launch_dedispersion_kernels(iseq_gpu, compute_stream);
                     }
                 }
             }
@@ -1281,7 +1257,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
             rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
             
             if (!host_only)
-                gdd->acquire_output(0, ichunk, ibatch, nullptr);
+                gdd->acquire_output(0, seq_id, nullptr);
 
             for (long itree = 0; itree < ntrees; itree++) {
                 const DedispersionTree &tree = plan->trees.at(itree);
@@ -1316,7 +1292,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
             }
 
             if (!host_only)
-                gdd->release_output(0, ichunk, ibatch, nullptr);
+                gdd->release_output(0, seq_id, nullptr);
         }
     }
     
@@ -1403,8 +1379,6 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
     cout << "GpuDedisperser::time(): running" << endl;
     while (kt.next()) {
         long seq_id = kt.curr_iteration;
-        long ichunk = seq_id / nbatches;
-        long ibatch = seq_id % nbatches;
 
         cudaStream_t h2g_stream = stream_pool->high_priority_h2g_stream;
         cudaStream_t compute_stream = stream_pool->compute_streams.at(kt.istream);
@@ -1429,17 +1403,17 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
         // First, wait on the producer (the cpu->gpu copy).
         // Then, wait on the consumer (the dedisperser), by calling this->acquire_input().
         evrb_raw.wait(compute_stream, seq_id);
-        Array<void> dd_in = acquire_input(ichunk, ibatch, compute_stream);
+        Array<void> dd_in = acquire_input(seq_id, compute_stream);
         dequantization_kernel.launch(dd_in, scoff_gpu, raw_gpu, compute_stream);
         evrb_dq.record(compute_stream, seq_id);
 
         // Launch all the dedispersion kernels.
         // (They will wait for the dequantization kernel.)
-        release_input_and_launch_dedispersion_kernels(ichunk, ibatch, compute_stream);
+        release_input_and_launch_dedispersion_kernels(seq_id, compute_stream);
 
         // Wait for dedispersion output (then throw it away).
-        acquire_output(0, ichunk, ibatch, compute_stream);
-        release_output(0, ichunk, ibatch, compute_stream);
+        acquire_output(0, seq_id, compute_stream);
+        release_output(0, seq_id, compute_stream);
 
         if (kt.warmed_up) {
             cout << "  iteration " << kt.curr_iteration

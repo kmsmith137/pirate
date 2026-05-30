@@ -661,7 +661,6 @@ void FrbServer::_processing_thread_main()
     const long B         = dedisperser_p->beams_per_batch;
     const long F         = dedisperser_p->nfreq;
     const long T         = dedisperser_p->nt_in;
-    const long nbatches  = dedisperser_p->nbatches;
     const Dtype dtype    = dedisperser_p->dtype;
     const Dtype dt_int4  = Dtype::from_str("int4");
 
@@ -719,100 +718,96 @@ void FrbServer::_processing_thread_main()
         rb_curr = rb_processed;
     }
 
-    // NOTE on chunk-index conventions:
+    // NOTE on index conventions:
     //
     // FrbServer's rb_* counters use ABSOLUTE frame IDs of the form
     // (time_chunk_index * nbeams + ibeam), where time_chunk_index is measured
-    // from fpga_seq=0 (in general nonzero). GpuDedisperser uses ZERO-BASED
-    // chunk indices ichunk = 0, 1, 2, ...
+    // from fpga_seq=0 (in general nonzero). GpuDedisperser uses a ZERO-BASED
+    // batch index seq_id = 0, 1, 2, ...
     //
-    // THIS PROCESSING CODE USES ZERO-BASED INDICES THROUGHOUT. ichunk, ibatch,
-    // b, and seq_id are all zero-based and are used only for the dedispersion-
-    // side arithmetic (acquire_input, evrb_*, dequant kernel). Ring-buffer
-    // access uses rb_curr % rb_size (an absolute index); the only bridge
-    // between the two worlds is the snapshot above.
+    // THIS PROCESSING CODE USES ZERO-BASED seq_id THROUGHOUT. seq_id and the
+    // per-beam index b are used only for the dedispersion-side arithmetic
+    // (acquire_input, evrb_*, dequant kernel). Ring-buffer access uses
+    // rb_curr % rb_size (an absolute index); the only bridge between the two
+    // worlds is the snapshot above.
     const long rb_size = long(frame_ringbuf.size());
 
-    for (long ichunk = 0; ; ichunk++) {
-        for (long ibatch = 0; ibatch < nbatches; ibatch++) {
-            const long seq_id  = ichunk * nbatches + ibatch;
-            const long istream = seq_id % S;
-            cudaStream_t compute_stream = dedisperser_p->stream_pool->compute_streams.at(istream);
-            cudaStream_t h2g_stream     = dedisperser_p->stream_pool->high_priority_h2g_stream;
+    for (long seq_id = 0; ; seq_id++) {
+        const long istream = seq_id % S;
+        cudaStream_t compute_stream = dedisperser_p->stream_pool->compute_streams.at(istream);
+        cudaStream_t h2g_stream     = dedisperser_p->stream_pool->high_priority_h2g_stream;
 
-            // Throttle H2G against the per-stream-slot dequant from
-            // (seq_id - nstreams) batches ago. Negative seq_id is a no-op
-            // (matches the existing GpuDedisperser pattern).
-            evrb_dequant_p->wait(h2g_stream, seq_id - S);
+        // Throttle H2G against the per-stream-slot dequant from
+        // (seq_id - nstreams) batches ago. Negative seq_id is a no-op
+        // (matches the existing GpuDedisperser pattern).
+        evrb_dequant_p->wait(h2g_stream, seq_id - S);
 
-            for (long b = 0; b < B; b++) {
-                std::shared_ptr<AssembledFrame> frame;
-                {
-                    unique_lock<std::mutex> lock(mutex);
-                    cv.wait(lock, [&]{
-                        return is_stopped || (rb_curr < rb_assembled);
-                    });
-                    if (is_stopped)
-                        return;
-                    xassert(rb_processed <= rb_curr);    // defensive
-                    frame = frame_ringbuf[rb_curr % rb_size];
-                    rb_curr++;
-                }
-
-                // Optional artificial per-frame delay, off-lock.
-                if (params.processing_delay_sec > 0.0) {
-                    std::this_thread::sleep_for(
-                        std::chrono::duration<double>(params.processing_delay_sec));
-                }
-
-                // Defensive: the h2g copies use raw pointers + byte counts (no
-                // shape validation), so assert the frame matches the dedisperser
-                // geometry (nfreq, nt_in). A mismatch would silently corrupt GPU
-                // memory.
-                xassert_eq(frame->nfreq, F);
-                xassert_eq(frame->ntime, T);
-
-                // Per-beam destinations and byte counts.
-                Array<void>   raw_dst   = int4_data_gpu     .slice(0, istream).slice(0, b);
-                Array<__half> scoff_dst = scales_offsets_gpu.slice(0, istream).slice(0, b);
-                const long raw_nbytes   = F * (T / 2);
-                const long scoff_nbytes = F * (T / 256) * 2 * long(sizeof(__half));
-
-                safe_memcpy_h2g_async(raw_dst.data,   frame->data.data,           raw_nbytes,   h2g_stream);
-                safe_memcpy_h2g_async(scoff_dst.data, frame->scales_offsets.data, scoff_nbytes, h2g_stream);
-
-                // Note: we do NOT bump rb_processed here -- the
-                // frame_finalizing_thread does that, in batches of B, after
-                // evrb_frame_finalized fires for this seq_id.
+        for (long b = 0; b < B; b++) {
+            std::shared_ptr<AssembledFrame> frame;
+            {
+                unique_lock<std::mutex> lock(mutex);
+                cv.wait(lock, [&]{
+                    return is_stopped || (rb_curr < rb_assembled);
+                });
+                if (is_stopped)
+                    return;
+                xassert(rb_processed <= rb_curr);    // defensive
+                frame = frame_ringbuf[rb_curr % rb_size];
+                rb_curr++;
             }
 
-            // Signal the frame_finalizing_thread that batch seq_id's H2G copies
-            // are queued; the finalizing thread will see this event fire once
-            // the GPU has actually completed the copies.
-            //
-            // Later (post-RFI), this record will move further down the pipeline
-            // -- we'll wait until the RFI mask is copied GPU->host before
-            // finalizing.
-            evrb_frame_finalized_p->record(h2g_stream, seq_id);
+            // Optional artificial per-frame delay, off-lock.
+            if (params.processing_delay_sec > 0.0) {
+                std::this_thread::sleep_for(
+                    std::chrono::duration<double>(params.processing_delay_sec));
+            }
 
-            // Barrier: compute_stream waits for the H2G copies. (h2g_done_event
-            // converts implicitly to cudaEvent_t; there is no .event field.)
-            CUDA_CALL(cudaEventRecord(h2g_done_event, h2g_stream));
-            CUDA_CALL(cudaStreamWaitEvent(compute_stream, h2g_done_event, 0));
+            // Defensive: the h2g copies use raw pointers + byte counts (no
+            // shape validation), so assert the frame matches the dedisperser
+            // geometry (nfreq, nt_in). A mismatch would silently corrupt GPU
+            // memory.
+            xassert_eq(frame->nfreq, F);
+            xassert_eq(frame->ntime, T);
 
-            // Acquire the dedisperser input slot (compute_stream waits on the
-            // slot becoming free internally), returning the per-batch view.
-            Array<void> dd_inbuf = dedisperser_p->acquire_input(ichunk, ibatch, compute_stream);
+            // Per-beam destinations and byte counts.
+            Array<void>   raw_dst   = int4_data_gpu     .slice(0, istream).slice(0, b);
+            Array<__half> scoff_dst = scales_offsets_gpu.slice(0, istream).slice(0, b);
+            const long raw_nbytes   = F * (T / 2);
+            const long scoff_nbytes = F * (T / 256) * 2 * long(sizeof(__half));
 
-            Array<void>   raw_batch   = int4_data_gpu     .slice(0, istream);
-            Array<__half> scoff_batch = scales_offsets_gpu.slice(0, istream);
-            dequantization_kernel.launch(dd_inbuf, scoff_batch, raw_batch, compute_stream);
+            safe_memcpy_h2g_async(raw_dst.data,   frame->data.data,           raw_nbytes,   h2g_stream);
+            safe_memcpy_h2g_async(scoff_dst.data, frame->scales_offsets.data, scoff_nbytes, h2g_stream);
 
-            evrb_dequant_p->record(compute_stream, seq_id);
-
-            dedisperser_p->release_input_and_launch_dedispersion_kernels(
-                ichunk, ibatch, compute_stream);
+            // Note: we do NOT bump rb_processed here -- the
+            // frame_finalizing_thread does that, in batches of B, after
+            // evrb_frame_finalized fires for this seq_id.
         }
+
+        // Signal the frame_finalizing_thread that batch seq_id's H2G copies
+        // are queued; the finalizing thread will see this event fire once
+        // the GPU has actually completed the copies.
+        //
+        // Later (post-RFI), this record will move further down the pipeline
+        // -- we'll wait until the RFI mask is copied GPU->host before
+        // finalizing.
+        evrb_frame_finalized_p->record(h2g_stream, seq_id);
+
+        // Barrier: compute_stream waits for the H2G copies. (h2g_done_event
+        // converts implicitly to cudaEvent_t; there is no .event field.)
+        CUDA_CALL(cudaEventRecord(h2g_done_event, h2g_stream));
+        CUDA_CALL(cudaStreamWaitEvent(compute_stream, h2g_done_event, 0));
+
+        // Acquire the dedisperser input slot (compute_stream waits on the
+        // slot becoming free internally), returning the per-batch view.
+        Array<void> dd_inbuf = dedisperser_p->acquire_input(seq_id, compute_stream);
+
+        Array<void>   raw_batch   = int4_data_gpu     .slice(0, istream);
+        Array<__half> scoff_batch = scales_offsets_gpu.slice(0, istream);
+        dequantization_kernel.launch(dd_inbuf, scoff_batch, raw_batch, compute_stream);
+
+        evrb_dequant_p->record(compute_stream, seq_id);
+
+        dedisperser_p->release_input_and_launch_dedispersion_kernels(seq_id, compute_stream);
     }
 }
 

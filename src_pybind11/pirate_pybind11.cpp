@@ -290,7 +290,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // convert the return value when acquire_output's lambda is bound below.
     py::class_<GpuDedisperser::Outputs>(m, "_GpuDedisperserOutputs",
         "Returned by GpuDedisperser.acquire_output(). Holds list-of-Array views\n"
-        "of the dedispersion output buffers for an acquired (ichunk, ibatch).")
+        "of the dedispersion output buffers for an acquired seq_id.")
         .def_readonly("out_max", &GpuDedisperser::Outputs::out_max,
             "List of length ntrees, peak-finding maximum values.")
         .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax,
@@ -339,38 +339,38 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    gpu_allocator: BumpAllocator for GPU memory\n"
                "    host_allocator: BumpAllocator for host memory")
           .def("acquire_input",
-               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+               [](GpuDedisperser &self, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   return self.acquire_input(ichunk, ibatch, stream);
+                   return self.acquire_input(seq_id, stream);
                },
-               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"),
-               "Acquire the input buffer for (ichunk, ibatch) and return a\n"
+               py::arg("seq_id"), py::arg("stream_ptr"),
+               "Acquire the input buffer for seq_id and return a\n"
                "ksgpu.Array view of it. After this call 'stream' sees an empty\n"
                "input buffer ready for writing; the returned view is valid until\n"
                "the matching release_input_and_launch_dedispersion_kernels() call.")
           .def("release_input_and_launch_dedispersion_kernels",
-               [](GpuDedisperser &self, long ichunk, long ibatch, uintptr_t stream_ptr) {
+               [](GpuDedisperser &self, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   self.release_input_and_launch_dedispersion_kernels(ichunk, ibatch, stream);
+                   self.release_input_and_launch_dedispersion_kernels(seq_id, stream);
                },
-               py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+               py::arg("seq_id"), py::arg("stream_ptr"))
           .def("acquire_output",
-               [](GpuDedisperser &self, long consumer_id, long ichunk, long ibatch, uintptr_t stream_ptr) {
+               [](GpuDedisperser &self, long consumer_id, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   return self.acquire_output(consumer_id, ichunk, ibatch, stream);
+                   return self.acquire_output(consumer_id, seq_id, stream);
                },
-               py::arg("consumer_id"), py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"),
-               "Acquire the output buffer for (consumer_id, ichunk, ibatch) and return\n"
+               py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"),
+               "Acquire the output buffer for (consumer_id, seq_id) and return\n"
                "an Outputs object holding list-of-Array views of out_max and out_argmax.\n"
                "After this call 'stream' sees a full output buffer ready for reading;\n"
                "the returned views are valid until the matching release_output() call.\n"
                "consumer_id must be in [0, num_consumers).")
           .def("release_output",
-               [](GpuDedisperser &self, long consumer_id, long ichunk, long ibatch, uintptr_t stream_ptr) {
+               [](GpuDedisperser &self, long consumer_id, long seq_id, uintptr_t stream_ptr) {
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-                   self.release_output(consumer_id, ichunk, ibatch, stream);
+                   self.release_output(consumer_id, seq_id, stream);
                },
-               py::arg("consumer_id"), py::arg("ichunk"), py::arg("ibatch"), py::arg("stream_ptr"))
+               py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"))
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
                py::arg("config"), 

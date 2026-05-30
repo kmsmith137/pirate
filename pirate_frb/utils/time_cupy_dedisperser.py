@@ -98,9 +98,7 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
     event = cp.cuda.Event(disable_timing=True)
 
     for iteration in range(niterations):
-        # Compute chunk/batch indices
-        ichunk = iteration // dedisperser.nbatches
-        ibatch = iteration % dedisperser.nbatches
+        # iteration is the seq_id (global batch index).
         istream = iteration % S
 
         # Setup for current iteration.
@@ -133,7 +131,7 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
 
         # Run dequantization and dedispersion kernels.
         # The get_input() context manager handles synchronization with dedisperser.
-        with dedisperser.get_input(ichunk, ibatch, stream=compute_stream) as dd_in:
+        with dedisperser.get_input(iteration, stream=compute_stream) as dd_in:
             # The kernel expects uint8 data which it interprets as int4.
             dequantization_kernel.launch(dd_in, scoff_gpu, raw_gpu, compute_stream)
             # Note: exiting the context manager triggers all the dedispersion kernels.
@@ -141,7 +139,7 @@ def time_cupy_dedisperser(dedisperser, gpu_allocator, cpu_allocator, niterations
         # We're throwing away the output for timing purposes, but we still call get_output()
         # since it performs important synchronization. (get_output() yields an Outputs
         # object with .out_max / .out_argmax attributes; we don't use them here.)
-        with dedisperser.get_output(ichunk, ibatch, stream=compute_stream) as outputs:
+        with dedisperser.get_output(iteration, stream=compute_stream) as outputs:
             pass
         
         # Calculate and print timing after warmup
