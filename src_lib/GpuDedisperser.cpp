@@ -679,7 +679,8 @@ void GpuDedisperser::release_input_and_launch_dedispersion_kernels(long seq_id, 
 }
 
 
-GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long seq_id, cudaStream_t stream)
+GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long seq_id, cudaStream_t stream,
+                                                       bool sync, bool noreturn)
 {
     xassert(seq_id >= 0);
     xassert(is_allocated);
@@ -722,19 +723,26 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long se
 
         curr_output_acquire_seq_id[consumer_id]++;
 
-        // Compute the per-batch output views under the lock. Slot 'iout' maps to
-        // the beam range [iout*beams_per_batch, (iout+1)*beams_per_batch) of
+        // Compute the per-batch output views under the lock (unless the caller
+        // passed noreturn=true and doesn't need them). Slot 'iout' maps to the
+        // beam range [iout*beams_per_batch, (iout+1)*beams_per_batch) of
         // output_ringbuf; slice() is pointer arithmetic + metadata copy, no
         // allocation. The returned views have nbeams = beams_per_batch.
-        outputs = output_ringbuf.slice(iout * beams_per_batch, (iout+1) * beams_per_batch);
+        if (!noreturn)
+            outputs = output_ringbuf.slice(iout * beams_per_batch, (iout+1) * beams_per_batch);
     }
 
     // Argument checking ends here. If an exception is thrown below, call stop().
-    // The caller-specified stream waits for 'cdd2' to produce outputs. The wait
-    // is blocking: acquire_output() is assumed to run on a different thread than
+    // Wait for 'cdd2' to produce the output for seq_id. By default this makes the
+    // caller-specified 'stream' wait; if sync=true we instead block the host
+    // thread (and ignore 'stream'). The wait is blocking on the producer:
+    // acquire_output() is assumed to run on a different thread than
     // acquire_input() / release_input_and_launch_dedispersion_kernels().
     try {
-        evrb_cdd2->wait(stream, seq_id, /*blocking=*/true);
+        if (sync)
+            evrb_cdd2->synchronize(seq_id, /*blocking=*/true);
+        else
+            evrb_cdd2->wait(stream, seq_id, /*blocking=*/true);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -1268,7 +1276,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
             rdd2->dedisperse(ichunk, ibatch);  // (ichunk, ibatch)
             
             if (!host_only)
-                gdd->acquire_output(0, seq_id, nullptr);
+                gdd->acquire_output(0, seq_id, nullptr, /*sync=*/false, /*noreturn=*/true);
 
             for (long itree = 0; itree < ntrees; itree++) {
                 const DedispersionTree &tree = plan->trees.at(itree);
@@ -1423,7 +1431,7 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
         release_input_and_launch_dedispersion_kernels(seq_id, compute_stream);
 
         // Wait for dedispersion output (then throw it away).
-        acquire_output(0, seq_id, compute_stream);
+        acquire_output(0, seq_id, compute_stream, /*sync=*/false, /*noreturn=*/true);
         release_output(0, seq_id, compute_stream);
 
         if (kt.warmed_up) {

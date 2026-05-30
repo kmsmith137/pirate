@@ -159,11 +159,13 @@ struct GpuDedisperser
     //                  the matching release_input_and_launch_dedispersion_kernels() call.
     // release_input_and_launch_dedispersion_kernels(seq_id, stream): before call,
     //                  'stream' must see full input buffer.
-    // acquire_output(consumer_id, seq_id, stream):
-    //                  after call, 'stream' sees full output buffer.
-    //                  Returns a GpuDedisperser::Outputs struct holding
-    //                  list-of-Array views of out_max and out_argmax, valid
-    //                  until the matching release_output() call. consumer_id
+    // acquire_output(consumer_id, seq_id, stream, sync, noreturn):
+    //                  after call, 'stream' sees full output buffer (if
+    //                  sync=true, the host thread blocks instead and 'stream'
+    //                  is ignored). Returns a GpuDedisperser::Outputs struct
+    //                  holding list-of-Array views of out_max and out_argmax,
+    //                  valid until the matching release_output() call (if
+    //                  noreturn=true, returns an empty Outputs). consumer_id
     //                  must be in [0, params.num_consumers).
     // release_output(consumer_id, seq_id, stream):
     //                  before call, 'stream' must see empty output buffer.
@@ -179,7 +181,12 @@ struct GpuDedisperser
     ksgpu::Array<void> acquire_input (long seq_id, cudaStream_t stream);
     void               release_input_and_launch_dedispersion_kernels (long seq_id, cudaStream_t stream);
 
-    Outputs            acquire_output(long consumer_id, long seq_id, cudaStream_t stream);
+    // If sync=true, then ignore 'stream' and synchronize the host thread
+    // (call evrb_cdd2->synchronize() instead of evrb_cdd2->wait()).
+    // If noreturn=true, then return an empty Outputs object (reduces overhead
+    // for callers who don't need it).
+    Outputs            acquire_output(long consumer_id, long seq_id, cudaStream_t stream,
+                                      bool sync=false, bool noreturn=false);
     void               release_output(long consumer_id, long seq_id, cudaStream_t stream);
 
     // (No separate view methods; both input and output return their views
