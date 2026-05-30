@@ -230,6 +230,9 @@ message Handshake {
   // The (postfilled) DedispersionConfig serialized as YAML
   // (DedispersionConfig::to_yaml_string()).
   string dedispersion_config_yaml = 10;
+
+  // DedispersionPlan::to_yaml_string()
+  string dedispersion_plan_yaml = 11;
 }
 
 // First consumer -> producer message, sent in response to the Handshake.
