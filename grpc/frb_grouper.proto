@@ -33,8 +33,9 @@ package frb.grouper.v1;
 //
 //   1. Producer opens the connection and starts Session().
 //   2. Producer's FIRST message is a Handshake. It carries:
-//        - a CUDA IPC handle for the *base* GPU allocation
-//          (gpu_dedisperser->get_base()), plus the device id and size, and
+//        - a CUDA IPC handle for the *base* GPU allocation that backs
+//          output_ringbuf (the producer's GPU allocator base), plus the
+//          device id and size, and
 //        - an ArrayDescriptor for every array in output_ringbuf, giving each
 //          array's dtype, shape, strides, and byte offset RELATIVE TO THE
 //          BASE allocation.
@@ -114,24 +115,6 @@ message ConsumerMessage {
 // Handshake.
 // ----------------------------------------------------------------------------
 
-// Mirrors ksgpu::Dtype (ksgpu/Dtype.hpp). 'kind' is the alpha "kind" prefix of
-// the canonical ksgpu dtype string, one of:
-//
-//     "int", "uint", "float", "complex", "complex_int", "complex_uint"
-//
-// (a real int/uint/float, optionally complex). 'nbits' is the element width in
-// bits (for complex types, the combined real+imag width). Examples:
-//     float32 -> { kind = "float", nbits = 32 }
-//     uint32  -> { kind = "uint",  nbits = 32 }
-//
-// In output_ringbuf, out_max uses config.dtype (e.g. float32 or float16) and
-// out_argmax is always uint32 -- but the consumer should read the dtype from
-// each ArrayDescriptor rather than assuming these.
-message Dtype {
-  string kind = 1;
-  uint32 nbits = 2;
-}
-
 // Describes one logical array of output_ringbuf as a strided view into the
 // shared base allocation.
 //
@@ -151,8 +134,11 @@ message ArrayDescriptor {
   // output_ringbuf has one out_max and one out_argmax per tree.
   int64 tree_index = 2;
 
-  // Element type of this array.
-  Dtype dtype = 3;
+  // Element type, as the canonical ksgpu dtype string (the output of
+  // ksgpu::Dtype::str(); reconstruct with ksgpu::Dtype::from_str()), e.g.
+  // "float32", "uint32". (out_max is float16/float32 and out_argmax is uint32,
+  // but the consumer should read this field rather than assuming.)
+  string dtype = 3;
 
   // Byte offset of this array's first element (its 'data' pointer) relative to
   // the start of the base allocation -- i.e. relative to the pointer the
@@ -166,8 +152,8 @@ message ArrayDescriptor {
 
   // Strides, one per axis (same count as 'shape'), expressed in units of
   // ELEMENTS (multiples of the dtype size), matching the ksgpu::Array
-  // convention. A consumer that needs byte strides computes:
-  //     byte_stride[i] = strides[i] * dtype.nbits / 8
+  // convention. A consumer that needs byte strides multiplies by the element
+  // size: byte_stride[i] = strides[i] * ksgpu::Dtype::from_str(dtype).nbits / 8.
   repeated int64 strides = 6;
 }
 
@@ -179,10 +165,11 @@ message Handshake {
   uint32 protocol_version = 1;
 
   // CUDA IPC memory handle (cudaIpcMemHandle_t -- 64 opaque bytes) for the
-  // producer's BASE GPU allocation, i.e. gpu_dedisperser->get_base(). The
-  // consumer passes these bytes to cudaIpcOpenMemHandle() to map the whole
-  // region once; individual arrays are then located via ArrayDescriptor
-  // byte_offsets into that region.
+  // producer's BASE GPU allocation that backs output_ringbuf (the base of the
+  // producer's GPU allocator, i.e. its cudaMalloc base). The consumer passes
+  // these bytes to cudaIpcOpenMemHandle() to map the whole region once;
+  // individual arrays are then located via ArrayDescriptor byte_offsets into
+  // that region.
   bytes ipc_mem_handle = 2;
 
   // CUDA device ordinal the producer allocated the base region on. CUDA IPC
