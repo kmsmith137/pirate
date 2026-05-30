@@ -121,8 +121,9 @@ GRPC_PYFILES = $(GRPC_PROTO:grpc/%.proto=pirate_frb/rpc/grpc/%_pb2.py)
 GRPC_PYFILES += $(GRPC_PROTO:grpc/%.proto=pirate_frb/rpc/grpc/%_pb2_grpc.py)
 GRPC_PYFILES += pirate_frb/rpc/grpc/__init__.py
 
-# FrbServer.cpp includes gRPC headers, so must be generated first
+# FrbServer.cpp and FrbGrouper.cpp include gRPC headers, so must be generated first
 src_lib/FrbServer.o: $(GRPC_HFILES)
+src_lib/FrbGrouper.o: $(GRPC_HFILES)
 
 
 ####################################################################################################
@@ -193,6 +194,7 @@ LIB_SRCFILES = \
   src_lib/FakeXEngine.cpp \
   src_lib/FileWriter.cpp \
   src_lib/FrbServer.cpp \
+  src_lib/FrbGrouper.cpp \
   src_lib/FrequencySubbands.cpp \
   src_lib/GpuDedisperser.cpp \
   src_lib/GpuDequantizationKernel.cu \
@@ -311,6 +313,7 @@ HFILES = \
   include/pirate/file_utils.hpp \
   include/pirate/FileWriter.hpp \
   include/pirate/FrbServer.hpp \
+  include/pirate/FrbGrouper.hpp \
   include/pirate/FrequencySubbands.hpp \
   include/pirate/GpuDequantizationKernel.hpp \
   include/pirate/inlines.hpp \

@@ -24,6 +24,7 @@
 #include "../include/pirate/FakeXEngine.hpp"
 #include "../include/pirate/Receiver.hpp"
 #include "../include/pirate/FrbServer.hpp"
+#include "../include/pirate/FrbGrouper.hpp"
 #include "../include/pirate/FileWriter.hpp"
 #include "../include/pirate/HwtestSender.hpp"
 #include "../include/pirate/Hwtest.hpp"
@@ -1095,6 +1096,70 @@ void register_core_bindings(pybind11::module &m)
                return self.frame_allocator;
           }, "AssembledFrameAllocator (backs the receivers). Underlying memory\n"
              "is from the ring-buffer host BumpAllocator; may be async.")
+    ;
+
+    // FrbGrouper: gRPC *server* side of the FrbGrouper service. Downstream
+    // consumer of an FrbServer's GpuDedisperser::output_ringbuf over CUDA IPC.
+    // py::dynamic_attr() lets the Python injection attach dedispersion_plan_yaml.
+    // Injections (pirate_frb/pybind11_injections.py) add __enter__/__exit__ and
+    // a get_output() context manager.
+    py::class_<FrbGrouper, std::shared_ptr<FrbGrouper>>(m, "FrbGrouper", py::dynamic_attr(),
+        "gRPC server that receives a GpuDedisperser output ring buffer from an\n"
+        "FrbServer over CUDA IPC. Use as a context manager (see injections):\n"
+        "    with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:\n"
+        "        with g.get_output(seq_id) as outputs: ...")
+          .def(py::init([](const std::string &addr){ return FrbGrouper::create(addr); }),
+               py::arg("listen_address"))
+          // open() must stay interruptible by Ctrl-C while it blocks waiting for
+          // a client. We can't just release the GIL for the whole call (Python
+          // signal handlers wouldn't run); instead we drive the wait in 0.5s
+          // steps, releasing the GIL during each wait and reacquiring it between
+          // steps to poll for pending Python signals (PyErr_CheckSignals() != 0
+          // => the SIGINT handler raised KeyboardInterrupt, propagated via
+          // error_already_set).
+          .def("open", [](FrbGrouper &self) {
+               self.start_listening();                 // GIL held; quick (bind + spawn)
+               for (;;) {
+                   bool ready;
+                   { py::gil_scoped_release nogil; ready = self.wait_for_handshake(500); }
+                   if (ready)
+                       break;
+                   if (PyErr_CheckSignals() != 0)       // e.g. Ctrl-C
+                       throw py::error_already_set();
+               }
+          }, "Start listening + block until a client connects and its handshake\n"
+             "is processed. Interruptible by Ctrl-C.")
+          .def("close", &FrbGrouper::close, py::call_guard<py::gil_scoped_release>(),
+               "Stop the session + join the send thread + shut down the gRPC server.")
+          .def("stop", [](FrbGrouper &self){ self.stop(); },
+               "Put the FrbGrouper into the stopped state (idempotent).")
+          .def("acquire_output", &FrbGrouper::acquire_output,
+               py::arg("seq_id"), py::call_guard<py::gil_scoped_release>(),
+               "Block until produced_seq_id has been received for 'seq_id'; return\n"
+               "a per-batch slice (nbeams == beams_per_batch) of output_ringbuf.")
+          .def("release_output", &FrbGrouper::release_output, py::arg("seq_id"),
+               "Record that the caller is done with 'seq_id' (emits CONSUMED).")
+          .def_property_readonly("is_stopped", &FrbGrouper::is_stopped_pub)
+          .def_readonly("cuda_device_id", &FrbGrouper::cuda_device_id)
+          .def_readonly("dtype", &FrbGrouper::dtype)
+          .def_readonly("nt_in", &FrbGrouper::nt_in)
+          .def_readonly("total_beams", &FrbGrouper::total_beams,
+               "Total beams per chunk (= beams_per_gpu). NOT the output-ringbuf\n"
+               "leading axis, which is num_batch_slots * beams_per_batch.")
+          .def_readonly("beams_per_batch", &FrbGrouper::beams_per_batch)
+          .def_readonly("num_batch_slots", &FrbGrouper::num_batch_slots)
+          .def_readonly("ntrees", &FrbGrouper::ntrees)
+          .def_readonly("ndm_out", &FrbGrouper::ndm_out)
+          .def_readonly("nt_out", &FrbGrouper::nt_out)
+          .def_readonly("dedispersion_config", &FrbGrouper::dedispersion_config)
+          .def_readonly("xengine_metadata", &FrbGrouper::xengine_metadata)
+          .def_readonly("xengine_metadata_yaml_string", &FrbGrouper::xengine_metadata_yaml_string)
+          .def_readonly("dedispersion_config_yaml_string", &FrbGrouper::dedispersion_config_yaml_string)
+          .def_readonly("dedispersion_plan_yaml_string", &FrbGrouper::dedispersion_plan_yaml_string)
+          // NOTE: FrbGrouper::dedispersion_plan_yaml (YAML::Node) is intentionally
+          // NOT wrapped; the injection adds a Python dedispersion_plan_yaml attribute
+          // parsed from dedispersion_plan_yaml_string. output_ringbuf is private
+          // (reached only via acquire_output).
     ;
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.

@@ -569,3 +569,50 @@ class DedispersionConfigInjections:
         self._cpp_dtype = ksgpu.Dtype(value)
 
 
+########################################################################################################
+
+
+@ksgpu.inject_methods(pirate_pybind11.FrbGrouper)
+class FrbGrouperInjections:
+    """Python extensions for FrbGrouper (context-manager usage + get_output)."""
+
+    def __enter__(self):
+        # Blocks until the client connects and the handshake is processed.
+        self.open()
+        # YAML::Node is not pybind-wrapped; convert the wire string to a Python
+        # object and attach it (py::dynamic_attr() on the C++ class enables this).
+        import yaml
+        self.dedispersion_plan_yaml = yaml.safe_load(self.dedispersion_plan_yaml_string)
+        # The IPC-mapped arrays live on cuda_device_id (known after the
+        # handshake); make cupy operate on that device.
+        import cupy
+        cupy.cuda.Device(self.cuda_device_id).use()
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    @contextmanager
+    def get_output(self, seq_id):
+        """Acquire one batch's outputs; release (-> CONSUMED) on exit.
+
+        WARNING: the body is responsible for synchronizing the GPU so that all
+        kernels operating on the yielded arrays have completed BEFORE this
+        context manager exits -- exit triggers the CONSUMED RPC, after which the
+        producer may overwrite the ring-buffer slot. (There is no IPC-event
+        fence; coordination is synchronous.)
+
+        Yields
+        ------
+        _GpuDedisperserOutputs
+            Per-batch slice with .out_max / .out_argmax (lists of ksgpu Arrays,
+            convertible to cupy via DLPack).
+        """
+        outputs = self.acquire_output(seq_id)
+        try:
+            yield outputs
+        finally:
+            self.release_output(seq_id)
+
+
