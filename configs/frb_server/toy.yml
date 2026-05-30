@@ -32,6 +32,12 @@ data_ip_addrs:
 rpc_ip_addrs:
   - '127.0.0.1:6000'
 
+# FrbGrouper address (one per server). The FrbServer is the gRPC *client*; the
+# grouper (downstream consumer) is the server. Must be loopback (CUDA IPC
+# requires same node/GPU). Run with 'run_server -G' to disable.
+grouper_ip_addrs:
+  - '127.0.0.1:7000'
+
 min_data_mtu: 1500
 min_rpc_mtu: 1500
 

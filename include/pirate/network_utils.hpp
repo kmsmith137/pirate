@@ -230,6 +230,12 @@ struct Epoll
 void parse_ip_address(const std::string &address, std::string &ip_addr, uint16_t &port);
 
 
+// Returns true if 'host' is a loopback host: IPv4 127.0.0.0/8, IPv6 "::1"
+// (with or without brackets), or the hostname "localhost". 'host' is the host
+// portion only (no ":port"); use parse_ip_address() first to split.
+bool is_loopback_address(const std::string &host);
+
+
 }  // namespace pirate
 
 #endif // _PIRATE_NETWORK_UTILS_HPP

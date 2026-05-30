@@ -1007,7 +1007,8 @@ void register_core_bindings(pybind11::module &m)
                            std::shared_ptr<BumpAllocator> host_allocator,
                            std::shared_ptr<BumpAllocator> gpu_allocator,
                            int cuda_device_id,
-                           double processing_delay_sec) {
+                           double processing_delay_sec,
+                           const std::string &grouper_ip_addr) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -1019,6 +1020,7 @@ void register_core_bindings(pybind11::module &m)
                params.gpu_allocator = std::move(gpu_allocator);
                params.cuda_device_id = cuda_device_id;
                params.processing_delay_sec = processing_delay_sec;
+               params.grouper_ip_addr = grouper_ip_addr;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
@@ -1029,6 +1031,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("gpu_allocator"),
                py::arg("cuda_device_id"),
                py::arg("processing_delay_sec") = 0.0,
+               py::arg("grouper_ip_addr") = "",
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -1053,7 +1056,11 @@ void register_core_bindings(pybind11::module &m)
                "        with this value.\n"
                "    processing_delay_sec (default 0): Artificial per-frame\n"
                "        delay (in seconds) injected by the processing thread,\n"
-               "        for simulating slow GPU work in pacing tests.")
+               "        for simulating slow GPU work in pacing tests.\n"
+               "    grouper_ip_addr (default ''): ip:port of the FrbGrouper to\n"
+               "        feed (the FrbServer is the gRPC client). Empty => disabled\n"
+               "        (GpuDedisperser built with num_consumers=0). Must be a\n"
+               "        loopback address (CUDA IPC requires the same node/GPU).")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"

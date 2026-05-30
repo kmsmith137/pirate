@@ -107,7 +107,7 @@ def _parse_config(filename):
         'num_servers', 'server_cpus',
         'rb_host_memory_per_server', 'dd_host_memory_per_server',
         'gpu_memory_per_server',
-        'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs',
+        'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs', 'grouper_ip_addrs',
         'ssd_dirs', 'ssd_devices', 'ssd_threads_per_server',
         'nfs_dir', 'nfs_threads_per_server',
     ]
@@ -165,6 +165,16 @@ def _parse_config(filename):
     for i, addr in enumerate(rpc):
         if not isinstance(addr, str):
             raise RuntimeError(f"{filename}: rpc_ip_addrs[{i}] must be a string, got {type(addr).__name__}")
+
+    # grouper_ip_addrs: same shape as rpc_ip_addrs (one loopback 'ip:port' per
+    # server). The FrbServer is the gRPC *client* of the FrbGrouper; the grouper
+    # (downstream consumer) is the server. '--no-grouper' overrides these to ''.
+    gia = config['grouper_ip_addrs']
+    if not isinstance(gia, list) or len(gia) != n:
+        raise RuntimeError(f"{filename}: 'grouper_ip_addrs' must be a list of length {n}")
+    for i, addr in enumerate(gia):
+        if not isinstance(addr, str):
+            raise RuntimeError(f"{filename}: grouper_ip_addrs[{i}] must be a string, got {type(addr).__name__}")
 
     for key in ('ssd_dirs', 'ssd_devices'):
         val = config[key]
@@ -251,12 +261,13 @@ class RunServerHelper:
     """
 
     def __init__(self, server_config_filename, dedispersion_config_filename,
-                 processing_delay_sec=0.0):
+                 processing_delay_sec=0.0, no_grouper=False):
         self.config = _parse_config(server_config_filename)
         self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
         self.n = self.config['num_servers']
         self.hw = Hardware()
         self.processing_delay_sec = processing_delay_sec
+        self.no_grouper = no_grouper
         # Populated later by run() -> _prepare_directories / _setup_memory.
         self.nfs_dir = None
         self.capacity = None
@@ -424,6 +435,7 @@ class RunServerHelper:
             # FrbServer: ties together receivers, file writer, and RPC.
             # (Imported here to avoid circular import with __init__.py.)
             from . import FrbServer
+            grouper_ip_addr = '' if self.no_grouper else self.config['grouper_ip_addrs'][i]
             server = FrbServer(self.dedisp_config, receivers, file_writer,
                                self.config['rpc_ip_addrs'][i],
                                self.config['ringbuf_nchunks'],
@@ -431,7 +443,8 @@ class RunServerHelper:
                                host_allocator=host_alloc,
                                gpu_allocator=gpu_alloc,
                                cuda_device_id=cuda_device_id,
-                               processing_delay_sec=self.processing_delay_sec)
+                               processing_delay_sec=self.processing_delay_sec,
+                               grouper_ip_addr=grouper_ip_addr)
             # server.start() is NOT called here. We defer all server.start()
             # calls to _build_all_servers's phase 3 so that the async
             # BumpAllocators across all servers can initialize concurrently
@@ -453,6 +466,8 @@ class RunServerHelper:
         print(f"  cuda_device_id = {cuda_device_id}")
         print(f"  data_ip_addrs = {self.config['data_ip_addrs'][i]}")
         print(f"  rpc_ip_addr = {self.config['rpc_ip_addrs'][i]}")
+        grouper = '' if self.no_grouper else self.config['grouper_ip_addrs'][i]
+        print(f"  grouper_ip_addr = {grouper!r}" + ("  (disabled via --no-grouper)" if self.no_grouper else ""))
         print(f"  ssd_dir = {self.config['ssd_dirs'][i]}")
 
     def _check_mtus_for_server(self, i):
@@ -492,14 +507,19 @@ class RunServerHelper:
 
 
 def run_server(server_config_filename, dedispersion_config_filename,
-               processing_delay_sec=0.0):
+               processing_delay_sec=0.0, no_grouper=False):
     """Main entry point for 'pirate_frb run_server'.
 
     processing_delay_sec (default 0): artificial per-frame delay (seconds)
     injected by the FrbServer processing thread. Used to simulate slow
     GPU work for testing the FakeXEngine pacing path.
+
+    no_grouper (default False): if True, disable the FrbGrouper RPC even when
+    'grouper_ip_addrs' is set in the config (GpuDedisperser runs with
+    num_consumers=0, receivers start immediately).
     """
     helper = RunServerHelper(server_config_filename, dedispersion_config_filename,
-                             processing_delay_sec=processing_delay_sec)
+                             processing_delay_sec=processing_delay_sec,
+                             no_grouper=no_grouper)
     helper.run()
 

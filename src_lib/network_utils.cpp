@@ -677,4 +677,18 @@ void parse_ip_address(const string &address, string &ip_addr, uint16_t &port)
 }
 
 
+// Returns true for loopback hosts. Uses a cheap "127." prefix test for IPv4
+// (127.0.0.0/8) rather than full octet parsing; a malformed host like
+// "127.evil" is not a routable non-loopback address anyway. Accepts both "::1"
+// and the bracketed "[::1]" form, since parse_ip_address() (splitting on the
+// LAST ':') yields "::1" for "::1:7000" and "[::1]" for "[::1]:7000".
+bool is_loopback_address(const string &host)
+{
+    if (host == "localhost") return true;
+    if (host == "::1" || host == "[::1]") return true;
+    if (host.rfind("127.", 0) == 0) return true;   // 127.0.0.0/8
+    return false;
+}
+
+
 } // namespace pirate

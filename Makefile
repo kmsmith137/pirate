@@ -103,8 +103,8 @@ NVCC_ARCH ?= $(DEFAULT_NVCC_ARCH)
 # gRPC code generation.
 # The .proto file generates both C++ files (in grpc/) and Python stubs (in pirate_frb/rpc/grpc/).
 
-# For now, there is only one .proto file, but more will be added later.
 GRPC_PROTO := grpc/frb_search.proto
+GRPC_PROTO += grpc/frb_grouper.proto
 
 # Sentinel files used in build process (convenient for multi-target commands)
 GRPC_SENTINELS = $(GRPC_PROTO:%.proto=%.protoc_cpp_sentinel) 

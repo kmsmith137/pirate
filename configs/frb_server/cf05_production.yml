@@ -58,6 +58,13 @@ rpc_ip_addrs:
   - '10.222.3.5:6000'
   - '10.222.3.5:6001'
 
+# FrbGrouper addresses (one per server). The FrbServer is the gRPC *client*;
+# the grouper (downstream consumer) is the server. Must be loopback (CUDA IPC
+# requires same node/GPU). Run with 'run_server -G' to disable.
+grouper_ip_addrs:
+  - '127.0.0.1:7000'
+  - '127.0.0.1:7001'
+
 # The FRB server (and fake X-engine) will throw exceptions if the MTUs are below these thresholds.
 # Intended as a defensive check against forgetting to enable jumbo MTUs.
 # Note: only enforced in python API, not low-level C++ classes.

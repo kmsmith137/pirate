@@ -20,6 +20,11 @@
 // Forward declarations
 namespace grpc { class Server; }
 
+// Forward-declare the generated proto type used by _fill_handshake(), so this
+// widely-included header does not pull in grpc++/protobuf. (The .cpp includes
+// the generated headers.)
+namespace frb::grouper::v1 { class Handshake; }
+
 namespace pirate {
 #if 0
 }  // editor auto-indent
@@ -102,6 +107,12 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // Applied off-lock so worker threads can keep advancing
         // rb_assembled during the "work".
         double processing_delay_sec = 0.0;
+
+        // gRPC address ("ip:port") of the FrbGrouper this server feeds. Empty
+        // string => no grouper (no Session RPC; GpuDedisperser built with
+        // num_consumers=0). Must be a loopback address (CUDA IPC requires the
+        // grouper to be on the same physical GPU); the constructor enforces this.
+        std::string grouper_ip_addr;
     };
 
     // Factory method (constructor is private).
@@ -200,6 +211,22 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // (signaled via evrb_frame_finalized). See top-of-file comment.
     std::thread frame_finalizing_thread;
 
+    // ----- FrbGrouper client state (only used when params.grouper_ip_addr is set) -----
+
+    // gRPC client state for the FrbGrouper Session stream. Defined in
+    // FrbServer.cpp (holds channel, stub, ClientContext, ClientReaderWriter).
+    // Hidden behind a pImpl so this header does not pull in grpc++/protobuf.
+    struct GrouperClient;
+    std::unique_ptr<GrouperClient> grouper_client;   // null unless grouper enabled
+
+    // Set true (under mutex) by grouper_send_thread once the handshake has been
+    // sent and HandshakeReply received; wakes grouper_receive_thread.
+    bool grouper_handshake_done = false;
+
+    // Grouper threads (only spawned when params.grouper_ip_addr is non-empty).
+    std::thread grouper_send_thread;
+    std::thread grouper_receive_thread;
+
     // ----- Noncopyable, nonmoveable -----
 
     FrbServer(const FrbServer &) = delete;
@@ -240,6 +267,17 @@ private:
     // Frame-finalizing thread functions.
     void _frame_finalizing_thread_main();
     void frame_finalizing_thread_main();
+
+    // Grouper send/receive thread functions (mirroring the existing pairs).
+    void _grouper_send_thread_main();
+    void grouper_send_thread_main();
+    void _grouper_receive_thread_main();
+    void grouper_receive_thread_main();
+
+    // Fills 'hs' from the (initialized) dedisperser + plan. See FrbServer.cpp.
+    void _fill_handshake(frb::grouper::v1::Handshake *hs,
+                         const std::shared_ptr<GpuDedisperser> &dd,
+                         const std::shared_ptr<DedispersionPlan> &plan_snap);
 };
 
 

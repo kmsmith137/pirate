@@ -1268,12 +1268,17 @@ def parse_run_server(subparsers):
                         help='Artificial per-frame delay in the processing thread '
                              '(seconds; default 0). Used to simulate slow GPU work '
                              'for testing FakeXEngine pacing.')
+    parser.add_argument('-G', '--no-grouper', action='store_true',
+                        help='Disable FrbGrouper RPC even if grouper_ip_addrs '
+                             'is set in the config (GpuDedisperser runs with '
+                             'num_consumers=0).')
 
 
 def run_server_command(args):
     from .run_server import run_server
     run_server(args.server_config, args.dedispersion_config,
-               processing_delay_sec=args.delay)
+               processing_delay_sec=args.delay,
+               no_grouper=args.no_grouper)
 
 
 ######################################  run_fake_xengine command  #####################################
