@@ -634,16 +634,10 @@ void FrbServer::_processing_thread_main()
     // num_consumers=0: the downstream consumer of the dedispersion output is
     // not yet wired up (added in a future prompt). num_consumers=0 makes the
     // dedisperser drop outputs as soon as cdd2 produces them.
-    //
-    // detect_deadlocks=false: the FrbServer's processing thread drives
-    // acquire_input / release_input_and_launch_dedispersion_kernels, and a separate downstream consumer
-    // (added in a future prompt) drives acquire_output / release_output --
-    // so the deadlock-detector's same-thread assumption would fire spuriously.
     GpuDedisperser::Params dd_params;
     dd_params.plan = plan_p;
     dd_params.stream_pool = stream_pool;
     dd_params.nbatches_out = config_postfilled.num_active_batches;
-    dd_params.detect_deadlocks = false;
     dd_params.num_consumers = 0;
     dd_params.cuda_device_id = params.cuda_device_id;
     auto dedisperser_p = GpuDedisperser::create(dd_params);

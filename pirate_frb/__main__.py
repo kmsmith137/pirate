@@ -816,7 +816,7 @@ def time_dedisperser(args):
     print(f'Creating GpuDedisperser...')
     stream_pool = core.CudaStreamPool(plan.num_active_batches)
     dedisperser = GpuDedisperser(plan, stream_pool, cuda_device_id=0,
-                                 num_consumers=1, detect_deadlocks=True)
+                                 num_consumers=1)
     
     # Calculate total memory needed. Dedisperser footprints come from
     # resource tracking and already include BumpAllocator's 128-byte

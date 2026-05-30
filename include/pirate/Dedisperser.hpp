@@ -54,16 +54,6 @@ struct GpuDedisperser
         long nbatches_out = 0;
         long nbatches_wt = 0;    // infrequently used (only in a unit test)
 
-        // detect_deadlocks=true: assumes that {acquire,release}_input() is called
-        // on the same thread as {acquire,release}_output(), and detect deadlocks
-        // accordingly.
-        //
-        // detect_deadlocks=false: assumes that {acquire,release}_input() is called
-        // on a different thread as {acquire,release}_output(). In this case, the
-        // deadlock-checking logic is disabled.
-
-        bool detect_deadlocks = true;
-
         // Number of independent downstream consumers of the dedispersion
         // output. Each consumer drives its own acquire_output / release_output
         // progress cursor and back-pressure. num_consumers == 0 is allowed

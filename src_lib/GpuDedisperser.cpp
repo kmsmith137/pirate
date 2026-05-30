@@ -17,8 +17,6 @@
 #include <ksgpu/test_utils.hpp>
 #include <ksgpu/KernelTimer.hpp>
 
-#include <limits>
-
 using namespace std;
 using namespace ksgpu;
 
@@ -627,24 +625,6 @@ Array<void> GpuDedisperser::acquire_input(long ichunk, long ibatch, cudaStream_t
             throw runtime_error(ss.str());
         }
 
-        if (params.detect_deadlocks && (params.num_consumers > 0)) {
-            // The slowest consumer is what bottlenecks input; take the per-consumer min.
-            // If num_consumers == 0 the check is skipped (no consumer holds input back).
-            long input_seq_id = ichunk * nbatches + ibatch;
-            long min_output_seq_id = std::numeric_limits<long>::max();
-            for (long c = 0; c < params.num_consumers; c++) {
-                long s = curr_output_ichunk[c] * nbatches + curr_output_ibatch[c];
-                min_output_seq_id = std::min(min_output_seq_id, s);
-            }
-
-            if (input_seq_id >= min_output_seq_id + params.nbatches_out) {
-                throw runtime_error("GpuDedisperser: deadlock detected (calls to acquire_input()"
-                    " are too far ahead of calls to release_output(). If the input/output arrays"
-                    " are handled in different threads, then this error is a false alarm, and you"
-                    " can suppress it by setting GpuDedisperser::Params::detect_deadlocks = false.");
-            }
-        }
-
         curr_input_acquired = true;
 
         // Compute the view under the lock, matching the precondition checks
@@ -748,18 +728,6 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long ic
             throw runtime_error(ss.str());
         }
 
-        if (params.detect_deadlocks) {
-            long input_seq_id = curr_input_ichunk * nbatches + curr_input_ibatch;
-            long output_seq_id = ichunk * nbatches + ibatch;
-
-            if (output_seq_id >= input_seq_id) {
-                throw runtime_error("GpuDedisperser: deadlock detected (calls to acquire_output()"
-                    " are ahead of calls to release_input_and_launch_dedispersion_kernels(). If the input/output arrays"
-                    " are handled in different threads, then this error is a false alarm, and you"
-                    " can suppress it by setting GpuDedisperser::Params::detect_deadlocks = false.");
-            }
-        }
-
         curr_output_acquired[consumer_id] = true;
 
         // Compute the per-batch output views under the lock. Slot 'iout' maps to
@@ -770,10 +738,11 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long ic
     }
 
     // Argument checking ends here. If an exception is thrown below, call stop().
-    // The caller-specified stream waits for 'cdd2' to produce outputs.
+    // The caller-specified stream waits for 'cdd2' to produce outputs. The wait
+    // is blocking: acquire_output() is assumed to run on a different thread than
+    // acquire_input() / release_input_and_launch_dedispersion_kernels().
     try {
-        bool blocking = !params.detect_deadlocks;
-        evrb_cdd2->wait(stream, seq_id, blocking);
+        evrb_cdd2->wait(stream, seq_id, /*blocking=*/true);
     } catch (...) {
         stop(std::current_exception());
         throw;
@@ -1004,11 +973,10 @@ void GpuDedisperser::_launch_dedispersion_kernels(long ichunk, long ibatch, cuda
     // If params.num_consumers == 0, the loop body doesn't execute and the
     // cdd2 kernel proceeds with no output-side back-pressure.
 
-    bool out_blocking = !params.detect_deadlocks;
     evrb_h2g->wait(compute_stream, seq_id);                                          // producer (h2g)
     evrb_et_h2g->wait(compute_stream, seq_id, true);                                 // producer (et_h2g), blocking=true
     for (long c = 0; c < params.num_consumers; c++)
-        evrb_release_output[c]->wait(compute_stream, seq_id - params.nbatches_out, out_blocking);   // consumer k
+        evrb_release_output[c]->wait(compute_stream, seq_id - params.nbatches_out, /*blocking=*/true);   // consumer k
     _launch_cdd2(ichunk, ibatch, compute_stream);
     evrb_cdd2->record(compute_stream, seq_id);
 
@@ -1143,7 +1111,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         params.stream_pool = CudaStreamPool::create(nstreams, compute_stream_priority);
         params.nbatches_out = nbatches_out;
         params.nbatches_wt = nbatches_out;
-        params.detect_deadlocks = true;
         params.num_consumers = 1;
         params.cuda_device_id = 0;
 
