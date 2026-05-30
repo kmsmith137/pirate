@@ -66,8 +66,8 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
 
     // Size per-consumer state vectors to params.num_consumers. evrb_release_output
     // is filled below alongside the other CudaEventRingbufs.
-    this->curr_output_seq_id.assign(params.num_consumers, 0);
-    this->curr_output_acquired.assign(params.num_consumers, false);
+    this->curr_output_acquire_seq_id.assign(params.num_consumers, 0);
+    this->curr_output_release_seq_id.assign(params.num_consumers, 0);
     this->evrb_release_output.assign(params.num_consumers, nullptr);
 
     if (params.nbatches_out == 0)
@@ -698,22 +698,29 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long se
             throw runtime_error(ss.str());
         }
 
-        if (seq_id != curr_output_seq_id[consumer_id]) {
+        // acquire_output() seq_ids must be consecutive (0, 1, 2, ...) per consumer.
+        if (seq_id != curr_output_acquire_seq_id[consumer_id]) {
             stringstream ss;
             ss << "GpuDedisperser::acquire_output(): consumer_id=" << consumer_id
-               << ", expected seq_id=" << curr_output_seq_id[consumer_id]
+               << ", expected seq_id=" << curr_output_acquire_seq_id[consumer_id]
                << ", got seq_id=" << seq_id;
             throw runtime_error(ss.str());
         }
 
-        if (curr_output_acquired[consumer_id]) {
+        // In synchronous mode, acquire_output() and release_output() must
+        // interleave: the previously-acquired batch must be released before the
+        // next one is acquired (so the release cursor has caught up to acquire).
+        if (params.synchronous &&
+            (curr_output_release_seq_id[consumer_id] != curr_output_acquire_seq_id[consumer_id])) {
             stringstream ss;
             ss << "GpuDedisperser::acquire_output(): consumer_id=" << consumer_id
-               << ", double call to acquire_output() with seq_id=" << seq_id;
+               << ", synchronous consumer called acquire_output() with seq_id=" << seq_id
+               << " while batch seq_id=" << curr_output_release_seq_id[consumer_id]
+               << " is acquired but not released (set Params::synchronous=false to allow this)";
             throw runtime_error(ss.str());
         }
 
-        curr_output_acquired[consumer_id] = true;
+        curr_output_acquire_seq_id[consumer_id]++;
 
         // Compute the per-batch output views under the lock. Slot 'iout' maps to
         // the beam range [iout*beams_per_batch, (iout+1)*beams_per_batch) of
@@ -751,24 +758,28 @@ void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t 
         throw runtime_error(ss.str());
     }
 
-    if (seq_id != curr_output_seq_id[consumer_id]) {
+    // release_output() seq_ids must be consecutive (0, 1, 2, ...) per consumer.
+    if (seq_id != curr_output_release_seq_id[consumer_id]) {
         stringstream ss;
         ss << "GpuDedisperser::release_output(): consumer_id=" << consumer_id
-           << ", expected seq_id=" << curr_output_seq_id[consumer_id]
+           << ", expected seq_id=" << curr_output_release_seq_id[consumer_id]
            << ", got seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
 
-    if (!curr_output_acquired[consumer_id]) {
+    // A consumer can't release a batch it hasn't acquired yet (the release cursor
+    // must stay behind the acquire cursor). In synchronous mode this is exactly
+    // "release_output() called without a preceding acquire_output()".
+    if (curr_output_release_seq_id[consumer_id] >= curr_output_acquire_seq_id[consumer_id]) {
         stringstream ss;
         ss << "GpuDedisperser::release_output(): consumer_id=" << consumer_id
-           << ", release_output() called without preceding acquire_output(),"
-           << " seq_id=" << seq_id;
+           << ", release_output() called for seq_id=" << seq_id
+           << " which has not been acquired (next un-acquired seq_id="
+           << curr_output_acquire_seq_id[consumer_id] << ")";
         throw runtime_error(ss.str());
     }
 
-    curr_output_seq_id[consumer_id]++;
-    curr_output_acquired[consumer_id] = false;
+    curr_output_release_seq_id[consumer_id]++;
 
     lock.unlock();
 

@@ -68,6 +68,15 @@ struct GpuDedisperser
         // device. ~GpuDedisperser also temporarily switches to this device
         // for its cleanup work. Required (constructor asserts >= 0).
         int cuda_device_id = -1;
+
+        // If true, each consumer must interleave its acquire_output() /
+        // release_output() calls (acquire seq_id N, release seq_id N, acquire
+        // N+1, ...). If false, a consumer may acquire_output() several batches
+        // (consecutive seq_ids) before releasing them -- appropriate for an
+        // asynchronous consumer.
+        //
+        // Currently the same for all consumers, but could be made per-consumer.
+        bool synchronous = true;
     };
 
     
@@ -137,6 +146,12 @@ struct GpuDedisperser
     // pair by seq_id = ichunk*nbatches + ibatch. acquire_input / release_input
     // (and each consumer's acquire_output / release_output) must be called with
     // seq_id = 0, 1, 2, ... in order.
+    //
+    // By default (Params::synchronous==true) a consumer must also INTERLEAVE its
+    // acquire_output()/release_output() calls (acquire N, release N, acquire N+1,
+    // ...). With Params::synchronous==false a consumer may acquire_output()
+    // several batches before releasing them; the only requirement is that release
+    // stays behind acquire (a batch can't be released before it is acquired).
     //
     // acquire_input(seq_id, stream): after call, 'stream' sees empty input
     //                  buffer. Returns the input buffer as ksgpu::Array<void>
@@ -287,10 +302,16 @@ public:
     long curr_input_seq_id = 0;
     bool curr_input_acquired = false;
 
-    // Per-consumer progress cursors and acquire flags.
-    // Each vector has length params.num_consumers.
-    std::vector<long> curr_output_seq_id;
-    std::vector<bool> curr_output_acquired;
+    // Per-consumer progress cursors. Each vector has length params.num_consumers.
+    // curr_output_acquire_seq_id: next seq_id to be passed to acquire_output().
+    // curr_output_release_seq_id: next seq_id to be passed to release_output().
+    // Invariant: curr_output_release_seq_id <= curr_output_acquire_seq_id (a batch
+    // can't be released before it is acquired). In synchronous mode the two
+    // cursors differ by at most 1 (acquire/release must interleave); in
+    // asynchronous mode (params.synchronous==false) acquire may run arbitrarily
+    // far ahead of release.
+    std::vector<long> curr_output_acquire_seq_id;
+    std::vector<long> curr_output_release_seq_id;
 
     // Thread-backed class pattern: worker thread and stopped state.
     // Note: no condition_variable needed to wake up worker thread, since the worker does
