@@ -274,6 +274,8 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     nt_in           = dedispersion_config.time_samples_per_chunk;
     total_beams     = dedispersion_config.beams_per_gpu;
     beams_per_batch = dedispersion_config.beams_per_batch;
+    xassert_divisible(total_beams, beams_per_batch);
+    nbatches        = total_beams / beams_per_batch;   // beam-batches per chunk (NOT num_batch_slots)
 
     // ... and from the plan YAML.
     ntrees = dedispersion_plan_yaml["ntrees"].as<long>();

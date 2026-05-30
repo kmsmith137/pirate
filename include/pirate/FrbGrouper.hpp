@@ -73,6 +73,9 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
                                   //   per chunk; used to map a seq_id to a physical beam
                                   //   range. NOT the output-ringbuf leading axis (see below).
     long beams_per_batch = 0;     // = dedispersion_config.beams_per_batch
+    long nbatches = 0;            // = total_beams / beams_per_batch (beam-batches per time
+                                  //   chunk, covering all beams). NOT num_batch_slots (the
+                                  //   ring depth); producer seq_id = ichunk*nbatches + ibatch.
     long num_batch_slots = 0;     // = handshake num_batch_slots (== producer nbatches_out).
                                   //   The output_ringbuf leading (beam) axis has length
                                   //   num_batch_slots * beams_per_batch, which is <=

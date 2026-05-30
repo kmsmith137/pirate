@@ -1147,6 +1147,9 @@ void register_core_bindings(pybind11::module &m)
                "Total beams per chunk (= beams_per_gpu). NOT the output-ringbuf\n"
                "leading axis, which is num_batch_slots * beams_per_batch.")
           .def_readonly("beams_per_batch", &FrbGrouper::beams_per_batch)
+          .def_readonly("nbatches", &FrbGrouper::nbatches,
+               "Beam-batches per time chunk (= total_beams / beams_per_batch). NOT\n"
+               "num_batch_slots (the output ring-buffer depth).")
           .def_readonly("num_batch_slots", &FrbGrouper::num_batch_slots)
           .def_readonly("ntrees", &FrbGrouper::ntrees)
           .def_readonly("ndm_out", &FrbGrouper::ndm_out)

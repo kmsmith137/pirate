@@ -1281,6 +1281,21 @@ def run_server_command(args):
                no_grouper=args.no_grouper)
 
 
+######################################  run_toy_grouper command  #####################################
+
+
+def parse_run_toy_grouper(subparsers):
+    help_text = "Toy FrbGrouper consumer: print the per-chunk global max of out_max"
+    parser = subparsers.add_parser("run_toy_grouper", help=help_text, description=help_text)
+    parser.add_argument('grouper_addr',
+                        help="FrbGrouper listen address 'ip:port' (e.g. 127.0.0.1:7000)")
+
+
+def run_toy_grouper_command(args):
+    from .run_toy_grouper import run_toy_grouper
+    run_toy_grouper(args.grouper_addr)
+
+
 ######################################  run_fake_xengine command  #####################################
 
 
@@ -1332,6 +1347,7 @@ def get_parser():
     subparsers = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     parse_run_server(subparsers)
+    parse_run_toy_grouper(subparsers)
     parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
     parse_rpc_write(subparsers)
@@ -1401,6 +1417,8 @@ def main():
         rpc_write(args)
     elif args.command == "run_server":
         run_server_command(args)
+    elif args.command == "run_toy_grouper":
+        run_toy_grouper_command(args)
     elif args.command == "run_fake_xengine":
         run_fake_xengine_command(args)
     else:
