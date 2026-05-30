@@ -154,7 +154,7 @@ void Receiver::start()
     if (is_started)
         throw runtime_error("Receiver::start() called twice");
     if (is_stopped)
-        throw runtime_error("Receiver::start() called after stop()");
+        throw runtime_error("Receiver::start() called on stopped instance");
 
     is_started = true;
     lock.unlock();

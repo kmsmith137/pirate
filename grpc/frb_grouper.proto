@@ -157,11 +157,28 @@ message ArrayDescriptor {
   repeated int64 strides = 6;
 }
 
+// Wire-protocol version. This is the single source of truth for the protocol
+// version on both the producer (C++ client) and consumer (C++/Python server)
+// sides -- both reference PROTOCOL_VERSION_CURRENT from the generated stubs,
+// rather than each hardcoding their own constant.
+//
+// proto3 requires every enum to have a zero value; PROTOCOL_VERSION_UNSPECIFIED
+// is that placeholder (a Handshake.protocol_version of 0 is therefore invalid).
+// Bump PROTOCOL_VERSION_CURRENT on any incompatible wire-format change.
+enum ProtocolVersion {
+  PROTOCOL_VERSION_UNSPECIFIED = 0;
+  PROTOCOL_VERSION_CURRENT = 1;
+}
+
 // First producer -> consumer message. Conveys everything the consumer needs to
 // import the shared GPU region and reconstruct the output_ringbuf arrays.
 message Handshake {
-  // Wire-protocol version. Bumped on incompatible changes so the consumer can
-  // reject a mismatched producer.
+  // Wire-protocol version: the producer sets this to PROTOCOL_VERSION_CURRENT
+  // (see the ProtocolVersion enum above), and the consumer REJECTS the handshake
+  // if it does not match its own PROTOCOL_VERSION_CURRENT. (Kept as a uint32
+  // rather than the enum type so an out-of-range value from a newer producer
+  // round-trips as a plain integer the consumer can report, instead of decoding
+  // to the proto3 "unknown enum" sentinel.)
   uint32 protocol_version = 1;
 
   // CUDA IPC memory handle (cudaIpcMemHandle_t -- 64 opaque bytes) for the
@@ -212,6 +229,12 @@ message Handshake {
   // YAML representations used elsewhere in pirate.
 
   // XEngineMetadata serialized as YAML (XEngineMetadata::to_yaml_string()).
+  //
+  // NOTE: this metadata is FREQUENCY-SCRUBBED -- its freq_channels are empty
+  // (the producer sends the FrbServer's canonical copy, which is scrubbed). The
+  // consumer must therefore obtain frequency information from the zone structure
+  // in dedispersion_config_yaml (zone_nfreq / zone_freq_edges), NOT from
+  // xengine_metadata_yaml.
   string xengine_metadata_yaml = 9;
 
   // The (postfilled) DedispersionConfig serialized as YAML
