@@ -217,6 +217,19 @@ message Handshake {
   //     [slot*beams_per_batch, (slot+1)*beams_per_batch)
   // along axis 0 of each output array, where slot = seq_id % num_batch_slots.
   int64 beams_per_batch = 8;
+
+  // ---- Run context (YAML) ----
+  // Full serialized configuration of the run, so the consumer can interpret
+  // the output_ringbuf contents (frequencies, beams, DM ranges, time sample,
+  // etc.) rather than working only from raw shapes/strides. These are the same
+  // YAML representations used elsewhere in pirate.
+
+  // XEngineMetadata serialized as YAML (XEngineMetadata::to_yaml_string()).
+  string xengine_metadata_yaml = 9;
+
+  // The (postfilled) DedispersionConfig serialized as YAML
+  // (DedispersionConfig::to_yaml_string()).
+  string dedispersion_config_yaml = 10;
 }
 
 // First consumer -> producer message, sent in response to the Handshake.
