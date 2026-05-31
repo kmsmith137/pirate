@@ -7,6 +7,7 @@
 
 #include <yaml-cpp/yaml.h>          // YAML::Node
 
+#include <chrono>
 #include <condition_variable>
 #include <exception>
 #include <memory>
@@ -136,6 +137,11 @@ private:
     bool send_io_done    = false;   // send thread has stopped touching the stream
     bool opened          = false;   // start_listening() called-once guard (single session)
     bool closed          = false;   // close() idempotency guard
+
+    // Throttles the "waiting for client" stdout message in wait_for_handshake()
+    // to ~1/sec (it is polled every ~0.5s). Under mutex. Default-init (epoch) so
+    // the first wait prints immediately.
+    std::chrono::steady_clock::time_point last_waiting_print {};
 
     // Progress counters (under mutex).
     long rb_produced      = 0;      // (last produced_seq_id) + 1   [updated by receive loop]

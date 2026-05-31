@@ -161,6 +161,19 @@ bool FrbGrouper::wait_for_handshake(int timeout_ms)
     _throw_if_stopped("FrbGrouper::open");
     if (handshake_done)
         return true;
+
+    // Print a "waiting for client" message at ~1/sec (this is polled every
+    // ~0.5s by open() / the pybind binding). Throttled via last_waiting_print.
+    // Stop once a TCP connection is established (session_active is set by the
+    // Session handler's guard at connect time): past that point we are waiting
+    // on the handshake, not the connection, so the message would be misleading.
+    auto now = std::chrono::steady_clock::now();
+    if (!session_active && (now - last_waiting_print >= std::chrono::seconds(1))) {
+        last_waiting_print = now;
+        std::cout << "FrbGrouper: waiting for client to connect at "
+                  << listen_address << " ..." << std::endl;
+    }
+
     cv.wait_for(lock, std::chrono::milliseconds(timeout_ms));
     _throw_if_stopped("FrbGrouper::open");
     return handshake_done;
@@ -198,6 +211,11 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
         grpc_state->stream  = stream;
     }
 
+    // The TCP connection is now open (gRPC invoked our Session handler).
+    // Announce it immediately -- do NOT wait for the handshake (the producer may
+    // take a while to build its dedisperser before sending the Handshake).
+    std::cout << "FrbGrouper: client connected at " << listen_address << std::endl;
+
     try {
         // 1. Read the Handshake (must be the first message).
         fg::ProducerMessage first;
@@ -215,6 +233,13 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
             handshake_done = true;
             cv.notify_all();
         }
+
+        // Announce handshake completion (output_ringbuf is now valid). The
+        // connection itself was already announced at TCP-open (above).
+        std::cout << "FrbGrouper: handshake processed (cuda_device_id=" << cuda_device_id
+                  << ", ntrees=" << ntrees
+                  << ", total_beams=" << total_beams
+                  << ", nbatches=" << nbatches << ")" << std::endl;
 
         // 4. Receive loop (this thread). Returns when the stream closes / is cancelled.
         _receive_loop();

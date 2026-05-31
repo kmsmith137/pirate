@@ -1094,6 +1094,8 @@ void FrbServer::_grouper_send_thread_main()
         channel->WaitForStateChange(channel->GetState(false), deadline);
     }
 
+    std::cout << "FrbServer: connected to grouper at " << params.grouper_ip_addr << std::endl;
+
     // (3) Open the Session stream. Recheck is_stopped first (see
     //     plans/grouper_client.md 4g): avoids starting an RPC we're about to
     //     abandon if stop() landed during the connect loop.
