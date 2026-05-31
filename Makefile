@@ -121,9 +121,11 @@ GRPC_PYFILES = $(GRPC_PROTO:grpc/%.proto=pirate_frb/rpc/grpc/%_pb2.py)
 GRPC_PYFILES += $(GRPC_PROTO:grpc/%.proto=pirate_frb/rpc/grpc/%_pb2_grpc.py)
 GRPC_PYFILES += pirate_frb/rpc/grpc/__init__.py
 
-# FrbServer.cpp and FrbGrouper.cpp include gRPC headers, so must be generated first
+# These .cpp files include generated gRPC headers, so the headers must exist
+# before these objects are compiled (matters under 'make -j' on a fresh build).
 src_lib/FrbServer.o: $(GRPC_HFILES)
 src_lib/FrbGrouper.o: $(GRPC_HFILES)
+src_lib/FakeXEngine.o: $(GRPC_HFILES)
 
 
 ####################################################################################################
