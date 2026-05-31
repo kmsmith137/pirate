@@ -156,8 +156,8 @@ struct GpuDedisperser
     // acquire_input(seq_id, stream): after call, 'stream' sees empty input
     //                  buffer. Returns the input buffer as ksgpu::Array<void>
     //                  with shape (beams_per_batch, nfreq, nt_in), valid until
-    //                  the matching release_input_and_launch_dedispersion_kernels() call.
-    // release_input_and_launch_dedispersion_kernels(seq_id, stream): before call,
+    //                  the matching release_input_and_launch_dd_kernels() call.
+    // release_input_and_launch_dd_kernels(seq_id, stream): before call,
     //                  'stream' must see full input buffer.
     // acquire_output(consumer_id, seq_id, stream, sync, noreturn):
     //                  after call, 'stream' sees full output buffer (if
@@ -179,7 +179,7 @@ struct GpuDedisperser
     // "dynamically" as part of the compute graph.
 
     ksgpu::Array<void> acquire_input (long seq_id, cudaStream_t stream);
-    void               release_input_and_launch_dedispersion_kernels (long seq_id, cudaStream_t stream);
+    void               release_input_and_launch_dd_kernels (long seq_id, cudaStream_t stream);
 
     // If sync=true, then ignore 'stream' and synchronize the host thread
     // (call evrb_cdd2->synchronize() instead of evrb_cdd2->wait()).

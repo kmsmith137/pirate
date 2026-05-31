@@ -62,7 +62,7 @@ struct FrbRpcService;     // defined in FrbServer.cpp
 // rb_initialized is true, then loops over (ichunk, ibatch, beam) doing a
 // per-beam H2G copy of the assembled frame into per-stream GPU scratch
 // (bumping the local rb_curr), per-batch dequantization into the dedisperser
-// input buffer, and per-batch release_input_and_launch_dedispersion_kernels.
+// input buffer, and per-batch release_input_and_launch_dd_kernels.
 // It does NOT bump rb_processed.
 //
 // frame_finalizing_thread: bridges H2G-copy completion (signaled via

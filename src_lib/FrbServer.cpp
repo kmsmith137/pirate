@@ -350,7 +350,7 @@ void FrbServer::stop(std::exception_ptr e)
     // Cascade to the dedisperser. GpuDedisperser::stop() also stops the
     // dedisperser's internal CudaEventRingbufs, which is how the
     // processing_thread is unblocked if it is parked in a blocking evrb_et_h2g
-    // wait inside release_input_and_launch_dedispersion_kernels.
+    // wait inside release_input_and_launch_dd_kernels.
     if (dd)
         dd->stop();
 
@@ -622,7 +622,7 @@ void FrbServer::reaper_thread_main()
 // rb_initialized is true, then loops over (ichunk, ibatch, beam): per-beam
 // H2G copy of the assembled frame into the scratch (bumping the local
 // rb_curr), per-batch dequantization into the dedisperser input buffer, and
-// per-batch release_input_and_launch_dedispersion_kernels. It does NOT bump
+// per-batch release_input_and_launch_dd_kernels. It does NOT bump
 // rb_processed -- the frame_finalizing_thread does that (in batches of
 // beams_per_batch) once the H2G copies are observably complete on the GPU.
 
@@ -884,7 +884,7 @@ void FrbServer::_processing_thread_main()
 
         evrb_dequant_p->record(compute_stream, seq_id);
 
-        dedisperser_p->release_input_and_launch_dedispersion_kernels(seq_id, compute_stream);
+        dedisperser_p->release_input_and_launch_dd_kernels(seq_id, compute_stream);
     }
 }
 

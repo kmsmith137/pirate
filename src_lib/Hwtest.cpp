@@ -683,7 +683,7 @@ struct ChimeWorker : public Hwtest::Worker
             cudaStream_t compute_stream = cuda_stream_pool->compute_streams.at(istream);
 
             gpu_dedisperser->acquire_input(sid, compute_stream);
-            gpu_dedisperser->release_input_and_launch_dedispersion_kernels(sid, compute_stream);
+            gpu_dedisperser->release_input_and_launch_dd_kernels(sid, compute_stream);
             
             gpu_dedisperser->acquire_output(0, sid, compute_stream, /*sync=*/false, /*noreturn=*/true);
             gpu_dedisperser->release_output(0, sid, compute_stream);

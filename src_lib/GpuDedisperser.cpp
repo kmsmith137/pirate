@@ -263,7 +263,7 @@ GpuDedisperser::GpuDedisperser(const GpuDedisperser::Params &params_) :
     // Note special "prefetch" logic for h2g copies!!
     // I can't decide if this way of doing it is elegant or a hack :)
     //
-    // When gpu kernels are queued (in GpuDedisperser::release_input_and_launch_dedispersion_kernels()),
+    // When gpu kernels are queued (in GpuDedisperser::release_input_and_launch_dd_kernels()),
     // instead of queueing h2g(seq_id), we queue h2g(seq_id + nstreams).
     // This should improve throughput, by "prefetching" the h2g data for
     // the next batch of gpu kernels.
@@ -411,7 +411,7 @@ void GpuDedisperser::stop(std::exception_ptr e)
 
     // Cascade stop() to the internal CudaEventRingbufs so that any thread
     // parked in a blocking wait / synchronize / synchronize_with_producer
-    // (e.g. an external caller of release_input_and_launch_dedispersion_kernels,
+    // (e.g. an external caller of release_input_and_launch_dd_kernels,
     // or our own et_h2h worker) throws "called on stopped instance" and exits
     // promptly. Previously this cascade happened only in ~GpuDedisperser, which
     // meant stop() alone could not unblock a parked caller. CudaEventRingbuf::stop()
@@ -631,7 +631,7 @@ Array<void> GpuDedisperser::acquire_input(long seq_id, cudaStream_t stream)
 
     try {
         // This call to wait() can be nonblocking, since we know that the tree_gridding
-        // kernel was successfully launched by a previous call to release_input_and_launch_dedispersion_kernels().
+        // kernel was successfully launched by a previous call to release_input_and_launch_dd_kernels().
         evrb_tree_gridding->wait(stream, seq_id - nstreams);
     } catch (...) {
         stop(std::current_exception());
@@ -642,23 +642,23 @@ Array<void> GpuDedisperser::acquire_input(long seq_id, cudaStream_t stream)
 }
 
 
-void GpuDedisperser::release_input_and_launch_dedispersion_kernels(long seq_id, cudaStream_t stream)
+void GpuDedisperser::release_input_and_launch_dd_kernels(long seq_id, cudaStream_t stream)
 {
     xassert(seq_id >= 0);
 
     std::unique_lock<std::mutex> lock(mutex);
-    _throw_if_stopped("release_input_and_launch_dedispersion_kernels");
+    _throw_if_stopped("release_input_and_launch_dd_kernels");
 
     if (seq_id != curr_input_seq_id) {
         stringstream ss;
-        ss << "GpuDedisperser::release_input_and_launch_dedispersion_kernels(): expected seq_id="
+        ss << "GpuDedisperser::release_input_and_launch_dd_kernels(): expected seq_id="
            << curr_input_seq_id << ", got seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
 
     if (!curr_input_acquired) {
         stringstream ss;
-        ss << "GpuDedisperser::acquire_input(): release_input_and_launch_dedispersion_kernels() called without "
+        ss << "GpuDedisperser::acquire_input(): release_input_and_launch_dd_kernels() called without "
            << " acquire_input(), seq_id=" << seq_id;
         throw runtime_error(ss.str());
     }
@@ -669,7 +669,7 @@ void GpuDedisperser::release_input_and_launch_dedispersion_kernels(long seq_id, 
     lock.unlock();
 
     // Argument-checking ends here. If an exception is thrown below, call stop().
-    // The rest of release_input_and_launch_dedispersion_kernels() is in its own method _launch_dedispersion_kernels().
+    // The rest of release_input_and_launch_dd_kernels() is in its own method _launch_dedispersion_kernels().
     try {
         _launch_dedispersion_kernels(seq_id, stream);
     } catch (...) {
@@ -737,7 +737,7 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long se
     // caller-specified 'stream' wait; if sync=true we instead block the host
     // thread (and ignore 'stream'). The wait is blocking on the producer:
     // acquire_output() is assumed to run on a different thread than
-    // acquire_input() / release_input_and_launch_dedispersion_kernels().
+    // acquire_input() / release_input_and_launch_dd_kernels().
     try {
         if (sync)
             evrb_cdd2->synchronize(seq_id, /*blocking=*/true);
@@ -887,7 +887,7 @@ void GpuDedisperser::release_output(long consumer_id, long seq_id, cudaStream_t 
 
 void GpuDedisperser::_launch_dedispersion_kernels(long seq_id, cudaStream_t stream)
 {
-    // Argument-checking has already been done in release_input_and_launch_dedispersion_kernels().
+    // Argument-checking has already been done in release_input_and_launch_dd_kernels().
     // Translate seq_id -> (ichunk, ibatch) for the per-kernel _launch_* helpers below.
     long ichunk = seq_id / nbatches;
     long ibatch = seq_id % nbatches;
@@ -1249,7 +1249,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
 
                         long nbytes = dst.size * xdiv(dst.dtype.nbits, 8);
                         cudaMemcpyAsync(dst.data, src.data, nbytes, cudaMemcpyDeviceToDevice, compute_stream);
-                        gdd->release_input_and_launch_dedispersion_kernels(iseq_gpu, compute_stream);
+                        gdd->release_input_and_launch_dd_kernels(iseq_gpu, compute_stream);
                     }
                 }
             }
@@ -1428,7 +1428,7 @@ void GpuDedisperser::time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_alloc
 
         // Launch all the dedispersion kernels.
         // (They will wait for the dequantization kernel.)
-        release_input_and_launch_dedispersion_kernels(seq_id, compute_stream);
+        release_input_and_launch_dd_kernels(seq_id, compute_stream);
 
         // Wait for dedispersion output (then throw it away).
         acquire_output(0, seq_id, compute_stream, /*sync=*/false, /*noreturn=*/true);

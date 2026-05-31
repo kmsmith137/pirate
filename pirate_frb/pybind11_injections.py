@@ -234,7 +234,7 @@ class GpuDedisperserInjections:
     
     # Save references to C++ methods
     _cpp_acquire_input = pirate_pybind11.GpuDedisperser.acquire_input
-    _cpp_release_input_and_launch_dedispersion_kernels = pirate_pybind11.GpuDedisperser.release_input_and_launch_dedispersion_kernels
+    _cpp_release_input_and_launch_dd_kernels = pirate_pybind11.GpuDedisperser.release_input_and_launch_dd_kernels
     _cpp_acquire_output = pirate_pybind11.GpuDedisperser.acquire_output
     _cpp_release_output = pirate_pybind11.GpuDedisperser.release_output
     
@@ -243,7 +243,7 @@ class GpuDedisperserInjections:
 
         After this call returns, 'stream' sees an empty input buffer ready
         for writing. The returned array is the same view formerly obtained
-        via view_input() -- valid until the matching release_input_and_launch_dedispersion_kernels() call.
+        via view_input() -- valid until the matching release_input_and_launch_dd_kernels() call.
 
         Parameters
         ----------
@@ -262,7 +262,7 @@ class GpuDedisperserInjections:
             stream = cp.cuda.get_current_stream()
         return self._cpp_acquire_input(seq_id, stream.ptr)
     
-    def release_input_and_launch_dedispersion_kernels(self, seq_id, stream=None):
+    def release_input_and_launch_dd_kernels(self, seq_id, stream=None):
         """Release input buffer after writing.
         
         Before calling this, 'stream' must see a full input buffer.
@@ -277,7 +277,7 @@ class GpuDedisperserInjections:
         import cupy as cp
         if stream is None:
             stream = cp.cuda.get_current_stream()
-        self._cpp_release_input_and_launch_dedispersion_kernels(seq_id, stream.ptr)
+        self._cpp_release_input_and_launch_dd_kernels(seq_id, stream.ptr)
     
     def acquire_output(self, seq_id, stream=None, consumer_id=0):
         """Acquire output buffer for reading and return Outputs views.
@@ -359,7 +359,7 @@ class GpuDedisperserInjections:
         try:
             yield arr
         finally:
-            self._cpp_release_input_and_launch_dedispersion_kernels(seq_id, stream.ptr)
+            self._cpp_release_input_and_launch_dd_kernels(seq_id, stream.ptr)
     
     @contextmanager
     def get_output(self, seq_id, stream=None, consumer_id=0):
