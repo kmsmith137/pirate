@@ -10,10 +10,10 @@ def _run_toy_grouper(grouper_addr, grouper):
     """Main loop (factored out of run_toy_grouper to reduce nesting).
 
     For each time chunk, accumulate the global max over all beam-batches, trees,
-    DMs and time samples of 'out_max', and print one line per chunk. We
-    synchronize the current cupy stream before each release so all GPU reads of
-    a batch complete before CONSUMED is sent (there is no IPC-event fence -- see
-    plans/grouper_server.md).
+    DMs and time samples of 'out_max', and print one line per chunk. The cupy
+    work runs on the current/default stream (FrbGrouper.__enter__ already
+    selected the right device); get_output's __exit__ synchronizes that stream
+    before releasing each batch.
     """
     import cupy as cp
 
@@ -24,11 +24,10 @@ def _run_toy_grouper(grouper_addr, grouper):
             seq_id = ichunk * grouper.nbatches + ibatch
             with grouper.get_output(seq_id) as outputs:
                 # outputs.out_max: list (length ntrees) of cupy arrays (views
-                # into the IPC-mapped memory via DLPack).
+                # into the IPC-mapped memory via DLPack). get_output's __exit__
+                # synchronizes the current stream before releasing the batch.
                 for tree_out in outputs.out_max:        # loop over trees
                     cp.maximum(running_max, tree_out.max(), out=running_max)
-                # Finish GPU reads before __exit__ -> release_output() (CONSUMED).
-                cp.cuda.get_current_stream().synchronize()
 
         # float() does a D2H copy (+ sync); one print per chunk.
         print(f'{grouper_addr}: ichunk={ichunk}: '
@@ -43,33 +42,26 @@ def run_toy_grouper(grouper_addr):
     then prints the per-chunk global 'out_max' until the producer disconnects or
     Ctrl-C.
     """
-    # Heavy / GPU imports are deferred so 'import pirate_frb' stays light and
-    # does not require cupy.
-    import cupy as cp
+    # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper
-    from .Hardware import Hardware
-    from .utils import ThreadAffinity
 
+    # FrbGrouper.__enter__ blocks until the producer connects, then pins this
+    # thread to the GPU's vcpus and selects the CUDA device (printing a message);
+    # __exit__ restores them and closes the grouper.
     with FrbGrouper(grouper_addr) as grouper:
-        # The IPC-mapped output arrays live on grouper.cuda_device_id. Pin this
-        # thread to the vcpus local to that GPU, and select the device (no
-        # dedicated stream -- the reductions run on the current/default stream,
-        # which _run_toy_grouper synchronizes before each release).
-        vcpu_list = Hardware().vcpu_list_from_gpu(grouper.cuda_device_id)
-        with ThreadAffinity(vcpu_list), cp.cuda.Device(grouper.cuda_device_id):
-            try:
-                _run_toy_grouper(grouper_addr, grouper)
-            except KeyboardInterrupt:
-                print(f'{grouper_addr}: interrupted; shutting down', flush=True)
-            except RuntimeError as e:
-                # Most likely the producer disconnected (the grouper stops and
-                # acquire_output rethrows). Report cleanly; re-raise anything
-                # that is not a stop (e.g. a genuine usage/assert bug).
-                if grouper.is_stopped:
-                    print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
-                else:
-                    raise
-        # FrbGrouper.__exit__ (close()) runs on the way out on every path.
+        try:
+            _run_toy_grouper(grouper_addr, grouper)
+        except KeyboardInterrupt:
+            print(f'{grouper_addr}: interrupted; shutting down', flush=True)
+        except RuntimeError as e:
+            # Most likely the producer disconnected (the grouper stops and
+            # acquire_output rethrows). Report cleanly; re-raise anything that is
+            # not a stop (e.g. a genuine usage/assert bug).
+            if grouper.is_stopped:
+                print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
+            else:
+                raise
+        # FrbGrouper.__exit__ restores affinity/device + closes on every path.
 
 
 def run_toy_groupers(grouper_addrs):
