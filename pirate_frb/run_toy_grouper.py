@@ -6,14 +6,14 @@ import sys
 import time
 
 
-def _run_toy_grouper(grouper_addr, grouper, stream):
+def _run_toy_grouper(grouper_addr, grouper):
     """Main loop (factored out of run_toy_grouper to reduce nesting).
 
     For each time chunk, accumulate the global max over all beam-batches, trees,
-    DMs and time samples of 'out_max', and print one line per chunk. 'stream' is
-    the current cupy stream; we synchronize it before each release so all GPU
-    reads of a batch complete before CONSUMED is sent (there is no IPC-event
-    fence -- see plans/grouper_server.md).
+    DMs and time samples of 'out_max', and print one line per chunk. We
+    synchronize the current cupy stream before each release so all GPU reads of
+    a batch complete before CONSUMED is sent (there is no IPC-event fence -- see
+    plans/grouper_server.md).
     """
     import cupy as cp
 
@@ -28,7 +28,7 @@ def _run_toy_grouper(grouper_addr, grouper, stream):
                 for tree_out in outputs.out_max:        # loop over trees
                     cp.maximum(running_max, tree_out.max(), out=running_max)
                 # Finish GPU reads before __exit__ -> release_output() (CONSUMED).
-                stream.synchronize()
+                cp.cuda.get_current_stream().synchronize()
 
         # float() does a D2H copy (+ sync); one print per chunk.
         print(f'{grouper_addr}: ichunk={ichunk}: '
@@ -47,25 +47,28 @@ def run_toy_grouper(grouper_addr):
     # does not require cupy.
     import cupy as cp
     from .rpc import FrbGrouper
+    from .Hardware import Hardware
+    from .utils import ThreadAffinity
 
     with FrbGrouper(grouper_addr) as grouper:
-        # The IPC-mapped output arrays live on grouper.cuda_device_id. Run our
-        # cupy reductions on a dedicated stream on that device.
-        with cp.cuda.Device(grouper.cuda_device_id):
-            stream = cp.cuda.Stream(non_blocking=True)
-            with stream:
-                try:
-                    _run_toy_grouper(grouper_addr, grouper, stream)
-                except KeyboardInterrupt:
-                    print(f'{grouper_addr}: interrupted; shutting down', flush=True)
-                except RuntimeError as e:
-                    # Most likely the producer disconnected (the grouper stops and
-                    # acquire_output rethrows). Report cleanly; re-raise anything
-                    # that is not a stop (e.g. a genuine usage/assert bug).
-                    if grouper.is_stopped:
-                        print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
-                    else:
-                        raise
+        # The IPC-mapped output arrays live on grouper.cuda_device_id. Pin this
+        # thread to the vcpus local to that GPU, and select the device (no
+        # dedicated stream -- the reductions run on the current/default stream,
+        # which _run_toy_grouper synchronizes before each release).
+        vcpu_list = Hardware().vcpu_list_from_gpu(grouper.cuda_device_id)
+        with ThreadAffinity(vcpu_list), cp.cuda.Device(grouper.cuda_device_id):
+            try:
+                _run_toy_grouper(grouper_addr, grouper)
+            except KeyboardInterrupt:
+                print(f'{grouper_addr}: interrupted; shutting down', flush=True)
+            except RuntimeError as e:
+                # Most likely the producer disconnected (the grouper stops and
+                # acquire_output rethrows). Report cleanly; re-raise anything
+                # that is not a stop (e.g. a genuine usage/assert bug).
+                if grouper.is_stopped:
+                    print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
+                else:
+                    raise
         # FrbGrouper.__exit__ (close()) runs on the way out on every path.
 
 
