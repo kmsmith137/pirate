@@ -15,7 +15,7 @@ from .HwtestSender import HwtestSender
 from .Hwtest import Hwtest
 from .Hardware import Hardware
 from .run_server import run_server
-from .run_toy_grouper import run_toy_grouper
+from .run_toy_grouper import run_toy_grouper, run_toy_groupers
 
 from .pirate_pybind11 import (
     DedispersionConfig,

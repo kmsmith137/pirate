@@ -1285,15 +1285,17 @@ def run_server_command(args):
 
 
 def parse_run_toy_grouper(subparsers):
-    help_text = "Toy FrbGrouper consumer: print the per-chunk global max of out_max"
+    help_text = "Toy FrbGrouper consumer(s): print the per-chunk global max of out_max"
     parser = subparsers.add_parser("run_toy_grouper", help=help_text, description=help_text)
-    parser.add_argument('grouper_addr',
-                        help="FrbGrouper listen address 'ip:port' (e.g. 127.0.0.1:7000)")
+    parser.add_argument('grouper_addrs', nargs='+', metavar='grouper_addr',
+                        help="FrbGrouper listen address(es) 'ip:port' (e.g. 127.0.0.1:7000). "
+                             "With more than one, each grouper runs in its own child "
+                             "subprocess; if any child exits, the parent and all siblings exit.")
 
 
 def run_toy_grouper_command(args):
-    from .run_toy_grouper import run_toy_grouper
-    run_toy_grouper(args.grouper_addr)
+    from .run_toy_grouper import run_toy_groupers
+    run_toy_groupers(args.grouper_addrs)
 
 
 ######################################  run_fake_xengine command  #####################################
