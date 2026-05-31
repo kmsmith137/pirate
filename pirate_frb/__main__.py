@@ -943,8 +943,18 @@ def rpc_status(args):
         a non-empty YAML string, then prints it (once) and stops trying.
         """
         try:
+            import math
+            import yaml
+
+            cfg = client.get_config()
+            tsamp_per_chunk = cfg.time_samples_per_chunk
+
             prev_time = None
             prev_bytes = None
+            prev_processed = None     # previous rb_processed (tracked only once nonzero == steady-state)
+            chunk_dur = None          # seconds of data per processed chunk (set once metadata arrives)
+            rt_ema = None             # EMA of "real-time beams" throughput
+            rt_tau = 10.0             # EMA smoothing scale (seconds)
             metadata_printed = False
 
             while not stop_event.is_set():
@@ -957,6 +967,13 @@ def rpc_status(args):
                         print()
                         metadata_printed = True
 
+                        # Seconds of data per processed chunk = (time samples per
+                        # chunk) x (seconds per FRB time sample). Used below to
+                        # convert the rb_processed rate into "real-time beams".
+                        xmd = yaml.safe_load(xmd_yaml)
+                        chunk_dur = (1.0e-9 * tsamp_per_chunk
+                                     * xmd['seq_per_frb_time_sample'] * xmd['dt_ns_per_seq'])
+
                 status = client.get_status()
                 now = time.monotonic()
 
@@ -967,10 +984,31 @@ def rpc_status(args):
                     gbps = (delta_bytes * 8) / (delta_time * 1e9)
                     bw_str = f", bw={gbps:.2f} Gbps"
 
+                # 'rt_beams': number of beams the server processes in real time,
+                # based on measured throughput. If the server processes N
+                # AssembledFrames (= delta rb_processed) in delta_time seconds,
+                # the instantaneous value is N * chunk_dur / delta_time. We smooth
+                # it with an EMA (rt_tau-second scale), and don't start until
+                # rb_processed is nonzero: rb_processed can jump discontinuously
+                # at startup (if initial_time_chunk != 0), so we wait for
+                # steady-state before sampling the rate.
+                rt_str = ""
+                if (chunk_dur is not None) and (status.rb_processed > 0):
+                    if (prev_processed is not None) and (now - prev_time) > 0:
+                        delta_time = now - prev_time
+                        inst = (status.rb_processed - prev_processed) * chunk_dur / delta_time
+                        alpha = 1.0 - math.exp(-delta_time / rt_tau)
+                        rt_ema = inst if (rt_ema is None) else (alpha * inst + (1.0 - alpha) * rt_ema)
+                    prev_processed = status.rb_processed
+                else:
+                    prev_processed = None
+                if rt_ema is not None:
+                    rt_str = f", rt_beams={rt_ema:.1f}"
+
                 prev_time = now
                 prev_bytes = status.num_bytes
 
-                print(f"[{addr}] connections={status.num_connections}, bytes={status.num_bytes}{bw_str}, "
+                print(f"[{addr}] connections={status.num_connections}{bw_str}{rt_str}, "
                       f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_assembled},{status.rb_end}], "
                       f"free={status.num_free_frames}")
 
