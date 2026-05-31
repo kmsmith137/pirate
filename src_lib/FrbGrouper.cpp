@@ -1,5 +1,6 @@
 #include "../include/pirate/FrbGrouper.hpp"
-#include "../include/pirate/YamlFile.hpp"   // YamlFile (DedispersionConfig::from_yaml)
+#include "../include/pirate/YamlFile.hpp"         // YamlFile (DedispersionConfig::from_yaml)
+#include "../include/pirate/network_utils.hpp"    // parse_ip_address, is_loopback_address
 
 #include "../grpc/frb_grouper.grpc.pb.h"
 #include "../grpc/frb_grouper.pb.h"
@@ -122,6 +123,20 @@ std::shared_ptr<FrbGrouper> FrbGrouper::create(const std::string &addr)
 FrbGrouper::FrbGrouper(const std::string &addr) : listen_address(addr)
 {
     xassert(addr.size() > 0);
+
+    // CUDA IPC requires producer (FrbServer) + consumer (FrbGrouper) to be on the
+    // same physical GPU, so the grouper must listen on a loopback address. Enforce
+    // this at construction. (parse_ip_address() also throws on a malformed
+    // "ip:port" string, which is likewise a configuration error.)
+    string ip; uint16_t port;
+    parse_ip_address(listen_address, ip, port);   // network_utils.hpp
+    if (!is_loopback_address(ip)) {
+        stringstream ss;
+        ss << "FrbGrouper: listen_address=" << listen_address
+           << " is not a loopback address (CUDA IPC requires the grouper to be on "
+           << "the same node / GPU as the FrbServer producer)";
+        throw runtime_error(ss.str());
+    }
 }
 
 
