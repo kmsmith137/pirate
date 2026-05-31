@@ -42,6 +42,8 @@ namespace pirate {
 // point throws an exception, stop(e) is called automatically before rethrowing.
 //
 // CudaEventRingbuf is noncopyable.
+//
+// For more info, example code, and discussion, see notes/cuda_event_ringbuf.md.
 
 
 struct CudaEventRingbuf

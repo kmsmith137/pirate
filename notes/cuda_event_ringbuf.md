@@ -72,7 +72,7 @@ and three GPU kernels (f,g,h), and four GPU ring buffers (in,x,y,out):
   - In this toy example, we assumed that all four ring buffers have independent
     sizes `Nin`, `Nx`, `Ny`, `Nout`. We'll also assume that all three kernels
     (plus the h2g and g2h copies) execute on five different CUDA streams
-    `sf`, `sg`, `sh`, `sin`, and `sout`. These assumptions are artificial,
+    `s_f`, `s_g`, `s_h`, `s_in`, and `s_out`. These assumptions are artificial,
     but help illustrate generality.
 
 This example could be implemented as follows.
@@ -107,7 +107,7 @@ This example could be implemented as follows.
     //           
     //   evrb_g2h: Two consumers. One is immediate in the same thread, and the other
     //             is on another thread. Similarly, I decided to use Nout here.
-    //               => nconsumers=2, max_size=1
+    //               => nconsumers=2, max_size=Nout
     
     auto evrb_h2g  = make_shared<CudaEventRingbuf> ("h2g", 2, 1);
     auto evrb_f    = make_shared<CudaEventRingbuf> ("f", 2, Nin);
@@ -137,7 +137,7 @@ This example could be implemented as follows.
             cudaMemcpyAsync(in[seq_id % Nin], host_batch, s_h2g);  // schematic syntax
 
             // Record event for the h2g memcpy, so that other kernels can wait on it.
-            // Note: blocking=false is okay here, since h2g events are consumed in
+            // Note: blocking=false is okay here, since h2g events are consumed
             // in the same thread. See below for systematic discussion.
             
             evrb_h2g->record(s_h2g, seq_id, /*blocking=*/ false);
@@ -155,14 +155,14 @@ This example could be implemented as follows.
             
             evrb_h2g->wait(s_g, seq_id, /*blocking=*/ false);
             evrb_h->wait(s_g, seq_id-Ny, /*blocking=*/ false);
-            launch_g(x[seq_id % Ny], in[seq_id % Nin], s_g);     // schematic syntax
+            launch_g(y[seq_id % Ny], in[seq_id % Nin], s_g);     // schematic syntax
             evrb_g->record(s_g, seq_id, /*blocking=*/ false);
 
             // Launch the h() kernel. Here, we need to wait on:
             //    source buffers: f(seq_id), g(seq_id)
             //    destination buffer: g2h(seq_id - Nout)
             //
-            // Note that we need blocking=true in couple of places here:
+            // Note that we need blocking=true in a couple of places here:
             // when consuming an event that was produced on another thread,
             // and when producing an event that will be consumed in another
             // thread. See below for systematic discussion.
@@ -170,7 +170,7 @@ This example could be implemented as follows.
             evrb_f->wait(s_h, seq_id, /*blocking=*/ false);
             evrb_g->wait(s_h, seq_id, /*blocking=*/ false);
             evrb_g2h->wait(s_h, seq_id - Nout, /*blocking=*/ true);
-            launch_h(out[seq_id % Nout], x[seq_id % Nx], y[seq_id % Nx], s_h);
+            launch_h(out[seq_id % Nout], x[seq_id % Nx], y[seq_id % Ny], s_h);
             evrb_h->record(s_h, seq_id, /*blocking=*/ true);
 
             // The h2g thread stops processing here.
@@ -190,7 +190,7 @@ This example could be implemented as follows.
             // produced before we call evrb_h->wait().
 
             evrb_h->wait(s_g2h, seq_id, /*blocking=*/ true);
-            cudaMemcpyAync(local_batch, out[seq_id % Nout], s_g2h);  // schematic
+            cudaMemcpyAsync(local_batch, out[seq_id % Nout], s_g2h);  // schematic
             evrb_g2h->record(s_g2h, seq_id, /*blocking=*/ true);
 
             // Wait for data to arrive, and process it on the CPU.
@@ -224,7 +224,7 @@ Comments on this example:
     In other situations (e.g. event produced by another thread), setting
     `blocking=true` is logically necessary.
 
-  - General comments on the `blocking` arugment to `CudaEventRingbuf::record()`:
+  - General comments on the `blocking` argument to `CudaEventRingbuf::record()`:
 
     In some situations, we know that all consumers wait on the event with an
     upper bound on the lag (e.g. all consumers are in previous loop iterations
@@ -247,10 +247,10 @@ Comments on this example:
     buffer in host memory instead, this could be implemented by having two
     `g2h_threads`: one to wait for space in the host ring buffer and launch
     the g2h copy kernel (calling `evrb_g2h->record()`), and one to
-    call `evrb_g2h->sychronize()` and process the data.
+    call `evrb_g2h->synchronize()` and process the data.
 
     The point of the previous two bullet points is that `CudaEventRingbuf`
-    is general enough to implement a wide range of syncrhonization schemes
+    is general enough to implement a wide range of synchronization schemes
     between host threads and gpu kernels.
   
 If you are writing, reviewing, debugging code involving `CudaEventRingbufs`, here
@@ -275,16 +275,16 @@ is a good mental checklist:
     In situations where the producer and consumer(s) are all on the same
     thread, then there may be a max lag between the producer and the slowest
     consumer. (For example, `evrb_f` and `evrb_g` in the example.) Then
-    there will be a clear choice of `max_lag`.
+    there will be a clear choice of `max_size`.
 
     In more complex situations, you'll want to analyze individual consumers.
-    A good example is the `evrb_h` thread above, where `max_size >= max(Nx,Ny)`
-    is needed to avoid crashes in two of the consumers (the ones that call
+    A good example is `evrb_h` above, where `max_size >= max(Nx,Ny)` is
+    needed to avoid deadlocks in two of the consumers (the ones that call
     `evrb_h->wait()` with `blocking=false`, on the same thread as the producer).
     The third consumer runs on a different thread and calls `evrb_h->wait()`
-    with `blocking=true`. In this case, any value of `max_lag` is correct,
+    with `blocking=true`. In this case, any value of `max_size` is correct,
     but a larger value leaves more scheduling "slack" between threads.
-    I ended up with `max_size=max(max(Nx,Ny), Nout)` as a heurstic.
+    I ended up with `max_size=max(max(Nx,Ny), Nout)` as a heuristic.
     
     
 
