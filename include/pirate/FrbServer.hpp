@@ -55,7 +55,7 @@ struct FrbRpcService;     // defined in FrbServer.cpp
 //
 // The processing thread also builds a GpuDedisperser (alongside a private
 // CudaStreamPool) once the plan exists. 'plan' and 'dedisperser' (along with
-// evrb_dequant / evrb_frame_finalized and dedisperser_is_initialized) become
+// evrb_dq / evrb_h2g and dedisperser_is_initialized) become
 // non-null atomically (published in the same critical section).
 //
 // processing_thread: after publishing, snapshots rb_curr = rb_processed once
@@ -66,7 +66,7 @@ struct FrbRpcService;     // defined in FrbServer.cpp
 // It does NOT bump rb_processed.
 //
 // frame_finalizing_thread: bridges H2G-copy completion (signaled via
-// evrb_frame_finalized) to the FrbServer ringbuf accounting. For each fired
+// evrb_h2g) to the FrbServer ringbuf accounting. For each fired
 // event it bumps rb_processed by beams_per_batch under 'mutex' and notifies
 // cv (waking the reaper).
 //
@@ -169,20 +169,22 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
     // Lock-protected. Published by processing_thread once
     // GpuDedisperser::allocate() returns and the post-allocate setup
     // is complete (along with dedisperser_is_initialized = true).
-    //
-    // evrb_dequant: produced by the dequantization kernel on
-    //   compute_stream, consumed (with lag nstreams) by the H2G copies
-    //   on h2g_stream. Gates per-stream-slot scratch reuse.
-    // evrb_frame_finalized: produced by processing_thread on
-    //   h2g_stream after the per-batch H2G copies complete,
-    //   consumed by frame_finalizing_thread.
-    std::shared_ptr<CudaEventRingbuf> evrb_dequant;
-    std::shared_ptr<CudaEventRingbuf> evrb_frame_finalized;
+
+    // evrb_dq: produced by the dequantization kernel on compute_stream,
+    //   consumed (with lag nstreams) by the H2G copies on h2g_stream.
+    //   Gates per-stream-slot scratch reuse.
+    std::shared_ptr<CudaEventRingbuf> evrb_dq;
+
+    // evrb_h2g: produced by processing_thread on h2g_stream after the
+    //   per-batch H2G copies complete. Two consumers: the dequantization
+    //   kernel (h2g -> compute barrier on compute_stream) and the
+    //   frame_finalizing_thread.
+    std::shared_ptr<CudaEventRingbuf> evrb_h2g;
 
     // Lock-protected. Set to true by processing_thread once
-    // { plan, dedisperser, evrb_dequant, evrb_frame_finalized } are
+    // { plan, dedisperser, evrb_dq, evrb_h2g } are
     // all assigned. Used by frame_finalizing_thread to know it's safe
-    // to read evrb_frame_finalized.
+    // to read evrb_h2g.
     bool dedisperser_is_initialized = false;
 
     // "Frame ids" are defined as (time_chunk_index * nbeams + ibeam).
@@ -208,7 +210,7 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
 
     // Frame-finalizing thread: advances rb_processed by beams_per_batch
     // each time the processing_thread's per-batch H2G copies complete
-    // (signaled via evrb_frame_finalized). See top-of-file comment.
+    // (signaled via evrb_h2g). See top-of-file comment.
     std::thread frame_finalizing_thread;
 
     // ----- FrbGrouper client state (only used when params.grouper_ip_addr is set) -----
