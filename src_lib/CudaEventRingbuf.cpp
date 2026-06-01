@@ -85,32 +85,41 @@ void CudaEventRingbuf::_throw_if_stopped(const char *method_name)
 }
 
 
-void CudaEventRingbuf::record(cudaStream_t stream, long seq_id)
+void CudaEventRingbuf::record(cudaStream_t stream, long seq_id, bool blocking)
 {
     try {
         // Get the slot for this event.
         long slot = seq_id % max_size;
-        
+
         std::unique_lock<std::mutex> lock(mutex);
         _throw_if_stopped("record");
-            
+
         // Check that seq_id matches expected value.
         if (seq_id != seq_end) {
             std::ostringstream ss;
-            ss << "CudaEventRingbuf '" << name << "' record(): expected seq_id=" 
+            ss << "CudaEventRingbuf '" << name << "' record(): expected seq_id="
                << seq_end << ", got seq_id=" << seq_id;
             throw std::runtime_error(ss.str());
         }
 
-        // Check ring buffer capacity.
-        if (seq_end - seq_start >= max_size) {
-            std::ostringstream ss;
-            ss << "CudaEventRingbuf '" << name << "' record(): ring buffer overflow."
-               << " Either max_size=" << max_size << " was too small, or nconsumers="
-               << nconsumers << " is too large.";
-            throw std::runtime_error(ss.str());
+        // Check ring buffer capacity. If the buffer is full:
+        //   - blocking=false: throw an overflow exception (see below).
+        //   - blocking=true:  block until a consumer frees a slot (advancing seq_start
+        //                     in _release(), which notifies 'cv').
+        // Since there is a single producer, seq_end is unchanged while we wait; only
+        // seq_start can advance, so the loop condition makes progress towards capacity.
+        while (seq_end - seq_start >= max_size) {
+            if (!blocking) {
+                std::ostringstream ss;
+                ss << "CudaEventRingbuf '" << name << "' record(): ring buffer overflow."
+                   << " Either max_size=" << max_size << " was too small, or nconsumers="
+                   << nconsumers << " is too large.";
+                throw std::runtime_error(ss.str());
+            }
+            cv.wait(lock);
+            _throw_if_stopped("record");
         }
-            
+
         // Reset counters for the new seq_id at this slot.
         produced[slot] = false;
         acquired[slot] = 0;

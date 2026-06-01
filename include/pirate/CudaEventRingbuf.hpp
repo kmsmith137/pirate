@@ -65,7 +65,12 @@ struct CudaEventRingbuf
 
     // Producer: records a cuda event from 'stream', and saves it in the ring buffer.
     // The seq_id argument is expected to be 0,1,2,... in the first, second, ... call.
-    void record(cudaStream_t stream, long seq_id);
+    //
+    // If there is no room in the ring buffer (i.e. the slot for this seq_id has not
+    // yet been freed by its consumers):
+    //   - If blocking=false (default), throws an exception.
+    //   - If blocking=true, the calling thread blocks until a consumer frees the slot.
+    void record(cudaStream_t stream, long seq_id, bool blocking = false);
 
     // Consumer: retrieve event from ringbuf, and call cudaStreamWaitEvent(stream, event).
     // If seq_id < 0, this is a no-op.
