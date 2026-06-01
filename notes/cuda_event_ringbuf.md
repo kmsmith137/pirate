@@ -72,7 +72,7 @@ and three GPU kernels (f,g,h), and four GPU ring buffers (in,x,y,out):
   - In this toy example, we assumed that all four ring buffers have independent
     sizes `Nin`, `Nx`, `Ny`, `Nout`. We'll also assume that all three kernels
     (plus the h2g and g2h copies) execute on five different CUDA streams
-    `s_f`, `s_g`, `s_h`, `s_in`, and `s_out`. These assumptions are artificial,
+    `s_f`, `s_g`, `s_h`, `s_h2g`, and `s_g2h`. These assumptions are artificial,
     but help illustrate generality.
 
 This example could be implemented as follows.
@@ -236,11 +236,11 @@ Comments on this example:
     
   - In the h2g path, we implicitly assumed that the lifetime of the `host_batch`
     was infinite. In a real system, we would probably want to keep a reference
-    to the `host_batch` during the g2h copy, and drop the reference when the
+    to the `host_batch` during the h2g copy, and drop the reference when the
     copy is complete. One way to implement this would be to have another thread
-    which consumes events from `evrb_g2h` and drops a reference after each event
-    is consumed. (Note that `evrb_g2h::num_consumers` would increase by 1, and
-    the call to `evrb_g2h->record()` would need `blocking=true`.)
+    which consumes events from `evrb_h2g` and drops a reference after each event
+    is consumed. (Note that `evrb_h2g::nconsumers` would increase by 1, and
+    the call to `evrb_h2g->record()` would need `blocking=true`.)
     
   - Similarly, in the g2h path, we assumed for simplicity that the `g2h_thread`
     could only store a single batch in host memory. If we wanted to put a ring
@@ -253,7 +253,7 @@ Comments on this example:
     is general enough to implement a wide range of synchronization schemes
     between host threads and gpu kernels.
   
-If you are writing, reviewing, debugging code involving `CudaEventRingbufs`, here
+If you are writing, reviewing, or debugging code involving `CudaEventRingbufs`, here
 is a good mental checklist:
 
   - Before each launch, double-check that you've waited on all source buffers,
@@ -267,7 +267,7 @@ is a good mental checklist:
     `CudaEventRingbuf::record()` are consistent with the above discussion.
     
   - Check that when the `CudaEventRingbuf` is constructed, the value of
-    `num_consumers` matches the number of callers of `wait()` and/or
+    `nconsumers` matches the number of callers of `wait()` and/or
     `synchronize()`.
 
   - Setting the proper value of `CudaEventRingbuf::max_size` is tricky!!
