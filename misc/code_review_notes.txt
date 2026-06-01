@@ -1,0 +1,15 @@
+This file contains notes to myself, enumerating code review tasks.
+In the future, I'll turn this into an automated system with one
+subagent per task.
+
+1. Read notes/cuda_event_ringbuf.md into context.
+   Then, find all instances of CudaEventRingbuf in the code.
+   
+   For each such instance, carefully review the usage of CudaEventRingbuf
+   for correctness, including the values of nconsumers and max_size, and
+   whether or not to set blocking=true in calls to record() and wait().
+
+   Make sure that are enough calls to wait() and/or synchronize() to
+   ensure that source/destination buffers are available, before launching
+   the kernel(s) associated with the CudaEventRingbuf. (See the "mental
+   checklist" at the end of notes/cuda_event_ringbuf.md.)
