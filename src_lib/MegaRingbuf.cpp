@@ -325,12 +325,40 @@ void MegaRingbuf::_lay_out_zone(Zone &z, bool on_gpu)
 {
     xassert(z.global_segment_offset < 0);
 
+    // The ring buffer is indexed by uint32 "segment" counts: the 'quadruple'
+    // representation (see MegaRingbuf.hpp) stores segment offsets as uint, and
+    // the GPU compute/copy kernels (e.g. DedispersionKernel.cu) compute segment
+    // indices using 32-bit arithmetic. So a global ring buffer cannot exceed
+    // 2^32 segments (= 512 GiB for the usual 128-byte segments) without
+    // silently wrapping around. We guard against that here, as the running
+    // totals (host_global_nseg, gpu_global_nseg) are accumulated.
     if (on_gpu) {
         z.global_segment_offset = gpu_global_nseg;
         gpu_global_nseg += z.num_frames * z.segments_per_frame;
+        // In practice the GPU ring buffer is far smaller than host memory, so
+        // this is a defensive check that should never fire.
+        xassert(gpu_global_nseg <= (1L << 32));
     } else {
         z.global_segment_offset = host_global_nseg;
         host_global_nseg += z.num_frames * z.segments_per_frame;
+
+        if (host_global_nseg > (1L << 32)) {
+            stringstream ss;
+            ss << "MegaRingbuf: the host ring buffer would contain "
+               << host_global_nseg << " segments, which exceeds the current "
+               << "maximum of 2^32 segments (= 512 GiB for the usual 128-byte "
+               << "segments).\n"
+               << "Segment offsets are stored as uint32 values in the 'quadruple' "
+               << "representation (see MegaRingbuf.hpp) and are indexed using "
+               << "32-bit arithmetic in the GPU compute/copy kernels (e.g. "
+               << "DedispersionKernel.cu), so a host ring buffer >= 512 GiB would "
+               << "silently wrap around rather than fail. This is a known "
+               << "limitation that I plan to fix in the future (by widening the "
+               << "segment index beyond 32 bits). For now, reduce the ring buffer "
+               << "size (e.g. fewer beams or a smaller max_clag) to keep the host "
+               << "ring buffer under 512 GiB.";
+            throw runtime_error(ss.str());
+        }
     }
 }
 
