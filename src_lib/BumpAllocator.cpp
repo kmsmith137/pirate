@@ -179,6 +179,13 @@ std::shared_ptr<void> BumpAllocator::_allocate_base(int cuda_device)
 
     // Allocate. For af_gpu, ensure cudaMalloc happens on the requested
     // device (ksgpu records this as the free-time device too).
+    //
+    // Note that the initial allocation (either mmap() or cudaMalloc()) is
+    // synchronous, even if the BumpAllocator has async=true. This detail
+    // is important for the GpuDedisperser, since it uses cudaIPC to share
+    // memory with the grouper, and this only works if the initial allocation
+    // is done with cudaMalloc (not cudaMallocAsync).
+    
     int alloc_flags = _compute_alloc_flags(aflags);
     std::optional<ksgpu::CudaSetDevice> _scoped;
     if (is_gpu)

@@ -993,6 +993,12 @@ void FrbServer::_fill_handshake(fg::Handshake *hs,
     // IPC handle for the base GPU allocation. The base + size come from the
     // gpu_allocator (not a GpuDedisperser accessor); the FrbServer constructor
     // already guaranteed it is non-empty/non-dummy when a grouper is configured.
+    //
+    // Note: cudaIPC requires the base pointer to be allocated with cudaMalloc
+    // (not cudaMallocAsync). The BumpAllocator code is writen so that the initial
+    // allocation is always synchronous, even if the BumpAllocator is constructed
+    // with async=true. (The 'async' arg controls whether zeroing is done in a
+    // separate thread, but does not affect the initial allocation.)
     std::shared_ptr<void> base_sp = params.gpu_allocator->get_base();
     void *base = base_sp.get();
     xassert(base != nullptr);   // guaranteed by the constructor's capacity > 0 check
