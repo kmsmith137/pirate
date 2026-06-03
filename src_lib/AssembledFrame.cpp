@@ -825,15 +825,6 @@ void AssembledFrame::randomize()
 }
 
 
-void AssembledFrameSet::randomize()
-{
-    for (const auto &f : frames) {
-        xassert(f);   // AssembledFrameSet invariant: all frames[i] non-null
-        f->randomize();
-    }
-}
-
-
 // -------------------------------------------------------------------------------------------------
 //
 // Constructor

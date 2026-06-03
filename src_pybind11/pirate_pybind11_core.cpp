@@ -227,10 +227,9 @@ void register_core_bindings(pybind11::module &m)
             "Bounds-checked accessor for frames[ibeam].")
         .def("validate", &AssembledFrameSet::validate,
             "Defensive consistency check; throws on inconsistency. Cheap.")
-        .def("randomize", &AssembledFrameSet::randomize,
-            py::call_guard<py::gil_scoped_release>(),
-            "Call AssembledFrame.randomize() on every contained frame.\n"
-            "See AssembledFrame.randomize() for the thread-safety contract.")
+        // NOTE: there is no AssembledFrameSet.randomize(); to randomize a
+        // whole set, use FakeXEngine.randomize_frames(fset) (parallelized
+        // over the randomizer-thread pool).
     ;
 
     // AssembledFrameAllocator: allocates AssembledFrameSets for multiple consumers.
@@ -838,6 +837,19 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine is stopped or worker_id\n"
                "    is out of range.")
+          .def("randomize_frames", &FakeXEngine::randomize_frames,
+               py::arg("fset"),
+               py::call_guard<py::gil_scoped_release>(),
+               "Fill every AssembledFrame in 'fset' with random data,\n"
+               "distributing the per-beam AssembledFrame.randomize() calls\n"
+               "across the randomizer-thread pool. Blocks until done.\n\n"
+               "'fset' must have exactly nbeams frames. The caller keeps\n"
+               "ownership and must keep 'fset' alive until this returns; on\n"
+               "return no randomizer thread is still touching it. NOT safe to\n"
+               "call concurrently with itself (single in-flight job).\n\n"
+               "Raises:\n"
+               "    RuntimeError: If the FakeXEngine is stopped, or fset's\n"
+               "    frame count does not match nbeams.")
           .def("get_minichunk_status", &FakeXEngine::get_minichunk_status,
                py::arg("worker_id"), py::arg("minichunk_index"),
                "Return the status byte for a previously-enqueued state-\n"

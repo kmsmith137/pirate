@@ -1,7 +1,8 @@
 #include "../include/pirate/FakeXEngine.hpp"
 #include "../include/pirate/network_utils.hpp"
+#include "../include/pirate/system_utils.hpp"   // get_thread_affinity()
 
-#include <algorithm>     // std::max (paced-mode bootstrap)
+#include <algorithm>     // std::max (paced-mode bootstrap), std::min (randomizer pool)
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -153,6 +154,21 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
     for (int i = 0; i < nworkers; i++)
         workers.push_back(std::make_unique<Worker>());
 
+    // Size the randomizer pool: min(nbeams, num_vcpus / 2), where
+    // num_vcpus is the size of THIS (constructor-calling) thread's vcpu
+    // affinity. The spawned randomizer threads inherit that same
+    // affinity. The /2 leaves headroom for the worker threads (which
+    // share the same vcpus). num_randomizers can legitimately be 0 (e.g.
+    // a single-vcpu affinity); randomize_frames() handles that by doing
+    // the work synchronously in the calling thread.
+    {
+        std::vector<int> vcpu_list = get_thread_affinity();
+        num_randomizers = std::min(nbeams, long(vcpu_list.size()) / 2);
+        if (num_randomizers < 0)
+            num_randomizers = 0;
+    }
+    randomizer_threads.reserve(num_randomizers);
+
     // In paced mode, allocate the MonitorRingbuf ClientContext before
     // spawning any threads, so stop() (which TryCancels via this ctx)
     // is safe to call from any of them. The channel + Stub are NOT
@@ -165,21 +181,30 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
         for (int i = 0; i < nworkers; i++)
             workers[i]->worker_thread = std::thread(&FakeXEngine::worker_main, this, i);
 
+        // Spawn the randomizer pool alongside the workers. These threads
+        // sit idle until randomize_frames() publishes a job.
+        for (long i = 0; i < num_randomizers; i++)
+            randomizer_threads.push_back(std::thread(&FakeXEngine::randomizer_main, this));
+
         // Spawn the pacing thread after the workers so that any incoming
         // MonitorRingbuf message can immediately broadcast to a fully
         // populated 'workers' vector.
         if (paced)
             pacing_thread = std::thread(&FakeXEngine::pacing_thread_main, this);
     } catch (...) {
-        // Partial-spawn cleanup: signal stop so any workers that did start
-        // exit promptly, then join whichever ones are joinable. stop()'s
-        // atomic CAS ensures only the first call sweeps; the destructor
-        // (which also calls stop()) will then be a no-op for the atomic
-        // and the per-worker sweep is idempotent.
+        // Partial-spawn cleanup: signal stop so any workers/randomizers
+        // that did start exit promptly, then join whichever ones are
+        // joinable. stop()'s atomic CAS ensures only the first call
+        // sweeps; the destructor (which also calls stop()) will then be a
+        // no-op for the atomic and the per-worker sweep is idempotent.
         stop(std::current_exception());
         for (auto &wp : workers) {
             if (wp->worker_thread.joinable())
                 wp->worker_thread.join();
+        }
+        for (auto &rt : randomizer_threads) {
+            if (rt.joinable())
+                rt.join();
         }
         if (pacing_thread.joinable())
             pacing_thread.join();
@@ -195,6 +220,16 @@ FakeXEngine::~FakeXEngine()
     for (auto &wp : workers) {
         if (wp->worker_thread.joinable())
             wp->worker_thread.join();
+    }
+
+    // Join the randomizer pool. stop() (called above) set rand_stopped
+    // and notified rand_cv, so any idle randomizer has woken and exited;
+    // any randomizer still finishing an in-flight job will exit as soon
+    // as that job drains (randomize() never blocks). Independent of the
+    // workers and the pacing thread.
+    for (auto &rt : randomizer_threads) {
+        if (rt.joinable())
+            rt.join();
     }
 
     // Join the pacing thread AFTER the workers -- the pacing thread's
@@ -242,6 +277,22 @@ void FakeXEngine::stop(std::exception_ptr e)
     // no-op if the call has already completed.
     if (paced && pacing_ctx)
         pacing_ctx->TryCancel();
+
+    // Signal the randomizer pool. Setting rand_stopped under rand_lock
+    // (a) lets idle randomizers wake from rand_cv and exit, and (b)
+    // makes a subsequent randomize_frames() throw on entry. We store the
+    // first stop()'s error so randomize_frames() can rethrow it. The
+    // rand_done_cv notify is belt-and-suspenders: a randomize_frames()
+    // caller blocked mid-job is woken by the randomizers themselves as
+    // they drain the job (the job always runs to completion), but
+    // notifying here too is harmless.
+    {
+        std::lock_guard<std::mutex> lock(rand_lock);
+        rand_stopped = true;
+        rand_error = e;
+    }
+    rand_cv.notify_all();
+    rand_done_cv.notify_all();
 }
 
 
@@ -1461,6 +1512,156 @@ void FakeXEngine::pacing_thread_main()
     } catch (...) {
         cerr << "FakeXEngine pacing thread terminated with unknown exception"
              << endl;
+        stop(std::current_exception());
+    }
+}
+
+
+// -------------------------------------------------------------------------------------------------
+//
+// Randomizer pool (used only by randomize_frames()).
+
+
+void FakeXEngine::_throw_if_rand_stopped(const char *method_name)
+{
+    // Caller must hold rand_lock.
+    if (rand_error)
+        std::rethrow_exception(rand_error);
+
+    if (rand_stopped)
+        throw runtime_error(string(method_name) + " called on stopped instance");
+}
+
+
+void FakeXEngine::randomize_frames(AssembledFrameSet &fset)
+{
+    long nb = long(fset.frames.size());
+
+    // The set must match this engine's beam count. (A set from the same
+    // metadata/allocator always satisfies this; the check catches misuse.)
+    if (nb != nbeams) {
+        stringstream ss;
+        ss << "FakeXEngine::randomize_frames: fset has " << nb
+           << " frames, expected nbeams=" << nbeams;
+        throw runtime_error(ss.str());
+    }
+
+    // Degenerate pool (num_randomizers == 0, e.g. single-vcpu affinity):
+    // honor the stop contract, then do the work synchronously here.
+    if (num_randomizers == 0) {
+        {
+            std::lock_guard<std::mutex> lock(rand_lock);
+            _throw_if_rand_stopped("FakeXEngine::randomize_frames");
+        }
+        for (const auto &f : fset.frames) {
+            xassert(f);   // AssembledFrameSet invariant: all frames[i] non-null
+            f->randomize();
+        }
+        return;
+    }
+
+    std::unique_lock<std::mutex> lock(rand_lock);
+    _throw_if_rand_stopped("FakeXEngine::randomize_frames");
+
+    // Single-in-flight-job invariant: randomize_frames() is not reentrant
+    // and must not be called concurrently with itself.
+    xassert(rand_total == 0);
+
+    // Publish the job and wake the pool.
+    rand_fset  = &fset;
+    rand_next  = 0;
+    rand_ndone = 0;
+    rand_total = nb;
+    rand_cv.notify_all();
+
+    // Block until every beam has been randomized. This predicate is NOT
+    // stop-sensitive on purpose: once published, the job always runs to
+    // completion (randomizers keep draining beams even after stop(), and
+    // a per-beam randomize() that throws still counts the beam -- see
+    // _randomizer_main). So rand_ndone is guaranteed to reach rand_total,
+    // and at that point no randomizer is still dereferencing &fset, which
+    // is exactly the condition that makes it safe for the caller to
+    // destroy fset after we return.
+    while (rand_ndone < rand_total)
+        rand_done_cv.wait(lock);
+
+    // Tear down the job slot for the next call, and capture stop-state
+    // while still holding the lock.
+    bool stopped = rand_stopped;
+    std::exception_ptr err = rand_error;
+    rand_fset  = nullptr;
+    rand_total = 0;
+    rand_next  = 0;
+    rand_ndone = 0;
+    lock.unlock();
+
+    // If stop() raced in during the job, surface it per the entry-point
+    // contract -- but only AFTER the job fully drained above, so fset is
+    // safe to destroy regardless.
+    if (stopped) {
+        if (err)
+            std::rethrow_exception(err);
+        throw runtime_error("FakeXEngine::randomize_frames called on stopped instance");
+    }
+}
+
+
+void FakeXEngine::_randomizer_main()
+{
+    std::unique_lock<std::mutex> lock(rand_lock);
+
+    for (;;) {
+        // Wait for a job (rand_next < rand_total) or for stop().
+        while (!rand_stopped && (rand_next >= rand_total))
+            rand_cv.wait(lock);
+
+        // If there's no claimable beam, the only way we got here is
+        // rand_stopped -- so exit. (We never abandon a published job: as
+        // long as rand_next < rand_total there is work to drain, even
+        // after stop().)
+        if (rand_next >= rand_total)
+            return;
+
+        // Claim a beam. Copy the frame's shared_ptr under the lock so the
+        // frame stays alive while we randomize it with the lock released
+        // (fset itself is kept alive by the blocked randomize_frames()
+        // caller until rand_ndone reaches rand_total).
+        long b = rand_next++;
+        std::shared_ptr<AssembledFrame> frame = rand_fset->frames[b];
+        lock.unlock();
+
+        // randomize() should not throw in practice, but if it does we
+        // capture it, still count the beam below (so the caller can't
+        // hang), and then stop() the engine so the exception surfaces.
+        std::exception_ptr ex;
+        try {
+            xassert(frame);   // AssembledFrameSet invariant: frames[b] non-null
+            frame->randomize();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        lock.lock();
+        if (++rand_ndone == rand_total)
+            rand_done_cv.notify_all();
+
+        if (ex) {
+            lock.unlock();
+            stop(ex);     // idempotent; sets rand_stopped, wakes the caller
+            lock.lock();
+        }
+    }
+}
+
+
+void FakeXEngine::randomizer_main()
+{
+    try {
+        _randomizer_main();
+    } catch (...) {
+        // _randomizer_main() catches per-beam randomize() exceptions
+        // itself; reaching here means something unexpected (e.g. a
+        // bad_alloc from the deque/cv machinery). Propagate via stop().
         stop(std::current_exception());
     }
 }

@@ -94,6 +94,18 @@ namespace pirate {
 // gap before the server has received enough data to publish its
 // first rb_processed value. See plans/fake_xengine_pacing.md.
 //
+// Randomizer pool: the constructor also spawns a small pool of
+// "randomizer" threads (count = min(nbeams, num_vcpus/2), where
+// num_vcpus is the size of the caller's vcpu affinity). These exist
+// solely to parallelize randomize_frames(), which fills a whole
+// AssembledFrameSet with random data by distributing the per-beam
+// AssembledFrame::randomize() calls across the pool. The pool is
+// otherwise idle. Like the worker threads, randomizer threads inherit
+// the constructor caller's vcpu affinity and are joined in the
+// destructor. They participate in the same stop()/shutdown protocol
+// (stop() wakes any idle randomizer so it can exit). See
+// randomize_frames() for the per-job synchronization contract.
+//
 // Usage:
 //   with ThreadAffinity(vcpu_list):
 //       fxe = FakeXEngine(xmd, {"10.0.0.2:5000", "10.0.1.2:5000"}, 64,
@@ -566,6 +578,47 @@ struct FakeXEngine
     // Pacing thread. Joinable only when paced=true.
     std::thread pacing_thread;
 
+    // ----- Randomizer-pool state -----
+    //
+    // A pool of helper threads used ONLY by randomize_frames() to fill an
+    // AssembledFrameSet with random data in parallel (one AssembledFrame::
+    // randomize() call per beam, distributed over the pool). All of the
+    // mutable job state below is protected by 'rand_lock'.
+    //
+    // Job model (single in-flight job at a time; randomize_frames() must
+    // not be called concurrently with itself):
+    //   - randomize_frames() publishes a job by setting rand_fset +
+    //     rand_total = nbeams, resetting rand_next/rand_ndone to 0, and
+    //     notifying rand_cv. It then blocks on rand_done_cv until
+    //     rand_ndone == rand_total, i.e. every claimed beam has finished.
+    //   - Each randomizer thread claims beams by post-incrementing
+    //     rand_next (work-stealing), randomizes that beam's frame with
+    //     'rand_lock' RELEASED, then re-acquires and increments rand_ndone.
+    //
+    // Crucial lifetime invariant: rand_ndone == rand_total implies NO
+    // randomizer thread is still dereferencing rand_fset (each thread
+    // bumps rand_ndone only after its randomize() returns). This is what
+    // makes it safe for randomize_frames()'s caller to destroy the
+    // AssembledFrameSet once randomize_frames() returns.
+    //
+    // Once a job is published, randomizer threads run it to completion
+    // even if stop() arrives mid-job (randomize() never blocks, so this
+    // is prompt) -- so rand_ndone is always guaranteed to reach
+    // rand_total and the caller can never hang.
+    long num_randomizers = 0;                 // = min(nbeams, num_vcpus/2)
+    std::vector<std::thread> randomizer_threads;
+
+    mutable std::mutex rand_lock;
+    std::condition_variable rand_cv;          // randomizers wait here for work / stop
+    std::condition_variable rand_done_cv;     // randomize_frames() waits here for completion
+
+    AssembledFrameSet *rand_fset = nullptr;   // current job's set (caller-owned; non-null only mid-job)
+    long rand_total = 0;                       // beams in current job (0 = no job in progress)
+    long rand_next  = 0;                       // next beam index to claim
+    long rand_ndone = 0;                       // beams completed in current job
+    bool rand_stopped = false;                 // set by stop(); gates idle-randomizer exit
+    std::exception_ptr rand_error;             // first stop()'s error (rethrown by randomize_frames)
+
     // ----- Public interface -----
 
     // Constructor: validates args, then spawns nworkers worker threads.
@@ -723,6 +776,27 @@ struct FakeXEngine
     // Throws on stopped FakeXEngine and on out-of-range worker_id.
     // The pybind11 wrapper releases the GIL.
     void synchronize(long worker_id);
+
+    // Entry point: fill every AssembledFrame in 'fset' with random data
+    // (equivalent to calling AssembledFrame::randomize() on each frame),
+    // distributing the per-beam work across the randomizer-thread pool
+    // for speed. Blocks until the whole set has been randomized.
+    //
+    // 'fset' must have exactly 'nbeams' frames (the engine's beam count);
+    // this is checked. The caller retains ownership of 'fset' and MUST
+    // keep it alive until randomize_frames() returns -- on return, no
+    // randomizer thread is still touching it (see the lifetime invariant
+    // on the randomizer-pool state above), so it is then safe to destroy.
+    //
+    // NOT reentrant / not safe to call concurrently with itself: only one
+    // randomize job may be in flight at a time (enforced by an internal
+    // assert). The single-controller-thread test driver satisfies this.
+    //
+    // Throws if the FakeXEngine is stopped (either on entry, or if stop()
+    // races in during the job -- in which case the in-flight job is still
+    // fully drained before the throw, so 'fset' remains safe to destroy).
+    // The pybind11 wrapper releases the GIL.
+    void randomize_frames(AssembledFrameSet &fset);
 
     // Entry point: snapshot the per-minichunk status byte for
     // workers[worker_id]->minichunk_status[minichunk_index -
@@ -883,6 +957,18 @@ private:
     // each Worker::mutex.
     void _pacing_thread_main();
     void pacing_thread_main();   // try/catch wrapper, calls stop() on throw
+
+    // Randomizer-pool thread main (one per pool thread). Loops claiming
+    // beams from the current randomize_frames() job and randomizing them,
+    // until stop() is signaled and no job work remains. See the
+    // randomizer-pool state block above for the synchronization contract.
+    void _randomizer_main();
+    void randomizer_main();      // try/catch wrapper, calls stop() on throw
+
+    // Helper for randomize_frames(): throw if the randomizer pool has been
+    // stopped (rethrows rand_error if non-null, else a generic runtime_error).
+    // Caller must hold rand_lock.
+    void _throw_if_rand_stopped(const char *method_name);
 };
 
 

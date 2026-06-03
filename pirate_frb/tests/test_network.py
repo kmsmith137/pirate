@@ -373,7 +373,7 @@ class NetworkTester:
 
                 while self.fspos <= ichunk:
                     self.framesets[self.fspos] = self.client_allocator.get_frame_set(consumer_id=0)
-                    self.framesets[self.fspos].randomize()
+                    fxe.randomize_frames(self.framesets[self.fspos])
                     assert self.framesets[self.fspos].time_chunk_index == self.fspos
                     self.fspos += 1
 

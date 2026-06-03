@@ -220,9 +220,10 @@ struct AssembledFrameSet
     // Convenience accessor (bounds-checked). Equivalent to frames.at(ibeam).
     const std::shared_ptr<AssembledFrame> &get_frame(long ibeam) const;
 
-    // Call AssembledFrame::randomize() on every contained frame.
-    // See AssembledFrame::randomize() for thread-safety caveats.
-    void randomize();
+    // NOTE: there is intentionally no AssembledFrameSet::randomize(). To
+    // randomize a whole set, use FakeXEngine::randomize_frames(), which
+    // distributes the per-beam AssembledFrame::randomize() calls over a
+    // pool of randomizer threads for speed.
 };
 
 
