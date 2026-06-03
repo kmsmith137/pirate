@@ -143,15 +143,18 @@ struct AssembledFrame
     make_random(const std::shared_ptr<const XEngineMetadata> &xmd,
                 long ntime, long beam_id, long time_chunk_index);
 
-    // Fill the data buffer with uniformly random bytes (each int4
-    // sample uniform over [-8, +7]). Intended for testing.
+    // Randomizes AssembledFrame:
+    //   - data buffer: uniform bits (i.e. int4s are random over [-8,+7])
+    //   - scales: uniform in [0,1]
+    //   - offsets: uniform in [-1,1].
     //
-    // Thread-safe with respect to the RNG (uses ksgpu's per-thread
-    // default_rng), but the caller must ensure that no other thread
-    // is concurrently reading or writing this frame's data buffer
-    // -- only the RNG is protected, not the destination buffer. In
-    // particular, this is NOT safe to call concurrently with an
-    // active reaper or with FakeXEngine's SEND_MINICHUNK gather.
+    // Thread-safety: snapshots the lock-protected 'scales_offsets'/'data' Arrays
+    // under the lock, then fills them without the lock held (the snapshot pins
+    // the slab so a concurrent _reap_locked() cannot free it underneath). Safe
+    // to call concurrently with reaping; on a reaped (empty) frame it is a no-op.
+    // Callers still must not run two randomize() (or other writers) on the SAME
+    // frame concurrently -- the buffer contents are not lock-protected.
+
     void randomize();
     
     // Members after this point are internal state.

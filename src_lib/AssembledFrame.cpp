@@ -757,11 +757,28 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
 
 void AssembledFrame::randomize()
 {
+    // Thread-safety: the array STATE (empty vs nonempty, and which slab the
+    // arrays point at) is lock-protected -- a concurrent _reap_locked() on the
+    // reaper / ssd-writer thread can drop 'scales_offsets'/'data' and free the
+    // underlying slab at any time. We therefore snapshot both Arrays into local
+    // copies while holding the lock; copying bumps the shared refcounted 'base',
+    // so the slab memory stays alive even if the frame is reaped concurrently.
+    // We then release the lock and run the (long) random-fill loops on the local
+    // copies, so the lock is not held during the bulk fill. (If a reap races in
+    // after the snapshot, we harmlessly fill memory that is about to be
+    // discarded -- not a use-after-free, since our copies keep it alive.)
+    Array<void> so_arr, data_arr;
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        so_arr   = scales_offsets;
+        data_arr = data;
+    }
+
     // int4 dtype packs 2 elements per byte, so nbytes = data.size / 2.
     // (data.size is the int4 element count, not the byte count -- see
     // AssembledFrameAllocator::_create_frame_set in this file.)
-    long data_nbytes = data.size / 2;
-    long so_nelts    = scales_offsets.size;  // (nfreq, mpc, 2) flat count
+    long data_nbytes = data_arr.size / 2;
+    long so_nelts    = so_arr.size;  // (nfreq, mpc, 2) flat count
 
     if ((data_nbytes <= 0) && (so_nelts <= 0))
         return;  // empty (e.g. reaped) frame -- nothing to do.
@@ -775,11 +792,11 @@ void AssembledFrame::randomize()
     // Fill scales_offsets first (matches slab order). Scales (last-axis index 0)
     // uniform in [0, 1]; offsets (last-axis index 1) uniform in [-1, 1].
     if (so_nelts > 0) {
-        xassert(scales_offsets.data != nullptr);
+        xassert(so_arr.data != nullptr);
         xassert((so_nelts % 2) == 0);
         std::uniform_real_distribution<float> dist_scale ( 0.0f, 1.0f);
         std::uniform_real_distribution<float> dist_offset(-1.0f, 1.0f);
-        __half *so = static_cast<__half *>(scales_offsets.data);
+        __half *so = static_cast<__half *>(so_arr.data);
         long npairs = so_nelts / 2;
         for (long i = 0; i < npairs; i++) {
             so[2*i + 0] = __float2half_rn(dist_scale (rng));
@@ -788,8 +805,8 @@ void AssembledFrame::randomize()
     }
 
     if (data_nbytes > 0) {
-        xassert(data.data != nullptr);
-        char *p = static_cast<char *>(data.data);
+        xassert(data_arr.data != nullptr);
+        char *p = static_cast<char *>(data_arr.data);
 
         // mt19937 yields uint32_t (4 random bytes per call). The final
         // 1-3 bytes (if data_nbytes % 4 != 0) get the low bytes of a
