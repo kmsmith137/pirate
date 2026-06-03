@@ -1167,11 +1167,14 @@ def parse_run_toy_grouper(subparsers):
                         help="FrbGrouper listen address(es) 'ip:port' (e.g. 127.0.0.1:7000). "
                              "With more than one, each grouper runs in its own child "
                              "subprocess; if any child exits, the parent and all siblings exit.")
+    parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
+                        help="Artificial per-chunk delay (seconds) inserted into the grouper "
+                             "loop, e.g. -d 0.001 for a 1 ms delay (default: 0, no delay).")
 
 
 def run_toy_grouper_command(args):
     from .run_toy_grouper import run_toy_groupers
-    run_toy_groupers(args.grouper_addrs)
+    run_toy_groupers(args.grouper_addrs, delay=args.delay)
 
 
 ######################################  run_fake_xengine command  #####################################

@@ -6,7 +6,7 @@ import sys
 import time
 
 
-def _run_toy_grouper(grouper_addr, grouper):
+def _run_toy_grouper(grouper_addr, grouper, delay=0.0):
     """Main loop (factored out of run_toy_grouper to reduce nesting).
 
     For each time chunk, accumulate the global max over all beam-batches, trees,
@@ -14,6 +14,10 @@ def _run_toy_grouper(grouper_addr, grouper):
     work runs on the current/default stream (FrbGrouper.__enter__ already
     selected the right device); get_output's __exit__ synchronizes that stream
     before releasing each batch.
+
+    If 'delay' > 0, sleep that many seconds at the end of each chunk -- an
+    artificial slowdown for testing how the producer behaves when the consumer
+    lags.
     """
     import cupy as cp
 
@@ -33,14 +37,20 @@ def _run_toy_grouper(grouper_addr, grouper):
         print(f'{grouper_addr}: ichunk={ichunk}: '
               f'global out_max = {float(running_max[0])}', flush=True)
 
+        if delay > 0:
+            time.sleep(delay)
 
-def run_toy_grouper(grouper_addr):
+
+def run_toy_grouper(grouper_addr, delay=0.0):
     """Run a toy FrbGrouper consumer at 'grouper_addr' (e.g. '127.0.0.1:7000').
 
     Acts as the downstream consumer of an FrbServer producer over CUDA IPC.
     Blocks (in FrbGrouper.open(), via __enter__) until the producer connects,
     then prints the per-chunk global 'out_max' until the producer disconnects or
     Ctrl-C.
+
+    'delay' (seconds) inserts an artificial per-chunk slowdown into the loop;
+    see _run_toy_grouper.
     """
     # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper
@@ -50,7 +60,7 @@ def run_toy_grouper(grouper_addr):
     # __exit__ restores them and closes the grouper.
     with FrbGrouper(grouper_addr) as grouper:
         try:
-            _run_toy_grouper(grouper_addr, grouper)
+            _run_toy_grouper(grouper_addr, grouper, delay)
         except KeyboardInterrupt:
             print(f'{grouper_addr}: interrupted; shutting down', flush=True)
         except RuntimeError as e:
@@ -64,7 +74,7 @@ def run_toy_grouper(grouper_addr):
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.
 
 
-def run_toy_groupers(grouper_addrs):
+def run_toy_groupers(grouper_addrs, delay=0.0):
     """Run one or more toy grouper consumers.
 
     With a single address, runs in this process. With more than one, runs each
@@ -72,9 +82,12 @@ def run_toy_groupers(grouper_addrs):
     'pirate_frb run_toy_grouper <addr>'); if ANY child exits -- for any reason --
     the parent terminates the remaining children and exits. This makes the group
     fail-fast: one grouper going down brings the whole set down.
+
+    'delay' (seconds) is forwarded to each grouper as an artificial per-chunk
+    slowdown (see run_toy_grouper).
     """
     if len(grouper_addrs) == 1:
-        run_toy_grouper(grouper_addrs[0])
+        run_toy_grouper(grouper_addrs[0], delay)
         return
 
     procs = []   # list of (addr, Popen)
@@ -86,7 +99,8 @@ def run_toy_groupers(grouper_addrs):
             # fork) avoids CUDA-after-fork hazards. stdout is inherited, so each
             # child's messages (which carry its own addr) appear interleaved.
             procs.append((addr, subprocess.Popen(
-                [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper', addr])))
+                [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper',
+                 '--delay', str(delay), addr])))
         rc = _monitor_children(procs)
     except KeyboardInterrupt:
         print('run_toy_grouper: interrupted; stopping all groupers', flush=True)
