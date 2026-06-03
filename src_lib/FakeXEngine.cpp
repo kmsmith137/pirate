@@ -400,9 +400,9 @@ bool FakeXEngine::_send_all(Worker &w, Socket &sock, const void *buf, long nbyte
 
 // -------------------------------------------------------------------------------------------------
 //
-// External-thread entry points: enqueue_send_junk(),
-// enqueue_skip_minichunk(), enqueue_send_minichunk(),
-// enqueue_disconnect(), wait_until_processed(). All but the last
+// External-thread entry points: enqueue_skip_minichunk(),
+// enqueue_send_minichunk(), enqueue_disconnect(),
+// wait_until_processed(). All but the last
 // share an _enqueue() helper that does the worker_id range check +
 // lock + throw-if-stopped + (for state-advancing commands)
 // queue-time sequentiality check + push + notify pattern. The
@@ -427,8 +427,8 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
     _throw_if_stopped(w, method_name);
 
     // Queue-time sequentiality check for state-advancing commands
-    // (SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK). DISCONNECT does
-    // not participate -- its minichunk_index is unused.
+    // (SKIP_MINICHUNK / SEND_MINICHUNK). DISCONNECT does not
+    // participate -- its minichunk_index is unused.
     if (is_state_advancing) {
         if (w.last_queued_minichunk < 0) {
             // First state-advancing command on this worker. Any
@@ -468,18 +468,6 @@ void FakeXEngine::_enqueue(long worker_id, Command &&cmd, bool is_state_advancin
     // drop it and wake the worker.
     lock.unlock();
     w.cv.notify_all();   // wakes only this worker
-}
-
-
-void FakeXEngine::enqueue_send_junk(long worker_id, long minichunk_index)
-{
-    xassert_ge(minichunk_index, 0L);
-
-    Command cmd;
-    cmd.kind = Command::Kind::SEND_JUNK;
-    cmd.minichunk_index = minichunk_index;
-    _enqueue(worker_id, std::move(cmd), /*is_state_advancing=*/true,
-             "FakeXEngine::enqueue_send_junk");
 }
 
 
@@ -670,7 +658,7 @@ std::array<long, 4> FakeXEngine::get_debug_counters() const
 //
 // Populates the worker's per-thread state (xmd, send_buf, header_nbytes,
 // mc_nbytes, ip_addr, port). The TCP socket is NOT opened here -- that
-// happens lazily on the first SEND_JUNK inside _send_junk().
+// happens lazily on the first SEND_MINICHUNK inside _skip_or_send().
 //
 // Combined "send buffer" laid out as:
 //
@@ -678,15 +666,17 @@ std::array<long, 4> FakeXEngine::get_debug_counters() const
 //   ^                                    ^
 //   send_buf.data()                      send_buf.data() + header_nbytes
 //
-// The first SEND_JUNK sends the whole buffer in one _send_all() call
-// (connection header + first minichunk); subsequent SEND_JUNKs send only
-// the minichunk portion. Combining the two saves a _send_all() call on
-// the first send and avoids a TCP-level Nagle round-trip between the
+// The first SEND_MINICHUNK sends the whole buffer in one _send_all() call
+// (connection header + first minichunk); subsequent SEND_MINICHUNKs send
+// only the minichunk portion. Combining the two saves a _send_all() call
+// on the first send and avoids a TCP-level Nagle round-trip between the
 // header and the first minichunk.
 //
-// The data is "junk" -- all zeros -- and stays that way; only the
-// minichunk's seq field (at offset header_nbytes + 4) is rewritten per
-// SEND_JUNK. See notes/network_protocol.md for the v2 wire format.
+// The data area is zero-initialized here defensively, but each
+// SEND_MINICHUNK overwrites it with gathered frame data (via
+// _populate_minichunk_buf) before sending, and rewrites the minichunk's
+// seq field (at offset header_nbytes + 4). See notes/network_protocol.md
+// for the v2 wire format.
 
 
 void FakeXEngine::_initialize(int worker_id)
@@ -729,8 +719,8 @@ void FakeXEngine::_initialize(int worker_id)
     }
 
     // Stamp the per-minichunk magic. Constant for this worker's lifetime;
-    // only the seq field at offset (header_nbytes + 4) is rewritten per
-    // SEND_JUNK.
+    // the seq field at offset (header_nbytes + 4) and the data area are
+    // rewritten per SEND_MINICHUNK.
     {
         uint32_t mc_magic = protocol_magic;
         std::memcpy(w.send_buf.data() + w.header_nbytes, &mc_magic, 4);
@@ -866,7 +856,7 @@ void FakeXEngine::_populate_minichunk_buf(Worker &w,
 // repeated DISCONNECTs on an already-disconnected worker are no-ops.
 //
 // Crucially, does NOT touch w.last_processed_minichunk or
-// w.last_queued_minichunk; the next SEND_* on this worker will hit
+// w.last_queued_minichunk; the next SEND_MINICHUNK on this worker will hit
 // the !w.connected branch in _skip_or_send and transparently reopen
 // the connection + re-send the protocol header (bundled with the
 // next minichunk in one _send_all). Also does NOT call
@@ -1091,7 +1081,7 @@ void FakeXEngine::_disconnect(Worker &w)
 
 // -------------------------------------------------------------------------------------------------
 //
-// _skip_or_send: handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
+// _skip_or_send: handler for SKIP_MINICHUNK / SEND_MINICHUNK.
 // See header for contract. Three discriminators:
 //
 //   - first_command (last_processed_minichunk == -1): the very first
@@ -1100,13 +1090,13 @@ void FakeXEngine::_disconnect(Worker &w)
 //     Subsequent state-advancing commands must advance by exactly +1.
 //     (DISCONNECT is not state-advancing -- it lives in _disconnect.)
 //
-//   - need_send (kind in {SEND_JUNK, SEND_MINICHUNK}): does this
-//     command put bytes on the wire?
+//   - need_send (kind == SEND_MINICHUNK): does this command put bytes
+//     on the wire?
 //
 //   - first_send_after_connect: did this _skip_or_send call open the
 //     TCP socket? If so, the conn header rides along in the same
 //     _send_all call as the first minichunk. Note this branch is
-//     taken both on the very first SEND_* AND after a DISCONNECT (in
+//     taken both on the very first SEND_MINICHUNK AND after a DISCONNECT (in
 //     which case it opens a fresh TCP connection + re-sends the
 //     handshake transparently to the controller).
 
@@ -1130,8 +1120,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
         xassert_eq(cmd.minichunk_index, w.last_processed_minichunk + 1L);
     xassert_ge(cmd.minichunk_index, 0L);
 
-    bool need_send = (cmd.kind == Command::Kind::SEND_JUNK ||
-                      cmd.kind == Command::Kind::SEND_MINICHUNK);
+    bool need_send = (cmd.kind == Command::Kind::SEND_MINICHUNK);
 
     // Snapshot of max_acked_minichunk[receiver_id] taken just before
     // _send_all. Attached to the PendingAck pushed at the bottom of
@@ -1142,8 +1131,8 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
 
     if (need_send) {
         // Paced-mode bootstrap + gate. See plans/fake_xengine_pacing.md.
-        // The bootstrap runs only on this worker's very first SEND_*
-        // (!first_send_done). The gate runs on every SEND_*.
+        // The bootstrap runs only on this worker's very first SEND_MINICHUNK
+        // (!first_send_done). The gate runs on every SEND_MINICHUNK.
         if (paced) {
             long ichunk = cmd.minichunk_index / minichunks_per_chunk;
 
@@ -1196,9 +1185,9 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             }
         }
 
-        // Lazy connect: the first SEND_* opens the socket. SKIP_MINICHUNK
-        // never opens the socket -- so a worker that only ever sees
-        // SKIPs leaves its TCP connection un-established.
+        // Lazy connect: the first SEND_MINICHUNK opens the socket.
+        // SKIP_MINICHUNK never opens the socket -- so a worker that only
+        // ever sees SKIPs leaves its TCP connection un-established.
         bool first_send_after_connect = false;
         if (!w.connected.load(std::memory_order_relaxed)) {
             // connect() may throw on ECONNREFUSED etc.; worker_main's
@@ -1216,15 +1205,12 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
             first_send_after_connect = true;
         }
 
-        // SEND_MINICHUNK: gather real data into the minichunk_buf.
-        // SEND_JUNK: leave the data area as the all-zero initialization
-        // from _initialize().
-        if (cmd.kind == Command::Kind::SEND_MINICHUNK) {
-            // _enqueue() already rejected null frame_set, but
-            // defense-in-depth in case a future caller bypasses it.
-            xassert(cmd.frame_set);
-            _populate_minichunk_buf(w, *cmd.frame_set, cmd.minichunk_index);
-        }
+        // Gather this minichunk's data into the minichunk_buf. need_send is
+        // true only for SEND_MINICHUNK, so frame_set is always present here.
+        // _enqueue() already rejected a null frame_set; we re-check
+        // defensively in case a future caller bypasses it.
+        xassert(cmd.frame_set);
+        _populate_minichunk_buf(w, *cmd.frame_set, cmd.minichunk_index);
 
         // Stamp the wire-seq for this minichunk.
         char *mc_ptr = w.send_buf.data() + w.header_nbytes;
@@ -1306,7 +1292,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
     // explicitly ignores SKIP-driven ichunk advances).
 
     // Determine the new minichunk_status entry for this cmd.
-    // Successful SEND_* -> STATUS_SENT (the wire bytes went out;
+    // Successful SEND_MINICHUNK -> STATUS_SENT (the wire bytes went out;
     // the ack hasn't arrived yet). SKIP_MINICHUNK -> STATUS_SKIPPED.
     unsigned char new_status;
     bool push_ack;
@@ -1350,7 +1336,7 @@ bool FakeXEngine::_skip_or_send(Worker &w, const Command &cmd)
 // -------------------------------------------------------------------------------------------------
 //
 // Worker main loop. Drained by external controller thread(s) via
-// enqueue_send_junk().
+// enqueue_send_minichunk().
 
 
 void FakeXEngine::_worker_main(int worker_id)
@@ -1390,7 +1376,6 @@ void FakeXEngine::_worker_main(int worker_id)
 
         // Dispatch.
         switch (cmd.kind) {
-        case Command::Kind::SEND_JUNK:
         case Command::Kind::SKIP_MINICHUNK:
         case Command::Kind::SEND_MINICHUNK:
             if (!_skip_or_send(w, cmd))

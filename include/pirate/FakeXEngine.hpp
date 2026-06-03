@@ -48,21 +48,21 @@ namespace pirate {
 // and entry points synchronize through each Worker's own mutex+cv+flag.
 //
 // Each worker thread:
-//   - Waits on its per-worker command queue for SEND_JUNK commands.
-//   - On the first SEND_JUNK, opens a TCP connection to its assigned
+//   - Waits on its per-worker command queue for SEND_MINICHUNK commands.
+//   - On the first SEND_MINICHUNK, opens a TCP connection to its assigned
 //     receiver IP and sends the protocol header (magic + flags + YAML
 //     metadata).
-//   - On every SEND_JUNK, sends one minichunk: a 12-byte header (uint32
+//   - On every SEND_MINICHUNK, sends one minichunk: a 12-byte header (uint32
 //     magic + uint64 seq) followed by a shape-(nbeams, nfreq, 256) int4
-//     data array (all zeros -- "junk"). The wire seq is derived from
-//     Command::minichunk_index.
+//     data array gathered from the command's AssembledFrameSet. The wire
+//     seq is derived from Command::minichunk_index.
 //
 // Workers are assigned round-robin to IP addresses (nworkers must be a
 // multiple of ip_addrs.size()). Frequency channels are assigned round-
 // robin to worker threads. There is NO internal cross-worker barrier --
 // the controller thread is responsible for any "minichunk N waits for
 // (N-2)" style serialization by interleaving wait_until_processed() and
-// enqueue_send_junk() calls. See plans/fake_xengine_command_queue.md
+// enqueue_send_minichunk() calls. See plans/fake_xengine_command_queue.md
 // for the canonical controller pseudocode.
 //
 // Worker threads inherit the vcpu affinity of the thread that calls the
@@ -76,8 +76,8 @@ namespace pirate {
 // threads gate their sends so the sender stays at most 5 time chunks
 // ahead of the server, MEASURED AGAINST THE WORKER'S MOST RECENT
 // SUCCESSFUL SEND (Worker::last_ichunk_sent), not against the pending
-// command's ichunk. Before each SEND_JUNK / SEND_MINICHUNK, the
-// worker blocks on its cv until Worker::rb_processed >=
+// command's ichunk. Before each SEND_MINICHUNK, the worker blocks on
+// its cv until Worker::rb_processed >=
 // (Worker::last_ichunk_sent - 5) * nbeams.
 //
 // Why "last_ichunk_sent" and not "ichunk-of-pending-send": SKIPs let a
@@ -111,7 +111,7 @@ namespace pirate {
 //       fxe = FakeXEngine(xmd, {"10.0.0.2:5000", "10.0.1.2:5000"}, 64,
 //                         /*time_samples_per_chunk=*/32768)
 //       # Spawn a controller thread (under the same affinity) that calls
-//       # fxe.enqueue_send_junk / fxe.wait_until_processed in a loop.
+//       # fxe.enqueue_send_minichunk / fxe.wait_until_processed in a loop.
 //   ...
 //   fxe.stop()   # signals workers and any in-flight entry points to exit.
 
@@ -150,15 +150,14 @@ struct FakeXEngine
     {
         enum class Kind : uint32_t {
             UNINITIALIZED  = 0,
-            SEND_JUNK      = 1,   // send minichunk_buf with all-zero ("junk") data
-            SKIP_MINICHUNK = 2,   // advance state, send nothing on the wire
-            SEND_MINICHUNK = 3,   // gather data from frame_set, then send
-            DISCONNECT     = 4,   // close the worker's TCP socket
-            WAIT_FOR_ACKS  = 5,   // worker calls _read_acks(blocking=true). Only
+            SKIP_MINICHUNK = 1,   // advance state, send nothing on the wire
+            SEND_MINICHUNK = 2,   // gather data from frame_set, then send
+            DISCONNECT     = 3,   // close the worker's TCP socket
+            WAIT_FOR_ACKS  = 4,   // worker calls _read_acks(blocking=true). Only
                                   // enqueued via FakeXEngine::enqueue_wait_for_acks().
         } kind = Kind::UNINITIALIZED;
 
-        // Used by all of {SEND_JUNK, SKIP_MINICHUNK, SEND_MINICHUNK}.
+        // Used by both of {SKIP_MINICHUNK, SEND_MINICHUNK}.
         // Ignored by DISCONNECT (which does not touch
         // last_processed_minichunk or last_queued_minichunk).
         // Wire seq = minichunk_index * 256 * xmd.seq_per_frb_time_sample.
@@ -193,7 +192,7 @@ struct FakeXEngine
 
     // PendingAck: one entry per in-flight wire minichunk awaiting an
     // ack byte from the receiver. Pushed into Worker::ack_queue by
-    // _skip_or_send after a successful SEND_*; popped by _read_acks
+    // _skip_or_send after a successful SEND_MINICHUNK; popped by _read_acks
     // when the receiver's ack byte arrives. Used by the FLAG_ACK
     // back-channel only.
     struct PendingAck
@@ -220,8 +219,8 @@ struct FakeXEngine
         // ---- All of these are protected by 'mutex'. ----
 
         mutable std::mutex mutex;
-        // Notified by: enqueue_send_junk / enqueue_skip_minichunk /
-        // enqueue_send_minichunk / enqueue_disconnect (after enqueue),
+        // Notified by: enqueue_skip_minichunk / enqueue_send_minichunk /
+        // enqueue_disconnect (after enqueue),
         // the worker thread (after a successful command processed-step
         // updates last_processed_minichunk), and stop() (when
         // is_stopped transitions to true).
@@ -231,8 +230,8 @@ struct FakeXEngine
         std::deque<Command> command_queue;
 
         // Latest minichunk_index this worker has finished *processing*
-        // for a state-advancing command (SEND_JUNK / SKIP_MINICHUNK /
-        // SEND_MINICHUNK), or -1 if no such command has completed yet.
+        // for a state-advancing command (SKIP_MINICHUNK / SEND_MINICHUNK),
+        // or -1 if no such command has completed yet.
         // Only the worker thread writes this; external threads read it
         // (under 'mutex') via wait_until_processed(). (Name reflects
         // that SKIP_MINICHUNK *processes* a command without actually
@@ -296,7 +295,7 @@ struct FakeXEngine
         std::vector<unsigned char> minichunk_status;
 
         // Pending acks (one entry per in-flight wire minichunk).
-        // When a SEND_JUNK or SEND_MINICHUNK is sent successfully on
+        // When a SEND_MINICHUNK is sent successfully on
         // the wire, the worker pushes a PendingAck here (under
         // 'mutex'); when an ack byte arrives, _read_acks pops the
         // front and uses (minichunk_index - first_minichunk) to find
@@ -313,7 +312,7 @@ struct FakeXEngine
         // Latest "effective" rb_processed observed for this worker
         // (paced mode only). Written by (a) the pacing thread on each
         // server-pushed update, and (b) the worker thread itself on
-        // its first SEND_*, seeded from FakeXEngine::rb_processed_floor.
+        // its first SEND_MINICHUNK, seeded from FakeXEngine::rb_processed_floor.
         // Read by the worker thread in the paced-mode gate inside
         // _skip_or_send. Monotone-nondecreasing -- both writers use
         // std::max on update. Zero (and unused) in non-paced mode.
@@ -336,15 +335,15 @@ struct FakeXEngine
         // the round-robin assignment of worker -> ip_addrs.
         long receiver_id = -1;
 
-        // False until this worker has performed its very first SEND_JUNK
-        // or SEND_MINICHUNK; flipped to true inside _skip_or_send the
+        // False until this worker has performed its very first
+        // SEND_MINICHUNK; flipped to true inside _skip_or_send the
         // first time the need_send branch is taken. Used to apply the
         // "+minichunks_per_chunk" shift to max_sent_minichunk on the
         // first send only (see the long comment in _skip_or_send).
         // Persists across DISCONNECT/reconnect cycles.
         bool first_send_done = false;
 
-        // Chunk index of this worker's most recent successful SEND_JUNK /
+        // Chunk index of this worker's most recent successful
         // SEND_MINICHUNK, or 0 if the worker has never sent. Updated in
         // _skip_or_send after _send_all() returns true. Read by the same
         // worker thread when computing the paced-mode gate horizon (see
@@ -367,11 +366,11 @@ struct FakeXEngine
         //   ^                                    ^
         //   send_buf.data()                      send_buf.data() + header_nbytes
         //
-        // The first SEND_JUNK sends the whole buffer in one _send_all()
-        // call; subsequent SEND_JUNKs send only the minichunk portion.
+        // The first SEND_MINICHUNK sends the whole buffer in one _send_all()
+        // call; subsequent SEND_MINICHUNKs send only the minichunk portion.
         // The minichunk's magic byte is stamped once in _initialize();
         // only the 8-byte seq field at offset (header_nbytes + 4) is
-        // rewritten per SEND_JUNK.
+        // rewritten per SEND_MINICHUNK.
         std::vector<char> send_buf;
 
         // Byte offset of the minichunk portion of send_buf.
@@ -386,7 +385,7 @@ struct FakeXEngine
 
         // TCP socket. Default-constructed (fd == -1) at Worker creation;
         // reassigned via sock = Socket(PF_INET, SOCK_STREAM) on the first
-        // SEND_JUNK before sock.connect().
+        // SEND_MINICHUNK before sock.connect().
         Socket sock;
 
         // False until sock.connect() has succeeded; flipped back to false
@@ -559,9 +558,9 @@ struct FakeXEngine
     // ----- Paced-mode state -----
 
     // Bootstrap floor for paced mode. Initialized to -1; CAS-set ONCE by
-    // whichever worker performs its first SEND_*, to (ichunk * nbeams)
+    // whichever worker performs its first SEND_MINICHUNK, to (ichunk * nbeams)
     // where ichunk = cmd.minichunk_index / minichunks_per_chunk. Every
-    // worker reads this on its own first SEND_* (whether or not it won
+    // worker reads this on its own first SEND_MINICHUNK (whether or not it won
     // the CAS) and seeds its Worker::rb_processed to at least this
     // value. Covers the latency gap before the server has received
     // enough data to publish its first rb_processed via MonitorRingbuf.
@@ -661,29 +660,19 @@ struct FakeXEngine
     // Destructor calls stop() and joins worker threads.
     ~FakeXEngine();
 
-    // Entry point: submit a SEND_JUNK(minichunk_index) command to
-    // workers[worker_id]->command_queue. Non-blocking. Throws if stopped
-    // or worker_id is out of range. The pybind11 wrapper releases the GIL.
-    //
-    // Wire effect: the worker sends one minichunk worth of all-zero data.
-    // (The protocol handshake is sent ahead of the first SEND_JUNK or
-    // SEND_MINICHUNK on this worker; SKIP_MINICHUNK never triggers
-    // connect/handshake.)
-    void enqueue_send_junk(long worker_id, long minichunk_index);
-
     // Entry point: submit a SKIP_MINICHUNK(minichunk_index) command.
-    // Non-blocking; same lock discipline as enqueue_send_junk.
+    // Non-blocking; same lock discipline as enqueue_send_minichunk.
     //
     // Wire effect: NONE. Advances last_processed_minichunk past
     // minichunk_index (per the usual +1 monotonicity rule, with the
     // first-command exception, enforced at queue time -- see
-    // enqueue_send_junk). A worker whose only commands are SKIPs
+    // enqueue_send_minichunk). A worker whose only commands are SKIPs
     // never opens its TCP connection -- useful for "silent peer"
     // tests.
     void enqueue_skip_minichunk(long worker_id, long minichunk_index);
 
     // Entry point: submit a SEND_MINICHUNK(minichunk_index, frame_set)
-    // command. Non-blocking; same lock discipline as enqueue_send_junk.
+    // command. Non-blocking; same lock discipline as enqueue_skip_minichunk.
     // Throws if frame_set is null.
     //
     // Wire effect: gather the per-(beam, freq) int4 data for the
@@ -713,9 +702,8 @@ struct FakeXEngine
     // Entry point: submit a DISCONNECT command. Non-blocking
     // (fire-and-forget); the worker closes its TCP socket on receipt.
     // last_processed_minichunk and last_queued_minichunk are NOT
-    // touched. The next SEND_JUNK or SEND_MINICHUNK on this worker
-    // transparently reopens the connection AND re-sends the protocol
-    // handshake.
+    // touched. The next SEND_MINICHUNK on this worker transparently
+    // reopens the connection AND re-sends the protocol handshake.
     //
     // SKIP_MINICHUNK commands continue to work normally while
     // disconnected. If the caller wants the next reconnect to start at
@@ -838,7 +826,7 @@ struct FakeXEngine
     // immediately. The winner sweeps every worker, locking each one's
     // mutex briefly to set is_stopped + error and notify its cv. Any
     // in-flight entry-point calls (wait_until_processed /
-    // enqueue_send_junk) then throw on their next predicate re-check.
+    // enqueue_send_minichunk) then throw on their next predicate re-check.
     // If 'e' is non-null, it represents an error; otherwise normal
     // termination.
     void stop(std::exception_ptr e = nullptr);
@@ -870,14 +858,14 @@ private:
     // xmd, send_buf (with the connection header stamped and the per-
     // minichunk magic stamped), header_nbytes, mc_nbytes, ip_addr, port.
     // Does NOT open the TCP connection -- that happens lazily on the
-    // first SEND_JUNK or SEND_MINICHUNK inside _skip_or_send().
+    // first SEND_MINICHUNK inside _skip_or_send().
     void _initialize(int worker_id);
 
-    // Combined handler for SEND_JUNK / SKIP_MINICHUNK / SEND_MINICHUNK.
+    // Combined handler for SKIP_MINICHUNK / SEND_MINICHUNK.
     // Performs a defense-in-depth strict-+1 monotonicity check
     // against last_processed_minichunk (redundant with the queue-time
-    // check in _enqueue), lazily connects on the first SEND_*, gathers
-    // data into the minichunk_buf for SEND_MINICHUNK, stamps the
+    // check in _enqueue), lazily connects on the first SEND_MINICHUNK,
+    // gathers data into the minichunk_buf for SEND_MINICHUNK, stamps the
     // wire-seq, calls _send_all(), and finally publishes
     // last_processed_minichunk + notifies the worker's cv.
     //
@@ -906,8 +894,8 @@ private:
     void _populate_minichunk_buf(Worker &w, const AssembledFrameSet &fset,
                                  long minichunk_index);
 
-    // Helper for the enqueue_send_junk / enqueue_skip_minichunk /
-    // enqueue_send_minichunk / enqueue_disconnect entry points.
+    // Helper for the enqueue_skip_minichunk / enqueue_send_minichunk /
+    // enqueue_disconnect entry points.
     // Validates worker_id, takes workers[worker_id]->mutex,
     // throws-if-stopped, performs the queue-time sequentiality check
     // (only if is_state_advancing is true), updates
@@ -917,8 +905,8 @@ private:
     // _throw_if_stopped and to the sequentiality-check error
     // message for diagnostics.
     //
-    // Callers MUST pass is_state_advancing = true for SEND_JUNK,
-    // SKIP_MINICHUNK, SEND_MINICHUNK; and false for DISCONNECT.
+    // Callers MUST pass is_state_advancing = true for SKIP_MINICHUNK and
+    // SEND_MINICHUNK; and false for DISCONNECT.
     // (We pass this as a separate argument rather than inspecting
     // cmd.kind, so it's explicit at every call site.)
     //
