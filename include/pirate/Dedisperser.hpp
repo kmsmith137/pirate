@@ -211,7 +211,17 @@ struct GpuDedisperser
     // (Note that the --python flag will run the python version of the timing benchmark, 
     //  which is in pirate_frb.utils.time_cupy_dedisperser().)
     void time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations);
-    
+
+    // Fills all (nbatches_wt) slots of the peak-finding weight arrays
+    // (wt_arrays) with ad hoc random weights. Must be called after allocate().
+    // This is a placeholder, intended to be replaced by a real variance
+    // calculation in the near future. Uses the same random-weight logic as
+    // test_one() (see the "Simulate peak-finding weights" comment there):
+    // ReferencePeakFindingKernel::make_random_weights() + GpuPfWeightLayout::to_gpu().
+    // Blocks (calls cudaDeviceSynchronize) before returning, so the weights are
+    // in place on the GPU when it returns.
+    void randomize_weights();
+
     // --------------------------  Public members  --------------------------
 
 protected:

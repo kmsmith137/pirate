@@ -261,13 +261,14 @@ class RunServerHelper:
     """
 
     def __init__(self, server_config_filename, dedispersion_config_filename,
-                 processing_delay_sec=0.0, no_grouper=False):
+                 processing_delay_sec=0.0, no_grouper=False, randomize_weights=True):
         self.config = _parse_config(server_config_filename)
         self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
         self.n = self.config['num_servers']
         self.hw = Hardware()
         self.processing_delay_sec = processing_delay_sec
         self.no_grouper = no_grouper
+        self.randomize_weights = randomize_weights
         # Populated later by run() -> _prepare_directories / _setup_memory.
         self.nfs_dir = None
         self.capacity = None
@@ -444,6 +445,7 @@ class RunServerHelper:
                                gpu_allocator=gpu_alloc,
                                cuda_device_id=cuda_device_id,
                                processing_delay_sec=self.processing_delay_sec,
+                               randomize_weights=self.randomize_weights,
                                grouper_ip_addr=grouper_ip_addr)
             # server.start() is NOT called here. We defer all server.start()
             # calls to _build_all_servers's phase 3 so that the async
@@ -510,7 +512,7 @@ class RunServerHelper:
 
 
 def run_server(server_config_filename, dedispersion_config_filename,
-               processing_delay_sec=0.0, no_grouper=False):
+               processing_delay_sec=0.0, no_grouper=False, randomize_weights=True):
     """Main entry point for 'pirate_frb run_server'.
 
     processing_delay_sec (default 0): artificial per-frame delay (seconds)
@@ -520,9 +522,14 @@ def run_server(server_config_filename, dedispersion_config_filename,
     no_grouper (default False): if True, disable the FrbGrouper RPC even when
     'grouper_ip_addrs' is set in the config (GpuDedisperser runs with
     num_consumers=0, receivers start immediately).
+
+    randomize_weights (default True): if True, each FrbServer does a one-time
+    randomization of its dedisperser's peak-finding weights at initialization.
+    Placeholder until a real variance calculation is implemented.
     """
     helper = RunServerHelper(server_config_filename, dedispersion_config_filename,
                              processing_delay_sec=processing_delay_sec,
-                             no_grouper=no_grouper)
+                             no_grouper=no_grouper,
+                             randomize_weights=randomize_weights)
     helper.run()
 

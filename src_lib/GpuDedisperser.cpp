@@ -1063,6 +1063,52 @@ static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, lon
 }
 
 
+// Fills all (nbatches_wt) slots of the peak-finding weight arrays with ad hoc
+// random weights. See declaration in Dedisperser.hpp. This mirrors the
+// "Simulate peak-finding weights, and copy to GPU" block in test_one(), except
+// that here we don't keep a host-side copy of the weights (test_one needs one
+// for its reference comparison) and we fill every weight slot exactly once
+// (test_one re-randomizes the weights on every chunk).
+void GpuDedisperser::randomize_weights()
+{
+    xassert(is_allocated);
+
+    const long nbatches_wt = params.nbatches_wt;
+
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &t = plan->trees.at(itree);
+        const long F = t.frequency_subbands.F;
+
+        // subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
+        Array<float> sbv({F}, af_uhost | af_zero);
+        for (long f = 0; f < F; f++)
+            sbv.at({f}) = variance_upper_bound(plan, itree, f);
+
+        // ReferencePeakFindingKernel, only used here for make_random_weights().
+        // Dcore is taken from the GPU kernel (as in test_one's non-host_only path).
+        const long Dcore = cdd2_kernels.at(itree)->Dcore;
+        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
+        ReferencePeakFindingKernel ref_kernel(pf_params, Dcore);
+
+        const GpuPfWeightLayout &wl = cdd2_kernels.at(itree)->pf_weight_layout;
+
+        // Per-slot host scratch with the "straightforward" weights layout
+        // (beams_per_batch, ndm_wt, nt_wt, nprofiles, F). Reused across slots.
+        Array<float> wcpu({beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, F}, af_rhost | af_zero);
+
+        for (long s = 0; s < nbatches_wt; s++) {
+            ref_kernel.make_random_weights(wcpu, sbv);
+            Array<void> wgpu = wt_arrays.at(itree).slice(0, s);
+            wl.to_gpu(wgpu, wcpu);
+        }
+    }
+
+    // Ensure the host->GPU weight copies have completed before returning (so
+    // the weights are in place before the caller starts launching dd kernels).
+    CUDA_CALL(cudaDeviceSynchronize());
+}
+
+
 // Static member function.
 void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, bool host_only)
 {

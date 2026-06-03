@@ -729,6 +729,19 @@ void FrbServer::_processing_thread_main()
          << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
          << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)" << endl;
 
+    // One-time randomization of the dedisperser's peak-finding weights, done
+    // after allocate() but before the dedisperser is "published" below (so no
+    // other thread can touch the weights concurrently). This is a placeholder
+    // until a real variance calculation is implemented (see
+    // GpuDedisperser::randomize_weights() and FrbServer::Params::randomize_weights).
+    if (params.randomize_weights) {
+        auto t0 = std::chrono::steady_clock::now();
+        dedisperser_p->randomize_weights();
+        auto t1 = std::chrono::steady_clock::now();
+        double dt = std::chrono::duration<double>(t1 - t0).count();
+        cout << "FrbServer: randomized dedisperser weights in " << dt << " sec" << endl;
+    }
+
     // Per-stream GPU scratch + dequantization kernel + the two new
     // CudaEventRingbufs. These are local to processing_thread; the evrb_*'s
     // are "published" to FrbServer's lock-protected members below.

@@ -1141,13 +1141,20 @@ def parse_run_server(subparsers):
                         help='Disable FrbGrouper RPC even if grouper_ip_addrs '
                              'is set in the config (GpuDedisperser runs with '
                              'num_consumers=0).')
+    parser.add_argument('-z', '--zeroed-weights', action='store_true',
+                        help='Disable the one-time randomization of the '
+                             'dedisperser peak-finding weights at startup '
+                             '(weights are left zeroed). By default the weights '
+                             'are randomized (a placeholder until a real variance '
+                             'calculation is implemented).')
 
 
 def run_server_command(args):
     from .run_server import run_server
     run_server(args.server_config, args.dedispersion_config,
                processing_delay_sec=args.delay,
-               no_grouper=args.no_grouper)
+               no_grouper=args.no_grouper,
+               randomize_weights=not args.zeroed_weights)
 
 
 ######################################  run_toy_grouper command  #####################################

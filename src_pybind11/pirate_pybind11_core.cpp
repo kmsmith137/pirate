@@ -1009,6 +1009,7 @@ void register_core_bindings(pybind11::module &m)
                            std::shared_ptr<BumpAllocator> gpu_allocator,
                            int cuda_device_id,
                            double processing_delay_sec,
+                           bool randomize_weights,
                            const std::string &grouper_ip_addr) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
@@ -1021,6 +1022,7 @@ void register_core_bindings(pybind11::module &m)
                params.gpu_allocator = std::move(gpu_allocator);
                params.cuda_device_id = cuda_device_id;
                params.processing_delay_sec = processing_delay_sec;
+               params.randomize_weights = randomize_weights;
                params.grouper_ip_addr = grouper_ip_addr;
                return FrbServer::create(params);
           }),
@@ -1032,6 +1034,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("gpu_allocator"),
                py::arg("cuda_device_id"),
                py::arg("processing_delay_sec") = 0.0,
+               py::arg("randomize_weights") = true,
                py::arg("grouper_ip_addr") = "",
                "Create an FrbServer.\n\n"
                "Args:\n"
@@ -1058,6 +1061,10 @@ void register_core_bindings(pybind11::module &m)
                "    processing_delay_sec (default 0): Artificial per-frame\n"
                "        delay (in seconds) injected by the processing thread,\n"
                "        for simulating slow GPU work in pacing tests.\n"
+               "    randomize_weights (default True): if True, the processing\n"
+               "        thread does a one-time randomization of the dedisperser's\n"
+               "        peak-finding weights during initialization. Placeholder\n"
+               "        until a real variance calculation is implemented.\n"
                "    grouper_ip_addr (default ''): ip:port of the FrbGrouper to\n"
                "        feed (the FrbServer is the gRPC client). Empty => disabled\n"
                "        (GpuDedisperser built with num_consumers=0). Must be a\n"
