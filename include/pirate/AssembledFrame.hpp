@@ -61,11 +61,17 @@ struct AssembledFrame
     // are length-1 (just this frame's beam).
     std::shared_ptr<const XEngineMetadata> metadata;
 
-    // 'scales_offsets' and 'data' share a single slab. 'scales_offsets' is
-    // at slab offset 0; 'data' is at slab offset (nfreq * mpc * 4) where
-    // mpc = ntime / 256. This ordering matches the per-minichunk wire layout
-    // (scales_offsets precedes the int4 payload). _reap_locked() releases
-    // both arrays together by dropping the slab shared_ptr.
+    // 'scales_offsets' and 'data' share a single slab, and BOTH arrays are
+    // individually aligned to constants::bytes_per_gpu_cache_line:
+    // 'scales_offsets' is at slab offset 0 (the slab base is cache-line aligned
+    // by the SlabAllocator), and 'data' is at slab offset
+    // align_up(scales_offsets_nbytes, bytes_per_gpu_cache_line) so its base is
+    // cache-line aligned too. This ordering matches the per-minichunk wire
+    // layout (scales_offsets precedes the int4 payload). See
+    // AssembledFrameAllocator::get_layout() for the exact offsets/sizes -- the
+    // single source of truth shared by AssembledFrameAllocator::_create_frame_set
+    // and external slab-pool sizing. _reap_locked() releases both arrays together
+    // by dropping the slab shared_ptr.
     //
     // Warning: if the AssembledFrame has been "reaped" under memory pressure,
     // then both 'scales_offsets' and 'data' are empty arrays. The array state
@@ -457,6 +463,39 @@ private:
     long _initialize_initial_chunk(long target_time_chunk);
     std::shared_ptr<AssembledFrameSet> _get_frame_set(int consumer_id);
     void _block_until_low_memory(long nframe_threshold);
+
+public:
+    // ------------------------  Slab layout  ------------------------
+    //
+    // Single source of truth for one AssembledFrame's (single-beam) slab byte
+    // layout. The slab holds both arrays:
+    //   - scales_offsets: dtype float16, shape (nfreq, mpc, 2), mpc = ntime/256
+    //   - data:           dtype int4,    shape (nfreq, ntime)
+    // Both array bases are INDIVIDUALLY aligned to
+    // constants::bytes_per_gpu_cache_line: scales_offsets at slab offset 0 (the
+    // slab base is cache-line aligned by the SlabAllocator), and data at the
+    // cache-line-aligned offset align_up(scales_offsets_nbytes, ...).
+    //
+    // Used by _create_frame_set() (the authoritative allocator) AND by external
+    // code that sizes a slab pool for AssembledFrameSets (e.g.
+    // pirate_frb.run_fake_xengine). Static -- callable without an instance,
+    // since pool sizing happens before the allocator is constructed.
+    struct SlabLayout
+    {
+        long scales_offsets_nbytes;  // bytes of the (nfreq, mpc, 2) float16 array
+        long data_offset;            // slab offset of 'data' (cache-line aligned)
+        long data_nbytes;            // bytes of the (nfreq, ntime) int4 array
+        long slab_nbytes;            // total slab size = data_offset + data_nbytes
+    };
+
+    // Compute the slab layout for one AssembledFrame.
+    // Throws unless nfreq > 0 and time_samples_per_chunk is a positive multiple of 256.
+    static SlabLayout get_layout(long nfreq, long time_samples_per_chunk);
+
+    // Convenience: total backing bytes for one AssembledFrame's slab (one beam),
+    // i.e. get_layout(...).slab_nbytes. Python-callable (static) -- lets callers
+    // size slab pools without duplicating the byte arithmetic.
+    static long slab_nbytes(long nfreq, long time_samples_per_chunk);
 };
 
 

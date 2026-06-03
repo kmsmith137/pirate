@@ -1,6 +1,7 @@
 #include "../include/pirate/AssembledFrame.hpp"
 #include "../include/pirate/file_utils.hpp"   // FileDeleteGuard
-#include "../include/pirate/inlines.hpp"      // xdiv()
+#include "../include/pirate/inlines.hpp"      // xdiv(), align_up()
+#include "../include/pirate/constants.hpp"    // bytes_per_gpu_cache_line
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/mem_utils.hpp>
@@ -958,6 +959,34 @@ void AssembledFrameAllocator::worker_main()
 // dropped (during slab acquisition + memset) and re-acquired.
 
 
+AssembledFrameAllocator::SlabLayout
+AssembledFrameAllocator::get_layout(long nfreq, long time_samples_per_chunk)
+{
+    xassert(nfreq > 0);
+    xassert(time_samples_per_chunk > 0);
+    xassert((time_samples_per_chunk % 256) == 0);   // implies even (int4 byte count exact)
+
+    long mpc = xdiv(time_samples_per_chunk, 256);
+    constexpr long nalign = constants::bytes_per_gpu_cache_line;
+
+    SlabLayout layout;
+    layout.scales_offsets_nbytes = nfreq * mpc * 4;                  // (nfreq, mpc, 2) float16
+    // Individually cache-line-align each array: scales_offsets starts at slab
+    // offset 0 (slab base is cache-line aligned by the SlabAllocator), and data
+    // starts at the next cache-line boundary so its base is aligned too.
+    layout.data_offset           = align_up(layout.scales_offsets_nbytes, nalign);
+    layout.data_nbytes           = nfreq * xdiv(time_samples_per_chunk, 2);  // (nfreq, ntime) int4
+    layout.slab_nbytes           = layout.data_offset + layout.data_nbytes;
+    return layout;
+}
+
+
+long AssembledFrameAllocator::slab_nbytes(long nfreq, long time_samples_per_chunk)
+{
+    return get_layout(nfreq, time_samples_per_chunk).slab_nbytes;
+}
+
+
 void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
 {
     xassert(metadata_is_initialized);
@@ -970,9 +999,8 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
     // Snapshot the loop bounds and shape under the lock.
     long nbeams = beam_ids.size();
     long mpc = xdiv(time_samples_per_chunk, 256);
-    long scales_offsets_nbytes = nfreq * mpc * 4;          // (nfreq, mpc, 2) float16
-    long data_nbytes = nfreq * xdiv(time_samples_per_chunk, 2);
-    long nbytes = scales_offsets_nbytes + data_nbytes;
+    SlabLayout layout = get_layout(nfreq, time_samples_per_chunk);
+    long nbytes = layout.slab_nbytes;
 
     // Drop lock while allocating + memsetting the nbeams slabs.
     guard.unlock();
@@ -982,8 +1010,9 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
     // are stamped once we've re-acquired the lock (so the set's chunk
     // index is consistent with the current queue state).
     //
-    // Slab layout: scales_offsets at offset 0, data after. Both arrays share
-    // a single slab shared_ptr; _reap_locked() drops both refs to free.
+    // Slab layout: scales_offsets at offset 0, data at layout.data_offset (both
+    // cache-line aligned -- see AssembledFrameAllocator::get_layout()). Both arrays
+    // share a single slab shared_ptr; _reap_locked() drops both refs to free.
     //
     // Slab-pool sizing: this loop holds up to nbeams slabs at a time. The
     // pool must have at least nbeams total slabs to make progress, which
@@ -994,10 +1023,11 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
     for (long b = 0; b < nbeams; b++) {
         shared_ptr<void> slab = slab_allocator->get_slab(nbytes, /*blocking=*/true);
 
-        // scales_offsets initial: float16 0.0 (bytes 0x00).
-        // data initial:           int4 -8     (bytes 0x88, two -8 nibbles per byte).
-        memset(slab.get(), 0x00, scales_offsets_nbytes);
-        memset((char *)slab.get() + scales_offsets_nbytes, 0x88, data_nbytes);
+        // scales_offsets initial: float16 0.0 (bytes 0x00); also zero the
+        // alignment padding between the two arrays (up to data_offset).
+        // data initial: int4 -8 (bytes 0x88, two -8 nibbles per byte).
+        memset(slab.get(), 0x00, layout.data_offset);
+        memset((char *)slab.get() + layout.data_offset, 0x88, layout.data_nbytes);
 
         auto frame = make_shared<AssembledFrame>();
         frame->nfreq = nfreq;
@@ -1019,8 +1049,9 @@ void AssembledFrameAllocator::_create_frame_set(unique_lock<mutex> &guard)
         frame->scales_offsets.base = slab;   // shares slab with data
         frame->scales_offsets.check_invariants("AssembledFrameAllocator::_create_frame_set()");
 
-        // Initialize frame->data at slab offset scales_offsets_nbytes.
-        frame->data.data = (char *)slab.get() + scales_offsets_nbytes;
+        // Initialize frame->data at slab offset layout.data_offset
+        // (cache-line aligned -- see AssembledFrameAllocator::get_layout()).
+        frame->data.data = (char *)slab.get() + layout.data_offset;
         frame->data.ndim = 2;
         frame->data.shape[0] = nfreq;
         frame->data.shape[1] = time_samples_per_chunk;

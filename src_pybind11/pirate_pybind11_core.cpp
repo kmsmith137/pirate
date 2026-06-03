@@ -313,6 +313,13 @@ void register_core_bindings(pybind11::module &m)
             "Stop the allocator. After stop(), entry points throw and any\n"
             "thread blocked in get_frame_set() (waiting for a free slab) wakes\n"
             "and raises. Idempotent and safe to call from any thread.")
+        .def_static("slab_nbytes", &AssembledFrameAllocator::slab_nbytes,
+            py::arg("nfreq"), py::arg("time_samples_per_chunk"),
+            "Total backing bytes for one AssembledFrame's slab (one beam), with\n"
+            "scales_offsets and data each cache-line aligned. Matches\n"
+            "_create_frame_set exactly -- use it (times nbeams) to size a slab\n"
+            "pool for AssembledFrameSets. Static: callable without an instance.\n"
+            "Throws unless time_samples_per_chunk is a positive multiple of 256.")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.
