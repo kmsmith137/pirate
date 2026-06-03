@@ -138,20 +138,13 @@ class RunFakeXEngineHelper:
     def _frame_set_nbytes(cfg, xmd):
         """Backing bytes for one AssembledFrameSet (= nbeams frames).
 
-        Mirrors AssembledFrameAllocator::_create_frame_set: each frame's slab
-        is scales_offsets (float16, shape (nfreq, mpc, 2)) + data (int4, shape
-        (nfreq, ntime)), with the slab size rounded up to the GPU cache line
-        (constants::bytes_per_gpu_cache_line == 128, the SlabAllocator's
-        alignment). Returns nbeams * (aligned per-frame bytes).
+        Delegates the per-frame slab arithmetic to AssembledFrameAllocator's
+        static slab_nbytes() so this stays in lockstep with
+        AssembledFrameAllocator::_create_frame_set (single source of truth).
         """
-        nfreq = xmd.get_total_nfreq()
-        nbeams = cfg.fake_nbeams
-        ntime = cfg.time_samples_per_chunk
-        mpc = ntime // 256
-        per_frame = nfreq * mpc * 4 + nfreq * (ntime // 2)
-        nalign = 128
-        per_frame = ((per_frame + nalign - 1) // nalign) * nalign
-        return nbeams * per_frame
+        per_frame = AssembledFrameAllocator.slab_nbytes(
+            xmd.get_total_nfreq(), cfg.time_samples_per_chunk)
+        return cfg.fake_nbeams * per_frame
 
     def _print_receiver_details(self, rpc_addr, cfg, xmd):
         ip_addrs = list(cfg.data_ip_addrs)
