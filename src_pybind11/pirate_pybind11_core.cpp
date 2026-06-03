@@ -276,9 +276,15 @@ void register_core_bindings(pybind11::module &m)
             "then return the established initial_time_chunk.")
         .def("get_frame_set", &AssembledFrameAllocator::get_frame_set,
             py::arg("consumer_id"),
+            py::call_guard<py::gil_scoped_release>(),
             "Get the next AssembledFrameSet (one time chunk, all beams) for\n"
             "this consumer. The N-th call returns time_chunk_index =\n"
-            "initial_time_chunk + N.")
+            "initial_time_chunk + N.\n\n"
+            "Releases the GIL: in dummy mode the calling thread does the\n"
+            "per-set allocation + memset synchronously, and in non-dummy mode\n"
+            "it may block on the worker thread -- neither should stall other\n"
+            "Python threads (e.g. a sender thread running concurrently with a\n"
+            "frame-provider thread).")
         .def("get_metadata",
             [](AssembledFrameAllocator &self, bool blocking) {
                 auto m = self.get_metadata(blocking);
@@ -302,6 +308,11 @@ void register_core_bindings(pybind11::module &m)
         .def("is_initialized", &AssembledFrameAllocator::is_initialized,
             "Non-blocking poll: True iff the underlying memory is ready to\n"
             "serve allocations (delegates through SlabAllocator to BumpAllocator).")
+        .def("stop", [](AssembledFrameAllocator &self) { self.stop(); },
+            py::call_guard<py::gil_scoped_release>(),
+            "Stop the allocator. After stop(), entry points throw and any\n"
+            "thread blocked in get_frame_set() (waiting for a free slab) wakes\n"
+            "and raises. Idempotent and safe to call from any thread.")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.
