@@ -81,6 +81,10 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
                                   //   The output_ringbuf leading (beam) axis has length
                                   //   num_batch_slots * beams_per_batch, which is <=
                                   //   total_beams (NOT equal to total_beams in general).
+    long initial_chunk = 0;       // = handshake initial_chunk (producer's
+                                  //   GpuDedisperser::Params::initial_chunk). Time-chunk
+                                  //   index of the first dedispersion output relative to
+                                  //   FPGA seq 0; used to set Outputs::ichunk_fpga_based.
 
     long ntrees = 0;              // = dedispersion_plan_yaml['ntrees']
     std::vector<long> ndm_out;    // length ntrees, from dedispersion_plan_yaml['trees'][:]['ndm_out']

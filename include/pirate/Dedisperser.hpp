@@ -104,7 +104,7 @@ struct GpuDedisperser
 
         long ichunk_zero_based = 0;    // chunk index, relative to first dedisperser output
         long ichunk_fpga_based = 0;    // chunk index, relative to fpga seq 0
-        long ibeam = 0;                // beam index (not beam_id!!) of first beam in Outpus
+        long ibeam = 0;                // beam index (not beam_id!!) of first beam in Outputs
         
         std::vector<long> ndm_out;     // length ntrees
         std::vector<long> nt_out;      // length ntrees

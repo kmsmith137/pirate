@@ -725,6 +725,12 @@ void FrbServer::_processing_thread_main()
     dd_params.num_consumers = params.grouper_ip_addr.empty() ? 0 : 1;
     dd_params.synchronous = false;
     dd_params.cuda_device_id = params.cuda_device_id;
+    // initial_chunk: the canonical initial_time_chunk (time-chunk index of the
+    // very first frame, relative to FPGA seq 0). Lets the dedisperser stamp each
+    // output with its FPGA-based chunk index (Outputs::ichunk_fpga_based). Blocks
+    // until the first Receiver-reader has parsed a per-minichunk header; harmless
+    // here since this thread already blocked on get_metadata() above.
+    dd_params.initial_chunk = frame_allocator->wait_for_initial_chunk();
     auto dedisperser_p = GpuDedisperser::create(dd_params);
     cout << "FrbServer: GpuDedisperser constructed"
          << " (nstreams=" << dedisperser_p->nstreams << ")" << endl;
@@ -1099,6 +1105,7 @@ void FrbServer::_fill_handshake(fg::Handshake *hs,
     hs->set_num_trees(dd->ntrees);
     hs->set_num_batch_slots(dd->params.nbatches_out);
     hs->set_beams_per_batch(dd->beams_per_batch);
+    hs->set_initial_chunk(dd->params.initial_chunk);   // -> Outputs::ichunk_fpga_based
 
     // Run context (YAML). metadata is available by now (the dedisperser needed
     // it to initialize). NOTE: frame_allocator->get_metadata() returns the

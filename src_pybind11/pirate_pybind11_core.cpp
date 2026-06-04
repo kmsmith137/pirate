@@ -1197,6 +1197,9 @@ void register_core_bindings(pybind11::module &m)
                "Beam-batches per time chunk (= total_beams / beams_per_batch). NOT\n"
                "num_batch_slots (the output ring-buffer depth).")
           .def_readonly("num_batch_slots", &FrbGrouper::num_batch_slots)
+          .def_readonly("initial_chunk", &FrbGrouper::initial_chunk,
+               "Time-chunk index of the producer's first dedispersion output,\n"
+               "relative to FPGA seq 0 (sets Outputs.ichunk_fpga_based).")
           .def_readonly("ntrees", &FrbGrouper::ntrees)
           .def_readonly("ndm_out", &FrbGrouper::ndm_out)
           .def_readonly("nt_out", &FrbGrouper::nt_out)

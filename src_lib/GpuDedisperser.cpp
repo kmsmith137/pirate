@@ -728,8 +728,19 @@ GpuDedisperser::Outputs GpuDedisperser::acquire_output(long consumer_id, long se
         // beam range [iout*beams_per_batch, (iout+1)*beams_per_batch) of
         // output_ringbuf; slice() is pointer arithmetic + metadata copy, no
         // allocation. The returned views have nbeams = beams_per_batch.
-        if (!noreturn)
+        if (!noreturn) {
             outputs = output_ringbuf.slice(iout * beams_per_batch, (iout+1) * beams_per_batch);
+
+            // Set the chunk/beam identity fields on the returned slice. These
+            // override the values slice() copied from output_ringbuf, because
+            // the ring slot 'iout' (= seq_id % nbatches_out) is NOT the true
+            // chunk/beam index: seq_id = ichunk*nbatches + ibatch, so the true
+            // chunk index is seq_id/nbatches and the true beam index of the
+            // first beam is (seq_id % nbatches) * beams_per_batch.
+            outputs.ichunk_zero_based = seq_id / nbatches;
+            outputs.ichunk_fpga_based = outputs.ichunk_zero_based + params.initial_chunk;
+            outputs.ibeam = (seq_id % nbatches) * beams_per_batch;
+        }
     }
 
     // Argument checking ends here. If an exception is thrown below, call stop().
@@ -1156,6 +1167,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         params.nbatches_wt = nbatches_out;
         params.num_consumers = 1;
         params.cuda_device_id = 0;
+        params.initial_chunk = 0;   // test harness: outputs are zero-based
 
         gdd = GpuDedisperser::create(params);
         BumpAllocator gpu_allocator(af_gpu | af_zero, -1);     // dummy allocator
@@ -1527,6 +1539,15 @@ GpuDedisperser::Outputs GpuDedisperser::Outputs::slice(long start_beam_index, lo
     Outputs ret;
     ret.dtype = dtype;
     ret.nbeams = end_beam_index - start_beam_index;
+
+    // A beam-axis slice leaves the chunk indices unchanged and shifts the
+    // first-beam index by start_beam_index. (Callers that slice by ring slot
+    // rather than by true beam index -- GpuDedisperser/FrbGrouper acquire_output()
+    // -- overwrite these fields afterwards; see those methods.)
+    ret.ichunk_zero_based = ichunk_zero_based;
+    ret.ichunk_fpga_based = ichunk_fpga_based;
+    ret.ibeam = ibeam + start_beam_index;
+
     ret.ndm_out = ndm_out;
     ret.nt_out = nt_out;
     ret.out_max.resize(nt);

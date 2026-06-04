@@ -222,6 +222,14 @@ message Handshake {
   // along axis 0 of each output array, where slot = seq_id % num_batch_slots.
   int64 beams_per_batch = 8;
 
+  // Time-chunk index of the producer's first dedispersion output, relative to
+  // FPGA seq 0 (GpuDedisperser::Params::initial_chunk, which the FrbServer sets
+  // to the frame_allocator's canonical initial_time_chunk). The consumer adds
+  // this to the zero-based chunk index (seq_id / nbatches) to recover the
+  // FPGA-based chunk index of each acquired output (Outputs::ichunk_fpga_based).
+  // Numbered 12 (the run-context YAML strings below took 9-11 first).
+  int64 initial_chunk = 12;
+
   // ---- Run context (YAML) ----
   // Full serialized configuration of the run, so the consumer can interpret
   // the output_ringbuf contents (frequencies, beams, DM ranges, time sample,

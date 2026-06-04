@@ -291,6 +291,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     py::class_<GpuDedisperser::Outputs>(m, "_GpuDedisperserOutputs",
         "Returned by GpuDedisperser.acquire_output(). Holds list-of-Array views\n"
         "of the dedispersion output buffers for an acquired seq_id.")
+        .def_readonly("ichunk_zero_based", &GpuDedisperser::Outputs::ichunk_zero_based,
+            "Chunk index of this output, relative to the first dedisperser output.")
+        .def_readonly("ichunk_fpga_based", &GpuDedisperser::Outputs::ichunk_fpga_based,
+            "Chunk index of this output, relative to FPGA seq 0\n"
+            "(= ichunk_zero_based + producer's Params::initial_chunk).")
+        .def_readonly("ibeam", &GpuDedisperser::Outputs::ibeam,
+            "Beam index (NOT beam_id) of the first beam in this output.")
         .def_readonly("out_max", &GpuDedisperser::Outputs::out_max,
             "List of length ntrees, peak-finding maximum values.")
         .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax,
@@ -303,7 +310,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                           int cuda_device_id,
                           long num_consumers,
                           long nbatches_out,
-                          long nbatches_wt) {
+                          long nbatches_wt,
+                          long initial_chunk) {
               GpuDedisperser::Params params;
               params.plan = plan;
               params.stream_pool = stream_pool;
@@ -311,6 +319,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
               params.num_consumers = num_consumers;
               params.nbatches_out = nbatches_out;
               params.nbatches_wt = nbatches_wt;
+              params.initial_chunk = initial_chunk;
               return GpuDedisperser::create(params);
           }),
           py::arg("plan"),
@@ -318,7 +327,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           py::arg("cuda_device_id"),
           py::arg("num_consumers") = -1,
           py::arg("nbatches_out") = 0,
-          py::arg("nbatches_wt") = 0)
+          py::arg("nbatches_wt") = 0,
+          py::arg("initial_chunk") = 0)
           .def_readonly("config", &GpuDedisperser::config)
           .def_readonly("plan", &GpuDedisperser::plan)
           .def_readonly("dtype", &GpuDedisperser::dtype)

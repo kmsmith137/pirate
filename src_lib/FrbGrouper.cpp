@@ -328,6 +328,7 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
 
     // Geometry cross-checks (defensive).
     num_batch_slots = hs.num_batch_slots();
+    initial_chunk = hs.initial_chunk();   // producer's GpuDedisperser::Params::initial_chunk
     xassert_eq(hs.num_trees(), ntrees);
     xassert_eq(hs.beams_per_batch(), beams_per_batch);
     // The output ring buffer's leading (beam) axis is num_batch_slots *
@@ -492,7 +493,18 @@ GpuDedisperser::Outputs FrbGrouper::acquire_output(long seq_id)
 
     rb_acquired = seq_id + 1;
     long iout = seq_id % num_batch_slots;
-    return output_ringbuf.slice(iout * beams_per_batch, (iout + 1) * beams_per_batch);
+    GpuDedisperser::Outputs out =
+        output_ringbuf.slice(iout * beams_per_batch, (iout + 1) * beams_per_batch);
+
+    // Set the chunk/beam identity fields on the returned slice. These override
+    // the values slice() copied from output_ringbuf: the ring slot 'iout'
+    // (= seq_id % num_batch_slots) is NOT the true chunk/beam index. Reconstruct
+    // them from seq_id = ichunk*nbatches + ibatch (the producer-side mapping in
+    // GpuDedisperser::acquire_output()), using initial_chunk from the handshake.
+    out.ichunk_zero_based = seq_id / nbatches;
+    out.ichunk_fpga_based = out.ichunk_zero_based + initial_chunk;
+    out.ibeam = (seq_id % nbatches) * beams_per_batch;
+    return out;
 }
 
 
