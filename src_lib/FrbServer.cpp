@@ -694,8 +694,11 @@ void FrbServer::_processing_thread_main()
     // Construct the DedispersionPlan OUTSIDE the mutex -- this is the slow
     // step (can take seconds), and we don't want to block other threads
     // (e.g. RPC handlers reading 'plan' or 'is_stopped') while it runs.
+    auto t_plan0 = std::chrono::steady_clock::now();
     auto plan_p = make_shared<DedispersionPlan>(config_postfilled);
-    cout << "FrbServer: DedispersionPlan constructed"
+    auto t_plan1 = std::chrono::steady_clock::now();
+    double dt_plan = std::chrono::duration<double>(t_plan1 - t_plan0).count();
+    cout << "FrbServer: DedispersionPlan constructed in " << dt_plan << " sec"
          << " (nfreq=" << plan_p->nfreq << ", ntrees=" << plan_p->ntrees << ")" << endl;
 
     // Build the CudaStreamPool and GpuDedisperser (also OUTSIDE the mutex;
@@ -731,15 +734,21 @@ void FrbServer::_processing_thread_main()
     // until the first Receiver-reader has parsed a per-minichunk header; harmless
     // here since this thread already blocked on get_metadata() above.
     dd_params.initial_chunk = frame_allocator->wait_for_initial_chunk();
+    auto t_dd0 = std::chrono::steady_clock::now();
     auto dedisperser_p = GpuDedisperser::create(dd_params);
-    cout << "FrbServer: GpuDedisperser constructed"
+    auto t_dd1 = std::chrono::steady_clock::now();
+    double dt_dd = std::chrono::duration<double>(t_dd1 - t_dd0).count();
+    cout << "FrbServer: GpuDedisperser constructed in " << dt_dd << " sec"
          << " (nstreams=" << dedisperser_p->nstreams << ")" << endl;
 
     // Allocate GpuDedisperser resources from the FrbServer's dedicated
     // host/gpu BumpAllocators. allocate() also spawns the GpuDedisperser
     // worker thread, which sets cudaSetDevice on itself.
+    auto t_alloc0 = std::chrono::steady_clock::now();
     dedisperser_p->allocate(*params.gpu_allocator, *params.host_allocator);
-    cout << "FrbServer: GpuDedisperser::allocate() done"
+    auto t_alloc1 = std::chrono::steady_clock::now();
+    double dt_alloc = std::chrono::duration<double>(t_alloc1 - t_alloc0).count();
+    cout << "FrbServer: GpuDedisperser::allocate() done in " << dt_alloc << " sec"
          << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
          << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)" << endl;
 
