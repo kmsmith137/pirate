@@ -1190,12 +1190,16 @@ def parse_run_fake_xengine(subparsers):
     parser.add_argument('-P', '--unpaced', action='store_true',
                         help='Disable pacing -- send chunks as fast as possible '
                              '(default: pace to stay <=5 chunks ahead of server)')
+    parser.add_argument('-j', '--send-junk', action='store_true',
+                        help='Randomize+send only the first chunk; send all-zero '
+                             'junk for every subsequent chunk (skips per-chunk '
+                             'randomization)')
 
 
 def run_fake_xengine_command(args):
     from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers,
-                     paced=not args.unpaced)
+                     paced=not args.unpaced, send_junk=args.send_junk)
 
 
 ####################################################################################################

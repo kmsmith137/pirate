@@ -23,7 +23,7 @@ class RunFakeXEngineHelper:
     spawn controllers; wait for Ctrl-C; cleanup).
     """
 
-    def __init__(self, rpc_addrs, nworkers=128, paced=True):
+    def __init__(self, rpc_addrs, nworkers=128, paced=True, send_junk=False):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -42,6 +42,10 @@ class RunFakeXEngineHelper:
         self.rpc_addrs = rpc_addrs
         self.nworkers = nworkers
         self.paced = paced
+        # send_junk: randomize+send only the FIRST chunk (SEND_MINICHUNK),
+        # then send all-zero SEND_JUNK for every subsequent chunk -- a cheap
+        # load mode that skips per-chunk randomization.
+        self.send_junk = send_junk
         self.hw = Hardware()
         self.fake_xengines = []   # parallel to rpc_addrs (Phase 1 fills this)
         self.allocators = []      # parallel: AssembledFrameAllocator per receiver
@@ -212,7 +216,8 @@ class RunFakeXEngineHelper:
         finally:
             self._stop_all()
 
-    def _frame_provider_main(self, fxe, allocator, ready, stop_event, exc_holder):
+    def _frame_provider_main(self, fxe, allocator, ready, stop_event,
+                             exc_holder, max_sets=None):
         """Dedicated thread that hands the send loop pre-randomized frames.
 
         Pulls AssembledFrameSets from the allocator (chunk 0, 1, 2, ... in
@@ -221,6 +226,10 @@ class RunFakeXEngineHelper:
         and randomize_frames() release the GIL, so this thread's allocation +
         randomization run concurrently with -- and do not stall -- the send
         loop.
+
+        If max_sets is not None, it produces at most that many sets and then
+        exits (used in send-junk mode, max_sets=1, where only the first chunk
+        carries real data).
 
         No explicit producer/consumer coordination: backpressure comes from
         the bounded slab pool. get_frame_set() blocks once the pool is
@@ -234,12 +243,16 @@ class RunFakeXEngineHelper:
         it pushes a None sentinel so a sender blocked on ready.get() wakes up.
         """
         try:
+            produced = 0
             while not stop_event.is_set():
+                if max_sets is not None and produced >= max_sets:
+                    break
                 # Blocks here when the slab pool is full (backpressure);
                 # allocator.stop() unblocks it with an exception on shutdown.
                 fset = allocator.get_frame_set(consumer_id=0)
                 fxe.randomize_frames(fset)   # GIL released during the fill
                 ready.put(fset)              # unbounded; pool bounds liveness
+                produced += 1
         except Exception as e:
             # allocator/fxe stopped (get_frame_set / randomize_frames raise
             # "called on stopped instance") or a genuine error. Stash it so the
@@ -267,20 +280,30 @@ class RunFakeXEngineHelper:
         frame from the provider. It deliberately keeps no reference to a frame
         beyond the chunk it is currently sending -- the C++ command queue holds
         the frame alive until its minichunks are processed, after which the
-        slabs return to the pool. Runs until fxe.stop() is called (from
-        anywhere), at which point the next wait_until_processed() /
-        enqueue_send_minichunk() raises RuntimeError, or the provider's None
-        sentinel ends the loop.
+        slabs return to the pool.
+
+        send-junk mode (self.send_junk): only the first chunk (chunk 0) carries
+        real randomized data via SEND_MINICHUNK; every subsequent chunk is sent
+        as all-zero SEND_JUNK (no frame set needed). The provider therefore
+        produces exactly one frame, and the loop only pulls from 'ready' at the
+        chunk-0 boundary.
+
+        Runs until fxe.stop() is called (from anywhere), at which point the next
+        wait_until_processed() / enqueue_send_minichunk() raises RuntimeError,
+        or the provider's None sentinel ends the loop.
         """
         nworkers = fxe.nworkers
         mpc = fxe.minichunks_per_chunk
+        send_junk = self.send_junk
 
         ready = queue.Queue()                  # provider -> sender handoff
         stop_event = threading.Event()
         exc_holder = []                        # provider's exception, if any
+        # In send-junk mode we only need the first chunk randomized.
+        max_sets = 1 if send_junk else None
         provider = threading.Thread(
             target=self._frame_provider_main,
-            args=(fxe, allocator, ready, stop_event, exc_holder),
+            args=(fxe, allocator, ready, stop_event, exc_holder, max_sets),
             daemon=True,
         )
         # Inherits this (already pinned) thread's vcpu affinity.
@@ -290,10 +313,12 @@ class RunFakeXEngineHelper:
             fset = None
             n = 0
             while True:
-                # At each chunk boundary, pull the next pre-randomized frame
-                # (time_chunk_index == n // mpc). A None sentinel means the
-                # provider has stopped -> end the loop.
-                if (n % mpc) == 0:
+                chunk = n // mpc
+                # Pull the next pre-randomized frame at chunk boundaries. In
+                # send-junk mode only chunk 0 carries real data, so we pull
+                # (and block on the provider) only there. A None sentinel means
+                # the provider has stopped -> end the loop.
+                if (n % mpc) == 0 and not (send_junk and chunk >= 1):
                     fset = ready.get()
                     if fset is None:
                         # Provider exited. Re-raise a genuine provider error;
@@ -309,13 +334,18 @@ class RunFakeXEngineHelper:
                 for w in range(nworkers):
                     fxe.wait_until_processed(w, n - 2)
 
-                # Send minichunk n on every worker. All workers reference the
-                # same chunk fset (each gathers its own freq-channel subset).
-                # The C++ command queue holds a reference to fset until its
-                # minichunks are processed, so it stays alive across the chunk
-                # even after the provider's reference is gone.
+                # Send minichunk n on every worker. For SEND_MINICHUNK all
+                # workers reference the same chunk fset (each gathers its own
+                # freq-channel subset); the C++ command queue holds a reference
+                # to fset until its minichunks are processed, so it stays alive
+                # across the chunk even after the provider's reference is gone.
+                # In send-junk mode, chunks >= 1 send all-zero junk instead.
+                use_junk = send_junk and (chunk >= 1)
                 for w in range(nworkers):
-                    fxe.enqueue_send_minichunk(w, n, fset)
+                    if use_junk:
+                        fxe.enqueue_send_junk(w, n)
+                    else:
+                        fxe.enqueue_send_minichunk(w, n, fset)
                 n += 1
         finally:
             # Stop the provider. allocator.stop() is what unblocks a provider
@@ -374,7 +404,7 @@ class RunFakeXEngineHelper:
                 pass
 
 
-def run_fake_xengine(rpc_addrs, nworkers=128, paced=True):
+def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -392,6 +422,11 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True):
             thread that subscribes to MonitorRingbuf and gates each
             worker's sends to stay <=5 chunks ahead of server-side
             rb_processed. If False, the sender runs unthrottled.
+        send_junk: if True, only the first chunk is randomized and sent as
+            real data (SEND_MINICHUNK); every subsequent chunk is sent as
+            all-zero junk (SEND_JUNK), skipping per-chunk randomization. If
+            False (default), every chunk is randomized.
     """
-    helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced)
+    helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced,
+                                  send_junk=send_junk)
     helper.run()
