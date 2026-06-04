@@ -117,6 +117,17 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // num_consumers=0). Must be a loopback address (CUDA IPC requires the
         // grouper to be on the same physical GPU); the constructor enforces this.
         std::string grouper_ip_addr;
+
+        // If true, the processing thread skips ALL GPU work: data is not even
+        // copied host->device, and no dequantization / dedispersion kernels are
+        // launched. The receive/assemble/ringbuf/reaper pipeline still runs in
+        // full (the processing thread still consumes frames from the ring buffer
+        // so rb_processed advances normally). The dedisperser is still fully
+        // constructed and allocated -- it is just never fed. This is an
+        // infrequently used corner case (e.g. exercising the network/assembly
+        // path with no GPU). --no-dedispersion implies --no-grouper, so
+        // grouper_ip_addr must be empty when this is set (constructor asserts).
+        bool no_dedispersion = false;
     };
 
     // Factory method (constructor is private).

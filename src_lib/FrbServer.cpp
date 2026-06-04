@@ -159,6 +159,14 @@ FrbServer::FrbServer(const Params &p) : params(p)
         throw runtime_error(ss.str());
     }
 
+    // --no-dedispersion implies --no-grouper: the processing thread skips all
+    // GPU work (so the dedisperser produces no output), leaving nothing for a
+    // grouper to consume. run_server.py enforces this by forcing an empty
+    // grouper_ip_addr; assert it here to catch direct Python callers / future
+    // mis-wiring.
+    if (params.no_dedispersion)
+        xassert(params.grouper_ip_addr.empty());
+
     if (!params.grouper_ip_addr.empty()) {
         // CUDA IPC requires producer + consumer on the same physical GPU, so the
         // grouper must be local. Enforce a loopback address.
@@ -820,11 +828,28 @@ void FrbServer::_processing_thread_main()
         cudaStream_t compute_stream = dedisperser_p->stream_pool->compute_streams.at(istream);
         cudaStream_t h2g_stream     = dedisperser_p->stream_pool->high_priority_h2g_stream;
 
-        // Before queueing the h2g copies, wait on its output buffer,
-        // by waiting on the dequant kernel with (seq_id - nstreams).
-        evrb_dq_p->wait(h2g_stream, seq_id - S);
+        // --no-dedispersion threads through this loop as a set of skips rather
+        // than a separate path: we run the SAME frame-consuming inner loop (so
+        // rb_curr advances in lockstep with rb_assembled, and frame_finalizing_thread
+        // can keep advancing rb_processed), but skip every GPU step -- the evrb_dq
+        // wait, the per-beam host->device copies, and the dequant + dedispersion
+        // launches. The dedisperser is still fully built and allocated above; under
+        // --no-dedispersion it is simply never fed (and --no-dedispersion implies
+        // --no-grouper, so there is no output consumer to starve). The key reason
+        // we keep the inner loop is that evrb_h2g must be recorded only AFTER all B
+        // frames are assembled -- never ahead of assembly -- or frame_finalizing_thread
+        // would advance rb_processed past rb_assembled and trip its invariant (and
+        // stall the reaper / trip the worker's slot-reuse assert).
 
-        // Queue the h2g copies.
+        // Before queueing the h2g copies, wait on its output buffer, by waiting on
+        // the dequant kernel with (seq_id - nstreams). Skipped under
+        // --no-dedispersion: evrb_dq is never recorded there, so this wait
+        // (blocking=false) would throw once seq_id >= nstreams.
+        if (!params.no_dedispersion)
+            evrb_dq_p->wait(h2g_stream, seq_id - S);
+
+        // Consume B assembled frames and queue their h2g copies (under
+        // --no-dedispersion, consume only -- no copies are queued).
         for (long b = 0; b < B; b++) {
             std::shared_ptr<AssembledFrame> frame;
             {
@@ -848,9 +873,15 @@ void FrbServer::_processing_thread_main()
             // Defensive: the h2g copies use raw pointers + byte counts (no
             // shape validation), so assert the frame matches the dedisperser
             // geometry (nfreq, nt_in). A mismatch would silently corrupt GPU
-            // memory.
+            // memory. (Also runs under --no-dedispersion, as a harmless
+            // frame-geometry sanity check.)
             xassert_eq(frame->nfreq, F);
             xassert_eq(frame->ntime, T);
+
+            // --no-dedispersion: the frame has been consumed (so rb_processed can
+            // advance); skip the actual host->device copy and move to the next beam.
+            if (params.no_dedispersion)
+                continue;
 
             // Per-beam destinations and byte counts.
             Array<void>   raw_dst   = int4_data_gpu     .slice(0, istream).slice(0, b);
@@ -866,13 +897,26 @@ void FrbServer::_processing_thread_main()
             // evrb_h2g fires for this seq_id.
         }
 
-        // After queueing the h2g copies, we produce an h2g event.
+        // After queueing the h2g copies (none under --no-dedispersion, but the
+        // inner loop waited for all B frames to be assembled either way), produce
+        // the h2g event. frame_finalizing_thread consumes it to advance
+        // rb_processed in both modes.
         evrb_h2g_p->record(h2g_stream, seq_id);
 
-        // Next step is to launch the dequantization kernel.
-        // First, we wait on its source buffer (h2g with same seq_id).
+        // Consume the h2g event on compute_stream. In the normal path this gates
+        // the dequantization kernel on its source buffer; under --no-dedispersion
+        // no kernel follows, but the wait is still required as evrb_h2g's SECOND
+        // consumer (nconsumers=2: this wait + frame_finalizing_thread) so its
+        // ring-buffer slots recycle.
         evrb_h2g_p->wait(compute_stream, seq_id);
-        // Second, wait on its destination buffer, by calling GpuDedisperser::acquire_input();
+
+        // --no-dedispersion: dedisperser built but never fed -- skip all remaining
+        // GPU compute (dequant + dedispersion launches, and the evrb_dq event that
+        // gates h2g-scratch reuse, which nothing consumes under --no-dedispersion).
+        if (params.no_dedispersion)
+            continue;
+
+        // Wait on the dequant kernel's destination buffer via GpuDedisperser::acquire_input().
         Array<void> dd_inbuf = dedisperser_p->acquire_input(seq_id, compute_stream);
 
         // Launch the dequantization kernel.

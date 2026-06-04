@@ -1141,6 +1141,13 @@ def parse_run_server(subparsers):
                         help='Disable FrbGrouper RPC even if grouper_ip_addrs '
                              'is set in the config (GpuDedisperser runs with '
                              'num_consumers=0).')
+    parser.add_argument('-D', '--no-dedispersion', action='store_true',
+                        help='Skip ALL GPU work in the processing thread: data '
+                             'is not even copied host->GPU, and no dequantization '
+                             'or dedispersion kernels run. The '
+                             'receive/assemble/ringbuf path still runs in full '
+                             '(the dedisperser is still built, just never fed). '
+                             'Implies --no-grouper. Infrequently used corner case.')
     parser.add_argument('-z', '--zeroed-weights', action='store_true',
                         help='Disable the one-time randomization of the '
                              'dedisperser peak-finding weights at startup '
@@ -1154,7 +1161,8 @@ def run_server_command(args):
     run_server(args.server_config, args.dedispersion_config,
                processing_delay_sec=args.delay,
                no_grouper=args.no_grouper,
-               randomize_weights=not args.zeroed_weights)
+               randomize_weights=not args.zeroed_weights,
+               no_dedispersion=args.no_dedispersion)
 
 
 ######################################  run_toy_grouper command  #####################################

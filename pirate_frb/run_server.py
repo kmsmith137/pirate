@@ -261,13 +261,19 @@ class RunServerHelper:
     """
 
     def __init__(self, server_config_filename, dedispersion_config_filename,
-                 processing_delay_sec=0.0, no_grouper=False, randomize_weights=True):
+                 processing_delay_sec=0.0, no_grouper=False, randomize_weights=True,
+                 no_dedispersion=False):
         self.config = _parse_config(server_config_filename)
         self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
         self.n = self.config['num_servers']
         self.hw = Hardware()
         self.processing_delay_sec = processing_delay_sec
-        self.no_grouper = no_grouper
+        self.no_dedispersion = no_dedispersion
+        # --no-dedispersion implies --no-grouper (no GPU work => no dedispersion
+        # output for a grouper to consume), so fold it into self.no_grouper.
+        # Everything downstream that keys off self.no_grouper (the empty
+        # grouper_ip_addr, the help lines) then respects the implication.
+        self.no_grouper = no_grouper or no_dedispersion
         self.randomize_weights = randomize_weights
         # Populated later by run() -> _prepare_directories / _setup_memory.
         self.nfs_dir = None
@@ -302,6 +308,8 @@ class RunServerHelper:
         print(f"  use_hugepages = {self.config['use_hugepages']}")
         if self.processing_delay_sec > 0.0:
             print(f"  processing_delay_sec = {self.processing_delay_sec}  (artificial per-frame delay)")
+        if self.no_dedispersion:
+            print(f"  no_dedispersion = True  (skip all GPU work; implies --no-grouper)")
 
     def _prepare_directories(self):
         # Resolve NFS dir and create SSD/NFS dirs if needed.
@@ -446,7 +454,8 @@ class RunServerHelper:
                                cuda_device_id=cuda_device_id,
                                processing_delay_sec=self.processing_delay_sec,
                                randomize_weights=self.randomize_weights,
-                               grouper_ip_addr=grouper_ip_addr)
+                               grouper_ip_addr=grouper_ip_addr,
+                               no_dedispersion=self.no_dedispersion)
             # server.start() is NOT called here. We defer all server.start()
             # calls to _build_all_servers's phase 3 so that the async
             # BumpAllocators across all servers can initialize concurrently
@@ -469,7 +478,13 @@ class RunServerHelper:
         print(f"  data_ip_addrs = {self.config['data_ip_addrs'][i]}")
         print(f"  rpc_ip_addr = {self.config['rpc_ip_addrs'][i]}")
         grouper = '' if self.no_grouper else self.config['grouper_ip_addrs'][i]
-        print(f"  grouper_ip_addr = {grouper!r}" + ("  (disabled via --no-grouper)" if self.no_grouper else ""))
+        if self.no_dedispersion:
+            grouper_note = "  (disabled via --no-dedispersion)"
+        elif self.no_grouper:
+            grouper_note = "  (disabled via --no-grouper)"
+        else:
+            grouper_note = ""
+        print(f"  grouper_ip_addr = {grouper!r}{grouper_note}")
         print(f"  ssd_dir = {self.config['ssd_dirs'][i]}")
 
     def _check_mtus_for_server(self, i):
@@ -512,7 +527,8 @@ class RunServerHelper:
 
 
 def run_server(server_config_filename, dedispersion_config_filename,
-               processing_delay_sec=0.0, no_grouper=False, randomize_weights=True):
+               processing_delay_sec=0.0, no_grouper=False, randomize_weights=True,
+               no_dedispersion=False):
     """Main entry point for 'pirate_frb run_server'.
 
     processing_delay_sec (default 0): artificial per-frame delay (seconds)
@@ -526,10 +542,16 @@ def run_server(server_config_filename, dedispersion_config_filename,
     randomize_weights (default True): if True, each FrbServer does a one-time
     randomization of its dedisperser's peak-finding weights at initialization.
     Placeholder until a real variance calculation is implemented.
+
+    no_dedispersion (default False): if True, the processing thread skips ALL
+    GPU work (data is not even copied host->device, and no dequantization /
+    dedispersion kernels run); the receive/assemble/ringbuf/reaper pipeline
+    still runs in full. Infrequently used corner case. Implies no_grouper.
     """
     helper = RunServerHelper(server_config_filename, dedispersion_config_filename,
                              processing_delay_sec=processing_delay_sec,
                              no_grouper=no_grouper,
-                             randomize_weights=randomize_weights)
+                             randomize_weights=randomize_weights,
+                             no_dedispersion=no_dedispersion)
     helper.run()
 

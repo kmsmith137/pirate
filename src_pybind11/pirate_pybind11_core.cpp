@@ -1040,7 +1040,8 @@ void register_core_bindings(pybind11::module &m)
                            int cuda_device_id,
                            double processing_delay_sec,
                            bool randomize_weights,
-                           const std::string &grouper_ip_addr) {
+                           const std::string &grouper_ip_addr,
+                           bool no_dedispersion) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -1054,6 +1055,7 @@ void register_core_bindings(pybind11::module &m)
                params.processing_delay_sec = processing_delay_sec;
                params.randomize_weights = randomize_weights;
                params.grouper_ip_addr = grouper_ip_addr;
+               params.no_dedispersion = no_dedispersion;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
@@ -1066,6 +1068,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("processing_delay_sec") = 0.0,
                py::arg("randomize_weights") = true,
                py::arg("grouper_ip_addr") = "",
+               py::arg("no_dedispersion") = false,
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -1098,7 +1101,13 @@ void register_core_bindings(pybind11::module &m)
                "    grouper_ip_addr (default ''): ip:port of the FrbGrouper to\n"
                "        feed (the FrbServer is the gRPC client). Empty => disabled\n"
                "        (GpuDedisperser built with num_consumers=0). Must be a\n"
-               "        loopback address (CUDA IPC requires the same node/GPU).")
+               "        loopback address (CUDA IPC requires the same node/GPU).\n"
+               "    no_dedispersion (default False): if True, the processing thread\n"
+               "        skips ALL GPU work -- data is not even copied host->device,\n"
+               "        and no dequantization/dedispersion kernels run. The\n"
+               "        receive/assemble/ringbuf/reaper pipeline still runs in full.\n"
+               "        Implies no grouper, so grouper_ip_addr must be '' (the\n"
+               "        constructor asserts this).")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"
