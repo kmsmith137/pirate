@@ -109,6 +109,14 @@ class NetworkTester:
         # the real-time eviction races and FLAG_ACK ack-prediction
         # checks that this test was designed for.
         paced = (random.random() < 0.2)
+        # Exercise the FrbServer's --no-dedispersion processing path 80% of
+        # the time. In this mode the processing thread skips ALL GPU work
+        # (no host->device copies, no dequant/dedispersion kernels), but
+        # still consumes each assembled frame so rb_processed advances, and
+        # the receive/assemble/ringbuf/reaper/file-writing pipeline -- which
+        # is what this test actually verifies -- runs in full. Implies no
+        # grouper, which holds trivially since the test never sets one.
+        no_dedispersion = (random.random() < 0.8)
         return dict(
             config                 = config,
             num_receivers          = num_receivers,
@@ -123,6 +131,7 @@ class NetworkTester:
             rpc_port               = 6000,
             ringbuf_nchunks        = random.randint(50, 100),
             paced                  = paced,
+            no_dedispersion        = no_dedispersion,
         )
 
     def __init__(self):
@@ -250,7 +259,8 @@ class NetworkTester:
                                 min_data_mtu=1500,
                                 host_allocator=host_alloc,
                                 gpu_allocator=gpu_alloc,
-                                cuda_device_id=0)
+                                cuda_device_id=0,
+                                no_dedispersion=p['no_dedispersion'])
         self.server.start()
 
     def _build_client(self):
