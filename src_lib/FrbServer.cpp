@@ -1133,12 +1133,24 @@ void FrbServer::_grouper_send_thread_main()
 {
     CUDA_CALL(cudaSetDevice(params.cuda_device_id));   // cudaIpcGetMemHandle, acquire_output(sync)
 
-    // (1) Build the gRPC client WITHOUT the lock (CreateChannel/NewStub allocate
-    // gRPC internals + may start name resolution -- too heavy to hold the hot
-    // FrbServer::mutex across), then publish it under the lock.
+    // (1) Build the gRPC client WITHOUT the lock (CreateCustomChannel/NewStub
+    // allocate gRPC internals + may start name resolution -- too heavy to hold
+    // the hot FrbServer::mutex across), then publish it under the lock.
+    //
+    // Cap the channel's connection-reconnect backoff at 1s. By default gRPC
+    // backs off exponentially between TCP connect attempts (1s, 1.6s, ... up to
+    // 120s), so if the grouper isn't up yet the producer can be slow to notice
+    // it appear -- the wait loop below polls once/sec, but GetState(
+    // try_to_connect=true) does NOT shorten an in-progress backoff. With
+    // initial == max == 1s, the channel retries ~once per second.
+    grpc::ChannelArguments chan_args;
+    chan_args.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, 1000);
+    chan_args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, 1000);
+
     auto gc = make_unique<GrouperClient>();
-    gc->channel = grpc::CreateChannel(params.grouper_ip_addr,
-                                      grpc::InsecureChannelCredentials());
+    gc->channel = grpc::CreateCustomChannel(params.grouper_ip_addr,
+                                            grpc::InsecureChannelCredentials(),
+                                            chan_args);
     gc->stub    = fg::FrbGrouper::NewStub(gc->channel);
     gc->context = make_unique<grpc::ClientContext>();
     {
