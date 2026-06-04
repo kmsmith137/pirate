@@ -77,27 +77,39 @@ struct GpuDedisperser
         //
         // Currently the same for all consumers, but could be made per-consumer.
         bool synchronous = true;
+
+        // This optional member is only used to set Outputs::ichunk_fpga_based
+        // (to Outputs::ichunk_zero-based + initial_chunk).
+        long initial_chunk = 0;
     };
 
     
-    // Dedisperserion output buffers (GpuDedisperser::output_ringbuf).
-    // GpuDedisperser::acquire_output() returns a per-batch slice.
+    // struct Outputs: dedisperserion output buffers, for one time chunk and
+    // multiple beams. Used in two contexts:
     //
-    // out_max:    length ntrees, inner Array shape (nbeams, ndm_out[i], nt_out[i]),
-    //             dtype = this->dtype (= config.dtype), t = plan->trees.at(i).
-    // out_argmax: length ntrees, inner Array shape identical to out_max, dtype = uint.
+    //  - GpuDedisperser::output_ringbuf is a ring buffer (shared between
+    //    dedisperser and grouper), containing outputs for many beams.
     //
-    // Axis 0 ('nbeams') is a beam count whose value is context-dependent:
-    //   - GpuDedisperser::output_ringbuf: nbeams = nbatches_out * beams_per_batch.
-    //   - Slice returned by acquire_output(): nbeams = beams_per_batch.
+    //  - GpuDedisperser::acquire_output() returns outputs for one
+    //    batch of beams.
 
     struct Outputs {
-        ksgpu::Dtype dtype;            // dtype of out_max (out_argmax is always uint)
-        long nbeams = 0;               // length of axis 0 (see above)
+        // Note that this is the dtype of the 'out_max' array only (out_argmax is always uint).
+        ksgpu::Dtype dtype;
+        
+        // Beam count, whose value is context-dependent:
+        //   - GpuDedisperser::output_ringbuf: nbeams = nbatches_out * beams_per_batch.
+        //   - Slice returned by acquire_output(): nbeams = beams_per_batch.
+        long nbeams = 0;
+
+        long ichunk_zero_based = 0;    // chunk index, relative to first dedisperser output
+        long ichunk_fpga_based = 0;    // chunk index, relative to fpga seq 0
+        long ibeam = 0;                // beam index (not beam_id!!) of first beam in Outpus
+        
         std::vector<long> ndm_out;     // length ntrees
         std::vector<long> nt_out;      // length ntrees
 
-        // "Outer" length ntrees
+        // "Outer" length ntrees.
         // "Inner" shape (nbeams, ndm_out[i], nt_out[i]).
         
         std::vector<ksgpu::Array<void>> out_max;     // config.dtype
