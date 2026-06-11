@@ -41,6 +41,12 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     print(grouper.dedispersion_plan_yaml_string)
     print('-------------------------------------------------')
 
+    # this is beams_per_gpu
+    nbeams = grouper.total_beams
+    print('Nbeams:', nbeams)
+    # time_samples_per_chunk
+    #grouper.nt_in
+
     my_config = dict(the_answer=42)
     my_config_yaml = yaml.dump(my_config)
 
@@ -57,21 +63,78 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     for ichunk in itertools.count():            # loop over time chunks
         running_max = cp.full((1,), -cp.inf, dtype=cp.float32)
 
+        per_beam_max = cp.full((nbeams,), -cp.inf, dtype=cp.float32)
+
+        beam_index = 0
         for ibatch in range(grouper.nbatches):  # loop over beam batches
             seq_id = ichunk * grouper.nbatches + ibatch
             with grouper.get_output(seq_id) as outputs:
+                #print('Chunk', ichunk, 'batch', ibatch)
                 # outputs.out_max: list (length ntrees) of cupy arrays (views
                 # into the IPC-mapped memory via DLPack). get_output's __exit__
                 # synchronizes the current stream before releasing the batch.
+
+                # outputs.out_argmax (uint32)
+                # outputs.out_max (float16/float32)
+                #   each out_max has shape (beam_per_batch, DM, T)
+
+                # out_max is a list of ntrees ksgpu.Array objects.
                 for tree_out in outputs.out_max:        # loop over trees
+                    #print('Tree_out:', type(tree_out), tree_out.shape)
+                    (nbeam, ndm, nt) = tree_out.shape
                     cp.maximum(running_max, tree_out.max(), out=running_max)
+                    #print('beam-wise max:', tree_out.max(axis=(1,2)).get())
+                    cp.maximum(per_beam_max[beam_index:beam_index+nbeam],
+                               tree_out.max(axis=(1,2)),
+                               out=per_beam_max[beam_index:beam_index+nbeam])
+                beam_index += nbeam
 
         # float() does a D2H copy (+ sync); one print per chunk.
         print(f'{grouper_addr}: ichunk={ichunk}: '
               f'global out_max = {float(running_max[0])}', flush=True)
 
+        bmax = per_beam_max.get()
+        print(f'{grouper_addr}: ichunk={ichunk}: '
+              f'per-beam max =', '[ ' + ', '.join(['%.1f' % b for b in bmax]) + ' ]',
+              flush=True)
+        
         if delay > 0:
             time.sleep(delay)
+
+                    
+'''
+dedisp meta:
+beams_per_gpu: 16
+beams_per_batch: 2
+
+Chunk 180 batch 0
+Tree_out: <class 'cupy.ndarray'> (2, 128, 16)
+Tree_out: <class 'cupy.ndarray'> (2, 64, 8)
+Tree_out: <class 'cupy.ndarray'> (2, 64, 8)
+Tree_out: <class 'cupy.ndarray'> (2, 32, 4)
+Tree_out: <class 'cupy.ndarray'> (2, 64, 4)
+Tree_out: <class 'cupy.ndarray'> (2, 64, 4)
+... batch 7
+
+Dedisp plan:
+
+trees:
+- tree_index: 0
+  ndm_out: 128
+  nt_out: 16
+  dm_min: 0
+  dm_max: 52.570234149182113
+  trigger_frequency: 400
+  ds_level: 0
+  delta_et: 0
+  max_width: 16
+  dm_downsampling: 8
+  time_downsampling: 16
+  wt_dm_downsampling: 64
+  wt_time_downsampling: 64
+  frequency_subband_counts: [0, 3, 2, 1]
+        '''
+
 
 
 def run_chord_grouper(grouper_addr, sifter_addr, delay=0.0):
