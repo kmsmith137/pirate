@@ -1185,6 +1185,26 @@ def run_toy_grouper_command(args):
     run_toy_groupers(args.grouper_addrs, delay=args.delay)
 
 
+######################################  run_chord_grouper command  #####################################
+
+
+def parse_run_chord_grouper(subparsers):
+    help_text = "CHORD FrbGrouper consumer(s)"
+    parser = subparsers.add_parser("run_chord_grouper", help=help_text, description=help_text)
+    parser.add_argument('grouper_addrs', nargs='+', metavar='grouper_addr',
+                        help="FrbGrouper listen address(es) 'ip:port' (e.g. 127.0.0.1:7000). "
+                             "With more than one, each grouper runs in its own child "
+                             "subprocess; if any child exits, the parent and all siblings exit.")
+    parser.add_argument('-s', '--sifter', type=str, required=True,
+                        help="IP:port address of the CHORD FRB Sifter to send to.")
+    parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
+                        help="Artificial per-chunk delay (seconds) inserted into the grouper "
+                             "loop, e.g. -d 0.001 for a 1 ms delay (default: 0, no delay).")
+
+def run_chord_grouper_command(args):
+    from .run_chord_grouper import run_chord_groupers
+    run_chord_groupers(args.grouper_addrs, args.sifter, delay=args.delay)
+
 ######################################  run_fake_xengine command  #####################################
 
 
@@ -1241,6 +1261,7 @@ def get_parser():
 
     parse_run_server(subparsers)
     parse_run_toy_grouper(subparsers)
+    parse_run_chord_grouper(subparsers)
     parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
     parse_rpc_write(subparsers)
@@ -1312,6 +1333,8 @@ def main():
         run_server_command(args)
     elif args.command == "run_toy_grouper":
         run_toy_grouper_command(args)
+    elif args.command == "run_chord_grouper":
+        run_chord_grouper_command(args)
     elif args.command == "run_fake_xengine":
         run_fake_xengine_command(args)
     else:
