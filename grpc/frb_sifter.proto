@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+service FrbSifter {
+
+  // First call - report my configuration.
+  // Returns true if good, false otherwise.
+  rpc CheckConfiguration (ConfigMessage) returns (ConfigReply) {}
+
+  // ?? For injections only
+  //rpc NewBeamSet (BeamSetUpdateMessage) returns (BeamSetUpdateReply) {}
+
+  // Report events from a given time chunk.
+  rpc FrbEvents (FrbEventsMessage) returns (FrbEventsReply) {}
+
+  // Report the max SNR seen per beam for a given time period
+  // rpc FrbBeamSNR (FrbBeamSNRMessage) returns (FrbBeamSNRReply) {}
+
+}
+
+message ConfigMessage {
+  string pirate_yaml = 2;
+  string xengine_yaml = 3;
+  string dedispersion_plan_yaml = 4;
+  string grouper_yaml = 5;
+}
+
+message ConfigReply {
+  bool ok = 1;
+}
+
+/*
+* message BeamSetUpdateMessage {
+*   int32 beam_set_id = 1;
+*   repeated int32 beam = 2;
+* }
+* message BeamSetUpdateReply {
+*   bool = 1;
+* }
+*/
+
+message FrbEvent {
+  int32 beam_id = 1;
+  int64 fpga_timestamp = 2;
+  float dm = 3;
+  float dm_error = 4;
+  float snr = 5;
+  float rfi_prob = 6;
+}
+
+message FrbEventsMessage {
+  bool has_injections = 1;
+  int32 beam_set_id = 2;
+  int64 chunk_fpga_count = 3;
+  repeated FrbEvent events = 4;
+
+  // Course-grained triggers (per beam; optional)
+  // Set the fpga-counts values to zero for no coarse-grained triggers
+  int64 coarsegrain_start_fpga_count = 5;
+  int64 coarsegrain_end_fpga_count = 6;
+  // A (large) array of SNRs, the same length as the beams being handled by this beam_set_id.
+  repeated float coarsegrain_snr = 7;
+}
+
+message FrbEventsReply {
+  bool ok = 1;
+  string message = 2;
+}
+
+//message FrbBeamSNRMessage {
+//  int32 beam_set_id = 1;
+//  int64 start_fpga_count = 2;
+//  int64 end_fpga_count = 3;
+//  // A (large) array of SNRs, the same length as the beams being handled by this beam_set_id.
+//  repeated float snr = 4;
+//}
+//
+//message FrbBeamSNRReply {
+//  bool ok = 1;
+//  string message = 2;
+//}
+
