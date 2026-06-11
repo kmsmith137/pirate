@@ -112,6 +112,7 @@ NVCC_CFLAGS += -I/home/dstn/nvidia/mathdx/26.03/include
 
 GRPC_PROTO := grpc/frb_search.proto
 GRPC_PROTO += grpc/frb_grouper.proto
+GRPC_PROTO += grpc/frb_sifter.proto
 
 # C++ generated files (protobuf message classes + gRPC service stubs)
 GRPC_HFILES = $(GRPC_PROTO:%.proto=%.pb.h) 
