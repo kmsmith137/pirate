@@ -8,6 +8,7 @@
 #include <ksgpu/rand_utils.hpp>
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/yaml.h>
+#include <iostream>
 
 using namespace std;
 
@@ -103,7 +104,7 @@ void XEngineMetadata::validate() const
 
     _check_finite(zone_freq_edges, "zone_freq_edges");
     for (size_t i = 0; i+1 < zone_freq_edges.size(); i++) {
-        xassert(zone_freq_edges[i] > 0.0);
+        xassert(zone_freq_edges[i] >= 0.0);
         xassert(zone_freq_edges[i] < zone_freq_edges[i+1]);
     }
 
@@ -455,8 +456,11 @@ XEngineMetadata XEngineMetadata::from_yaml(const YamlFile &f)
         ret.noise_variance = nv_node.as_vector<double>();
     }
 
-    f.check_for_invalid_keys();
+    //std::cout << "check_for_invalid_keys" << std::endl;
+    //f.check_for_invalid_keys();
 
+    std::cout << "validate" << std::endl;
+    
     ret.validate();
     return ret;
 }

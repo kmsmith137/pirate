@@ -73,21 +73,28 @@ def run_toy_grouper(grouper_addr, delay=0.0):
                 raise
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.
 
-
 def run_toy_groupers(grouper_addrs, delay=0.0):
-    """Run one or more toy grouper consumers.
-
-    With a single address, runs in this process. With more than one, runs each
-    grouper in its own child subprocess (re-invoking
-    'pirate_frb run_toy_grouper <addr>'); if ANY child exits -- for any reason --
-    the parent terminates the remaining children and exits. This makes the group
-    fail-fast: one grouper going down brings the whole set down.
-
+    """
     'delay' (seconds) is forwarded to each grouper as an artificial per-chunk
     slowdown (see run_toy_grouper).
     """
+    run_groupers(run_toy_grouper, grouper_addrs, (), dict(delay=delay),
+                 [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper',
+                 '--delay', str(delay)])
+
+def run_groupers(grouper_func, grouper_addrs, args, kwargs, pycommand):
+    """Run one or more grouper consumers.
+
+    With a single address, runs "grouper_func" in this process. With more than one, runs each
+    grouper in its own child subprocess (re-invoking
+    'pycommand' with the <addr> appended, eg, 'pirate_frb run_toy_grouper <addr>');
+    if ANY child exits -- for any reason --
+    the parent terminates the remaining children and exits. This makes the group
+    fail-fast: one grouper going down brings the whole set down.
+
+    """
     if len(grouper_addrs) == 1:
-        run_toy_grouper(grouper_addrs[0], delay)
+        grouper_func(grouper_addrs[0], *args, **kwargs)
         return
 
     procs = []   # list of (addr, Popen)
@@ -98,12 +105,10 @@ def run_toy_groupers(grouper_addrs, delay=0.0):
             # grouper in-process (len==1 branch above). A fresh process (not
             # fork) avoids CUDA-after-fork hazards. stdout is inherited, so each
             # child's messages (which carry its own addr) appear interleaved.
-            procs.append((addr, subprocess.Popen(
-                [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper',
-                 '--delay', str(delay), addr])))
+            procs.append((addr, subprocess.Popen(pycommand + [addr])))
         rc = _monitor_children(procs)
     except KeyboardInterrupt:
-        print('run_toy_grouper: interrupted; stopping all groupers', flush=True)
+        print('run_groupers: interrupted; stopping all groupers', flush=True)
     finally:
         _terminate_children(procs)
 

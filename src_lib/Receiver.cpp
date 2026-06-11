@@ -300,6 +300,7 @@ void Receiver::_listener_main()
 
         lock.lock();
         if (is_stopped) return;
+        std::cout << "New connection" << std::endl;
         reader_peer_queue.push_back(peer_ptr);
         lock.unlock();
 
@@ -345,6 +346,7 @@ void Receiver::_reader_main()
                 break;
 
             // No active peers and no pending peers -- wait for listener thread.
+            std::cout << "Waiting for new connection" << std::endl;
             cv.wait(lock);
         }
 
@@ -399,21 +401,30 @@ void Receiver::_reader_main()
             // Connection closed by peer (via epoll flags).
             if ((ev_flags & EPOLLRDHUP) || (ev_flags & EPOLLHUP) || (ev_flags & EPOLLERR)) {
                 peers_to_remove.push_back(raw_peer);
+                std::cout << "Connection closed by peer" << std::endl;
                 continue;
             }
 
             // Data available to read.
             if (ev_flags & EPOLLIN) {
                 // Note: lack of "else if" is intentional -- can "fall through" from one state to the next.
-                if (sh_peer->state == Peer::State::ReadIni)
+                if (sh_peer->state == Peer::State::ReadIni) {
+                    std::cout << "Reading header..." << std::endl;
                     this->_read_ini(sh_peer);
-                if (sh_peer->state == Peer::State::ReadYaml)
+                }
+                if (sh_peer->state == Peer::State::ReadYaml) {
+                    std::cout << "Reading yaml..." << std::endl;
                     this->_read_yaml(sh_peer);
-                if (sh_peer->state == Peer::State::ReadData)
+                }
+                if (sh_peer->state == Peer::State::ReadData) {
+                    std::cout << "Reading data..." << std::endl;
                     this->_read_data(sh_peer);
+                }
 
-                if (sh_peer->socket.eof)
+                if (sh_peer->socket.eof) {
+                    std::cout << "End-of-stream from peer" << std::endl;
                     peers_to_remove.push_back(raw_peer);
+                }
             }
         }
 
@@ -485,6 +496,8 @@ void Receiver::_read_ini(const shared_ptr<Peer> &peer)
     xassert_gt(yaml_len, 0);
     xassert_le(yaml_len, 1024*1024);
 
+    std::cout << "Expecting YAML string of length " << yaml_len << std::endl;
+
     peer->yaml_string_len = yaml_len;
     peer->yaml_buf = Array<char> ({yaml_len+1}, af_uhost);
     peer->yaml_buf.data[yaml_len] = 0;
@@ -515,10 +528,13 @@ void Receiver::_read_yaml(const shared_ptr<Peer> &peer)
     // Verify null terminator.
     if (yaml_str[peer->yaml_string_len - 1] != '\0')
         throw runtime_error("Receiver::Peer: YAML string is not null-terminated");
-    
+
+    std::cout << "Yaml string length: " << peer->yaml_string_len << std::endl;
     // Parse YAML string into XEngineMetadata.
     peer->metadata = XEngineMetadata::from_yaml_string(std::string(yaml_str));
+    std::cout << "Created metadata" << std::endl;
     peer->metadata.validate();
+    std::cout << "Yaml validated" << std::endl;
 
     long nfreq = peer->metadata.freq_channels.size();
     long nbeams = peer->metadata.get_nbeams();
