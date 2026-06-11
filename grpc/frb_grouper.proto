@@ -85,8 +85,8 @@ message ProducerMessage {
     Handshake handshake = 1;
 
     // "Batch 'produced_seq_id' has been written into its ring slot and is
-    // ready to read." Sent after the producer has launched the kernels that
-    // fill the batch. A monotonically increasing batch sequence id: the ring
+    // ready to read." Sent after the producer has filled the batch.
+    // A monotonically increasing batch sequence id: the ring
     // slot is (produced_seq_id % num_batch_slots) and the beam range is
     // derived as described in Handshake.beams_per_batch. (The producer defines
     // the exact seq_id -> (ichunk, ibatch) mapping; the consumer only needs
