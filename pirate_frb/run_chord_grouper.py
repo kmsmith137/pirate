@@ -20,6 +20,7 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     lags.
     """
     import cupy as cp
+    import numpy as np
 
     from .rpc.grpc.frb_sifter_pb2_grpc import FrbSifterStub
     from .rpc.grpc.frb_sifter_pb2 import ConfigMessage, FrbEventsMessage, FrbEvent
@@ -49,8 +50,6 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     # this is beams_per_gpu
     nbeams = grouper.total_beams
     print('Nbeams:', nbeams)
-    # time_samples_per_chunk
-    #grouper.nt_in
 
     xengine = yaml.load(grouper.xengine_metadata_yaml_string, Loader=Loader)
     beamset = xengine['beamset']
@@ -80,11 +79,19 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     r1 = sifter.CheckConfiguration(msg)
     print('Got Sifter result:', r1.ok)
 
+    # How often to send the coarse-grained beam SNRs to the Sifter, in seconds
+    beam_snr_period = 2.0
+    # convert to number of chunks (otherwise, we might include a varying number of
+    # chunks, and then the S/N statistics will be different)
+    beam_snr_chunks = int(np.round(beam_snr_period / (fpga_per_chunk * nano_per_fpga * 1e-9)))
+
     for ichunk in itertools.count():            # loop over time chunks
         running_max = cp.full((1,), -cp.inf, dtype=cp.float32)
 
-        per_beam_max = cp.full((nbeams,), -cp.inf, dtype=cp.float32)
+        if ichunk % beam_snr_chunks == 0:
+            per_beam_max = cp.full((nbeams,), -cp.inf, dtype=cp.float32)
 
+        # we're maybe supposed to use outputs.ibeam instead?
         beam_index = 0
         for ibatch in range(grouper.nbatches):  # loop over beam batches
             seq_id = ichunk * grouper.nbatches + ibatch
@@ -118,6 +125,9 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
                     #                                     1e-9 * (unix_time_nano_end % nano))
                     # print('chunk:', date_start, 'to', date_end)
 
+                    if ichunk % beam_snr_chunks == 0:
+                        beam_fpga_start = fpga_chunk_start
+
                 # out_max is a list of ntrees ksgpu.Array objects.
                 for tree_out in outputs.out_max:        # loop over trees
                     #print('Tree_out:', type(tree_out), tree_out.shape)
@@ -138,17 +148,20 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
               f'per-beam max =', '[ ' + ', '.join(['%.1f' % b for b in bmax]) + ' ]',
               flush=True)
 
-        # Send to Sifter
-        # (we could coarse-grain the SNR values over more than one chunk...)
-        msg = FrbEventsMessage(has_injections=0,
-                               beam_set_id=beamset,
-                               chunk_fpga_count=fpga_chunk_start,
-                               events=[],
-                               coarsegrain_start_fpga_count=fpga_chunk_start,
-                               coarsegrain_end_fpga_count=fpga_chunk_end,
-                               coarsegrain_snr=bmax)
-        reply = sifter.FrbEvents(msg)
-        print('Got Sifter result:', reply.ok, 'message', reply.message)
+        if (ichunk+1) % beam_snr_chunks == 0:
+            beam_fpga_end = fpga_chunk_end
+
+            # Send to Sifter
+            # (we could coarse-grain the SNR values over more than one chunk...)
+            msg = FrbEventsMessage(has_injections=0,
+                                   beam_set_id=beamset,
+                                   chunk_fpga_count=fpga_chunk_start,
+                                   events=[],
+                                   coarsegrain_start_fpga_count=beam_fpga_start,
+                                   coarsegrain_end_fpga_count=beam_fpga_end,
+                                   coarsegrain_snr=bmax)
+            reply = sifter.FrbEvents(msg)
+            print('Got Sifter result:', reply.ok, 'message', reply.message)
 
         if delay > 0:
             time.sleep(delay)
