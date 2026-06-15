@@ -152,7 +152,6 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
             beam_fpga_end = fpga_chunk_end
 
             # Send to Sifter
-            # (we could coarse-grain the SNR values over more than one chunk...)
             msg = FrbEventsMessage(has_injections=0,
                                    beam_set_id=beamset,
                                    chunk_fpga_count=fpga_chunk_start,

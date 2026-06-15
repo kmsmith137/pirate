@@ -23,7 +23,8 @@ class RunFakeXEngineHelper:
     spawn controllers; wait for Ctrl-C; cleanup).
     """
 
-    def __init__(self, rpc_addrs, nworkers=128, paced=True, send_junk=False):
+    def __init__(self, rpc_addrs, nworkers=128, paced=True, send_junk=False,
+                 now=False):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -53,6 +54,7 @@ class RunFakeXEngineHelper:
         self.controllers = []     # parallel (Phase 2 fills this)
         self.exc_list = []        # list[(rpc_addr, BaseException)]
         self.exc_lock = threading.Lock()
+        self.now = now
 
     def run(self):
         """Top-level lifecycle: Phase 1 build, Phase 2 spawn, wait, cleanup.
@@ -99,6 +101,10 @@ class RunFakeXEngineHelper:
             beam_ids,
             cfg.fake_time_sample_ms,
         )
+        if self.now:
+            from datetime import datetime
+            now = datetime.utcnow()
+            xmd.unix_ns_at_seq_0 = int(now.timestamp() * 1e9)
 
         self._print_receiver_details(rpc_addr, cfg, xmd)
         vcpu_list = self._verify_nics_and_mtu(rpc_addr, cfg)
@@ -404,7 +410,7 @@ class RunFakeXEngineHelper:
                 pass
 
 
-def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False):
+def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False, now=False):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -428,5 +434,5 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False):
             False (default), every chunk is randomized.
     """
     helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced,
-                                  send_junk=send_junk)
+                                  send_junk=send_junk, now=now)
     helper.run()
