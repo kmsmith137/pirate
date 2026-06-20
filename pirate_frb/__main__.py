@@ -662,6 +662,7 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config', action='store_true', help="Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)")
     parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan construction took (non-deterministic line; off by default so the output is reproducible)")
+    parser.add_argument('-z', '--zones', action='store_true', help="Include the per-clag mega_ringbuf host/gpu zone breakdown (independent of -v, which controls comments)")
     parser.add_argument('-s', '--streams', type=int, help="Override config.num_active_batches with specified value")
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
     parser.add_argument('-g', '--max-gpu-clag', type=int, help="Override config.max_gpu_clag with specified value")
@@ -702,7 +703,7 @@ def show_dedisperser(args):
     plan_dt = time.time() - t0
     if args.time:
         print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n')
-    plan_yaml = plan.to_yaml_string(args.verbose)
+    plan_yaml = plan.to_yaml_string(args.verbose, args.zones)
     if args.verbose:
         plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
         plan_yaml = align_inline_comments(plan_yaml)

@@ -45,5 +45,6 @@ the `dedispersion_plan_yaml` wire field; the output is deterministic, which is
 why the checked-in snapshot stays byte-stable across rebuilds. Pass `-c` to also
 print the `DedispersionConfig` (the `dedispersion_config_yaml` wire field), with
 a separator before the plan; `-t` to also print how long plan construction took
-(a non-deterministic line); `-v` for inline comments explaining each field; or
-see `python -m pirate_frb show_dedisperser -h` for the full set of options.
+(a non-deterministic line); `-v` for inline comments explaining each field; `-z`
+for the per-clag `mega_ringbuf` host/gpu zone breakdown; or see
+`python -m pirate_frb show_dedisperser -h` for the full set of options.

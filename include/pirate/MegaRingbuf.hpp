@@ -215,8 +215,10 @@ struct MegaRingbuf {
     // FIXME I might implement something more realistic later.
     static std::shared_ptr<MegaRingbuf> make_trivial(long total_beams, long nquads);
 
-    // Serialize this MegaRingbuf to YAML format
-    void to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose=false) const;
+    // Serialize this MegaRingbuf to YAML format. 'verbose' controls explanatory
+    // comments; 'zones' independently controls whether the per-clag host/gpu zone
+    // breakdown is emitted (vs. just a "total GiB" scalar for host_zones/gpu_zones).
+    void to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose=false, bool zones=false) const;
 
     // ------------------------------------------------------------------------
     //
