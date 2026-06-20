@@ -1,6 +1,17 @@
 # This Makefile will be invoked by the python build system (e.g. via 'pip install'),
 # but you can also build individual targets by invoking 'make' directly.
 #
+# Overrideable variables (either as env variables, or in a gitignored-file 'config.mk')
+# NOTE: Conda users normally need none of these (found via $CONDA_PREFIX)
+#
+#   NVCC_OPT       e.g. '-O0 -g' (default is '-O3')
+#   EXTRA_INCDIRS  e.g. '-I/usr/local/include -I/home/dstn/nvidia/mathdx/26.03/include'
+#   NVCC           e.g. '/usr/local/bin/nvcc' (the nvcc program; its flags are NVCCFLAGS)
+#   NVCCFLAGS      e.g. '-std=c++20 ...' (all of nvcc's flags; usually tweak NVCC_OPT instead)
+#   NVCC_ARCH      e.g. '-gencode arch=compute_90,code=sm_90' (default targets sm_80/86/89)
+#   NVCC_DEPFLAGS  e.g. '-MMD -MP' (the default)
+#   PYTHON         e.g. 'python3.11' (default is 'python3')
+#
 # A note on how to add new source files:
 #
 #   include/pirate/.*hpp            -> add to HFILES below (only needed for pip/pypi)
@@ -67,16 +78,28 @@ docs-serve: docs
 
 ####################################################################################################
 #
-# Variables encoding configuration: PYTHON, NVCC, NVCC_ARCH, NVCC_DEPFLAGS.
+# Variables encoding configuration: PYTHON, NVCC, NVCCFLAGS, NVCC_OPT, NVCC_ARCH,
+# NVCC_DEPFLAGS, EXTRA_INCDIRS. These can be overridden from the environment or a
+# gitignored 'config.mk' (see the overridable-variables list at the top of this file),
+# so you normally don't need to edit the defaults below.
 #
-# FIXME some day I'll define a configure-script mechanism for setting these variables.
-# For now, if you want to change the defaults, just edit the Makfile.
+# FIXME some day I'll replace the env/config.mk mechanism with a proper configure script.
+
+# Optional per-machine overrides (gitignored). A non-conda build can set
+# EXTRA_INCDIRS, NVCC_OPT, etc. here instead of editing this file. Included before
+# the '?=' defaults below so its assignments take effect.
+-include config.mk
 
 PYTHON ?= python3
 
+# NVCC is the nvcc program alone; its flags live in NVCCFLAGS. Keeping them
+# separate means you can point NVCC at a different toolkit (NVCC=/path/to/nvcc)
+# without retyping the flags, and tweak the optimization level via NVCC_OPT
+# (a debug build is just NVCC_OPT='-O0 -g') without retyping the whole command.
 # To time nvcc invocations, prepend: time -f "   %e seconds"
-#NVCC ?= nvcc -std=c++17 -m64 -O3 -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
-NVCC ?= nvcc -std=c++17 -m64 -O0 -g -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
+NVCC      ?= nvcc
+NVCC_OPT  ?= -O3
+NVCCFLAGS ?= -std=c++17 -m64 $(NVCC_OPT) -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
 
 # If using a conda env, add include and lib paths.
 ifneq ($(CONDA_PREFIX),)
@@ -97,12 +120,12 @@ DEFAULT_NVCC_ARCH += -gencode arch=compute_86,code=sm_86
 DEFAULT_NVCC_ARCH += -gencode arch=compute_89,code=sm_89
 # DEFAULT_ARCH += -gencode arch=compute_90,code=sm_90
 NVCC_ARCH ?= $(DEFAULT_NVCC_ARCH)
-#NVCC_CFLAGS = -Iasdf-cxx/include -I$(KSGPU_DIR)/include $(CONDA_INCFLAGS)
 
-#### dstn
-# /usr/local/include/asdf
-NVCC_CFLAGS = -I/usr/local/include -I$(KSGPU_DIR)/include $(CONDA_INCFLAGS) -Iasdf-cxx/include
-NVCC_CFLAGS += -I/home/dstn/nvidia/mathdx/26.03/include
+# Include dirs passed to every nvcc compile. mathdx normally comes from conda
+# ($(CONDA_INCFLAGS)); a non-conda build adds hand-installed include dirs (mathdx,
+# system asdf, ...) via EXTRA_INCDIRS, which defaults empty -> old conda-only behavior.
+EXTRA_INCDIRS ?=
+NVCC_CFLAGS = -Iasdf-cxx/include -I$(KSGPU_DIR)/include $(CONDA_INCFLAGS) $(EXTRA_INCDIRS)
 
 
 ####################################################################################################
@@ -431,27 +454,27 @@ pirate_frb/lib:
 
 # Build object files from .cu files (CUDA kernels)
 %.o: %.cu %.d
-	$(NVCC) $(NVCC_ARCH) $(NVCC_DEPFLAGS) $(NVCC_CFLAGS) -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) $(NVCC_DEPFLAGS) $(NVCC_CFLAGS) -c -o $@ $<
 
 # Build object files from .cpp files (pure C++, forwarded to host compiler by nvcc)
 %.o: %.cpp %.d
-	$(NVCC) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ $(NVCC_CFLAGS) -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ $(NVCC_CFLAGS) -c -o $@ $<
 
 # Build object files from .cc files (e.g. protoc-generated gRPC files)
 %.o: %.cc %.d
-	$(NVCC) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ $(NVCC_CFLAGS) -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ $(NVCC_CFLAGS) -c -o $@ $<
 
 # Build object files from .cxx files (asdf-cxx library)
 %.o: %.cxx %.d
-	$(NVCC) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ $(NVCC_CFLAGS) -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ $(NVCC_CFLAGS) -c -o $@ $<
 
 # Build object files in src_pybind11/ from .cu files with special flags.
 src_pybind11/%.o: src_pybind11/%.cu src_pybind11/%.d
-	$(NVCC) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -I$(KSGPU_DIR)/include -I$(PYTHON_INCDIR) -I$(NUMPY_INCDIR) -I$(PYBIND11_INCDIR) $(CONDA_INCFLAGS) -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -I$(KSGPU_DIR)/include -I$(PYTHON_INCDIR) -I$(NUMPY_INCDIR) -I$(PYBIND11_INCDIR) $(CONDA_INCFLAGS) -c -o $@ $<
 
 # Build object files in src_pybind11/ from .cpp files with special flags.
 src_pybind11/%.o: src_pybind11/%.cpp src_pybind11/%.d
-	$(NVCC) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ -I$(KSGPU_DIR)/include -I$(PYTHON_INCDIR) -I$(NUMPY_INCDIR) -I$(PYBIND11_INCDIR) $(CONDA_INCFLAGS) -c -o $@ $<
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) $(NVCC_DEPFLAGS) -x c++ -I$(KSGPU_DIR)/include -I$(PYTHON_INCDIR) -I$(NUMPY_INCDIR) -I$(PYBIND11_INCDIR) $(CONDA_INCFLAGS) -c -o $@ $<
 
 # Source files in 'src_lib/autogenerated_kernels' are created using './autogenerate_kernel.py'...
 src_lib/autogenerated_kernels/%.cu: autogenerate_kernel.py $(CUDAGEN_PYFILES)
@@ -538,7 +561,7 @@ pirate_frb/rpc/grpc/__init__.py: $(GRPC_PROTO)
 # Libraries: ksgpu, yaml-cpp, grpc++, protobuf (asdf-cxx uses yaml-cpp which is already linked)
 $(PIRATE_LIB): $(LIB_OFILES) makefile_helper.out
 	@mkdir -p lib
-	$(NVCC) $(NVCC_ARCH) -shared -o $@ $(LIB_OFILES) -lksgpu -lyaml-cpp -lgrpc++ -lprotobuf -L$(KSGPU_DIR)/lib $(CONDA_LIBFLAGS) -Xcompiler '"-Wl,-rpath=$(KSGPU_DIR)/lib"'
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) -shared -o $@ $(LIB_OFILES) -lksgpu -lyaml-cpp -lgrpc++ -lprotobuf -L$(KSGPU_DIR)/lib $(CONDA_LIBFLAGS) -Xcompiler '"-Wl,-rpath=$(KSGPU_DIR)/lib"'
 
 # Build the python extension (pirate_frb/pirate_pybind11...so)
 # We want it to automatically pull in the C++ library pirate_frb/lib/libpirate.so.
@@ -562,7 +585,7 @@ $(PIRATE_LIB): $(LIB_OFILES) makefile_helper.out
 #     to load the libraries libksgpu.so and ksgpu_pybind11...so with globally visible symbols.
 
 $(PIRATE_PYEXT): $(PYEXT_OFILES) $(PIRATE_LIB) pirate_frb/lib
-	$(NVCC) $(NVCC_ARCH) -shared -o $@ $(PYEXT_OFILES) -lpirate -Lpirate_frb/lib -Xcompiler '"-Wl,-rpath=\\$$ORIGIN/lib"'
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) -shared -o $@ $(PYEXT_OFILES) -lpirate -Lpirate_frb/lib -Xcompiler '"-Wl,-rpath=\\$$ORIGIN/lib"'
 
 # Special targets for autogenerated kernels
 #   - autogenerated kernels -> all .cu files
