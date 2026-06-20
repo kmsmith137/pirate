@@ -838,6 +838,17 @@ void FrbServer::_processing_thread_main()
     // worlds is the snapshot above.
     const long rb_size = long(frame_ringbuf.size());
 
+    // Index-convention helpers for the per-frame consistency check below.
+    //   nbeams   = beams per time chunk (= m->get_nbeams() = beams_per_gpu).
+    //   nbatches = batches per time chunk (B = beams_per_batch beams each).
+    //   initial_time_chunk = FPGA-based chunk index of seq_id=0 (the same
+    //     canonical value the workers seed rb_* with, and that we passed to
+    //     GpuDedisperser::Params::initial_chunk). wait_for_initial_chunk() is
+    //     idempotent and already resolved here, so this does not block.
+    const long nbeams             = m->get_nbeams();
+    const long nbatches           = nbeams / B;
+    const long initial_time_chunk = frame_allocator->wait_for_initial_chunk();
+
     for (long seq_id = 0; ; seq_id++) {
         const long istream = seq_id % S;
         cudaStream_t compute_stream = dedisperser_p->stream_pool->compute_streams.at(istream);
@@ -892,6 +903,23 @@ void FrbServer::_processing_thread_main()
             // frame-geometry sanity check.)
             xassert_eq(frame->nfreq, F);
             xassert_eq(frame->ntime, T);
+
+            // Defensive: confirm the frame we just pulled is exactly the one
+            // this (seq_id, b) is supposed to feed into dedispersion. The
+            // dedisperser stamps each output with an FPGA-based chunk index and
+            // a beam index derived SOLELY from seq_id:
+            //     ichunk_fpga_based = initial_time_chunk + seq_id / nbatches
+            //     ibeam             = (seq_id % nbatches) * B + b
+            // (see GpuDedisperser::acquire_output / Outputs). This asserts the
+            // INPUT frame carries the matching time_chunk_index / beam_id, so
+            // any drift between the absolute frame ring (rb_curr) and the
+            // zero-based seq_id world -- which would silently mislabel every
+            // output -- is caught here rather than downstream. Mirrors the
+            // worker-side insertion check (frame_id = ichunk*nbeams + ibeam).
+            const long expected_chunk   = initial_time_chunk + seq_id / nbatches;
+            const long expected_beam_id = m->beam_ids.at((seq_id % nbatches) * B + b);
+            xassert_eq(frame->time_chunk_index, expected_chunk);
+            xassert_eq(frame->beam_id, expected_beam_id);
 
             // --no-dedispersion: the frame has been consumed (so rb_processed can
             // advance); skip the actual host->device copy and move to the next beam.
