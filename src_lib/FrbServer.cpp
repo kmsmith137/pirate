@@ -758,6 +758,7 @@ void FrbServer::_processing_thread_main()
     // until a real variance calculation is implemented (see
     // GpuDedisperser::randomize_weights() and FrbServer::Params::randomize_weights).
     if (params.randomize_weights) {
+        cout << "FrbServer: calling randomize_weights(): this is a temporary hack that may take a while" << endl;
         auto t0 = std::chrono::steady_clock::now();
         dedisperser_p->randomize_weights();
         auto t1 = std::chrono::steady_clock::now();
