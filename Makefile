@@ -434,7 +434,7 @@ WHEEL_FILES := $(PYFILES) $(CUDAGEN_PYFILES) $(GRPC_PYFILES) $(PIRATE_PYEXT) pir
 WHEEL_FILES += $(HFILES:%=pirate_frb/%)
 
 # Phony targets. The special targets 'build_wheel' and 'build_sdist' are needed by pip/pipmake.
-lib: $(PIRATE_LIB) $(PIRATE_PYEXT) configs/asdf_header.yml
+lib: $(PIRATE_LIB) $(PIRATE_PYEXT) configs/example_asdf_header.yml configs/example_dedispersion_plan.yml
 build_wheel: wheel_files.txt $(PIRATE_LIB) $(PIRATE_PYEXT)
 build_sdist: sdist_files.txt
 
@@ -443,8 +443,21 @@ build_sdist: sdist_files.txt
 # docs. Depends on 'show_file_format' defaulting to verbose=true (a one-line
 # contract noted in pirate_frb/__main__.py). If you change write_asdf(),
 # rerun 'make' so the regenerated file shows up in 'git status'.
-configs/asdf_header.yml: configs/xengine/xengine_metadata_v2.yml $(PIRATE_PYEXT) $(PIRATE_LIB)
+configs/example_asdf_header.yml: configs/xengine/xengine_metadata_v2.yml $(PIRATE_PYEXT) $(PIRATE_LIB)
 	$(PYTHON) -m pirate_frb show_file_format $< > $@
+
+# Auto-generated snapshot of 'show_dedisperser' run on a representative
+# dedispersion config. Checked into git and included in the Sphinx docs as an
+# example of the dedispersion plan (the dedispersion_plan_yaml Handshake field)
+# that the FRB search process sends to the grouper at gRPC-handshake time
+# (frb_grouper.proto; see FrbServer). The bare 'show_dedisperser' output is the
+# plan only -- a single valid YAML document matching the wire -- and is
+# deterministic by default (the non-deterministic plan-construction timing line
+# is opt-in via -t), so the checked-in snapshot stays byte-stable across
+# rebuilds. If you change the dedispersion plan YAML format, rerun 'make' so the
+# regenerated file shows up in 'git status'.
+configs/example_dedispersion_plan.yml: configs/dedispersion/chord_sb2_et.yml $(PIRATE_PYEXT) $(PIRATE_LIB)
+	$(PYTHON) -m pirate_frb show_dedisperser $< > $@
 
 # Symlink {include,lib} into python directory 'pirate_frb'.
 pirate_frb/include:
@@ -515,7 +528,7 @@ grpc: $(GRPC_CCFILES) $(GRPC_HFILES) $(GRPC_PYFILES)
 # so it stayed permanently newer than them; the empty-recipe rules then 'remade'
 # the headers on every 'make', and GNU make treats a remade target as newer than
 # its dependents -- forcing a spurious rebuild of every grpc-dependent object,
-# both shared libs, and configs/asdf_header.yml on each invocation.)
+# both shared libs, and configs/example_asdf_header.yml on each invocation.)
 # Note: $* is the stem (the part matched by %).
 grpc/%.pb.cc grpc/%.pb.h grpc/%.grpc.pb.cc grpc/%.grpc.pb.h: grpc/%.proto
 	protoc --cpp_out=grpc --grpc_out=grpc \
@@ -633,7 +646,7 @@ clean:
 	@for d in $(wildcard $(CLEAN_RMDIRS)); do echo rmdir $$d; rmdir $$d 2>/dev/null || true; done
 
 # Delete a target if its recipe fails, so a partial output left by a failed
-# redirection (e.g. 'configs/asdf_header.yml: ... > $@') is not kept and treated
+# redirection (e.g. 'configs/example_asdf_header.yml: ... > $@') is not kept and treated
 # as up-to-date on the next build.
 .DELETE_ON_ERROR:
 

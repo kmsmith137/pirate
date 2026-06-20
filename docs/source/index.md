@@ -16,7 +16,8 @@ notes/build
 notes/hardware
 notes/network_protocol
 X->FRB metadata (v2) <configs/xengine/xengine_metadata_v2.yml>
-ASDF file format <configs/asdf_header.yml>
+ASDF file format <configs/example_asdf_header.yml>
+notes/dedispersion_plan
 _grpc_generated
 ```
 

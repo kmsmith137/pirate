@@ -1,0 +1,176 @@
+dtype: float16
+nfreq: 28160
+nt_in: 2048
+num_downsampling_levels: 4
+beams_per_gpu: 60
+beams_per_batch: 2
+num_active_batches: 2
+stage1_dd_rank: [8, 7, 7, 7]
+stage1_amb_rank: [8, 8, 8, 8]
+ntrees: 10
+
+trees:
+
+  - tree_index: 0
+    ndm_out: 4096
+    nt_out: 128
+    dm_min: 0
+    dm_max: 1480.9072871051153
+    trigger_frequency: 300
+    ds_level: 0
+    delta_et: 0
+    max_width: 16
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+  - tree_index: 1
+    ndm_out: 1024
+    nt_out: 64
+    dm_min: 1480.9072871051153
+    dm_max: 2961.8145742102306
+    trigger_frequency: 416.02514716892182
+    ds_level: 1
+    delta_et: 1
+    max_width: 16
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [0, 9, 7, 3, 1]
+
+  - tree_index: 2
+    ndm_out: 2048
+    nt_out: 64
+    dm_min: 1480.9072871051153
+    dm_max: 2961.8145742102306
+    trigger_frequency: 300
+    ds_level: 1
+    delta_et: 0
+    max_width: 16
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+  - tree_index: 3
+    ndm_out: 1024
+    nt_out: 64
+    dm_min: 2961.8145742102306
+    dm_max: 5923.6291484204612
+    trigger_frequency: 566.9467095138408
+    ds_level: 2
+    delta_et: 2
+    max_width: 16
+    dm_downsampling: 8
+    time_downsampling: 8
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [0, 7, 3, 1]
+
+  - tree_index: 4
+    ndm_out: 1024
+    nt_out: 32
+    dm_min: 2961.8145742102306
+    dm_max: 5923.6291484204612
+    trigger_frequency: 416.02514716892182
+    ds_level: 2
+    delta_et: 1
+    max_width: 16
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [0, 9, 7, 3, 1]
+
+  - tree_index: 5
+    ndm_out: 2048
+    nt_out: 32
+    dm_min: 2961.8145742102306
+    dm_max: 5923.6291484204612
+    trigger_frequency: 300
+    ds_level: 2
+    delta_et: 0
+    max_width: 16
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+  - tree_index: 6
+    ndm_out: 512
+    nt_out: 32
+    dm_min: 5923.6291484204612
+    dm_max: 11847.258296840922
+    trigger_frequency: 750
+    ds_level: 3
+    delta_et: 3
+    max_width: 16
+    dm_downsampling: 8
+    time_downsampling: 8
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [0, 0, 3, 1]
+
+  - tree_index: 7
+    ndm_out: 1024
+    nt_out: 32
+    dm_min: 5923.6291484204612
+    dm_max: 11847.258296840922
+    trigger_frequency: 566.9467095138408
+    ds_level: 3
+    delta_et: 2
+    max_width: 16
+    dm_downsampling: 8
+    time_downsampling: 8
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [0, 7, 3, 1]
+
+  - tree_index: 8
+    ndm_out: 1024
+    nt_out: 16
+    dm_min: 5923.6291484204612
+    dm_max: 11847.258296840922
+    trigger_frequency: 416.02514716892182
+    ds_level: 3
+    delta_et: 1
+    max_width: 16
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [0, 9, 7, 3, 1]
+
+  - tree_index: 9
+    ndm_out: 2048
+    nt_out: 16
+    dm_min: 5923.6291484204612
+    dm_max: 11847.258296840922
+    trigger_frequency: 300
+    ds_level: 3
+    delta_et: 0
+    max_width: 16
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+mega_ringbuf:
+  host_zones: 368.39 GiB
+  gpu_zones: 22.14 GiB
+  h2g bandwidth: 8.966 GB/s
+  g2h bandwidth: 7.226 GB/s
+  et_h2h bandwidth: 3.480 GB/s
+  max_clag: 254
+  max_gpu_clag: 5
+  min_host_clag: 6
+  min_et_clag: 6
+  min_et_headroom: 16
+
+dedispersion_outputs: 0.173 GB/s
