@@ -171,12 +171,18 @@ struct DedispersionConfig
 
     // make_random(): used for unit tests.
 
-    struct RandomArgs 
+    struct RandomArgs
     {
         int max_rank = 10;
         int max_early_triggers = 5;  // set to zero to disable early triggers
         bool gpu_valid = true;
         bool verbose = false;
+
+        // If true, the randomly-generated config always uses dtype=float32
+        // (never float16). Used by callers that can't yet tolerate float16
+        // (e.g. GpuDedisperser::test_random(), which has a known float16
+        // peak-finding threshold bug -- see the FIXME there).
+        bool force_float32 = false;
     };
     
     static DedispersionConfig make_random(const RandomArgs &args);
