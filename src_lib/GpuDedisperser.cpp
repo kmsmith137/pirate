@@ -430,19 +430,11 @@ GpuDedisperser::~GpuDedisperser()
     bool saved = (cudaGetDevice(&saved_device) == cudaSuccess);
     cudaSetDevice(params.cuda_device_id);
 
-    // Stop the worker thread.
+    // Stop the worker thread. GpuDedisperser::stop() cascades stop() to all the
+    // internal CudaEventRingbufs, which unblocks any blocking wait/synchronize in
+    // the worker thread so it exits before the worker.join() below. (stop() is
+    // idempotent, so this is correct whether or not stop() already ran earlier.)
     this->stop();
-
-    // Stop all CudaEventRingbufs before joining the worker thread.
-    // This ensures that any blocking waits in the worker thread will unblock.
-    if (evrb_tree_gridding) evrb_tree_gridding->stop();
-    if (evrb_g2g) evrb_g2g->stop();
-    if (evrb_g2h) evrb_g2h->stop();
-    if (evrb_h2g) evrb_h2g->stop();
-    if (evrb_cdd2) evrb_cdd2->stop();
-    if (evrb_et_h2g) evrb_et_h2g->stop();
-    for (auto &r : evrb_release_output)
-        if (r) r->stop();
 
     // Join the worker thread.
     if (worker.joinable())
@@ -481,12 +473,10 @@ void GpuDedisperser::stop(std::exception_ptr e)
     // parked in a blocking wait / synchronize / synchronize_with_producer
     // (e.g. an external caller of release_input_and_launch_dd_kernels,
     // or our own et_h2h worker) throws "called on stopped instance" and exits
-    // promptly. Previously this cascade happened only in ~GpuDedisperser, which
-    // meant stop() alone could not unblock a parked caller. CudaEventRingbuf::stop()
-    // is idempotent and makes no CUDA calls, so the destructor's identical calls
-    // remain harmless. NOTE: stopping an evrb does NOT cancel in-flight GPU work
-    // or destroy the cuda events -- ~GpuDedisperser still synchronizes all streams
-    // before any GPU array is freed.
+    // promptly. This cascade is also what lets ~GpuDedisperser unblock and join
+    // the worker thread by calling stop() alone. NOTE: stopping an evrb does NOT
+    // cancel in-flight GPU work or destroy the cuda events -- ~GpuDedisperser
+    // still synchronizes all streams before any GPU array is freed.
     if (evrb_tree_gridding) evrb_tree_gridding->stop();
     if (evrb_g2g)           evrb_g2g->stop();
     if (evrb_g2h)           evrb_g2h->stop();
