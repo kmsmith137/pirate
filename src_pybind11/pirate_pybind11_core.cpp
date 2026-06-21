@@ -200,9 +200,19 @@ void register_core_bindings(pybind11::module &m)
             "metadata's beam_ids / beam_positions_{x,y} are length-1 (just this\n"
             "frame's beam) and freq_channels is empty. See XEngineMetadata.hpp.")
         .def("randomize", &AssembledFrame::randomize,
+            // Default is Python None (-> null shared_ptr at call time). A C++
+            // shared_ptr<XEngineMetadata>() default fails here because the
+            // AssembledFrame binding precedes XEngineMetadata's registration.
+            py::arg("xmd") = py::none(),
             py::call_guard<py::gil_scoped_release>(),
-            "Fill the frame's data buffer with uniformly random bytes.\n"
-            "Each int4 sample is uniform over [-8, +7]. Intended for testing.\n\n"
+            "Fill the frame's data buffer with uniformly random int4 samples\n"
+            "(uniform over [-8, +7]). Intended for testing.\n\n"
+            "If xmd is None (default), scales are uniform in [0, 1] and offsets in\n"
+            "[-1, 1]. If xmd is given, the data is filled the same way but the\n"
+            "scales/offsets are calibrated instead: offset = 0 and scale =\n"
+            "sqrt(variance / 17.5) per frequency zone, so the dequantized data has\n"
+            "the per-zone variance xmd.noise_variance. Requires xmd.zone_nfreq to\n"
+            "sum to the frame's nfreq, with one noise_variance entry per zone.\n\n"
             "Thread-safe with respect to the RNG (uses ksgpu's per-thread\n"
             "default RNG), but the caller must ensure that no other thread is\n"
             "concurrently reading or writing the same frame's data buffer --\n"

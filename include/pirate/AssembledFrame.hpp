@@ -154,8 +154,15 @@ struct AssembledFrame
 
     // Randomizes AssembledFrame:
     //   - data buffer: uniform bits (i.e. int4s are random over [-8,+7])
-    //   - scales: uniform in [0,1]
-    //   - offsets: uniform in [-1,1].
+    //   - scales: uniform in [0,1]      (when xmd is null)
+    //   - offsets: uniform in [-1,1]    (when xmd is null)
+    //
+    // If 'xmd' is non-null, the data buffer is filled the same way, but the
+    // scales/offsets are instead CALIBRATED: offset = 0 and scale = S per
+    // frequency zone, chosen so that the dequantized data has the per-zone noise
+    // variance given by xmd->noise_variance. Requires xmd->zone_nfreq to sum to
+    // this frame's nfreq, and xmd->noise_variance to have one entry per zone. See
+    // the definition (src_lib/AssembledFrame.cpp) for the derivation of S.
     //
     // Thread-safety: snapshots the lock-protected 'scales_offsets'/'data' Arrays
     // under the lock, then fills them without the lock held (the snapshot pins
@@ -164,7 +171,7 @@ struct AssembledFrame
     // Callers still must not run two randomize() (or other writers) on the SAME
     // frame concurrently -- the buffer contents are not lock-protected.
 
-    void randomize();
+    void randomize(const std::shared_ptr<XEngineMetadata> &xmd = std::shared_ptr<XEngineMetadata>());
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.
