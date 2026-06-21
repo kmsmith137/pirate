@@ -788,13 +788,21 @@ void FrbServer::_processing_thread_main()
 
     GpuDequantizationKernel dequantization_kernel(dtype, B, F, T);
 
-    // FIXME: using huge CudaEventRingbuf capacity for now, matching the
-    // constant in GpuDedisperser.cpp's constructor.
-    const long evrb_capacity = 1000;
+    // CudaEventRingbuf capacities. As in GpuDedisperser, each ring's max_size is
+    // the worst-case host-side span = max lag between the producer's record() and
+    // the slowest consumer's wait()/synchronize() (see notes/cuda_event_ringbuf.md).
+    // Threads here: P = processing_thread (this thread; producer + same-thread
+    // consumer), F = frame_finalizing_thread. A ring with a cross-thread consumer
+    // records with blocking=true (an under-sized ring then throttles instead of
+    // throwing) and adds +S of headroom so the producer doesn't block steady-state.
+    //
+    //   dequant: producer P; consumer dq-wait (P, lag S). span = S.
+    //   h2g: producer P; consumers h2g-wait (P, lag 0), frame_finalizing
+    //        (F, lag ~S = input pipeline depth). span ~ S; +S headroom -> 2S.
     auto evrb_dq_p = std::make_shared<CudaEventRingbuf>(
-        "dequant", /*nconsumers=*/1, evrb_capacity, /*blocking_sync=*/true);
+        "dequant", /*nconsumers=*/1, /*max_size=*/S, /*blocking_sync=*/true);
     auto evrb_h2g_p = std::make_shared<CudaEventRingbuf>(
-        "h2g", /*nconsumers=*/2, evrb_capacity, /*blocking_sync=*/true);
+        "h2g", /*nconsumers=*/2, /*max_size=*/2*S, /*blocking_sync=*/true);
 
     // Publish plan + dedisperser + evrb_* atomically under the mutex, and set
     // dedisperser_is_initialized (which wakes the frame_finalizing_thread).
@@ -945,7 +953,8 @@ void FrbServer::_processing_thread_main()
         // inner loop waited for all B frames to be assembled either way), produce
         // the h2g event. frame_finalizing_thread consumes it to advance
         // rb_processed in both modes.
-        evrb_h2g_p->record(h2g_stream, seq_id);
+        // blocking=true: the second consumer (frame_finalizing_thread) is cross-thread.
+        evrb_h2g_p->record(h2g_stream, seq_id, /*blocking=*/true);
 
         // Consume the h2g event on compute_stream. In the normal path this gates
         // the dequantization kernel on its source buffer; under --no-dedispersion
@@ -969,7 +978,8 @@ void FrbServer::_processing_thread_main()
         dequantization_kernel.launch(dd_inbuf, scoff_batch, raw_batch, compute_stream);
 
         // After launching the dequantization kernel, we produce a dq event.
-        evrb_dq_p->record(compute_stream, seq_id);
+        // blocking=false: the only consumer (dq-wait above) is on this thread (P).
+        evrb_dq_p->record(compute_stream, seq_id, /*blocking=*/false);
 
         // Launch the rest of the dedispersion kernels.
         dedisperser_p->release_input_and_launch_dd_kernels(seq_id, compute_stream);
