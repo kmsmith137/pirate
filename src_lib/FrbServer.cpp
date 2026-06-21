@@ -1144,6 +1144,9 @@ void FrbServer::_fill_handshake(fg::Handshake *hs,
     hs->set_beams_per_batch(dd->beams_per_batch);
     hs->set_initial_chunk(dd->params.initial_chunk);   // -> Outputs::ichunk_fpga_based
 
+    // The producer's own RPC endpoint, so the consumer can reach back to us.
+    hs->set_rpc_ip_addr(params.rpc_server_address);
+
     // Run context (YAML). metadata is available by now (the dedisperser needed
     // it to initialize). NOTE: frame_allocator->get_metadata() returns the
     // FrbServer's canonical copy, which is FREQUENCY-SCRUBBED (empty

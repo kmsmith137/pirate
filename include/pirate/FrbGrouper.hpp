@@ -66,6 +66,11 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
     std::string dedispersion_config_yaml_string;
     std::string dedispersion_plan_yaml_string;
 
+    // The producer FrbServer's own RPC endpoint ("ip:port"), from the handshake
+    // (Handshake::rpc_ip_addr == FrbServer::Params::rpc_server_address). Lets a
+    // consumer reach back to the producing server over its frb_search RPC.
+    std::string rpc_ip_addr;
+
     // ----- Convenience accessors (derived at handshake) -----
     int cuda_device_id = -1;      // from handshake
     ksgpu::Dtype dtype;           // = dedispersion_config.dtype

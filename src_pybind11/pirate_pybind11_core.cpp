@@ -1208,6 +1208,8 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("xengine_metadata_yaml_string", &FrbGrouper::xengine_metadata_yaml_string)
           .def_readonly("dedispersion_config_yaml_string", &FrbGrouper::dedispersion_config_yaml_string)
           .def_readonly("dedispersion_plan_yaml_string", &FrbGrouper::dedispersion_plan_yaml_string)
+          .def_readonly("rpc_ip_addr", &FrbGrouper::rpc_ip_addr,
+               "Producer FrbServer's own RPC endpoint ('ip:port'), from the handshake.")
           // NOTE: FrbGrouper::dedispersion_plan_yaml (YAML::Node) is intentionally
           // NOT wrapped; the injection adds a Python dedispersion_plan_yaml attribute
           // parsed from dedispersion_plan_yaml_string. output_ringbuf is private
