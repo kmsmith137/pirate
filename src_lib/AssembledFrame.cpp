@@ -800,6 +800,7 @@ void AssembledFrame::randomize()
     if (so_nelts > 0) {
         xassert(so_arr.data != nullptr);
         xassert((so_nelts % 2) == 0);
+        xassert(so_arr.is_fully_contiguous());   // loop below indexes linearly from the base ptr
         std::uniform_real_distribution<float> dist_scale ( 0.0f, 1.0f);
         std::uniform_real_distribution<float> dist_offset(-1.0f, 1.0f);
         __half *so = static_cast<__half *>(so_arr.data);
@@ -812,6 +813,7 @@ void AssembledFrame::randomize()
 
     if (data_nbytes > 0) {
         xassert(data_arr.data != nullptr);
+        xassert(data_arr.is_fully_contiguous());   // contiguous byte-sweep below
         char *p = static_cast<char *>(data_arr.data);
 
         // mt19937 yields uint32_t (4 random bytes per call). The final
