@@ -183,11 +183,13 @@ void register_core_bindings(pybind11::module &m)
             "comments are detailed enough that the header serves as self-\n"
             "contained documentation of the file format. Intended for use\n"
             "with 'pirate_frb show_file_format'.")
-        .def_static("make_random", &AssembledFrame::make_random,
+        .def_static("make_uninitialized", &AssembledFrame::make_uninitialized,
             py::arg("xmd"), py::arg("ntime"), py::arg("beam_id"), py::arg("time_chunk_index"),
-            "Create a random AssembledFrame backed by the given XEngineMetadata.\n\n"
+            "Create an AssembledFrame backed by the given XEngineMetadata, with\n"
+            "freshly-allocated data / scales_offsets arrays whose CONTENTS ARE\n"
+            "UNSPECIFIED -- the caller must fill them (e.g. via randomize()).\n\n"
             "Throws if xmd is None or if beam_id is not in xmd.beam_ids.\n"
-            "Data is filled with random bytes. nfreq is taken from xmd.get_total_nfreq().\n\n"
+            "nfreq is taken from xmd.get_total_nfreq().\n\n"
             "xmd.freq_channels is ignored. Callers should typically pass a\n"
             "frequency-scrubbed xmd so the returned frame matches the\n"
             "'always frequency-scrubbed' invariant on AssembledFrame.metadata.")

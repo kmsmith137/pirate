@@ -584,16 +584,20 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 
     long mpc = ntime / 256;
 
-    // Allocate AssembledFrame with host memory (allocate scales_offsets
-    // before data, mirroring slab order in the allocator).
-    auto frame = make_shared<AssembledFrame>();
-    frame->nfreq = nfreq;
-    frame->ntime = ntime;
-    frame->beam_id = beam_id;
-    frame->time_chunk_index = time_chunk_index;
-    frame->metadata = std::move(md);
-    frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
-    frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
+    // Allocate the frame (host memory, uninitialized) via the shared factory,
+    // which derives nfreq from the metadata's zone_nfreq and enforces the ntime
+    // constraints. The scales_offsets/data arrays are filled by the memcpys below.
+    auto frame = AssembledFrame::make_uninitialized(md, ntime, beam_id, time_chunk_index);
+
+    // Cross-check the metadata-derived nfreq (used for the array shapes) against
+    // the file's explicit 'nfreq' scalar. These can only disagree for a corrupt
+    // or internally-inconsistent ASDF file.
+    if (frame->nfreq != nfreq) {
+        stringstream ss;
+        ss << "AssembledFrame::from_asdf(): file nfreq=" << nfreq
+           << " disagrees with metadata-derived nfreq=" << frame->nfreq;
+        throw runtime_error(ss.str());
+    }
 
     // Read scales_offsets array (float16, shape (nfreq, mpc, 2)).
     {
@@ -713,12 +717,12 @@ const shared_ptr<AssembledFrame> &AssembledFrameSet::get_frame(long ibeam) const
 
 
 // Static member function.
-shared_ptr<AssembledFrame> AssembledFrame::make_random(
+shared_ptr<AssembledFrame> AssembledFrame::make_uninitialized(
     const shared_ptr<const XEngineMetadata> &xmd,
     long ntime, long beam_id, long time_chunk_index)
 {
     if (!xmd)
-        throw runtime_error("AssembledFrame::make_random(): xmd is null");
+        throw runtime_error("AssembledFrame::make_uninitialized(): xmd is null");
 
     // Check that beam_id appears in xmd->beam_ids.
     bool found = false;
@@ -730,7 +734,7 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     }
     if (!found) {
         stringstream ss;
-        ss << "AssembledFrame::make_random(): beam_id=" << beam_id
+        ss << "AssembledFrame::make_uninitialized(): beam_id=" << beam_id
            << " is not in xmd->beam_ids";
         throw runtime_error(ss.str());
     }
@@ -742,6 +746,8 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     xassert((ntime % 256) == 0);
     long mpc = ntime / 256;
 
+    // Allocate scales_offsets before data, mirroring slab order in the allocator.
+    // The two arrays are left UNINITIALIZED -- the caller fills them.
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = ntime;
@@ -751,7 +757,6 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
     frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
 
-    frame->randomize();
     return frame;
 }
 

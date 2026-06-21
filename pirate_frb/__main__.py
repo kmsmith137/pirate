@@ -910,10 +910,10 @@ def show_file_format(args):
     # ntime=256 (one minichunk) is the smallest valid value -- keeps the binary
     # blob small since we don't actually look at it.
     #
-    # Note: existing AssembledFrame.make_random() is convenient here, but the randomness
-    # is a red herring: only the data (which gets thrown away) is randomized.
+    # We only read back the YAML header, so the data contents are irrelevant:
+    # make_uninitialized() (no fill) is enough -- no need to randomize.
 
-    frame = core.AssembledFrame.make_random(
+    frame = core.AssembledFrame.make_uninitialized(
         xmd, ntime=256, beam_id=xmd.beam_ids[0], time_chunk_index=0)
 
     # Random filename + try/finally so concurrent invocations don't race on

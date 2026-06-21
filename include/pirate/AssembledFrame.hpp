@@ -45,14 +45,14 @@ struct AssembledFrame
     long time_chunk_index = 0;
 
     // Shared X-engine metadata for this frame. Set at frame creation by
-    // AssembledFrameAllocator::_create_frame (or by AssembledFrame::make_random
+    // AssembledFrameAllocator::_create_frame (or by AssembledFrame::make_uninitialized
     // / AssembledFrame::from_asdf for non-allocator code paths). Treated as
     // immutable after creation -- all frames from one allocator share a single
     // XEngineMetadata instance via this shared_ptr. INVARIANT: non-null on
     // every constructed AssembledFrame.
     //
     // freq_channels: always FREQUENCY-SCRUBBED (empty). The allocator path
-    // scrubs in AssembledFrameAllocator::_initialize_metadata; the make_random
+    // scrubs in AssembledFrameAllocator::_initialize_metadata; the make_uninitialized
     // and from_asdf paths produce frames whose metadata starts scrubbed.
     //
     // Note: XEngineMetadata round-trips bit-exactly through YAML, but is
@@ -136,18 +136,21 @@ struct AssembledFrame
     // Called by reaper thread, or ssd writer thread.
     void _reap_locked();
 
-    // Create a random AssembledFrame (for testing). Note: ntime must be even.
-    // Throws if 'xmd' is null. Throws if 'beam_id' is not in 'xmd->beam_ids'.
-    // The returned frame's metadata is set to 'xmd' (shared, no copy);
-    // data is filled with random bytes. nfreq is taken from xmd->get_total_nfreq().
+    // Create an AssembledFrame with freshly-allocated (registered-host) data and
+    // scales_offsets arrays whose CONTENTS ARE UNSPECIFIED -- the caller is
+    // responsible for filling them (e.g. via randomize(), an ASDF read, or a
+    // memcpy). Used for testing and by from_asdf(). Note: ntime must be a
+    // multiple of 256. Throws if 'xmd' is null, or if 'beam_id' is not in
+    // 'xmd->beam_ids'. The returned frame's metadata is set to 'xmd' (shared,
+    // no copy); nfreq is taken from xmd->get_total_nfreq().
     //
     // xmd.freq_channels: IGNORED (only beam_ids / beam_positions_* / zone_nfreq /
     // zone_freq_edges are read out of xmd here). Callers should typically pass a
     // frequency-scrubbed xmd, so the returned frame's metadata matches the
     // "always frequency-scrubbed" invariant on AssembledFrame::metadata.
     static std::shared_ptr<AssembledFrame>
-    make_random(const std::shared_ptr<const XEngineMetadata> &xmd,
-                long ntime, long beam_id, long time_chunk_index);
+    make_uninitialized(const std::shared_ptr<const XEngineMetadata> &xmd,
+                       long ntime, long beam_id, long time_chunk_index);
 
     // Randomizes AssembledFrame:
     //   - data buffer: uniform bits (i.e. int4s are random over [-8,+7])
