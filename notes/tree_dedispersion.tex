@@ -3,7 +3,8 @@
 \usepackage{setspace}
 \usepackage{amsmath}
 
-\def\DD{{\mbox DD}}
+\def\DD{{\rm DD}}
+\def\nn{\nonumber}
 
 \title{Notes on tree dedispersion}
 \author{Kendrick Smith}
@@ -53,6 +54,69 @@ A frequency channel lying entirely within $I_t$ contributes with weight $1$, whi
 Because the intervals $I_t$ tile $[0, N_{\rm freq}]$, the weights of any fixed input channel sum to one, $\sum_t w_{tf} = 1$; the gridding kernel is thus a delay-linearizing rebinning of the frequency axis that conserves total intensity, $\sum_t {\rm out}[t] = \sum_f {\rm in}[f]$.
 
 Note that the tree gridding kernel is a monotone {\em decreasing} reindexing operation.
-Thus, to search for FRBs with positive dispersion (lowest frequencies arise last), we want to search over lines in the tree array with positive slope (highest tree-chanels arrive last).
+Thus, to search for FRBs with positive dispersion (lowest frequencies arise last), we want to search over lines in the tree array with positive slope (highest tree-channels arrive last).
+
+\section{Tree dedispersion}
+
+After the tree gridding kernel, the next step is ``tree dedispersion'', which searches for straight lines with $0\le \mbox{slope} \le 1$.
+(The extension to slope $>1$ will be discussed in a future section, along with more details such as subband searches, early triggers, and peak-finding.)
+
+The dedispersion input array has shape $(2^r, N_{\rm time})$.
+Indices along the first axis will be called ``tree-freq channels'', and represent
+reparameterized frequencies.
+Straight lines will be parameterized by an integer $0 \le d < 2^r$, representing
+the delay (in time samples) between the lowest and highest tree-freq channel,
+and a time index $t$ representing the arrival time in the {\em highest} tree-freq channel
+(i.e. the {\em latest} arrival time).
+Thus, the dedispersion output array also has shape $(2^r, N_{\rm time})$, where the first axis represents a delay (or DM).\footnote{Frequently in the code (but not in these notes), it's convenient to use a {\em bit-reversed} delay index $0 \le d_{\rm rev} < 2^r$. (This turns out to allow some array operations to operate ``in place'', facilitating parallelization.)}
+
+Tree dedispersion is a composition of functions:
+\begin{equation}
+\big( \mbox{Input array} \big)
+  \overset{\DD(0)}{\longrightarrow} \big( \mbox{Intermediate array} \big)
+  \overset{\DD(1)}{\longrightarrow} \cdots 
+  \overset{\DD(r-1)}{\longrightarrow}
+\big( \mbox{Output array} \big)
+\label{eq:DD_composition}
+\end{equation}
+where the function $\DD(k)$ is described as follows:
+
+\begin{itemize}
+
+\item
+The $\DD(k)$ input array is a shape $(2^{r-k}, 2^k, N_{\rm time})$ array.
+The first axis represents a coarse frequency channel.
+Each coarse-freq channel $f$ corresponds to a block of $2^k$ tree-freq channels
+in the original tree input array:
+\begin{equation}
+2^k \, f \le (\mbox{tree-freq index}) < 2^k (f+1)  \label{eq:coarse_freq}
+\end{equation}
+The second axis represents a delay $0 \le d < 2^k$ within the coarse-freq channel
+(\ref{eq:coarse_freq}). As $k$ increases, the coarse-freq channels double in width,
+and we need twice as many delay indices to cover the range $0 \le (\mbox{slope}) \le 1$.
+
+The time index represents an arrival time at the largest tree-freq channel
+in the coarse-freq channel (\ref{eq:coarse_freq}), i.e.~the latest arrival time within the coarse-freq channel.
+
+\item The $\DD(k)$ operation is defined by:
+
+\begin{align}
+{\tt out}[f,2d,t] &= \frac{1}{\sqrt{2}} 
+  \big( {\tt in}[2f,d,t-d] + {\tt in}[2f+1,d,t] \big) \nn \\
+{\tt out}[f,2d+1,t] &= \frac{1}{\sqrt{2}} 
+  \big( {\tt in}[2f,d,t-d-1] + {\tt in}[2f+1,d,t] \big)
+\end{align}
+
+\item
+As formulated above, tree dedispersion can lead to negative time indices.
+By default, \verb|in[...,-N]| is defined to be zero.
+(In the real-time system, we run tree dedispersion in an ``incremental'' context where a negative time index should be interpreted as a reference to data received in a previous time chunk.)
+
+\item The $\DD(0)$ input array is sometimes reshaped from $(2^r,1,N_{\rm time})$
+ to $(2^r,N_{\rm time})$, and the $\DD(r-1)$ output array is sometimes reshaped
+ from $(1,2^r,N_{\rm time})$ to $(2^r,N_{\rm time})$.
+ Thus, we think of the entire tree dedispersion operation (\ref{eq:DD_composition}) as having input and output shapes $(2^r, N_{\rm time})$.
+
+\end{itemize}
 
 \end{document}
