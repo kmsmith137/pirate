@@ -38,22 +38,15 @@ class SparseTreeArray:
         when the len(dbits) middle axes are flattened to length 2^len(dbits) in
         C-order, dbits[0] is the most significant bit. (unpack() relies on this,
         and any future iterate() must build 'data' to match.)
-
-      self.initial_f0, self.initial_nf:
-        These are the values of (f0,nf) when a k=0 SparseTreeArray is created via
-        SparseTreeArray.make_tree_gridding_output(). Later, when SparseTreeArray.iterate()
-        is called, a new SparseTreeArray is returned with new values of (f0,nf), but
-        unmodified values of (initial_f0, initial_nf).
     """
 
 
-    def __init__(self, r, k, f0, nf, nt, dbits, data, initial_f0, initial_nf):
+    def __init__(self, r, k, f0, nf, nt, dbits, data):
         self.r, self.k = r, k
         self.f0, self.nf = f0, nf
         self.nt = nt
         self.dbits = list(dbits)
         self.data = data
-        self.initial_f0, self.initial_nf = initial_f0, initial_nf
         self._check_invariants()
 
 
@@ -101,8 +94,7 @@ class SparseTreeArray:
         data = w.reshape(-1, 1)                 # (nf, nt=1), float64
 
         nf = f1 - f0
-        return SparseTreeArray(r=r, k=0, f0=f0, nf=nf, nt=1, dbits=[],
-                               data=data, initial_f0=f0, initial_nf=nf)
+        return SparseTreeArray(r=r, k=0, f0=f0, nf=nf, nt=1, dbits=[], data=data)
 
 
     @staticmethod
@@ -187,8 +179,7 @@ class SparseTreeArray:
             data_out[:, :, :nt_out].reshape((nf_out,) + (2,) * m_out + (nt_out,)))
 
         return SparseTreeArray(r=self.r, k=k + 1, f0=F0, nf=nf_out, nt=nt_out,
-                               dbits=dbits_out, data=data_out,
-                               initial_f0=self.initial_f0, initial_nf=self.initial_nf)
+                               dbits=dbits_out, data=data_out)
 
 
     def unpack(self, ntime):
