@@ -456,11 +456,7 @@ XEngineMetadata XEngineMetadata::from_yaml(const YamlFile &f)
         ret.noise_variance = nv_node.as_vector<double>();
     }
 
-    //std::cout << "check_for_invalid_keys" << std::endl;
-    //f.check_for_invalid_keys();
-
-    std::cout << "validate" << std::endl;
-    
+    f.check_for_invalid_keys();
     ret.validate();
     return ret;
 }
