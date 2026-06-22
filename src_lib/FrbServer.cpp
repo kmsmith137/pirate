@@ -758,6 +758,7 @@ void FrbServer::_processing_thread_main()
     // until a real variance calculation is implemented (see
     // GpuDedisperser::randomize_weights() and FrbServer::Params::randomize_weights).
     if (params.randomize_weights) {
+        cout << "FrbServer: calling randomize_weights(): this is a temporary hack that may take a while" << endl;
         auto t0 = std::chrono::steady_clock::now();
         dedisperser_p->randomize_weights();
         auto t1 = std::chrono::steady_clock::now();
@@ -787,13 +788,21 @@ void FrbServer::_processing_thread_main()
 
     GpuDequantizationKernel dequantization_kernel(dtype, B, F, T);
 
-    // FIXME: using huge CudaEventRingbuf capacity for now, matching the
-    // constant in GpuDedisperser.cpp's constructor.
-    const long evrb_capacity = 1000;
+    // CudaEventRingbuf capacities. As in GpuDedisperser, each ring's max_size is
+    // the worst-case host-side span = max lag between the producer's record() and
+    // the slowest consumer's wait()/synchronize() (see notes/cuda_event_ringbuf.md).
+    // Threads here: P = processing_thread (this thread; producer + same-thread
+    // consumer), F = frame_finalizing_thread. A ring with a cross-thread consumer
+    // records with blocking=true (an under-sized ring then throttles instead of
+    // throwing) and adds +S of headroom so the producer doesn't block steady-state.
+    //
+    //   dequant: producer P; consumer dq-wait (P, lag S). span = S.
+    //   h2g: producer P; consumers h2g-wait (P, lag 0), frame_finalizing
+    //        (F, lag ~S = input pipeline depth). span ~ S; +S headroom -> 2S.
     auto evrb_dq_p = std::make_shared<CudaEventRingbuf>(
-        "dequant", /*nconsumers=*/1, evrb_capacity, /*blocking_sync=*/true);
+        "dequant", /*nconsumers=*/1, /*max_size=*/S, /*blocking_sync=*/true);
     auto evrb_h2g_p = std::make_shared<CudaEventRingbuf>(
-        "h2g", /*nconsumers=*/2, evrb_capacity, /*blocking_sync=*/true);
+        "h2g", /*nconsumers=*/2, /*max_size=*/2*S, /*blocking_sync=*/true);
 
     // Publish plan + dedisperser + evrb_* atomically under the mutex, and set
     // dedisperser_is_initialized (which wakes the frame_finalizing_thread).
@@ -837,6 +846,17 @@ void FrbServer::_processing_thread_main()
     // rb_curr % rb_size (an absolute index); the only bridge between the two
     // worlds is the snapshot above.
     const long rb_size = long(frame_ringbuf.size());
+
+    // Index-convention helpers for the per-frame consistency check below.
+    //   nbeams   = beams per time chunk (= m->get_nbeams() = beams_per_gpu).
+    //   nbatches = batches per time chunk (B = beams_per_batch beams each).
+    //   initial_time_chunk = FPGA-based chunk index of seq_id=0 (the same
+    //     canonical value the workers seed rb_* with, and that we passed to
+    //     GpuDedisperser::Params::initial_chunk). wait_for_initial_chunk() is
+    //     idempotent and already resolved here, so this does not block.
+    const long nbeams             = m->get_nbeams();
+    const long nbatches           = nbeams / B;
+    const long initial_time_chunk = frame_allocator->wait_for_initial_chunk();
 
     for (long seq_id = 0; ; seq_id++) {
         const long istream = seq_id % S;
@@ -893,6 +913,23 @@ void FrbServer::_processing_thread_main()
             xassert_eq(frame->nfreq, F);
             xassert_eq(frame->ntime, T);
 
+            // Defensive: confirm the frame we just pulled is exactly the one
+            // this (seq_id, b) is supposed to feed into dedispersion. The
+            // dedisperser stamps each output with an FPGA-based chunk index and
+            // a beam index derived SOLELY from seq_id:
+            //     ichunk_fpga_based = initial_time_chunk + seq_id / nbatches
+            //     ibeam             = (seq_id % nbatches) * B + b
+            // (see GpuDedisperser::acquire_output / Outputs). This asserts the
+            // INPUT frame carries the matching time_chunk_index / beam_id, so
+            // any drift between the absolute frame ring (rb_curr) and the
+            // zero-based seq_id world -- which would silently mislabel every
+            // output -- is caught here rather than downstream. Mirrors the
+            // worker-side insertion check (frame_id = ichunk*nbeams + ibeam).
+            const long expected_chunk   = initial_time_chunk + seq_id / nbatches;
+            const long expected_beam_id = m->beam_ids.at((seq_id % nbatches) * B + b);
+            xassert_eq(frame->time_chunk_index, expected_chunk);
+            xassert_eq(frame->beam_id, expected_beam_id);
+
             // --no-dedispersion: the frame has been consumed (so rb_processed can
             // advance); skip the actual host->device copy and move to the next beam.
             if (params.no_dedispersion)
@@ -916,7 +953,8 @@ void FrbServer::_processing_thread_main()
         // inner loop waited for all B frames to be assembled either way), produce
         // the h2g event. frame_finalizing_thread consumes it to advance
         // rb_processed in both modes.
-        evrb_h2g_p->record(h2g_stream, seq_id);
+        // blocking=true: the second consumer (frame_finalizing_thread) is cross-thread.
+        evrb_h2g_p->record(h2g_stream, seq_id, /*blocking=*/true);
 
         // Consume the h2g event on compute_stream. In the normal path this gates
         // the dequantization kernel on its source buffer; under --no-dedispersion
@@ -940,7 +978,8 @@ void FrbServer::_processing_thread_main()
         dequantization_kernel.launch(dd_inbuf, scoff_batch, raw_batch, compute_stream);
 
         // After launching the dequantization kernel, we produce a dq event.
-        evrb_dq_p->record(compute_stream, seq_id);
+        // blocking=false: the only consumer (dq-wait above) is on this thread (P).
+        evrb_dq_p->record(compute_stream, seq_id, /*blocking=*/false);
 
         // Launch the rest of the dedispersion kernels.
         dedisperser_p->release_input_and_launch_dd_kernels(seq_id, compute_stream);
@@ -1115,6 +1154,9 @@ void FrbServer::_fill_handshake(fg::Handshake *hs,
     hs->set_num_batch_slots(dd->params.nbatches_out);
     hs->set_beams_per_batch(dd->beams_per_batch);
     hs->set_initial_chunk(dd->params.initial_chunk);   // -> Outputs::ichunk_fpga_based
+
+    // The producer's own RPC endpoint, so the consumer can reach back to us.
+    hs->set_rpc_ip_addr(params.rpc_server_address);
 
     // Run context (YAML). metadata is available by now (the dedisperser needed
     // it to initialize). NOTE: frame_allocator->get_metadata() returns the

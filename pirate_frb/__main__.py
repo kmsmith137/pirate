@@ -17,6 +17,8 @@ from . import loose_ends
 from . import core
 from . import tests
 
+from .reference import SparseTreeArray
+
 from . import (
     DedispersionConfig,
     DedispersionPlan,
@@ -51,6 +53,7 @@ def parse_test(subparsers):
     parser.add_argument('--zomb', action='store_true', help='Runs "zombie" tests (code that I wrote during protoyping that may never get used)')
     parser.add_argument('--dd', action='store_true', help='Runs GpuDedisperser.test_random()')
     parser.add_argument('--ana', action='store_true', help='Runs AnalyticDedisperser.test_random()')
+    parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_upchan()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
 
@@ -72,7 +75,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'ana', 'net' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'ana', 'avar', 'net' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -144,6 +147,10 @@ def test(args):
         
         if run_all_tests or args.ana:
             core.AnalyticDedisperser.test_random()
+
+        if run_all_tests or args.avar:
+            SparseTreeArray.test_random_tree_gridding()
+            SparseTreeArray.test_random_dedispersion()
         
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)
@@ -660,7 +667,9 @@ def parse_show_dedisperser(subparsers):
     parser = subparsers.add_parser("show_dedisperser", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
-    parser.add_argument('-c', '--config-only', action='store_true', help="Print config only (skip plan)")
+    parser.add_argument('-c', '--config', action='store_true', help="Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)")
+    parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan construction took (non-deterministic line; off by default so the output is reproducible)")
+    parser.add_argument('-z', '--zones', action='store_true', help="Include the per-clag mega_ringbuf host/gpu zone breakdown (independent of -v, which controls comments)")
     parser.add_argument('-s', '--streams', type=int, help="Override config.num_active_batches with specified value")
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
     parser.add_argument('-g', '--max-gpu-clag', type=int, help="Override config.max_gpu_clag with specified value")
@@ -684,22 +693,28 @@ def show_dedisperser(args):
     config.validate()
     config.test()   # I decided to run the unit tests here, since they're very fast!
     
-    config_yaml = config.to_yaml_string(args.verbose)
-    if args.verbose:
-        config_yaml = align_inline_comments(config_yaml)
-    print(config_yaml)
-    
-    if not args.config_only:
-        print_separator('DedispersionPlan starts here')
-        t0 = time.time()
-        plan = DedispersionPlan(config)
-        plan_dt = time.time() - t0
-        print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n')
-        plan_yaml = plan.to_yaml_string(args.verbose)
+    # By default print only the DedispersionPlan, with no separator, so that the
+    # output matches the dedispersion_plan_yaml that the FRB search sends to the
+    # grouper (see FrbServer / frb_grouper.proto). With -c, also print the
+    # DedispersionConfig (the dedispersion_config_yaml wire field) first, with a
+    # human-readable separator before the plan.
+    if args.config:
+        config_yaml = config.to_yaml_string(args.verbose)
         if args.verbose:
-            plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
-            plan_yaml = align_inline_comments(plan_yaml)
-        print(plan_yaml)
+            config_yaml = align_inline_comments(config_yaml)
+        print(config_yaml)
+        print_separator('DedispersionPlan starts here')
+
+    t0 = time.time()
+    plan = DedispersionPlan(config)
+    plan_dt = time.time() - t0
+    if args.time:
+        print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n')
+    plan_yaml = plan.to_yaml_string(args.verbose, args.zones)
+    if args.verbose:
+        plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
+        plan_yaml = align_inline_comments(plan_yaml)
+    print(plan_yaml)
 
     if args.channel_map:
         print_separator('Channel map starts here')
@@ -714,9 +729,6 @@ def show_dedisperser(args):
 
     if args.resources or args.fine_grained_resources:
         print_separator('Resource tracking starts here (assumes 4-bit raw data)')
-        if args.config_only:
-            plan = DedispersionPlan(config)
-
         nin = plan.beams_per_batch * plan.nfreq * plan.nt_in
         nbits = plan.nbits
 
@@ -891,7 +903,7 @@ def parse_show_file_format(subparsers):
 
 
 def show_file_format(args):
-    # NOTE: the 'configs/asdf_header.yml' Makefile rule depends on
+    # NOTE: the 'configs/example_asdf_header.yml' Makefile rule depends on
     # this command defaulting to verbose=True (no -n flag).
     # Do not flip that default without updating the Makefile rule.
     import tempfile
@@ -905,10 +917,10 @@ def show_file_format(args):
     # ntime=256 (one minichunk) is the smallest valid value -- keeps the binary
     # blob small since we don't actually look at it.
     #
-    # Note: existing AssembledFrame.make_random() is convenient here, but the randomness
-    # is a red herring: only the data (which gets thrown away) is randomized.
+    # We only read back the YAML header, so the data contents are irrelevant:
+    # make_uninitialized() (no fill) is enough -- no need to randomize.
 
-    frame = core.AssembledFrame.make_random(
+    frame = core.AssembledFrame.make_uninitialized(
         xmd, ntime=256, beam_id=xmd.beam_ids[0], time_chunk_index=0)
 
     # Random filename + try/finally so concurrent invocations don't race on

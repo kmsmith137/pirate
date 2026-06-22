@@ -167,7 +167,9 @@ message ArrayDescriptor {
 // Bump PROTOCOL_VERSION_CURRENT on any incompatible wire-format change.
 enum ProtocolVersion {
   PROTOCOL_VERSION_UNSPECIFIED = 0;
-  PROTOCOL_VERSION_CURRENT = 1;
+  // Bumped to 2 when the Handshake field numbers were made sequential and
+  // rpc_ip_addr was added (an incompatible wire-format change vs version 1).
+  PROTOCOL_VERSION_CURRENT = 2;
 }
 
 // First producer -> consumer message. Conveys everything the consumer needs to
@@ -227,14 +229,21 @@ message Handshake {
   // to the frame_allocator's canonical initial_time_chunk). The consumer adds
   // this to the zero-based chunk index (seq_id / nbatches) to recover the
   // FPGA-based chunk index of each acquired output (Outputs::ichunk_fpga_based).
-  // Numbered 12 (the run-context YAML strings below took 9-11 first).
-  int64 initial_chunk = 12;
+  int64 initial_chunk = 9;
 
-  // ---- Run context (YAML) ----
-  // Full serialized configuration of the run, so the consumer can interpret
+  // ---- Run context ----
+  // Information that lets the consumer interpret the output_ringbuf contents
+  // and reach the producer, beyond the raw shapes/strides above.
+
+  // The producer FrbServer's own RPC endpoint (FrbServer::Params::rpc_server_address,
+  // an "ip:port" string), so the consumer can reach back to the server (e.g. to
+  // query status) over its frb_search RPC interface.
+  string rpc_ip_addr = 10;
+
+  // The remaining run-context fields are full YAML serializations -- the same
+  // representations used elsewhere in pirate -- so the consumer can interpret
   // the output_ringbuf contents (frequencies, beams, DM ranges, time sample,
-  // etc.) rather than working only from raw shapes/strides. These are the same
-  // YAML representations used elsewhere in pirate.
+  // etc.) rather than working only from raw shapes/strides.
 
   // XEngineMetadata serialized as YAML (XEngineMetadata::to_yaml_string()).
   //
@@ -243,14 +252,14 @@ message Handshake {
   // consumer must therefore obtain frequency information from the zone structure
   // in dedispersion_config_yaml (zone_nfreq / zone_freq_edges), NOT from
   // xengine_metadata_yaml.
-  string xengine_metadata_yaml = 9;
+  string xengine_metadata_yaml = 11;
 
   // The (postfilled) DedispersionConfig serialized as YAML
   // (DedispersionConfig::to_yaml_string()).
-  string dedispersion_config_yaml = 10;
+  string dedispersion_config_yaml = 12;
 
   // DedispersionPlan::to_yaml_string()
-  string dedispersion_plan_yaml = 11;
+  string dedispersion_plan_yaml = 13;
 }
 
 // First consumer -> producer message, sent in response to the Handshake.

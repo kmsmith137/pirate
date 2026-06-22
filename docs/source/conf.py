@@ -18,6 +18,17 @@ for _f in glob.glob(os.path.join(_notes_src, '*.md')):
     if not _f.endswith('~'):
         shutil.copy2(_f, _notes_dst)
 
+# Copy any compiled LaTeX PDFs (notes/*.pdf, produced by 'make tex') into the
+# _static dir, so the docs can link to them as ordinary served assets that open
+# INLINE in the browser. (A {download} link would emit an <a download> that forces
+# a save-to-disk instead of viewing.) Creating _static here also satisfies
+# html_static_path (otherwise Sphinx warns it does not exist). These PDFs are
+# gitignored and rebuilt before each Sphinx run by 'make docs' / docs/deploy.sh.
+_static_dst = os.path.join(os.path.dirname(__file__), '_static')
+os.makedirs(_static_dst, exist_ok=True)
+for _f in glob.glob(os.path.join(_notes_src, '*.pdf')):
+    shutil.copy2(_f, _static_dst)
+
 # Copy configs/ so that relative links from notes (e.g. ../configs/...) resolve.
 # For each .yml/.yaml file, also generate a rendered .md page so that links
 # display the YAML in the browser instead of triggering a download.

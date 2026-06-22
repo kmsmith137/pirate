@@ -1,0 +1,122 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{amsmath}
+
+\def\DD{{\rm DD}}
+\def\nn{\nonumber}
+
+\title{Notes on tree dedispersion}
+\author{Kendrick Smith}
+
+\begin{document}
+
+\maketitle
+
+\setstretch{1.05}   % spacing between lines
+\setlength{\parskip}{2.5pt}  % spacing between paragraphs
+
+\section{Tree gridding kernel}
+
+Our starting point for tree dedispersion is a shape $(N_{\rm freq}, N_{\rm time})$ array representing channelized intensity time series. We do not assume that frequency channels are evenly spaced (in CHORD we use unequal spacing).
+We want to search this array for FRBs with delay $\propto \nu^{-2}$.
+
+The first step is a ``tree gridding'' kernel which changes variables so that the delay is linear (i.e.~the FRB dispersion sweep looks like a straight line).
+The input of the tree gridding kernel is a shape $(N_{\rm freq}, N_{\rm time})$ array, and the output is a shape $(N_{\rm tree}, N_{\rm time})$ array, where $N_{\rm tree}=2^r$.
+The parameter $r$ is the tree dedispersion ``rank'' and is specified in a config file.
+
+The tree gridding kernel also takes an auxiliary array \verb|channel_map|, which describes the mapping between frequency channels $0 \le f < N_{\rm freq}$ and tree channels $0 \le t < N_{\rm tree}$.
+The array \verb|channel_map| has length $N_{\rm tree}+1$, and its entries are (in general non-integer) frequency-channel indices in the range $[0, N_{\rm freq}]$.
+Writing $c_t$ for the $t$-th entry, tree channel $t$ is defined to occupy the half-open interval of frequency channels
+\begin{equation}
+I_t = \big[\, c_{t+1},\ c_t \,\big), \qquad 0 \le t < N_{\rm tree},
+\end{equation}
+i.e.~consecutive entries give the lower and upper edges of each tree channel.
+The entries are fixed by the dispersion geometry: the tree channels are equally spaced in the dispersion variable $x \equiv \nu^{-2}$ (this is the change of variables that linearizes the delay), so the $t$-th edge sits at
+\begin{equation}
+x_t = \nu_{\rm hi}^{-2} + \frac{t}{N_{\rm tree}}\left(\nu_{\rm lo}^{-2} - \nu_{\rm hi}^{-2}\right),
+\end{equation}
+and $c_t$ is the frequency-channel index of the frequency $\nu_t = x_t^{-1/2}$, where the index increases with frequency, running from $0$ at the band bottom $\nu_{\rm lo}$ to $N_{\rm freq}$ at the band top $\nu_{\rm hi}$.
+In particular $c_0 = N_{\rm freq}$ and $c_{N_{\rm tree}} = 0$, so \verb|channel_map| is monotonically {\em decreasing} ($c_{t+1} < c_t$).
+We store it in double precision, since the gridding weights below are obtained by differencing adjacent entries, which loses relative precision.
+
+The details of the tree gridding kernel are as follows.
+Each output tree channel $t$ is a weighted sum of the input frequency channels whose bins overlap the interval $I_t = [c_{t+1}, c_t)$:
+\begin{equation}
+{\rm out}[t] = \sum_{f=0}^{N_{\rm freq}-1} w_{tf}\, {\rm in}[f],
+\end{equation}
+where ${\rm in}[f]$ and ${\rm out}[t]$ are length-$N_{\rm time}$ time series, and the same weights are applied at every time sample (the time axis is untouched).
+The weight $w_{tf}$ is the length of the overlap between the tree-channel interval $I_t$ and the unit-width frequency bin $[f, f+1)$:
+\begin{equation}
+w_{tf} = \max\!\big(\,0,\ \min(c_t,\, f+1) - \max(c_{t+1},\, f)\,\big).
+\end{equation}
+A frequency channel lying entirely within $I_t$ contributes with weight $1$, while a channel straddling an edge of $I_t$ contributes a fractional weight.
+Because the intervals $I_t$ tile $[0, N_{\rm freq}]$, the weights of any fixed input channel sum to one, $\sum_t w_{tf} = 1$; the gridding kernel is thus a delay-linearizing rebinning of the frequency axis that conserves total intensity, $\sum_t {\rm out}[t] = \sum_f {\rm in}[f]$.
+
+Note that the tree gridding kernel is a monotone {\em decreasing} reindexing operation.
+Thus, to search for FRBs with positive dispersion (lowest frequencies arise last), we want to search over lines in the tree array with positive slope (highest tree-channels arrive last).
+
+\section{Tree dedispersion}
+
+After the tree gridding kernel, the next step is ``tree dedispersion'', which searches for straight lines with $0\le \mbox{slope} \le 1$.
+(The extension to slope $>1$ will be discussed in a future section, along with more details such as subband searches, early triggers, and peak-finding.)
+
+The dedispersion input array has shape $(2^r, N_{\rm time})$.
+Indices along the first axis will be called ``tree-freq channels'', and represent
+reparameterized frequencies.
+Straight lines will be parameterized by an integer $0 \le d < 2^r$, representing
+the delay (in time samples) between the lowest and highest tree-freq channel,
+and a time index $t$ representing the arrival time in the {\em highest} tree-freq channel
+(i.e. the {\em latest} arrival time).
+Thus, the dedispersion output array also has shape $(2^r, N_{\rm time})$, where the first axis represents a delay (or DM).\footnote{Frequently in the code (but not in these notes), it's convenient to use a {\em bit-reversed} delay index $0 \le d_{\rm rev} < 2^r$. (This turns out to allow some array operations to operate ``in place'', facilitating parallelization.)}
+
+Tree dedispersion is a composition of functions:
+\begin{equation}
+\big( \mbox{Input array} \big)
+  \overset{\DD(0)}{\longrightarrow} \big( \mbox{Intermediate array} \big)
+  \overset{\DD(1)}{\longrightarrow} \cdots 
+  \overset{\DD(r-1)}{\longrightarrow}
+\big( \mbox{Output array} \big)
+\label{eq:DD_composition}
+\end{equation}
+where the function $\DD(k)$ is described as follows:
+
+\begin{itemize}
+
+\item
+The $\DD(k)$ input array is a shape $(2^{r-k}, 2^k, N_{\rm time})$ array.
+The first axis represents a coarse frequency channel.
+Each coarse-freq channel $f$ corresponds to a block of $2^k$ tree-freq channels
+in the original tree input array:
+\begin{equation}
+2^k \, f \le (\mbox{tree-freq index}) < 2^k (f+1)  \label{eq:coarse_freq}
+\end{equation}
+The second axis represents a delay $0 \le d < 2^k$ within the coarse-freq channel
+(\ref{eq:coarse_freq}). As $k$ increases, the coarse-freq channels double in width,
+and we need twice as many delay indices to cover the range $0 \le (\mbox{slope}) \le 1$.
+
+The time index represents an arrival time at the largest tree-freq channel
+in the coarse-freq channel (\ref{eq:coarse_freq}), i.e.~the latest arrival time within the coarse-freq channel.
+
+\item The $\DD(k)$ operation is defined by:
+
+\begin{align}
+{\tt out}[f,2d,t] &= \frac{1}{\sqrt{2}} 
+  \big( {\tt in}[2f,d,t-d] + {\tt in}[2f+1,d,t] \big) \nn \\
+{\tt out}[f,2d+1,t] &= \frac{1}{\sqrt{2}} 
+  \big( {\tt in}[2f,d,t-d-1] + {\tt in}[2f+1,d,t] \big)
+\end{align}
+
+\item
+As formulated above, tree dedispersion can lead to negative time indices.
+By default, \verb|in[...,-N]| is defined to be zero.
+(In the real-time system, we run tree dedispersion in an ``incremental'' context where a negative time index should be interpreted as a reference to data received in a previous time chunk.)
+
+\item The $\DD(0)$ input array is sometimes reshaped from $(2^r,1,N_{\rm time})$
+ to $(2^r,N_{\rm time})$, and the $\DD(r-1)$ output array is sometimes reshaped
+ from $(1,2^r,N_{\rm time})$ to $(2^r,N_{\rm time})$.
+ Thus, we think of the entire tree dedispersion operation (\ref{eq:DD_composition}) as having input and output shapes $(2^r, N_{\rm time})$.
+
+\end{itemize}
+
+\end{document}

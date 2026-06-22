@@ -57,8 +57,10 @@ struct DedispersionPlan
     long ntrees = 0;
     std::vector<DedispersionTree> trees;  // length ntrees
 
-    void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;
-    std::string to_yaml_string(bool verbose = false) const;
+    // 'verbose' controls explanatory comments; 'zones' independently controls
+    // whether the mega_ringbuf per-clag host/gpu zone breakdown is emitted.
+    void to_yaml(YAML::Emitter &emitter, bool verbose = false, bool zones = false) const;
+    std::string to_yaml_string(bool verbose = false, bool zones = false) const;
 
 
     // -------------------------------------------------------------------------------------------------

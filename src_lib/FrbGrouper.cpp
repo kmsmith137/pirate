@@ -294,6 +294,9 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     cuda_device_id = hs.cuda_device_id();
     CUDA_CALL(cudaSetDevice(cuda_device_id));
 
+    // The producer's own RPC endpoint (not deserialized -- just stored).
+    rpc_ip_addr = hs.rpc_ip_addr();
+
     // Stash the wire strings, then deserialize.
     xengine_metadata_yaml_string    = hs.xengine_metadata_yaml();
     dedispersion_config_yaml_string = hs.dedispersion_config_yaml();

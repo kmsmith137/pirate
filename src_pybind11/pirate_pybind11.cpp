@@ -276,11 +276,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("nbytes_per_segment", &DedispersionPlan::nbytes_per_segment,
                "Number of bytes per GPU memory segment.\n"
                "Currently always constants::bytes_per_gpu_cache_line")
-          .def("to_yaml_string", &DedispersionPlan::to_yaml_string, 
+          .def("to_yaml_string", &DedispersionPlan::to_yaml_string,
                py::arg("verbose") = false,
+               py::arg("zones") = false,
                "Convert plan to YAML string representation.\n\n"
                "Args:\n"
-               "    verbose: Include detailed information about all trees and parameters\n\n"
+               "    verbose: Include explanatory comments on fields\n"
+               "    zones: Include the per-clag mega_ringbuf host/gpu zone breakdown\n\n"
                "Returns:\n"
                "    YAML string representation of the plan")
     ;

@@ -513,12 +513,15 @@ shared_ptr<MegaRingbuf> MegaRingbuf::make_trivial(long total_beams, long nquads)
 // YAML serialization.
 
 
-// Helper function for printing memory zone info in verbose mode
-static void _emit_memory_zones(YAML::Emitter &emitter, const string &key, double total_gib, const vector<MegaRingbuf::Zone> &zones, bool verbose)
+// Helper function for printing memory zone info. If 'show_zones' is false, emit
+// just a "<total> GiB" scalar; if true, emit a map with the total plus the
+// per-clag zone breakdown. (Named 'show_zones' to avoid colliding with the
+// 'zones' vector argument.)
+static void _emit_memory_zones(YAML::Emitter &emitter, const string &key, double total_gib, const vector<MegaRingbuf::Zone> &zones, bool show_zones)
 {
     emitter << YAML::Key << key;
-    
-    if (!verbose) {
+
+    if (!show_zones) {
         stringstream ss;
         ss << fixed << setprecision(2) << total_gib << " GiB";
         emitter << YAML::Value << ss.str();
@@ -565,7 +568,7 @@ static void _emit_memory_zones(YAML::Emitter &emitter, const string &key, double
 }
 
 
-void MegaRingbuf::to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose) const
+void MegaRingbuf::to_yaml(YAML::Emitter &emitter, double frames_per_second, long nfreq, long time_samples_per_chunk, bool verbose, bool zones) const
 {
     emitter << YAML::BeginMap;
 
@@ -586,8 +589,10 @@ void MegaRingbuf::to_yaml(YAML::Emitter &emitter, double frames_per_second, long
     double gpu_to_host_gbps = xseg * 128.0 * beams_per_gpu / T / 1.0e9;
     double et_h2h_gbps = (h2h_octuples.size / 8) * 2.0 * 128.0 * beams_per_gpu / T / 1.0e9;
 
-    _emit_memory_zones(emitter, "host_zones", host_gib, host_zones, verbose);
-    _emit_memory_zones(emitter, "gpu_zones", gpu_gib, gpu_zones, verbose);
+    // The per-clag zone breakdown is gated on 'zones' (not 'verbose'): the
+    // explanatory comments below are gated on 'verbose'.
+    _emit_memory_zones(emitter, "host_zones", host_gib, host_zones, zones);
+    _emit_memory_zones(emitter, "gpu_zones", gpu_gib, gpu_zones, zones);
     {
         stringstream ss;
         ss << fixed << setprecision(3) << host_to_gpu_gbps << " GB/s";

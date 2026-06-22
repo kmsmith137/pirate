@@ -333,7 +333,7 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 // ------------------------------------------------------------------------------------------------
 
 
-void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
+void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const
 {
     emitter << YAML::BeginMap;
 
@@ -506,7 +506,7 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
             << YAML::Key << "mega_ringbuf"
             << YAML::Value;
     
-    mega_ringbuf->to_yaml(emitter, frames_per_second, nfreq, config.time_samples_per_chunk, verbose);
+    mega_ringbuf->to_yaml(emitter, frames_per_second, nfreq, config.time_samples_per_chunk, verbose, zones);
 
     // Compute dedispersion output bandwidth
     long dd_out_N = 0;
@@ -526,10 +526,10 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose) const
 }
 
 
-string DedispersionPlan::to_yaml_string(bool verbose) const
+string DedispersionPlan::to_yaml_string(bool verbose, bool zones) const
 {
     YAML::Emitter emitter;
-    this->to_yaml(emitter, verbose);
+    this->to_yaml(emitter, verbose, zones);
     return emitter.c_str();
 }
 

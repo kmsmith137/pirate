@@ -14,6 +14,7 @@
 #include <fcntl.h>     // open(), O_RDONLY
 #include <unistd.h>    // fsync(), close()
 
+#include <cmath>       // std::sqrt
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -584,16 +585,20 @@ shared_ptr<AssembledFrame> AssembledFrame::from_asdf(const std::string &filename
 
     long mpc = ntime / 256;
 
-    // Allocate AssembledFrame with host memory (allocate scales_offsets
-    // before data, mirroring slab order in the allocator).
-    auto frame = make_shared<AssembledFrame>();
-    frame->nfreq = nfreq;
-    frame->ntime = ntime;
-    frame->beam_id = beam_id;
-    frame->time_chunk_index = time_chunk_index;
-    frame->metadata = std::move(md);
-    frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
-    frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
+    // Allocate the frame (host memory, uninitialized) via the shared factory,
+    // which derives nfreq from the metadata's zone_nfreq and enforces the ntime
+    // constraints. The scales_offsets/data arrays are filled by the memcpys below.
+    auto frame = AssembledFrame::make_uninitialized(md, ntime, beam_id, time_chunk_index);
+
+    // Cross-check the metadata-derived nfreq (used for the array shapes) against
+    // the file's explicit 'nfreq' scalar. These can only disagree for a corrupt
+    // or internally-inconsistent ASDF file.
+    if (frame->nfreq != nfreq) {
+        stringstream ss;
+        ss << "AssembledFrame::from_asdf(): file nfreq=" << nfreq
+           << " disagrees with metadata-derived nfreq=" << frame->nfreq;
+        throw runtime_error(ss.str());
+    }
 
     // Read scales_offsets array (float16, shape (nfreq, mpc, 2)).
     {
@@ -713,12 +718,12 @@ const shared_ptr<AssembledFrame> &AssembledFrameSet::get_frame(long ibeam) const
 
 
 // Static member function.
-shared_ptr<AssembledFrame> AssembledFrame::make_random(
+shared_ptr<AssembledFrame> AssembledFrame::make_uninitialized(
     const shared_ptr<const XEngineMetadata> &xmd,
     long ntime, long beam_id, long time_chunk_index)
 {
     if (!xmd)
-        throw runtime_error("AssembledFrame::make_random(): xmd is null");
+        throw runtime_error("AssembledFrame::make_uninitialized(): xmd is null");
 
     // Check that beam_id appears in xmd->beam_ids.
     bool found = false;
@@ -730,7 +735,7 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     }
     if (!found) {
         stringstream ss;
-        ss << "AssembledFrame::make_random(): beam_id=" << beam_id
+        ss << "AssembledFrame::make_uninitialized(): beam_id=" << beam_id
            << " is not in xmd->beam_ids";
         throw runtime_error(ss.str());
     }
@@ -742,6 +747,8 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     xassert((ntime % 256) == 0);
     long mpc = ntime / 256;
 
+    // Allocate scales_offsets before data, mirroring slab order in the allocator.
+    // The two arrays are left UNINITIALIZED -- the caller fills them.
     auto frame = make_shared<AssembledFrame>();
     frame->nfreq = nfreq;
     frame->ntime = ntime;
@@ -751,12 +758,11 @@ shared_ptr<AssembledFrame> AssembledFrame::make_random(
     frame->scales_offsets = Array<void>(Dtype(df_float, 16), {nfreq, mpc, 2}, af_rhost);
     frame->data           = Array<void>(Dtype(df_int, 4),    {nfreq, ntime}, af_rhost);
 
-    frame->randomize();
     return frame;
 }
 
 
-void AssembledFrame::randomize()
+void AssembledFrame::randomize(const shared_ptr<XEngineMetadata> &xmd)
 {
     // Thread-safety: the array STATE (empty vs nonempty, and which slab the
     // arrays point at) is lock-protected -- a concurrent _reap_locked() on the
@@ -790,23 +796,82 @@ void AssembledFrame::randomize()
     // not protected.
     std::mt19937 &rng = ksgpu::default_rng();
 
-    // Fill scales_offsets first (matches slab order). Scales (last-axis index 0)
-    // uniform in [0, 1]; offsets (last-axis index 1) uniform in [-1, 1].
+    // Fill scales_offsets first (matches slab order). The (scale, offset) pairs
+    // are laid out as a contiguous (nfreq, mpc, 2) array, so pair index i maps to
+    // frequency channel (i / mpc).
     if (so_nelts > 0) {
         xassert(so_arr.data != nullptr);
         xassert((so_nelts % 2) == 0);
-        std::uniform_real_distribution<float> dist_scale ( 0.0f, 1.0f);
-        std::uniform_real_distribution<float> dist_offset(-1.0f, 1.0f);
+        xassert(so_arr.is_fully_contiguous());   // loop below indexes linearly from the base ptr
         __half *so = static_cast<__half *>(so_arr.data);
         long npairs = so_nelts / 2;
-        for (long i = 0; i < npairs; i++) {
-            so[2*i + 0] = __float2half_rn(dist_scale (rng));
-            so[2*i + 1] = __float2half_rn(dist_offset(rng));
+
+        if (!xmd) {
+            // No metadata: scales uniform in [0, 1], offsets uniform in [-1, 1].
+            std::uniform_real_distribution<float> dist_scale ( 0.0f, 1.0f);
+            std::uniform_real_distribution<float> dist_offset(-1.0f, 1.0f);
+            for (long i = 0; i < npairs; i++) {
+                so[2*i + 0] = __float2half_rn(dist_scale (rng));
+                so[2*i + 1] = __float2half_rn(dist_offset(rng));
+            }
+        }
+        else {
+            // Calibrated scales/offsets: offset = 0 and scale = S per frequency
+            // zone, chosen so the dequantized 'data' array has the per-zone noise
+            // variance xmd->noise_variance.
+            //
+            // Derivation of S
+            // ---------------
+            // The dequantizer computes  out = scale*v + offset  for each int4
+            // sample v, EXCEPT the sentinel v = -8 dequantizes to 0 regardless of
+            // scale/offset (see GpuDequantizationKernel: "data == -8 -> 0"). With
+            // offset = 0 the dequantized value is  out = S * w, where w is the
+            // "effective" sample:  w = 0 if v = -8, else w = v.
+            //
+            // 'data' is filled uniformly over the 16 int4 values v in [-8, 7], so
+            // (folding -8 -> 0) w is 0 with probability 2/16 and each of
+            // {+-1, ..., +-7} with probability 1/16. Thus w is mean-zero,
+            //   E[w]   = (1/16)(0 + 0 + sum_{k=1..7} k + sum_{k=1..7} (-k)) = 0,
+            // and its variance is
+            //   Var(w) = E[w^2] = (1/16)(2 * sum_{k=1..7} k^2)
+            //          = (1/16)(2 * 140) = 280/16 = 17.5.
+            // Hence  Var(out) = S^2 * Var(w) = 17.5 * S^2, and matching the target
+            // zone variance V gives
+            //   S = sqrt(V / 17.5).
+            xassert(so_arr.ndim == 3);
+            long nfreq = so_arr.shape[0];
+            long mpc   = so_arr.shape[1];          // (scale, offset) pairs per frequency
+            xassert_eq(npairs, nfreq * mpc);
+
+            const std::vector<long>   &zone_nfreq = xmd->zone_nfreq;
+            const std::vector<double> &zone_var   = xmd->noise_variance;
+            xassert_eq((long) zone_nfreq.size(), (long) zone_var.size());   // one variance per zone
+
+            // Expand the per-zone scale S = sqrt(V / 17.5) into a per-frequency
+            // array (zones are contiguous channel ranges given by zone_nfreq).
+            std::vector<__half> scale_by_freq(nfreq);
+            long f = 0;
+            for (size_t z = 0; z < zone_nfreq.size(); z++) {
+                xassert(zone_var[z] >= 0.0);
+                __half S = __float2half_rn((float) std::sqrt(zone_var[z] / 17.5));
+                for (long k = 0; k < zone_nfreq[z]; k++) {
+                    xassert(f < nfreq);
+                    scale_by_freq[f++] = S;
+                }
+            }
+            xassert_eq(f, nfreq);   // zone_nfreq must sum to this frame's nfreq
+
+            __half zero = __float2half_rn(0.0f);
+            for (long i = 0; i < npairs; i++) {
+                so[2*i + 0] = scale_by_freq[i / mpc];   // scale (frequency = i / mpc)
+                so[2*i + 1] = zero;                     // offset = 0
+            }
         }
     }
 
     if (data_nbytes > 0) {
         xassert(data_arr.data != nullptr);
+        xassert(data_arr.is_fully_contiguous());   // contiguous byte-sweep below
         char *p = static_cast<char *>(data_arr.data);
 
         // mt19937 yields uint32_t (4 random bytes per call). The final

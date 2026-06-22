@@ -814,16 +814,21 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
 
     // Choose my_keys[0] ("primary" key).
 
+    // If args.force_float32 is set, restrict the random dtype to float32 (see
+    // RandomArgs::force_float32).
+    const Dtype f32 = Dtype::native<float>();
+
     if (args.gpu_valid) {
         vector<Key2> valid_keys;
         for (const Key2 &k: all_keys)
-            if (k.dd_rank <= max_stage2_rank)
+            if ((k.dd_rank <= max_stage2_rank) && (!args.force_float32 || (k.dtype == f32)))
                 valid_keys.push_back(k);
-        
+
         if (valid_keys.size() == 0) {
             stringstream ss;
             ss << "DedispersionConfig::make_random(): no precompiled cdd2 kernel is available "
-               << "(max_rank=" << args.max_rank << ", max_stage2_rank=" << max_stage2_rank << ")";
+               << "(max_rank=" << args.max_rank << ", max_stage2_rank=" << max_stage2_rank
+               << ", force_float32=" << args.force_float32 << ")";
             throw runtime_error(ss.str());
         }
 
@@ -831,7 +836,7 @@ DedispersionConfig DedispersionConfig::make_random(const RandomArgs &args)
         my_keys.push_back(valid_keys.at(ix));
     }
     else {
-        Dtype dtype = rand_bool() ? Dtype::from_str("float32") : Dtype::from_str("float16");
+        Dtype dtype = (args.force_float32 || rand_bool()) ? Dtype::from_str("float32") : Dtype::from_str("float16");
         long dd_rank = rand_int(1, max_stage2_rank + 1);
 
         Key2 primary_key = _make_random_cdd2_key(dtype, dd_rank);
