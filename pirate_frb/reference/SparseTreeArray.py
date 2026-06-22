@@ -328,8 +328,22 @@ class SparseTreeArray:
         SparseTreeArray. We assume a non-bit-reversed delay index.
         """
         sarr = SparseTreeArray.make_tree_gridding_output(channel_map, ifreq)
+        nf_start = sarr.nf
         while sarr.k < sarr.r:
             sarr = sarr.iterate()
+        # Invariant: nf_start == nt_end, where nf_start is the gridding footprint width (the
+        # number of adjacent tree channels the one-hot spreads across, at t=0) and nt_end is
+        # the final tile's PRE-shift time extent. (At k==r, nf==1, so there is one tile.)
+        #
+        # Hand-waving argument: the tshifts absorb the per-delay bulk dispersion sweep, so
+        # the stored nt measures only the RELATIVE time-smearing across the footprint. The
+        # sweep is approximately linear in frequency, so a width-nf_start frequency footprint
+        # maps onto a width-nf_start time smear at the maximum delay; hence the residual
+        # (pre-shift) time footprint equals the spatial footprint. Equivalently, this is a
+        # check that nt stays minimal (no padding) and the tshift/dbits machinery works as
+        # intended.
+        nt_end = sarr.tiles[0].nt
+        assert nf_start == nt_end, (nf_start, nt_end)
         return sarr
 
     def iterate(self):
