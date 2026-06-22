@@ -151,6 +151,9 @@ def test(args):
         if run_all_tests or args.avar:
             SparseTreeArray.test_random_tree_gridding()
             SparseTreeArray.test_random_dedispersion()
+            SparseTreeArray.test_random_iterate_aligned()
+            SparseTreeArray.test_random_iterate_singletons()
+            SparseTreeArray.test_single_channel_dbits()
         
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)
