@@ -25,8 +25,16 @@ pirate_frb/rpc/grpc/*_pb2_grpc.py
 pirate_frb/rpc/grpc/__init__.py
 pirate_frb/rpc/grpc/__init__.pyi
 
+# LaTeX (notes/*.tex -> notes/*.pdf; pdflatex temp files)
+notes/*.aux
+notes/*.log
+notes/*.out
+notes/*.toc
+notes/*.pdf
+
 # Sphinx documentation
 docs/build/
+docs/source/_static/*.pdf
 docs/source/_autosummary/
 docs/source/notes/
 docs/source/configs/

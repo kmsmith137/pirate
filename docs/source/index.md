@@ -31,3 +31,7 @@ notes/gpu_kernels
 notes/pybind11
 notes/thread_backed_class
 ```
+
+## Supplementary notes (PDF)
+
+- <a href="_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tree dedispersion (PDF)</a> -- the tree gridding and dedispersion kernels (compiled from `notes/tree_dedispersion.tex`).

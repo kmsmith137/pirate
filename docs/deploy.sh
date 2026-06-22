@@ -16,8 +16,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Building Sphinx docs..."
-make -C "$REPO_ROOT/docs" clean html
+echo "==> Building Sphinx docs (docs-clean for a fresh build; also builds notes/*.tex PDFs)..."
+# 'docs' depends on 'tex', so the notes PDFs are built and copied into the source
+# tree (conf.py) before Sphinx runs. 'docs-clean' first gives a from-scratch build.
+make -C "$REPO_ROOT" docs-clean docs
 
 echo "==> Preparing gh-pages worktree..."
 # Create the gh-pages branch as an orphan if it doesn't exist yet.
