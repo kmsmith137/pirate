@@ -150,6 +150,7 @@ def test(args):
 
         if run_all_tests or args.avar:
             SparseTreeArray.test_random_tree_gridding()
+            SparseTreeArray.test_random_dedispersion()
         
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)

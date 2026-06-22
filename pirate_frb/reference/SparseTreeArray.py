@@ -123,11 +123,72 @@ class SparseTreeArray:
         """
         The DD(k) operation defined in notes/tree_dedispersion.tex has input shape
         (2^(r-k), 2^k, ntime) and output shape (2^(r-k-1), 2^(k+1), ntime). This
-        method returns a SpareTreeArray representing the output, given a SparseTreeArray
+        method returns a SparseTreeArray representing the output, given a SparseTreeArray
         representing the input. We assume non-bit-reversed delay indices, and pad 'nt'
         as needed.
+
+        The DD(k) recursion (with d = d'>>1, e = d'&1, lower-half shift d+e = ceil(d'/2)):
+
+            out[F, d', t] = (1/sqrt2) ( in[2F, d, t-(d+e)] + in[2F+1, d, t] )
+
+        merges input channels 2F (lower freq) and 2F+1 (upper freq) into output channel F.
+        This works DIRECTLY on the compact (nf, 2^|dbits|, nt) representation: it never
+        forms the dense 2^(r-k) f-axis or 2^k d-axis. We only build the 2^|dbits_out|
+        delay slices that are actually stored (looping over them), gathering input rows
+        with out-of-range channels zero-filled.
         """
-        pass
+        assert self.k < self.r, "iterate(): already at k == r"
+        k = self.k
+        f0_in, nf_in, nt_in, dbits_in = self.f0, self.nf, self.nt, self.dbits
+
+        # Output coarse channels [F0, F0+nf_out): channel F merges input rows 2F and 2F+1.
+        F0 = f0_in // 2
+        nf_out = (f0_in + nf_in - 1) // 2 - F0 + 1
+        base = 2 * F0 - f0_in                       # 0 if f0_in even, -1 if odd
+        i_out = np.arange(nf_out)
+        lower_idx = base + 2 * i_out                # input data-row for channel 2F  (may be out of range)
+        upper_idx = lower_idx + 1                   # input data-row for channel 2F+1
+
+        # dbits_out (decided from channel indices, not values): the lower-half time shift
+        # ceil(d'/2) depends on the full delay, so if any lower channel is present the
+        # output depends on every delay bit; otherwise (a single upper-only channel) the
+        # input's bit dependence just shifts up by one (bit b of d -> bit b+1 of d').
+        has_lower = bool(np.any((lower_idx >= 0) & (lower_idx < nf_in)))
+        if has_lower:
+            dbits_out = list(range(k, -1, -1))      # all k+1 bits
+            max_shift = 1 << k                      # max ceil(d'/2) over d' in [0, 2^(k+1))
+        else:
+            dbits_out = [b + 1 for b in dbits_in]   # reverse-sorted; bits in [1, k]
+            max_shift = 0
+        m_out = len(dbits_out)
+
+        rsqrt2 = 1.0 / np.sqrt(2.0)
+        nt_alloc = nt_in + max_shift
+        data_in = self.data.reshape(nf_in, 1 << len(dbits_in), nt_in)
+        data_out = np.zeros((nf_out, 1 << m_out, nt_alloc), dtype=np.float64)
+
+        for s_out in range(1 << m_out):
+            dp = SparseTreeArray._representative_delay(s_out, dbits_out)   # representative d'
+            d, e = dp >> 1, dp & 1
+            shift = d + e
+            slab = data_in[:, SparseTreeArray._selected_bits_index(d, dbits_in), :]   # B[:, d, :]
+            data_out[:, s_out, :nt_in] += rsqrt2 * SparseTreeArray._gather_rows(slab, upper_idx)
+            if has_lower:
+                # Skip when no lower channels: 'shift' can be nonzero (from d) while
+                # data_out is only nt_in wide, so writing the (all-zero) lower term would
+                # raise a shape error.
+                lower = SparseTreeArray._gather_rows(slab, lower_idx)
+                data_out[:, s_out, shift:shift + nt_in] += rsqrt2 * lower
+
+        # Trim trailing all-zero time samples (sign-agnostic: only drops genuinely-zero columns).
+        nz_t = np.nonzero(np.any(data_out != 0.0, axis=(0, 1)))[0]
+        nt_out = int(nz_t[-1]) + 1 if nz_t.size else 1
+        data_out = np.ascontiguousarray(
+            data_out[:, :, :nt_out].reshape((nf_out,) + (2,) * m_out + (nt_out,)))
+
+        return SparseTreeArray(r=self.r, k=k + 1, f0=F0, nf=nf_out, nt=nt_out,
+                               dbits=dbits_out, data=data_out,
+                               initial_f0=self.initial_f0, initial_nf=self.initial_nf)
 
 
     def unpack(self, ntime):
@@ -146,7 +207,7 @@ class SparseTreeArray:
         m = len(self.dbits)
 
         data_flat = self.data.reshape(self.nf, 2**m, self.nt)   # collapse selected-bit axes
-        flat_idx = self._delay_to_flat_index(np.arange(nd_full))
+        flat_idx = self._selected_bits_index(np.arange(nd_full), self.dbits)
         gathered = data_flat[:, flat_idx, :]                    # (nf, nd_full, nt)
 
         out = np.zeros((nf_full, nd_full, ntime), dtype=self.data.dtype)
@@ -154,14 +215,37 @@ class SparseTreeArray:
         return out
 
 
-    def _delay_to_flat_index(self, d):
-        # Map each delay d to a flat index into the 2^m collapsed selected-bit axes.
-        # dbits[0] is the most significant bit (matches data's C-order middle block).
-        m = len(self.dbits)
-        idx = np.zeros_like(d)
-        for j, b in enumerate(self.dbits):
-            idx |= ((d >> b) & 1) << (m - 1 - j)
+    @staticmethod
+    def _selected_bits_index(d, dbits):
+        # Flat index into the 2^len(dbits) collapsed selected-bit axes, for delay value(s)
+        # d (a python int or a numpy array). dbits[0] is the most significant bit (matches
+        # data's C-order middle block). 'd * 0' seeds idx with d's type/shape (so an empty
+        # dbits still yields an array when d is an array).
+        idx = d * 0
+        m = len(dbits)
+        for j, b in enumerate(dbits):
+            idx = idx | (((d >> b) & 1) << (m - 1 - j))
         return idx
+
+
+    @staticmethod
+    def _representative_delay(s, dbits):
+        # Inverse of _selected_bits_index: the delay whose dbits-bits encode flat index s,
+        # with all non-dbits bits set to zero.
+        d = 0
+        m = len(dbits)
+        for j, b in enumerate(dbits):
+            d |= ((s >> (m - 1 - j)) & 1) << b
+        return d
+
+
+    @staticmethod
+    def _gather_rows(slab, idx):
+        # Gather rows slab[idx] (slab has shape (nin, T)); out-of-range idx -> zero rows.
+        out = np.zeros((len(idx), slab.shape[1]), dtype=slab.dtype)
+        valid = (idx >= 0) & (idx < slab.shape[0])
+        out[valid] = slab[idx[valid]]
+        return out
 
 
     @staticmethod
@@ -206,29 +290,50 @@ class SparseTreeArray:
 
 
     @staticmethod
-    def test_one_tree_gridding(channel_map, ifreq):
-        """
-        Compare make_tree_gridding_output(...).unpack() against ReferenceTreeGriddingKernel
-        applied to a one-hot input, for a specific (channel_map, ifreq). nfreq is inferred
-        as round(channel_map[0]) (the top edge of a full channel_map).
-        """
-        import ksgpu
+    def _reference_gridding(channel_map, ifreq, ntime):
+        # Apply ReferenceTreeGriddingKernel to a one-hot (ifreq, t=0) input; returns a
+        # (1, ntree, ntime) float32 array. nfreq is inferred as round(channel_map[0]) (the
+        # top edge of a full channel_map). Shared by the gridding + dedispersion tests.
         from ..kernels import ReferenceTreeGriddingKernel
-
         cm = np.ascontiguousarray(channel_map, dtype=np.float64)
         ntree = len(cm) - 1
         nfreq = int(round(float(cm[0])))
-        ntime = 32                                  # kernel needs ntime % (1024/nbits) == 0 (nbits=32);
-                                                    # >1 also lightly exercises unpack's zero-padding
-        ifreq = int(ifreq)
-        assert 0 <= ifreq < nfreq
-
+        assert 0 <= int(ifreq) < nfreq
         one_hot = np.zeros((1, nfreq, ntime), dtype=np.float32)
-        one_hot[0, ifreq, 0] = 1.0
+        one_hot[0, int(ifreq), 0] = 1.0
         kernel = ReferenceTreeGriddingKernel(nfreq=nfreq, nchan=ntree, ntime=ntime,
                                              beams_per_batch=1, channel_map=cm)
-        ref = kernel.apply(one_hot)                 # (1, ntree, ntime) float32
+        return kernel.apply(one_hot)
 
+
+    @staticmethod
+    def _bit_reverse_permutation(rank):
+        # perm[d] = bit_reverse(d, rank). ReferenceTree's output uses a bit-reversed delay
+        # index; indexing its delay axis with this permutation restores the natural
+        # (notes / SparseTreeArray) ordering.
+        n = 1 << rank
+        perm = np.zeros(n, dtype=np.intp)
+        for d in range(n):
+            x, b = d, 0
+            for _ in range(rank):
+                b = (b << 1) | (x & 1)
+                x >>= 1
+            perm[d] = b
+        return perm
+
+
+    @staticmethod
+    def test_one_tree_gridding(channel_map, ifreq):
+        """
+        Compare make_tree_gridding_output(...).unpack() against ReferenceTreeGriddingKernel
+        applied to a one-hot input, for a specific (channel_map, ifreq).
+        """
+        import ksgpu
+        cm = np.ascontiguousarray(channel_map, dtype=np.float64)
+        ntree = len(cm) - 1
+        ntime = 32                                  # gridding kernel needs ntime % (1024/nbits) == 0 (nbits=32)
+
+        ref = SparseTreeArray._reference_gridding(cm, ifreq, ntime)   # (1, ntree, ntime) float32
         sarr = SparseTreeArray.make_tree_gridding_output(cm, ifreq)
         got = sarr.unpack(ntime)                    # (ntree, 1, ntime) float64
         assert sarr.k == 0 and got.shape == (ntree, 1, ntime)
@@ -242,3 +347,43 @@ class SparseTreeArray:
     def test_random_tree_gridding():
         cm, ifreq = SparseTreeArray.random_channel_map()
         SparseTreeArray.test_one_tree_gridding(cm, ifreq)
+
+
+    @staticmethod
+    def test_one_dedispersion(channel_map, ifreq):
+        """
+        Compare make_dedispersion_output(...).unpack() against
+        ReferenceTreeGriddingKernel -> ReferenceTree (no subbands) on a one-hot input.
+        """
+        import ksgpu
+        from ..kernels import ReferenceTree
+
+        cm = np.ascontiguousarray(channel_map, dtype=np.float64)
+        ntree = len(cm) - 1
+        r = ntree.bit_length() - 1
+        # ntime: a multiple of 32 (gridding-kernel constraint) and > 2^r, so the max
+        # dispersion delay (2^r - 1) fits in a single ReferenceTree chunk -- a single chunk
+        # with zeroed pstate then equals the non-incremental dedispersion.
+        ntime = ((ntree + 31) // 32 + 1) * 32
+
+        grid = SparseTreeArray._reference_gridding(cm, ifreq, ntime)   # (1, ntree, ntime) f32
+        buf = np.ascontiguousarray(grid.reshape(1, 1, ntree, ntime))   # (1,1,ntree,ntime) f32
+        tree = ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
+                             nspec=1, subband_counts=[1])
+        tree.dedisperse(buf, None)                 # mutates buf IN PLACE; delay axis is bit-reversed
+        perm = SparseTreeArray._bit_reverse_permutation(r)
+        ref_natural = buf[0, 0][perm, :]           # (ntree, ntime), natural delay order
+
+        sarr = SparseTreeArray.make_dedispersion_output(cm, ifreq)
+        got = sarr.unpack(ntime)                    # (1, ntree, ntime) float64
+        assert sarr.k == r and got.shape == (1, ntree, ntime)
+
+        # All-non-negative computation -> epsabs=0 (zeros align structurally).
+        ksgpu.assert_arrays_equal(ref_natural, got[0], "reftree", "got",
+                                  ["delay", "time"], epsabs=0.0)
+
+
+    @staticmethod
+    def test_random_dedispersion():
+        cm, ifreq = SparseTreeArray.random_channel_map()
+        SparseTreeArray.test_one_dedispersion(cm, ifreq)
