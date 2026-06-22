@@ -28,6 +28,7 @@ from . import casm
 from . import kernels
 from . import loose_ends
 from . import core
+from . import reference
 
 from .HwtestSender import HwtestSender
 from .Hwtest import Hwtest
