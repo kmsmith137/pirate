@@ -1,3 +1,12 @@
+/**
+
+This is the gRPC protocol definition for the CHORD FRB Grouper-to-Sifter.
+
+Its canonical source is
+https://github.com/dstndstn/chord-frb-sifter/blob/main/chord_frb_grpc/frb_sifter.proto
+
+*/
+
 syntax = "proto3";
 
 service FrbSifter {
