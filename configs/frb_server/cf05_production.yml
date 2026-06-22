@@ -40,23 +40,31 @@ ringbuf_nchunks: 512
 ########################################  Network config  ########################################
 
 
-# 'data_ip_addrs' is a list (length num_servers). Each entry is either an 'ip_addr:tcp_port'
+# 'data_ip_addrs' is a list (length num_servers). Each entry is either an 'ip:tcp_port'
 # string, or a list of such strings. The latter case arises if a server receives data from
 # multiple IP addresses. We expect this to happen in full CHORD. (Under the hood, each IP
 # address corresponds to one 'class Receiver', and an FrbServer can have multiple Receivers.)
+#
+# The 'ip' part of each 'ip:tcp_port' entry may be written in any of three ways, so that ONE
+# config file can be shared across a cluster of machines with different IP addresses:
+#
+#   - a literal IPv4 address                                  e.g. '10.0.0.2:5000'
+#   - a glob matched against this machine's IPv4 addresses    e.g. '10.0.0.*:5000'
+#   - a network device / NIC name                             e.g. 'enp13s0f0np0:5000'
 
 data_ip_addrs:
-  - [ '10.0.0.2:5000', '10.0.1.2:5000' ]
-  - [ '10.0.2.2:5000', '10.0.3.2:5000' ]
+  - [ '10.0.0.*:5000', '10.0.1.*:5000' ]
+  - [ '10.0.2.*:5000', '10.0.3.*:5000' ]
 
-# 'rpc_ip_addrs' is a list of 'ip_addr:tcp_port' strings. Currently, RPC threads are
-# not pinned to a specific CPU. This is fine for now, since all RPCs are "lightweight".
-# We may revisit in the future, when we define "heavyweight" RPCs for e.g. injections.
-# See discussion in include/pirate/FrbServer.hpp.
+# 'rpc_ip_addrs' is a list of 'ip:tcp_port' strings (one per server). The 'ip' accepts the
+# same literal / glob / device-name forms as data_ip_addrs above (see resolve_ip_spec()).
+# Currently, RPC threads are not pinned to a specific CPU. This is fine for now, since all
+# RPCs are "lightweight". We may revisit in the future, when we define "heavyweight" RPCs
+# for e.g. injections. See discussion in include/pirate/FrbServer.hpp.
 
 rpc_ip_addrs:
-  - '10.222.3.5:6000'
-  - '10.222.3.5:6001'
+  - '10.222.3.*:6000'
+  - '10.222.3.*:6001'
 
 # FrbGrouper addresses (one per server). The FrbServer is the gRPC *client*;
 # the grouper (downstream consumer) is the server. Must be loopback (CUDA IPC

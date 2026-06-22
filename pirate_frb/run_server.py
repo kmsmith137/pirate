@@ -10,7 +10,7 @@ import yaml
 import ksgpu
 
 from .Hardware import Hardware
-from .utils import ThreadAffinity, extract_ip, check_mtu
+from .utils import ThreadAffinity, extract_ip, check_mtu, resolve_addr
 from .core import BumpAllocator, SlabAllocator, AssembledFrameAllocator, FileWriter, Receiver
 from .pirate_pybind11 import DedispersionConfig
 
@@ -196,6 +196,26 @@ def _parse_config(filename):
     return config
 
 
+def _resolve_ip_addrs(config, hw, filename):
+    """Resolve glob / device-name 'ip' specs in data_ip_addrs and rpc_ip_addrs to
+    this machine's concrete IPv4 addresses, in place. Literal-IPv4 specs pass
+    through unchanged. This is what lets a single config file be shared across a
+    cluster of machines with different IP addresses -- each machine resolves its
+    own local addresses. See resolve_addr() / resolve_ip_spec() in utils/network.py.
+
+    grouper_ip_addrs are intentionally NOT resolved: they must stay loopback
+    (CUDA IPC requires the grouper on the same node), so a literal '127.0.0.1' is
+    the right thing there.
+    """
+    for i, addrs in enumerate(config['data_ip_addrs']):
+        for j in range(len(addrs)):
+            addrs[j] = resolve_addr(hw, addrs[j], context=f"{filename}: data_ip_addrs[{i}][{j}]: ")
+
+    rpc = config['rpc_ip_addrs']
+    for i in range(len(rpc)):
+        rpc[i] = resolve_addr(hw, rpc[i], context=f"{filename}: rpc_ip_addrs[{i}]: ")
+
+
 def _validate_hardware(config, hw):
     """Check that all data_ip_addrs and ssd_dirs are consistent with server_cpus.
 
@@ -267,6 +287,12 @@ class RunServerHelper:
         self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
         self.n = self.config['num_servers']
         self.hw = Hardware()
+        # Resolve any glob / device-name 'ip' specs in data_ip_addrs / rpc_ip_addrs
+        # to this machine's concrete IPv4 addresses, so the same config file works
+        # on a cluster of machines with different IP addresses. Done here (before
+        # the hardware check and all downstream consumers) so everything sees
+        # concrete 'ip:port' strings.
+        _resolve_ip_addrs(self.config, self.hw, server_config_filename)
         self.processing_delay_sec = processing_delay_sec
         self.no_dedispersion = no_dedispersion
         # --no-dedispersion implies --no-grouper (no GPU work => no dedispersion
