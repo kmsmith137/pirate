@@ -337,7 +337,6 @@ PYFILES = \
   pirate_frb/casm/CasmReferenceBeamformer.py \
   pirate_frb/casm/Dense1dBeamformer.py \
   pirate_frb/core/__init__.py \
-  pirate_frb/core/AnalyticDedisperser.py \
   pirate_frb/reference/__init__.py \
   pirate_frb/reference/SparseTreeArray.py \
   pirate_frb/kernels/__init__.py \
