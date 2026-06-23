@@ -119,4 +119,51 @@ By default, \verb|in[...,-N]| is defined to be zero.
 
 \end{itemize}
 
+\section{Subband searches}
+
+So far, we have described a search for FRBs which cover the full tree-freq range $0 \le f < 2^r$.
+This would be suboptimal since real FRBs do not always cover the full frequency range.
+Next, we introduce a ``sub-band'' search for searching a configurable set of subbands.
+
+\subsection{Parameterization of subbands}
+
+Our dedispersion config files contain a length-$(R+1)$ integer-valued array of subband counts $C_l$.\footnote{In 
+the code, $R$ is denoted {\tt pf\_rank}, $l$ is denoted {\tt pf\_level}, and $C_l$ is denoted {\tt frequency\_subband\_counts}.}
+Here $0 \le R \le r$, where $r$ is the tree rank.
+The counts $C_l$ parameterize a set of subbands as follows:
+\begin{itemize}
+\item Frequency subbands are indexed by a pair $(l,s)$ where $0 \le l \le R$ and $0 \le s < C_l$.
+\item Level $l=0$ is special: subband $(0,s)$ corresponds to tree-freq range
+\begin{equation}
+2^{r-R} s \le f < 2^{r-R} (s+1)
+\end{equation}
+\item At levels $l>0$, subband $(l,s)$ corresponds to tree-freq range
+\begin{equation}
+2^{r-R+l-1} s \le f < 2^{r-R+l-1} (s+2)
+\end{equation}
+Thus, level 0 consists of non-overlapping bands whose fractional width is $1/2^R$.
+Levels $l>0$ consist of bands whose fractional width is $1/2^{R-l}$, and overlap by a factor 2.
+\item
+To avoid ``overflowing'' the band, $C_l$ must satisfy
+\begin{equation}
+0 \le C_l \le \begin{cases}
+2^R & \mbox{for } l=0 \\
+2^{R-l+1}-1 & \mbox{for } l>0
+\end{cases}
+\end{equation}
+A level with $C_l=0$ is allowed, and simply contributes no subbands.
+We require $C_R=1$, i.e.~we always search the full frequency band.
+The case $C_l=\{1\}$ (with $R=0$) corresponds to disabling subbands, and only searching the full band.
+\item The details of this scheme, including the ``specialness'' of level $l=0$, are
+dictated by convenience in the GPU kernel.
+\end{itemize}
+
+% \subsection{Dedispersion with subbands}
+
+% Define S,M. Give full array and per-subband shapes.
+
+% Split into "case 1: l=0 or even s", and "case 2: l>0 and odd s".
+
+% Comment on full range.
+
 \end{document}

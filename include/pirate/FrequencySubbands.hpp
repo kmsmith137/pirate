@@ -32,14 +32,14 @@ struct FrequencySubbands
     //     spaced in delay (not frequency!), ordered so that i=0 is high-frequency.
     //
     //   - Frequency subbands are indexed by a pair (pf_level,s) where 0 <= pf_level <= pf_rank 
-    //     and 0 <= s < subband_counts[f].
+    //     and 0 <= s < subband_counts[pf_level].
     //
     //   - pf_level=0 is special: s=0,1,... corresponds directly to i=0,1,... (non-overlapping)
     //
     //   - For pf_level > 0, each s=0,1,.. corresponds to an overlapping band 
     //      (s * 2^(pf_level-1)) <= i < ((s+2) * 2^(pf_level-1))
     //
-    //   - We require subband_counts[pf_rank]=1, and the only "subband" at pf_level==pf_rank
+    //   - We require subband_counts[pf_rank]=1, i.e. the only "subband" at pf_level==pf_rank
     //     is the full frequency range 0 <= i < 2^(pf_rank).
     //
     //   - The details of this scheme, including the "specialness" of pf_level==0, are
