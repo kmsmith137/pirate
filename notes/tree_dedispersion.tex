@@ -1,6 +1,7 @@
 \documentclass{article}
 \usepackage[margin=1in]{geometry}
 \usepackage{setspace}
+\usepackage{graphicx}
 \usepackage{amsmath}
 
 \def\DD{{\rm DD}}
@@ -160,6 +161,16 @@ The case $C_l=\{1\}$ (with $R=0$) corresponds to disabling subbands, and only se
 \item The details of this scheme, including the ``specialness'' of level $l=0$, are
 dictated by convenience in the GPU kernel.
 \end{itemize}
+Some example subbands are shown in Figure \ref{fig:subbands}.
+\begin{figure}
+\centering
+\includegraphics[width=\textwidth]{figs/chord_subbands.pdf}
+\caption{Frequency subbands in a CHORD config with {\tt frequency\_subband\_counts=[5,9,7,3,1]}).
+The top panel shows the subbands in tree-freqs (where they are ``naturally'' defined) and the bottom
+panel shows the conversion to physical frequency $\nu$ in MHz. Note that the conversion between tree-freqs
+and $\nu$ is monotone decreasing.}
+\label{fig:subbands}
+\end{figure}
 
 \subsection{Subbanded dedispersion}
 
