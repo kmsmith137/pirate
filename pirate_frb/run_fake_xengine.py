@@ -4,6 +4,8 @@ import queue
 import time
 import threading
 
+from datetime import datetime, timezone
+
 from .Hardware import Hardware
 from .utils import ThreadAffinity, extract_ip, check_mtu
 from .core import (
@@ -23,8 +25,7 @@ class RunFakeXEngineHelper:
     spawn controllers; wait for Ctrl-C; cleanup).
     """
 
-    def __init__(self, rpc_addrs, nworkers=128, paced=True, send_junk=False,
-                 now=False):
+    def __init__(self, rpc_addrs, nworkers=128, paced=True, send_junk=False):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -54,7 +55,6 @@ class RunFakeXEngineHelper:
         self.controllers = []     # parallel (Phase 2 fills this)
         self.exc_list = []        # list[(rpc_addr, BaseException)]
         self.exc_lock = threading.Lock()
-        self.now = now
 
     def run(self):
         """Top-level lifecycle: Phase 1 build, Phase 2 spawn, wait, cleanup.
@@ -101,10 +101,10 @@ class RunFakeXEngineHelper:
             beam_ids,
             cfg.fake_time_sample_ms,
         )
-        if self.now:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
-            xmd.unix_ns_at_seq_0 = int(now.timestamp() * 1e9)
+        # Anchor the X-engine clock (unix-timestamp-at-fpga-seq-0) to the
+        # current UTC wall-clock time.
+        now = datetime.now(timezone.utc)
+        xmd.unix_ns_at_seq_0 = int(now.timestamp() * 1e9)
 
         self._print_receiver_details(rpc_addr, cfg, xmd)
         vcpu_list = self._verify_nics_and_mtu(rpc_addr, cfg)
@@ -410,7 +410,7 @@ class RunFakeXEngineHelper:
                 pass
 
 
-def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False, now=False):
+def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -434,5 +434,5 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False, now=F
             False (default), every chunk is randomized.
     """
     helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced,
-                                  send_junk=send_junk, now=now)
+                                  send_junk=send_junk)
     helper.run()

@@ -1230,7 +1230,6 @@ def parse_run_fake_xengine(subparsers):
                         help='One or more "ip:port" strings (one per receiver)')
     parser.add_argument('-w', '--workers', type=int, default=128,
                         help='Number of worker threads per FakeXEngine (default 128)')
-    parser.add_argument('--now', action='store_true', help='Set clock time to now?')
     parser.add_argument('-P', '--unpaced', action='store_true',
                         help='Disable pacing -- send chunks as fast as possible '
                              '(default: pace to stay <=5 chunks ahead of server)')
@@ -1243,8 +1242,7 @@ def parse_run_fake_xengine(subparsers):
 def run_fake_xengine_command(args):
     from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers,
-                     paced=not args.unpaced, send_junk=args.send_junk,
-                     now=args.now)
+                     paced=not args.unpaced, send_junk=args.send_junk)
 
 ####################################################################################################
 
