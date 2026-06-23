@@ -24,16 +24,31 @@ class SparseTreeTile:
       t0:      delay- and f-independent constant forward time shift (>= 0); equivalently
                the data's pre-shift time origin, or a "constant tshift". Supported in all
                tile ops (unpack/slice/iterate_*); see notes/tree_dedispersion.tex.
+
+    The constructor takes an optional trim=False: when True, all-zero leading/trailing time
+    slices of 'data' are dropped (trailing shrinks nt; leading folds into t0), giving the
+    minimal (nt, t0) for the same unpacked array.
     """
 
-    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0):
+    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0, trim=False):
         self.r, self.k = r, k
         self.f0, self.nf = f0, nf
-        self.nt = nt
         self.dbits = list(dbits)
+        t0 = int(t0)
+        if trim:
+            # Drop all-zero leading/trailing time slices (over the f and delay-bit axes).
+            # Trailing slices shrink nt; leading slices fold into t0 (the constant forward
+            # shift), leaving unpack() unchanged but (nt, t0) minimal.
+            data = np.asarray(data)
+            nzt = np.nonzero(np.any(data != 0.0, axis=tuple(range(data.ndim - 1))))[0]
+            lo, hi = (int(nzt[0]), int(nzt[-1]) + 1) if nzt.size else (0, 1)
+            data = np.ascontiguousarray(data[..., lo:hi])
+            t0 += lo
+            nt = hi - lo
+        self.nt = nt
         self.data = data
         self.tshifts = np.asarray(tshifts, dtype=np.int64)
-        self.t0 = int(t0)
+        self.t0 = t0
         self._check_invariants()
 
     def _check_invariants(self):
@@ -54,8 +69,8 @@ class SparseTreeTile:
         """
         Return the sub-tile for f-index range [c0, c1) (must lie within [f0, f0+nf)). The
         uniform tshifts make this a pure restriction of the data rows; (nt, dbits, tshifts)
-        are inherited unchanged -- valid, but possibly non-minimal for the sub-range. (A
-        future 'trim=False' optional arg could re-minimize them.)
+        are inherited unchanged -- valid, but possibly non-minimal for the sub-range.
+        (Passing trim=True to the constructor would re-minimize the time range.)
         """
         assert self.f0 <= c0 < c1 <= self.f0 + self.nf
         data = np.ascontiguousarray(self.data[c0 - self.f0 : c1 - self.f0])
@@ -167,14 +182,12 @@ class SparseTreeTile:
             data_out[:, dp, :nt_in] += rsqrt2 * gu
             data_out[:, dp, sh:sh + nt_in] += rsqrt2 * gl
 
-        nz_t = np.nonzero(np.any(data_out != 0.0, axis=(0, 1)))[0]
-        nt_out = int(nz_t[-1]) + 1 if nz_t.size else 1
-        data_out = np.ascontiguousarray(
-            data_out[:, :, :nt_out].reshape((nf_out,) + (2,) * m_out + (nt_out,)))
+        data_out = data_out.reshape((nf_out,) + (2,) * m_out + (nt_alloc,))
         tshifts_out = np.concatenate(([0], tin)).astype(np.int64)
         # t0 is a uniform shift: it factors out of the DD sum, so it passes through.
-        return SparseTreeTile(tile.r, k + 1, F0, nf_out, nt_out, dbits_out, data_out,
-                              tshifts_out, t0=tile.t0)
+        # trim=True drops leading/trailing all-zero time slices (leading folds into t0).
+        return SparseTreeTile(tile.r, k + 1, F0, nf_out, nt_alloc, dbits_out, data_out,
+                              tshifts_out, t0=tile.t0, trim=True)
 
     @staticmethod
     def iterate_singletons(lower, upper, require_aligned=True):
@@ -250,11 +263,10 @@ class SparseTreeTile:
                 col = up_flat[0, SparseTreeTile._selected_bits_index(d, upper.dbits), :]
                 data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
-        nz_t = np.nonzero(np.any(data_out != 0.0, axis=(0, 1)))[0]
-        nt_out = int(nz_t[-1]) + 1 if nz_t.size else 1
-        data_out = np.ascontiguousarray(
-            data_out[:, :, :nt_out].reshape((1,) + (2,) * m_out + (nt_out,)))
-        return SparseTreeTile(r, k + 1, f_out, 1, nt_out, dbits_out, data_out, tmin, t0=t0_out)
+        data_out = data_out.reshape((1,) + (2,) * m_out + (nt_alloc,))
+        # trim=True drops leading/trailing all-zero time slices (leading folds into t0_out).
+        return SparseTreeTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
+                              t0=t0_out, trim=True)
 
     @staticmethod
     def split_to_multiplets(tile, nlow, coarse_lag_coeff):
