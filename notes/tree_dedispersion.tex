@@ -207,7 +207,7 @@ To populate the \verb|out| array, we slice/reshape \verb|tmp| and apply time lag
 \end{equation}
 where on the RHS we define:
 \begin{equation}
-d \equiv d_{\rm hi} 2^l + d_{\rm lo}   \hspace{1.5cm} T \equiv d (2^{R-l}-1-f)
+d \equiv d_{\rm hi} 2^l + d_{\rm lo}   \hspace{1.5cm} T \equiv d_{\rm hi} 2^l (2^{R-l}-1-f)
 \end{equation}
 
 \item {\bf Case 2: $l>0$ and odd $s$.}
@@ -231,13 +231,32 @@ Then \verb|tmp| has shape $(2^{R-l+1}, 2^{r-R+l-1}, N_{\rm time})$.
 where on the RHS we define:
 \begin{equation}
 d \equiv d_{\rm hi} 2^{l-1} + d_{\rm lo}
-  \hspace{1.5cm} T_0 = d (2^{R-l+1} - 2f - 3) 
-  \hspace{1.5cm} T_1 = T_0 + (2^{R-l} - f - 2)
+  \hspace{1.5cm} T_0 = T_1 = d_{\rm hi} 2^{l-1} (2^{R-l+1} - 2f - 3)
 \end{equation}
 (Warning: the quantities $f,k,d_{\rm lo}$ have slightly different meanings in cases 1 and 2!)
 
 \end{itemize}
 Note that subband dedispersion includes the full band (via $C_R=1$), but the full-band output array is
 ``reshaped'' to $(2^{r-R}, 2^R, N_{\rm time})$, whereas in the previous section it had shape $(2^r, N_{\rm time})$.
+
+\medskip
+\noindent{\bf Remark (time-lag convention).}
+The lags $T$ (Case 1) and $T_0 = T_1$ (Case 2) above depend only on the {\em coarse} delay $d_{\rm hi}$,
+not on the fine delay $d_{\rm lo}$: both equal $g\, d_{\rm hi}$, where $g$ is the number of coarse
+channels (each $2^{r-R}$ tree-freq channels wide) lying above the subband.
+Equivalently, the $2^l$ fine-DM multiplets that share a given subband and coarse delay $d_{\rm hi}$ are
+assigned a {\em common} time origin, extrapolated to the full-band top from the coarse delay alone.
+This is the convention used by the GPU kernel and \verb|ReferenceTree| (their \verb|ff*dd|), and we
+adopt it here only to match the current code.
+
+Arguably it would make more sense to reference each multiplet to the full-band-top arrival
+extrapolated from its {\em own} (full) subband delay, so that a given burst peaks at the same output
+time index for every multiplet of its DM. That choice replaces the lags above by
+\begin{align}
+\mbox{Case 1:}\quad & T = d\,(2^{R-l}-1-f), \qquad\quad d = d_{\rm hi}2^l + d_{\rm lo}, \nn \\
+\mbox{Case 2:}\quad & T_0 = d\,(2^{R-l+1}-2f-3), \qquad T_1 = T_0 + (2^{R-l}-f-2),
+\end{align}
+i.e.~the (floored) half-integer extrapolation, for which $T_0 \ne T_1$. We may switch the code to
+this convention in the future.
 
 \end{document}
