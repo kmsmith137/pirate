@@ -17,7 +17,7 @@ from . import loose_ends
 from . import core
 from . import tests
 
-from .reference import SparseTreeArray
+from .reference import SparseTreeArray, PeakFindingVariance
 
 from . import (
     DedispersionConfig,
@@ -157,7 +157,9 @@ def test(args):
             SparseTreeArray.test_random_split_to_multiplets()
             SparseTreeArray.test_subbanded_reduces_to_fullband()
             SparseTreeArray.test_random_subbanded_dedispersion()
-        
+            PeakFindingVariance.test_reduces_to_norms()
+            PeakFindingVariance.test_random_variance()
+
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)
             if i == 0:
