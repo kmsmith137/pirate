@@ -274,6 +274,50 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("test_basics", &ReferenceTree::test_basics)
           .def_static("test_subbands", &ReferenceTree::test_subbands)
     ;
+
+    // Exposed for unit tests only (see PeakFindingVariance.test_kernels_match_reference).
+    // The reference peak-finder computes in float32 regardless of the configured dtype.
+    py::class_<ReferencePeakFindingKernel>(m, "ReferencePeakFindingKernel",
+        "Reference (CPU, float32) peak-finding kernel; exposed for unit tests.")
+          .def(py::init([](const std::vector<long> &subband_counts, long max_kernel_width,
+                           long beams_per_batch, long total_beams, long ndm_out, long ndm_wt,
+                           long nt_out, long nt_in, long nt_wt, long Dcore) {
+              PeakFindingKernelParams params;
+              params.subband_counts = subband_counts;
+              params.dtype = Dtype::native<float> ();
+              params.max_kernel_width = max_kernel_width;
+              params.beams_per_batch = beams_per_batch;
+              params.total_beams = total_beams;
+              params.ndm_out = ndm_out;
+              params.ndm_wt = ndm_wt;
+              params.nt_out = nt_out;
+              params.nt_in = nt_in;
+              params.nt_wt = nt_wt;
+              return new ReferencePeakFindingKernel(params, Dcore);
+          }),
+          py::arg("subband_counts"), py::arg("max_kernel_width"),
+          py::arg("beams_per_batch"), py::arg("total_beams"),
+          py::arg("ndm_out"), py::arg("ndm_wt"),
+          py::arg("nt_out"), py::arg("nt_in"), py::arg("nt_wt"), py::arg("Dcore"))
+          .def_property_readonly("P", [](const ReferencePeakFindingKernel &self) { return self.nprofiles; })
+          .def_property_readonly("M", [](const ReferencePeakFindingKernel &self) { return self.fs.M; })
+          .def_property_readonly("F", [](const ReferencePeakFindingKernel &self) { return self.fs.F; })
+          .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.Dout; })
+          .def_property_readonly("Dcore", [](const ReferencePeakFindingKernel &self) { return self.Dcore; })
+          .def("apply",
+               [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
+                  const Array<float> &in_, const Array<float> &wt, long ibatch) {
+                   self.apply(out_max, out_argmax, in_, wt, ibatch);
+               },
+               py::arg("out_max"), py::arg("out_argmax"), py::arg("in_"),
+               py::arg("wt"), py::arg("ibatch"))
+          .def("eval_tokens",
+               [](ReferencePeakFindingKernel &self, Array<float> &out,
+                  const Array<uint> &in_tokens, const Array<float> &wt) {
+                   self.eval_tokens(out, in_tokens, wt);
+               },
+               py::arg("out"), py::arg("in_tokens"), py::arg("wt"))
+    ;
 }
 
 }  // namespace pirate

@@ -127,3 +127,60 @@ class PeakFindingVariance:
                 w = 1 << l
                 want = {0: 1.0, 1: 2.0 * w, 2: 1.5 * w, 3: 2.5 * w}[q]
                 assert abs(var[p] - want) < 1e-9, (Wmax, p, l, q, var[p], want)
+
+    @staticmethod
+    def test_kernels_match_reference():
+        """Check our kernels h_p against the ones ReferencePeakFindingKernel actually uses.
+
+        The reference peak-finder does not expose its kernels: apply() coalesces
+        (convolve with h_p) + (multiply by weights) + (max-reduce).  But with the weights
+        set to 1, eval_tokens() returns a single profile's value w*y == (h_p * in) at a
+        fixed reference time -- a linear functional of the input.  So we feed unit impulses
+        (one per DM row) and read eval_tokens() for each profile p; the readout sweeps out
+        h_p, recovered up to a time shift and a reversal.  That is exactly the equivalence
+        class that leaves Var = ||h_p * x||^2 unchanged, so it is the right thing to pin: if
+        the reference's kernel coefficients/shapes/profile-ordering change, this test fails.
+
+        Deterministic (no randomness) -- intended to run once, not every iteration.
+        """
+        from ..pirate_pybind11 import ReferencePeakFindingKernel
+
+        nt_in, Dout, Dcore = 512, 4, 1     # validated params (see plans/); reads land mid-array
+        nt_out = nt_in // Dout
+        tout = nt_out // 2                  # middle output bin -> reference time interior, big margins
+        J = nt_in                          # impulse-position axis == DM axis (a power of two)
+
+        for Wmax in [1, 2, 4, 8, 16, 32]:
+            ker = ReferencePeakFindingKernel(
+                subband_counts=[1], max_kernel_width=Wmax,
+                beams_per_batch=1, total_beams=1, ndm_out=J, ndm_wt=1,
+                nt_out=nt_out, nt_in=nt_in, nt_wt=1, Dcore=Dcore)
+            P = ker.P
+
+            # "Identity" of impulses: DM row j carries a unit impulse at time j.
+            in_ = np.zeros((1, J, 1, nt_in), dtype=np.float32)
+            in_[0, np.arange(J), 0, np.arange(J)] = 1.0
+            wt = np.ones((1, 1, 1, P, 1), dtype=np.float32)          # weights = 1 -> read raw y
+            out_max = np.zeros((1, J, nt_out), dtype=np.float32)
+            out_arg = np.zeros((1, J, nt_out), dtype=np.uint32)
+            ker.apply(out_max, out_arg, in_, wt, 0)                  # one apply builds all temp arrays
+
+            kernels, labels = PeakFindingVariance.peak_finding_kernels(Wmax)
+            assert len(kernels) == P, (Wmax, len(kernels), P)
+
+            for p in range(P):
+                in_tok = np.zeros((1, J, nt_out), dtype=np.uint32)
+                in_tok[0, :, tout] = (p << 8)                       # token = t | (p<<8) | (m<<16), m=t=0
+                out = np.zeros((1, J, nt_out), dtype=np.float32)
+                ker.eval_tokens(out, in_tok, wt)
+                c = out[0, :, tout]                                 # c[j] = h_p[t_ref - j]
+
+                nz = np.nonzero(c)[0]
+                assert len(nz) > 0, (Wmax, p, "extracted an all-zero kernel")
+                assert nz[0] > 0 and nz[-1] < J - 1, \
+                    (Wmax, p, "kernel support reached the array edge; increase nt_in")
+                ctrim = c[nz[0]:nz[-1] + 1]                         # trim -> h_p up to shift/reversal
+                hp = kernels[p]
+                ok = (ctrim.shape == hp.shape) and \
+                     (np.allclose(ctrim, hp) or np.allclose(ctrim, hp[::-1]))
+                assert ok, (Wmax, p, labels[p], list(ctrim), list(hp))
