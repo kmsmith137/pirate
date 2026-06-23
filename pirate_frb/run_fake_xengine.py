@@ -102,8 +102,8 @@ class RunFakeXEngineHelper:
             cfg.fake_time_sample_ms,
         )
         if self.now:
-            from datetime import datetime
-            now = datetime.utcnow()
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
             xmd.unix_ns_at_seq_0 = int(now.timestamp() * 1e9)
 
         self._print_receiver_details(rpc_addr, cfg, xmd)
