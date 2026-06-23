@@ -73,10 +73,20 @@ help:
 # \ref's) stop changing, capped at 5 passes as a safety net. The temp files
 # (*.aux/*.log/*.out/*.toc) and the generated *.pdf are gitignored and removed
 # by 'make clean'.
-TEX_SRCS := $(wildcard notes/*.tex)
+#
+# The .tex files to compile are listed EXPLICITLY in TEX_SRCS (not globbed), so a
+# throwaway file like notes/scratch.tex is never compiled by accident. This
+# mirrors notes/*.md, which are only rendered if listed in the docs toctree
+# (docs/source/index.md). The 'tex' recipe warns about any stray .tex on disk
+# that isn't listed here.
+TEX_SRCS := notes/tree_dedispersion.tex
 TEX_PDFS := $(TEX_SRCS:.tex=.pdf)
 
+# notes/*.tex present on disk but not listed in TEX_SRCS (e.g. scratch files).
+TEX_STRAY := $(filter-out $(TEX_SRCS),$(wildcard notes/*.tex))
+
 tex: $(TEX_PDFS)
+	@$(if $(TEX_STRAY),echo "WARNING: ignoring stray notes/*.tex not listed in TEX_SRCS: $(TEX_STRAY)" >&2,true)
 
 notes/%.pdf: notes/%.tex
 	@echo "pdflatex $<"
