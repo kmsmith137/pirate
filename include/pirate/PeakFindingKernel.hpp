@@ -163,7 +163,7 @@ struct ReferencePeakFindingKernel
     // array -- the input data comes from the most recent call to apply().
 
     void eval_tokens(ksgpu::Array<float> &out,  // output array, shape (beams_per_batch, ndm_out, nt_out)
-        const ksgpu::Array<uint> &in_tokens,    // input array, shape (beams_per_batch, ndm_out, params.fs.M, nt_out)
+        const ksgpu::Array<uint> &in_tokens,    // input array, shape (beams_per_batch, ndm_out, nt_out)
         const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
 
     // Make a mean-zero input array for testing.
@@ -226,7 +226,7 @@ struct ReferencePeakFindingKernel
     // The reference rl allocates persistent state in the constructor (not a separate
     // allocate() method). We just save the last (tpad) samples from the previous chunk.
 
-    ksgpu::Array<float> pstate;  // shape (total_beams, A, M, tpad)
+    ksgpu::Array<float> pstate;  // shape (total_beams, ndm_out, M, tpad)
 
     // Helper for eval_tokens()
     static std::runtime_error _bad_token(uint token, const char *why);
