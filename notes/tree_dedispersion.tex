@@ -123,7 +123,8 @@ By default, \verb|in[...,-N]| is defined to be zero.
 
 \end{itemize}
 
-\section{Subband searches}
+\section{Subband search}
+\label{sec:subband_search}
 
 So far, we have described a search for FRBs which cover the full tree-freq range $0 \le f < 2^r$.
 This would be suboptimal since real FRBs do not always cover the full frequency range.
@@ -269,5 +270,61 @@ time index for every multiplet of its DM. That choice replaces the lags above by
 \end{align}
 i.e.~the (floored) half-integer extrapolation, for which $T_0 \ne T_1$. We may switch the code to
 this convention in the future.
+
+\section{Peak-finding}
+\label{sec:peak_finding}
+
+The final stage of the dedispersion transform is {\em peak-finding}.
+For now, we give a partial description -- a future version of the notes will describe
+peak-finding in more detail.
+The input is the shape-$(2^{r-R}, M, N_{\rm time})$ array from the previous section.
+The output is a shape-$(2^{r-R}, N_{\rm time}/D)$ array, where $D$ is a downsampling factor.
+Conceptually, peak-finding is 3 steps:
+\begin{itemize}
+\item For each $(d_{\rm hi}, m)$, the input array is a 1-d time series.
+We convolve the time series with $P$ peak-finding kernels, described below, to
+obtain a shape $(2^{r-R}, M, N_{\rm time}, P)$ array.
+\item We apply weights that depend on $(d_{\rm hi}, m, p)$, to normalize the array 
+so that each array element has variance 1. (Thus, array elements are normalized to
+``sigmas''.)
+\item We downsample the array to shape $(2^{r-R}, N_{\rm time}/D)$.
+Downsampling is done with ``max'' rather than addition, so each array element
+corresponds to max detection significance over all downsampled parameters.
+\end{itemize}
+In implementation, these 3 steps are coalesced into one GPU kernel for speed (and also
+coalesced with the final stages of tree dedispersion), e.g.\ the shape $(2^{r-R}, M, N_{\rm time}, P)$
+is never ``materialized'' in GPU memory.
+
+\subsection{Peak-finding kernels}
+
+The kernels are organized into $\Lambda \equiv \max(\log_2 W_{\rm max},\,1)$ {\em levels} $0 \le \lambda < \Lambda$,\footnote{In the code these are denoted {\tt l} and {\tt L}; we use $\lambda$ and $\Lambda$ here to avoid ambiguity with the subband level $l$ in \S\ref{sec:subband_search}.} where
+$W_{\rm max}$ (a power of two) is the config parameter \verb|max_kernel_width|. The total number of
+profiles is
+\begin{equation}
+P = 3 \log_2 W_{\rm max} + 1.
+\end{equation}
+The building block at level $\lambda$ is the {\em unnormalized running boxcar sum} of width $2^\lambda$,
+\begin{equation}
+b_\lambda[t] \equiv \sum_{i=0}^{2^\lambda - 1} x[t-i],
+\end{equation}
+computed by the recursion
+\begin{equation}
+b_0[t] = x[t], \qquad b_{\lambda+1}[t] = b_\lambda[t] + b_\lambda[t - 2^\lambda].
+\label{eq:boxcar_recursion}
+\end{equation}
+Note that (\ref{eq:boxcar_recursion}) is a {\em plain sum}: there is no $1/\sqrt2$ in the boxcar
+downsampling. (All normalization is deferred to the weights.)
+
+At each level $\lambda$ we form up to four kernels, denoted $h_{\lambda,q}$ where $0\le q \le 3$:
+\begin{align}
+h_{\lambda,0} &= [\,\underbrace{1,\dots,1}_{2^\lambda}\,] \nn \\
+h_{\lambda,1} &= [\,\underbrace{1,\dots,\dots,1}_{2^{\lambda+1}}\,] \nn \\
+h_{\lambda,2} &= [\,\underbrace{\tfrac12,\dots}_{2^\lambda},\ \underbrace{1,\dots}_{2^\lambda},\ \underbrace{\tfrac12,\dots}_{2^\lambda}\,] \nn \\
+h_{\lambda,3} &= [\,\underbrace{\tfrac12,\dots}_{2^\lambda},\ \underbrace{1,\dots,\dots,1}_{2^{\lambda+1}},\ \underbrace{\tfrac12,\dots}_{2^\lambda}\,]
+\end{align}
+The profile index $0\le p < P$ is related to $(\lambda,q)$ by $p = 3\lambda + q$, with the special value $p = 0$ for
+$(\lambda,q) = (0,0)$. Thus level $0$ contributes profiles $p = 0,1,2,3$, and each level $\lambda > 0$ contributes
+$p = 3\lambda+1, 3\lambda+2, 3\lambda+3$ --- the single-boxcar kernel $h_{\lambda,0}$ is dropped for $\lambda>0$, since
+$h_{\lambda,0} = b_\lambda = h_{\lambda-1,1}$ would be redundant.
 
 \end{document}
