@@ -104,7 +104,7 @@ void XEngineMetadata::validate() const
 
     _check_finite(zone_freq_edges, "zone_freq_edges");
     for (size_t i = 0; i+1 < zone_freq_edges.size(); i++) {
-        xassert(zone_freq_edges[i] >= 0.0);
+        xassert(zone_freq_edges[i] > 0.0);
         xassert(zone_freq_edges[i] < zone_freq_edges[i+1]);
     }
 
