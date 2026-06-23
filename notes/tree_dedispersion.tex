@@ -25,45 +25,48 @@ The first step is a ``tree gridding'' kernel which changes variables so that the
 The input of the tree gridding kernel is a shape $(N_{\rm freq}, N_{\rm time})$ array, and the output is a shape $(N_{\rm tree}, N_{\rm time})$ array, where $N_{\rm tree}=2^r$.
 The parameter $r$ is the tree dedispersion ``rank'' and is specified in a config file.
 
-The tree gridding kernel also takes an auxiliary array \verb|channel_map|, which describes the mapping between frequency channels $0 \le f < N_{\rm freq}$ and tree channels $0 \le t < N_{\rm tree}$.
+The leading axis of the input array represents frequency channels, and will be indexed by $0 \le F < N_{\rm freq}$.
+The leading axis of the output array represents a reparameterized frequency channel (``tree-freq'' channel for short), and will be indexed by $0\le f < 2^r$.
+Conceptually, the tree gridding kernel just reparameterizes the frequency axis (i.e.\ the time axis is a spectator.)
+
+The tree gridding kernel also takes an auxiliary array \verb|channel_map|, which describes the mapping between frequency channels $0 \le F < N_{\rm freq}$ and tree-freq channels $0 \le f < N_{\rm tree}$.
 The array \verb|channel_map| has length $N_{\rm tree}+1$, and its entries are (in general non-integer) frequency-channel indices in the range $[0, N_{\rm freq}]$.
-Writing $c_t$ for the $t$-th entry, tree channel $t$ is defined to occupy the half-open interval of frequency channels
+Writing $c_f$ for the $f$-th entry, tree-freq channel $f$ is defined to occupy the half-open interval of frequency channels
 \begin{equation}
-I_t = \big[\, c_{t+1},\ c_t \,\big), \qquad 0 \le t < N_{\rm tree},
+I_f = \big[\, c_{f+1},\ c_f \,\big), \qquad 0 \le f < N_{\rm tree},
 \end{equation}
-i.e.~consecutive entries give the lower and upper edges of each tree channel.
-The entries are fixed by the dispersion geometry: the tree channels are equally spaced in the dispersion variable $x \equiv \nu^{-2}$ (this is the change of variables that linearizes the delay), so the $t$-th edge sits at
+i.e.~consecutive entries give the lower and upper edges of each tree-freq channel.
+The entries are fixed by the dispersion geometry: the tree-freq channels are equally spaced in the dispersion variable $x \equiv \nu^{-2}$ (this is the change of variables that linearizes the delay), so the $f$-th edge sits at
 \begin{equation}
-x_t = \nu_{\rm hi}^{-2} + \frac{t}{N_{\rm tree}}\left(\nu_{\rm lo}^{-2} - \nu_{\rm hi}^{-2}\right),
+x_f = \nu_{\rm hi}^{-2} + \frac{f}{N_{\rm tree}}\left(\nu_{\rm lo}^{-2} - \nu_{\rm hi}^{-2}\right),
 \end{equation}
-and $c_t$ is the frequency-channel index of the frequency $\nu_t = x_t^{-1/2}$, where the index increases with frequency, running from $0$ at the band bottom $\nu_{\rm lo}$ to $N_{\rm freq}$ at the band top $\nu_{\rm hi}$.
-In particular $c_0 = N_{\rm freq}$ and $c_{N_{\rm tree}} = 0$, so \verb|channel_map| is monotonically {\em decreasing} ($c_{t+1} < c_t$).
+and $c_f$ is the frequency-channel index of the frequency $\nu_f = x_f^{-1/2}$, where the index increases with frequency, running from $0$ at the band bottom $\nu_{\rm lo}$ to $N_{\rm freq}$ at the band top $\nu_{\rm hi}$.
+In particular $c_0 = N_{\rm freq}$ and $c_{N_{\rm tree}} = 0$, so \verb|channel_map| is monotonically {\em decreasing} ($c_{f+1} < c_f$).
 We store it in double precision, since the gridding weights below are obtained by differencing adjacent entries, which loses relative precision.
 
 The details of the tree gridding kernel are as follows.
-Each output tree channel $t$ is a weighted sum of the input frequency channels whose bins overlap the interval $I_t = [c_{t+1}, c_t)$:
+Each output tree-freq channel $f$ is a weighted sum of the input frequency channels whose bins overlap the interval $I_f = [c_{f+1}, c_f)$:
 \begin{equation}
-{\rm out}[t] = \sum_{f=0}^{N_{\rm freq}-1} w_{tf}\, {\rm in}[f],
+{\rm out}[f] = \sum_{F=0}^{N_{\rm freq}-1} w_{fF}\, {\rm in}[F],
 \end{equation}
-where ${\rm in}[f]$ and ${\rm out}[t]$ are length-$N_{\rm time}$ time series, and the same weights are applied at every time sample (the time axis is untouched).
-The weight $w_{tf}$ is the length of the overlap between the tree-channel interval $I_t$ and the unit-width frequency bin $[f, f+1)$:
+where ${\rm in}[F]$ and ${\rm out}[f]$ are length-$N_{\rm time}$ time series, and the same weights are applied at every time sample (the time axis is untouched).
+The weight $w_{fF}$ is the length of the overlap between the tree-freq channel interval $I_f$ and the unit-width frequency bin $[F, F+1)$:
 \begin{equation}
-w_{tf} = \max\!\big(\,0,\ \min(c_t,\, f+1) - \max(c_{t+1},\, f)\,\big).
+w_{fF} = \max\!\big(\,0,\ \min(c_f,\, F+1) - \max(c_{f+1},\, F)\,\big).
 \end{equation}
-A frequency channel lying entirely within $I_t$ contributes with weight $1$, while a channel straddling an edge of $I_t$ contributes a fractional weight.
-Because the intervals $I_t$ tile $[0, N_{\rm freq}]$, the weights of any fixed input channel sum to one, $\sum_t w_{tf} = 1$; the gridding kernel is thus a delay-linearizing rebinning of the frequency axis that conserves total intensity, $\sum_t {\rm out}[t] = \sum_f {\rm in}[f]$.
+A frequency channel lying entirely within $I_f$ contributes with weight $1$, while a channel straddling an edge of $I_f$ contributes a fractional weight.
+Because the intervals $I_f$ tile $[0, N_{\rm freq}]$, the weights of any fixed input channel sum to one, $\sum_f w_{fF} = 1$; the gridding kernel is thus a delay-linearizing rebinning of the frequency axis that conserves total intensity, $\sum_f {\rm out}[f] = \sum_F {\rm in}[F]$.
 
 Note that the tree gridding kernel is a monotone {\em decreasing} reindexing operation.
-Thus, to search for FRBs with positive dispersion (lowest frequencies arise last), we want to search over lines in the tree array with positive slope (highest tree-channels arrive last).
+Thus, to search for FRBs with positive dispersion (lowest frequencies arise last), we want to search over lines in the tree array with positive slope (highest tree-freq channels arrive last).
 
 \section{Tree dedispersion}
+\label{sec:tree_dedispersion}
 
 After the tree gridding kernel, the next step is ``tree dedispersion'', which searches for straight lines with $0\le \mbox{slope} \le 1$.
 (The extension to slope $>1$ will be discussed in a future section, along with more details such as subband searches, early triggers, and peak-finding.)
 
-The dedispersion input array has shape $(2^r, N_{\rm time})$.
-Indices along the first axis will be called ``tree-freq channels'', and represent
-reparameterized frequencies.
+The dedispersion input array has shape $(2^r, N_{\rm time})$, where the leading axis is ``tree-freq'' (see above).
 Straight lines will be parameterized by an integer $0 \le d < 2^r$, representing
 the delay (in time samples) between the lowest and highest tree-freq channel,
 and a time index $t$ representing the arrival time in the {\em highest} tree-freq channel
@@ -135,11 +138,11 @@ The counts $C_l$ parameterize a set of subbands as follows:
 \item Frequency subbands are indexed by a pair $(l,s)$ where $0 \le l \le R$ and $0 \le s < C_l$.
 \item Level $l=0$ is special: subband $(0,s)$ corresponds to tree-freq range
 \begin{equation}
-2^{r-R} s \le f < 2^{r-R} (s+1)
+2^{r-R} s \le \mbox{(tree-freq index)} < 2^{r-R} (s+1)  \label{eq:subband_l0}
 \end{equation}
 \item At levels $l>0$, subband $(l,s)$ corresponds to tree-freq range
 \begin{equation}
-2^{r-R+l-1} s \le f < 2^{r-R+l-1} (s+2)
+2^{r-R+l-1} s \le \mbox{(tree-freq index)} < 2^{r-R+l-1} (s+2)  \label{eq:subband_l1}
 \end{equation}
 Thus, level 0 consists of non-overlapping bands whose fractional width is $1/2^R$.
 Levels $l>0$ consist of bands whose fractional width is $1/2^{R-l}$, and overlap by a factor 2.
@@ -158,12 +161,83 @@ The case $C_l=\{1\}$ (with $R=0$) corresponds to disabling subbands, and only se
 dictated by convenience in the GPU kernel.
 \end{itemize}
 
-% \subsection{Dedispersion with subbands}
+\subsection{Subbanded dedispersion}
 
-% Define S,M. Give full array and per-subband shapes.
+Subbanded dedispersion is an operation whose input array is the same as ordinary (non-subbanded) tree 
+dedispersion (\ref{sec:tree_dedispersion}), i.e.\ a shape $(2^r, N_{\rm time})$ array where the first index is tree-freq.
+The output array has shape $(2^{r-R}, M, N_{\rm time})$, where $M$ is the number of ``multiplets'':
+\begin{equation}
+M \equiv \sum_{l=0}^R 2^l C_l
+\end{equation}
+Each subband $(l,s)$ ``owns'' a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output.
+The first two axes correspond to $2^{r-R+l}$ dispersion delays across the subband, split into a ``coarse'' index
+$0 \le d_{\rm hi} < 2^{r-R}$ and a ``fine'' index  $0 \le d_{\rm lo} < 2^l$.
+(This index-splitting ensures that the combined output of all subbands is a regular $(2^{r-R}, M, N_{\rm time})$ array,
+rather than a ``ragged'' object.)
 
-% Split into "case 1: l=0 or even s", and "case 2: l>0 and odd s".
+Conceptually, subband dedispersion works as follows.
+For each subband $(l,s)$, we apply tree dedispersion to the appropriate tree-freq range (either Eq.\ (\ref{eq:subband_l0}) 
+or (\ref{eq:subband_l1})). We also apply a time lag so that the time index corresponds to the extrapolated arrival time at 
+the highest tree-freq in the full band, not the highest tree-freq in the subband.
+For an efficient implementation, we run tree dedispersion as usual (Eq.\ \ref{eq:DD_composition}), and extract per-subband
+dedispersion outputs from intermediate arrays ``on the fly'', rather than dedispersing each subband ``from scratch''.
 
-% Comment on full range.
+Formally, the details are as follows:
+
+\begin{itemize}
+
+\item {\bf Case 1: $l=0$ or even $s$.}
+In this case, the subband corresponds to an ``aligned'' tree-freq range of the form:
+\begin{equation}
+2^{r-R+l} f \le \mbox{(tree-freq index)} < 2^{r-R+l}(f+1) \hspace{1cm} \mbox{(where $0 \le f < 2^{R-l}$)}
+\end{equation}
+where the coarse-freq index $f$ is given by:
+\begin{equation}
+f = \begin{cases} s & \mbox{if } l=0 \\ s/2 & \mbox{if } l > 0 \end{cases}
+\end{equation}
+The subband owns a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output (denote by \verb|out|).
+
+In this case, the per-subband dedispersion outputs already arise as intermediates in tree dedispersion
+(Eq.\ \ref{eq:DD_composition}); we just need to apply a time lag.
+Let \verb|tmp| be the output array of $\DD(k-1)$, where $k=r-R+l$. 
+Then \verb|tmp| has shape $(2^{R-l}, 2^{r-R+l}, N_{\rm time})$.
+To populate the \verb|out| array, we slice/reshape \verb|tmp| and apply time lags:
+\begin{equation}
+{\tt out}\big[ d_{\rm hi}, d_{\rm lo}, t \big] = {\tt tmp}\big[ f, d, t - T \big]
+\end{equation}
+where on the RHS we define:
+\begin{equation}
+d \equiv d_{\rm hi} 2^l + d_{\rm lo}   \hspace{1.5cm} T \equiv d (2^{R-l}-1-f)
+\end{equation}
+
+\item {\bf Case 2: $l>0$ and odd $s$.}
+In this case, the subband corresponds to a ``half-aligned'' tree-freq range of the form:
+\begin{equation}
+2^{r-R+l-1} (2f+1) \le \mbox{(tree-freq index)} < 2^{r-R+l-1}(2f+3) \hspace{1cm} \mbox{(where $0 \le f < 2^{R-l}-1$)}
+\end{equation}
+where the coarse-freq index $f$ is given by $f \equiv (s-1)/2$.
+The subband owns a shape $(2^{r-R}, 2^l, N_{\rm time})$ subarray of the output (denote by \verb|out|).
+
+This case is a little more complicated, since the per-subband dedispersion outputs are ``one DD-step away''
+from the intermediate arrays in tree dedispersion.
+Let \verb|tmp| be the output array of $\DD(k-1)$, where $k=r-R+l-1$. 
+Then \verb|tmp| has shape $(2^{R-l+1}, 2^{r-R+l-1}, N_{\rm time})$.
+\begin{align}
+{\tt out}\big[ d_{\rm hi}, 2 d_{\rm lo}, t \big] 
+  &= \frac{1}{\sqrt{2}} \Big( {\tt tmp}\big[ 2f+1, d, t - T_0 - d \big] + {\tt tmp}\big[ 2f+2, d, t - T_0 \big] \Big) \nn \\
+{\tt out}\big[ d_{\rm hi}, 2 d_{\rm lo} + 1, t \big] 
+  &= \frac{1}{\sqrt{2}} \Big( {\tt tmp}\big[ 2f+1, d, t - T_1 - d - 1 \big] + {\tt tmp}\big[ 2f+2, d, t - T_1 \big] \Big) 
+\end{align}
+where on the RHS we define:
+\begin{equation}
+d \equiv d_{\rm hi} 2^{l-1} + d_{\rm lo}
+  \hspace{1.5cm} T_0 = d (2^{R-l+1} - 2f - 3) 
+  \hspace{1.5cm} T_1 = T_0 + (2^{R-l} - f - 2)
+\end{equation}
+(Warning: the quantities $f,k,d_{\rm lo}$ have slightly different meanings in cases 1 and 2!)
+
+\end{itemize}
+Note that subband dedispersion includes the full band (via $C_R=1$), but the full-band output array is
+``reshaped'' to $(2^{r-R}, 2^R, N_{\rm time})$, whereas in the previous section it had shape $(2^r, N_{\rm time})$.
 
 \end{document}
