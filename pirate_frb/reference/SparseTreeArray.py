@@ -13,9 +13,9 @@ class SparseTreeTile:
       nt:      (pre-time-shift) time indices outside [0, nt) are zero.
       dbits:   reverse-sorted list of bits [b0>b1>...], 0 <= bi < k. The (pre-shift) data
                depends on the delay d only through the digits {d_{b0}, d_{b1}, ...}.
-      data:    shape (nf,) + (2,)*len(dbits) + (nt,), the pre-time-shift array. Convention:
-               data middle axis (1+j) corresponds to dbits[j]; flattened in C-order,
-               dbits[0] is the most significant bit.
+      data:    shape (nf, 2^len(dbits), nt), the pre-time-shift array. The middle axis packs
+               the selected delay bits in C-order with dbits[0] as the most significant bit
+               (the flat index is _selected_bits_index(d, dbits)).
       tshifts: length-k array, applied UNIFORMLY to every f-index of the tile before
                unpacking: unpacked[f,d,t] = data[f-f0, sel(d), t - t0 - T(d)] for all f,
                where T(d) = sum_i tshifts[i]*bit_i(d). (Because of the shift, 'data'
@@ -40,7 +40,7 @@ class SparseTreeTile:
             # Trailing slices shrink nt; leading slices fold into t0 (the constant forward
             # shift), leaving unpack() unchanged but (nt, t0) minimal.
             data = np.asarray(data)
-            nzt = np.nonzero(np.any(data != 0.0, axis=tuple(range(data.ndim - 1))))[0]
+            nzt = np.nonzero(np.any(data != 0.0, axis=(0, 1)))[0]   # (f, delay-bit) axes
             lo, hi = (int(nzt[0]), int(nzt[-1]) + 1) if nzt.size else (0, 1)
             data = np.ascontiguousarray(data[..., lo:hi])
             t0 += lo
@@ -58,7 +58,7 @@ class SparseTreeTile:
         assert all(0 <= b < self.k for b in self.dbits)
         assert self.dbits == sorted(self.dbits, reverse=True)
         assert len(set(self.dbits)) == len(self.dbits)
-        expected = (self.nf,) + (2,) * len(self.dbits) + (self.nt,)
+        expected = (self.nf, 2 ** len(self.dbits), self.nt)
         assert self.data.shape == expected, (self.data.shape, expected)
         assert self.data.dtype == np.float64
         assert self.tshifts.shape == (self.k,)
@@ -83,15 +83,13 @@ class SparseTreeTile:
         per-delay time shift t0 + T(d) to every row. 'ntime' must be >= nt + t0 + max_d T(d).
         """
         nd_full = 2**self.k
-        m = len(self.dbits)
         tshift = self._delay_tshift(np.arange(nd_full), self.tshifts)   # (nd_full,)
         nt_needed = self.nt + self.t0 + int(tshift.max())
         if ntime < nt_needed:
             raise RuntimeError(f"unpack: ntime={ntime} too small (need >= {nt_needed})")
 
-        data_flat = self.data.reshape(self.nf, 2**m, self.nt)
         flat_idx = self._selected_bits_index(np.arange(nd_full), self.dbits)
-        gathered = data_flat[:, flat_idx, :]                           # (nf, nd_full, nt)
+        gathered = self.data[:, flat_idx, :]                           # (nf, nd_full, nt)
 
         out = np.zeros((self.nf, nd_full, ntime), dtype=self.data.dtype)
         for d in range(nd_full):
@@ -171,7 +169,7 @@ class SparseTreeTile:
         m_out = k + 1
         rsqrt2 = 1.0 / np.sqrt(2.0)
         nt_alloc = nt_in + (1 << k)
-        data_in = tile.data.reshape(nf, 1 << len(dbits_in), nt_in)
+        data_in = tile.data                            # (nf, 2^|dbits_in|, nt_in)
         data_out = np.zeros((nf_out, 1 << m_out, nt_alloc), dtype=np.float64)
         for dp in range(1 << m_out):                   # representative is the identity (all bits)
             d = dp >> 1
@@ -182,7 +180,6 @@ class SparseTreeTile:
             data_out[:, dp, :nt_in] += rsqrt2 * gu
             data_out[:, dp, sh:sh + nt_in] += rsqrt2 * gl
 
-        data_out = data_out.reshape((nf_out,) + (2,) * m_out + (nt_alloc,))
         tshifts_out = np.concatenate(([0], tin)).astype(np.int64)
         # t0 is a uniform shift: it factors out of the DD sum, so it passes through.
         # trim=True drops leading/trailing all-zero time slices (leading folds into t0).
@@ -249,8 +246,8 @@ class SparseTreeTile:
 
         rsqrt2 = 1.0 / np.sqrt(2.0)
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
-        lo_flat = lower.data.reshape(1, 1 << len(lower.dbits), lower.nt) if lower is not None else None
-        up_flat = upper.data.reshape(1, 1 << len(upper.dbits), upper.nt) if upper is not None else None
+        lo_flat = lower.data if lower is not None else None      # (1, 2^|dbits|, nt)
+        up_flat = upper.data if upper is not None else None
         for s_out in range(1 << m_out):
             dp = SparseTreeTile._representative_delay(s_out, dbits_out)
             d = dp >> 1
@@ -263,7 +260,6 @@ class SparseTreeTile:
                 col = up_flat[0, SparseTreeTile._selected_bits_index(d, upper.dbits), :]
                 data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
-        data_out = data_out.reshape((1,) + (2,) * m_out + (nt_alloc,))
         # trim=True drops leading/trailing all-zero time slices (leading folds into t0_out).
         return SparseTreeTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
                               t0=t0_out, trim=True)
@@ -298,7 +294,6 @@ class SparseTreeTile:
         for e in range(1 << nlow):
             low_idx = SparseTreeTile._selected_bits_index(e, low)
             data_e = np.ascontiguousarray(data_resh[:, :, low_idx, :])  # (1, 2^nhigh, nt)
-            data_e = data_e.reshape((1,) + (2,) * nhigh + (tile.nt,))
             t0 = tile.t0 + int(SparseTreeTile._delay_tshift(e, tile.tshifts[:nlow]))
             out.append(SparseTreeTile(rho, rho, 0, 1, tile.nt, new_dbits, data_e,
                                       new_tshifts, t0=t0))
@@ -386,7 +381,7 @@ class SparseTreeArray:
         n = np.arange(f0, f1)
         w = np.minimum(cm[n], ifreq + 1.0) - np.maximum(cm[n + 1], float(ifreq))
         w = np.maximum(w, 0.0)
-        data = w.reshape(-1, 1)                        # (nf, nt=1)
+        data = w.reshape(-1, 1, 1)                     # (nf, 2^0=1, nt=1)
         tile = SparseTreeTile(r=r, k=0, f0=f0, nf=f1 - f0, nt=1, dbits=[], data=data,
                               tshifts=np.zeros(0, dtype=np.int64))
         return SparseTreeArray._from_tile(tile)
@@ -540,7 +535,7 @@ class SparseTreeArray:
             tshifts = np.zeros(0, dtype=np.int64)
         nt = int(np.random.randint(1, 5))
         t0 = int(np.random.randint(0, 4))
-        shape = (nf,) + (2,) * len(dbits) + (nt,)
+        shape = (nf, 2 ** len(dbits), nt)
         data = np.random.uniform(0.0, 1.0, size=shape).astype(np.float64)
         return SparseTreeTile(r, k, f0, nf, nt, dbits, data, tshifts, t0=t0)
 
@@ -649,7 +644,7 @@ class SparseTreeArray:
         ntree = 1 << r
         j = int(np.random.randint(0, ntree))
         tile = SparseTreeTile(r=r, k=0, f0=j, nf=1, nt=1, dbits=[],
-                              data=np.array([[1.0]]), tshifts=np.zeros(0, dtype=np.int64))
+                              data=np.ones((1, 1, 1)), tshifts=np.zeros(0, dtype=np.int64))
         sarr = SparseTreeArray._from_tile(tile)
         while sarr.k < sarr.r:
             sarr = sarr.iterate()
@@ -788,7 +783,7 @@ class SparseSubbandedArray:
     @staticmethod
     def _zero_tile(rho):
         # A zero rank-rho, k==rho, nf==1 tile (for subbands outside the footprint).
-        return SparseTreeTile(rho, rho, 0, 1, 1, [], np.zeros((1, 1), dtype=np.float64),
+        return SparseTreeTile(rho, rho, 0, 1, 1, [], np.zeros((1, 1, 1), dtype=np.float64),
                               np.zeros(rho, dtype=np.int64))
 
     @staticmethod
