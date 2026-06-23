@@ -17,18 +17,23 @@ class SparseTreeTile:
                data middle axis (1+j) corresponds to dbits[j]; flattened in C-order,
                dbits[0] is the most significant bit.
       tshifts: length-k array, applied UNIFORMLY to every f-index of the tile before
-               unpacking: unpacked[f,d,t] = data[f-f0, sel(d), t - T(d)] for all f, where
-               T(d) = sum_i tshifts[i]*bit_i(d). (Because of the shift, 'data' depends on d
-               only through 'dbits', but the unpacked array may depend on more digits.)
+               unpacking: unpacked[f,d,t] = data[f-f0, sel(d), t - t0 - T(d)] for all f,
+               where T(d) = sum_i tshifts[i]*bit_i(d). (Because of the shift, 'data'
+               depends on d only through 'dbits', but the unpacked array may depend on
+               more digits.)
+      t0:      delay- and f-independent constant forward time shift (>= 0); equivalently
+               the data's pre-shift time origin, or a "constant tshift". Supported in all
+               tile ops (unpack/slice/iterate_*); see notes/tree_dedispersion.tex.
     """
 
-    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts):
+    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0):
         self.r, self.k = r, k
         self.f0, self.nf = f0, nf
         self.nt = nt
         self.dbits = list(dbits)
         self.data = data
         self.tshifts = np.asarray(tshifts, dtype=np.int64)
+        self.t0 = int(t0)
         self._check_invariants()
 
     def _check_invariants(self):
@@ -43,6 +48,7 @@ class SparseTreeTile:
         assert self.data.dtype == np.float64
         assert self.tshifts.shape == (self.k,)
         assert np.all(self.tshifts >= 0)
+        assert self.t0 >= 0
 
     def slice(self, c0, c1):
         """
@@ -53,17 +59,18 @@ class SparseTreeTile:
         """
         assert self.f0 <= c0 < c1 <= self.f0 + self.nf
         data = np.ascontiguousarray(self.data[c0 - self.f0 : c1 - self.f0])
-        return SparseTreeTile(self.r, self.k, c0, c1 - c0, self.nt, self.dbits, data, self.tshifts)
+        return SparseTreeTile(self.r, self.k, c0, c1 - c0, self.nt, self.dbits, data,
+                              self.tshifts, t0=self.t0)
 
     def unpack(self, ntime):
         """
         Returns a dense (nf, 2^k, ntime) array for this tile's f-rows, applying the uniform
-        per-delay time shift T(d) to every row. 'ntime' must be >= nt + max_d T(d).
+        per-delay time shift t0 + T(d) to every row. 'ntime' must be >= nt + t0 + max_d T(d).
         """
         nd_full = 2**self.k
         m = len(self.dbits)
         tshift = self._delay_tshift(np.arange(nd_full), self.tshifts)   # (nd_full,)
-        nt_needed = self.nt + int(tshift.max())
+        nt_needed = self.nt + self.t0 + int(tshift.max())
         if ntime < nt_needed:
             raise RuntimeError(f"unpack: ntime={ntime} too small (need >= {nt_needed})")
 
@@ -73,7 +80,7 @@ class SparseTreeTile:
 
         out = np.zeros((self.nf, nd_full, ntime), dtype=self.data.dtype)
         for d in range(nd_full):
-            sh = int(tshift[d])
+            sh = self.t0 + int(tshift[d])
             out[:, d, sh:sh + self.nt] = gathered[:, d, :]
         return out
 
@@ -165,16 +172,24 @@ class SparseTreeTile:
         data_out = np.ascontiguousarray(
             data_out[:, :, :nt_out].reshape((nf_out,) + (2,) * m_out + (nt_out,)))
         tshifts_out = np.concatenate(([0], tin)).astype(np.int64)
-        return SparseTreeTile(tile.r, k + 1, F0, nf_out, nt_out, dbits_out, data_out, tshifts_out)
+        # t0 is a uniform shift: it factors out of the DD sum, so it passes through.
+        return SparseTreeTile(tile.r, k + 1, F0, nf_out, nt_out, dbits_out, data_out,
+                              tshifts_out, t0=tile.t0)
 
     @staticmethod
-    def iterate_singletons(lower, upper):
+    def iterate_singletons(lower, upper, require_aligned=True):
         """
-        DD(k) merge of two singleton tiles into the output singleton (output channel f).
-        'lower' is the [2f:2f+1] singleton (channel 2f); 'upper' is [2f+1:2f+2] (channel
-        2f+1). Each is a tile with nf==1 and its own (dbits, nt, tshifts). Either may be
-        None (but not both). Chooses tshifts (the elementwise min of the two halves' total
+        DD(k) merge of two adjacent singleton tiles into the output singleton. 'lower' is
+        the lower-tree-freq half (gets the DD shift); 'upper' is the upper half. Each is a
+        tile with nf==1 and its own (dbits, nt, tshifts, t0). Either may be None (but not
+        both). Chooses tshifts/t0 (the elementwise/scalar min of the two halves' total
         shifts) to minimize the output (dbits, nt). Returns the level-(k+1) output tile.
+
+        With require_aligned (default), 'lower' must be even-aligned (channels 2f, 2f+1) so
+        the output is tree coarse-freq channel f -- the standard DD step. Case 2 of the
+        subband extraction passes require_aligned=False to merge the odd-aligned pair
+        (2f+1, 2f+2); the merge math is identical and the output tile is consumed directly
+        (its f0 is then cosmetic).
         """
         assert lower is not None or upper is not None
         ref = lower if lower is not None else upper
@@ -182,7 +197,9 @@ class SparseTreeTile:
         assert k < r
         if lower is not None and upper is not None:
             assert (lower.r, lower.k) == (upper.r, upper.k)
-            assert lower.f0 % 2 == 0 and lower.f0 + 1 == upper.f0
+            assert lower.f0 + 1 == upper.f0                 # adjacency
+            if require_aligned:
+                assert lower.f0 % 2 == 0                    # tree-channel semantics
         f_out = ref.f0 // 2
         assert (lower is None or lower.nf == 1) and (upper is None or upper.nf == 1)
 
@@ -199,14 +216,21 @@ class SparseTreeTile:
         res_L = (s_L - tmin) if lower is not None else None
         res_U = (s_U - tmin) if upper is not None else None
 
+        # Constant (t0) shift: absorb the common min into the output t0; each half's
+        # residual constant (>= 0) folds into its data placement, exactly like res_L/res_U.
+        t0_present = [t.t0 for t in (lower, upper) if t is not None]
+        t0_out = min(t0_present)
+        c_L = (lower.t0 - t0_out) if lower is not None else 0
+        c_U = (upper.t0 - t0_out) if upper is not None else 0
+
         dbits_set = set()
         nt_alloc = 1
         if lower is not None:
             dbits_set |= set(b + 1 for b in lower.dbits) | SparseTreeTile._nonzero_bits(res_L)
-            nt_alloc = max(nt_alloc, lower.nt + int(res_L.sum()))
+            nt_alloc = max(nt_alloc, lower.nt + c_L + int(res_L.sum()))
         if upper is not None:
             dbits_set |= set(b + 1 for b in upper.dbits) | SparseTreeTile._nonzero_bits(res_U)
-            nt_alloc = max(nt_alloc, upper.nt + int(res_U.sum()))
+            nt_alloc = max(nt_alloc, upper.nt + c_U + int(res_U.sum()))
         dbits_out = sorted(dbits_set, reverse=True)
         m_out = len(dbits_out)
 
@@ -218,11 +242,11 @@ class SparseTreeTile:
             dp = SparseTreeTile._representative_delay(s_out, dbits_out)
             d = dp >> 1
             if lower is not None:
-                rL = int(SparseTreeTile._delay_tshift(dp, res_L))
+                rL = c_L + int(SparseTreeTile._delay_tshift(dp, res_L))
                 col = lo_flat[0, SparseTreeTile._selected_bits_index(d, lower.dbits), :]
                 data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
             if upper is not None:
-                rU = int(SparseTreeTile._delay_tshift(dp, res_U))
+                rU = c_U + int(SparseTreeTile._delay_tshift(dp, res_U))
                 col = up_flat[0, SparseTreeTile._selected_bits_index(d, upper.dbits), :]
                 data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
@@ -230,7 +254,43 @@ class SparseTreeTile:
         nt_out = int(nz_t[-1]) + 1 if nz_t.size else 1
         data_out = np.ascontiguousarray(
             data_out[:, :, :nt_out].reshape((1,) + (2,) * m_out + (nt_out,)))
-        return SparseTreeTile(r, k + 1, f_out, 1, nt_out, dbits_out, data_out, tmin)
+        return SparseTreeTile(r, k + 1, f_out, 1, nt_out, dbits_out, data_out, tmin, t0=t0_out)
+
+    @staticmethod
+    def split_to_multiplets(tile, nlow, coarse_lag_coeff):
+        """
+        Split a singleton tile (nf==1) at level k into 2^nlow fully-iterated rank-(k-nlow)
+        tiles, one per value 'e' of the low 'nlow' delay bits (the subband "fine index").
+
+        The high rho = k-nlow delay bits become the new (coarse) delay axis; an extraction
+        lag (coarse_lag_coeff * d_hi) is folded into the new tshifts; and the fine bits'
+        own (constant) tshift contribution, T_lo(e) = sum_{i<nlow} tshifts[i] bit_i(e),
+        becomes the per-multiplet t0. Returns a length-2^nlow list (index = fine index e),
+        each a SparseTreeTile with r == k == rho, nf == 1. See notes/tree_dedispersion.tex.
+        """
+        assert tile.nf == 1
+        assert 0 <= nlow <= tile.k
+        C = int(coarse_lag_coeff)
+        assert C >= 0
+        k, rho = tile.k, tile.k - nlow
+        high = [b for b in tile.dbits if b >= nlow]    # reverse-sorted (leading data axes)
+        low = [b for b in tile.dbits if b < nlow]      # reverse-sorted (trailing data axes)
+        nhigh, nlow_b = len(high), len(low)
+        new_dbits = [b - nlow for b in high]           # reverse-sorted, in [0, rho)
+        new_tshifts = np.array([tile.tshifts[nlow + j] + C * (1 << j) for j in range(rho)],
+                               dtype=np.int64)
+        # data (1, 2^|dbits|, nt) -> (1, 2^nhigh, 2^nlow_b, nt): high bits are the MSBs.
+        data_resh = tile.data.reshape(1, 1 << nhigh, 1 << nlow_b, tile.nt)
+
+        out = []
+        for e in range(1 << nlow):
+            low_idx = SparseTreeTile._selected_bits_index(e, low)
+            data_e = np.ascontiguousarray(data_resh[:, :, low_idx, :])  # (1, 2^nhigh, nt)
+            data_e = data_e.reshape((1,) + (2,) * nhigh + (tile.nt,))
+            t0 = tile.t0 + int(SparseTreeTile._delay_tshift(e, tile.tshifts[:nlow]))
+            out.append(SparseTreeTile(rho, rho, 0, 1, tile.nt, new_dbits, data_e,
+                                      new_tshifts, t0=t0))
+        return out
 
 
 class SparseTreeArray:
@@ -457,7 +517,8 @@ class SparseTreeArray:
     @staticmethod
     def _random_tile(r, k, f0, nf):
         # A random valid SparseTreeTile with the given dims (non-negative data so the
-        # structural tests can use epsabs=0).
+        # structural tests can use epsabs=0). A random t0 is included so that the
+        # iterate_* tests exercise nonzero t0 (guards against silent t0==0 assumptions).
         if k > 0:
             nbits = int(np.random.randint(0, k + 1))
             dbits = sorted((int(b) for b in np.random.choice(k, size=nbits, replace=False)), reverse=True)
@@ -466,9 +527,10 @@ class SparseTreeArray:
             dbits = []
             tshifts = np.zeros(0, dtype=np.int64)
         nt = int(np.random.randint(1, 5))
+        t0 = int(np.random.randint(0, 4))
         shape = (nf,) + (2,) * len(dbits) + (nt,)
         data = np.random.uniform(0.0, 1.0, size=shape).astype(np.float64)
-        return SparseTreeTile(r, k, f0, nf, nt, dbits, data, tshifts)
+        return SparseTreeTile(r, k, f0, nf, nt, dbits, data, tshifts, t0=t0)
 
     @staticmethod
     def test_one_tree_gridding(channel_map, ifreq):
@@ -532,7 +594,7 @@ class SparseTreeArray:
         nf = 2 * int(np.random.randint(1, nfull // 2 + 1))
         f0 = 2 * int(np.random.randint(0, (nfull - nf) // 2 + 1))
         tile = SparseTreeArray._random_tile(r, k, f0, nf)
-        ntime = tile.nt + int(tile.tshifts.sum()) + (1 << k) + 8
+        ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + (1 << k) + 8
         ref = SparseTreeArray._dense_dd(tile.unpack(ntime), k)        # (nf/2, 2^(k+1), ntime)
         got = SparseTreeTile.iterate_aligned(tile).unpack(ntime)
         ksgpu.assert_arrays_equal(ref, got, "ref", "got", ["f", "delay", "time"], epsabs=0.0)
@@ -552,9 +614,9 @@ class SparseTreeArray:
 
         need = 1
         if lower is not None:
-            need = max(need, lower.nt + int(lower.tshifts.sum()))
+            need = max(need, lower.nt + lower.t0 + int(lower.tshifts.sum()))
         if upper is not None:
-            need = max(need, upper.nt + int(upper.tshifts.sum()))
+            need = max(need, upper.nt + upper.t0 + int(upper.tshifts.sum()))
         ntime = need + (1 << k) + 8
         row_lo = lower.unpack(ntime)[0] if lower is not None else np.zeros((1 << k, ntime))
         row_up = upper.unpack(ntime)[0] if upper is not None else np.zeros((1 << k, ntime))
@@ -592,3 +654,192 @@ class SparseTreeArray:
         ref_natural = buf[0, 0][perm, :]
         got = sarr.unpack(ntime)
         ksgpu.assert_arrays_equal(ref_natural, got[0], "reftree", "got", ["delay", "time"], epsabs=0.0)
+
+    @staticmethod
+    def test_random_split_to_multiplets():
+        """split_to_multiplets(tile, nlow, C) vs. brute-force 'fix low bits, lag high bits'."""
+        import ksgpu
+        r = int(np.random.randint(2, 8))
+        k = int(np.random.randint(1, r + 1))            # 1 <= k <= r
+        f0 = int(np.random.randint(0, 1 << (r - k)))    # singleton coarse-freq index
+        tile = SparseTreeArray._random_tile(r, k, f0, 1)
+        nlow = int(np.random.randint(0, k + 1))         # 0 <= nlow <= k
+        rho = k - nlow
+        C = int(np.random.randint(0, 5))
+        ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + C * (1 << rho) + 8
+        full = tile.unpack(ntime)[0]                    # (2^k, ntime)
+        mts = SparseTreeTile.split_to_multiplets(tile, nlow, C)
+        assert len(mts) == (1 << nlow)
+        for e in range(1 << nlow):
+            got = mts[e].unpack(ntime)[0]               # (2^rho, ntime)
+            tgt = np.zeros((1 << rho, ntime), dtype=np.float64)
+            for d_hi in range(1 << rho):
+                D = d_hi * (1 << nlow) + e               # full delay (low bits = e)
+                T = C * d_hi
+                if T < ntime:
+                    tgt[d_hi, T:] = full[D, :ntime - T]
+            ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["d_hi", "time"], epsabs=0.0)
+
+    @staticmethod
+    def test_one_subbanded_dedispersion(channel_map, ifreq, subband_counts):
+        """
+        Compare SparseSubbandedArray.make_dedispersion_output(...).unpack() against
+        ReferenceTreeGriddingKernel -> ReferenceTree(subband_counts) on a one-hot input.
+        """
+        import ksgpu
+        from ..kernels import ReferenceTree
+        from ..pirate_pybind11 import FrequencySubbands
+
+        cm = np.ascontiguousarray(channel_map, dtype=np.float64)
+        ntree = len(cm) - 1
+        r = ntree.bit_length() - 1
+        sc = [int(c) for c in subband_counts]
+        R = len(sc) - 1
+        assert R <= r
+        rho = r - R
+        M = FrequencySubbands(sc).M
+        # ntime: multiple of 32 (gridding) and comfortably > 2^(r+1) so the largest
+        # (delay + lag) fits one non-incremental ReferenceTree chunk with no wraparound.
+        ntime = (((3 << r) + 128) // 32 + 1) * 32
+
+        grid = SparseTreeArray._reference_gridding(cm, ifreq, ntime)    # (1, ntree, ntime) f32
+        buf = np.ascontiguousarray(grid.reshape(1, 1, ntree, ntime))   # (1,1,ntree,ntime) f32
+        out_rt = np.zeros((1, 1 << rho, M, ntime), dtype=np.float32)
+        ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
+                      nspec=1, subband_counts=sc).dedisperse(buf, out_rt)  # natural (d_hi, m)
+
+        ssa = SparseSubbandedArray.make_dedispersion_output(cm, ifreq, sc)
+        got = ssa.unpack(ntime)                                         # (2^rho, M, ntime) f64
+        assert got.shape == (1 << rho, M, ntime)
+        ksgpu.assert_arrays_equal(out_rt[0], got, "reftree", "got", ["d_hi", "m", "time"], epsabs=0.0)
+
+    @staticmethod
+    def test_random_subbanded_dedispersion():
+        from ..pirate_pybind11 import FrequencySubbands
+        cm, ifreq = SparseTreeArray.random_channel_map()
+        r = (len(cm) - 1).bit_length() - 1
+        R = int(np.random.randint(0, min(r, 4) + 1))    # pf_rank <= min(r, 4)
+        sc = [int(c) for c in FrequencySubbands.make_random_subband_counts(R)]
+        SparseTreeArray.test_one_subbanded_dedispersion(cm, ifreq, sc)
+
+    @staticmethod
+    def test_subbanded_reduces_to_fullband():
+        """subband_counts=[1] must reproduce the full-band make_dedispersion_output."""
+        import ksgpu
+        cm, ifreq = SparseTreeArray.random_channel_map()
+        ntree = len(cm) - 1
+        ntime = ((ntree + 31) // 32 + 1) * 32
+        full = SparseTreeArray.make_dedispersion_output(cm, ifreq).unpack(ntime)   # (1, 2^r, ntime)
+        ssa = SparseSubbandedArray.make_dedispersion_output(cm, ifreq, [1])
+        assert len(ssa.per_m) == 1
+        got = ssa.per_m[0].unpack(ntime)                                          # (1, 2^r, ntime)
+        ksgpu.assert_arrays_equal(full, got, "full", "subband[1]", ["f", "delay", "time"], epsabs=0.0)
+
+
+class SparseSubbandedArray:
+    """
+    Sparse representation of a SUBBANDED tree-dedisperser's output for a one-hot input.
+    The dense output has shape (2^(r-R), M, ntime) (notes Section "Subbanded
+    dedispersion"), held as a length-M list 'per_m' of SparseTreeTiles, each a rank-(r-R),
+    fully-iterated (k == r-R), nf==1 tile carrying that multiplet's 2^(r-R) coarse delays.
+
+    Members
+    -------
+      r, R:            tree rank and pf_rank (rho = r - R is the per-m tile rank).
+      subband_counts:  the length-(R+1) C_l array.
+      per_m:           length-M list of SparseTreeTile (r == k == rho, nf == 1).
+    """
+
+    def __init__(self, r, R, subband_counts, per_m):
+        self.r, self.R = r, R
+        self.subband_counts = [int(c) for c in subband_counts]
+        self.per_m = list(per_m)
+        self._check_invariants()
+
+    def _check_invariants(self):
+        assert 0 <= self.R <= self.r
+        rho = self.r - self.R
+        M = sum((1 << l) * c for l, c in enumerate(self.subband_counts))
+        assert len(self.per_m) == M, (len(self.per_m), M)
+        for t in self.per_m:
+            assert isinstance(t, SparseTreeTile)
+            assert (t.r, t.k, t.nf) == (rho, rho, 1), (t.r, t.k, t.nf, rho)
+
+    def unpack(self, ntime):
+        """Returns the dense (2^(r-R), M, ntime) output array."""
+        rho = self.r - self.R
+        out = np.zeros((1 << rho, len(self.per_m), ntime), dtype=np.float64)
+        for m, tile in enumerate(self.per_m):
+            out[:, m, :] = tile.unpack(ntime)[0]
+        return out
+
+    @staticmethod
+    def _zero_tile(rho):
+        # A zero rank-rho, k==rho, nf==1 tile (for subbands outside the footprint).
+        return SparseTreeTile(rho, rho, 0, 1, 1, [], np.zeros((1, 1), dtype=np.float64),
+                              np.zeros(rho, dtype=np.int64))
+
+    @staticmethod
+    def _emit(per_m, mbase, l, rho, tile, C):
+        # Fill the 2^l multiplets of one subband into per_m.
+        if tile is None:                                        # subband outside footprint
+            for e in range(1 << l):
+                per_m[mbase + e] = SparseSubbandedArray._zero_tile(rho)
+        else:
+            tiles = SparseTreeTile.split_to_multiplets(tile, l, C)
+            for e in range(1 << l):
+                per_m[mbase + e] = tiles[e]
+
+    @staticmethod
+    def make_dedispersion_output(channel_map, ifreq, subband_counts):
+        """
+        Suppose TreeGriddingKernel -> (subbanded tree dedispersion) is applied to a one-hot
+        shape (nfreq, ntime) input whose (ifreq, 0) entry is 1. The output is a mostly-zero
+        shape (2^(r-R), M, ntime) array; this returns an equivalent SparseSubbandedArray.
+        We assume non-bit-reversed coarse-delay (d_hi) and multiplet (m) indices.
+
+        Implementation (notes Section "Subbanded dedispersion"): iterate a single
+        under-the-hood SparseTreeArray (the full-band gridding footprint) and extract per-
+        multiplet outputs "on the fly". Case 1 (aligned, l=0 or even s) reads the
+        level-(r-R+l) singleton f directly; Case 2 (half-aligned, l>0 odd s) merges the
+        level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons(require_aligned=False).
+        Each extraction is then split into its 2^l multiplets (split_to_multiplets).
+        """
+        from ..pirate_pybind11 import FrequencySubbands
+        sc = [int(c) for c in subband_counts]
+        sarr = SparseTreeArray.make_tree_gridding_output(channel_map, ifreq)
+        r = sarr.r
+        fs = FrequencySubbands(sc)
+        R = fs.pf_rank
+        rho = r - R
+        assert 0 <= R <= r, (R, r)
+        per_m = [None] * fs.M
+
+        # Per subband: (l, f_blk, case1, mbase), derived from its coarse i-range [ilo, ihi).
+        subs = []
+        for f in range(fs.F):
+            ilo, ihi = int(fs.f_to_ilo[f]), int(fs.f_to_ihi[f])
+            l = (ihi - ilo).bit_length() - 1               # band width is 2^l
+            f_blk = ilo >> l                               # coarse block index
+            case1 = (ilo & ((1 << l) - 1)) == 0            # aligned (always true for l==0)
+            subs.append((l, f_blk, case1, int(fs.f_to_mbase[f])))
+
+        for k in range(0, r + 1):
+            for (l, f_blk, case1, mbase) in subs:
+                if case1 and (r - R + l) == k:                  # Case 1: read level k
+                    tile = sarr.get_singleton(f_blk, allow_none=True)
+                    C = (1 << l) * ((1 << (R - l)) - 1 - f_blk)
+                    SparseSubbandedArray._emit(per_m, mbase, l, rho, tile, C)
+                elif (not case1) and (r - R + l - 1) == k:      # Case 2: read level r-R+l-1
+                    lo = sarr.get_singleton(2 * f_blk + 1, allow_none=True)
+                    up = sarr.get_singleton(2 * f_blk + 2, allow_none=True)
+                    C = (1 << (l - 1)) * ((1 << (R - l + 1)) - 2 * f_blk - 3)
+                    if lo is None and up is None:
+                        tile = None
+                    else:
+                        tile = SparseTreeTile.iterate_singletons(lo, up, require_aligned=False)
+                    SparseSubbandedArray._emit(per_m, mbase, l, rho, tile, C)
+            if k < r:
+                sarr = sarr.iterate()
+
+        return SparseSubbandedArray(r, R, sc, per_m)
