@@ -149,7 +149,6 @@ def test(args):
             SparseTreeArray.test_random_dedispersion()
             SparseTreeArray.test_random_iterate_aligned()
             SparseTreeArray.test_random_iterate_singletons()
-            SparseTreeArray.test_single_channel_dbits()
             SparseTreeArray.test_random_split_to_multiplets()
             SparseTreeArray.test_subbanded_reduces_to_fullband()
             SparseTreeArray.test_random_subbanded_dedispersion()

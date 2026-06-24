@@ -621,37 +621,6 @@ class SparseTreeArray:
         ksgpu.assert_arrays_equal(ref, got, "ref", "got", ["f", "delay", "time"], epsabs=0.0)
 
     @staticmethod
-    def test_single_channel_dbits():
-        """
-        A single tree channel iterated to k==r keeps dbits==[] at every level (the headline
-        compactness property), and unpacks to the same impulse response as ReferenceTree.
-        """
-        import ksgpu
-        from ..kernels import ReferenceTree
-        from ..utils import bit_reverse_permutation
-        r = int(np.random.randint(1, 8))
-        ntree = 1 << r
-        j = int(np.random.randint(0, ntree))
-        tile = SparseTreeTile(r=r, k=0, f0=j, nf=1, nt=1, dbits=[],
-                              data=np.ones((1, 1, 1)), tshifts=np.zeros(0, dtype=np.int64))
-        sarr = SparseTreeArray._from_tile(tile)
-        while sarr.k < sarr.r:
-            sarr = sarr.iterate()
-            assert sarr.nf == 1
-            for t in sarr.tiles:
-                assert t.dbits == [], (sarr.k, t.dbits)
-
-        ntime = ((ntree + 31) // 32 + 1) * 32
-        buf = np.zeros((1, 1, ntree, ntime), dtype=np.float32)
-        buf[0, 0, j, 0] = 1.0
-        ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
-                      nspec=1, subband_counts=[1]).dedisperse(buf, None)
-        perm = bit_reverse_permutation(r)
-        ref_natural = buf[0, 0][perm, :]
-        got = sarr.unpack(ntime)
-        ksgpu.assert_arrays_equal(ref_natural, got[0], "reftree", "got", ["delay", "time"], epsabs=0.0)
-
-    @staticmethod
     def test_random_split_to_multiplets():
         """split_to_multiplets(tile, nlow, C) vs. brute-force 'fix low bits, lag high bits'."""
         import ksgpu
@@ -709,6 +678,19 @@ class SparseTreeArray:
         got = ssa.unpack(ntime)                                         # (2^rho, M, ntime) f64
         assert got.shape == (1 << rho, M, ntime)
         ksgpu.assert_arrays_equal(out_rt[0], got, "reftree", "got", ["d_hi", "m", "time"], epsabs=0.0)
+
+        # "Headline compactness" structural check: when ifreq's gridding footprint is a
+        # single tree channel, iterating to k==r keeps the tile maximally compact -- nf==1
+        # and dbits==[] at every level. (This single-channel case occurs often under
+        # random_channel_map; its dedispersion correctness is already covered above, since
+        # a single-channel footprint grids to weight 1.0.)
+        s = SparseTreeArray.make_tree_gridding_output(cm, ifreq)
+        if s.nf == 1:
+            while s.k < s.r:
+                s = s.iterate()
+                assert s.nf == 1, (s.k, s.nf)
+                for t in s.tiles:
+                    assert t.dbits == [], (s.k, t.dbits)
 
     @staticmethod
     def test_random_subbanded_dedispersion():
