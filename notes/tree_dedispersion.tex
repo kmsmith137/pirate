@@ -3,6 +3,8 @@
 \usepackage{setspace}
 \usepackage{graphicx}
 \usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{multirow}
 
 \def\DD{{\rm DD}}
 \def\nn{\nonumber}
@@ -18,6 +20,7 @@
 \setlength{\parskip}{2.5pt}  % spacing between paragraphs
 
 \section{Tree gridding kernel}
+\label{sec:gridding}
 
 Our starting point for tree dedispersion is a shape $(N_{\rm freq}, N_{\rm time})$ array representing channelized intensity time series. We do not assume that frequency channels are evenly spaced (in CHORD we use unequal spacing).
 We want to search this array for FRBs with delay $\propto \nu^{-2}$.
@@ -326,5 +329,65 @@ The profile index $0\le p < P$ is related to $(\lambda,q)$ by $p = 3\lambda + q$
 $(\lambda,q) = (0,0)$. Thus level $0$ contributes profiles $p = 0,1,2,3$, and each level $\lambda > 0$ contributes
 $p = 3\lambda+1, 3\lambda+2, 3\lambda+3$ --- the single-boxcar kernel $h_{\lambda,0}$ is dropped for $\lambda>0$, since
 $h_{\lambda,0} = b_\lambda = h_{\lambda-1,1}$ would be redundant.
+
+\section{Downsampled trees and early triggers}
+\label{sec:downsampled_early}
+
+So far, we have described a single {\tt DedispersionTree} which searches up to slope 1 (i.e.~full-band dispersion delay equal to $2^r$ time samples), and ``triggers'' when the pulse arrives at the lowest frequency (highest tree-freq).
+It will be useful to define a larger {\tt Dedisperser} object, consisting of multiple trees, as follows:
+\begin{itemize}
+\item {\bf Downsampled trees} in order to search to higher DM. If we time-downsample the data by a factor $2^{\tt ids}$, and run rank-$r$ dedispersion as usual, then we can search to a max dispersion delay which is larger by a factor $2^{\tt ids}$. 
+When we time-downsample by a factor $2^{\tt ids}$, we add time samples and multiply by $2^{-{\tt ids}/2}$, in order to leave the variance unchanged (assuming uncorrelated samples).
+
+The integer {\tt ids} is called the {\em downsampling level}. If ${\tt ids} > 0$, then we only keep the upper half (in delay) of the dedispersion output, since the lower half was already searched at downsampling level $({\tt ids}-1)$.
+\item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. By default, we only trigger when the pulse arrives at the highest tree-freq (i.e.\ lowest radio frequency). To trigger earlier for some bursts, we also run parallel dedispersion trees over the lowest $2^{r-\delta}$ tree-freqs, where $\delta=1,2,\cdots$ is denoted either {\tt delta\_et} or {\tt delta\_rank} in the code. These trees trigger at lower tree-freq (by a factor $2^\delta$), i.e.\ higher radio frequency.
+\end{itemize}
+A {\tt Dedisperser} consists of one or more {\tt DedispersionTrees}, each identified by a $({\tt ids}, \delta)$ pair.
+The ``base'' tree $({\tt ids}, \delta)=(0,0)$ does not downsample or trigger early.
+Conceptually, each {\tt DedispersionTree} just runs ``vanilla'' rank-$(r-\delta$) tree dedispersion on the first $2^{r-\delta}$ tree-freqs, downsampled in time by $2^{\tt ids}$, and then drops the lower DM-half of the outputs if ${\tt ids} > 0$.\footnote{This description suggests that each tree is an independent computation run ``from scratch''. There are a lot of tricks in the code that reuse computations between trees, i.e.\ the {\tt Dedisperser} is faster than running the constituent {\tt DedispersionTrees} independently.}
+
+{\sloppy
+As a concrete example, Table~\ref{tab:chord_sb2_et} and Figures~\ref{fig:early_triggers}--\ref{fig:tree_segments} show the ten-tree family of the CHORD config {\tt chord\_sb2\_et.yml} ($r=16$, with four downsampling levels and six early triggers).
+\par}
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{c c c c c c}
+\toprule
+{\tt ids} & $\delta$ & Full-band delay range (s) & DM range (pc\,cm$^{-3}$) & trigger (MHz) & latency range (s) \\
+\midrule
+0 & 0 & 0.0--65.5 & 0--1481 & 300 & 0.0--65.5 \\
+\midrule
+\multirow{2}{*}{1} & 0 & \multirow{2}{*}{65.5--131.1} & \multirow{2}{*}{1481--2962} & 300 & 65.5--131.1 \\
+ & 1 & & & 416 & 32.8--65.5 \\
+\midrule
+\multirow{3}{*}{2} & 0 & \multirow{3}{*}{131.1--262.1} & \multirow{3}{*}{2962--5924} & 300 & 131.1--262.1 \\
+ & 1 & & & 416 & 65.5--131.1 \\
+ & 2 & & & 567 & 32.8--65.5 \\
+\midrule
+\multirow{4}{*}{3} & 0 & \multirow{4}{*}{262.1--524.3} & \multirow{4}{*}{5924--11847} & 300 & 262.1--524.3 \\
+ & 1 & & & 416 & 131.1--262.1 \\
+ & 2 & & & 567 & 65.5--131.1 \\
+ & 3 & & & 750 & 32.8--65.5 \\
+\bottomrule
+\end{tabular}
+\caption{The ten {\tt DedispersionTree}s of the CHORD config {\tt chord\_sb2\_et.yml} (rank $r=16$; four downsampling levels; six early triggers). Each tree is identified by an $({\tt ids}, \delta)$ pair. The DM range and {\em full-band} dispersion delay range depend only on {\tt ids}. The trigger frequency depends only on $\delta$, and the latency range is $2^{-\delta} \times \mbox{(delay range)}$.
+(Generated with {\tt pirate\_frb show\_dedisperser -v configs/dedispersion/chord\_sb2\_et.yml}.)}
+\label{tab:chord_sb2_et}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\textwidth]{figs/early_triggers.pdf}
+\caption{A visualization of early triggers, in radio frequency (right panel) or the ``tree-freq'' reparametrization used in the code (left panel). Trees with early triggers search the lower part of the tree-freq range, i.e.\ the high part of the radio frequency range. A tree with $\delta > 0$ triggers earlier (by a factor $2^\delta$) than the main tree. The plot assumes CHORD params (300--1500 MHz, $r=16$, $0\le\delta\le 3$).}
+\label{fig:early_triggers}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{figs/tree_segments.pdf}
+\caption{The ten {\tt DedispersionTrees} from Table\ \ref{tab:chord_sb2_et}, shown as line segments in the (DM, triggering latency) plane. For each tree $({\tt ids}, \delta)$, the value of {\tt ids} determines the DM range, and the value of $\delta$ determines the slope.}
+\label{fig:tree_segments}
+\end{figure}
 
 \end{document}
