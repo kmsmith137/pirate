@@ -11,11 +11,12 @@ class SparseTile:
       r, k:    rank and iteration index (0 <= k <= r).
       f0, nf:  the tile covers f-indices [f0, f0+nf); elements outside are zero.
       nt:      (pre-time-shift) time indices outside [0, nt) are zero.
-      dbits:   reverse-sorted list of bits [b0>b1>...], 0 <= bi < k. The (pre-shift) data
-               depends on the delay d only through the digits {d_{b0}, d_{b1}, ...}.
-      data:    shape (nf, 2^len(dbits), nt), the pre-time-shift array. The middle axis packs
-               the selected delay bits in C-order with dbits[0] as the most significant bit
-               (the flat index is _selected_bits_index(d, dbits)).
+      dbits:   integer bitmask of selected delay bits: bit b set (for 0 <= b < k) means the
+               (pre-shift) data depends on digit d_b. So data depends on the delay d only
+               through the digits {d_b : bit b of dbits is set}.
+      data:    shape (nf, 2^popcount(dbits), nt), the pre-time-shift array. The middle axis
+               packs the selected delay bits in C-order, with the HIGHEST selected bit as the
+               most significant (the flat index is _selected_bits_index(d, dbits)).
       tshifts: length-k array, applied UNIFORMLY to every f-index of the tile before
                unpacking: unpacked[f,d,t] = data[f-f0, sel(d), t - t0 - T(d)] for all f,
                where T(d) = sum_i tshifts[i]*bit_i(d). (Because of the shift, 'data'
@@ -33,7 +34,7 @@ class SparseTile:
     def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0, trim=False):
         self.r, self.k = r, k
         self.f0, self.nf = f0, nf
-        self.dbits = list(dbits)
+        self.dbits = int(dbits)
         t0 = int(t0)
         if trim:
             # Drop all-zero leading/trailing time slices (over the f and delay-bit axes).
@@ -55,10 +56,8 @@ class SparseTile:
         assert 0 <= self.k <= self.r
         assert 0 <= self.f0 and self.nf >= 1 and self.f0 + self.nf <= 2**(self.r - self.k)
         assert self.nt >= 1
-        assert all(0 <= b < self.k for b in self.dbits)
-        assert self.dbits == sorted(self.dbits, reverse=True)
-        assert len(set(self.dbits)) == len(self.dbits)
-        expected = (self.nf, 2 ** len(self.dbits), self.nt)
+        assert 0 <= self.dbits < (1 << self.k)
+        expected = (self.nf, 1 << self.dbits.bit_count(), self.nt)
         assert self.data.shape == expected, (self.data.shape, expected)
         assert self.data.dtype == np.float64
         assert self.tshifts.shape == (self.k,)
@@ -101,23 +100,28 @@ class SparseTile:
 
     @staticmethod
     def _selected_bits_index(d, dbits):
-        # Flat index into the 2^len(dbits) collapsed selected-bit axes, for delay value(s)
-        # d (python int or numpy array). dbits[0] is the most significant bit. 'd*0' seeds
-        # idx with d's type/shape (so empty dbits yields an array when d is an array).
+        # Flat index into the 2^popcount(dbits) collapsed selected-bit axes, for delay
+        # value(s) d (python int or numpy array). The selected bits (those set in 'dbits')
+        # are packed highest-first: the highest set bit -> most significant output bit.
+        # 'd*0' seeds idx with d's type/shape (so dbits==0 yields an array when d is array).
         idx = d * 0
-        m = len(dbits)
-        for j, b in enumerate(dbits):
-            idx = idx | (((d >> b) & 1) << (m - 1 - j))
+        shift = dbits.bit_count() - 1
+        for b in reversed(range(dbits.bit_length())):
+            if (dbits >> b) & 1:
+                idx = idx | (((d >> b) & 1) << shift)
+                shift -= 1
         return idx
 
     @staticmethod
     def _representative_delay(s, dbits):
-        # Inverse of _selected_bits_index: the delay whose dbits-bits encode flat index s,
-        # with all non-dbits bits zero.
+        # Inverse of _selected_bits_index: the delay whose selected (set in 'dbits') bits
+        # encode flat index s, with all non-selected bits zero.
         d = 0
-        m = len(dbits)
-        for j, b in enumerate(dbits):
-            d |= ((s >> (m - 1 - j)) & 1) << b
+        shift = dbits.bit_count() - 1
+        for b in reversed(range(dbits.bit_length())):
+            if (dbits >> b) & 1:
+                d |= ((s >> shift) & 1) << b
+                shift -= 1
         return d
 
     @staticmethod
@@ -138,9 +142,12 @@ class SparseTile:
         return T
 
     @staticmethod
-    def _nonzero_bits(vec):
-        # Set of bit-indices i where vec[i] != 0.
-        return set(int(i) for i in np.nonzero(vec)[0])
+    def _nonzero_mask(vec):
+        # Bitmask with bit i set where vec[i] != 0.
+        m = 0
+        for i in np.nonzero(vec)[0]:
+            m |= 1 << int(i)
+        return m
 
     @staticmethod
     def _dd_tlo(k):
@@ -165,11 +172,11 @@ class SparseTile:
 
         F0 = f0 // 2
         nf_out = nf // 2
-        dbits_out = list(range(k, -1, -1))             # all k+1 bits
+        dbits_out = (1 << (k + 1)) - 1                 # all k+1 bits
         m_out = k + 1
         rsqrt2 = 1.0 / np.sqrt(2.0)
         nt_alloc = nt_in + (1 << k)
-        data_in = tile.data                            # (nf, 2^|dbits_in|, nt_in)
+        data_in = tile.data                            # (nf, 2^popcount(dbits_in), nt_in)
         data_out = np.zeros((nf_out, 1 << m_out, nt_alloc), dtype=np.float64)
         for dp in range(1 << m_out):                   # representative is the identity (all bits)
             d = dp >> 1
@@ -233,20 +240,20 @@ class SparseTile:
         c_L = (lower.t0 - t0_out) if lower is not None else 0
         c_U = (upper.t0 - t0_out) if upper is not None else 0
 
-        dbits_set = set()
+        # 'dbits + 1' (lifting every selected bit one level) is a left shift on the mask.
+        dbits_out = 0
         nt_alloc = 1
         if lower is not None:
-            dbits_set |= set(b + 1 for b in lower.dbits) | SparseTile._nonzero_bits(res_L)
+            dbits_out |= (lower.dbits << 1) | SparseTile._nonzero_mask(res_L)
             nt_alloc = max(nt_alloc, lower.nt + c_L + int(res_L.sum()))
         if upper is not None:
-            dbits_set |= set(b + 1 for b in upper.dbits) | SparseTile._nonzero_bits(res_U)
+            dbits_out |= (upper.dbits << 1) | SparseTile._nonzero_mask(res_U)
             nt_alloc = max(nt_alloc, upper.nt + c_U + int(res_U.sum()))
-        dbits_out = sorted(dbits_set, reverse=True)
-        m_out = len(dbits_out)
+        m_out = dbits_out.bit_count()
 
         rsqrt2 = 1.0 / np.sqrt(2.0)
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
-        lo_flat = lower.data if lower is not None else None      # (1, 2^|dbits|, nt)
+        lo_flat = lower.data if lower is not None else None      # (1, 2^popcount(dbits), nt)
         up_flat = upper.data if upper is not None else None
         for s_out in range(1 << m_out):
             dp = SparseTile._representative_delay(s_out, dbits_out)
@@ -282,13 +289,12 @@ class SparseTile:
         C = int(coarse_lag_coeff)
         assert C >= 0
         k, rho = self.k, self.k - nlow
-        high = [b for b in self.dbits if b >= nlow]    # reverse-sorted (leading data axes)
-        low = [b for b in self.dbits if b < nlow]      # reverse-sorted (trailing data axes)
-        nhigh, nlow_b = len(high), len(low)
-        new_dbits = [b - nlow for b in high]           # reverse-sorted, in [0, rho)
+        low = self.dbits & ((1 << nlow) - 1)           # selected bits < nlow (trailing data axes)
+        new_dbits = self.dbits >> nlow                 # selected bits >= nlow, shifted into [0, rho)
+        nhigh, nlow_b = new_dbits.bit_count(), low.bit_count()
         new_tshifts = np.array([self.tshifts[nlow + j] + C * (1 << j) for j in range(rho)],
                                dtype=np.int64)
-        # data (1, 2^|dbits|, nt) -> (1, 2^nhigh, 2^nlow_b, nt): high bits are the MSBs.
+        # data (1, 2^popcount(dbits), nt) -> (1, 2^nhigh, 2^nlow_b, nt): high bits are the MSBs.
         data_resh = self.data.reshape(1, 1 << nhigh, 1 << nlow_b, self.nt)
 
         out = []
@@ -307,16 +313,11 @@ class SparseTile:
         # A random valid SparseTile with the given dims (non-negative data so the
         # structural tests can use epsabs=0). A random t0 is included so that the
         # iterate_* tests exercise nonzero t0 (guards against silent t0==0 assumptions).
-        if k > 0:
-            nbits = int(np.random.randint(0, k + 1))
-            dbits = sorted((int(b) for b in np.random.choice(k, size=nbits, replace=False)), reverse=True)
-            tshifts = np.random.randint(0, 4, size=k).astype(np.int64)
-        else:
-            dbits = []
-            tshifts = np.zeros(0, dtype=np.int64)
+        dbits = int(np.random.randint(0, 1 << k))       # random subset of bits [0, k)
+        tshifts = np.random.randint(0, 4, size=k).astype(np.int64)
         nt = int(np.random.randint(1, 5))
         t0 = int(np.random.randint(0, 4))
-        shape = (nf, 2 ** len(dbits), nt)
+        shape = (nf, 1 << dbits.bit_count(), nt)
         data = np.random.uniform(0.0, 1.0, size=shape).astype(np.float64)
         return SparseTile(r, k, f0, nf, nt, dbits, data, tshifts, t0=t0)
 
@@ -484,7 +485,7 @@ class SparseTileTriple:
         w = np.minimum(cm[n], ifreq + 1.0) - np.maximum(cm[n + 1], float(ifreq))
         w = np.maximum(w, 0.0)
         data = w.reshape(-1, 1, 1)                     # (nf, 2^0=1, nt=1)
-        tile = SparseTile(r=r, k=0, f0=f0, nf=f1 - f0, nt=1, dbits=[], data=data,
+        tile = SparseTile(r=r, k=0, f0=f0, nf=f1 - f0, nt=1, dbits=0, data=data,
                           tshifts=np.zeros(0, dtype=np.int64))
         return SparseTileTriple._from_tile(tile)
 
@@ -627,7 +628,7 @@ class SparseTilePerM:
     @staticmethod
     def _zero_tile(rho):
         # A zero rank-rho, k==rho, nf==1 tile (for subbands outside the footprint).
-        return SparseTile(rho, rho, 0, 1, 1, [], np.zeros((1, 1, 1), dtype=np.float64),
+        return SparseTile(rho, rho, 0, 1, 1, 0, np.zeros((1, 1, 1), dtype=np.float64),
                           np.zeros(rho, dtype=np.int64))
 
     @staticmethod
@@ -733,7 +734,7 @@ class SparseTilePerM:
 
         # "Headline compactness" structural check: when ifreq's gridding footprint is a
         # single tree channel, iterating to k==r keeps the tile maximally compact -- nf==1
-        # and dbits==[] at every level. (This single-channel case occurs often under
+        # and dbits==0 at every level. (This single-channel case occurs often under
         # random_channel_map; its dedispersion correctness is already covered above, since
         # a single-channel footprint grids to weight 1.0.)
         s = SparseTileTriple.make_tree_gridding_output(cm, ifreq)
@@ -742,7 +743,7 @@ class SparseTilePerM:
                 s = s.iterate()
                 assert s.nf == 1, (s.k, s.nf)
                 for t in s.tiles:
-                    assert t.dbits == [], (s.k, t.dbits)
+                    assert t.dbits == 0, (s.k, t.dbits)
 
     @staticmethod
     def test_random_subbanded_dedispersion():
