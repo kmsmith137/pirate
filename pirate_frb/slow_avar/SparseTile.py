@@ -271,29 +271,25 @@ class SparseTile:
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
                           t0=t0_out, trim=True)
 
-    def split_dm_index(self, nlow, coarse_lag_coeff):
+    def split_dm_index(self, nlow):
         """
         Split this singleton tile's (nf==1) level-k DM (delay) index into a coarse part (the
         high rho = k-nlow bits) and a fine part (the low 'nlow' bits, the subband "fine
         index" / multiplet). Returns 2^nlow fully-iterated rank-(k-nlow) tiles, one per value
         'e' of the low bits.
 
-        The high rho bits become the new (coarse) delay axis; an extraction lag
-        (coarse_lag_coeff * d_hi) is folded into the new tshifts; and the fine bits' own
-        (constant) tshift contribution, T_lo(e) = sum_{i<nlow} tshifts[i] bit_i(e), becomes
-        the per-multiplet t0. The returned list is indexed by fine index e; each entry is a
-        SparseTile with r == k == rho, nf == 1. See notes/tree_dedispersion.tex.
+        The high rho bits become the new (coarse) delay axis, inheriting their tshifts; the
+        fine bits' own (constant) tshift contribution, T_lo(e) = sum_{i<nlow} tshifts[i]
+        bit_i(e), becomes the per-multiplet t0. The returned list is indexed by fine index e;
+        each entry is a SparseTile with r == k == rho, nf == 1. See notes/tree_dedispersion.tex.
         """
         assert self.nf == 1
         assert 0 <= nlow <= self.k
-        C = int(coarse_lag_coeff)
-        assert C >= 0
-        k, rho = self.k, self.k - nlow
+        rho = self.k - nlow
         low = self.dbits & ((1 << nlow) - 1)           # selected bits < nlow (trailing data axes)
         new_dbits = self.dbits >> nlow                 # selected bits >= nlow, shifted into [0, rho)
         nhigh, nlow_b = new_dbits.bit_count(), low.bit_count()
-        new_tshifts = np.array([self.tshifts[nlow + j] + C * (1 << j) for j in range(rho)],
-                               dtype=np.int64)
+        new_tshifts = np.array(self.tshifts[nlow:], dtype=np.int64)   # high bits' tshifts
         # data (1, 2^popcount(dbits), nt) -> (1, 2^nhigh, 2^nlow_b, nt): high bits are the MSBs.
         data_resh = self.data.reshape(1, 1 << nhigh, 1 << nlow_b, self.nt)
 
@@ -379,7 +375,7 @@ class SparseTile:
 
     @staticmethod
     def test_random_split_dm_index():
-        """split_dm_index(nlow, C) vs. brute-force 'fix low bits, lag high bits'."""
+        """split_dm_index(nlow) vs. brute-force 'fix the low bits, keep the high bits'."""
         import ksgpu
         r = int(np.random.randint(2, 8))
         k = int(np.random.randint(1, r + 1))            # 1 <= k <= r
@@ -387,19 +383,16 @@ class SparseTile:
         tile = SparseTile.make_random(r, k, f0, 1)
         nlow = int(np.random.randint(0, k + 1))         # 0 <= nlow <= k
         rho = k - nlow
-        C = int(np.random.randint(0, 5))
-        ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + C * (1 << rho) + 8
+        ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + 8
         full = tile.unpack(ntime)[0]                    # (2^k, ntime)
-        mts = tile.split_dm_index(nlow, C)
+        mts = tile.split_dm_index(nlow)
         assert len(mts) == (1 << nlow)
         for e in range(1 << nlow):
             got = mts[e].unpack(ntime)[0]               # (2^rho, ntime)
             tgt = np.zeros((1 << rho, ntime), dtype=np.float64)
             for d_hi in range(1 << rho):
                 D = d_hi * (1 << nlow) + e               # full delay (low bits = e)
-                T = C * d_hi
-                if T < ntime:
-                    tgt[d_hi, T:] = full[D, :ntime - T]
+                tgt[d_hi] = full[D]
             ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["d_hi", "time"], epsabs=0.0)
 
 
@@ -634,14 +627,17 @@ class SparseTilePerM:
     @staticmethod
     def _emit(per_m, mbase, l, tile, C):
         # Fill the 2^l multiplets of one subband into per_m. A None tile (subband outside
-        # the gridding footprint) leaves those multiplets as None.
+        # the gridding footprint) leaves those multiplets as None. The extraction lag C*d_hi
+        # (the subband's per-coarse-delay time shift) is folded into each multiplet's tshifts
+        # here: adding C*2^j to coarse bit j gives a total forward shift of C*d_hi.
         if tile is None:
             for e in range(1 << l):
                 per_m[mbase + e] = None
         else:
-            tiles = tile.split_dm_index(l, C)
-            for e in range(1 << l):
-                per_m[mbase + e] = tiles[e]
+            lag = C * (1 << np.arange(tile.k - l, dtype=np.int64))   # coarse bit j -> C*2^j
+            for e, t in enumerate(tile.split_dm_index(l)):
+                per_m[mbase + e] = SparseTile(t.r, t.k, t.f0, t.nf, t.nt, t.dbits,
+                                              t.data, t.tshifts + lag, t0=t.t0)
 
     @staticmethod
     def make_dedispersion_output(channel_map, ifreq, fs):
