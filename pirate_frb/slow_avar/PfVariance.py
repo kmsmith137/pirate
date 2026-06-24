@@ -22,6 +22,8 @@ each call is a small matmul.
 
 import numpy as np
 
+from .SparseTile import SparseTile
+
 
 class PfVarianceConvolver:
     """Computes Var(h_p * x) for each peak-finding profile p, given a short kernel x.
@@ -184,3 +186,86 @@ class PfVarianceConvolver:
                 ok = (ctrim.shape == hp.shape) and \
                      (np.allclose(ctrim, hp) or np.allclose(ctrim, hp[::-1]))
                 assert ok, (Wmax, p, labels[p], list(ctrim), list(hp))
+
+
+class PfVariance:
+    """Compressed peak-finding output variance var[d, p], for delay 0 <= d < 2^rank and
+    peak-finding profile 0 <= p < P (P is fixed by the convolver).
+
+    The variance is stored as a small sum of terms, each of which depends on the delay d
+    through only a few of its bits.  A term is keyed by an integer bitmask 'dbits' (bit b set
+    means the term depends on digit d_b) and holds an array of shape (2^popcount(dbits), P)
+    indexed by (compacted selected-bit pattern of d, profile).  The full variance is
+
+        var[d, p] = sum over terms (dbits, arr) of arr[sel(d, dbits), p],
+
+    where sel(d, dbits) = SparseTile._selected_bits_index (highest selected bit is the most
+    significant) -- the same delay-axis convention SparseTile.data uses.  Keeping the terms
+    factored (rather than expanding to a dense (2^rank, P) array) is the compression.
+
+    Members
+    -------
+      rank:      number of delay bits (delays run over 0 <= d < 2^rank).
+      convolver: PfVarianceConvolver defining the P peak-finding profiles.
+      terms:     dict mapping dbits (int bitmask) -> ndarray of shape (2^popcount(dbits), P).
+    """
+
+    def __init__(self, rank, convolver):
+        self.rank = int(rank)
+        self.convolver = convolver
+        self.terms = {}      # dbits (int) -> (2^popcount(dbits), P) float64
+
+    def get_all_dbits(self):
+        """Bitwise-OR of all term keys (the union of bits any term depends on)."""
+        all_dbits = 0
+        for dbits in self.terms:
+            all_dbits |= dbits
+        return all_dbits
+
+    def unpack(self, dbits):
+        """Expand every term to shape (2^popcount(dbits), P) and return their sum.
+
+        'dbits' must be a superset of every term's dbits (otherwise it cannot represent some
+        term's delay-dependence); a ValueError is raised if it is too small.
+        """
+        dbits = int(dbits)
+        missing = self.get_all_dbits() & ~dbits
+        if missing:
+            raise ValueError(f"PfVariance.unpack: dbits={dbits:#x} is too small; a term "
+                             f"depends on bit(s) {missing:#x} not present in dbits")
+        m = dbits.bit_count()
+        out = np.zeros((1 << m, self.convolver.P), dtype=np.float64)
+        # Representative delay for each output row (its 'dbits' bits encode the row index).
+        d = SparseTile._representative_delay(np.arange(1 << m), dbits)
+        for term_dbits, term_arr in self.terms.items():
+            out += term_arr[SparseTile._selected_bits_index(d, term_dbits)]
+        return out
+
+    def add_tile(self, tile):
+        """Convolve a singleton SparseTile (tile.k == self.rank) into a new term.
+
+        tile.data has shape (1, 2^popcount(tile.dbits), nt); the convolver maps its length-nt
+        time axis to the P profiles, giving a term (tile.dbits, (2^popcount, P)).  tile.tshifts
+        and tile.t0 are irrelevant (the variance is time-shift invariant) and are ignored.
+        """
+        assert tile.nf == 1, "PfVariance.add_tile: tile must be a singleton (nf == 1)"
+        assert tile.k == self.rank, (tile.k, self.rank)
+        tile_var = self.convolver.variance(tile.data)[0]   # drop the nf==1 axis -> (2^popcount, P)
+        self._accumulate(tile.dbits, tile_var)
+
+    def add(self, pfvar):
+        """Accumulate all terms of another PfVariance into self."""
+        assert pfvar.rank == self.rank, (pfvar.rank, self.rank)
+        for dbits, arr in pfvar.terms.items():
+            self._accumulate(dbits, arr)
+
+    def _accumulate(self, dbits, arr):
+        # Add the term (dbits -> arr), summing into any existing same-dbits term.
+        dbits = int(dbits)
+        assert 0 <= dbits < (1 << self.rank), (dbits, self.rank)
+        assert arr.shape == (1 << dbits.bit_count(), self.convolver.P), \
+            (arr.shape, dbits, self.convolver.P)
+        if dbits in self.terms:
+            self.terms[dbits] = self.terms[dbits] + arr
+        else:
+            self.terms[dbits] = np.array(arr, dtype=np.float64)   # copy (avoid aliasing)
