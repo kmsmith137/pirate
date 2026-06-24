@@ -402,7 +402,7 @@ class SparseTile:
             ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["d_hi", "time"], epsabs=0.0)
 
 
-class SparseTripleTile:
+class SparseTileTriple:
     """
     A tree-dedispersion array of shape (2^(r-k), 2^k, ntime) over a contiguous f-index
     range [f0, f0+nf), represented as a list of SparseTiles. The split lets the first
@@ -441,10 +441,10 @@ class SparseTripleTile:
 
     @staticmethod
     def _from_tile(tile):
-        # Build a canonical SparseTripleTile by splitting a single tile into 1/2/3 sub-tiles.
-        bounds = SparseTripleTile._tile_bounds(tile.f0, tile.nf)
+        # Build a canonical SparseTileTriple by splitting a single tile into 1/2/3 sub-tiles.
+        bounds = SparseTileTriple._tile_bounds(tile.f0, tile.nf)
         tiles = [tile.slice(c0, c1) for (c0, c1) in bounds]
-        return SparseTripleTile(tile.r, tile.k, tile.f0, tile.nf, tiles)
+        return SparseTileTriple(tile.r, tile.k, tile.f0, tile.nf, tiles)
 
     def get_singleton(self, f, allow_none=False):
         """Return the singleton SparseTile for f-index f. If f is out of [f0, f0+nf):
@@ -463,7 +463,7 @@ class SparseTripleTile:
         """
         Suppose the TreeGriddingKernel is called on a "one-hot" shape (nfreq,ntime) array
         whose (ifreq,0) entry is 1. The output is a shape (2^rank, 1, ntime) array which is
-        mostly zeros. This method returns an equivalent SparseTripleTile.
+        mostly zeros. This method returns an equivalent SparseTileTriple.
         """
         cm = np.ascontiguousarray(channel_map, dtype=np.float64)
         nchan = len(cm) - 1
@@ -486,7 +486,7 @@ class SparseTripleTile:
         data = w.reshape(-1, 1, 1)                     # (nf, 2^0=1, nt=1)
         tile = SparseTile(r=r, k=0, f0=f0, nf=f1 - f0, nt=1, dbits=[], data=data,
                           tshifts=np.zeros(0, dtype=np.int64))
-        return SparseTripleTile._from_tile(tile)
+        return SparseTileTriple._from_tile(tile)
 
     def iterate(self):
         """
@@ -494,7 +494,7 @@ class SparseTripleTile:
         iterate_singletons (which absorbs shifts into tshifts to minimize dbits/nt); the
         bulk output channels [F0+1, Fmax) are computed with iterate_aligned on the
         even-aligned input sub-block [2F0+2, 2Fmax) (which lies inside the input middle
-        tile). Returns a canonical SparseTripleTile at level k+1.
+        tile). Returns a canonical SparseTileTriple at level k+1.
         """
         assert self.k < self.r, "iterate(): already at k == r"
         f0, nf = self.f0, self.nf
@@ -513,7 +513,7 @@ class SparseTripleTile:
             tiles.append(SparseTile.iterate_singletons(
                 self.get_singleton(2 * Fmax, allow_none=True),
                 self.get_singleton(2 * Fmax + 1, allow_none=True)))
-        return SparseTripleTile(self.r, self.k + 1, F0, nf_out, tiles)
+        return SparseTileTriple(self.r, self.k + 1, F0, nf_out, tiles)
 
     def unpack(self, ntime):
         """Returns a dense (2^(r-k), 2^k, ntime) array, assembled from the tiles."""
@@ -575,19 +575,19 @@ class SparseTripleTile:
         cm = np.ascontiguousarray(channel_map, dtype=np.float64)
         ntree = len(cm) - 1
         ntime = 32                                  # gridding kernel needs ntime % (1024/nbits) == 0 (nbits=32)
-        ref = SparseTripleTile._reference_gridding(cm, ifreq, ntime)   # (1, ntree, ntime) f32
-        sarr = SparseTripleTile.make_tree_gridding_output(cm, ifreq)
+        ref = SparseTileTriple._reference_gridding(cm, ifreq, ntime)   # (1, ntree, ntime) f32
+        sarr = SparseTileTriple.make_tree_gridding_output(cm, ifreq)
         got = sarr.unpack(ntime)                    # (ntree, 1, ntime) f64
         assert sarr.k == 0 and got.shape == (ntree, 1, ntime)
         ksgpu.assert_arrays_equal(ref[0], got[:, 0, :], "ref", "got", ["tree", "time"], epsabs=0.0)
 
     @staticmethod
     def test_random_tree_gridding():
-        cm, ifreq = SparseTripleTile.random_channel_map()
-        SparseTripleTile.test_one_tree_gridding(cm, ifreq)
+        cm, ifreq = SparseTileTriple.random_channel_map()
+        SparseTileTriple.test_one_tree_gridding(cm, ifreq)
 
 
-class SparsePerMTile:
+class SparseTilePerM:
     """
     Sparse representation of a SUBBANDED tree-dedisperser's output for a one-hot input.
     The dense output has shape (2^(r-R), M, ntime) (notes Section "Subbanded
@@ -635,7 +635,7 @@ class SparsePerMTile:
         # Fill the 2^l multiplets of one subband into per_m.
         if tile is None:                                        # subband outside footprint
             for e in range(1 << l):
-                per_m[mbase + e] = SparsePerMTile._zero_tile(rho)
+                per_m[mbase + e] = SparseTilePerM._zero_tile(rho)
         else:
             tiles = tile.split_dm_index(l, C)
             for e in range(1 << l):
@@ -646,20 +646,20 @@ class SparsePerMTile:
         """
         Suppose TreeGriddingKernel -> (subbanded tree dedispersion) is applied to a one-hot
         shape (nfreq, ntime) input whose (ifreq, 0) entry is 1. The output is a mostly-zero
-        shape (2^(r-R), M, ntime) array; this returns an equivalent SparsePerMTile.
+        shape (2^(r-R), M, ntime) array; this returns an equivalent SparseTilePerM.
         We assume non-bit-reversed coarse-delay (d_hi) and multiplet (m) indices.
 
         'fs' is a FrequencySubbands object defining the subband scheme.
 
         Implementation (notes Section "Subbanded dedispersion"): iterate a single
-        under-the-hood SparseTripleTile (the full-band gridding footprint) and extract per-
+        under-the-hood SparseTileTriple (the full-band gridding footprint) and extract per-
         multiplet outputs "on the fly". Case 1 (aligned, l=0 or even s) reads the
         level-(r-R+l) singleton f directly; Case 2 (half-aligned, l>0 odd s) merges the
         level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons(require_aligned=False).
         Each extraction is then split into its 2^l multiplets (split_dm_index).
         """
         sc = [int(c) for c in fs.subband_counts]
-        sarr = SparseTripleTile.make_tree_gridding_output(channel_map, ifreq)
+        sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
         r = sarr.r
         R = fs.pf_rank
         rho = r - R
@@ -680,7 +680,7 @@ class SparsePerMTile:
                 if case1 and (r - R + l) == k:                  # Case 1: read level k
                     tile = sarr.get_singleton(f_blk, allow_none=True)
                     C = (1 << l) * ((1 << (R - l)) - 1 - f_blk)
-                    SparsePerMTile._emit(per_m, mbase, l, rho, tile, C)
+                    SparseTilePerM._emit(per_m, mbase, l, rho, tile, C)
                 elif (not case1) and (r - R + l - 1) == k:      # Case 2: read level r-R+l-1
                     lo = sarr.get_singleton(2 * f_blk + 1, allow_none=True)
                     up = sarr.get_singleton(2 * f_blk + 2, allow_none=True)
@@ -689,18 +689,18 @@ class SparsePerMTile:
                         tile = None
                     else:
                         tile = SparseTile.iterate_singletons(lo, up, require_aligned=False)
-                    SparsePerMTile._emit(per_m, mbase, l, rho, tile, C)
+                    SparseTilePerM._emit(per_m, mbase, l, rho, tile, C)
             if k < r:
                 sarr = sarr.iterate()
 
-        return SparsePerMTile(r, R, sc, per_m)
+        return SparseTilePerM(r, R, sc, per_m)
 
     # ------------------------------- test utilities -------------------------------
 
     @staticmethod
     def test_one_subbanded_dedispersion(channel_map, ifreq, subband_counts):
         """
-        Compare SparsePerMTile.make_dedispersion_output(...).unpack() against
+        Compare SparseTilePerM.make_dedispersion_output(...).unpack() against
         ReferenceTreeGriddingKernel -> ReferenceTree(subband_counts) on a one-hot input.
         """
         import ksgpu
@@ -720,13 +720,13 @@ class SparsePerMTile:
         # (delay + lag) fits one non-incremental ReferenceTree chunk with no wraparound.
         ntime = (((3 << r) + 128) // 32 + 1) * 32
 
-        grid = SparseTripleTile._reference_gridding(cm, ifreq, ntime)    # (1, ntree, ntime) f32
+        grid = SparseTileTriple._reference_gridding(cm, ifreq, ntime)    # (1, ntree, ntime) f32
         buf = np.ascontiguousarray(grid.reshape(1, 1, ntree, ntime))   # (1,1,ntree,ntime) f32
         out_rt = np.zeros((1, 1 << rho, M, ntime), dtype=np.float32)
         ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
                       nspec=1, subband_counts=sc).dedisperse(buf, out_rt)  # natural (d_hi, m)
 
-        ssa = SparsePerMTile.make_dedispersion_output(cm, ifreq, fs)
+        ssa = SparseTilePerM.make_dedispersion_output(cm, ifreq, fs)
         got = ssa.unpack(ntime)                                         # (2^rho, M, ntime) f64
         assert got.shape == (1 << rho, M, ntime)
         ksgpu.assert_arrays_equal(out_rt[0], got, "reftree", "got", ["d_hi", "m", "time"], epsabs=0.0)
@@ -736,7 +736,7 @@ class SparsePerMTile:
         # and dbits==[] at every level. (This single-channel case occurs often under
         # random_channel_map; its dedispersion correctness is already covered above, since
         # a single-channel footprint grids to weight 1.0.)
-        s = SparseTripleTile.make_tree_gridding_output(cm, ifreq)
+        s = SparseTileTriple.make_tree_gridding_output(cm, ifreq)
         if s.nf == 1:
             while s.k < s.r:
                 s = s.iterate()
@@ -747,8 +747,8 @@ class SparsePerMTile:
     @staticmethod
     def test_random_subbanded_dedispersion():
         from ..pirate_pybind11 import FrequencySubbands
-        cm, ifreq = SparseTripleTile.random_channel_map()
+        cm, ifreq = SparseTileTriple.random_channel_map()
         r = (len(cm) - 1).bit_length() - 1
         R = int(np.random.randint(0, min(r, 4) + 1))    # pf_rank <= min(r, 4)
         sc = [int(c) for c in FrequencySubbands.make_random_subband_counts(R)]
-        SparsePerMTile.test_one_subbanded_dedispersion(cm, ifreq, sc)
+        SparseTilePerM.test_one_subbanded_dedispersion(cm, ifreq, sc)

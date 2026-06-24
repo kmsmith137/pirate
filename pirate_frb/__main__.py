@@ -17,7 +17,7 @@ from . import loose_ends
 from . import core
 from . import tests
 
-from .slow_avar import SparseTile, SparseTripleTile, SparsePerMTile, PfVarianceConvolver
+from .slow_avar import SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver
 
 from . import (
     DedispersionConfig,
@@ -145,11 +145,11 @@ def test(args):
                 GpuDedisperser.test_random()
         
         if run_all_tests or args.avar:
-            SparseTripleTile.test_random_tree_gridding()
+            SparseTileTriple.test_random_tree_gridding()
             SparseTile.test_random_iterate_aligned()
             SparseTile.test_random_iterate_singletons()
             SparseTile.test_random_split_dm_index()
-            SparsePerMTile.test_random_subbanded_dedispersion()
+            SparseTilePerM.test_random_subbanded_dedispersion()
             PfVarianceConvolver.test_reduces_to_norms()
             PfVarianceConvolver.test_random_variance()
             if i == 0:  # deterministic (no randomness); run once
