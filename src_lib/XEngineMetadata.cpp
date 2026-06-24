@@ -757,7 +757,7 @@ std::shared_ptr<XEngineMetadata> XEngineMetadata::make_random()
 
     ret->noise_variance.resize(nzones);
     for (long i = 0; i < nzones; i++)
-        ret->noise_variance[i] = rand_uniform(0.1, 10.0, rng);
+        ret->noise_variance[i] = rand_uniform(0.5, 1.0, rng);
 
     ret->validate();
     return ret;
