@@ -35,7 +35,6 @@ ReferenceTree::ReferenceTree(const Params &params_) :
     long S = params.nspec;
     long R = params.dd_rank;
     long B = params.num_beams;
-    long A = pow2(params.amb_rank);
     long Dpf = pow2(params.amb_rank + params.dd_rank - fs.pf_rank);
 
     long scratch_nelts = S * (T + pow2(R) + 1);
@@ -54,43 +53,8 @@ ReferenceTree::ReferenceTree(const Params &params_) :
 
     this->final_lagbuf = make_shared<ReferenceLagbuf> (final_lags, T*S);    
 
-    // The rest of the constructor is dedicated to computing 'pstate_nelts'.
-    // This computation depends on the details of how dedisperse() is implemented.
-    // If these details change, then the constructor will probably need to be revisited.
-
-    long pstate_nelts = 0;
-
-    // Dedispersion contibution to pstate_nelts.
-    // At each rank 0 <= r < R, the contribution to pstate_nelts is:
-    //   N = 2^(R-r-1) * sum_{0 <= l < 2^r} (l+1)
-    //     = (2^{R-1} (2^r+1)) / 2
-
-    for (long r = 0; r < R; r++) {
-        // This way of writing N makes sense for R=1 (which implies r=0).
-        long N = (pow2(R-1) * (pow2(r)+1)) >> 1;
-        pstate_nelts += B * A * N * S;
-    }
-
-    // Contribution to pstate_nelts from peak-finding at pf_level >= 1.
-    // Written in a brain-dead way which "mirrors" ReferenceTree::dedisperse_2d().
-
-    for (long pf_level = 1; pf_level <= fs.pf_rank; pf_level++) {
-        // long nf_in = pow2(fs.pf_rank - pf_level + 1);
-        long pf_ndm = pow2(params.dd_rank - fs.pf_rank);
-        long pf_nd2 = pow2(pf_level - 1);
-
-        for (long pfs = 0; pfs < fs.subband_counts.at(pf_level); pfs++) {
-            for (long pf_dm = 0; pf_dm < pf_ndm; pf_dm++) {
-                for (long d2 = 0; d2 < pf_nd2; d2++) {
-                    long dm_in = (pf_dm * pf_nd2) + d2;
-                    long dd_lag = dm_in;
-                    pstate_nelts += B * A * (dd_lag+1) * S;
-                }
-            }
-        }
-    }
-
-    this->pstate = Array<float> ({pstate_nelts}, af_uhost | af_zero);
+    // 'pstate' is sized lazily on the first dedisperse() call (see dedisperse_1d), so its
+    // size always tracks dedisperse_2d() without a separate hand-maintained computation.
 }
 
 
@@ -119,7 +83,7 @@ void ReferenceTree::dedisperse(Array<float> &buf, Array<float> &out)
         throw runtime_error("ReferenceTree::dedisperse(): if subbands are "
                             "defined (M > 1), then 'out' must be a nonempty array");
     
-    float *ps = pstate.data;
+    long ps_used = 0;
 
     for (long b = 0; b < B; b++) {
         for (long a = 0; a < A; a++) {
@@ -138,28 +102,25 @@ void ReferenceTree::dedisperse(Array<float> &buf, Array<float> &out)
                 out_mstride = out.strides[2];
             }
 
-            ps = dedisperse_2d(bufp, buf_dstride, outp, out_dstride, out_mstride, ps);
+            ps_used = dedisperse_2d(bufp, buf_dstride, outp, out_dstride, out_mstride, ps_used);
         }
     }
 
     if (out.size != 0)
         final_lagbuf->apply_lags(out);
 
-    // cout << " (ps-pstate.data) = " << (ps-pstate.data) << endl;
-    // cout << "  pstate.size = " << pstate.size << endl;
-    xassert(ps == pstate.data + pstate.size);
+    xassert(ps_used == (long) pstate.size());
 }
 
 
 // 'bufp': shape (2^dd_rank, ntime * nspec), will be dedispersed in place
 // 'outp': shape (pf_ndm, M, ntime * nspec), can be NULL.
-// 'ps': pointer to current location in persistent_state.
-// Returns pointer to updated location in persistent_state.
+// 'ps_used': current offset into persistent_state ('pstate'); returns the updated offset.
 
-float *ReferenceTree::dedisperse_2d(
-    float *bufp, long buf_dstride, 
-    float *outp, long out_dstride, long out_mstride, 
-    float *ps)
+long ReferenceTree::dedisperse_2d(
+    float *bufp, long buf_dstride,
+    float *outp, long out_dstride, long out_mstride,
+    long ps_used)
 {
     const FrequencySubbands &fs = frequency_subbands;
     
@@ -309,7 +270,7 @@ float *ReferenceTree::dedisperse_2d(
                         long dst_stride = out_mstride;
 
                         long dd_lag = dm_in;
-                        ps = dedisperse_1d(dst, dst_stride, src, src_stride, ps, dd_lag);
+                        ps_used = dedisperse_1d(dst, dst_stride, src, src_stride, ps_used, dd_lag);
                     }
                 }
             }
@@ -327,7 +288,7 @@ float *ReferenceTree::dedisperse_2d(
                 long dm_in = bit_reverse_slow(dm_in_brev, r);
                 float *p = bufp + (fout * ndm_out + dm_in_brev) * buf_dstride;
                 long pstride = ndm_in * buf_dstride;
-                ps = dedisperse_1d(p, pstride, p, pstride, ps, dm_in);  // lag = dm_in
+                ps_used = dedisperse_1d(p, pstride, p, pstride, ps_used, dm_in);  // lag = dm_in
             }
         }
     }
@@ -335,23 +296,29 @@ float *ReferenceTree::dedisperse_2d(
     long expected_mcurr = outp ? fs.M : 0;
     xassert(mcurr == expected_mcurr);
 
-    return ps;
+    return ps_used;
 }
 
 
 // 'dst': shape (2,T*S), where T=params.ntime.
 // 'src': shape (2,T*S), okay if dst==src.
-// 'ps' points to a buffer of length (lag+1)*S.
+// 'ps_used': offset into 'pstate'; the (lag+1)*S elements there are this call's state.
 // FIXME slow implementation -- may improve after tests pass.
-inline float *ReferenceTree::dedisperse_1d(
+inline long ReferenceTree::dedisperse_1d(
     float *dst, long dstride, 
     float *src, long sstride, 
-    float *ps, long lag)
+    long ps_used, long lag)
 {
     static constexpr float rsqrt2 = 0.7071067811865476f;
     float *tmp = scratch.data;
     long T = params.ntime;
     long S = params.nspec;
+
+    // Grow 'pstate' if needed, then point at this call's (lag+1)*S persistent-state elements.
+    // (Take the pointer AFTER resize, since resize may reallocate.)
+    if (ps_used + (lag+1)*S > (long) pstate.size())
+        pstate.resize(ps_used + (lag+1)*S, 0.0f);
+    float *ps = pstate.data() + ps_used;
 
     // (pstate[:], src[0,:]) -> scratch (length (T+lag+1)*S)
     xassert(scratch.size >= (T+lag+1) * S);
@@ -371,7 +338,7 @@ inline float *ReferenceTree::dedisperse_1d(
         dst[dstride + ts] = rsqrt2 * (x0 + y);   // dst[1, ts]
     }
 
-    return ps + (lag+1)*S;
+    return ps_used + (lag+1)*S;
 }
 
 

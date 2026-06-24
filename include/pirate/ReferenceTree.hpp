@@ -42,7 +42,7 @@ struct ReferenceTree
     Params params;
     FrequencySubbands frequency_subbands;
 
-    ksgpu::Array<float> pstate;
+    std::vector<float> pstate;   // sized lazily on the first dedisperse() (see dedisperse_1d)
     ksgpu::Array<float> scratch;
 
     std::shared_ptr<ReferenceLagbuf> final_lagbuf;
@@ -64,12 +64,13 @@ struct ReferenceTree
     // Helper for dedisperse().
     // buf shape: (pow2(dd_rank), ntime * nspec).
     // out shape: (pow2(dd_rank-pf_rank), fs.M, ntime * nspec). Can be NULL.
-    float *dedisperse_2d(float *bufp, long buf_dstride, float *outp, long out_dstride, long out_mstride, float *ps);
+    // 'ps_used' is the current offset into 'pstate'; returns the updated offset.
+    long dedisperse_2d(float *bufp, long buf_dstride, float *outp, long out_dstride, long out_mstride, long ps_used);
 
     // Helper for dedisperse()
     // 'dst' and 'src' have shape (2, ntime * nspec), and dst==src is okay.
-    // Returns a new 'ps' (persistent state) pointer.
-    inline float *dedisperse_1d(float *dst, long ds, float *src, long ss, float *ps, long lag);
+    // 'ps_used' is the current offset into 'pstate' (grown here if needed); returns the updated offset.
+    inline long dedisperse_1d(float *dst, long ds, float *src, long ss, long ps_used, long lag);
 };
 
 
