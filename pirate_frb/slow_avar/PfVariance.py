@@ -22,7 +22,7 @@ each call is a small matmul.
 
 import numpy as np
 
-from .SparseTile import SparseTile
+from .SparseTile import SparseTile, SparseTilePerM
 
 
 class PfVarianceConvolver:
@@ -281,3 +281,63 @@ class PfVariance:
             self.terms[dbits] = self.terms[dbits] + arr
         else:
             self.terms[dbits] = np.array(arr, dtype=np.float64)   # copy (avoid aliasing)
+
+
+class PfAvarExact:
+    """Exact analytic peak-finding variances for a DedispersionConfig (ds_level=0 only, so far).
+
+    For the base (ds_level=0) tree, computes the peak-finding output variance of every
+    (input frequency channel, multiplet) pair as a PfVariance, and the frequency-summed
+    variance per multiplet.  Each PfVariance has rank rho = r - R (the per-multiplet tile
+    rank) and shares one PfVarianceConvolver(Wmax).
+
+    Members
+    -------
+      r, R, rho:  tree_rank, pf_rank, and rho = r - R.
+      fs:         FrequencySubbands (subband scheme) for ds_level=0.
+      Wmax:       max peak-finding kernel width (ds_level=0).
+      convolver:  PfVarianceConvolver(Wmax), shared by all PfVariance objects.
+      nfreq:      number of input frequency channels.
+      per_fm:     (nfreq, fs.M) list-of-lists; per_fm[ifreq][m] is the single-channel
+                  PfVariance for (ifreq, m), or None if channel ifreq does not overlap
+                  multiplet m's subband.
+      per_m:      length-fs.M list of PfVariance; per_m[m] is the frequency-summed variance
+                  for multiplet m (sum over ifreq of per_fm[ifreq][m]).
+    """
+
+    def __init__(self, config):
+        from ..pirate_pybind11 import FrequencySubbands
+
+        ds_level = 0     # only ds_level=0 is handled for now
+        self.r = int(config.tree_rank)
+        self.fs = FrequencySubbands(config.frequency_subband_counts)
+        self.R = self.fs.pf_rank
+        self.rho = self.r - self.R
+        self.Wmax = int(config.peak_finding_params[ds_level].max_width)
+        self.nfreq = int(config.get_total_nfreq())
+        self.convolver = PfVarianceConvolver(self.Wmax)
+
+        channel_map = np.asarray(config.make_channel_map(), dtype=np.float64)
+        self.per_fm = self._make_per_fm(channel_map)
+        self.per_m = self._make_per_m()
+
+    def _make_per_fm(self, channel_map):
+        # per_fm[ifreq][m]: single-channel PfVariance for (ifreq, m), or None (no overlap).
+        per_fm = []
+        for ifreq in range(self.nfreq):
+            ssa = SparseTilePerM.make_dedispersion_output(channel_map, ifreq, self.fs)
+            per_fm.append([None if tile is None else PfVariance.from_tile(tile, self.convolver)
+                           for tile in ssa.per_m])
+        return per_fm
+
+    def _make_per_m(self):
+        # per_m[m]: frequency-summed PfVariance for multiplet m (sum over per_fm[:, m]).
+        per_m = []
+        for m in range(self.fs.M):
+            acc = PfVariance(self.rho, self.convolver)
+            for ifreq in range(self.nfreq):
+                pv = self.per_fm[ifreq][m]
+                if pv is not None:
+                    acc.add(pv)
+            per_m.append(acc)
+        return per_m

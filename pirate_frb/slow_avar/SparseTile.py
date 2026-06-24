@@ -598,9 +598,9 @@ class SparseTilePerM:
 
     Members
     -------
-      r, R:            tree rank and pf_rank (rho = r - R is the per-m tile rank).
+      r, R:            tree rank and pf_rank (per_m tiles will have rank rho = r-R)
       subband_counts:  the length-(R+1) C_l array.
-      per_m:           length-M list whose entries are a SparseTile (r == k == rho, nf == 1)
+      per_m:           length-M list whose entries are a SparseTile (with r == k == rho)
                        or None (multiplet outside the gridding footprint).
     """
 
