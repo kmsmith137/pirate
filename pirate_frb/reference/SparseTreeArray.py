@@ -704,7 +704,8 @@ class SparseTreeArray:
         R = len(sc) - 1
         assert R <= r
         rho = r - R
-        M = FrequencySubbands(sc).M
+        fs = FrequencySubbands(sc)
+        M = fs.M
         # ntime: multiple of 32 (gridding) and comfortably > 2^(r+1) so the largest
         # (delay + lag) fits one non-incremental ReferenceTree chunk with no wraparound.
         ntime = (((3 << r) + 128) // 32 + 1) * 32
@@ -715,7 +716,7 @@ class SparseTreeArray:
         ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
                       nspec=1, subband_counts=sc).dedisperse(buf, out_rt)  # natural (d_hi, m)
 
-        ssa = SparseSubbandedArray.make_dedispersion_output(cm, ifreq, sc)
+        ssa = SparseSubbandedArray.make_dedispersion_output(cm, ifreq, fs)
         got = ssa.unpack(ntime)                                         # (2^rho, M, ntime) f64
         assert got.shape == (1 << rho, M, ntime)
         ksgpu.assert_arrays_equal(out_rt[0], got, "reftree", "got", ["d_hi", "m", "time"], epsabs=0.0)
@@ -733,11 +734,12 @@ class SparseTreeArray:
     def test_subbanded_reduces_to_fullband():
         """subband_counts=[1] must reproduce the full-band make_dedispersion_output."""
         import ksgpu
+        from ..pirate_pybind11 import FrequencySubbands
         cm, ifreq = SparseTreeArray.random_channel_map()
         ntree = len(cm) - 1
         ntime = ((ntree + 31) // 32 + 1) * 32
         full = SparseTreeArray.make_dedispersion_output(cm, ifreq).unpack(ntime)   # (1, 2^r, ntime)
-        ssa = SparseSubbandedArray.make_dedispersion_output(cm, ifreq, [1])
+        ssa = SparseSubbandedArray.make_dedispersion_output(cm, ifreq, FrequencySubbands([1]))
         assert len(ssa.per_m) == 1
         got = ssa.per_m[0].unpack(ntime)                                          # (1, 2^r, ntime)
         ksgpu.assert_arrays_equal(full, got, "full", "subband[1]", ["f", "delay", "time"], epsabs=0.0)
@@ -798,12 +800,14 @@ class SparseSubbandedArray:
                 per_m[mbase + e] = tiles[e]
 
     @staticmethod
-    def make_dedispersion_output(channel_map, ifreq, subband_counts):
+    def make_dedispersion_output(channel_map, ifreq, fs):
         """
         Suppose TreeGriddingKernel -> (subbanded tree dedispersion) is applied to a one-hot
         shape (nfreq, ntime) input whose (ifreq, 0) entry is 1. The output is a mostly-zero
         shape (2^(r-R), M, ntime) array; this returns an equivalent SparseSubbandedArray.
         We assume non-bit-reversed coarse-delay (d_hi) and multiplet (m) indices.
+
+        'fs' is a FrequencySubbands object defining the subband scheme.
 
         Implementation (notes Section "Subbanded dedispersion"): iterate a single
         under-the-hood SparseTreeArray (the full-band gridding footprint) and extract per-
@@ -812,11 +816,9 @@ class SparseSubbandedArray:
         level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons(require_aligned=False).
         Each extraction is then split into its 2^l multiplets (split_to_multiplets).
         """
-        from ..pirate_pybind11 import FrequencySubbands
-        sc = [int(c) for c in subband_counts]
+        sc = [int(c) for c in fs.subband_counts]
         sarr = SparseTreeArray.make_tree_gridding_output(channel_map, ifreq)
         r = sarr.r
-        fs = FrequencySubbands(sc)
         R = fs.pf_rank
         rho = r - R
         assert 0 <= R <= r, (R, r)
