@@ -22,7 +22,7 @@ each call is a small matmul.
 
 import numpy as np
 
-from .SparseTile import SparseTile, SparseTilePerM
+from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
 
 
 class PfVarianceConvolver:
@@ -271,6 +271,13 @@ class PfVariance:
         for dbits, arr in pfvar.terms.items():
             self._accumulate(dbits, arr)
 
+    def scaled(self, c):
+        """Return a new PfVariance (same rank/convolver) with every term multiplied by c."""
+        out = PfVariance(self.rank, self.convolver)
+        for dbits, arr in self.terms.items():
+            out._accumulate(dbits, c * arr)
+        return out
+
     def _accumulate(self, dbits, arr):
         # Add the term (dbits -> arr), summing into any existing same-dbits term.
         dbits = int(dbits)
@@ -341,3 +348,104 @@ class PfAvarExact:
                     acc.add(pv)
             per_m.append(acc)
         return per_m
+
+
+class PfAvarApproximation:
+    """Approximate analytic peak-finding variances for a DedispersionConfig (ds_level=0, so far).
+
+    Like PfAvarExact, but compressed and approximated. Variances are stored per coarse-freq
+    channel (the 2^R level-0 subbands, tree-freq range 2^(r-R) f <= tree-freq < 2^(r-R) (f+1)),
+    at the WEIGHTS' DM resolution 2^(r-L): each PfVariance has rank r-L, not r-R. The
+    approximation is that the variance does not depend on the low (L-R) DM bits (those that
+    vary within one weight DM bin); we just fix them to 0.
+
+    Per-multiplet variances are reconstructed on demand (get_per_fm / get_per_m): a multiplet m
+    spans a coarse-freq range [ilo, ihi) (= fs.m_to_ilo(m)..m_to_ihi(m)); its variance is the
+    mean of the per-coarse-freq variances over that range -- i.e. (1/(ihi-ilo)) * sum -- where
+    the 1/(ihi-ilo) factor is the inter-coarse-freq DD normalization (2^-l in variance for a
+    width-2^l subband) that the exact subband dedispersion would apply.
+
+    Members
+    -------
+      r, R, L, rho:  tree_rank, pf_rank, log2(wt_dm_downsampling), and rho = r - L (PfVariance rank).
+      fs:            FrequencySubbands (subband scheme) for ds_level=0.
+      Wmax:          max peak-finding kernel width (ds_level=0).
+      convolver:     PfVarianceConvolver(Wmax), shared by all PfVariance objects.
+      nfreq:         number of input frequency channels.
+      per_ff:        (nfreq, 2^R) list-of-lists; per_ff[ifreq][f] is the single-channel PfVariance
+                     (rank r-L) of coarse-freq f for input channel ifreq, or None (no overlap).
+      per_f:         length-2^R list of PfVariance; per_f[f] = sum over ifreq of per_ff[ifreq][f].
+    """
+
+    def __init__(self, config):
+        from ..pirate_pybind11 import FrequencySubbands
+
+        ds_level = 0     # only ds_level=0 is handled for now
+        self.r = int(config.tree_rank)
+        self.fs = FrequencySubbands(config.frequency_subband_counts)
+        self.R = self.fs.pf_rank
+        wt_dd = int(config.peak_finding_params[ds_level].wt_dm_downsampling)
+        self.L = wt_dd.bit_length() - 1                  # log2(wt_dm_downsampling)
+        assert wt_dd == (1 << self.L), "wt_dm_downsampling must be a power of two"
+        assert self.R <= self.L <= self.r, (self.R, self.L, self.r)
+        self.rho = self.r - self.L                       # PfVariance rank (approximation)
+        self.Wmax = int(config.peak_finding_params[ds_level].max_width)
+        self.nfreq = int(config.get_total_nfreq())
+        self.convolver = PfVarianceConvolver(self.Wmax)
+
+        channel_map = np.asarray(config.make_channel_map(), dtype=np.float64)
+        self.per_ff = self._make_per_ff(channel_map)
+        self.per_f = self._make_per_f()
+
+    def _make_per_ff(self, channel_map):
+        # per_ff[ifreq][f]: single-channel PfVariance (rank r-L) of coarse-freq f, or None.
+        per_ff = []
+        for ifreq in range(self.nfreq):
+            sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
+            for _ in range(self.r - self.R):
+                sarr = sarr.iterate()            # now k == r-R: 2^R coarse-freqs, 2^(r-R) DMs
+            row = []
+            for f in range(1 << self.R):
+                tile = sarr.get_singleton(f, allow_none=True)   # singleton (k=r-R, nf=1) or None
+                if tile is None:
+                    row.append(None)
+                else:
+                    # Drop the low (L-R) DM bits (fix to 0): rank (r-R)-(L-R) = r-L singleton.
+                    tile = tile.specialize_low_dbits(0, self.L - self.R)
+                    row.append(PfVariance.from_tile(tile, self.convolver))
+            per_ff.append(row)
+        return per_ff
+
+    def _make_per_f(self):
+        # per_f[f]: frequency-summed PfVariance for coarse-freq f (sum over per_ff[:, f]).
+        per_f = []
+        for f in range(1 << self.R):
+            acc = PfVariance(self.rho, self.convolver)
+            for ifreq in range(self.nfreq):
+                pv = self.per_ff[ifreq][f]
+                if pv is not None:
+                    acc.add(pv)
+            per_f.append(acc)                    # always a PfVariance (empty if f overlaps nothing)
+        return per_f
+
+    def get_per_fm(self, ifreq, m):
+        """Approximate single-channel variance for (ifreq, multiplet m): the mean of per_ff over
+        the multiplet's coarse-freq range. Returns None if no coarse-freq in the range overlaps."""
+        ilo, ihi = self.fs.m_to_ilo(m), self.fs.m_to_ihi(m)
+        acc = None
+        for f in range(ilo, ihi):
+            pv = self.per_ff[ifreq][f]
+            if pv is not None:
+                if acc is None:
+                    acc = PfVariance(self.rho, self.convolver)
+                acc.add(pv)
+        return None if acc is None else acc.scaled(1.0 / (ihi - ilo))
+
+    def get_per_m(self, m):
+        """Approximate frequency-summed variance for multiplet m: the mean of per_f over the
+        multiplet's coarse-freq range. Always returns a PfVariance."""
+        ilo, ihi = self.fs.m_to_ilo(m), self.fs.m_to_ihi(m)
+        acc = PfVariance(self.rho, self.convolver)
+        for f in range(ilo, ihi):
+            acc.add(self.per_f[f])
+        return acc.scaled(1.0 / (ihi - ilo))
