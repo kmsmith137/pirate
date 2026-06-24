@@ -17,7 +17,7 @@ from . import loose_ends
 from . import core
 from . import tests
 
-from .reference import SparseTreeArray, PeakFindingVariance
+from .reference import SparseTreeArray, SparseTreeTile, SparseSubbandedArray, PeakFindingVariance
 
 from . import (
     DedispersionConfig,
@@ -146,10 +146,10 @@ def test(args):
         
         if run_all_tests or args.avar:
             SparseTreeArray.test_random_tree_gridding()
-            SparseTreeArray.test_random_iterate_aligned()
-            SparseTreeArray.test_random_iterate_singletons()
-            SparseTreeArray.test_random_split_to_multiplets()
-            SparseTreeArray.test_random_subbanded_dedispersion()
+            SparseTreeTile.test_random_iterate_aligned()
+            SparseTreeTile.test_random_iterate_singletons()
+            SparseTreeTile.test_random_split_dm_index()
+            SparseSubbandedArray.test_random_subbanded_dedispersion()
             PeakFindingVariance.test_reduces_to_norms()
             PeakFindingVariance.test_random_variance()
             if i == 0:  # deterministic (no randomness); run once
