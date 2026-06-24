@@ -340,6 +340,7 @@ PYFILES = \
   pirate_frb/slow_avar/__init__.py \
   pirate_frb/slow_avar/SparseTile.py \
   pirate_frb/slow_avar/PfVariance.py \
+  pirate_frb/slow_avar/check_approximation.py \
   pirate_frb/kernels/__init__.py \
   pirate_frb/loose_ends/__init__.py \
   pirate_frb/tests/__init__.py \

@@ -164,18 +164,18 @@ def test(args):
             tests.test_network()
 
 
-#################################   test_avar_approximation command  ################################
+#################################   check_avar_approximation command  ###############################
 
 
-def parse_test_avar_approximation(subparsers):
+def parse_check_avar_approximation(subparsers):
     help_text = "Compare exact vs approximate analytic peak-finding variance for a config"
-    parser = subparsers.add_parser("test_avar_approximation", help=help_text, description=help_text)
+    parser = subparsers.add_parser("check_avar_approximation", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to dedispersion YAML config file")
 
 
-def test_avar_approximation(args):
+def check_avar_approximation(args):
     config = DedispersionConfig.from_yaml(args.config_file)
-    slow_avar.test_approximation(config)
+    slow_avar.check_approximation(config)
 
 
 #########################################   time command  ##########################################
@@ -1296,7 +1296,7 @@ def get_parser():
     parse_rpc_write(subparsers)
     
     parse_test(subparsers)
-    parse_test_avar_approximation(subparsers)
+    parse_check_avar_approximation(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
     
@@ -1327,8 +1327,8 @@ def main():
 
     if args.command == "test":
         test(args)
-    elif args.command == "test_avar_approximation":
-        test_avar_approximation(args)
+    elif args.command == "check_avar_approximation":
+        check_avar_approximation(args)
     elif args.command == "time":
         time_command(args)
     elif args.command == "show_hardware":
