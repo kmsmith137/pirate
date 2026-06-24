@@ -17,7 +17,7 @@ from . import loose_ends
 from . import core
 from . import tests
 
-from .reference import SparseTreeArray, SparseTreeTile, SparseSubbandedArray, PeakFindingVariance
+from .slow_avar import SparseTile, SparseTripleTile, SparsePerMTile, PfVarianceConvolver
 
 from . import (
     DedispersionConfig,
@@ -145,15 +145,15 @@ def test(args):
                 GpuDedisperser.test_random()
         
         if run_all_tests or args.avar:
-            SparseTreeArray.test_random_tree_gridding()
-            SparseTreeTile.test_random_iterate_aligned()
-            SparseTreeTile.test_random_iterate_singletons()
-            SparseTreeTile.test_random_split_dm_index()
-            SparseSubbandedArray.test_random_subbanded_dedispersion()
-            PeakFindingVariance.test_reduces_to_norms()
-            PeakFindingVariance.test_random_variance()
+            SparseTripleTile.test_random_tree_gridding()
+            SparseTile.test_random_iterate_aligned()
+            SparseTile.test_random_iterate_singletons()
+            SparseTile.test_random_split_dm_index()
+            SparsePerMTile.test_random_subbanded_dedispersion()
+            PfVarianceConvolver.test_reduces_to_norms()
+            PfVarianceConvolver.test_random_variance()
             if i == 0:  # deterministic (no randomness); run once
-                PeakFindingVariance.test_kernels_match_reference()
+                PfVarianceConvolver.test_kernels_match_reference()
 
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)

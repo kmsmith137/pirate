@@ -23,7 +23,7 @@ each call is a small matmul.
 import numpy as np
 
 
-class PeakFindingVariance:
+class PfVarianceConvolver:
     """Computes Var(h_p * x) for each peak-finding profile p, given a short kernel x.
 
     Construct once for a given max_kernel_width Wmax (which fixes the kernel bank
@@ -100,7 +100,7 @@ class PeakFindingVariance:
     def test_random_variance():
         """Compare variance() to brute-force ||h_p * x||^2, with random spectators/T/Wmax."""
         Wmax = 1 << np.random.randint(0, 6)              # one of 1,2,4,8,16,32
-        pfv = PeakFindingVariance(Wmax)
+        pfv = PfVarianceConvolver(Wmax)
 
         shape = tuple(int(s) for s in np.random.randint(1, 4, size=np.random.randint(1, 4)))
         T = int(np.random.randint(1, 13))               # includes T > 2*Wmax for small Wmax
@@ -121,7 +121,7 @@ class PeakFindingVariance:
     def test_reduces_to_norms():
         """x = [1] (T=1) must reproduce ||h_p||^2 = {1, 2, 3/2, 5/2} * 2^l per profile."""
         for Wmax in [1, 2, 4, 8, 16, 32]:
-            pfv = PeakFindingVariance(Wmax)
+            pfv = PfVarianceConvolver(Wmax)
             var = pfv.variance(np.array([1.0]))          # shape (P,) == A[:, 0] == ||h_p||^2
             for p, (l, q) in enumerate(pfv.labels):
                 w = 1 << l
@@ -165,7 +165,7 @@ class PeakFindingVariance:
             out_arg = np.zeros((1, J, nt_out), dtype=np.uint32)
             ker.apply(out_max, out_arg, in_, wt, 0)                  # one apply builds all temp arrays
 
-            kernels, labels = PeakFindingVariance.peak_finding_kernels(Wmax)
+            kernels, labels = PfVarianceConvolver.peak_finding_kernels(Wmax)
             assert len(kernels) == P, (Wmax, len(kernels), P)
 
             for p in range(P):

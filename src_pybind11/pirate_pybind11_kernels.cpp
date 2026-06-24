@@ -275,7 +275,7 @@ void register_kernel_bindings(pybind11::module &m)
           .def_static("test_subbands", &ReferenceTree::test_subbands)
     ;
 
-    // Exposed for unit tests only (see PeakFindingVariance.test_kernels_match_reference).
+    // Exposed for unit tests only (see PfVarianceConvolver.test_kernels_match_reference).
     // The reference peak-finder computes in float32 regardless of the configured dtype.
     py::class_<ReferencePeakFindingKernel>(m, "ReferencePeakFindingKernel",
         "Reference (CPU, float32) peak-finding kernel; exposed for unit tests.")
