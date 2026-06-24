@@ -215,6 +215,18 @@ class PfVariance:
         self.convolver = convolver
         self.terms = {}      # dbits (int) -> (2^popcount(dbits), P) float64
 
+    @staticmethod
+    def from_tile(tile, convolver):
+        """Build a PfVariance from a single singleton SparseTile.
+
+        Shorthand for PfVariance(tile.k, convolver) followed by add_tile(tile): the result
+        has rank == tile.k and one term (keyed by tile.dbits). 'convolver' must be supplied --
+        the peak-finding profiles can't be inferred from the tile.
+        """
+        pfvar = PfVariance(tile.k, convolver)
+        pfvar.add_tile(tile)
+        return pfvar
+
     def get_all_dbits(self):
         """Bitwise-OR of all term keys (the union of bits any term depends on)."""
         all_dbits = 0
