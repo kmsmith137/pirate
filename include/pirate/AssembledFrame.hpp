@@ -171,7 +171,7 @@ struct AssembledFrame
     // Callers still must not run two randomize() (or other writers) on the SAME
     // frame concurrently -- the buffer contents are not lock-protected.
 
-    void randomize(const std::shared_ptr<XEngineMetadata> &xmd = std::shared_ptr<XEngineMetadata>());
+    void randomize(const std::shared_ptr<const XEngineMetadata> &xmd = std::shared_ptr<const XEngineMetadata>());
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.

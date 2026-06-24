@@ -762,7 +762,7 @@ shared_ptr<AssembledFrame> AssembledFrame::make_uninitialized(
 }
 
 
-void AssembledFrame::randomize(const shared_ptr<XEngineMetadata> &xmd)
+void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd)
 {
     // Thread-safety: the array STATE (empty vs nonempty, and which slab the
     // arrays point at) is lock-protected -- a concurrent _reap_locked() on the

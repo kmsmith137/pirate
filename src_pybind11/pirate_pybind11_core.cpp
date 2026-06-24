@@ -696,11 +696,12 @@ void register_core_bindings(pybind11::module &m)
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
           .def(py::init<const std::shared_ptr<const XEngineMetadata> &,
                         const std::vector<std::string> &,
-                        int, long, bool, bool, const std::string &>(),
+                        int, long, bool, bool, bool, const std::string &>(),
                py::arg("xmd"), py::arg("ip_addrs"), py::arg("nworkers"),
                py::arg("time_samples_per_chunk"),
                py::arg("debug") = false,
                py::arg("paced") = true,
+               py::arg("normalized") = true,
                py::arg("rpc_address") = "",
                "Create a FakeXEngine and spawn 'nworkers' worker threads.\n\n"
                "Workers inherit the vcpu affinity of the calling thread, so the\n"
@@ -724,6 +725,11 @@ void register_core_bindings(pybind11::module &m)
                "        to the FrbServer's MonitorRingbuf push stream and gates\n"
                "        each worker's sends to stay <=5 chunks ahead of\n"
                "        server-side rb_processed. Requires rpc_address.\n"
+               "    normalized (default True): If True, randomize_frames()\n"
+               "        calibrates each frame's scales/offsets (via\n"
+               "        AssembledFrame.randomize(xmd)) so the dequantized data\n"
+               "        has the per-zone noise variance in xmd.noise_variance.\n"
+               "        If False, the scales/offsets are arbitrary junk.\n"
                "    rpc_address: 'ip:port' of the FrbServer's gRPC endpoint.\n"
                "        Required (non-empty) when paced=True; ignored (silently\n"
                "        accepted) when paced=False.")

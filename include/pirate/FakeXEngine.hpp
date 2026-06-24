@@ -452,6 +452,17 @@ struct FakeXEngine
     // rb_processed. See class doc-comment + plans/fake_xengine_pacing.md.
     const bool paced;
 
+    // When true (the default), randomize_frames() calls each frame's
+    // AssembledFrame::randomize(xmd) with this engine's 'xmd', so the
+    // sent data is "normalized": scales/offsets are calibrated to give
+    // the per-zone noise variance in xmd->noise_variance. When false,
+    // randomize() is called with a null xmd, so the normalization is
+    // arbitrary (scales/offsets are filled with uniform junk). Only
+    // 'xmd->zone_nfreq' and 'xmd->noise_variance' are used here; the
+    // frequency-scrubbed xmd typically passed to the constructor still
+    // carries valid values for both. See AssembledFrame::randomize().
+    const bool normalized;
+
     // gRPC address ("ip:port") of the FrbServer's RPC endpoint. Required
     // (non-empty) when paced=true; ignored when paced=false (a non-empty
     // value is silently accepted).
@@ -649,6 +660,11 @@ struct FakeXEngine
     // of server-side rb_processed. rpc_address must be non-empty when
     // paced=true; ignored (silently accepted) when paced=false.
     //
+    // normalized (default true): if true, randomize_frames() fills each
+    // frame's scales/offsets so the dequantized data has the per-zone
+    // noise variance from xmd (via AssembledFrame::randomize(xmd)). If
+    // false, the scales/offsets get arbitrary (uniform-junk) values.
+    //
     // rpc_address: "ip:port" of the FrbServer's gRPC endpoint. Required
     // when paced=true; pass empty string when paced=false.
     FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd,
@@ -656,6 +672,7 @@ struct FakeXEngine
                 int nworkers, long time_samples_per_chunk,
                 bool debug = false,
                 bool paced = true,
+                bool normalized = true,
                 const std::string &rpc_address = "");
 
     // Destructor calls stop() and joins worker threads.

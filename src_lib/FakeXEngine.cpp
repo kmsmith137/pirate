@@ -67,7 +67,7 @@ static void _stop_one_worker(FakeXEngine::Worker &w, std::exception_ptr e)
 FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
                          const std::vector<std::string> &ip_addrs_,
                          int nworkers_, long time_samples_per_chunk_,
-                         bool debug_, bool paced_,
+                         bool debug_, bool paced_, bool normalized_,
                          const std::string &rpc_address_) :
     xmd(xmd_),
     ip_addrs(ip_addrs_),
@@ -75,6 +75,7 @@ FakeXEngine::FakeXEngine(const std::shared_ptr<const XEngineMetadata> &xmd_,
     time_samples_per_chunk(time_samples_per_chunk_),
     debug(debug_),
     paced(paced_),
+    normalized(normalized_),
     rpc_address(rpc_address_),
     nbeams(xmd_ ? xmd_->get_nbeams() : 0),  // null xmd is rejected below; guard avoids null-deref
     minichunks_per_chunk(time_samples_per_chunk_ / 256),
@@ -1555,7 +1556,10 @@ void FakeXEngine::randomize_frames(AssembledFrameSet &fset)
         }
         for (const auto &f : fset.frames) {
             xassert(f);   // AssembledFrameSet invariant: all frames[i] non-null
-            f->randomize();
+            // Pass xmd to calibrate scales/offsets when normalized; a null
+            // xmd leaves the normalization arbitrary. See 'normalized' in
+            // FakeXEngine.hpp.
+            f->randomize(normalized ? xmd : nullptr);
         }
         return;
     }
@@ -1636,7 +1640,8 @@ void FakeXEngine::_randomizer_main()
         std::exception_ptr ex;
         try {
             xassert(frame);   // AssembledFrameSet invariant: frames[b] non-null
-            frame->randomize();
+            // Normalized -> pass xmd (calibrated scales/offsets); else null.
+            frame->randomize(normalized ? xmd : nullptr);
         } catch (...) {
             ex = std::current_exception();
         }

@@ -25,7 +25,8 @@ class RunFakeXEngineHelper:
     spawn controllers; wait for Ctrl-C; cleanup).
     """
 
-    def __init__(self, rpc_addrs, nworkers=128, paced=True, send_junk=False):
+    def __init__(self, rpc_addrs, nworkers=128, paced=True, normalized=True,
+                 send_junk=False):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -44,6 +45,10 @@ class RunFakeXEngineHelper:
         self.rpc_addrs = rpc_addrs
         self.nworkers = nworkers
         self.paced = paced
+        # normalized: when True (default), randomize_frames() calibrates
+        # scales/offsets to xmd's per-zone noise variance; when False the
+        # normalization is arbitrary. See FakeXEngine's 'normalized' arg.
+        self.normalized = normalized
         # send_junk: randomize+send only the FIRST chunk (SEND_MINICHUNK),
         # then send all-zero SEND_JUNK for every subsequent chunk -- a cheap
         # load mode that skips per-chunk randomization.
@@ -122,7 +127,8 @@ class RunFakeXEngineHelper:
             fxe = FakeXEngine(
                 xmd, list(cfg.data_ip_addrs), self.nworkers,
                 time_samples_per_chunk=cfg.time_samples_per_chunk,
-                paced=self.paced, rpc_address=rpc_addr)
+                paced=self.paced, normalized=self.normalized,
+                rpc_address=rpc_addr)
 
             # SlabAllocator + AssembledFrameAllocator to source the
             # AssembledFrameSets we randomize and send. Built inside the
@@ -142,7 +148,9 @@ class RunFakeXEngineHelper:
         self.allocators.append(allocator)
         self.fxe_vcpus.append(vcpu_list)
         paced_note = "paced" if self.paced else "unpaced"
-        print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, {paced_note}).")
+        norm_note = "normalized" if self.normalized else "unnormalized"
+        print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, "
+              f"{paced_note}, {norm_note}).")
 
     @staticmethod
     def _frame_set_nbytes(cfg, xmd):
@@ -410,7 +418,8 @@ class RunFakeXEngineHelper:
                 pass
 
 
-def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False):
+def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
+                     send_junk=False):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -428,11 +437,15 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, send_junk=False):
             thread that subscribes to MonitorRingbuf and gates each
             worker's sends to stay <=5 chunks ahead of server-side
             rb_processed. If False, the sender runs unthrottled.
+        normalized: if True (default), randomize_frames() calibrates each
+            frame's scales/offsets to xmd's per-zone noise variance so the
+            dequantized data is "normalized". If False, the normalization
+            is arbitrary (scales/offsets are uniform junk).
         send_junk: if True, only the first chunk is randomized and sent as
             real data (SEND_MINICHUNK); every subsequent chunk is sent as
             all-zero junk (SEND_JUNK), skipping per-chunk randomization. If
             False (default), every chunk is randomized.
     """
     helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced,
-                                  send_junk=send_junk)
+                                  normalized=normalized, send_junk=send_junk)
     helper.run()

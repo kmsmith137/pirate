@@ -289,6 +289,9 @@ class NetworkTester:
             time_samples_per_chunk = p['time_samples_per_chunk'],
             debug = True,
             paced = p['paced'],
+            # The network test only checks transport/assembly, not data
+            # normalization, so skip the (calibrated) normalized path here.
+            normalized = False,
             rpc_address = f"127.0.0.1:{p['rpc_port']}",
         )
 
