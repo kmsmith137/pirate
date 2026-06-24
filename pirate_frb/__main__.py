@@ -148,7 +148,7 @@ def test(args):
             SparseTileTriple.test_random_tree_gridding()
             SparseTile.test_random_iterate_aligned()
             SparseTile.test_random_iterate_singletons()
-            SparseTile.test_random_split_dm_index()
+            SparseTile.test_random_specialize_low_dbits()
             SparseTilePerM.test_random_subbanded_dedispersion()
             PfVarianceConvolver.test_reduces_to_norms()
             PfVarianceConvolver.test_random_variance()

@@ -271,36 +271,34 @@ class SparseTile:
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
                           t0=t0_out, trim=True)
 
-    def split_dm_index(self, nlow):
+    def specialize_low_dbits(self, dlo, nbits_low):
         """
-        Split this singleton tile's (nf==1) level-k DM (delay) index into a coarse part (the
-        high rho = k-nlow bits) and a fine part (the low 'nlow' bits, the subband "fine
-        index" / multiplet). Returns 2^nlow fully-iterated rank-(k-nlow) tiles, one per value
-        'e' of the low bits.
+        Specialize this singleton tile's (nf==1) level-k DM (delay) index by fixing its low
+        'nbits_low' bits to the value dlo (0 <= dlo < 2^nbits_low). Returns a single fully-
+        iterated rank-(k-nbits_low) SparseTile (r == k == rho, nf == 1).
 
-        The high rho bits become the new (coarse) delay axis, inheriting their tshifts; the
-        fine bits' own (constant) tshift contribution, T_lo(e) = sum_{i<nlow} tshifts[i]
-        bit_i(e), becomes the per-multiplet t0. The returned list is indexed by fine index e;
-        each entry is a SparseTile with r == k == rho, nf == 1. See notes/tree_dedispersion.tex.
+        The high rho = k-nbits_low bits become the new (coarse) delay axis, inheriting their
+        tshifts; the fixed low bits' (constant) tshift contribution,
+        T_lo(dlo) = sum_{i<nbits_low} tshifts[i] bit_i(dlo), becomes the tile's t0. (Only the
+        SELECTED low bits affect the data; non-selected low bits affect dlo only via t0.)
+        Looping dlo over 0..2^nbits_low-1 yields the subband's 2^nbits_low multiplets. See
+        notes/tree_dedispersion.tex.
         """
         assert self.nf == 1
-        assert 0 <= nlow <= self.k
-        rho = self.k - nlow
-        low = self.dbits & ((1 << nlow) - 1)           # selected bits < nlow (trailing data axes)
-        new_dbits = self.dbits >> nlow                 # selected bits >= nlow, shifted into [0, rho)
+        assert 0 <= nbits_low <= self.k
+        assert 0 <= dlo < (1 << nbits_low)
+        rho = self.k - nbits_low
+        low = self.dbits & ((1 << nbits_low) - 1)      # selected bits < nbits_low (trailing data axes)
+        new_dbits = self.dbits >> nbits_low            # selected bits >= nbits_low, shifted into [0, rho)
         nhigh, nlow_b = new_dbits.bit_count(), low.bit_count()
-        new_tshifts = np.array(self.tshifts[nlow:], dtype=np.int64)   # high bits' tshifts
+        new_tshifts = np.array(self.tshifts[nbits_low:], dtype=np.int64)   # high bits' tshifts
         # data (1, 2^popcount(dbits), nt) -> (1, 2^nhigh, 2^nlow_b, nt): high bits are the MSBs.
         data_resh = self.data.reshape(1, 1 << nhigh, 1 << nlow_b, self.nt)
 
-        out = []
-        for e in range(1 << nlow):
-            low_idx = SparseTile._selected_bits_index(e, low)
-            data_e = np.ascontiguousarray(data_resh[:, :, low_idx, :])  # (1, 2^nhigh, nt)
-            t0 = self.t0 + int(SparseTile._delay_tshift(e, self.tshifts[:nlow]))
-            out.append(SparseTile(rho, rho, 0, 1, self.nt, new_dbits, data_e,
-                                  new_tshifts, t0=t0))
-        return out
+        low_idx = SparseTile._selected_bits_index(dlo, low)
+        data_lo = np.ascontiguousarray(data_resh[:, :, low_idx, :])        # (1, 2^nhigh, nt)
+        t0 = self.t0 + int(SparseTile._delay_tshift(dlo, self.tshifts[:nbits_low]))
+        return SparseTile(rho, rho, 0, 1, self.nt, new_dbits, data_lo, new_tshifts, t0=t0)
 
     # ------------------------------- test utilities -------------------------------
 
@@ -374,24 +372,22 @@ class SparseTile:
         ksgpu.assert_arrays_equal(ref, got, "ref", "got", ["f", "delay", "time"], epsabs=0.0)
 
     @staticmethod
-    def test_random_split_dm_index():
-        """split_dm_index(nlow) vs. brute-force 'fix the low bits, keep the high bits'."""
+    def test_random_specialize_low_dbits():
+        """specialize_low_dbits(dlo, nbits_low) vs. brute-force 'fix the low bits to dlo'."""
         import ksgpu
         r = int(np.random.randint(2, 8))
-        k = int(np.random.randint(1, r + 1))            # 1 <= k <= r
-        f0 = int(np.random.randint(0, 1 << (r - k)))    # singleton coarse-freq index
+        k = int(np.random.randint(1, r + 1))                # 1 <= k <= r
+        f0 = int(np.random.randint(0, 1 << (r - k)))        # singleton coarse-freq index
         tile = SparseTile.make_random(r, k, f0, 1)
-        nlow = int(np.random.randint(0, k + 1))         # 0 <= nlow <= k
-        rho = k - nlow
+        nbits_low = int(np.random.randint(0, k + 1))        # 0 <= nbits_low <= k
+        rho = k - nbits_low
         ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + 8
-        full = tile.unpack(ntime)[0]                    # (2^k, ntime)
-        mts = tile.split_dm_index(nlow)
-        assert len(mts) == (1 << nlow)
-        for e in range(1 << nlow):
-            got = mts[e].unpack(ntime)[0]               # (2^rho, ntime)
+        full = tile.unpack(ntime)[0]                        # (2^k, ntime)
+        for dlo in range(1 << nbits_low):
+            got = tile.specialize_low_dbits(dlo, nbits_low).unpack(ntime)[0]   # (2^rho, ntime)
             tgt = np.zeros((1 << rho, ntime), dtype=np.float64)
             for d_hi in range(1 << rho):
-                D = d_hi * (1 << nlow) + e               # full delay (low bits = e)
+                D = d_hi * (1 << nbits_low) + dlo           # full delay (low bits = dlo)
                 tgt[d_hi] = full[D]
             ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["d_hi", "time"], epsabs=0.0)
 
@@ -635,7 +631,8 @@ class SparseTilePerM:
                 per_m[mbase + e] = None
         else:
             lag = C * (1 << np.arange(tile.k - l, dtype=np.int64))   # coarse bit j -> C*2^j
-            for e, t in enumerate(tile.split_dm_index(l)):
+            for e in range(1 << l):
+                t = tile.specialize_low_dbits(e, l)
                 per_m[mbase + e] = SparseTile(t.r, t.k, t.f0, t.nf, t.nt, t.dbits,
                                               t.data, t.tshifts + lag, t0=t.t0)
 
@@ -654,7 +651,7 @@ class SparseTilePerM:
         multiplet outputs "on the fly". Case 1 (aligned, l=0 or even s) reads the
         level-(r-R+l) singleton f directly; Case 2 (half-aligned, l>0 odd s) merges the
         level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons(require_aligned=False).
-        Each extraction is then split into its 2^l multiplets (split_dm_index).
+        Each extraction is then split into its 2^l multiplets (specialize_low_dbits).
         """
         sc = [int(c) for c in fs.subband_counts]
         sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
