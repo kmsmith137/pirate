@@ -592,14 +592,16 @@ class SparseTilePerM:
     """
     Sparse representation of a SUBBANDED tree-dedisperser's output for a one-hot input.
     The dense output has shape (2^(r-R), M, ntime) (notes Section "Subbanded
-    dedispersion"), held as a length-M list 'per_m' of SparseTiles, each a rank-(r-R),
-    fully-iterated (k == r-R), nf==1 tile carrying that multiplet's 2^(r-R) coarse delays.
+    dedispersion"), held as a length-M list 'per_m'. Each entry is either a rank-(r-R),
+    fully-iterated (k == r-R), nf==1 SparseTile carrying that multiplet's 2^(r-R) coarse
+    delays, or None for a multiplet whose subband does not overlap the input frequency channel.
 
     Members
     -------
       r, R:            tree rank and pf_rank (rho = r - R is the per-m tile rank).
       subband_counts:  the length-(R+1) C_l array.
-      per_m:           length-M list of SparseTile (r == k == rho, nf == 1).
+      per_m:           length-M list whose entries are a SparseTile (r == k == rho, nf == 1)
+                       or None (multiplet outside the gridding footprint).
     """
 
     def __init__(self, r, R, subband_counts, per_m):
@@ -614,29 +616,28 @@ class SparseTilePerM:
         M = sum((1 << l) * c for l, c in enumerate(self.subband_counts))
         assert len(self.per_m) == M, (len(self.per_m), M)
         for t in self.per_m:
+            if t is None:
+                continue
             assert isinstance(t, SparseTile)
             assert (t.r, t.k, t.nf) == (rho, rho, 1), (t.r, t.k, t.nf, rho)
 
     def unpack(self, ntime):
-        """Returns the dense (2^(r-R), M, ntime) output array."""
+        """Returns the dense (2^(r-R), M, ntime) output array.
+        Multiplets with no overlap (per_m[m] is None) are left as zeros."""
         rho = self.r - self.R
         out = np.zeros((1 << rho, len(self.per_m), ntime), dtype=np.float64)
         for m, tile in enumerate(self.per_m):
-            out[:, m, :] = tile.unpack(ntime)[0]
+            if tile is not None:
+                out[:, m, :] = tile.unpack(ntime)[0]
         return out
 
     @staticmethod
-    def _zero_tile(rho):
-        # A zero rank-rho, k==rho, nf==1 tile (for subbands outside the footprint).
-        return SparseTile(rho, rho, 0, 1, 1, 0, np.zeros((1, 1, 1), dtype=np.float64),
-                          np.zeros(rho, dtype=np.int64))
-
-    @staticmethod
-    def _emit(per_m, mbase, l, rho, tile, C):
-        # Fill the 2^l multiplets of one subband into per_m.
-        if tile is None:                                        # subband outside footprint
+    def _emit(per_m, mbase, l, tile, C):
+        # Fill the 2^l multiplets of one subband into per_m. A None tile (subband outside
+        # the gridding footprint) leaves those multiplets as None.
+        if tile is None:
             for e in range(1 << l):
-                per_m[mbase + e] = SparseTilePerM._zero_tile(rho)
+                per_m[mbase + e] = None
         else:
             tiles = tile.split_dm_index(l, C)
             for e in range(1 << l):
@@ -663,7 +664,6 @@ class SparseTilePerM:
         sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
         r = sarr.r
         R = fs.pf_rank
-        rho = r - R
         assert 0 <= R <= r, (R, r)
         per_m = [None] * fs.M
 
@@ -681,7 +681,7 @@ class SparseTilePerM:
                 if case1 and (r - R + l) == k:                  # Case 1: read level k
                     tile = sarr.get_singleton(f_blk, allow_none=True)
                     C = (1 << l) * ((1 << (R - l)) - 1 - f_blk)
-                    SparseTilePerM._emit(per_m, mbase, l, rho, tile, C)
+                    SparseTilePerM._emit(per_m, mbase, l, tile, C)
                 elif (not case1) and (r - R + l - 1) == k:      # Case 2: read level r-R+l-1
                     lo = sarr.get_singleton(2 * f_blk + 1, allow_none=True)
                     up = sarr.get_singleton(2 * f_blk + 2, allow_none=True)
@@ -690,7 +690,7 @@ class SparseTilePerM:
                         tile = None
                     else:
                         tile = SparseTile.iterate_singletons(lo, up, require_aligned=False)
-                    SparseTilePerM._emit(per_m, mbase, l, rho, tile, C)
+                    SparseTilePerM._emit(per_m, mbase, l, tile, C)
             if k < r:
                 sarr = sarr.iterate()
 
