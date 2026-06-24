@@ -494,19 +494,6 @@ class SparseTreeArray:
         return kernel.apply(one_hot)
 
     @staticmethod
-    def _bit_reverse_permutation(rank):
-        # perm[d] = bit_reverse(d, rank); un-bit-reverses a ReferenceTree delay axis.
-        n = 1 << rank
-        perm = np.zeros(n, dtype=np.intp)
-        for d in range(n):
-            x, b = d, 0
-            for _ in range(rank):
-                b = (b << 1) | (x & 1)
-                x >>= 1
-            perm[d] = b
-        return perm
-
-    @staticmethod
     def _dense_dd(dense_in, k):
         # Reference dense DD(k): (nf, 2^k, ntime) -> (nf//2, 2^(k+1), ntime). nf even.
         nf, nd, ntime = dense_in.shape
@@ -565,6 +552,7 @@ class SparseTreeArray:
         """
         import ksgpu
         from ..kernels import ReferenceTree
+        from ..utils import bit_reverse_permutation
 
         cm = np.ascontiguousarray(channel_map, dtype=np.float64)
         ntree = len(cm) - 1
@@ -578,7 +566,7 @@ class SparseTreeArray:
         tree = ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
                              nspec=1, subband_counts=[1])
         tree.dedisperse(buf, None)                 # mutates buf IN PLACE; delay axis is bit-reversed
-        perm = SparseTreeArray._bit_reverse_permutation(r)
+        perm = bit_reverse_permutation(r)
         ref_natural = buf[0, 0][perm, :]           # (ntree, ntime), natural delay order
 
         sarr = SparseTreeArray.make_dedispersion_output(cm, ifreq)
@@ -640,6 +628,7 @@ class SparseTreeArray:
         """
         import ksgpu
         from ..kernels import ReferenceTree
+        from ..utils import bit_reverse_permutation
         r = int(np.random.randint(1, 8))
         ntree = 1 << r
         j = int(np.random.randint(0, ntree))
@@ -657,7 +646,7 @@ class SparseTreeArray:
         buf[0, 0, j, 0] = 1.0
         ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
                       nspec=1, subband_counts=[1]).dedisperse(buf, None)
-        perm = SparseTreeArray._bit_reverse_permutation(r)
+        perm = bit_reverse_permutation(r)
         ref_natural = buf[0, 0][perm, :]
         got = sarr.unpack(ntime)
         ksgpu.assert_arrays_equal(ref_natural, got[0], "reftree", "got", ["delay", "time"], epsabs=0.0)
