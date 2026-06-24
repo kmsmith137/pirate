@@ -231,6 +231,9 @@ long ReferenceTree::dedisperse_2d(
             //   dedispersion lag = (pf_dm * pf_nd2) + d2
             //
             // Note that the input array is indexed with a bit_reverse()!
+            //
+            // FIXME: I remember that after writing this, I saw a way to simplify the code,
+            // but now I forgot what it was! I might return to this some day.
 
             long pf_ns = fs.subband_counts.at(pf_level);
             long pf_nd2 = 1 << (pf_level - 1);
