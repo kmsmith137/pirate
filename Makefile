@@ -346,7 +346,6 @@ PYFILES = \
   pirate_frb/tests/test_assembled_frame_asdf.py \
   pirate_frb/tests/test_network.py \
   pirate_frb/utils/__init__.py \
-  pirate_frb/utils/core.py \
   pirate_frb/utils/ThreadAffinity.py \
   pirate_frb/utils/network.py \
   pirate_frb/utils/time_cupy_dedisperser.py \

@@ -386,33 +386,6 @@ class SparseTreeArray:
                               tshifts=np.zeros(0, dtype=np.int64))
         return SparseTreeArray._from_tile(tile)
 
-    @staticmethod
-    def make_dedispersion_output(channel_map, ifreq):
-        """
-        Suppose TreeGriddingKernel -> (Tree dedispersion) is called on a "one-hot" shape
-        (nfreq,ntime) array whose (ifreq,0) entry is 1. The output is a shape (1, 2^rank,
-        ntime) array which is mostly zeros. This method returns an equivalent
-        SparseTreeArray. We assume a non-bit-reversed delay index.
-        """
-        sarr = SparseTreeArray.make_tree_gridding_output(channel_map, ifreq)
-        nf_start = sarr.nf
-        while sarr.k < sarr.r:
-            sarr = sarr.iterate()
-        # Invariant: nf_start == nt_end, where nf_start is the gridding footprint width (the
-        # number of adjacent tree channels the one-hot spreads across, at t=0) and nt_end is
-        # the final tile's PRE-shift time extent. (At k==r, nf==1, so there is one tile.)
-        #
-        # Hand-waving argument: the tshifts absorb the per-delay bulk dispersion sweep, so
-        # the stored nt measures only the RELATIVE time-smearing across the footprint. The
-        # sweep is approximately linear in frequency, so a width-nf_start frequency footprint
-        # maps onto a width-nf_start time smear at the maximum delay; hence the residual
-        # (pre-shift) time footprint equals the spatial footprint. Equivalently, this is a
-        # check that nt stays minimal (no padding) and the tshift/dbits machinery works as
-        # intended.
-        nt_end = sarr.tiles[0].nt
-        assert nf_start == nt_end, (nf_start, nt_end)
-        return sarr
-
     def iterate(self):
         """
         One DD(k) step. The first/last output channels (F0, Fmax) are computed with
@@ -545,41 +518,6 @@ class SparseTreeArray:
         SparseTreeArray.test_one_tree_gridding(cm, ifreq)
 
     @staticmethod
-    def test_one_dedispersion(channel_map, ifreq):
-        """
-        Compare make_dedispersion_output(...).unpack() against
-        ReferenceTreeGriddingKernel -> ReferenceTree (no subbands) on a one-hot input.
-        """
-        import ksgpu
-        from ..kernels import ReferenceTree
-        from ..utils import bit_reverse_permutation
-
-        cm = np.ascontiguousarray(channel_map, dtype=np.float64)
-        ntree = len(cm) - 1
-        r = ntree.bit_length() - 1
-        # ntime: multiple of 32 (gridding kernel) and > 2^r, so the max dispersion delay
-        # (2^r - 1) fits in one ReferenceTree chunk (-> non-incremental result).
-        ntime = ((ntree + 31) // 32 + 1) * 32
-
-        grid = SparseTreeArray._reference_gridding(cm, ifreq, ntime)   # (1, ntree, ntime) f32
-        buf = np.ascontiguousarray(grid.reshape(1, 1, ntree, ntime))   # (1,1,ntree,ntime) f32
-        tree = ReferenceTree(num_beams=1, amb_rank=0, dd_rank=r, ntime=ntime,
-                             nspec=1, subband_counts=[1])
-        tree.dedisperse(buf, None)                 # mutates buf IN PLACE; delay axis is bit-reversed
-        perm = bit_reverse_permutation(r)
-        ref_natural = buf[0, 0][perm, :]           # (ntree, ntime), natural delay order
-
-        sarr = SparseTreeArray.make_dedispersion_output(cm, ifreq)
-        got = sarr.unpack(ntime)                    # (1, ntree, ntime) f64
-        assert sarr.k == r and got.shape == (1, ntree, ntime)
-        ksgpu.assert_arrays_equal(ref_natural, got[0], "reftree", "got", ["delay", "time"], epsabs=0.0)
-
-    @staticmethod
-    def test_random_dedispersion():
-        cm, ifreq = SparseTreeArray.random_channel_map()
-        SparseTreeArray.test_one_dedispersion(cm, ifreq)
-
-    @staticmethod
     def test_random_iterate_aligned():
         """iterate_aligned(tile).unpack() must equal the dense DD(k) of tile.unpack()."""
         import ksgpu
@@ -700,20 +638,6 @@ class SparseTreeArray:
         R = int(np.random.randint(0, min(r, 4) + 1))    # pf_rank <= min(r, 4)
         sc = [int(c) for c in FrequencySubbands.make_random_subband_counts(R)]
         SparseTreeArray.test_one_subbanded_dedispersion(cm, ifreq, sc)
-
-    @staticmethod
-    def test_subbanded_reduces_to_fullband():
-        """subband_counts=[1] must reproduce the full-band make_dedispersion_output."""
-        import ksgpu
-        from ..pirate_pybind11 import FrequencySubbands
-        cm, ifreq = SparseTreeArray.random_channel_map()
-        ntree = len(cm) - 1
-        ntime = ((ntree + 31) // 32 + 1) * 32
-        full = SparseTreeArray.make_dedispersion_output(cm, ifreq).unpack(ntime)   # (1, 2^r, ntime)
-        ssa = SparseSubbandedArray.make_dedispersion_output(cm, ifreq, FrequencySubbands([1]))
-        assert len(ssa.per_m) == 1
-        got = ssa.per_m[0].unpack(ntime)                                          # (1, 2^r, ntime)
-        ksgpu.assert_arrays_equal(full, got, "full", "subband[1]", ["f", "delay", "time"], epsabs=0.0)
 
 
 class SparseSubbandedArray:
