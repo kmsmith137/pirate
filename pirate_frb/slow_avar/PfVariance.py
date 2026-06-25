@@ -206,18 +206,7 @@ class PfVariance:
         self.P = int(P)
         self.terms = {}      # dbits (int) -> (2^popcount(dbits), P) float64
 
-    @staticmethod
-    def from_tile(tile, P, convolver):
-        """Build a PfVariance from a single singleton SparseTile.
-
-        Shorthand for PfVariance(tile.k, P) followed by add_tile(tile, convolver): the result
-        has rank == tile.k and one term (keyed by tile.dbits). P (profile count) and the
-        convolver must both be supplied -- neither can be inferred from the tile.
-        """
-        pfvar = PfVariance(tile.k, P)
-        pfvar.add_tile(tile, convolver)
-        return pfvar
-
+    
     def get_all_dbits(self):
         """Bitwise-OR of all term keys (the union of bits any term depends on)."""
         all_dbits = 0
@@ -225,37 +214,41 @@ class PfVariance:
             all_dbits |= dbits
         return all_dbits
 
+    
     def unpack(self, dbits):
-        """Expand every term to shape (2^popcount(dbits), P) and return their sum.
-
-        'dbits' must be a superset of every term's dbits (otherwise it cannot represent some
-        term's delay-dependence); a ValueError is raised if it is too small.
         """
+        Expand every term to shape (2^popcount(dbits), P) and return their sum.
+        'dbits' must be a superset of every term's dbits.
+        """
+        
         dbits = int(dbits)
         missing = self.get_all_dbits() & ~dbits
         if missing:
             raise ValueError(f"PfVariance.unpack: dbits={dbits:#x} is too small; a term "
                              f"depends on bit(s) {missing:#x} not present in dbits")
+        
         m = dbits.bit_count()
         out = np.zeros((1 << m, self.P), dtype=np.float64)
+        
         # Representative delay for each output row (its 'dbits' bits encode the row index).
         d = SparseTile._representative_delay(np.arange(1 << m), dbits)
         for term_dbits, term_arr in self.terms.items():
             out += term_arr[SparseTile._selected_bits_index(d, term_dbits)]
+        
         return out
 
+    
     def add_tile(self, tile, convolver):
-        """Convolve a singleton SparseTile (tile.k == self.rank) into a new term.
-
-        tile.data has shape (1, 2^popcount(tile.dbits), nt); 'convolver' maps its length-nt time
-        axis to self.P profiles, giving a term (tile.dbits, (2^popcount, P)).  tile.tshifts and
-        tile.t0 are irrelevant (the variance is time-shift invariant) and are ignored.
+        """
+        Given a singleton SparseTile representing dedisperser output, compute the variance
+        and accumulate it into (self.terms).
         """
         assert tile.nf == 1, "PfVariance.add_tile: tile must be a singleton (nf == 1)"
         assert tile.k == self.rank, (tile.k, self.rank)
         tile_var = convolver.variance(tile.data, self.P)[0]   # drop nf==1 axis -> (2^popcount, P)
         self._accumulate(tile.dbits, tile_var, steal=True)    # tile_var is a fresh, unshared temporary
 
+    
     def add(self, pfvar, upper_half=False, scale=1.0):
         """
         Accumulate (scale * pfvar) into self.
@@ -266,49 +259,63 @@ class PfVariance:
         We require pfvar.rank = self.rank + (upper_half ? 1 : 0).
         We require (self.P <= pfvar.P); extra profiles in pfvar are discarded.
         """
+        
         assert self is not pfvar, "PfVariance.add: cannot add a PfVariance to itself"
-        assert self.P <= pfvar.P, (self.P, pfvar.P)
-        if not upper_half:
-            assert pfvar.rank == self.rank, (pfvar.rank, self.rank)
-            for dbits, arr in pfvar.terms.items():
-                self._accumulate(dbits, arr[:, :self.P], scale=scale)   # steal=False: arr is borrowed
-            return
-        assert pfvar.rank == self.rank + 1, (pfvar.rank, self.rank)
-        topbit = 1 << self.rank                          # pfvar's extra (top) delay bit
+        assert pfvar.rank == self.rank + (1 if upper_half else 0), (pfvar.rank, self.rank)
+        assert pfvar.P >= self.P
+        
+        topbit = 1 << self.rank
+        
         for dbits, arr in pfvar.terms.items():
-            arr = arr[:, :self.P]
-            if dbits & topbit:                           # depends on the top bit (its array MSB):
-                self._accumulate(dbits & ~topbit, arr[arr.shape[0] // 2:], scale=scale)  # upper half
+            if (not upper_half) or (dbits & topbit) == 0:
+                self._accumulate(dbits, arr[:, :self.P], scale=scale)   # steal=False: arr is borrowed
             else:
-                self._accumulate(dbits, arr, scale=scale)               # independent of the top bit
+                self._accumulate(dbits & ~topbit, arr[arr.shape[0] // 2:, :self.P], scale=scale)  # upper half
 
-    def add_spectator_low_bits(self, nbits):
-        """Return a new PfVariance of rank (self.rank + nbits) that is independent of the new
-        low 'nbits' delay bits (spectators): each term keeps its array, but its dbits shift up
-        by nbits (old bit j -> bit j+nbits). Used to raise a coarser variance to a finer rank
-        so it can be compared against a finer one."""
-        out = PfVariance(self.rank + nbits, self.P)
-        for dbits, arr in self.terms.items():
-            out._accumulate(dbits << nbits, arr)
-        return out
 
+    @staticmethod
+    def from_tile(tile, P, convolver):
+        """
+        Given a singleton SparseTile representing dedisperser output, compute the variance
+        and return it as a new PfVariance object.
+        """
+        pfvar = PfVariance(tile.k, P)
+        pfvar.add_tile(tile, convolver)
+        return pfvar
+
+    
     def _accumulate(self, dbits, arr, *, scale=1.0, steal=False):
-        # Accumulate (scale * arr) into term 'dbits', in-place (+=) when that term already exists.
-        # steal=True grants ownership of 'arr': a new term may alias it rather than copy, so the
-        # caller must pass a fresh array it will never reuse.  Callers passing a borrowed array
-        # (e.g. a view into another PfVariance) must leave steal=False so the new-term path copies
-        # -- otherwise a later in-place += here would corrupt the source.
+        """
+        Accumulate (dbits, scale*arr) into self.terms.
+        The 'steal' arg indicates whether it's okay to steal ownership of 'arr'.
+        """
+        
         dbits = int(dbits)
         assert 0 <= dbits < (1 << self.rank), (dbits, self.rank)
         assert arr.shape == (1 << dbits.bit_count(), self.P), (arr.shape, dbits, self.P)
+        
         arr = np.asarray(arr, dtype=np.float64)
+        
         if dbits in self.terms:
-            self.terms[dbits] += arr if scale == 1.0 else scale * arr
+            self.terms[dbits] += arr if scale == 1.0 else (scale * arr)
         elif steal and scale == 1.0:
             self.terms[dbits] = arr                          # take ownership (zero-copy alias)
         else:
             self.terms[dbits] = np.array(arr) if scale == 1.0 else scale * arr   # owned copy
 
+    
+    # ---------------------------------------------------------------------------
+    # Code below is only called on testing/checking paths.
+
+    
+    def add_spectator_low_bits(self, nbits):
+        """Returna a new PfVariance of rank (self.rank + nbits)."""
+        out = PfVariance(self.rank + nbits, self.P)
+        for dbits, arr in self.terms.items():
+            out._accumulate(dbits << nbits, arr)
+        return out
+
+    
     @staticmethod
     def test_add_truncate_upper_half():
         """add(): p-truncation (self.P <= pfvar.P) and upper_half match the per-tile path.
