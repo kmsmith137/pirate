@@ -373,10 +373,10 @@ class PfAvarExact:
     Members
     -------
       ntrees:      number of DedispersionTrees (= plan.ntrees).
-      tree_r:      length-ntrees int array; tree_r[itree] = config.tree_rank - delta - (ids>0 ? 1 : 0),
-                   the tree's kept-output rank (delta = early-trigger reduction, ids = ds_level).
-                   It already includes the early-trigger -delta and the downsampled -1, so
-                   tree_r == config.tree_rank only for tree 0.
+      tree_r:      length-ntrees int array; tree_r[itree] = amb_rank + early_dd_rank, the tree's
+                   kept-output rank (equivalently config.tree_rank - delta - (ids>0 ? 1 : 0), where
+                   delta = early-trigger reduction and ids = ds_level; so tree_r == config.tree_rank
+                   only for tree 0).
       tree_R:      length-ntrees int array; tree_R[itree] = the tree's pf_rank (NOT the config pf_rank).
       tree_P:      length-ntrees int array; tree_P[itree] = the tree's nprofiles (= 1 + 3 log2(Wmax)).
       convolver:   a single shared PfVarianceConvolver (full kernel bank to constants.max_pf_width;
@@ -396,9 +396,8 @@ class PfAvarExact:
         cfg = plan.config
         full_cm = np.asarray(cfg.make_channel_map(), dtype=np.float64)
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
-        # tree_r[itree] = config.tree_rank - delta - (ids>0 ? 1 : 0)
-        self.tree_r = np.array([cfg.tree_rank - (t.pri_dd_rank - t.early_dd_rank) - (t.ds_level > 0)
-                           for t in plan.trees])
+        # tree_r[itree] = amb_rank + early_dd_rank (= config.tree_rank - delta - (ids>0 ? 1 : 0))
+        self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
@@ -416,7 +415,7 @@ class PfAvarExact:
     def _make_per_fm(self, itree, tree, full_cm, progress=False):
         # per_fm[ifreq]: length-M list of (PfVariance or None) for tree itree, or None (no overlap).
         fs, P, ids = self.tree_fs[itree], int(self.tree_P[itree]), tree.ds_level
-        rho_cm = self.plan.config.tree_rank - (tree.pri_dd_rank - tree.early_dd_rank)   # = r + (ids>0)
+        rho_cm = int(self.tree_r[itree]) + (ids > 0)   # = tree_r + (ids>0) = config.tree_rank - delta
         cm = np.ascontiguousarray(full_cm[: (1 << rho_cm) + 1])    # truncate to first 2^rho_cm channels
         per_fm = []
         for ifreq in range(self.nfreq):
@@ -484,8 +483,8 @@ class PfAvarApproximation:
     Members
     -------
       ntrees:      number of DedispersionTrees (= plan.ntrees).
-      tree_r:      length-ntrees int array; tree_r[itree] = config.tree_rank - delta - (ids>0 ? 1 : 0)
-                   (matches PfAvarExact.tree_r). The PfVariance rank is tree_r[itree] - tree_L[itree].
+      tree_r:      length-ntrees int array; tree_r[itree] = amb_rank + early_dd_rank (matches
+                   PfAvarExact.tree_r). The PfVariance rank is tree_r[itree] - tree_L[itree].
       tree_R:      length-ntrees int array; tree_R[itree] = the tree's pf_rank (NOT the config pf_rank).
       tree_L:      length-ntrees int array; tree_L[itree] = log2(tree's wt_dm_downsampling). Read per
                    tree -- no assumption that early-trigger trees share L/R with their siblings;
@@ -504,10 +503,9 @@ class PfAvarApproximation:
     def __init__(self, plan, progress=False):
         # If progress is set, print one '.' per 1000 input freq channels.
         cfg = plan.config
-        K = int(cfg.tree_rank)
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
-        # tree_r[itree] = config.tree_rank - delta - (ids>0 ? 1 : 0)
-        self.tree_r = np.array([K - (t.pri_dd_rank - t.early_dd_rank) - (t.ds_level > 0) for t in plan.trees])
+        # tree_r[itree] = amb_rank + early_dd_rank (= config.tree_rank - delta - (ids>0 ? 1 : 0))
+        self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_L = np.array([int(t.pf.wt_dm_downsampling).bit_length() - 1 for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
@@ -542,7 +540,7 @@ class PfAvarApproximation:
         for ifreq in range(self.nfreq):
             if progress and (ifreq + 1) % 1000 == 0:
                 print(".", end="", flush=True)
-            sarr = SparseTileTriple.make_tree_gridding_output(full_cm, ifreq)   # rank K, level 0
+            sarr = SparseTileTriple.make_tree_gridding_output(full_cm, ifreq)   # rank config.tree_rank, level 0
             for k in range(0, max_k + 1):
                 trees_k = trees_at.get(k, ())
                 if trees_k:
