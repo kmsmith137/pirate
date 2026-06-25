@@ -271,48 +271,35 @@ class SparseTile:
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
                           t0=t0_out, trim=True)
 
-    def specialize_low_dbits(self, dlo, nbits_low):
+    def specialize_dbits(self, value, nbits, *, low):
         """
-        Specialize this singleton tile's (nf==1) level-k DM (delay) index by fixing its low
-        'nbits_low' bits to the value dlo (0 <= dlo < 2^nbits_low). Returns a single fully-
-        iterated rank-(k-nbits_low) SparseTile (r == k == rho, nf == 1).
+        Specialize this singleton tile's (nf==1) level-k DM (delay) index by fixing 'nbits' of
+        its delay bits to the value 'value' (0 <= value < 2^nbits), keeping the other (k-nbits)
+        bits. Collapses to a standalone fully-iterated rank-(k-nbits) SparseTile (r == k == rho,
+        f0 == 0, nf == 1).
 
-        The high rho = k-nbits_low bits become the new (coarse) delay axis, inheriting their
-        tshifts; the fixed low bits' (constant) tshift contribution,
-        T_lo(dlo) = sum_{i<nbits_low} tshifts[i] bit_i(dlo), becomes the tile's t0. (Only the
-        SELECTED low bits affect the data; non-selected low bits affect dlo only via t0.)
-        Looping dlo over 0..2^nbits_low-1 yields the subband's 2^nbits_low multiplets. See
-        notes/tree_dedispersion.tex.
+        If low=True, the LOW 'nbits' bits are fixed; the high rho = k-nbits bits become the new
+        (coarse) delay axis, inheriting their tshifts. Looping 'value' over 0..2^nbits-1 then
+        yields the subband's 2^nbits multiplets.
+        If low=False, the HIGH 'nbits' bits are fixed, keeping the low (k-nbits) bits. Used to
+        discard part of the DM range: e.g. specialize_dbits(1, 1, low=False) keeps the upper half
+        of the delay axis (top bit == 1), dropping rank by 1.
+
+        Only the SELECTED fixed bits affect the data; non-selected fixed bits affect 'value' only
+        via t0. The fixed bits' (constant) tshift contribution folds into the tile's t0; the kept
+        bits' tshifts carry over. See notes/tree_dedispersion.tex.
         """
-        return self._specialize_dbits(dlo, nbits_low, fix_low=True)
-
-    def specialize_high_dbits(self, dhi, nbits_high):
-        """
-        Mirror of specialize_low_dbits: fix the HIGH 'nbits_high' delay bits to the value dhi
-        (0 <= dhi < 2^nbits_high), keeping the low (k-nbits_high) bits. Returns a single
-        fully-iterated rank-(k-nbits_high) SparseTile (r == k == rho, nf == 1).
-
-        Used to discard part of the DM range: e.g. specialize_high_dbits(1, 1) keeps the upper
-        half of the delay axis (top bit == 1), dropping rank by 1.
-        """
-        return self._specialize_dbits(dhi, nbits_high, fix_low=False)
-
-    def _specialize_dbits(self, value, nbits, fix_low):
-        # Shared core of specialize_{low,high}_dbits. Fix 'nbits' delay bits to 'value' (the low
-        # nbits if fix_low, else the high nbits), keep the other (k-nbits) bits, and collapse to a
-        # standalone rank-(k-nbits) singleton (r==k==rho, f0=0, nf==1). The data middle axis packs
-        # all dbits MSB-first as (1, 2^nhigh, 2^nlow, nt) (high group leading); we slice out the
-        # fixed group's index and keep the other group's axis. The fixed bits' tshift contribution
-        # folds into t0; the kept bits' tshifts carry over.
         assert self.nf == 1
         assert 0 <= nbits <= self.k
         assert 0 <= value < (1 << nbits)
-        b = nbits if fix_low else (self.k - nbits)     # split: low group = bits [0,b), high group = [b,k)
+        # The data middle axis packs all dbits MSB-first as (1, 2^nhigh, 2^nlow, nt) (high group
+        # leading); we slice out the fixed group's index and keep the other group's axis.
+        b = nbits if low else (self.k - nbits)         # split: low group = bits [0,b), high group = [b,k)
         low_mask = self.dbits & ((1 << b) - 1)         # selected bits in [0, b)
         high_mask = self.dbits >> b                    # selected bits in [b, k), shifted to [0, k-b)
         nlow, nhigh = low_mask.bit_count(), high_mask.bit_count()
         data_resh = self.data.reshape(1, 1 << nhigh, 1 << nlow, self.nt)
-        if fix_low:
+        if low:
             idx = SparseTile._selected_bits_index(value, low_mask)
             data_sel = data_resh[:, :, idx, :]         # keep high (leading) axis -> (1, 2^nhigh, nt)
             new_dbits, new_tshifts, delay = high_mask, self.tshifts[nbits:], value
@@ -399,7 +386,7 @@ class SparseTile:
 
     @staticmethod
     def test_random_specialize_low_dbits():
-        """specialize_low_dbits(dlo, nbits_low) vs. brute-force 'fix the low bits to dlo'."""
+        """specialize_dbits(dlo, nbits_low, low=True) vs. brute-force 'fix the low bits to dlo'."""
         import ksgpu
         r = int(np.random.randint(2, 8))
         k = int(np.random.randint(1, r + 1))                # 1 <= k <= r
@@ -410,7 +397,7 @@ class SparseTile:
         ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + 8
         full = tile.unpack(ntime)[0]                        # (2^k, ntime)
         for dlo in range(1 << nbits_low):
-            got = tile.specialize_low_dbits(dlo, nbits_low).unpack(ntime)[0]   # (2^rho, ntime)
+            got = tile.specialize_dbits(dlo, nbits_low, low=True).unpack(ntime)[0]   # (2^rho, ntime)
             tgt = np.zeros((1 << rho, ntime), dtype=np.float64)
             for d_hi in range(1 << rho):
                 D = d_hi * (1 << nbits_low) + dlo           # full delay (low bits = dlo)
@@ -660,10 +647,10 @@ class SparseTilePerM:
         else:
             lag = C * (1 << np.arange(tile.k - l, dtype=np.int64))   # coarse bit j -> C*2^j
             for e in range(1 << l):
-                t = tile.specialize_low_dbits(e, l)
+                t = tile.specialize_dbits(e, l, low=True)
                 t = SparseTile(t.r, t.k, t.f0, t.nf, t.nt, t.dbits, t.data, t.tshifts + lag, t0=t.t0)
                 if upper_half_only:
-                    t = t.specialize_high_dbits(1, 1)   # keep upper DM-half (top bit == 1)
+                    t = t.specialize_dbits(1, 1, low=False)   # keep upper DM-half (top bit == 1)
                 per_m[mbase + e] = t
 
     @staticmethod
@@ -685,7 +672,7 @@ class SparseTilePerM:
         multiplet outputs "on the fly". Case 1 (aligned, l=0 or even s) reads the
         level-(r-R+l) singleton f directly; Case 2 (half-aligned, l>0 odd s) merges the
         level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons(require_aligned=False).
-        Each extraction is then split into its 2^l multiplets (specialize_low_dbits).
+        Each extraction is then split into its 2^l multiplets (specialize_dbits, low=True).
         """
         sc = [int(c) for c in fs.subband_counts]
         sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)

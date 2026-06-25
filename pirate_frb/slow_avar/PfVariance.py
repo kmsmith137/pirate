@@ -431,7 +431,7 @@ class PfAvarApproximation:
                     row.append(None)
                 else:
                     # Drop the low (L-R) DM bits (fix to 0): rank (r-R)-(L-R) = r-L singleton.
-                    tile = tile.specialize_low_dbits(0, self.L - self.R)
+                    tile = tile.specialize_dbits(0, self.L - self.R, low=True)
                     row.append(PfVariance.from_tile(tile, self.convolver))
             per_ff.append(row)
         return per_ff
