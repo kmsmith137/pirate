@@ -99,6 +99,16 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
             if (tree.pf.time_downsampling == 0)
                 tree.pf.time_downsampling = tree.pf.dm_downsampling;
 
+            // All four downsampling factors are now powers of two: the wt factors and any
+            // explicitly-set dm/time factors are checked by config.validate() (called above); the
+            // dm/time factors left at 0 (which validate() leaves unchecked) are pow2() by the
+            // auto-fill just above. Assert all four here -- where the resolved values are first
+            // established and much downstream code assumes the property.
+            xassert(is_power_of_two(tree.pf.dm_downsampling));
+            xassert(is_power_of_two(tree.pf.time_downsampling));
+            xassert(is_power_of_two(tree.pf.wt_dm_downsampling));
+            xassert(is_power_of_two(tree.pf.wt_time_downsampling));
+
             xassert_le(tree.pf.dm_downsampling, tree.pf.wt_dm_downsampling);
             xassert_le(tree.pf.wt_dm_downsampling, pow2(tot_rank));
             xassert_le(tree.pf.time_downsampling, tree.pf.wt_time_downsampling);
