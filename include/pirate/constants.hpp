@@ -22,6 +22,14 @@ struct constants
     
     static constexpr int max_downsampling_level = 6;
 
+    // Max width of a peak-finding kernel (PeakFindingConfig::max_width, in "tree" time
+    // samples). Must be a power of two. Bounds both DedispersionConfig::validate() and the
+    // make_random() config generator. (Production configs currently use 16, and the compiled
+    // GPU kernel registry currently provides Wmax in {8, 16}; this looser bound matches the
+    // largest width the make_random() reference path exercises.)
+
+    static constexpr int max_pf_width = 32;
+
     // Constants in peak-finding kernels
     static constexpr float pf_a = 0.5;
     static constexpr float pf_b = 0.5;

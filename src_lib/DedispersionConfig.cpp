@@ -419,6 +419,8 @@ void DedispersionConfig::validate() const
         xassert(is_power_of_two(pfp.wt_dm_downsampling));
         xassert(is_power_of_two(pfp.wt_time_downsampling));
 
+        xassert_le(pfp.max_width, constants::max_pf_width);
+
         long ds_rank = ds_level ? (tree_rank-1) : (tree_rank);
         long min_rank = ds_rank;
         for (const EarlyTrigger &et: early_triggers)
@@ -788,7 +790,7 @@ static CoalescedDdKernel2::RegistryKey _make_random_cdd2_key(Dtype dtype, long d
 
     ret.dtype = dtype;
     ret.dd_rank = dd_rank;
-    ret.Wmax = pow2(rand_int(0,6));
+    ret.Wmax = pow2(rand_int(0, integer_log2(constants::max_pf_width) + 1));
 
     long i = rand_int(0,6);
     long j = rand_int(0,6-i);
