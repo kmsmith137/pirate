@@ -19,13 +19,12 @@ def check_approximation(plan):
     approx = PfAvarApproximation(plan)
     r0, R0 = int(exact.r[0]), int(exact.R[0])    # tree 0's rank / pf_rank
     rho0 = r0 - R0                               # tree 0's exact PfVariance rank
-    approx_R = approx.fs.pf_rank                 # approximation's pf_rank (== R0 for consistency)
     approx_rho = approx.r - approx.L             # approximation's PfVariance rank (r-L)
     M = approx.fs.M
     assert exact.fs[0].M == M, (exact.fs[0].M, M)
-    assert (r0, R0) == (approx.r, approx_R), (r0, R0, approx.r, approx_R)   # consistency at tree 0
+    assert (r0, R0) == (approx.r, approx.R), (r0, R0, approx.r, approx.R)   # consistency at tree 0
     lift = rho0 - approx_rho                      # (r-R) - (r-L) = L-R spectator low bits to add
-    assert lift == approx.L - approx_R, (lift, approx.L, approx_R)
+    assert lift == approx.L - approx.R, (lift, approx.L, approx.R)
 
     # Note: eps_mean / eps2_mean accumulate the per-multiplet means, then divide by M (so they
     # are <eps> and <eps^2>). Dividing is required for Delta = sqrt(<eps^2> - <eps>^2) to be a

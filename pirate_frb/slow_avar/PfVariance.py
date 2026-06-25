@@ -388,9 +388,9 @@ class PfAvarApproximation:
 
     Members
     -------
-      r, L:          tree 0's rank (= config.tree_rank) and log2(wt_dm_downsampling), from
-                     plan.trees[0]. The pf_rank R = fs.pf_rank and the PfVariance rank rho = r - L
-                     are recomputed locally (as plain variables) where needed.
+      r, R, L:       tree 0's rank (= config.tree_rank), pf_rank (= fs.pf_rank), and
+                     log2(wt_dm_downsampling), from plan.trees[0]. The PfVariance rank rho = r - L
+                     is recomputed locally (as a plain variable) where needed.
       fs:            FrequencySubbands (subband scheme) of plan.trees[0].
       Wmax:          tree 0's max peak-finding kernel width.
       convolver:     PfVarianceConvolver(Wmax), shared by all PfVariance objects.
@@ -404,10 +404,11 @@ class PfAvarApproximation:
         tree0 = plan.trees[0]                            # base tree (ids=0, delta=0)
         self.r = int(plan.config.tree_rank)              # = tree0's kept-output rank (ids=0, delta=0)
         self.fs = tree0.frequency_subbands
+        self.R = self.fs.pf_rank
         wt_dd = int(tree0.pf.wt_dm_downsampling)
         self.L = wt_dd.bit_length() - 1                  # log2(wt_dm_downsampling)
         assert wt_dd == (1 << self.L), "wt_dm_downsampling must be a power of two"
-        assert self.fs.pf_rank <= self.L <= self.r, (self.fs.pf_rank, self.L, self.r)
+        assert self.R <= self.L <= self.r, (self.R, self.L, self.r)
         self.Wmax = int(tree0.pf.max_width)
         self.nfreq = int(plan.nfreq)
         self.convolver = PfVarianceConvolver(self.Wmax)
@@ -418,29 +419,28 @@ class PfAvarApproximation:
 
     def _make_per_ff(self, channel_map):
         # per_ff[ifreq][f]: single-channel PfVariance (rank r-L) of coarse-freq f, or None.
-        R = self.fs.pf_rank
         per_ff = []
         for ifreq in range(self.nfreq):
             sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
-            for _ in range(self.r - R):
+            for _ in range(self.r - self.R):
                 sarr = sarr.iterate()            # now k == r-R: 2^R coarse-freqs, 2^(r-R) DMs
             row = []
-            for f in range(1 << R):
+            for f in range(1 << self.R):
                 tile = sarr.get_singleton(f, allow_none=True)   # singleton (k=r-R, nf=1) or None
                 if tile is None:
                     row.append(None)
                 else:
                     # Drop the low (L-R) DM bits (fix to 0): rank (r-R)-(L-R) = r-L singleton.
-                    tile = tile.specialize_dbits(0, self.L - R, low=True)
+                    tile = tile.specialize_dbits(0, self.L - self.R, low=True)
                     row.append(PfVariance.from_tile(tile, self.convolver))
             per_ff.append(row)
         return per_ff
 
     def _make_per_f(self):
         # per_f[f]: frequency-summed PfVariance for coarse-freq f (sum over per_ff[:, f]).
-        R, rho = self.fs.pf_rank, self.r - self.L
+        rho = self.r - self.L
         per_f = []
-        for f in range(1 << R):
+        for f in range(1 << self.R):
             acc = PfVariance(rho, self.convolver)
             for ifreq in range(self.nfreq):
                 pv = self.per_ff[ifreq][f]
