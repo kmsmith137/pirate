@@ -1,24 +1,3 @@
-"""Pure-Python reference: output variance of the peak-finding kernels.
-
-Background (see the "Peak-finding" section of notes/tree_dedispersion.tex):
-the peak-finder convolves each time series with P short kernels h_p, multiplies
-by weights, and reduces by max.  This module answers a normalization question:
-if the peak-finder is fed noise of the form y = x * g (white unit-variance noise
-g, smeared by a short kernel x), what is the output variance Var(z_p) of each
-profile p?
-
-Since z_p = h_p * y = h_p * (x * g) = (h_p * x) * g, and white unit-variance
-noise through a kernel k has variance ||k||^2,
-
-    Var(z_p) = ||h_p * x||^2 = sum_delta R_x[delta] R_{h_p}[delta],
-
-where R_a[delta] = sum_t a[t] a[t+delta] is the (auto)correlation.  For profile p only lags
-|delta| < min(T, len(h_p)) contribute: R_x vanishes past T = len(x), and R_{h_p} past the
-kernel length.  We build the full kernel bank (out to constants.max_pf_width) and precompute
-every kernel's autocorrelation once into a table -- capturing each in full, with no assumption
-about len(x) -- after which variance(x, P) is a small matmul over the first P profiles.
-"""
-
 import numpy as np
 
 from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
@@ -29,72 +8,66 @@ from ..utils import integer_log2
 
 
 class PfVarianceConvolver:
-    """Computes Var(h_p * x) for the peak-finding profiles p, given a short kernel x.
-
-    Constructs the full kernel bank out to constants.max_pf_width (Pmax = 3*log2(max_pf_width)+1
-    profiles); call variance(x, P) for the first P profiles.  The bank is nested in P (each kernel
-    depends only on its (level, shape), not the max width), so the first P profiles are exactly the
-    bank of a peak-finder with P = 3*log2(Wmax)+1 profiles.  variance() maps an input of shape
-    (..., T) to output (..., P), with the leading axes treated as spectators.
     """
-
+    The PfVarianceConvolver has one purpose in life: to convert time series to variances,
+    after convolving with the first P pirate peak-finding kernels. See variance() below.
+    """
+    
     def __init__(self):
         from ..pirate_pybind11 import constants    # lazy: keep this module's top level pybind-free
-        self.kernels, self.labels = self.peak_finding_kernels(int(constants.max_pf_width))
+        self.kernels = self.peak_finding_kernels(int(constants.max_pf_width))
         self.Pmax = len(self.kernels)              # = 3*log2(max_pf_width)+1
         self.Tmax = np.array([len(h) for h in self.kernels], dtype=np.int64)  # per-profile autocorr extent
         assert np.all(np.diff(self.Tmax) >= 0)     # non-decreasing -> Tmax[P-1] == max(Tmax[:P])
-        self.A = self._autocorr_table(self.kernels, int(self.Tmax[-1]))   # (Pmax, 2*max_pf_width)
+
+        # Autocorrelation table A[p, delta] = sum_t h_p[t] h_p[t+delta] for delta = 0..Tmax-1, where
+        # Tmax = self.Tmax[-1] is the longest kernel.  Lags >= len(h_p) vanish (no self-overlap), so
+        # row p is the kernel's one-sided autocorrelation, zero-padded out to Tmax.
+        self.A = np.zeros((self.Pmax, int(self.Tmax[-1])))   # (Pmax, 2*max_pf_width)
+        for p, h in enumerate(self.kernels):
+            self.A[p, :len(h)] = self._autocorr(h, len(h))
 
     @staticmethod
     def peak_finding_kernels(Wmax):
-        """Materialize the P peak-finding kernels as float64 arrays.
-
-        Returns (kernels, labels), where kernels[p] is the 1-d kernel h_p and
-        labels[p] = (l, q).  The ordering is the code convention p = 3*l + q with
-        the special profile p=0 = (l=0, q=0) (matching ReferencePeakFindingKernel
-        and notes/tree_dedispersion.tex).  Each kernel is built from adjacent
-        width-2^l boxcars: q=1 is the width-2^(l+1) boxcar, and q=2,q=3 are
-        trapezoids whose end taps are half-weighted.
-        """
+        """Returns a length-Pmax list of 1-d arrays, containing peak-finding kernels."""
         Lq = integer_log2(Wmax)       # = log2(Wmax) = number of levels carrying q=1,2,3 profiles
 
-        kernels, labels = [], []
-        kernels.append(np.ones(1));  labels.append((0, 0))   # p=0: finest single sample
-        for l in range(Lq):
-            w = 1 << l                                       # 2^l
+        kernels = [np.ones(1)]        # p=0: finest single sample (l=0, q=0)
+        for l in range(Lq):           # level l adds the three profiles p = 3l+q (q = 1, 2, 3)
+            w = 1 << l
             kernels.append(np.ones(2 * w))
-            labels.append((l, 1))
             kernels.append(np.concatenate([0.5 * np.ones(w), np.ones(w),     0.5 * np.ones(w)]))
-            labels.append((l, 2))
             kernels.append(np.concatenate([0.5 * np.ones(w), np.ones(2 * w), 0.5 * np.ones(w)]))
-            labels.append((l, 3))
 
         assert len(kernels) == 3 * Lq + 1
-        return kernels, labels
+        return kernels
 
     @staticmethod
     def _autocorr(a, maxlag):
-        """One-sided autocorrelation sum_t a[..., t] a[..., t+k] for lags k = 0..maxlag-1.
-
+        """
+        One-sided autocorrelation sum_t a[..., t] a[..., t+k] for lags k = 0..maxlag-1.
         Acts on the last axis (leading axes are spectators); needs 1 <= maxlag <= a.shape[-1].
-        Returns shape a.shape[:-1] + (maxlag,)."""
+        Returns shape a.shape[:-1] + (maxlag,).
+        """
+        
         a = np.asarray(a, dtype=np.float64)
         T = a.shape[-1]
         assert 1 <= maxlag <= T, (maxlag, T)
         return np.stack([(a[..., :T - k] * a[..., k:]).sum(axis=-1) for k in range(maxlag)], axis=-1)
 
-    @staticmethod
-    def _autocorr_table(kernels, Tmax):
-        """Table A[p, delta] = sum_t h_p[t] h_p[t+delta], for delta = 0 .. Tmax-1."""
-        A = np.zeros((len(kernels), Tmax))
-        for p, h in enumerate(kernels):
-            d = min(Tmax, len(h))                # lags >= len(h) vanish (kernel can't overlap itself)
-            A[p, :d] = PfVarianceConvolver._autocorr(h, d)
-        return A
-
     def variance(self, x, P):
-        """Var(h_p * x) for the first P profiles.  x: shape (..., T) -> out: shape (..., P)."""
+        """
+        Setup: x[..., T] is an array whose last index is time (other indices are spectators).
+        Returns an array of variances x[..., P] for the first P peak-finding kernels.
+
+        Formal definition (streamlining notation by removing spectator indices):
+          - x is a 1-d time series defined for 0 <= t < T
+          - convolve x with a unit Gaussian time series g, defined for -infty < t < infinity
+          - convolve with each peak-finding kernel h_p
+          - the resulting time series y_p = (x * g * h_p) is statistically time-translation
+             invariant; let V[p] be its variance (which is equal for each sample)
+          - this function computes x[t] -> V[p]
+        """
         x = np.asarray(x, dtype=np.float64)
         assert x.ndim >= 1
         assert 1 <= P <= self.Pmax, (P, self.Pmax)
@@ -136,7 +109,8 @@ class PfVarianceConvolver:
         """x = [1] (T=1) must reproduce ||h_p||^2 = {1, 2, 3/2, 5/2} * 2^l per profile."""
         pfv = PfVarianceConvolver()
         var = pfv.variance(np.array([1.0]), pfv.Pmax)    # (Pmax,) == A[:, 0] == ||h_p||^2
-        for p, (l, q) in enumerate(pfv.labels):
+        for p in range(pfv.Pmax):
+            l, q = (0, 0) if p == 0 else ((p - 1) // 3, (p - 1) % 3 + 1)   # invert p = 3l+q
             w = 1 << l
             want = {0: 1.0, 1: 2.0 * w, 2: 1.5 * w, 3: 2.5 * w}[q]
             assert abs(var[p] - want) < 1e-9, (p, l, q, var[p], want)
@@ -179,7 +153,7 @@ class PfVarianceConvolver:
             out_arg = np.zeros((1, J, nt_out), dtype=np.uint32)
             ker.apply(out_max, out_arg, in_, wt, 0)                  # one apply builds all temp arrays
 
-            kernels, labels = PfVarianceConvolver.peak_finding_kernels(Wmax)
+            kernels = PfVarianceConvolver.peak_finding_kernels(Wmax)
             assert len(kernels) == P, (Wmax, len(kernels), P)
 
             for p in range(P):
@@ -197,15 +171,17 @@ class PfVarianceConvolver:
                 hp = kernels[p]
                 ok = (ctrim.shape == hp.shape) and \
                      (np.allclose(ctrim, hp) or np.allclose(ctrim, hp[::-1]))
-                assert ok, (Wmax, p, labels[p], list(ctrim), list(hp))
+                assert ok, (Wmax, p, list(ctrim), list(hp))
 
 
 #######################################   class PfVariance   #######################################
 
 
 class PfVariance:
-    """Compressed peak-finding output variance var[d, p], for delay 0 <= d < 2^rank and
-    peak-finding profile 0 <= p < P (P is fixed by the convolver).
+    """
+    Represents a variance array var[d, p], for delay 0 <= d < 2^rank and peak-finding
+    profile 0 <= p < P (P is fixed by the convolver). Variance arrays with more indices
+    can be represented by building larger data structures that contain PfVariance objects.
 
     The variance is stored as a small sum of terms, each of which depends on the delay d
     through only a few of its bits.  A term is keyed by an integer bitmask 'dbits' (bit b set
