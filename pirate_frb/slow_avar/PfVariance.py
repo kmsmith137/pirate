@@ -254,39 +254,33 @@ class PfVariance:
         assert tile.nf == 1, "PfVariance.add_tile: tile must be a singleton (nf == 1)"
         assert tile.k == self.rank, (tile.k, self.rank)
         tile_var = convolver.variance(tile.data, self.P)[0]   # drop nf==1 axis -> (2^popcount, P)
-        self._accumulate(tile.dbits, tile_var)
+        self._accumulate(tile.dbits, tile_var, steal=True)    # tile_var is a fresh, unshared temporary
 
     def add(self, pfvar, upper_half=False, scale=1.0):
-        """Accumulate (scale * pfvar) into self.
-
-        Requires self.P <= pfvar.P; if pfvar has more profiles its p-axis is truncated to the first
-        self.P (the kernel bank is nested in P, so the truncation is the lower-P variance exactly).
-        Every accumulated term is multiplied by 'scale' (default 1.0).
-
-        If upper_half (which requires pfvar.rank == self.rank + 1), accumulate the logical UPPER
-        HALF of pfvar's delay axis: fix pfvar's top delay bit (bit self.rank) to 1 and drop it. A
-        term whose dbits lacks that bit is independent of it and added as-is; a term that depends on
-        it keeps only the upper half of its (highest-bit-first) array. This equals adding from a
-        tile specialized via specialize_dbits(1, 1, low=False), because variance is computed
-        independently per delay row.
         """
+        Accumulate (scale * pfvar) into self.
+        
+        If upper_half=True, accumulate the logical upper half of pfvar's delay axis,
+        i.e. fix the delay bit to 1 and drop it.
+
+        We require pfvar.rank = self.rank + (upper_half ? 1 : 0).
+        We require (self.P <= pfvar.P); extra profiles in pfvar are discarded.
+        """
+        assert self is not pfvar, "PfVariance.add: cannot add a PfVariance to itself"
         assert self.P <= pfvar.P, (self.P, pfvar.P)
         if not upper_half:
             assert pfvar.rank == self.rank, (pfvar.rank, self.rank)
             for dbits, arr in pfvar.terms.items():
-                arr = arr[:, :self.P]
-                self._accumulate(dbits, arr if scale == 1.0 else scale * arr)
+                self._accumulate(dbits, arr[:, :self.P], scale=scale)   # steal=False: arr is borrowed
             return
         assert pfvar.rank == self.rank + 1, (pfvar.rank, self.rank)
         topbit = 1 << self.rank                          # pfvar's extra (top) delay bit
         for dbits, arr in pfvar.terms.items():
             arr = arr[:, :self.P]
-            if scale != 1.0:
-                arr = scale * arr
             if dbits & topbit:                           # depends on the top bit (its array MSB):
-                self._accumulate(dbits & ~topbit, arr[arr.shape[0] // 2:])   # drop it, keep upper half
+                self._accumulate(dbits & ~topbit, arr[arr.shape[0] // 2:], scale=scale)  # upper half
             else:
-                self._accumulate(dbits, arr)             # independent of the top bit
+                self._accumulate(dbits, arr, scale=scale)               # independent of the top bit
 
     def add_spectator_low_bits(self, nbits):
         """Return a new PfVariance of rank (self.rank + nbits) that is independent of the new
@@ -298,16 +292,22 @@ class PfVariance:
             out._accumulate(dbits << nbits, arr)
         return out
 
-    def _accumulate(self, dbits, arr):
-        # Add the term (dbits -> arr), summing into any existing same-dbits term.
+    def _accumulate(self, dbits, arr, *, scale=1.0, steal=False):
+        # Accumulate (scale * arr) into term 'dbits', in-place (+=) when that term already exists.
+        # steal=True grants ownership of 'arr': a new term may alias it rather than copy, so the
+        # caller must pass a fresh array it will never reuse.  Callers passing a borrowed array
+        # (e.g. a view into another PfVariance) must leave steal=False so the new-term path copies
+        # -- otherwise a later in-place += here would corrupt the source.
         dbits = int(dbits)
         assert 0 <= dbits < (1 << self.rank), (dbits, self.rank)
-        assert arr.shape == (1 << dbits.bit_count(), self.P), \
-            (arr.shape, dbits, self.P)
+        assert arr.shape == (1 << dbits.bit_count(), self.P), (arr.shape, dbits, self.P)
+        arr = np.asarray(arr, dtype=np.float64)
         if dbits in self.terms:
-            self.terms[dbits] = self.terms[dbits] + arr
+            self.terms[dbits] += arr if scale == 1.0 else scale * arr
+        elif steal and scale == 1.0:
+            self.terms[dbits] = arr                          # take ownership (zero-copy alias)
         else:
-            self.terms[dbits] = np.array(arr, dtype=np.float64)   # copy (avoid aliasing)
+            self.terms[dbits] = np.array(arr) if scale == 1.0 else scale * arr   # owned copy
 
     @staticmethod
     def test_add_truncate_upper_half():
