@@ -398,47 +398,47 @@ class PfAvarExact:
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
+        self._tree_ids = np.array([t.ds_level for t in plan.trees])
 
         full_cm = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
 
-        self.per_tfm = []
-        for itree, tree in enumerate(plan.trees):
+        # per_tfm: (ntrees,nfreq,M) -> (length-M list of (PfVariance rank r-R, or None), or None)
+        # per_tm:  (ntrees,M) -> (PfVariance rank r-R)   [accumulated alongside per_tfm]
+        self.per_tfm = [ None ] * self.ntrees
+        self.per_tm = [ None ] * self.ntrees
+
+        for itree in range(self.ntrees):
+            rho = int(self.tree_r[itree] - self.tree_R[itree])
+            P, M = int(self.tree_P[itree]), self.tree_fs[itree].M
+            self.per_tfm[itree] = [ None ] * self.nfreq
+            self.per_tm[itree] = [ PfVariance(rho, P) for _ in range(M) ]
+
+        for itree in range(self.ntrees):
             if progress:
                 print(f"  PfAvarExact tree {itree}/{self.ntrees}: ", end="", flush=True)
-            self.per_tfm.append(self._make_per_fm(itree, tree, full_cm, progress))
+            self._process_tree(itree, full_cm, progress)
             if progress:
                 print(flush=True)
-        self.per_tm = [self._make_per_m(itree) for itree in range(self.ntrees)]
 
-    def _make_per_fm(self, itree, tree, full_cm, progress=False):
-        # per_fm[ifreq]: length-M list of (PfVariance or None) for tree itree, or None (no overlap).
-        fs, P, ids = self.tree_fs[itree], int(self.tree_P[itree]), tree.ds_level
+    def _process_tree(self, itree, full_cm, progress):
+        # Fill per_tfm[itree][ifreq] (length-M list of PfVariance/None, or None where ifreq is below
+        # the tree's truncated band) and accumulate per_tm[itree][m] += per_tfm[itree][ifreq][m].
+        fs, P, ids = self.tree_fs[itree], int(self.tree_P[itree]), int(self._tree_ids[itree])
         rho_cm = int(self.tree_r[itree]) + (ids > 0)   # = tree_r + (ids>0) = config.tree_rank - delta
         cm = np.ascontiguousarray(full_cm[: (1 << rho_cm) + 1])    # truncate to first 2^rho_cm channels
-        per_fm = []
+
         for ifreq in range(self.nfreq):
             if progress and (ifreq + 1) % 1000 == 0:
                 print(".", end="", flush=True)
             if not (ifreq < cm[0] and ifreq + 1 > cm[-1]):        # ifreq below the truncated band
-                per_fm.append(None)
                 continue
             ssa = SparseTilePerM.make_dedispersion_output(cm, ifreq, fs, upper_half_only=(ids > 0))
-            per_fm.append([None if t is None else PfVariance.from_tile(t, P, self.convolver)
-                           for t in ssa.per_m])
-        return per_fm
+            row = [None if t is None else PfVariance.from_tile(t, P, self.convolver) for t in ssa.per_m]
+            self.per_tfm[itree][ifreq] = row
 
-    def _make_per_m(self, itree):
-        # per_m[m]: frequency-summed PfVariance for tree itree, multiplet m.
-        rho = int(self.tree_r[itree]) - int(self.tree_R[itree])
-        P, per_fm = int(self.tree_P[itree]), self.per_tfm[itree]
-        per_m = []
-        for m in range(self.tree_fs[itree].M):
-            acc = PfVariance(rho, P)
-            for row in per_fm:
-                if row is not None and row[m] is not None:
-                    acc.add(row[m])
-            per_m.append(acc)
-        return per_m
+            for m, pv in enumerate(row):
+                if pv is not None:
+                    self.per_tm[itree][m].add(pv)
 
 
 ###################################   class PfAvarApproximation   ##################################
