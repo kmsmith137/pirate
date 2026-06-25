@@ -30,9 +30,10 @@ class PfVarianceConvolver:
     @staticmethod
     def peak_finding_kernels(Wmax):
         """Returns a length-Pmax list of 1-d arrays, containing peak-finding kernels."""
+        
         Lq = integer_log2(Wmax)       # = log2(Wmax) = number of levels carrying q=1,2,3 profiles
-
         kernels = [np.ones(1)]        # p=0: finest single sample (l=0, q=0)
+        
         for l in range(Lq):           # level l adds the three profiles p = 3l+q (q = 1, 2, 3)
             w = 1 << l
             kernels.append(np.ones(2 * w))
@@ -297,11 +298,13 @@ class PfVariance:
         arr = np.asarray(arr, dtype=np.float64)
         
         if dbits in self.terms:
-            self.terms[dbits] += arr if scale == 1.0 else (scale * arr)
-        elif steal and scale == 1.0:
-            self.terms[dbits] = arr                          # take ownership (zero-copy alias)
+            self.terms[dbits] += arr if (scale == 1.0) else (scale * arr)
+        elif not steal:
+            self.terms[dbits] = np.array(arr) if scale == 1.0 else (scale * arr)
         else:
-            self.terms[dbits] = np.array(arr) if scale == 1.0 else scale * arr   # owned copy
+            if (scale != 1.0):
+                arr *= scale
+            self.terms[dbits] = arr  # steal it
 
     
     # ---------------------------------------------------------------------------
