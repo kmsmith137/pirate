@@ -22,6 +22,7 @@ about len(x) -- after which variance(x, P) is a small matmul over the first P pr
 import numpy as np
 
 from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
+from ..utils import integer_log2
 
 
 ###################################   class PfVarianceConvolver   ##################################
@@ -56,9 +57,7 @@ class PfVarianceConvolver:
         width-2^l boxcars: q=1 is the width-2^(l+1) boxcar, and q=2,q=3 are
         trapezoids whose end taps are half-weighted.
         """
-        Wmax = int(Wmax)
-        assert Wmax >= 1 and (Wmax & (Wmax - 1)) == 0, "Wmax must be a power of two >= 1"
-        Lq = Wmax.bit_length() - 1    # = log2(Wmax) = number of levels carrying q=1,2,3 profiles
+        Lq = integer_log2(Wmax)       # = log2(Wmax) = number of levels carrying q=1,2,3 profiles
 
         kernels, labels = [], []
         kernels.append(np.ones(1));  labels.append((0, 0))   # p=0: finest single sample
@@ -507,7 +506,7 @@ class PfAvarApproximation:
         # tree_r[itree] = amb_rank + early_dd_rank (= config.tree_rank - delta - (ids>0 ? 1 : 0))
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
-        self.tree_L = np.array([int(t.pf.wt_dm_downsampling).bit_length() - 1 for t in plan.trees])
+        self.tree_L = np.array([integer_log2(int(t.pf.wt_dm_downsampling)) for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
         self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
@@ -516,8 +515,7 @@ class PfAvarApproximation:
         self._tree_ids = [int(t.ds_level > 0) for t in plan.trees]
         self._tree_klevel = []
         for itree, t in enumerate(plan.trees):
-            wt = int(t.pf.wt_dm_downsampling)
-            assert wt == (1 << int(self.tree_L[itree])), "wt_dm_downsampling must be a power of two"
+            # (tree_L's integer_log2 already enforced wt_dm_downsampling is a power of two.)
             assert 0 <= self.tree_R[itree] <= self.tree_L[itree] <= self.tree_r[itree], \
                 (itree, int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_r[itree]))
             rho_cm = int(self.tree_r[itree]) + self._tree_ids[itree]

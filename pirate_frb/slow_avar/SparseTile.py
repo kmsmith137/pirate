@@ -1,5 +1,7 @@
 import numpy as np
 
+from ..utils import integer_log2
+
 
 #######################################   class SparseTile   #######################################
 
@@ -497,8 +499,7 @@ class SparseTileTriple:
         """
         cm = np.ascontiguousarray(channel_map, dtype=np.float64)
         nchan = len(cm) - 1
-        r = nchan.bit_length() - 1
-        assert r >= 0 and nchan == (1 << r), "channel_map length must be 2^rank + 1"
+        r = integer_log2(nchan)        # channel_map length must be 2^rank + 1
         assert np.all(np.diff(cm) < 0.0), "channel_map must be strictly decreasing"
         ifreq = int(ifreq)
         assert ifreq >= 0
@@ -715,7 +716,7 @@ class SparseTilePerM:
         subs = []
         for f in range(fs.F):
             ilo, ihi = int(fs.f_to_ilo[f]), int(fs.f_to_ihi[f])
-            l = (ihi - ilo).bit_length() - 1               # band width is 2^l
+            l = integer_log2(ihi - ilo)                    # band width is 2^l
             f_blk = ilo >> l                               # coarse block index
             case1 = (ilo & ((1 << l) - 1)) == 0            # aligned (always true for l==0)
             subs.append((l, f_blk, case1, int(fs.f_to_mbase[f])))
@@ -755,7 +756,7 @@ class SparseTilePerM:
 
         cm = np.ascontiguousarray(channel_map, dtype=np.float64)
         ntree = len(cm) - 1
-        r = ntree.bit_length() - 1
+        r = integer_log2(ntree)
         sc = [int(c) for c in subband_counts]
         R = len(sc) - 1
         assert R <= r
@@ -797,7 +798,7 @@ class SparseTilePerM:
     def test_random_subbanded_dedispersion():
         from ..pirate_pybind11 import FrequencySubbands
         cm, ifreq = SparseTileTriple.random_channel_map()
-        r = (len(cm) - 1).bit_length() - 1
+        r = integer_log2(len(cm) - 1)
         R = int(np.random.randint(0, min(r, 4) + 1))    # pf_rank <= min(r, 4)
         sc = [int(c) for c in FrequencySubbands.make_random_subband_counts(R)]
         upper = bool(np.random.randint(0, 2))
