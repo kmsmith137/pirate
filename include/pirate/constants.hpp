@@ -9,6 +9,10 @@ namespace pirate {
 
 struct constants
 {
+    // REMINDER: selected constants here are exposed to python as pirate_frb.constants.<name>,
+    // via the py::class_<constants> block in src_pybind11/pirate_pybind11.cpp (read-only). If you
+    // add a constant that should be visible from python, add a def_readonly_static() line there too.
+
     static constexpr int bytes_per_gpu_cache_line = 128;
     
     // Currently all Dedispersers are two-stage, and each stage has rank <= 8,

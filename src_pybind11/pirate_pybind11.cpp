@@ -17,6 +17,7 @@
 
 #include <ksgpu/pybind11.hpp>
 
+#include "../include/pirate/constants.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
@@ -59,8 +60,21 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     register_loose_ends_bindings(m);
     register_utils_bindings(m);
 
+    // pirate::constants, exposed to python as pirate_frb.constants.<name>. Bound as a (never-
+    // instantiated) class with read-only static properties, so assignment raises AttributeError.
+    // When adding a constant here, also update include/pirate/constants.hpp's reminder.
+    py::class_<constants>(m, "constants",
+        "Compile-time constants (pirate::constants). Read-only; assignment raises AttributeError.")
+        .def_readonly_static("max_tree_rank", &constants::max_tree_rank,
+            "Maximum dedispersion tree rank (number of tree channels is 2^tree_rank).")
+        .def_readonly_static("max_downsampling_level", &constants::max_downsampling_level,
+            "Maximum number of downsampling levels.")
+        .def_readonly_static("max_pf_width", &constants::max_pf_width,
+            "Maximum peak-finding kernel width (PeakFindingConfig::max_width), in tree time samples.")
+    ;
+
     // Main dedispersion classes defined here
-    
+
     py::class_<DedispersionConfig>(m, "DedispersionConfig",
         "Configuration for dedispersion processing.\n\n"
         "Specifies frequency channels, time samples, dedispersion tree parameters,\n"
