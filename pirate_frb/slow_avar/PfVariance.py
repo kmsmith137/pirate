@@ -524,11 +524,15 @@ class PfAvarApproximation:
 
         full_cm = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
 
-        # per_tff[itree][ifreq]: length-2^R list (PfVariance rank r-L, or None).
-        # per_tf[itree][f]: length-2^R list (PfVariance rank r-L)
-        self.per_tff = [[None] * self.nfreq for _ in range(self.ntrees)]
-        self.per_tf = [[PfVariance(int(r) - int(L), int(P)) for _ in range(1 << int(R))]
-                       for r, R, L, P in zip(self.tree_r, self.tree_R, self.tree_L, self.tree_P)]
+        # per_tff: (ntrees,nfreq,2^R) -> (PfVariance rank r-L, or None)
+        # per_tf:  (ntrees,2^R) -> (PfVariance rank r-L)
+        self.per_tff = [ None ] * self.ntrees
+        self.per_tf = [ None ] * self.ntrees
+
+        for itree in range(self.ntrees):
+            r, R, L, P = self.tree_r[itree], self.tree_R[itree], self.tree_L[itree], self.tree_P[itree]
+            self.per_tff[itree] = [ [None]*(1<<R) for _ in range(self.nfreq) ]
+            self.per_tf[itree] = [ PfVariance(r-L,P) for _ in range(1 << R) ]
 
         for ifreq in range(self.nfreq):
             if progress and (ifreq + 1) % 1000 == 0:
@@ -555,37 +559,39 @@ class PfAvarApproximation:
         P_shared = int(max(self.tree_P[itree] for itree in trees_k))
         nfp = 1 << int(max(self.tree_L[itree] for itree in trees_k))
         pv_fp = [None] * nfp
+        
         for fp in range(nfp):
             tile = sarr.get_singleton(fp, allow_none=True)
             if tile is not None:
                 pv_fp[fp] = PfVariance.from_tile(tile, P_shared, self.convolver)
 
         for itree in trees_k:
-            pv = self._coarsify_row(pv_fp, itree)          # list of 2^R (PfVariance or None)
-            self.per_tff[itree][ifreq] = pv
-            for f, x in enumerate(pv):
-                if x is not None:
-                    self.per_tf[itree][f].add(x)
+            pv_row = self._coarsify_row(pv_fp, itree)          # list of 2^R (PfVariance or None)
+            for f, pv in enumerate(pv_row):
+                if pv is not None:
+                    self.per_tff[itree][ifreq][f] = pv
+                    self.per_tf[itree][f].add(pv)
         
     
     def _coarsify_row(self, pv_fp, itree):
         # Coarsify the shared per-sub-block PfVariances into tree itree's 2^R coarse-freqs:
         # f = f' >> (L-R), mean over its 2^(L-R) sub-blocks (scaled by 2^-(L-R)). add() truncates
         # the p-axis to this tree's P and (ids>0) keeps the upper DM half (rank rho_cm-L -> r-L).
-        R, L, ids = int(self.tree_R[itree]), int(self.tree_L[itree]), self._tree_ids[itree]
+        
+        R, L, ids = int(self.tree_R[itree]), int(self.tree_L[itree]), int(self._tree_ids[itree])
         P = int(self.tree_P[itree])
-        rho = int(self.tree_r[itree]) - L                       # PfVariance rank = r - L  (== klevel - ids)
+        rho = int(self.tree_r[itree]) - L                   # PfVariance rank = r - L  (== klevel - ids)
         norm = 2.0 ** (-(L - R))                            # DD normalization: sub-block-variance mean
-        row = [None] * (1 << R)
+        pv_row = [None] * (1 << R)
         for fp in range(1 << L):                            # sub-block coarse-freq f'
             pv = pv_fp[fp]
             if pv is None:
                 continue
             f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
-            if row[f] is None:
-                row[f] = PfVariance(rho, P)
-            row[f].add(pv, upper_half=(ids > 0))            # sum sub-block variances (upper half if ids)
-        return [None if pv is None else pv.scaled(norm) for pv in row]   # ... then mean (2^-(L-R))
+            if pv_row[f] is None:
+                pv_row[f] = PfVariance(rho, P)
+            pv_row[f].add(pv, upper_half=(ids > 0))            # sum sub-block variances (upper half if ids)
+        return [None if pv is None else pv.scaled(norm) for pv in pv_row]   # ... then mean (2^-(L-R))
 
     
     def get_per_fm(self, itree, ifreq, m):
