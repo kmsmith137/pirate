@@ -18,7 +18,7 @@ from . import core
 from . import tests
 from . import slow_avar
 
-from .slow_avar import SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver
+from .slow_avar import SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver, PfVariance
 
 from . import (
     DedispersionConfig,
@@ -153,6 +153,7 @@ def test(args):
             SparseTilePerM.test_random_subbanded_dedispersion()
             PfVarianceConvolver.test_reduces_to_norms()
             PfVarianceConvolver.test_random_variance()
+            PfVariance.test_add_truncate_upper_half()
             if i == 0:  # deterministic (no randomness); run once
                 PfVarianceConvolver.test_kernels_match_reference()
 

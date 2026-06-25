@@ -24,6 +24,8 @@ import numpy as np
 from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
 
 
+###################################   class PfVarianceConvolver   ##################################
+
 class PfVarianceConvolver:
     """Computes Var(h_p * x) for the peak-finding profiles p, given a short kernel x.
 
@@ -192,6 +194,8 @@ class PfVarianceConvolver:
                 assert ok, (Wmax, p, labels[p], list(ctrim), list(hp))
 
 
+#######################################   class PfVariance   #######################################
+
 class PfVariance:
     """Compressed peak-finding output variance var[d, p], for delay 0 <= d < 2^rank and
     peak-finding profile 0 <= p < P (P is fixed by the convolver).
@@ -269,12 +273,33 @@ class PfVariance:
         tile_var = convolver.variance(tile.data, self.P)[0]   # drop nf==1 axis -> (2^popcount, P)
         self._accumulate(tile.dbits, tile_var)
 
-    def add(self, pfvar):
-        """Accumulate all terms of another PfVariance into self."""
-        assert pfvar.rank == self.rank, (pfvar.rank, self.rank)
-        assert pfvar.P == self.P, (pfvar.P, self.P)
+    def add(self, pfvar, upper_half=False):
+        """Accumulate another PfVariance into self.
+
+        Requires self.P <= pfvar.P; if pfvar has more profiles its p-axis is truncated to the first
+        self.P (the kernel bank is nested in P, so the truncation is the lower-P variance exactly).
+
+        If upper_half (which requires pfvar.rank == self.rank + 1), accumulate the logical UPPER
+        HALF of pfvar's delay axis: fix pfvar's top delay bit (bit self.rank) to 1 and drop it. A
+        term whose dbits lacks that bit is independent of it and added as-is; a term that depends on
+        it keeps only the upper half of its (highest-bit-first) array. This equals adding from a
+        tile specialized via specialize_dbits(1, 1, low=False), because variance is computed
+        independently per delay row.
+        """
+        assert self.P <= pfvar.P, (self.P, pfvar.P)
+        if not upper_half:
+            assert pfvar.rank == self.rank, (pfvar.rank, self.rank)
+            for dbits, arr in pfvar.terms.items():
+                self._accumulate(dbits, arr[:, :self.P])
+            return
+        assert pfvar.rank == self.rank + 1, (pfvar.rank, self.rank)
+        topbit = 1 << self.rank                          # pfvar's extra (top) delay bit
         for dbits, arr in pfvar.terms.items():
-            self._accumulate(dbits, arr)
+            arr = arr[:, :self.P]
+            if dbits & topbit:                           # depends on the top bit (its array MSB):
+                self._accumulate(dbits & ~topbit, arr[arr.shape[0] // 2:])   # drop it, keep upper half
+            else:
+                self._accumulate(dbits, arr)             # independent of the top bit
 
     def scaled(self, c):
         """Return a new PfVariance (same rank/P) with every term multiplied by c."""
@@ -304,6 +329,35 @@ class PfVariance:
         else:
             self.terms[dbits] = np.array(arr, dtype=np.float64)   # copy (avoid aliasing)
 
+    @staticmethod
+    def test_add_truncate_upper_half():
+        """add(): p-truncation (self.P <= pfvar.P) and upper_half match the per-tile path.
+
+        A PfVariance built from a raw singleton at the larger P_shared, accumulated with
+        truncation (and optionally upper_half), must equal building at the smaller P directly from
+        the raw tile -- resp. from its specialize_dbits(1, 1, low=False) upper half. This is the
+        hoist PfAvarApproximation relies on (per-sub-block variance built once, shared across trees
+        that then truncate P and take the upper DM half in add())."""
+        conv = PfVarianceConvolver()
+        k = int(np.random.randint(1, 6))                  # k >= 1 for the upper-half case
+        tile = SparseTile.make_random(k, k, 0, 1)         # singleton, rank k
+        P1 = int(np.random.randint(1, conv.Pmax + 1))     # a tree's P
+        P2 = int(np.random.randint(P1, conv.Pmax + 1))    # shared P >= P1
+        pv = PfVariance.from_tile(tile, P2, conv)          # shared, built at P2
+
+        # ids=0: add with p-truncation P2 -> P1, vs add_tile at P1.
+        a_new = PfVariance(k, P1); a_new.add(pv)
+        a_old = PfVariance(k, P1); a_old.add_tile(tile, conv)
+        assert np.allclose(a_new.unpack(tile.dbits), a_old.unpack(tile.dbits)), (k, P1, P2)
+
+        # ids>0: add(upper_half) + truncation, vs specialize_dbits(1, 1, low=False) + add_tile.
+        spec = tile.specialize_dbits(1, 1, low=False)
+        b_new = PfVariance(k - 1, P1); b_new.add(pv, upper_half=True)
+        b_old = PfVariance(k - 1, P1); b_old.add_tile(spec, conv)
+        assert np.allclose(b_new.unpack(spec.dbits), b_old.unpack(spec.dbits)), (k, P1, P2)
+
+
+#######################################   class PfAvarExact   ######################################
 
 class PfAvarExact:
     """Exact analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
@@ -387,6 +441,8 @@ class PfAvarExact:
         return per_m
 
 
+###################################   class PfAvarApproximation   ##################################
+
 class PfAvarApproximation:
     """Approximate analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
 
@@ -408,9 +464,12 @@ class PfAvarApproximation:
     A single full-band (rank config.tree_rank) gridding SparseTileTriple is iterated ONCE per input
     freq channel and shared across all trees: the iteration is rank-agnostic and footprint-local,
     and a tree's truncated channel map is a prefix of the full one, so the first 2^L sub-blocks at
-    level klevel reproduce the truncated tree's sub-blocks exactly. Per tree at extraction: take
-    those 2^L sub-blocks; for ids>0, specialize_dbits(1,1,low=False) keeps the upper coarse-DM half
-    (rank rho_cm-L -> r-L); then coarsify-mean into 2^R coarse-freqs.
+    level klevel reproduce the truncated tree's sub-blocks exactly. At each level the RAW sub-block
+    singletons are converted to PfVariance ONCE (at the max P over the trees at that level) and
+    shared across those trees; each tree then coarsify-means them into its 2^R coarse-freqs via
+    PfVariance.add(upper_half=ids>0), which truncates the p-axis to the tree's P and (for ids>0)
+    keeps the upper coarse-DM half (rank rho_cm-L -> r-L) -- equivalent to specializing each tile,
+    but with the expensive variance evaluated once per level instead of once per tree.
 
     Per-multiplet variances are reconstructed on demand (get_per_fm / get_per_m): a multiplet m
     spans a coarse-freq range [ilo, ihi) (= fs.m_to_ilo(m)..m_to_ihi(m)); its variance is the
@@ -468,8 +527,9 @@ class PfAvarApproximation:
 
     def _make_per_tff(self, full_cm, progress=False):
         # per_tff[itree][ifreq]: length-2^R[itree] list of (PfVariance rank r-L, or None). One full-
-        # band (rank config.tree_rank) gridding SparseTileTriple is iterated ONCE per ifreq and
-        # shared across trees; each tree extracts at its own level klevel = rho_cm - L.
+        # band (rank config.tree_rank) gridding SparseTileTriple is iterated ONCE per ifreq; at each
+        # level k the raw sub-block singletons are converted to PfVariance ONCE (shared across all
+        # trees at that level, klevel == k) and each tree coarsify-means them into its row.
         max_k = max(self._klevel)
         trees_at = {}                                     # level k -> [itree, ...]
         for itree, k in enumerate(self._klevel):
@@ -480,31 +540,47 @@ class PfAvarApproximation:
                 print(".", end="", flush=True)
             sarr = SparseTileTriple.make_tree_gridding_output(full_cm, ifreq)   # rank K, level 0
             for k in range(0, max_k + 1):
-                for itree in trees_at.get(k, ()):
-                    per_tff[itree][ifreq] = self._extract_row(sarr, itree)
+                trees_k = trees_at.get(k, ())
+                if trees_k:
+                    pv_fp = self._sub_block_variances(sarr, trees_k)   # shared across trees_k
+                    for itree in trees_k:
+                        per_tff[itree][ifreq] = self._coarsify_row(pv_fp, itree)
                 if k < max_k:
                     sarr = sarr.iterate()
         return per_tff
 
-    def _extract_row(self, sarr, itree):
-        # Extract tree itree's coarse-freq row from the shared SparseTileTriple at level klevel:
-        # take the first 2^L sub-blocks f', (ids>0) keep their upper DM half, coarsify-mean into
-        # 2^R coarse-freqs f = f' >> (L-R). See the class docstring.
+    def _sub_block_variances(self, sarr, trees_k):
+        # Convert each RAW sub-block singleton at the current level to a PfVariance ONCE, shared
+        # across all trees in trees_k (all have klevel == this level). Built at the max P over
+        # trees_k and without any upper-half specialization; each tree's _coarsify_row truncates the
+        # p-axis to its own P and (ids>0) takes the upper DM half via PfVariance.add(). pv_fp[fp] is
+        # None for sub-blocks outside the gridding footprint.
+        P_shared = int(max(self.P[itree] for itree in trees_k))
+        nfp = 1 << int(max(self.L[itree] for itree in trees_k))
+        pv_fp = [None] * nfp
+        for fp in range(nfp):
+            tile = sarr.get_singleton(fp, allow_none=True)
+            if tile is not None:
+                pv_fp[fp] = PfVariance.from_tile(tile, P_shared, self.convolver)
+        return pv_fp
+
+    def _coarsify_row(self, pv_fp, itree):
+        # Coarsify the shared per-sub-block PfVariances into tree itree's 2^R coarse-freqs:
+        # f = f' >> (L-R), mean over its 2^(L-R) sub-blocks (scaled by 2^-(L-R)). add() truncates
+        # the p-axis to this tree's P and (ids>0) keeps the upper DM half (rank rho_cm-L -> r-L).
         R, L, ids = int(self.R[itree]), int(self.L[itree]), self._ids[itree]
         P = int(self.P[itree])
-        rho = int(self.r[itree]) - L                       # PfVariance rank = r - L
+        rho = int(self.r[itree]) - L                       # PfVariance rank = r - L  (== klevel - ids)
         norm = 2.0 ** (-(L - R))                            # DD normalization: sub-block-variance mean
         row = [None] * (1 << R)
         for fp in range(1 << L):                            # sub-block coarse-freq f'
-            tile = sarr.get_singleton(fp, allow_none=True)  # rank-(rho_cm-L) singleton, or None
-            if tile is None:
+            pv = pv_fp[fp]
+            if pv is None:
                 continue
-            if ids:
-                tile = tile.specialize_dbits(1, 1, low=False)   # keep upper DM half -> rank r-L
             f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
             if row[f] is None:
                 row[f] = PfVariance(rho, P)
-            row[f].add_tile(tile, self.convolver)           # sum the sub-block variances ...
+            row[f].add(pv, upper_half=(ids > 0))            # sum sub-block variances (upper half if ids)
         return [None if pv is None else pv.scaled(norm) for pv in row]   # ... then mean (2^-(L-R))
 
     def _make_per_tf(self, itree):

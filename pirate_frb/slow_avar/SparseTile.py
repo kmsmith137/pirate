@@ -1,6 +1,8 @@
 import numpy as np
 
 
+#######################################   class SparseTile   #######################################
+
 class SparseTile:
     """
     A contiguous f-index range of a tree-dedispersion array of shape (2^(r-k), 2^k, ntime),
@@ -426,6 +428,8 @@ class SparseTile:
             ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["d_hi", "time"], epsabs=0.0)
 
 
+####################################   class SparseTileTriple   ####################################
+
 class SparseTileTriple:
     """
     A tree-dedispersion array of shape (2^(r-k), 2^k, ntime) over a contiguous f-index
@@ -610,6 +614,8 @@ class SparseTileTriple:
         cm, ifreq = SparseTileTriple.random_channel_map()
         SparseTileTriple.test_one_tree_gridding(cm, ifreq)
 
+
+#####################################   class SparseTilePerM   #####################################
 
 class SparseTilePerM:
     """
