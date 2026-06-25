@@ -74,13 +74,23 @@ class PfVarianceConvolver:
         return kernels, labels
 
     @staticmethod
+    def _autocorr(a, maxlag):
+        """One-sided autocorrelation sum_t a[..., t] a[..., t+k] for lags k = 0..maxlag-1.
+
+        Acts on the last axis (leading axes are spectators); needs 1 <= maxlag <= a.shape[-1].
+        Returns shape a.shape[:-1] + (maxlag,)."""
+        a = np.asarray(a, dtype=np.float64)
+        T = a.shape[-1]
+        assert 1 <= maxlag <= T, (maxlag, T)
+        return np.stack([(a[..., :T - k] * a[..., k:]).sum(axis=-1) for k in range(maxlag)], axis=-1)
+
+    @staticmethod
     def _autocorr_table(kernels, Tmax):
         """Table A[p, delta] = sum_t h_p[t] h_p[t+delta], for delta = 0 .. Tmax-1."""
         A = np.zeros((len(kernels), Tmax))
         for p, h in enumerate(kernels):
-            n = len(h)
-            for delta in range(min(Tmax, n)):    # min == n here (Tmax >= longest kernel)
-                A[p, delta] = float(h[:n - delta] @ h[delta:])
+            d = min(Tmax, len(h))                # lags >= len(h) vanish (kernel can't overlap itself)
+            A[p, :d] = PfVarianceConvolver._autocorr(h, d)
         return A
 
     def variance(self, x, P):
@@ -92,12 +102,10 @@ class PfVarianceConvolver:
         assert T >= 1
         d = min(T, int(self.Tmax[P - 1]))   # longest kernel among the first P profiles
 
-        # One-sided autocorrelation of x, lags 0..d-1, over the last axis
-        # (leading/spectator axes broadcast through the sum).
-        rho = np.stack([(x[..., :T - k] * x[..., k:]).sum(axis=-1) for k in range(d)], axis=-1)  # (..., d)
-        rho[..., 1:] *= 2.0          # +/- delta symmetry of R_x
+        rho = self._autocorr(x, d)           # (..., d)
+        rho[..., 1:] *= 2.0                  # +/- delta symmetry of R_x
 
-        return rho @ self.A[:P, :d].T  # (..., d) @ (d, P) -> (..., P)
+        return rho @ self.A[:P, :d].T        # (..., d) @ (d, P) -> (..., P)
 
     # ---------------------------------------------------------------------------
     # Tests (dispatched from pirate_frb/__main__.py via 'test --avar').
