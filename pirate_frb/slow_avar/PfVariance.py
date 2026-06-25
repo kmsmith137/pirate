@@ -12,12 +12,11 @@ noise through a kernel k has variance ||k||^2,
 
     Var(z_p) = ||h_p * x||^2 = sum_delta R_x[delta] R_{h_p}[delta],
 
-where R_a[delta] = sum_t a[t] a[t+delta] is the (auto)correlation.  Only lags
-|delta| < min(T, 2*Wmax) contribute: R_x vanishes past T = len(x), and R_{h_p}
-vanishes past the longest kernel (length 2*Wmax).  We precompute the kernel
-autocorrelations once into a table of width Tmax = 2*Wmax -- this captures every
-kernel's autocorrelation in full, with no assumption about len(x) -- after which
-each call is a small matmul.
+where R_a[delta] = sum_t a[t] a[t+delta] is the (auto)correlation.  For profile p only lags
+|delta| < min(T, len(h_p)) contribute: R_x vanishes past T = len(x), and R_{h_p} past the
+kernel length.  We build the full kernel bank (out to constants.max_pf_width) and precompute
+every kernel's autocorrelation once into a table -- capturing each in full, with no assumption
+about len(x) -- after which variance(x, P) is a small matmul over the first P profiles.
 """
 
 import numpy as np
@@ -26,20 +25,22 @@ from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
 
 
 class PfVarianceConvolver:
-    """Computes Var(h_p * x) for each peak-finding profile p, given a short kernel x.
+    """Computes Var(h_p * x) for the peak-finding profiles p, given a short kernel x.
 
-    Construct once for a given max_kernel_width Wmax (which fixes the kernel bank
-    and the number of profiles P = 3*log2(Wmax) + 1), then call variance() many
-    times.  variance() maps an input of shape (..., T) to output (..., P), with
-    the leading axes treated as spectators.
+    Constructs the full kernel bank out to constants.max_pf_width (Pmax = 3*log2(max_pf_width)+1
+    profiles); call variance(x, P) for the first P profiles.  The bank is nested in P (each kernel
+    depends only on its (level, shape), not the max width), so the first P profiles are exactly the
+    bank of a peak-finder with P = 3*log2(Wmax)+1 profiles.  variance() maps an input of shape
+    (..., T) to output (..., P), with the leading axes treated as spectators.
     """
 
-    def __init__(self, Wmax):
-        self.Wmax = int(Wmax)
-        self.kernels, self.labels = self.peak_finding_kernels(self.Wmax)
-        self.P = len(self.kernels)
-        self.Tmax = 2 * self.Wmax     # covers the longest kernel (len 2*Wmax) in full
-        self.A = self._autocorr_table(self.kernels, self.Tmax)   # (P, Tmax); A[p,0] = ||h_p||^2
+    def __init__(self):
+        from ..pirate_pybind11 import constants    # lazy: keep this module's top level pybind-free
+        self.kernels, self.labels = self.peak_finding_kernels(int(constants.max_pf_width))
+        self.Pmax = len(self.kernels)              # = 3*log2(max_pf_width)+1
+        self.Tmax = np.array([len(h) for h in self.kernels], dtype=np.int64)  # per-profile autocorr extent
+        assert np.all(np.diff(self.Tmax) >= 0)     # non-decreasing -> Tmax[P-1] == max(Tmax[:P])
+        self.A = self._autocorr_table(self.kernels, int(self.Tmax[-1]))   # (Pmax, 2*max_pf_width)
 
     @staticmethod
     def peak_finding_kernels(Wmax):
@@ -80,55 +81,58 @@ class PfVarianceConvolver:
                 A[p, delta] = float(h[:n - delta] @ h[delta:])
         return A
 
-    def variance(self, x):
-        """Var(h_p * x) for each profile p.  x: shape (..., T) -> out: shape (..., P)."""
+    def variance(self, x, P):
+        """Var(h_p * x) for the first P profiles.  x: shape (..., T) -> out: shape (..., P)."""
         x = np.asarray(x, dtype=np.float64)
         assert x.ndim >= 1
+        assert 1 <= P <= self.Pmax, (P, self.Pmax)
         T = x.shape[-1]
         assert T >= 1
-        d = min(T, self.Tmax)        # number of lags that can be nonzero
+        d = min(T, int(self.Tmax[P - 1]))   # longest kernel among the first P profiles
 
         # One-sided autocorrelation of x, lags 0..d-1, over the last axis
         # (leading/spectator axes broadcast through the sum).
         rho = np.stack([(x[..., :T - k] * x[..., k:]).sum(axis=-1) for k in range(d)], axis=-1)  # (..., d)
         rho[..., 1:] *= 2.0          # +/- delta symmetry of R_x
 
-        return rho @ self.A[:, :d].T  # (..., d) @ (d, P) -> (..., P)
+        return rho @ self.A[:P, :d].T  # (..., d) @ (d, P) -> (..., P)
 
     # ---------------------------------------------------------------------------
     # Tests (dispatched from pirate_frb/__main__.py via 'test --avar').
 
     @staticmethod
     def test_random_variance():
-        """Compare variance() to brute-force ||h_p * x||^2, with random spectators/T/Wmax."""
-        Wmax = 1 << np.random.randint(0, 6)              # one of 1,2,4,8,16,32
-        pfv = PfVarianceConvolver(Wmax)
+        """Compare variance(x, P) to brute-force ||h_p * x||^2, with random spectators/T/P."""
+        pfv = PfVarianceConvolver()
+        P = int(np.random.randint(1, pfv.Pmax + 1))      # 1..Pmax
 
         shape = tuple(int(s) for s in np.random.randint(1, 4, size=np.random.randint(1, 4)))
-        T = int(np.random.randint(1, 13))               # includes T > 2*Wmax for small Wmax
+        T = int(np.random.randint(1, 13))               # spans T < and >= Tmax[P-1]
         x = np.random.standard_normal(shape + (T,))
 
-        got = pfv.variance(x)
-        want = np.empty(shape + (pfv.P,))
+        got = pfv.variance(x, P)
+        want = np.empty(shape + (P,))
         for idx in np.ndindex(*shape):
-            for p, h in enumerate(pfv.kernels):
-                k = np.convolve(h, x[idx])
+            for p in range(P):
+                k = np.convolve(pfv.kernels[p], x[idx])
                 want[idx + (p,)] = float((k * k).sum())
 
         assert got.shape == want.shape, (got.shape, want.shape)
         assert np.allclose(got, want, rtol=1e-9, atol=1e-12), \
-            (Wmax, shape, T, float(np.abs(got - want).max()))
+            (P, shape, T, float(np.abs(got - want).max()))
 
     @staticmethod
     def test_reduces_to_norms():
         """x = [1] (T=1) must reproduce ||h_p||^2 = {1, 2, 3/2, 5/2} * 2^l per profile."""
-        for Wmax in [1, 2, 4, 8, 16, 32]:
-            pfv = PfVarianceConvolver(Wmax)
-            var = pfv.variance(np.array([1.0]))          # shape (P,) == A[:, 0] == ||h_p||^2
-            for p, (l, q) in enumerate(pfv.labels):
-                w = 1 << l
-                want = {0: 1.0, 1: 2.0 * w, 2: 1.5 * w, 3: 2.5 * w}[q]
-                assert abs(var[p] - want) < 1e-9, (Wmax, p, l, q, var[p], want)
+        pfv = PfVarianceConvolver()
+        var = pfv.variance(np.array([1.0]), pfv.Pmax)    # (Pmax,) == A[:, 0] == ||h_p||^2
+        for p, (l, q) in enumerate(pfv.labels):
+            w = 1 << l
+            want = {0: 1.0, 1: 2.0 * w, 2: 1.5 * w, 3: 2.5 * w}[q]
+            assert abs(var[p] - want) < 1e-9, (p, l, q, var[p], want)
+        # P-slicing: variance(x, P) is the length-P prefix of variance(x, Pmax).
+        for P in [1, 4, 7, 13, pfv.Pmax]:
+            assert np.allclose(pfv.variance(np.array([1.0]), P), var[:P]), P
 
     @staticmethod
     def test_kernels_match_reference():
@@ -206,25 +210,25 @@ class PfVariance:
     Members
     -------
       rank:      number of delay bits (delays run over 0 <= d < 2^rank).
-      convolver: PfVarianceConvolver defining the P peak-finding profiles.
+      P:         number of peak-finding profiles (each term's last axis has length P).
       terms:     dict mapping dbits (int bitmask) -> ndarray of shape (2^popcount(dbits), P).
     """
 
-    def __init__(self, rank, convolver):
+    def __init__(self, rank, P):
         self.rank = int(rank)
-        self.convolver = convolver
+        self.P = int(P)
         self.terms = {}      # dbits (int) -> (2^popcount(dbits), P) float64
 
     @staticmethod
-    def from_tile(tile, convolver):
+    def from_tile(tile, P, convolver):
         """Build a PfVariance from a single singleton SparseTile.
 
-        Shorthand for PfVariance(tile.k, convolver) followed by add_tile(tile): the result
-        has rank == tile.k and one term (keyed by tile.dbits). 'convolver' must be supplied --
-        the peak-finding profiles can't be inferred from the tile.
+        Shorthand for PfVariance(tile.k, P) followed by add_tile(tile, convolver): the result
+        has rank == tile.k and one term (keyed by tile.dbits). P (profile count) and the
+        convolver must both be supplied -- neither can be inferred from the tile.
         """
-        pfvar = PfVariance(tile.k, convolver)
-        pfvar.add_tile(tile)
+        pfvar = PfVariance(tile.k, P)
+        pfvar.add_tile(tile, convolver)
         return pfvar
 
     def get_all_dbits(self):
@@ -246,34 +250,35 @@ class PfVariance:
             raise ValueError(f"PfVariance.unpack: dbits={dbits:#x} is too small; a term "
                              f"depends on bit(s) {missing:#x} not present in dbits")
         m = dbits.bit_count()
-        out = np.zeros((1 << m, self.convolver.P), dtype=np.float64)
+        out = np.zeros((1 << m, self.P), dtype=np.float64)
         # Representative delay for each output row (its 'dbits' bits encode the row index).
         d = SparseTile._representative_delay(np.arange(1 << m), dbits)
         for term_dbits, term_arr in self.terms.items():
             out += term_arr[SparseTile._selected_bits_index(d, term_dbits)]
         return out
 
-    def add_tile(self, tile):
+    def add_tile(self, tile, convolver):
         """Convolve a singleton SparseTile (tile.k == self.rank) into a new term.
 
-        tile.data has shape (1, 2^popcount(tile.dbits), nt); the convolver maps its length-nt
-        time axis to the P profiles, giving a term (tile.dbits, (2^popcount, P)).  tile.tshifts
-        and tile.t0 are irrelevant (the variance is time-shift invariant) and are ignored.
+        tile.data has shape (1, 2^popcount(tile.dbits), nt); 'convolver' maps its length-nt time
+        axis to self.P profiles, giving a term (tile.dbits, (2^popcount, P)).  tile.tshifts and
+        tile.t0 are irrelevant (the variance is time-shift invariant) and are ignored.
         """
         assert tile.nf == 1, "PfVariance.add_tile: tile must be a singleton (nf == 1)"
         assert tile.k == self.rank, (tile.k, self.rank)
-        tile_var = self.convolver.variance(tile.data)[0]   # drop the nf==1 axis -> (2^popcount, P)
+        tile_var = convolver.variance(tile.data, self.P)[0]   # drop nf==1 axis -> (2^popcount, P)
         self._accumulate(tile.dbits, tile_var)
 
     def add(self, pfvar):
         """Accumulate all terms of another PfVariance into self."""
         assert pfvar.rank == self.rank, (pfvar.rank, self.rank)
+        assert pfvar.P == self.P, (pfvar.P, self.P)
         for dbits, arr in pfvar.terms.items():
             self._accumulate(dbits, arr)
 
     def scaled(self, c):
-        """Return a new PfVariance (same rank/convolver) with every term multiplied by c."""
-        out = PfVariance(self.rank, self.convolver)
+        """Return a new PfVariance (same rank/P) with every term multiplied by c."""
+        out = PfVariance(self.rank, self.P)
         for dbits, arr in self.terms.items():
             out._accumulate(dbits, c * arr)
         return out
@@ -283,7 +288,7 @@ class PfVariance:
         low 'nbits' delay bits (spectators): each term keeps its array, but its dbits shift up
         by nbits (old bit j -> bit j+nbits). Used to raise a coarser variance to a finer rank
         so it can be compared against a finer one."""
-        out = PfVariance(self.rank + nbits, self.convolver)
+        out = PfVariance(self.rank + nbits, self.P)
         for dbits, arr in self.terms.items():
             out._accumulate(dbits << nbits, arr)
         return out
@@ -292,8 +297,8 @@ class PfVariance:
         # Add the term (dbits -> arr), summing into any existing same-dbits term.
         dbits = int(dbits)
         assert 0 <= dbits < (1 << self.rank), (dbits, self.rank)
-        assert arr.shape == (1 << dbits.bit_count(), self.convolver.P), \
-            (arr.shape, dbits, self.convolver.P)
+        assert arr.shape == (1 << dbits.bit_count(), self.P), \
+            (arr.shape, dbits, self.P)
         if dbits in self.terms:
             self.terms[dbits] = self.terms[dbits] + arr
         else:
@@ -316,8 +321,9 @@ class PfAvarExact:
                    It already includes the early-trigger -delta and the downsampled -1, so
                    r == config.tree_rank only for tree 0.
       R:           length-ntrees int array; R[itree] = the tree's pf_rank (NOT the config pf_rank).
-      Wmax:        length-ntrees int array; Wmax[itree] = the tree's max peak-finding kernel width.
-      convolvers:  length-ntrees list of PfVarianceConvolver (one per tree).
+      P:           length-ntrees int array; P[itree] = the tree's nprofiles (= 1 + 3 log2(Wmax)).
+      convolver:   a single shared PfVarianceConvolver (full kernel bank to constants.max_pf_width;
+                   every tree's P[itree] <= convolver.Pmax).
       fs:          length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
       plan, nfreq: the DedispersionPlan and the number of input frequency channels.
       per_tfm:     (ntrees, nfreq, M) ragged; per_tfm[itree][ifreq] is None (ifreq below the tree's
@@ -337,9 +343,9 @@ class PfAvarExact:
         self.r = np.array([cfg.tree_rank - (t.pri_dd_rank - t.early_dd_rank) - (t.ds_level > 0)
                            for t in plan.trees])
         self.R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
-        self.Wmax = np.array([t.pf.max_width for t in plan.trees])
+        self.P = np.array([t.nprofiles for t in plan.trees])
         self.fs = [t.frequency_subbands for t in plan.trees]
-        self.convolvers = [PfVarianceConvolver(int(w)) for w in self.Wmax]   # one per tree (lightweight)
+        self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
 
         self.per_tfm = []
         for itree, tree in enumerate(plan.trees):
@@ -352,7 +358,7 @@ class PfAvarExact:
 
     def _make_per_fm(self, itree, tree, full_cm, progress=False):
         # per_fm[ifreq]: length-M list of (PfVariance or None) for tree itree, or None (no overlap).
-        fs, conv, ids = self.fs[itree], self.convolvers[itree], tree.ds_level
+        fs, P, ids = self.fs[itree], int(self.P[itree]), tree.ds_level
         rho_cm = self.plan.config.tree_rank - (tree.pri_dd_rank - tree.early_dd_rank)   # = r + (ids>0)
         cm = np.ascontiguousarray(full_cm[: (1 << rho_cm) + 1])    # truncate to first 2^rho_cm channels
         per_fm = []
@@ -363,16 +369,17 @@ class PfAvarExact:
                 per_fm.append(None)
                 continue
             ssa = SparseTilePerM.make_dedispersion_output(cm, ifreq, fs, upper_half_only=(ids > 0))
-            per_fm.append([None if t is None else PfVariance.from_tile(t, conv) for t in ssa.per_m])
+            per_fm.append([None if t is None else PfVariance.from_tile(t, P, self.convolver)
+                           for t in ssa.per_m])
         return per_fm
 
     def _make_per_m(self, itree):
         # per_m[m]: frequency-summed PfVariance for tree itree, multiplet m.
         rho = int(self.r[itree]) - int(self.R[itree])
-        conv, per_fm = self.convolvers[itree], self.per_tfm[itree]
+        P, per_fm = int(self.P[itree]), self.per_tfm[itree]
         per_m = []
         for m in range(self.fs[itree].M):
-            acc = PfVariance(rho, conv)
+            acc = PfVariance(rho, P)
             for row in per_fm:
                 if row is not None and row[m] is not None:
                     acc.add(row[m])
@@ -420,8 +427,9 @@ class PfAvarApproximation:
       L:           length-ntrees int array; L[itree] = log2(tree's wt_dm_downsampling). Read per
                    tree -- no assumption that early-trigger trees share L/R with their siblings;
                    only the structural 0 <= R <= L <= r is required (asserted per tree).
-      Wmax:        length-ntrees int array; Wmax[itree] = the tree's max peak-finding kernel width.
-      convolvers:  length-ntrees list of PfVarianceConvolver (one per tree).
+      P:           length-ntrees int array; P[itree] = the tree's nprofiles (= 1 + 3 log2(Wmax)).
+      convolver:   a single shared PfVarianceConvolver (full kernel bank to constants.max_pf_width;
+                   every tree's P[itree] <= convolver.Pmax).
       fs:          length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
       plan, nfreq: the DedispersionPlan and the number of input frequency channels.
       per_tff:     (ntrees, nfreq, 2^R[itree]) ragged; per_tff[itree][ifreq][f] is the single-
@@ -439,9 +447,9 @@ class PfAvarApproximation:
         self.r = np.array([K - (t.pri_dd_rank - t.early_dd_rank) - (t.ds_level > 0) for t in plan.trees])
         self.R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.L = np.array([int(t.pf.wt_dm_downsampling).bit_length() - 1 for t in plan.trees])
-        self.Wmax = np.array([t.pf.max_width for t in plan.trees])
+        self.P = np.array([t.nprofiles for t in plan.trees])
         self.fs = [t.frequency_subbands for t in plan.trees]
-        self.convolvers = [PfVarianceConvolver(int(w)) for w in self.Wmax]   # one per tree (lightweight)
+        self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
 
         # Per-tree validation + derived ids flag and iterate level klevel = rho_cm - L = (r+ids) - L.
         self._ids = [int(t.ds_level > 0) for t in plan.trees]
@@ -483,7 +491,7 @@ class PfAvarApproximation:
         # take the first 2^L sub-blocks f', (ids>0) keep their upper DM half, coarsify-mean into
         # 2^R coarse-freqs f = f' >> (L-R). See the class docstring.
         R, L, ids = int(self.R[itree]), int(self.L[itree]), self._ids[itree]
-        conv = self.convolvers[itree]
+        P = int(self.P[itree])
         rho = int(self.r[itree]) - L                       # PfVariance rank = r - L
         norm = 2.0 ** (-(L - R))                            # DD normalization: sub-block-variance mean
         row = [None] * (1 << R)
@@ -495,17 +503,17 @@ class PfAvarApproximation:
                 tile = tile.specialize_dbits(1, 1, low=False)   # keep upper DM half -> rank r-L
             f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
             if row[f] is None:
-                row[f] = PfVariance(rho, conv)
-            row[f].add_tile(tile)                           # sum the sub-block variances ...
+                row[f] = PfVariance(rho, P)
+            row[f].add_tile(tile, self.convolver)           # sum the sub-block variances ...
         return [None if pv is None else pv.scaled(norm) for pv in row]   # ... then mean (2^-(L-R))
 
     def _make_per_tf(self, itree):
         # per_tf[itree][f]: frequency-summed PfVariance for tree itree, coarse-freq f.
         rho = int(self.r[itree]) - int(self.L[itree])
-        conv = self.convolvers[itree]
+        P = int(self.P[itree])
         per_f = []
         for f in range(1 << int(self.R[itree])):
-            acc = PfVariance(rho, conv)
+            acc = PfVariance(rho, P)
             for ifreq in range(self.nfreq):
                 pv = self.per_tff[itree][ifreq][f]
                 if pv is not None:
@@ -524,7 +532,7 @@ class PfAvarApproximation:
             pv = self.per_tff[itree][ifreq][f]
             if pv is not None:
                 if acc is None:
-                    acc = PfVariance(rho, self.convolvers[itree])
+                    acc = PfVariance(rho, int(self.P[itree]))
                 acc.add(pv)
         return None if acc is None else acc.scaled(1.0 / (ihi - ilo))
 
@@ -534,7 +542,7 @@ class PfAvarApproximation:
         rho = int(self.r[itree]) - int(self.L[itree])
         fs = self.fs[itree]
         ilo, ihi = fs.m_to_ilo(m), fs.m_to_ihi(m)
-        acc = PfVariance(rho, self.convolvers[itree])
+        acc = PfVariance(rho, int(self.P[itree]))
         for f in range(ilo, ihi):
             acc.add(self.per_tf[itree][f])
         return acc.scaled(1.0 / (ihi - ilo))
