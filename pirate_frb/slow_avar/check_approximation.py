@@ -23,15 +23,15 @@ def check_approximation(plan):
 
 
 def _check_one_tree(exact, approx, itree):
-    r, R, L = int(exact.r[itree]), int(exact.R[itree]), int(approx.L[itree])
-    assert (r, R) == (int(approx.r[itree]), int(approx.R[itree])), \
-        (itree, r, R, int(approx.r[itree]), int(approx.R[itree]))
+    r, R, L = int(exact.tree_r[itree]), int(exact.tree_R[itree]), int(approx.tree_L[itree])
+    assert (r, R) == (int(approx.tree_r[itree]), int(approx.tree_R[itree])), \
+        (itree, r, R, int(approx.tree_r[itree]), int(approx.tree_R[itree]))
     rho = r - R                                  # exact PfVariance rank
     approx_rho = r - L                           # approximation PfVariance rank (r-L)
     lift = rho - approx_rho                      # (r-R) - (r-L) = L-R spectator low bits to add
     assert lift == L - R, (lift, L, R)
-    M = exact.fs[itree].M
-    assert approx.fs[itree].M == M, (itree, approx.fs[itree].M, M)
+    M = exact.tree_fs[itree].M
+    assert approx.tree_fs[itree].M == M, (itree, approx.tree_fs[itree].M, M)
 
     # eps_mean / eps2_mean accumulate the per-multiplet means, then divide by M (so they are <eps>
     # and <eps^2>); dividing is required for Delta = sqrt(<eps^2> - <eps>^2) to be a valid spread.
