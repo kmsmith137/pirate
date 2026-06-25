@@ -19,11 +19,13 @@ def check_approximation(plan):
     approx = PfAvarApproximation(plan)
     r0, R0 = int(exact.r[0]), int(exact.R[0])    # tree 0's rank / pf_rank
     rho0 = r0 - R0                               # tree 0's exact PfVariance rank
+    approx_R = approx.fs.pf_rank                 # approximation's pf_rank (== R0 for consistency)
+    approx_rho = approx.r - approx.L             # approximation's PfVariance rank (r-L)
     M = approx.fs.M
     assert exact.fs[0].M == M, (exact.fs[0].M, M)
-    assert (r0, R0) == (approx.r, approx.R), (r0, R0, approx.r, approx.R)   # consistency at tree 0
-    lift = rho0 - approx.rho                      # (r-R) - (r-L) = L-R spectator low bits to add
-    assert lift == approx.L - approx.R, (lift, approx.L, approx.R)
+    assert (r0, R0) == (approx.r, approx_R), (r0, R0, approx.r, approx_R)   # consistency at tree 0
+    lift = rho0 - approx_rho                      # (r-R) - (r-L) = L-R spectator low bits to add
+    assert lift == approx.L - approx_R, (lift, approx.L, approx_R)
 
     # Note: eps_mean / eps2_mean accumulate the per-multiplet means, then divide by M (so they
     # are <eps> and <eps^2>). Dividing is required for Delta = sqrt(<eps^2> - <eps>^2) to be a
@@ -37,7 +39,7 @@ def check_approximation(plan):
             raise RuntimeError(f"check_approximation: empty PfVariance at m={m} "
                                f"(exact={len(var_exact.terms)}, approx={len(var_approx.terms)} terms)")
         assert var_exact.rank == rho0, (m, var_exact.rank, rho0)
-        assert var_approx.rank == approx.rho, (m, var_approx.rank, approx.rho)
+        assert var_approx.rank == approx_rho, (m, var_approx.rank, approx_rho)
 
         var_approx = var_approx.add_spectator_low_bits(lift)         # rank r-L -> r-R
         dbits = var_exact.get_all_dbits() | var_approx.get_all_dbits()
