@@ -412,4 +412,78 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    cpu_allocator: BumpAllocator for host memory (for raw data arrays)\n"
                "    niterations: Number of timing iterations")
     ;
+
+    // ReferenceDedisperser: CPU reference dedisperser (testing / variance studies).
+    // Bound as the abstract base ReferenceDedisperserBase, via a factory py::init that
+    // returns a concrete subclass as shared_ptr<Base>; Python sees one type.
+    py::class_<ReferenceDedisperserBase, std::shared_ptr<ReferenceDedisperserBase>>(m, "ReferenceDedisperser",
+        "CPU reference dedisperser (for testing and variance studies).\n"
+        "\n"
+        "Constructed directly:\n"
+        "    ReferenceDedisperser(plan, sophistication, enable_variances=False, Dcore=None)\n"
+        "\n"
+        "'sophistication' (0, 1, or 2) selects the reference implementation:\n"
+        "  0 -- one-stage dedispersion (instead of two stages); in downsampled trees,\n"
+        "       compute twice as many DMs as necessary then drop the bottom half; each\n"
+        "       early trigger is a separate tree (disregarding some input channels).\n"
+        "  1 -- the same two-stage tree/lag structure as the plan; lags applied with a\n"
+        "       per-tree ReferenceLagbuf (not ring/staging buffers); lags split into\n"
+        "       segments + residuals, but not further split into chunks.\n"
+        "  2 -- as close to the GPU implementation as possible.\n"
+        "All three produce the same peak-finding output, modulo float roundoff.\n"
+        "\n"
+        "'Dcore' is the per-tree internal time-downsampling factor of the peak-finder\n"
+        "(see PeakFindingKernel.hpp). To perfectly mimic a GpuDedisperser, pass the\n"
+        "Dcore values from its GpuPeakFindingKernels. For a host-only reference (the\n"
+        "common case), leave Dcore=None to use plan.trees[i].pf.time_downsampling.\n"
+        "\n"
+        "If enable_variances=True, the per-tree out_var buffers are allocated and filled\n"
+        "by dedisperse() (per-chunk peak-finding variances; see ReferencePeakFindingKernel).")
+        .def(py::init([](std::shared_ptr<DedispersionPlan> plan, int sophistication,
+                         bool enable_variances, py::object Dcore_obj) {
+            ReferenceDedisperserBase::Params p;
+            p.plan = plan;
+            p.sophistication = sophistication;
+            p.enable_variances = enable_variances;
+            if (!Dcore_obj.is_none())
+                p.Dcore = Dcore_obj.cast<std::vector<long>>();
+            // empty p.Dcore -> make() fills it from tree.pf.time_downsampling (host-only default)
+            return ReferenceDedisperserBase::make(p);
+        }), py::arg("plan"), py::arg("sophistication"),
+            py::arg("enable_variances") = false, py::arg("Dcore") = py::none())
+        // params fields (nested) exposed as read-only properties:
+        .def_property_readonly("sophistication",   [](const ReferenceDedisperserBase &d){ return d.params.sophistication; })
+        .def_property_readonly("Dcore",            [](const ReferenceDedisperserBase &d){ return d.params.Dcore; })
+        .def_property_readonly("enable_variances", [](const ReferenceDedisperserBase &d){ return d.params.enable_variances; })
+        // derived convenience members:
+        .def_readonly("ntrees",          &ReferenceDedisperserBase::ntrees)
+        .def_readonly("nfreq",           &ReferenceDedisperserBase::nfreq)
+        .def_readonly("nt_in",           &ReferenceDedisperserBase::nt_in)
+        .def_readonly("total_beams",     &ReferenceDedisperserBase::total_beams)
+        .def_readonly("beams_per_batch", &ReferenceDedisperserBase::beams_per_batch)
+        .def_readonly("nbatches",        &ReferenceDedisperserBase::nbatches)
+        .def_readonly("config",          &ReferenceDedisperserBase::config)
+        .def_readonly("trees",           &ReferenceDedisperserBase::trees)
+        // Input/weights buffers (write into these zero-copy views before dedisperse()):
+        .def_readonly("input_array",     &ReferenceDedisperserBase::input_array)
+        .def_readonly("wt_arrays",       &ReferenceDedisperserBase::wt_arrays)
+        // Outputs (read after dedisperse()). out_var is empty unless enable_variances was set:
+        .def_readonly("out_max",         &ReferenceDedisperserBase::out_max)
+        .def_readonly("out_argmax",      &ReferenceDedisperserBase::out_argmax)
+        // out_var elements are empty when variances are disabled, and the Array->numpy caster
+        // rejects zero-size arrays -- so map empty -> None (the list is always length ntrees).
+        .def_property_readonly("out_var", [](const ReferenceDedisperserBase &d) {
+            py::list out;
+            for (const auto &v : d.out_var) {
+                if (v.size == 0)
+                    out.append(py::none());
+                else
+                    out.append(py::cast(v));
+            }
+            return out;
+        })
+        .def("dedisperse",               &ReferenceDedisperserBase::dedisperse,
+             py::arg("ichunk"), py::arg("ibatch"),
+             "Dedisperse one (ichunk, ibatch). Fills out_max/out_argmax (and out_var if enabled).")
+    ;
 }

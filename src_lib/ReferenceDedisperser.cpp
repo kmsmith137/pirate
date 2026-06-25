@@ -47,11 +47,12 @@ static DedispersionBuffer _make_dd_buffer(const DedispersionBufferParams &params
 // ReferenceDedisperserBase
 
 
-ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_, int sophistication_) :
-    plan(plan_), Dcore(Dcore_), sophistication(sophistication_)
+ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
+    params(params_)
 {
+    const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     xassert(plan);
-    xassert_eq(long(Dcore.size()), plan->ntrees);
+    xassert_eq(long(params.Dcore.size()), plan->ntrees);
 
     this->config = plan->config;
     this->dtype = plan->dtype;
@@ -70,7 +71,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
     // Peak-finding kernels.
     for (long itree = 0; itree < ntrees; itree++) {
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
-        auto pf_kernel = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
+        auto pf_kernel = make_shared<ReferencePeakFindingKernel> (pf_params, params.Dcore.at(itree));
         this->pf_kernels.push_back(pf_kernel);
     }
 
@@ -101,6 +102,17 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
         this->out_max[itree] = Array<float>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
         this->out_argmax[itree] = Array<uint>({beams_per_batch, ndm_out, nt_out}, af_uhost | af_zero);
     }
+
+    // Optionally allocate out_var (per-chunk peak-finding variances). Sized from the pf
+    // kernels so the shape matches what ReferencePeakFindingKernel::apply() expects.
+    this->out_var.resize(ntrees);   // empty unless enable_variances
+    if (params.enable_variances) {
+        for (long itree = 0; itree < ntrees; itree++) {
+            const ReferencePeakFindingKernel &pf = *pf_kernels.at(itree);
+            this->out_var[itree] = Array<double>(
+                {beams_per_batch, pf.params.ndm_out, pf.fs.M, pf.nprofiles}, af_uhost | af_zero);
+        }
+    }
 }
 
 
@@ -115,7 +127,7 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const shared_ptr<Dedispersion
 
 struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 {
-    ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan, const vector<long> &Dcore);
+    ReferenceDedisperser0(const Params &params);
 
     virtual void dedisperse(long itime, long ibeam) override;
 
@@ -144,8 +156,8 @@ struct ReferenceDedisperser0 : public ReferenceDedisperserBase
 };
 
 
-ReferenceDedisperser0::ReferenceDedisperser0(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
-    ReferenceDedisperserBase(plan_, Dcore_, 0)
+ReferenceDedisperser0::ReferenceDedisperser0(const Params &params) :
+    ReferenceDedisperserBase(params)
 {   
     this->downsampled_inputs.resize(num_downsampling_levels);
     this->dedispersion_buffers.resize(ntrees);
@@ -242,8 +254,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
             sb = sb.slice(1, sb.shape[1]/2, sb.shape[1]);
 
         auto pf_kernel = pf_kernels.at(itree);
-        Array<double> empty_var;   // out_var feature disabled in the reference dedisperser
-        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), empty_var, sb, wt_arrays.at(itree), ibatch);
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), out_var.at(itree), sb, wt_arrays.at(itree), ibatch);
     }
 }
 
@@ -259,7 +270,7 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
 
 struct ReferenceDedisperser1 : public ReferenceDedisperserBase
 {
-    ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_);
+    ReferenceDedisperser1(const Params &params);
 
     // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
     // Step 1: run LaggedDownsampler.
@@ -285,9 +296,10 @@ struct ReferenceDedisperser1 : public ReferenceDedisperserBase
 };
 
 
-ReferenceDedisperser1::ReferenceDedisperser1(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
-    ReferenceDedisperserBase(plan_, Dcore_, 1)
+ReferenceDedisperser1::ReferenceDedisperser1(const Params &params) :
+    ReferenceDedisperserBase(params)
 {
+    const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
     this->lds_kernel = make_shared<ReferenceLaggedDownsamplingKernel> (plan->lds_params);
@@ -421,8 +433,7 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 
         Array<float> sb_buf = stage2_subband_bufs.at(itree);
         dd_kernel->apply(dd_buf, dd_buf, sb_buf, ichunk, ibatch);
-        Array<double> empty_var;   // out_var feature disabled in the reference dedisperser
-        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), empty_var, sb_buf, wt_arrays.at(itree), ibatch);
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), out_var.at(itree), sb_buf, wt_arrays.at(itree), ibatch);
     }
 }
 
@@ -434,7 +445,7 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 
 struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 {
-    ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan, const vector<long> &Dcore);
+    ReferenceDedisperser2(const Params &params);
     
     // Step 0: Run tree gridding kernel (input_array -> stage1_dd_buf.bufs.at(0)).
     // Step 1: run LaggedDownsampler.
@@ -464,9 +475,10 @@ struct ReferenceDedisperser2 : public ReferenceDedisperserBase
 };
 
 
-ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> &plan_, const vector<long> &Dcore_) :
-    ReferenceDedisperserBase(plan_, Dcore_, 2)
+ReferenceDedisperser2::ReferenceDedisperser2(const Params &params) :
+    ReferenceDedisperserBase(params)
 {
+    const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     this->stage1_dd_buf = _make_dd_buffer(plan->stage1_dd_buf_params);
     this->stage2_dd_buf = _make_dd_buffer(plan->stage2_dd_buf_params);
 
@@ -506,6 +518,7 @@ ReferenceDedisperser2::ReferenceDedisperser2(const shared_ptr<DedispersionPlan> 
 
 void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 {
+    const auto &plan = params.plan;   // local alias -- keeps the plan->... body below unchanged
     const long BT = this->config.beams_per_gpu;            // total beams
     const long BB = this->config.beams_per_batch;          // beams per batch
     const long BA = this->config.num_active_batches * BB;  // active beams
@@ -608,8 +621,7 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
         Array<float> sb_buf = stage2_subband_bufs.at(itree);
         dd_kernel->apply(this->gpu_ringbuf, dd_buf, sb_buf, ichunk, ibatch);
-        Array<double> empty_var;   // out_var feature disabled in the reference dedisperser
-        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), empty_var, sb_buf, wt_arrays.at(itree), ibatch);
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), out_var.at(itree), sb_buf, wt_arrays.at(itree), ibatch);
     }
 }
 
@@ -618,18 +630,24 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
 
 // Static member function
-shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(
-    const shared_ptr<DedispersionPlan> &plan_, 
-    const vector<long> &Dcore_,
-    int sophistication_)
+shared_ptr<ReferenceDedisperserBase> ReferenceDedisperserBase::make(const Params &params_)
 {
-    if (sophistication_ == 0)
-        return make_shared<ReferenceDedisperser0> (plan_, Dcore_);
-    else if (sophistication_ == 1)
-        return make_shared<ReferenceDedisperser1> (plan_, Dcore_);
-    else if (sophistication_ == 2)
-        return make_shared<ReferenceDedisperser2> (plan_, Dcore_);
-    throw runtime_error("ReferenceDedisperserBase::make(): invalid value of 'sophistication' parameter");
+    xassert(params_.plan);
+
+    // Copy params so we can resolve an empty Dcore (host-only default) without violating const.
+    Params params = params_;
+    if (params.Dcore.empty()) {
+        for (long itree = 0; itree < params.plan->ntrees; itree++)
+            params.Dcore.push_back(params.plan->trees.at(itree).pf.time_downsampling);
+    }
+
+    if (params.sophistication == 0)
+        return make_shared<ReferenceDedisperser0> (params);
+    else if (params.sophistication == 1)
+        return make_shared<ReferenceDedisperser1> (params);
+    else if (params.sophistication == 2)
+        return make_shared<ReferenceDedisperser2> (params);
+    throw runtime_error("ReferenceDedisperserBase::make(): sophistication must be 0, 1, or 2");
 }
 
 

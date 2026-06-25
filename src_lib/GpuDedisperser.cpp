@@ -1194,10 +1194,14 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         ref_kernels_for_weights.at(itree) = make_shared<ReferencePeakFindingKernel> (pf_params, Dcore.at(itree));
     }
 
-    // Create ReferenceDedispersers (must come after Dcore initialization)
-    shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(plan, Dcore, 0);
-    shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(plan, Dcore, 1);
-    shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(plan, Dcore, 2);
+    // Create ReferenceDedispersers (must come after Dcore initialization).
+    // Pass an explicit Dcore (from the GPU kernels), not the host-only default.
+    ReferenceDedisperserBase::Params rdd_params;
+    rdd_params.plan = plan;
+    rdd_params.Dcore = Dcore;
+    rdd_params.sophistication = 0;  shared_ptr<ReferenceDedisperserBase> rdd0 = ReferenceDedisperserBase::make(rdd_params);
+    rdd_params.sophistication = 1;  shared_ptr<ReferenceDedisperserBase> rdd1 = ReferenceDedisperserBase::make(rdd_params);
+    rdd_params.sophistication = 2;  shared_ptr<ReferenceDedisperserBase> rdd2 = ReferenceDedisperserBase::make(rdd_params);
 
     // Dedispersion input array. We randomly generate it (nbatches_out) batches at a time.
     Array<float> dd_in_cpu({nbatches_out, beams_per_batch, nfreq, nt_in}, af_rhost | af_zero);
