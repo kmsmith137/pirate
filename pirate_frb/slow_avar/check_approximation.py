@@ -15,8 +15,8 @@ def check_approximation(plan):
     fractional error epsilon = var_approx/var_exact - 1 is formed (shape (2^len(dbits), P)). Prints
     the mean of epsilon and its spread Delta(eps) = sqrt(<eps^2> - <eps>^2), averaged over multiplets.
     """
-    exact = PfAvarExact(plan)
-    approx = PfAvarApproximation(plan)
+    exact = PfAvarExact(plan, progress=True)
+    approx = PfAvarApproximation(plan, progress=True)
     r0, R0 = int(exact.r[0]), int(exact.R[0])    # tree 0's rank / pf_rank
     rho0 = r0 - R0                               # tree 0's exact PfVariance rank
     approx_rho = approx.r - approx.L             # approximation's PfVariance rank (r-L)

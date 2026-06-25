@@ -327,7 +327,9 @@ class PfAvarExact:
                    itree, multiplet m (also rank r[itree]-R[itree]).
     """
 
-    def __init__(self, plan):
+    def __init__(self, plan, progress=False):
+        # If progress is set, print one line per tree and one '.' per 1000 input freq channels
+        # (this constructor is the slow part of 'pirate_frb check_avar_approximation').
         cfg = plan.config
         full_cm = np.asarray(cfg.make_channel_map(), dtype=np.float64)
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
@@ -339,16 +341,24 @@ class PfAvarExact:
         self.fs = [t.frequency_subbands for t in plan.trees]
         self.convolvers = [PfVarianceConvolver(int(w)) for w in self.Wmax]   # one per tree (lightweight)
 
-        self.per_tfm = [self._make_per_fm(itree, tree, full_cm) for itree, tree in enumerate(plan.trees)]
+        self.per_tfm = []
+        for itree, tree in enumerate(plan.trees):
+            if progress:
+                print(f"  PfAvarExact tree {itree}/{self.ntrees}: ", end="", flush=True)
+            self.per_tfm.append(self._make_per_fm(itree, tree, full_cm, progress))
+            if progress:
+                print(flush=True)
         self.per_tm = [self._make_per_m(itree) for itree in range(self.ntrees)]
 
-    def _make_per_fm(self, itree, tree, full_cm):
+    def _make_per_fm(self, itree, tree, full_cm, progress=False):
         # per_fm[ifreq]: length-M list of (PfVariance or None) for tree itree, or None (no overlap).
         fs, conv, ids = self.fs[itree], self.convolvers[itree], tree.ds_level
         rho_cm = self.plan.config.tree_rank - (tree.pri_dd_rank - tree.early_dd_rank)   # = r + (ids>0)
         cm = np.ascontiguousarray(full_cm[: (1 << rho_cm) + 1])    # truncate to first 2^rho_cm channels
         per_fm = []
         for ifreq in range(self.nfreq):
+            if progress and (ifreq + 1) % 1000 == 0:
+                print(".", end="", flush=True)
             if not (ifreq < cm[0] and ifreq + 1 > cm[-1]):        # ifreq below the truncated band
                 per_fm.append(None)
                 continue
@@ -400,7 +410,8 @@ class PfAvarApproximation:
       per_f:         length-2^R list of PfVariance; per_f[f] = sum over ifreq of per_ff[ifreq][f].
     """
 
-    def __init__(self, plan):
+    def __init__(self, plan, progress=False):
+        # If progress is set, print one '.' per 1000 input freq channels.
         tree0 = plan.trees[0]                            # base tree (ids=0, delta=0)
         self.r = int(plan.config.tree_rank)              # = tree0's kept-output rank (ids=0, delta=0)
         self.fs = tree0.frequency_subbands
@@ -414,13 +425,19 @@ class PfAvarApproximation:
         self.convolver = PfVarianceConvolver(self.Wmax)
 
         channel_map = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
-        self.per_ff = self._make_per_ff(channel_map)
+        if progress:
+            print("  PfAvarApproximation: ", end="", flush=True)
+        self.per_ff = self._make_per_ff(channel_map, progress)
+        if progress:
+            print(flush=True)
         self.per_f = self._make_per_f()
 
-    def _make_per_ff(self, channel_map):
+    def _make_per_ff(self, channel_map, progress=False):
         # per_ff[ifreq][f]: single-channel PfVariance (rank r-L) of coarse-freq f, or None.
         per_ff = []
         for ifreq in range(self.nfreq):
+            if progress and (ifreq + 1) % 1000 == 0:
+                print(".", end="", flush=True)
             sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
             for _ in range(self.r - self.R):
                 sarr = sarr.iterate()            # now k == r-R: 2^R coarse-freqs, 2^(r-R) DMs
