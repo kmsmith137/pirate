@@ -390,17 +390,17 @@ class PfAvarExact:
     """
 
     def __init__(self, plan, progress=False):
-        # If progress is set, print one line per tree and one '.' per 1000 input freq channels
-        # (this constructor is the slow part of 'pirate_frb check_avar_approximation').
-        cfg = plan.config
-        full_cm = np.asarray(cfg.make_channel_map(), dtype=np.float64)
+        # If progress is set, print one line per tree and one '.' per 1000 input freq channels.
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
-        # tree_r[itree] = amb_rank + early_dd_rank (= config.tree_rank - delta - (ids>0 ? 1 : 0))
+        self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
+
+        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
-        self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
+
+        full_cm = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
 
         self.per_tfm = []
         for itree, tree in enumerate(plan.trees):
@@ -501,54 +501,56 @@ class PfAvarApproximation:
 
     def __init__(self, plan, progress=False):
         # If progress is set, print one '.' per 1000 input freq channels.
-        cfg = plan.config
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
-        # tree_r[itree] = amb_rank + early_dd_rank (= config.tree_rank - delta - (ids>0 ? 1 : 0))
+        self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
+        
+        # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
         self.tree_L = np.array([integer_log2(int(t.pf.wt_dm_downsampling)) for t in plan.trees])
         self.tree_P = np.array([t.nprofiles for t in plan.trees])
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
-        self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
+        assert np.all((self.tree_R >= 0) & (self.tree_R <= self.tree_L) & (self.tree_L <= self.tree_r))
 
         # Per-tree validation + derived ids flag and iterate level klevel = rho_cm - L = (r+ids) - L.
-        self._tree_ids = [int(t.ds_level > 0) for t in plan.trees]
-        self._tree_klevel = []
-        for itree, t in enumerate(plan.trees):
-            # (tree_L's integer_log2 already enforced wt_dm_downsampling is a power of two.)
-            assert 0 <= self.tree_R[itree] <= self.tree_L[itree] <= self.tree_r[itree], \
-                (itree, int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_r[itree]))
-            rho_cm = int(self.tree_r[itree]) + self._tree_ids[itree]
-            self._tree_klevel.append(rho_cm - int(self.tree_L[itree]))
-
-        full_cm = np.asarray(cfg.make_channel_map(), dtype=np.float64)
-        self.per_tff = self._make_per_tff(full_cm, progress)
-        self.per_tf = [self._make_per_tf(itree) for itree in range(self.ntrees)]
-
-    def _make_per_tff(self, full_cm, progress=False):
-        # per_tff[itree][ifreq]: length-2^R[itree] list of (PfVariance rank r-L, or None). One full-
-        # band (rank config.tree_rank) gridding SparseTileTriple is iterated ONCE per ifreq; at each
-        # level k the raw sub-block singletons are converted to PfVariance ONCE (shared across all
-        # trees at that level, klevel == k) and each tree coarsify-means them into its row.
-        max_k = max(self._tree_klevel)
+        self._tree_ids = np.array([t.ds_level for t in plan.trees])
+        self._tree_klevel = self.tree_r + (self._tree_ids > 0) - self.tree_L
+        
+        max_k = int(max(self._tree_klevel))
         trees_at = {}                                     # level k -> [itree, ...]
         for itree, k in enumerate(self._tree_klevel):
-            trees_at.setdefault(k, []).append(itree)
-        per_tff = [[None] * self.nfreq for _ in range(self.ntrees)]
+            trees_at.setdefault(int(k), []).append(itree)
+
+        full_cm = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
+
+        # per_tff[itree][ifreq]: length-2^R list (PfVariance rank r-L, or None).
+        # per_tf[itree][f]: length-2^R list (PfVariance rank r-L)
+        self.per_tff = [[None] * self.nfreq for _ in range(self.ntrees)]
+        self.per_tf = [[PfVariance(int(r) - int(L), int(P)) for _ in range(1 << int(R))]
+                       for r, R, L, P in zip(self.tree_r, self.tree_R, self.tree_L, self.tree_P)]
+
         for ifreq in range(self.nfreq):
             if progress and (ifreq + 1) % 1000 == 0:
                 print(".", end="", flush=True)
+                
             sarr = SparseTileTriple.make_tree_gridding_output(full_cm, ifreq)   # rank config.tree_rank, level 0
+            
             for k in range(0, max_k + 1):
                 trees_k = trees_at.get(k, ())
+                
                 if trees_k:
                     pv_fp = self._sub_block_variances(sarr, trees_k)   # shared across trees_k
                     for itree in trees_k:
-                        per_tff[itree][ifreq] = self._coarsify_row(pv_fp, itree)
+                        pv = self._coarsify_row(pv_fp, itree)          # list of 2^R (PfVariance or None)
+                        self.per_tff[itree][ifreq] = pv
+                        for f, x in enumerate(pv):
+                            if x is not None:
+                                self.per_tf[itree][f].add(x)
+                
                 if k < max_k:
                     sarr = sarr.iterate()
-        return per_tff
 
+    
     def _sub_block_variances(self, sarr, trees_k):
         # Convert each RAW sub-block singleton at the current level to a PfVariance ONCE, shared
         # across all trees in trees_k (all have klevel == this level). Built at the max P over
@@ -564,6 +566,7 @@ class PfAvarApproximation:
                 pv_fp[fp] = PfVariance.from_tile(tile, P_shared, self.convolver)
         return pv_fp
 
+    
     def _coarsify_row(self, pv_fp, itree):
         # Coarsify the shared per-sub-block PfVariances into tree itree's 2^R coarse-freqs:
         # f = f' >> (L-R), mean over its 2^(L-R) sub-blocks (scaled by 2^-(L-R)). add() truncates
@@ -583,20 +586,7 @@ class PfAvarApproximation:
             row[f].add(pv, upper_half=(ids > 0))            # sum sub-block variances (upper half if ids)
         return [None if pv is None else pv.scaled(norm) for pv in row]   # ... then mean (2^-(L-R))
 
-    def _make_per_tf(self, itree):
-        # per_tf[itree][f]: frequency-summed PfVariance for tree itree, coarse-freq f.
-        rho = int(self.tree_r[itree]) - int(self.tree_L[itree])
-        P = int(self.tree_P[itree])
-        per_f = []
-        for f in range(1 << int(self.tree_R[itree])):
-            acc = PfVariance(rho, P)
-            for ifreq in range(self.nfreq):
-                pv = self.per_tff[itree][ifreq][f]
-                if pv is not None:
-                    acc.add(pv)
-            per_f.append(acc)                    # always a PfVariance (empty if f overlaps nothing)
-        return per_f
-
+    
     def get_per_fm(self, itree, ifreq, m):
         """Approximate single-channel variance for tree itree, (ifreq, multiplet m): the mean of
         per_tff over the multiplet's coarse-freq range. Returns None if no coarse-freq overlaps."""
@@ -612,6 +602,7 @@ class PfAvarApproximation:
                 acc.add(pv)
         return None if acc is None else acc.scaled(1.0 / (ihi - ilo))
 
+    
     def get_per_m(self, itree, m):
         """Approximate frequency-summed variance for tree itree, multiplet m: the mean of per_tf
         over the multiplet's coarse-freq range. Always returns a PfVariance."""
