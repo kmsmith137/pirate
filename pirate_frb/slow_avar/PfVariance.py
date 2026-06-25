@@ -387,8 +387,17 @@ class PfAvarApproximation:
     (it reads all per-tree quantities from plan.trees[0], so r/R/Wmax match PfAvarExact.{r,R,Wmax}[0]).
     Variances are stored per coarse-freq channel (the 2^R level-0 subbands, tree-freq range
     2^(r-R) f <= tree-freq < 2^(r-R) (f+1)), at the WEIGHTS' DM resolution 2^(r-L): each PfVariance
-    has rank r-L, not r-R. The approximation is that the variance does not depend on the low (L-R)
-    DM bits (those that vary within one weight DM bin); we just fix them to 0.
+    has rank r-L.
+
+    The approximation: rather than coherently dedispersing each coarse-freq's full 2^(r-R)-channel
+    block, we iterate only to level k = r-L (giving 2^L finer "sub-block" coarse-freqs f', each a
+    2^(r-L)-channel dedispersion with 2^(r-L) DMs) and take, into the coarse f = f' >> (L-R), the
+    MEAN of its 2^(L-R) sub-block variances. This drops the inter-sub-block cross-covariances and
+    reads each sub-block's own 2^(r-L) DMs as the coarse-DM axis. The mean (factor 2^-(L-R) on the
+    sub-block-variance sum) is the 1/sqrt(2)-per-level DD normalization: because the full-block
+    dedispersion runs L-R more 1/sqrt(2) levels than a sub-block, its variance equals the sub-block
+    MEAN, not the sum -- analogous to the 1/(ihi-ilo) factor get_per_m applies across coarse-freqs.
+    (When L == R this reduces to the plain per-coarse-freq dedispersion.)
 
     Per-multiplet variances are reconstructed on demand (get_per_fm / get_per_m): a multiplet m
     spans a coarse-freq range [ilo, ihi) (= fs.m_to_ilo(m)..m_to_ihi(m)); its variance is the
@@ -433,23 +442,30 @@ class PfAvarApproximation:
         self.per_f = self._make_per_f()
 
     def _make_per_ff(self, channel_map, progress=False):
-        # per_ff[ifreq][f]: single-channel PfVariance (rank r-L) of coarse-freq f, or None.
+        # per_ff[ifreq][f]: PfVariance (rank r-L) for coarse-freq f, or None (no overlap). Built by
+        # iterating to level r-L (2^L sub-block coarse-freqs f', each rank-(r-L)) and taking, into
+        # coarse f = f' >> (L-R), the MEAN of its 2^(L-R) sub-block variances (the 2^-(L-R) factor
+        # is the DD 1/sqrt(2)-per-level normalization). See the class docstring.
+        R, L = int(self.R), int(self.L)
+        rho = self.r - L                                  # PfVariance rank
+        norm = 2.0 ** (-(L - R))                          # DD normalization: sub-block-variance mean
         per_ff = []
         for ifreq in range(self.nfreq):
             if progress and (ifreq + 1) % 1000 == 0:
                 print(".", end="", flush=True)
             sarr = SparseTileTriple.make_tree_gridding_output(channel_map, ifreq)
-            for _ in range(self.r - self.R):
-                sarr = sarr.iterate()            # now k == r-R: 2^R coarse-freqs, 2^(r-R) DMs
-            row = []
-            for f in range(1 << self.R):
-                tile = sarr.get_singleton(f, allow_none=True)   # singleton (k=r-R, nf=1) or None
+            for _ in range(self.r - L):
+                sarr = sarr.iterate()            # now k == r-L: 2^L coarse-freqs, 2^(r-L) DMs
+            row = [None] * (1 << R)
+            for fp in range(1 << L):                       # fine "sub-block" coarse-freq f'
+                tile = sarr.get_singleton(fp, allow_none=True)   # rank-(r-L) singleton, or None
                 if tile is None:
-                    row.append(None)
-                else:
-                    # Drop the low (L-R) DM bits (fix to 0): rank (r-R)-(L-R) = r-L singleton.
-                    tile = tile.specialize_dbits(0, self.L - self.R, low=True)
-                    row.append(PfVariance.from_tile(tile, self.convolver))
+                    continue
+                f = fp >> (L - R)                          # coarsify the f-index by 2^(L-R)
+                if row[f] is None:
+                    row[f] = PfVariance(rho, self.convolver)
+                row[f].add_tile(tile)                      # sum the sub-block variances ...
+            row = [None if pv is None else pv.scaled(norm) for pv in row]   # ... then mean (2^-(L-R))
             per_ff.append(row)
         return per_ff
 
