@@ -534,7 +534,7 @@ class PfAvarApproximation:
         self.per_tf = [ None ] * self.ntrees
 
         for itree in range(self.ntrees):
-            r, R, L, P = self.tree_r[itree], self.tree_R[itree], self.tree_L[itree], self.tree_P[itree]
+            r, R, L, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
             self.per_tff[itree] = [ [None]*(1<<R) for _ in range(self.nfreq) ]
             self.per_tf[itree] = [ PfVariance(r-L,P) for _ in range(1 << R) ]
 
@@ -574,26 +574,22 @@ class PfAvarApproximation:
             # f = f' >> (L-R), mean over its 2^(L-R) sub-blocks (scaled by 2^-(L-R)). add() truncates
             # the p-axis to this tree's P and (ids>0) keeps the upper DM half (rank rho_cm-L -> r-L).
 
-            R, L, ids = int(self.tree_R[itree]), int(self.tree_L[itree]), int(self._tree_ids[itree])
-            P = int(self.tree_P[itree])
-            rho = int(self.tree_r[itree]) - L                   # PfVariance rank = r - L  (== klevel - ids)
+            r, R, L, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
+            upper_half = (int(self._tree_ids[itree]) > 0)
             norm = 2.0 ** (-(L - R))                            # DD normalization: sub-block-variance mean
-            pv_row = [None] * (1 << R)
 
             for fp in range(1 << L):                            # sub-block coarse-freq f'
                 pv = pv_fp[fp]
                 if pv is None:
                     continue
-                f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
-                if pv_row[f] is None:
-                    pv_row[f] = PfVariance(rho, P)
-                # mean (scale 2^-(L-R)) of the sub-block variances; upper DM half if ids.
-                pv_row[f].add(pv, upper_half=(ids > 0), scale=norm)
 
-            for f, pv in enumerate(pv_row):
-                if pv is not None:
-                    self.per_tff[itree][ifreq][f] = pv
-                    self.per_tf[itree][f].add(pv)
+                f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
+                if self.per_tff[itree][ifreq][f] is None:
+                    self.per_tff[itree][ifreq][f] = PfVariance(r - L, P)
+
+                # mean (scale 2^-(L-R)) of the sub-block variances; upper DM half if ids.
+                self.per_tff[itree][ifreq][f].add(pv, upper_half=upper_half, scale=norm)
+                self.per_tf[itree][f].add(pv, upper_half=upper_half, scale=norm)
 
     
     def get_per_fm(self, itree, ifreq, m):
