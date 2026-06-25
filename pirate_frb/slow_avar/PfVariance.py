@@ -301,73 +301,84 @@ class PfVariance:
 
 
 class PfAvarExact:
-    """Exact analytic peak-finding variances for a DedispersionConfig (ds_level=0 only, so far).
+    """Exact analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
 
-    For the base (ds_level=0) tree, computes the peak-finding output variance of every
-    (input frequency channel, multiplet) pair as a PfVariance, and the frequency-summed
-    variance per multiplet.  Each PfVariance has rank rho = r - R (the per-multiplet tile
-    rank) and shares one PfVarianceConvolver(Wmax).
+    For each DedispersionTree (one per (downsampling level, early trigger)), computes the
+    peak-finding output variance of every (input frequency channel, multiplet) pair, plus the
+    frequency-summed variance per multiplet.  Each tree is processed "from scratch" (no reuse of
+    computations across trees).  Every PfVariance for tree itree has rank r[itree] - R[itree].
 
     Members
     -------
-      r, R, rho:  tree_rank, pf_rank, and rho = r - R.
-      fs:         FrequencySubbands (subband scheme) for ds_level=0.
-      Wmax:       max peak-finding kernel width (ds_level=0).
-      convolver:  PfVarianceConvolver(Wmax), shared by all PfVariance objects.
-      nfreq:      number of input frequency channels.
-      per_fm:     (nfreq, fs.M) list-of-lists; per_fm[ifreq][m] is the single-channel
-                  PfVariance for (ifreq, m), or None if channel ifreq does not overlap
-                  multiplet m's subband.
-      per_m:      length-fs.M list of PfVariance; per_m[m] is the frequency-summed variance
-                  for multiplet m (sum over ifreq of per_fm[ifreq][m]).
+      ntrees:      number of DedispersionTrees (= plan.ntrees).
+      r:           length-ntrees int array; r[itree] = config.tree_rank - delta - (ids>0 ? 1 : 0),
+                   the tree's kept-output rank (delta = early-trigger reduction, ids = ds_level).
+                   It already includes the early-trigger -delta and the downsampled -1, so
+                   r == config.tree_rank only for tree 0.
+      R:           length-ntrees int array; R[itree] = the tree's pf_rank (NOT the config pf_rank).
+      Wmax:        length-ntrees int array; Wmax[itree] = the tree's max peak-finding kernel width.
+      convolvers:  length-ntrees list of PfVarianceConvolver (one per tree).
+      fs:          length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
+      plan, nfreq: the DedispersionPlan and the number of input frequency channels.
+      per_tfm:     (ntrees, nfreq, M) ragged; per_tfm[itree][ifreq] is None (ifreq below the tree's
+                   truncated band) or a length-M list of (PfVariance of rank r[itree]-R[itree], or
+                   None where multiplet m doesn't overlap ifreq).
+      per_tm:      (ntrees, M) ragged; per_tm[itree][m] is the frequency-summed PfVariance for tree
+                   itree, multiplet m (also rank r[itree]-R[itree]).
     """
 
-    def __init__(self, config):
-        from ..pirate_pybind11 import FrequencySubbands
+    def __init__(self, plan):
+        cfg = plan.config
+        full_cm = np.asarray(cfg.make_channel_map(), dtype=np.float64)
+        self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
+        # r[itree] = config.tree_rank - delta - (ids>0 ? 1 : 0)
+        self.r = np.array([cfg.tree_rank - (t.pri_dd_rank - t.early_dd_rank) - (t.ds_level > 0)
+                           for t in plan.trees])
+        self.R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
+        self.Wmax = np.array([t.pf.max_width for t in plan.trees])
+        self.fs = [t.frequency_subbands for t in plan.trees]
+        self.convolvers = [PfVarianceConvolver(int(w)) for w in self.Wmax]   # one per tree (lightweight)
 
-        ds_level = 0     # only ds_level=0 is handled for now
-        self.r = int(config.tree_rank)
-        self.fs = FrequencySubbands(config.frequency_subband_counts)
-        self.R = self.fs.pf_rank
-        self.rho = self.r - self.R
-        self.Wmax = int(config.peak_finding_params[ds_level].max_width)
-        self.nfreq = int(config.get_total_nfreq())
-        self.convolver = PfVarianceConvolver(self.Wmax)
+        self.per_tfm = [self._make_per_fm(itree, tree, full_cm) for itree, tree in enumerate(plan.trees)]
+        self.per_tm = [self._make_per_m(itree) for itree in range(self.ntrees)]
 
-        channel_map = np.asarray(config.make_channel_map(), dtype=np.float64)
-        self.per_fm = self._make_per_fm(channel_map)
-        self.per_m = self._make_per_m()
-
-    def _make_per_fm(self, channel_map):
-        # per_fm[ifreq][m]: single-channel PfVariance for (ifreq, m), or None (no overlap).
+    def _make_per_fm(self, itree, tree, full_cm):
+        # per_fm[ifreq]: length-M list of (PfVariance or None) for tree itree, or None (no overlap).
+        fs, conv, ids = self.fs[itree], self.convolvers[itree], tree.ds_level
+        rho_cm = self.plan.config.tree_rank - (tree.pri_dd_rank - tree.early_dd_rank)   # = r + (ids>0)
+        cm = np.ascontiguousarray(full_cm[: (1 << rho_cm) + 1])    # truncate to first 2^rho_cm channels
         per_fm = []
         for ifreq in range(self.nfreq):
-            ssa = SparseTilePerM.make_dedispersion_output(channel_map, ifreq, self.fs)
-            per_fm.append([None if tile is None else PfVariance.from_tile(tile, self.convolver)
-                           for tile in ssa.per_m])
+            if not (ifreq < cm[0] and ifreq + 1 > cm[-1]):        # ifreq below the truncated band
+                per_fm.append(None)
+                continue
+            ssa = SparseTilePerM.make_dedispersion_output(cm, ifreq, fs, upper_half_only=(ids > 0))
+            per_fm.append([None if t is None else PfVariance.from_tile(t, conv) for t in ssa.per_m])
         return per_fm
 
-    def _make_per_m(self):
-        # per_m[m]: frequency-summed PfVariance for multiplet m (sum over per_fm[:, m]).
+    def _make_per_m(self, itree):
+        # per_m[m]: frequency-summed PfVariance for tree itree, multiplet m.
+        rho = int(self.r[itree]) - int(self.R[itree])
+        conv, per_fm = self.convolvers[itree], self.per_tfm[itree]
         per_m = []
-        for m in range(self.fs.M):
-            acc = PfVariance(self.rho, self.convolver)
-            for ifreq in range(self.nfreq):
-                pv = self.per_fm[ifreq][m]
-                if pv is not None:
-                    acc.add(pv)
+        for m in range(self.fs[itree].M):
+            acc = PfVariance(rho, conv)
+            for row in per_fm:
+                if row is not None and row[m] is not None:
+                    acc.add(row[m])
             per_m.append(acc)
         return per_m
 
 
 class PfAvarApproximation:
-    """Approximate analytic peak-finding variances for a DedispersionConfig (ds_level=0, so far).
+    """Approximate analytic peak-finding variances for a DedispersionPlan (tree 0 only, so far).
 
-    Like PfAvarExact, but compressed and approximated. Variances are stored per coarse-freq
-    channel (the 2^R level-0 subbands, tree-freq range 2^(r-R) f <= tree-freq < 2^(r-R) (f+1)),
-    at the WEIGHTS' DM resolution 2^(r-L): each PfVariance has rank r-L, not r-R. The
-    approximation is that the variance does not depend on the low (L-R) DM bits (those that
-    vary within one weight DM bin); we just fix them to 0.
+    Like PfAvarExact, but compressed and approximated, and consistent with PfAvarExact at tree 0
+    (it reads all per-tree quantities from plan.trees[0], so r/R/Wmax match PfAvarExact.{r,R,Wmax}[0]).
+    Variances are stored per coarse-freq channel (the 2^R level-0 subbands, tree-freq range
+    2^(r-R) f <= tree-freq < 2^(r-R) (f+1)), at the WEIGHTS' DM resolution 2^(r-L): each PfVariance
+    has rank r-L, not r-R. The approximation is that the variance does not depend on the low (L-R)
+    DM bits (those that vary within one weight DM bin); we just fix them to 0.
 
     Per-multiplet variances are reconstructed on demand (get_per_fm / get_per_m): a multiplet m
     spans a coarse-freq range [ilo, ihi) (= fs.m_to_ilo(m)..m_to_ihi(m)); its variance is the
@@ -377,9 +388,10 @@ class PfAvarApproximation:
 
     Members
     -------
-      r, R, L, rho:  tree_rank, pf_rank, log2(wt_dm_downsampling), and rho = r - L (PfVariance rank).
-      fs:            FrequencySubbands (subband scheme) for ds_level=0.
-      Wmax:          max peak-finding kernel width (ds_level=0).
+      r, R, L, rho:  tree 0's rank (= config.tree_rank), pf_rank, log2(wt_dm_downsampling), and
+                     rho = r - L (PfVariance rank). All from plan.trees[0].
+      fs:            FrequencySubbands (subband scheme) of plan.trees[0].
+      Wmax:          tree 0's max peak-finding kernel width.
       convolver:     PfVarianceConvolver(Wmax), shared by all PfVariance objects.
       nfreq:         number of input frequency channels.
       per_ff:        (nfreq, 2^R) list-of-lists; per_ff[ifreq][f] is the single-channel PfVariance
@@ -387,23 +399,21 @@ class PfAvarApproximation:
       per_f:         length-2^R list of PfVariance; per_f[f] = sum over ifreq of per_ff[ifreq][f].
     """
 
-    def __init__(self, config):
-        from ..pirate_pybind11 import FrequencySubbands
-
-        ds_level = 0     # only ds_level=0 is handled for now
-        self.r = int(config.tree_rank)
-        self.fs = FrequencySubbands(config.frequency_subband_counts)
+    def __init__(self, plan):
+        tree0 = plan.trees[0]                            # base tree (ids=0, delta=0)
+        self.r = int(plan.config.tree_rank)              # = tree0's kept-output rank (ids=0, delta=0)
+        self.fs = tree0.frequency_subbands
         self.R = self.fs.pf_rank
-        wt_dd = int(config.peak_finding_params[ds_level].wt_dm_downsampling)
+        wt_dd = int(tree0.pf.wt_dm_downsampling)
         self.L = wt_dd.bit_length() - 1                  # log2(wt_dm_downsampling)
         assert wt_dd == (1 << self.L), "wt_dm_downsampling must be a power of two"
         assert self.R <= self.L <= self.r, (self.R, self.L, self.r)
         self.rho = self.r - self.L                       # PfVariance rank (approximation)
-        self.Wmax = int(config.peak_finding_params[ds_level].max_width)
-        self.nfreq = int(config.get_total_nfreq())
+        self.Wmax = int(tree0.pf.max_width)
+        self.nfreq = int(plan.nfreq)
         self.convolver = PfVarianceConvolver(self.Wmax)
 
-        channel_map = np.asarray(config.make_channel_map(), dtype=np.float64)
+        channel_map = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
         self.per_ff = self._make_per_ff(channel_map)
         self.per_f = self._make_per_f()
 

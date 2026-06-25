@@ -175,7 +175,9 @@ def parse_check_avar_approximation(subparsers):
 
 def check_avar_approximation(args):
     config = DedispersionConfig.from_yaml(args.config_file)
-    slow_avar.check_approximation(config)
+    config.validate()
+    plan = DedispersionPlan(config)
+    slow_avar.check_approximation(plan)
 
 
 #########################################   time command  ##########################################
