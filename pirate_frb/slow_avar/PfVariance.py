@@ -555,35 +555,35 @@ class PfAvarApproximation:
         if not trees_k:
             return
 
-        # Convert each RAW sub-block singleton at the current level to a PfVariance ONCE, shared
-        # across all trees in trees_k (all have klevel == this level). Built at the max P over
-        # trees_k and without any upper-half specialization; each tree's coarsify loop below
-        # truncates the p-axis to its own P and (ids>0) takes the upper DM half via PfVariance.add().
-        # pv_fp[fp] is None for sub-blocks outside the gridding footprint.
+        # All trees in trees_k share the level-k sub-block singletons. Loop over the sub-blocks fp:
+        # convert each RAW singleton to a PfVariance ONCE (at the max P over these trees), then add it
+        # into each tree's coarse-freq accumulators per_tff[itree][ifreq][f] and per_tf[itree][f]
+        # (f = fp >> (L-R)); PfVariance.add truncates the p-axis to the tree's P, (ids>0) keeps the
+        # upper DM half, and scale=2^-(L-R) gives the sub-block-variance mean.
         P_shared = int(max(self.tree_P[itree] for itree in trees_k))
         nfp = 1 << int(max(self.tree_L[itree] for itree in trees_k))
-        pv_fp = [None] * nfp
 
         for fp in range(nfp):
             tile = sarr.get_singleton(fp, allow_none=True)
-            if tile is not None:
-                pv_fp[fp] = PfVariance.from_tile(tile, P_shared, self.convolver)
+            if tile is None:
+                continue
 
-        for itree in trees_k:
-            # Coarsify the shared per-sub-block PfVariances into tree itree's 2^R coarse-freqs:
-            # f = f' >> (L-R), mean over its 2^(L-R) sub-blocks (scaled by 2^-(L-R)). add() truncates
-            # the p-axis to this tree's P and (ids>0) keeps the upper DM half (rank rho_cm-L -> r-L).
+            pv = PfVariance.from_tile(tile, P_shared, self.convolver)
 
-            r, R, L, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
-            upper_half = (int(self._tree_ids[itree]) > 0)
-            norm = 2.0 ** (-(L - R))                            # DD normalization: sub-block-variance mean
+            for itree in trees_k:
+                # Coarsify the shared per-sub-block PfVariances into tree itree's 2^R coarse-freqs:
+                # f = f' >> (L-R), mean over its 2^(L-R) sub-blocks (scaled by 2^-(L-R)). add() truncates
+                # the p-axis to this tree's P and (ids>0) keeps the upper DM half (rank rho_cm-L -> r-L).
 
-            for fp in range(1 << L):                            # sub-block coarse-freq f'
-                pv = pv_fp[fp]
-                if pv is None:
-                    continue
+                r, R, L, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
+                upper_half = (int(self._tree_ids[itree]) > 0)
+                norm = 2.0 ** (-(L - R))                            # DD normalization: sub-block-variance mean
+
+                if fp >= (1 << L):
+                    continue   # no overlap with tree
 
                 f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
+                
                 if self.per_tff[itree][ifreq][f] is None:
                     self.per_tff[itree][ifreq][f] = PfVariance(r - L, P)
 
