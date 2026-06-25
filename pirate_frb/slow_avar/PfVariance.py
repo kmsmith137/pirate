@@ -26,6 +26,7 @@ from .SparseTile import SparseTile, SparseTileTriple, SparseTilePerM
 
 ###################################   class PfVarianceConvolver   ##################################
 
+
 class PfVarianceConvolver:
     """Computes Var(h_p * x) for the peak-finding profiles p, given a short kernel x.
 
@@ -196,6 +197,7 @@ class PfVarianceConvolver:
 
 #######################################   class PfVariance   #######################################
 
+
 class PfVariance:
     """Compressed peak-finding output variance var[d, p], for delay 0 <= d < 2^rank and
     peak-finding profile 0 <= p < P (P is fixed by the convolver).
@@ -359,6 +361,7 @@ class PfVariance:
 
 #######################################   class PfAvarExact   ######################################
 
+
 class PfAvarExact:
     """Exact analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
 
@@ -442,6 +445,7 @@ class PfAvarExact:
 
 
 ###################################   class PfAvarApproximation   ##################################
+
 
 class PfAvarApproximation:
     """Approximate analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).

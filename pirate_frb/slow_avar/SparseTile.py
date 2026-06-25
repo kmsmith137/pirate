@@ -3,6 +3,7 @@ import numpy as np
 
 #######################################   class SparseTile   #######################################
 
+
 class SparseTile:
     """
     A contiguous f-index range of a tree-dedispersion array of shape (2^(r-k), 2^k, ntime),
@@ -430,6 +431,7 @@ class SparseTile:
 
 ####################################   class SparseTileTriple   ####################################
 
+
 class SparseTileTriple:
     """
     A tree-dedispersion array of shape (2^(r-k), 2^k, ntime) over a contiguous f-index
@@ -616,6 +618,7 @@ class SparseTileTriple:
 
 
 #####################################   class SparseTilePerM   #####################################
+
 
 class SparseTilePerM:
     """
