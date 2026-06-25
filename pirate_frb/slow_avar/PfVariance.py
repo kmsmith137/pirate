@@ -514,12 +514,13 @@ class PfAvarApproximation:
 
         # Per-tree validation + derived ids flag and iterate level klevel = rho_cm - L = (r+ids) - L.
         self._tree_ids = np.array([t.ds_level for t in plan.trees])
-        self._tree_klevel = self.tree_r + (self._tree_ids > 0) - self.tree_L
-        
-        max_k = int(max(self._tree_klevel))
-        trees_at = {}                                     # level k -> [itree, ...]
-        for itree, k in enumerate(self._tree_klevel):
-            trees_at.setdefault(int(k), []).append(itree)
+        self._klevel_trees = {}
+        self._klevel_max = -1
+
+        for itree in range(self.ntrees):
+            k = self.tree_r[itree] - self.tree_L[itree] + (self._tree_ids[itree] > 0)
+            self._klevel_trees.setdefault(int(k), []).append(itree)
+            self._klevel_max = max(self._klevel_max, k)
 
         full_cm = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
 
@@ -535,23 +536,17 @@ class PfAvarApproximation:
                 
             sarr = SparseTileTriple.make_tree_gridding_output(full_cm, ifreq)   # rank config.tree_rank, level 0
             
-            for k in range(0, max_k + 1):
-                trees_k = trees_at.get(k, ())
-                
-                if trees_k:
-                    pv_fp = self._sub_block_variances(sarr, trees_k)   # shared across trees_k
-                    for itree in trees_k:
-                        pv = self._coarsify_row(pv_fp, itree)          # list of 2^R (PfVariance or None)
-                        self.per_tff[itree][ifreq] = pv
-                        for f, x in enumerate(pv):
-                            if x is not None:
-                                self.per_tf[itree][f].add(x)
-                
-                if k < max_k:
+            for k in range(0, self._klevel_max + 1):
+                self._process_klevel(sarr, k, ifreq)
+                if k < self._klevel_max:
                     sarr = sarr.iterate()
 
-    
-    def _sub_block_variances(self, sarr, trees_k):
+
+    def _process_klevel(self, sarr, k, ifreq):
+        trees_k = self._klevel_trees.get(k, ())
+        if not trees_k:
+            return
+
         # Convert each RAW sub-block singleton at the current level to a PfVariance ONCE, shared
         # across all trees in trees_k (all have klevel == this level). Built at the max P over
         # trees_k and without any upper-half specialization; each tree's _coarsify_row truncates the
@@ -564,8 +559,14 @@ class PfAvarApproximation:
             tile = sarr.get_singleton(fp, allow_none=True)
             if tile is not None:
                 pv_fp[fp] = PfVariance.from_tile(tile, P_shared, self.convolver)
-        return pv_fp
 
+        for itree in trees_k:
+            pv = self._coarsify_row(pv_fp, itree)          # list of 2^R (PfVariance or None)
+            self.per_tff[itree][ifreq] = pv
+            for f, x in enumerate(pv):
+                if x is not None:
+                    self.per_tf[itree][f].add(x)
+        
     
     def _coarsify_row(self, pv_fp, itree):
         # Coarsify the shared per-sub-block PfVariances into tree itree's 2^R coarse-freqs:
