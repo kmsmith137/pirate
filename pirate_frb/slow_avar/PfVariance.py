@@ -274,11 +274,12 @@ class PfVariance:
         tile_var = convolver.variance(tile.data, self.P)[0]   # drop nf==1 axis -> (2^popcount, P)
         self._accumulate(tile.dbits, tile_var)
 
-    def add(self, pfvar, upper_half=False):
-        """Accumulate another PfVariance into self.
+    def add(self, pfvar, upper_half=False, scale=1.0):
+        """Accumulate (scale * pfvar) into self.
 
         Requires self.P <= pfvar.P; if pfvar has more profiles its p-axis is truncated to the first
         self.P (the kernel bank is nested in P, so the truncation is the lower-P variance exactly).
+        Every accumulated term is multiplied by 'scale' (default 1.0).
 
         If upper_half (which requires pfvar.rank == self.rank + 1), accumulate the logical UPPER
         HALF of pfvar's delay axis: fix pfvar's top delay bit (bit self.rank) to 1 and drop it. A
@@ -291,23 +292,19 @@ class PfVariance:
         if not upper_half:
             assert pfvar.rank == self.rank, (pfvar.rank, self.rank)
             for dbits, arr in pfvar.terms.items():
-                self._accumulate(dbits, arr[:, :self.P])
+                arr = arr[:, :self.P]
+                self._accumulate(dbits, arr if scale == 1.0 else scale * arr)
             return
         assert pfvar.rank == self.rank + 1, (pfvar.rank, self.rank)
         topbit = 1 << self.rank                          # pfvar's extra (top) delay bit
         for dbits, arr in pfvar.terms.items():
             arr = arr[:, :self.P]
+            if scale != 1.0:
+                arr = scale * arr
             if dbits & topbit:                           # depends on the top bit (its array MSB):
                 self._accumulate(dbits & ~topbit, arr[arr.shape[0] // 2:])   # drop it, keep upper half
             else:
                 self._accumulate(dbits, arr)             # independent of the top bit
-
-    def scaled(self, c):
-        """Return a new PfVariance (same rank/P) with every term multiplied by c."""
-        out = PfVariance(self.rank, self.P)
-        for dbits, arr in self.terms.items():
-            out._accumulate(dbits, c * arr)
-        return out
 
     def add_spectator_low_bits(self, nbits):
         """Return a new PfVariance of rank (self.rank + nbits) that is independent of the new
@@ -356,6 +353,13 @@ class PfVariance:
         b_new = PfVariance(k - 1, P1); b_new.add(pv, upper_half=True)
         b_old = PfVariance(k - 1, P1); b_old.add_tile(spec, conv)
         assert np.allclose(b_new.unpack(spec.dbits), b_old.unpack(spec.dbits)), (k, P1, P2)
+
+        # scale: add(scale=c) accumulates c * pfvar (both ids branches).
+        c = float(np.random.uniform(0.5, 2.0))
+        for base, ph in ((a_new, False), (b_new, True)):
+            s = PfVariance(base.rank, P1); s.add(pv, upper_half=ph, scale=c)
+            assert np.allclose(s.unpack(base.get_all_dbits()),
+                               c * base.unpack(base.get_all_dbits())), (k, P1, P2, c, ph)
 
 
 #######################################   class PfAvarExact   ######################################
@@ -590,8 +594,9 @@ class PfAvarApproximation:
             f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
             if pv_row[f] is None:
                 pv_row[f] = PfVariance(rho, P)
-            pv_row[f].add(pv, upper_half=(ids > 0))            # sum sub-block variances (upper half if ids)
-        return [None if pv is None else pv.scaled(norm) for pv in pv_row]   # ... then mean (2^-(L-R))
+            # mean (scale 2^-(L-R)) of the sub-block variances; upper DM half if ids.
+            pv_row[f].add(pv, upper_half=(ids > 0), scale=norm)
+        return pv_row
 
     
     def get_per_fm(self, itree, ifreq, m):
@@ -600,14 +605,15 @@ class PfAvarApproximation:
         rho = int(self.tree_r[itree]) - int(self.tree_L[itree])
         fs = self.tree_fs[itree]
         ilo, ihi = fs.m_to_ilo(m), fs.m_to_ihi(m)
+        scale = 1.0 / (ihi - ilo)            # mean over the coarse-freq range
         acc = None
         for f in range(ilo, ihi):
             pv = self.per_tff[itree][ifreq][f]
             if pv is not None:
                 if acc is None:
                     acc = PfVariance(rho, int(self.tree_P[itree]))
-                acc.add(pv)
-        return None if acc is None else acc.scaled(1.0 / (ihi - ilo))
+                acc.add(pv, scale=scale)
+        return acc
 
     
     def get_per_m(self, itree, m):
@@ -616,7 +622,8 @@ class PfAvarApproximation:
         rho = int(self.tree_r[itree]) - int(self.tree_L[itree])
         fs = self.tree_fs[itree]
         ilo, ihi = fs.m_to_ilo(m), fs.m_to_ihi(m)
+        scale = 1.0 / (ihi - ilo)            # mean over the coarse-freq range
         acc = PfVariance(rho, int(self.tree_P[itree]))
         for f in range(ilo, ihi):
-            acc.add(self.per_tf[itree][f])
-        return acc.scaled(1.0 / (ihi - ilo))
+            acc.add(self.per_tf[itree][f], scale=scale)
+        return acc
