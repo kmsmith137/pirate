@@ -123,8 +123,16 @@ struct ReferencePeakFindingKernel
     ReferencePeakFindingKernel(const PeakFindingKernelParams &params, long Dcore);
 
     // The reference kernel uses float32, regardless of what dtype is specified.
+    //
+    // The optional 'out_var' argument is either an empty array (feature disabled), or a
+    // fully-contiguous host array of shape (beams_per_batch, ndm_out, fs.M, nprofiles).
+    // If specified, it is OVERWRITTEN with the per-chunk mean square (a variance estimate,
+    // for mean-zero input) of each weighted peak-finding output 'w*y' that is max-reduced
+    // into out_max, resolved by (multiplet m, profile p) and normalized over time.
+    // The out_max and out_argmax arrays are unaffected by whether out_var is supplied.
     void apply(ksgpu::Array<float> &out_max,     // shape (beams_per_batch, ndm_out, nt_out)
                ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
+               ksgpu::Array<double> &out_var,    // shape (beams_per_batch, ndm_out, fs.M, nprofiles), or empty
                const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, params.fs.M, nt_in)
                const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
                long ibatch,                      // 0 <= ibatch < nbatches

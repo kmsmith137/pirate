@@ -235,16 +235,20 @@ ReferencePeakFindingKernel::ReferencePeakFindingKernel(const PeakFindingKernelPa
 
 
 // helper for ReferencePeakFindingKernel::apply()
-static inline void _update_pf(float &maxval, uint &argmax, float val, uint token)
+// In addition to the (maxval, argmax) max-reduce, accumulate val^2 into 'sumsq'
+// (a running sum-of-squares, later normalized into out_var; see apply()).
+static inline void _update_pf(float &maxval, uint &argmax, double &sumsq, float val, uint token)
 {
     argmax = (val > maxval) ? token : argmax;
     maxval = std::max(maxval, val);
+    sumsq += double(val) * val;
 }
 
 
 void ReferencePeakFindingKernel::apply(
     ksgpu::Array<float> &out_max,      // shape (beams_per_batch, ndm_out, nt_out)
     ksgpu::Array<uint> &out_argmax,    // shape (beams_per_batch, ndm_out, nt_out)
+    ksgpu::Array<double> &out_var,     // shape (beams_per_batch, ndm_out, M, nprofiles), or empty
     const ksgpu::Array<float> &in,     // shape (beams_per_batch, ndm_out, M, nt_in)
     const ksgpu::Array<float> &wt,     // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, F)
     long ibatch, bool debug)
@@ -259,6 +263,15 @@ void ReferencePeakFindingKernel::apply(
     xassert(out_argmax.on_host());
     xassert(in.on_host());
     xassert(wt.on_host());
+
+    // Optional out_var: an empty array disables the feature; otherwise it is overwritten
+    // with per-chunk variances (see comments in PeakFindingKernel.hpp).
+    bool do_var = (out_var.size > 0);
+    if (do_var) {
+        xassert_shape_eq(out_var, ({p.beams_per_batch, p.ndm_out, fs.M, nprofiles}));
+        xassert(out_var.on_host());
+        xassert(out_var.is_fully_contiguous());
+    }
 
     xassert_eq(ibatch, expected_ibatch);
     expected_ibatch = (ibatch + 1) % nbatches;
@@ -338,6 +351,13 @@ void ReferencePeakFindingKernel::apply(
 
     for (long b = 0; b < B; b++) {
         for (long d = 0; d < D; d++) {
+            // out_var[b,d] is a contiguous (M,P) block, overwritten (zeroed, then accumulated
+            // across the tout loop below) so the caller always gets a single-chunk variance.
+            double *var_bd = do_var ? &out_var.at({b,d,0,0}) : nullptr;
+            if (do_var)
+                for (long i = 0; i < M*P; i++)
+                    var_bd[i] = 0.0;
+
             for (long tout = 0; tout < nt_out; tout++) {
                 const float *wp = &wt.at({b,d/Wds,tout/Tds,0,0});  // shape (P,F) contiguous
 
@@ -354,6 +374,7 @@ void ReferencePeakFindingKernel::apply(
                     int N = tmp_nout[l];    // count
                     int S = tmp_sout[l];    // spacing
                     int I = tmp_iout[l];    // base
+                    double wvar = 1.0 / double(nt_out * N);  // 1/count for level l (sum-of-squares -> variance)
 
                     for (int m = 0; m < M; m++) {
                         int f = fs.m_to_f[m];
@@ -362,7 +383,10 @@ void ReferencePeakFindingKernel::apply(
                         float w2 = wp[(3*l+2)*F + f];     // p = (3*l+2)
                         float w3 = wp[(3*l+3)*F + f];     // p = (3*l+3)
 
-                        // Each iteration of the n-loop corresponds to one time sample in the 
+                        double *var_m = do_var ? (var_bd + (long)m * P) : nullptr;  // out_var row, p=0..P-1
+                        double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;  // per-(tout,l,m) sum of squares
+
+                        // Each iteration of the n-loop corresponds to one time sample in the
                         // tmp[l] array, or (dt) time samples in the original input array.
 
                         for (int n = 0; n < N; n++) {
@@ -382,12 +406,12 @@ void ReferencePeakFindingKernel::apply(
                             float y3 = (0.5f*x0 + x1 + x2 + 0.5f*x3);
 
                             if (l == 0)
-                                _update_pf(maxval, argmax, w0*y0, token0);
+                                _update_pf(maxval, argmax, s0, w0*y0, token0);
 
                             if (P > 1) {
-                                _update_pf(maxval, argmax, w1*y1, token1);
-                                _update_pf(maxval, argmax, w2*y2, token2);
-                                _update_pf(maxval, argmax, w3*y3, token3);
+                                _update_pf(maxval, argmax, s1, w1*y1, token1);
+                                _update_pf(maxval, argmax, s2, w2*y2, token2);
+                                _update_pf(maxval, argmax, s3, w3*y3, token3);
                             }
 
                             if (debug && (b == 0) && (d==0) && (tout==2)) {
@@ -402,6 +426,19 @@ void ReferencePeakFindingKernel::apply(
                                     cout << "   p=" << (3*l+2) << " -> (w=" << w2 << ", y=" << y2 << ", w*y=" << (w2*y2) << endl;
                                     cout << "   p=" << (3*l+3) << " -> (w=" << w3 << ", y=" << y3 << ", w*y=" << (w3*y3) << endl;
                                 }
+                            }
+                        }
+
+                        // Fold this (tout,l,m) block's sum-of-squares into out_var, normalized by
+                        // wvar = 1/count(level l). The += accumulates across the tout loop; var_bd
+                        // was zeroed per (b,d), so out_var ends as the per-chunk variance estimate.
+                        if (do_var) {
+                            if (l == 0)
+                                var_m[0] += s0 * wvar;
+                            if (P > 1) {
+                                var_m[3*l+1] += s1 * wvar;
+                                var_m[3*l+2] += s2 * wvar;
+                                var_m[3*l+3] += s3 * wvar;
                             }
                         }
                     }
@@ -837,7 +874,8 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
 
     Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
-    ref_kernel_large.apply(cpu_out_large, cpu_argmax_large, cpu_in_large, cpu_wt_large, 0);
+    Array<double> cpu_var_large;  // empty -> out_var feature disabled
+    ref_kernel_large.apply(cpu_out_large, cpu_argmax_large, cpu_var_large, cpu_in_large, cpu_wt_large, 0);
 
     // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
     // (We haven't compared the reference and GPU peak-finders yet.)
@@ -870,7 +908,8 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
 
             Array<float> cpu_out_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
             Array<uint> cpu_argmax_small({beams_per_batch, ndm_out, nt_out_per_chunk}, af_rhost | af_zero);
-            ref_kernel_small.apply(cpu_out_small, cpu_argmax_small, cpu_in_small, cpu_wt_small, ibatch);
+            Array<double> cpu_var_small;  // empty -> out_var feature disabled
+            ref_kernel_small.apply(cpu_out_small, cpu_argmax_small, cpu_var_small, cpu_in_small, cpu_wt_small, ibatch);
 
             // Use eval_tokens() to get a nontrivial test of the reference peak-finder.
             // (We haven't compared the reference and GPU peak-finders yet.)

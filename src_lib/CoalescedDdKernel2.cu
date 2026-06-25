@@ -381,7 +381,8 @@ void CoalescedDdKernel2::test_random()
             // cout << "Debug: wt.shape = " << wt_cpu.shape_str() << endl;
             // wt_cpu.at({0,0,0,0,0}) = 1.0f;
 
-            ref_pf_kernel.apply(max_cpu, argmax_cpu, sb_cpu, wt_cpu, ibatch);
+            Array<double> var_cpu;   // empty -> out_var feature disabled
+            ref_pf_kernel.apply(max_cpu, argmax_cpu, var_cpu, sb_cpu, wt_cpu, ibatch);
 
             // CPU kernel done! Now run the GPU kernel.
             Array<void> wt_gpu = wl.to_gpu(wt_cpu);

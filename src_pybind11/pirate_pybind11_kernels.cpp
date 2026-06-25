@@ -307,10 +307,18 @@ void register_kernel_bindings(pybind11::module &m)
           .def("apply",
                [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
                   const Array<float> &in_, const Array<float> &wt, long ibatch) {
-                   self.apply(out_max, out_argmax, in_, wt, ibatch);
+                   Array<double> out_var;   // empty -> out_var feature disabled
+                   self.apply(out_max, out_argmax, out_var, in_, wt, ibatch);
                },
                py::arg("out_max"), py::arg("out_argmax"), py::arg("in_"),
                py::arg("wt"), py::arg("ibatch"))
+          .def("apply",
+               [](ReferencePeakFindingKernel &self, Array<float> &out_max, Array<uint> &out_argmax,
+                  const Array<float> &in_, const Array<float> &wt, long ibatch, Array<double> &out_var) {
+                   self.apply(out_max, out_argmax, out_var, in_, wt, ibatch);
+               },
+               py::arg("out_max"), py::arg("out_argmax"), py::arg("in_"),
+               py::arg("wt"), py::arg("ibatch"), py::arg("out_var"))
           .def("eval_tokens",
                [](ReferencePeakFindingKernel &self, Array<float> &out,
                   const Array<uint> &in_tokens, const Array<float> &wt) {

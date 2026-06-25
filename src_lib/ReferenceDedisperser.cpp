@@ -242,7 +242,8 @@ void ReferenceDedisperser0::dedisperse(long ichunk, long ibatch)
             sb = sb.slice(1, sb.shape[1]/2, sb.shape[1]);
 
         auto pf_kernel = pf_kernels.at(itree);
-        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), sb, wt_arrays.at(itree), ibatch);
+        Array<double> empty_var;   // out_var feature disabled in the reference dedisperser
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), empty_var, sb, wt_arrays.at(itree), ibatch);
     }
 }
 
@@ -420,7 +421,8 @@ void ReferenceDedisperser1::dedisperse(long ichunk, long ibatch)
 
         Array<float> sb_buf = stage2_subband_bufs.at(itree);
         dd_kernel->apply(dd_buf, dd_buf, sb_buf, ichunk, ibatch);
-        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), sb_buf, wt_arrays.at(itree), ibatch);
+        Array<double> empty_var;   // out_var feature disabled in the reference dedisperser
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), empty_var, sb_buf, wt_arrays.at(itree), ibatch);
     }
 }
 
@@ -606,7 +608,8 @@ void ReferenceDedisperser2::dedisperse(long ichunk, long ibatch)
 
         Array<float> sb_buf = stage2_subband_bufs.at(itree);
         dd_kernel->apply(this->gpu_ringbuf, dd_buf, sb_buf, ichunk, ibatch);
-        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), sb_buf, wt_arrays.at(itree), ibatch);
+        Array<double> empty_var;   // out_var feature disabled in the reference dedisperser
+        pf_kernel->apply(out_max.at(itree), out_argmax.at(itree), empty_var, sb_buf, wt_arrays.at(itree), ibatch);
     }
 }
 
