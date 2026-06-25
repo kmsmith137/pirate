@@ -199,7 +199,8 @@ class SparseTile:
         DD(k) merge of two adjacent singleton tiles into the output singleton. 'lower' is
         the lower-tree-freq half (gets the DD shift); 'upper' is the upper half. Each is a
         tile with nf==1 and its own (dbits, nt, tshifts, t0). Either may be None (but not
-        both). Chooses tshifts/t0 (the elementwise/scalar min of the two halves' total
+        both); the single-half cases delegate to _iterate_lower / _iterate_upper. With both
+        present, chooses tshifts/t0 (the elementwise/scalar min of the two halves' total
         shifts) to minimize the output (dbits, nt). Returns the level-(k+1) output tile.
 
         With require_aligned (default), 'lower' must be even-aligned (channels 2f, 2f+1) so
@@ -209,67 +210,87 @@ class SparseTile:
         (its f0 is then cosmetic).
         """
         assert lower is not None or upper is not None
-        ref = lower if lower is not None else upper
-        r, k = ref.r, ref.k
+        if upper is None:
+            return SparseTile._iterate_lower(lower)
+        if lower is None:
+            return SparseTile._iterate_upper(upper)
+
+        # Both halves present: the standard aligned DD(k) merge.
+        assert (lower.r, lower.k) == (upper.r, upper.k)
+        assert lower.nf == 1 and upper.nf == 1
+        r, k = lower.r, lower.k
         assert k < r
-        if lower is not None and upper is not None:
-            assert (lower.r, lower.k) == (upper.r, upper.k)
-            assert lower.f0 + 1 == upper.f0                 # adjacency
-            if require_aligned:
-                assert lower.f0 % 2 == 0                    # tree-channel semantics
-        f_out = ref.f0 // 2
-        assert (lower is None or lower.nf == 1) and (upper is None or upper.nf == 1)
+        assert lower.f0 + 1 == upper.f0                 # adjacency
+        if require_aligned:
+            assert lower.f0 % 2 == 0                    # tree-channel semantics
+        f_out = lower.f0 // 2
 
-        tlo = SparseTile._dd_tlo(k)                # length k+1
-        # Each present half's total time shift relative to its stored (pre-shift) data:
-        #   lower gets the DD shift plus its own (lifted) input shift; upper gets only its.
-        s_L = tlo + np.concatenate(([0], lower.tshifts)).astype(np.int64) if lower is not None else None
-        s_U = np.concatenate(([0], upper.tshifts)).astype(np.int64) if upper is not None else None
+        tlo = SparseTile._dd_tlo(k)                     # length k+1
+        # Each half's total time shift relative to its stored (pre-shift) data: lower gets the
+        # DD shift plus its own (lifted) input shift; upper gets only its own.
+        s_L = tlo + np.concatenate(([0], lower.tshifts)).astype(np.int64)
+        s_U = np.concatenate(([0], upper.tshifts)).astype(np.int64)
+        tmin = np.minimum(s_L, s_U)
+        res_L, res_U = s_L - tmin, s_U - tmin
 
-        present = [s for s in (s_L, s_U) if s is not None]
-        tmin = present[0].copy()
-        for p in present[1:]:
-            tmin = np.minimum(tmin, p)
-        res_L = (s_L - tmin) if lower is not None else None
-        res_U = (s_U - tmin) if upper is not None else None
-
-        # Constant (t0) shift: absorb the common min into the output t0; each half's
-        # residual constant (>= 0) folds into its data placement, exactly like res_L/res_U.
-        t0_present = [t.t0 for t in (lower, upper) if t is not None]
-        t0_out = min(t0_present)
-        c_L = (lower.t0 - t0_out) if lower is not None else 0
-        c_U = (upper.t0 - t0_out) if upper is not None else 0
+        # Constant (t0) shift: absorb the common min into the output t0; each half's residual
+        # constant (>= 0) folds into its data placement, exactly like res_L/res_U.
+        t0_out = min(lower.t0, upper.t0)
+        c_L, c_U = lower.t0 - t0_out, upper.t0 - t0_out
 
         # 'dbits + 1' (lifting every selected bit one level) is a left shift on the mask.
-        dbits_out = 0
-        nt_alloc = 1
-        if lower is not None:
-            dbits_out |= (lower.dbits << 1) | SparseTile._nonzero_mask(res_L)
-            nt_alloc = max(nt_alloc, lower.nt + c_L + int(res_L.sum()))
-        if upper is not None:
-            dbits_out |= (upper.dbits << 1) | SparseTile._nonzero_mask(res_U)
-            nt_alloc = max(nt_alloc, upper.nt + c_U + int(res_U.sum()))
+        dbits_out = ((lower.dbits << 1) | SparseTile._nonzero_mask(res_L)
+                     | (upper.dbits << 1) | SparseTile._nonzero_mask(res_U))
+        nt_alloc = max(lower.nt + c_L + int(res_L.sum()), upper.nt + c_U + int(res_U.sum()))
         m_out = dbits_out.bit_count()
 
         rsqrt2 = 1.0 / np.sqrt(2.0)
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
-        lo_flat = lower.data if lower is not None else None      # (1, 2^popcount(dbits), nt)
-        up_flat = upper.data if upper is not None else None
         for s_out in range(1 << m_out):
             dp = SparseTile._representative_delay(s_out, dbits_out)
             d = dp >> 1
-            if lower is not None:
-                rL = c_L + int(SparseTile._delay_tshift(dp, res_L))
-                col = lo_flat[0, SparseTile._selected_bits_index(d, lower.dbits), :]
-                data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
-            if upper is not None:
-                rU = c_U + int(SparseTile._delay_tshift(dp, res_U))
-                col = up_flat[0, SparseTile._selected_bits_index(d, upper.dbits), :]
-                data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
+            rL = c_L + int(SparseTile._delay_tshift(dp, res_L))
+            col = lower.data[0, SparseTile._selected_bits_index(d, lower.dbits), :]
+            data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
+            rU = c_U + int(SparseTile._delay_tshift(dp, res_U))
+            col = upper.data[0, SparseTile._selected_bits_index(d, upper.dbits), :]
+            data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
         # trim=True drops leading/trailing all-zero time slices (leading folds into t0_out).
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
                           t0=t0_out, trim=True)
+
+    @staticmethod
+    def _iterate_lower(lower):
+        """
+        iterate_singletons() with upper=None: DD(k) on just the lower half (channel 2f).
+        The lower half takes the DD shift, but with no upper half to align against, that shift
+        folds entirely into tshifts (the residual is zero), so the output is (1/sqrt2)*lower.data
+        with every selected bit lifted one level (dbits << 1). No per-delay loop is needed.
+        """
+        k = lower.k
+        assert lower.nf == 1 and k < lower.r
+        rsqrt2 = 1.0 / np.sqrt(2.0)
+        tshifts_out = SparseTile._dd_tlo(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
+        data_out = np.ascontiguousarray(rsqrt2 * lower.data)
+        return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, data_out,
+                          tshifts_out, t0=lower.t0, trim=True)
+
+    @staticmethod
+    def _iterate_upper(upper):
+        """
+        iterate_singletons() with lower=None: DD(k) on just the upper half (channel 2f+1).
+        The upper half gets no DD shift, so the new bit 0 is a pure spectator (tshift 0) and the
+        output is (1/sqrt2)*upper.data with every selected bit lifted one level (dbits << 1).
+        No per-delay loop is needed.
+        """
+        k = upper.k
+        assert upper.nf == 1 and k < upper.r
+        rsqrt2 = 1.0 / np.sqrt(2.0)
+        tshifts_out = np.concatenate(([0], upper.tshifts)).astype(np.int64)
+        data_out = np.ascontiguousarray(rsqrt2 * upper.data)
+        return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, data_out,
+                          tshifts_out, t0=upper.t0, trim=True)
 
     def specialize_dbits(self, value, nbits, *, low):
         """
