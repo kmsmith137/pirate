@@ -130,14 +130,6 @@ class SparseTile:
         return d
 
     @staticmethod
-    def _gather_rows(slab, idx):
-        # Gather rows slab[idx] (slab shape (nin, T)); out-of-range idx -> zero rows.
-        out = np.zeros((len(idx), slab.shape[1]), dtype=slab.dtype)
-        valid = (idx >= 0) & (idx < slab.shape[0])
-        out[valid] = slab[idx[valid]]
-        return out
-
-    @staticmethod
     def _delay_tshift(d, tshifts):
         # Total forward time shift T(d) = sum_i tshifts[i]*bit_i(d), for delay value(s) d
         # (python int or numpy array).

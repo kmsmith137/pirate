@@ -140,16 +140,14 @@ class PfVarianceConvolver:
     def test_kernels_match_reference():
         """Check our kernels h_p against the ones ReferencePeakFindingKernel actually uses.
 
-        The reference peak-finder does not expose its kernels: apply() coalesces
-        (convolve with h_p) + (multiply by weights) + (max-reduce).  But with the weights
-        set to 1, eval_tokens() returns a single profile's value w*y == (h_p * in) at a
-        fixed reference time -- a linear functional of the input.  So we feed unit impulses
-        (one per DM row) and read eval_tokens() for each profile p; the readout sweeps out
-        h_p, recovered up to a time shift and a reversal.  That is exactly the equivalence
-        class that leaves Var = ||h_p * x||^2 unchanged, so it is the right thing to pin: if
-        the reference's kernel coefficients/shapes/profile-ordering change, this test fails.
+        The reference doesn't expose its kernels (apply() fuses convolve + weight + max-reduce).
+        But with weights == 1, eval_tokens() returns the linear functional (h_p * in) at a fixed
+        reference time.  Feeding unit impulses (one per DM row) and reading eval_tokens() for each
+        profile p sweeps out h_p, up to a time shift and a reversal -- exactly the equivalence
+        class that leaves Var = ||h_p * x||^2 unchanged.  So this fails if the reference's kernel
+        coefficients/shapes/profile-ordering change.
 
-        Deterministic (no randomness) -- intended to run once, not every iteration.
+        Deterministic -- intended to run once, not every iteration.
         """
         from ..pirate_pybind11 import ReferencePeakFindingKernel
 
@@ -557,9 +555,9 @@ class PfAvarApproximation:
 
         # All trees in trees_k share the level-k sub-block singletons. Loop over the sub-blocks fp:
         # convert each RAW singleton to a PfVariance ONCE (at the max P over these trees), then add it
-        # into each tree's coarse-freq accumulators per_tff[itree][ifreq][f] and per_tf[itree][f]
-        # (f = fp >> (L-R)); PfVariance.add truncates the p-axis to the tree's P, (ids>0) keeps the
-        # upper DM half, and scale=2^-(L-R) gives the sub-block-variance mean.
+        # into each tree's coarse-freq accumulators per_tff[itree][ifreq][f] and per_tf[itree][f], with
+        # f = fp >> (L-R). add() truncates the p-axis to the tree's P, (ids>0) keeps the upper DM half
+        # (rank rho_cm-L -> r-L), and scale=2^-(L-R) means (not sums) the 2^(L-R) sub-block variances.
         P_shared = int(max(self.tree_P[itree] for itree in trees_k))
         nfp = 1 << int(max(self.tree_L[itree] for itree in trees_k))
 
@@ -571,23 +569,18 @@ class PfAvarApproximation:
             pv = PfVariance.from_tile(tile, P_shared, self.convolver)
 
             for itree in trees_k:
-                # Coarsify the shared per-sub-block PfVariances into tree itree's 2^R coarse-freqs:
-                # f = f' >> (L-R), mean over its 2^(L-R) sub-blocks (scaled by 2^-(L-R)). add() truncates
-                # the p-axis to this tree's P and (ids>0) keeps the upper DM half (rank rho_cm-L -> r-L).
-
                 r, R, L, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
                 upper_half = (int(self._tree_ids[itree]) > 0)
-                norm = 2.0 ** (-(L - R))                            # DD normalization: sub-block-variance mean
+                norm = 2.0 ** (-(L - R))
 
                 if fp >= (1 << L):
-                    continue   # no overlap with tree
+                    continue                                   # sub-block fp is outside this tree
 
-                f = fp >> (L - R)                               # coarsify the f-index by 2^(L-R)
-                
+                f = fp >> (L - R)                              # coarsify f-index by 2^(L-R)
+
                 if self.per_tff[itree][ifreq][f] is None:
                     self.per_tff[itree][ifreq][f] = PfVariance(r - L, P)
 
-                # mean (scale 2^-(L-R)) of the sub-block variances; upper DM half if ids.
                 self.per_tff[itree][ifreq][f].add(pv, upper_half=upper_half, scale=norm)
                 self.per_tf[itree][f].add(pv, upper_half=upper_half, scale=norm)
 

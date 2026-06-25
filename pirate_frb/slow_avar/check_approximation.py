@@ -6,14 +6,12 @@ from .PfVariance import PfAvarExact, PfAvarApproximation
 
 
 def check_approximation(plan):
-    """Print summary statistics comparing the exact vs approximate peak-finding variance, per tree.
+    """Print, per tree, summary statistics of the exact-vs-approximate peak-finding variance.
 
-    Builds PfAvarExact(plan) and PfAvarApproximation(plan) and compares them for every tree. For
-    each tree itree and multiplet m, compares var_exact = exact.per_tm[itree][m] (rank r-R) to
-    var_approx = approx.get_per_m(itree, m) (rank r-L): the approximate variance is lifted to rank
-    r-R by adding L-R spectator low DM bits, both are unpacked to a common 'dbits', and the
-    fractional error epsilon = var_approx/var_exact - 1 is formed (shape (2^len(dbits), P)). Prints,
-    per tree, the mean of epsilon and its spread Delta(eps) = sqrt(<eps^2> - <eps>^2) over multiplets.
+    For each tree itree and multiplet m, lifts var_approx = approx.get_per_m(itree, m) (rank r-L)
+    to rank r-R (adding L-R spectator low DM bits), unpacks it and var_exact = exact.per_tm[itree][m]
+    to a common 'dbits', and forms epsilon = var_approx/var_exact - 1.  Prints the mean of epsilon
+    and its spread Delta(eps) = sqrt(<eps^2> - <eps>^2) over multiplets.
     """
     exact = PfAvarExact(plan, progress=True)
     approx = PfAvarApproximation(plan, progress=True)
