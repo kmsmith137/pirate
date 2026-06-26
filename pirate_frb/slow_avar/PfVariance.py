@@ -191,8 +191,8 @@ class PfVariance:
 
         var[d, p] = sum over terms (dbits, arr) of arr[sel(d, dbits), p],
 
-    where sel(d, dbits) = SparseTile._selected_bits_index (highest selected bit is the most
-    significant) -- the same delay-axis convention SparseTile.data uses.  Keeping the terms
+    where sel(d, dbits) packs the selected bits of d highest-first (SparseTile._remap_d(d,
+    (1<<rank)-1, dbits)) -- the same delay-axis convention SparseTile.data uses.  Keeping the terms
     factored (rather than expanding to a dense (2^rank, P) array) is the compression.
 
     Members
@@ -234,10 +234,10 @@ class PfVariance:
         m = dbits.bit_count()
         out = np.zeros((1 << m, self.P), dtype=np.float64)
         
-        # Representative delay for each output row (its 'dbits' bits encode the row index).
-        d = SparseTile._representative_delay(np.arange(1 << m), dbits)
+        # Each output row's 'dbits' bits encode the row index; remap it into each term's packing.
+        rows = np.arange(1 << m)
         for term_dbits, term_arr in self.terms.items():
-            out += term_arr[SparseTile._selected_bits_index(d, term_dbits)]
+            out += term_arr[SparseTile._remap_d(rows, dbits, term_dbits)]
         
         return out
 

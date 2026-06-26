@@ -21,7 +21,7 @@ class SparseTile:
                through the digits {d_b : bit b of dbits is set}.
       data:    shape (nf, 2^popcount(dbits), nt), the pre-time-shift array. The middle axis
                packs the selected delay bits in C-order, with the HIGHEST selected bit as the
-               most significant (the flat index is _selected_bits_index(d, dbits)).
+               most significant (the flat index is _remap_d(d, (1<<k)-1, dbits)).
       tshifts: length-k array, applied UNIFORMLY to every f-index of the tile before
                unpacking: unpacked[f,d,t] = data[f-f0, sel(d), t - t0 - T(d)] for all f,
                where T(d) = sum_i tshifts[i]*bit_i(d). (Because of the shift, 'data'
@@ -75,7 +75,7 @@ class SparseTile:
         if ntime < nt_needed:
             raise RuntimeError(f"unpack: ntime={ntime} too small (need >= {nt_needed})")
 
-        flat_idx = self._selected_bits_index(np.arange(nd_full), self.dbits)
+        flat_idx = self._remap_d(np.arange(nd_full), (1 << self.k) - 1, self.dbits)
         gathered = self.data[:, flat_idx, :]                           # (nf, nd_full, nt)
 
         out = np.zeros((self.nf, nd_full, ntime), dtype=self.data.dtype)
@@ -87,23 +87,28 @@ class SparseTile:
     # ----------------------------- bit-index helpers -----------------------------
 
     @staticmethod
-    def _selected_bits_index(d, dbits):
-        # Flat index into the 2^popcount(dbits) collapsed selected-bit axes, for delay
-        # value(s) d (python int or numpy array). The selected bits (those set in 'dbits')
-        # are packed highest-first: the highest set bit -> most significant output bit.
-        # 'd*0' seeds idx with d's type/shape (so dbits==0 yields an array when d is array).
-        idx = d * 0
-        shift = dbits.bit_count() - 1
-        for b in reversed(range(dbits.bit_length())):
-            if (dbits >> b) & 1:
-                idx = idx | (((d >> b) & 1) << shift)
-                shift -= 1
-        return idx
+    def _remap_d(d, dbits_in, dbits_out):
+        # Reinterpret 'd' (a flat index in the 2^popcount(dbits_in) packing) as a flat index in the
+        # 2^popcount(dbits_out) packing, where dbits_out is a subset of dbits_in. Both packings are
+        # highest-bit-first: a set bit's packed position is popcount of the selected bits below it.
+        # Vectorized in d (python int or numpy array); dbits_in, dbits_out are scalar python ints.
+        # Written to port to C++ line-by-line (popcount / bit_floor intrinsics).
+        assert (~dbits_in & dbits_out) == 0                     # dbits_out subset of dbits_in
+        assert np.all((np.asarray(d) >= 0) & (np.asarray(d) < (1 << dbits_in.bit_count())))
+        dout = d * 0                                            # seed type/shape from d
+        tmp = dbits_out
+        while tmp:
+            bout = 1 << (tmp.bit_length() - 1)                 # highest set bit of tmp (C++ bit_floor)
+            tmp &= ~bout
+            shift_in = (dbits_in & (bout - 1)).bit_count()     # this bit's packed position in d
+            shift_out = (dbits_out & (bout - 1)).bit_count()   # this bit's packed position in dout
+            dout = dout | (((d >> shift_in) & 1) << shift_out)
+        return dout
 
     @staticmethod
     def _representative_delay(s, dbits):
-        # Inverse of _selected_bits_index: the delay whose selected (set in 'dbits') bits
-        # encode flat index s, with all non-selected bits zero.
+        # The delay whose selected (set in 'dbits') bits encode flat index s (highest-bit-first),
+        # all non-selected bits zero -- i.e. spread a packed index back into a full delay.
         d = 0
         shift = dbits.bit_count() - 1
         for b in reversed(range(dbits.bit_length())):
@@ -154,7 +159,7 @@ class SparseTile:
         data_out = np.zeros((nf_out, 1 << m_out, nt_alloc), dtype=np.float64)
         for dp in range(1 << m_out):                   # representative is the identity (all bits)
             d = dp >> 1
-            slab = data_in[:, SparseTile._selected_bits_index(d, dbits_in), :]   # (nf, nt_in)
+            slab = data_in[:, SparseTile._remap_d(d, (1 << k) - 1, dbits_in), :]   # (nf, nt_in)
             gu = slab[1::2]                            # upper halves (2F+1), (nf_out, nt_in)
             gl = slab[0::2]                            # lower halves (2F)
             sh = (dp >> 1) + (dp & 1)                  # ceil(dp/2)
@@ -221,14 +226,14 @@ class SparseTile:
 
         rsqrt2 = 1.0 / np.sqrt(2.0)
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
+        ldb, udb = lower.dbits << 1, upper.dbits << 1      # each half's selected bits, lifted (subset of dbits_out)
         for s_out in range(1 << m_out):
-            dp = SparseTile._representative_delay(s_out, dbits_out)
-            d = dp >> 1
+            dp = SparseTile._representative_delay(s_out, dbits_out)   # full delay, for the per-half time shifts
             rL = c_L + int(SparseTile._eval_tshifts(dp, res_L))
-            col = lower.data[0, SparseTile._selected_bits_index(d, lower.dbits), :]
+            col = lower.data[0, SparseTile._remap_d(s_out, dbits_out, ldb), :]
             data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
             rU = c_U + int(SparseTile._eval_tshifts(dp, res_U))
-            col = upper.data[0, SparseTile._selected_bits_index(d, upper.dbits), :]
+            col = upper.data[0, SparseTile._remap_d(s_out, dbits_out, udb), :]
             data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
@@ -295,11 +300,11 @@ class SparseTile:
         nlow, nhigh = low_mask.bit_count(), high_mask.bit_count()
         data_resh = self.data.reshape(1, 1 << nhigh, 1 << nlow, self.nt)
         if low:
-            idx = SparseTile._selected_bits_index(value, low_mask)
+            idx = SparseTile._remap_d(value, (1 << nbits) - 1, low_mask)
             data_sel = data_resh[:, :, idx, :]         # keep high (leading) axis -> (1, 2^nhigh, nt)
             new_dbits, new_tshifts, delay = high_mask, self.tshifts[nbits:], value
         else:
-            idx = SparseTile._selected_bits_index(value, high_mask)
+            idx = SparseTile._remap_d(value, (1 << nbits) - 1, high_mask)
             data_sel = data_resh[:, idx, :, :]         # keep low (trailing) axis -> (1, 2^nlow, nt)
             new_dbits, new_tshifts, delay = low_mask, self.tshifts[:b], (value << b)
         rho = self.k - nbits
@@ -337,6 +342,35 @@ class SparseTile:
             if sh < ntime:
                 out[:, dp, sh:] += rsqrt2 * dense_in[0::2, d, :ntime - sh]   # lower (2F), shift sh
         return out
+
+    @staticmethod
+    def test_random_remap_d():
+        """_remap_d vs a brute-force 'spread over dbits_in, re-extract dbits_out' reference."""
+        n = int(np.random.randint(0, 9))                 # 0..8 total bits
+        dbits_in = int(np.random.randint(0, 1 << n))     # any mask over bits [0, n)
+        dbits_out = 0                                    # a random subset of dbits_in
+        for b in range(n):
+            if (dbits_in >> b) & 1 and np.random.rand() < 0.5:
+                dbits_out |= (1 << b)
+        p_in = dbits_in.bit_count()
+        d = np.arange(1 << p_in, dtype=np.int64)         # all packed inputs, vectorized
+        got = SparseTile._remap_d(d, dbits_in, dbits_out)
+        # Brute-force reference (independent of _remap_d): spread each packed index into a full
+        # delay over dbits_in (MSB-first), then re-extract the dbits_out bits (also MSB-first).
+        ref = np.zeros_like(d)
+        for s in range(1 << p_in):
+            D, sh = 0, p_in - 1
+            for b in reversed(range(n)):
+                if (dbits_in >> b) & 1:
+                    D |= ((s >> sh) & 1) << b; sh -= 1
+            out, sh = 0, dbits_out.bit_count() - 1
+            for b in reversed(range(n)):
+                if (dbits_out >> b) & 1:
+                    out |= ((D >> b) & 1) << sh; sh -= 1
+            ref[s] = out
+        assert np.array_equal(got, ref), (n, dbits_in, dbits_out, list(got), list(ref))
+        # Scalar (python int) path: _remap_d(0b101, 0b111, 0b101) keeps bits {2,0} -> 0b11.
+        assert SparseTile._remap_d(0b101, 0b111, 0b101) == 0b11
 
     @staticmethod
     def test_random_iterate_aligned():

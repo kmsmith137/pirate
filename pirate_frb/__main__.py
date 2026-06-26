@@ -150,6 +150,7 @@ def test(args):
             SparseTile.test_random_iterate_aligned()
             SparseTile.test_random_iterate_singletons()
             SparseTile.test_random_specialize_low_dbits()
+            SparseTile.test_random_remap_d()
             SparseTilePerM.test_random_subbanded_dedispersion()
             PfVarianceConvolver.test_reduces_to_norms()
             PfVarianceConvolver.test_random_variance()
