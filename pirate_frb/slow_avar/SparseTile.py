@@ -153,14 +153,15 @@ class SparseTile:
         data_in = tile.data                            # (nf, 2^popcount(dbits_in), nt_in)
         data_out = np.zeros((nf_out, 1 << m_out, nt_alloc), dtype=np.float64)
         
-        for dp in range(1 << m_out):                   # representative is the identity (all bits)
-            d = dp >> 1
+        # Each input delay d feeds the two output delays dp = 2d and 2d+1; both reuse the same
+        # gathered input row, with the lower half shifted by ceil(dp/2) = d and d+1 respectively.
+        for d in range(1 << k):
             slab = data_in[:, SparseTile._remap_d(d, (1 << k) - 1, dbits_in), :]   # (nf, nt_in)
-            gu = slab[1::2]                            # upper halves (2F+1), (nf_out, nt_in)
-            gl = slab[0::2]                            # lower halves (2F)
-            sh = (dp >> 1) + (dp & 1)                  # ceil(dp/2)
-            data_out[:, dp, :nt_in] += rsqrt2 * gu
-            data_out[:, dp, sh:sh + nt_in] += rsqrt2 * gl
+            gu = rsqrt2 * slab[1::2]                    # upper halves (2F+1): unshifted in both children
+            gl = rsqrt2 * slab[0::2]                    # lower halves (2F): shifted by d, d+1
+            data_out[:, 2*d:2*d+2, :nt_in] += gu[:, None, :]   # upper half -> both children at once
+            data_out[:, 2*d,   d:d + nt_in]     += gl          # dp = 2d
+            data_out[:, 2*d+1, d+1:d+1 + nt_in] += gl          # dp = 2d+1
 
         tshifts_out = np.concatenate(([0], tin)).astype(np.int64)
         return SparseTile(tile.r, k + 1, F0, nf_out, nt_alloc, dbits_out, data_out, tshifts_out, t0=tile.t0)
