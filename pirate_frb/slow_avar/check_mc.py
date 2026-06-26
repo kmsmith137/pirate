@@ -51,9 +51,10 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
     rdd = ReferenceDedisperser(plan, sophistication, enable_variances=True)
     assert int(rdd.beams_per_batch) == 1 and int(rdd.nbatches) == 1, "check_avar_mc requires nbeams==1"
 
-    # Per-tree: analytic variance aligned to (ndm_out, M, P); per-coarse-DM settling table;
-    # MC accumulators (sum of out_var and per-coarse-DM chunk count); positive-analytic mask.
-    analytic, settle, mc_sum, mc_count, pos = [], [], [], [], []
+    # Per-tree: analytic variance aligned to (ndm_out, M, P); per-coarse-DM settling table; MC
+    # accumulators (sum and sum-of-squares of out_var, and per-coarse-DM steady-chunk count).
+    # (PfAvarExact asserts tree_variance > 0, so no positive-prediction mask is needed.)
+    analytic, settle, mc_sum, mc_sumsq, mc_count = [], [], [], [], []
     for itree in range(ntrees):
         tree = plan.trees[itree]
         r, R = int(exact.tree_r[itree]), int(exact.tree_R[itree])
@@ -65,8 +66,8 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
         analytic.append(a)
         settle.append(_settle_chunks(tree, r, R, nt_in))
         mc_sum.append(np.zeros_like(a))
+        mc_sumsq.append(np.zeros_like(a))
         mc_count.append(np.zeros(ndm_out, dtype=np.int64))
-        pos.append(a > 0.0)
 
     # Peak-finding weights = 1, so out_var is directly comparable to PfAvarExact (which is unweighted).
     for w in rdd.wt_arrays:
@@ -89,16 +90,17 @@ def check_avar_mc(plan, sophistication=1, freq_variances=None, max_chunks=None, 
                 if steady.any():
                     ov = np.asarray(rdd.out_var[itree])[0]  # (ndm_out, M, P)
                     mc_sum[itree][steady] += ov[steady]
+                    mc_sumsq[itree][steady] += ov[steady] ** 2
                     mc_count[itree][steady] += 1
             if ichunk % report_every == 0:
-                _report(ichunk, exact, analytic, mc_sum, mc_count, pos)
+                _report(ichunk, exact, analytic, mc_sum, mc_sumsq, mc_count)
             ichunk += 1
     except KeyboardInterrupt:
         print("\ncheck_avar_mc: interrupted.", flush=True)
 
     if ichunk > 0:
         print("check_avar_mc: final summary:", flush=True)
-        _report(ichunk - 1, exact, analytic, mc_sum, mc_count, pos)
+        _report(ichunk - 1, exact, analytic, mc_sum, mc_sumsq, mc_count)
 
 
 def _spread(eps):
@@ -106,8 +108,12 @@ def _spread(eps):
     return float(np.sqrt(max(0.0, float(np.mean(eps ** 2)) - float(np.mean(eps)) ** 2)))
 
 
-def _report(ichunk, exact, analytic, mc_sum, mc_count, pos):
+_MIN_COUNT_WORST = 10   # only flag the worst channel among those with >= this many steady chunks
+
+
+def _report(ichunk, exact, analytic, mc_sum, mc_sumsq, mc_count):
     all_eps, lines = [], []
+    worst = None   # (|a_I|, a_I, sigma_I) of the largest-|a_i| channel over all trees (n_i >= MIN)
     for itree in range(len(analytic)):
         cnt = mc_count[itree]
         ready = cnt > 0
@@ -116,18 +122,39 @@ def _report(ichunk, exact, analytic, mc_sum, mc_count, pos):
         if not ready.any():
             lines.append(f"  tree {itree} [r={r} R={R} M={M}]: no steady-state channels yet")
             continue
-        est = mc_sum[itree][ready] / cnt[ready][:, None, None]   # (nready, M, P)
-        pm = pos[itree][ready]
-        eps = est[pm] / analytic[itree][ready][pm] - 1.0
-        all_eps.append(eps)
-        lines.append(f"  tree {itree} [r={r} R={R} M={M}]: dm {int(ready.sum())}/{ndm_out} steady, "
-                     f"{eps.size} chans, mean(eps)={float(np.mean(eps)):+.4g}, "
-                     f"Delta(eps)={_spread(eps):.4g}, count {int(cnt[ready].min())}..{int(cnt[ready].max())}")
+        n = cnt[ready].astype(np.float64)[:, None, None]        # (nready, 1, 1)
+        a = analytic[itree][ready]                              # (nready, M, P)
+        s1 = mc_sum[itree][ready]                              # sum of out_var over steady chunks
+        eps = s1 / n / a - 1.0                                 # a_i: per-channel mean of eps over chunks
+        all_eps.append(eps.ravel())
+        line = (f"  tree {itree} [r={r} R={R} M={M}]: dm {int(ready.sum())}/{ndm_out} steady, "
+                f"{eps.size} chans, mean(eps)={float(np.mean(eps)):+.4g}, "
+                f"Delta(eps)={_spread(eps.ravel()):.4g}, count {int(cnt[ready].min())}..{int(cnt[ready].max())}")
+
+        # Worst (largest |a_i|) channel among well-sampled coarse-DMs (n_i >= _MIN_COUNT_WORST).
+        # sigma_i = a_i / SE(a_i), with SE(a_i) = sqrt(v_i / n_i), v_i = Var(eps_is) over chunks.
+        elig = cnt[ready] >= _MIN_COUNT_WORST
+        if elig.any():
+            ne = n[elig]                                        # (nel, 1, 1)
+            ae, s1e, s2e = a[elig], s1[elig], mc_sumsq[itree][ready][elig]
+            ai = s1e / ne / ae - 1.0
+            var_ov = (s2e - s1e ** 2 / ne) / (ne - 1.0)        # unbiased Var(out_var) over chunks
+            with np.errstate(divide="ignore", invalid="ignore"):
+                sigma = (s1e / ne - ae) / np.sqrt(var_ov / ne)  # = a_i / sqrt(v_i / n_i)
+            k = int(np.argmax(np.abs(ai)))
+            absx, ax, sx = float(np.abs(ai).flat[k]), float(ai.flat[k]), float(sigma.flat[k])
+            line += f", worst(eps)={ax:+.4g} ({sx:+.1f} sigma)"
+            if (worst is None) or (absx > worst[0]):
+                worst = (absx, ax, sx)
+        lines.append(line)
 
     if all_eps:
         e = np.concatenate(all_eps)
-        print(f"[chunk {ichunk}] overall: {e.size} chans, mean(eps)={float(np.mean(e)):+.4g}, "
-              f"Delta(eps)={_spread(e):.4g}", flush=True)
+        hdr = (f"[chunk {ichunk}] overall: {e.size} chans, mean(eps)={float(np.mean(e)):+.4g}, "
+               f"Delta(eps)={_spread(e):.4g}")
+        hdr += (f", worst(eps)={worst[1]:+.4g} ({worst[2]:+.1f} sigma)" if worst is not None
+                else f", worst(eps)=n/a (need count>={_MIN_COUNT_WORST})")
+        print(hdr, flush=True)
     else:
         print(f"[chunk {ichunk}] overall: no steady-state channels yet", flush=True)
     for line in lines:

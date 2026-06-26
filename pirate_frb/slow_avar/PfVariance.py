@@ -401,6 +401,7 @@ class PfAvarExact:
         # Per-channel input variances; applied when summing per_tfm over frequency into per_tm.
         self.freq_variances = np.asarray(freq_variances, dtype=np.float64)
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
+        assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
         # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
@@ -451,7 +452,9 @@ class PfAvarExact:
                     
             for m in range(fs.M):
                 self.tree_variance[itree][m, :, :] = self.per_tm[itree][m].unpack((1 << (r - R)) - 1)
-                
+            assert np.all(self.tree_variance[itree] > 0.0), \
+                (itree, float(self.tree_variance[itree].min()))
+
             if progress:
                 print(flush=True)
 
@@ -506,6 +509,7 @@ class PfAvarApproximation:
         # Per-channel input variances; applied when summing per_tff over frequency into per_tf.
         self.freq_variances = np.asarray(freq_variances, dtype=np.float64)
         assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
+        assert np.all(self.freq_variances > 0.0), float(self.freq_variances.min())
 
         # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
@@ -576,7 +580,9 @@ class PfAvarApproximation:
 
                 all_dbits = (1 << (r-L)) - 1
                 self.tree_variance[itree][n,:,:] = pv.unpack(all_dbits)
-        
+            assert np.all(self.tree_variance[itree] > 0.0), \
+                (itree, float(self.tree_variance[itree].min()))
+
         if progress:
             print(flush=True)
 
