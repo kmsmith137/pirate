@@ -88,6 +88,12 @@ class SparseTile:
 
     @staticmethod
     def _remap_d(d, dbits_in, dbits_out):
+        """
+        'd' is an index with 0 <= d < 2^popc(dbits_in)
+        'dbits_out' is a subset of 'dbits_in'
+        returns an index 'dout' with 0 <= dout < 2^popc(dbits_out)
+        """
+
         # Reinterpret 'd' (a flat index in the 2^popcount(dbits_in) packing) as a flat index in the
         # 2^popcount(dbits_out) packing, where dbits_out is a subset of dbits_in. Both packings are
         # highest-bit-first: a set bit's packed position is popcount of the selected bits below it.
@@ -283,35 +289,43 @@ class SparseTile:
         via t0. The fixed bits' (constant) tshift contribution folds into the tile's t0; the kept
         bits' tshifts carry over. See notes/tree_dedispersion.tex.
         """
+        
         assert self.nf == 1
         assert 0 <= nbits <= self.k
         assert 0 <= value < (1 << nbits)
         
-        # The data middle axis packs all dbits MSB-first as (1, 2^nhigh, 2^nlow, nt) (high group
-        # leading); we slice out the fixed group's index and keep the other group's axis.
-        b = nbits if low else (self.k - nbits)         # split: low group = bits [0,b), high group = [b,k)
-        low_mask = self.dbits & ((1 << b) - 1)         # selected bits in [0, b)
-        high_mask = self.dbits >> b                    # selected bits in [b, k), shifted to [0, k-b)
-        nlow, nhigh = low_mask.bit_count(), high_mask.bit_count()
-        data_resh = self.data.reshape(1, 1 << nhigh, 1 << nlow, self.nt)
-        
         if low:
-            idx = SparseTile._remap_d(value, (1 << nbits) - 1, low_mask)
-            data_sel = data_resh[:, :, idx, :]         # keep high (leading) axis -> (1, 2^nhigh, nt)
-            new_dbits, new_tshifts = high_mask, self.tshifts[nbits:]
-            removed_dbits = (1 << nbits) - 1
-        else:
-            idx = SparseTile._remap_d(value, (1 << nbits) - 1, high_mask)
-            data_sel = data_resh[:, idx, :, :]         # keep low (trailing) axis -> (1, 2^nlow, nt)
-            new_dbits, new_tshifts = low_mask, self.tshifts[:b]
-            removed_dbits = (1 << self.k) - (1 << (self.k - nbits))
+            rbits = (1 << nbits) - 1               # all bits to remove (whether in self.dbits or not)
+            low_dbits = self.dbits & rbits         # selected bits in [0, nbits)
+            high_dbits = self.dbits & ~rbits       # selected bits in [nbits, k)
             
-        rho = self.k - nbits
-        new_t0 = self.t0 + int(SparseTile._eval_tshifts(value, removed_dbits, self.tshifts))
+            idx = SparseTile._remap_d(value, rbits, low_dbits)
+            new_data = self.data.reshape(1, 1 << high_dbits.bit_count(), 1 << low_dbits.bit_count(), self.nt)
+            new_data = new_data[:, :, idx, :]      # keep high bits, discard low bits
+            new_dbits = high_dbits >> nbits
+            new_tshifts = self.tshifts[nbits:]
         
-        return SparseTile(rho, rho, 0, 1, self.nt, new_dbits,
-                          np.ascontiguousarray(data_sel),
-                          np.array(new_tshifts, dtype=np.int64), t0=new_t0)
+        else:
+            rbits = (1 << self.k) - (1 << (self.k - nbits))  # all bits to remove (whether in self.dbits or not)
+            low_dbits = self.dbits & ~rbits        # selected bits in [0, k-nbits)
+            high_dbits = self.dbits & rbits        # selected bits in [k-nbits, k)
+            
+            idx = SparseTile._remap_d(value, rbits, high_dbits)
+            new_data = self.data.reshape(1, 1 << high_dbits.bit_count(), 1 << low_dbits.bit_count(), self.nt)
+            new_data = new_data[:, idx, :, :]      # keep low bits, discard high bits
+            new_dbits = low_dbits
+            new_tshifts = self.tshifts[:(self.k-nbits)]
+        
+        return SparseTile(
+            r = self.k - nbits,
+            k = self.k - nbits,
+            f0 = 0, nf = 1,
+            nt = self.nt,
+            dbits = new_dbits,
+            data = np.ascontiguousarray(new_data),
+            tshifts = np.array(new_tshifts, dtype=np.int64),
+            t0 = self.t0 + int(SparseTile._eval_tshifts(value, rbits, self.tshifts))
+        )
 
     # ------------------------------- test utilities -------------------------------
 
