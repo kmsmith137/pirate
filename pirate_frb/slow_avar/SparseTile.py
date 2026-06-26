@@ -70,7 +70,7 @@ class SparseTile:
         per-delay time shift t0 + T(d) to every row. 'ntime' must be >= nt + t0 + max_d T(d).
         """
         nd_full = 2**self.k
-        tshift = self._eval_tshifts(np.arange(nd_full), self.tshifts)   # (nd_full,)
+        tshift = self._eval_tshifts(np.arange(nd_full), nd_full - 1, self.tshifts)   # (nd_full,)
         nt_needed = self.nt + self.t0 + int(tshift.max())
         if ntime < nt_needed:
             raise RuntimeError(f"unpack: ntime={ntime} too small (need >= {nt_needed})")
@@ -106,26 +106,21 @@ class SparseTile:
         return dout
 
     @staticmethod
-    def _representative_delay(s, dbits):
-        # The delay whose selected (set in 'dbits') bits encode flat index s (highest-bit-first),
-        # all non-selected bits zero -- i.e. spread a packed index back into a full delay.
-        d = 0
-        shift = dbits.bit_count() - 1
-        for b in reversed(range(dbits.bit_length())):
-            if (dbits >> b) & 1:
-                d |= ((s >> shift) & 1) << b
-                shift -= 1
-        return d
-
-    @staticmethod
-    def _eval_tshifts(d, tshifts):
+    def _eval_tshifts(d, dbits, tshifts):
         """
-        Returns total forward time shift T(d) = sum_i tshifts[i]*bit_i(d), for delay value(s) d.
+        The 'd' arg satisfies 0 <= d < 2^popcount(dbits), and 'tshifts' is a length-k array.
+        Returns the associated forward time shift T, obtained summing tshifts for each bit that has been set.
         Vectorized: 'd' can be an int or a numpy array.
         """
+        # 'd' is packed over dbits (highest-bit-first), so bit b of the full delay is d's packed
+        # bit at position popcount(dbits below b); non-selected bits are zero (contribute nothing).
         T = d * 0
-        for i, ti in enumerate(tshifts):
-            T = T + (((d >> i) & 1) * ti)
+        tmp = dbits
+        while tmp:
+            b = tmp.bit_length() - 1                       # highest set bit position (C++ bit_floor)
+            tmp &= ~(1 << b)
+            shift = (dbits & ((1 << b) - 1)).bit_count()   # bit b's packed position in d
+            T = T + (((d >> shift) & 1) * tshifts[b])
         return T
 
     @staticmethod
@@ -228,11 +223,10 @@ class SparseTile:
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
         ldb, udb = lower.dbits << 1, upper.dbits << 1      # each half's selected bits, lifted (subset of dbits_out)
         for s_out in range(1 << m_out):
-            dp = SparseTile._representative_delay(s_out, dbits_out)   # full delay, for the per-half time shifts
-            rL = c_L + int(SparseTile._eval_tshifts(dp, res_L))
+            rL = c_L + int(SparseTile._eval_tshifts(s_out, dbits_out, res_L))
             col = lower.data[0, SparseTile._remap_d(s_out, dbits_out, ldb), :]
             data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
-            rU = c_U + int(SparseTile._eval_tshifts(dp, res_U))
+            rU = c_U + int(SparseTile._eval_tshifts(s_out, dbits_out, res_U))
             col = upper.data[0, SparseTile._remap_d(s_out, dbits_out, udb), :]
             data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
@@ -292,6 +286,7 @@ class SparseTile:
         assert self.nf == 1
         assert 0 <= nbits <= self.k
         assert 0 <= value < (1 << nbits)
+        
         # The data middle axis packs all dbits MSB-first as (1, 2^nhigh, 2^nlow, nt) (high group
         # leading); we slice out the fixed group's index and keep the other group's axis.
         b = nbits if low else (self.k - nbits)         # split: low group = bits [0,b), high group = [b,k)
@@ -299,6 +294,7 @@ class SparseTile:
         high_mask = self.dbits >> b                    # selected bits in [b, k), shifted to [0, k-b)
         nlow, nhigh = low_mask.bit_count(), high_mask.bit_count()
         data_resh = self.data.reshape(1, 1 << nhigh, 1 << nlow, self.nt)
+        
         if low:
             idx = SparseTile._remap_d(value, (1 << nbits) - 1, low_mask)
             data_sel = data_resh[:, :, idx, :]         # keep high (leading) axis -> (1, 2^nhigh, nt)
@@ -307,8 +303,10 @@ class SparseTile:
             idx = SparseTile._remap_d(value, (1 << nbits) - 1, high_mask)
             data_sel = data_resh[:, idx, :, :]         # keep low (trailing) axis -> (1, 2^nlow, nt)
             new_dbits, new_tshifts, delay = low_mask, self.tshifts[:b], (value << b)
+            
         rho = self.k - nbits
-        t0 = self.t0 + int(SparseTile._eval_tshifts(delay, self.tshifts))  # fixed bits' tshift -> t0
+        # fixed bits' (constant) tshift folds into t0 (delay = their full self.k-bit delay)
+        t0 = self.t0 + int(SparseTile._eval_tshifts(delay, (1 << self.k) - 1, self.tshifts))
         return SparseTile(rho, rho, 0, 1, self.nt, new_dbits,
                           np.ascontiguousarray(data_sel),
                           np.array(new_tshifts, dtype=np.int64), t0=t0)
