@@ -194,6 +194,32 @@ def check_avar_approximation(args):
     slow_avar.check_approximation(plan, freq_variances)
 
 
+#################################   check_avar_mc command  ###############################
+
+
+def parse_check_avar_mc(subparsers):
+    help_text = "Monte-Carlo check of analytic peak-finding variance vs a ReferenceDedisperser"
+    parser = subparsers.add_parser("check_avar_mc", help=help_text, description=help_text)
+    parser.add_argument('config_file', help="Path to dedispersion YAML config file")
+    parser.add_argument('-r', '--random-variances', action='store_true',
+                        help="Use random per-channel input variances (config.make_random_freq_variances) instead of all-ones")
+    parser.add_argument('-s', '--sophistication', type=int, default=1,
+                        help="ReferenceDedisperser sophistication (0, 1, or 2; default 1)")
+
+
+def check_avar_mc(args):
+    config = DedispersionConfig.from_yaml(args.config_file)
+    print(f"check_avar_mc: forcing nbeams=1 (config had beams_per_gpu={config.beams_per_gpu}, "
+          f"beams_per_batch={config.beams_per_batch})", flush=True)
+    config.beams_per_gpu = 1
+    config.beams_per_batch = 1
+    config.num_active_batches = 1
+    config.validate()
+    plan = DedispersionPlan(config)
+    freq_variances = config.make_random_freq_variances(noisy=True) if args.random_variances else None
+    slow_avar.check_avar_mc(plan, sophistication=args.sophistication, freq_variances=freq_variances)
+
+
 #########################################   time command  ##########################################
 
 
@@ -1326,6 +1352,7 @@ def get_parser():
     
     parse_test(subparsers)
     parse_check_avar_approximation(subparsers)
+    parse_check_avar_mc(subparsers)
     parse_time(subparsers)
     parse_time_dedisperser(subparsers)
     
@@ -1358,6 +1385,8 @@ def main():
         test(args)
     elif args.command == "check_avar_approximation":
         check_avar_approximation(args)
+    elif args.command == "check_avar_mc":
+        check_avar_mc(args)
     elif args.command == "time":
         time_command(args)
     elif args.command == "show_hardware":
