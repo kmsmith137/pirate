@@ -17,6 +17,7 @@ from . import loose_ends
 from . import core
 from . import tests
 from . import slow_avar
+from .fast_avar import PfAvarApproximation, test_fast_avar
 
 from .slow_avar import SparseTile, SparseTileTriple, SparseTilePerM, PfVarianceConvolver, PfVariance
 
@@ -158,6 +159,13 @@ def test(args):
             PfVariance.test_add_truncate_upper_half()
             if i == 0:  # deterministic (no randomness); run once
                 PfVarianceConvolver.test_kernels_match_reference()
+
+            # fast_avar: C++ ports compared against the slow_avar python reference.
+            test_fast_avar.test_cpp_convolver()
+            test_fast_avar.test_cpp_sparse_tile_triple()
+            test_fast_avar.test_cpp_pf_variance()
+            if i == 0:  # end-to-end (builds a plan + runs the full python reference); run once
+                test_fast_avar.test_cpp_pf_avar_approximation()
 
         if run_all_tests or args.net:
             # Network/allocator tests only need to run once (not niter times)
@@ -694,7 +702,7 @@ def parse_show_dedisperser(subparsers):
     parser.add_argument('config_file', help="Path to YAML config file")
     parser.add_argument('-v', '--verbose', action='store_true', help="Include comments explaining the meaning of each field")
     parser.add_argument('-c', '--config', action='store_true', help="Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)")
-    parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan construction took (non-deterministic line; off by default so the output is reproducible)")
+    parser.add_argument('-t', '--time', action='store_true', help="Also print how long DedispersionPlan and C++ PfAvarApproximation construction took (non-deterministic lines; off by default so the output is reproducible)")
     parser.add_argument('-z', '--zones', action='store_true', help="Include the per-clag mega_ringbuf host/gpu zone breakdown (independent of -v, which controls comments)")
     parser.add_argument('-s', '--streams', type=int, help="Override config.num_active_batches with specified value")
     parser.add_argument('-b', '--beams', type=int, help="Override config.beams_per_gpu with specified value")
@@ -736,6 +744,14 @@ def show_dedisperser(args):
     plan_dt = time.time() - t0
     if args.time:
         print(f'# DedispersionPlan construction took {plan_dt:.3f} seconds\n')
+        # Also time the C++ PfAvarApproximation build from the plan (uses unit input variances;
+        # the construction time is independent of the variance values).
+        import numpy as np
+        freq_variances = np.ones(int(plan.nfreq), dtype=np.float64)
+        t0 = time.time()
+        PfAvarApproximation(plan, freq_variances)
+        avar_dt = time.time() - t0
+        print(f'# C++ PfAvarApproximation construction took {avar_dt:.3f} seconds\n')
     plan_yaml = plan.to_yaml_string(args.verbose, args.zones)
     if args.verbose:
         plan_yaml = indent_dedispersion_plan_comments(plan_yaml)
