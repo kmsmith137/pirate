@@ -496,7 +496,7 @@ class PfAvarApproximation:
                        per_tf[t][f] = sum_ifreq freq_variances[ifreq] * per_tff[t][ifreq][f].
 
       tree_variance:   For each tree, a shape (N,2^{r-L},P) array; entry n is per_tf averaged
-                       over subband n's coarse-freq range (= get_per_m for any multiplet in n).
+                       over subband n's coarse-freq range (the per-subband mean of per_tf).
     """
 
     def __init__(self, plan, freq_variances, progress=False):
@@ -621,33 +621,3 @@ class PfAvarApproximation:
 
                 self.per_tff[itree][ifreq][f].add(pv, upper_half=upper_half, scale=norm)
                 self.per_tf[itree][f].add(pv, upper_half=upper_half, scale=norm * self.freq_variances[ifreq])
-
-    
-    def get_per_fm(self, itree, ifreq, m):
-        """Approximate single-channel variance for tree itree, (ifreq, multiplet m): the mean of
-        per_tff over the multiplet's coarse-freq range. Returns None if no coarse-freq overlaps."""
-        rho = int(self.tree_r[itree]) - int(self.tree_L[itree])
-        fs = self.tree_fs[itree]
-        flo, fhi = fs.m_to_flo(m), fs.m_to_fhi(m)
-        scale = 1.0 / (fhi - flo)            # mean over the coarse-freq range
-        acc = None
-        for f in range(flo, fhi):
-            pv = self.per_tff[itree][ifreq][f]
-            if pv is not None:
-                if acc is None:
-                    acc = PfVariance(rho, int(self.tree_P[itree]))
-                acc.add(pv, scale=scale)
-        return acc
-
-    
-    def get_per_m(self, itree, m):
-        """Approximate frequency-summed variance for tree itree, multiplet m: the mean of per_tf
-        over the multiplet's coarse-freq range. Always returns a PfVariance."""
-        rho = int(self.tree_r[itree]) - int(self.tree_L[itree])
-        fs = self.tree_fs[itree]
-        flo, fhi = fs.m_to_flo(m), fs.m_to_fhi(m)
-        scale = 1.0 / (fhi - flo)            # mean over the coarse-freq range
-        acc = PfVariance(rho, int(self.tree_P[itree]))
-        for f in range(flo, fhi):
-            acc.add(self.per_tf[itree][f], scale=scale)
-        return acc
