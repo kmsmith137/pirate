@@ -47,8 +47,7 @@ class SparseTile:
         assert 0 <= self.f0 and self.nf >= 1 and self.f0 + self.nf <= 2**(self.r - self.k)
         assert self.nt >= 1
         assert 0 <= self.dbits < (1 << self.k)
-        expected = (self.nf, 1 << self.dbits.bit_count(), self.nt)
-        assert self.data.shape == expected, (self.data.shape, expected)
+        assert self.data.shape == (self.nf, 1 << self.dbits.bit_count(), self.nt)
         assert self.data.dtype == np.float64
         assert self.tshifts.shape == (self.k,)
         assert np.all(self.tshifts >= 0)
@@ -71,7 +70,7 @@ class SparseTile:
         per-delay time shift t0 + T(d) to every row. 'ntime' must be >= nt + t0 + max_d T(d).
         """
         nd_full = 2**self.k
-        tshift = self._delay_tshift(np.arange(nd_full), self.tshifts)   # (nd_full,)
+        tshift = self._eval_tshifts(np.arange(nd_full), self.tshifts)   # (nd_full,)
         nt_needed = self.nt + self.t0 + int(tshift.max())
         if ntime < nt_needed:
             raise RuntimeError(f"unpack: ntime={ntime} too small (need >= {nt_needed})")
@@ -114,16 +113,18 @@ class SparseTile:
         return d
 
     @staticmethod
-    def _delay_tshift(d, tshifts):
-        # Total forward time shift T(d) = sum_i tshifts[i]*bit_i(d), for delay value(s) d
-        # (python int or numpy array).
+    def _eval_tshifts(d, tshifts):
+        """
+        Returns total forward time shift T(d) = sum_i tshifts[i]*bit_i(d), for delay value(s) d.
+        Vectorized: 'd' can be an int or a numpy array.
+        """
         T = d * 0
         for i, ti in enumerate(tshifts):
             T = T + (((d >> i) & 1) * ti)
         return T
 
     @staticmethod
-    def _dd_tlo(k):
+    def _dd_tshifts(k):
         # The DD(k) lower-half time shift ceil(d'/2) as a tshift vector (length k+1):
         # tlo[0]=1, tlo[j]=2^(j-1) for j>=1.
         return np.array([1] + [1 << (j - 1) for j in range(1, k + 1)], dtype=np.int64)
@@ -197,7 +198,7 @@ class SparseTile:
             assert lower.f0 % 2 == 0                    # tree-channel semantics
         f_out = lower.f0 // 2
 
-        tlo = SparseTile._dd_tlo(k)                     # length k+1
+        tlo = SparseTile._dd_tshifts(k)                     # length k+1
         # Each half's total time shift relative to its stored (pre-shift) data: lower gets the
         # DD shift plus its own (lifted) input shift; upper gets only its own.
         s_L = tlo + np.concatenate(([0], lower.tshifts)).astype(np.int64)
@@ -223,10 +224,10 @@ class SparseTile:
         for s_out in range(1 << m_out):
             dp = SparseTile._representative_delay(s_out, dbits_out)
             d = dp >> 1
-            rL = c_L + int(SparseTile._delay_tshift(dp, res_L))
+            rL = c_L + int(SparseTile._eval_tshifts(dp, res_L))
             col = lower.data[0, SparseTile._selected_bits_index(d, lower.dbits), :]
             data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
-            rU = c_U + int(SparseTile._delay_tshift(dp, res_U))
+            rU = c_U + int(SparseTile._eval_tshifts(dp, res_U))
             col = upper.data[0, SparseTile._selected_bits_index(d, upper.dbits), :]
             data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
@@ -244,7 +245,7 @@ class SparseTile:
         k = lower.k
         assert lower.nf == 1 and k < lower.r
         rsqrt2 = 1.0 / np.sqrt(2.0)
-        tshifts_out = SparseTile._dd_tlo(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
+        tshifts_out = SparseTile._dd_tshifts(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
         data_out = np.ascontiguousarray(rsqrt2 * lower.data)
         return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, data_out,
                           tshifts_out, t0=lower.t0)
@@ -302,7 +303,7 @@ class SparseTile:
             data_sel = data_resh[:, idx, :, :]         # keep low (trailing) axis -> (1, 2^nlow, nt)
             new_dbits, new_tshifts, delay = low_mask, self.tshifts[:b], (value << b)
         rho = self.k - nbits
-        t0 = self.t0 + int(SparseTile._delay_tshift(delay, self.tshifts))  # fixed bits' tshift -> t0
+        t0 = self.t0 + int(SparseTile._eval_tshifts(delay, self.tshifts))  # fixed bits' tshift -> t0
         return SparseTile(rho, rho, 0, 1, self.nt, new_dbits,
                           np.ascontiguousarray(data_sel),
                           np.array(new_tshifts, dtype=np.int64), t0=t0)
