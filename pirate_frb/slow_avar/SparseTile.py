@@ -150,19 +150,16 @@ class SparseTile:
         nf_out = nf // 2
         dbits_out = (1 << (k + 1)) - 1                 # all k+1 bits
         m_out = k + 1
-        rsqrt2 = 1.0 / np.sqrt(2.0)
         nt_alloc = nt_in + (1 << k)
         data_in = tile.data                            # (nf, 2^popcount(dbits_in), nt_in)
         data_out = np.zeros((nf_out, 1 << m_out, nt_alloc), dtype=np.float64)
+        s = tile.scale / np.sqrt(2.0)
         
-        # Each input delay d feeds the two output delays dp = 2d and 2d+1; both reuse the same
-        # gathered input row, with the lower half shifted by ceil(dp/2) = d and d+1 respectively.
-        # The input tile.scale is folded into the data here (scale inner, to match a dense DD of
-        # tile.unpack() exactly), so the output tile has scale = 1.0.
+        # Each input delay d feeds the two output delays dp = 2d and 2d+1.
         for d in range(1 << k):
             slab = data_in[:, SparseTile._remap_d(d, (1 << k) - 1, dbits_in), :]   # (nf, nt_in)
-            gu = rsqrt2 * (tile.scale * slab[1::2])     # upper halves (2F+1): unshifted in both children
-            gl = rsqrt2 * (tile.scale * slab[0::2])     # lower halves (2F): shifted by d, d+1
+            gu = s * slab[1::2]     # upper halves (2F+1): unshifted in both children
+            gl = s * slab[0::2]     # lower halves (2F): shifted by d, d+1
             data_out[:, 2*d:2*d+2, :nt_in] += gu[:, None, :]   # upper half -> both children at once
             data_out[:, 2*d,   d:d + nt_in]     += gl          # dp = 2d
             data_out[:, 2*d+1, d+1:d+1 + nt_in] += gl          # dp = 2d+1
@@ -212,7 +209,8 @@ class SparseTile:
         nt_alloc = max(lower.nt + c_L + int(res_L.sum()), upper.nt + c_U + int(res_U.sum()))
         m_out = dbits_out.bit_count()
 
-        rsqrt2 = 1.0 / np.sqrt(2.0)
+        ls = lower.scale / np.sqrt(2.0)
+        us = upper.scale / np.sqrt(2.0)
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
         ldb, udb = lower.dbits << 1, upper.dbits << 1      # each half's selected bits, lifted (subset of dbits_out)
         
@@ -220,11 +218,11 @@ class SparseTile:
         for s_out in range(1 << m_out):
             rL = c_L + int(SparseTile._eval_tshifts(s_out, dbits_out, res_L))
             col = lower.data[0, SparseTile._remap_d(s_out, dbits_out, ldb), :]
-            data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * (lower.scale * col)
+            data_out[0, s_out, rL:rL + lower.nt] += ls * col
 
             rU = c_U + int(SparseTile._eval_tshifts(s_out, dbits_out, res_U))
             col = upper.data[0, SparseTile._remap_d(s_out, dbits_out, udb), :]
-            data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * (upper.scale * col)
+            data_out[0, s_out, rU:rU + upper.nt] += us * col
 
         f_out = lower.f0 // 2
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin, t0=t0_out)
@@ -236,11 +234,10 @@ class SparseTile:
         k = lower.k
         assert lower.nf == 1 and lower.k < lower.r
         
-        rsqrt2 = 1.0 / np.sqrt(2.0)
-        tshifts_out = SparseTile._dd_tshifts(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
         # No data copy: defer the 1/sqrt2 into the output tile's scale.
+        tshifts_out = SparseTile._dd_tshifts(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
         return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, lower.data,
-                          tshifts_out, t0=lower.t0, scale=rsqrt2 * lower.scale)
+                          tshifts_out, t0=lower.t0, scale = lower.scale / np.sqrt(2.0))
 
     @staticmethod
     def _iterate_upper(upper):
@@ -249,11 +246,9 @@ class SparseTile:
         k = upper.k
         assert upper.nf == 1 and k < upper.r
         
-        rsqrt2 = 1.0 / np.sqrt(2.0)
         tshifts_out = np.concatenate(([0], upper.tshifts)).astype(np.int64)
-        # No data copy: defer the 1/sqrt2 into the output tile's scale.
         return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, upper.data,
-                          tshifts_out, t0=upper.t0, scale=rsqrt2 * upper.scale)
+                          tshifts_out, t0=upper.t0, scale = upper.scale / np.sqrt(2.0))
     
 
     def specialize_dbits(self, value, nbits, *, low):
@@ -511,15 +506,16 @@ class SparseTileTriple:
     def get_singleton(self, f, allow_none=False):
         """Return the singleton SparseTile for f-index f. If f is out of [f0, f0+nf):
         return None when allow_none, else raise."""
-        if not (self.f0 <= f < self.f0 + self.nf):
-            if allow_none:
-                return None
-            raise IndexError(f"get_singleton: f={f} out of range [{self.f0}, {self.f0 + self.nf})")
+
         for tile in self.tiles:
             if tile.f0 <= f < tile.f0 + tile.nf:
                 return tile.slice(f, f + 1)
-        raise AssertionError("unreachable")
 
+        if allow_none:
+            return None
+        
+        raise IndexError(f"get_singleton: f={f} out of range [{self.f0}, {self.f0 + self.nf})")
+    
     @staticmethod
     def make_tree_gridding_output(channel_map, ifreq):
         """
@@ -550,13 +546,8 @@ class SparseTileTriple:
         return SparseTileTriple._from_tile(tile)
 
     def iterate(self):
-        """
-        One DD(k) step. The first/last output channels (F0, Fmax) are computed with
-        iterate_singletons (which absorbs shifts into tshifts to minimize dbits/nt); the
-        bulk output channels [F0+1, Fmax) are computed with iterate_aligned on the
-        even-aligned input sub-block [2F0+2, 2Fmax) (which lies inside the input middle
-        tile). Returns a canonical SparseTileTriple at level k+1.
-        """
+        """Applies DD(k) to a SparseTileTriple, returning a triple with k->(k+1)."""
+        
         assert self.k < self.r, "iterate(): already at k == r"
         f0, nf = self.f0, self.nf
         F0 = f0 // 2
