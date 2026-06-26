@@ -298,18 +298,20 @@ class SparseTile:
         if low:
             idx = SparseTile._remap_d(value, (1 << nbits) - 1, low_mask)
             data_sel = data_resh[:, :, idx, :]         # keep high (leading) axis -> (1, 2^nhigh, nt)
-            new_dbits, new_tshifts, delay = high_mask, self.tshifts[nbits:], value
+            new_dbits, new_tshifts = high_mask, self.tshifts[nbits:]
+            removed_dbits = (1 << nbits) - 1
         else:
             idx = SparseTile._remap_d(value, (1 << nbits) - 1, high_mask)
             data_sel = data_resh[:, idx, :, :]         # keep low (trailing) axis -> (1, 2^nlow, nt)
-            new_dbits, new_tshifts, delay = low_mask, self.tshifts[:b], (value << b)
+            new_dbits, new_tshifts = low_mask, self.tshifts[:b]
+            removed_dbits = (1 << self.k) - (1 << (self.k - nbits))
             
         rho = self.k - nbits
-        # fixed bits' (constant) tshift folds into t0 (delay = their full self.k-bit delay)
-        t0 = self.t0 + int(SparseTile._eval_tshifts(delay, (1 << self.k) - 1, self.tshifts))
+        new_t0 = self.t0 + int(SparseTile._eval_tshifts(value, removed_dbits, self.tshifts))
+        
         return SparseTile(rho, rho, 0, 1, self.nt, new_dbits,
                           np.ascontiguousarray(data_sel),
-                          np.array(new_tshifts, dtype=np.int64), t0=t0)
+                          np.array(new_tshifts, dtype=np.int64), t0=new_t0)
 
     # ------------------------------- test utilities -------------------------------
 
@@ -412,24 +414,27 @@ class SparseTile:
         ksgpu.assert_arrays_equal(ref, got, "ref", "got", ["f", "delay", "time"], epsabs=0.0)
 
     @staticmethod
-    def test_random_specialize_low_dbits():
-        """specialize_dbits(dlo, nbits_low, low=True) vs. brute-force 'fix the low bits to dlo'."""
+    def test_random_specialize_dbits():
+        """specialize_dbits(value, nbits, low) vs. brute-force 'fix nbits of the delay to value',
+        for both low=True (fix the low nbits bits) and low=False (fix the high nbits bits)."""
         import ksgpu
         r = int(np.random.randint(2, 8))
         k = int(np.random.randint(1, r + 1))                # 1 <= k <= r
         f0 = int(np.random.randint(0, 1 << (r - k)))        # singleton coarse-freq index
         tile = SparseTile.make_random(r, k, f0, 1)
-        nbits_low = int(np.random.randint(0, k + 1))        # 0 <= nbits_low <= k
-        rho = k - nbits_low
+        nbits = int(np.random.randint(0, k + 1))            # 0 <= nbits <= k bits fixed
+        rho = k - nbits                                     # number of kept (delay-axis) bits
         ntime = tile.nt + tile.t0 + int(tile.tshifts.sum()) + 8
         full = tile.unpack(ntime)[0]                        # (2^k, ntime)
-        for dlo in range(1 << nbits_low):
-            got = tile.specialize_dbits(dlo, nbits_low, low=True).unpack(ntime)[0]   # (2^rho, ntime)
-            tgt = np.zeros((1 << rho, ntime), dtype=np.float64)
-            for d_hi in range(1 << rho):
-                D = d_hi * (1 << nbits_low) + dlo           # full delay (low bits = dlo)
-                tgt[d_hi] = full[D]
-            ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["d_hi", "time"], epsabs=0.0)
+        for low in (False, True):
+            for value in range(1 << nbits):                # the fixed bits are set to 'value'
+                got = tile.specialize_dbits(value, nbits, low=low).unpack(ntime)[0]   # (2^rho, ntime)
+                tgt = np.zeros((1 << rho, ntime), dtype=np.float64)
+                for j in range(1 << rho):                  # j indexes the kept bits
+                    # low=True fixes the low nbits bits; low=False fixes the high nbits bits.
+                    D = (j << nbits) | value if low else (value << rho) | j
+                    tgt[j] = full[D]
+                ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["kept_d", "time"], epsabs=0.0)
 
 
 ####################################   class SparseTileTriple   ####################################
