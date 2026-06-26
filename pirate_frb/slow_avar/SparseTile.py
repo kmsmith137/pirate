@@ -20,10 +20,11 @@ class SparseTile:
       dbits:   integer bitmask of selected delay bits (0 <= dbits < 2^k).
                the tile contents only depend on dm-index 0 <= d < 2^k via these bits.
       data:    shape (nf, 2^popcount(dbits), nt) array.
+      scale:   scalar multiplier applied to the data on unpacking (default 1.0).
 
     Using these members, we can "unpack" the array from shape (nf, 2^popc(dbits), nt)
-    to shape (2^(r-k), 2^k, nt). This is followed by a second unpacking stage where
-    we apply a time shift which depends on 0 <= d < 2^k (but not 0 <= f < 2^(r-k)).
+    to shape (2^(r-k), 2^k, nt), multiplying the data by 'scale'. This is followed by a
+    second unpacking stage where we apply a time shift depending on 0 <= d < 2^k (not f).
 
       tshifts: length-k integer-valued array
       t0:      integer
@@ -39,7 +40,7 @@ class SparseTile:
     document the SparseTile details is to specify unpack().)
     """
 
-    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0):
+    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0, scale=1.0):
         self.r, self.k = r, k
         self.f0, self.nf = f0, nf
         self.dbits = int(dbits)
@@ -47,6 +48,7 @@ class SparseTile:
         self.data = data
         self.tshifts = np.asarray(tshifts, dtype=np.int64)
         self.t0 = int(t0)
+        self.scale = float(scale)
         self._check_invariants()
 
     def _check_invariants(self):
@@ -65,11 +67,11 @@ class SparseTile:
         assert self.f0 <= c0 < c1 <= self.f0 + self.nf
         data = np.ascontiguousarray(self.data[c0 - self.f0 : c1 - self.f0])
         return SparseTile(self.r, self.k, c0, c1 - c0, self.nt, self.dbits, data,
-                          self.tshifts, t0=self.t0)
+                          self.tshifts, t0=self.t0, scale=self.scale)
 
     def unpack(self, ntime):
         """
-        Returns a dense (nf, 2^k, ntime) array for this tile's f-rows.
+        Returns a dense (nf, 2^k, ntime) array for this tile's f-rows (data scaled by self.scale).
         The ntime arg must be >= nt + max_d T(d).
         """
         nd_full = 2**self.k
@@ -85,7 +87,7 @@ class SparseTile:
         out = np.zeros((self.nf, nd_full, ntime), dtype=self.data.dtype)
         for d in range(nd_full):
             sh = self.t0 + int(tshift[d])
-            out[:, d, sh:sh + self.nt] = gathered[:, d, :]
+            out[:, d, sh:sh + self.nt] = self.scale * gathered[:, d, :]
         return out
 
     # ----------------------------- bit-index helpers -----------------------------
@@ -155,10 +157,12 @@ class SparseTile:
         
         # Each input delay d feeds the two output delays dp = 2d and 2d+1; both reuse the same
         # gathered input row, with the lower half shifted by ceil(dp/2) = d and d+1 respectively.
+        # The input tile.scale is folded into the data here (scale inner, to match a dense DD of
+        # tile.unpack() exactly), so the output tile has scale = 1.0.
         for d in range(1 << k):
             slab = data_in[:, SparseTile._remap_d(d, (1 << k) - 1, dbits_in), :]   # (nf, nt_in)
-            gu = rsqrt2 * slab[1::2]                    # upper halves (2F+1): unshifted in both children
-            gl = rsqrt2 * slab[0::2]                    # lower halves (2F): shifted by d, d+1
+            gu = rsqrt2 * (tile.scale * slab[1::2])     # upper halves (2F+1): unshifted in both children
+            gl = rsqrt2 * (tile.scale * slab[0::2])     # lower halves (2F): shifted by d, d+1
             data_out[:, 2*d:2*d+2, :nt_in] += gu[:, None, :]   # upper half -> both children at once
             data_out[:, 2*d,   d:d + nt_in]     += gl          # dp = 2d
             data_out[:, 2*d+1, d+1:d+1 + nt_in] += gl          # dp = 2d+1
@@ -212,14 +216,15 @@ class SparseTile:
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
         ldb, udb = lower.dbits << 1, upper.dbits << 1      # each half's selected bits, lifted (subset of dbits_out)
         
+        # Each half's scale is folded into the data here, so the output tile has scale = 1.0.
         for s_out in range(1 << m_out):
             rL = c_L + int(SparseTile._eval_tshifts(s_out, dbits_out, res_L))
             col = lower.data[0, SparseTile._remap_d(s_out, dbits_out, ldb), :]
-            data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
-            
+            data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * (lower.scale * col)
+
             rU = c_U + int(SparseTile._eval_tshifts(s_out, dbits_out, res_U))
             col = upper.data[0, SparseTile._remap_d(s_out, dbits_out, udb), :]
-            data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
+            data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * (upper.scale * col)
 
         f_out = lower.f0 // 2
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin, t0=t0_out)
@@ -233,8 +238,9 @@ class SparseTile:
         
         rsqrt2 = 1.0 / np.sqrt(2.0)
         tshifts_out = SparseTile._dd_tshifts(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
-        data_out = np.ascontiguousarray(rsqrt2 * lower.data)        
-        return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, data_out, tshifts_out, t0=lower.t0)
+        # No data copy: defer the 1/sqrt2 into the output tile's scale.
+        return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, lower.data,
+                          tshifts_out, t0=lower.t0, scale=rsqrt2 * lower.scale)
 
     @staticmethod
     def _iterate_upper(upper):
@@ -245,8 +251,9 @@ class SparseTile:
         
         rsqrt2 = 1.0 / np.sqrt(2.0)
         tshifts_out = np.concatenate(([0], upper.tshifts)).astype(np.int64)
-        data_out = np.ascontiguousarray(rsqrt2 * upper.data)
-        return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, data_out, tshifts_out, t0=upper.t0)
+        # No data copy: defer the 1/sqrt2 into the output tile's scale.
+        return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, upper.data,
+                          tshifts_out, t0=upper.t0, scale=rsqrt2 * upper.scale)
     
 
     def specialize_dbits(self, value, nbits, *, low):
@@ -292,7 +299,8 @@ class SparseTile:
             dbits = new_dbits,
             data = np.ascontiguousarray(new_data),
             tshifts = np.array(new_tshifts, dtype=np.int64),
-            t0 = self.t0 + int(SparseTile._eval_tshifts(value, rbits, self.tshifts))
+            t0 = self.t0 + int(SparseTile._eval_tshifts(value, rbits, self.tshifts)),
+            scale = self.scale,
         )
 
     # ------------------------------- test utilities -------------------------------
@@ -417,6 +425,40 @@ class SparseTile:
                     D = (j << nbits) | value if low else (value << rho) | j
                     tgt[j] = full[D]
                 ksgpu.assert_arrays_equal(got, tgt, "got", "tgt", ["kept_d", "time"], epsabs=0.0)
+
+    @staticmethod
+    def test_random_scale():
+        """The scale member: unpack multiplies data by scale, iterate_aligned folds it (scale_out=1),
+        and PfVariance.add_tile picks up scale^2 (variance is quadratic in the data)."""
+        import ksgpu
+        from .PfVariance import PfVarianceConvolver, PfVariance
+        s = float(np.random.uniform(0.25, 4.0))
+
+        # unpack scales the data; iterate_aligned folds the scale into its output (vs dense DD).
+        r = int(np.random.randint(2, 7))
+        k = int(np.random.randint(0, r))                         # 0 <= k < r
+        nfull = 1 << (r - k)
+        nf = 2 * int(np.random.randint(1, nfull // 2 + 1))
+        f0 = 2 * int(np.random.randint(0, (nfull - nf) // 2 + 1))
+        base = SparseTile.make_random(r, k, f0, nf)             # scale == 1
+        scaled = SparseTile(base.r, base.k, base.f0, base.nf, base.nt, base.dbits,
+                            base.data, base.tshifts, t0=base.t0, scale=s)
+        ntime = base.nt + base.t0 + int(base.tshifts.sum()) + (1 << k) + 8
+        ksgpu.assert_arrays_equal(scaled.unpack(ntime), s * base.unpack(ntime),
+                                  "scaled", "s*base", ["f", "delay", "time"], epsabs=0.0)
+        ref = SparseTile._dense_dd(scaled.unpack(ntime), k)
+        got = SparseTile.iterate_aligned(scaled).unpack(ntime)
+        ksgpu.assert_arrays_equal(ref, got, "ref", "got", ["f", "delay", "time"], epsabs=0.0)
+
+        # PfVariance.add_tile: a scale-s singleton gives s^2 times the unscaled variance.
+        kk = int(np.random.randint(1, 6))
+        b1 = SparseTile.make_random(kk, kk, 0, 1)               # singleton, scale == 1
+        s1 = SparseTile(kk, kk, 0, 1, b1.nt, b1.dbits, b1.data, b1.tshifts, t0=b1.t0, scale=s)
+        conv = PfVarianceConvolver()
+        pv1 = PfVariance.from_tile(b1, conv.Pmax, conv)
+        pvs = PfVariance.from_tile(s1, conv.Pmax, conv)
+        ksgpu.assert_arrays_equal(pvs.unpack(b1.dbits), (s ** 2) * pv1.unpack(b1.dbits),
+                                  "pvs", "s^2*pv1", ["d", "p"], epsabs=0.0)
 
 
 ####################################   class SparseTileTriple   ####################################
@@ -667,7 +709,8 @@ class SparseTilePerM:
             lag = C * (1 << np.arange(tile.k - l, dtype=np.int64))   # coarse bit j -> C*2^j
             for e in range(1 << l):
                 t = tile.specialize_dbits(e, l, low=True)
-                t = SparseTile(t.r, t.k, t.f0, t.nf, t.nt, t.dbits, t.data, t.tshifts + lag, t0=t.t0)
+                t = SparseTile(t.r, t.k, t.f0, t.nf, t.nt, t.dbits, t.data, t.tshifts + lag,
+                               t0=t.t0, scale=t.scale)
                 if upper_half_only:
                     t = t.specialize_dbits(1, 1, low=False)   # keep upper DM-half (top bit == 1)
                 per_m[mbase + e] = t

@@ -249,7 +249,8 @@ class PfVariance:
         """
         assert tile.nf == 1, "PfVariance.add_tile: tile must be a singleton (nf == 1)"
         assert tile.k == self.rank, (tile.k, self.rank)
-        tile_var = convolver.variance(tile.data, self.P)[0]   # drop nf==1 axis -> (2^popcount, P)
+        # variance is quadratic in the data, so a tile.scale on unpacking gives scale**2 on variance.
+        tile_var = (tile.scale ** 2) * convolver.variance(tile.data, self.P)[0]   # (2^popcount, P)
         self._accumulate(tile.dbits, tile_var, steal=True)    # tile_var is a fresh, unshared temporary
 
     

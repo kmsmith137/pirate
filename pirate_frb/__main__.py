@@ -151,6 +151,7 @@ def test(args):
             SparseTile.test_random_iterate_singletons()
             SparseTile.test_random_specialize_dbits()
             SparseTile.test_random_remap_d()
+            SparseTile.test_random_scale()
             SparseTilePerM.test_random_subbanded_dedispersion()
             PfVarianceConvolver.test_reduces_to_norms()
             PfVarianceConvolver.test_random_variance()
