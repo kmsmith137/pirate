@@ -159,6 +159,12 @@ struct DedispersionConfig
 
     ksgpu::Array<double> make_channel_map() const;
 
+    // make_random_freq_variances(): for testing/debugging (e.g. 'check_avar_approximation
+    // --random-variances'). Assigns one random variance in [0,1] to each frequency zone, and
+    // returns a length-nfreq array of per-channel variances (constant within each zone).
+    // If 'noisy' is true, prints the length-nzones per-zone array.
+    ksgpu::Array<double> make_random_freq_variances(bool noisy=false) const;
+
     // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
     // are inverses of each other, by sampling random values and checking endpoints.
     // Called by 'python -m pirate_frb test --dd' -> GpuDedisperser::test() -> DedispersionConfig::test().

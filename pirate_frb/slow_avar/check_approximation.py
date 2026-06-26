@@ -5,16 +5,22 @@ import numpy as np
 from .PfVariance import PfAvarExact, PfAvarApproximation
 
 
-def check_approximation(plan):
+def check_approximation(plan, freq_variances=None):
     """Print, per tree, summary statistics of the exact-vs-approximate peak-finding variance.
 
     For each tree itree and multiplet m, lifts var_approx = approx.get_per_m(itree, m) (rank r-L)
     to rank r-R (adding L-R spectator low DM bits), unpacks it and var_exact = exact.per_tm[itree][m]
     to a common 'dbits', and forms epsilon = var_approx/var_exact - 1.  Prints the mean of epsilon
     and its spread Delta(eps) = sqrt(<eps^2> - <eps>^2) over multiplets.
+
+    'freq_variances' is a length-nfreq array of per-channel input variances (the weights used
+    when summing per-frequency variances over frequency). Defaults to all-ones (equal weighting),
+    which makes the exact-vs-approx comparison independent of the weighting.
     """
-    exact = PfAvarExact(plan, progress=True)
-    approx = PfAvarApproximation(plan, progress=True)
+    if freq_variances is None:
+        freq_variances = np.ones(int(plan.nfreq))
+    exact = PfAvarExact(plan, freq_variances, progress=True)
+    approx = PfAvarApproximation(plan, freq_variances, progress=True)
     print("PfAvar exact-vs-approx (epsilon = var_approx/var_exact - 1):")
     for itree in range(plan.ntrees):
         _check_one_tree(exact, approx, itree)

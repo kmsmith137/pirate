@@ -174,13 +174,16 @@ def parse_check_avar_approximation(subparsers):
     help_text = "Compare exact vs approximate analytic peak-finding variance for a config"
     parser = subparsers.add_parser("check_avar_approximation", help=help_text, description=help_text)
     parser.add_argument('config_file', help="Path to dedispersion YAML config file")
+    parser.add_argument('-r', '--random-variances', action='store_true',
+                        help="Use random per-channel variances (config.make_random_freq_variances) instead of all-ones")
 
 
 def check_avar_approximation(args):
     config = DedispersionConfig.from_yaml(args.config_file)
     config.validate()
     plan = DedispersionPlan(config)
-    slow_avar.check_approximation(plan)
+    freq_variances = config.make_random_freq_variances(noisy=True) if args.random_variances else None
+    slow_avar.check_approximation(plan, freq_variances)
 
 
 #########################################   time command  ##########################################

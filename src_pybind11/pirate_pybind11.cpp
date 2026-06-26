@@ -196,6 +196,13 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Create channel map array defining tree-to-frequency mapping.\n\n"
                "Returns:\n"
                "    Array of length (2^tree_rank + 1) with channel boundaries")
+          .def("make_random_freq_variances", &DedispersionConfig::make_random_freq_variances,
+               py::arg("noisy") = false,
+               "Random per-channel input variances for testing (one random value in [0,1] per zone).\n\n"
+               "Args:\n"
+               "    noisy: if true, print the per-zone variances\n\n"
+               "Returns:\n"
+               "    Array of length nfreq (constant within each frequency zone)")
           // dtype: now uses direct readwrite, Python injection provides flexible setter
           .def_readwrite("dtype", &DedispersionConfig::dtype,
                "Data type for dedispersion (e.g. 'float32', 'float16')")

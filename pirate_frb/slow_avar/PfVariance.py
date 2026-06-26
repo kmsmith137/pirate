@@ -377,6 +377,8 @@ class PfAvarExact:
       plan:        the DedispersionPlan
       ntrees:      number of DedispersionTrees (= plan.ntrees)
       nfreq:       number of input frequency channels
+      freq_variances: length-nfreq input array; the per-channel variance weight applied
+                   when summing per_tfm over frequency to form per_tm.
       tree_r:      config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
       tree_R:      pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_P:      nprofiles (a length-ntrees array)
@@ -384,13 +386,18 @@ class PfAvarExact:
       convolver:   a single shared PfVarianceConvolver
       per_tfm:     (ntrees, nfreq, M) array of (None or single-channel PfVariance).
                    This is a "ragged" array (list of list of lists) since M is tree-dependent.
-      per_tm:      (ntrees, M) ragged array of frequency-summed PfVariances (never None).
+      per_tm:      (ntrees, M) ragged array of frequency-summed PfVariances (never None):
+                   per_tm[t][m] = sum_ifreq freq_variances[ifreq] * per_tfm[t][ifreq][m].
     """
 
-    def __init__(self, plan, progress=False):
+    def __init__(self, plan, freq_variances, progress=False):
         # If progress is set, print one line per tree and one '.' per 1000 input freq channels.
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
         self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
+
+        # Per-channel input variances; applied when summing per_tfm over frequency into per_tm.
+        self.freq_variances = np.asarray(freq_variances, dtype=np.float64)
+        assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
 
         # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
@@ -437,7 +444,7 @@ class PfAvarExact:
 
             for m, pv in enumerate(row):
                 if pv is not None:
-                    self.per_tm[itree][m].add(pv)
+                    self.per_tm[itree][m].add(pv, scale=self.freq_variances[ifreq])
 
 
 ###################################   class PfAvarApproximation   ##################################
@@ -465,6 +472,8 @@ class PfAvarApproximation:
       plan:        the DedispersionPlan
       ntrees:      number of DedispersionTrees (= plan.ntrees)
       nfreq:       number of input frequency channels
+      freq_variances: length-nfreq input array; the per-channel variance weight applied
+                   when summing per_tff over frequency to form per_tf.
       tree_r:      config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
       tree_R:      pf_rank (a length-ntrees array, can differ from the config pf_rank)
       tree_L:      log2(wt_dm_downsampling) (a length-ntrees array); requires 0 <= R <= L <= r
@@ -473,13 +482,18 @@ class PfAvarApproximation:
       convolver:   a single shared PfVarianceConvolver
       per_tff:     (ntrees, nfreq, 2^R) array of (None or single-channel PfVariance).
                    This is a "ragged" array (list of list of lists) since 2^R is tree-dependent.
-      per_tf:      (ntrees, 2^R) ragged array of frequency-summed PfVariances (never None).
+      per_tf:      (ntrees, 2^R) ragged array of frequency-summed PfVariances (never None):
+                   per_tf[t][f] = sum_ifreq freq_variances[ifreq] * per_tff[t][ifreq][f].
     """
 
-    def __init__(self, plan, progress=False):
+    def __init__(self, plan, freq_variances, progress=False):
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
         self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
-        
+
+        # Per-channel input variances; applied when summing per_tff over frequency into per_tf.
+        self.freq_variances = np.asarray(freq_variances, dtype=np.float64)
+        assert self.freq_variances.shape == (self.nfreq,), (self.freq_variances.shape, self.nfreq)
+
         # First line is equivalent to: tree_r[itree] = config.tree_rank - delta - (ids > 0).
         self.tree_r = np.array([t.amb_rank + t.early_dd_rank for t in plan.trees])
         self.tree_R = np.array([t.frequency_subbands.pf_rank for t in plan.trees])
@@ -569,7 +583,7 @@ class PfAvarApproximation:
                     self.per_tff[itree][ifreq][f] = PfVariance(r - L, P)
 
                 self.per_tff[itree][ifreq][f].add(pv, upper_half=upper_half, scale=norm)
-                self.per_tf[itree][f].add(pv, upper_half=upper_half, scale=norm)
+                self.per_tf[itree][f].add(pv, upper_half=upper_half, scale=norm * self.freq_variances[ifreq])
 
     
     def get_per_fm(self, itree, ifreq, m):
