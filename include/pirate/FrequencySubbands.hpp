@@ -61,8 +61,8 @@ struct FrequencySubbands
     long F = 0;  // number of distinct frequency subbands
     long M = 0;  // number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
 
-    std::vector<long> m_to_f;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
-    std::vector<long> m_to_d;     // mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+    std::vector<long> m_to_f;     // mapping (multiplet) -> frequency_subband
+    std::vector<long> m_to_d;     // mapping (multiplet) -> fine_grained_dm
     std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
     std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
     std::vector<long> f_to_mbase; // mapping (frequency_subband) -> m-index range (mbase : mbase + 2^level)
@@ -83,8 +83,7 @@ struct FrequencySubbands
 
     // Static member function.
     // Creates FrequencySubbands from frequency range and threshold.
-    // Equivalent to python FrequencySubbands(pf_rank, fmin, fmax, threshold).
-    
+
     static FrequencySubbands from_threshold(double fmin, double fmax, double threshold, long pf_rank = 4);
 
     // Static member function.

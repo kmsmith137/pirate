@@ -16,17 +16,12 @@ class FrequencySubbands:
         the code generator runs during build time, when the C++ code has not been compiled yet.
         """
         
-        assert len(subband_counts) > 0
-        assert subband_counts[-1] == 1   # must search full band
+        # Full validation (same checks as the C++ constructor, which also calls
+        # validate_subband_counts() -- keep the two constructors consistent).
+        self.validate_subband_counts(subband_counts)
 
         self.subband_counts = subband_counts
         self.pf_rank = pf_rank = len(subband_counts) - 1
-
-        # Currently, pf_rank=4 is max value supported by the peak-finding kernel,
-        # so a larger value would indicate a bug (such as using the total tree rank
-        # instead of the peak-finding rank).
-        if (pf_rank > 4):
-            raise RuntimeError('FrequencySubbands: max allowed pf_rank is 4. This may change in the future.')
 
         self.F = 0               # number of frequency_subbands
         self.M = 0               # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
@@ -35,8 +30,6 @@ class FrequencySubbands:
         self.f_to_mrange = [ ]   # mapping (frequency_subband) -> (multiplet pair 0 <= mlo < mhi <= M)
 
         for level in range(pf_rank+1):
-            assert self.subband_counts[level] >= 0
-            
             for b in range(self.subband_counts[level]):
                 for d in range(2**level):
                     self.m_to_fd.append((self.F,d))

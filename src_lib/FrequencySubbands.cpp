@@ -249,7 +249,7 @@ void FrequencySubbands::show_token(uint token, ostream &os) const
 
     os << " -> (t=" << t << ", p=" << p << ", m=" << m << ")";
 
-    if (m < M) {
+    if (m >= M) {
         os << " -> BAD M-VALUE";
         return;
     }
