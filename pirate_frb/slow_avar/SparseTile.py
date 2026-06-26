@@ -30,31 +30,16 @@ class SparseTile:
       t0:      delay- and f-independent constant forward time shift (>= 0); equivalently
                the data's pre-shift time origin, or a "constant tshift". Supported in all
                tile ops (unpack/slice/iterate_*); see notes/tree_dedispersion.tex.
-
-    The constructor takes an optional trim=False: when True, all-zero leading/trailing time
-    slices of 'data' are dropped (trailing shrinks nt; leading folds into t0), giving the
-    minimal (nt, t0) for the same unpacked array.
     """
 
-    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0, trim=False):
+    def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0):
         self.r, self.k = r, k
         self.f0, self.nf = f0, nf
         self.dbits = int(dbits)
-        t0 = int(t0)
-        if trim:
-            # Drop all-zero leading/trailing time slices (over the f and delay-bit axes).
-            # Trailing slices shrink nt; leading slices fold into t0 (the constant forward
-            # shift), leaving unpack() unchanged but (nt, t0) minimal.
-            data = np.asarray(data)
-            nzt = np.nonzero(np.any(data != 0.0, axis=(0, 1)))[0]   # (f, delay-bit) axes
-            lo, hi = (int(nzt[0]), int(nzt[-1]) + 1) if nzt.size else (0, 1)
-            data = np.ascontiguousarray(data[..., lo:hi])
-            t0 += lo
-            nt = hi - lo
         self.nt = nt
         self.data = data
         self.tshifts = np.asarray(tshifts, dtype=np.int64)
-        self.t0 = t0
+        self.t0 = int(t0)
         self._check_invariants()
 
     def _check_invariants(self):
@@ -74,7 +59,6 @@ class SparseTile:
         Return the sub-tile for f-index range [c0, c1) (must lie within [f0, f0+nf)). The
         uniform tshifts make this a pure restriction of the data rows; (nt, dbits, tshifts)
         are inherited unchanged -- valid, but possibly non-minimal for the sub-range.
-        (Passing trim=True to the constructor would re-minimize the time range.)
         """
         assert self.f0 <= c0 < c1 <= self.f0 + self.nf
         data = np.ascontiguousarray(self.data[c0 - self.f0 : c1 - self.f0])
@@ -186,9 +170,8 @@ class SparseTile:
 
         tshifts_out = np.concatenate(([0], tin)).astype(np.int64)
         # t0 is a uniform shift: it factors out of the DD sum, so it passes through.
-        # trim=True drops leading/trailing all-zero time slices (leading folds into t0).
         return SparseTile(tile.r, k + 1, F0, nf_out, nt_alloc, dbits_out, data_out,
-                          tshifts_out, t0=tile.t0, trim=True)
+                          tshifts_out, t0=tile.t0)
 
     @staticmethod
     def iterate_singletons(lower, upper, require_aligned=True):
@@ -253,9 +236,8 @@ class SparseTile:
             col = upper.data[0, SparseTile._selected_bits_index(d, upper.dbits), :]
             data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
-        # trim=True drops leading/trailing all-zero time slices (leading folds into t0_out).
         return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
-                          t0=t0_out, trim=True)
+                          t0=t0_out)
 
     @staticmethod
     def _iterate_lower(lower):
@@ -271,7 +253,7 @@ class SparseTile:
         tshifts_out = SparseTile._dd_tlo(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
         data_out = np.ascontiguousarray(rsqrt2 * lower.data)
         return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, data_out,
-                          tshifts_out, t0=lower.t0, trim=True)
+                          tshifts_out, t0=lower.t0)
 
     @staticmethod
     def _iterate_upper(upper):
@@ -287,7 +269,7 @@ class SparseTile:
         tshifts_out = np.concatenate(([0], upper.tshifts)).astype(np.int64)
         data_out = np.ascontiguousarray(rsqrt2 * upper.data)
         return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, data_out,
-                          tshifts_out, t0=upper.t0, trim=True)
+                          tshifts_out, t0=upper.t0)
 
     def specialize_dbits(self, value, nbits, *, low):
         """
