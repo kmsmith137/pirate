@@ -8,28 +8,35 @@ from ..utils import integer_log2
 
 class SparseTile:
     """
-    A contiguous f-index range of a tree-dedispersion array of shape (2^(r-k), 2^k, ntime),
-    indexed by (f,d,t), stored compactly. See notes/tree_dedispersion.tex.
+    During tree dedispersion, intermediate arrays have shape (2^(r-k), 2^k, ntime), 
+    where the axes are (coarse-freq, delay, time). See notes/tree_dedispersion.tex.
+    
+    A SparseTile represents a subset of such an array, in a two-stage compressed
+    representation as follows. First, we define the following members:
 
-    Members
-    -------
       r, k:    rank and iteration index (0 <= k <= r).
       f0, nf:  the tile covers f-indices [f0, f0+nf); elements outside are zero.
-      nt:      (pre-time-shift) time indices outside [0, nt) are zero.
-      dbits:   integer bitmask of selected delay bits: bit b set (for 0 <= b < k) means the
-               (pre-shift) data depends on digit d_b. So data depends on the delay d only
-               through the digits {d_b : bit b of dbits is set}.
-      data:    shape (nf, 2^popcount(dbits), nt), the pre-time-shift array. The middle axis
-               packs the selected delay bits in C-order, with the HIGHEST selected bit as the
-               most significant (the flat index is _remap_d(d, (1<<k)-1, dbits)).
-      tshifts: length-k array, applied UNIFORMLY to every f-index of the tile before
-               unpacking: unpacked[f,d,t] = data[f-f0, sel(d), t - t0 - T(d)] for all f,
-               where T(d) = sum_i tshifts[i]*bit_i(d). (Because of the shift, 'data'
-               depends on d only through 'dbits', but the unpacked array may depend on
-               more digits.)
-      t0:      delay- and f-independent constant forward time shift (>= 0); equivalently
-               the data's pre-shift time origin, or a "constant tshift". Supported in all
-               tile ops (unpack/slice/iterate_*); see notes/tree_dedispersion.tex.
+      nt:      time indices outside [0, nt) are zero.
+      dbits:   integer bitmask of selected delay bits (0 <= dbits < 2^k).
+               the tile contents only depend on dm-index 0 <= d < 2^k via these bits.
+      data:    shape (nf, 2^popcount(dbits), nt) array.
+
+    Using these members, we can "unpack" the array from shape (nf, 2^popc(dbits), nt)
+    to shape (2^(r-k), 2^k, nt). This is followed by a second unpacking stage where
+    we apply a time shift which depends on 0 <= d < 2^k (but not 0 <= f < 2^(r-k)).
+
+      tshifts: length-k integer-valued array
+      t0:      integer
+
+    If d has base-2 representation d = [ d_{k-1} ... d_0 ]_2, then the delay at index d is:
+
+      T(d) = t0 + sum_i (d_i * tshifts[i])
+
+    Note that after the second unpacking stage, the array size will enlarge from
+    (2^{r-k}, 2^k, nt) to (2^{r-k}, 2^k, nt + max_d T(d)).
+    
+    See unpack() for an implementation of this two-stage unpacking scheme. (One way to
+    document the SparseTile details is to specify unpack().)
     """
 
     def __init__(self, r, k, f0, nf, nt, dbits, data, tshifts, t0=0):
@@ -54,11 +61,7 @@ class SparseTile:
         assert self.t0 >= 0
 
     def slice(self, c0, c1):
-        """
-        Return the sub-tile for f-index range [c0, c1) (must lie within [f0, f0+nf)). The
-        uniform tshifts make this a pure restriction of the data rows; (nt, dbits, tshifts)
-        are inherited unchanged -- valid, but possibly non-minimal for the sub-range.
-        """
+        """Return the sub-tile for f-index range [c0, c1) (must lie within [f0, f0+nf))."""
         assert self.f0 <= c0 < c1 <= self.f0 + self.nf
         data = np.ascontiguousarray(self.data[c0 - self.f0 : c1 - self.f0])
         return SparseTile(self.r, self.k, c0, c1 - c0, self.nt, self.dbits, data,
@@ -66,12 +69,13 @@ class SparseTile:
 
     def unpack(self, ntime):
         """
-        Returns a dense (nf, 2^k, ntime) array for this tile's f-rows, applying the uniform
-        per-delay time shift t0 + T(d) to every row. 'ntime' must be >= nt + t0 + max_d T(d).
+        Returns a dense (nf, 2^k, ntime) array for this tile's f-rows.
+        The ntime arg must be >= nt + max_d T(d).
         """
         nd_full = 2**self.k
         tshift = self._eval_tshifts(np.arange(nd_full), nd_full - 1, self.tshifts)   # (nd_full,)
         nt_needed = self.nt + self.t0 + int(tshift.max())
+        
         if ntime < nt_needed:
             raise RuntimeError(f"unpack: ntime={ntime} too small (need >= {nt_needed})")
 
@@ -89,16 +93,10 @@ class SparseTile:
     @staticmethod
     def _remap_d(d, dbits_in, dbits_out):
         """
-        'd' is an index with 0 <= d < 2^popc(dbits_in)
-        'dbits_out' is a subset of 'dbits_in'
-        returns an index 'dout' with 0 <= dout < 2^popc(dbits_out)
+        Returns an index 'dout' with 0 <= dout < 2^popc(dbits_out).
+          - 'd' is an index with 0 <= d < 2^popc(dbits_in)
+          - 'dbits_out' is a subset of 'dbits_in'
         """
-
-        # Reinterpret 'd' (a flat index in the 2^popcount(dbits_in) packing) as a flat index in the
-        # 2^popcount(dbits_out) packing, where dbits_out is a subset of dbits_in. Both packings are
-        # highest-bit-first: a set bit's packed position is popcount of the selected bits below it.
-        # Vectorized in d (python int or numpy array); dbits_in, dbits_out are scalar python ints.
-        # Written to port to C++ line-by-line (popcount / bit_floor intrinsics).
         assert (~dbits_in & dbits_out) == 0                     # dbits_out subset of dbits_in
         assert np.all((np.asarray(d) >= 0) & (np.asarray(d) < (1 << dbits_in.bit_count())))
         dout = d * 0                                            # seed type/shape from d
@@ -118,8 +116,6 @@ class SparseTile:
         Returns the associated forward time shift T, obtained summing tshifts for each bit that has been set.
         Vectorized: 'd' can be an int or a numpy array.
         """
-        # 'd' is packed over dbits (highest-bit-first), so bit b of the full delay is d's packed
-        # bit at position popcount(dbits below b); non-selected bits are zero (contribute nothing).
         T = d * 0
         tmp = dbits
         while tmp:
@@ -131,8 +127,7 @@ class SparseTile:
 
     @staticmethod
     def _dd_tshifts(k):
-        # The DD(k) lower-half time shift ceil(d'/2) as a tshift vector (length k+1):
-        # tlo[0]=1, tlo[j]=2^(j-1) for j>=1.
+        """Returns the lower-half time shifts used in DD(k), as a 'tshift' array of length (k+1)."""
         return np.array([1] + [1 << (j - 1) for j in range(1, k + 1)], dtype=np.int64)
 
     # ----------------------------- tile-level DD(k) ops -----------------------------
@@ -140,11 +135,10 @@ class SparseTile:
     @staticmethod
     def iterate_aligned(tile):
         """
-        DD(k) for an even-aligned tile (tile.f0 and tile.nf both even, so every output
-        channel has both halves). The common input time shift is carried into the output
-        tshifts ([0]+tin); the DD lower-half shift is baked, so the output uses all (k+1)
-        delay bits. Returns the level-(k+1) output tile.
+        Applies DD(k) to an even-aligned tile, returning a tile with k->k+1.
+        "Even-aligned" means that tile.f0 and tile.nf both even, so every output channel has both halves.
         """
+        
         k = tile.k
         f0, nf, nt_in, dbits_in, tin = tile.f0, tile.nf, tile.nt, tile.dbits, tile.tshifts
         assert f0 % 2 == 0 and nf % 2 == 0 and nf >= 2, "iterate_aligned requires even f0, nf"
@@ -158,6 +152,7 @@ class SparseTile:
         nt_alloc = nt_in + (1 << k)
         data_in = tile.data                            # (nf, 2^popcount(dbits_in), nt_in)
         data_out = np.zeros((nf_out, 1 << m_out, nt_alloc), dtype=np.float64)
+        
         for dp in range(1 << m_out):                   # representative is the identity (all bits)
             d = dp >> 1
             slab = data_in[:, SparseTile._remap_d(d, (1 << k) - 1, dbits_in), :]   # (nf, nt_in)
@@ -168,26 +163,16 @@ class SparseTile:
             data_out[:, dp, sh:sh + nt_in] += rsqrt2 * gl
 
         tshifts_out = np.concatenate(([0], tin)).astype(np.int64)
-        # t0 is a uniform shift: it factors out of the DD sum, so it passes through.
-        return SparseTile(tile.r, k + 1, F0, nf_out, nt_alloc, dbits_out, data_out,
-                          tshifts_out, t0=tile.t0)
+        return SparseTile(tile.r, k + 1, F0, nf_out, nt_alloc, dbits_out, data_out, tshifts_out, t0=tile.t0)
 
+    
     @staticmethod
-    def iterate_singletons(lower, upper, require_aligned=True):
+    def iterate_singletons(lower, upper):
         """
-        DD(k) merge of two adjacent singleton tiles into the output singleton. 'lower' is
-        the lower-tree-freq half (gets the DD shift); 'upper' is the upper half. Each is a
-        tile with nf==1 and its own (dbits, nt, tshifts, t0). Either may be None (but not
-        both); the single-half cases delegate to _iterate_lower / _iterate_upper. With both
-        present, chooses tshifts/t0 (the elementwise/scalar min of the two halves' total
-        shifts) to minimize the output (dbits, nt). Returns the level-(k+1) output tile.
+        Applies DD(k) to a pair of adjacent singleton tiles, returning a singleton tile with k->k+1.
+        Either 'lower' or 'upper' may be None, but not both.
+        """
 
-        With require_aligned (default), 'lower' must be even-aligned (channels 2f, 2f+1) so
-        the output is tree coarse-freq channel f -- the standard DD step. Case 2 of the
-        subband extraction passes require_aligned=False to merge the odd-aligned pair
-        (2f+1, 2f+2); the merge math is identical and the output tile is consumed directly
-        (its f0 is then cosmetic).
-        """
         assert lower is not None or upper is not None
         if upper is None:
             return SparseTile._iterate_lower(lower)
@@ -200,13 +185,10 @@ class SparseTile:
         r, k = lower.r, lower.k
         assert k < r
         assert lower.f0 + 1 == upper.f0                 # adjacency
-        if require_aligned:
-            assert lower.f0 % 2 == 0                    # tree-channel semantics
-        f_out = lower.f0 // 2
 
-        tlo = SparseTile._dd_tshifts(k)                     # length k+1
         # Each half's total time shift relative to its stored (pre-shift) data: lower gets the
         # DD shift plus its own (lifted) input shift; upper gets only its own.
+        tlo = SparseTile._dd_tshifts(k)   # length k+1
         s_L = tlo + np.concatenate(([0], lower.tshifts)).astype(np.int64)
         s_U = np.concatenate(([0], upper.tshifts)).astype(np.int64)
         tmin = np.minimum(s_L, s_U)
@@ -228,66 +210,51 @@ class SparseTile:
         rsqrt2 = 1.0 / np.sqrt(2.0)
         data_out = np.zeros((1, 1 << m_out, nt_alloc), dtype=np.float64)
         ldb, udb = lower.dbits << 1, upper.dbits << 1      # each half's selected bits, lifted (subset of dbits_out)
+        
         for s_out in range(1 << m_out):
             rL = c_L + int(SparseTile._eval_tshifts(s_out, dbits_out, res_L))
             col = lower.data[0, SparseTile._remap_d(s_out, dbits_out, ldb), :]
             data_out[0, s_out, rL:rL + lower.nt] += rsqrt2 * col
+            
             rU = c_U + int(SparseTile._eval_tshifts(s_out, dbits_out, res_U))
             col = upper.data[0, SparseTile._remap_d(s_out, dbits_out, udb), :]
             data_out[0, s_out, rU:rU + upper.nt] += rsqrt2 * col
 
-        return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin,
-                          t0=t0_out)
+        f_out = lower.f0 // 2
+        return SparseTile(r, k + 1, f_out, 1, nt_alloc, dbits_out, data_out, tmin, t0=t0_out)
 
     @staticmethod
     def _iterate_lower(lower):
-        """
-        iterate_singletons() with upper=None: DD(k) on just the lower half (channel 2f).
-        The lower half takes the DD shift, but with no upper half to align against, that shift
-        folds entirely into tshifts (the residual is zero), so the output is (1/sqrt2)*lower.data
-        with every selected bit lifted one level (dbits << 1). No per-delay loop is needed.
-        """
+        """This is the special case of iterate_singletons() with upper=None."""
+
         k = lower.k
-        assert lower.nf == 1 and k < lower.r
+        assert lower.nf == 1 and lower.k < lower.r
+        
         rsqrt2 = 1.0 / np.sqrt(2.0)
         tshifts_out = SparseTile._dd_tshifts(k) + np.concatenate(([0], lower.tshifts)).astype(np.int64)
-        data_out = np.ascontiguousarray(rsqrt2 * lower.data)
-        return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, data_out,
-                          tshifts_out, t0=lower.t0)
+        data_out = np.ascontiguousarray(rsqrt2 * lower.data)        
+        return SparseTile(lower.r, k + 1, lower.f0 // 2, 1, lower.nt, lower.dbits << 1, data_out, tshifts_out, t0=lower.t0)
 
     @staticmethod
     def _iterate_upper(upper):
-        """
-        iterate_singletons() with lower=None: DD(k) on just the upper half (channel 2f+1).
-        The upper half gets no DD shift, so the new bit 0 is a pure spectator (tshift 0) and the
-        output is (1/sqrt2)*upper.data with every selected bit lifted one level (dbits << 1).
-        No per-delay loop is needed.
-        """
+        """This is the special case of iterate_singletons() with lower=None."""
+        
         k = upper.k
         assert upper.nf == 1 and k < upper.r
+        
         rsqrt2 = 1.0 / np.sqrt(2.0)
         tshifts_out = np.concatenate(([0], upper.tshifts)).astype(np.int64)
         data_out = np.ascontiguousarray(rsqrt2 * upper.data)
-        return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, data_out,
-                          tshifts_out, t0=upper.t0)
+        return SparseTile(upper.r, k + 1, upper.f0 // 2, 1, upper.nt, upper.dbits << 1, data_out, tshifts_out, t0=upper.t0)
+    
 
     def specialize_dbits(self, value, nbits, *, low):
         """
         Specialize this singleton tile's (nf==1) level-k DM (delay) index by fixing 'nbits' of
         its delay bits to the value 'value' (0 <= value < 2^nbits), keeping the other (k-nbits)
         bits. Collapses to a standalone fully-iterated rank-(k-nbits) SparseTile (r == k == rho,
-        f0 == 0, nf == 1).
-
-        If low=True, the LOW 'nbits' bits are fixed; the high rho = k-nbits bits become the new
-        (coarse) delay axis, inheriting their tshifts. Looping 'value' over 0..2^nbits-1 then
-        yields the subband's 2^nbits multiplets.
-        If low=False, the HIGH 'nbits' bits are fixed, keeping the low (k-nbits) bits. Used to
-        discard part of the DM range: e.g. specialize_dbits(1, 1, low=False) keeps the upper half
-        of the delay axis (top bit == 1), dropping rank by 1.
-
-        Only the SELECTED fixed bits affect the data; non-selected fixed bits affect 'value' only
-        via t0. The fixed bits' (constant) tshift contribution folds into the tile's t0; the kept
-        bits' tshifts carry over. See notes/tree_dedispersion.tex.
+        f0 == 0, nf == 1). The boolean 'low' argument indicates whether the lowest or highest
+        bits are specialized.
         """
         
         assert self.nf == 1
@@ -722,7 +689,8 @@ class SparseTilePerM:
         under-the-hood SparseTileTriple (the full-band gridding footprint) and extract per-
         multiplet outputs "on the fly". Case 1 (aligned, l=0 or even s) reads the
         level-(r-R+l) singleton f directly; Case 2 (half-aligned, l>0 odd s) merges the
-        level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons(require_aligned=False).
+        level-(r-R+l-1) pair (2f+1, 2f+2) via iterate_singletons().
+        
         Each extraction is then split into its 2^l multiplets (specialize_dbits, low=True).
         """
         sc = [int(c) for c in fs.subband_counts]
@@ -754,7 +722,7 @@ class SparseTilePerM:
                     if lo is None and up is None:
                         tile = None
                     else:
-                        tile = SparseTile.iterate_singletons(lo, up, require_aligned=False)
+                        tile = SparseTile.iterate_singletons(lo, up)
                     SparseTilePerM._emit(per_m, mbase, l, tile, C, upper_half_only)
             if k < r:
                 sarr = sarr.iterate()
