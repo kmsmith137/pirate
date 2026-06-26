@@ -363,29 +363,27 @@ class PfVariance:
 class PfAvarExact:
     """Exact analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
 
-    For each DedispersionTree (one per (downsampling level, early trigger)), computes the
-    peak-finding output variance of every (input frequency channel, multiplet) pair, plus the
-    frequency-summed variance per multiplet.  Each tree is processed "from scratch" (no reuse of
-    computations across trees).  Every PfVariance for tree itree has rank tree_r[itree] - tree_R[itree].
+    In PfAvarExact, each tree is processed "from scratch" (no reuse of computations across trees).
+    Note that in PfAvarApprox (see below), we try to be efficient and reuse computations.
+    Comparison between the two is a unit test of the reuse-logic in PfAvarApprox.
+
+    PfVariances are computed per-m, where the "multiplet" 0 <= m < M indexes a
+    (frequency_subband, fine_dm) pair. Each per-m PfVariance has rank (r-R), where
+    r = tree_rank[itree] and R = pf_rank[itree].
 
     Members
     -------
-      ntrees:      number of DedispersionTrees (= plan.ntrees).
-      tree_r:      length-ntrees int array; tree_r[itree] = amb_rank + early_dd_rank, the tree's
-                   kept-output rank (equivalently config.tree_rank - delta - (ids>0 ? 1 : 0), where
-                   delta = early-trigger reduction and ids = ds_level; so tree_r == config.tree_rank
-                   only for tree 0).
-      tree_R:      length-ntrees int array; tree_R[itree] = the tree's pf_rank (NOT the config pf_rank).
-      tree_P:      length-ntrees int array; tree_P[itree] = the tree's nprofiles (= 1 + 3 log2(Wmax)).
-      convolver:   a single shared PfVarianceConvolver (full kernel bank to constants.max_pf_width;
-                   every tree's tree_P[itree] <= convolver.Pmax).
+      plan:        the DedispersionPlan
+      ntrees:      number of DedispersionTrees (= plan.ntrees)
+      nfreq:       number of input frequency channels
+      tree_r:      config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
+      tree_R:      pf_rank (a length-ntrees array, can differ from the config pf_rank)
+      tree_P:      nprofiles (a length-ntrees array)
       tree_fs:     length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
-      plan, nfreq: the DedispersionPlan and the number of input frequency channels.
-      per_tfm:     (ntrees, nfreq, M) ragged; per_tfm[itree][ifreq] is None (ifreq below the tree's
-                   truncated band) or a length-M list of (PfVariance of rank tree_r-tree_R, or
-                   None where multiplet m doesn't overlap ifreq).
-      per_tm:      (ntrees, M) ragged; per_tm[itree][m] is the frequency-summed PfVariance for tree
-                   itree, multiplet m (also rank tree_r-tree_R).
+      convolver:   a single shared PfVarianceConvolver
+      per_tfm:     (ntrees, nfreq, M) array of (None or single-channel PfVariance).
+                   This is a "ragged" array (list of list of lists) since M is tree-dependent.
+      per_tm:      (ntrees, M) ragged array of frequency-summed PfVariances (never None).
     """
 
     def __init__(self, plan, progress=False):
@@ -447,59 +445,39 @@ class PfAvarExact:
 class PfAvarApproximation:
     """Approximate analytic peak-finding variances for a DedispersionPlan (all DedispersionTrees).
 
-    Like PfAvarExact, but compressed and approximated. Every PfVariance for tree itree has rank
-    r[itree] - L[itree] (the WEIGHTS' DM resolution 2^(r-L)) and is stored per coarse-freq channel
-    (the 2^R[itree] level-0 subbands). Writing rho_cm = r + (ids>0) = config.tree_rank - delta for
-    the tree's pre-upper-half DD rank (it processes the top 2^rho_cm tree-channels):
+    For each tree, we divide the tree-freqs into 2^L bands, where 2^L = tree.pf.wt_dm_downsampling.
+    We make the approximation that frequency channel overlaps between bands are negligible.
+    Consequences of this approximation:
 
-    The approximation (sub-block-mean): rather than coherently dedispersing each coarse-freq's full
-    2^(rho_cm-R)-channel block, we iterate only to level klevel = rho_cm-L (giving 2^L finer
-    "sub-block" coarse-freqs f', each a 2^(rho_cm-L)-channel dedispersion) and take, into the coarse
-    f = f' >> (L-R), the MEAN of its 2^(L-R) sub-block variances. This drops the inter-sub-block
-    cross-covariances and reads each sub-block's own DMs as the coarse-DM axis. The mean (factor
-    2^-(L-R) on the sub-block-variance sum) is the 1/sqrt(2)-per-level DD normalization: the
-    full-block dedispersion runs L-R more 1/sqrt(2) levels than a sub-block, so its variance equals
-    the sub-block MEAN, not the sum -- analogous to the 1/(ihi-ilo) factor get_per_m applies across
-    coarse-freqs. (When L == R this reduces to the plain per-coarse-freq dedispersion.)
+       - The variance only depends on the (r-L) highest bits of the dm. (That is, the variance
+         array has the same dm-axis length as the pf-weights array.) In particular, if we write
+         a multiplet as (subband n, dm_lo) then the variance depends on n but not dm_lo.
 
-    A single full-band (rank config.tree_rank) gridding SparseTileTriple is iterated ONCE per input
-    freq channel and shared across all trees: the iteration is rank-agnostic and footprint-local,
-    and a tree's truncated channel map is a prefix of the full one, so the first 2^L sub-blocks at
-    level klevel reproduce the truncated tree's sub-blocks exactly. At each level the RAW sub-block
-    singletons are converted to PfVariance ONCE (at the max P over the trees at that level) and
-    shared across those trees; each tree then coarsify-means them into its 2^R coarse-freqs via
-    PfVariance.add(upper_half=ids>0), which truncates the p-axis to the tree's P and (for ids>0)
-    keeps the upper coarse-DM half (rank rho_cm-L -> r-L) -- equivalent to specializing each tile,
-    but with the expensive variance evaluated once per level instead of once per tree.
+       - The per-tree variance can be computed as an array of shape (2^{r-L}, 2^R, P), and then
+         reduced to any of the following shapes (N = #subbands, M = #multiplets):
+    
+            (2^{r-L}, N, P)   -> average "level 0" bands into subbands
+            (2^{r-L}, M, P)   -> one-to-many map between n-index (subband) and m (multiplet)         
 
-    Per-multiplet variances are reconstructed on demand (get_per_fm / get_per_m): a multiplet m
-    spans a coarse-freq range [ilo, ihi) (= fs.m_to_ilo(m)..m_to_ihi(m)); its variance is the
-    mean of the per-coarse-freq variances over that range -- i.e. (1/(ihi-ilo)) * sum -- where
-    the 1/(ihi-ilo) factor is the inter-coarse-freq DD normalization (2^-l in variance for a
-    width-2^l subband) that the exact subband dedispersion would apply.
+    All PfVariances in sight have rank (r-L). (Not r-R as in PfAvarExact.)
 
     Members
     -------
-      ntrees:      number of DedispersionTrees (= plan.ntrees).
-      tree_r:      length-ntrees int array; tree_r[itree] = amb_rank + early_dd_rank (matches
-                   PfAvarExact.tree_r). The PfVariance rank is tree_r[itree] - tree_L[itree].
-      tree_R:      length-ntrees int array; tree_R[itree] = the tree's pf_rank (NOT the config pf_rank).
-      tree_L:      length-ntrees int array; tree_L[itree] = log2(tree's wt_dm_downsampling). Read per
-                   tree -- no assumption that early-trigger trees share L/R with their siblings;
-                   only the structural 0 <= R <= L <= r is required (asserted per tree).
-      tree_P:      length-ntrees int array; tree_P[itree] = the tree's nprofiles (= 1 + 3 log2(Wmax)).
-      convolver:   a single shared PfVarianceConvolver (full kernel bank to constants.max_pf_width;
-                   every tree's tree_P[itree] <= convolver.Pmax).
+      plan:        the DedispersionPlan
+      ntrees:      number of DedispersionTrees (= plan.ntrees)
+      nfreq:       number of input frequency channels
+      tree_r:      config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
+      tree_R:      pf_rank (a length-ntrees array, can differ from the config pf_rank)
+      tree_L:      log2(wt_dm_downsampling) (a length-ntrees array); requires 0 <= R <= L <= r
+      tree_P:      nprofiles (a length-ntrees array)
       tree_fs:     length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
-      plan, nfreq: the DedispersionPlan and the number of input frequency channels.
-      per_tff:     (ntrees, nfreq, 2^R[itree]) ragged; per_tff[itree][ifreq][f] is the single-
-                   channel PfVariance (rank r-L) of coarse-freq f, or None (no overlap).
-      per_tf:      (ntrees, 2^R[itree]) ragged; per_tf[itree][f] = sum over ifreq of
-                   per_tff[itree][ifreq][f].
+      convolver:   a single shared PfVarianceConvolver
+      per_tff:     (ntrees, nfreq, 2^R) array of (None or single-channel PfVariance).
+                   This is a "ragged" array (list of list of lists) since 2^R is tree-dependent.
+      per_tf:      (ntrees, 2^R) ragged array of frequency-summed PfVariances (never None).
     """
 
     def __init__(self, plan, progress=False):
-        # If progress is set, print one '.' per 1000 input freq channels.
         self.plan, self.nfreq, self.ntrees = plan, int(plan.nfreq), int(plan.ntrees)
         self.convolver = PfVarianceConvolver()   # shared full kernel bank; sliced per-tree by P
         
@@ -511,7 +489,12 @@ class PfAvarApproximation:
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
         assert np.all((self.tree_R >= 0) & (self.tree_R <= self.tree_L) & (self.tree_L <= self.tree_r))
 
-        # Per-tree validation + derived ids flag and iterate level klevel = rho_cm - L = (r+ids) - L.
+        # Strategy for re-using computations between trees:
+        #  - for each ifreq, we'll call SparseTileTriple.iterate() to iterate k=0,1,2,...
+        #  - at k = (r - L + (ids?1:0)), we convert SparseTileTriple -> PfVariance and accumulate
+        #  - different trees may have different k ("k-level"), so we outer-loop over k and
+        #     inner-loop over the trees at each k-level.
+
         self._tree_ids = np.array([t.ds_level for t in plan.trees])
         self._tree_klevel = self.tree_r - self.tree_L + (self._tree_ids > 0)
         self._max_klevel = np.max(self._tree_klevel)
@@ -552,7 +535,18 @@ class PfAvarApproximation:
         if self._klevel_Lmax[k] < 0:
             return   # no trees at this klevel
 
-        for fp in range(1 << self._klevel_Lmax[k]):
+        # Iterate over singletons in 'sarr', which are indexed by 0 <= f < 2^{config.tree_rank - k}.
+        # (For a given ifreq, only a subset of these f-indices will arise.)
+
+        # Non-obvious: each tree only uses indices 0 <= f < 2^L.
+        # For a non-early tree this is the full range 0 <= f < 2^{config.tree_rank - k}.
+        # For an early tree, this range is smaller, reflecting frequencies that are available at trigger.
+        # (To see this, it may help to note that (config.tree_rank - k - delta) = L.)
+        
+        f0 = sarr.f0
+        f1 = min(sarr.f0 + sarr.nf, 1 << self._klevel_Lmax[k])
+        
+        for fp in range(f0, f1):
             tile = sarr.get_singleton(fp, allow_none=True)
             if tile is None:
                 continue
