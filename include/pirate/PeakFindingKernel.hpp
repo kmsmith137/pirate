@@ -47,7 +47,7 @@ namespace pirate {
 // a single axis, indexed by a "multiplet" 0 <= m < M. The FrequencySubband helper
 // class contains information about the frequency subband scheme. In particular:
 //
-//   FrequencySubband::F = number of distinct frequency subbands
+//   FrequencySubband::N = number of distinct frequency subbands
 //   FrequencySubband::M = number of distinct multiplets (freq_subband, fine_dm)
 //
 // The peak-finding profile 0 <= p < P indexes a trial profile (in time) which is
@@ -67,10 +67,10 @@ namespace pirate {
 // in whatever normalization is convenient for the GPU kernel. The 'wt' array contains
 // the multiplier which converts to detection significants in "sigmas". We make the
 // approximation that the normalization only depends on the multiplet 0 <= m < M
-// (see above) through its frequency subband 0 <= f < F. Then, the 'wt' array is
+// (see above) through its frequency subband 0 <= n < N. Then, the 'wt' array is
 // a logical 4-d array (for each beam) with shape:
 //
-//   (ndm_wt, nt_wt, P, F)    (*)
+//   (ndm_wt, nt_wt, P, N)    (*)
 //
 // where (ndm_wt, nt_wt) are obtained by applying downsampling factors to (ndm_in, nt_in).
 // These "weights" downsampling factors are independent of the downsampling factors used
@@ -93,7 +93,7 @@ struct PeakFindingKernelParams
 
     // Peak-finding input array has shape (beams_per_batch, ndm_out, fs.M, nt_in).
     // Output arrays have shape (beams_per_batch, ndm_out, nt_out).
-    // Weight array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F).
+    // Weight array has shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N).
 
     long ndm_out = 0;
     long ndm_wt = 0;
@@ -109,7 +109,7 @@ struct ReferencePeakFindingKernel
 {
     // Parameters specified at construction.
     PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
-    FrequencySubbands fs;             // pf_rank, F, M
+    FrequencySubbands fs;             // pf_rank, N, M
     long Dcore = 0;
 
     // Derived parameters, computed in constructor.
@@ -134,7 +134,7 @@ struct ReferencePeakFindingKernel
                ksgpu::Array<uint> &out_argmax,   // shape (beams_per_batch, ndm_out, nt_out)
                ksgpu::Array<double> &out_var,    // shape (beams_per_batch, ndm_out, fs.M, nprofiles), or empty
                const ksgpu::Array<float> &in,    // shape (beams_per_batch, ndm_out, params.fs.M, nt_in)
-               const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
+               const ksgpu::Array<float> &wt,    // shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
                long ibatch,                      // 0 <= ibatch < nbatches
                bool debug = false);              // enables verbose debugging output
 
@@ -172,16 +172,16 @@ struct ReferencePeakFindingKernel
 
     void eval_tokens(ksgpu::Array<float> &out,  // output array, shape (beams_per_batch, ndm_out, nt_out)
         const ksgpu::Array<uint> &in_tokens,    // input array, shape (beams_per_batch, ndm_out, nt_out)
-        const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
+        const ksgpu::Array<float> &wt);         // input array, shape (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
 
     // Make a mean-zero input array for testing.
     // Returns shape (nbeams_per_batch, ndm_out, params.fs.M, nt_in)
     ksgpu::Array<float> make_random_input_array();
 
     // make_random_weights(): make an interesting weights array for testing.
-    // output array shape: (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, fs.F)
-    // The 'subband_variance' array has shape (fs.F,) and is an estimate for
-    // the variance of the peak-finder input, in frequency subband 0 <= f < F. 
+    // output array shape: (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
+    // The 'subband_variance' array has shape (fs.N,) and is an estimate for
+    // the variance of the peak-finder input, in frequency subband 0 <= n < N. 
 
     // Fill preallocated output array.
     void make_random_weights(ksgpu::Array<float> &out, const ksgpu::Array<float> &subband_variances);
@@ -211,14 +211,14 @@ struct ReferencePeakFindingKernel
     // for p=3*l+q and 0 <= tout < nt_out, we use a loop like this:
     //
     //   I = tmp_iout[l];   // base
-    //   N = tmp_nout[l];   // count
+    //   nsamp = tmp_nout[l];   // count
     //   S = tmp_sout[l];   // spacing
     //
-    //   for (n = 0; n < N; n++) {
-    //       float x_0 = tmp_arr[l][b,d,m, I + tout*N + n - (q-1)*S];
-    //       float x_1 = tmp_arr[l][b,d,m, I + tout*N + n - (q-2)*S];
+    //   for (isamp = 0; isamp < nsamp; isamp++) {
+    //       float x_0 = tmp_arr[l][b,d,m, I + tout*nsamp + isamp - (q-1)*S];
+    //       float x_1 = tmp_arr[l][b,d,m, I + tout*nsamp + isamp - (q-2)*S];
     //           ...
-    //       float x_end = tmp_arr[l][b,d,m, I + tout*N + n];
+    //       float x_end = tmp_arr[l][b,d,m, I + tout*nsamp + isamp];
 
     long tpad = 0;  // prepadding (in "input time samples"), same for all levels
     long num_levels = 0;
@@ -245,14 +245,14 @@ struct ReferencePeakFindingKernel
 //
 // Peak-finding weights are logically a 5-d array with shape:
 //
-//   (beams_per_batch, ndm_wt, nt_wt, P, F)        (*)
+//   (beams_per_batch, ndm_wt, nt_wt, P, N)        (*)
 //
 // where:
 //
 //  - ndm_wt = number of DMs in weights array (downsampled relative to tree)
 //  - nt_wt = number of time samples in weights array (downsampled relative to tree)
 //  - P = number of peak-finding profiles
-//  - F = number of frequency subbands F
+//  - N = number of frequency subbands N
 //
 // The on-GPU memory layout is more complicated than (*)! Details of this layout
 // are important in the autogenerated cuda kernels, but can be mostly opaque to
@@ -270,7 +270,7 @@ struct GpuPfWeightLayout
 {
     ksgpu::Dtype dtype;
     
-    long F = 0;     // number of distinct frequency subbands
+    long N = 0;     // number of distinct frequency subbands
     long P = 0;     // number of peak-finding kernels
 
     // Used internally to define layout.
@@ -284,7 +284,7 @@ struct GpuPfWeightLayout
     std::vector<long> get_strides(long nbeams, long ndm_wt, long nt_wt) const;
 
     // Copies weights array from host to GPU (also converts fp32 -> fp16 if needed).
-    // The source array has the straightforward layout (nbeams, ndm_wt, nt_wt, P, F).
+    // The source array has the straightforward layout (nbeams, ndm_wt, nt_wt, P, N).
     // The destination array has the complicated layout assumed by the GPU kernel.
     // This function is intended to help hide details of the GPU layout.
     // Note: poorly optimized! (Intended for unit tests.)
@@ -318,7 +318,7 @@ struct GpuPeakFindingKernel
 
     void allocate(BumpAllocator &allocator);
 
-    // The 'weights' array has logical shape (beams_per_batch, ndm_wt, nt_wt, P, F),
+    // The 'weights' array has logical shape (beams_per_batch, ndm_wt, nt_wt, P, N),
     // but is passed to the gpu kernel in a complicated, non-contiguous layout. To put
     // an array into the proper layout, call GpuPfWeightLayout::to_gpu().
 
@@ -336,7 +336,7 @@ struct GpuPeakFindingKernel
     // ------------------------  Members  ------------------------
 
     PeakFindingKernelParams params;  // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
-    FrequencySubbands fs;             // pf_rank, F, M
+    FrequencySubbands fs;             // pf_rank, N, M
 
     // Derived parameters chosen by the kernel.
     GpuPfWeightLayout pf_weight_layout;     // layout of peak-finding weights in GPU memory
@@ -450,7 +450,7 @@ struct PfWeightReaderMicrokernel
         // cuda_kernel(void *out, const void *in, uint nt_in, uint nt_in_per_wt)
         //
         // out: shape (nt_in/Dcore, Mouter*Minner, Pouter*Pinner)
-        // in: shape (nt_in/(nt_in_per_wt*Tinner), Pouter, F, Tinner, Pinner)
+        // in: shape (nt_in/(nt_in_per_wt*Tinner), Pouter, N, Tinner, Pinner)
         // nt_in: number of input time samples
         // nt_in_per_wt: time downsampling factor for weight array
         //

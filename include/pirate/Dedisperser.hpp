@@ -419,7 +419,7 @@ struct ReferenceDedisperserBase
     ksgpu::Array<float> input_array;
 
     // Befre calling dedisperse(), caller should fill 'wt_arrays' (peak-finding weights).
-    // Shape is (beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.F)
+    // Shape is (beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.N)
     //   where t = plan->trees.at(itree).
     std::vector<ksgpu::Array<float>> wt_arrays;    // length ntrees
 

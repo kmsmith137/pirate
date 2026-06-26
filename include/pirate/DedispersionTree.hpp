@@ -37,7 +37,7 @@ struct DedispersionTree
     long nprofiles = 0;
 
     // For peak-finding array shapes.
-    // 'wt' array shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, frequency_subbands.F).
+    // 'wt' array shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, frequency_subbands.N).
     // 'out_max', 'out_argmax' shapes are (beams_per_batch, ndm_out, nt_out).
     long ndm_out = 0;
     long ndm_wt = 0;

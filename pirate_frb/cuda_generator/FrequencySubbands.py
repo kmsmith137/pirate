@@ -23,36 +23,36 @@ class FrequencySubbands:
         self.subband_counts = subband_counts
         self.pf_rank = pf_rank = len(subband_counts) - 1
 
-        self.F = 0               # number of frequency_subbands
+        self.N = 0               # number of frequency_subbands
         self.M = 0               # number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
-        self.m_to_fd = [ ]       # mapping (multiplet) -> (frequency_subband, fine_grained_dm)
-        self.f_to_irange = [ ]   # mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2**rank)
-        self.f_to_mrange = [ ]   # mapping (frequency_subband) -> (multiplet pair 0 <= mlo < mhi <= M)
+        self.m_to_nd = [ ]       # mapping (multiplet) -> (frequency_subband, fine_grained_dm)
+        self.n_to_frange = [ ]   # mapping (frequency_subband) -> (coarse-freq index pair 0 <= flo < fhi <= 2**rank)
+        self.n_to_mrange = [ ]   # mapping (frequency_subband) -> (multiplet pair 0 <= mlo < mhi <= M)
 
         for level in range(pf_rank+1):
             for b in range(self.subband_counts[level]):
                 for d in range(2**level):
-                    self.m_to_fd.append((self.F,d))
+                    self.m_to_nd.append((self.N,d))
                 
-                # Compute (ilo, ihi) for this band: 0 <= ilo < ihi <= 2**pf_rank
+                # Compute (flo, fhi) for this band: 0 <= flo < fhi <= 2**pf_rank
                 s = 2**max(level-1, 0)  # spacing between bands
-                ilo = b * s
-                ihi = b * s + 2**level
+                flo = b * s
+                fhi = b * s + 2**level
                 
-                self.f_to_irange.append((ilo,ihi))
-                self.f_to_mrange.append((self.M, self.M + 2**level))
+                self.n_to_frange.append((flo,fhi))
+                self.n_to_mrange.append((self.M, self.M + 2**level))
 
                 self.M += 2**level
-                self.F += 1
+                self.N += 1
         
         # For kernel/file names in code generator.
-        self.fstr = '_'.join(f'f{int(n)}' for n in self.subband_counts)
+        self.fstr = '_'.join(f'n{int(c)}' for c in self.subband_counts)
 
         
     @classmethod
     def from_fstr(cls, fstr):
         # For parsing filenames in code generator.
-        if not re.fullmatch(r'f\d+(?:_f\d+)*', fstr):
+        if not re.fullmatch(r'n\d+(?:_n\d+)*', fstr):
             raise RuntimeError(f"FrequencySubbands.from_fstr(): couldn't parse fstr='{fstr}'")
         subband_counts = [int(x) for x in re.findall(r'\d+', fstr) ]
         return cls(subband_counts = subband_counts)
@@ -138,16 +138,16 @@ class FrequencySubbands:
 
     
     def get_band_index_range(self, level, b):
-        """Returns (ilo, ihi), where 0 <= ilo < ihi <= 2**pf_rank."""
+        """Returns (flo, fhi), where 0 <= flo < fhi <= 2**pf_rank."""
         
         assert 0 <= level <= self.pf_rank
         assert 0 <= b < self.max_bands_at_level(level)
 
         s = 2**max(level-1,0)         # spacing between bands
-        return (b*s, b*s + 2**level)  # (ilo, ihi)
+        return (b*s, b*s + 2**level)  # (flo, fhi)
 
 
-    def check_m(self, m, expected_ilo, expected_ihi, expected_d):
-        f,d = self.m_to_fd[m]
-        assert self.f_to_irange[f] == (expected_ilo, expected_ihi)
+    def check_m(self, m, expected_flo, expected_fhi, expected_d):
+        n,d = self.m_to_nd[m]
+        assert self.n_to_frange[n] == (expected_flo, expected_fhi)
         assert d == expected_d

@@ -491,7 +491,7 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
             // by a Python post-processing hack in pirate_frb/__main__.py (show_dedisperser).
             // If you change the format of this comment, update the Python code accordingly!
             stringstream ss;
-            ss << "At tree_index=" << tree_index << ", " << fs.F << " frequency subband(s) are searched:\n";
+            ss << "At tree_index=" << tree_index << ", " << fs.N << " frequency subband(s) are searched:\n";
             fs.show_compact(ss);
             emitter << YAML::Newline << YAML::Newline << YAML::Comment(ss.str()) 
                     << YAML::Newline << YAML::Newline;

@@ -80,33 +80,33 @@ long DedispersionConfig::get_total_nfreq() const
 }
 
 
-double DedispersionConfig::frequency_to_index(double f) const
+double DedispersionConfig::frequency_to_index(double freq) const
 {
     // Allow small roundoff error at band edges.
     double fmin = zone_freq_edges.front();
     double fmax = zone_freq_edges.back();
     double eps = 1.0e-5 * (fmax - fmin);
     
-    if ((f < fmin - eps) || (f > fmax + eps)) {
+    if ((freq < fmin - eps) || (freq > fmax + eps)) {
         stringstream ss;
-        ss << "DedispersionConfig::frequency_to_index(): frequency " << f
+        ss << "DedispersionConfig::frequency_to_index(): frequency " << freq
            << " is out of range [" << fmin << ", " << fmax << "]";
         throw runtime_error(ss.str());
     }
     
     // Clamp to band edges (in case of small roundoff error).
-    f = std::max(f, fmin);
-    f = std::min(f, fmax);
+    freq = std::max(freq, fmin);
+    freq = std::min(freq, fmax);
     
     // Linear search through zones.
     double channel_offset = 0;
     for (size_t i = 0; i < zone_nfreq.size(); i++) {
-        double f0 = zone_freq_edges[i];
-        double f1 = zone_freq_edges[i+1];
+        double freq0 = zone_freq_edges[i];
+        double freq1 = zone_freq_edges[i+1];
         
-        if (f <= f1) {
+        if (freq <= freq1) {
             // Frequency is in zone i.
-            double frac = (f - f0) / (f1 - f0);
+            double frac = (freq - freq0) / (freq1 - freq0);
             channel_offset += frac * zone_nfreq[i];
             break;
         }
@@ -150,9 +150,9 @@ double DedispersionConfig::index_to_frequency(double index) const
         if (index <= next_offset) {
             // Index is in zone i.
             double frac = (index - channel_offset) / zone_nfreq[i];
-            double f0 = zone_freq_edges[i];
-            double f1 = zone_freq_edges[i+1];
-            return f0 + frac * (f1 - f0);
+            double freq0 = zone_freq_edges[i];
+            double freq1 = zone_freq_edges[i+1];
+            return freq0 + frac * (freq1 - freq0);
         }
         
         channel_offset = next_offset;
@@ -165,11 +165,11 @@ double DedispersionConfig::index_to_frequency(double index) const
 
 double DedispersionConfig::delay_to_frequency(double delay) const
 {
-    // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo.
-    // Formula: f = 1 / sqrt(d/scale + 1/fhi^2), where scale = ntree / (1/flo^2 - 1/fhi^2).
+    // Delay is defined so that d=0 corresponds to freq=freq_hi, and d=ntree corresponds to freq=freq_lo.
+    // Formula: freq = 1 / sqrt(d/scale + 1/freq_hi^2), where scale = ntree / (1/freq_lo^2 - 1/freq_hi^2).
     
-    double flo = zone_freq_edges.front();
-    double fhi = zone_freq_edges.back();
+    double freq_lo = zone_freq_edges.front();
+    double freq_hi = zone_freq_edges.back();
     double ntree = pow2(tree_rank);
     double eps = 1.0e-5 * ntree;
     
@@ -184,39 +184,39 @@ double DedispersionConfig::delay_to_frequency(double delay) const
     delay = std::max(delay, 0.0);
     delay = std::min(delay, ntree);
     
-    double scale = ntree / (1.0/(flo*flo) - 1.0/(fhi*fhi));
-    double inv_fhi_sq = 1.0 / (fhi * fhi);
-    double f = 1.0 / sqrt(delay/scale + inv_fhi_sq);
+    double scale = ntree / (1.0/(freq_lo*freq_lo) - 1.0/(freq_hi*freq_hi));
+    double inv_fhi_sq = 1.0 / (freq_hi * freq_hi);
+    double freq = 1.0 / sqrt(delay/scale + inv_fhi_sq);
     
-    return f;
+    return freq;
 }
 
 
-double DedispersionConfig::frequency_to_delay(double f) const
+double DedispersionConfig::frequency_to_delay(double freq) const
 {
-    // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo.
-    // Formula: d = scale * (1/f^2 - 1/fhi^2), where scale = ntree / (1/flo^2 - 1/fhi^2).
+    // Delay is defined so that d=0 corresponds to freq=freq_hi, and d=ntree corresponds to freq=freq_lo.
+    // Formula: d = scale * (1/freq^2 - 1/freq_hi^2), where scale = ntree / (1/freq_lo^2 - 1/freq_hi^2).
     
-    double flo = zone_freq_edges.front();
-    double fhi = zone_freq_edges.back();
+    double freq_lo = zone_freq_edges.front();
+    double freq_hi = zone_freq_edges.back();
     double ntree = pow2(tree_rank);
-    double eps = 1.0e-5 * (fhi - flo);
+    double eps = 1.0e-5 * (freq_hi - freq_lo);
     
-    if ((f < flo - eps) || (f > fhi + eps)) {
+    if ((freq < freq_lo - eps) || (freq > freq_hi + eps)) {
         stringstream ss;
-        ss << "DedispersionConfig::frequency_to_delay(): frequency " << f
-           << " is out of range [" << flo << ", " << fhi << "]";
+        ss << "DedispersionConfig::frequency_to_delay(): frequency " << freq
+           << " is out of range [" << freq_lo << ", " << freq_hi << "]";
         throw runtime_error(ss.str());
     }
     
     // Clamp to valid range (in case of small roundoff error).
-    f = std::max(f, flo);
-    f = std::min(f, fhi);
+    freq = std::max(freq, freq_lo);
+    freq = std::min(freq, freq_hi);
     
     // Delays before rescaling.
-    double d = 1.0/ (f*f);
-    double dlo = 1.0 / (flo*flo);
-    double dhi = 1.0 / (fhi*fhi);
+    double d = 1.0/ (freq*freq);
+    double dlo = 1.0 / (freq_lo*freq_lo);
+    double dhi = 1.0 / (freq_hi*freq_hi);
 
     // Return rescaled delay.
     // FIXME ntree or (ntree-1) here?
@@ -252,8 +252,8 @@ Array<double> DedispersionConfig::make_channel_map() const
     Array<double> channel_map({nchan+1}, af_rhost);
     
     for (long n = 0; n <= nchan; n++) {
-        double f = this->delay_to_frequency(n);
-        channel_map.data[n] = this->frequency_to_index(f);
+        double freq = this->delay_to_frequency(n);
+        channel_map.data[n] = this->frequency_to_index(freq);
     }
     
     return channel_map;
@@ -264,56 +264,56 @@ void DedispersionConfig::test() const
 {
     this->validate();
     
-    double flo = zone_freq_edges.front();
-    double fhi = zone_freq_edges.back();
+    double freq_lo = zone_freq_edges.front();
+    double freq_hi = zone_freq_edges.back();
     double tot_nfreq = this->get_total_nfreq();
     double ntree = pow2(tree_rank);
     
     // Test frequency_to_index / index_to_frequency at all zone boundaries.
-    // E.g. if f=zone_freq_edges[i], then index = sum_{j<i} zone_nfreq[j].
+    // E.g. if freq=zone_freq_edges[i], then index = sum_{j<i} zone_nfreq[j].
     double expected_index = 0;
     for (size_t i = 0; i < zone_freq_edges.size(); i++) {
-        double f = zone_freq_edges[i];
-        double index = frequency_to_index(f);
+        double freq = zone_freq_edges[i];
+        double index = frequency_to_index(freq);
         xassert(fabs(index - expected_index) < 1.0e-4 * tot_nfreq);
         
-        double f2 = index_to_frequency(expected_index);
-        xassert(fabs(f - f2) < 1.0e-4 * fhi);
+        double freq2 = index_to_frequency(expected_index);
+        xassert(fabs(freq - freq2) < 1.0e-4 * freq_hi);
         
         if (i < zone_nfreq.size())
             expected_index += zone_nfreq[i];
     }
     
     // Test delay_to_frequency / frequency_to_delay at endpoints.
-    xassert(fabs(delay_to_frequency(0.0) - fhi) < 1.0e-4 * fhi);
-    xassert(fabs(delay_to_frequency(ntree) - flo) < 1.0e-4 * fhi);
-    xassert(fabs(frequency_to_delay(fhi)) < 1.0e-4 * ntree);
-    xassert(fabs(frequency_to_delay(flo) - ntree) < 1.0e-4 * ntree);
+    xassert(fabs(delay_to_frequency(0.0) - freq_hi) < 1.0e-4 * freq_hi);
+    xassert(fabs(delay_to_frequency(ntree) - freq_lo) < 1.0e-4 * freq_hi);
+    xassert(fabs(frequency_to_delay(freq_hi)) < 1.0e-4 * ntree);
+    xassert(fabs(frequency_to_delay(freq_lo) - ntree) < 1.0e-4 * ntree);
     
     // Test that frequency_to_index and index_to_frequency are inverses.
     for (int i = 0; i < 10; i++) {
         double index = rand_uniform(0, tot_nfreq);
-        double f = index_to_frequency(index);
-        double index2 = frequency_to_index(f);
+        double freq = index_to_frequency(index);
+        double index2 = frequency_to_index(freq);
         xassert(fabs(index - index2) < 1.0e-4 * tot_nfreq);
         
-        f = rand_uniform(flo, fhi);
-        index = frequency_to_index(f);
-        double f2 = index_to_frequency(index);
-        xassert(fabs(f - f2) < 1.0e-4 * fhi);
+        freq = rand_uniform(freq_lo, freq_hi);
+        index = frequency_to_index(freq);
+        double freq2 = index_to_frequency(index);
+        xassert(fabs(freq - freq2) < 1.0e-4 * freq_hi);
     }
     
     // Test that delay_to_frequency and frequency_to_delay are inverses.
     for (int i = 0; i < 10; i++) {
         double delay = rand_uniform(0, ntree);
-        double f = delay_to_frequency(delay);
-        double delay2 = frequency_to_delay(f);
+        double freq = delay_to_frequency(delay);
+        double delay2 = frequency_to_delay(freq);
         xassert(fabs(delay - delay2) < 1.0e-4 * ntree);
         
-        f = rand_uniform(flo, fhi);
-        delay = frequency_to_delay(f);
-        double f2 = delay_to_frequency(delay);
-        xassert(fabs(f - f2) < 1.0e-4 * fhi);
+        freq = rand_uniform(freq_lo, freq_hi);
+        delay = frequency_to_delay(freq);
+        double freq2 = delay_to_frequency(delay);
+        xassert(fabs(freq - freq2) < 1.0e-4 * freq_hi);
     }
 }
 
@@ -490,8 +490,8 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     emitter << YAML::Key << "zone_freq_edges"
             << YAML::Value << YAML::Flow << YAML::BeginSeq;
-    for (double f: zone_freq_edges)
-        emitter << f;
+    for (double freq: zone_freq_edges)
+        emitter << freq;
     emitter << YAML::EndSeq;
 
     if (verbose)
@@ -541,7 +541,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
 
     if (verbose) {
         emitter << YAML::Newline << YAML::Newline << YAML::Comment(
-            "Early triggers: search a subset [fmid,fmax] of the full frequency range [flo,fhi]\n"
+            "Early triggers: search a subset [fmid,fmax] of the full frequency range [freq_lo,freq_hi]\n"
             "at reduced latency. Each downsampling level has an independent set of early triggers.\n"
             "Early triggers are optional (this can be an empty list).\n"
             "Syntax: list of {ds_level, delta_rank} pairs.\n"
@@ -558,11 +558,11 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
         double dm_lo = this->dm_per_unit_delay() * ((ds == 0) ? 0 : pow2(tree_rank + ds - 1));
         double dm_hi = this->dm_per_unit_delay() * pow2(tree_rank + ds);
         double max_delay = 1.0e-3 * time_sample_ms * pow2(tree_rank + ds - early_trigger.delta_rank);
-        double f = this->delay_to_frequency(pow2(tree_rank - early_trigger.delta_rank));
+        double freq = this->delay_to_frequency(pow2(tree_rank - early_trigger.delta_rank));
        
         stringstream ss;
         ss << fixed << setprecision(1)
-           << "triggers at " << f << " MHz, "
+           << "triggers at " << freq << " MHz, "
            << "max delay " << max_delay << " seconds, "
            << "DM range [" << dm_lo << ", " << dm_hi << "] pc/cm^3";
 
@@ -580,10 +580,10 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
     // ---- Frequency subbands ----
 
     if (verbose) {
-        double flo = zone_freq_edges.front();
-        double fhi = zone_freq_edges.back();
+        double freq_lo = zone_freq_edges.front();
+        double freq_hi = zone_freq_edges.back();
 
-        FrequencySubbands fs(frequency_subband_counts, flo, fhi);
+        FrequencySubbands fs(frequency_subband_counts, freq_lo, freq_hi);
         stringstream ss;
 
         ss << "Frequency subbands: can improve SNR for bursts that don't span the full frequency range.\n"
@@ -591,7 +591,7 @@ void DedispersionConfig::to_yaml(YAML::Emitter &emitter, bool verbose) const
            << "To disable subbands and only search the full frequency band, set to [1].\n"
            << "For a tool for creating frequency_subband_counts, see 'python -m pirate_frb make_subbands --help'.\n"
            << "Note: these are the 'top-level' frequency subbands; fewer subbands may be searched in individual trees.\n"
-           << "In this config, there are " << fs.F << " top-level frequency subband(s):";
+           << "In this config, there are " << fs.N << " top-level frequency subband(s):";
 
         fs.show_compact(ss);
 

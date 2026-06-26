@@ -76,7 +76,7 @@ struct DedispersionConfig
 
     std::vector<PeakFindingConfig> peak_finding_params;  // length (num_downsampling_levels)
 
-    // Early triggers: search a subset [fmid,fmax] of the full frequency range [flo,fhi]
+    // Early triggers: search a subset [fmid,fmax] of the full frequency range [freq_lo,freq_hi]
     // at reduced latency. Each downsampling level has an independent set of early triggers.
     //
     // Early triggers are parameterized by EarlyTrigger::tree_rank, which must be less 
@@ -126,22 +126,22 @@ struct DedispersionConfig
     int get_nelts_per_segment() const;
 
     // Converts between frequency and (fractional) frequency channel.
-    // Returns the fractional frequency channel corresponding to frequency f.
-    // E.g. f=zone_freq_edges[i] corresponds to index = sum_{j<i} zone_nfreq[j].
+    // Returns the fractional frequency channel corresponding to frequency freq.
+    // E.g. freq=zone_freq_edges[i] corresponds to index = sum_{j<i} zone_nfreq[j].
     // Throws an exception if out-of-range (but allows a little roundoff error).
     // Uses linear search (not binary search) since the number of zones is assumed small.
-    double frequency_to_index(double f) const;
+    double frequency_to_index(double freq) const;
     double index_to_frequency(double index) const;
 
-    // Converts between frequency and "delay" (a scaled version of f^(-2)).
-    // Delay is defined so that d=0 corresponds to f=fhi, and d=ntree corresponds to f=flo,
-    // where flo=zone_freq_edges.front(), fhi=zone_freq_edges.back(), and ntree=2^tree_rank.
-    // Valid delay range is [0, 2^tree_rank], valid frequency range is [flo, fhi].
+    // Converts between frequency and "delay" (a scaled version of freq^(-2)).
+    // Delay is defined so that d=0 corresponds to freq=freq_hi, and d=ntree corresponds to freq=freq_lo,
+    // where freq_lo=zone_freq_edges.front(), freq_hi=zone_freq_edges.back(), and ntree=2^tree_rank.
+    // Valid delay range is [0, 2^tree_rank], valid frequency range is [freq_lo, freq_hi].
     double delay_to_frequency(double delay) const;
-    double frequency_to_delay(double f) const;
+    double frequency_to_delay(double freq) const;
 
     // Returns the DM (in standard units, pc cm^{-3}) of an FRB whose dispersion delay
-    // across the full band (zone_freq_edges.front() < f < zone_freq_edges.back()) is
+    // across the full band (zone_freq_edges.front() < freq < zone_freq_edges.back()) is
     // equal to one time sample.
     double dm_per_unit_delay() const;
 

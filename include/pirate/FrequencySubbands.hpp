@@ -28,16 +28,16 @@ struct FrequencySubbands
     // subband_counts: length-(pf_rank+1) vector, containing number of frequency subbands 
     // at each level. This vector fully parameterizes the frequency subbands as follows.
     //
-    //   - Divide the full frequency range into subranges 0 <= i < 2^pf_rank, equally
-    //     spaced in delay (not frequency!), ordered so that i=0 is high-frequency.
+    //   - Divide the full frequency range into coarse-freq subranges 0 <= f < 2^pf_rank, equally
+    //     spaced in delay (not frequency!), ordered so that f=0 is high-frequency.
     //
-    //   - Frequency subbands are indexed by a pair (pf_level,s) where 0 <= pf_level <= pf_rank 
+    //   - Frequency subbands are indexed by a pair (pf_level,s) where 0 <= pf_level <= pf_rank
     //     and 0 <= s < subband_counts[pf_level].
     //
-    //   - pf_level=0 is special: s=0,1,... corresponds directly to i=0,1,... (non-overlapping)
+    //   - pf_level=0 is special: s=0,1,... corresponds directly to f=0,1,... (non-overlapping)
     //
-    //   - For pf_level > 0, each s=0,1,.. corresponds to an overlapping band 
-    //      (s * 2^(pf_level-1)) <= i < ((s+2) * 2^(pf_level-1))
+    //   - For pf_level > 0, each s=0,1,.. corresponds to an overlapping band
+    //      (s * 2^(pf_level-1)) <= f < ((s+2) * 2^(pf_level-1))
     //
     //   - We require subband_counts[pf_rank]=1, i.e. the only "subband" at pf_level==pf_rank
     //     is the full frequency range 0 <= i < 2^(pf_rank).
@@ -58,23 +58,23 @@ struct FrequencySubbands
     std::vector<long> subband_counts;   
 
     long pf_rank = -1;  // = subband_counts.size() - 1
-    long F = 0;  // number of distinct frequency subbands
+    long N = 0;  // number of distinct frequency subbands
     long M = 0;  // number of "multiplets", i.e. (frequency_subband, fine_grained_dm) pairs
 
-    std::vector<long> m_to_f;     // mapping (multiplet) -> frequency_subband
+    std::vector<long> m_to_n;     // mapping (multiplet) -> frequency_subband
     std::vector<long> m_to_d;     // mapping (multiplet) -> fine_grained_dm
-    std::vector<long> f_to_ilo;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
-    std::vector<long> f_to_ihi;   // mapping (frequency_subband) -> (index pair 0 <= ilo < ihi <= 2^pf_rank)
-    std::vector<long> f_to_mbase; // mapping (frequency_subband) -> m-index range (mbase : mbase + 2^level)
+    std::vector<long> n_to_flo;   // mapping (frequency_subband) -> (coarse-freq index pair 0 <= flo < fhi <= 2^pf_rank)
+    std::vector<long> n_to_fhi;   // mapping (frequency_subband) -> (coarse-freq index pair 0 <= flo < fhi <= 2^pf_rank)
+    std::vector<long> n_to_mbase; // mapping (frequency_subband) -> m-index range (mbase : mbase + 2^level)
 
-    // i_to_f: mapping (0 <= index <= 2^pf_rank) -> (frequency)
+    // f_to_freq: mapping (coarse-freq index 0 <= f <= 2^pf_rank) -> (physical frequency)
     // Only defined if fmin/fmax are specified in the constructor; otherwise empty.
-    std::vector<double> i_to_f;
+    std::vector<double> f_to_freq;
     double fmin = 0.0;
     double fmax = 0.0;
 
-    inline long m_to_ilo(int m) const { long f = m_to_f.at(m); return f_to_ilo.at(f); }
-    inline long m_to_ihi(int m) const { long f = m_to_f.at(m); return f_to_ihi.at(f); }
+    inline long m_to_flo(int m) const { long n = m_to_n.at(m); return n_to_flo.at(n); }
+    inline long m_to_fhi(int m) const { long n = m_to_n.at(m); return n_to_fhi.at(n); }
 
     void show(std::ostream &os = std::cout) const;
     void show_compact(std::stringstream &ss) const;  // requires fmin/fmax specified at construction

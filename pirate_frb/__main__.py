@@ -331,7 +331,7 @@ def parse_make_subbands(subparsers):
 
     parser.add_argument('fmin', type=float, help='Minimum frequency (MHz)')
     parser.add_argument('fmax', type=float, help='Maximum frequency (MHz)')
-    parser.add_argument('threshold', type=float, help='Threshold for flo/fhi')
+    parser.add_argument('threshold', type=float, help='Threshold for fmin/fmax')
     parser.add_argument('-r', '--pf-rank', type=int, default=4, help='Peak finding rank (default: 4)')
 
 

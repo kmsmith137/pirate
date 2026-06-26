@@ -301,7 +301,7 @@ void register_kernel_bindings(pybind11::module &m)
           py::arg("nt_out"), py::arg("nt_in"), py::arg("nt_wt"), py::arg("Dcore"))
           .def_property_readonly("P", [](const ReferencePeakFindingKernel &self) { return self.nprofiles; })
           .def_property_readonly("M", [](const ReferencePeakFindingKernel &self) { return self.fs.M; })
-          .def_property_readonly("F", [](const ReferencePeakFindingKernel &self) { return self.fs.F; })
+          .def_property_readonly("N", [](const ReferencePeakFindingKernel &self) { return self.fs.N; })
           .def_property_readonly("Dout", [](const ReferencePeakFindingKernel &self) { return self.Dout; })
           .def_property_readonly("Dcore", [](const ReferencePeakFindingKernel &self) { return self.Dcore; })
           .def("apply",

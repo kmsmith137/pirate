@@ -156,11 +156,11 @@ class PeakFinder:
         k.emit('//   - nt_in is a multiple of (32 * simd_width)')
         k.emit('//   - total warps (B*W) is a multiple of ndm_out_per_wt')
         k.emit('//')
-        k.emit('// Note: the PfWeightLayout parameters (ndm_wt,nt_wt,P,F) are given by:')
+        k.emit('// Note: the PfWeightLayout parameters (ndm_wt,nt_wt,P,N) are given by:')
         k.emit('//   - ndm_wt = (B*W) / ndm_out_per_wt')
         k.emit('//   - nt_wt = nt_in / nt_in_pwer_wt')
         k.emit('//   - P = 3*log2(W) + 1')
-        k.emit('//   - F = frequency_subbands.F')
+        k.emit('//   - N = frequency_subbands.N')
         k.emit('//')
         k.emit('// FIXME assuming 32 threads/block and 16 threadblocks/SM for now')
         k.emit()
@@ -262,10 +262,10 @@ class PeakFinder:
         fs = self.frequency_subbands
         wl = self.weight_layout
         sb_counts = ', '.join(str(int(x)) for x in fs.subband_counts)
-        m_to_f = ', '.join(str(int(f)) for f,d in fs.m_to_fd)
-        m_to_d = ', '.join(str(int(d)) for f,d in fs.m_to_fd)
-        f_to_ilo = ', '.join(str(int(ilo)) for ilo,ihi in fs.f_to_irange)
-        f_to_ihi = ', '.join(str(int(ihi)) for ilo,ihi in fs.f_to_irange)
+        m_to_n = ', '.join(str(int(n)) for n,d in fs.m_to_nd)
+        m_to_d = ', '.join(str(int(d)) for n,d in fs.m_to_nd)
+        n_to_flo = ', '.join(str(int(flo)) for flo,fhi in fs.n_to_frange)
+        n_to_fhi = ', '.join(str(int(fhi)) for flo,fhi in fs.n_to_frange)
         
         k.emit('\n// Boilerplate to register the kernel when the library is loaded.')
         k.emit('namespace {')
@@ -284,7 +284,7 @@ class PeakFinder:
         k.emit(f'v.PW32 = {self.PW32};')
         k.emit()
         k.emit(f'v.pf_weight_layout.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
-        k.emit(f'v.pf_weight_layout.F = {fs.F};')
+        k.emit(f'v.pf_weight_layout.N = {fs.N};')
         k.emit(f'v.pf_weight_layout.P = {self.P};')
         k.emit(f'v.pf_weight_layout.Pouter = {wl.Pouter};')
         k.emit(f'v.pf_weight_layout.Pinner = {wl.Pinner};')
@@ -294,12 +294,12 @@ class PeakFinder:
         k.emit()
         k.emit('// Checks consistency of python/C++ FrequencySubbands')
         k.emit(f'FrequencySubbands fs({{ {sb_counts} }});')
-        k.emit(f'xassert_eq(fs.F, {fs.F});')
+        k.emit(f'xassert_eq(fs.N, {fs.N});')
         k.emit(f'xassert_eq(fs.M, {fs.M});')
-        k.emit(f'xassert(vec_equal(fs.m_to_f, {{ {m_to_f} }}));')
+        k.emit(f'xassert(vec_equal(fs.m_to_n, {{ {m_to_n} }}));')
         k.emit(f'xassert(vec_equal(fs.m_to_d, {{ {m_to_d} }}));')
-        k.emit(f'xassert(vec_equal(fs.f_to_ilo, {{ {f_to_ilo} }}));')
-        k.emit(f'xassert(vec_equal(fs.f_to_ihi, {{ {f_to_ihi} }}));')
+        k.emit(f'xassert(vec_equal(fs.n_to_flo, {{ {n_to_flo} }}));')
+        k.emit(f'xassert(vec_equal(fs.n_to_fhi, {{ {n_to_fhi} }}));')
         k.emit()
         k.emit('bool debug = false;')
         k.emit('GpuPeakFindingKernel::registry().add(k, v, debug);')
@@ -693,7 +693,7 @@ class PeakFinder:
         basename = os.path.basename(filename)
 
         # Typical basename: pf_fp32_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1.cu
-        m = re.fullmatch(r'pf_(fp\d+)_((?:f\d+_)*f\d+)_W(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
+        m = re.fullmatch(r'pf_(fp\d+)_((?:n\d+_)*n\d+)_W(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
         if not m:
             raise RuntimeError(f"Couldn't match filename '{filename}'")
         
@@ -724,12 +724,12 @@ class PfWeightLayout:
         The W-array in global memory
         ----------------------------
         
-        The W-array is a logical 4-d array with shape (ndm_wt,nt_wt,P,F) parameterized by:
+        The W-array is a logical 4-d array with shape (ndm_wt,nt_wt,P,N) parameterized by:
         
           - ndm_wt = number of coarse DMs in weights array
           - nt_wt = number of coarse time samples in weights array
           - P = number of peak-finding profiles
-          - F = number of frequency subbands F
+          - N = number of frequency subbands N
 
         Before describing the global memory layout, a few more definitions:
 
@@ -744,8 +744,8 @@ class PfWeightLayout:
 
         The W-array global memory layout can be described as either a 6-d or a 5-d array:
         
-           dtype          W[ndm_wt,Touter,Pouter,F,Tinner,Pinner]
-           dtype*Pinnner  W[ndm_wt,Touter,Pouter,F,Tinner]
+           dtype          W[ndm_wt,Touter,Pouter,N,Tinner,Pinner]
+           dtype*Pinnner  W[ndm_wt,Touter,Pouter,N,Tinner]
 
         Important note: we always pad so that the 'Touter' stride is 128-byte aligned!
         (See "self.touter_stride" below.)
@@ -777,7 +777,7 @@ class PfWeightLayout:
 
         self.frequency_subbands = frequency_subbands
         self.dtype = dtype = Dtype(dtype)
-        self.F = frequency_subbands.F
+        self.N = frequency_subbands.N
         self.Tinner = Tinner
         self.P = P
         
@@ -787,7 +787,7 @@ class PfWeightLayout:
         self.Pouter = (self.P + self.Pinner - 1) // self.Pinner
 
         # The weights array is stored with a non-contiguous (128-byte) aligned touter-stride (see docstring).
-        self.unpadded_byte_stride = self.Pouter * self.F * Tinner * self.Pinner * utils.xdiv(dtype.nbits,8)
+        self.unpadded_byte_stride = self.Pouter * self.N * Tinner * self.Pinner * utils.xdiv(dtype.nbits,8)
         self.touter_byte_stride = (self.unpadded_byte_stride + 127) & ~127   # round up to multiple of 128
         
 
@@ -816,7 +816,7 @@ class PfWeightReader:
          -----------------------------------------------
 
            // Initialization of input pointer is not supplied by PfWeightReader.
-           // 'wp' is a per-warp pointer to shape (Touter,Pouter,F,Tinner,Pinner/SW),
+           // 'wp' is a per-warp pointer to shape (Touter,Pouter,N,Tinner,Pinner/SW),
            // where the 'touter' stride is 128-byte aligned. The pointer is "owned"
            // where the 'touter' stride is 128-byte aligned. The pointer is "owned"
            // by the PfWeightReader class, and will be incremented as data is read
@@ -852,7 +852,7 @@ class PfWeightReader:
         self.Pouter = self.weight_layout.Pouter
         self.Pinner = self.weight_layout.Pinner
         self.M = frequency_subbands.M
-        self.F = frequency_subbands.F
+        self.N = frequency_subbands.N
 
         assert utils.is_power_of_two(Dcore)
         assert utils.is_power_of_two(Tinner)
@@ -883,13 +883,13 @@ class PfWeightReader:
         """After calling this function, weights are available with variable name 'pfw_m{m}_p{p}'."""
 
         k.emit(f'// PfWeightReader.read_weights({m=}, {p=}): start.')
-        wp, F, Minner, Pinner, Tinner = self.wp, self.F, self.Minner, self.Pinner, self.Tinner
+        wp, N, Minner, Pinner, Tinner = self.wp, self.N, self.Minner, self.Pinner, self.Tinner
 
         if p == 0:
             self._init_pfI(k, m)
 
         pfI = f'pfI_m{m}'
-        dI = utils.xdiv(p,Pinner) * F * Tinner
+        dI = utils.xdiv(p,Pinner) * N * Tinner
         Istr = f'{pfI} + {dI}' if (dI > 0) else pfI
 
         # Very important assert -- our algorithm depends on this!
@@ -913,22 +913,22 @@ class PfWeightReader:
 
     def _get_I(self, m, p, tinner):
         """
-        Throughout 'class PfWeightReader', a capitalized index 0 <= I < Pouter*F*Tinner
-        denotes a "flattened" index triple (pouter, f, tinner). Such an index I can be
+        Throughout 'class PfWeightReader', a capitalized index 0 <= I < Pouter*N*Tinner
+        denotes a "flattened" index triple (pouter, n, tinner). Such an index I can be
         viewed as an offset relative to the 'wp' pointer (see docstring), and (I >> 5)
         corresponds to a cache line.
         """
 
         m = min(m, self.M-1)
-        f = self.frequency_subbands.m_to_fd[m][0]
+        n = self.frequency_subbands.m_to_nd[m][0]
         pouter = utils.xdiv(p, self.Pinner)
-        return (pouter * self.F * self.Tinner) + (f * self.Tinner) + tinner
+        return (pouter * self.N * self.Tinner) + (n * self.Tinner) + tinner
 
 
     def _get_wcl(self, k, I):
         """Helper for read_weights()."""
 
-        assert 0 <= I < (self.Pouter * self.F * self.Tinner)
+        assert 0 <= I < (self.Pouter * self.N * self.Tinner)
         assert (I % 32) == 0
         wcl = f'pf_wcl_I{I}'
 
@@ -983,14 +983,14 @@ class PfWeightReader:
         """The 'tin', 'nt_in_per_wt' args are string varnames."""
         
  
-        nelts = self.Pouter * self.F * self.Tinner * self.Pinner
+        nelts = self.Pouter * self.N * self.Tinner * self.Pinner
         us = self.weight_layout.unpadded_byte_stride
         bs = self.weight_layout.touter_byte_stride
         ps = utils.xdiv(bs, 4)   # since 'wp' is a 32-bit type
 
         k.emit()
         k.emit(f'// PfWeightReader.bottom()')
-        k.emit(f'// One touter-step corresponds to (Pouter * F * Tinner * Pinner) = {nelts} W-array elements')
+        k.emit(f'// One touter-step corresponds to (Pouter * N * Tinner * Pinner) = {nelts} W-array elements')
         k.emit(f'// unpadded_byte_stride = {us}, byte_stride = {bs}, pointer_stride = {ps}')
 
         if self.Tinner > 1:
@@ -1028,7 +1028,7 @@ class PfWeightReader:
         k.emit('//               call read_weights(), and write to out[]')
         k.emit('//')
         k.emit('// out: shape (nt_in/Dcore, Mouter*Minner, Pouter*Pinner)')
-        k.emit('// in: shape (nt_in/(nt_in_per_wt*Tinner), Pouter, F, Tinner, Pinner)')
+        k.emit('// in: shape (nt_in/(nt_in_per_wt*Tinner), Pouter, N, Tinner, Pinner)')
         k.emit('// nt_in: number of input time samples')
         k.emit('// nt_in_per_wt: time downsampling factor for weight array')
         k.emit('//')
@@ -1082,10 +1082,10 @@ class PfWeightReader:
         k.emit('}   // end of cuda kernel')
 
         fs = self.frequency_subbands
-        m_to_f = ', '.join(str(int(f)) for f,d in fs.m_to_fd)
-        m_to_d = ', '.join(str(int(d)) for f,d in fs.m_to_fd)
-        f_to_ilo = ', '.join(str(int(ilo)) for ilo,ihi in fs.f_to_irange)
-        f_to_ihi = ', '.join(str(int(ihi)) for ilo,ihi in fs.f_to_irange)
+        m_to_n = ', '.join(str(int(n)) for n,d in fs.m_to_nd)
+        m_to_d = ', '.join(str(int(d)) for n,d in fs.m_to_nd)
+        n_to_flo = ', '.join(str(int(flo)) for flo,fhi in fs.n_to_frange)
+        n_to_fhi = ', '.join(str(int(fhi)) for flo,fhi in fs.n_to_frange)
         sb_counts = ', '.join(str(int(x)) for x in fs.subband_counts)
         
         k.emit('\n// Boilerplate to register the kernel when the library is loaded.')
@@ -1105,7 +1105,7 @@ class PfWeightReader:
         k.emit(f'v.Minner = {self.Minner};')
         k.emit()
         k.emit(f'v.pf_weight_layout.dtype =  ksgpu::Dtype::native<{self.dtype.scalar}>();')
-        k.emit(f'v.pf_weight_layout.F = {self.F};')
+        k.emit(f'v.pf_weight_layout.N = {self.N};')
         k.emit(f'v.pf_weight_layout.P = {self.P};')
         k.emit(f'v.pf_weight_layout.Pouter = {self.Pouter};')
         k.emit(f'v.pf_weight_layout.Pinner = {self.Pinner};')
@@ -1115,12 +1115,12 @@ class PfWeightReader:
         k.emit()
         k.emit('// Checks consistency of python/C++ FrequencySubbands')
         k.emit(f'FrequencySubbands fs( {{ {sb_counts} }} );')
-        k.emit(f'xassert_eq(fs.F, {self.F});')
+        k.emit(f'xassert_eq(fs.N, {self.N});')
         k.emit(f'xassert_eq(fs.M, {self.M});')
-        k.emit(f'xassert(vec_equal(fs.m_to_f, {{ {m_to_f} }}));')
+        k.emit(f'xassert(vec_equal(fs.m_to_n, {{ {m_to_n} }}));')
         k.emit(f'xassert(vec_equal(fs.m_to_d, {{ {m_to_d} }}));')
-        k.emit(f'xassert(vec_equal(fs.f_to_ilo, {{ {f_to_ilo} }}));')
-        k.emit(f'xassert(vec_equal(fs.f_to_ihi, {{ {f_to_ihi} }}));')
+        k.emit(f'xassert(vec_equal(fs.n_to_flo, {{ {n_to_flo} }}));')
+        k.emit(f'xassert(vec_equal(fs.n_to_fhi, {{ {n_to_fhi} }}));')
         k.emit()
         k.emit('bool debug = false;')
         k.emit('PfWeightReaderMicrokernel::registry().add(k, v, debug);')
@@ -1139,7 +1139,7 @@ class PfWeightReader:
         basename = os.path.basename(filename)
 
         # Typical basename: pf_weight_reader_fp32_f11_f6_f3_f1_Dcore8_P13_Tinner2.cu
-        m = re.fullmatch(r'pf_weight_reader_(fp\d+)_((?:f\d+_)*f\d+)_Dcore(\d+)_P(\d+)_Tinner(\d+)\.cu', basename)
+        m = re.fullmatch(r'pf_weight_reader_(fp\d+)_((?:n\d+_)*n\d+)_Dcore(\d+)_P(\d+)_Tinner(\d+)\.cu', basename)
         if not m:
             raise RuntimeError(f"Couldn't match filename '{filename}'")
 

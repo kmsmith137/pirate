@@ -459,8 +459,6 @@ class PfAvarApproximation:
             (2^{r-L}, N, P)   -> average "level 0" bands into subbands
             (2^{r-L}, M, P)   -> one-to-many map between n-index (subband) and m (multiplet)         
 
-    All PfVariances in sight have rank (r-L). (Not r-R as in PfAvarExact.)
-
     Members
     -------
       plan:        the DedispersionPlan
@@ -578,10 +576,10 @@ class PfAvarApproximation:
         per_tff over the multiplet's coarse-freq range. Returns None if no coarse-freq overlaps."""
         rho = int(self.tree_r[itree]) - int(self.tree_L[itree])
         fs = self.tree_fs[itree]
-        ilo, ihi = fs.m_to_ilo(m), fs.m_to_ihi(m)
-        scale = 1.0 / (ihi - ilo)            # mean over the coarse-freq range
+        flo, fhi = fs.m_to_flo(m), fs.m_to_fhi(m)
+        scale = 1.0 / (fhi - flo)            # mean over the coarse-freq range
         acc = None
-        for f in range(ilo, ihi):
+        for f in range(flo, fhi):
             pv = self.per_tff[itree][ifreq][f]
             if pv is not None:
                 if acc is None:
@@ -595,9 +593,9 @@ class PfAvarApproximation:
         over the multiplet's coarse-freq range. Always returns a PfVariance."""
         rho = int(self.tree_r[itree]) - int(self.tree_L[itree])
         fs = self.tree_fs[itree]
-        ilo, ihi = fs.m_to_ilo(m), fs.m_to_ihi(m)
-        scale = 1.0 / (ihi - ilo)            # mean over the coarse-freq range
+        flo, fhi = fs.m_to_flo(m), fs.m_to_fhi(m)
+        scale = 1.0 / (fhi - flo)            # mean over the coarse-freq range
         acc = PfVariance(rho, int(self.tree_P[itree]))
-        for f in range(ilo, ihi):
+        for f in range(flo, fhi):
             acc.add(self.per_tf[itree][f], scale=scale)
         return acc

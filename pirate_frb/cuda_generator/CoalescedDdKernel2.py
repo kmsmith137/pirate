@@ -67,7 +67,7 @@ class CoalescedDdKernel2:
         self.pf_rank = self.pf.pf_rank
         self.weight_layout = self.pf.weight_layout
 
-        # Typical kernel name: cdd2_fp32_r7_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1
+        # Typical kernel name: cdd2_fp32_r7_n11_n6_n3_n1_W16_Dcore8_Dout16_Tinner1
         self.kernel_name = f'cdd2_{dtype.fname}_r{dd_rank}_{frequency_subbands.fstr}_W{Wmax}_Dcore{Dcore}_Dout{Dout}_Tinner{Tinner}'
         self.kernel_basename = self.kernel_name + '.cu'
 
@@ -270,10 +270,10 @@ class CoalescedDdKernel2:
         fs = self.frequency_subbands
         wl = self.weight_layout
         sb_counts = ', '.join(str(int(x)) for x in fs.subband_counts)
-        m_to_f = ', '.join(str(int(f)) for f,d in fs.m_to_fd)
-        m_to_d = ', '.join(str(int(d)) for f,d in fs.m_to_fd)
-        f_to_ilo = ', '.join(str(int(ilo)) for ilo,ihi in fs.f_to_irange)
-        f_to_ihi = ', '.join(str(int(ihi)) for ilo,ihi in fs.f_to_irange)
+        m_to_n = ', '.join(str(int(n)) for n,d in fs.m_to_nd)
+        m_to_d = ', '.join(str(int(d)) for n,d in fs.m_to_nd)
+        n_to_flo = ', '.join(str(int(flo)) for flo,fhi in fs.n_to_frange)
+        n_to_fhi = ', '.join(str(int(fhi)) for flo,fhi in fs.n_to_frange)
 
         k.emit('\n// Boilerplate to register the kernel when the library is loaded.')
         k.emit('namespace {')
@@ -296,7 +296,7 @@ class CoalescedDdKernel2:
         k.emit(f'v.nt_per_segment = {self.nt_per_segment};')
         k.emit()
         k.emit(f'v.pf_weight_layout.dtype = ksgpu::Dtype::native<{self.dtype.scalar}>();')
-        k.emit(f'v.pf_weight_layout.F = {fs.F};')
+        k.emit(f'v.pf_weight_layout.N = {fs.N};')
         k.emit(f'v.pf_weight_layout.P = {self.P};')
         k.emit(f'v.pf_weight_layout.Pouter = {wl.Pouter};')
         k.emit(f'v.pf_weight_layout.Pinner = {wl.Pinner};')
@@ -306,12 +306,12 @@ class CoalescedDdKernel2:
         k.emit()
         k.emit('// Checks consistency of python/C++ FrequencySubbands')
         k.emit(f'FrequencySubbands fs({{ {sb_counts} }});')
-        k.emit(f'xassert_eq(fs.F, {fs.F});')
+        k.emit(f'xassert_eq(fs.N, {fs.N});')
         k.emit(f'xassert_eq(fs.M, {fs.M});')
-        k.emit(f'xassert(vec_equal(fs.m_to_f, {{ {m_to_f} }}));')
+        k.emit(f'xassert(vec_equal(fs.m_to_n, {{ {m_to_n} }}));')
         k.emit(f'xassert(vec_equal(fs.m_to_d, {{ {m_to_d} }}));')
-        k.emit(f'xassert(vec_equal(fs.f_to_ilo, {{ {f_to_ilo} }}));')
-        k.emit(f'xassert(vec_equal(fs.f_to_ihi, {{ {f_to_ihi} }}));')
+        k.emit(f'xassert(vec_equal(fs.n_to_flo, {{ {n_to_flo} }}));')
+        k.emit(f'xassert(vec_equal(fs.n_to_fhi, {{ {n_to_fhi} }}));')
         k.emit()
         k.emit('bool debug = false;')
         k.emit('CoalescedDdKernel2::registry().add(k, v, debug);')
@@ -369,8 +369,8 @@ class CoalescedDdKernel2:
         
         basename = os.path.basename(filename)
 
-        # Typical basename: cdd2_fp32_r7_f11_f6_f3_f1_W16_Dcore8_Dout16_Tinner1
-        m = re.fullmatch(r'cdd2_(fp\d+)_r(\d+)_((?:f\d+_)*f\d+)_W(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
+        # Typical basename: cdd2_fp32_r7_n11_n6_n3_n1_W16_Dcore8_Dout16_Tinner1
+        m = re.fullmatch(r'cdd2_(fp\d+)_r(\d+)_((?:n\d+_)*n\d+)_W(\d+)_Dcore(\d+)_Dout(\d+)_Tinner(\d+)\.cu', basename)
         if not m:
             raise RuntimeError(f"Couldn't match filename '{filename}'")
         

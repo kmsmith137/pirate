@@ -82,11 +82,11 @@ ReferenceDedisperserBase::ReferenceDedisperserBase(const Params &params_) :
     this->wt_arrays.resize(ntrees);
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = trees.at(itree);
-        long F = tree.frequency_subbands.F;
+        long N = tree.frequency_subbands.N;
         long ndm_wt = tree.ndm_wt;
         long nt_wt = tree.nt_wt;
         long P = tree.nprofiles;
-        this->wt_arrays[itree] = Array<float>({beams_per_batch, ndm_wt, nt_wt, P, F}, af_uhost | af_zero);
+        this->wt_arrays[itree] = Array<float>({beams_per_batch, ndm_wt, nt_wt, P, N}, af_uhost | af_zero);
     }
 
     // Alllocate out_max, out_argmax arrays.

@@ -718,14 +718,14 @@ class SparseTilePerM:
         assert 0 <= R <= r, (R, r)
         per_m = [None] * fs.M
 
-        # Per subband: (l, f_blk, case1, mbase), derived from its coarse i-range [ilo, ihi).
+        # Per subband: (l, f_blk, case1, mbase), derived from its coarse f-range [flo, fhi).
         subs = []
-        for f in range(fs.F):
-            ilo, ihi = int(fs.f_to_ilo[f]), int(fs.f_to_ihi[f])
-            l = integer_log2(ihi - ilo)                    # band width is 2^l
-            f_blk = ilo >> l                               # coarse block index
-            case1 = (ilo & ((1 << l) - 1)) == 0            # aligned (always true for l==0)
-            subs.append((l, f_blk, case1, int(fs.f_to_mbase[f])))
+        for n in range(fs.N):
+            flo, fhi = int(fs.n_to_flo[n]), int(fs.n_to_fhi[n])
+            l = integer_log2(fhi - flo)                    # band width is 2^l
+            f_blk = flo >> l                               # coarse block index
+            case1 = (flo & ((1 << l) - 1)) == 0            # aligned (always true for l==0)
+            subs.append((l, f_blk, case1, int(fs.n_to_mbase[n])))
 
         for k in range(0, r + 1):
             for (l, f_blk, case1, mbase) in subs:

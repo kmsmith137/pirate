@@ -29,7 +29,7 @@ struct CoalescedDdKernel2
 
     void allocate(BumpAllocator &allocator);
 
-    // The 'weights' array has logical shape (beams_per_batch, ndm_wt, nt_wt, P, F),
+    // The 'weights' array has logical shape (beams_per_batch, ndm_wt, nt_wt, P, N),
     // but is passed to the gpu kernel in a complicated, non-contiguous layout. To put
     // an array into the proper layout, call GpuPfWeightLayout::to_gpu().
     //
@@ -61,7 +61,7 @@ struct CoalescedDdKernel2
 
     DedispersionKernelParams dd_params;  // dd_rank, amb_rank, total_beams, beams_per_batch, ntime, mega_ringbuf
     PeakFindingKernelParams pf_params;   // beams_per_batch, total_beams, ndm_out, ndm_wt, nt_out, nt_in, nt_wt
-    FrequencySubbands fs;                // pf_rank, F, M
+    FrequencySubbands fs;                // pf_rank, N, M
 
     bool is_allocated = false;
 

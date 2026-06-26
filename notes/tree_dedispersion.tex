@@ -116,7 +116,7 @@ in the coarse-freq channel (\ref{eq:coarse_freq}), i.e.~the latest arrival time 
 
 \item
 As formulated above, tree dedispersion can lead to negative time indices.
-By default, \verb|in[...,-N]| is defined to be zero.
+By default, \verb|in[...,t]| with $t<0$ is defined to be zero.
 (In the real-time system, we run tree dedispersion in an ``incremental'' context where a negative time index should be interpreted as a reference to data received in a previous time chunk.)
 
 \item The $\DD(0)$ input array is sometimes reshaped from $(2^r,1,N_{\rm time})$
@@ -141,6 +141,12 @@ Here $0 \le R \le r$, where $r$ is the tree rank.
 The counts $C_l$ parameterize a set of subbands as follows:
 \begin{itemize}
 \item Frequency subbands are indexed by a pair $(l,s)$ where $0 \le l \le R$ and $0 \le s < C_l$.
+We will sometimes ``flatten'' the pair $(l,s)$ into a single subband index $0 \le n < N$, where
+\begin{equation}
+N \equiv \sum_{l=0}^R C_l
+\end{equation}
+is the total number of subbands. 
+(In the code, $n$ and $N$ are denoted by the same symbols, e.g.\ $N$ is {\tt FrequencySubbands::N}.)
 \item Level $l=0$ is special: subband $(0,s)$ corresponds to tree-freq range
 \begin{equation}
 2^{r-R} s \le \mbox{(tree-freq index)} < 2^{r-R} (s+1)  \label{eq:subband_l0}

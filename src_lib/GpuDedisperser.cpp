@@ -1041,22 +1041,22 @@ void GpuDedisperser::_worker_main()
 // GpuDedisperser::test()
 
 
-static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, long itree, long f)
+static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, long itree, long n)
 {
     const DedispersionTree &tree = plan->trees.at(itree);
     const FrequencySubbands &fs = tree.frequency_subbands;
 
-    // Tree index range 0 <= ilo < ihi < 2^pf_rank.
-    long ilo = fs.f_to_ilo.at(f);
-    long ihi = fs.f_to_ihi.at(f);
+    // Coarse-freq index range 0 <= flo < fhi < 2^pf_rank.
+    long flo = fs.n_to_flo.at(n);
+    long fhi = fs.n_to_fhi.at(n);
 
     // Frequency range in MHz (note lo/hi swap)
-    double flo = fs.i_to_f.at(ihi);
-    double fhi = fs.i_to_f.at(ilo);
+    double freq_lo = fs.f_to_freq.at(fhi);
+    double freq_hi = fs.f_to_freq.at(flo);
 
     // Frequency index range
-    double filo = plan->config.frequency_to_index(flo);
-    double fihi = plan->config.frequency_to_index(fhi);
+    double filo = plan->config.frequency_to_index(freq_lo);
+    double fihi = plan->config.frequency_to_index(freq_hi);
 
     long r = tree.early_dd_rank + tree.amb_rank + (tree.ds_level ? 1 : 0);
     return (fihi - filo) / pow(2,r) / 3.0;
@@ -1077,12 +1077,12 @@ void GpuDedisperser::randomize_weights()
 
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &t = plan->trees.at(itree);
-        const long F = t.frequency_subbands.F;
+        const long N = t.frequency_subbands.N;
 
         // subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
-        Array<float> sbv({F}, af_uhost | af_zero);
-        for (long f = 0; f < F; f++)
-            sbv.at({f}) = variance_upper_bound(plan, itree, f);
+        Array<float> sbv({N}, af_uhost | af_zero);
+        for (long n = 0; n < N; n++)
+            sbv.at({n}) = variance_upper_bound(plan, itree, n);
 
         // ReferencePeakFindingKernel, only used here for make_random_weights().
         // Dcore is taken from the GPU kernel (as in test_one's non-host_only path).
@@ -1093,8 +1093,8 @@ void GpuDedisperser::randomize_weights()
         const GpuPfWeightLayout &wl = cdd2_kernels.at(itree)->pf_weight_layout;
 
         // Per-slot host scratch with the "straightforward" weights layout
-        // (beams_per_batch, ndm_wt, nt_wt, nprofiles, F). Reused across slots.
-        Array<float> wcpu({beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, F}, af_rhost | af_zero);
+        // (beams_per_batch, ndm_wt, nt_wt, nprofiles, N). Reused across slots.
+        Array<float> wcpu({beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, N}, af_rhost | af_zero);
 
         for (long s = 0; s < nbatches_wt; s++) {
             ref_kernel.make_random_weights(wcpu, sbv);
@@ -1181,10 +1181,10 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     // subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
     vector<Array<float>> subband_variances(ntrees);
     for (long itree = 0; itree < ntrees; itree++) {
-        long F = plan->trees.at(itree).frequency_subbands.F;
-        subband_variances.at(itree) = Array<float> ({F}, af_uhost | af_zero);
-        for (long f = 0; f < F; f++)
-            subband_variances.at(itree).at({f}) = variance_upper_bound(plan, itree, f);
+        long N = plan->trees.at(itree).frequency_subbands.N;
+        subband_variances.at(itree) = Array<float> ({N}, af_uhost | af_zero);
+        for (long n = 0; n < N; n++)
+            subband_variances.at(itree).at({n}) = variance_upper_bound(plan, itree, n);
     }
 
     // ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
@@ -1215,8 +1215,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         long D = t.ndm_wt;
         long T = t.nt_wt;
         long P = t.nprofiles;
-        long F = t.frequency_subbands.F;
-        pf_wt_cpu.at(itree) = Array<float> ({nbatches_out,B,D,T,P,F}, af_rhost | af_zero);
+        long N = t.frequency_subbands.N;
+        pf_wt_cpu.at(itree) = Array<float> ({nbatches_out,B,D,T,P,N}, af_rhost | af_zero);
     }
     
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {

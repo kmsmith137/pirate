@@ -37,7 +37,7 @@ def collect_subbands(config):
     """Procedurally build the subband list from the config.
 
     Returns (r, R, coarse, subbands), where subbands is a list of dicts with
-    keys: level, tlo/thi (tree-freq index range, 0..2^r) and flo/fhi (frequency
+    keys: level, tlo/thi (tree-freq index range, 0..2^r) and freq_lo/freq_hi (frequency
     range in MHz).
     """
     r = config.tree_rank
@@ -55,11 +55,11 @@ def collect_subbands(config):
     subbands = []
     for level in range(R + 1):
         for b in range(counts[level]):
-            ilo, ihi = fs.get_band_index_range(level, b)   # coarse (i) units, 0..2^R
-            tlo, thi = ilo * coarse, ihi * coarse          # tree-freq index, 0..2^r
-            fa, fb = tree_to_mhz(tlo), tree_to_mhz(thi)    # MHz (freq decreases with tree-freq)
+            flo, fhi = fs.get_band_index_range(level, b)   # coarse (f) units, 0..2^R
+            tlo, thi = flo * coarse, fhi * coarse          # tree-freq index, 0..2^r
+            freq_a, freq_b = tree_to_mhz(tlo), tree_to_mhz(thi)  # MHz (freq decreases with tree-freq)
             subbands.append(dict(level=level, tlo=tlo, thi=thi,
-                                 flo=min(fa, fb), fhi=max(fa, fb)))
+                                 freq_lo=min(freq_a, freq_b), freq_hi=max(freq_a, freq_b)))
 
     # Coarse-channel (i-grid) boundaries, in tree-freq index and in MHz.
     bnd_t = [i * coarse for i in range(2 ** R + 1)]
@@ -135,10 +135,10 @@ def main(output=OUTPUT):
     # --- Bottom panel: frequency, log (increasing left-to-right) ---
     for fmhz in bnd_mhz:
         ax_f.axvline(fmhz, color="0.90", lw=0.5, zorder=0)
-    draw_bars(ax_f, "flo", "fhi")
+    draw_bars(ax_f, "freq_lo", "freq_hi")
     decorate_y(ax_f)
-    f_hi = max(sb["fhi"] for sb in subbands)
-    f_lo = min(sb["flo"] for sb in subbands)
+    f_hi = max(sb["freq_hi"] for sb in subbands)
+    f_lo = min(sb["freq_lo"] for sb in subbands)
     ax_f.set_xscale("log")
     ax_f.set_xlim(f_lo, f_hi)
     fticks = [t for t in (300, 400, 500, 600, 800, 1000, 1500) if f_lo - 1 <= t <= f_hi + 1]

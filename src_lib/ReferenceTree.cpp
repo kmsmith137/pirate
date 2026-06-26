@@ -44,7 +44,7 @@ ReferenceTree::ReferenceTree(const Params &params_) :
     for (long b = 0; b < B; b++) {
         for (long dpf = 0; dpf < Dpf; dpf++) {
             for (long m = 0; m < M; m++) {
-                long ff = pow2(fs.pf_rank) - fs.m_to_ihi(m);
+                long ff = pow2(fs.pf_rank) - fs.m_to_fhi(m);
                 long dd = dpf & (pow2(params.dd_rank-fs.pf_rank) - 1);
                 final_lags.at({b,dpf,m}) = ff * dd * S;
             }
@@ -167,8 +167,8 @@ long ReferenceTree::dedisperse_2d(
 
             // Consistency check on m-indices.
             for (long pfs = 0; pfs < pf_ns; pfs++) {
-                xassert_eq(fs.m_to_ilo(pfs), pfs);
-                xassert_eq(fs.m_to_ihi(pfs), pfs+1);
+                xassert_eq(fs.m_to_flo(pfs), pfs);
+                xassert_eq(fs.m_to_fhi(pfs), pfs+1);
                 xassert_eq(fs.m_to_d.at(pfs), 0);
             }
 
@@ -248,8 +248,8 @@ long ReferenceTree::dedisperse_2d(
             for (long pfs = 0; pfs < pf_ns; pfs++) {
                 for (long pfd = 0; pfd < 2*pf_nd2; pfd++) {
                     long m = mcurr + (pfs * 2*pf_nd2) + pfd;
-                    xassert_eq(fs.m_to_ilo(m), (pfs) * pf_nd2);
-                    xassert_eq(fs.m_to_ihi(m), (pfs+2) * pf_nd2);
+                    xassert_eq(fs.m_to_flo(m), (pfs) * pf_nd2);
+                    xassert_eq(fs.m_to_fhi(m), (pfs+2) * pf_nd2);
                     xassert_eq(fs.m_to_d.at(m), pfd);
                 }
             }
@@ -510,7 +510,7 @@ void ReferenceTree::test_subbands()
          << ", out_strides=" << ksgpu::tuple_str(out_strides)
          << endl;
 
-    long F = fs.F;
+    long N = fs.N;
     long M = fs.M;
     long A = pow2(amb_rank);
     long Din = pow2(dd_rank);
@@ -526,14 +526,14 @@ void ReferenceTree::test_subbands()
     params.subband_counts = fs.subband_counts;
 
     ReferenceTree tree_with_subbands(params);
-    vector<shared_ptr<ReferenceTree>> subtrees(F);
+    vector<shared_ptr<ReferenceTree>> subtrees(N);
 
     // Initialize subtrees.
-    for (long f = 0; f < F; f++) {
-        long ilo = fs.f_to_ilo.at(f);
-        long ihi = fs.f_to_ihi.at(f);
+    for (long n = 0; n < N; n++) {
+        long flo = fs.n_to_flo.at(n);
+        long fhi = fs.n_to_fhi.at(n);
 
-        long subtree_size = (ihi - ilo) << (dd_rank - pf_rank);
+        long subtree_size = (fhi - flo) << (dd_rank - pf_rank);
         long subtree_rank = integer_log2(subtree_size);
        
         Params subtree_params;
@@ -548,7 +548,7 @@ void ReferenceTree::test_subbands()
         // constructed inside the for-loop (?!)
         subtree_params.subband_counts.push_back(1);
 
-        subtrees[f] = make_shared<ReferenceTree> (subtree_params);
+        subtrees[n] = make_shared<ReferenceTree> (subtree_params);
     }
     
     // Make a "clone" of tree_with_subbands.final_lagbuf (independent persistent_state).
@@ -575,20 +575,20 @@ void ReferenceTree::test_subbands()
         tree_with_subbands.dedisperse(buf, out);
 
         // Compare the result with running multiple ReferenceTrees.
-        for (long f = 0; f < F; f++) {
-            long ilo = fs.f_to_ilo.at(f) << (dd_rank - pf_rank);
-            long ihi = fs.f_to_ihi.at(f) << (dd_rank - pf_rank);
-            long pf_level = integer_log2(fs.f_to_ihi.at(f) - fs.f_to_ilo.at(f));
+        for (long n = 0; n < N; n++) {
+            long flo = fs.n_to_flo.at(n) << (dd_rank - pf_rank);
+            long fhi = fs.n_to_fhi.at(n) << (dd_rank - pf_rank);
+            long pf_level = integer_log2(fs.n_to_fhi.at(n) - fs.n_to_flo.at(n));
 
-            long subtree_size = ihi - ilo;
+            long subtree_size = fhi - flo;
             long subtree_rank = integer_log2(subtree_size);
 
             // Copy in -> buf2
             Array<float> dd = buf2.slice(2, 0, subtree_size);
-            Array<float> src = in.slice(2, ilo, ihi);
+            Array<float> src = in.slice(2, flo, fhi);
             dd.fill(src);
 
-            subtrees[f]->dedisperse(dd, sb_empty);
+            subtrees[n]->dedisperse(dd, sb_empty);
 
             // Copy dd -> out2.
             // The ambient index 'a' is a bit-reversed coarse DM.
@@ -601,7 +601,7 @@ void ReferenceTree::test_subbands()
 
                     // (dm_c, dm_f) -> (dpf, m)
                     long dpf = (dm_c << (dd_rank - pf_rank)) + (dm_f >> pf_level);
-                    long m = fs.f_to_mbase.at(f) + (dm_f & (pow2(pf_level)-1));
+                    long m = fs.n_to_mbase.at(n) + (dm_f & (pow2(pf_level)-1));
 
                     // dd_slice: shape (B, A, subtree_size, T*S) -> (B, T)
                     Array<float> dd_slice = dd.slice(1, a);
@@ -619,8 +619,8 @@ void ReferenceTree::test_subbands()
         local_lagbuf->apply_lags(out2);
 
         // Check that full band is last, so that we can directly compare 'buf' and 'buf2'.
-        xassert(fs.f_to_ilo.at(F-1) == 0);
-        xassert(fs.f_to_ihi.at(F-1) == pow2(pf_rank));
+        xassert(fs.n_to_flo.at(N-1) == 0);
+        xassert(fs.n_to_fhi.at(N-1) == pow2(pf_rank));
 
         stringstream ss;
         ss << "(chunk=" << ichunk << ")";
