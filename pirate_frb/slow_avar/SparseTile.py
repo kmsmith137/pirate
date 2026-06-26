@@ -123,14 +123,6 @@ class SparseTile:
         return T
 
     @staticmethod
-    def _nonzero_mask(vec):
-        # Bitmask with bit i set where vec[i] != 0.
-        m = 0
-        for i in np.nonzero(vec)[0]:
-            m |= 1 << int(i)
-        return m
-
-    @staticmethod
     def _dd_tlo(k):
         # The DD(k) lower-half time shift ceil(d'/2) as a tshift vector (length k+1):
         # tlo[0]=1, tlo[j]=2^(j-1) for j>=1.
@@ -219,8 +211,10 @@ class SparseTile:
         c_L, c_U = lower.t0 - t0_out, upper.t0 - t0_out
 
         # 'dbits + 1' (lifting every selected bit one level) is a left shift on the mask.
-        dbits_out = ((lower.dbits << 1) | SparseTile._nonzero_mask(res_L)
-                     | (upper.dbits << 1) | SparseTile._nonzero_mask(res_U))
+        dbits_out = (lower.dbits | upper.dbits) << 1
+        for i in np.nonzero(res_L + res_U)[0]:
+            dbits_out |= (1 << int(i))
+        
         nt_alloc = max(lower.nt + c_L + int(res_L.sum()), upper.nt + c_U + int(res_U.sum()))
         m_out = dbits_out.bit_count()
 
