@@ -409,51 +409,51 @@ class PfAvarExact:
         self.tree_fs = [t.frequency_subbands for t in plan.trees]
         self._tree_ids = np.array([t.ds_level for t in plan.trees])
 
-        full_cm = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
-
-        # per_tfm: (ntrees,nfreq,M) -> (length-M list of (PfVariance rank r-R, or None), or None)
+        # per_tfm: (ntrees,nfreq,M) -> (length-M list of (PfVariance rank r-R, or None))
         # per_tm:  (ntrees,M) -> (PfVariance rank r-R)   [accumulated alongside per_tfm]
         self.tree_variance = [ None ] * self.ntrees
         self.per_tfm = [ None ] * self.ntrees
         self.per_tm = [ None ] * self.ntrees
 
+        full_cmap = np.asarray(plan.config.make_channel_map(), dtype=np.float64)
+        
         for itree in range(self.ntrees):
-            r, R, P, fs = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_P[itree]), self.tree_fs[itree]
+            r, R, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_P[itree])
+            fs, ids = self.tree_fs[itree], self._tree_ids[itree]
             
             self.tree_variance[itree] = np.zeros((fs.M, 2**(r-R), P))
             self.per_tfm[itree] = [ None ] * self.nfreq
             self.per_tm[itree] = [ PfVariance(r-R, P) for _ in range(fs.M) ]
-
-        for itree in range(self.ntrees):
+            
             if progress:
                 print(f"  PfAvarExact tree {itree}/{self.ntrees}: ", end="", flush=True)
-            self._process_tree(itree, full_cm, progress)
+                
+            cmap_rank = r + (ids > 0)                   # = tree_r + (ids>0) = config.tree_rank - delta
+            cmap = full_cmap[: (1 << cmap_rank) + 1]    # truncate to first 2^cmap_rank channels
+
+            for ifreq in range(self.nfreq):
+                self.per_tfm[itree][ifreq] = [ None ] * fs.M
+                
+                if progress and (ifreq + 1) % 1000 == 0:
+                    print(".", end="", flush=True)
+                if not (ifreq < cmap[0] and ifreq + 1 > cmap[-1]):    # ifreq below the truncated band
+                    continue
+
+                ssa = SparseTilePerM.make_dedispersion_output(cmap, ifreq, fs, upper_half_only=(ids > 0))
+
+                for (m,tile) in enumerate(ssa.per_m):
+                    if tile is None:
+                        continue
+                    
+                    pv = PfVariance.from_tile(tile, P, self.convolver)
+                    self.per_tm[itree][m].add(pv, scale=self.freq_variances[ifreq])
+                    self.per_tfm[itree][ifreq][m] = pv
+                    
+            for m in range(fs.M):
+                self.tree_variance[itree][m, :, :] = self.per_tm[itree][m].unpack((1 << (r - R)) - 1)
+                
             if progress:
                 print(flush=True)
-
-    def _process_tree(self, itree, full_cm, progress):
-        # Fill per_tfm[itree][ifreq] (length-M list of PfVariance/None, or None where ifreq is below
-        # the tree's truncated band) and accumulate per_tm[itree][m] += per_tfm[itree][ifreq][m].
-        fs, P, ids = self.tree_fs[itree], int(self.tree_P[itree]), int(self._tree_ids[itree])
-        rho_cm = int(self.tree_r[itree]) + (ids > 0)   # = tree_r + (ids>0) = config.tree_rank - delta
-        cm = np.ascontiguousarray(full_cm[: (1 << rho_cm) + 1])    # truncate to first 2^rho_cm channels
-
-        for ifreq in range(self.nfreq):
-            if progress and (ifreq + 1) % 1000 == 0:
-                print(".", end="", flush=True)
-            if not (ifreq < cm[0] and ifreq + 1 > cm[-1]):        # ifreq below the truncated band
-                continue
-            ssa = SparseTilePerM.make_dedispersion_output(cm, ifreq, fs, upper_half_only=(ids > 0))
-            row = [None if t is None else PfVariance.from_tile(t, P, self.convolver) for t in ssa.per_m]
-            self.per_tfm[itree][ifreq] = row
-
-            for m, pv in enumerate(row):
-                if pv is not None:
-                    self.per_tm[itree][m].add(pv, scale=self.freq_variances[ifreq])
-
-        r, R = int(self.tree_r[itree]), int(self.tree_R[itree])
-        for m in range(fs.M):
-            self.tree_variance[itree][m, :, :] = self.per_tm[itree][m].unpack((1 << (r - R)) - 1)
 
 
 ###################################   class PfAvarApproximation   ##################################
