@@ -240,8 +240,10 @@ PfAvarApproximation::PfAvarApproximation(const DedispersionPlan &plan, const Arr
 
     xassert(freq_variances.ndim == 1 && freq_variances.shape[0] == nfreq);
     freq_variances_vec.resize(nfreq);
-    for (long i = 0; i < nfreq; i++)
+    for (long i = 0; i < nfreq; i++) {
         freq_variances_vec[i] = freq_variances.data[freq_variances.strides[0] * i];
+        xassert_gt(freq_variances_vec[i], 0.0);
+    }
 
     tree_r.resize(ntrees);
     tree_R.resize(ntrees);
@@ -322,6 +324,8 @@ PfAvarApproximation::PfAvarApproximation(const DedispersionPlan &plan, const Arr
             Array<double> u = pv.unpack(all_dbits);    // (2^(r-L), P), contiguous
             memcpy(tv + n * blk, u.data, (size_t)blk * sizeof(double));
         }
+        for (long i = 0; i < tree_variance[t].size; i++)
+            xassert_gt(tv[i], 0.0);
     }
 }
 
