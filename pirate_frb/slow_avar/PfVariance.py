@@ -478,21 +478,25 @@ class PfAvarApproximation:
 
     Members
     -------
-      plan:        the DedispersionPlan
-      ntrees:      number of DedispersionTrees (= plan.ntrees)
-      nfreq:       number of input frequency channels
-      freq_variances: length-nfreq input array; the per-channel variance weight applied
-                   when summing per_tff over frequency to form per_tf.
-      tree_r:      config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
-      tree_R:      pf_rank (a length-ntrees array, can differ from the config pf_rank)
-      tree_L:      log2(wt_dm_downsampling) (a length-ntrees array); requires 0 <= R <= L <= r
-      tree_P:      nprofiles (a length-ntrees array)
-      tree_fs:     length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
-      convolver:   a single shared PfVarianceConvolver
-      per_tff:     (ntrees, nfreq, 2^R) array of (None or single-channel PfVariance).
-                   This is a "ragged" array (list of list of lists) since 2^R is tree-dependent.
-      per_tf:      (ntrees, 2^R) ragged array of frequency-summed PfVariances (never None):
-                   per_tf[t][f] = sum_ifreq freq_variances[ifreq] * per_tff[t][ifreq][f].
+      plan:            the DedispersionPlan
+      ntrees:          number of DedispersionTrees (= plan.ntrees)
+      nfreq:           number of input frequency channels
+      freq_variances:  length-nfreq input array containing input variances
+      tree_r:          config.tree_rank - delta - (ids>0 ? 1 : 0), a length-ntrees array
+      tree_R:          pf_rank (a length-ntrees array, can differ from the config pf_rank)
+      tree_L:          log2(wt_dm_downsampling) (a length-ntrees array); requires 0 <= R <= L <= r
+      tree_P:          nprofiles (a length-ntrees array)
+      tree_fs:         length-ntrees list of FrequencySubbands (= tree.frequency_subbands).
+      convolver:       a single shared PfVarianceConvolver
+    
+      per_tff:         (ntrees, nfreq, 2^R) array of (None or single-channel PfVariance).
+                       This is a "ragged" array (list of list of lists) since 2^R is tree-dependent.
+    
+      per_tf:          (ntrees, 2^R) ragged array of frequency-summed PfVariances (never None):
+                       per_tf[t][f] = sum_ifreq freq_variances[ifreq] * per_tff[t][ifreq][f].
+
+      tree_variance:   For each tree, a shape (N,2^{r-L},P) array; entry n is per_tf averaged
+                       over subband n's coarse-freq range (= get_per_m for any multiplet in n).
     """
 
     def __init__(self, plan, freq_variances, progress=False):
@@ -533,14 +537,21 @@ class PfAvarApproximation:
 
         # per_tff: (ntrees,nfreq,2^R) -> (PfVariance rank r-L, or None)
         # per_tf:  (ntrees,2^R) -> (PfVariance rank r-L)
+        self.tree_variance = [ None ] * self.ntrees
         self.per_tff = [ None ] * self.ntrees
         self.per_tf = [ None ] * self.ntrees
 
         for itree in range(self.ntrees):
-            r, R, L, P = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree]), int(self.tree_P[itree])
+            r, R, L = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree])
+            P, N = int(self.tree_P[itree]), int(self.tree_fs[itree].N)
+            
+            self.tree_variance[itree] = np.zeros((N, 2**(r-L), P))
             self.per_tff[itree] = [ [None]*(1<<R) for _ in range(self.nfreq) ]
             self.per_tf[itree] = [ PfVariance(r-L,P) for _ in range(1 << R) ]
 
+        if progress:
+            print('PfAvarApproximation', flush=True)
+            
         for ifreq in range(self.nfreq):
             if progress and (ifreq + 1) % 1000 == 0:
                 print(".", end="", flush=True)
@@ -552,7 +563,24 @@ class PfAvarApproximation:
                 if k < self._max_klevel:
                     sarr = sarr.iterate()
 
+        for itree in range(self.ntrees):
+            r, R, L = int(self.tree_r[itree]), int(self.tree_R[itree]), int(self.tree_L[itree])
+            P, fs = int(self.tree_P[itree]), self.tree_fs[itree]
 
+            for n in range(fs.N):
+                flo, fhi = fs.n_to_flo[n], fs.n_to_fhi[n]
+                
+                pv = PfVariance(r-L, P)
+                for f in range(flo, fhi):
+                    pv.add(self.per_tf[itree][f], scale = 1.0/(fhi-flo))
+
+                all_dbits = (1 << (r-L)) - 1
+                self.tree_variance[itree][n,:,:] = pv.unpack(all_dbits)
+        
+        if progress:
+            print(flush=True)
+
+    
     def _process_klevel(self, sarr, k, ifreq):
         if self._klevel_Lmax[k] < 0:
             return   # no trees at this klevel
