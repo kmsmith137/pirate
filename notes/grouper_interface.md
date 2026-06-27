@@ -5,7 +5,7 @@ The grouper is a python program which receives dedispersion
 outputs from `pirate`.
 (The "dedispersion outputs" consist of a pair of 2-d arrays
 `out_max`, `out_argmax` in the dm/time plane, for each dedispersion
-"tree". See below.)
+"tree" and for each beam. See below.)
 
 The purpose of the grouper is to identify peaks in the dm/time plane,
 run a classifier on each peak, and send a top-k list of peaks ("events")
@@ -85,3 +85,10 @@ values in the X-engine are different from the "static" values in the config file
 `zone_nfreq`, `zone_freq_edges`, `time_sample_ms`, `beams_per_gpu`.
 
 ## Data arrays (placeholder)
+
+ - Outer loop over time chunk, inner loop over beam "batches"
+ 
+ - 3-d arrays indexed by (beam, dm, time)
+
+ - Meaning of time coordinate is different for early triggers.
+ 

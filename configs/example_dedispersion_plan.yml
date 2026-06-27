@@ -1,6 +1,13 @@
+# To create a dedispersion_plan yaml file, use 'pirate_frb show_dedisperser -v'.
+# 
+# The dedispersion_plan yaml file is used internally by pirate, and is also one of three
+# metadata files sent from pirate to the grouper. (Most fields are only useful internally,
+# and won't be needed in the grouper.)
+
 dtype: float16                 # Data type for dedispersion computations
 nfreq: 28160                   # Total number of frequency channels across all zones
 nt_in: 2048                    # Number of time samples per input chunk
+toplevel_rank: 16              # Tree rank specified in toplevel config
 num_downsampling_levels: 4     # Number of downsampling levels
 beams_per_gpu: 60              # Number of beams processed per GPU
 beams_per_batch: 2             # Number of beams per batch
@@ -8,6 +15,14 @@ num_active_batches: 2          # Number of active batches
 stage1_dd_rank: [8, 7, 7, 7]   # Active dedispersion rank of each stage1 tree
 stage1_amb_rank: [8, 8, 8, 8]  # Ambient rank of each stage1 tree (= number of coarse freq channels)
 ntrees: 10                     # Number of output trees (== length of the 'trees' sequence below)
+
+# As explained in notes/tree_dedispersion.tex, the dedisperser consists of multiple "trees"
+# corresponding to pairs (ds_level, delta_rank). Here, ds_level is the input downsampling that
+# is applied before dedispersion, which controls the DM-range of the tree. If delta_rank > 0,
+# then the tree has an "early trigger" and searches a subset of the frequency range (the value
+# of delta_rank is the "earliness").
+# 
+# The details of the trees are nontrivial -- see notes/tree_dedispersion.tex for info/plots.
 
 trees:
 

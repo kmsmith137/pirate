@@ -345,6 +345,17 @@ DedispersionPlan::DedispersionPlan(const DedispersionConfig &config_) :
 
 void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones) const
 {
+    // Top-of-file header comment (verbose only).
+    if (verbose) {
+        emitter << YAML::Comment(
+            "To create a dedispersion_plan yaml file, use 'pirate_frb show_dedisperser -v'.\n"
+            "\n"
+            "The dedispersion_plan yaml file is used internally by pirate, and is also one of three\n"
+            "metadata files sent from pirate to the grouper. (Most fields are only useful internally,\n"
+            "and won't be needed in the grouper.)")
+                << YAML::Newline;
+    }
+
     emitter << YAML::BeginMap;
 
     emitter << YAML::Key << "dtype" << YAML::Value << dtype.str();
@@ -358,6 +369,10 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
     emitter << YAML::Key << "nt_in" << YAML::Value << nt_in;
     if (verbose)
         emitter << YAML::Comment("Number of time samples per input chunk");
+
+    emitter << YAML::Key << "toplevel_rank" << YAML::Value << config.tree_rank;
+    if (verbose)
+        emitter << YAML::Comment("Tree rank specified in toplevel config");
 
     emitter << YAML::Key << "num_downsampling_levels" << YAML::Value << num_downsampling_levels;
     if (verbose)
@@ -394,6 +409,17 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
     emitter << YAML::Key << "ntrees" << YAML::Value << ntrees;
     if (verbose)
         emitter << YAML::Comment("Number of output trees (== length of the 'trees' sequence below)");
+
+    if (verbose) {
+        emitter << YAML::Newline << YAML::Newline << YAML::Comment(
+            "As explained in notes/tree_dedispersion.tex, the dedisperser consists of multiple \"trees\"\n"
+            "corresponding to pairs (ds_level, delta_rank). Here, ds_level is the input downsampling that\n"
+            "is applied before dedispersion, which controls the DM-range of the tree. If delta_rank > 0,\n"
+            "then the tree has an \"early trigger\" and searches a subset of the frequency range (the value\n"
+            "of delta_rank is the \"earliness\").\n"
+            "\n"
+            "The details of the trees are nontrivial -- see notes/tree_dedispersion.tex for info/plots.");
+    }
 
     emitter << YAML::Newline << YAML::Newline
             << YAML::Key << "trees"

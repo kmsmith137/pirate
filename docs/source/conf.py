@@ -65,13 +65,24 @@ for _f in sorted(glob.glob(os.path.join(_grpc_src, '*.proto'))):
         _fout.write(f'---\norphan: true\n---\n\n# {_fname}\n\n```protobuf\n{_proto_content}\n```\n')
 
 # Generate a page listing all proto files (no toctree, to keep them out of the sidebar).
+# The dict gives each proto a one-line description and also sets the display order. Any
+# proto file not listed here is appended afterward (alphabetically) with no description,
+# so a newly-added proto still shows up.
+_grpc_descriptions = {
+    'frb_search.proto':  'RPC server embedded in pirate (e.g. write_file callbacks)',
+    'frb_grouper.proto': 'RPC intercommunication between pirate and grouper',
+    'frb_sifter.proto':  'RPC intercommunication between grouper and sifter',
+}
+_grpc_ordered = ([_f for _f in _grpc_descriptions if _f in _proto_files]
+                 + [_f for _f in _proto_files if _f not in _grpc_descriptions])
+
 _grpc_gen_path = os.path.join(os.path.dirname(__file__), '_grpc_generated.md')
 with open(_grpc_gen_path, 'w') as _fout:
     _fout.write('# gRPC Protocol Definitions\n\n')
-    _fout.write('The FRB server currently defines a single gRPC service. ')
-    _fout.write('Additional services will be added as the project grows.\n\n')
-    for _fname in _proto_files:
-        _fout.write(f'- [{_fname}](grpc/{_fname}.md)\n')
+    for _fname in _grpc_ordered:
+        _desc = _grpc_descriptions.get(_fname)
+        _suffix = f' - {_desc}' if _desc else ''
+        _fout.write(f'- [{_fname}](grpc/{_fname}.md){_suffix}\n')
 
 # Rewrite .yml/.yaml/.proto links in the copied notes to point to the rendered .md pages.
 import re
