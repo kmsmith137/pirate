@@ -50,7 +50,7 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
   
   - The FRB server defines [gRPC service(s)](../grpc/frb_search.proto) for things like control, monitoring,
     and triggered data writes. All interaction with a running server is via gRPC.
-    There is a python client (`pirate_frb.rpc.FrbClient`) but not a C++ client
+    There is a python client (`pirate_frb.rpc.FrbSearchClient`) but not a C++ client
     (not sure if we'll need one).
     
   - The FRB server stores data sent by the X-engine in a ring buffer, and defines

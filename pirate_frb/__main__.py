@@ -1030,9 +1030,9 @@ def _rpc_write_one(addr):
     """Send a write_files RPC to a single FrbServer."""
 
     import yaml
-    from .rpc import FrbClient
+    from .rpc import FrbSearchClient
 
-    client = FrbClient(addr)
+    client = FrbSearchClient(addr)
     print(f"[{addr}] Connected")
 
     try:

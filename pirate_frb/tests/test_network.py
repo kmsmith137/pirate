@@ -47,7 +47,7 @@ from ..core import (
     XEngineMetadata,
 )
 from ..pirate_pybind11 import DedispersionConfig, FrbServer
-from ..rpc import FrbClient
+from ..rpc import FrbSearchClient
 
 
 class NetworkTester:
@@ -334,7 +334,7 @@ class NetworkTester:
         # buffers the notifications in the meantime, which is fine at
         # our scale (<= ~90 notifications * ~40 bytes is well below
         # the 64 KB INITIAL_WINDOW_SIZE).
-        self.rpc_client = FrbClient(f"127.0.0.1:{p['rpc_port']}")
+        self.rpc_client = FrbSearchClient(f"127.0.0.1:{p['rpc_port']}")
         self.file_sub   = self.rpc_client.subscribe_files()
 
         # Filenames tracked across all iouter turns. Three disjoint sets:

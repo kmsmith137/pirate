@@ -14,7 +14,7 @@ from .core import (
     SlabAllocator,
     XEngineMetadata,
 )
-from .rpc import FrbClient
+from .rpc import FrbSearchClient
 
 
 class RunFakeXEngineHelper:
@@ -91,7 +91,7 @@ class RunFakeXEngineHelper:
     def _build_one(self, rpc_addr):
         """Per-receiver Phase 1: GetConfig -> XMD -> NIC checks -> FakeXEngine."""
         print(f"\n[{rpc_addr}] Connecting ...")
-        with FrbClient(rpc_addr) as c:
+        with FrbSearchClient(rpc_addr) as c:
             cfg = c.get_config()
         if not list(cfg.data_ip_addrs):
             raise RuntimeError(f"[{rpc_addr}] reported empty data_ip_addrs")

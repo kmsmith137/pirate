@@ -9,7 +9,7 @@ import threading
 import grpc
 import yaml
 
-from .rpc import FrbClient
+from .rpc import FrbSearchClient
 
 
 class _ThroughputTracker:
@@ -208,7 +208,7 @@ def run_rpc_status(ip_addrs):
             (e.g. ["127.0.0.1:6000"]).
     """
     # Strings are iterable, so a caller passing a bare string would silently
-    # iterate it character-by-character (FrbClient('1'), FrbClient('2'), ...).
+    # iterate it character-by-character (FrbSearchClient('1'), FrbSearchClient('2'), ...).
     # Short-circuit with a clear error (mirrors run_fake_xengine).
     if isinstance(ip_addrs, str):
         raise RuntimeError(
@@ -218,7 +218,7 @@ def run_rpc_status(ip_addrs):
     if not ip_addrs:
         raise RuntimeError("run_rpc_status: ip_addrs is empty")
 
-    clients = [(addr, FrbClient(addr)) for addr in ip_addrs]
+    clients = [(addr, FrbSearchClient(addr)) for addr in ip_addrs]
 
     print(f"RPC client(s) connected to {', '.join(ip_addrs)}")
     print()
