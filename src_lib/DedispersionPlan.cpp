@@ -402,10 +402,10 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
 
     for (long tree_index = 0; tree_index < ntrees; tree_index++) {
         const DedispersionTree &tree = this->trees.at(tree_index);
-        long delta_et = tree.pri_dd_rank - tree.early_dd_rank;
+        long delta_rank = tree.pri_dd_rank - tree.early_dd_rank;
         double time_sample_ms = config.time_sample_ms;
         double ds_factor = pow2(tree.ds_level);
-        double max_delay = 1.0e-3 * time_sample_ms * ds_factor * pow2(config.tree_rank - delta_et);
+        double max_delay = 1.0e-3 * time_sample_ms * ds_factor * pow2(config.tree_rank - delta_rank);
 
         emitter << YAML::Newline;
         emitter << YAML::BeginMap;
@@ -440,10 +440,10 @@ void DedispersionPlan::to_yaml(YAML::Emitter &emitter, bool verbose, bool zones)
             emitter << YAML::Comment(ss.str());
         }
 
-        emitter << YAML::Key << "delta_et" << YAML::Value << delta_et;
+        emitter << YAML::Key << "delta_rank" << YAML::Value << delta_rank;
         if (verbose) {
             stringstream ss;
-            ss << (delta_et > 0 ? "early" : "non-early")
+            ss << (delta_rank > 0 ? "early" : "non-early")
                << " trigger at " << tree.trigger_frequency << " MHz"
                << ", max delay " << max_delay << " seconds";
             emitter << YAML::Comment(ss.str());

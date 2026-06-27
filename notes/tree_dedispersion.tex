@@ -9,7 +9,7 @@
 \def\DD{{\rm DD}}
 \def\nn{\nonumber}
 
-\title{Notes on tree dedispersion}
+\title{Notes on tree dedispersion (very incomplete)}
 \author{Kendrick Smith}
 
 \begin{document}
@@ -18,6 +18,8 @@
 
 \setstretch{1.05}   % spacing between lines
 \setlength{\parskip}{2.5pt}  % spacing between paragraphs
+
+These tex notes are {\bf very incomplete} -- many important aspects of the dedisperser are still undocumented!
 
 \section{Tree gridding kernel}
 \label{sec:gridding}
@@ -170,8 +172,22 @@ We require $C_R=1$, i.e.~we always search the full frequency band.
 The case $C_l=\{1\}$ (with $R=0$) corresponds to disabling subbands, and only searching the full band.
 \item The details of this scheme, including the ``specialness'' of level $l=0$, are
 dictated by convenience in the GPU kernel.
+\item To {\em interpret} the $C_l$ already in a config file, run \verb|pirate_frb show_dedisperser -cv|.
+For example, for $C_l=[5,9,7,3,1]$ this prints:
+\begin{verbatim}
+# In this config, there are 25 top-level frequency subband(s):
+#   pf_level=0: [948.7,1500.0], [750.0,948.7], [639.6,750.0], [566.9,639.6], [514.5,566.9]
+#   pf_level=1: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+#               [442.3,514.5], [416.0,474.3], [393.9,442.3], [375.0,416.0]
+#   pf_level=2: [566.9,1500.0], [474.3,750.0], [416.0,566.9], [375.0,474.3], [344.1,416.0],
+#               [319.8,375.0], [300.0,344.1]
+#   pf_level=3: [416.0,1500.0], [344.1,566.9], [300.0,416.0]
+#   pf_level=4: [300.0,1500.0]
+\end{verbatim}
+\item To {\em create} a $C_l$ array with a given max $\Delta(\log \nu)$, run \verb|pirate_frb make_subbands|.
+For example, \verb|pirate_frb make_subbands 300 1500 0.1 -r 4| gives $C_l=[5,9,7,3,1]$.
+These subbands are shown visually in Figure \ref{fig:subbands}.
 \end{itemize}
-Some example subbands are shown in Figure \ref{fig:subbands}.
 \begin{figure}
 \centering
 \includegraphics[width=\textwidth]{figs/chord_subbands.pdf}
@@ -287,7 +303,7 @@ The final stage of the dedispersion transform is {\em peak-finding}.
 For now, we give a partial description -- a future version of the notes will describe
 peak-finding in more detail.
 The input is the shape-$(2^{r-R}, M, N_{\rm time})$ array from the previous section.
-The output is a shape-$(2^{r-R}, N_{\rm time}/D)$ array, where $D$ is a downsampling factor.
+The output is a shape-$(2^{r-R}, N_{\rm time}/T_{\rm ds})$ array, where $T_{\rm ds}$ is a time downsampling factor.
 Conceptually, peak-finding is 3 steps:
 \begin{itemize}
 \item For each $(d_{\rm hi}, m)$, the input array is a 1-d time series.
@@ -296,7 +312,7 @@ obtain a shape $(2^{r-R}, M, N_{\rm time}, P)$ array.
 \item We apply weights that depend on $(d_{\rm hi}, m, p)$, to normalize the array 
 so that each array element has variance 1. (Thus, array elements are normalized to
 ``sigmas''.)
-\item We downsample the array to shape $(2^{r-R}, N_{\rm time}/D)$.
+\item We downsample the array to shape $(2^{r-R}, N_{\rm time}/T_{\rm ds})$.
 Downsampling is done with ``max'' rather than addition, so each array element
 corresponds to max detection significance over all downsampled parameters.
 \end{itemize}
@@ -341,12 +357,17 @@ $h_{\lambda,0} = b_\lambda = h_{\lambda-1,1}$ would be redundant.
 
 So far, we have described a single {\tt DedispersionTree} which searches up to slope 1 (i.e.~full-band dispersion delay equal to $2^r$ time samples), and ``triggers'' when the pulse arrives at the lowest frequency (highest tree-freq).
 It will be useful to define a larger {\tt Dedisperser} object, consisting of multiple trees, as follows:
+
 \begin{itemize}
+
 \item {\bf Downsampled trees} in order to search to higher DM. If we time-downsample the data by a factor $2^{\tt ids}$, and run rank-$r$ dedispersion as usual, then we can search to a max dispersion delay which is larger by a factor $2^{\tt ids}$. 
 When we time-downsample by a factor $2^{\tt ids}$, we add time samples and multiply by $2^{-{\tt ids}/2}$, in order to leave the variance unchanged (assuming uncorrelated samples).
 
-The integer {\tt ids} is called the {\em downsampling level}. If ${\tt ids} > 0$, then we only keep the upper half (in delay) of the dedispersion output, since the lower half was already searched at downsampling level $({\tt ids}-1)$.
-\item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. By default, we only trigger when the pulse arrives at the highest tree-freq (i.e.\ lowest radio frequency). To trigger earlier for some bursts, we also run parallel dedispersion trees over the lowest $2^{r-\delta}$ tree-freqs, where $\delta=1,2,\cdots$ is denoted either {\tt delta\_et} or {\tt delta\_rank} in the code. These trees trigger at lower tree-freq (by a factor $2^\delta$), i.e.\ higher radio frequency.
+The integer {\tt ids} is called the {\em downsampling level}, and is denoted in the code by either \verb|ids| or \verb|ds_level|.
+If ${\tt ids} > 0$, then we only keep the upper half (in delay) of the dedispersion output, since the lower half was already searched at downsampling level $({\tt ids}-1)$.
+
+\item {\bf Early triggers} in order to reduce triggering latency, especially at high DM. By default, we only trigger when the pulse arrives at the highest tree-freq (i.e.\ lowest radio frequency). To trigger earlier for some bursts, we also run parallel dedispersion trees over the lowest $2^{r-\delta}$ tree-freqs, where $\delta=1,2,\cdots$ is denoted {\tt delta\_rank} in the code. These trees trigger at lower tree-freq (by a factor $2^\delta$), i.e.\ higher radio frequency.
+
 \end{itemize}
 A {\tt Dedisperser} consists of one or more {\tt DedispersionTrees}, each identified by a $({\tt ids}, \delta)$ pair.
 The ``base'' tree $({\tt ids}, \delta)=(0,0)$ does not downsample or trigger early.
@@ -395,5 +416,113 @@ As a concrete example, Table~\ref{tab:chord_sb2_et} and Figures~\ref{fig:early_t
 \caption{The ten {\tt DedispersionTrees} from Table\ \ref{tab:chord_sb2_et}, shown as line segments in the (DM, triggering latency) plane. For each tree $({\tt ids}, \delta)$, the value of {\tt ids} determines the DM range, and the value of $\delta$ determines the slope.}
 \label{fig:tree_segments}
 \end{figure}
+
+\clearpage
+
+\section{Dedispersion output arrays}
+
+\subsection{Parameter definitions}
+
+The pirate \verb|DedispersionPlan| defines the following global (i.e.\ not per-tree) parameters:
+\begin{align}
+T_{\rm in} &= {\tt nt\_in} & \mbox{ (input time samples per time chunk)} \nn \\
+r_{\rm top} &= {\tt toplevel\_rank} & \mbox{ (tree rank specified in toplevel config file; denoted $r$ in earlier sections)} \nn
+\end{align}
+and the following per-tree parameters:
+\begin{align}
+{\tt ids} &= {\tt ds\_level} & \mbox{ (downsampling level of tree)} \nn \\
+\delta &= {\tt delta\_rank}  & \mbox{ (``earliness'' of trigger)} \nn \\
+T_{\rm ds} &= {\tt time\_downsampling} & \mbox{ (time coarse-graining factor in peak-finding kernel)} \nn \\
+D_{\rm ds} &= {\tt dm\_downsampling}   & \mbox{ (dm coarse-graining factor in peak-finding kernel)} \nn
+\end{align}
+These parameters can be inspected with \verb|pirate_frb show_dedisperser -v|, and are also
+passed from pirate to the grouper via the \verb|dedispersion_plan| yaml metadata.
+
+\subsection{Details of output arrays}
+
+The dedispersion output consists of a pair of 2-d arrays (\verb|out_max|, \verb|out_argmax|)
+for each tree, indexed by (dm,time). (In the code, there is also a beam axis, omitted in
+the notes for simplicity). The per-tree array shape $({\tt ndm\_out}, {\tt nt\_out})$ is given by:
+\begin{align}
+{\tt ndm\_out} &= \begin{cases}
+  2^{r_{\rm top} - \delta} / D_{\rm ds} & \mbox{ if } {\tt ids}=0 \\
+  2^{r_{\rm top} - \delta - 1} / D_{\rm ds} & \mbox{ if } {\tt ids} \ge 1
+\end{cases} \label{eq:ndm_out} \\
+{\tt nt\_out} &= \frac{T_{\rm in}}{2^{\tt ids} T_{\rm ds}} \label{eq:nt_out}
+\end{align}
+The {\em full-band} delay range searched by each tree (expressed as an integer number samples, 
+before any per-tree time downsampling has been done) is:
+\begin{equation}
+d_{\rm lo} = \begin{cases}
+  0 & \mbox{ if } {\tt ids}=0 \\
+  2^{r_{\rm top} + {\tt ids} - 1} & \mbox{ if } {\tt ids}\ge 1
+\end{cases}
+\hspace{1.5cm}
+d_{\rm hi} = 2^{r_{\rm top} + {\tt ids}}
+\label{eq:dlo_dhi}
+\end{equation}
+To derive Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}), we walk through steps in the code:
+\begin{itemize}
+
+\item On the time axis, we start with a length-$T_{\rm in}$ input array,
+  downsample by a factor $2^{\tt ids}$, run tree dedispersion,
+  and downsample the output (max-ing, not averaging!) by $T_{\rm ds}$. 
+  This implies Eq.\ (\ref{eq:nt_out}).
+
+\item The DM axis is a bit more complicated. First consider the base tree (no downsampling
+  or early triggers), and assume $D_{\rm ds}=1$ for simplicity. We have:
+  \begin{equation}
+   d_{\rm lo} = 0
+     \hspace{1.5cm}
+   d_{\rm hi} = 2^{r_{\rm top}}
+     \hspace{1.5cm}
+   {\tt ndm\_out} = 2^{r_{\rm top}}
+  \end{equation}
+  Then we include addiitonal complications one at a time.
+  If we downsample the input by $2^{\tt ids}$, then $d_{\rm hi}$ gets multiplied by $2^{\tt ids}$.
+  Recall that for ${\tt ids} > 0$, we also discard the lower half of the output DMs (which was already searched at downsampling level ${\tt ids}-1$).
+  Therefore:
+  \begin{equation}
+   d_{\rm lo} = \begin{cases}
+        0 & \mbox{ if } {\tt ids} = 0 \\
+        2^{r_{\rm top} + {\tt ids} - 1} & \mbox{ if } {\tt ids} > 0
+   \end{cases}
+     \hspace{1cm}
+   d_{\rm hi} = 2^{r_{\rm top} + {\tt ids}}
+     \hspace{1cm}
+   {\tt ndm\_out} = \begin{cases}
+     2^{r_{\rm top}} & \mbox{ if } {\tt ids} = 0 \\
+     2^{r_{\rm top}-1} & \mbox{ if } {\tt ids} > 0 \\
+  \end{cases}
+  \end{equation}
+  If this is an early-triggered tree with $\delta > 0$, then the {\em full-band} delay
+  range is unchanged, but the spacing between trial DMs increases by $2^\delta$, so
+  {\tt ndm\_out} decreases by the same factor:
+  \begin{equation}
+   d_{\rm lo} = \begin{cases}
+        0 & \mbox{ if } {\tt ids} = 0 \\
+        2^{r_{\rm top} + {\tt ids} - 1} & \mbox{ if } {\tt ids} > 0
+   \end{cases}
+     \hspace{1cm}
+   d_{\rm hi} = 2^{r_{\rm top} + {\tt ids}}
+     \hspace{1cm}
+   {\tt ndm\_out} = \begin{cases}
+     2^{r_{\rm top}-\delta} & \mbox{ if } {\tt ids} = 0 \\
+     2^{r_{\rm top}-\delta-1} & \mbox{ if } {\tt ids} > 0 \\
+  \end{cases}
+  \end{equation}
+  Finally, we downsample the output (max-ing, not averaging!) by $D_{\rm ds}$.
+  This decreases {\tt ndm\_out} by a factor $D_{\rm ds}$, leaving $d_{\rm lo}$, $d_{\rm hi}$
+  unchanged. This implies Eqs.\ (\ref{eq:ndm_out}), (\ref{eq:dlo_dhi}).
+\end{itemize}
+
+\subsection{What a mess}
+
+Now that I've typed this all out, I'm realizing that my parameterization doesn't exactly
+make it straightforward to configure a set of trees. At some point in the future, I'll probably
+switch to something more intuitive.
+
+In the meantime, if there are any simple changes that would be helpful, such as putting
+more info in the \verb|dedispersion_plan| yaml, let me know.
 
 \end{document}

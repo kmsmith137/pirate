@@ -494,29 +494,14 @@ build_wheel: wheel_files.txt $(PIRATE_LIB) $(PIRATE_PYEXT)
 build_sdist: sdist_files.txt
 
 # Auto-generated snapshot of the verbose ASDF YAML header emitted by
-# AssembledFrame::write_asdf(). Checked into git and included in the Sphinx
-# docs. Depends on 'show_file_format' defaulting to verbose=true (a one-line
-# contract noted in pirate_frb/__main__.py). If you change write_asdf(),
-# rerun 'make' so the regenerated file shows up in 'git status'.
-# The $(GRPC_PYFILES) prerequisite (here and on the example_dedispersion_plan.yml
-# rule below) is required because the recipe runs 'python -m pirate_frb', which
-# imports the generated gRPC *_pb2 modules; without it a cold 'make -j' can run
-# this rule before they exist (ImportError: cannot import name 'frb_search_pb2').
+# AssembledFrame::write_asdf(). Checked into git and included in the Sphinx docs.
 configs/example_asdf_header.yml: configs/xengine/xengine_metadata_v2.yml $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
 	$(PYTHON) -m pirate_frb show_file_format $< > $@
 
-# Auto-generated snapshot of 'show_dedisperser' run on a representative
-# dedispersion config. Checked into git and included in the Sphinx docs as an
-# example of the dedispersion plan (the dedispersion_plan_yaml Handshake field)
-# that the FRB search process sends to the grouper at gRPC-handshake time
-# (frb_grouper.proto; see FrbServer). The bare 'show_dedisperser' output is the
-# plan only -- a single valid YAML document matching the wire -- and is
-# deterministic by default (the non-deterministic plan-construction timing line
-# is opt-in via -t), so the checked-in snapshot stays byte-stable across
-# rebuilds. If you change the dedispersion plan YAML format, rerun 'make' so the
-# regenerated file shows up in 'git status'.
+# Auto-generated snapshot of 'show_dedisperser -v' run on a representative
+# dedispersion config. Checked into git and included in the Sphinx docs.
 configs/example_dedispersion_plan.yml: configs/dedispersion/chord_sb2_et.yml $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
-	$(PYTHON) -m pirate_frb show_dedisperser $< > $@
+	$(PYTHON) -m pirate_frb show_dedisperser -v $< > $@
 
 # Symlink {include,lib} into python directory 'pirate_frb'.
 pirate_frb/include:
