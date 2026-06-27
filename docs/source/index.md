@@ -2,7 +2,7 @@
 
 An experimental GPU-based fast transient search for CHORD.
 
-- <a href="_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tree dedispersion (PDF)</a> -- mathematical details of the search.
+- <a href="_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tree dedispersion tex notes (PDF)</a> -- mathematical details of the search.
 
 ```{toctree}
 ---

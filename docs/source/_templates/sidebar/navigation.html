@@ -1,0 +1,20 @@
+{#-
+  Override of furo's sidebar/navigation.html.
+
+  Furo's stock template is just the sidebar-tree div wrapping
+  {{ furo_navigation_tree }}. We prepend a redundant "Home" link (in addition
+  to the clickable project title in the sidebar header, which is easy to miss)
+  so there is always an obvious way back to the toplevel page, plus a "tex
+  notes" link to tree_dedispersion.pdf (also linked from the main page). These
+  sit above the first toctree caption ("User Guide"). We reuse furo's own
+  toctree-l1 / "reference internal" classes so they match the other nav items.
+  The PDF is a served static asset, so its link uses pathto(..., 1) (a raw URI,
+  not a doc lookup) and resolves relative to each page like the toctree entries.
+-#}
+<div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="{{ pathto(master_doc) }}">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="{{ pathto('_static/tree_dedispersion.pdf', 1) }}" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
+  {{ furo_navigation_tree }}
+</div>
