@@ -15,10 +15,13 @@ that receives events from groupers on all search nodes.
 We run one one grouper per GPU, i.e. two groupers per search node.
 The grouper exchanges data arrays with `pirate` via a shared
 GPU memory ring buffer. This avoids the overhead of copying data
-between GPU and CPU. The grouper exhanges *metadata* with `pirate`
+between GPU and CPU. The grouper exhanges **metadata** with `pirate`
 via `grpc` over the loopback network (`127.0.0.1`).
 For performance reasons, the grouper should leave arrays on the GPU
 if possible, and process them with `cupy`.
+
+ - Protocol for pirate-grouper communication: [`grpc/frb_grouper.proto`](../grpc/frb_grouper.proto).
+ - Protocol for grouper-sifter communication: [`grpc/frb_sifter.proto`](../grpc/frb_sifter.proto).
 
 ## Example code (placeholder)
 
@@ -37,7 +40,6 @@ When the `FrbServer` context manager is entered, a lot happens under the hood:
 
  - The grouper starts a grpc service, and blocks until `pirate` connects.
    Note that the grouper is the grpc server, and `pirate` is the client.
-   The grpc proto file is here: [`grpc/frb_grouper.proto`](../grpc/frb_grouper.proto).
    
  - The grouper receives metadata (three yaml objects, see below) from `pirate`.
 
@@ -91,4 +93,13 @@ values in the X-engine are different from the "static" values in the config file
  - 3-d arrays indexed by (beam, dm, time)
 
  - Meaning of time coordinate is different for early triggers.
- 
+
+## FrbGrouper class reference
+
+Auto-generated reference for the `FrbGrouper` pybind11 class (the grouper-side
+endpoint described above; use it as a context manager).
+
+```{eval-rst}
+.. autoclass:: pirate_frb.pirate_pybind11.FrbGrouper
+   :members:
+```

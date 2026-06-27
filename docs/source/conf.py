@@ -140,6 +140,7 @@ release = '1.0.0'
 # -- General configuration ---------------------------------------------------
 
 extensions = [
+    'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
     'myst_parser',
 ]

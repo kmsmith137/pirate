@@ -1169,7 +1169,8 @@ void register_core_bindings(pybind11::module &m)
     // a get_output() context manager.
     py::class_<FrbGrouper, std::shared_ptr<FrbGrouper>>(m, "FrbGrouper", py::dynamic_attr(),
         "gRPC server that receives a GpuDedisperser output ring buffer from an\n"
-        "FrbServer over CUDA IPC. Use as a context manager (see injections):\n"
+        "FrbServer over CUDA IPC. Use as a context manager (see injections)::\n"
+        "\n"
         "    with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:\n"
         "        with g.get_output(seq_id) as outputs: ...")
           .def(py::init([](const std::string &addr){ return FrbGrouper::create(addr); }),
