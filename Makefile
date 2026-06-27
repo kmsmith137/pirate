@@ -333,7 +333,11 @@ PYFILES = \
   pirate_frb/Hardware.py \
   pirate_frb/pybind11_injections.py \
   pirate_frb/run_server.py \
+  pirate_frb/run_chord_grouper.py \
+  pirate_frb/run_fake_xengine.py \
+  pirate_frb/run_rpc_status.py \
   pirate_frb/run_toy_grouper.py \
+  pirate_frb/run_toy_sifter.py \
   pirate_frb/yaml_utils.py \
   pirate_frb/chime/__init__.py \
   pirate_frb/casm/__init__.py \
@@ -353,6 +357,7 @@ PYFILES = \
   pirate_frb/tests/test_assembled_frame_asdf.py \
   pirate_frb/tests/test_network.py \
   pirate_frb/utils/__init__.py \
+  pirate_frb/utils/core.py \
   pirate_frb/utils/ThreadAffinity.py \
   pirate_frb/utils/network.py \
   pirate_frb/utils/time_cupy_dedisperser.py \

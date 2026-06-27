@@ -1265,6 +1265,22 @@ def run_toy_grouper_command(args):
     run_toy_groupers(args.grouper_addrs, delay=args.delay)
 
 
+######################################  run_toy_sifter command  #####################################
+
+
+def parse_run_toy_sifter(subparsers):
+    help_text = "Toy FrbSifter gRPC server: print a one-line summary of each received message"
+    parser = subparsers.add_parser("run_toy_sifter", help=help_text, description=help_text)
+    parser.add_argument('addr', metavar='ADDR',
+                        help="Listen address 'ip:port' for the sifter gRPC server "
+                             "(e.g. 127.0.0.1:7100; use [::]:7100 or 0.0.0.0:7100 for all interfaces).")
+
+
+def run_toy_sifter_command(args):
+    from .run_toy_sifter import run_toy_sifter
+    run_toy_sifter(args.addr)
+
+
 ######################################  run_chord_grouper command  #####################################
 
 
@@ -1345,6 +1361,7 @@ def get_parser():
 
     parse_run_server(subparsers)
     parse_run_toy_grouper(subparsers)
+    parse_run_toy_sifter(subparsers)
     parse_run_chord_grouper(subparsers)
     parse_run_fake_xengine(subparsers)
     parse_rpc_status(subparsers)
@@ -1423,6 +1440,8 @@ def main():
         run_server_command(args)
     elif args.command == "run_toy_grouper":
         run_toy_grouper_command(args)
+    elif args.command == "run_toy_sifter":
+        run_toy_sifter_command(args)
     elif args.command == "run_chord_grouper":
         run_chord_grouper_command(args)
     elif args.command == "run_fake_xengine":
