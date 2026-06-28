@@ -14,19 +14,24 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     'out_max' and compute, ENTIRELY ON THE GPU (no device->host copies in the
     inner loops):
 
-      - the single highest-SNR "event", and which (tree, ibeam, dm, time) it came
-        from. 'ibeam' is a GLOBAL beam index (0 <= ibeam < total_beams), formed by
-        adding ibatch*beams_per_batch to the per-batch beam index.
+      - the single highest-SNR "event", and which (tree, ibeam, idm, itime) it
+        came from -- all ARRAY INDICES (not physical units). 'ibeam' is a GLOBAL
+        beam index (0 <= ibeam < total_beams), formed by adding
+        ibatch*beams_per_batch to the per-batch beam index; idm/itime index the
+        winning tree's output dm/time axes.
       - the per-beam maximum SNR (a length-total_beams array; no per-beam argmax).
 
     Only after the chunk's GPU scan finishes do we copy the winning event's
-    coordinates/value to the host (one small copy) to print it and -- if a sifter
-    is configured -- send it.
+    indices/value to the host (one small copy) to print it and -- if a sifter is
+    configured -- send it.
 
     'sifter' is an already-connected FrbSifterClient (constructed by the caller),
     or None. If not None, we send one check_configuration message up front, then
     one FrbEvents message per chunk: a single event (the chunk's peak), with
-    coarsegrain_snr set to the per-beam max.
+    coarsegrain_snr set to the per-beam max. The event's physical fields and the
+    message's fpga counts are derived from the X-engine metadata (timing,
+    beam_ids, beamset) and the winning tree's dm_min/dm_max in the dedispersion
+    plan.
 
     The cupy work runs on the current/default stream (FrbGrouper.__enter__ already
     selected the right device); get_output's __exit__ synchronizes that stream
@@ -43,6 +48,16 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     beams_per_batch = nbeams_tot // nbatches
 
     if sifter is not None:
+        import yaml
+        # One-time metadata used to convert array indices -> physical units when
+        # building the FrbEvents messages below.
+        xengine = yaml.safe_load(grouper.xengine_metadata_yaml_string)
+        plan_trees = grouper.dedispersion_plan_yaml['trees']
+        beam_set_id = xengine['beamset']
+        beam_ids = xengine['beam_ids']                       # global beam index -> beam_id
+        seq_per_sample = xengine['seq_per_frb_time_sample']  # fpga seq per input time sample
+        fpga_per_chunk = seq_per_sample * grouper.nt_in
+
         sifter.check_configuration(
             pirate_yaml = grouper.dedispersion_config_yaml_string,
             xengine_yaml = grouper.xengine_metadata_yaml_string,
@@ -54,12 +69,13 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     for ichunk in itertools.count():            # loop over time chunks
         # GPU-resident accumulators, updated entirely on the GPU below (no
         # device->host copies until the chunk's scan is complete). gmax is the
-        # running peak SNR; the g_* 0-d arrays hold its (tree, ibeam, dm, time).
+        # running peak SNR; the g_* 0-d arrays hold its (tree, ibeam, idm, itime)
+        # array indices.
         gmax    = cp.full((), -cp.inf, dtype=cp.float32)
         g_tree  = cp.full((), -1, dtype=cp.int64)
         g_ibeam = cp.full((), -1, dtype=cp.int64)
-        g_dm    = cp.full((), -1, dtype=cp.int64)
-        g_time  = cp.full((), -1, dtype=cp.int64)
+        g_idm   = cp.full((), -1, dtype=cp.int64)
+        g_itime = cp.full((), -1, dtype=cp.int64)
         per_beam_max = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)
 
         for ibatch in range(nbatches):          # loop over beam batches
@@ -78,39 +94,48 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
                     cp.maximum(sl, t.max(axis=(1, 2)), out=sl)
 
                     # Global peak + argmax candidate from this tree (all GPU).
+                    # unravel gives (local beam, dm, time) ARRAY INDICES.
                     m = t.max()
-                    lb, dm, tt = cp.unravel_index(t.argmax(), t.shape)
+                    lb, idm, itime = cp.unravel_index(t.argmax(), t.shape)
                     upd = m > gmax
                     gmax    = cp.where(upd, m, gmax)
                     g_tree  = cp.where(upd, itree, g_tree)
                     g_ibeam = cp.where(upd, beam0 + lb, g_ibeam)
-                    g_dm    = cp.where(upd, dm, g_dm)
-                    g_time  = cp.where(upd, tt, g_time)
+                    g_idm   = cp.where(upd, idm, g_idm)
+                    g_itime = cp.where(upd, itime, g_itime)
 
-        # Chunk scan done. One small device->host copy of the peak's coords/value.
-        tree, ibeam, dm, tt = (int(v) for v in
-                               cp.stack([g_tree, g_ibeam, g_dm, g_time]).get())
+        # Chunk scan done. One small device->host copy of the peak's indices/value.
+        tree, ibeam, idm, itime = (int(v) for v in
+                                   cp.stack([g_tree, g_ibeam, g_idm, g_itime]).get())
         snr = float(gmax.get())
 
         print(f'{grouper.grouper_ip_addr}: ichunk={ichunk}: max snr={snr:.3g} '
-              f'at (tree={tree}, ibeam={ibeam}, dm={dm}, time={tt})', flush=True)
+              f'at (tree={tree}, ibeam={ibeam}, idm={idm}, itime={itime})', flush=True)
 
         if sifter is not None:
-            # One event = the chunk's peak; coarsegrain_snr = the per-beam max
-            # (passed as a cupy array -- FrbSifterClient copies it host-side in
-            # one shot). FrbEvent has no 'tree' field, so 'tree' is printed only.
+            # Convert the peak's array indices to physical units for the one event,
+            # and derive the message's fpga counts from the X-engine timing.
+            # coarsegrain_snr = the per-beam max (cupy array; the client copies it
+            # host-side in one shot). FrbEvent has no 'tree' field (printed only).
+            chunk_fpga = ichunk * fpga_per_chunk
+            tr = plan_trees[tree]
+            dm = tr['dm_min'] + (tr['dm_max'] - tr['dm_min']) * (idm/tr['ndm_out'] + 0.5)
+            # The tree's output time axis is downsampled: its nt_out samples span the
+            # whole chunk, so each output sample is fpga_per_chunk/nt_out fpga counts.
+            fpga_per_out_sample = fpga_per_chunk // tr['nt_out']
+            
             sifter.send_events(
                 has_injections = False,
-                beam_set_id = 0,
-                chunk_fpga_count = ichunk,
-                event_beam_ids = [ibeam],
-                event_fpga_timestamps = [tt],
-                event_dms = [float(dm)],
+                beam_set_id = beam_set_id,
+                chunk_fpga_count = chunk_fpga,
+                event_beam_ids = [beam_ids[ibeam]],
+                event_fpga_timestamps = [chunk_fpga + itime * fpga_per_out_sample],
+                event_dms = [dm],
                 event_dm_errors = [0.0],
                 event_snrs = [snr],
                 event_rfi_probs = [0.0],
-                coarsegrain_start_fpga_count = ichunk,
-                coarsegrain_end_fpga_count = ichunk + 1,
+                coarsegrain_start_fpga_count = chunk_fpga,
+                coarsegrain_end_fpga_count = chunk_fpga + fpga_per_chunk,
                 coarsegrain_snr = per_beam_max)
 
         if delay > 0:
