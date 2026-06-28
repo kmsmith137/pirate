@@ -316,7 +316,7 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // Returned by GpuDedisperser.acquire_output(). Must be registered
     // before the GpuDedisperser class_ block, so pybind11 knows how to
     // convert the return value when acquire_output's lambda is bound below.
-    py::class_<GpuDedisperser::Outputs>(m, "_GpuDedisperserOutputs",
+    py::class_<GpuDedisperser::Outputs>(m, "GpuDedisperserOutputs",
         "Returned by GpuDedisperser.acquire_output(). Holds list-of-Array views\n"
         "of the dedispersion output buffers for an acquired seq_id.")
         .def_readonly("ichunk_zero_based", &GpuDedisperser::Outputs::ichunk_zero_based,

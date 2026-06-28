@@ -9,6 +9,7 @@ from ..pirate_pybind11 import (
     FakeXEngine,
     FileWriter,
     FrequencySubbands,
+    GpuDedisperserOutputs,
     PeakFindingConfig,
     Receiver,
     ResourceTracker,

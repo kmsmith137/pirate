@@ -103,7 +103,7 @@ class FrbGrouperInjections:
 
         Yields
         ------
-        _GpuDedisperserOutputs
+        GpuDedisperserOutputs
             Per-batch slice with .out_max / .out_argmax (lists of ksgpu Arrays,
             convertible to cupy via DLPack).
         """
