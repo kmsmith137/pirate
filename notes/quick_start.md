@@ -37,6 +37,9 @@ pirate_frb rpc_status 127.0.0.1:6000
 # the server exits.
 pirate_frb rpc_write 127.0.0.1:6000
 ```
+Note that you don't need to run this entire sequence every time!
+The programs above have command-line args to "short-circuit" the downstream programs.
+(For example, `pirate_frb run_server --no-grouper` or `pirate_frb run_toy_grouper --no-sifter`.)
 
 ## Running a production search (cf00/cf05)
 
