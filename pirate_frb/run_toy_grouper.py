@@ -28,10 +28,10 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     'sifter' is an already-connected FrbSifterClient (constructed by the caller),
     or None. If not None, we send one check_configuration message up front, then
     one FrbEvents message per chunk: a single event (the chunk's peak), with
-    coarsegrain_snr set to the per-beam max. The event's physical fields and the
-    message's fpga counts are derived from the X-engine metadata (timing,
-    beam_ids, beamset) and the winning tree's dm_min/dm_max in the dedispersion
-    plan.
+    coarsegrain_snr set to the per-beam max. grouper.create_events() converts the
+    peak's array indices into a FrbSifterEvents (physical fields + chunk_fpga_count)
+    using the X-engine metadata (timing, beam_ids, beamset) and the winning tree's
+    dm_min/dm_max in the dedispersion plan.
 
     The cupy work runs on the current/default stream (FrbGrouper.__enter__ already
     selected the right device); get_output's __exit__ synchronizes that stream
@@ -48,15 +48,13 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     beams_per_batch = nbeams_tot // nbatches
 
     if sifter is not None:
-        # One-time metadata used to convert array indices -> physical units when
-        # building the FrbEvents messages below. The yaml strings are parsed once
-        # by FrbGrouper.__enter__ and attached as .xengine_yaml / .*_plan_yaml.
+        # Metadata for the FrbEvents messages. The yaml strings are parsed once by
+        # FrbGrouper.__enter__; the per-event index -> physical-unit conversion is
+        # done by grouper.create_events() below. We still need beam_set_id and
+        # fpga_per_chunk here (for the coarsegrain time window).
         xengine = grouper.xengine_yaml
-        plan_trees = grouper.dedispersion_plan_yaml['trees']
         beam_set_id = xengine['beamset']
-        beam_ids = xengine['beam_ids']                       # global beam index -> beam_id
-        seq_per_sample = xengine['seq_per_frb_time_sample']  # fpga seq per input time sample
-        fpga_per_chunk = seq_per_sample * grouper.nt_in
+        fpga_per_chunk = xengine['seq_per_frb_time_sample'] * grouper.nt_in
 
         sifter.check_configuration(
             pirate_yaml = grouper.dedispersion_config_yaml_string,
@@ -112,27 +110,17 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
               f'at (tree={tree}, ibeam={ibeam}, idm={idm}, itime={itime})', flush=True)
 
         if sifter is not None:
-            # Convert the peak's array indices to physical units for the one event,
-            # and derive the message's fpga counts from the X-engine timing.
-            # coarsegrain_snr = the per-beam max (cupy array; the client copies it
-            # host-side in one shot). FrbEvent has no 'tree' field (printed only).
-            chunk_fpga = ichunk * fpga_per_chunk
-            tr = plan_trees[tree]
-            dm = tr['dm_min'] + (tr['dm_max'] - tr['dm_min']) * (idm/tr['ndm_out'] + 0.5)
-            # The tree's output time axis is downsampled: its nt_out samples span the
-            # whole chunk, so each output sample is fpga_per_chunk/nt_out fpga counts.
-            fpga_per_out_sample = fpga_per_chunk // tr['nt_out']
-            
+            # Convert the chunk's peak (still GPU 0-d index arrays) to a one-event
+            # FrbSifterEvents -- create_events does the index -> physical-unit math
+            # and sets chunk_fpga_count from ichunk. coarsegrain_snr = the per-beam
+            # max (cupy array; the client copies it host-side in one shot). FrbEvent
+            # has no 'tree' field (printed only).
+            events = grouper.create_events(ichunk, g_tree, g_ibeam, g_idm, g_itime, gmax)
+            chunk_fpga = events.chunk_fpga_count
             sifter.send_events(
                 has_injections = False,
                 beam_set_id = beam_set_id,
-                chunk_fpga_count = chunk_fpga,
-                event_beam_ids = [beam_ids[ibeam]],
-                event_fpga_timestamps = [chunk_fpga + itime * fpga_per_out_sample],
-                event_dms = [dm],
-                event_dm_errors = [0.0],
-                event_snrs = [snr],
-                event_rfi_probs = [0.0],
+                events = events,
                 coarsegrain_start_fpga_count = chunk_fpga,
                 coarsegrain_end_fpga_count = chunk_fpga + fpga_per_chunk,
                 coarsegrain_snr = per_beam_max)

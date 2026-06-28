@@ -8,4 +8,7 @@ This section is **very incomplete** -- only a couple of classes are documented s
 
 .. autoclass:: pirate_frb.rpc.FrbSifterClient
    :members:
+
+.. autoclass:: pirate_frb.rpc.FrbSifterEvents
+   :members:
 ```

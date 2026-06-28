@@ -6,6 +6,90 @@ from .grpc import frb_sifter_pb2
 from .grpc import frb_sifter_pb2_grpc
 
 
+class FrbSifterEvents:
+    """A batch of FRB events to send to the sifter (FrbSifterClient.send_events).
+
+    Holds the per-event fields of the FrbEvent message (grpc/frb_sifter.proto) as
+    parallel numpy arrays (NOT cupy) -- one FrbEvent is sent per array element --
+    plus the scalar ``chunk_fpga_count`` carried by the enclosing FrbEventsMessage.
+
+    The per-event arrays (cast to the indicated dtype) are:
+
+    - ``beam_ids`` (int32): X-engine beam id of each event
+    - ``fpga_timestamps`` (int64): absolute FPGA-counter timestamp of each event
+    - ``dms`` (float32): dispersion measure
+    - ``dm_errors`` (float32): dispersion-measure uncertainty
+    - ``snrs`` (float32): signal-to-noise ratio
+    - ``rfi_probs`` (float32): RFI probability
+
+    The from-scratch constructor takes these six arrays (each a numpy array or any
+    array-like; a cupy array is rejected -- use FrbGrouper.create_events to build
+    from GPU arrays) plus ``chunk_fpga_count`` (a non-negative int). All six arrays
+    must have the same shape; events are emitted in row-major (C) order.
+    """
+
+    # (attribute, proto FrbEvent field, numpy dtype) -- order follows the proto.
+    _FIELDS = (
+        ("beam_ids",        "beam_id",        np.int32),
+        ("fpga_timestamps", "fpga_timestamp", np.int64),
+        ("dms",             "dm",             np.float32),
+        ("dm_errors",       "dm_error",       np.float32),
+        ("snrs",            "snr",            np.float32),
+        ("rfi_probs",       "rfi_prob",       np.float32),
+    )
+
+    def __init__(self, beam_ids, fpga_timestamps, dms, dm_errors, snrs, rfi_probs,
+                 chunk_fpga_count):
+        try:
+            self.chunk_fpga_count = int(chunk_fpga_count)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"FrbSifterEvents: chunk_fpga_count must be an integer, "
+                             f"got {chunk_fpga_count!r}") from e
+        if self.chunk_fpga_count < 0:
+            raise ValueError(f"FrbSifterEvents: chunk_fpga_count must be >= 0, "
+                             f"got {self.chunk_fpga_count}")
+
+        values = dict(beam_ids=beam_ids, fpga_timestamps=fpga_timestamps, dms=dms,
+                      dm_errors=dm_errors, snrs=snrs, rfi_probs=rfi_probs)
+        for attr, _, dtype in self._FIELDS:
+            val = values[attr]
+            if type(val).__module__.split('.', 1)[0] == 'cupy':
+                raise TypeError(f"FrbSifterEvents: argument {attr!r} is a cupy array; this "
+                                f"class stores numpy arrays. Use FrbGrouper.create_events() "
+                                f"to build a FrbSifterEvents from GPU arrays.")
+            try:
+                arr = np.asarray(val, dtype=dtype)
+            except Exception as e:
+                raise ValueError(f"FrbSifterEvents: could not convert argument {attr!r} to a "
+                                 f"numpy {np.dtype(dtype).name} array: {e}") from e
+            setattr(self, attr, arr)
+
+        shapes = {attr: getattr(self, attr).shape for attr, _, _ in self._FIELDS}
+        if len(set(shapes.values())) != 1:
+            raise ValueError(f"FrbSifterEvents: all event arrays must have the same shape, "
+                             f"got {shapes}")
+        self.shape = next(iter(shapes.values()))
+
+    def to_proto(self):
+        """Return a list of frb_sifter_pb2.FrbEvent, one per event (row-major order).
+
+        Arrays of any shape are flattened; .tolist() yields the native Python
+        scalars required by protobuf.
+        """
+        cols = {proto: getattr(self, attr).reshape(-1).tolist()
+                for attr, proto, _ in self._FIELDS}
+        return [frb_sifter_pb2.FrbEvent(**{f: cols[f][i] for f in cols})
+                for i in range(len(self))]
+
+    def __len__(self):
+        """Number of events (== number of FrbEvent protos that will be sent)."""
+        return int(self.beam_ids.size)
+
+    def __repr__(self):
+        return (f"FrbSifterEvents(num_events={len(self)}, shape={self.shape}, "
+                f"chunk_fpga_count={self.chunk_fpga_count})")
+
+
 class FrbSifterClient:
     """Python client for the FrbSifter gRPC service (grpc/frb_sifter.proto).
 
@@ -26,11 +110,11 @@ class FrbSifterClient:
         with FrbSifterClient("localhost:7100") as sifter:
             sifter.check_configuration(pirate_yaml, xengine_yaml,
                                        dedispersion_plan_yaml, grouper_yaml)
-            sifter.send_events(has_injections, beam_set_id, chunk_fpga_count,
-                               event_beam_ids, event_fpga_timestamps, event_dms,
-                               event_dm_errors, event_snrs, event_rfi_probs,
+            sifter.send_events(has_injections, beam_set_id, events,
                                coarsegrain_start_fpga_count,
                                coarsegrain_end_fpga_count, coarsegrain_snr)
+
+    where 'events' is a FrbSifterEvents (or None).
     """
 
     def __init__(self, server_address: str = "localhost:50051"):
@@ -63,50 +147,39 @@ class FrbSifterClient:
             raise RuntimeError(f"FrbSifterClient.check_configuration: sifter at "
                                f"{self.server_address!r} returned ok=False")
 
-    def send_events(self, has_injections, beam_set_id, chunk_fpga_count,
-                    event_beam_ids, event_fpga_timestamps, event_dms,
-                    event_dm_errors, event_snrs, event_rfi_probs,
+    def send_events(self, has_injections, beam_set_id, events,
                     coarsegrain_start_fpga_count, coarsegrain_end_fpga_count,
                     coarsegrain_snr):
-        """Send an FrbEventsMessage (FrbEvents RPC). Args are in proto field order.
+        """Send an FrbEventsMessage (FrbEvents RPC).
 
-        The per-event fields are passed as six parallel 1-d arrays -- one FrbEvent
-        is built per element, so all six must have equal length. These six and
-        coarsegrain_snr may each be a numpy or cupy 1-d array (or any 1-d iterable):
-        a cupy array is copied to the host in a single shot via .get() (cupy raises
-        on implicit np.asarray()), then cast to the proto field's dtype.
+        'events' is a FrbSifterEvents (one FrbEvent is sent per element, and its
+        chunk_fpga_count populates the message's chunk_fpga_count field), or None
+        to send no per-event triggers (with chunk_fpga_count = 0).
+
+        'coarsegrain_snr' may be a numpy or cupy 1-d array (or any 1-d iterable): a
+        cupy array is copied to the host in a single shot via .get() (cupy raises on
+        implicit np.asarray()), then cast to float32.
 
         Returns None; raises a verbose RuntimeError on failure (malformed input,
         gRPC transport error, or a not-ok reply).
         """
-        beam_ids   = self._to_1d("event_beam_ids", event_beam_ids, np.int32)
-        timestamps = self._to_1d("event_fpga_timestamps", event_fpga_timestamps, np.int64)
-        dms        = self._to_1d("event_dms", event_dms, np.float32)
-        dm_errors  = self._to_1d("event_dm_errors", event_dm_errors, np.float32)
-        snrs       = self._to_1d("event_snrs", event_snrs, np.float32)
-        rfi_probs  = self._to_1d("event_rfi_probs", event_rfi_probs, np.float32)
-
-        event_arrays = [beam_ids, timestamps, dms, dm_errors, snrs, rfi_probs]
-        if len({len(a) for a in event_arrays}) != 1:
-            raise RuntimeError(f"FrbSifterClient.send_events: the six event_* arrays must "
-                               f"have equal length, got {[len(a) for a in event_arrays]}")
+        if events is None:
+            proto_events = []
+            chunk_fpga_count = 0
+        elif isinstance(events, FrbSifterEvents):
+            proto_events = events.to_proto()
+            chunk_fpga_count = events.chunk_fpga_count
+        else:
+            raise RuntimeError(f"FrbSifterClient.send_events: 'events' must be a "
+                               f"FrbSifterEvents or None, got {type(events).__name__}")
 
         cg_snr = self._to_1d("coarsegrain_snr", coarsegrain_snr, np.float32)
-
-        # Build one FrbEvent per element. .tolist() yields native Python scalars.
-        events = [
-            frb_sifter_pb2.FrbEvent(beam_id=b, fpga_timestamp=t, dm=dm,
-                                    dm_error=de, snr=s, rfi_prob=r)
-            for b, t, dm, de, s, r in zip(beam_ids.tolist(), timestamps.tolist(),
-                                          dms.tolist(), dm_errors.tolist(),
-                                          snrs.tolist(), rfi_probs.tolist())
-        ]
 
         request = frb_sifter_pb2.FrbEventsMessage(
             has_injections = has_injections,
             beam_set_id = beam_set_id,
             chunk_fpga_count = chunk_fpga_count,
-            events = events,
+            events = proto_events,
             coarsegrain_start_fpga_count = coarsegrain_start_fpga_count,
             coarsegrain_end_fpga_count = coarsegrain_end_fpga_count,
             coarsegrain_snr = cg_snr,

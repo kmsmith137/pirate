@@ -8,8 +8,11 @@ Applied as a side effect of importing pirate_frb.rpc.
 
 from contextlib import contextmanager, ExitStack
 
+import numpy as np
+
 import ksgpu
 from .. import pirate_pybind11
+from .FrbSifterClient import FrbSifterEvents
 
 
 @ksgpu.inject_methods(pirate_pybind11.FrbGrouper)
@@ -100,5 +103,86 @@ class FrbGrouperInjections:
         finally:
             cp.cuda.get_current_stream().synchronize()
             self.release_output(seq_id)
+
+    def create_events(self, ichunk, itrees, ibeams, idm, itime, snr):
+        """Build a FrbSifterEvents from GPU arrays of (tree, beam, dm, time) indices.
+
+        Converts the array indices of a set of events -- the dedispersion-tree
+        index, global beam index, and the tree's (dm, time) output-axis indices --
+        plus their SNRs into physical units (beam id, absolute FPGA timestamp, DM),
+        using this grouper's X-engine metadata and dedispersion plan (parsed in
+        __enter__). The result is a host-side FrbSifterEvents, ready to pass to
+        FrbSifterClient.send_events.
+
+        Parameters
+        ----------
+        ichunk : int
+            Zero-based time-chunk index (>= 0); sets the absolute FPGA timing.
+        itrees, ibeams, idm, itime, snr : cupy.ndarray
+            Equal-shaped GPU arrays (one event per element). itrees selects the
+            dedispersion tree; ibeams is a global beam index; idm/itime index that
+            tree's output (dm, time) axes; snr is the event SNR. Index values are
+            assumed in range (not bounds-checked, to avoid a device->host sync).
+
+        Returns
+        -------
+        FrbSifterEvents
+            chunk_fpga_count = ichunk * (seq_per_frb_time_sample * nt_in). dm_error
+            and rfi_prob are set to zero (not computed by the toy grouper).
+        """
+        import cupy as cp
+
+        if not isinstance(ichunk, (int, np.integer)):
+            raise TypeError(f"FrbGrouper.create_events: ichunk must be an int, "
+                            f"got {type(ichunk).__name__}")
+        if ichunk < 0:
+            raise ValueError(f"FrbGrouper.create_events: ichunk must be >= 0 (got {ichunk})")
+
+        named = dict(itrees=itrees, ibeams=ibeams, idm=idm, itime=itime, snr=snr)
+        for name, a in named.items():
+            if not isinstance(a, cp.ndarray):
+                raise TypeError(f"FrbGrouper.create_events: {name!r} must be a cupy array, "
+                                f"got {type(a).__name__}")
+        shapes = {name: a.shape for name, a in named.items()}
+        if len(set(shapes.values())) != 1:
+            raise ValueError(f"FrbGrouper.create_events: itrees/ibeams/idm/itime/snr must all "
+                             f"have the same shape, got {shapes}")
+
+        # Scalar FPGA count at the start of this chunk.
+        seq_per_sample = self.xengine_yaml['seq_per_frb_time_sample']
+        fpga_per_chunk = int(seq_per_sample) * int(self.nt_in)
+        chunk_fpga = int(ichunk) * fpga_per_chunk
+
+        # Per-tree lookup tables (small host lists -> device arrays), indexed by itrees;
+        # plus the global-beam-index -> X-engine beam-id table.
+        trees = self.dedispersion_plan_yaml['trees']
+        dm_min  = cp.asarray([t['dm_min']  for t in trees], dtype=cp.float64)
+        dm_max  = cp.asarray([t['dm_max']  for t in trees], dtype=cp.float64)
+        ndm_out = cp.asarray([t['ndm_out'] for t in trees], dtype=cp.float64)
+        nt_out  = cp.asarray([t['nt_out']  for t in trees], dtype=cp.int64)
+        beam_id_lut = cp.asarray(self.xengine_yaml['beam_ids'], dtype=cp.int64)
+
+        it = itrees.astype(cp.int64)   # integer indices for the lookup tables
+        ib = ibeams.astype(cp.int64)
+
+        # Index -> physical-unit conversions, all on the GPU.
+        dms = dm_min[it] + (dm_max[it] - dm_min[it]) * (idm / ndm_out[it] + 0.5)
+        # Each tree's nt_out output samples span the whole chunk, so one output
+        # sample is fpga_per_chunk // nt_out FPGA counts.
+        fpga_per_out_sample = fpga_per_chunk // nt_out[it]
+        fpga_timestamps = chunk_fpga + itime.astype(cp.int64) * fpga_per_out_sample
+        beam_ids = beam_id_lut[ib]
+
+        # One bulk device->host copy per array (FrbSifterEvents casts dtypes and
+        # validates shapes). dm_error / rfi_prob are zero for the toy grouper.
+        return FrbSifterEvents(
+            beam_ids = beam_ids.get(),
+            fpga_timestamps = fpga_timestamps.get(),
+            dms = dms.get(),
+            dm_errors = np.zeros(snr.shape, dtype=np.float32),
+            snrs = snr.get(),
+            rfi_probs = np.zeros(snr.shape, dtype=np.float32),
+            chunk_fpga_count = chunk_fpga,
+        )
 
 
