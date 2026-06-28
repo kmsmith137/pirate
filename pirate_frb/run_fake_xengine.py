@@ -85,11 +85,16 @@ class RunFakeXEngineHelper:
         # Doing all per-receiver builds before spawning any controllers means
         # a misconfigured/unreachable receiver fails fast, with no half-built
         # state running in the background.
-        for rpc_addr in self.rpc_addrs:
-            self._build_one(rpc_addr)
+        for beamset, rpc_addr in enumerate(self.rpc_addrs):
+            self._build_one(beamset, rpc_addr)
 
-    def _build_one(self, rpc_addr):
-        """Per-receiver Phase 1: GetConfig -> XMD -> NIC checks -> FakeXEngine."""
+    def _build_one(self, beamset, rpc_addr):
+        """Per-receiver Phase 1: GetConfig -> XMD -> NIC checks -> FakeXEngine.
+
+        'beamset' is this receiver's index in rpc_addrs, stamped into the
+        XEngineMetadata so that, with multiple servers, each one advertises a
+        distinct beam-set id.
+        """
         print(f"\n[{rpc_addr}] Connecting ...")
         with FrbSearchClient(rpc_addr) as c:
             cfg = c.get_config()
@@ -106,6 +111,11 @@ class RunFakeXEngineHelper:
             beam_ids,
             cfg.fake_time_sample_ms,
         )
+        # make_fiducial() defaults beamset=0; override it with this receiver's
+        # index so that, with multiple servers, each one advertises a distinct
+        # beam-set id. (beam_ids stay 0..nbeams-1 on every server; the beamset
+        # is what disambiguates the sets downstream.)
+        xmd.beamset = beamset
         # Anchor the X-engine clock (unix-timestamp-at-fpga-seq-0) to the
         # current UTC wall-clock time.
         now = datetime.now(timezone.utc)
@@ -170,7 +180,7 @@ class RunFakeXEngineHelper:
         print(f"[{rpc_addr}]   data_ip_addrs = {ip_addrs}")
         print(f"[{rpc_addr}]   time_samples_per_chunk = {cfg.time_samples_per_chunk}")
         print(f"[{rpc_addr}]   min_data_mtu = {cfg.min_data_mtu}")
-        print(f"[{rpc_addr}]   nbeams = {cfg.fake_nbeams}, total_nfreq = {xmd.get_total_nfreq()}")
+        print(f"[{rpc_addr}]   beamset = {xmd.beamset}, nbeams = {cfg.fake_nbeams}, total_nfreq = {xmd.get_total_nfreq()}")
         print(f"[{rpc_addr}]   time_sample_ms = {actual_time_sample_ms}")
         print(f"[{rpc_addr}]   dt_ns_per_seq = {xmd.dt_ns_per_seq}")
         print(f"[{rpc_addr}]   seq_per_frb_time_sample = {xmd.seq_per_frb_time_sample}")
