@@ -56,12 +56,15 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
         n_events = len(request.events)
         max_snr = max((e.snr for e in request.events), default=None)
         snr_str = f"{max_snr:.1f}" if max_snr is not None else "n/a"
+        max_cg_snr = max(request.coarsegrain_snr, default=None)
+        cg_snr_str = f"{max_cg_snr:.1f}" if max_cg_snr is not None else "n/a"
         print(f"{_peer_ip(context)}  FrbEvents("
               f"beam_set_id={request.beam_set_id}, "
               f"chunk_fpga_count={request.chunk_fpga_count}, "
               f"n_events={n_events}, max_snr={snr_str}, "
               f"has_injections={request.has_injections}, "
-              f"n_coarsegrain_snr={len(request.coarsegrain_snr)})", flush=True)
+              f"n_coarsegrain_snr={len(request.coarsegrain_snr)}, "
+              f"max_coarsegrain_snr={cg_snr_str})", flush=True)
         return frb_sifter_pb2.FrbEventsReply(ok=True, message="")
 
 
