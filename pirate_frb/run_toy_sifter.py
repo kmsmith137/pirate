@@ -38,6 +38,18 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
     """Implements FrbSifter; prints one summary line per received RPC."""
 
     def CheckConfiguration(self, request, context):
+        # Reject any client whose wire-protocol version does not match ours.
+        # context.abort() raises to terminate the RPC, so the client gets a
+        # clean FAILED_PRECONDITION error naming the mismatch (rather than a
+        # silent ok=True). proto3 defaults an unset protocol_version to 0, so an
+        # old client that never set the field is rejected here too.
+        if request.protocol_version != frb_sifter_pb2.PROTOCOL_VERSION_CURRENT:
+            msg = (f"protocol version mismatch: client sent protocol_version="
+                   f"{request.protocol_version}, but this sifter requires "
+                   f"{frb_sifter_pb2.PROTOCOL_VERSION_CURRENT}")
+            print(f"{_peer_ip(context)}  CheckConfiguration REJECTED ({msg})", flush=True)
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, msg)
+
         # One-line summary: the size of each (possibly empty) config YAML field,
         # rather than dumping the multi-line YAML itself.
         sizes = ", ".join(

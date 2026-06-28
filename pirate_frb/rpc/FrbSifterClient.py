@@ -157,6 +157,9 @@ class FrbSifterClient:
             not-ok reply from the sifter.
         """
         request = frb_sifter_pb2.ConfigMessage(
+            # Always advertise the protocol version we were built against; the
+            # sifter rejects the config if it does not match its own.
+            protocol_version = frb_sifter_pb2.PROTOCOL_VERSION_CURRENT,
             pirate_yaml = self._to_yaml("pirate_yaml", pirate_yaml),
             xengine_yaml = self._to_yaml("xengine_yaml", xengine_yaml),
             dedispersion_plan_yaml = self._to_yaml("dedispersion_plan_yaml", dedispersion_plan_yaml),

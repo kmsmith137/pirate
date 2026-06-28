@@ -48,7 +48,7 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     import numpy as np
 
     from .rpc.grpc.frb_sifter_pb2_grpc import FrbSifterStub
-    from .rpc.grpc.frb_sifter_pb2 import ConfigMessage, FrbEventsMessage, FrbEvent
+    from .rpc.grpc.frb_sifter_pb2 import ConfigMessage, FrbEventsMessage, FrbEvent, PROTOCOL_VERSION_CURRENT
     import grpc
     import yaml
     from datetime import datetime
@@ -93,7 +93,8 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     ch1 = grpc.insecure_channel(sifter_addr)
     sifter = FrbSifterStub(ch1)
     # Make the first Sifter gRPC call -- send yaml configuration strings.
-    msg = ConfigMessage(xengine_yaml=grouper.xengine_metadata_yaml_string,
+    msg = ConfigMessage(protocol_version=PROTOCOL_VERSION_CURRENT,
+                        xengine_yaml=grouper.xengine_metadata_yaml_string,
                         pirate_yaml=grouper.dedispersion_config_yaml_string,
                         dedispersion_plan_yaml=grouper.dedispersion_plan_yaml_string,
                         grouper_yaml=my_config_yaml)

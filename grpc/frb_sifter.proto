@@ -26,7 +26,31 @@ service FrbSifter {
 
 }
 
+// Wire-protocol version. This is the single source of truth for the protocol
+// version on both the client (grouper) and server (sifter) sides -- both
+// reference PROTOCOL_VERSION_CURRENT from the generated stubs, rather than each
+// hardcoding their own constant.
+//
+// proto3 requires every enum to have a zero value; PROTOCOL_VERSION_UNSPECIFIED
+// is that placeholder (a ConfigMessage.protocol_version of 0 is therefore
+// invalid -- e.g. an old client that never set the field). Bump
+// PROTOCOL_VERSION_CURRENT on any incompatible wire-format change.
+//
+// NOTE: protocol_version (and this enum) is a pirate-local addition; it is not
+// (yet) present in the canonical upstream frb_sifter.proto referenced above.
+enum ProtocolVersion {
+  PROTOCOL_VERSION_UNSPECIFIED = 0;
+  PROTOCOL_VERSION_CURRENT = 1;
+}
+
 message ConfigMessage {
+  // Wire-protocol version: the client sets this to PROTOCOL_VERSION_CURRENT (see
+  // the ProtocolVersion enum above), and the sifter REJECTS the config if it
+  // does not match its own PROTOCOL_VERSION_CURRENT. Kept as a uint32 rather
+  // than the enum type so an out-of-range value from a newer client round-trips
+  // as a plain integer the sifter can report, instead of decoding to the proto3
+  // "unknown enum" sentinel.
+  uint32 protocol_version = 1;
   string pirate_yaml = 2;
   string xengine_yaml = 3;
   string dedispersion_plan_yaml = 4;

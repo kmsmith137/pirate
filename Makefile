@@ -569,7 +569,15 @@ $(ASDF_CXX_OFILES): asdf-cxx/include/asdf/config.hxx
 # gRPC code generation rules (pattern rules for any grpc/*.proto file).
 # Generates C++ files in grpc/ and Python stubs in pirate_frb/rpc/grpc/.
 
-# Phony target to regenerate all gRPC files
+# Phony target to regenerate all gRPC files.
+#
+# NOTE: after editing a .proto, `make grpc` alone is NOT enough -- run a full
+# `make`. Under the default ("cpp") protobuf Python implementation, the compiled
+# pirate_pybind11 extension links the generated *.pb.o and registers each .proto
+# into protobuf's PROCESS-GLOBAL C++ descriptor pool at import time. That stale
+# descriptor then SILENTLY SHADOWS the freshly regenerated _pb2.py stub (e.g. a
+# new field reads back as missing), until the .pb.o is recompiled and the .so is
+# relinked. A full `make` does both.
 grpc: $(GRPC_CCFILES) $(GRPC_HFILES) $(GRPC_PYFILES)
 
 # Generate C++ protobuf + gRPC files from .proto. A single protoc invocation
