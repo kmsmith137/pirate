@@ -1,5 +1,6 @@
 """Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter."""
 
+import contextlib
 import itertools
 import subprocess
 import sys
@@ -132,30 +133,30 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
     # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper, FrbSifterClient
 
-    # Construct the sifter client here (opens a gRPC channel; the RPCs themselves
-    # are issued in _run_toy_grouper, which has the grouper metadata). None = no sifter.
-    sifter = FrbSifterClient(sifter_addr) if (sifter_addr is not None) else None
-    try:
-        # FrbGrouper.__enter__ blocks until the producer connects, then pins this
-        # thread to the GPU's vcpus and selects the CUDA device (printing a message);
-        # __exit__ restores them and closes the grouper.
-        with FrbGrouper(grouper_addr) as grouper:
-            try:
-                _run_toy_grouper(grouper, sifter, delay)
-            except KeyboardInterrupt:
-                print(f'{grouper_addr}: interrupted; shutting down', flush=True)
-            except RuntimeError as e:
-                # Most likely the producer disconnected (the grouper stops and
-                # acquire_output rethrows). Report cleanly; re-raise anything that is
-                # not a stop (e.g. a genuine usage/assert bug).
-                if grouper.is_stopped:
-                    print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
-                else:
-                    raise
-            # FrbGrouper.__exit__ restores affinity/device + closes on every path.
-    finally:
-        if sifter is not None:
-            sifter.close()
+    # Construct the sifter client (opens a gRPC channel; the RPCs themselves are
+    # issued in _run_toy_grouper, which has the grouper metadata). It's used as a
+    # context manager so it's closed on every exit path; with no sifter,
+    # nullcontext() yields None (which _run_toy_grouper accepts).
+    sifter_cm = FrbSifterClient(sifter_addr) if (sifter_addr is not None) else contextlib.nullcontext()
+
+    # FrbGrouper.__enter__ blocks until the producer connects, then pins this thread
+    # to the GPU's vcpus and selects the CUDA device (printing a message); __exit__
+    # restores them and closes the grouper. The sifter (if any) is closed when its
+    # 'with' exits (after the grouper's).
+    with sifter_cm as sifter, FrbGrouper(grouper_addr) as grouper:
+        try:
+            _run_toy_grouper(grouper, sifter, delay)
+        except KeyboardInterrupt:
+            print(f'{grouper_addr}: interrupted; shutting down', flush=True)
+        except RuntimeError as e:
+            # Most likely the producer disconnected (the grouper stops and
+            # acquire_output rethrows). Report cleanly; re-raise anything that is
+            # not a stop (e.g. a genuine usage/assert bug).
+            if grouper.is_stopped:
+                print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
+            else:
+                raise
+        # FrbGrouper.__exit__ restores affinity/device + closes on every path.
 
 def run_toy_groupers(grouper_addrs, sifter_addr=None, delay=0.0):
     """
