@@ -318,18 +318,22 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // convert the return value when acquire_output's lambda is bound below.
     py::class_<GpuDedisperser::Outputs>(m, "GpuDedisperserOutputs",
         "Returned by GpuDedisperser.acquire_output(). Holds list-of-Array views\n"
-        "of the dedispersion output buffers for an acquired seq_id.")
-        .def_readonly("ichunk_zero_based", &GpuDedisperser::Outputs::ichunk_zero_based,
-            "Chunk index of this output, relative to the first dedisperser output.")
-        .def_readonly("ichunk_fpga_based", &GpuDedisperser::Outputs::ichunk_fpga_based,
-            "Chunk index of this output, relative to FPGA seq 0\n"
-            "(= ichunk_zero_based + producer's Params::initial_chunk).")
-        .def_readonly("ibeam", &GpuDedisperser::Outputs::ibeam,
-            "Beam index (NOT beam_id) of the first beam in this output.")
-        .def_readonly("out_max", &GpuDedisperser::Outputs::out_max,
-            "List of length ntrees, peak-finding maximum values.")
-        .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax,
-            "List of length ntrees, peak-finding argmax tokens.");
+        "of the dedispersion output buffers for an acquired seq_id.\n"
+        "\n"
+        "Attributes (all read-only):\n"
+        "\n"
+        "- ``ichunk_zero_based`` (int) -- chunk index of this output, relative to the first dedisperser output.\n"
+        "- ``ichunk_fpga_based`` (int) -- chunk index relative to FPGA seq 0 (= ichunk_zero_based + the producer's initial_chunk).\n"
+        "- ``ibeam`` (int) -- beam index (NOT beam_id) of the first beam in this output.\n"
+        "- ``out_max`` (list) -- length-ntrees list of peak-finding maximum-value arrays.\n"
+        "- ``out_argmax`` (list) -- length-ntrees list of peak-finding argmax-token arrays.")
+        // Member docstrings omitted on purpose -- documented in the class docstring's
+        // bullet list above (see notes/docstrings.md).
+        .def_readonly("ichunk_zero_based", &GpuDedisperser::Outputs::ichunk_zero_based)
+        .def_readonly("ichunk_fpga_based", &GpuDedisperser::Outputs::ichunk_fpga_based)
+        .def_readonly("ibeam", &GpuDedisperser::Outputs::ibeam)
+        .def_readonly("out_max", &GpuDedisperser::Outputs::out_max)
+        .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax);
 
     // GpuDedisperser: pybind11_injections.py adds stream=None wrappers for acquire/release methods
     py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")

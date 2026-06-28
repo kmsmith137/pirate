@@ -59,14 +59,7 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - When writing docstrings, comments in the larger C++ codebase may be useful. For example, when writing python bindings for `class pirate::BumpAllocator`, comments in the source files `include/pirate/BumpAllocator.hpp` and `src_lib/BumpAllocator.cpp` may be useful for writing docstrings.
 
-- Docstrings for class members/attributes (`def_readonly`, `def_readonly_static`, etc.) must not contain a bare colon in their first line. The Sphinx docs enable the `napoleon` extension, which reads an attribute docstring as `type: description` and splits it on the first colon -- so e.g. a docstring `"listen address ('ip:port')"` renders as a mangled "Type" field in `autoclass` output. Wrap any colon-bearing (or otherwise reStructuredText-special, e.g. `*` or `_`) token in a double-backtick inline literal, which prevents the split and renders the token as monospace:
-
-  ```
-  Bad:  "The grouper's listen address ('ip:port'), set at construction."
-  Good: "The grouper's listen address (``ip:port``), set at construction."
-  ```
-
-  (This only affects member/attribute docstrings, not method docstrings.)
+- For how to write docstrings that render well in the Sphinx docs (documenting class members, the napoleon gotchas, etc.), see `notes/docstrings.md`.
 
 - If it's technically challenging (or awkward) to python-bind a C++ class member/method, or if the member/method seems unlikely to be useful from python, then skip it. Please list in the chat all "skipped" members/methods.
 

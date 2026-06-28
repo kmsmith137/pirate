@@ -15,12 +15,17 @@ class FrbSifterEvents:
 
     The per-event arrays (cast to the indicated dtype) are:
 
-    - ``beam_ids`` (int32): X-engine beam id of each event
-    - ``fpga_timestamps`` (int64): absolute FPGA-counter timestamp of each event
-    - ``dms`` (float32): dispersion measure
-    - ``dm_errors`` (float32): dispersion-measure uncertainty
-    - ``snrs`` (float32): signal-to-noise ratio
-    - ``rfi_probs`` (float32): RFI probability
+    - ``beam_ids`` (int32) -- X-engine beam id of each event
+    - ``fpga_timestamps`` (int64) -- absolute FPGA-counter timestamp of each event
+    - ``dms`` (float32) -- dispersion measure
+    - ``dm_errors`` (float32) -- dispersion-measure uncertainty
+    - ``snrs`` (float32) -- signal-to-noise ratio
+    - ``rfi_probs`` (float32) -- RFI probability
+
+    Other attributes:
+
+    - ``chunk_fpga_count`` (int) -- FPGA count at the start of the time chunk.
+    - ``shape`` (tuple) -- common shape of the per-event arrays.
 
     The from-scratch constructor takes these six arrays (each a numpy array or any
     array-like; a cupy array is rejected -- use FrbGrouper.create_events to build
@@ -98,12 +103,16 @@ class FrbSifterClient:
     code open a connection to a sifter and send it messages. It wraps the two RPCs
     currently used by the prototype grouper (pirate_frb/run_chord_grouper.py):
 
-      - send_configuration()  -- the initial ConfigMessage (config YAML strings).
-      - send_events()         -- a per-time-period FrbEventsMessage (FRB events
-                                 and/or coarse-grained per-beam SNRs).
+    - send_configuration()  -- the initial ConfigMessage (config YAML strings).
+    - send_events()         -- a per-time-period FrbEventsMessage (FRB events
+                              and/or coarse-grained per-beam SNRs).
 
     Both methods return None and raise a verbose RuntimeError on failure (a gRPC
     transport error, or a not-ok reply from the sifter).
+
+    Attributes (read-only):
+
+    - ``server_address`` (str) -- the sifter's ``ip:port`` address.
 
     Usage::
 

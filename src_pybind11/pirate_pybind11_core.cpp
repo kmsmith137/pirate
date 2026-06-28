@@ -1172,7 +1172,36 @@ void register_core_bindings(pybind11::module &m)
         "FrbServer over CUDA IPC. Use as a context manager (see injections)::\n"
         "\n"
         "    with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:\n"
-        "        with g.get_output(ichunk, ibatch) as outputs: ...")
+        "        with g.get_output(ichunk, ibatch) as outputs: ...\n"
+        "\n"
+        "Attributes (all read-only):\n"
+        "\n"
+        "- ``is_stopped`` (bool) -- whether the grouper is in the stopped state.\n"
+        "- ``cuda_device_id`` (int) -- CUDA device where the IPC-mapped outputs live.\n"
+        "- ``dtype`` (ksgpu.Dtype) -- data type of the out_max arrays.\n"
+        "- ``nt_in`` (int) -- input time samples per time chunk.\n"
+        "- ``total_beams`` (int) -- total beams per chunk (= beams_per_gpu).\n"
+        "- ``beams_per_batch`` (int) -- beams per output batch.\n"
+        "- ``nbatches`` (int) -- beam-batches per chunk (= total_beams / beams_per_batch); producer ``seq_id = ichunk*nbatches + ibatch``.\n"
+        "- ``num_batch_slots`` (int) -- output ring-buffer depth; leading beam axis = ``num_batch_slots*beams_per_batch`` (<= total_beams).\n"
+        "- ``initial_chunk`` (int) -- chunk index of the producer's first output vs FPGA seq 0 (sets GpuDedisperserOutputs.ichunk_fpga_based).\n"
+        "- ``ntrees`` (int) -- number of dedispersion trees.\n"
+        "- ``ndm_out`` (list of int) -- per-tree output DM-channel counts (length ntrees).\n"
+        "- ``nt_out`` (list of int) -- per-tree output time-sample counts (length ntrees).\n"
+        "- ``dedispersion_config`` (DedispersionConfig) -- producer's dedispersion config (from the handshake).\n"
+        "- ``xengine_metadata`` (XEngineMetadata) -- X-engine metadata (from the handshake).\n"
+        "- ``xengine_metadata_yaml_string`` (str) -- X-engine metadata as a YAML string.\n"
+        "- ``dedispersion_config_yaml_string`` (str) -- dedispersion config as a YAML string.\n"
+        "- ``dedispersion_plan_yaml_string`` (str) -- dedispersion plan as a YAML string.\n"
+        "- ``grouper_ip_addr`` (str) -- the grouper's own listen address (``ip:port``), set at construction.\n"
+        "- ``search_ip_addr`` (str) -- producer FrbServer's FrbSearch RPC endpoint (``ip:port``), from the handshake.\n"
+        "\n"
+        "The Python context manager also attaches (available inside the ``with`` block):\n"
+        "\n"
+        "- ``xengine_yaml`` (dict) -- parsed X-engine metadata (from xengine_metadata_yaml_string).\n"
+        "- ``dedispersion_config_yaml`` (dict) -- parsed dedispersion config.\n"
+        "- ``dedispersion_plan_yaml`` (dict) -- parsed dedispersion plan.\n"
+        "- ``dm_per_unit_delay`` (float) -- DM of a full-band delay of one input time sample.")
           .def(py::init([](const std::string &ip_addr){ return FrbGrouper::create(ip_addr); }),
                py::arg("ip_addr"))
           // open() must stay interruptible by Ctrl-C while it blocks waiting for
@@ -1204,21 +1233,19 @@ void register_core_bindings(pybind11::module &m)
                "a per-batch slice (nbeams == beams_per_batch) of output_ringbuf.")
           .def("release_output", &FrbGrouper::release_output, py::arg("seq_id"),
                "Record that the caller is done with 'seq_id' (emits CONSUMED).")
+          // Member docstrings are intentionally omitted here: each member is documented
+          // in the bullet list in the class docstring above (kept as a plain list, not a
+          // napoleon "Attributes" section, so the rendering is compact and the members are
+          // not re-registered as separate sphinx objects / sidebar entries).
           .def_property_readonly("is_stopped", &FrbGrouper::is_stopped_pub)
           .def_readonly("cuda_device_id", &FrbGrouper::cuda_device_id)
           .def_readonly("dtype", &FrbGrouper::dtype)
           .def_readonly("nt_in", &FrbGrouper::nt_in)
-          .def_readonly("total_beams", &FrbGrouper::total_beams,
-               "Total beams per chunk (= beams_per_gpu). NOT the output-ringbuf\n"
-               "leading axis, which is num_batch_slots * beams_per_batch.")
+          .def_readonly("total_beams", &FrbGrouper::total_beams)
           .def_readonly("beams_per_batch", &FrbGrouper::beams_per_batch)
-          .def_readonly("nbatches", &FrbGrouper::nbatches,
-               "Beam-batches per time chunk (= total_beams / beams_per_batch). NOT\n"
-               "num_batch_slots (the output ring-buffer depth).")
+          .def_readonly("nbatches", &FrbGrouper::nbatches)
           .def_readonly("num_batch_slots", &FrbGrouper::num_batch_slots)
-          .def_readonly("initial_chunk", &FrbGrouper::initial_chunk,
-               "Time-chunk index of the producer's first dedispersion output,\n"
-               "relative to FPGA seq 0 (sets Outputs.ichunk_fpga_based).")
+          .def_readonly("initial_chunk", &FrbGrouper::initial_chunk)
           .def_readonly("ntrees", &FrbGrouper::ntrees)
           .def_readonly("ndm_out", &FrbGrouper::ndm_out)
           .def_readonly("nt_out", &FrbGrouper::nt_out)
@@ -1227,10 +1254,8 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("xengine_metadata_yaml_string", &FrbGrouper::xengine_metadata_yaml_string)
           .def_readonly("dedispersion_config_yaml_string", &FrbGrouper::dedispersion_config_yaml_string)
           .def_readonly("dedispersion_plan_yaml_string", &FrbGrouper::dedispersion_plan_yaml_string)
-          .def_readonly("grouper_ip_addr", &FrbGrouper::grouper_ip_addr,
-               "The grouper's own listen address (``ip:port``), specified at construction.")
-          .def_readonly("search_ip_addr", &FrbGrouper::search_ip_addr,
-               "Producer FrbServer's FrbSearch RPC endpoint (``ip:port``), from the handshake.")
+          .def_readonly("grouper_ip_addr", &FrbGrouper::grouper_ip_addr)
+          .def_readonly("search_ip_addr", &FrbGrouper::search_ip_addr)
           // NOTE: FrbGrouper::dedispersion_plan_yaml (YAML::Node) is intentionally
           // NOT wrapped; the injection adds a Python dedispersion_plan_yaml attribute
           // parsed from dedispersion_plan_yaml_string. output_ringbuf is private
