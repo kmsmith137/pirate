@@ -73,6 +73,9 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
             "Maximum number of downsampling levels.")
         .def_readonly_static("max_pf_width", &constants::max_pf_width,
             "Maximum peak-finding kernel width (PeakFindingConfig::max_width), in tree time samples.")
+        .def_readonly_static("k_dm", &constants::k_dm,
+            "Dispersion constant K_DM, in (ms MHz^2) per (pc cm^{-3}): dispersion delay (ms) = "
+            "k_dm * DM * (f_lo^{-2} - f_hi^{-2}), with frequencies in MHz.")
     ;
 
     // Main dedispersion classes defined here

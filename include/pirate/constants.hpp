@@ -37,7 +37,12 @@ struct constants
     // Constants in peak-finding kernels
     static constexpr float pf_a = 0.5;
     static constexpr float pf_b = 0.5;
-    
+
+    // Dispersion constant K_DM, in (ms . MHz^2) per (pc cm^{-3}):
+    //   dispersion delay (ms) = k_dm * DM * (f_lo^{-2} - f_hi^{-2}),
+    // with DM in pc cm^{-3} and f_lo, f_hi in MHz. (Equivalently, 4.148808e3 s MHz^2.)
+    static constexpr double k_dm = 4.148808e6;
+
     // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#features-and-technical-specifications
     static constexpr int cuda_max_y_blocks = 65535;
     static constexpr int cuda_max_z_blocks = 65535;

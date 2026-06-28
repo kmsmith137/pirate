@@ -239,10 +239,9 @@ double DedispersionConfig::dm_per_unit_delay() const
     double inv_f_lo_sq = 1.0 / (f_lo * f_lo);
     double inv_f_hi_sq = 1.0 / (f_hi * f_hi);
 
-    // Delay = K_DM * DM * (f_lo^{-2} - f_hi^{-2})
-    // where K_DM = 4.148808 ms MHz^2 (with DM in pc cm^{-3})
-    double K_DM = 4.148808e6;
-    return time_sample_ms / (K_DM * (inv_f_lo_sq - inv_f_hi_sq));
+    // Delay = k_dm * DM * (f_lo^{-2} - f_hi^{-2}), with DM in pc cm^{-3} and
+    // frequencies in MHz (see pirate::constants::k_dm).
+    return time_sample_ms / (constants::k_dm * (inv_f_lo_sq - inv_f_hi_sq));
 }
 
 
