@@ -11,23 +11,13 @@ caption: User Guide
 ---
 notes/install
 notes/intro
+notes/quick_start
 notes/developer
-cli
 notes/grouper_interface
 notes/build
 notes/hardware
+cli
 formats
 python_class_reference
-```
-
-```{toctree}
----
-maxdepth: 2
-caption: "Appendix: Context Files for LLMs"
----
-notes/cpp
-notes/gpu_kernels
-notes/pybind11
-notes/thread_backed_class
-notes/cuda_event_ringbuf
+llm_context
 ```
