@@ -519,13 +519,38 @@ To derive Eqs.\ (\ref{eq:ndm_out})--(\ref{eq:dlo_dhi}), we walk through steps in
   unchanged. This implies Eqs.\ (\ref{eq:ndm_out}), (\ref{eq:dlo_dhi}).
 \end{itemize}
 
-\subsection{What a mess}
+\subsection{Converting output indices to DM and arrival time}
 
-Now that I've typed this all out, I'm realizing that my parameterization doesn't exactly
-make it straightforward to configure a set of trees. At some point in the future, I'll probably
-switch to something more intuitive.
+In the grouper, a peak in the (dm,time) plane is identified by a pair of indices 
+$0 \le {\tt idm} < {\tt ndm\_out}$ and $0 \le {\tt it} < {\tt nt\_out}$.
+Before sending the event to the sifter, we must convert to a physical DM and arrival time.
 
-In the meantime, if there are any simple changes that would be helpful, such as putting
-more info in the \verb|dedispersion_plan| yaml, let me know.
+For a tree without an early trigger (i.e.\ $\delta=0$), we convert {\tt idm} and {\tt it} to $d$ and $t$ 
+as follows:
+\begin{equation}
+d = d_{\rm lo} + \big( d_{\rm hi} - d_{\rm lo} \big) \, \frac{{\tt idm} + 0.5}{{\tt ndm\_out}}
+  \hspace{1.5cm}
+t = T_{\rm in} \, \frac{{\tt it} + 0.5}{\tt nt\_out}  \label{eq:idm_it}
+\end{equation}
+where the quantities $d_{\rm lo}$, $d_{\rm hi}$, ${\tt ndm\_out}$, $T_{\rm in}$, ${\tt nt\_out}$
+were defined above (in the previous subsections).
+Then we convert $d$ (full-band delay, in ``units'' of the input time sample length) to DM, 
+and convert $t$ (arrival time relative to the start of the time chunk, in ``units'' of the 
+input time sample length) to a physical time.
+
+If the tree has an early trigger (i.e.\ $\delta>0$), then there is an extra subtlety.
+The value of $d$ in Eq.\ (\ref{eq:idm_it}) is the {\em full-band} dispersion delay, 
+but the time $t$ in Eq.\ (\ref{eq:idm_it}) is the arrival time {\em at the trigger frequency}.
+The sifter expects the arrival time {\em at the lowest frequency in the full band}, which
+is given by:\footnote{In the code, Eqs.\ (\ref{eq:idm_it}), (\ref{eq:idm_it_early}) appear
+in {\tt FrbGrouper.create\_events()}, which converts array indices to DMs and arrival times.
+Note that for now, we place each (dm,time) at the center of its coarse-grained output array
+element. In the future, we'll add code to recover the fine-grained position, using the
+{\tt out\_argmax} array. (This is not as trivial as it sounds, since the {\tt out\_argmax}
+array uses an ``encoding'' that's convenient in the GPU kernel, and I need to write code
+to decode it.)}
+\begin{equation}
+t' = t + \big( 1 - 2^{-\delta} \big) \, d \label{eq:idm_it_early}
+\end{equation}
 
 \end{document}
