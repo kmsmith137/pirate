@@ -1249,7 +1249,7 @@ def run_server_command(args):
 
 
 def parse_run_toy_grouper(subparsers):
-    help_text = "Toy FrbGrouper consumer(s): print the per-chunk global max of out_max"
+    help_text = "Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter"
     parser = subparsers.add_parser("run_toy_grouper", help=help_text, description=help_text)
     parser.add_argument('grouper_addrs', nargs='+', metavar='grouper_addr',
                         help="FrbGrouper listen address(es) 'ip:port' (e.g. 127.0.0.1:7000). "
@@ -1258,11 +1258,19 @@ def parse_run_toy_grouper(subparsers):
     parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
                         help="Artificial per-chunk delay (seconds) inserted into the grouper "
                              "loop, e.g. -d 0.001 for a 1 ms delay (default: 0, no delay).")
+    # Exactly one of -s/-S is required.
+    sifter_group = parser.add_mutually_exclusive_group(required=True)
+    sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',
+                              help="Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100): "
+                                   "send check_configuration once, then one FrbEvents message "
+                                   "(the chunk's peak event) per chunk.")
+    sifter_group.add_argument('-S', '--no-sifter', action='store_true',
+                              help="Run without a sifter (don't send any sifter RPCs).")
 
 
 def run_toy_grouper_command(args):
     from .run_toy_grouper import run_toy_groupers
-    run_toy_groupers(args.grouper_addrs, delay=args.delay)
+    run_toy_groupers(args.grouper_addrs, sifter_addr=args.sifter, delay=args.delay)
 
 
 ######################################  run_toy_sifter command  #####################################
