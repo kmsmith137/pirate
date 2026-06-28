@@ -53,7 +53,7 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
 {
     // Factory method (constructor is private). Constructs the RPC service but
     // does NOT listen; call open() to start listening + wait for a client.
-    static std::shared_ptr<FrbGrouper> create(const std::string &listen_address);
+    static std::shared_ptr<FrbGrouper> create(const std::string &ip_addr);
 
     ~FrbGrouper();   // close(): stop(); join send thread; server shutdown
 
@@ -66,10 +66,13 @@ struct FrbGrouper : public std::enable_shared_from_this<FrbGrouper>
     std::string dedispersion_config_yaml_string;
     std::string dedispersion_plan_yaml_string;
 
-    // The producer FrbServer's own RPC endpoint ("ip:port"), from the handshake
+    // The grouper's own listen address ("ip:port"), specified at construction.
+    std::string grouper_ip_addr;
+
+    // The producer FrbServer's FrbSearch RPC endpoint ("ip:port"), from the handshake
     // (Handshake::rpc_ip_addr == FrbServer::Params::rpc_server_address). Lets a
     // consumer reach back to the producing server over its frb_search RPC.
-    std::string rpc_ip_addr;
+    std::string search_ip_addr;
 
     // ----- Convenience accessors (derived at handshake) -----
     int cuda_device_id = -1;      // from handshake
@@ -124,9 +127,7 @@ private:
     // private _run_session(); it needs access to that private entry point.
     friend class FrbGrouperService;
 
-    explicit FrbGrouper(const std::string &listen_address);
-
-    std::string listen_address;
+    explicit FrbGrouper(const std::string &ip_addr);
 
     // pImpl: gRPC service + server + the active session's context/stream.
     // Defined in FrbGrouper.cpp so this header stays free of grpc++/protobuf.

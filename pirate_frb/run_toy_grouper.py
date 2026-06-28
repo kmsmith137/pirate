@@ -6,7 +6,7 @@ import sys
 import time
 
 
-def _run_toy_grouper(grouper_addr, grouper, sifter_addr=None, delay=0.0):
+def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     """Main loop (factored out of run_toy_grouper to reduce nesting).
 
     For each time chunk, scan all beam-batches/trees/DMs/time-samples of
@@ -22,9 +22,10 @@ def _run_toy_grouper(grouper_addr, grouper, sifter_addr=None, delay=0.0):
     coordinates/value to the host (one small copy) to print it and -- if a sifter
     is configured -- send it.
 
-    If 'sifter_addr' is not None, connect to that FrbSifter, send one
-    check_configuration message up front, then one FrbEvents message per chunk: a
-    single event (the chunk's peak), with coarsegrain_snr set to the per-beam max.
+    'sifter' is an already-connected FrbSifterClient (constructed by the caller),
+    or None. If not None, we send one check_configuration message up front, then
+    one FrbEvents message per chunk: a single event (the chunk's peak), with
+    coarsegrain_snr set to the per-beam max.
 
     The cupy work runs on the current/default stream (FrbGrouper.__enter__ already
     selected the right device); get_output's __exit__ synchronizes that stream
@@ -40,76 +41,79 @@ def _run_toy_grouper(grouper_addr, grouper, sifter_addr=None, delay=0.0):
     nbatches = grouper.nbatches
     beams_per_batch = nbeams_tot // nbatches
 
-    sifter = None
-    if sifter_addr is not None:
-        from .rpc import FrbSifterClient
-        sifter = FrbSifterClient(sifter_addr)
+    if sifter is not None:
         sifter.check_configuration(
             pirate_yaml = grouper.dedispersion_config_yaml_string,
             xengine_yaml = grouper.xengine_metadata_yaml_string,
             dedispersion_plan_yaml = grouper.dedispersion_plan_yaml_string,
             grouper_yaml = {'toy_grouper': True})
-        print(f'{grouper_addr}: connected to sifter at {sifter_addr}, sent check_configuration',
-              flush=True)
+        print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
+              f'sent check_configuration', flush=True)
 
-    try:
-        for ichunk in itertools.count():            # loop over time chunks
-            # GPU-resident accumulators, updated entirely on the GPU below (no
-            # device->host copies until the chunk's scan is complete). gmax is the
-            # running peak SNR; the g_* 0-d arrays hold its (tree, ibeam, dm, time).
-            gmax    = cp.full((), -cp.inf, dtype=cp.float32)
-            g_tree  = cp.full((), -1, dtype=cp.int64)
-            g_ibeam = cp.full((), -1, dtype=cp.int64)
-            g_dm    = cp.full((), -1, dtype=cp.int64)
-            g_time  = cp.full((), -1, dtype=cp.int64)
-            per_beam_max = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)
+    for ichunk in itertools.count():            # loop over time chunks
+        # GPU-resident accumulators, updated entirely on the GPU below (no
+        # device->host copies until the chunk's scan is complete). gmax is the
+        # running peak SNR; the g_* 0-d arrays hold its (tree, ibeam, dm, time).
+        gmax    = cp.full((), -cp.inf, dtype=cp.float32)
+        g_tree  = cp.full((), -1, dtype=cp.int64)
+        g_ibeam = cp.full((), -1, dtype=cp.int64)
+        g_dm    = cp.full((), -1, dtype=cp.int64)
+        g_time  = cp.full((), -1, dtype=cp.int64)
+        per_beam_max = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)
 
-            for ibatch in range(nbatches):          # loop over beam batches
-                seq_id = ichunk * nbatches + ibatch
-                beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
-                with grouper.get_output(seq_id) as outputs:
-                    # outputs.out_max: list (length ntrees) of cupy arrays, each
-                    # shape (beams_per_batch, ndm, nt), viewing IPC-mapped GPU
-                    # memory. get_output's __exit__ synchronizes the current stream
-                    # before releasing the batch.
-                    for itree, tree_out in enumerate(outputs.out_max):   # loop over trees
-                        t = cp.asarray(tree_out)    # cupy view (no-op if already cupy)
+        for ibatch in range(nbatches):          # loop over beam batches
+            seq_id = ichunk * nbatches + ibatch
+            beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
+            with grouper.get_output(seq_id) as outputs:
+                # outputs.out_max: list (length ntrees) of cupy arrays, each
+                # shape (beams_per_batch, ndm, nt), viewing IPC-mapped GPU
+                # memory. get_output's __exit__ synchronizes the current stream
+                # before releasing the batch.
+                for itree, tree_out in enumerate(outputs.out_max):   # loop over trees
+                    t = cp.asarray(tree_out)    # cupy view (no-op if already cupy)
 
-                        # Per-beam max (over dm,time) for this batch's beams.
-                        sl = per_beam_max[beam0 : beam0 + beams_per_batch]
-                        cp.maximum(sl, t.max(axis=(1, 2)), out=sl)
+                    # Per-beam max (over dm,time) for this batch's beams.
+                    sl = per_beam_max[beam0 : beam0 + beams_per_batch]
+                    cp.maximum(sl, t.max(axis=(1, 2)), out=sl)
 
-                        # Global peak + argmax candidate from this tree (all GPU).
-                        m = t.max()
-                        lb, dm, tt = cp.unravel_index(t.argmax(), t.shape)
-                        upd = m > gmax
-                        gmax    = cp.where(upd, m, gmax)
-                        g_tree  = cp.where(upd, itree, g_tree)
-                        g_ibeam = cp.where(upd, beam0 + lb, g_ibeam)
-                        g_dm    = cp.where(upd, dm, g_dm)
-                        g_time  = cp.where(upd, tt, g_time)
+                    # Global peak + argmax candidate from this tree (all GPU).
+                    m = t.max()
+                    lb, dm, tt = cp.unravel_index(t.argmax(), t.shape)
+                    upd = m > gmax
+                    gmax    = cp.where(upd, m, gmax)
+                    g_tree  = cp.where(upd, itree, g_tree)
+                    g_ibeam = cp.where(upd, beam0 + lb, g_ibeam)
+                    g_dm    = cp.where(upd, dm, g_dm)
+                    g_time  = cp.where(upd, tt, g_time)
 
-            # Chunk scan done. One small device->host copy of the peak's coords/value.
-            tree, ibeam, dm, tt = (int(v) for v in
-                                   cp.stack([g_tree, g_ibeam, g_dm, g_time]).get())
-            snr = float(gmax.get())
+        # Chunk scan done. One small device->host copy of the peak's coords/value.
+        tree, ibeam, dm, tt = (int(v) for v in
+                               cp.stack([g_tree, g_ibeam, g_dm, g_time]).get())
+        snr = float(gmax.get())
 
-            print(f'{grouper_addr}: ichunk={ichunk}: max snr={snr:.3g} '
-                  f'at (tree={tree}, ibeam={ibeam}, dm={dm}, time={tt})', flush=True)
+        print(f'{grouper.grouper_ip_addr}: ichunk={ichunk}: max snr={snr:.3g} '
+              f'at (tree={tree}, ibeam={ibeam}, dm={dm}, time={tt})', flush=True)
 
-            if sifter is not None:
-                # One event = the chunk's peak; coarsegrain_snr = the per-beam max
-                # (passed as a cupy array -- FrbSifterClient copies it host-side in
-                # one shot). FrbEvent has no 'tree' field, so 'tree' is printed only.
-                sifter.send_events(False, 0, ichunk,
-                                   [ibeam], [tt], [float(dm)], [0.0], [snr], [0.0],
-                                   ichunk, ichunk + 1, per_beam_max)
-
-            if delay > 0:
-                time.sleep(delay)
-    finally:
         if sifter is not None:
-            sifter.close()
+            # One event = the chunk's peak; coarsegrain_snr = the per-beam max
+            # (passed as a cupy array -- FrbSifterClient copies it host-side in
+            # one shot). FrbEvent has no 'tree' field, so 'tree' is printed only.
+            sifter.send_events(
+                has_injections = False,
+                beam_set_id = 0,
+                chunk_fpga_count = ichunk,
+                event_beam_ids = [ibeam],
+                event_fpga_timestamps = [tt],
+                event_dms = [float(dm)],
+                event_dm_errors = [0.0],
+                event_snrs = [snr],
+                event_rfi_probs = [0.0],
+                coarsegrain_start_fpga_count = ichunk,
+                coarsegrain_end_fpga_count = ichunk + 1,
+                coarsegrain_snr = per_beam_max)
+
+        if delay > 0:
+            time.sleep(delay)
 
 
 def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
@@ -126,25 +130,32 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
     see _run_toy_grouper.
     """
     # Imported here (not at module top) so 'import pirate_frb' stays light.
-    from .rpc import FrbGrouper
+    from .rpc import FrbGrouper, FrbSifterClient
 
-    # FrbGrouper.__enter__ blocks until the producer connects, then pins this
-    # thread to the GPU's vcpus and selects the CUDA device (printing a message);
-    # __exit__ restores them and closes the grouper.
-    with FrbGrouper(grouper_addr) as grouper:
-        try:
-            _run_toy_grouper(grouper_addr, grouper, sifter_addr, delay)
-        except KeyboardInterrupt:
-            print(f'{grouper_addr}: interrupted; shutting down', flush=True)
-        except RuntimeError as e:
-            # Most likely the producer disconnected (the grouper stops and
-            # acquire_output rethrows). Report cleanly; re-raise anything that is
-            # not a stop (e.g. a genuine usage/assert bug).
-            if grouper.is_stopped:
-                print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
-            else:
-                raise
-        # FrbGrouper.__exit__ restores affinity/device + closes on every path.
+    # Construct the sifter client here (opens a gRPC channel; the RPCs themselves
+    # are issued in _run_toy_grouper, which has the grouper metadata). None = no sifter.
+    sifter = FrbSifterClient(sifter_addr) if (sifter_addr is not None) else None
+    try:
+        # FrbGrouper.__enter__ blocks until the producer connects, then pins this
+        # thread to the GPU's vcpus and selects the CUDA device (printing a message);
+        # __exit__ restores them and closes the grouper.
+        with FrbGrouper(grouper_addr) as grouper:
+            try:
+                _run_toy_grouper(grouper, sifter, delay)
+            except KeyboardInterrupt:
+                print(f'{grouper_addr}: interrupted; shutting down', flush=True)
+            except RuntimeError as e:
+                # Most likely the producer disconnected (the grouper stops and
+                # acquire_output rethrows). Report cleanly; re-raise anything that is
+                # not a stop (e.g. a genuine usage/assert bug).
+                if grouper.is_stopped:
+                    print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
+                else:
+                    raise
+            # FrbGrouper.__exit__ restores affinity/device + closes on every path.
+    finally:
+        if sifter is not None:
+            sifter.close()
 
 def run_toy_groupers(grouper_addrs, sifter_addr=None, delay=0.0):
     """

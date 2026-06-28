@@ -1173,8 +1173,8 @@ void register_core_bindings(pybind11::module &m)
         "\n"
         "    with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:\n"
         "        with g.get_output(seq_id) as outputs: ...")
-          .def(py::init([](const std::string &addr){ return FrbGrouper::create(addr); }),
-               py::arg("listen_address"))
+          .def(py::init([](const std::string &ip_addr){ return FrbGrouper::create(ip_addr); }),
+               py::arg("ip_addr"))
           // open() must stay interruptible by Ctrl-C while it blocks waiting for
           // a client. We can't just release the GIL for the whole call (Python
           // signal handlers wouldn't run); instead we drive the wait in 0.5s
@@ -1227,8 +1227,10 @@ void register_core_bindings(pybind11::module &m)
           .def_readonly("xengine_metadata_yaml_string", &FrbGrouper::xengine_metadata_yaml_string)
           .def_readonly("dedispersion_config_yaml_string", &FrbGrouper::dedispersion_config_yaml_string)
           .def_readonly("dedispersion_plan_yaml_string", &FrbGrouper::dedispersion_plan_yaml_string)
-          .def_readonly("rpc_ip_addr", &FrbGrouper::rpc_ip_addr,
-               "Producer FrbServer's own RPC endpoint ('ip:port'), from the handshake.")
+          .def_readonly("grouper_ip_addr", &FrbGrouper::grouper_ip_addr,
+               "The grouper's own listen address ('ip:port'), specified at construction.")
+          .def_readonly("search_ip_addr", &FrbGrouper::search_ip_addr,
+               "Producer FrbServer's FrbSearch RPC endpoint ('ip:port'), from the handshake.")
           // NOTE: FrbGrouper::dedispersion_plan_yaml (YAML::Node) is intentionally
           // NOT wrapped; the injection adds a Python dedispersion_plan_yaml attribute
           // parsed from dedispersion_plan_yaml_string. output_ringbuf is private

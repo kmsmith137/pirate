@@ -21,7 +21,7 @@ run the following commands in separate terminal windows:
 pirate_frb run_toy_sifter 127.0.0.1:7500
 
 # Window 2: start the grouper (waits for search to connect)
-pirate_frb run_chord_grouper -s 127.0.0.1:7500 127.0.0.1:7000
+pirate_frb run_toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000
 
 # Window 3: start the search (waits for fake X-engine to connect)
 pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
@@ -53,7 +53,7 @@ to the sifter.
 pirate_frb run_toy_sifter 127.0.0.1:7500
 
 # Window cf05/2: start the grouper (waits for search to connect)
-pirate_frb run_chord_grouper -s 127.0.0.1:7500 127.0.0.1:7000 127.0.0.1:7001
+pirate_frb run_toy_grouper -s 127.0.0.1:7500 127.0.0.1:7000 127.0.0.1:7001
 
 # Window cf05/3: start the search (waits for fake X-engine to connect)
 pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml

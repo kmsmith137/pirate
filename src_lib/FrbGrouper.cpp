@@ -120,19 +120,19 @@ std::shared_ptr<FrbGrouper> FrbGrouper::create(const std::string &addr)
 }
 
 
-FrbGrouper::FrbGrouper(const std::string &addr) : listen_address(addr)
+FrbGrouper::FrbGrouper(const std::string &ip_addr) : grouper_ip_addr(ip_addr)
 {
-    xassert(addr.size() > 0);
+    xassert(ip_addr.size() > 0);
 
     // CUDA IPC requires producer (FrbServer) + consumer (FrbGrouper) to be on the
     // same physical GPU, so the grouper must listen on a loopback address. Enforce
     // this at construction. (parse_ip_address() also throws on a malformed
     // "ip:port" string, which is likewise a configuration error.)
     string ip; uint16_t port;
-    parse_ip_address(listen_address, ip, port);   // network_utils.hpp
+    parse_ip_address(grouper_ip_addr, ip, port);   // network_utils.hpp
     if (!is_loopback_address(ip)) {
         stringstream ss;
-        ss << "FrbGrouper: listen_address=" << listen_address
+        ss << "FrbGrouper: grouper_ip_addr=" << grouper_ip_addr
            << " is not a loopback address (CUDA IPC requires the grouper to be on "
            << "the same node / GPU as the FrbServer producer)";
         throw runtime_error(ss.str());
@@ -160,11 +160,11 @@ void FrbGrouper::start_listening()
     }
 
     grpc::ServerBuilder builder;
-    builder.AddListeningPort(listen_address, grpc::InsecureServerCredentials());
+    builder.AddListeningPort(grouper_ip_addr, grpc::InsecureServerCredentials());
     builder.RegisterService(grpc_state->service.get());
     grpc_state->server = builder.BuildAndStart();
     if (!grpc_state->server)
-        throw runtime_error("FrbGrouper: failed to bind " + listen_address);
+        throw runtime_error("FrbGrouper: failed to bind " + grouper_ip_addr);
 
     send_thread = std::thread(&FrbGrouper::send_thread_main, this);
 }
@@ -186,7 +186,7 @@ bool FrbGrouper::wait_for_handshake(int timeout_ms)
     if (!session_active && (now - last_waiting_print >= std::chrono::seconds(1))) {
         last_waiting_print = now;
         std::cout << "FrbGrouper: waiting for client to connect at "
-                  << listen_address << " ..." << std::endl;
+                  << grouper_ip_addr << " ..." << std::endl;
     }
 
     cv.wait_for(lock, std::chrono::milliseconds(timeout_ms));
@@ -229,7 +229,7 @@ FrbGrouper::SessionResult FrbGrouper::_run_session(void *ctx_, void *stream_)
     // The TCP connection is now open (gRPC invoked our Session handler).
     // Announce it immediately -- do NOT wait for the handshake (the producer may
     // take a while to build its dedisperser before sending the Handshake).
-    std::cout << "FrbGrouper: client connected at " << listen_address << std::endl;
+    std::cout << "FrbGrouper: client connected at " << grouper_ip_addr << std::endl;
 
     try {
         // 1. Read the Handshake (must be the first message).
@@ -295,7 +295,7 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     CUDA_CALL(cudaSetDevice(cuda_device_id));
 
     // The producer's own RPC endpoint (not deserialized -- just stored).
-    rpc_ip_addr = hs.rpc_ip_addr();
+    search_ip_addr = hs.rpc_ip_addr();
 
     // Stash the wire strings, then deserialize.
     xengine_metadata_yaml_string    = hs.xengine_metadata_yaml();
