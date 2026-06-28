@@ -10,45 +10,64 @@
 pirate_frb test -n 5
 ```
 
-### Running a toy server
+### Running a toy search
 
-To run a toy server instance locally, run the following commands in separate terminal windows:
-
+The "toy" search is a subscale example which starts quickly, runs over the loopback network on
+a single node, and uses a small fraction of a single GPU.
+To run the full sequence (fake X-engine) -> (FRB search) -> (grouper) -> (sifter),
+run the following commands in separate terminal windows:
 ```
-# Start the FRB server (listens for X-engine data and gRPC requests).
-pirate_frb run_server configs/frb_server/toy.yml
+# Window 1: start the sifter (waits for grouper to connect)
+pirate_frb run_toy_sifter 127.0.0.1:7500
 
-# Monitor server status (connections, bytes received, ring buffer state) and filenames.
+# Window 2: start the grouper (waits for search to connect)
+pirate_frb run_chord_grouper -s 127.0.0.1:7500 127.0.0.1:7000
+
+# Window 3: start the search (waits for fake X-engine to connect)
+pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
+
+# Window 4: start the fake X-engine. Data will start streaming through all 4 proceses.
+pirate_frb run_fake_xengine 127.0.0.1:6000
+
+# Optional: in window 5, send RPC "status" requests to the server.
+# This will monitor connections, bytes received, files written, ring buffer state.
 pirate_frb rpc_status 127.0.0.1:6000
 
-# Send fake X-engine data to the server.
-pirate_frb run_server -s configs/frb_server/toy.yml
-
-# Send a write_files RPC (saves data to disk for randomly chosen beams/time range).
-# Filenames will be printed in the 'rpc_status' process as they are written.
-# Files appear in /dev/shm/pirate_nfs, and will be deleted when the server exits.
+# Optional: in window 6, send RPC "write_files" requests to the server, for randomly
+# chosen beams/times. Filenames will be printed in the 'rpc_status' process (window 5)
+# as they are written. Files appear in /dev/shm/pirate_nfs, and will be deleted when
+# the server exits.
 pirate_frb rpc_write 127.0.0.1:6000
 ```
 
-### Running a production server (cf00/cf05)
+### Running a production search (cf00/cf05)
 
-To run a production server on cf05 (with cf00 sending fake X-engine data),
-run the following commands in separate terminal windows:
-
+The "production" search uses an entire node (cf05), with full CHORD parameters,
+and many beams. We use a different node (cf00) as the fake X-engine, and send data
+over the real network (not the loopback network). In this example, we run the
+sifter on cf05, but it could be run on cf00 (or a third node). Note that there
+are two grouper processes (one per GPU), each of which independently connects
+to the sifter.
 ```
-# On cf05. Start the FRB server (two servers, one per CPU, full CHORD parameters).
-# Files are written through local SSD cache to NFS (/mnt/cs00/data).
-pirate_frb run_server configs/frb_server/cf05_production.yml
+# Window cf05/1: start the sifter (waits for grouper to connect)
+pirate_frb run_toy_sifter 127.0.0.1:7500
 
-# On cf00 or cf05. Monitor server status and filenames.
+# Window cf05/2: start the grouper (waits for search to connect)
+pirate_frb run_chord_grouper -s 127.0.0.1:7500 127.0.0.1:7000 127.0.0.1:7001
+
+# Window cf05/3: start the search (waits for fake X-engine to connect)
+pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml
+
+# Window cf00/1: start the fake X-engine. Data will start streaming through all 4 proceses.
+pirate_frb run_fake_xengine 10.222.3.5:6000 10.222.3.5:6001
+
+# Optional: on either cf00 or cf05, send RPC "status" requests to the server.
 pirate_frb rpc_status 10.222.3.5:6000 10.222.3.5:6001
 
-# On cf00. Send fake X-engine data to cf05 (128 TCP connections per server).
-pirate_frb run_server -s configs/frb_server/cf05_production.yml
-
-# On cf00 or cf05. Send a write_files RPC to both servers.
-# Filenames will be printed in the 'rpc_status' process as they are written.
-# Files appear on the real NFS server: /mnt/cs00/data/{user}/{date}
+# Optional: in window 6, send RPC "write_files" requests to the server, for randomly
+# chosen beams/times. Filenames will be printed in the 'rpc_status' processas they
+# are written. Files appear on the real NFS server: /mnt/cs00/data/{user}/{date},
+# and persist after the server exits.
 pirate_frb rpc_write 10.222.3.5:6000 10.222.3.5:6001
 ```
 
