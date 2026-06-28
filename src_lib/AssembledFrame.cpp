@@ -158,14 +158,14 @@ static std::array<double, 3> _read_float_arr3(const shared_ptr<ASDF::group> &grp
 
 
 // Write the "xengine_metadata" sub-map directly to an ASDF::writer. Key
-// order follows configs/xengine/xengine_metadata_v2.yml. Emits via writer
+// order follows configs/xengine_metadata.yml. Emits via writer
 // (not ASDF::group) so the order is preserved -- group::to_yaml is backed
 // by std::map and would alphabetize keys. Skips freq_channels, beam_ids,
 // and beam_positions_{x,y}; those are handled per-frame at the top level
 // by AssembledFrame::write_asdf. m.freq_channels: IGNORED (skipped on emit).
 //
 // If verbose, emits explanatory comments. Section breakdown matches
-// configs/xengine/xengine_metadata_v2.yml; comments here are terse since
+// configs/xengine_metadata.yml; comments here are terse since
 // the top-level write_asdf() comment block points readers at that file
 // for field-by-field detail.
 static void _emit_metadata_yaml(ASDF::writer &w, const XEngineMetadata &m, bool verbose)
@@ -415,7 +415,7 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
     // Emit the file manually via ASDF::writer rather than going through
     // ASDF::asdf + ASDF::group. The group representation is backed by
     // std::map, which alphabetizes keys; we want a custom order
-    // (resembling configs/xengine/xengine_metadata_v2.yml: freq -> beams ->
+    // (resembling configs/xengine_metadata.yml: freq -> beams ->
     // time -> nested xengine_metadata -> ndarrays). scales_offsets is
     // emitted before data so its binary block lands first in the file.
     {
@@ -437,8 +437,8 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
                 "Note that we define a \"minichunk\" to be 256 time samples.\n"
                 "\n"
                 "References:\n"
-                "  configs/xengine/xengine_metadata_v2.yml -- xengine_metadata fields\n"
-                "  notes/network_protocol.md               -- wire protocol"
+                "  configs/xengine_metadata.yml -- xengine_metadata fields\n"
+                "  notes/network_protocol.md    -- wire protocol"
             ) << YAML::Newline << YAML::Newline;
         }
 
@@ -498,7 +498,7 @@ void AssembledFrame::write_asdf(const std::string &filename, bool sync, bool ver
             ) << YAML::Newline << YAML::Newline;
         }
 
-        // XEngineMetadata sub-map (inner key order also follows xengine_metadata_v2.yml).
+        // XEngineMetadata sub-map (inner key order also follows xengine_metadata.yml).
         w << YAML::Key << "xengine_metadata" << YAML::Value;
         _emit_metadata_yaml(w, *metadata, verbose);
 

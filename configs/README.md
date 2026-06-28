@@ -8,7 +8,7 @@ documentation snapshots (do not edit them by hand; regenerate by running
 `make`):
 
 - `example_asdf_header.yml`
-  (`python -m pirate_frb show_file_format configs/xengine/xengine_metadata_v2.yml`)
+  (`python -m pirate_frb show_file_format configs/xengine_metadata.yml`)
   -- the verbose ASDF YAML header emitted by `AssembledFrame::write_asdf()`.
 - `example_dedispersion_plan.yml`
   (`python -m pirate_frb show_dedisperser configs/dedispersion/chord_sb2_et.yml`)
@@ -63,5 +63,5 @@ documentation snapshots (do not edit them by hand; regenerate by running
   To inspect:
 
   ```
-  pirate_frb show_xengine_metadata [-v] configs/xengine/xengine_metadata_v2.yml
+  pirate_frb show_xengine_metadata [-v] configs/xengine_metadata.yml
   ```

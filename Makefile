@@ -503,7 +503,7 @@ build_sdist: sdist_files.txt
 
 # Auto-generated snapshot of the verbose ASDF YAML header emitted by
 # AssembledFrame::write_asdf(). Checked into git and included in the Sphinx docs.
-configs/example_asdf_header.yml: configs/xengine/xengine_metadata_v2.yml $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
+configs/example_asdf_header.yml: configs/xengine_metadata.yml $(PIRATE_PYEXT) $(PIRATE_LIB) $(GRPC_PYFILES)
 	$(PYTHON) -m pirate_frb show_file_format $< > $@
 
 # Auto-generated snapshot of 'show_dedisperser -v' run on a representative

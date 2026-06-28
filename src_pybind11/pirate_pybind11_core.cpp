@@ -580,7 +580,7 @@ void register_core_bindings(pybind11::module &m)
         "Metadata sent over the wire by X-engine nodes to FRB nodes at the\n"
         "start of every TCP stream. Also used for bookkeeping in several\n"
         "places (allocator's canonical copy, per-frame ASDF projection, etc).\n\n"
-        "See configs/xengine/xengine_metadata_v2.yml for field-by-field\n"
+        "See configs/xengine_metadata.yml for field-by-field\n"
         "documentation. The freq_channels member has two distinct meanings\n"
         "depending on context -- see the 'freq_channels' attribute docstring\n"
         "and XEngineMetadata.hpp for the 'frequency-scrubbed' convention.\n\n"

@@ -73,7 +73,7 @@ When the `FrbServer` context manager is entered, a lot happens under the hood:
 The grouper receives three metadata objects from `pirate`:
 
  1. `xengine_metadata_yaml` -- the X-engine metadata
-    ([example](../configs/xengine/xengine_metadata_v2.yml)).
+    ([example](../configs/xengine_metadata.yml)).
 
  2. `dedispersion_config_yaml` -- same format as on-disk dedispersion configs (XXX example).
 

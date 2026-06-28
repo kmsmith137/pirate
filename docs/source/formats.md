@@ -10,7 +10,7 @@ maxdepth: 1
 ---
 ASDF file format <configs/example_asdf_header.yml>
 notes/network_protocol
-xengine_metadata (v2) <configs/xengine/xengine_metadata_v2.yml>
+xengine_metadata (v2) <configs/xengine_metadata.yml>
 dedispersion_config <configs/dedispersion/chord_sb2_et.yml>
 dedispersion_plan <configs/example_dedispersion_plan.yml>
 _grpc_generated

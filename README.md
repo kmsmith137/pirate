@@ -24,12 +24,11 @@ or browse the `.md` files below:
 
 - [Installation](notes/install.md)
 - [Introduction](notes/intro.md)
-- [To do list](notes/todo.md)
 - [Developer notes](notes/developer.md)
 - [Build system](notes/build.md)
 - [Hardware](notes/hardware.md)
 - [X->FRB network protocol (v2)](notes/network_protocol.md)
-- [X->FRB metadata (v2)](configs/xengine/xengine_metadata_v2.yml)
+- [X->FRB metadata (v2)](configs/xengine_metadata.yml)
 - [gRPC protocol definitions](grpc/)
 
 Contact: Kendrick Smith <kmsmith@perimeterinstitute.ca>

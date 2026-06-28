@@ -21,7 +21,7 @@ namespace pirate {
 // to the FRB nodes, at the beginning of every TCP stream.
 //
 // References:
-//   - configs/xengine/xengine_metadata_v2.yml
+//   - configs/xengine_metadata.yml
 //   - notes/network_protocol.md
 //
 // The C++ class 'XEngineMetadata' is also used for bookkeeping in several places.

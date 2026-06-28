@@ -125,7 +125,7 @@ by this giant memory region, and memory is recycled internally without needing t
 `free() + malloc()`.
 
 This is challenging in part because of **dynamic configuration**: the X-engine metadata
-(see [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml))
+(see [`configs/xengine_metadata.yml`](../configs/xengine_metadata.yml))
 includes important parameters such as the frequency upchannelization and beam layout.
 The FRB search "dynamically" configures itself when this data is received from the X-engine.
 
@@ -152,7 +152,7 @@ The most important classes are:
 - **`Receiver`**: Listens for TCP connections from upstream X-engine nodes and assembles
   incoming data into `AssembledFrame` objects. Implements the
   [X->FRB network protocol](network_protocol.md), which includes YAML
-  metadata ([`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml)).
+  metadata ([`configs/xengine_metadata.yml`](../configs/xengine_metadata.yml)).
   Each `Receiver` corresponds to one `(ip_addr, tcp_port)` pair.
 
 - **`FrbServer`**: High-level orchestrator that manages one or more `Receiver` instances,

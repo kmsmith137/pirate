@@ -20,11 +20,11 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
 
   - Receives data via TCP from the "upstream" X-engine. The network protocol
     is [here](network_protocol.md). The protocol includes metadata -- the
-    format is defined by [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml).
+    format is defined by [`configs/xengine_metadata.yml`](../configs/xengine_metadata.yml).
     Details of the protocol and metadata will change in the future.
 
   - Dynamic configuration: the X-engine metadata
-    (see [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml))
+    (see [`configs/xengine_metadata.yml`](../configs/xengine_metadata.yml))
     includes important parameters such as the frequency upchannelization and beam layout.
     The FRB search "dynamically" configures itself when this data is
     received from the X-engine.

@@ -11,7 +11,6 @@ caption: User Guide
 ---
 notes/install
 notes/intro
-notes/todo
 notes/developer
 cli
 notes/grouper_interface

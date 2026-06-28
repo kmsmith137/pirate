@@ -22,7 +22,7 @@ The network protocol for each of these connections is as follows:
 - The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.
 
 - A zero-terminated ascii string follows, containing metadata in the format defined by
-  [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml).
+  [`configs/xengine_metadata.yml`](../configs/xengine_metadata.yml).
   There is a C++ class `XEngineMetadata` for parsing this string.
 
   Note that the metadata includes `freq_channels` and `nbeams`. Here, `nbeams` is the (receiver-dependent) number of 
