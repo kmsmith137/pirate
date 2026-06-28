@@ -24,9 +24,13 @@ class FrbGrouperInjections:
         # Blocks until the client connects and the handshake is processed.
         self.open()
 
-        # YAML::Node is not pybind-wrapped; convert the wire string to a Python
-        # object and attach it (py::dynamic_attr() on the C++ class enables this).
+        # The handshake yaml strings are not YAML::Node-wrapped in pybind; parse
+        # the wire strings into Python objects and attach them as attributes
+        # (py::dynamic_attr() on the C++ class enables setting these). The strings
+        # are only populated after the handshake, so this must follow self.open().
         import yaml
+        self.xengine_yaml = yaml.safe_load(self.xengine_metadata_yaml_string)
+        self.dedispersion_config_yaml = yaml.safe_load(self.dedispersion_config_yaml_string)
         self.dedispersion_plan_yaml = yaml.safe_load(self.dedispersion_plan_yaml_string)
 
         # The IPC-mapped output arrays live on cuda_device_id (known after the
@@ -55,8 +59,18 @@ class FrbGrouperInjections:
         return False
 
     @contextmanager
-    def get_output(self, seq_id):
-        """Acquire one batch's outputs; on exit synchronize the GPU, then release.
+    def get_output(self, ichunk, ibatch):
+        """Acquire one beam-batch's outputs; on exit synchronize the GPU, then release.
+
+        Parameters
+        ----------
+        ichunk : int
+            Zero-based time-chunk index (must be >= 0).
+        ibatch : int
+            Beam-batch index within the chunk (must satisfy
+            0 <= ibatch < self.nbatches).
+
+        The producer sequence id is ``seq_id = ichunk * nbatches + ibatch``.
 
         On exit this calls ``cupy.cuda.get_current_stream().synchronize()``
         BEFORE ``release_output(seq_id)``, so all GPU reads the body queued on
@@ -73,7 +87,13 @@ class FrbGrouperInjections:
             Per-batch slice with .out_max / .out_argmax (lists of ksgpu Arrays,
             convertible to cupy via DLPack).
         """
+        if ichunk < 0:
+            raise ValueError(f"FrbGrouper.get_output: ichunk must be >= 0 (got {ichunk})")
+        if not (0 <= ibatch < self.nbatches):
+            raise ValueError(f"FrbGrouper.get_output: ibatch must be in "
+                             f"[0, {self.nbatches}) (got {ibatch})")
         import cupy as cp
+        seq_id = ichunk * self.nbatches + ibatch
         outputs = self.acquire_output(seq_id)
         try:
             yield outputs

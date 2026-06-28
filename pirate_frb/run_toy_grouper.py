@@ -48,10 +48,10 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     beams_per_batch = nbeams_tot // nbatches
 
     if sifter is not None:
-        import yaml
         # One-time metadata used to convert array indices -> physical units when
-        # building the FrbEvents messages below.
-        xengine = yaml.safe_load(grouper.xengine_metadata_yaml_string)
+        # building the FrbEvents messages below. The yaml strings are parsed once
+        # by FrbGrouper.__enter__ and attached as .xengine_yaml / .*_plan_yaml.
+        xengine = grouper.xengine_yaml
         plan_trees = grouper.dedispersion_plan_yaml['trees']
         beam_set_id = xengine['beamset']
         beam_ids = xengine['beam_ids']                       # global beam index -> beam_id
@@ -79,9 +79,8 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
         per_beam_max = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)
 
         for ibatch in range(nbatches):          # loop over beam batches
-            seq_id = ichunk * nbatches + ibatch
             beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
-            with grouper.get_output(seq_id) as outputs:
+            with grouper.get_output(ichunk, ibatch) as outputs:
                 # outputs.out_max: list (length ntrees) of cupy arrays, each
                 # shape (beams_per_batch, ndm, nt), viewing IPC-mapped GPU
                 # memory. get_output's __exit__ synchronizes the current stream

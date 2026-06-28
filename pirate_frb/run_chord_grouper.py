@@ -51,10 +51,6 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
     from .rpc.grpc.frb_sifter_pb2 import ConfigMessage, FrbEventsMessage, FrbEvent
     import grpc
     import yaml
-    try:
-        from yaml import CLoader as Loader, CDumper as Dumper
-    except ImportError:
-        from yaml import Loader, Dumper
     from datetime import datetime
 
     print('Starting CHORD grouper: sifter address is', sifter_addr)
@@ -73,7 +69,8 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
 
     # this is beams_per_gpu
     nbeams = grouper.total_beams
-    xengine = yaml.load(grouper.xengine_metadata_yaml_string, Loader=Loader)
+    # Parsed once by FrbGrouper.__enter__ and attached as grouper.xengine_yaml.
+    xengine = grouper.xengine_yaml
     beamset = xengine['beamset']
     # timing parameters
     seq_per_frb_time_sample = xengine['seq_per_frb_time_sample']
@@ -144,8 +141,7 @@ def _run_chord_grouper(grouper_addr, sifter_addr, grouper, delay=0.0):
         # outputs.ibeam instead?
         beam_index = 0
         for ibatch in range(grouper.nbatches):
-            seq_id = ichunk * grouper.nbatches + ibatch
-            with grouper.get_output(seq_id) as outputs:
+            with grouper.get_output(ichunk, ibatch) as outputs:
                 # outputs.out_max: list (length ntrees) of cupy arrays
                 # (views into GPU memory)
                 # data type is (float16 or float32)

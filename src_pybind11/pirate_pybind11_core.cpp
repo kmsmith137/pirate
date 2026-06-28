@@ -1165,14 +1165,14 @@ void register_core_bindings(pybind11::module &m)
     // FrbGrouper: gRPC *server* side of the FrbGrouper service. Downstream
     // consumer of an FrbServer's GpuDedisperser::output_ringbuf over CUDA IPC.
     // py::dynamic_attr() lets the Python injection attach dedispersion_plan_yaml.
-    // Injections (pirate_frb/pybind11_injections.py) add __enter__/__exit__ and
+    // Injections (pirate_frb/rpc/_FrbGrouper.py) add __enter__/__exit__ and
     // a get_output() context manager.
     py::class_<FrbGrouper, std::shared_ptr<FrbGrouper>>(m, "FrbGrouper", py::dynamic_attr(),
         "gRPC server that receives a GpuDedisperser output ring buffer from an\n"
         "FrbServer over CUDA IPC. Use as a context manager (see injections)::\n"
         "\n"
         "    with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:\n"
-        "        with g.get_output(seq_id) as outputs: ...")
+        "        with g.get_output(ichunk, ibatch) as outputs: ...")
           .def(py::init([](const std::string &ip_addr){ return FrbGrouper::create(ip_addr); }),
                py::arg("ip_addr"))
           // open() must stay interruptible by Ctrl-C while it blocks waiting for
