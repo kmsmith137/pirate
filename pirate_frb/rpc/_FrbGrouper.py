@@ -82,14 +82,6 @@ class FrbGrouperInjections:
     def get_output(self, ichunk, ibatch):
         """Acquire one beam-batch's outputs; on exit synchronize the GPU, then release.
 
-        Parameters
-        ----------
-        ichunk : int
-            Zero-based time-chunk index (must be >= 0).
-        ibatch : int
-            Beam-batch index within the chunk (must satisfy
-            0 <= ibatch < self.nbatches).
-
         The producer sequence id is ``seq_id = ichunk * nbatches + ibatch``.
 
         On exit this calls ``cupy.cuda.get_current_stream().synchronize()``
@@ -100,6 +92,14 @@ class FrbGrouperInjections:
         plans/grouper_server.md). The body must therefore do its GPU work on the
         current cupy stream (the default; FrbGrouper's __enter__ has already
         selected the right device).
+
+        Parameters
+        ----------
+        ichunk : int
+            Zero-based time-chunk index (must be >= 0).
+        ibatch : int
+            Beam-batch index within the chunk (must satisfy
+            0 <= ibatch < self.nbatches).
 
         Yields
         ------

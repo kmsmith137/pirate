@@ -141,6 +141,10 @@ release = '1.0.0'
 
 extensions = [
     'sphinx.ext.autodoc',
+    # napoleon parses NumPy/Google-style docstring sections (Parameters, Returns,
+    # Yields, ...) into field lists. Without it, the "Parameters"/"Returns"
+    # underlines are read as rST section headings and render in a huge font.
+    'sphinx.ext.napoleon',
     'sphinx.ext.intersphinx',
     'myst_parser',
 ]
