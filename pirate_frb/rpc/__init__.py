@@ -2,6 +2,7 @@
 
 from .FrbSearchClient import FrbSearchClient
 from .FrbSifterClient import FrbSifterClient
-from ..pirate_pybind11 import FrbGrouper   # injections applied at pirate_frb import
+from ..pirate_pybind11 import FrbGrouper
+from . import _FrbGrouper   # noqa: F401  (applies FrbGrouper method injections)
 
 __all__ = ["FrbSearchClient", "FrbSifterClient", "FrbGrouper"]
