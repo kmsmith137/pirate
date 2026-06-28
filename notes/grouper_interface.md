@@ -20,6 +20,8 @@ via `grpc` over the loopback network (`127.0.0.1`).
 For performance reasons, the grouper should leave arrays on the GPU
 if possible, and process them with `cupy`.
 
+ - Python class for the grouper endpoint: {py:class}`~pirate_frb.pirate_pybind11.FrbGrouper`.
+ - Python class for the sifter client: {py:class}`~pirate_frb.rpc.FrbSifterClient`.
  - Protocol for pirate-grouper communication: [`grpc/frb_grouper.proto`](../grpc/frb_grouper.proto).
  - Protocol for grouper-sifter communication: [`grpc/frb_sifter.proto`](../grpc/frb_sifter.proto).
 
@@ -93,13 +95,3 @@ values in the X-engine are different from the "static" values in the config file
  - 3-d arrays indexed by (beam, dm, time)
 
  - Meaning of time coordinate is different for early triggers.
-
-## FrbGrouper class reference
-
-Auto-generated reference for the `FrbGrouper` pybind11 class (the grouper-side
-endpoint described above; use it as a context manager).
-
-```{eval-rst}
-.. autoclass:: pirate_frb.pirate_pybind11.FrbGrouper
-   :members:
-```

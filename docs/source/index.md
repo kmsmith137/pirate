@@ -18,6 +18,7 @@ notes/grouper_interface
 notes/build
 notes/hardware
 formats
+python_class_reference
 ```
 
 ```{toctree}

@@ -21,7 +21,8 @@ class FrbSifterClient:
     Both methods return None and raise a verbose RuntimeError on failure (a gRPC
     transport error, or a not-ok reply from the sifter).
 
-    Usage:
+    Usage::
+
         with FrbSifterClient("localhost:7100") as sifter:
             sifter.check_configuration(pirate_yaml, xengine_yaml,
                                        dedispersion_plan_yaml, grouper_yaml)
@@ -41,8 +42,8 @@ class FrbSifterClient:
                             dedispersion_plan_yaml, grouper_yaml):
         """Send the initial ConfigMessage (CheckConfiguration RPC).
 
-        Each *_yaml argument may be either a str (sent unmodified) or any
-        yaml-serializable object (yaml.dump()'d to a string before sending).
+        Each of the four yaml arguments may be either a str (sent unmodified) or
+        any yaml-serializable object (yaml.dump()'d to a string before sending).
 
         Returns None; raises a verbose RuntimeError on failure (yaml-serialization
         error, gRPC transport error, or a not-ok reply).
