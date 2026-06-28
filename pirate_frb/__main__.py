@@ -1261,9 +1261,7 @@ def parse_run_toy_grouper(subparsers):
     # Exactly one of -s/-S is required.
     sifter_group = parser.add_mutually_exclusive_group(required=True)
     sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',
-                              help="Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100): "
-                                   "send check_configuration once, then one FrbEvents message "
-                                   "(the chunk's peak event) per chunk.")
+                              help="Report to the FrbSifter at this 'ip:port' (e.g. 127.0.0.1:7100):")
     sifter_group.add_argument('-S', '--no-sifter', action='store_true',
                               help="Run without a sifter (don't send any sifter RPCs).")
 

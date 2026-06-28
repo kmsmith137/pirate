@@ -98,7 +98,7 @@ class FrbSifterClient:
     code open a connection to a sifter and send it messages. It wraps the two RPCs
     currently used by the prototype grouper (pirate_frb/run_chord_grouper.py):
 
-      - check_configuration() -- the initial ConfigMessage (config YAML strings).
+      - send_configuration()  -- the initial ConfigMessage (config YAML strings).
       - send_events()         -- a per-time-period FrbEventsMessage (FRB events
                                  and/or coarse-grained per-beam SNRs).
 
@@ -108,7 +108,7 @@ class FrbSifterClient:
     Usage::
 
         with FrbSifterClient("localhost:7100") as sifter:
-            sifter.check_configuration(pirate_yaml, xengine_yaml,
+            sifter.send_configuration(pirate_yaml, xengine_yaml,
                                        dedispersion_plan_yaml, grouper_yaml)
             sifter.send_events(has_injections, beam_set_id, events,
                                coarsegrain_start_fpga_count,
@@ -122,7 +122,7 @@ class FrbSifterClient:
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_sifter_pb2_grpc.FrbSifterStub(self.channel)
 
-    def check_configuration(self, pirate_yaml, xengine_yaml,
+    def send_configuration(self, pirate_yaml, xengine_yaml,
                             dedispersion_plan_yaml, grouper_yaml):
         """Send the initial ConfigMessage (CheckConfiguration RPC).
 
@@ -141,10 +141,10 @@ class FrbSifterClient:
         try:
             reply = self.stub.CheckConfiguration(request)
         except grpc.RpcError as e:
-            raise RuntimeError(f"FrbSifterClient.check_configuration: RPC to sifter at "
+            raise RuntimeError(f"FrbSifterClient.send_configuration: RPC to sifter at "
                                f"{self.server_address!r} failed: {e}") from e
         if not reply.ok:
-            raise RuntimeError(f"FrbSifterClient.check_configuration: sifter at "
+            raise RuntimeError(f"FrbSifterClient.send_configuration: sifter at "
                                f"{self.server_address!r} returned ok=False")
 
     def send_events(self, has_injections, beam_set_id, events,

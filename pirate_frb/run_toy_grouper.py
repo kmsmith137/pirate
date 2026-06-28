@@ -8,34 +8,12 @@ import time
 
 
 def _run_toy_grouper(grouper, sifter=None, delay=0.0):
-    """Main loop (factored out of run_toy_grouper to reduce nesting).
+    """
+    Main grouper loop (factored out of run_toy_grouper to reduce nesting).
 
-    For each time chunk, scan all beam-batches/trees/DMs/time-samples of
-    'out_max' and compute, ENTIRELY ON THE GPU (no device->host copies in the
-    inner loops):
-
-      - the single highest-SNR "event", and which (tree, ibeam, idm, itime) it
-        came from -- all ARRAY INDICES (not physical units). 'ibeam' is a GLOBAL
-        beam index (0 <= ibeam < total_beams), formed by adding
-        ibatch*beams_per_batch to the per-batch beam index; idm/itime index the
-        winning tree's output dm/time axes.
-      - the per-beam maximum SNR (a length-total_beams array; no per-beam argmax).
-
-    Only after the chunk's GPU scan finishes do we copy the winning event's
-    indices/value to the host (one small copy) to print it and -- if a sifter is
-    configured -- send it.
-
-    'sifter' is an already-connected FrbSifterClient (constructed by the caller),
-    or None. If not None, we send one check_configuration message up front, then
-    one FrbEvents message per chunk: a single event (the chunk's peak), with
-    coarsegrain_snr set to the per-beam max. grouper.create_events() converts the
-    peak's array indices into a FrbSifterEvents (physical fields + chunk_fpga_count)
-    using the X-engine metadata (timing, beam_ids, beamset) and the winning tree's
-    dm_min/dm_max in the dedispersion plan.
-
-    The cupy work runs on the current/default stream (FrbGrouper.__enter__ already
-    selected the right device); get_output's __exit__ synchronizes that stream
-    before releasing each batch.
+    In the toy grouper, we don't do peak-finding or thresholding. We just send one
+    event per time chunk, corresponding to the (beam,dm,time) triple with highest
+    snr (even if the snr doesn't correspond to a statistically significant event!)
 
     If 'delay' > 0, sleep that many seconds at the end of each chunk -- an
     artificial slowdown for testing how the producer behaves when the consumer
@@ -48,52 +26,54 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     beams_per_batch = nbeams_tot // nbatches
 
     if sifter is not None:
-        # Metadata for the FrbEvents messages. The yaml strings are parsed once by
-        # FrbGrouper.__enter__; the per-event index -> physical-unit conversion is
-        # done by grouper.create_events() below. We still need beam_set_id and
-        # fpga_per_chunk here (for the coarsegrain time window).
-        xengine = grouper.xengine_yaml
-        beam_set_id = xengine['beamset']
-        fpga_per_chunk = xengine['seq_per_frb_time_sample'] * grouper.nt_in
+        # Send the ConfigMessage to the sifter (this is only done once).
+        beam_set_id = grouper.xengine_yaml['beamset']
+        fpga_per_chunk = grouper.xengine_yaml['seq_per_frb_time_sample'] * grouper.nt_in
 
-        sifter.check_configuration(
+        sifter.send_configuration(
             pirate_yaml = grouper.dedispersion_config_yaml_string,
             xengine_yaml = grouper.xengine_metadata_yaml_string,
             dedispersion_plan_yaml = grouper.dedispersion_plan_yaml_string,
-            grouper_yaml = {'toy_grouper': True})
+            grouper_yaml = {'toy_grouper': True})  # placeholder for future expansion
+        
         print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
-              f'sent check_configuration', flush=True)
+              f'sent ConfigMessage', flush=True)
 
-    for ichunk in itertools.count():            # loop over time chunks
-        # GPU-resident accumulators, updated entirely on the GPU below (no
-        # device->host copies until the chunk's scan is complete). gmax is the
-        # running peak SNR; the g_* 0-d arrays hold its (tree, ibeam, idm, itime)
-        # array indices.
-        gmax    = cp.full((), -cp.inf, dtype=cp.float32)
-        g_tree  = cp.full((), -1, dtype=cp.int64)
-        g_ibeam = cp.full((), -1, dtype=cp.int64)
-        g_idm   = cp.full((), -1, dtype=cp.int64)
-        g_itime = cp.full((), -1, dtype=cp.int64)
+    # The grouper receives dedispersion outputs as an outer loop over time chunks,
+    # followed by an inner loop over beam batches. Dedispersion outputs are arrays
+    # (beams_per_batch, coarse_ndm, coarse_ntime). (One array for each dedispersion tree.)
+
+    for ichunk in itertools.count():  # outer loop over time chunks
+        # GPU-resident accumulators, updated entirely on the GPU below.
+        gmax    = cp.full((), -cp.inf, dtype=cp.float32)   # max(snr)
+        g_tree  = cp.full((), -1, dtype=cp.int64)          # argmax(tree index)
+        g_ibeam = cp.full((), -1, dtype=cp.int64)          # argmax(beam index)
+        g_idm   = cp.full((), -1, dtype=cp.int64)          # argmax(dm index)
+        g_itime = cp.full((), -1, dtype=cp.int64)          # argmax(time index)
         per_beam_max = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)
 
-        for ibatch in range(nbatches):          # loop over beam batches
+        for ibatch in range(nbatches):          # inner loop over beam batches
             beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
-            with grouper.get_output(ichunk, ibatch) as outputs:
-                # outputs.out_max: list (length ntrees) of cupy arrays, each
-                # shape (beams_per_batch, ndm, nt), viewing IPC-mapped GPU
-                # memory. get_output's __exit__ synchronizes the current stream
-                # before releasing the batch.
-                for itree, tree_out in enumerate(outputs.out_max):   # loop over trees
-                    t = cp.asarray(tree_out)    # cupy view (no-op if already cupy)
 
+            # Inside the inner context manager, you can use the 'output' object
+            # (of type GpuDedisperserOutputs) to get the (out_max, out_argmax) arrays.
+            #
+            # WARNING: these arrays are only valid inside the context manager!
+            # (They are "raw" pointers to GPU memory, which will be reused
+            # when the context manager exits, even if you keep references.)
+
+            with grouper.get_output(ichunk, ibatch) as outputs:
+                # Loop over dedispersion trees.
+                # 'tree_out' has shape (beams_per_batch, coarse_ndm, coarse_ntime).
+                for itree, tree_out in enumerate(outputs.out_max):
                     # Per-beam max (over dm,time) for this batch's beams.
                     sl = per_beam_max[beam0 : beam0 + beams_per_batch]
-                    cp.maximum(sl, t.max(axis=(1, 2)), out=sl)
+                    cp.maximum(sl, tree_out.max(axis=(1, 2)), out=sl)
 
-                    # Global peak + argmax candidate from this tree (all GPU).
-                    # unravel gives (local beam, dm, time) ARRAY INDICES.
-                    m = t.max()
-                    lb, idm, itime = cp.unravel_index(t.argmax(), t.shape)
+                    # Global peak + argmax candidate from this tree.
+                    # Done entirely on GPU; no gpu<->host copies in sight!
+                    m = tree_out.max()
+                    lb, idm, itime = cp.unravel_index(tree_out.argmax(), tree_out.shape)
                     upd = m > gmax
                     gmax    = cp.where(upd, m, gmax)
                     g_tree  = cp.where(upd, itree, g_tree)
@@ -101,28 +81,24 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
                     g_idm   = cp.where(upd, idm, g_idm)
                     g_itime = cp.where(upd, itime, g_itime)
 
-        # Chunk scan done. One small device->host copy of the peak's indices/value.
-        tree, ibeam, idm, itime = (int(v) for v in
-                                   cp.stack([g_tree, g_ibeam, g_idm, g_itime]).get())
-        snr = float(gmax.get())
+        # Now we have the (snr, itree, ibeam, idm, itime) of a single "event".
+        # We copy this data from the GPU to the host, and do a little math to convert
+        # to "physical" quantities such as DM and arrival time. The math is explained
+        # in notes/tree_dedispersion.tex, and is implemented in a helper method
+        # grouper.create_events(), which returns an FrbSifterEvents object.
 
-        print(f'{grouper.grouper_ip_addr}: ichunk={ichunk}: max snr={snr:.3g} '
-              f'at (tree={tree}, ibeam={ibeam}, idm={idm}, itime={itime})', flush=True)
+        events = grouper.create_events(ichunk, g_tree, g_ibeam, g_idm, g_itime, gmax)
+
+        print(f'{grouper.grouper_ip_addr}: {ichunk=}: max snr={float(events.snrs):.3g}', flush=True)
 
         if sifter is not None:
-            # Convert the chunk's peak (still GPU 0-d index arrays) to a one-event
-            # FrbSifterEvents -- create_events does the index -> physical-unit math
-            # and sets chunk_fpga_count from ichunk. coarsegrain_snr = the per-beam
-            # max (cupy array; the client copies it host-side in one shot). FrbEvent
-            # has no 'tree' field (printed only).
-            events = grouper.create_events(ichunk, g_tree, g_ibeam, g_idm, g_itime, gmax)
-            chunk_fpga = events.chunk_fpga_count
+            # Send the FrbEventsMessage to the sifter.
             sifter.send_events(
                 has_injections = False,
                 beam_set_id = beam_set_id,
                 events = events,
-                coarsegrain_start_fpga_count = chunk_fpga,
-                coarsegrain_end_fpga_count = chunk_fpga + fpga_per_chunk,
+                coarsegrain_start_fpga_count = events.chunk_fpga_count,
+                coarsegrain_end_fpga_count = events.chunk_fpga_count + fpga_per_chunk,
                 coarsegrain_snr = per_beam_max)
 
         if delay > 0:
