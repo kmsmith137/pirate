@@ -2,16 +2,12 @@
 
 This section is **very incomplete** -- only a couple of classes are documented so far.
 
-```{eval-rst}
-.. autoclass:: pirate_frb.rpc.FrbGrouper
-   :members:
-
-.. autoclass:: pirate_frb.rpc.FrbSifterClient
-   :members:
-
-.. autoclass:: pirate_frb.rpc.FrbSifterEvents
-   :members:
-
-.. autoclass:: pirate_frb.core.GpuDedisperserOutputs
-   :members:
+```{toctree}
+---
+maxdepth: 1
+---
+classes/FrbGrouper
+classes/FrbSifterClient
+classes/FrbSifterEvents
+classes/GpuDedisperserOutputs
 ```
