@@ -333,7 +333,6 @@ PYFILES = \
   pirate_frb/Hardware.py \
   pirate_frb/pybind11_injections.py \
   pirate_frb/run_server.py \
-  pirate_frb/run_chord_grouper.py \
   pirate_frb/run_fake_xengine.py \
   pirate_frb/run_rpc_status.py \
   pirate_frb/run_toy_grouper.py \

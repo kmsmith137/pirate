@@ -2,8 +2,6 @@
 
 import contextlib
 import itertools
-import subprocess
-import sys
 import time
 
 
@@ -144,76 +142,3 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
             else:
                 raise
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.
-
-def run_toy_groupers(grouper_addrs, sifter_addr=None, delay=0.0):
-    """
-    'sifter_addr' (an 'ip:port' string, or None for no sifter) and 'delay' (an
-    artificial per-chunk slowdown, in seconds) are forwarded to each grouper.
-    """
-    # When fanning out to child subprocesses, re-pass exactly one of the
-    # (mutually-exclusive, required) sifter flags.
-    sifter_flag = ['--sifter', sifter_addr] if (sifter_addr is not None) else ['--no-sifter']
-    run_groupers(run_toy_grouper, grouper_addrs, (), dict(sifter_addr=sifter_addr, delay=delay),
-                 [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper',
-                  *sifter_flag, '--delay', str(delay)])
-
-def run_groupers(grouper_func, grouper_addrs, args, kwargs, pycommand):
-    """Run one or more grouper consumers.
-
-    With a single address, runs "grouper_func" in this process. With more than one, runs each
-    grouper in its own child subprocess (re-invoking
-    'pycommand' with the <addr> appended, eg, 'pirate_frb run_toy_grouper <addr>');
-    if ANY child exits -- for any reason --
-    the parent terminates the remaining children and exits. This makes the group
-    fail-fast: one grouper going down brings the whole set down.
-
-    """
-    if len(grouper_addrs) == 1:
-        grouper_func(grouper_addrs[0], *args, **kwargs)
-        return
-
-    procs = []   # list of (addr, Popen)
-    rc = 0
-    try:
-        for addr in grouper_addrs:
-            # Re-invoke the CLI with a single address -> the child runs the
-            # grouper in-process (len==1 branch above). A fresh process (not
-            # fork) avoids CUDA-after-fork hazards. stdout is inherited, so each
-            # child's messages (which carry its own addr) appear interleaved.
-            procs.append((addr, subprocess.Popen(pycommand + [addr])))
-        rc = _monitor_children(procs)
-    except KeyboardInterrupt:
-        print('run_groupers: interrupted; stopping all groupers', flush=True)
-    finally:
-        _terminate_children(procs)
-
-    if rc:
-        sys.exit(rc)
-
-
-def _monitor_children(procs):
-    """Block until any child exits; return 0 if all dead children exited cleanly,
-    else 1. (The caller then terminates the survivors.)"""
-    while True:
-        dead = [(addr, p) for addr, p in procs if p.poll() is not None]
-        if dead:
-            for addr, p in dead:
-                print(f'run_toy_grouper: child for {addr} exited (code {p.returncode}); '
-                      f'stopping the other groupers', flush=True)
-            return 0 if all(p.returncode == 0 for _, p in dead) else 1
-        time.sleep(0.2)
-
-
-def _terminate_children(procs, grace_sec=5.0):
-    """SIGTERM all still-running children, then SIGKILL any that don't exit
-    within grace_sec."""
-    for _, p in procs:
-        if p.poll() is None:
-            p.terminate()
-    deadline = time.monotonic() + grace_sec
-    for _, p in procs:
-        try:
-            p.wait(timeout=max(0.0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            p.kill()
-            p.wait()
