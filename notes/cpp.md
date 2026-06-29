@@ -49,7 +49,7 @@ void f(int x, int y, int z)
         throw runtime_error(ss.str());
     }
 
-    // Example 2: you should not replace this by xassert_lt(x+y,z), since the xassert_eq() error message
+    // Example 2: you should not replace this by xassert_lt(x+y,z), since the xassert_lt() error message
     // contains less information than the message below (which shows x,y,z individually)
 
     if ((x+y) >= z) {

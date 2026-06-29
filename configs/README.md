@@ -11,7 +11,7 @@ documentation snapshots (do not edit them by hand; regenerate by running
   (`python -m pirate_frb show_file_format configs/xengine_metadata.yml`)
   -- the verbose ASDF YAML header emitted by `AssembledFrame::write_asdf()`.
 - `example_dedispersion_plan.yml`
-  (`python -m pirate_frb show_dedisperser configs/dedispersion/chord_sb2_et.yml`)
+  (`python -m pirate_frb show_dedisperser -v configs/dedispersion/chord_sb2_et.yml`)
   -- the dedispersion plan (`dedispersion_plan_yaml`) that the FRB search sends
   to the grouper at gRPC-handshake time. Use `-c` to also show the config and
   `-t` for plan-construction timing; the default output is reproducible.
@@ -34,8 +34,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
   file-writing threads, SSD/NFS paths, fake-X-engine parameters). Used by:
 
   ```
-  pirate_frb run_server configs/frb_server/toy.yml        # start server
-  pirate_frb run_server -s configs/frb_server/toy.yml     # send fake X-engine data
+  pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml   # start server
+  pirate_frb run_fake_xengine 127.0.0.1:6000   # send fake X-engine data
   ```
 
   `toy.yml` runs a single server on loopback for local testing;
@@ -52,8 +52,9 @@ documentation snapshots (do not edit them by hand; regenerate by running
   Each file enables a different subset of loads (e.g. `cf00_net.yml` for
   networking only, `cf00_all.yml` for everything, `cf00_blob.yml` for storage).
 
-- **`xengine/`** -- X-engine metadata file defining the frequency-zone layout, beam
-  configuration, and initial time sample. This file serves double duty:
+- **`xengine_metadata.yml`** (top-level file) -- X-engine metadata defining the
+  frequency-zone layout, beam configuration, and initial time sample. This file
+  serves double duty:
 
   1. It documents the binary metadata header that each X-engine node sends at the
      start of a TCP stream to an FRB search node.

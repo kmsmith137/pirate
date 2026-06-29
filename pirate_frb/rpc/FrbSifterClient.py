@@ -175,7 +175,7 @@ class FrbSifterClient:
             Whether this message's events include injected (simulated) FRBs.
         beam_set_id : int
             X-engine beam-set id.
-        events : FrbSifterEvents or None
+        events : :class:`~pirate_frb.rpc.FrbSifterEvents` or None
             The per-event triggers: one FrbEvent is sent per array element, and the
             object's chunk_fpga_count populates the message's chunk_fpga_count field.
             None sends no per-event triggers (with chunk_fpga_count = 0).
@@ -261,8 +261,8 @@ class FrbSifterClient:
         return arr
 
     def close(self):
-        """
-        Close the gRPC channel.
+        """Close the gRPC channel.
+
         Automatically called if the FrbSifterClient is used as a context manager.
         """
         self.channel.close()

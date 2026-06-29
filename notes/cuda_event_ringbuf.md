@@ -1,7 +1,7 @@
 # CudaEventRingbuf
 
 This class is used ubiquitously, to chain kernel launchers together.
-A single producer produces `CudaEvents`, and multiple consumers consume them.
+A single producer produces cuda events, and multiple consumers consume them.
 Events can be consumed in two ways: either by synchronizing a stream on the event (`wait()`),
 or synchronizing a host thread on the event (`synchronize()`).
 Each event has a `seq_id = 0,1,...` which must be consecutive.
@@ -43,7 +43,7 @@ struct CudaEventRingbuf
 
 Usage of `CudaEventRingbuf` is best explained by example.
 
-Consider the following example, with two host threads (named ``h2g'' and ``g2h'')
+Consider the following example, with two host threads (named `h2g` and `g2h`)
 and three GPU kernels (f,g,h), and four GPU ring buffers (in,x,y,out):
 
   - The h2g thread runs in a loop: data "batches" arrive unpredictably
@@ -52,10 +52,10 @@ and three GPU kernels (f,g,h), and four GPU ring buffers (in,x,y,out):
   
   - When the data arrives in the ``in`` buffer, two GPU kernels can be launched:
 
-      - ``f()`` whose input is an `in` batch, and whose output is an  `x` batch.
+      - ``f()`` whose input is an `in` batch, and whose output is an `x` batch.
         Here, `x` is a GPU ring buffer which can hold `Nx` batches.
 
-      - ``g()`` whose input is an `in` batch, and whose output is an  `y` batch.
+      - ``g()`` whose input is an `in` batch, and whose output is a `y` batch.
         Here, `y` is a GPU ring buffer which can hold `Ny` batches.
 
   - When the ``f()`` and ``g()`` kernels have completed, a third GPU kernel can

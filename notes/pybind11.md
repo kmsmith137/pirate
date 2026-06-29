@@ -7,7 +7,7 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 
 ```
     # Assume MyClass is a C++ class bound via Pybind11
-    from ../ import MyClass 
+    from my_module import MyClass 
 
     @ksgpu.inject_methods(MyClass)
     class MyClassInjections:
@@ -31,11 +31,13 @@ C++ class. This can be done with the class decorator `ksgpu.inject_methods`:
 
 Pybind11 code is in the following source files:
 ```
+   src_pybind11/pirate_pybind11_avar.cpp
    src_pybind11/pirate_pybind11_casm.cpp
    src_pybind11/pirate_pybind11_chime.cpp
    src_pybind11/pirate_pybind11_core.cpp
    src_pybind11/pirate_pybind11_kernels.cpp
    src_pybind11/pirate_pybind11_loose_ends.cpp
+   src_pybind11/pirate_pybind11_utils.cpp
    src_pybind11/pirate_pybind11.cpp   # toplevel
 ```
 These get compiled into a single extension module `pirate_pybind11.so`.

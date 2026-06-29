@@ -99,7 +99,7 @@ The most important classes are:
 - **`FakeXEngine`**: A testing class that simulates upstream X-engine nodes sending data
   over TCP. Spawns multiple worker threads that each open a TCP connection, so that a
   single `FakeXEngine` node can simulate multiple X-engine nodes.
-  Used for end-to-end testing (e.g. `pirate_frb run_server -s`).
+  Used for end-to-end testing (e.g. `pirate_frb run_fake_xengine`).
 
 ## File writing
 

@@ -10,17 +10,17 @@ A pattern for a class `X`:
 
 - If the worker thread throws an exception `e`, then the worker thread catches the exception, calls `X::stop(e)`, and exits.
 
-- Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `NULL`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.) 
+- Some public methods of `X` are labelled as "entry points". If an entry point is called in the stopped state, the exception `e` is rethrown. (If `e` is `nullptr`, then a generic exception `runtime_error("X::f() called on stopped instance")` is thrown.) 
 
 - If an entry point throws an exception, then `X::stop(e)` is called, and the exception is rethrown.
 
-- In a context where the value of `is_stopped` is checked (e.g. entry point or `worker_thread_main`), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `cv.notify()`. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
+- In a context where the value of `is_stopped` is checked (e.g. entry point or `worker_thread_main`), if a blocking call is made (e.g. `cv.wait()`) then `is_stopped` is rechecked on wakeup. `X::stop()` should call `cv.notify_all()`. In situations where this notification mechanism doesn't work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck `is_stopped` every millisecond.)
 
 - `~X()` calls `stop()` before joining the worker thread, to force the worker thread to exit.
 
 - `X` is noncopyable, nonmoveable, and always accessed through a shared_ptr.
 
-- In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X:allocate()`.
+- In the example below, the worker thread is created in `X::X()`, but in other cases, the worker may be created in a different method, for example `X::start()` or `X::allocate()`.
 
 - If `X` contains pointers to other thread-backed classes (or more generally, to any class `Y` defining `Y::stop()`), then `X::stop()` should call `ptr->stop()` for each such pointer.
 

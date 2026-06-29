@@ -12,10 +12,10 @@ run a classifier on each peak, and send a top-k list of peaks ("events")
 to the "sifter". The sifter is a process that runs on a central node,
 that receives events from groupers on all search nodes.
 
-We run one one grouper per GPU, i.e. two groupers per search node.
+We run one grouper per GPU, i.e. two groupers per search node.
 The grouper exchanges data arrays with `pirate` via a shared
 GPU memory ring buffer. This avoids the overhead of copying data
-between GPU and CPU. The grouper exhanges **metadata** with `pirate`
+between GPU and CPU. The grouper exchanges **metadata** with `pirate`
 via `grpc` over the loopback network (`127.0.0.1`).
 For performance reasons, the grouper should leave arrays on the GPU
 if possible, and process them with `cupy`.
@@ -128,7 +128,7 @@ When the `FrbGrouper` context manager is entered, a lot happens under the hood:
  - The grouper receives metadata (three yaml objects, see below) from `pirate`.
 
  - The grouper learns which GPU it is running on (by receiving a cuda `device_id`),
-   and *changes the current cupy stream* to the appropriate GPU. This change will
+   and *changes the current cupy device* to the appropriate GPU. This change will
    be un-done when the context manager exits. Within the `FrbGrouper` context manager,
    cupy functions will use the correct GPU, but may revert to GPU 0 after the context
    manager exits.
@@ -167,14 +167,14 @@ when `pirate` is started, and passed through to the grouper mostly unmodified
 values in the X-engine are different from the "static" values in the config file:
 `zone_nfreq`, `zone_freq_edges`, `time_sample_ms`, `beams_per_gpu`.
 
-## Data arrays and GpuDedispersionOutputs context manager
+## Data arrays and GpuDedisperserOutputs context manager
 
 Dedispersion outputs are processed in the following loop structure
 (see example code above):
 
  - Outer loop over time "chunks"
  
- - Middle loop over beam "batches". Call `FrbGrouper.get_outputs()` once per
+ - Middle loop over beam "batches". Call `FrbGrouper.get_output()` once per
    iteration of the middle loop, to get a {py:class}`~pirate_frb.core.GpuDedisperserOutputs`
    object.
    
@@ -186,7 +186,7 @@ Here are some details that are not obvious from the example code:
 
  - Each batch must be fully processed by the grouper, before moving on to the
    next batch. This is because the dedispersion output array is only valid inside
-   its `GpuDedipsersionOutputs` context manager.
+   its `GpuDedisperserOutputs` context manager.
 
    If you must process multiple batches in parallel, or save a previous batch,
    then you'll need to copy data. (Don't save a reference to the original array,
@@ -201,7 +201,7 @@ Here are some details that are not obvious from the example code:
    tuples to DMs and arrival times.
 
    However, when implementing peak-finding logic in a new grouper, you should
-   consider how it might be affected by having different corase-graining in
+   consider how it might be affected by having different coarse-graining in
    different trees.
 
    For trees with early triggers, there is an extra complication.

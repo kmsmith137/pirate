@@ -1,7 +1,7 @@
 # Build system
 
-- Uses pipmake, a tiny build system which is pip-compatible, but forwards pip commands to a Makefile (e.g. `pip install` forwards to `make wheel`).
-- The Makefile runs the script `makefile_helper.py,` which contains miscellaneous logic that's more convenient to write in python than in Makefile language. The output of this script is a file `makefile_helper.out`, containing variable declarations in Makefile language.
+- Uses pipmake, a tiny build system which is pip-compatible, but forwards pip commands to a Makefile (e.g. `pip install` forwards to `make build_wheel`).
+- The Makefile runs the script `makefile_helper.py`, which contains miscellaneous logic that's more convenient to write in python than in Makefile language. The output of this script is a file `makefile_helper.out`, containing variable declarations in Makefile language.
 - Build the whole project with `make -j 32`. Compile time is high, so `make src_lib/FILE.o` may be useful when working on `src_lib/FILE.cu`.
 - If you add a new source file, see comments near the top of `Makefile` for instructions on how to modify the makefile.
 - The Makefile should work automatically with conda. If you're not using conda, you may need to override some makefile vars (see below).
@@ -40,7 +40,7 @@ notes/                              - Developer-facing markdown notes
 lib/libpirate.so                    - Shared library
 ```
 
-## Overridding Makefile variables
+## Overriding Makefile variables
 
 The Makefile's compiler, flags, and include paths can be overridden without editing it,
 either from an environment variable or from a gitignored `config.mk` in the repo root.

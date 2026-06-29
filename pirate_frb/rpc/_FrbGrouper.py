@@ -242,7 +242,7 @@ class FrbGrouperInjections:
         needs to translate these indices into physical quantities (DM, time, etc)
         before sending events to the sifter.
 
-        The create_events() method peforms this translation, including subtleties
+        The create_events() method performs this translation, including subtleties
         like early triggers (which mean that event arrival times can be in the future!)
         For more info, see the grouper-specific parts of the sphinx docs, and/or
         the tex notes.
@@ -250,20 +250,32 @@ class FrbGrouperInjections:
         Currently, when we assign dm/time value to each event, we ignore out_argmax
         arrays, and use the center of each coarse dm/time pixel. I plan to improve
         this in the future.
+
+        The index arrays (itrees, ibeams, idm, itime, snr) must all be cupy arrays
+        with the same shape -- one event per element. Index values are assumed to be
+        in range; they are not bounds-checked, to avoid a device->host sync.
         
         Parameters
         ----------
         ichunk : int
             Zero-based time-chunk index (>= 0); sets the absolute FPGA timing.
-        itrees, ibeams, idm, itime, snr : cupy.ndarray
-            Equal-shaped GPU arrays (one event per element). itrees selects the
-            dedispersion tree; ibeams is a global beam index; idm/itime index that
-            tree's output (dm, time) axes; snr is the event SNR. Index values are
-            assumed in range (not bounds-checked, to avoid a device->host sync).
+        itrees : cupy.ndarray
+            Per-event dedispersion-tree index.
+        ibeams : cupy.ndarray
+            Per-event global beam index.
+        idm : cupy.ndarray
+            Per-event index along the selected tree's output DM axis.
+        itime : cupy.ndarray
+            Per-event index along the selected tree's output time axis.
+        snr : cupy.ndarray
+            Per-event SNR.
 
         Returns
         -------
-        FrbSifterEvents object
+        FrbSifterEvents
+            The events translated into physical units (beam id, absolute FPGA
+            timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events().
+            dm_error and rfi_prob are set to zero (not computed by the toy grouper).
         """
         import cupy as cp
 
