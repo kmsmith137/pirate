@@ -317,8 +317,16 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
     // before the GpuDedisperser class_ block, so pybind11 knows how to
     // convert the return value when acquire_output's lambda is bound below.
     py::class_<GpuDedisperser::Outputs>(m, "GpuDedisperserOutputs",
-        "Returned by GpuDedisperser.acquire_output(). Holds list-of-Array views\n"
-        "of the dedispersion output buffers for an acquired seq_id.\n"
+        "Helper class, representing dedispersion outputs for one beam batch.\n"
+        "Return value from FrbGrouper.get_output(ichunk, ibatch)\n"
+        "\n"
+        "Example usage::\n"
+        "\n"
+        "    with grouper.get_output(ichunk, ibatch) as outputs:\n"
+        "        # 'outputs' has type GpuDedisperserOutputs\n"
+        "        # Loop over dedispersion trees.\n"
+        "        for itree, tree_out in enumerate(outputs.out_max):\n"
+        "            # 'tree_out' has shape (beams_per_batch, coarse_ndm, coarse_ntime)\n"
         "\n"
         "Attributes (all read-only):\n"
         "\n"

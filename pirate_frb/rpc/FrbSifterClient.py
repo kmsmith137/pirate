@@ -7,14 +7,12 @@ from .grpc import frb_sifter_pb2_grpc
 
 
 class FrbSifterEvents:
-    """A batch of FRB events to send to the sifter (FrbSifterClient.send_events).
+    """Helper class, representing FRB events to send to the sifter.
 
-    Holds the per-event fields of the FrbEvent message (grpc/frb_sifter.proto) as
-    parallel numpy arrays (NOT cupy) -- one FrbEvent is sent per array element --
-    plus the scalar ``chunk_fpga_count`` carried by the enclosing FrbEventsMessage.
+    Returned by FrbGrouper.create_events(), and passed to FrbSifterClient.send_events().
 
-    The per-event arrays (cast to the indicated dtype) are:
-
+    Attributes (numpy arrays, shapes must be equal):
+    
     - ``beam_ids`` (int32) -- X-engine beam id of each event
     - ``fpga_timestamps`` (int64) -- absolute FPGA-counter timestamp of each event
     - ``dms`` (float32) -- dispersion measure
@@ -26,11 +24,6 @@ class FrbSifterEvents:
 
     - ``chunk_fpga_count`` (int) -- FPGA count at the start of the time chunk.
     - ``shape`` (tuple) -- common shape of the per-event arrays.
-
-    The from-scratch constructor takes these six arrays (each a numpy array or any
-    array-like; a cupy array is rejected -- use FrbGrouper.create_events to build
-    from GPU arrays) plus ``chunk_fpga_count`` (a non-negative int). All six arrays
-    must have the same shape; events are emitted in row-major (C) order.
     """
 
     # (attribute, proto FrbEvent field, numpy dtype) -- order follows the proto.
@@ -96,19 +89,13 @@ class FrbSifterEvents:
 
 
 class FrbSifterClient:
-    """Python client for the FrbSifter gRPC service (grpc/frb_sifter.proto).
+    """
+    The FrbSifterClient manages grouper-sifter communication (from the grouper side).
 
-    The "sifter" is a central process that receives FRB events (and coarse-grained
-    per-beam SNRs) from the groupers on all search nodes. This client lets other
-    code open a connection to a sifter and send it messages. It wraps the two RPCs
-    currently used by the prototype grouper (pirate_frb/run_chord_grouper.py):
+    The grouper sends two types of messages to the sifter: a ConfigMessage
+    (sent once), and FrbEventsMessages (sent once per time chunk).
 
-    - send_configuration()  -- the initial ConfigMessage (config YAML strings).
-    - send_events()         -- a per-time-period FrbEventsMessage (FRB events
-                              and/or coarse-grained per-beam SNRs).
-
-    Both methods return None and raise a verbose RuntimeError on failure (a gRPC
-    transport error, or a not-ok reply from the sifter).
+    If FrbSifterClient is used as a context manager, then close() is automatically called.
 
     Attributes (read-only):
 
@@ -135,11 +122,30 @@ class FrbSifterClient:
                             dedispersion_plan_yaml, grouper_yaml):
         """Send the initial ConfigMessage (CheckConfiguration RPC).
 
-        Each of the four yaml arguments may be either a str (sent unmodified) or
-        any yaml-serializable object (yaml.dump()'d to a string before sending).
+        Sent once, before any events. Each yaml argument may be either a str (sent
+        unmodified) or any yaml-serializable object (``yaml.dump()``'d to a string
+        before sending).
 
-        Returns None; raises a verbose RuntimeError on failure (yaml-serialization
-        error, gRPC transport error, or a not-ok reply).
+        Parameters
+        ----------
+        pirate_yaml : str or object
+            Pirate dedispersion-configuration yaml.
+        xengine_yaml : str or object
+            X-engine metadata yaml.
+        dedispersion_plan_yaml : str or object
+            Dedispersion-plan yaml.
+        grouper_yaml : str or object
+            Grouper-specific configuration yaml.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        RuntimeError
+            On failure: a yaml-serialization error, a gRPC transport error, or a
+            not-ok reply from the sifter.
         """
         request = frb_sifter_pb2.ConfigMessage(
             pirate_yaml = self._to_yaml("pirate_yaml", pirate_yaml),
@@ -161,16 +167,37 @@ class FrbSifterClient:
                     coarsegrain_snr):
         """Send an FrbEventsMessage (FrbEvents RPC).
 
-        'events' is a FrbSifterEvents (one FrbEvent is sent per element, and its
-        chunk_fpga_count populates the message's chunk_fpga_count field), or None
-        to send no per-event triggers (with chunk_fpga_count = 0).
+        Sent once per time chunk, after send_configuration().
 
-        'coarsegrain_snr' may be a numpy or cupy 1-d array (or any 1-d iterable): a
-        cupy array is copied to the host in a single shot via .get() (cupy raises on
-        implicit np.asarray()), then cast to float32.
+        Parameters
+        ----------
+        has_injections : bool
+            Whether this message's events include injected (simulated) FRBs.
+        beam_set_id : int
+            X-engine beam-set id.
+        events : FrbSifterEvents or None
+            The per-event triggers: one FrbEvent is sent per array element, and the
+            object's chunk_fpga_count populates the message's chunk_fpga_count field.
+            None sends no per-event triggers (with chunk_fpga_count = 0).
+        coarsegrain_start_fpga_count : int
+            FPGA count at the start of the coarse-grain SNR window.
+        coarsegrain_end_fpga_count : int
+            FPGA count at the end of the coarse-grain SNR window.
+        coarsegrain_snr : array_like
+            Per-beam coarse-grained max SNR, as a 1-d numpy or cupy array (or any
+            1-d iterable). A cupy array is copied to the host in a single shot via
+            ``.get()`` (cupy raises on implicit ``np.asarray()``), then cast to
+            float32.
 
-        Returns None; raises a verbose RuntimeError on failure (malformed input,
-        gRPC transport error, or a not-ok reply).
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        RuntimeError
+            On failure: malformed input, a gRPC transport error, or a not-ok reply
+            from the sifter.
         """
         if events is None:
             proto_events = []
@@ -234,7 +261,10 @@ class FrbSifterClient:
         return arr
 
     def close(self):
-        """Close the gRPC channel."""
+        """
+        Close the gRPC channel.
+        Automatically called if the FrbSifterClient is used as a context manager.
+        """
         self.channel.close()
 
     def __enter__(self):

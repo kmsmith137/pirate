@@ -1,6 +1,6 @@
 # Python class reference
 
-This section is **very incomplete** -- only a couple of classes are documented so far.
+This section is **very incomplete** -- only a few classes are documented so far.
 
 ```{toctree}
 ---

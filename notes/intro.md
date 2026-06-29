@@ -3,9 +3,9 @@
 Some notes/caveats:
 
   - This repo contains real-time server code (network receive, ring buffering,
-    file-writing RPCs) and GPU dedispersion code, but currently the **real-time
-    server does not call the GPU dedisperser**! Working on this is my top
-    priority.
+    file-writing RPCs) and GPU dedispersion code, but currently the **dedispersion
+    output is not correctly normalized, and looks like random noise**!
+    Fixing this is my top priority.
 
   - Currently, this code can only be compiled on a recent ubuntu
     linux machine with **a physical GPU**, and the cuda toolkit installed.
@@ -67,13 +67,3 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
     are emitted by a python code generator (`pirate_frb.cuda_generator`).
     Some kernels ended up getting so complicated and coalesced that a
     hacked-up code generator was easier than C++ templates!
-
-  - The output of the FRB search is a stream of arrays ("coarse-grained
-    dedispersion outputs", to be described in future documentation).
-    The plan for these arrays is as follows.
-    
-    Arrays will be handed off to a "downstream" process (the "grouper"),
-    using a shared ring buffer in GPU memory. This could be implemented
-    with `cudaIpc`, using grpc to synchronize the producer/consumer, by
-    streaming integer frame offsets back and forth. None of this is implemented
-    yet, but it will be soon!

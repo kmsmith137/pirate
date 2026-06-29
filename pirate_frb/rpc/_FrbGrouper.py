@@ -17,11 +17,19 @@ from .FrbSifterClient import FrbSifterEvents
 
 @ksgpu.inject_methods(pirate_pybind11.FrbGrouper)
 class FrbGrouperInjections:
-    """gRPC server that receives a GpuDedisperser output ring buffer from an
-    FrbServer over CUDA IPC. Use as a context manager::
+    """The FrbGrouper manages pirate-grouper communication (from the grouper side).
+    
+    This is a complex class, and the docstrings just summarize syntax.
+    For a lot more info, see the grouper-specific parts of the sphinx docs.
+
+    Usage summary::
 
         with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:
-            with g.get_output(ichunk, ibatch) as outputs: ...
+            for ichunk in itertools.count():       # outer loop over time chunks
+                for ibatch in range(g.nbatches):   # inner loop over beam batches
+                   with g.get_output(ichunk, ibatch) as outputs:
+                       pass
+                events = g.create_events(...)
 
     Attributes (all read-only):
 
@@ -118,18 +126,16 @@ class FrbGrouperInjections:
 
     @contextmanager
     def get_output(self, ichunk, ibatch):
-        """Acquire one beam-batch's outputs; on exit synchronize the GPU, then release.
+        """Acquire one beam-batch's outputs, as a GpuDedisperserOutputs object.
 
-        The producer sequence id is ``seq_id = ichunk * nbatches + ibatch``.
-
-        On exit this calls ``cupy.cuda.get_current_stream().synchronize()``
-        BEFORE ``_release_output(seq_id)``, so all GPU reads the body queued on
-        the current cupy stream complete before CONSUMED is sent to the
-        producer. This is required because there is no IPC-event fence: once
-        CONSUMED is sent, the producer may overwrite the ring-buffer slot (see
-        plans/grouper_server.md). The body must therefore do its GPU work on the
-        current cupy stream (the default; FrbGrouper's __enter__ has already
-        selected the right device).
+        Usage summary (see grouper-specific parts of sphinx docs for more info)::
+        
+            # Warning: output arrays are only valid inside the context manager!!
+            # Therefore, each batch must be fully processed, before seeing the next batch.
+            with grouper.get_output(ichunk, ibatch) as outputs:
+                # Loop over dedispersion trees.
+                for itree, tree_out in enumerate(outputs.out_max):
+                    # 'tree_out' has shape (beams_per_batch, coarse_ndm, coarse_ntime)
 
         Parameters
         ----------
@@ -232,14 +238,19 @@ class FrbGrouperInjections:
     def create_events(self, ichunk, itrees, ibeams, idm, itime, snr):
         """Build a FrbSifterEvents from GPU arrays of (tree, beam, dm, time) indices.
 
-        Converts the array indices of a set of events -- the dedispersion-tree index,
-        global beam index, and the tree's (dm, time) output-axis indices -- plus their
-        SNRs into physical units (beam id, absolute FPGA timestamp, DM), following
-        notes/tree_dedispersion.tex, section "Dedispersion output arrays" (Eqs. idm_it,
-        idm_it_early). The per-tree geometry tables and dm_per_unit_delay are
-        precomputed once in __enter__ (see _precompute_event_tables); this method does
-        only the per-event arithmetic.
+        The grouper finds peaks at index quadruples (itree, ibeam, idm, itime), and
+        needs to translate these indices into physical quantities (DM, time, etc)
+        before sending events to the sifter.
 
+        The create_events() method peforms this translation, including subtleties
+        like early triggers (which mean that event arrival times can be in the future!)
+        For more info, see the grouper-specific parts of the sphinx docs, and/or
+        the tex notes.
+
+        Currently, when we assign dm/time value to each event, we ignore out_argmax
+        arrays, and use the center of each coarse dm/time pixel. I plan to improve
+        this in the future.
+        
         Parameters
         ----------
         ichunk : int
@@ -252,11 +263,7 @@ class FrbGrouperInjections:
 
         Returns
         -------
-        FrbSifterEvents
-            chunk_fpga_count = ichunk * T_in * seq_per_frb_time_sample. dm_error and
-            rfi_prob are set to zero (not computed by the toy grouper). For an
-            early-trigger tree (delta>0), the reported arrival time is corrected from
-            the trigger frequency to the lowest full-band frequency (Eq. idm_it_early).
+        FrbSifterEvents object
         """
         import cupy as cp
 
