@@ -86,7 +86,7 @@ message FrbEventsMessage {
   int64 chunk_fpga_count = 3;
   repeated FrbEvent events = 4;
 
-  // Course-grained triggers (per beam; optional)
+  // Coarse-grained triggers (per beam; optional)
   // Set the fpga-counts values to zero for no coarse-grained triggers
   int64 coarsegrain_start_fpga_count = 5;
   int64 coarsegrain_end_fpga_count = 6;
