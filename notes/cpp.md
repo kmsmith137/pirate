@@ -61,7 +61,7 @@ void f(int x, int y, int z)
     // Example 3: you should replace this by xassert_shape_eq(arr, ({M,N})), since the xassert_shape_eq()
     // message contains more information (namely, the actual and expected array shapes).
 
-    if ((arr.ndim != 2) || (arr.shape[0] != x) && (arr.shape[1] != y)) {
+    if ((arr.ndim != 2) || (arr.shape[0] != x) || (arr.shape[1] != y)) {
         stringstream ss;
         ss << "f(): expected shape (x,y) = (" << x << "," << y << "), got " << arr.shape_str();
         throw runtime_error(ss.str());

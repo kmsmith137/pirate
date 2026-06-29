@@ -65,7 +65,7 @@ pirate_frb run_fake_xengine 10.222.3.5:6000 10.222.3.5:6001
 # Optional: on either cf00 or cf05, send RPC "status" requests to the server.
 pirate_frb rpc_status 10.222.3.5:6000 10.222.3.5:6001
 
-# Optional: in window 6, send RPC "write_files" requests to the server, for randomly
+# Optional: in another window on cf00 or cf05, send RPC "write_files" requests to the server, for randomly
 # chosen beams/times. Filenames will be printed in the 'rpc_status' process as they
 # are written. Files appear on the real NFS server: /mnt/cs00/data/{user}/{date},
 # and persist after the server exits.

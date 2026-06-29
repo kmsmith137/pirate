@@ -58,8 +58,8 @@ documentation snapshots (do not edit them by hand; regenerate by running
 
   1. It documents the binary metadata header that each X-engine node sends at the
      start of a TCP stream to an FRB search node.
-  2. It is used as configuration for the fake X-engine data sender
-     (`pirate_frb run_server -s`).
+  2. It is the input from which the `example_asdf_header.yml` documentation
+     snapshot is generated (`pirate_frb show_file_format configs/xengine_metadata.yml`).
 
   To inspect:
 

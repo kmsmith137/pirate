@@ -15,12 +15,12 @@
 
 ## gRPC
 
-- Proto files live in `grpc/` (currently just [`grpc/frb_search.proto`](../grpc/frb_search.proto)).
+- Proto files live in `grpc/`: [`frb_search.proto`](../grpc/frb_search.proto), [`frb_grouper.proto`](../grpc/frb_grouper.proto), [`frb_sifter.proto`](../grpc/frb_sifter.proto).
 - `make grpc` generates both C++ and Python files from `.proto` files.
 - C++ generated files (`*.pb.{h,cc}`, `*.grpc.pb.{h,cc}`) are output to `grpc/`.
 - Python generated files (`*_pb2.py`, `*_pb2_grpc.py`) are output to `pirate_frb/rpc/grpc/`.
 - C++ generation uses `protoc` with `grpc_cpp_plugin`. Python generation uses `grpc_tools.protoc` followed by `protol` (protoletariat) to fix relative imports.
-- Sentinel files (`*.protoc_cpp_sentinel`, `*.protoc_python_sentinel`) ensure each `protoc` invocation runs exactly once despite producing multiple output files.
+- Each `protoc` invocation emits several files at once (the four C++ outputs, or both Python stubs), so the rules are grouped multi-target pattern rules: one rule whose targets are all of those outputs, run once per `.proto`.
 - The shared library links against `-lgrpc++` and `-lprotobuf`.
 
 ## File Structure

@@ -120,7 +120,7 @@ uint y1 = __byte_perm(x0, x1, 0x7351);
 
 And one more local transpose example, using 4-bit data packed into `uint`
 registers. The bitwise helper `bit_select(a, mask, b) = (a & mask) | (b & ~mask)`
-compiles to a single LOP3 instruction (LUT 0xe2):
+can be implemented as a single LOP3 instruction (LUT 0xe2):
 ```cpp
 // Helper: bit_select(a, mask, b) returns (a & mask) | (b & ~mask).
 // This can be done with one LOP3. Surprisingly, nvcc 13.2 compiles it
