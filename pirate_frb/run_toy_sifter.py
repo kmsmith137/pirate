@@ -3,9 +3,9 @@
 Pure-Python (no C++) implementation of the FrbSifter service from
 frb_sifter.proto. The real sifter (chord-frb-sifter) aggregates FRB events from
 the groupers on all search nodes; this toy version simply receives each RPC and
-prints one line -- the client IP and a short summary of the message -- then
-returns a trivial ok=True reply. Useful for smoke-testing a grouper's
-sifter-client path without running the real sifter.
+prints a one-line summary of the message, then returns a trivial ok=True reply.
+Useful for smoke-testing a grouper's sifter-client path without running the real
+sifter.
 """
 
 from concurrent import futures
@@ -53,18 +53,18 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
         return frb_sifter_pb2.ConfigReply(ok=True)
 
     def FrbEvents(self, request, context):
+        # 'chunk_fpga_count' is the proto field; the grouper populates it with the
+        # chunk's FPGA-seq start (FrbSifterEvents.chunk_fpga_start).
         n_events = len(request.events)
-        max_snr = max((e.snr for e in request.events), default=None)
-        snr_str = f"{max_snr:.1f}" if max_snr is not None else "n/a"
-        max_cg_snr = max(request.coarsegrain_snr, default=None)
-        cg_snr_str = f"{max_cg_snr:.1f}" if max_cg_snr is not None else "n/a"
-        print(f"{_peer_ip(context)}  FrbEvents("
-              f"beam_set_id={request.beam_set_id}, "
-              f"chunk_fpga_count={request.chunk_fpga_count}, "
-              f"n_events={n_events}, max_snr={snr_str}, "
-              f"has_injections={request.has_injections}, "
-              f"n_coarsegrain_snr={len(request.coarsegrain_snr)}, "
-              f"max_coarsegrain_snr={cg_snr_str})", flush=True)
+        line = (f"beamset={request.beam_set_id}, "
+                f"fpga={request.chunk_fpga_count}, "
+                f"nevents={n_events}")
+        if n_events > 0:
+            # Report the single highest-SNR event.
+            ev = max(request.events, key=lambda e: e.snr)
+            line += (f" (snr={ev.snr:.4g}, beam={ev.beam_id}, dm={ev.dm:.4g}, "
+                     f"fpga={ev.fpga_timestamp}, rfiprob={ev.rfi_prob:.4g})")
+        print(line, flush=True)
         return frb_sifter_pb2.FrbEventsReply(ok=True, message="")
 
 
@@ -72,9 +72,8 @@ def run_toy_sifter(addr, max_workers=4):
     """Run a toy FrbSifter gRPC server listening at 'addr' (e.g. '127.0.0.1:7100').
 
     Implements the FrbSifter service (CheckConfiguration, FrbEvents) in pure
-    Python. For each received RPC, prints one line with the client IP and a
-    one-line summary of the message, then returns a trivial ok=True reply.
-    Blocks until Ctrl-C.
+    Python. For each received RPC, prints a one-line summary of the message, then
+    returns a trivial ok=True reply. Blocks until Ctrl-C.
 
     'addr' is passed to grpc's add_insecure_port(): use 'ip:port' for a specific
     interface, or '[::]:port' / '0.0.0.0:port' to listen on all interfaces.
