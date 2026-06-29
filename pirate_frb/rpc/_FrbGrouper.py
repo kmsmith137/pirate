@@ -17,7 +17,45 @@ from .FrbSifterClient import FrbSifterEvents
 
 @ksgpu.inject_methods(pirate_pybind11.FrbGrouper)
 class FrbGrouperInjections:
-    """Python extensions for FrbGrouper (context-manager usage + get_output)."""
+    """gRPC server that receives a GpuDedisperser output ring buffer from an
+    FrbServer over CUDA IPC. Use as a context manager::
+
+        with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:
+            with g.get_output(ichunk, ibatch) as outputs: ...
+
+    Attributes (all read-only):
+
+    - ``is_stopped`` (bool) -- whether the grouper is in the stopped state.
+    - ``cuda_device_id`` (int) -- CUDA device where the IPC-mapped outputs live.
+    - ``dtype`` (ksgpu.Dtype) -- data type of the out_max arrays.
+    - ``nt_in`` (int) -- input time samples per time chunk.
+    - ``total_beams`` (int) -- total beams per chunk (= beams_per_gpu).
+    - ``beams_per_batch`` (int) -- beams per output batch.
+    - ``nbatches`` (int) -- beam-batches per chunk (= total_beams / beams_per_batch); producer ``seq_id = ichunk*nbatches + ibatch``.
+    - ``num_batch_slots`` (int) -- output ring-buffer depth; leading beam axis = ``num_batch_slots*beams_per_batch`` (<= total_beams).
+    - ``initial_chunk`` (int) -- chunk index of the producer's first output vs FPGA seq 0 (sets GpuDedisperserOutputs.ichunk_fpga_based).
+    - ``ntrees`` (int) -- number of dedispersion trees.
+    - ``ndm_out`` (list of int) -- per-tree output DM-channel counts (length ntrees).
+    - ``nt_out`` (list of int) -- per-tree output time-sample counts (length ntrees).
+    - ``dedispersion_config`` (DedispersionConfig) -- producer's dedispersion config (from the handshake).
+    - ``xengine_metadata`` (XEngineMetadata) -- X-engine metadata (from the handshake).
+    - ``xengine_metadata_yaml_string`` (str) -- X-engine metadata as a YAML string.
+    - ``dedispersion_config_yaml_string`` (str) -- dedispersion config as a YAML string.
+    - ``dedispersion_plan_yaml_string`` (str) -- dedispersion plan as a YAML string.
+    - ``grouper_ip_addr`` (str) -- the grouper's own listen address (``ip:port``), set at construction.
+    - ``search_ip_addr`` (str) -- producer FrbServer's FrbSearch RPC endpoint (``ip:port``), from the handshake.
+
+    The Python context manager also attaches (available inside the ``with`` block):
+
+    - ``xengine_yaml`` (dict) -- parsed X-engine metadata (from xengine_metadata_yaml_string).
+    - ``dedispersion_config_yaml`` (dict) -- parsed dedispersion config.
+    - ``dedispersion_plan_yaml`` (dict) -- parsed dedispersion plan.
+    - ``dm_per_unit_delay`` (float) -- DM of a full-band delay of one input time sample.
+    """
+    # This class docstring (above) is the FrbGrouper docstring: the pybind11 binding
+    # deliberately sets none, and ksgpu.inject_methods copies this one onto the class
+    # (option 2 in notes/docstrings.md). It's kept here, next to the context-manager
+    # / get_output() code that defines FrbGrouper's primary Python interface.
 
     def __enter__(self):
         import cupy as cp

@@ -67,6 +67,8 @@ and documented (with `autoclass`) in the sphinx docs.
 
 - If a class has method injections, then add a C++ comment to the pybind11 code with a concise description of the injections.
 
+- A class's docstring may live either in the pybind11 binding or in the `inject_methods` injector class (an injector docstring overrides the pybind11 one). Keep it on exactly one side and put a pointer comment on the other. See "Class docstrings for classes with method injections" in `notes/docstrings.md` for the policy and how to choose.
+
 - Don't use lambda-functions in cases where a named function (or constructor) would be equivalent.
 
 - Some C++ classes have protected constructors and a public static method `shared_ptr<X> X::create(...)`. In such cases, the python syntax should be `x = X(...)`, not `x = X.create(...)`.

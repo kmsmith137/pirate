@@ -336,6 +336,10 @@ void register_core_bindings(pybind11::module &m)
 
     // CudaStreamPool: always accessed via shared_ptr.
     // Stream members are exposed to python as CudaStreamWrapper objects.
+    // No class docstring here: CudaStreamPool's docstring lives in the Python
+    // injector (pirate_frb/pybind11_injections.py), since its Python interface is
+    // the injected stream accessors that return ksgpu.CudaStreamWrapper objects
+    // (option 2 in notes/docstrings.md).
     py::class_<CudaStreamPool, std::shared_ptr<CudaStreamPool>>(m, "CudaStreamPool")
         .def(py::init([](int num_compute_streams, int compute_stream_priority) {
             return CudaStreamPool::create(num_compute_streams, compute_stream_priority);
@@ -1167,41 +1171,12 @@ void register_core_bindings(pybind11::module &m)
     // py::dynamic_attr() lets the Python injection attach dedispersion_plan_yaml.
     // Injections (pirate_frb/rpc/_FrbGrouper.py) add __enter__/__exit__ and
     // a get_output() context manager.
-    py::class_<FrbGrouper, std::shared_ptr<FrbGrouper>>(m, "FrbGrouper", py::dynamic_attr(),
-        "gRPC server that receives a GpuDedisperser output ring buffer from an\n"
-        "FrbServer over CUDA IPC. Use as a context manager (see injections)::\n"
-        "\n"
-        "    with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:\n"
-        "        with g.get_output(ichunk, ibatch) as outputs: ...\n"
-        "\n"
-        "Attributes (all read-only):\n"
-        "\n"
-        "- ``is_stopped`` (bool) -- whether the grouper is in the stopped state.\n"
-        "- ``cuda_device_id`` (int) -- CUDA device where the IPC-mapped outputs live.\n"
-        "- ``dtype`` (ksgpu.Dtype) -- data type of the out_max arrays.\n"
-        "- ``nt_in`` (int) -- input time samples per time chunk.\n"
-        "- ``total_beams`` (int) -- total beams per chunk (= beams_per_gpu).\n"
-        "- ``beams_per_batch`` (int) -- beams per output batch.\n"
-        "- ``nbatches`` (int) -- beam-batches per chunk (= total_beams / beams_per_batch); producer ``seq_id = ichunk*nbatches + ibatch``.\n"
-        "- ``num_batch_slots`` (int) -- output ring-buffer depth; leading beam axis = ``num_batch_slots*beams_per_batch`` (<= total_beams).\n"
-        "- ``initial_chunk`` (int) -- chunk index of the producer's first output vs FPGA seq 0 (sets GpuDedisperserOutputs.ichunk_fpga_based).\n"
-        "- ``ntrees`` (int) -- number of dedispersion trees.\n"
-        "- ``ndm_out`` (list of int) -- per-tree output DM-channel counts (length ntrees).\n"
-        "- ``nt_out`` (list of int) -- per-tree output time-sample counts (length ntrees).\n"
-        "- ``dedispersion_config`` (DedispersionConfig) -- producer's dedispersion config (from the handshake).\n"
-        "- ``xengine_metadata`` (XEngineMetadata) -- X-engine metadata (from the handshake).\n"
-        "- ``xengine_metadata_yaml_string`` (str) -- X-engine metadata as a YAML string.\n"
-        "- ``dedispersion_config_yaml_string`` (str) -- dedispersion config as a YAML string.\n"
-        "- ``dedispersion_plan_yaml_string`` (str) -- dedispersion plan as a YAML string.\n"
-        "- ``grouper_ip_addr`` (str) -- the grouper's own listen address (``ip:port``), set at construction.\n"
-        "- ``search_ip_addr`` (str) -- producer FrbServer's FrbSearch RPC endpoint (``ip:port``), from the handshake.\n"
-        "\n"
-        "The Python context manager also attaches (available inside the ``with`` block):\n"
-        "\n"
-        "- ``xengine_yaml`` (dict) -- parsed X-engine metadata (from xengine_metadata_yaml_string).\n"
-        "- ``dedispersion_config_yaml`` (dict) -- parsed dedispersion config.\n"
-        "- ``dedispersion_plan_yaml`` (dict) -- parsed dedispersion plan.\n"
-        "- ``dm_per_unit_delay`` (float) -- DM of a full-band delay of one input time sample.")
+    // The class docstring (including the read-only-attribute bullet list) lives in
+    // the Python injector pirate_frb/rpc/_FrbGrouper.py, NOT here: FrbGrouper's
+    // primary interface is the context-manager / get_output() usage defined there,
+    // and ksgpu.inject_methods copies the injector's docstring onto this class
+    // (overriding any docstring set here). Per-class policy: notes/docstrings.md.
+    py::class_<FrbGrouper, std::shared_ptr<FrbGrouper>>(m, "FrbGrouper", py::dynamic_attr())
           .def(py::init([](const std::string &ip_addr){ return FrbGrouper::create(ip_addr); }),
                py::arg("ip_addr"))
           // open() must stay interruptible by Ctrl-C while it blocks waiting for
@@ -1234,9 +1209,10 @@ void register_core_bindings(pybind11::module &m)
           .def("_release_output", &FrbGrouper::release_output, py::arg("seq_id"),
                "Record that the caller is done with 'seq_id' (emits CONSUMED).")
           // Member docstrings are intentionally omitted here: each member is documented
-          // in the bullet list in the class docstring above (kept as a plain list, not a
-          // napoleon "Attributes" section, so the rendering is compact and the members are
-          // not re-registered as separate sphinx objects / sidebar entries).
+          // in the bullet list in the class docstring, which lives in the Python injector
+          // (pirate_frb/rpc/_FrbGrouper.py). Kept as a plain list, not a napoleon
+          // "Attributes" section, so the rendering is compact and the members are not
+          // re-registered as separate sphinx objects / sidebar entries.
           .def_property_readonly("is_stopped", &FrbGrouper::is_stopped_pub)
           .def_readonly("cuda_device_id", &FrbGrouper::cuda_device_id)
           .def_readonly("dtype", &FrbGrouper::dtype)

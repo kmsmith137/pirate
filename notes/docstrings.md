@@ -6,6 +6,41 @@ rendered as reStructuredText, and napoleon additionally parses NumPy/Google-styl
 sections. A few conventions keep the rendered output clean. (See also
 `notes/pybind11.md` for the pybind-specific version of these rules.)
 
+## Class docstrings for classes with method injections
+
+A pybind11-wrapped class that is extended via `ksgpu.inject_methods` (see
+`notes/pybind11.md`) can carry its class docstring on either side. `inject_methods`
+copies the injector class's docstring onto the C++ class *when the injector defines
+one* -- and that overrides the docstring set in the pybind11 binding. If the injector
+has no docstring, the pybind11 docstring stands.
+
+To avoid confusion and accidental clobbering, put each such class's docstring on
+exactly ONE side, and leave a short comment on the other side pointing to it:
+
+- **Option 1 -- docstring in the pybind11 binding.** Write the class docstring in the
+  C++ `py::class_<...>(m, "Name", "docstring...")`. In the injector class, write *no*
+  docstring; instead put a `#` comment noting the docstring lives in pybind11 (so the
+  next reader knows not to add one here, since it would override).
+- **Option 2 -- docstring in the injector class.** Write the class docstring as the
+  Python injector's docstring, and set *no* docstring in the C++ `py::class_<...>(m,
+  "Name")`; put a C++ comment there noting the docstring lives in the injector.
+
+Choosing between them -- put the docstring where the class is most naturally described:
+
+- Use **option 1** for classes that are essentially C++ objects with a thin Python
+  shim (a constructor/`launch`/setter that just converts dtypes, streams, or aflags),
+  especially when a good C++ docstring already exists. Examples: `BumpAllocator`,
+  `SlabAllocator`, `DedispersionConfig`, `GpuDequantizationKernel`, `CasmBeamformer`.
+- Use **option 2** when the class's primary Python interface *is* the injection -- a
+  context-manager usage pattern, or accessors that return Python wrapper objects -- so
+  the narrative (and the read-only-attribute bullet list, per the next section) belongs
+  next to that Python code. Examples: `FrbGrouper` (the `with ... as g:` /
+  `g.get_output(...)` API), `GpuDedisperser` (`get_input`/`get_output` context
+  managers), `CudaStreamPool` (accessors returning `ksgpu.CudaStreamWrapper`).
+
+Either way the docstring is plain rST/napoleon, so all the conventions below apply
+regardless of which side it lives on.
+
 ## Simple properties / attributes: document them in the class docstring
 
 Prefer documenting "simple" members -- typical read-only pybind11 properties

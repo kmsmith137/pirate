@@ -23,8 +23,18 @@ void register_casm_bindings(pybind11::module &m)
 {
     // CasmBeamformer: GPU beamformer for CASM telescope
     // Note: Python method injections in pirate_frb/pybind11_injections.py add stream argument support
-    py::class_<CasmBeamformer> (m, "CasmBeamformer")
-        
+    // Note: Python injections in pirate_frb/pybind11_injections.py add a stream
+    // argument to launch_beamformer(); the class docstring stays here (option 1
+    // in notes/docstrings.md).
+    py::class_<CasmBeamformer> (m, "CasmBeamformer",
+        "GPU beamformer for CASM/CHORD-style arrays.\n\n"
+        "Constructed once with time-independent parameters (beam locations, feed\n"
+        "layout, frequencies); then launch_beamformer() is called on successive\n"
+        "chunks of int4+4 electric-field data to produce downsampled per-beam\n"
+        "intensities, applying per-feed complex weights (gains / masking).\n\n"
+        "Array shapes: E-field (T, F, 2, 256), feed_weights (F, 2, 256, 2),\n"
+        "output intensities (T/downsampling_factor, F, B). See launch_beamformer().")
+
         // Constructor with optional ew_feed_spacings argument (defaults to None/empty Array)
         .def(py::init([](const Array<float> &frequencies,
                          const Array<int> &feed_indices,

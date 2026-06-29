@@ -335,7 +335,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         .def_readonly("out_max", &GpuDedisperser::Outputs::out_max)
         .def_readonly("out_argmax", &GpuDedisperser::Outputs::out_argmax);
 
-    // GpuDedisperser: pybind11_injections.py adds stream=None wrappers for acquire/release methods
+    // GpuDedisperser: pybind11_injections.py adds stream=None wrappers for acquire/release
+    // methods. No class docstring here: it lives in the Python injector, since the primary
+    // Python interface is the injected get_input()/get_output() context managers (option 2
+    // in notes/docstrings.md).
     py::class_<GpuDedisperser, std::shared_ptr<GpuDedisperser>>(m, "GpuDedisperser")
           .def(py::init([](std::shared_ptr<DedispersionPlan> plan,
                           std::shared_ptr<CudaStreamPool> stream_pool,

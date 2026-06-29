@@ -17,8 +17,10 @@ from . import pirate_pybind11
 
 @ksgpu.inject_methods(pirate_pybind11.BumpAllocator)
 class BumpAllocatorInjections:
-    """Python extensions for BumpAllocator."""
-    
+    # No class docstring here: BumpAllocator's docstring lives in the pybind11
+    # binding (option 1 in notes/docstrings.md). inject_methods would otherwise
+    # copy a docstring written here onto the class, overriding the pybind11 one.
+
     # Save original C++ constructor
     _cpp_init = pirate_pybind11.BumpAllocator.__init__
     
@@ -102,12 +104,19 @@ class BumpAllocatorInjections:
 
 @ksgpu.inject_methods(pirate_pybind11.CudaStreamPool)
 class CudaStreamPoolInjections:
-    """Python extensions for CudaStreamPool.
-    
-    Wraps C++ stream members as Python-friendly ksgpu.CudaStreamWrapper objects
-    that can be used with cupy context managers.
+    """Pool of CUDA streams used by the dedispersion pipeline.
+
+    Holds a set of compute streams plus dedicated high/low-priority GPU-to-host
+    and host-to-GPU transfer streams.
+
+    The stream accessors (``low_priority_g2h_stream``, ``high_priority_h2g_stream``,
+    ``compute_streams``, ...) return ``ksgpu.CudaStreamWrapper`` objects, which can be
+    used as cupy stream context managers.
     """
-    
+    # This class docstring (above) is the CudaStreamPool docstring: the pybind11
+    # binding deliberately sets none, and inject_methods copies this one onto the
+    # class (option 2 in notes/docstrings.md).
+
     # Save references to C++ properties
     _cpp_low_priority_g2h_stream = pirate_pybind11.CudaStreamPool.low_priority_g2h_stream
     _cpp_low_priority_h2g_stream = pirate_pybind11.CudaStreamPool.low_priority_h2g_stream
@@ -180,11 +189,10 @@ class CudaStreamPoolInjections:
 
 @ksgpu.inject_methods(pirate_pybind11.CasmBeamformer)
 class CasmBeamformerInjections:
-    """Python extensions for CasmBeamformer.
-    
-    Adds stream argument support to launch_beamformer.
-    """
-    
+    # No class docstring here: CasmBeamformer's docstring lives in the pybind11
+    # binding (option 1 in notes/docstrings.md); this injector only adds a stream
+    # argument to launch_beamformer().
+
     # Save reference to C++ method
     _cpp_launch_beamformer = pirate_pybind11.CasmBeamformer.launch_beamformer
     
@@ -230,11 +238,17 @@ class CasmBeamformerInjections:
 
 @ksgpu.inject_methods(pirate_pybind11.GpuDedisperser)
 class GpuDedisperserInjections:
-    """Python extensions for GpuDedisperser.
-    
-    Adds stream argument support to acquire/release methods.
+    """GPU tree-dedispersion engine.
+
+    Consumes input chunks (one beam-batch at a time) and produces dedispersion
+    output buffers -- per-tree peak-finding max/argmax over the DM-vs-time plane.
+    The Python interface is the get_input() / get_output() context managers (and
+    the acquire/release methods they wrap), which add stream=None handling.
     """
-    
+    # This class docstring (above) is the GpuDedisperser docstring: the pybind11
+    # binding deliberately sets none, and inject_methods copies this one onto the
+    # class (option 2 in notes/docstrings.md).
+
     # Save references to C++ methods
     _cpp_acquire_input = pirate_pybind11.GpuDedisperser.acquire_input
     _cpp_release_input_and_launch_dd_kernels = pirate_pybind11.GpuDedisperser.release_input_and_launch_dd_kernels
@@ -408,8 +422,10 @@ class GpuDedisperserInjections:
 
 @ksgpu.inject_methods(pirate_pybind11.SlabAllocator)
 class SlabAllocatorInjections:
-    """Python extensions for SlabAllocator."""
-    
+    # No class docstring here: SlabAllocator's docstring lives in the pybind11
+    # binding (option 1 in notes/docstrings.md). inject_methods would otherwise
+    # copy a docstring written here onto the class, overriding the pybind11 one.
+
     # Save original C++ constructor
     _cpp_init = pirate_pybind11.SlabAllocator.__init__
     
@@ -456,12 +472,11 @@ class SlabAllocatorInjections:
 
 @ksgpu.inject_methods(pirate_pybind11.GpuDequantizationKernel)
 class GpuDequantizationKernelInjections:
-    """Python extensions for GpuDequantizationKernel.
+    # No class docstring here: GpuDequantizationKernel's docstring lives in the
+    # pybind11 binding (option 1 in notes/docstrings.md); this injector adds dtype
+    # conversion for the constructor and a stream argument for launch().
 
-    Adds dtype conversion for constructor and stream argument support for launch.
-    """
-
-    # Save references to C++ methods
+# Save references to C++ methods
     _cpp_init = pirate_pybind11.GpuDequantizationKernel.__init__
     _cpp_launch = pirate_pybind11.GpuDequantizationKernel.launch
 
@@ -531,11 +546,10 @@ class GpuDequantizationKernelInjections:
 
 @ksgpu.inject_methods(pirate_pybind11.DedispersionConfig)
 class DedispersionConfigInjections:
-    """Python extensions for DedispersionConfig.
-    
-    Adds flexible dtype setter that accepts strings, numpy/cupy dtypes, etc.
-    """
-    
+    # No class docstring here: DedispersionConfig's docstring lives in the pybind11
+    # binding (option 1 in notes/docstrings.md); this injector adds a flexible dtype
+    # setter that accepts strings, numpy/cupy dtypes, etc.
+
     # Save reference to C++ dtype attribute
     _cpp_dtype = pirate_pybind11.DedispersionConfig.dtype
     
