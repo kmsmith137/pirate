@@ -1211,7 +1211,7 @@ void register_core_bindings(pybind11::module &m)
           // steps to poll for pending Python signals (PyErr_CheckSignals() != 0
           // => the SIGINT handler raised KeyboardInterrupt, propagated via
           // error_already_set).
-          .def("open", [](FrbGrouper &self) {
+          .def("_open", [](FrbGrouper &self) {
                self.start_listening();                 // GIL held; quick (bind + spawn)
                for (;;) {
                    bool ready;
@@ -1223,15 +1223,15 @@ void register_core_bindings(pybind11::module &m)
                }
           }, "Start listening + block until a client connects and its handshake\n"
              "is processed. Interruptible by Ctrl-C.")
-          .def("close", &FrbGrouper::close, py::call_guard<py::gil_scoped_release>(),
+          .def("_close", &FrbGrouper::close, py::call_guard<py::gil_scoped_release>(),
                "Stop the session + join the send thread + shut down the gRPC server.")
-          .def("stop", [](FrbGrouper &self){ self.stop(); },
+          .def("_stop", [](FrbGrouper &self){ self.stop(); },
                "Put the FrbGrouper into the stopped state (idempotent).")
-          .def("acquire_output", &FrbGrouper::acquire_output,
+          .def("_acquire_output", &FrbGrouper::acquire_output,
                py::arg("seq_id"), py::call_guard<py::gil_scoped_release>(),
                "Block until produced_seq_id has been received for 'seq_id'; return\n"
                "a per-batch slice (nbeams == beams_per_batch) of output_ringbuf.")
-          .def("release_output", &FrbGrouper::release_output, py::arg("seq_id"),
+          .def("_release_output", &FrbGrouper::release_output, py::arg("seq_id"),
                "Record that the caller is done with 'seq_id' (emits CONSUMED).")
           // Member docstrings are intentionally omitted here: each member is documented
           // in the bullet list in the class docstring above (kept as a plain list, not a
@@ -1259,7 +1259,7 @@ void register_core_bindings(pybind11::module &m)
           // NOTE: FrbGrouper::dedispersion_plan_yaml (YAML::Node) is intentionally
           // NOT wrapped; the injection adds a Python dedispersion_plan_yaml attribute
           // parsed from dedispersion_plan_yaml_string. output_ringbuf is private
-          // (reached only via acquire_output).
+          // (reached only via _acquire_output).
     ;
 
     // FileWriter: writes AssembledFrames to disk via SSD and NFS queues.

@@ -138,7 +138,7 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
             print(f'{grouper_addr}: interrupted; shutting down', flush=True)
         except RuntimeError as e:
             # Most likely the producer disconnected (the grouper stops and
-            # acquire_output rethrows). Report cleanly; re-raise anything that is
+            # _acquire_output rethrows). Report cleanly; re-raise anything that is
             # not a stop (e.g. a genuine usage/assert bug).
             if grouper.is_stopped:
                 print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)

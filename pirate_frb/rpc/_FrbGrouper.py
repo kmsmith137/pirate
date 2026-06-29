@@ -25,15 +25,15 @@ class FrbGrouperInjections:
         from ..utils import ThreadAffinity
 
         # Blocks until the client connects and the handshake is processed.
-        self.open()
+        self._open()
 
-        # Everything below runs after open() but before we return; if it raises, the
+        # Everything below runs after _open() but before we return; if it raises, the
         # caller's 'with' will NOT run __exit__, so we undo it here and re-raise.
         try:
             # The handshake yaml strings are not YAML::Node-wrapped in pybind; parse
             # the wire strings into Python objects and attach them as attributes
             # (py::dynamic_attr() on the C++ class enables setting these). The strings
-            # are only populated after the handshake, so this must follow self.open().
+            # are only populated after the handshake, so this must follow self._open().
             import yaml
             self.xengine_yaml = yaml.safe_load(self.xengine_metadata_yaml_string)
             self.dedispersion_config_yaml = yaml.safe_load(self.dedispersion_config_yaml_string)
@@ -62,7 +62,7 @@ class FrbGrouperInjections:
                     self._exit_stack = None
                     es.close()
             finally:
-                self.close()
+                self._close()
             raise
         return self
 
@@ -75,7 +75,7 @@ class FrbGrouperInjections:
                 self._exit_stack = None
                 es.close()
         finally:
-            self.close()
+            self._close()
         return False
 
     @contextmanager
@@ -85,7 +85,7 @@ class FrbGrouperInjections:
         The producer sequence id is ``seq_id = ichunk * nbatches + ibatch``.
 
         On exit this calls ``cupy.cuda.get_current_stream().synchronize()``
-        BEFORE ``release_output(seq_id)``, so all GPU reads the body queued on
+        BEFORE ``_release_output(seq_id)``, so all GPU reads the body queued on
         the current cupy stream complete before CONSUMED is sent to the
         producer. This is required because there is no IPC-event fence: once
         CONSUMED is sent, the producer may overwrite the ring-buffer slot (see
@@ -114,12 +114,12 @@ class FrbGrouperInjections:
                              f"[0, {self.nbatches}) (got {ibatch})")
         import cupy as cp
         seq_id = ichunk * self.nbatches + ibatch
-        outputs = self.acquire_output(seq_id)
+        outputs = self._acquire_output(seq_id)
         try:
             yield outputs
         finally:
             cp.cuda.get_current_stream().synchronize()
-            self.release_output(seq_id)
+            self._release_output(seq_id)
 
     def _precompute_event_tables(self):
         """Precompute the per-tree lookup tables used by create_events().
