@@ -15,15 +15,8 @@ service FrbSifter {
   // Returns true if good, false otherwise.
   rpc CheckConfiguration (ConfigMessage) returns (ConfigReply) {}
 
-  // ?? For injections only
-  //rpc NewBeamSet (BeamSetUpdateMessage) returns (BeamSetUpdateReply) {}
-
   // Report events from a given time chunk.
   rpc FrbEvents (FrbEventsMessage) returns (FrbEventsReply) {}
-
-  // Report the max SNR seen per beam for a given time period
-  // rpc FrbBeamSNR (FrbBeamSNRMessage) returns (FrbBeamSNRReply) {}
-
 }
 
 // Wire-protocol version. This is the single source of truth for the protocol
@@ -40,7 +33,7 @@ service FrbSifter {
 // (yet) present in the canonical upstream frb_sifter.proto referenced above.
 enum ProtocolVersion {
   PROTOCOL_VERSION_UNSPECIFIED = 0;
-  PROTOCOL_VERSION_CURRENT = 1;
+  PROTOCOL_VERSION_CURRENT = 2;
 }
 
 message ConfigMessage {
@@ -49,66 +42,52 @@ message ConfigMessage {
   // does not match its own PROTOCOL_VERSION_CURRENT. Kept as a uint32 rather
   // than the enum type so an out-of-range value from a newer client round-trips
   // as a plain integer the sifter can report, instead of decoding to the proto3
-  // "unknown enum" sentinel.
+  // "unknown enum" sentinel.  
   uint32 protocol_version = 1;
   string pirate_yaml = 2;
   string xengine_yaml = 3;
   string dedispersion_plan_yaml = 4;
   string grouper_yaml = 5;
+  string search_ip_addr = 6;  // for rpc callbacks sifter -> pirate
 }
 
 message ConfigReply {
   bool ok = 1;
 }
 
-/*
-* message BeamSetUpdateMessage {
-*   int32 beam_set_id = 1;
-*   repeated int32 beam = 2;
-* }
-* message BeamSetUpdateReply {
-*   bool = 1;
-* }
-*/
+// If there are early triggers, then the event timestamp can be outside
+// the EventsMessage range [chunk_fpga_start:chunk_fpga_end]! In this scenario,
+// the sifter may receive multiple events (in different chunks) for the same
+// FRB, as the pulse crosses different early-trigger frequencies.
 
 message FrbEvent {
   int32 beam_id = 1;
-  int64 fpga_timestamp = 2;
+  int64 fpga_timestamp = 2;  // can be outside the chunk, see above!
   float dm = 3;
-  float dm_error = 4;
-  float snr = 5;
-  float rfi_prob = 6;
+  float snr = 4;
+  float rfi_prob = 5;
 }
 
-message FrbEventsMessage {
-  bool has_injections = 1;
-  int32 beam_set_id = 2;
-  int64 chunk_fpga_count = 3;
-  repeated FrbEvent events = 4;
+// When events are sent from the search pipeline, we set from_simulator=false.
+// When the fake X-engine simulates pulses "upstream", it sends a parallel sequence
+// of events with from_simulator=true. Thus, the sifter can use this flag to
+// compare the actual outcome of the search (from_simulator=false) to the
+// ideal outcome (from simulator=true).
 
-  // Coarse-grained triggers (per beam; optional)
-  // Set the fpga-counts values to zero for no coarse-grained triggers
-  int64 coarsegrain_start_fpga_count = 5;
-  int64 coarsegrain_end_fpga_count = 6;
-  // A (large) array of SNRs, the same length as the beams being handled by this beam_set_id.
-  repeated float coarsegrain_snr = 7;
+message FrbEventsMessage {
+  bool from_simulator = 1;
+  int32 beam_set_id = 2;
+  int64 chunk_fpga_start = 3;
+  int64 chunk_fpga_end = 4;
+  repeated FrbEvent events = 5;
+
+  // Coarse-grained triggers
+  // A small array of SNRs, the same length as the beams being handled by this beam_set_id.
+  repeated float coarsegrain_snr = 6;
 }
 
 message FrbEventsReply {
   bool ok = 1;
   string message = 2;
 }
-
-//message FrbBeamSNRMessage {
-//  int32 beam_set_id = 1;
-//  int64 start_fpga_count = 2;
-//  int64 end_fpga_count = 3;
-//  // A (large) array of SNRs, the same length as the beams being handled by this beam_set_id.
-//  repeated float snr = 4;
-//}
-//
-//message FrbBeamSNRReply {
-//  bool ok = 1;
-//  string message = 2;
-//}
 
