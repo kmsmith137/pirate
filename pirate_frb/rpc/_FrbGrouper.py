@@ -140,7 +140,8 @@ class FrbGrouperInjections:
         Parameters
         ----------
         ichunk : int
-            Zero-based time-chunk index (must be >= 0).
+            Zero-based time-chunk index (i.e. first call to get_output() should
+            specify ichunk=0, and ignore the value of FrbGrouper.initial_chunk).
         ibatch : int
             Beam-batch index within the chunk (must satisfy
             0 <= ibatch < self.nbatches).
@@ -258,7 +259,9 @@ class FrbGrouperInjections:
         Parameters
         ----------
         ichunk : int
-            Zero-based time-chunk index (>= 0); sets the absolute FPGA timing.
+            Time-chunk index, using the same zero-based indexing as get_output().
+            (Note: when create_events() computes the arrival time, it adds the value
+            of 'initial_chunk', which was sent in the pirate-grouper handshake.)
         itrees : cupy.ndarray
             Per-event dedispersion-tree index.
         ibeams : cupy.ndarray
@@ -274,8 +277,10 @@ class FrbGrouperInjections:
         -------
         FrbSifterEvents
             The events translated into physical units (beam id, absolute FPGA
-            timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events().
-            dm_error and rfi_prob are set to zero (not computed by the toy grouper).
+            timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events(). Also
+            carries the chunk's absolute FPGA window (``chunk_fpga_start``,
+            ``chunk_fpga_end``). dm_error and rfi_prob are set to zero (not computed by
+            the toy grouper).
         """
         import cupy as cp
 
@@ -313,11 +318,17 @@ class FrbGrouperInjections:
 
         dms = d * self.dm_per_unit_delay
         beam_ids = self._beam_id_lut[ibeam_h]
-        # Absolute fpga timestamp = chunk start + within-chunk offset (t' in input
+        # Absolute (FPGA-seq-0-based) timing of this chunk. 'ichunk' is zero-based (relative
+        # to the producer's first output chunk); adding initial_chunk offsets it to FPGA
+        # seq 0 (cf. GpuDedisperserOutputs.ichunk_fpga_based = ichunk_zero_based + initial_chunk).
+        # fpga_per_chunk = nt_in input samples * fpga-counts-per-sample.
+        fpga_per_chunk = self._nt_in * self._seq_per_sample
+        chunk_fpga_start = (int(ichunk) + self.initial_chunk) * fpga_per_chunk
+        chunk_fpga_end = chunk_fpga_start + fpga_per_chunk
+        # Per-event absolute timestamp = chunk start + within-chunk offset (t' in input
         # samples * fpga-counts-per-sample), rounded to the nearest integer fpga count.
-        chunk_fpga = int(ichunk) * self._nt_in * self._seq_per_sample
         offset = np.rint(t_full * self._seq_per_sample).astype(np.int64)
-        fpga_timestamps = chunk_fpga + offset
+        fpga_timestamps = chunk_fpga_start + offset
 
         # FrbSifterEvents casts dtypes and validates shapes. dm_error / rfi_prob are
         # zero for the toy grouper.
@@ -328,7 +339,8 @@ class FrbGrouperInjections:
             dm_errors = np.zeros(snr_h.shape, dtype=np.float32),
             snrs = snr_h,
             rfi_probs = np.zeros(snr_h.shape, dtype=np.float32),
-            chunk_fpga_count = chunk_fpga,
+            chunk_fpga_start = chunk_fpga_start,
+            chunk_fpga_end = chunk_fpga_end,
         )
 
 

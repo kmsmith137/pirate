@@ -50,7 +50,6 @@ with FrbGrouper(grouper_addr) as grouper:
         grouper_yaml = {'toy_grouper': True})  # placeholder for future expansion
         
     beam_set_id = grouper.xengine_yaml['beamset']
-    fpga_per_chunk = grouper.xengine_yaml['seq_per_frb_time_sample'] * grouper.nt_in
     nbeams_tot = grouper.total_beams
     nbatches = grouper.nbatches
     beams_per_batch = nbeams_tot // nbatches
@@ -113,8 +112,8 @@ with FrbGrouper(grouper_addr) as grouper:
                 has_injections = False,
                 beam_set_id = beam_set_id,
                 events = events,
-                coarsegrain_start_fpga_count = events.chunk_fpga_count,
-                coarsegrain_end_fpga_count = events.chunk_fpga_count + fpga_per_chunk,
+                coarsegrain_start_fpga_count = events.chunk_fpga_start,
+                coarsegrain_end_fpga_count = events.chunk_fpga_end,
                 coarsegrain_snr = per_beam_max)
 ```
   

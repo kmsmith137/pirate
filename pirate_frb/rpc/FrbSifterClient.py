@@ -22,7 +22,8 @@ class FrbSifterEvents:
 
     Other attributes:
 
-    - ``chunk_fpga_count`` (int) -- FPGA count at the start of the time chunk.
+    - ``chunk_fpga_start`` (int) -- FPGA count at the start of the time chunk.
+    - ``chunk_fpga_end`` (int) -- FPGA count at the end of the time chunk (= start of the next chunk).
     - ``shape`` (tuple) -- common shape of the per-event arrays.
     """
 
@@ -36,16 +37,24 @@ class FrbSifterEvents:
         ("rfi_probs",       "rfi_prob",       np.float32),
     )
 
-    def __init__(self, beam_ids, fpga_timestamps, dms, dm_errors, snrs, rfi_probs,
-                 chunk_fpga_count):
+    @staticmethod
+    def _check_fpga_count(name, value):
+        """Coerce an FPGA-count scalar to a non-negative int (raises ValueError otherwise)."""
         try:
-            self.chunk_fpga_count = int(chunk_fpga_count)
+            value = int(value)
         except (TypeError, ValueError) as e:
-            raise ValueError(f"FrbSifterEvents: chunk_fpga_count must be an integer, "
-                             f"got {chunk_fpga_count!r}") from e
-        if self.chunk_fpga_count < 0:
-            raise ValueError(f"FrbSifterEvents: chunk_fpga_count must be >= 0, "
-                             f"got {self.chunk_fpga_count}")
+            raise ValueError(f"FrbSifterEvents: {name} must be an integer, got {value!r}") from e
+        if value < 0:
+            raise ValueError(f"FrbSifterEvents: {name} must be >= 0, got {value}")
+        return value
+
+    def __init__(self, beam_ids, fpga_timestamps, dms, dm_errors, snrs, rfi_probs,
+                 chunk_fpga_start, chunk_fpga_end):
+        self.chunk_fpga_start = self._check_fpga_count("chunk_fpga_start", chunk_fpga_start)
+        self.chunk_fpga_end = self._check_fpga_count("chunk_fpga_end", chunk_fpga_end)
+        if self.chunk_fpga_end < self.chunk_fpga_start:
+            raise ValueError(f"FrbSifterEvents: chunk_fpga_end ({self.chunk_fpga_end}) must be "
+                             f">= chunk_fpga_start ({self.chunk_fpga_start})")
 
         values = dict(beam_ids=beam_ids, fpga_timestamps=fpga_timestamps, dms=dms,
                       dm_errors=dm_errors, snrs=snrs, rfi_probs=rfi_probs)
@@ -85,7 +94,7 @@ class FrbSifterEvents:
 
     def __repr__(self):
         return (f"FrbSifterEvents(num_events={len(self)}, shape={self.shape}, "
-                f"chunk_fpga_count={self.chunk_fpga_count})")
+                f"chunk_fpga_start={self.chunk_fpga_start}, chunk_fpga_end={self.chunk_fpga_end})")
 
 
 class FrbSifterClient:
@@ -177,7 +186,7 @@ class FrbSifterClient:
             X-engine beam-set id.
         events : :class:`~pirate_frb.rpc.FrbSifterEvents` or None
             The per-event triggers: one FrbEvent is sent per array element, and the
-            object's chunk_fpga_count populates the message's chunk_fpga_count field.
+            object's chunk_fpga_start populates the message's chunk_fpga_count field.
             None sends no per-event triggers (with chunk_fpga_count = 0).
         coarsegrain_start_fpga_count : int
             FPGA count at the start of the coarse-grain SNR window.
@@ -204,7 +213,7 @@ class FrbSifterClient:
             chunk_fpga_count = 0
         elif isinstance(events, FrbSifterEvents):
             proto_events = events.to_proto()
-            chunk_fpga_count = events.chunk_fpga_count
+            chunk_fpga_count = events.chunk_fpga_start
         else:
             raise RuntimeError(f"FrbSifterClient.send_events: 'events' must be a "
                                f"FrbSifterEvents or None, got {type(events).__name__}")

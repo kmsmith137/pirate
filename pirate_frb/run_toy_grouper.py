@@ -28,7 +28,6 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     if sifter is not None:
         # Send the ConfigMessage to the sifter (this is only done once).
         beam_set_id = grouper.xengine_yaml['beamset']
-        fpga_per_chunk = grouper.xengine_yaml['seq_per_frb_time_sample'] * grouper.nt_in
 
         sifter.send_configuration(
             pirate_yaml = grouper.dedispersion_config_yaml_string,
@@ -97,8 +96,8 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
                 has_injections = False,
                 beam_set_id = beam_set_id,
                 events = events,
-                coarsegrain_start_fpga_count = events.chunk_fpga_count,
-                coarsegrain_end_fpga_count = events.chunk_fpga_count + fpga_per_chunk,
+                coarsegrain_start_fpga_count = events.chunk_fpga_start,
+                coarsegrain_end_fpga_count = events.chunk_fpga_end,
                 coarsegrain_snr = per_beam_max)
 
         if delay > 0:
