@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="#">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="notes/install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notes/todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -263,19 +282,21 @@
           <section id="pirate-perimeter-institute-radio-transient-engine">
 <h1>Pirate - Perimeter Institute RAdio Transient Engine<a class="headerlink" href="#pirate-perimeter-institute-radio-transient-engine" title="Link to this heading">¶</a></h1>
 <p>An experimental GPU-based fast transient search for CHORD.</p>
+<ul class="simple">
+<li><p><a href="_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tree dedispersion tex notes (PDF)</a> – mathematical details of the search.</p></li>
+</ul>
 <div class="toctree-wrapper compound">
 <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="notes/install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="notes/todo.html">To do list</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="notes/todo.html#immediate-concrete-tasks">Immediate concrete tasks</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/todo.html#short-term-goals">Short-term goals</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/todo.html#goals-for-a-pathfinder-search">Goals for a pathfinder search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/quick_start.html">Quick start</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="notes/quick_start.html#run-unit-tests">Run unit tests</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/quick_start.html#running-a-toy-search">Running a toy search</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/quick_start.html#running-a-production-search-cf00-cf05">Running a production search (cf00/cf05)</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="notes/developer.html">Developer notes</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="notes/developer.html#some-fun-cli-examples">Some fun CLI examples</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/developer.html#ksgpu-helper-library">ksgpu helper library</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/developer.html#chunks-batches-frames-and-segments">Chunks, batches, frames, and segments</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/developer.html#allocators">Allocators</a></li>
@@ -284,15 +305,17 @@
 <li class="toctree-l2"><a class="reference internal" href="notes/developer.html#software-engineering-philosophy">Software engineering philosophy</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="cli.html">CLI reference</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="cli.html#subcommands">Subcommands</a></li>
-<li class="toctree-l2"><a class="reference internal" href="cli.html#detailed-usage">Detailed usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/grouper_interface.html">Writing a grouper</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="notes/grouper_interface.html#example-code">Example code</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/grouper_interface.html#frbgrouper-context-manager">FrbGrouper context manager</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/grouper_interface.html#data-arrays-and-gpudedisperseroutputs-context-manager">Data arrays and GpuDedisperserOutputs context manager</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="notes/build.html">Build system</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="notes/build.html#autogenerated-kernels">Autogenerated kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/build.html#grpc">gRPC</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/build.html#file-structure">File Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/build.html#overriding-makefile-variables">Overriding Makefile variables</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="notes/hardware.html">Hardware</a><ul>
@@ -301,37 +324,34 @@
 <li class="toctree-l2"><a class="reference internal" href="notes/hardware.html#drao-backend">DRAO backend</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="notes/cpp.html#ksgpu">ksgpu</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/cpp.html#xassert-macros">xassert macros</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cli.html">CLI reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="cli.html#subcommands">Subcommands</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli.html#detailed-usage">Detailed usage</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#register-assignment-notation">Register assignment notation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#local-transpose">Local transpose</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#warp-transpose">Warp transpose</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#pointer-offsets">Pointer offsets</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html#performance-guidelines">Performance guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="formats.html">File/network formats</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="notes/pybind11.html">Pybind11</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html#method-injections">Method injections</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html#source-file-organization">Source file organization</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html#general-notes">General notes</a></li>
-<li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html#specific-argument-types">Specific argument types</a></li>
+<li class="toctree-l1"><a class="reference internal" href="python_class_reference.html">Python class reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="notes/thread_backed_class.html#example-code">Example Code</a></li>
+<li class="toctree-l1"><a class="reference internal" href="llm_context.html">LLM context files</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
 </ul>
 </li>
 </ul>

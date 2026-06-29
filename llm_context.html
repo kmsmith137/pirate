@@ -1,15 +1,15 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../">
+<html class="no-js" lang="en" data-content_root="./">
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" />
+<link rel="index" title="Index" href="genindex.html" /><link rel="search" title="Search" href="search.html" /><link rel="next" title="C++ guidelines" href="notes/cpp.html" /><link rel="prev" title="GpuDedisperserOutputs" href="classes/GpuDedisperserOutputs.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
-        <title>Reviewing GPU kernels - pirate_frb 1.0.0 documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
-    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
+        <title>LLM context files - pirate_frb 1.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=354aac6f" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=302659d7" />
     
     
 
@@ -168,7 +168,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+      <a href="index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -189,37 +189,56 @@
   <aside class="sidebar-drawer">
     <div class="sidebar-container">
       
-      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
   
   <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
   
-</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+</a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
-<li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="notes/install.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/quick_start.html">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/developer.html">Developer notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/grouper_interface.html">Writing a grouper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/build.html">Build system</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/hardware.html">Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children current-page"><a class="current reference internal" href="#">LLM context files</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -240,7 +259,7 @@
         </a>
         <div class="content-icon-container">
           <div class="view-this-page">
-  <a class="muted-link" href="../_sources/notes/scratch.md.txt" title="View this page">
+  <a class="muted-link" href="_sources/llm_context.md.txt" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
@@ -260,25 +279,22 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="reviewing-gpu-kernels">
-<h1>Reviewing GPU kernels<a class="headerlink" href="#reviewing-gpu-kernels" title="Link to this heading">¶</a></h1>
-<p>If you’re asked to review</p>
-<ul class="simple">
-<li><p><strong>Important.</strong> in all cases where</p></li>
-<li><p>Check that all global memory loads/stores are “cache-friendly”, i.e. each instruction
-operates on either 1, 2, or 4 entire cache lines per warp (depending on whether the
-load/store is 32-bit, or “wide” 64/128-bit instruction), unless a comment explicitly
-indicates otherwise.</p></li>
-<li><p>Check that all shared memory loads/stores are bank conflict free, unless a comment
-explicitly indicates otherwise.</p></li>
-<li><p>Are there enough calls to <code class="docutils literal notranslate"><span class="pre">__syncthreads()</span></code>? Are there more calls than necessary?</p></li>
-<li><p>In addition to checking for bugs, please also check for typos, especially in comments
-where a register assignment is declared.</p></li>
-<li><p>Check for 32-bit overflows in</p></li>
-<li><p>Unintentional use of double precision</p></li>
-<li><p><strong>launch_bounds</strong></p></li>
-<li><p>Also check carefully for bugs that are not in the list above.</p></li>
+          <section id="llm-context-files">
+<h1>LLM context files<a class="headerlink" href="#llm-context-files" title="Link to this heading">¶</a></h1>
+<p>The markdown files below document low-level pieces of pirate. They double as
+context files for LLM coding assistants – the per-repo CLAUDE.md instructs the
+assistant to read the relevant one before working on a given area (e.g. C++ code
+or GPU kernels).</p>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
 </ul>
+</div>
 </section>
 
         </article>
@@ -286,8 +302,26 @@ where a register assignment is declared.</p></li>
       <footer>
         
         <div class="related-pages">
-          
-          
+          <a class="next-page" href="notes/cpp.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">C++ guidelines</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="classes/GpuDedisperserOutputs.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">GpuDedisperserOutputs</div>
+                
+              </div>
+            </a>
         </div>
         <div class="bottom-of-page">
           <div class="left-details">
@@ -312,9 +346,9 @@ where a register assignment is declared.</p></li>
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=8d563738"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
-    <script src="../_static/scripts/furo.js?v=5fa4622c"></script>
+</div><script src="_static/documentation_options.js?v=8d563738"></script>
+    <script src="_static/doctools.js?v=9bcbadda"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/scripts/furo.js?v=5fa4622c"></script>
     </body>
 </html>

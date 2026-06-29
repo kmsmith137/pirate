@@ -3,7 +3,7 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="prev" title="Pybind11" href="pybind11.html" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="CudaEventRingbuf" href="cuda_event_ringbuf.html" /><link rel="prev" title="Writing sphinx-friendly docstrings" href="docstrings.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
         <title>Thread-Backed Class Pattern - pirate_frb 1.0.0 documentation</title>
@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
-<ul>
+<ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -268,12 +287,12 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> has a <code class="docutils literal notranslate"><span class="pre">stop(std::exception_ptr</span> <span class="pre">e)</span></code> method which can be called externally, to put the object into a “stopped” state (<code class="docutils literal notranslate"><span class="pre">X::is_stopped==true</span></code>). The value of <code class="docutils literal notranslate"><span class="pre">e</span></code> is saved in <code class="docutils literal notranslate"><span class="pre">X::error</span></code>, and is null or non-null depending on whether the call to <code class="docutils literal notranslate"><span class="pre">stop()</span></code> represents normal termination. The first caller to <code class="docutils literal notranslate"><span class="pre">stop()</span></code> sets <code class="docutils literal notranslate"><span class="pre">X::error</span></code>.</p></li>
 <li><p>When the object enters its stopped state, the worker thread returns (as promptly as is practical).</p></li>
 <li><p>If the worker thread throws an exception <code class="docutils literal notranslate"><span class="pre">e</span></code>, then the worker thread catches the exception, calls <code class="docutils literal notranslate"><span class="pre">X::stop(e)</span></code>, and exits.</p></li>
-<li><p>Some public methods of <code class="docutils literal notranslate"><span class="pre">X</span></code> are labelled as “entry points”. If an entry point is called in the stopped state, the exception <code class="docutils literal notranslate"><span class="pre">e</span></code> is rethrown. (If <code class="docutils literal notranslate"><span class="pre">e</span></code> is <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, then a generic exception <code class="docutils literal notranslate"><span class="pre">runtime_error(&quot;X::f()</span> <span class="pre">called</span> <span class="pre">on</span> <span class="pre">stopped</span> <span class="pre">instance&quot;)</span></code> is thrown.)</p></li>
+<li><p>Some public methods of <code class="docutils literal notranslate"><span class="pre">X</span></code> are labelled as “entry points”. If an entry point is called in the stopped state, the exception <code class="docutils literal notranslate"><span class="pre">e</span></code> is rethrown. (If <code class="docutils literal notranslate"><span class="pre">e</span></code> is <code class="docutils literal notranslate"><span class="pre">nullptr</span></code>, then a generic exception <code class="docutils literal notranslate"><span class="pre">runtime_error(&quot;X::f()</span> <span class="pre">called</span> <span class="pre">on</span> <span class="pre">stopped</span> <span class="pre">instance&quot;)</span></code> is thrown.)</p></li>
 <li><p>If an entry point throws an exception, then <code class="docutils literal notranslate"><span class="pre">X::stop(e)</span></code> is called, and the exception is rethrown.</p></li>
-<li><p>In a context where the value of <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is checked (e.g. entry point or <code class="docutils literal notranslate"><span class="pre">worker_thread_main</span></code>), if a blocking call is made (e.g. <code class="docutils literal notranslate"><span class="pre">cv.wait()</span></code>) then <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is rechecked on wakeup. <code class="docutils literal notranslate"><span class="pre">X::stop()</span></code> should call <code class="docutils literal notranslate"><span class="pre">cv.notify()</span></code>. In situations where this notification mechanism doesn’t work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> every millisecond.)</p></li>
+<li><p>In a context where the value of <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is checked (e.g. entry point or <code class="docutils literal notranslate"><span class="pre">worker_thread_main</span></code>), if a blocking call is made (e.g. <code class="docutils literal notranslate"><span class="pre">cv.wait()</span></code>) then <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> is rechecked on wakeup. <code class="docutils literal notranslate"><span class="pre">X::stop()</span></code> should call <code class="docutils literal notranslate"><span class="pre">cv.notify_all()</span></code>. In situations where this notification mechanism doesn’t work, please find an alternative if possible. (For example, a network worker thread which needs to block waiting on a socket could specify a 1-ms timeout, in order to recheck <code class="docutils literal notranslate"><span class="pre">is_stopped</span></code> every millisecond.)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">~X()</span></code> calls <code class="docutils literal notranslate"><span class="pre">stop()</span></code> before joining the worker thread, to force the worker thread to exit.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> is noncopyable, nonmoveable, and always accessed through a shared_ptr.</p></li>
-<li><p>In the example below, the worker thread is created in <code class="docutils literal notranslate"><span class="pre">X::X()</span></code>, but in other cases, the worker may be created in a different method, for example <code class="docutils literal notranslate"><span class="pre">X::start()</span></code> or <code class="docutils literal notranslate"><span class="pre">X:allocate()</span></code>.</p></li>
+<li><p>In the example below, the worker thread is created in <code class="docutils literal notranslate"><span class="pre">X::X()</span></code>, but in other cases, the worker may be created in a different method, for example <code class="docutils literal notranslate"><span class="pre">X::start()</span></code> or <code class="docutils literal notranslate"><span class="pre">X::allocate()</span></code>.</p></li>
 <li><p>If <code class="docutils literal notranslate"><span class="pre">X</span></code> contains pointers to other thread-backed classes (or more generally, to any class <code class="docutils literal notranslate"><span class="pre">Y</span></code> defining <code class="docutils literal notranslate"><span class="pre">Y::stop()</span></code>), then <code class="docutils literal notranslate"><span class="pre">X::stop()</span></code> should call <code class="docutils literal notranslate"><span class="pre">ptr-&gt;stop()</span></code> for each such pointer.</p></li>
 </ul>
 <section id="example-code">
@@ -398,15 +417,23 @@ The entry point <code class="docutils literal notranslate"><span class="pre">X::
       <footer>
         
         <div class="related-pages">
-          
-          <a class="prev-page" href="pybind11.html">
+          <a class="next-page" href="cuda_event_ringbuf.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">CudaEventRingbuf</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="docstrings.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Pybind11</div>
+                <div class="title">Writing sphinx-friendly docstrings</div>
                 
               </div>
             </a>

@@ -3,10 +3,10 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="GpuDedisperserOutputs" href="GpuDedisperserOutputs.html" /><link rel="prev" title="FrbSifterClient" href="FrbSifterClient.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
-        <title>X-&gt;FRB network protocol (v1) - pirate_frb 1.0.0 documentation</title>
+        <title>FrbSifterEvents - pirate_frb 1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../notes/install.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/quick_start.html">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/developer.html">Developer notes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/grouper_interface.html">Writing a grouper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/build.html">Build system</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
-<li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -240,7 +259,7 @@
         </a>
         <div class="content-icon-container">
           <div class="view-this-page">
-  <a class="muted-link" href="../_sources/notes/network_protocol_v1.md.txt" title="View this page">
+  <a class="muted-link" href="../_sources/classes/FrbSifterEvents.md.txt" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
@@ -260,34 +279,37 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="x-frb-network-protocol-v1">
-<h1>X-&gt;FRB network protocol (v1)<a class="headerlink" href="#x-frb-network-protocol-v1" title="Link to this heading">¶</a></h1>
-<section id="this-is-the-old-v1-protocol-not-the-current-protocol">
-<h2>This is the old (v1) protocol, not the current protocol.<a class="headerlink" href="#this-is-the-old-v1-protocol-not-the-current-protocol" title="Link to this heading">¶</a></h2>
-<p>This document describes the network protocol used in the CHORD radio telescope, to send beamformed
-intensity data from the X-engine (a 64-node cluster) to the FRB search backend (a 14-node cluster).</p>
-<p>The intensity data is a 3-d “data cube” with axes <code class="docutils literal notranslate"><span class="pre">(frequency</span> <span class="pre">channel,</span> <span class="pre">beam,</span> <span class="pre">time)</span></code>.
-Each X-engine sends a subset of the frequency channels (for all beams and times).
-Each FRB search node receives a subset of the beams (for all frequency channels and times).
-The data is sent over persistent TCP connections (one connection per sender/receiver node pair).
-The network protocol for each of these connections is as follows:</p>
-<ul>
-<li><p>Everything is little-endian. (You can assume that all code is running on a little-endian architecture.)</p></li>
-<li><p>A persistent TCP connection is opened. The first 4 bytes are <code class="docutils literal notranslate"><span class="pre">0xf4bf4b01</span></code> where the <code class="docutils literal notranslate"><span class="pre">01</span></code> is the protocol version number.</p></li>
-<li><p>The next 4 bytes are a 32-bit integer string length, including one or more bytes of zero padding.</p></li>
-<li><p>A zero-terminated ascii string follows, containing metadata in the format defined by <a class="reference internal" href="../configs/xengine/xengine_metadata_v1.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v1.yml</span></code></span></a>. There is a C++ class <code class="docutils literal notranslate"><span class="pre">XEngineMetadata</span></code> for parsing this string.</p>
-<p>Note that the metadata includes <code class="docutils literal notranslate"><span class="pre">freq_channels</span></code> and <code class="docutils literal notranslate"><span class="pre">nbeams</span></code>. Here, <code class="docutils literal notranslate"><span class="pre">nbeams</span></code> is the (receiver-dependent) number of
-beams sent to the FRB search node, and <code class="docutils literal notranslate"><span class="pre">nfreq</span> <span class="pre">=</span> <span class="pre">len(freq_channels)</span></code> is the (sender-dependent) number of frequency
-channels sent by the X-engine node.</p>
-</li>
-<li><p>Next, a sequence of shape <code class="docutils literal notranslate"><span class="pre">(nbeams,</span> <span class="pre">nfreq,</span> <span class="pre">256)</span></code> int4 arrays is sent.
-Each such array represents 256 time samples of intensity data (one “minichunk”).
-The value (-8) indicates “this sample is masked”.
-We pack two int4s into a byte as (<code class="docutils literal notranslate"><span class="pre">(x[1]</span> <span class="pre">&lt;&lt;</span> <span class="pre">4)</span> <span class="pre">|</span> <span class="pre">x[0]</span></code>).</p></li>
+          <section id="frbsifterevents">
+<h1>FrbSifterEvents<a class="headerlink" href="#frbsifterevents" title="Link to this heading">¶</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSifterEvents">
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pirate_frb.rpc.</span></span><span class="sig-name descname"><span class="pre">FrbSifterEvents</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">beam_ids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fpga_timestamps</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">snrs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rfi_probs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_fpga_start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_fpga_end</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterEvents" title="Link to this definition">¶</a></dt>
+<dd><p>Helper class, representing FRB events to send to the sifter.</p>
+<p>Returned by FrbGrouper.create_events(), and passed to FrbSifterClient.send_events().</p>
+<p>Attributes (numpy arrays, shapes must be equal):</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">beam_ids</span></code> (int32) – X-engine beam id of each event</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">fpga_timestamps</span></code> (int64) – absolute FPGA-counter timestamp of each event</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dms</span></code> (float32) – dispersion measure</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">snrs</span></code> (float32) – signal-to-noise ratio</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">rfi_probs</span></code> (float32) – RFI probability</p></li>
 </ul>
-<p>NOTE: future versions of this file format will add float16 offsets and scales, so that the int4 data can be
-converted to intensities (which are always positive). Version 1 of this file format is a placeholder.</p>
-</section>
+<p>Other attributes:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">chunk_fpga_start</span></code> (int) – FPGA count at the start of the time chunk.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">chunk_fpga_end</span></code> (int) – FPGA count at the end of the time chunk (= start of the next chunk).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">shape</span></code> (tuple) – common shape of the per-event arrays.</p></li>
+</ul>
+<dl class="py method">
+<dt class="sig sig-object py" id="pirate_frb.rpc.FrbSifterEvents.to_proto">
+<span class="sig-name descname"><span class="pre">to_proto</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterEvents.to_proto" title="Link to this definition">¶</a></dt>
+<dd><p>Return a list of frb_sifter_pb2.FrbEvent, one per event (row-major order).</p>
+<p>Arrays of any shape are flattened; .tolist() yields the native Python
+scalars required by protobuf.</p>
+</dd></dl>
+
+</dd></dl>
+
 </section>
 
         </article>
@@ -295,8 +317,26 @@ converted to intensities (which are always positive). Version 1 of this file for
       <footer>
         
         <div class="related-pages">
-          
-          
+          <a class="next-page" href="GpuDedisperserOutputs.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">GpuDedisperserOutputs</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="FrbSifterClient.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">FrbSifterClient</div>
+                
+              </div>
+            </a>
         </div>
         <div class="bottom-of-page">
           <div class="left-details">
@@ -327,8 +367,11 @@ converted to intensities (which are always positive). Version 1 of this file for
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">X-&gt;FRB network protocol (v1)</a><ul>
-<li><a class="reference internal" href="#this-is-the-old-v1-protocol-not-the-current-protocol">This is the old (v1) protocol, not the current protocol.</a></li>
+<li><a class="reference internal" href="#">FrbSifterEvents</a><ul>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSifterEvents"><code class="docutils literal notranslate"><span class="pre">FrbSifterEvents</span></code></a><ul>
+<li><a class="reference internal" href="#pirate_frb.rpc.FrbSifterEvents.to_proto"><code class="docutils literal notranslate"><span class="pre">FrbSifterEvents.to_proto()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>

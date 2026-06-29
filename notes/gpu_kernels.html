@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
-<ul>
+<ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -282,7 +301,7 @@ registers, and simd lanes of a GPU kernel.</p>
 <span class="n">__half2</span><span class="w"> </span><span class="n">x2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="p">((</span><span class="n">__half2</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="o">+</span><span class="n">s</span><span class="o">+</span><span class="mi">128</span><span class="p">));</span>
 <span class="n">__half2</span><span class="w"> </span><span class="n">x3</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="p">((</span><span class="n">__half2</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="n">p</span><span class="o">+</span><span class="n">s</span><span class="o">+</span><span class="mi">192</span><span class="p">));</span>
 
-<span class="c1">// x has the following register assigment.</span>
+<span class="c1">// x has the following register assignment.</span>
 <span class="c1">// See below for an explanation of this &quot;register assignment&quot; notation.</span>
 <span class="c1">//   simd:      s0              &lt;-&gt;  k0</span>
 <span class="c1">//   register:  r1 r0           &lt;-&gt;  j3 j2</span>
@@ -292,7 +311,7 @@ registers, and simd lanes of a GPU kernel.</p>
 </div>
 <p>The meaning of the register assignment notation is as follows.
 Each 16-bit element of the array p[i,j,k] has a “logical” location which is parameterized
-by four integers (i,j,k), whose base-2 representations consist of four bits each:</p>
+by three integers (i,j,k), whose base-2 representations consist of four bits each:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">i</span> <span class="o">=</span> <span class="p">(</span><span class="n">i3</span> <span class="n">i2</span> <span class="n">i1</span> <span class="n">i0</span><span class="p">)</span><span class="n">_2</span>    <span class="n">j</span> <span class="o">=</span> <span class="p">(</span><span class="n">j3</span> <span class="n">j2</span> <span class="n">j1</span> <span class="n">j0</span><span class="p">)</span><span class="n">_2</span>    <span class="n">k</span> <span class="o">=</span> <span class="p">(</span><span class="n">k3</span> <span class="n">k2</span> <span class="n">k1</span> <span class="n">k0</span><span class="p">)</span><span class="n">_2</span>
 </pre></div>
 </div>
@@ -372,6 +391,38 @@ It’s easiest to explain by example:</p>
 
 <span class="c1">// Note: to exchange s1 (rather than s0) with r0, we would replace the</span>
 <span class="c1">// constants (0x6240, 0x7351) with (0x5410, 0x7632).</span>
+</pre></div>
+</div>
+<p>And one more local transpose example, using 4-bit data packed into <code class="docutils literal notranslate"><span class="pre">uint</span></code>
+registers. The bitwise helper <code class="docutils literal notranslate"><span class="pre">bit_select(a,</span> <span class="pre">mask,</span> <span class="pre">b)</span> <span class="pre">=</span> <span class="pre">(a</span> <span class="pre">&amp;</span> <span class="pre">mask)</span> <span class="pre">|</span> <span class="pre">(b</span> <span class="pre">&amp;</span> <span class="pre">~mask)</span></code>
+can be implemented as a single LOP3 instruction (LUT 0xe2):</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="c1">// Helper: bit_select(a, mask, b) returns (a &amp; mask) | (b &amp; ~mask).</span>
+<span class="c1">// This can be done with one LOP3. Surprisingly, nvcc 13.2 compiles it</span>
+<span class="c1">// (suboptimally) to two LOP3s, so we use inline PTX as a workaround!</span>
+<span class="n">__device__</span><span class="w"> </span><span class="n">__forceinline__</span><span class="w"> </span><span class="n">uint</span><span class="w"> </span><span class="n">bit_select</span><span class="p">(</span><span class="n">uint</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">uint</span><span class="w"> </span><span class="n">mask</span><span class="p">,</span><span class="w"> </span><span class="n">uint</span><span class="w"> </span><span class="n">b</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="n">uint</span><span class="w"> </span><span class="n">r</span><span class="p">;</span>
+<span class="w">    </span><span class="k">asm</span><span class="p">(</span><span class="s">&quot;lop3.b32 %0, %1, %2, %3, 0xe2;&quot;</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s">&quot;=r&quot;</span><span class="p">(</span><span class="n">r</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">a</span><span class="p">),</span><span class="w"> </span><span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">mask</span><span class="p">),</span><span class="w"> </span><span class="s">&quot;r&quot;</span><span class="p">(</span><span class="n">b</span><span class="p">));</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">r</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// In this example, suppose we have a 4-bit array which has been packed into</span>
+<span class="c1">// uint registers (i.e. 8 simd lanes per register), with register assignment:</span>
+<span class="c1">//   simd:      i2 i1 i0</span>
+<span class="c1">//   register:  i3</span>
+
+<span class="n">uint</span><span class="w"> </span><span class="n">x0</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">;</span>
+
+<span class="c1">// The following &quot;local transpose&quot; operation exchanges physical bits s0 (simd)</span>
+<span class="c1">// with r0 (register). Unlike the 8-bit case above, __byte_perm can&#39;t help:</span>
+<span class="c1">// s0 selects between the low and high nibble within a byte, not whole bytes.</span>
+
+<span class="n">uint</span><span class="w"> </span><span class="n">y0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bit_select</span><span class="p">(</span><span class="n">x0</span><span class="p">,</span><span class="w">      </span><span class="mh">0x0F0F0F0FU</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">);</span>
+<span class="n">uint</span><span class="w"> </span><span class="n">y1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bit_select</span><span class="p">(</span><span class="n">x0</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mh">0x0F0F0F0FU</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">);</span>
+
+<span class="c1">// Now the y-array has a new register assignment:</span>
+<span class="c1">//   simd:      i2 i1 i3</span>
+<span class="c1">//   register:  i0</span>
 </pre></div>
 </div>
 </section>

@@ -1,0 +1,295 @@
+---
+orphan: true
+---
+
+# example_dedispersion_plan.yml
+
+```yaml
+# To create a dedispersion_plan yaml file, use 'pirate_frb show_dedisperser -v'.
+# 
+# The dedispersion_plan yaml file is used internally by pirate, and is also one of three
+# metadata files sent from pirate to the grouper. (Most fields are only useful internally,
+# and won't be needed in the grouper.)
+
+dtype: float16                 # Data type for dedispersion computations
+nfreq: 28160                   # Total number of frequency channels across all zones
+nt_in: 2048                    # Number of time samples per input chunk
+toplevel_rank: 16              # Tree rank specified in toplevel config
+num_downsampling_levels: 4     # Number of downsampling levels
+beams_per_gpu: 60              # Number of beams processed per GPU
+beams_per_batch: 2             # Number of beams per batch
+num_active_batches: 2          # Number of active batches
+stage1_dd_rank: [8, 7, 7, 7]   # Active dedispersion rank of each stage1 tree
+stage1_amb_rank: [8, 8, 8, 8]  # Ambient rank of each stage1 tree (= number of coarse freq channels)
+ntrees: 10                     # Number of output trees (== length of the 'trees' sequence below)
+
+# As explained in notes/tree_dedispersion.tex, the dedisperser consists of multiple "trees"
+# corresponding to pairs (ds_level, delta_rank). Here, ds_level is the input downsampling that
+# is applied before dedispersion, which controls the DM-range of the tree. If delta_rank > 0,
+# then the tree has an "early trigger" and searches a subset of the frequency range (the value
+# of delta_rank is the "earliness").
+# 
+# The details of the trees are nontrivial -- see notes/tree_dedispersion.tex for info/plots.
+
+trees:
+
+  - tree_index: 0
+    ndm_out: 4096               # Number of output (dedispersed) DM channels
+    nt_out: 128                 # Number of output time samples
+    dm_min: 0                   # Minimum DM (pc/cm^3)
+    dm_max: 1480.9072871051153  # Maximum DM (pc/cm^3)
+    trigger_frequency: 300      # Early-trigger frequency (MHz)
+    ds_level: 0                 # 1 ms samples, DM range [0, 1480.91]
+    delta_rank: 0               # non-early trigger at 300 MHz, max delay 65.536 seconds
+    max_width: 16               # 16 ms
+    dm_downsampling: 16
+    time_downsampling: 16
+    wt_dm_downsampling: 64
+    wt_time_downsampling: 64
+
+    # At tree_index=0, 25 frequency subband(s) are searched:
+    # 
+    #   pf_level=0: [948.7,1500.0], [750.0,948.7], [639.6,750.0], [566.9,639.6], [514.5,566.9]
+    #   pf_level=1: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+    #               [442.3,514.5], [416.0,474.3], [393.9,442.3], [375.0,416.0]
+    #   pf_level=2: [566.9,1500.0], [474.3,750.0], [416.0,566.9], [375.0,474.3], [344.1,416.0],
+    #               [319.8,375.0], [300.0,344.1]
+    #   pf_level=3: [416.0,1500.0], [344.1,566.9], [300.0,416.0]
+    #   pf_level=4: [300.0,1500.0]
+
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+  - tree_index: 1
+    ndm_out: 1024                          # Number of output (dedispersed) DM channels
+    nt_out: 64                             # Number of output time samples
+    dm_min: 1480.9072871051153             # Minimum DM (pc/cm^3)
+    dm_max: 2961.8145742102306             # Maximum DM (pc/cm^3)
+    trigger_frequency: 416.02514716892182  # Early-trigger frequency (MHz)
+    ds_level: 1                            # 2 ms samples, DM range [1480.91, 2961.81]
+    delta_rank: 1                          # early trigger at 416.025 MHz, max delay 65.536 seconds
+    max_width: 16                          # 32 ms
+    dm_downsampling: 16                    # 32 before downsampling
+    time_downsampling: 16                  # 32 before downsampling
+    wt_dm_downsampling: 64                 # 128 before downsampling
+    wt_time_downsampling: 64               # 128 before downsampling
+
+    # At tree_index=1, 20 frequency subband(s) are searched:
+    # 
+    #   pf_level=1: [948.7,1500.0], [832.1,1133.9], [750.0,948.7], [688.2,832.1], [639.6,750.0],
+    #               [600.0,688.2], [566.9,639.6], [538.8,600.0], [514.5,566.9]
+    #   pf_level=2: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+    #               [442.3,514.5], [416.0,474.3]
+    #   pf_level=3: [566.9,1500.0], [474.3,750.0], [416.0,566.9]
+    #   pf_level=4: [416.0,1500.0]
+
+    frequency_subband_counts: [0, 9, 7, 3, 1]
+
+  - tree_index: 2
+    ndm_out: 2048               # Number of output (dedispersed) DM channels
+    nt_out: 64                  # Number of output time samples
+    dm_min: 1480.9072871051153  # Minimum DM (pc/cm^3)
+    dm_max: 2961.8145742102306  # Maximum DM (pc/cm^3)
+    trigger_frequency: 300      # Early-trigger frequency (MHz)
+    ds_level: 1                 # 2 ms samples, DM range [1480.91, 2961.81]
+    delta_rank: 0               # non-early trigger at 300 MHz, max delay 131.072 seconds
+    max_width: 16               # 32 ms
+    dm_downsampling: 16         # 32 before downsampling
+    time_downsampling: 16       # 32 before downsampling
+    wt_dm_downsampling: 64      # 128 before downsampling
+    wt_time_downsampling: 64    # 128 before downsampling
+
+    # At tree_index=2, 25 frequency subband(s) are searched:
+    # 
+    #   pf_level=0: [948.7,1500.0], [750.0,948.7], [639.6,750.0], [566.9,639.6], [514.5,566.9]
+    #   pf_level=1: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+    #               [442.3,514.5], [416.0,474.3], [393.9,442.3], [375.0,416.0]
+    #   pf_level=2: [566.9,1500.0], [474.3,750.0], [416.0,566.9], [375.0,474.3], [344.1,416.0],
+    #               [319.8,375.0], [300.0,344.1]
+    #   pf_level=3: [416.0,1500.0], [344.1,566.9], [300.0,416.0]
+    #   pf_level=4: [300.0,1500.0]
+
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+  - tree_index: 3
+    ndm_out: 1024                         # Number of output (dedispersed) DM channels
+    nt_out: 64                            # Number of output time samples
+    dm_min: 2961.8145742102306            # Minimum DM (pc/cm^3)
+    dm_max: 5923.6291484204612            # Maximum DM (pc/cm^3)
+    trigger_frequency: 566.9467095138408  # Early-trigger frequency (MHz)
+    ds_level: 2                           # 4 ms samples, DM range [2961.81, 5923.63]
+    delta_rank: 2                         # early trigger at 566.947 MHz, max delay 65.536 seconds
+    max_width: 16                         # 64 ms
+    dm_downsampling: 8                    # 32 before downsampling
+    time_downsampling: 8                  # 32 before downsampling
+    wt_dm_downsampling: 64                # 256 before downsampling
+    wt_time_downsampling: 64              # 256 before downsampling
+
+    # At tree_index=3, 11 frequency subband(s) are searched:
+    # 
+    #   pf_level=1: [948.7,1500.0], [832.1,1133.9], [750.0,948.7], [688.2,832.1], [639.6,750.0],
+    #               [600.0,688.2], [566.9,639.6]
+    #   pf_level=2: [750.0,1500.0], [639.6,948.7], [566.9,750.0]
+    #   pf_level=3: [566.9,1500.0]
+
+    frequency_subband_counts: [0, 7, 3, 1]
+
+  - tree_index: 4
+    ndm_out: 1024                          # Number of output (dedispersed) DM channels
+    nt_out: 32                             # Number of output time samples
+    dm_min: 2961.8145742102306             # Minimum DM (pc/cm^3)
+    dm_max: 5923.6291484204612             # Maximum DM (pc/cm^3)
+    trigger_frequency: 416.02514716892182  # Early-trigger frequency (MHz)
+    ds_level: 2                            # 4 ms samples, DM range [2961.81, 5923.63]
+    delta_rank: 1                          # early trigger at 416.025 MHz, max delay 131.072 seconds
+    max_width: 16                          # 64 ms
+    dm_downsampling: 16                    # 64 before downsampling
+    time_downsampling: 16                  # 64 before downsampling
+    wt_dm_downsampling: 64                 # 256 before downsampling
+    wt_time_downsampling: 64               # 256 before downsampling
+
+    # At tree_index=4, 20 frequency subband(s) are searched:
+    # 
+    #   pf_level=1: [948.7,1500.0], [832.1,1133.9], [750.0,948.7], [688.2,832.1], [639.6,750.0],
+    #               [600.0,688.2], [566.9,639.6], [538.8,600.0], [514.5,566.9]
+    #   pf_level=2: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+    #               [442.3,514.5], [416.0,474.3]
+    #   pf_level=3: [566.9,1500.0], [474.3,750.0], [416.0,566.9]
+    #   pf_level=4: [416.0,1500.0]
+
+    frequency_subband_counts: [0, 9, 7, 3, 1]
+
+  - tree_index: 5
+    ndm_out: 2048               # Number of output (dedispersed) DM channels
+    nt_out: 32                  # Number of output time samples
+    dm_min: 2961.8145742102306  # Minimum DM (pc/cm^3)
+    dm_max: 5923.6291484204612  # Maximum DM (pc/cm^3)
+    trigger_frequency: 300      # Early-trigger frequency (MHz)
+    ds_level: 2                 # 4 ms samples, DM range [2961.81, 5923.63]
+    delta_rank: 0               # non-early trigger at 300 MHz, max delay 262.144 seconds
+    max_width: 16               # 64 ms
+    dm_downsampling: 16         # 64 before downsampling
+    time_downsampling: 16       # 64 before downsampling
+    wt_dm_downsampling: 64      # 256 before downsampling
+    wt_time_downsampling: 64    # 256 before downsampling
+
+    # At tree_index=5, 25 frequency subband(s) are searched:
+    # 
+    #   pf_level=0: [948.7,1500.0], [750.0,948.7], [639.6,750.0], [566.9,639.6], [514.5,566.9]
+    #   pf_level=1: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+    #               [442.3,514.5], [416.0,474.3], [393.9,442.3], [375.0,416.0]
+    #   pf_level=2: [566.9,1500.0], [474.3,750.0], [416.0,566.9], [375.0,474.3], [344.1,416.0],
+    #               [319.8,375.0], [300.0,344.1]
+    #   pf_level=3: [416.0,1500.0], [344.1,566.9], [300.0,416.0]
+    #   pf_level=4: [300.0,1500.0]
+
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+  - tree_index: 6
+    ndm_out: 512                # Number of output (dedispersed) DM channels
+    nt_out: 32                  # Number of output time samples
+    dm_min: 5923.6291484204612  # Minimum DM (pc/cm^3)
+    dm_max: 11847.258296840922  # Maximum DM (pc/cm^3)
+    trigger_frequency: 750      # Early-trigger frequency (MHz)
+    ds_level: 3                 # 8 ms samples, DM range [5923.63, 11847.3]
+    delta_rank: 3               # early trigger at 750 MHz, max delay 65.536 seconds
+    max_width: 16               # 128 ms
+    dm_downsampling: 8          # 64 before downsampling
+    time_downsampling: 8        # 64 before downsampling
+    wt_dm_downsampling: 64      # 512 before downsampling
+    wt_time_downsampling: 64    # 512 before downsampling
+
+    # At tree_index=6, 4 frequency subband(s) are searched:
+    # 
+    #   pf_level=2: [948.7,1500.0], [832.1,1133.9], [750.0,948.7]
+    #   pf_level=3: [750.0,1500.0]
+
+    frequency_subband_counts: [0, 0, 3, 1]
+
+  - tree_index: 7
+    ndm_out: 1024                         # Number of output (dedispersed) DM channels
+    nt_out: 32                            # Number of output time samples
+    dm_min: 5923.6291484204612            # Minimum DM (pc/cm^3)
+    dm_max: 11847.258296840922            # Maximum DM (pc/cm^3)
+    trigger_frequency: 566.9467095138408  # Early-trigger frequency (MHz)
+    ds_level: 3                           # 8 ms samples, DM range [5923.63, 11847.3]
+    delta_rank: 2                         # early trigger at 566.947 MHz, max delay 131.072 seconds
+    max_width: 16                         # 128 ms
+    dm_downsampling: 8                    # 64 before downsampling
+    time_downsampling: 8                  # 64 before downsampling
+    wt_dm_downsampling: 64                # 512 before downsampling
+    wt_time_downsampling: 64              # 512 before downsampling
+
+    # At tree_index=7, 11 frequency subband(s) are searched:
+    # 
+    #   pf_level=1: [948.7,1500.0], [832.1,1133.9], [750.0,948.7], [688.2,832.1], [639.6,750.0],
+    #               [600.0,688.2], [566.9,639.6]
+    #   pf_level=2: [750.0,1500.0], [639.6,948.7], [566.9,750.0]
+    #   pf_level=3: [566.9,1500.0]
+
+    frequency_subband_counts: [0, 7, 3, 1]
+
+  - tree_index: 8
+    ndm_out: 1024                          # Number of output (dedispersed) DM channels
+    nt_out: 16                             # Number of output time samples
+    dm_min: 5923.6291484204612             # Minimum DM (pc/cm^3)
+    dm_max: 11847.258296840922             # Maximum DM (pc/cm^3)
+    trigger_frequency: 416.02514716892182  # Early-trigger frequency (MHz)
+    ds_level: 3                            # 8 ms samples, DM range [5923.63, 11847.3]
+    delta_rank: 1                          # early trigger at 416.025 MHz, max delay 262.144 seconds
+    max_width: 16                          # 128 ms
+    dm_downsampling: 16                    # 128 before downsampling
+    time_downsampling: 16                  # 128 before downsampling
+    wt_dm_downsampling: 64                 # 512 before downsampling
+    wt_time_downsampling: 64               # 512 before downsampling
+
+    # At tree_index=8, 20 frequency subband(s) are searched:
+    # 
+    #   pf_level=1: [948.7,1500.0], [832.1,1133.9], [750.0,948.7], [688.2,832.1], [639.6,750.0],
+    #               [600.0,688.2], [566.9,639.6], [538.8,600.0], [514.5,566.9]
+    #   pf_level=2: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+    #               [442.3,514.5], [416.0,474.3]
+    #   pf_level=3: [566.9,1500.0], [474.3,750.0], [416.0,566.9]
+    #   pf_level=4: [416.0,1500.0]
+
+    frequency_subband_counts: [0, 9, 7, 3, 1]
+
+  - tree_index: 9
+    ndm_out: 2048               # Number of output (dedispersed) DM channels
+    nt_out: 16                  # Number of output time samples
+    dm_min: 5923.6291484204612  # Minimum DM (pc/cm^3)
+    dm_max: 11847.258296840922  # Maximum DM (pc/cm^3)
+    trigger_frequency: 300      # Early-trigger frequency (MHz)
+    ds_level: 3                 # 8 ms samples, DM range [5923.63, 11847.3]
+    delta_rank: 0               # non-early trigger at 300 MHz, max delay 524.288 seconds
+    max_width: 16               # 128 ms
+    dm_downsampling: 16         # 128 before downsampling
+    time_downsampling: 16       # 128 before downsampling
+    wt_dm_downsampling: 64      # 512 before downsampling
+    wt_time_downsampling: 64    # 512 before downsampling
+
+    # At tree_index=9, 25 frequency subband(s) are searched:
+    # 
+    #   pf_level=0: [948.7,1500.0], [750.0,948.7], [639.6,750.0], [566.9,639.6], [514.5,566.9]
+    #   pf_level=1: [750.0,1500.0], [639.6,948.7], [566.9,750.0], [514.5,639.6], [474.3,566.9],
+    #               [442.3,514.5], [416.0,474.3], [393.9,442.3], [375.0,416.0]
+    #   pf_level=2: [566.9,1500.0], [474.3,750.0], [416.0,566.9], [375.0,474.3], [344.1,416.0],
+    #               [319.8,375.0], [300.0,344.1]
+    #   pf_level=3: [416.0,1500.0], [344.1,566.9], [300.0,416.0]
+    #   pf_level=4: [300.0,1500.0]
+
+    frequency_subband_counts: [5, 9, 7, 3, 1]
+
+mega_ringbuf:
+  host_zones: 368.39 GiB
+  gpu_zones: 22.14 GiB
+  h2g bandwidth: 8.966 GB/s  # plus raw data: 0.845 GB/s if 4-bit, 1.690 GB/s if 8-bit
+  g2h bandwidth: 7.226 GB/s
+  et_h2h bandwidth: 3.480 GB/s
+  max_clag: 254
+  max_gpu_clag: 5
+  min_host_clag: 6
+  min_et_clag: 6
+  min_et_headroom: 16
+
+dedispersion_outputs: 0.173 GB/s
+```

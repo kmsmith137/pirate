@@ -14,7 +14,7 @@
   - The nodes are "balanced", in the sense that each CPU is physically connected
     to half of the hardware (i.e. 1 TB memory, one GPU, 2x25 GbE networking, one SSD).
     
-    (Exception: the 1GbE NICs are both on the first CPU. These are low-bandwith
+    (Exception: the 1GbE NICs are both on the first CPU. These are low-bandwidth
     enough that there shouldn't be performance implications, but it may affect
     details of our core-pinning logic.)
   
@@ -35,7 +35,7 @@
   
   - As described above, each FRB node can be viewed as two half-nodes
     which processes an independent set of beams. Similarly, each X-engine
-    node can be viewed as two half-nodes nodes which process an independent
+    node can be viewed as two half-nodes which process an independent
     set of frequencies. Thus, we'll have 128 x 28 TCP connections (one connection
     for each X-engine half-node and FRB half-node).
 

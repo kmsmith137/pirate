@@ -3,9 +3,9 @@
 Some notes/caveats:
 
   - This repo contains real-time server code (network receive, ring buffering,
-    file-writing RPCs) and GPU dedispersion code, but currently the **real-time
-    server does not call the GPU dedisperser**! Working on this is my top
-    priority.
+    file-writing RPCs) and GPU dedispersion code, but currently the **dedispersion
+    output is not correctly normalized, and looks like random noise**!
+    Fixing this is my top priority.
 
   - Currently, this code can only be compiled on a recent ubuntu
     linux machine with **a physical GPU**, and the cuda toolkit installed.
@@ -20,11 +20,11 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
 
   - Receives data via TCP from the "upstream" X-engine. The network protocol
     is [here](network_protocol.md). The protocol includes metadata -- the
-    format is defined by [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml.md).
+    format is defined by [`configs/xengine_metadata.yml`](../configs/xengine_metadata.yml.md).
     Details of the protocol and metadata will change in the future.
 
   - Dynamic configuration: the X-engine metadata
-    (see [`configs/xengine/xengine_metadata_v2.yml`](../configs/xengine/xengine_metadata_v2.yml.md))
+    (see [`configs/xengine_metadata.yml`](../configs/xengine_metadata.yml.md))
     includes important parameters such as the frequency upchannelization and beam layout.
     The FRB search "dynamically" configures itself when this data is
     received from the X-engine.
@@ -50,7 +50,7 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
   
   - The FRB server defines [gRPC service(s)](../grpc/frb_search.proto.md) for things like control, monitoring,
     and triggered data writes. All interaction with a running server is via gRPC.
-    There is a python client (`pirate_frb.rpc.FrbClient`) but not a C++ client
+    There is a python client (`pirate_frb.rpc.FrbSearchClient`) but not a C++ client
     (not sure if we'll need one).
     
   - The FRB server stores data sent by the X-engine in a ring buffer, and defines
@@ -67,13 +67,3 @@ Pirate is a real-time FRB search written in C++ / cuda / python.
     are emitted by a python code generator (`pirate_frb.cuda_generator`).
     Some kernels ended up getting so complicated and coalesced that a
     hacked-up code generator was easier than C++ templates!
-
-  - The output of the FRB search is a stream of arrays ("coarse-grained
-    dedispersion outputs", to be described in future documentation).
-    The plan for these arrays is as follows.
-    
-    Arrays will be handed off to a "downstream" process (the "grouper"),
-    using a shared ring buffer in GPU memory. This could be implemented
-    with `cudaIpc`, using grpc to synchronize the producer/consumer, by
-    streaming integer frame offsets back and forth. None of this is implemented
-    yet, but it will be soon!

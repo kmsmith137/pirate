@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../notes/quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../notes/grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -268,10 +287,10 @@
 <span class="c1">#</span>
 <span class="c1"># To start the server:</span>
 <span class="c1">#   mkdir -p /dev/shm/pirate_ssd /dev/shm/pirate_nfs</span>
-<span class="c1">#   pirate_frb run_server configs/frb_server/toy2.yml</span>
+<span class="c1">#   pirate_frb run_server configs/frb_server/toy2.yml configs/dedispersion/toy.yml</span>
 <span class="c1">#</span>
 <span class="c1"># To send fake X-engine data (in a separate terminal):</span>
-<span class="c1">#   pirate_frb run_server -s configs/frb_server/toy2.yml</span>
+<span class="c1">#   pirate_frb run_fake_xengine 127.0.0.1:6000</span>
 
 
 <span class="c1">########################################  General config  ########################################</span>
@@ -280,10 +299,12 @@
 <span class="nt">num_servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 <span class="nt">server_cpus</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">0</span><span class="w"> </span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># length num_servers</span>
 
-<span class="nt">memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;10</span><span class="nv"> </span><span class="s">GB&#39;</span>
+
+<span class="nt">rb_host_memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;1</span><span class="nv"> </span><span class="s">GB&#39;</span>
+<span class="nt">dd_host_memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;1</span><span class="nv"> </span><span class="s">GB&#39;</span>
+<span class="nt">gpu_memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;1</span><span class="nv"> </span><span class="s">GB&#39;</span>
 <span class="nt">use_hugepages</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 
-<span class="nt">time_samples_per_chunk</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
 <span class="nt">ringbuf_nchunks</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 
 
@@ -296,6 +317,12 @@
 
 <span class="nt">rpc_ip_addrs</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;127.0.0.1:6000&#39;</span>
+
+<span class="c1"># FrbGrouper address (one per server). The FrbServer is the gRPC *client*; the</span>
+<span class="c1"># grouper (downstream consumer) is the server. Must be loopback (CUDA IPC</span>
+<span class="c1"># requires same node/GPU). Run with &#39;run_server -G&#39; to disable.</span>
+<span class="nt">grouper_ip_addrs</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;127.0.0.1:7000&#39;</span>
 
 <span class="nt">min_data_mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1500</span>
 <span class="nt">min_rpc_mtu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1500</span>
@@ -310,22 +337,6 @@
 
 <span class="nt">nfs_dir</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;/dev/shm/pirate_nfs&#39;</span>
 <span class="nt">nfs_threads_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
-
-
-<span class="c1">###################################  &quot;Fake X-engine&quot; config  #####################################</span>
-<span class="c1">#</span>
-<span class="c1"># This optional section is only needed if you want to send &quot;fake X-engine&quot; data</span>
-<span class="c1"># (pirate_frb run_server -s).</span>
-
-
-<span class="nt">beams_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
-<span class="nt">base_beam_id</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">100</span><span class="w"> </span><span class="p p-Indicator">]</span><span class="w">    </span><span class="c1"># length num_servers</span>
-
-<span class="nt">tcp_connections_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
-
-<span class="c1"># Frequency channels from xengine_metadata_v1.yml.</span>
-<span class="nt">zone_nfreq</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">8192</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">8192</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">6144</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">2048</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">3584</span><span class="p p-Indicator">]</span>
-<span class="nt">zone_freq_edges</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">300</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">350</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">450</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">600</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">800</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1500</span><span class="p p-Indicator">]</span>
 </pre></div>
 </div>
 </section>

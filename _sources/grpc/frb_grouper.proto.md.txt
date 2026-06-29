@@ -1,0 +1,292 @@
+---
+orphan: true
+---
+
+# frb_grouper.proto
+
+```protobuf
+syntax = "proto3";
+
+package frb.grouper.v1;
+
+// ============================================================================
+// frb_grouper.proto
+//
+// Control protocol for sharing GpuDedisperser::output_ringbuf -- a GPU ring
+// buffer of dedispersion / peak-finding outputs -- with a downstream consumer
+// running in a SEPARATE PROCESS. The GPU memory is shared via CUDA IPC; this
+// gRPC service is only the control/transport channel (it carries IPC handles
+// and flow-control messages, never the bulk output data itself).
+//
+// Roles (note: client/server is "backwards" relative to data flow):
+//
+//   - PRODUCER = GpuDedisperser. Owns the GPU allocation that backs
+//     output_ringbuf. It is the gRPC *client*: it opens a persistent TCP
+//     connection into a long-lived consumer.
+//
+//   - CONSUMER = downstream process. Maps the producer's GPU memory into its
+//     own address space via cudaIpcOpenMemHandle(). It is the gRPC *server*.
+//
+// One bidirectional-streaming RPC (Session) == one sharing session. The
+// handshake is modeled as the first message of that stream (rather than a
+// separate unary RPC) so the lifetime of the IPC sharing is tied to exactly
+// one RPC: when the stream ends, the imported memory is no longer valid and
+// both sides tear down.
+//
+// Message sequence on a Session stream:
+//
+//   producer -> consumer:   Handshake, then a stream of produced seq_ids
+//   consumer -> producer:   HandshakeReply, then a stream of consumed seq_ids
+//
+//   1. Producer opens the connection and starts Session().
+//   2. Producer's FIRST message is a Handshake. It carries:
+//        - a CUDA IPC handle for the *base* GPU allocation that backs
+//          output_ringbuf (the producer's GPU allocator base), plus the
+//          device id and size, and
+//        - an ArrayDescriptor for every array in output_ringbuf, giving each
+//          array's dtype, shape, strides, and byte offset RELATIVE TO THE
+//          BASE allocation.
+//      This is enough for the consumer to open the IPC handle ONCE on the
+//      base region and then reconstruct every output array as a strided view
+//      into it -- without assuming anything about how those arrays are packed
+//      (see ArrayDescriptor for why this matters).
+//   3. Consumer opens the IPC handle, rebuilds the views, and replies with a
+//      HandshakeReply (ready, or an error).
+//   4. Steady state: the two sides exchange per-batch sequence ids:
+//        - produced_seq_id   producer -> consumer  ("batch seq_id has been
+//                                                    written and is ready")
+//        - consumed_seq_id   consumer -> producer  ("done with batch seq_id;
+//                                                    its ring slot may recycle")
+//      seq_id names which batch the message refers to; the ring slot is
+//      (seq_id % num_batch_slots). See ProducerMessage and Handshake.
+//
+// When the RPC ends (either side closes, or on error) the session is over:
+// the consumer stops using the imported memory and the producer treats the
+// consumer as gone.
+// ============================================================================
+
+
+service FrbGrouper {
+  // One sharing session between a producer (client) and consumer (server).
+  // See the file header for the full message sequence. In brief:
+  //   client -> server:  Handshake, then produced seq_ids
+  //   server -> client:  HandshakeReply, then consumed seq_ids
+  rpc Session(stream ProducerMessage) returns (stream ConsumerMessage);
+}
+
+
+// ----------------------------------------------------------------------------
+// Stream envelopes.
+//
+// gRPC streams are homogeneously typed, so each direction uses a single
+// envelope message with a oneof body. The first message in each direction is
+// the handshake; every later message is just a batch sequence id (the
+// steady-state flow-control signal), carried inline in the oneof.
+// ----------------------------------------------------------------------------
+
+// Producer -> consumer (client -> server).
+message ProducerMessage {
+  // The FIRST ProducerMessage on a stream MUST be a Handshake; every
+  // subsequent message MUST be a produced_seq_id.
+  oneof body {
+    Handshake handshake = 1;
+
+    // "Batch 'produced_seq_id' has been written into its ring slot and is
+    // ready to read." Sent after the producer has filled the batch.
+    // A monotonically increasing batch sequence id: the ring
+    // slot is (produced_seq_id % num_batch_slots) and the beam range is
+    // derived as described in Handshake.beams_per_batch. (The producer defines
+    // the exact seq_id -> (ichunk, ibatch) mapping; the consumer only needs
+    // the modular slot arithmetic.)
+    int64 produced_seq_id = 2;
+  }
+}
+
+// Consumer -> producer (server -> client).
+message ConsumerMessage {
+  // The FIRST ConsumerMessage on a stream MUST be a HandshakeReply; every
+  // subsequent message MUST be a consumed_seq_id.
+  oneof body {
+    HandshakeReply handshake_reply = 1;
+
+    // "I am done reading batch 'consumed_seq_id'; its ring slot may be
+    // recycled." This is the seq_id of a previously produced batch the
+    // consumer has finished with (same slot arithmetic as produced_seq_id
+    // above).
+    int64 consumed_seq_id = 2;
+  }
+}
+
+
+// ----------------------------------------------------------------------------
+// Handshake.
+// ----------------------------------------------------------------------------
+
+// Describes one logical array of output_ringbuf as a strided view into the
+// shared base allocation.
+//
+// This is intentionally a FULLY GENERAL strided description (byte offset +
+// shape + per-axis strides + dtype), so the consumer never has to assume any
+// particular packing of the output_ringbuf arrays. In particular it does NOT
+// assume that out_max and out_argmax are contiguous, or adjacent, or in any
+// fixed order: today they happen to be contiguous, but that may change. Each
+// array stands on its own and is located purely by byte_offset + strides.
+message ArrayDescriptor {
+  // Semantic role of this array, e.g. "out_max" or "out_argmax". This is the
+  // key the consumer matches on; new roles can be introduced later without a
+  // wire-format change.
+  string name = 1;
+
+  // Which output tree this array belongs to: 0 <= tree_index < num_trees.
+  // output_ringbuf has one out_max and one out_argmax per tree.
+  int64 tree_index = 2;
+
+  // Element type, as the canonical ksgpu dtype string (the output of
+  // ksgpu::Dtype::str(); reconstruct with ksgpu::Dtype::from_str()), e.g.
+  // "float32", "uint32". (out_max is float16/float32 and out_argmax is uint32,
+  // but the consumer should read this field rather than assuming.)
+  string dtype = 3;
+
+  // Byte offset of this array's first element (its 'data' pointer) relative to
+  // the start of the base allocation -- i.e. relative to the pointer the
+  // consumer gets back from cudaIpcOpenMemHandle(ipc_mem_handle).
+  int64 byte_offset = 4;
+
+  // Logical shape, one entry per axis. The number of entries is the array's
+  // ndim. (For output_ringbuf the inner shape is
+  // (num_batch_slots * beams_per_batch, ndm_out, nt_out).)
+  repeated int64 shape = 5;
+
+  // Strides, one per axis (same count as 'shape'), expressed in units of
+  // ELEMENTS (multiples of the dtype size), matching the ksgpu::Array
+  // convention. A consumer that needs byte strides multiplies by the element
+  // size: byte_stride[i] = strides[i] * ksgpu::Dtype::from_str(dtype).nbits / 8.
+  repeated int64 strides = 6;
+}
+
+// Wire-protocol version. This is the single source of truth for the protocol
+// version on both the producer (C++ client) and consumer (C++/Python server)
+// sides -- both reference PROTOCOL_VERSION_CURRENT from the generated stubs,
+// rather than each hardcoding their own constant.
+//
+// proto3 requires every enum to have a zero value; PROTOCOL_VERSION_UNSPECIFIED
+// is that placeholder (a Handshake.protocol_version of 0 is therefore invalid).
+// Bump PROTOCOL_VERSION_CURRENT on any incompatible wire-format change.
+enum ProtocolVersion {
+  PROTOCOL_VERSION_UNSPECIFIED = 0;
+  // Bumped to 2 when the Handshake field numbers were made sequential and
+  // rpc_ip_addr was added (an incompatible wire-format change vs version 1).
+  PROTOCOL_VERSION_CURRENT = 2;
+}
+
+// First producer -> consumer message. Conveys everything the consumer needs to
+// import the shared GPU region and reconstruct the output_ringbuf arrays.
+message Handshake {
+  // Wire-protocol version: the producer sets this to PROTOCOL_VERSION_CURRENT
+  // (see the ProtocolVersion enum above), and the consumer REJECTS the handshake
+  // if it does not match its own PROTOCOL_VERSION_CURRENT. (Kept as a uint32
+  // rather than the enum type so an out-of-range value from a newer producer
+  // round-trips as a plain integer the consumer can report, instead of decoding
+  // to the proto3 "unknown enum" sentinel.)
+  uint32 protocol_version = 1;
+
+  // CUDA IPC memory handle (cudaIpcMemHandle_t -- 64 opaque bytes) for the
+  // producer's BASE GPU allocation that backs output_ringbuf (the base of the
+  // producer's GPU allocator, i.e. its cudaMalloc base). The consumer passes
+  // these bytes to cudaIpcOpenMemHandle() to map the whole region once;
+  // individual arrays are then located via ArrayDescriptor byte_offsets into
+  // that region.
+  bytes ipc_mem_handle = 2;
+
+  // CUDA device ordinal the producer allocated the base region on. CUDA IPC
+  // requires producer and consumer to be on the same physical GPU; the
+  // consumer uses this to select / validate its device before importing.
+  int32 cuda_device_id = 3;
+
+  // Size in bytes of the base allocation. Lets the consumer wrap the imported
+  // pointer (e.g. as a cupy UnownedMemory of this size) and bounds-check every
+  // ArrayDescriptor (byte_offset + extent <= base_nbytes).
+  int64 base_nbytes = 4;
+
+  // One descriptor per array in output_ringbuf (out_max and out_argmax for
+  // each tree). Order is not significant; the consumer keys on
+  // (name, tree_index).
+  repeated ArrayDescriptor arrays = 5;
+
+  // ---- Ring-buffer geometry (derived metadata, not memory layout) ----
+  // Surfaced explicitly so the consumer can map a produced_seq_id /
+  // consumed_seq_id onto a ring slot and beam range without re-deriving it
+  // from the array shapes.
+
+  // Number of output trees == number of (out_max, out_argmax) pairs.
+  int64 num_trees = 6;
+
+  // Number of batch slots in the ring buffer (GpuDedisperser nbatches_out).
+  // The leading axis of every output array has length
+  // num_batch_slots * beams_per_batch.
+  int64 num_batch_slots = 7;
+
+  // Beams per batch. The batch with sequence id 'seq_id' occupies beam range
+  //     [slot*beams_per_batch, (slot+1)*beams_per_batch)
+  // along axis 0 of each output array, where slot = seq_id % num_batch_slots.
+  int64 beams_per_batch = 8;
+
+  // Time-chunk index of the producer's first dedispersion output, relative to
+  // FPGA seq 0 (GpuDedisperser::Params::initial_chunk, which the FrbServer sets
+  // to the frame_allocator's canonical initial_time_chunk). The consumer adds
+  // this to the zero-based chunk index (seq_id / nbatches) to recover the
+  // FPGA-based chunk index of each acquired output (Outputs::ichunk_fpga_based).
+  // (Here nbatches = total_beams / beams_per_batch is the number of beam-batches
+  // per time chunk -- distinct from num_batch_slots, the ring-buffer depth.)
+  int64 initial_chunk = 9;
+
+  // ---- Run context ----
+  // Information that lets the consumer interpret the output_ringbuf contents
+  // and reach the producer, beyond the raw shapes/strides above.
+
+  // The producer FrbServer's own RPC endpoint (FrbServer::Params::rpc_server_address,
+  // an "ip:port" string), so the consumer can reach back to the server (e.g. to
+  // query status) over its frb_search RPC interface.
+  string rpc_ip_addr = 10;
+
+  // The remaining run-context fields are full YAML serializations -- the same
+  // representations used elsewhere in pirate -- so the consumer can interpret
+  // the output_ringbuf contents (frequencies, beams, DM ranges, time sample,
+  // etc.) rather than working only from raw shapes/strides.
+
+  // XEngineMetadata serialized as YAML (XEngineMetadata::to_yaml_string()).
+  //
+  // NOTE: this metadata is FREQUENCY-SCRUBBED -- its freq_channels are empty
+  // (the producer sends the FrbServer's canonical copy, which is scrubbed). The
+  // consumer must therefore obtain frequency information from the zone structure
+  // in dedispersion_config_yaml (zone_nfreq / zone_freq_edges), NOT from
+  // xengine_metadata_yaml.
+  string xengine_metadata_yaml = 11;
+
+  // The (postfilled) DedispersionConfig serialized as YAML
+  // (DedispersionConfig::to_yaml_string()).
+  string dedispersion_config_yaml = 12;
+
+  // DedispersionPlan::to_yaml_string()
+  string dedispersion_plan_yaml = 13;
+}
+
+// First consumer -> producer message, sent in response to the Handshake.
+//
+// (Acknowledging the handshake is not strictly part of the produced/consumed
+// seq_id exchange, but it is needed for correctness: the producer must not
+// start sending produced_seq_ids until the consumer has actually imported the
+// IPC handle and rebuilt its views, and the consumer needs a channel to report
+// an import failure.)
+message HandshakeReply {
+  // True iff the consumer successfully imported the IPC handle, rebuilt all
+  // array views, and is ready to receive produced_seq_ids. If false, the
+  // producer must not send produced_seq_ids and should tear down the session;
+  // 'error_message' explains why.
+  bool ready = 1;
+
+  // Human-readable error description. Empty iff ready == true.
+  string error_message = 2;
+}
+
+```

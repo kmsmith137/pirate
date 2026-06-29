@@ -49,7 +49,7 @@ void f(int x, int y, int z)
         throw runtime_error(ss.str());
     }
 
-    // Example 2: you should not replace this by xassert_lt(x+y,z), since the xassert_eq() error message
+    // Example 2: you should not replace this by xassert_lt(x+y,z), since the xassert_lt() error message
     // contains less information than the message below (which shows x,y,z individually)
 
     if ((x+y) >= z) {
@@ -61,7 +61,7 @@ void f(int x, int y, int z)
     // Example 3: you should replace this by xassert_shape_eq(arr, ({M,N})), since the xassert_shape_eq()
     // message contains more information (namely, the actual and expected array shapes).
 
-    if ((arr.ndim != 2) || (arr.shape[0] != x) && (arr.shape[1] != y)) {
+    if ((arr.ndim != 2) || (arr.shape[0] != x) || (arr.shape[1] != y)) {
         stringstream ss;
         ss << "f(): expected shape (x,y) = (" << x << "," << y << "), got " << arr.shape_str();
         throw runtime_error(ss.str());

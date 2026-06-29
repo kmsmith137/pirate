@@ -1,0 +1,590 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Build system" href="build.html" /><link rel="prev" title="Developer notes" href="developer.html" />
+
+    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
+        <title>Writing a grouper - pirate_frb 1.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f8f8f8;
+  --color-code-foreground: black;
+  --color-brand-primary: #007bff;
+  --color-brand-content: #0056b3;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
+<label class="overlay sidebar-overlay" for="__navigation">
+  <div class="visually-hidden">Hide navigation sidebar</div>
+</label>
+<label class="overlay toc-overlay" for="__toc">
+  <div class="visually-hidden">Hide table of contents sidebar</div>
+</label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <div class="visually-hidden">Toggle site navigation sidebar</div>
+        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">pirate_frb 1.0.0 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle">
+          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <div class="visually-hidden">Toggle table of contents sidebar</div>
+        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  
+  <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
+  <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Writing a grouper</a></li>
+<li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/notes/grouper_interface.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle">
+              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <div class="visually-hidden">Toggle table of contents sidebar</div>
+            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="writing-a-grouper">
+<h1>Writing a grouper<a class="headerlink" href="#writing-a-grouper" title="Link to this heading">¶</a></h1>
+<p>The next step after the FRB search (<code class="docutils literal notranslate"><span class="pre">pirate</span></code>) is the “grouper”.
+The grouper is a python program which receives dedispersion
+outputs from <code class="docutils literal notranslate"><span class="pre">pirate</span></code>.
+(The “dedispersion outputs” consist of a pair of 2-d arrays
+<code class="docutils literal notranslate"><span class="pre">out_max</span></code>, <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code> in the dm/time plane, for each dedispersion
+“tree” and for each beam. See below.)</p>
+<p>The purpose of the grouper is to identify peaks in the dm/time plane,
+run a classifier on each peak, and send a top-k list of peaks (“events”)
+to the “sifter”. The sifter is a process that runs on a central node,
+that receives events from groupers on all search nodes.</p>
+<p>We run one grouper per GPU, i.e. two groupers per search node.
+The grouper exchanges data arrays with <code class="docutils literal notranslate"><span class="pre">pirate</span></code> via a shared
+GPU memory ring buffer. This avoids the overhead of copying data
+between GPU and CPU. The grouper exchanges <strong>metadata</strong> with <code class="docutils literal notranslate"><span class="pre">pirate</span></code>
+via <code class="docutils literal notranslate"><span class="pre">grpc</span></code> over the loopback network (<code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>).
+For performance reasons, the grouper should leave arrays on the GPU
+if possible, and process them with <code class="docutils literal notranslate"><span class="pre">cupy</span></code>.</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="../classes/FrbGrouper.html#pirate_frb.rpc.FrbGrouper" title="pirate_frb.pirate_pybind11.FrbGrouper"><code class="xref py py-class docutils literal notranslate"><span class="pre">FrbGrouper</span></code></a>: for managing communication with pirate.</p></li>
+<li><p><a class="reference internal" href="../classes/FrbSifterClient.html#pirate_frb.rpc.FrbSifterClient" title="pirate_frb.rpc.FrbSifterClient"><code class="xref py py-class docutils literal notranslate"><span class="pre">FrbSifterClient</span></code></a>: for managing communication with the sifter.</p></li>
+<li><p><a class="reference internal" href="../classes/FrbSifterEvents.html#pirate_frb.rpc.FrbSifterEvents" title="pirate_frb.rpc.FrbSifterEvents"><code class="xref py py-class docutils literal notranslate"><span class="pre">FrbSifterEvents</span></code></a>: helper class for sending events to the sifter.</p></li>
+<li><p><a class="reference internal" href="../classes/GpuDedisperserOutputs.html#pirate_frb.core.GpuDedisperserOutputs" title="pirate_frb.core.GpuDedisperserOutputs"><code class="xref py py-class docutils literal notranslate"><span class="pre">GpuDedisperserOutputs</span></code></a>: helper class for storing dedispersion output arrays.</p></li>
+<li><p>Protocol for pirate-grouper communication: <a class="reference internal" href="../grpc/frb_grouper.proto.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">grpc/frb_grouper.proto</span></code></span></a>.</p></li>
+<li><p>Protocol for grouper-sifter communication: <a class="reference internal" href="../grpc/frb_sifter.proto.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">grpc/frb_sifter.proto</span></code></span></a>.</p></li>
+</ul>
+<section id="example-code">
+<h2>Example code<a class="headerlink" href="#example-code" title="Link to this heading">¶</a></h2>
+<p>From <code class="docutils literal notranslate"><span class="pre">pirate_frb/run_toy_grouper.py</span></code> (slightly streamlined):</p>
+<div class="highlight-py notranslate"><div class="highlight"><pre><span></span><span class="c1"># In the toy grouper, we don&#39;t do peak-finding or thresholding. We just send one</span>
+<span class="c1"># event per time chunk, corresponding to the (beam,dm,time) triple with highest</span>
+<span class="c1"># snr (even if the snr doesn&#39;t correspond to a statistically significant event!)</span>
+
+<span class="c1"># The FrbGrouper context manager blocks until &#39;pirate&#39; connects and sends metadata.</span>
+<span class="c1"># WARNING: don&#39;t touch the gpu (e.g. by allocating memory with cupy) until you enter</span>
+<span class="c1"># the context manager. See &#39;FrbGrouper context manager&#39; below</span>
+
+<span class="k">with</span> <span class="n">FrbGrouper</span><span class="p">(</span><span class="n">grouper_addr</span><span class="p">)</span> <span class="k">as</span> <span class="n">grouper</span><span class="p">:</span>
+    <span class="n">sifter</span> <span class="o">=</span> <span class="n">FrbSifterClient</span><span class="p">(</span><span class="n">sifter_addr</span><span class="p">)</span>
+    
+    <span class="c1"># Send the ConfigMessage to the sifter (this is only done once).</span>
+    <span class="n">sifter</span><span class="o">.</span><span class="n">send_configuration</span><span class="p">(</span>
+        <span class="n">pirate_yaml</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">dedispersion_config_yaml_string</span><span class="p">,</span>
+        <span class="n">xengine_yaml</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">xengine_metadata_yaml_string</span><span class="p">,</span>
+        <span class="n">dedispersion_plan_yaml</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">dedispersion_plan_yaml_string</span><span class="p">,</span>
+        <span class="n">grouper_yaml</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;toy_grouper&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>  <span class="c1"># placeholder for future expansion</span>
+        <span class="n">search_ip_addr</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">search_ip_addr</span><span class="p">)</span>
+        
+    <span class="n">beam_set_id</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">xengine_yaml</span><span class="p">[</span><span class="s1">&#39;beamset&#39;</span><span class="p">]</span>
+    <span class="n">nbeams_tot</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">total_beams</span>
+    <span class="n">nbatches</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">nbatches</span>
+    <span class="n">beams_per_batch</span> <span class="o">=</span> <span class="n">nbeams_tot</span> <span class="o">//</span> <span class="n">nbatches</span>
+    
+    <span class="c1"># The grouper receives dedispersion outputs as an outer loop over time chunks,</span>
+    <span class="c1"># followed by an inner loop over beam batches. Dedispersion outputs are arrays</span>
+    <span class="c1"># (beams_per_batch, coarse_ndm, coarse_ntime). (One array for each dedispersion tree.)</span>
+
+    <span class="k">for</span> <span class="n">ichunk</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">():</span>  <span class="c1"># outer loop over time chunks</span>
+        <span class="c1"># GPU-resident accumulators, updated entirely on the GPU below.</span>
+        <span class="n">gmax</span>    <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="o">-</span><span class="n">cp</span><span class="o">.</span><span class="n">inf</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">cp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>   <span class="c1"># max(snr)</span>
+        <span class="n">g_tree</span>  <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">cp</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>          <span class="c1"># argmax(tree index)</span>
+        <span class="n">g_ibeam</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">cp</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>          <span class="c1"># argmax(beam index)</span>
+        <span class="n">g_idm</span>   <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">cp</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>          <span class="c1"># argmax(dm index)</span>
+        <span class="n">g_itime</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">full</span><span class="p">((),</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">cp</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>          <span class="c1"># argmax(time index)</span>
+        <span class="n">per_beam_max</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="n">nbeams_tot</span><span class="p">,),</span> <span class="o">-</span><span class="n">cp</span><span class="o">.</span><span class="n">inf</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">cp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">ibatch</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">nbatches</span><span class="p">):</span>          <span class="c1"># inner loop over beam batches</span>
+            <span class="n">beam0</span> <span class="o">=</span> <span class="n">ibatch</span> <span class="o">*</span> <span class="n">beams_per_batch</span>    <span class="c1"># global index of this batch&#39;s first beam</span>
+
+            <span class="c1"># Inside the inner context manager, you can use the &#39;output&#39; object</span>
+            <span class="c1"># (of type GpuDedisperserOutputs) to get the (out_max, out_argmax) arrays.</span>
+            <span class="c1">#</span>
+            <span class="c1"># WARNING: these arrays are only valid inside the context manager!</span>
+            <span class="c1"># (They are &quot;raw&quot; pointers to GPU memory, which will be reused</span>
+            <span class="c1"># when the context manager exits, even if you keep references.)</span>
+
+            <span class="k">with</span> <span class="n">grouper</span><span class="o">.</span><span class="n">get_output</span><span class="p">(</span><span class="n">ichunk</span><span class="p">,</span> <span class="n">ibatch</span><span class="p">)</span> <span class="k">as</span> <span class="n">outputs</span><span class="p">:</span>
+                <span class="c1"># Loop over dedispersion trees.</span>
+                <span class="c1"># &#39;tree_out&#39; has shape (beams_per_batch, coarse_ndm, coarse_ntime).</span>
+                <span class="k">for</span> <span class="n">itree</span><span class="p">,</span> <span class="n">tree_out</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">outputs</span><span class="o">.</span><span class="n">out_max</span><span class="p">):</span>
+                    <span class="c1"># Per-beam max (over dm,time) for this batch&#39;s beams.</span>
+                    <span class="n">sl</span> <span class="o">=</span> <span class="n">per_beam_max</span><span class="p">[</span><span class="n">beam0</span> <span class="p">:</span> <span class="n">beam0</span> <span class="o">+</span> <span class="n">beams_per_batch</span><span class="p">]</span>
+                    <span class="n">cp</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">sl</span><span class="p">,</span> <span class="n">tree_out</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)),</span> <span class="n">out</span><span class="o">=</span><span class="n">sl</span><span class="p">)</span>
+
+                    <span class="c1"># Global peak + argmax candidate from this tree.</span>
+                    <span class="c1"># Done entirely on GPU; no gpu&lt;-&gt;host copies in sight!</span>
+                    <span class="n">m</span> <span class="o">=</span> <span class="n">tree_out</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+                    <span class="n">lb</span><span class="p">,</span> <span class="n">idm</span><span class="p">,</span> <span class="n">itime</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">unravel_index</span><span class="p">(</span><span class="n">tree_out</span><span class="o">.</span><span class="n">argmax</span><span class="p">(),</span> <span class="n">tree_out</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+                    <span class="n">upd</span> <span class="o">=</span> <span class="n">m</span> <span class="o">&gt;</span> <span class="n">gmax</span>
+                    <span class="n">gmax</span>    <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">upd</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">gmax</span><span class="p">)</span>
+                    <span class="n">g_tree</span>  <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">upd</span><span class="p">,</span> <span class="n">itree</span><span class="p">,</span> <span class="n">g_tree</span><span class="p">)</span>
+                    <span class="n">g_ibeam</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">upd</span><span class="p">,</span> <span class="n">beam0</span> <span class="o">+</span> <span class="n">lb</span><span class="p">,</span> <span class="n">g_ibeam</span><span class="p">)</span>
+                    <span class="n">g_idm</span>   <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">upd</span><span class="p">,</span> <span class="n">idm</span><span class="p">,</span> <span class="n">g_idm</span><span class="p">)</span>
+                    <span class="n">g_itime</span> <span class="o">=</span> <span class="n">cp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">upd</span><span class="p">,</span> <span class="n">itime</span><span class="p">,</span> <span class="n">g_itime</span><span class="p">)</span>
+
+        <span class="c1"># Now we have the (snr, itree, ibeam, idm, itime) of a single &quot;event&quot;.</span>
+        <span class="c1"># We copy this data from the GPU to the host, and do a little math to convert</span>
+        <span class="c1"># to &quot;physical&quot; quantities such as DM and arrival time. The math is explained</span>
+        <span class="c1"># in notes/tree_dedispersion.tex, and is implemented in a helper method</span>
+        <span class="c1"># grouper.create_events(), which returns an FrbSifterEvents object.</span>
+
+        <span class="n">events</span> <span class="o">=</span> <span class="n">grouper</span><span class="o">.</span><span class="n">create_events</span><span class="p">(</span><span class="n">ichunk</span><span class="p">,</span> <span class="n">g_tree</span><span class="p">,</span> <span class="n">g_ibeam</span><span class="p">,</span> <span class="n">g_idm</span><span class="p">,</span> <span class="n">g_itime</span><span class="p">,</span> <span class="n">gmax</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">grouper</span><span class="o">.</span><span class="n">grouper_ip_addr</span><span class="si">}</span><span class="s1">: </span><span class="si">{</span><span class="n">ichunk</span><span class="si">=}</span><span class="s1">: max snr=</span><span class="si">{</span><span class="nb">float</span><span class="p">(</span><span class="n">events</span><span class="o">.</span><span class="n">snrs</span><span class="p">)</span><span class="si">:</span><span class="s1">.3g</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">sifter</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># Send the FrbEventsMessage to the sifter.</span>
+            <span class="n">sifter</span><span class="o">.</span><span class="n">send_events</span><span class="p">(</span>
+                <span class="n">beam_set_id</span> <span class="o">=</span> <span class="n">beam_set_id</span><span class="p">,</span>
+                <span class="n">events</span> <span class="o">=</span> <span class="n">events</span><span class="p">,</span>
+                <span class="n">coarsegrain_snr</span> <span class="o">=</span> <span class="n">per_beam_max</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="frbgrouper-context-manager">
+<h2>FrbGrouper context manager<a class="headerlink" href="#frbgrouper-context-manager" title="Link to this heading">¶</a></h2>
+<p>When the <code class="docutils literal notranslate"><span class="pre">FrbGrouper</span></code> context manager is entered, a lot happens under the hood:</p>
+<ul>
+<li><p>The grouper starts a grpc service, and blocks until <code class="docutils literal notranslate"><span class="pre">pirate</span></code> connects.
+Note that the grouper is the grpc server, and <code class="docutils literal notranslate"><span class="pre">pirate</span></code> is the client.</p></li>
+<li><p>The grouper receives metadata (three yaml objects, see below) from <code class="docutils literal notranslate"><span class="pre">pirate</span></code>.</p></li>
+<li><p>The grouper learns which GPU it is running on (by receiving a cuda <code class="docutils literal notranslate"><span class="pre">device_id</span></code>),
+and <em>changes the current cupy device</em> to the appropriate GPU. This change will
+be un-done when the context manager exits. Within the <code class="docutils literal notranslate"><span class="pre">FrbGrouper</span></code> context manager,
+cupy functions will use the correct GPU, but may revert to GPU 0 after the context
+manager exits.</p>
+<p><em>Important consequence:</em> the grouper code must not touch the GPU outside
+(either before or after) the <code class="docutils literal notranslate"><span class="pre">FrbGrouper</span></code> context manager. Otherwise, you
+may use the wrong GPU (which will lead to either a crash, or a slowdown if
+data is copied between GPUs).</p>
+<p>(Similarly, the <code class="docutils literal notranslate"><span class="pre">FrbGrouper</span></code> context manager sets the CPU affinity of the
+python caller, to whichever CPU is appropriate.)</p>
+</li>
+<li><p>Based on received metadata (yaml files + a <code class="docutils literal notranslate"><span class="pre">cudaIpcMemHandle_t</span></code>), the grouper
+configures a GPU memory ring buffer which will be shared with <code class="docutils literal notranslate"><span class="pre">pirate</span></code>.</p></li>
+<li><p>The grouper spawns background threads for sending/receiving short rpcs with
+<code class="docutils literal notranslate"><span class="pre">pirate</span></code>. These short rpcs are used to synchronize access to the shared ring
+buffer in GPU memory. (When pirate produces new data, it sends a message
+to the grouper, and vice versa when the grouper is finished consuming data.)
+For GIL reasons, these are C++ threads, not python threads.</p></li>
+</ul>
+<p>The grouper receives three metadata objects from <code class="docutils literal notranslate"><span class="pre">pirate</span></code>:</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">xengine_metadata_yaml</span></code> – the X-engine metadata
+(<a class="reference internal" href="../configs/xengine_metadata.yml.html"><span class="std std-doc">example</span></a>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_config_yaml</span></code> – same format as on-disk dedispersion configs
+(<a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html"><span class="std std-doc">example</span></a>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_plan_yaml</span></code> – more detailed dedispersion metadata, including array shapes
+(<a class="reference internal" href="../configs/example_dedispersion_plan.yml.html"><span class="std std-doc">example</span></a>).</p></li>
+</ol>
+<p>Note: a <code class="docutils literal notranslate"><span class="pre">dedispersion_config</span></code> file is specified on the <code class="docutils literal notranslate"><span class="pre">pirate</span></code> command line
+when <code class="docutils literal notranslate"><span class="pre">pirate</span></code> is started, and passed through to the grouper mostly unmodified
+(item 2 above). However, the following members may be modified, if the real-time
+values in the X-engine are different from the “static” values in the config file:
+<code class="docutils literal notranslate"><span class="pre">zone_nfreq</span></code>, <code class="docutils literal notranslate"><span class="pre">zone_freq_edges</span></code>, <code class="docutils literal notranslate"><span class="pre">time_sample_ms</span></code>, <code class="docutils literal notranslate"><span class="pre">beams_per_gpu</span></code>.</p>
+</section>
+<section id="data-arrays-and-gpudedisperseroutputs-context-manager">
+<h2>Data arrays and GpuDedisperserOutputs context manager<a class="headerlink" href="#data-arrays-and-gpudedisperseroutputs-context-manager" title="Link to this heading">¶</a></h2>
+<p>Dedispersion outputs are processed in the following loop structure
+(see example code above):</p>
+<ul class="simple">
+<li><p>Outer loop over time “chunks”</p></li>
+<li><p>Middle loop over beam “batches”. Call <code class="docutils literal notranslate"><span class="pre">FrbGrouper.get_output()</span></code> once per
+iteration of the middle loop, to get a <a class="reference internal" href="../classes/GpuDedisperserOutputs.html#pirate_frb.core.GpuDedisperserOutputs" title="pirate_frb.core.GpuDedisperserOutputs"><code class="xref py py-class docutils literal notranslate"><span class="pre">GpuDedisperserOutputs</span></code></a>
+object.</p></li>
+<li><p>Inner loop over dedispersion trees. For each tree, the dedispersion outputs are
+an array of shape <code class="docutils literal notranslate"><span class="pre">(beams_per_batch,</span> <span class="pre">coarse_ndm,</span> <span class="pre">coarse_ntime)</span></code>, i.e. a 2-d array
+in the dm-time plane, with a short beam spectator axis.</p></li>
+</ul>
+<p>Here are some details that are not obvious from the example code:</p>
+<ul>
+<li><p>Each batch must be fully processed by the grouper, before moving on to the
+next batch. This is because the dedispersion output array is only valid inside
+its <code class="docutils literal notranslate"><span class="pre">GpuDedisperserOutputs</span></code> context manager.</p>
+<p>If you must process multiple batches in parallel, or save a previous batch,
+then you’ll need to copy data. (Don’t save a reference to the original array,
+it will be overwritten as soon as you exit the context manager!)</p>
+<p>This is not a fundamental limitation – it’s just the easiest interface to implement.
+If it creates problems then let me know, and we can figure out an alternative.</p>
+</li>
+<li><p>Each tree searches a different DM range, and can have different levels of
+coarse-graining in the DM and time axes. These details are partially “hidden”
+by <code class="docutils literal notranslate"><span class="pre">FrbGrouper.create_events()</span></code>, which converts <code class="docutils literal notranslate"><span class="pre">(tree_index,</span> <span class="pre">dm_index,</span> <span class="pre">time_index)</span></code>
+tuples to DMs and arrival times.</p>
+<p>However, when implementing peak-finding logic in a new grouper, you should
+consider how it might be affected by having different coarse-graining in
+different trees.</p>
+<p>For trees with early triggers, there is an extra complication.
+There are two notions of arrival time: pulse arrival time at the trigger
+frequency, and pulse arrival time at the lower edge of the full band.
+Currently, we send the latter arrival time (lower edge of full band)
+to the sifter, even though this arrival time will often be in the future!
+(This detail is also “hidden” in <code class="docutils literal notranslate"><span class="pre">FrbGrouper.create_events()</span></code>)</p>
+<p>Another thing that happens in pirate (but not its predecessor bonsai):
+for some trees, only the upper half of the DM range is passed to the grouper,
+i.e.\ the lower edge of the dm-axis doesn’t correspond to dm=0.
+(This happens for downsampled trees, since the lower half of the dm-range
+has been searched by a previous <code class="docutils literal notranslate"><span class="pre">ds_level</span></code>. You can test for this by either
+checking <code class="docutils literal notranslate"><span class="pre">ds_level</span> <span class="pre">&gt;</span> <span class="pre">0</span></code> or <code class="docutils literal notranslate"><span class="pre">dm_min</span> <span class="pre">&gt;</span> <span class="pre">0</span></code> in the per-tree metadata.)
+This may affect details of your peak-finding logic.</p>
+<p>For a lot more info on these details, see the tex notes.</p>
+</li>
+<li><p>The dedisperser passes <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code> arrays to the grouper, to indicate which
+fine-grained (dm, time, frequency subband, peak-finding width) is responsible
+for each coarse-grained maximum SNR. Currently, these <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code> arrays are
+ignored by <code class="docutils literal notranslate"><span class="pre">FrbGrouper.create_events()</span></code>, which just uses the central (dm,time)
+in each coarse-grained pixel.</p>
+<p>In the future, I plan to add code to recover fine-grained information from
+the <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code> array. (This is not as trivial as it sounds, since the <code class="docutils literal notranslate"><span class="pre">out_argmax</span></code>
+array uses an “encoding” that’s convenient in the GPU kernel, and I need to write code
+to decode it.)</p>
+</li>
+</ul>
+<p>The <code class="docutils literal notranslate"><span class="pre">FrbGrouper</span></code> and <code class="docutils literal notranslate"><span class="pre">FrbSifter</span></code> classes aren’t well-optimized at all.
+However, I find empirically that the “toy” grouper does not slow down a CHORD-scale search.
+If this changes in the future, then here are some optimization ideas (just want to write
+these down somewhere so I don’t forget):</p>
+<ul class="simple">
+<li><p>The biggest open risk is that cupy will not be fast enough for efficient peak-finding.
+If this turns out to be an issue, then a custom cuda kernel or two might help.
+It may also help to use a larger batch size, or to switch to an interface which
+allows processing multiple batches in parallel (see above).</p></li>
+<li><p>Currently, the pirate-grouper intercommunication synchronizes cuda streams
+with host grpc threads on both sides. It would be more efficient to serialize and
+exchange cuda events, to directly “couple” pirate’s cuda streams to cupy’s streams).</p></li>
+<li><p>Currently, grouper-sifter intercommunication is synchronous: the grouper blocks
+until a tcp connection to the sifter is opened and closed. It would be better to
+use asynchronous communication, with the tcp connection managed by another thread.</p></li>
+</ul>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="build.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Build system</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="developer.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Developer notes</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, Kendrick Smith
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Writing a grouper</a><ul>
+<li><a class="reference internal" href="#example-code">Example code</a></li>
+<li><a class="reference internal" href="#frbgrouper-context-manager">FrbGrouper context manager</a></li>
+<li><a class="reference internal" href="#data-arrays-and-gpudedisperseroutputs-context-manager">Data arrays and GpuDedisperserOutputs context manager</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=8d563738"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/scripts/furo.js?v=5fa4622c"></script>
+    </body>
+</html>

@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../notes/quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../notes/grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../notes/hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../notes/cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -266,10 +285,10 @@
 <span class="c1"># Files are written through local SSD cache to a real NFS server (/mnt/cs00/data).</span>
 <span class="c1">#</span>
 <span class="c1"># To start server on cf05:</span>
-<span class="c1">#   pirate_frb run_server configs/frb_server/cf05_production.yml</span>
+<span class="c1">#   pirate_frb run_server configs/frb_server/cf05_production.yml configs/dedispersion/chord_sb2_et.yml</span>
 <span class="c1">#</span>
 <span class="c1"># To send data from cf00 to cf05:</span>
-<span class="c1">#   pirate_frb run_server -s configs/frb_server/cf05_production.yml</span>
+<span class="c1">#   pirate_frb run_fake_xengine 10.222.3.5:6000 10.222.3.5:6001</span>
 
 
 <span class="c1">########################################  General config  ########################################</span>
@@ -284,16 +303,14 @@
 <span class="nt">num_servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
 <span class="nt">server_cpus</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1</span><span class="w"> </span><span class="p p-Indicator">]</span><span class="w">   </span><span class="c1"># length num_servers</span>
 
-<span class="c1"># Memory is fully allocated and zeroed before the server starts (with scattered</span>
-<span class="c1"># small exceptions where we do call malloc()).</span>
+<span class="c1"># For now, the config file must declare upper bounds on the amount of memory needed</span>
+<span class="c1"># for dedispersion and ring buffering. This is a hack, and I&#39;ll implement better</span>
+<span class="c1"># memory management in the future!</span>
 
-<span class="nt">memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;256</span><span class="nv"> </span><span class="s">GB&#39;</span>
+<span class="nt">rb_host_memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;256</span><span class="nv"> </span><span class="s">GB&#39;</span>
+<span class="nt">dd_host_memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;420</span><span class="nv"> </span><span class="s">GB&#39;</span>
+<span class="nt">gpu_memory_per_server</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;40</span><span class="nv"> </span><span class="s">GB&#39;</span>
 <span class="nt">use_hugepages</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-
-<span class="c1"># The time &quot;chunk&quot; size sets cadence throughout the FRB search, and the number</span>
-<span class="c1"># of time samples per output file. Must be a multiple of 256.</span>
-
-<span class="nt">time_samples_per_chunk</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span><span class="w"> </span>
 
 <span class="c1"># Logical length of ring buffer (in time &quot;chunks&quot;, not time+beam &quot;frames&quot;).</span>
 <span class="c1"># In principle, this is an independent parameter from &#39;memory_per_server&#39;.</span>
@@ -306,23 +323,38 @@
 <span class="c1">########################################  Network config  ########################################</span>
 
 
-<span class="c1"># &#39;data_ip_addrs&#39; is a list (length num_servers). Each entry is either an &#39;ip_addr:tcp_port&#39;</span>
+<span class="c1"># &#39;data_ip_addrs&#39; is a list (length num_servers). Each entry is either an &#39;ip:tcp_port&#39;</span>
 <span class="c1"># string, or a list of such strings. The latter case arises if a server receives data from</span>
 <span class="c1"># multiple IP addresses. We expect this to happen in full CHORD. (Under the hood, each IP</span>
 <span class="c1"># address corresponds to one &#39;class Receiver&#39;, and an FrbServer can have multiple Receivers.)</span>
+<span class="c1">#</span>
+<span class="c1"># The &#39;ip&#39; part of each &#39;ip:tcp_port&#39; entry may be written in any of three ways, so that ONE</span>
+<span class="c1"># config file can be shared across a cluster of machines with different IP addresses:</span>
+<span class="c1">#</span>
+<span class="c1">#   - a literal IPv4 address                                  e.g. &#39;10.0.0.2:5000&#39;</span>
+<span class="c1">#   - a glob matched against this machine&#39;s IPv4 addresses    e.g. &#39;10.0.0.*:5000&#39;</span>
+<span class="c1">#   - a network device / NIC name                             e.g. &#39;enp13s0f0np0:5000&#39;</span>
 
 <span class="nt">data_ip_addrs</span><span class="p">:</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;10.0.0.2:5000&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;10.0.1.2:5000&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;10.0.2.2:5000&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;10.0.3.2:5000&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;10.0.0.*:5000&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;10.0.1.*:5000&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="s">&#39;10.0.2.*:5000&#39;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&#39;10.0.3.*:5000&#39;</span><span class="w"> </span><span class="p p-Indicator">]</span>
 
-<span class="c1"># &#39;rpc_ip_addrs&#39; is a list of &#39;ip_addr:tcp_port&#39; strings. Currently, RPC threads are</span>
-<span class="c1"># not pinned to a specific CPU. This is fine for now, since all RPCs are &quot;lightweight&quot;.</span>
-<span class="c1"># We may revisit in the future, when we define &quot;heavyweight&quot; RPCs for e.g. injections.</span>
-<span class="c1"># See discussion in include/pirate/FrbServer.hpp.</span>
+<span class="c1"># &#39;rpc_ip_addrs&#39; is a list of &#39;ip:tcp_port&#39; strings (one per server). The &#39;ip&#39; accepts the</span>
+<span class="c1"># same literal / glob / device-name forms as data_ip_addrs above (see resolve_ip_spec()).</span>
+<span class="c1"># Currently, RPC threads are not pinned to a specific CPU. This is fine for now, since all</span>
+<span class="c1"># RPCs are &quot;lightweight&quot;. We may revisit in the future, when we define &quot;heavyweight&quot; RPCs</span>
+<span class="c1"># for e.g. injections. See discussion in include/pirate/FrbServer.hpp.</span>
 
 <span class="nt">rpc_ip_addrs</span><span class="p">:</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.5:6000&#39;</span>
-<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.5:6001&#39;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.*:6000&#39;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;10.222.3.*:6001&#39;</span>
+
+<span class="c1"># FrbGrouper addresses (one per server). The FrbServer is the gRPC *client*;</span>
+<span class="c1"># the grouper (downstream consumer) is the server. Must be loopback (CUDA IPC</span>
+<span class="c1"># requires same node/GPU). Run with &#39;run_server -G&#39; to disable.</span>
+<span class="nt">grouper_ip_addrs</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;127.0.0.1:7000&#39;</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&#39;127.0.0.1:7001&#39;</span>
 
 <span class="c1"># The FRB server (and fake X-engine) will throw exceptions if the MTUs are below these thresholds.</span>
 <span class="c1"># Intended as a defensive check against forgetting to enable jumbo MTUs.</span>
@@ -351,44 +383,6 @@
 
 <span class="nt">nfs_dir</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;/mnt/cs00/data/{user}/{date}&#39;</span>
 <span class="nt">nfs_threads_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
-
-
-<span class="c1">###################################  &quot;Fake X-engine&quot; config  #####################################</span>
-<span class="c1">#</span>
-<span class="c1"># This optional section is only needed if you want to send &quot;fake X-engine&quot; data</span>
-<span class="c1"># (pirate_frb run_server -s).</span>
-
-
-<span class="c1"># Note: The X-engine determines the beam configuration, and the FRB server</span>
-<span class="c1"># receives it dynamically at runtime.</span>
-
-<span class="nt">beams_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
-<span class="nt">base_beam_id</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="w"> </span><span class="nv">100</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">200</span><span class="w"> </span><span class="p p-Indicator">]</span><span class="w">    </span><span class="c1"># length num_servers</span>
-
-<span class="c1"># In the real system, each X-engine &quot;half-node&quot; (i.e. numa domain) opens a separate</span>
-<span class="c1"># TCP connection (128 TCP connections in full CHORD).</span>
-<span class="c1">#</span>
-<span class="c1"># The &quot;fake X-engine&quot; uses many TCP connections in order to mimic this behavior, but</span>
-<span class="c1"># they all originate from the same physical node. (Detail: if the server has multiple</span>
-<span class="c1"># data_ip_addrs, then the TCP connections are assigned round-robin.)</span>
-
-<span class="nt">tcp_connections_per_server</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
-
-<span class="c1"># Frequency channels. The observed frequency band is divided into &quot;zones&quot;.</span>
-<span class="c1"># Within each zone, all frequency channels have the same width, but the</span>
-<span class="c1"># channel width may differ between zones.</span>
-<span class="c1">#   zone_nfreq: number of frequency channels in each zone.</span>
-<span class="c1">#   zone_freq_edges: frequency band edges in MHz.</span>
-<span class="c1"># For example:</span>
-<span class="c1">#   zone_nfreq: [N]      zone_freq_edges: [400,800]      one zone, channel width (400/N) MHz</span>
-<span class="c1">#   zone_nfreq: [2*N,N]  zone_freq_edges: [400,600,800]  width (100/N), (200/N) MHz in lower/upper band</span>
-<span class="c1">#</span>
-<span class="c1"># In this config, we have:</span>
-<span class="c1">#  Total frequency channels: 28160</span>
-<span class="c1">#  Channel widths (MHz): [ 0.00610352, 0.012207, 0.0244141, 0.0976562, 0.195312 ]</span>
-
-<span class="nt">zone_nfreq</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">8192</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">8192</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">6144</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">2048</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">3584</span><span class="p p-Indicator">]</span>
-<span class="nt">zone_freq_edges</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">300</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">350</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">450</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">600</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">800</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1500</span><span class="p p-Indicator">]</span>
 </pre></div>
 </div>
 </section>

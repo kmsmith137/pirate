@@ -3,7 +3,7 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="To do list" href="todo.html" /><link rel="prev" title="Installation" href="install.html" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Quick start" href="quick_start.html" /><link rel="prev" title="Installation" href="install.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
         <title>Introduction - pirate_frb 1.0.0 documentation</title>
@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -265,9 +284,9 @@
 <p>Some notes/caveats:</p>
 <ul class="simple">
 <li><p>This repo contains real-time server code (network receive, ring buffering,
-file-writing RPCs) and GPU dedispersion code, but currently the <strong>real-time
-server does not call the GPU dedisperser</strong>! Working on this is my top
-priority.</p></li>
+file-writing RPCs) and GPU dedispersion code, but currently the <strong>dedispersion
+output is not correctly normalized, and looks like random noise</strong>!
+Fixing this is my top priority.</p></li>
 <li><p>Currently, this code can only be compiled on a recent ubuntu
 linux machine with <strong>a physical GPU</strong>, and the cuda toolkit installed.
 I hope to improve this in the future!</p></li>
@@ -280,10 +299,10 @@ day.)</p></li>
 <ul>
 <li><p>Receives data via TCP from the “upstream” X-engine. The network protocol
 is <a class="reference internal" href="network_protocol.html"><span class="std std-doc">here</span></a>. The protocol includes metadata – the
-format is defined by <a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v2.yml</span></code></span></a>.
+format is defined by <a class="reference internal" href="../configs/xengine_metadata.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine_metadata.yml</span></code></span></a>.
 Details of the protocol and metadata will change in the future.</p></li>
 <li><p>Dynamic configuration: the X-engine metadata
-(see <a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine/xengine_metadata_v2.yml</span></code></span></a>)
+(see <a class="reference internal" href="../configs/xengine_metadata.yml.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">configs/xengine_metadata.yml</span></code></span></a>)
 includes important parameters such as the frequency upchannelization and beam layout.
 The FRB search “dynamically” configures itself when this data is
 received from the X-engine.</p>
@@ -306,7 +325,7 @@ and we just call C++ for low-level compute kernels.</p>
 For more info, see <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">pirate_frb</span> <span class="pre">--help</span></code> or the HTML docs.</p></li>
 <li><p>The FRB server defines <a class="reference internal" href="../grpc/frb_search.proto.html"><span class="std std-doc">gRPC service(s)</span></a> for things like control, monitoring,
 and triggered data writes. All interaction with a running server is via gRPC.
-There is a python client (<code class="docutils literal notranslate"><span class="pre">pirate_frb.rpc.FrbClient</span></code>) but not a C++ client
+There is a python client (<code class="docutils literal notranslate"><span class="pre">pirate_frb.rpc.FrbSearchClient</span></code>) but not a C++ client
 (not sure if we’ll need one).</p></li>
 <li><p>The FRB server stores data sent by the X-engine in a ring buffer, and defines
 RPCs for saving data to disk, via a two-stage process where data is written
@@ -320,15 +339,6 @@ done on the GPU, with custom GPU kernels.</p></li>
 are emitted by a python code generator (<code class="docutils literal notranslate"><span class="pre">pirate_frb.cuda_generator</span></code>).
 Some kernels ended up getting so complicated and coalesced that a
 hacked-up code generator was easier than C++ templates!</p></li>
-<li><p>The output of the FRB search is a stream of arrays (“coarse-grained
-dedispersion outputs”, to be described in future documentation).
-The plan for these arrays is as follows.</p>
-<p>Arrays will be handed off to a “downstream” process (the “grouper”),
-using a shared ring buffer in GPU memory. This could be implemented
-with <code class="docutils literal notranslate"><span class="pre">cudaIpc</span></code>, using grpc to synchronize the producer/consumer, by
-streaming integer frame offsets back and forth. None of this is implemented
-yet, but it will be soon!</p>
-</li>
 </ul>
 </section>
 
@@ -337,12 +347,12 @@ yet, but it will be soon!</p>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="todo.html">
+          <a class="next-page" href="quick_start.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">To do list</div>
+                <div class="title">Quick start</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>

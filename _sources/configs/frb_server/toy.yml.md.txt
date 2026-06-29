@@ -10,10 +10,10 @@ orphan: true
 #
 # To start the server:
 #   mkdir -p /dev/shm/pirate_ssd /dev/shm/pirate_nfs
-#   pirate_frb run_server configs/frb_server/toy.yml
+#   pirate_frb run_server configs/frb_server/toy.yml configs/dedispersion/toy.yml
 #
 # To send fake X-engine data (in a separate terminal):
-#   pirate_frb run_server -s configs/frb_server/toy.yml
+#   pirate_frb run_fake_xengine 127.0.0.1:6000
 
 
 ########################################  General config  ########################################
@@ -22,10 +22,11 @@ orphan: true
 num_servers: 1
 server_cpus: [ 0 ]   # length num_servers
 
-memory_per_server: '10 GB'
+rb_host_memory_per_server: '1 GB'
+dd_host_memory_per_server: '1 GB'
+gpu_memory_per_server: '1 GB'
 use_hugepages: true
 
-time_samples_per_chunk: 1024
 ringbuf_nchunks: 512
 
 
@@ -37,6 +38,12 @@ data_ip_addrs:
 
 rpc_ip_addrs:
   - '127.0.0.1:6000'
+
+# FrbGrouper address (one per server). The FrbServer is the gRPC *client*; the
+# grouper (downstream consumer) is the server. Must be loopback (CUDA IPC
+# requires same node/GPU). Run with 'run_server -G' to disable.
+grouper_ip_addrs:
+  - '127.0.0.1:7000'
 
 min_data_mtu: 1500
 min_rpc_mtu: 1500
@@ -51,20 +58,4 @@ ssd_threads_per_server: 4
 
 nfs_dir: '/dev/shm/pirate_nfs'
 nfs_threads_per_server: 2
-
-
-###################################  "Fake X-engine" config  #####################################
-#
-# This optional section is only needed if you want to send "fake X-engine" data
-# (pirate_frb run_server -s).
-
-
-beams_per_server: 3
-base_beam_id: [ 100 ]    # length num_servers
-
-tcp_connections_per_server: 64
-
-# Frequency channels from xengine_metadata_v1.yml.
-zone_nfreq: [8192, 8192, 6144, 2048, 3584]
-zone_freq_edges: [300, 350, 450, 600, 800, 1500]
 ```

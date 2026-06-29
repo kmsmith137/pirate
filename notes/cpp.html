@@ -3,7 +3,7 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="GPU kernels" href="gpu_kernels.html" /><link rel="prev" title="gRPC Protocol Definitions" href="../_grpc_generated.html" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="GPU kernels" href="gpu_kernels.html" /><link rel="prev" title="LLM context files" href="../llm_context.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
         <title>C++ guidelines - pirate_frb 1.0.0 documentation</title>
@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
-<ul>
+<ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1"><a class="reference internal" href="build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul class="current">
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul class="current">
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -304,7 +323,7 @@ For example:</p>
         <span class="n">throw</span> <span class="n">runtime_error</span><span class="p">(</span><span class="n">ss</span><span class="o">.</span><span class="n">str</span><span class="p">());</span>
     <span class="p">}</span>
 
-    <span class="o">//</span> <span class="n">Example</span> <span class="mi">2</span><span class="p">:</span> <span class="n">you</span> <span class="n">should</span> <span class="ow">not</span> <span class="n">replace</span> <span class="n">this</span> <span class="n">by</span> <span class="n">xassert_lt</span><span class="p">(</span><span class="n">x</span><span class="o">+</span><span class="n">y</span><span class="p">,</span><span class="n">z</span><span class="p">),</span> <span class="n">since</span> <span class="n">the</span> <span class="n">xassert_eq</span><span class="p">()</span> <span class="n">error</span> <span class="n">message</span>
+    <span class="o">//</span> <span class="n">Example</span> <span class="mi">2</span><span class="p">:</span> <span class="n">you</span> <span class="n">should</span> <span class="ow">not</span> <span class="n">replace</span> <span class="n">this</span> <span class="n">by</span> <span class="n">xassert_lt</span><span class="p">(</span><span class="n">x</span><span class="o">+</span><span class="n">y</span><span class="p">,</span><span class="n">z</span><span class="p">),</span> <span class="n">since</span> <span class="n">the</span> <span class="n">xassert_lt</span><span class="p">()</span> <span class="n">error</span> <span class="n">message</span>
     <span class="o">//</span> <span class="n">contains</span> <span class="n">less</span> <span class="n">information</span> <span class="n">than</span> <span class="n">the</span> <span class="n">message</span> <span class="n">below</span> <span class="p">(</span><span class="n">which</span> <span class="n">shows</span> <span class="n">x</span><span class="p">,</span><span class="n">y</span><span class="p">,</span><span class="n">z</span> <span class="n">individually</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="p">((</span><span class="n">x</span><span class="o">+</span><span class="n">y</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">z</span><span class="p">)</span> <span class="p">{</span>
@@ -316,7 +335,7 @@ For example:</p>
     <span class="o">//</span> <span class="n">Example</span> <span class="mi">3</span><span class="p">:</span> <span class="n">you</span> <span class="n">should</span> <span class="n">replace</span> <span class="n">this</span> <span class="n">by</span> <span class="n">xassert_shape_eq</span><span class="p">(</span><span class="n">arr</span><span class="p">,</span> <span class="p">({</span><span class="n">M</span><span class="p">,</span><span class="n">N</span><span class="p">})),</span> <span class="n">since</span> <span class="n">the</span> <span class="n">xassert_shape_eq</span><span class="p">()</span>
     <span class="o">//</span> <span class="n">message</span> <span class="n">contains</span> <span class="n">more</span> <span class="n">information</span> <span class="p">(</span><span class="n">namely</span><span class="p">,</span> <span class="n">the</span> <span class="n">actual</span> <span class="ow">and</span> <span class="n">expected</span> <span class="n">array</span> <span class="n">shapes</span><span class="p">)</span><span class="o">.</span>
 
-    <span class="k">if</span> <span class="p">((</span><span class="n">arr</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">)</span> <span class="o">||</span> <span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">x</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">y</span><span class="p">))</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="p">((</span><span class="n">arr</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">)</span> <span class="o">||</span> <span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="n">x</span><span class="p">)</span> <span class="o">||</span> <span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">y</span><span class="p">))</span> <span class="p">{</span>
         <span class="n">stringstream</span> <span class="n">ss</span><span class="p">;</span>
         <span class="n">ss</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;f(): expected shape (x,y) = (&quot;</span> <span class="o">&lt;&lt;</span> <span class="n">x</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;,&quot;</span> <span class="o">&lt;&lt;</span> <span class="n">y</span> <span class="o">&lt;&lt;</span> <span class="s2">&quot;), got &quot;</span> <span class="o">&lt;&lt;</span> <span class="n">arr</span><span class="o">.</span><span class="n">shape_str</span><span class="p">();</span>
         <span class="n">throw</span> <span class="n">runtime_error</span><span class="p">(</span><span class="n">ss</span><span class="o">.</span><span class="n">str</span><span class="p">());</span>
@@ -341,14 +360,14 @@ For example:</p>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="../_grpc_generated.html">
+          <a class="prev-page" href="../llm_context.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">gRPC Protocol Definitions</div>
+                <div class="title">LLM context files</div>
                 
               </div>
             </a>

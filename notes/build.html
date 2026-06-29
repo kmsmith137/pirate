@@ -3,7 +3,7 @@
   <head><meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Hardware" href="hardware.html" /><link rel="prev" title="CLI reference" href="../cli.html" />
+<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Hardware" href="hardware.html" /><link rel="prev" title="Writing a grouper" href="grouper_interface.html" />
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
         <title>Build system - pirate_frb 1.0.0 documentation</title>
@@ -200,26 +200,45 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul>
+    <li class="toctree-l1"><a class="reference internal" href="../index.html">Home</a></li>
+    <li class="toctree-l1"><a class="reference external" href="../_static/tree_dedispersion.pdf" target="_blank" rel="noopener">Tex notes</a></li>
+  </ul>
   <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="install.html">Installation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="intro.html">Introduction</a></li>
-<li class="toctree-l1"><a class="reference internal" href="todo.html">To do list</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">Quick start</a></li>
 <li class="toctree-l1"><a class="reference internal" href="developer.html">Developer notes</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="grouper_interface.html">Writing a grouper</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
-<li class="toctree-l1"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/xengine/xengine_metadata_v2.yml.html">X-&gt;FRB metadata (v2)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../configs/asdf_header.yml.html">ASDF file format</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Appendix: Context Files for LLMs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
-<li class="toctree-l1"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
+<li class="toctree-l2"><a class="reference internal" href="docstrings.html">Writing sphinx-friendly docstrings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="thread_backed_class.html">Thread-Backed Class Pattern</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cuda_event_ringbuf.html">CudaEventRingbuf</a></li>
+</ul>
+</li>
 </ul>
 
 </div>
@@ -263,10 +282,11 @@
           <section id="build-system">
 <h1>Build system<a class="headerlink" href="#build-system" title="Link to this heading">¶</a></h1>
 <ul class="simple">
-<li><p>Uses pipmake, a tiny build system which is pip-compatible, but forwards pip commands to a Makefile (e.g. <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span></code> forwards to <code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">wheel</span></code>).</p></li>
-<li><p>The Makefile runs the script <code class="docutils literal notranslate"><span class="pre">makefile_helper.py,</span></code> which contains miscellaneous logic that’s more convenient to write in python than in Makefile language. The output of this script is a file <code class="docutils literal notranslate"><span class="pre">makefile_helper.out</span></code>, containing variable declarations in Makefile language.</p></li>
+<li><p>Uses pipmake, a tiny build system which is pip-compatible, but forwards pip commands to a Makefile (e.g. <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span></code> forwards to <code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">build_wheel</span></code>).</p></li>
+<li><p>The Makefile runs the script <code class="docutils literal notranslate"><span class="pre">makefile_helper.py</span></code>, which contains miscellaneous logic that’s more convenient to write in python than in Makefile language. The output of this script is a file <code class="docutils literal notranslate"><span class="pre">makefile_helper.out</span></code>, containing variable declarations in Makefile language.</p></li>
 <li><p>Build the whole project with <code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">-j</span> <span class="pre">32</span></code>. Compile time is high, so <code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">src_lib/FILE.o</span></code> may be useful when working on <code class="docutils literal notranslate"><span class="pre">src_lib/FILE.cu</span></code>.</p></li>
 <li><p>If you add a new source file, see comments near the top of <code class="docutils literal notranslate"><span class="pre">Makefile</span></code> for instructions on how to modify the makefile.</p></li>
+<li><p>The Makefile should work automatically with conda. If you’re not using conda, you may need to override some makefile vars (see below).</p></li>
 </ul>
 <section id="autogenerated-kernels">
 <h2>Autogenerated kernels<a class="headerlink" href="#autogenerated-kernels" title="Link to this heading">¶</a></h2>
@@ -280,12 +300,12 @@
 <section id="grpc">
 <h2>gRPC<a class="headerlink" href="#grpc" title="Link to this heading">¶</a></h2>
 <ul class="simple">
-<li><p>Proto files live in <code class="docutils literal notranslate"><span class="pre">grpc/</span></code> (currently just <a class="reference internal" href="../grpc/frb_search.proto.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">grpc/frb_search.proto</span></code></span></a>).</p></li>
+<li><p>Proto files live in <code class="docutils literal notranslate"><span class="pre">grpc/</span></code>: <a class="reference internal" href="../grpc/frb_search.proto.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">frb_search.proto</span></code></span></a>, <a class="reference internal" href="../grpc/frb_grouper.proto.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">frb_grouper.proto</span></code></span></a>, <a class="reference internal" href="../grpc/frb_sifter.proto.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">frb_sifter.proto</span></code></span></a>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">grpc</span></code> generates both C++ and Python files from <code class="docutils literal notranslate"><span class="pre">.proto</span></code> files.</p></li>
 <li><p>C++ generated files (<code class="docutils literal notranslate"><span class="pre">*.pb.{h,cc}</span></code>, <code class="docutils literal notranslate"><span class="pre">*.grpc.pb.{h,cc}</span></code>) are output to <code class="docutils literal notranslate"><span class="pre">grpc/</span></code>.</p></li>
 <li><p>Python generated files (<code class="docutils literal notranslate"><span class="pre">*_pb2.py</span></code>, <code class="docutils literal notranslate"><span class="pre">*_pb2_grpc.py</span></code>) are output to <code class="docutils literal notranslate"><span class="pre">pirate_frb/rpc/grpc/</span></code>.</p></li>
 <li><p>C++ generation uses <code class="docutils literal notranslate"><span class="pre">protoc</span></code> with <code class="docutils literal notranslate"><span class="pre">grpc_cpp_plugin</span></code>. Python generation uses <code class="docutils literal notranslate"><span class="pre">grpc_tools.protoc</span></code> followed by <code class="docutils literal notranslate"><span class="pre">protol</span></code> (protoletariat) to fix relative imports.</p></li>
-<li><p>Sentinel files (<code class="docutils literal notranslate"><span class="pre">*.protoc_cpp_sentinel</span></code>, <code class="docutils literal notranslate"><span class="pre">*.protoc_python_sentinel</span></code>) ensure each <code class="docutils literal notranslate"><span class="pre">protoc</span></code> invocation runs exactly once despite producing multiple output files.</p></li>
+<li><p>Each <code class="docutils literal notranslate"><span class="pre">protoc</span></code> invocation emits several files at once (the four C++ outputs, or both Python stubs), so the rules are grouped multi-target pattern rules: one rule whose targets are all of those outputs, run once per <code class="docutils literal notranslate"><span class="pre">.proto</span></code>.</p></li>
 <li><p>The shared library links against <code class="docutils literal notranslate"><span class="pre">-lgrpc++</span></code> and <code class="docutils literal notranslate"><span class="pre">-lprotobuf</span></code>.</p></li>
 </ul>
 </section>
@@ -297,12 +317,36 @@
 <span class="n">src_lib</span><span class="o">/</span><span class="n">autogenerated_kernels</span><span class="o">/*.</span><span class="n">cu</span>  <span class="o">-</span> <span class="n">Generated</span> <span class="n">kernels</span> <span class="p">(</span><span class="n">DO</span> <span class="n">NOT</span> <span class="n">EDIT</span><span class="p">)</span>
 <span class="n">pirate_frb</span><span class="o">/</span><span class="n">cuda_generator</span><span class="o">/*.</span><span class="n">py</span>      <span class="o">-</span> <span class="n">Python</span> <span class="n">code</span> <span class="n">that</span> <span class="n">generates</span> <span class="n">CUDA</span> <span class="n">kernels</span>
 <span class="n">pirate_frb</span><span class="o">/*.</span><span class="n">py</span>                     <span class="o">-</span> <span class="n">High</span><span class="o">-</span><span class="n">level</span> <span class="n">python</span> <span class="n">interface</span>
-<span class="n">pirate_frb</span><span class="o">/</span><span class="n">rpc</span><span class="o">/</span>                     <span class="o">-</span> <span class="n">RPC</span> <span class="n">client</span> <span class="n">code</span> <span class="p">(</span><span class="n">FrbClient</span><span class="o">.</span><span class="n">py</span><span class="p">)</span>
+<span class="n">pirate_frb</span><span class="o">/</span><span class="n">rpc</span><span class="o">/</span>                     <span class="o">-</span> <span class="n">RPC</span> <span class="n">client</span> <span class="n">code</span> <span class="p">(</span><span class="n">FrbSearchClient</span><span class="o">.</span><span class="n">py</span><span class="p">)</span>
 <span class="n">pirate_frb</span><span class="o">/</span><span class="n">rpc</span><span class="o">/</span><span class="n">grpc</span><span class="o">/</span>                <span class="o">-</span> <span class="n">Generated</span> <span class="n">Python</span> <span class="n">protobuf</span><span class="o">/</span><span class="n">gRPC</span> <span class="n">stubs</span>
 <span class="n">grpc</span><span class="o">/</span>                               <span class="o">-</span> <span class="n">gRPC</span> <span class="o">.</span><span class="n">proto</span> <span class="n">sources</span> <span class="ow">and</span> <span class="n">generated</span> <span class="n">C</span><span class="o">++</span> <span class="n">stubs</span> <span class="p">(</span><span class="o">*.</span><span class="n">pb</span><span class="o">.</span><span class="p">{</span><span class="n">h</span><span class="p">,</span><span class="n">cc</span><span class="p">})</span>
 <span class="n">configs</span><span class="o">/</span>                            <span class="o">-</span> <span class="n">YAML</span> <span class="n">config</span> <span class="n">files</span> <span class="p">(</span><span class="n">frb_server</span><span class="p">,</span> <span class="n">xengine</span><span class="p">,</span> <span class="n">hwtest</span><span class="p">,</span> <span class="n">dedispersion</span><span class="p">)</span>
 <span class="n">notes</span><span class="o">/</span>                              <span class="o">-</span> <span class="n">Developer</span><span class="o">-</span><span class="n">facing</span> <span class="n">markdown</span> <span class="n">notes</span>
 <span class="n">lib</span><span class="o">/</span><span class="n">libpirate</span><span class="o">.</span><span class="n">so</span>                    <span class="o">-</span> <span class="n">Shared</span> <span class="n">library</span>
+</pre></div>
+</div>
+</section>
+<section id="overriding-makefile-variables">
+<h2>Overriding Makefile variables<a class="headerlink" href="#overriding-makefile-variables" title="Link to this heading">¶</a></h2>
+<p>The Makefile’s compiler, flags, and include paths can be overridden without editing it,
+either from an environment variable or from a gitignored <code class="docutils literal notranslate"><span class="pre">config.mk</span></code> in the repo root.
+Conda users normally need none of these: cufftdx (mathdx), yaml-cpp, asdf, etc. are found
+automatically under <code class="docutils literal notranslate"><span class="pre">$CONDA_PREFIX</span></code>. A non-conda build typically just sets <code class="docutils literal notranslate"><span class="pre">EXTRA_INCDIRS</span></code>.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">NVCC_OPT</span></code>: e.g. <code class="docutils literal notranslate"><span class="pre">-O0</span> <span class="pre">-g</span></code>. nvcc optimization flags (default <code class="docutils literal notranslate"><span class="pre">-O3</span></code>); use for a debug build.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">EXTRA_INCDIRS</span></code>: e.g. <code class="docutils literal notranslate"><span class="pre">-I/usr/local/include</span> <span class="pre">-I/home/dstn/nvidia/mathdx/26.03/include</span></code>. Extra <code class="docutils literal notranslate"><span class="pre">-I</span></code> dirs for hand-installed deps (mathdx, system asdf) on non-conda machines.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NVCC</span></code>: e.g. <code class="docutils literal notranslate"><span class="pre">/usr/local/bin/nvcc</span></code>. The nvcc program, e.g. to point at a different toolkit; its flags live in <code class="docutils literal notranslate"><span class="pre">NVCCFLAGS</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NVCCFLAGS</span></code>: e.g. <code class="docutils literal notranslate"><span class="pre">-std=c++20</span> <span class="pre">...</span></code>. All of nvcc’s flags; usually tweak <code class="docutils literal notranslate"><span class="pre">NVCC_OPT</span></code> instead.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NVCC_ARCH</span></code>: e.g. <code class="docutils literal notranslate"><span class="pre">-gencode</span> <span class="pre">arch=compute_90,code=sm_90</span></code>. GPU-architecture flags (default targets sm_80/86/89).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">NVCC_DEPFLAGS</span></code>: e.g. <code class="docutils literal notranslate"><span class="pre">-MMD</span> <span class="pre">-MP</span></code>. Dependency-file generation flags (the default).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">PYTHON</span></code>: e.g. <code class="docutils literal notranslate"><span class="pre">python3.11</span></code>. Python interpreter used by the build (default <code class="docutils literal notranslate"><span class="pre">python3</span></code>).</p></li>
+</ul>
+<p>Precedence, highest first: <code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">VAR=...</span></code> on the command line, then <code class="docutils literal notranslate"><span class="pre">config.mk</span></code>, then the
+environment, then the Makefile defaults.</p>
+<p>For a persistent non-conda setup, put the overrides in <code class="docutils literal notranslate"><span class="pre">config.mk</span></code> (gitignored). For
+example, Dustin’s <code class="docutils literal notranslate"><span class="pre">config.mk</span></code> is:</p>
+<div class="highlight-make notranslate"><div class="highlight"><pre><span></span><span class="nv">EXTRA_INCDIRS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>-I/usr/local/include<span class="w"> </span>-I/home/dstn/nvidia/mathdx/26.03/include
+<span class="c"># NVCC_OPT = -O0 -g</span>
 </pre></div>
 </div>
 </section>
@@ -322,14 +366,14 @@
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="../cli.html">
+          <a class="prev-page" href="grouper_interface.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">CLI reference</div>
+                <div class="title">Writing a grouper</div>
                 
               </div>
             </a>
@@ -367,6 +411,7 @@
 <li><a class="reference internal" href="#autogenerated-kernels">Autogenerated kernels</a></li>
 <li><a class="reference internal" href="#grpc">gRPC</a></li>
 <li><a class="reference internal" href="#file-structure">File Structure</a></li>
+<li><a class="reference internal" href="#overriding-makefile-variables">Overriding Makefile variables</a></li>
 </ul>
 </li>
 </ul>

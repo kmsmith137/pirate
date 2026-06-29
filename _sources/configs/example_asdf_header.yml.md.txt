@@ -2,7 +2,7 @@
 orphan: true
 ---
 
-# asdf_header.yml
+# example_asdf_header.yml
 
 ```yaml
 #ASDF 1.0.0
@@ -22,8 +22,8 @@ orphan: true
 # Note that we define a "minichunk" to be 256 time samples.
 # 
 # References:
-#   configs/xengine/xengine_metadata_v2.yml -- xengine_metadata fields
-#   notes/network_protocol.md               -- wire protocol
+#   configs/xengine_metadata.yml -- xengine_metadata fields
+#   notes/network_protocol.md    -- wire protocol
 
 asdf/library: !core/software-1.0.0
     name: asdf-cxx

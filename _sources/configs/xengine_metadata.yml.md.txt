@@ -2,18 +2,14 @@
 orphan: true
 ---
 
-# xengine_metadata_v2.yml
+# xengine_metadata.yml
 
 ```yaml
-# The purpose of this "X-engine metadata" file is to document the file format.
-# It will be used in two contexts:
+# The xengine_metadata file represents all FRB-related metadata from the X-engine.
+# It is sent from the X-engine to every FRB node, and is also one of three metadata
+# files sent from pirate to the grouper.
 #
-#  1. Every X-engine node sends this file to every FRB node, at the beginning
-#    of the TCP stream.
-#
-#  2. As a configuration file for the "fake correlator" used for testing.
-#
-# This is a minimal "version 0", and will be extended later.
+# The purpose of this git-controlled example file is to document the file format.
 
 version: 2
 

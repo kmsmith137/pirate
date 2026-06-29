@@ -19,7 +19,12 @@ service FrbSearch {
   // Returns the current status of the search engine
   rpc GetStatus (GetStatusRequest) returns (GetStatusResponse);
 
-  // Returns XEngine metadata as a YAML string (empty if metadata not yet available)
+  // Returns the per-server configuration this server was started with.
+  // Loosely mirrors the run_server YAML config (flattened to a single server).
+  rpc GetConfig (GetConfigRequest) returns (GetConfigResponse);
+
+  // Returns XEngine metadata as a YAML string. Empty if metadata not yet available (the
+  // (metadata is sent by the X-engine, and is not available until the X-engine connects).
   rpc GetXEngineMetadata (GetXEngineMetadataRequest) returns (GetXEngineMetadataResponse);
 
   // Write files to disk for specified beams and time range
@@ -29,9 +34,18 @@ service FrbSearch {
   // at any time, or by the server on shutdown or exception.
   rpc SubscribeFiles (SubscribeFilesRequest) returns (stream SubscribeFilesResponse);
 
-  // Returns the per-server configuration this server was started with.
-  // Loosely mirrors the run_server YAML config (flattened to a single server).
-  rpc GetConfig (GetConfigRequest) returns (GetConfigResponse);
+  // Push stream of rb_processed updates. The server sends one message as
+  // soon as the ring buffer is initialized (carrying the current value),
+  // then one message per change. The stream ends when the client closes
+  // the connection or when FrbServer::stop() is called.
+  //
+  // SPECIAL-PURPOSE: this RPC is intended for use by the FakeXEngine
+  // "pacing" feature (see plans/fake_xengine_pacing.md), which uses a
+  // persistent push stream to gate the sender's chunk rate against the
+  // server's GPU processing rate. Don't use this from new code without
+  // a similar push-based use case in mind -- general status polling
+  // should use GetStatus instead.
+  rpc MonitorRingbuf (MonitorRingbufRequest) returns (stream MonitorRingbufResponse);
 }
 
 // Request message (currently empty, but extensible)
@@ -43,9 +57,38 @@ message GetStatusResponse {
   int64 num_bytes = 2;        // Total bytes received (summed over receivers)
   int64 rb_start = 3;         // First frame_id in ring buffer
   int64 rb_reaped = 4;        // (Last reaped frame_id) + 1
-  int64 rb_finalized = 5;     // (Last finalized frame_id) + 1
-  int64 rb_end = 6;           // (Last frame_id in ring buffer) + 1
-  int64 num_free_frames = 7;  // Number of available frames in AssembledFrameAllocator
+  int64 rb_processed = 5;     // (Last GPU-processed frame_id) + 1; rpc-writeable upper bound
+  int64 rb_assembled = 6;     // (Last fully-assembled frame_id) + 1
+  int64 rb_end = 7;           // (Last frame_id in ring buffer) + 1
+  int64 num_free_frames = 8;  // Number of available frames in AssembledFrameAllocator
+}
+
+// Request message for GetConfig (currently empty, but extensible)
+message GetConfigRequest {}
+
+// Response message containing the per-server config.
+//
+// The "fake_*" fields are server-defined defaults for the FakeXEngine,
+// and are not actually used for anything on the server. The true values
+// of these fields (nfreq, nbeams, etc.) are sent by the X-engine, and
+// can be obtained with the GetXEngineMetadata RPC.
+
+message GetConfigResponse {
+  string rpc_ip_addr = 1;              // "ip:port" string this server is listening on for RPC
+  repeated string data_ip_addrs = 2;   // "ip:port" string per Receiver (one per data IP)
+  int64 time_samples_per_chunk = 3;    // Time samples per chunk (from AssembledFrameAllocator)
+  int64 ringbuf_nchunks = 4;           // Logical ring buffer length in time chunks
+  int64 min_data_mtu = 5;              // Mirrors the server YAML 'min_data_mtu' key
+  string ssd_dir = 6;                  // SSD cache directory for this server
+  string nfs_dir = 7;                  // NFS output directory (already interpolated for {user}/{date})
+  int64 ssd_threads = 8;               // Number of FileWriter SSD threads
+  int64 nfs_threads = 9;               // Number of FileWriter NFS threads
+  int64 tree_rank = 10;                // From config_prefilled.tree_rank
+  int64 beams_per_batch = 11;          // From config_prefilled.beams_per_batch
+  repeated int64 fake_zone_nfreq = 12; // From config_prefilled.zone_nfreq (pre-metadata)
+  repeated double fake_zone_freq_edges = 13;  // From config_prefilled.zone_freq_edges (pre-metadata)
+  double fake_time_sample_ms = 14;     // From config_prefilled.time_sample_ms (pre-metadata)
+  int64 fake_nbeams = 15;              // From config_prefilled.beams_per_gpu (pre-metadata)
 }
 
 // Request message for GetXEngineMetadata
@@ -102,18 +145,12 @@ message WriteNotification {
   string error_message = 2;  // Empty = success; non-empty = error string.
 }
 
-// Request message for GetConfig (currently empty, but extensible)
-message GetConfigRequest {}
+// Request message for MonitorRingbuf (currently empty, but extensible).
+message MonitorRingbufRequest {}
 
-// Response message containing the per-server config.
-message GetConfigResponse {
-  string rpc_ip_addr = 1;              // "ip:port" string this server is listening on for RPC
-  repeated string data_ip_addrs = 2;   // "ip:port" string per Receiver (one per data IP)
-  int64 time_samples_per_chunk = 3;    // Time samples per chunk (from AssembledFrameAllocator)
-  string ssd_dir = 4;                  // SSD cache directory for this server
-  string nfs_dir = 5;                  // NFS output directory (already interpolated for {user}/{date})
-  int64 ssd_threads = 6;               // Number of FileWriter SSD threads
-  int64 nfs_threads = 7;               // Number of FileWriter NFS threads
-  int64 ringbuf_nchunks = 8;           // Logical ring buffer length in time chunks
+// Streamed update for MonitorRingbuf. One message per change in rb_processed.
+message MonitorRingbufResponse {
+  int64 rb_processed = 1;
 }
+
 ```
