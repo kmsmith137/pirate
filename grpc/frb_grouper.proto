@@ -229,6 +229,8 @@ message Handshake {
   // to the frame_allocator's canonical initial_time_chunk). The consumer adds
   // this to the zero-based chunk index (seq_id / nbatches) to recover the
   // FPGA-based chunk index of each acquired output (Outputs::ichunk_fpga_based).
+  // (Here nbatches = total_beams / beams_per_batch is the number of beam-batches
+  // per time chunk -- distinct from num_batch_slots, the ring-buffer depth.)
   int64 initial_chunk = 9;
 
   // ---- Run context ----
