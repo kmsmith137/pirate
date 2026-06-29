@@ -279,8 +279,8 @@ class FrbGrouperInjections:
             The events translated into physical units (beam id, absolute FPGA
             timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events(). Also
             carries the chunk's absolute FPGA window (``chunk_fpga_start``,
-            ``chunk_fpga_end``). dm_error and rfi_prob are set to zero (not computed by
-            the toy grouper).
+            ``chunk_fpga_end``). rfi_prob is set to zero (not computed by the toy
+            grouper).
         """
         import cupy as cp
 
@@ -330,13 +330,12 @@ class FrbGrouperInjections:
         offset = np.rint(t_full * self._seq_per_sample).astype(np.int64)
         fpga_timestamps = chunk_fpga_start + offset
 
-        # FrbSifterEvents casts dtypes and validates shapes. dm_error / rfi_prob are
-        # zero for the toy grouper.
+        # FrbSifterEvents casts dtypes and validates shapes. rfi_prob is zero for the
+        # toy grouper.
         return FrbSifterEvents(
             beam_ids = beam_ids,
             fpga_timestamps = fpga_timestamps,
             dms = dms,
-            dm_errors = np.zeros(snr_h.shape, dtype=np.float32),
             snrs = snr_h,
             rfi_probs = np.zeros(snr_h.shape, dtype=np.float32),
             chunk_fpga_start = chunk_fpga_start,

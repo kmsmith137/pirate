@@ -16,7 +16,6 @@ class FrbSifterEvents:
     - ``beam_ids`` (int32) -- X-engine beam id of each event
     - ``fpga_timestamps`` (int64) -- absolute FPGA-counter timestamp of each event
     - ``dms`` (float32) -- dispersion measure
-    - ``dm_errors`` (float32) -- dispersion-measure uncertainty
     - ``snrs`` (float32) -- signal-to-noise ratio
     - ``rfi_probs`` (float32) -- RFI probability
 
@@ -32,7 +31,6 @@ class FrbSifterEvents:
         ("beam_ids",        "beam_id",        np.int32),
         ("fpga_timestamps", "fpga_timestamp", np.int64),
         ("dms",             "dm",             np.float32),
-        ("dm_errors",       "dm_error",       np.float32),
         ("snrs",            "snr",            np.float32),
         ("rfi_probs",       "rfi_prob",       np.float32),
     )
@@ -48,7 +46,7 @@ class FrbSifterEvents:
             raise ValueError(f"FrbSifterEvents: {name} must be >= 0, got {value}")
         return value
 
-    def __init__(self, beam_ids, fpga_timestamps, dms, dm_errors, snrs, rfi_probs,
+    def __init__(self, beam_ids, fpga_timestamps, dms, snrs, rfi_probs,
                  chunk_fpga_start, chunk_fpga_end):
         self.chunk_fpga_start = self._check_fpga_count("chunk_fpga_start", chunk_fpga_start)
         self.chunk_fpga_end = self._check_fpga_count("chunk_fpga_end", chunk_fpga_end)
@@ -57,7 +55,7 @@ class FrbSifterEvents:
                              f">= chunk_fpga_start ({self.chunk_fpga_start})")
 
         values = dict(beam_ids=beam_ids, fpga_timestamps=fpga_timestamps, dms=dms,
-                      dm_errors=dm_errors, snrs=snrs, rfi_probs=rfi_probs)
+                      snrs=snrs, rfi_probs=rfi_probs)
         for attr, _, dtype in self._FIELDS:
             val = values[attr]
             if type(val).__module__.split('.', 1)[0] == 'cupy':
@@ -102,7 +100,8 @@ class FrbSifterClient:
     The FrbSifterClient manages grouper-sifter communication (from the grouper side).
 
     The grouper sends two types of messages to the sifter: a ConfigMessage
-    (sent once), and FrbEventsMessages (sent once per time chunk).
+    (sent once), and FrbEventsMessages (sent once per FPGA window, typically
+    one per time chunk).
 
     If FrbSifterClient is used as a context manager, then close() is automatically called.
 
@@ -114,12 +113,11 @@ class FrbSifterClient:
 
         with FrbSifterClient("localhost:7100") as sifter:
             sifter.send_configuration(pirate_yaml, xengine_yaml,
-                                       dedispersion_plan_yaml, grouper_yaml)
-            sifter.send_events(has_injections, beam_set_id, events,
-                               coarsegrain_start_fpga_count,
-                               coarsegrain_end_fpga_count, coarsegrain_snr)
+                                       dedispersion_plan_yaml, grouper_yaml,
+                                       search_ip_addr)
+            sifter.send_events(beam_set_id, events, coarsegrain_snr)
 
-    where 'events' is a FrbSifterEvents (or None).
+    where 'events' is a FrbSifterEvents.
     """
 
     def __init__(self, server_address: str = "localhost:50051"):
@@ -128,7 +126,8 @@ class FrbSifterClient:
         self.stub = frb_sifter_pb2_grpc.FrbSifterStub(self.channel)
 
     def send_configuration(self, pirate_yaml, xengine_yaml,
-                            dedispersion_plan_yaml, grouper_yaml):
+                            dedispersion_plan_yaml, grouper_yaml,
+                            search_ip_addr):
         """Send the initial ConfigMessage (CheckConfiguration RPC).
 
         Sent once, before any events. Each yaml argument may be either a str (sent
@@ -145,6 +144,10 @@ class FrbSifterClient:
             Dedispersion-plan yaml.
         grouper_yaml : str or object
             Grouper-specific configuration yaml.
+        search_ip_addr : str
+            The producer FrbServer's FrbSearch RPC endpoint (an ``ip:port`` string,
+            typically ``grouper.search_ip_addr``), so the sifter can call back to
+            pirate. Sent as-is (not yaml-serialized).
 
         Returns
         -------
@@ -164,6 +167,7 @@ class FrbSifterClient:
             xengine_yaml = self._to_yaml("xengine_yaml", xengine_yaml),
             dedispersion_plan_yaml = self._to_yaml("dedispersion_plan_yaml", dedispersion_plan_yaml),
             grouper_yaml = self._to_yaml("grouper_yaml", grouper_yaml),
+            search_ip_addr = search_ip_addr,   # plain 'ip:port' string (sifter -> pirate callbacks)
         )
         try:
             reply = self.stub.CheckConfiguration(request)
@@ -174,32 +178,29 @@ class FrbSifterClient:
             raise RuntimeError(f"FrbSifterClient.send_configuration: sifter at "
                                f"{self.server_address!r} returned ok=False")
 
-    def send_events(self, has_injections, beam_set_id, events,
-                    coarsegrain_start_fpga_count, coarsegrain_end_fpga_count,
-                    coarsegrain_snr):
+    def send_events(self, beam_set_id, events, coarsegrain_snr, from_simulator=False):
         """Send an FrbEventsMessage (FrbEvents RPC).
 
-        Sent once per time chunk, after send_configuration().
+        Sent once per FPGA window, after send_configuration().
 
         Parameters
         ----------
-        has_injections : bool
-            Whether this message's events include injected (simulated) FRBs.
         beam_set_id : int
             X-engine beam-set id.
-        events : :class:`~pirate_frb.rpc.FrbSifterEvents` or None
-            The per-event triggers: one FrbEvent is sent per array element, and the
-            object's chunk_fpga_start populates the message's chunk_fpga_count field.
-            None sends no per-event triggers (with chunk_fpga_count = 0).
-        coarsegrain_start_fpga_count : int
-            FPGA count at the start of the coarse-grain SNR window.
-        coarsegrain_end_fpga_count : int
-            FPGA count at the end of the coarse-grain SNR window.
+        events : :class:`~pirate_frb.rpc.FrbSifterEvents`
+            The per-event triggers (one FrbEvent per array element) AND the FPGA
+            window ``[chunk_fpga_start, chunk_fpga_end]`` this message covers -- the
+            window is taken from this object. For a coarse-grain-only message, pass an
+            FrbSifterEvents with empty per-event arrays but a valid window.
         coarsegrain_snr : array_like
-            Per-beam coarse-grained max SNR, as a 1-d numpy or cupy array (or any
-            1-d iterable). A cupy array is copied to the host in a single shot via
-            ``.get()`` (cupy raises on implicit ``np.asarray()``), then cast to
-            float32.
+            Per-beam coarse-grained max SNR over the same FPGA window, as a 1-d numpy
+            or cupy array (or any 1-d iterable). A cupy array is copied to the host in
+            a single shot via ``.get()`` (cupy raises on implicit ``np.asarray()``),
+            then cast to float32.
+        from_simulator : bool, optional
+            False (default) for events produced by the real search pipeline; True for
+            the parallel "ideal" events the fake X-engine emits when simulating pulses
+            upstream (so the sifter can tell the two apart).
 
         Returns
         -------
@@ -211,25 +212,18 @@ class FrbSifterClient:
             On failure: malformed input, a gRPC transport error, or a not-ok reply
             from the sifter.
         """
-        if events is None:
-            proto_events = []
-            chunk_fpga_count = 0
-        elif isinstance(events, FrbSifterEvents):
-            proto_events = events.to_proto()
-            chunk_fpga_count = events.chunk_fpga_start
-        else:
+        if not isinstance(events, FrbSifterEvents):
             raise RuntimeError(f"FrbSifterClient.send_events: 'events' must be a "
-                               f"FrbSifterEvents or None, got {type(events).__name__}")
+                               f"FrbSifterEvents, got {type(events).__name__}")
 
         cg_snr = self._to_1d("coarsegrain_snr", coarsegrain_snr, np.float32)
 
         request = frb_sifter_pb2.FrbEventsMessage(
-            has_injections = has_injections,
+            from_simulator = from_simulator,
             beam_set_id = beam_set_id,
-            chunk_fpga_count = chunk_fpga_count,
-            events = proto_events,
-            coarsegrain_start_fpga_count = coarsegrain_start_fpga_count,
-            coarsegrain_end_fpga_count = coarsegrain_end_fpga_count,
+            chunk_fpga_start = events.chunk_fpga_start,
+            chunk_fpga_end = events.chunk_fpga_end,
+            events = events.to_proto(),
             coarsegrain_snr = cg_snr,
         )
         try:

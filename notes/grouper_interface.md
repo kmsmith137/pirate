@@ -47,7 +47,8 @@ with FrbGrouper(grouper_addr) as grouper:
         pirate_yaml = grouper.dedispersion_config_yaml_string,
         xengine_yaml = grouper.xengine_metadata_yaml_string,
         dedispersion_plan_yaml = grouper.dedispersion_plan_yaml_string,
-        grouper_yaml = {'toy_grouper': True})  # placeholder for future expansion
+        grouper_yaml = {'toy_grouper': True},  # placeholder for future expansion
+        search_ip_addr = grouper.search_ip_addr)
         
     beam_set_id = grouper.xengine_yaml['beamset']
     nbeams_tot = grouper.total_beams
@@ -109,11 +110,8 @@ with FrbGrouper(grouper_addr) as grouper:
         if sifter is not None:
             # Send the FrbEventsMessage to the sifter.
             sifter.send_events(
-                has_injections = False,
                 beam_set_id = beam_set_id,
                 events = events,
-                coarsegrain_start_fpga_count = events.chunk_fpga_start,
-                coarsegrain_end_fpga_count = events.chunk_fpga_end,
                 coarsegrain_snr = per_beam_max)
 ```
   

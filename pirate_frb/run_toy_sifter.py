@@ -61,15 +61,17 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
                 ("grouper", request.grouper_yaml),
             )
         )
-        print(f"{_peer_ip(context)}  CheckConfiguration({sizes})", flush=True)
+        print(f"{_peer_ip(context)}  CheckConfiguration("
+              f"search_ip_addr={request.search_ip_addr!r}, {sizes})", flush=True)
         return frb_sifter_pb2.ConfigReply(ok=True)
 
     def FrbEvents(self, request, context):
-        # 'chunk_fpga_count' is the proto field; the grouper populates it with the
-        # chunk's FPGA-seq start (FrbSifterEvents.chunk_fpga_start).
+        # The message covers the FPGA window [chunk_fpga_start, chunk_fpga_end]: one
+        # time chunk for a per-event grouper message, possibly several chunks for a
+        # coarse-grain-only message.
         n_events = len(request.events)
         line = (f"beamset={request.beam_set_id}, "
-                f"fpga={request.chunk_fpga_count}, "
+                f"fpga=[{request.chunk_fpga_start}:{request.chunk_fpga_end}], "
                 f"nevents={n_events}")
         if n_events > 0:
             # Report the single highest-SNR event.
