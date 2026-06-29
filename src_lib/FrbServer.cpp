@@ -724,10 +724,12 @@ void FrbServer::_processing_thread_main()
     GpuDedisperser::Params dd_params;
     dd_params.plan = plan_p;
     dd_params.stream_pool = stream_pool;
-    dd_params.nbatches_out = config_postfilled.num_active_batches;
+    dd_params.nbatches_out = 2 * config_postfilled.num_active_batches;  // leave a little headroom for grouper
+    dd_params.nbatches_wt = config_postfilled.num_active_batches;
     dd_params.num_consumers = params.grouper_ip_addr.empty() ? 0 : 1;
     dd_params.synchronous = false;
     dd_params.cuda_device_id = params.cuda_device_id;
+    
     // initial_chunk: the canonical initial_time_chunk (time-chunk index of the
     // very first frame, relative to FPGA seq 0). Lets the dedisperser stamp each
     // output with its FPGA-based chunk index (Outputs::ichunk_fpga_based). Blocks
