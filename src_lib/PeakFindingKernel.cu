@@ -581,77 +581,9 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
     return ret;
 }
 
-// This weird procedure for making a random weights array is intended to
-// expose corner cases in the peak-finding kernel.
-// 
-// We also scale each weight so that the variance of the pf-kernel output 
-// is of order 1. This is crucial for unit-testing fp16 kernels.
-//
-// Array shape is (beams_per_batch, ndm_wt, nt_wt, nprofiles, N).
 
-void ReferencePeakFindingKernel::make_random_weights(Array<float> &out, const Array<float> &subband_variances)
-{
-    long B = params.beams_per_batch;
-    long D = params.ndm_wt;
-    long T = params.nt_wt;
-    long P = nprofiles;
-    long N = fs.N;
-
-    xassert_eq(P, 3*(P/3)+1);
-    xassert_shape_eq(out, ({B,D,T,P,N}));
-    xassert_shape_eq(subband_variances, ({N,}));
-    xassert(out.on_host());
-    xassert(subband_variances.on_host());
-
-    vector<float> w0(N);
-    for (long n = 0; n < N; n++) {
-        float var = subband_variances.at({n});
-        xassert(var > 0.0f);
-        w0[n] = rsqrtf(var);
-    }
-
-    vector<float> wp(P);
-    vector<float> wf(N);
-
-    long nouter = B*D*T;
-    std::mt19937 &rng = ksgpu::default_rng();
-
-    for (long i = 0; i < nouter; i++) {
-        float p0 = rand_uniform(0.1f, 1.1f, rng);
-
-        for (long n = 0; n < N; n++)
-            wf[n] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * w0[n]) : 0.0f;
-
-        wp[0] = (rand_uniform(0.0, 1.0, rng) < p0) ? rand_uniform(0.0, 1.0, rng) : 0.0f;
-        for (long l = 0; l < (P/3); l++) {
-            wp[3*l+1] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * rsqrtf(2.0f * pow2(l))) : 0.0f;
-            wp[3*l+2] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * rsqrtf(1.5f * pow2(l))) : 0.0f;
-            wp[3*l+3] = (rand_uniform(0.0, 1.0, rng) < p0) ? (rand_uniform(0.0, 1.0, rng) * rsqrtf(2.5f * pow2(l))) : 0.0f;
-        }
-
-        for (long p = 0; p < P; p++)
-            for (long n = 0; n < N; n++)
-                out.data[i*P*N + p*N + n] = rand_uniform(1.0f, 2.0f, rng) * wf[n] * wp[p];
-    }
-}
-
-
-Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> &subband_variances)
-{
-    long B = params.beams_per_batch;
-    long D = params.ndm_wt;
-    long T = params.nt_wt;
-    long P = nprofiles;
-    long N = fs.N;
-
-    Array<float> ret({B,D,T,P,N}, af_rhost);
-    make_random_weights(ret, subband_variances);
-    return ret;
-}
-
-
-// _make_weights(): build peak-finding weights from per-(subband, dm, profile) input variances
-// (a variant of make_random_weights(), which takes a single per-subband variance).
+// fill_host_weights(): build peak-finding weights from per-(subband, dm, profile) input
+// variances.
 //
 //   out shape       = (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)   (float)
 //   variances shape = (N, ndm_wt, nprofiles)                            (double)
@@ -663,7 +595,7 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
 //                    weight is zero with probability ~(1-p0), else uniform in [0,1).
 //   randomize=false: out[b,d,t,p,n] = base_weights[d,n,p] (no random multiplier).
 
-void ReferencePeakFindingKernel::_make_weights(Array<float> &out, const Array<double> &variances, bool randomize)
+void ReferencePeakFindingKernel::fill_host_weights(Array<float> &out, const Array<double> &variances, bool randomize)
 {
     const long B = params.beams_per_batch;
     const long D = params.ndm_wt;
@@ -736,7 +668,7 @@ void ReferencePeakFindingKernel::_make_weights(Array<float> &out, const Array<do
 // unit-variance input sample -- a (1,1) array with x[0,0]=1 -- through PfVarianceConvolver,
 // giving the per-profile output variance (1,P). (out[0,p] is the zero-lag autocorrelation of
 // peak-finding kernel p, i.e. the sum of its squared taps.) We then trivially broadcast these
-// P variances across all (subband, dm) and hand off to _make_weights() (randomize=true).
+// P variances across all (subband, dm) and hand off to fill_host_weights() (randomize=true).
 
 void ReferencePeakFindingKernel::make_bare_random_weights_for_testing(Array<float> &out)
 {
@@ -765,7 +697,7 @@ void ReferencePeakFindingKernel::make_bare_random_weights_for_testing(Array<floa
             for (long p = 0; p < P; p++)
                 vp[(n*D + d)*P + p] = pf_var[p];
 
-    this->_make_weights(out, variances, /*randomize=*/true);
+    this->fill_host_weights(out, variances, /*randomize=*/true);
 }
 
 

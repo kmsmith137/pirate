@@ -224,21 +224,11 @@ struct GpuDedisperser
     //  which is in pirate_frb.utils.time_cupy_dedisperser().)
     void time(BumpAllocator &gpu_allocator, BumpAllocator &cpu_allocator, long niterations);
 
-    // Fills all (nbatches_wt) slots of the peak-finding weight arrays
-    // (wt_arrays) with ad hoc random weights. Must be called after allocate().
-    // This is a placeholder, intended to be replaced by a real variance
-    // calculation in the near future. Uses the same random-weight logic as
-    // test_one() (see the "Simulate peak-finding weights" comment there):
-    // ReferencePeakFindingKernel::make_random_weights() + GpuPfWeightLayout::to_gpu().
-    // Blocks (calls cudaDeviceSynchronize) before returning, so the weights are
-    // in place on the GPU when it returns.
-    void randomize_weights();
-
-    // Like randomize_weights(), but fills the peak-finding weight arrays (wt_arrays)
-    // with NON-random analytic weights, derived from a PfAvarApproximation built from
-    // (plan, freq_variances). All weight slots and all beams get identical weights.
-    // Must be called after allocate(). Blocks (calls cudaDeviceSynchronize) before
-    // returning, so the weights are in place on the GPU when it returns.
+    // Fills the peak-finding weight arrays (wt_arrays) with NON-random analytic weights,
+    // derived from a PfAvarApproximation built from (plan, freq_variances). All weight
+    // slots and all beams get identical weights. Must be called after allocate(). Blocks
+    // (calls cudaDeviceSynchronize) before returning, so the weights are in place on the
+    // GPU when it returns.
     void fill_analytic_weights(const ksgpu::Array<double> &freq_variances);
 
     // --------------------------  Public members  --------------------------

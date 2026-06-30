@@ -1042,76 +1042,8 @@ void GpuDedisperser::_worker_main()
 // GpuDedisperser::test()
 
 
-static double variance_upper_bound(const shared_ptr<DedispersionPlan> &plan, long itree, long n)
-{
-    const DedispersionTree &tree = plan->trees.at(itree);
-    const FrequencySubbands &fs = tree.frequency_subbands;
-
-    // Coarse-freq index range 0 <= flo < fhi < 2^pf_rank.
-    long flo = fs.n_to_flo.at(n);
-    long fhi = fs.n_to_fhi.at(n);
-
-    // Frequency range in MHz (note lo/hi swap)
-    double freq_lo = fs.f_to_freq.at(fhi);
-    double freq_hi = fs.f_to_freq.at(flo);
-
-    // Frequency index range
-    double filo = plan->config.frequency_to_index(freq_lo);
-    double fihi = plan->config.frequency_to_index(freq_hi);
-
-    long r = tree.early_dd_rank + tree.amb_rank + (tree.ds_level ? 1 : 0);
-    return (fihi - filo) / pow(2,r) / 3.0;
-}
-
-
-// Fills all (nbatches_wt) slots of the peak-finding weight arrays with ad hoc
-// random weights. See declaration in Dedisperser.hpp. This mirrors the
-// "Simulate peak-finding weights, and copy to GPU" block in test_one(), except
-// that here we don't keep a host-side copy of the weights (test_one needs one
-// for its reference comparison) and we fill every weight slot exactly once
-// (test_one re-randomizes the weights on every chunk).
-void GpuDedisperser::randomize_weights()
-{
-    xassert(is_allocated);
-
-    const long nbatches_wt = params.nbatches_wt;
-
-    for (long itree = 0; itree < ntrees; itree++) {
-        const DedispersionTree &t = plan->trees.at(itree);
-        const long N = t.frequency_subbands.N;
-
-        // subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
-        Array<float> sbv({N}, af_uhost | af_zero);
-        for (long n = 0; n < N; n++)
-            sbv.at({n}) = variance_upper_bound(plan, itree, n);
-
-        // ReferencePeakFindingKernel, only used here for make_random_weights().
-        // Dcore is taken from the GPU kernel (as in test_one's non-host_only path).
-        const long Dcore = cdd2_kernels.at(itree)->Dcore;
-        const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
-        ReferencePeakFindingKernel ref_kernel(pf_params, Dcore);
-
-        const GpuPfWeightLayout &wl = cdd2_kernels.at(itree)->pf_weight_layout;
-
-        // Per-slot host scratch with the "straightforward" weights layout
-        // (beams_per_batch, ndm_wt, nt_wt, nprofiles, N). Reused across slots.
-        Array<float> wcpu({beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, N}, af_rhost | af_zero);
-
-        for (long s = 0; s < nbatches_wt; s++) {
-            ref_kernel.make_random_weights(wcpu, sbv);
-            Array<void> wgpu = wt_arrays.at(itree).slice(0, s);
-            wl.to_gpu(wgpu, wcpu);
-        }
-    }
-
-    // Ensure the host->GPU weight copies have completed before returning (so
-    // the weights are in place before the caller starts launching dd kernels).
-    CUDA_CALL(cudaDeviceSynchronize());
-}
-
-
-// Like randomize_weights(), but fills every weight slot/beam with the SAME non-random
-// analytic weights, computed from a PfAvarApproximation. See Dedisperser.hpp.
+// Fills every weight slot/beam with the SAME non-random analytic weights, computed from
+// a PfAvarApproximation. See Dedisperser.hpp.
 void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
 {
     xassert(is_allocated);
@@ -1125,7 +1057,7 @@ void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
         const long N = t.frequency_subbands.N;
 
         // Reference peak-finding kernel for a SINGLE beam (beams_per_batch = total_beams = 1).
-        // Dcore is taken from the GPU kernel (as in randomize_weights()).
+        // Dcore is taken from the cdd2 GPU kernel.
         PeakFindingKernelParams pf_params = plan->stage2_pf_params.at(itree);   // copy
         pf_params.beams_per_batch = 1;
         pf_params.total_beams = 1;
@@ -1133,9 +1065,9 @@ void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
         ReferencePeakFindingKernel pf_kernel(pf_params, Dcore);
 
         // Non-random weights from the analytic variances. avar.tree_variance[itree] already has
-        // the (N, ndm_wt, nprofiles) shape that _make_weights() expects.
+        // the (N, ndm_wt, nprofiles) shape that fill_host_weights() expects.
         Array<float> host_weights({1, t.ndm_wt, t.nt_wt, t.nprofiles, N}, af_rhost | af_zero);
-        pf_kernel._make_weights(host_weights, avar.tree_variance.at(itree), /*randomize=*/ false);
+        pf_kernel.fill_host_weights(host_weights, avar.tree_variance.at(itree), /*randomize=*/ false);
 
         // Fill the first beam slot via to_gpu(), then duplicate it to all 'nslots' beam slots with
         // GPU->GPU memcopies. wt_arrays[itree] is dense in (slot, beam): each beam block is
@@ -1235,7 +1167,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         pf_tmp.at(itree) = Array<float> ({beams_per_batch, tree.ndm_out, tree.nt_out}, af_uhost | af_zero);
     }
 
-    // ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
+    // ref_kernels_for_weights: only used for ReferencePeakFindingKernel::fill_host_weights().
     vector<shared_ptr<ReferencePeakFindingKernel>> ref_kernels_for_weights(ntrees);
     for (long itree = 0; itree < ntrees; itree++) {
         const PeakFindingKernelParams &pf_params = plan->stage2_pf_params.at(itree);
@@ -1305,7 +1237,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                     
                     for (long s = 0; s < ns; s++) {
                         Array<float> wcpu = pf_wt_cpu.at(itree).slice(0,s);
-                        ref_kernels_for_weights.at(itree)->_make_weights(wcpu, variances, /*randomize=*/ true);
+                        ref_kernels_for_weights.at(itree)->fill_host_weights(wcpu, variances, /*randomize=*/ true);
 
                         if (host_only)
                             continue;
