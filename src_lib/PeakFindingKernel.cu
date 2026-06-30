@@ -649,6 +649,76 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
 }
 
 
+// _make_random_weights2(): variant of make_random_weights() that takes per-(subband, dm,
+// profile) input variances instead of a single per-subband variance.
+//
+//   out shape       = (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)
+//   variances shape = (N, ndm_wt, nprofiles)
+//
+// Each output weight is out[b,d,t,p,n] = x * base_weights[d,n,p], where
+//   base_weights[d,n,p] = 1/sqrt(variances[n,d,p])   (note the N <-> ndm_wt transpose)
+// and 'x' is a sparse random value: per (b,d,t) we draw an "occupancy" p0, then for each
+// (n,p) the weight is zero with probability ~(1-p0), else uniform in [0,1).
+
+void ReferencePeakFindingKernel::_make_random_weights2(Array<float> &out, const Array<float> &variances)
+{
+    const long B = params.beams_per_batch;
+    const long D = params.ndm_wt;
+    const long T = params.nt_wt;
+    const long P = nprofiles;
+    const long N = fs.N;
+
+    xassert_shape_eq(out, ({B,D,T,P,N}));
+    xassert_shape_eq(variances, ({N,D,P}));
+    xassert(out.on_host());
+    xassert(variances.on_host());
+    xassert(out.is_fully_contiguous());
+    xassert(variances.is_fully_contiguous());
+
+    // Phase 1: base_weights[d,n,p] = rsqrtf(variances[n,d,p]).
+    // (variances is (N,D,P); base_weights is (D,N,P) -- transpose the first two axes.)
+    Array<float> base_weights({D,N,P}, af_uhost);
+    {
+        const float *vp = variances.data;     // (N,D,P) contiguous
+        float *bp = base_weights.data;        // (D,N,P) contiguous
+        for (long n = 0; n < N; n++) {
+            for (long d = 0; d < D; d++) {
+                const float *vrow = vp + (n*D + d)*P;   // variances[n,d,:]
+                float *brow = bp + (d*N + n)*P;         // base_weights[d,n,:]
+                for (long p = 0; p < P; p++) {
+                    float var = vrow[p];
+                    xassert(var > 0.0f);
+                    brow[p] = rsqrtf(var);
+                }
+            }
+        }
+    }
+
+    // Phase 2: fill 'out'. The (p,n) block of 'out' is contiguous (p outer, n inner), so
+    // we write it sequentially through 'op'. For a fixed d, base_weights is a tiny (N*P)
+    // array that stays in cache, so the strided read base_weights[d,n,p] = bw_d[n*P+p] is cheap.
+    std::mt19937 &rng = ksgpu::default_rng();
+    const float *bw = base_weights.data;      // (D,N,P)
+    float *op = out.data;                      // (B,D,T,P,N), fully contiguous
+
+    for (long b = 0; b < B; b++) {
+        for (long d = 0; d < D; d++) {
+            const float *bw_d = bw + d*N*P;            // base_weights[d], layout [n][p]
+            for (long t = 0; t < T; t++) {
+                float p0 = rand_uniform(0.01f, 1.1f, rng);
+                for (long p = 0; p < P; p++) {
+                    for (long n = 0; n < N; n++) {
+                        float r = rand_uniform(0.0f, 1.0f, rng);
+                        float x = (r < p0) ? rand_uniform(0.0f, 1.0f, rng) : 0.0f;
+                        *op++ = x * bw_d[n*P + p];
+                    }
+                }
+            }
+        }
+    }
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // GpuPeakFindingKernel

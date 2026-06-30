@@ -189,6 +189,10 @@ struct ReferencePeakFindingKernel
     // Allocate new output array.
     ksgpu::Array<float> make_random_weights(const ksgpu::Array<float> &subband_variances);
 
+    // Output array shape = (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
+    // Input (variance) array shape = (fs.N, ndm_wt, P)
+    void _make_random_weights2(ksgpu::Array<float> &out, const ksgpu::Array<float> &variances);
+
     // At "level" l (where 0 <= l < log2(Wmax)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).
     //
@@ -264,6 +268,10 @@ struct ReferencePeakFindingKernel
 // with a GpuPfWeightLayout instance describing its expected memory layout. This
 // instance has member functions to_gpu()) which are intended to hide details
 // of the layout.
+//
+// ** NOTE ** GpuPfWeightLayout is too slow for "hot loops" (~100 ms/beam for
+// CHORD, and also synchronizes the GPU) but is fast enough for one-time server
+// initialization, or for testing.
 
 
 struct GpuPfWeightLayout
