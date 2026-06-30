@@ -111,7 +111,7 @@ void register_avar_bindings(pybind11::module &m)
 
     py::class_<PfAvarApproximation>(m, "PfAvarApproximation")
         .def(py::init([](std::shared_ptr<DedispersionPlan> plan, const Array<double> &freq_variances) {
-                 return new PfAvarApproximation(*plan, freq_variances);
+                 return new PfAvarApproximation(plan, freq_variances);
              }), py::arg("plan"), py::arg("freq_variances"))
         .def_readonly("nfreq", &PfAvarApproximation::nfreq)
         .def_readonly("ntrees", &PfAvarApproximation::ntrees)

@@ -3,12 +3,13 @@
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/CudaEventRingbuf.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
-#include "../include/pirate/DedispersionConfig.hpp"
-#include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/RingbufCopyKernel.hpp"
 #include "../include/pirate/TreeGriddingKernel.hpp"
-#include "../include/pirate/MegaRingbuf.hpp"
+#include "../include/pirate/DedispersionConfig.hpp"
+#include "../include/pirate/CoalescedDdKernel2.hpp"
 #include "../include/pirate/GpuDequantizationKernel.hpp"
+#include "../include/pirate/MegaRingbuf.hpp"
+#include "../include/pirate/PfVariance.hpp"
 #include "../include/pirate/constants.hpp"  // xdiv(), pow2()
 #include "../include/pirate/inlines.hpp"  // xdiv(), pow2()
 #include "../include/pirate/utils.hpp"    // safe_memcpy_*
@@ -1124,6 +1125,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     long nstreams = config.num_active_batches;
     long nt_in = config.time_samples_per_chunk;
     long nfreq = config.get_total_nfreq();
+    std::mt19937 &rng = ksgpu::default_rng();
 
     cout << "    nchunks = " << nchunks << ";\n"
          << "    nbatches_out = " << nbatches_out << ";"
@@ -1139,11 +1141,16 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     xassert(nchunks > 0);
     xassert(nbatches_out > 0);
     xassert(nbatches_out <= nchunks * nbatches);
-    
+
+    Array<double> freq_variance({nfreq}, af_uhost | af_zero);  // for PfAvarApproximation
+    for (long ifreq = 0; ifreq < nfreq; ifreq++)
+        freq_variance.data[ifreq] = 1.0f;
+
     shared_ptr<DedispersionPlan> plan = make_shared<DedispersionPlan> (config);
+    shared_ptr<PfAvarApproximation> avar = make_shared<PfAvarApproximation> (plan, freq_variance);
     shared_ptr<GpuDedisperser> gdd;
     long ntrees = plan->ntrees;
-
+    
     if (!host_only) {
         // We use compute_stream_priority=-1 so that cudaMemcpyAsync(..., compute_stream)
         // will fill the GpuDedisperser input arrays as quickly as possible. See below.
@@ -1176,15 +1183,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &tree = plan->trees.at(itree);
         pf_tmp.at(itree) = Array<float> ({beams_per_batch, tree.ndm_out, tree.nt_out}, af_uhost | af_zero);
-    }
-
-    // subband_variances: used in ReferencePeakFindingKernel::make_random_weights().
-    vector<Array<float>> subband_variances(ntrees);
-    for (long itree = 0; itree < ntrees; itree++) {
-        long N = plan->trees.at(itree).frequency_subbands.N;
-        subband_variances.at(itree) = Array<float> ({N}, af_uhost | af_zero);
-        for (long n = 0; n < N; n++)
-            subband_variances.at(itree).at({n}) = variance_upper_bound(plan, itree, n);
     }
 
     // ref_kernels_for_weights: only used for ReferencePeakFindingKernel::make_random_weights().
@@ -1235,11 +1233,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 // Simulate dedispersion input.
                 // Random values uniform over [-1.0, 1.0].
                 xassert(dd_in_cpu.is_fully_contiguous());
-                {
-                    std::mt19937 &rng = ksgpu::default_rng();
-                    for (long i = 0; i < ns * beams_per_batch * nfreq * nt_in; i++)
-                        dd_in_cpu.data[i] = ksgpu::rand_uniform(-1.0, 1.0, rng);
-                }
+                for (long i = 0; i < ns * beams_per_batch * nfreq * nt_in; i++)
+                    dd_in_cpu.data[i] = ksgpu::rand_uniform(-1.0, 1.0, rng);
 
                 // Copy dedispersion input to GPU.
                 if (!host_only) {
@@ -1256,11 +1251,11 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 CUDA_CALL(cudaDeviceSynchronize());
 
                 for (long itree = 0; itree < ntrees; itree++) {
-                    Array<float> sbv = subband_variances.at(itree);
-
+                    Array<double> variances = avar->tree_variance.at(itree);
+                    
                     for (long s = 0; s < ns; s++) {
                         Array<float> wcpu = pf_wt_cpu.at(itree).slice(0,s);
-                        ref_kernels_for_weights.at(itree)->make_random_weights(wcpu, sbv);
+                        ref_kernels_for_weights.at(itree)->_make_weights(wcpu, variances, /*randomize=*/ true);
 
                         if (host_only)
                             continue;
@@ -1378,7 +1373,7 @@ void GpuDedisperser::test_random()
     // upconversion of the float32 reference -- so float16 runs sometimes fail
     // spuriously. Remove force_float32 once the threshold logic is fixed.
     DedispersionConfig::RandomArgs rargs;
-    rargs.force_float32 = true;
+    // rargs.force_float32 = true;
     auto config = DedispersionConfig::make_random(rargs);
     config.validate();
     

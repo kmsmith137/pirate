@@ -233,10 +233,11 @@ ksgpu::Array<double> PfVariance::unpack(long dbits) const
 // PfAvarApproximation
 
 
-PfAvarApproximation::PfAvarApproximation(const DedispersionPlan &plan, const Array<double> &freq_variances)
+PfAvarApproximation::PfAvarApproximation(const shared_ptr<DedispersionPlan> &plan, const Array<double> &freq_variances)
 {
-    nfreq = plan.nfreq;
-    ntrees = plan.ntrees;
+    xassert(plan);
+    nfreq = plan->nfreq;
+    ntrees = plan->ntrees;
 
     xassert(freq_variances.ndim == 1 && freq_variances.shape[0] == nfreq);
     freq_variances_vec.resize(nfreq);
@@ -256,7 +257,7 @@ PfAvarApproximation::PfAvarApproximation(const DedispersionPlan &plan, const Arr
     tree_n_to_fhi.resize(ntrees);
 
     for (long t = 0; t < ntrees; t++) {
-        const DedispersionTree &tr = plan.trees[t];
+        const DedispersionTree &tr = plan->trees[t];
         const FrequencySubbands &fs = tr.frequency_subbands;
         tree_r[t] = tr.amb_rank + tr.early_dd_rank;
         tree_R[t] = fs.pf_rank;
@@ -279,7 +280,7 @@ PfAvarApproximation::PfAvarApproximation(const DedispersionPlan &plan, const Arr
         klevel_Lmax[k] = std::max(klevel_Lmax[k], tree_L[t]);
     }
 
-    Array<double> cm = plan.config.make_channel_map();
+    Array<double> cm = plan->config.make_channel_map();
     xassert(cm.ndim == 1);
     channel_map.resize(cm.size);
     for (long i = 0; i < cm.size; i++)

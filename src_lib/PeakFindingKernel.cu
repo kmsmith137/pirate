@@ -653,8 +653,8 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
 // _make_weights(): build peak-finding weights from per-(subband, dm, profile) input variances
 // (a variant of make_random_weights(), which takes a single per-subband variance).
 //
-//   out shape       = (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)
-//   variances shape = (N, ndm_wt, nprofiles)
+//   out shape       = (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)   (float)
+//   variances shape = (N, ndm_wt, nprofiles)                            (double)
 //
 // In both modes base_weights[d,n,p] = 1/sqrt(variances[n,d,p]) (note the N <-> ndm_wt
 // transpose). Then:
@@ -663,7 +663,7 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
 //                    weight is zero with probability ~(1-p0), else uniform in [0,1).
 //   randomize=false: out[b,d,t,p,n] = base_weights[d,n,p] (no random multiplier).
 
-void ReferencePeakFindingKernel::_make_weights(Array<float> &out, const Array<float> &variances, bool randomize)
+void ReferencePeakFindingKernel::_make_weights(Array<float> &out, const Array<double> &variances, bool randomize)
 {
     const long B = params.beams_per_batch;
     const long D = params.ndm_wt;
@@ -679,18 +679,19 @@ void ReferencePeakFindingKernel::_make_weights(Array<float> &out, const Array<fl
     xassert(variances.is_fully_contiguous());
 
     // Phase 1: base_weights[d,n,p] = rsqrtf(variances[n,d,p]).
-    // (variances is (N,D,P); base_weights is (D,N,P) -- transpose the first two axes.)
+    // (variances is double, (N,D,P); base_weights is float, (D,N,P) -- transpose the first two
+    // axes. rsqrtf() keeps the base-weight computation in float.)
     Array<float> base_weights({D,N,P}, af_uhost);
     {
-        const float *vp = variances.data;     // (N,D,P) contiguous
-        float *bp = base_weights.data;        // (D,N,P) contiguous
+        const double *vp = variances.data;    // (N,D,P) contiguous, double
+        float *bp = base_weights.data;        // (D,N,P) contiguous, float
         for (long n = 0; n < N; n++) {
             for (long d = 0; d < D; d++) {
-                const float *vrow = vp + (n*D + d)*P;   // variances[n,d,:]
+                const double *vrow = vp + (n*D + d)*P;  // variances[n,d,:]
                 float *brow = bp + (d*N + n)*P;         // base_weights[d,n,:]
                 for (long p = 0; p < P; p++) {
-                    float var = vrow[p];
-                    xassert(var > 0.0f);
+                    double var = vrow[p];
+                    xassert(var > 0.0);
                     brow[p] = rsqrtf(var);
                 }
             }
@@ -757,12 +758,12 @@ void ReferencePeakFindingKernel::make_bare_random_weights_for_testing(Array<floa
 
     // Trivially expand (1,P) -> variances (N, ndm_wt, P): same per-profile variance for
     // every (subband n, dm d).
-    Array<float> variances({N,D,P}, af_uhost);
-    float *vp = variances.data;
+    Array<double> variances({N,D,P}, af_uhost);
+    double *vp = variances.data;
     for (long n = 0; n < N; n++)
         for (long d = 0; d < D; d++)
             for (long p = 0; p < P; p++)
-                vp[(n*D + d)*P + p] = float(pf_var[p]);
+                vp[(n*D + d)*P + p] = pf_var[p];
 
     this->_make_weights(out, variances, /*randomize=*/true);
 }

@@ -2,6 +2,7 @@
 #define _PIRATE_PF_VARIANCE_HPP
 
 #include <vector>
+#include <memory>
 #include <ksgpu/Array.hpp>
 
 #include "SparseTile.hpp"
@@ -98,7 +99,7 @@ public:
     // per_tf[itree][f] is a rank-(r-L) PfVariance, f in [0, 2^R).
     std::vector<std::vector<PfVariance>> per_tf;
 
-    PfAvarApproximation(const DedispersionPlan &plan, const ksgpu::Array<double> &freq_variances);
+    PfAvarApproximation(const std::shared_ptr<DedispersionPlan> &plan, const ksgpu::Array<double> &freq_variances);
 
 private:
     PfVarianceConvolver convolver;     // shared full kernel bank; sliced per-tree by P
