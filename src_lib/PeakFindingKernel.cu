@@ -600,12 +600,13 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
 //                    weight is zero with probability ~(1-p0), else uniform in [0,1).
 //   randomize=false: out[b,d,t,p,n] = base_weights[d,n,p] (no random multiplier).
 
-void ReferencePeakFindingKernel::fill_host_weights(Array<float> &out, const Array<double> &variances, bool randomize)
+void PeakFindingKernelParams::fill_host_weights(Array<float> &out, const Array<double> &variances, bool randomize) const
 {
-    const long B = params.beams_per_batch;
-    const long D = params.ndm_wt;
-    const long T = params.nt_wt;
-    const long P = nprofiles;
+    const long B = beams_per_batch;
+    const long D = ndm_wt;
+    const long T = nt_wt;
+    const long P = 3 * integer_log2(max_kernel_width) + 1;   // nprofiles
+    const FrequencySubbands fs(subband_counts);
     const long N = fs.N;
 
     const bool bare = (variances.size == 0);
@@ -903,7 +904,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     xassert_shape_eq(cpu_in_large, ({total_beams, ndm_out, M, nchunks * nt_in_per_chunk}));
 
     Array<float> cpu_wt_large({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}, af_rhost | af_zero);
-    ref_kernel_large.fill_host_weights(cpu_wt_large, Array<double>(), /*randomize=*/true);
+    params_large.fill_host_weights(cpu_wt_large, Array<double>(), /*randomize=*/true);
  
     Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
