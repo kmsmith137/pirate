@@ -144,13 +144,10 @@ def test(args):
             
         if run_all_tests or args.dd:
             if i == 0:
-                # CPU-only invariant (regression test): make_random(gpu_valid=False) must always
-                # produce a config that passes validate() -- make_random() runs validate() as its
-                # last step, so a violation throws here. Guards the EarlyTrigger delta_rank bound in
-                # DedispersionConfig::validate() (a too-strict bound once rejected the odd-tree_rank
-                # early triggers that make_random(gpu_valid=False) emits; gpu_valid=True hid it).
+                # Catches errors in DedispersionConfig::make_random() or validate().
                 for _ in range(500):
-                    DedispersionConfig.make_random(max_rank=8, max_early_triggers=4, gpu_valid=False)
+                    c = DedispersionConfig.make_random(max_rank=8, max_early_triggers=4, gpu_valid=False)
+                    c.test()
             for _ in rrange(kernels.CoalescedDdKernel2):
                 GpuDedisperser.test_random()
         

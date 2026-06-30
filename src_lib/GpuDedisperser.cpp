@@ -1097,8 +1097,6 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.emit_cpp();
-
-    // I decided that this was the least awkward place to call DedispersionConfig::test(). 
     config.test();  // calls config.validate()
 
     Dtype dtype = config.dtype;

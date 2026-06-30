@@ -167,7 +167,7 @@ struct DedispersionConfig
 
     // Test that frequency_to_index/index_to_frequency and delay_to_frequency/frequency_to_delay
     // are inverses of each other, by sampling random values and checking endpoints.
-    // Called by 'python -m pirate_frb test --dd' -> GpuDedisperser::test() -> DedispersionConfig::test().
+    // Called by 'python -m pirate_frb test --dd' (special iteration-0 logic in __main__.py).
     // Also called by 'python -m pirate_frb show_dedisperser ...'.
     void test() const;
 
