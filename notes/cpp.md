@@ -2,7 +2,8 @@
 
 - Prefer private (or static) functions over anonymous scopes `{ ... }`.
 
-- Use `//` comments, not `/* */`
+- Use `//` comments, not `/* */`. Exception: `/* */` is a good choice for inline
+  argument-name annotations at a call site, e.g. `f(/*count=*/3, /*noisy=*/true)`.
 
 - Use `long` for sizes and indices, not `int` or `size_t`
 
