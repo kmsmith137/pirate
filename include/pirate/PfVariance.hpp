@@ -87,7 +87,11 @@ public:
     long nfreq = 0;
     long ntrees = 0;
 
-    // Output: one array per tree, tree_variance[itree] has shape (N, 2^(r-L), P).
+    // Output: one array per tree, tree_variance[itree] has shape (N, 2^(r-L), P), where:
+    //    r = tree rank = config.tree_rank - delta_rank - (ids>0 ? 1 : 0)
+    //    2^L = tree.pf.wt_dm_downsampling
+    //    N = frequency_subbands.N
+    // Note that the shape can also be written as (N, tree.ndm_wt, P).
     std::vector<ksgpu::Array<double>> tree_variance;
 
     // Per-frequency-summed accumulators, kept as a member (per python request).

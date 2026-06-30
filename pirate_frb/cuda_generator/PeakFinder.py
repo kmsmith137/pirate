@@ -744,8 +744,8 @@ class PfWeightLayout:
 
         The W-array global memory layout can be described as either a 6-d or a 5-d array:
         
-           dtype          W[ndm_wt,Touter,Pouter,N,Tinner,Pinner]
-           dtype*Pinnner  W[ndm_wt,Touter,Pouter,N,Tinner]
+           dtype         W[ndm_wt,Touter,Pouter,N,Tinner,Pinner]
+           dtype*Pinner  W[ndm_wt,Touter,Pouter,N,Tinner]
 
         Important note: we always pad so that the 'Touter' stride is 128-byte aligned!
         (See "self.touter_stride" below.)
