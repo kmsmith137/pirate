@@ -369,7 +369,7 @@ void CoalescedDdKernel2::test_random()
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
         for (long ibatch = 0; ibatch < num_batches; ibatch++) {                
             ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ichunk, ibatch);
-            ref_pf_kernel.make_bare_random_weights_for_testing(wt_cpu);
+            ref_pf_kernel.fill_host_weights(wt_cpu, Array<double>(), /*randomize=*/true);
 
             Array<double> var_cpu;   // empty -> out_var feature disabled
             ref_pf_kernel.apply(max_cpu, argmax_cpu, var_cpu, sb_cpu, wt_cpu, ibatch);

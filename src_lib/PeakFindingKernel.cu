@@ -582,14 +582,19 @@ Array<float> ReferencePeakFindingKernel::make_random_input_array()
 }
 
 
-// fill_host_weights(): build peak-finding weights from per-(subband, dm, profile) input
-// variances.
+// fill_host_weights(): build peak-finding weights. The per-(subband, dm, profile) base_weights
+// are set one of two ways:
+//   - 'variances' non-empty, shape (N, ndm_wt, nprofiles) (double):
+//         base_weights[d,n,p] = 1/sqrt(variances[n,d,p])   (note the N <-> ndm_wt transpose)
+//   - 'variances' empty: "bare-kernel" weights for unit-variance input. Feed a single unit
+//         sample through the peak-finding convolver to get the per-profile output variance
+//         pf_var[p] (the zero-lag autocorrelation of kernel p), and broadcast over (n,d):
+//         base_weights[d,n,p] = 1/sqrt(pf_var[p]). Appropriate for testing a bare peak-finding
+//         or cdd2 kernel (whose input is unit-variance).
 //
-//   out shape       = (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)   (float)
-//   variances shape = (N, ndm_wt, nprofiles)                            (double)
+//   out shape = (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)   (float)
 //
-// In both modes base_weights[d,n,p] = 1/sqrt(variances[n,d,p]) (note the N <-> ndm_wt
-// transpose). Then:
+// Then fill 'out':
 //   randomize=true:  out[b,d,t,p,n] = x * base_weights[d,n,p], where 'x' is a sparse random
 //                    value -- per (b,d,t) we draw an "occupancy" p0, then for each (n,p) the
 //                    weight is zero with probability ~(1-p0), else uniform in [0,1).
@@ -603,18 +608,37 @@ void ReferencePeakFindingKernel::fill_host_weights(Array<float> &out, const Arra
     const long P = nprofiles;
     const long N = fs.N;
 
-    xassert_shape_eq(out, ({B,D,T,P,N}));
-    xassert_shape_eq(variances, ({N,D,P}));
-    xassert(out.on_host());
-    xassert(variances.on_host());
-    xassert(out.is_fully_contiguous());
-    xassert(variances.is_fully_contiguous());
+    const bool bare = (variances.size == 0);
 
-    // Phase 1: base_weights[d,n,p] = rsqrtf(variances[n,d,p]).
-    // (variances is double, (N,D,P); base_weights is float, (D,N,P) -- transpose the first two
-    // axes. rsqrtf() keeps the base-weight computation in float.)
+    xassert_shape_eq(out, ({B,D,T,P,N}));
+    xassert(out.on_host());
+    xassert(out.is_fully_contiguous());
+    if (!bare) {
+        xassert_shape_eq(variances, ({N,D,P}));
+        xassert(variances.on_host());
+        xassert(variances.is_fully_contiguous());
+    }
+
+    // Phase 1: base_weights[d,n,p] (float, (D,N,P)).
     Array<float> base_weights({D,N,P}, af_uhost);
-    {
+    if (bare) {
+        // "Bare-kernel" weights for unit-variance input: per-profile output variance for a
+        // single unit sample (pf_var[p] = zero-lag autocorrelation of kernel p), broadcast
+        // over (subband n, dm d).
+        PfVarianceConvolver conv;
+        double x = 1.0;
+        std::vector<double> pf_var(P);
+        conv.variance(&x, /*S=*/1, /*nt=*/1, P, pf_var.data());
+        float *bp = base_weights.data;        // (D,N,P)
+        for (long d = 0; d < D; d++)
+            for (long n = 0; n < N; n++)
+                for (long p = 0; p < P; p++)
+                    bp[(d*N + n)*P + p] = rsqrtf(pf_var[p]);
+    }
+    else {
+        // base_weights[d,n,p] = rsqrtf(variances[n,d,p]). (variances is double, (N,D,P);
+        // base_weights is float, (D,N,P) -- transpose the first two axes. rsqrtf() keeps the
+        // base-weight computation in float.)
         const double *vp = variances.data;    // (N,D,P) contiguous, double
         float *bp = base_weights.data;        // (D,N,P) contiguous, float
         for (long n = 0; n < N; n++) {
@@ -660,44 +684,6 @@ void ReferencePeakFindingKernel::fill_host_weights(Array<float> &out, const Arra
             }
         }
     }
-}
-
-
-// make_bare_random_weights_for_testing(): random weights for testing a "bare" peak-finding
-// or cdd2 kernel, whose input is unit-variance (see the header comment). We feed a single
-// unit-variance input sample -- a (1,1) array with x[0,0]=1 -- through PfVarianceConvolver,
-// giving the per-profile output variance (1,P). (out[0,p] is the zero-lag autocorrelation of
-// peak-finding kernel p, i.e. the sum of its squared taps.) We then trivially broadcast these
-// P variances across all (subband, dm) and hand off to fill_host_weights() (randomize=true).
-
-void ReferencePeakFindingKernel::make_bare_random_weights_for_testing(Array<float> &out)
-{
-    const long B = params.beams_per_batch;
-    const long D = params.ndm_wt;
-    const long T = params.nt_wt;
-    const long P = nprofiles;
-    const long N = fs.N;
-
-    xassert_shape_eq(out, ({B,D,T,P,N}));
-    xassert(out.on_host());
-    xassert(out.is_fully_contiguous());
-
-    // Per-profile output variance for one unit-variance input sample: (1,1) -> (1,P).
-    PfVarianceConvolver conv;
-    double x = 1.0;
-    std::vector<double> pf_var(P);
-    conv.variance(&x, /*S=*/1, /*nt=*/1, P, pf_var.data());
-
-    // Trivially expand (1,P) -> variances (N, ndm_wt, P): same per-profile variance for
-    // every (subband n, dm d).
-    Array<double> variances({N,D,P}, af_uhost);
-    double *vp = variances.data;
-    for (long n = 0; n < N; n++)
-        for (long d = 0; d < D; d++)
-            for (long p = 0; p < P; p++)
-                vp[(n*D + d)*P + p] = pf_var[p];
-
-    this->fill_host_weights(out, variances, /*randomize=*/true);
 }
 
 
@@ -917,7 +903,7 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     xassert_shape_eq(cpu_in_large, ({total_beams, ndm_out, M, nchunks * nt_in_per_chunk}));
 
     Array<float> cpu_wt_large({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}, af_rhost | af_zero);
-    ref_kernel_large.make_bare_random_weights_for_testing(cpu_wt_large);
+    ref_kernel_large.fill_host_weights(cpu_wt_large, Array<double>(), /*randomize=*/true);
  
     Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
