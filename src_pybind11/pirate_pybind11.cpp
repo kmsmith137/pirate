@@ -137,24 +137,24 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "Checks that all parameters are consistent and within valid ranges.\n"
                "Throws an exception if validation fails.")
           .def("add_early_trigger", &DedispersionConfig::add_early_trigger,
-               py::arg("ds_level"), py::arg("tree_rank"),
+               py::arg("ds_level"), py::arg("delta_rank"),
                "Add a single early trigger.\n\n"
                "Early triggers are automatically kept sorted by ds_level (increasing)\n"
                "and delta_rank (decreasing).\n\n"
                "Args:\n"
                "    ds_level: Downsampling level (0 <= ds_level < num_downsampling_levels)\n"
-               "    tree_rank: Tree rank for this trigger (must be > 0)")
-          .def("add_early_triggers", 
-               [](DedispersionConfig &self, long ds_level, const std::vector<long> &tree_ranks) {
-                   for (long tree_rank : tree_ranks) {
-                       self.add_early_trigger(ds_level, tree_rank);
+               "    delta_rank: Specifies 'early-ness' of trigger (must be > 0)")
+          .def("add_early_triggers",
+               [](DedispersionConfig &self, long ds_level, const std::vector<long> &delta_ranks) {
+                   for (long delta_rank : delta_ranks) {
+                       self.add_early_trigger(ds_level, delta_rank);
                    }
                },
-               py::arg("ds_level"), py::arg("tree_ranks"),
+               py::arg("ds_level"), py::arg("delta_ranks"),
                "Add multiple early triggers at the same downsampling level.\n\n"
                "Args:\n"
                "    ds_level: Downsampling level for all triggers\n"
-               "    tree_ranks: List of tree ranks to add")
+               "    delta_ranks: List of delta_rank values (each specifies 'early-ness', must be > 0)")
           .def("get_nelts_per_segment", &DedispersionConfig::get_nelts_per_segment,
                "Get the number of elements per segment.\n\n"
                "Returns:\n"

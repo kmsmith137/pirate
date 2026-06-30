@@ -79,11 +79,11 @@ struct DedispersionConfig
     // Early triggers: search a subset [fmid,fmax] of the full frequency range [freq_lo,freq_hi]
     // at reduced latency. Each downsampling level has an independent set of early triggers.
     //
-    // Early triggers are parameterized by EarlyTrigger::tree_rank, which must be less 
-    // than the rank of the main (i.e. non-early) dedispersion tree. The rank of the main 
-    // tree is (DedispersionConfig::tree_rank - S), where S=0 at ds_level=0, and S=1 for
-    // ds_level > 0. (Detail: the downsampled trees have one lower rank because they search
-    // a DM range which does not start at zero, see above.)
+    // Early triggers are parameterized by EarlyTrigger::delta_rank > 0, the reduction in rank
+    // relative to the main (i.e. non-early) dedispersion tree: the early-trigger tree has rank
+    // (main_rank - delta_rank). The rank of the main tree is (DedispersionConfig::tree_rank - S),
+    // where S=0 at ds_level=0, and S=1 for ds_level > 0. (Detail: the downsampled trees have one
+    // lower rank because they search a DM range which does not start at zero, see above.)
     //
     // Early triggers are optional (i.e. 'early_triggers' can be an empty vector).
 

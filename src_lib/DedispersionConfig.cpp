@@ -413,7 +413,14 @@ void DedispersionConfig::validate() const
         long ds_stage1_rank = ds_rank / 2;
         
         xassert((et.ds_level >= 0) && (et.ds_level < num_downsampling_levels));
-        xassert((et.delta_rank > 0) && (et.delta_rank < ds_stage1_rank));
+
+        // The early-trigger tree has rank (ds_rank - delta_rank): a strict early trigger
+        // (delta_rank > 0) that is no smaller than the stage1 tree (ds_rank - delta_rank >=
+        // ds_stage1_rank, i.e. delta_rank <= ds_rank - ds_stage1_rank). Note ds_rank - ds_stage1_rank
+        // = ceil(ds_rank/2), which for odd ds_rank is one MORE than ds_stage1_rank -- so do not
+        // write 'delta_rank < ds_stage1_rank' here (that rejects the largest legal delta_rank, the
+        // value make_random() can emit for odd ds_rank).
+        xassert((et.delta_rank > 0) && (et.delta_rank <= ds_rank - ds_stage1_rank));
     }
 
     // Check validity of early triggers.
