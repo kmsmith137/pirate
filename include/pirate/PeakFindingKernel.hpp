@@ -189,6 +189,12 @@ struct ReferencePeakFindingKernel
     // Allocate new output array.
     ksgpu::Array<float> make_random_weights(const ksgpu::Array<float> &subband_variances);
 
+    // Generate random weights that are appropriate for testing a "bare" peak-finding or cdd2 kernel.
+    // In both cases, the input to the peak-finding kernel is unit-variance (trivially true for peak-finding,
+    // not so obvious for cdd2 but follows from the 1/sqrt(2) in the tree dedispersion normalization).
+    // The 'out' array has shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N).
+    void make_bare_random_weights_for_testing(ksgpu::Array<float> &out);
+
     // Output array shape = (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
     // Input (variance) array shape = (fs.N, ndm_wt, P)
     void _make_random_weights2(ksgpu::Array<float> &out, const ksgpu::Array<float> &variances);

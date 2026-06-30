@@ -2,6 +2,7 @@
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/inlines.hpp"
 #include "../include/pirate/utils.hpp"
+#include "../include/pirate/PfVariance.hpp"   // PfVarianceConvolver
 
 #include <mutex>
 #include <sstream>
@@ -719,6 +720,44 @@ void ReferencePeakFindingKernel::_make_random_weights2(Array<float> &out, const 
 }
 
 
+// make_bare_random_weights_for_testing(): random weights for testing a "bare" peak-finding
+// or cdd2 kernel, whose input is unit-variance (see the header comment). We feed a single
+// unit-variance input sample -- a (1,1) array with x[0,0]=1 -- through PfVarianceConvolver,
+// giving the per-profile output variance (1,P). (out[0,p] is the zero-lag autocorrelation of
+// peak-finding kernel p, i.e. the sum of its squared taps.) We then trivially broadcast these
+// P variances across all (subband, dm) and hand off to _make_random_weights2().
+
+void ReferencePeakFindingKernel::make_bare_random_weights_for_testing(Array<float> &out)
+{
+    const long B = params.beams_per_batch;
+    const long D = params.ndm_wt;
+    const long T = params.nt_wt;
+    const long P = nprofiles;
+    const long N = fs.N;
+
+    xassert_shape_eq(out, ({B,D,T,P,N}));
+    xassert(out.on_host());
+    xassert(out.is_fully_contiguous());
+
+    // Per-profile output variance for one unit-variance input sample: (1,1) -> (1,P).
+    PfVarianceConvolver conv;
+    double x = 1.0;
+    std::vector<double> pf_var(P);
+    conv.variance(&x, /*S=*/1, /*nt=*/1, P, pf_var.data());
+
+    // Trivially expand (1,P) -> variances (N, ndm_wt, P): same per-profile variance for
+    // every (subband n, dm d).
+    Array<float> variances({N,D,P}, af_uhost);
+    float *vp = variances.data;
+    for (long n = 0; n < N; n++)
+        for (long d = 0; d < D; d++)
+            for (long p = 0; p < P; p++)
+                vp[(n*D + d)*P + p] = float(pf_var[p]);
+
+    this->_make_random_weights2(out, variances);
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // GpuPeakFindingKernel
@@ -931,17 +970,12 @@ void GpuPeakFindingKernel::test_random(bool short_circuit)
     long N = gpu_kernel.fs.N;
     long M = gpu_kernel.fs.M;
 
-    // subband_variances are for make_random_weights()
-    Array<float> subband_variances({N}, af_uhost);
-    for (long n = 0; n < N; n++)
-        subband_variances.at({n}) = 1.0f;
-
     Array<float> cpu_in_large = ref_kernel_large.make_random_input_array();
     xassert_shape_eq(cpu_in_large, ({total_beams, ndm_out, M, nchunks * nt_in_per_chunk}));
 
-    Array<float> cpu_wt_large = ref_kernel_large.make_random_weights(subband_variances);
-    xassert_shape_eq(cpu_wt_large, ({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}));
-
+    Array<float> cpu_wt_large({total_beams, ndm_wt, nchunks * nt_wt_per_chunk, P, N}, af_rhost | af_zero);
+    ref_kernel_large.make_bare_random_weights_for_testing(cpu_wt_large);
+ 
     Array<float> cpu_out_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     Array<uint> cpu_argmax_large({total_beams, ndm_out, nchunks * nt_out_per_chunk}, af_rhost | af_zero);
     Array<double> cpu_var_large;  // empty -> out_var feature disabled

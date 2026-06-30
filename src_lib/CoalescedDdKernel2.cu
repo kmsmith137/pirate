@@ -347,15 +347,9 @@ void CoalescedDdKernel2::test_random()
     long A = pow2(dd_params.amb_rank);
     long T = nt_in_per_chunk;
     long D = pow2(dd_params.dd_rank);
-    long N = fs.N;
     long M = fs.M;
     long Dout = pow2(lg_ndm_out);
     long Tout = pf_params.nt_out;
-
-    // subband_variances are for make_random_weights()
-    Array<float> subband_variances({N}, af_uhost);
-    for (long n = 0; n < N; n++)
-        subband_variances.at({n}) = 1.0f;
 
     Array<float> dd_cpu({B,A,D,T}, af_uhost);      // 'dd_out' for ref_dd_kernel
     Array<float> sb_cpu({B,Dout,M,T}, af_uhost);   // 'sb_out' for ref_pf_kernel, input for ref_pf_kernel
@@ -367,19 +361,15 @@ void CoalescedDdKernel2::test_random()
     Array<void> max_gpu(dtype, {B,Dout,Tout}, af_gpu | af_zero);
     Array<uint> argmax_gpu({B,Dout,Tout}, af_gpu | af_zero);
 
+    Array<float> wt_cpu({B, pf_params.ndm_wt, pf_params.nt_wt, ref_pf_kernel.nprofiles, fs.N}, af_rhost | af_zero);
+    
     // Tmp buffer for comparing "argmax" arrays, see below.
     Array<float> max_x({B,Dout,Tout}, af_uhost | af_zero);
 
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
-        for (long ibatch = 0; ibatch < num_batches; ibatch++) {
+        for (long ibatch = 0; ibatch < num_batches; ibatch++) {                
             ref_dd_kernel.apply(in_cpu, dd_cpu, sb_cpu, ichunk, ibatch);
-
-            Array<float> wt_cpu = ref_pf_kernel.make_random_weights(subband_variances);
-
-            // Uncomment to use one-hot weights.
-            // wt_cpu = Array<float> ({B, pf_params.ndm_wt, pf_params.nt_wt, ref_pf_kernel.nprofiles, fs.N}, af_rhost | af_zero);
-            // cout << "Debug: wt.shape = " << wt_cpu.shape_str() << endl;
-            // wt_cpu.at({0,0,0,0,0}) = 1.0f;
+            ref_pf_kernel.make_bare_random_weights_for_testing(wt_cpu);
 
             Array<double> var_cpu;   // empty -> out_var feature disabled
             ref_pf_kernel.apply(max_cpu, argmax_cpu, var_cpu, sb_cpu, wt_cpu, ibatch);
