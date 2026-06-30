@@ -195,9 +195,13 @@ struct ReferencePeakFindingKernel
     // The 'out' array has shape (nbeams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N).
     void make_bare_random_weights_for_testing(ksgpu::Array<float> &out);
 
-    // Output array shape = (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
-    // Input (variance) array shape = (fs.N, ndm_wt, P)
-    void _make_random_weights2(ksgpu::Array<float> &out, const ksgpu::Array<float> &variances);
+    // Fill 'out' with peak-finding weights from per-(subband, dm, profile) variances:
+    //   base_weights[d,n,p] = 1/sqrt(variances[n,d,p]).
+    // randomize=true scales each weight by a sparse random factor (see the .cu); randomize=false
+    // uses the base_weights directly (no random multiplier).
+    //   out array shape       = (beams_per_batch, ndm_wt, nt_wt, nprofiles, fs.N)
+    //   variances array shape = (fs.N, ndm_wt, P)
+    void _make_weights(ksgpu::Array<float> &out, const ksgpu::Array<float> &variances, bool randomize);
 
     // At "level" l (where 0 <= l < log2(Wmax)), we have an array 'tmp_arr' containing input
     // array elements downsampled by 2^l (prepadded with data from the previous chunk).

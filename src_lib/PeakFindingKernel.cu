@@ -650,18 +650,20 @@ Array<float> ReferencePeakFindingKernel::make_random_weights(const Array<float> 
 }
 
 
-// _make_random_weights2(): variant of make_random_weights() that takes per-(subband, dm,
-// profile) input variances instead of a single per-subband variance.
+// _make_weights(): build peak-finding weights from per-(subband, dm, profile) input variances
+// (a variant of make_random_weights(), which takes a single per-subband variance).
 //
 //   out shape       = (beams_per_batch, ndm_wt, nt_wt, nprofiles, N)
 //   variances shape = (N, ndm_wt, nprofiles)
 //
-// Each output weight is out[b,d,t,p,n] = x * base_weights[d,n,p], where
-//   base_weights[d,n,p] = 1/sqrt(variances[n,d,p])   (note the N <-> ndm_wt transpose)
-// and 'x' is a sparse random value: per (b,d,t) we draw an "occupancy" p0, then for each
-// (n,p) the weight is zero with probability ~(1-p0), else uniform in [0,1).
+// In both modes base_weights[d,n,p] = 1/sqrt(variances[n,d,p]) (note the N <-> ndm_wt
+// transpose). Then:
+//   randomize=true:  out[b,d,t,p,n] = x * base_weights[d,n,p], where 'x' is a sparse random
+//                    value -- per (b,d,t) we draw an "occupancy" p0, then for each (n,p) the
+//                    weight is zero with probability ~(1-p0), else uniform in [0,1).
+//   randomize=false: out[b,d,t,p,n] = base_weights[d,n,p] (no random multiplier).
 
-void ReferencePeakFindingKernel::_make_random_weights2(Array<float> &out, const Array<float> &variances)
+void ReferencePeakFindingKernel::_make_weights(Array<float> &out, const Array<float> &variances, bool randomize)
 {
     const long B = params.beams_per_batch;
     const long D = params.ndm_wt;
@@ -706,13 +708,21 @@ void ReferencePeakFindingKernel::_make_random_weights2(Array<float> &out, const 
         for (long d = 0; d < D; d++) {
             const float *bw_d = bw + d*N*P;            // base_weights[d], layout [n][p]
             for (long t = 0; t < T; t++) {
-                float p0 = rand_uniform(0.01f, 1.1f, rng);
-                for (long p = 0; p < P; p++) {
-                    for (long n = 0; n < N; n++) {
-                        float r = rand_uniform(0.0f, 1.0f, rng);
-                        float x = (r < p0) ? rand_uniform(0.0f, 1.0f, rng) : 0.0f;
-                        *op++ = x * bw_d[n*P + p];
+                // 'randomize' is loop-invariant; branch here rather than per element.
+                if (randomize) {
+                    float p0 = rand_uniform(0.01f, 1.1f, rng);
+                    for (long p = 0; p < P; p++) {
+                        for (long n = 0; n < N; n++) {
+                            float r = rand_uniform(0.0f, 1.0f, rng);
+                            float x = (r < p0) ? rand_uniform(0.0f, 1.0f, rng) : 0.0f;
+                            *op++ = x * bw_d[n*P + p];
+                        }
                     }
+                }
+                else {
+                    for (long p = 0; p < P; p++)
+                        for (long n = 0; n < N; n++)
+                            *op++ = bw_d[n*P + p];
                 }
             }
         }
@@ -725,7 +735,7 @@ void ReferencePeakFindingKernel::_make_random_weights2(Array<float> &out, const 
 // unit-variance input sample -- a (1,1) array with x[0,0]=1 -- through PfVarianceConvolver,
 // giving the per-profile output variance (1,P). (out[0,p] is the zero-lag autocorrelation of
 // peak-finding kernel p, i.e. the sum of its squared taps.) We then trivially broadcast these
-// P variances across all (subband, dm) and hand off to _make_random_weights2().
+// P variances across all (subband, dm) and hand off to _make_weights() (randomize=true).
 
 void ReferencePeakFindingKernel::make_bare_random_weights_for_testing(Array<float> &out)
 {
@@ -754,7 +764,7 @@ void ReferencePeakFindingKernel::make_bare_random_weights_for_testing(Array<floa
             for (long p = 0; p < P; p++)
                 vp[(n*D + d)*P + p] = float(pf_var[p]);
 
-    this->_make_random_weights2(out, variances);
+    this->_make_weights(out, variances, /*randomize=*/true);
 }
 
 
