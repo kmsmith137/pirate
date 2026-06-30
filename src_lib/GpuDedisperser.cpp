@@ -1110,6 +1110,56 @@ void GpuDedisperser::randomize_weights()
 }
 
 
+// Like randomize_weights(), but fills every weight slot/beam with the SAME non-random
+// analytic weights, computed from a PfAvarApproximation. See Dedisperser.hpp.
+void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
+{
+    xassert(is_allocated);
+
+    // Analytic per-(subband, dm, profile) variances for every tree (validates freq_variances).
+    PfAvarApproximation avar(plan, freq_variances);
+    const long nslots = params.nbatches_wt * beams_per_batch;
+
+    for (long itree = 0; itree < ntrees; itree++) {
+        const DedispersionTree &t = plan->trees.at(itree);
+        const long N = t.frequency_subbands.N;
+
+        // Reference peak-finding kernel for a SINGLE beam (beams_per_batch = total_beams = 1).
+        // Dcore is taken from the GPU kernel (as in randomize_weights()).
+        PeakFindingKernelParams pf_params = plan->stage2_pf_params.at(itree);   // copy
+        pf_params.beams_per_batch = 1;
+        pf_params.total_beams = 1;
+        const long Dcore = cdd2_kernels.at(itree)->Dcore;
+        ReferencePeakFindingKernel pf_kernel(pf_params, Dcore);
+
+        // Non-random weights from the analytic variances. avar.tree_variance[itree] already has
+        // the (N, ndm_wt, nprofiles) shape that _make_weights() expects.
+        Array<float> host_weights({1, t.ndm_wt, t.nt_wt, t.nprofiles, N}, af_rhost | af_zero);
+        pf_kernel._make_weights(host_weights, avar.tree_variance.at(itree), /*randomize=*/ false);
+
+        // Fill the first beam slot via to_gpu(), then duplicate it to all 'nslots' beam slots with
+        // GPU->GPU memcopies. wt_arrays[itree] is dense in (slot, beam): each beam block is
+        // 'beam_nelts' consecutive elements (incl. any internal padding) and the blocks are
+        // back-to-back, so beam slot k starts at element offset k*beam_nelts.
+        const GpuPfWeightLayout &wl = cdd2_kernels.at(itree)->pf_weight_layout;
+        Array<void> dst0 = wt_arrays.at(itree).slice(0, 0).slice(0, 0, 1);   // first beam slot, (1,ndm_wt,...)
+        wl.to_gpu(dst0, host_weights);
+
+        const long beam_nelts = extended_wt_strides.at(itree).at(1);   // per-beam stride (dense)
+        const long beam_nbytes = (beam_nelts * dtype.nbits) / 8;
+        
+        xassert_eq(extended_wt_strides.at(itree).at(0), beams_per_batch * beam_nelts);        
+        char *base = (char *) wt_arrays.at(itree).data;
+        
+        for (long k = 1; k < nslots; k++)
+            CUDA_CALL(cudaMemcpy(base + k * beam_nbytes, base, beam_nbytes, cudaMemcpyDeviceToDevice));
+    }
+
+    // Ensure all GPU copies have completed before returning.
+    CUDA_CALL(cudaDeviceSynchronize());
+}
+
+
 // Static member function.
 void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, bool host_only)
 {

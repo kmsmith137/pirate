@@ -754,18 +754,28 @@ void FrbServer::_processing_thread_main()
          << " (gmem=" << dedisperser_p->resource_tracker.get_gmem_footprint() << " B"
          << ", hmem=" << dedisperser_p->resource_tracker.get_hmem_footprint() << " B)" << endl;
 
-    // One-time randomization of the dedisperser's peak-finding weights, done
-    // after allocate() but before the dedisperser is "published" below (so no
-    // other thread can touch the weights concurrently). This is a placeholder
-    // until a real variance calculation is implemented (see
-    // GpuDedisperser::randomize_weights() and FrbServer::Params::randomize_weights).
-    if (params.randomize_weights) {
-        cout << "FrbServer: calling randomize_weights(): this is a temporary hack that may take a while" << endl;
+    // One-time fill of the dedisperser's peak-finding weights from analytic variances,
+    // done after allocate() but before the dedisperser is "published" below (so no other
+    // thread can touch the weights concurrently). 'freq_variances' is the per-channel noise
+    // variance, expanded from the X-engine metadata's per-zone noise_variance.
+    {
+        const long nfreq = m->get_total_nfreq();
+        const long nzones = (long) m->zone_nfreq.size();
+        xassert_eq((long) m->noise_variance.size(), nzones);
+
+        Array<double> freq_variances({nfreq}, af_uhost);
+        long ifreq = 0;
+        for (long z = 0; z < nzones; z++)
+            for (long i = 0; i < m->zone_nfreq[z]; i++)
+                freq_variances.data[ifreq++] = m->noise_variance[z];
+        xassert_eq(ifreq, nfreq);
+
+        cout << "FrbServer: calling fill_analytic_weights() ..." << endl;
         auto t0 = std::chrono::steady_clock::now();
-        dedisperser_p->randomize_weights();
+        dedisperser_p->fill_analytic_weights(freq_variances);
         auto t1 = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(t1 - t0).count();
-        cout << "FrbServer: randomized dedisperser weights in " << dt << " sec" << endl;
+        cout << "FrbServer: filled analytic dedisperser weights in " << dt << " sec" << endl;
     }
 
     // Per-stream GPU scratch + dequantization kernel + the two new

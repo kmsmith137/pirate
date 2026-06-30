@@ -234,6 +234,13 @@ struct GpuDedisperser
     // in place on the GPU when it returns.
     void randomize_weights();
 
+    // Like randomize_weights(), but fills the peak-finding weight arrays (wt_arrays)
+    // with NON-random analytic weights, derived from a PfAvarApproximation built from
+    // (plan, freq_variances). All weight slots and all beams get identical weights.
+    // Must be called after allocate(). Blocks (calls cudaDeviceSynchronize) before
+    // returning, so the weights are in place on the GPU when it returns.
+    void fill_analytic_weights(const ksgpu::Array<double> &freq_variances);
+
     // --------------------------  Public members  --------------------------
 
 protected:

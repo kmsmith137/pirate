@@ -108,10 +108,6 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // rb_assembled during the "work".
         double processing_delay_sec = 0.0;
 
-        // If true, then the dedisperser will be initialized with ad hoc random weights.
-        // This is a placeholder, that will be replaced by a real variance calculation in the near future!
-        bool randomize_weights=true;
-
         // gRPC address ("ip:port") of the FrbGrouper this server feeds. Empty
         // string => no grouper (no Session RPC; GpuDedisperser built with
         // num_consumers=0). Must be a loopback address (CUDA IPC requires the

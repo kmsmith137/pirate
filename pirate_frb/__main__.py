@@ -1236,12 +1236,6 @@ def parse_run_server(subparsers):
                              'receive/assemble/ringbuf path still runs in full '
                              '(the dedisperser is still built, just never fed). '
                              'Implies --no-grouper. Infrequently used corner case.')
-    parser.add_argument('-z', '--zeroed-weights', action='store_true',
-                        help='Disable the one-time randomization of the '
-                             'dedisperser peak-finding weights at startup '
-                             '(weights are left zeroed). By default the weights '
-                             'are randomized (a placeholder until a real variance '
-                             'calculation is implemented).')
 
 
 def run_server_command(args):
@@ -1249,7 +1243,6 @@ def run_server_command(args):
     run_server(args.server_config, args.dedispersion_config,
                processing_delay_sec=args.delay,
                no_grouper=args.no_grouper,
-               randomize_weights=not args.zeroed_weights,
                no_dedispersion=args.no_dedispersion)
 
 
