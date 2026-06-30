@@ -1367,14 +1367,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
 // Static member function.
 void GpuDedisperser::test_random()
 {
-    // FIXME: force_float32 is a temporary workaround. The peak-finding comparison
-    // threshold in test_one() (eps = 3 * dtype.precision() * sqrt(n+2)) is too
-    // tight for float16 -- it does not account for the float16->float32
-    // upconversion of the float32 reference -- so float16 runs sometimes fail
-    // spuriously. Remove force_float32 once the threshold logic is fixed.
-    DedispersionConfig::RandomArgs rargs;
-    // rargs.force_float32 = true;
-    auto config = DedispersionConfig::make_random(rargs);
+    auto config = DedispersionConfig::make_random();
     config.validate();
     
     long ntree = pow2(config.tree_rank);
