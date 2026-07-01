@@ -10,4 +10,5 @@ classes/FrbGrouper
 classes/FrbSifterClient
 classes/FrbSifterEvents
 classes/GpuDedisperserOutputs
+classes/SinglePulse
 ```

@@ -185,6 +185,22 @@ def test(args):
             tests.test_network()
 
 
+######################################   test_simpulse command  #####################################
+
+
+def parse_test_simpulse(subparsers):
+    help_text = "Run simpulse tests (pulse-upsampling self-consistency) and write example plots to cwd"
+    parser = subparsers.add_parser("test_simpulse", help=help_text, description=help_text)
+    parser.add_argument('-n', '--niter', type=int, default=100, help="Number of upsampling-test iterations (default 100)")
+
+
+def test_simpulse(args):
+    # Import lazily so matplotlib (needed by plot_pulses) is only required for this command.
+    from .simpulse import test_pulse_upsampling, plot_pulses
+    test_pulse_upsampling.run_tests(args.niter)
+    plot_pulses.make_plots()
+
+
 #################################   check_avar_approximation command  ###############################
 
 
@@ -1373,6 +1389,7 @@ def get_parser():
     parse_rpc_write(subparsers)
     
     parse_test(subparsers)
+    parse_test_simpulse(subparsers)
     parse_check_avar_approximation(subparsers)
     parse_check_avar_mc(subparsers)
     parse_time(subparsers)
@@ -1405,6 +1422,8 @@ def main():
 
     if args.command == "test":
         test(args)
+    elif args.command == "test_simpulse":
+        test_simpulse(args)
     elif args.command == "check_avar_approximation":
         check_avar_approximation(args)
     elif args.command == "check_avar_mc":
