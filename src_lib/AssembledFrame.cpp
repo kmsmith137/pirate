@@ -2,6 +2,7 @@
 #include "../include/pirate/file_utils.hpp"   // FileDeleteGuard
 #include "../include/pirate/inlines.hpp"      // xdiv(), align_up()
 #include "../include/pirate/constants.hpp"    // bytes_per_gpu_cache_line
+#include "../include/pirate/avx2_utils.hpp"   // avx2_simulate_4bit_noise(), avx2_4bit_noise_variance()
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/mem_utils.hpp>
@@ -762,7 +763,7 @@ shared_ptr<AssembledFrame> AssembledFrame::make_uninitialized(
 }
 
 
-void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd)
+void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd, bool gaussian)
 {
     // Thread-safety: the array STATE (empty vs nonempty, and which slab the
     // arrays point at) is lock-protected -- a concurrent _reap_locked() on the
@@ -826,18 +827,18 @@ void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd)
             // sample v, EXCEPT the sentinel v = -8 dequantizes to 0 regardless of
             // scale/offset (see GpuDequantizationKernel: "data == -8 -> 0"). With
             // offset = 0 the dequantized value is  out = S * w, where w is the
-            // "effective" sample:  w = 0 if v = -8, else w = v.
+            // "effective" sample: w = 0 if v = -8, else w = v. Then
+            // Var(out) = S^2 * Var(w), and matching the target zone variance V
+            // gives  S = sqrt(V / Var(w)), where Var(w) depends on the data fill:
             //
-            // 'data' is filled uniformly over the 16 int4 values v in [-8, 7], so
-            // (folding -8 -> 0) w is 0 with probability 2/16 and each of
-            // {+-1, ..., +-7} with probability 1/16. Thus w is mean-zero,
-            //   E[w]   = (1/16)(0 + 0 + sum_{k=1..7} k + sum_{k=1..7} (-k)) = 0,
-            // and its variance is
-            //   Var(w) = E[w^2] = (1/16)(2 * sum_{k=1..7} k^2)
-            //          = (1/16)(2 * 140) = 280/16 = 17.5.
-            // Hence  Var(out) = S^2 * Var(w) = 17.5 * S^2, and matching the target
-            // zone variance V gives
-            //   S = sqrt(V / 17.5).
+            //   - uniform (gaussian=false): v is uniform over [-8, 7], so
+            //     (folding -8 -> 0) w is 0 w.p. 2/16 and each of {+-1, ..., +-7}
+            //     w.p. 1/16. Mean-zero, with Var(w) = E[w^2] =
+            //     (1/16)(2 * sum_{k=1..7} k^2) = 280/16 = 17.5.
+            //   - gaussian (gaussian=true): v never equals -8 (clamped to
+            //     [-7, 7]), so w = v and Var(w) = avx2_4bit_noise_variance().
+            double data_variance = gaussian ? avx2_4bit_noise_variance() : 17.5;
+
             xassert(so_arr.ndim == 3);
             long nfreq = so_arr.shape[0];
             long mpc   = so_arr.shape[1];          // (scale, offset) pairs per frequency
@@ -853,7 +854,7 @@ void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd)
             long f = 0;
             for (size_t z = 0; z < zone_nfreq.size(); z++) {
                 xassert(zone_var[z] >= 0.0);
-                __half S = __float2half_rn((float) std::sqrt(zone_var[z] / 17.5));
+                __half S = __float2half_rn((float) std::sqrt(zone_var[z] / data_variance));
                 for (long k = 0; k < zone_nfreq[z]; k++) {
                     xassert(f < nfreq);
                     scale_by_freq[f++] = S;
@@ -871,21 +872,30 @@ void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd)
 
     if (data_nbytes > 0) {
         xassert(data_arr.data != nullptr);
-        xassert(data_arr.is_fully_contiguous());   // contiguous byte-sweep below
-        char *p = static_cast<char *>(data_arr.data);
+        xassert(data_arr.is_fully_contiguous());   // contiguous sweep below
 
-        // mt19937 yields uint32_t (4 random bytes per call). The final
-        // 1-3 bytes (if data_nbytes % 4 != 0) get the low bytes of a
-        // fresh uint32 via a short-memcpy.
-        long i = 0;
-        while (i + 4 <= data_nbytes) {
-            uint32_t r = rng();
-            std::memcpy(p + i, &r, 4);
-            i += 4;
+        if (gaussian) {
+            // Simulated Gaussian noise quantized to int4 in [-7,7] (the -8 sentinel is never
+            // produced). data_arr.size is the int4 element count = nfreq*ntime, a multiple of 64
+            // (ntime is a multiple of 256), as required by avx2_simulate_4bit_noise().
+            avx2_simulate_4bit_noise(static_cast<unsigned int *>(data_arr.data), data_arr.size);
         }
-        if (i < data_nbytes) {
-            uint32_t r = rng();
-            std::memcpy(p + i, &r, data_nbytes - i);
+        else {
+            char *p = static_cast<char *>(data_arr.data);
+
+            // mt19937 yields uint32_t (4 random bytes per call). The final
+            // 1-3 bytes (if data_nbytes % 4 != 0) get the low bytes of a
+            // fresh uint32 via a short-memcpy.
+            long i = 0;
+            while (i + 4 <= data_nbytes) {
+                uint32_t r = rng();
+                std::memcpy(p + i, &r, 4);
+                i += 4;
+            }
+            if (i < data_nbytes) {
+                uint32_t r = rng();
+                std::memcpy(p + i, &r, data_nbytes - i);
+            }
         }
     }
 }

@@ -152,17 +152,19 @@ struct AssembledFrame
     make_uninitialized(const std::shared_ptr<const XEngineMetadata> &xmd,
                        long ntime, long beam_id, long time_chunk_index);
 
-    // Randomizes AssembledFrame:
-    //   - data buffer: uniform bits (i.e. int4s are random over [-8,+7])
-    //   - scales: uniform in [0,1]      (when xmd is null)
-    //   - offsets: uniform in [-1,1]    (when xmd is null)
+    // randomize(): fill the frame with random test data.
+    //   - gaussian=false: data buffer = uniform bits (int4s uniform over [-8,+7]).
+    //   - gaussian=true:  data buffer = simulated Gaussian noise quantized to int4, clamped to
+    //         [-7,+7] via avx2_simulate_4bit_noise() (the -8 sentinel never occurs).
     //
-    // If 'xmd' is non-null, the data buffer is filled the same way, but the
-    // scales/offsets are instead CALIBRATED: offset = 0 and scale = S per
-    // frequency zone, chosen so that the dequantized data has the per-zone noise
-    // variance given by xmd->noise_variance. Requires xmd->zone_nfreq to sum to
-    // this frame's nfreq, and xmd->noise_variance to have one entry per zone. See
-    // the definition (src_lib/AssembledFrame.cpp) for the derivation of S.
+    // scales/offsets are filled the same way regardless of 'gaussian':
+    //   - xmd is null:  scales uniform in [0,1], offsets uniform in [-1,1].
+    //   - xmd non-null: CALIBRATED -- offset = 0 and scale = S per frequency zone, chosen so the
+    //         dequantized data has the per-zone noise variance xmd->noise_variance. (S = sqrt(V/Vq),
+    //         where Vq is the int4 data variance: 17.5 for uniform [folding the -8 sentinel to 0],
+    //         avx2_4bit_noise_variance() for gaussian. See src_lib/AssembledFrame.cpp for the
+    //         derivation.) Requires xmd->zone_nfreq to sum to this frame's nfreq, and
+    //         xmd->noise_variance to have one entry per zone.
     //
     // Thread-safety: snapshots the lock-protected 'scales_offsets'/'data' Arrays
     // under the lock, then fills them without the lock held (the snapshot pins
@@ -171,7 +173,7 @@ struct AssembledFrame
     // Callers still must not run two randomize() (or other writers) on the SAME
     // frame concurrently -- the buffer contents are not lock-protected.
 
-    void randomize(const std::shared_ptr<const XEngineMetadata> &xmd = std::shared_ptr<const XEngineMetadata>());
+    void randomize(const std::shared_ptr<const XEngineMetadata> &xmd, bool gaussian);
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.

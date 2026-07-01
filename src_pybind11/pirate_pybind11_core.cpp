@@ -200,23 +200,24 @@ void register_core_bindings(pybind11::module &m)
             "metadata's beam_ids / beam_positions_{x,y} are length-1 (just this\n"
             "frame's beam) and freq_channels is empty. See XEngineMetadata.hpp.")
         .def("randomize", &AssembledFrame::randomize,
-            // Default is Python None (-> null shared_ptr at call time). A C++
-            // shared_ptr<XEngineMetadata>() default fails here because the
-            // AssembledFrame binding precedes XEngineMetadata's registration.
-            py::arg("xmd") = py::none(),
+            // xmd may be None (-> null shared_ptr). No default: gaussian is required, and a
+            // trailing-defaults rule would then force a default on xmd too.
+            py::arg("xmd"), py::arg("gaussian"),
             py::call_guard<py::gil_scoped_release>(),
-            "Fill the frame's data buffer with uniformly random int4 samples\n"
-            "(uniform over [-8, +7]). Intended for testing.\n\n"
-            "If xmd is None (default), scales are uniform in [0, 1] and offsets in\n"
-            "[-1, 1]. If xmd is given, the data is filled the same way but the\n"
-            "scales/offsets are calibrated instead: offset = 0 and scale =\n"
-            "sqrt(variance / 17.5) per frequency zone, so the dequantized data has\n"
-            "the per-zone variance xmd.noise_variance. Requires xmd.zone_nfreq to\n"
-            "sum to the frame's nfreq, with one noise_variance entry per zone.\n\n"
-            "Thread-safe with respect to the RNG (uses ksgpu's per-thread\n"
-            "default RNG), but the caller must ensure that no other thread is\n"
-            "concurrently reading or writing the same frame's data buffer --\n"
-            "only the RNG is protected, not the destination buffer.")
+            "Fill the frame with random int4 data (intended for testing).\n\n"
+            "gaussian=False: data is uniform over [-8, +7]. gaussian=True: data is\n"
+            "simulated Gaussian noise quantized to int4 and clamped to [-7, +7]\n"
+            "(the -8 sentinel is never produced).\n\n"
+            "scales/offsets (same regardless of 'gaussian'): if xmd is None, scales\n"
+            "are uniform in [0, 1] and offsets in [-1, 1]. If xmd is given, offset =\n"
+            "0 and scale = sqrt(variance / Vq) per frequency zone -- Vq = 17.5\n"
+            "(uniform, folding the -8 sentinel to 0) or avx2_4bit_noise_variance()\n"
+            "(gaussian) -- so the dequantized data has the per-zone variance\n"
+            "xmd.noise_variance. Requires xmd.zone_nfreq to sum to the frame's\n"
+            "nfreq, with one noise_variance entry per zone.\n\n"
+            "Thread-safe with respect to the RNG (uses ksgpu's per-thread default\n"
+            "RNG), but the caller must ensure no other thread concurrently reads or\n"
+            "writes the same frame's data buffer -- only the RNG is protected.")
     ;
 
     // AssembledFrameSet: container of (nbeams) AssembledFrames for one time chunk.
@@ -731,7 +732,7 @@ void register_core_bindings(pybind11::module &m)
                "        server-side rb_processed. Requires rpc_address.\n"
                "    normalized (default True): If True, randomize_frames()\n"
                "        calibrates each frame's scales/offsets (via\n"
-               "        AssembledFrame.randomize(xmd)) so the dequantized data\n"
+               "        AssembledFrame.randomize(xmd, gaussian=False)) so the dequantized data\n"
                "        has the per-zone noise variance in xmd.noise_variance.\n"
                "        If False, the scales/offsets are arbitrary junk.\n"
                "    rpc_address: 'ip:port' of the FrbServer's gRPC endpoint.\n"

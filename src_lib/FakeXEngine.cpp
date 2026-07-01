@@ -1559,7 +1559,7 @@ void FakeXEngine::randomize_frames(AssembledFrameSet &fset)
             // Pass xmd to calibrate scales/offsets when normalized; a null
             // xmd leaves the normalization arbitrary. See 'normalized' in
             // FakeXEngine.hpp.
-            f->randomize(normalized ? xmd : nullptr);
+            f->randomize(normalized ? xmd : nullptr, /*gaussian=*/ false);
         }
         return;
     }
@@ -1641,7 +1641,7 @@ void FakeXEngine::_randomizer_main()
         try {
             xassert(frame);   // AssembledFrameSet invariant: frames[b] non-null
             // Normalized -> pass xmd (calibrated scales/offsets); else null.
-            frame->randomize(normalized ? xmd : nullptr);
+            frame->randomize(normalized ? xmd : nullptr, /*gaussian=*/ false);
         } catch (...) {
             ex = std::current_exception();
         }
