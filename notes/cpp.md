@@ -13,6 +13,24 @@
 
 - If a class `X` derives from `std::enable_shared_from_this`, then its constructor(s) must be protected, and the class must define `create()` static method(s) that return `shared_ptr<X>`.
 
+- Minimize header `#include` dependencies. In a `.hpp`, if a type is only used by
+  pointer, reference, or `std::shared_ptr<T>` (not by value, as a base class, or
+  via member access / `sizeof`), forward-declare it instead of `#include`-ing its
+  header, and move the `#include` into the `.cpp` file(s) that use the full type.
+  This cuts recompilation when the included header changes. Match the declared
+  keyword (`class` vs `struct`) and note where it lives, e.g.:
+
+  ```
+  class SlabAllocator;     // defined in SlabAllocator.hpp
+  struct XEngineMetadata;  // defined in XEngineMetadata.hpp
+  ```
+
+  Caveat: keep the full `#include` in the header when the complete type is needed
+  there -- a base class, a by-value member, an inline function that touches the
+  type, or a `std::unique_ptr<T>` member of a class whose destructor is
+  compiler-generated in the header (`unique_ptr` needs a complete type at the
+  destructor; `shared_ptr` does not). When unsure, include it.
+
 ## ksgpu
 
 Uses the `ksgpu` helper library, especially the Array class (ksgpu/Array.hpp), memory managment (ksgpu/mem_utils.hpp),

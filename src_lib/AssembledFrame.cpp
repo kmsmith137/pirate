@@ -1,4 +1,7 @@
 #include "../include/pirate/AssembledFrame.hpp"
+#include "../include/pirate/SlabAllocator.hpp"
+#include "../include/pirate/XEngineMetadata.hpp"
+
 #include "../include/pirate/file_utils.hpp"   // FileDeleteGuard
 #include "../include/pirate/inlines.hpp"      // xdiv(), align_up()
 #include "../include/pirate/constants.hpp"    // bytes_per_gpu_cache_line

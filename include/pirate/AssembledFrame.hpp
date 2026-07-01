@@ -1,9 +1,6 @@
 #ifndef _PIRATE_ASSEMBLED_FRAME_HPP
 #define _PIRATE_ASSEMBLED_FRAME_HPP
 
-#include "SlabAllocator.hpp"
-#include "XEngineMetadata.hpp"
-
 #include <ksgpu/Array.hpp>
 
 #include <mutex>
@@ -20,6 +17,9 @@ namespace pirate {
 #if 0
 }  // editor auto-indent
 #endif
+
+class SlabAllocator;     // defined in SlabAllocator.hpp
+struct XEngineMetadata;  // defined in XEngineMetadata.hpp
 
 
 // AssembledFrame: This central data structure represents one data frame on the server,
