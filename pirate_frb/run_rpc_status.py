@@ -183,6 +183,7 @@ def _print_config(addr, cfg):
     print(f"  nfs_threads = {cfg.nfs_threads}")
     print(f"  tree_rank = {cfg.tree_rank}")
     print(f"  beams_per_batch = {cfg.beams_per_batch}")
+    print(f"  frequency_subband_counts = {list(cfg.frequency_subband_counts)}")
     print(f"  min_data_mtu = {cfg.min_data_mtu}")
     print(f"  fake_zone_nfreq = {list(cfg.fake_zone_nfreq)}")
     print(f"  fake_zone_freq_edges = {list(cfg.fake_zone_freq_edges)}")

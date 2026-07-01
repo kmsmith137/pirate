@@ -1736,6 +1736,8 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
     const DedispersionConfig &c = s->params.config_prefilled;
     response->set_tree_rank(c.tree_rank);
     response->set_beams_per_batch(c.beams_per_batch);
+    for (long v : c.frequency_subband_counts)
+        response->add_frequency_subband_counts(v);
     for (long v : c.zone_nfreq)
         response->add_fake_zone_nfreq(v);
     for (double v : c.zone_freq_edges)

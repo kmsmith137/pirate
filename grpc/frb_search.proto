@@ -82,6 +82,9 @@ message GetConfigResponse {
   repeated double fake_zone_freq_edges = 13;  // From config_prefilled.zone_freq_edges (pre-metadata)
   double fake_time_sample_ms = 14;     // From config_prefilled.time_sample_ms (pre-metadata)
   int64 fake_nbeams = 15;              // From config_prefilled.beams_per_gpu (pre-metadata)
+  // Real search-config value (NOT a fake_ default): the DedispersionConfig's
+  // frequency_subband_counts, from config_prefilled.
+  repeated int64 frequency_subband_counts = 16;
 }
 
 // Request message for GetXEngineMetadata
