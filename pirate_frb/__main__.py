@@ -1340,6 +1340,10 @@ def parse_run_fake_xengine(subparsers):
                         help='Send unnormalized data -- leave scales/offsets '
                              'arbitrary (default: calibrate them to the per-zone '
                              'noise variance)')
+    parser.add_argument('-G', '--non-gaussian', action='store_true',
+                        help='Fill int4 data with uniform noise over [-8,+7] '
+                             '(default: simulated Gaussian noise clamped to '
+                             '[-7,+7])')
     parser.add_argument('-j', '--send-junk', action='store_true',
                         help='Randomize+send only the first chunk; send all-zero '
                              'junk for every subsequent chunk (skips per-chunk '
@@ -1350,6 +1354,7 @@ def run_fake_xengine_command(args):
     from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers,
                      paced=not args.unpaced, normalized=not args.unnormalized,
+                     gaussian=not args.non_gaussian,
                      send_junk=args.send_junk)
 
 ####################################################################################################

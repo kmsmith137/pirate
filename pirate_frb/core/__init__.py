@@ -13,6 +13,7 @@ from ..pirate_pybind11 import (
     PeakFindingConfig,
     Receiver,
     ResourceTracker,
+    SimulatedFrameFactory,
     SlabAllocator,
     XEngineMetadata,
     get_thread_affinity,

@@ -10,6 +10,7 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/AssembledFrame.hpp"
+#include "../include/pirate/SimulatedFrameFactory.hpp"
 #include "../include/pirate/BumpAllocator.hpp"
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/SlabAllocator.hpp"
@@ -240,9 +241,17 @@ void register_core_bindings(pybind11::module &m)
             "Bounds-checked accessor for frames[ibeam].")
         .def("validate", &AssembledFrameSet::validate,
             "Defensive consistency check; throws on inconsistency. Cheap.")
-        // NOTE: there is no AssembledFrameSet.randomize(); to randomize a
-        // whole set, use FakeXEngine.randomize_frames(fset) (parallelized
-        // over the randomizer-thread pool).
+        .def("randomize", &AssembledFrameSet::randomize,
+            // xmd may be None (-> null shared_ptr). No default: matches
+            // AssembledFrame.randomize (a trailing-defaults rule would force
+            // a default on xmd too).
+            py::arg("xmd"), py::arg("gaussian"),
+            py::call_guard<py::gil_scoped_release>(),
+            "Fill every frame in the set with random int4 test data, by calling\n"
+            "AssembledFrame.randomize(xmd, gaussian) on each frame in turn (serial,\n"
+            "single-threaded). See AssembledFrame.randomize for the meaning of xmd\n"
+            "and gaussian. To randomize a stream of sets in parallel, use a\n"
+            "SimulatedFrameFactory.")
     ;
 
     // AssembledFrameAllocator: allocates AssembledFrameSets for multiple consumers.
@@ -333,6 +342,47 @@ void register_core_bindings(pybind11::module &m)
             "_create_frame_set exactly -- use it (times nbeams) to size a slab\n"
             "pool for AssembledFrameSets. Static: callable without an instance.\n"
             "Throws unless time_samples_per_chunk is a positive multiple of 256.")
+    ;
+
+    // SimulatedFrameFactory: hands a consumer a stream of pre-randomized
+    // AssembledFrameSets. Bound with a kwargs constructor that fills Params.
+    py::class_<SimulatedFrameFactory>(m, "SimulatedFrameFactory",
+        "Produces a stream of pre-randomized AssembledFrameSets for an external\n"
+        "consumer, staying a few frames ahead (bounded by frame_set_queue_size and\n"
+        "the allocator's slab pool). Owns a producer thread plus a randomizer-thread\n"
+        "pool. The allocator (num_consumers=1) must already be initialized\n"
+        "(initialize_metadata + initialize_initial_chunk), and the factory MUST be\n"
+        "constructed inside a ThreadAffinity context manager -- the spawned threads\n"
+        "inherit the caller's vcpu affinity. stop() propagates to the allocator.")
+        .def(py::init([](std::shared_ptr<AssembledFrameAllocator> allocator,
+                         bool normalized, bool gaussian, long frame_set_queue_size) {
+                 SimulatedFrameFactory::Params p;
+                 p.allocator = std::move(allocator);
+                 p.normalized = normalized;
+                 p.gaussian = gaussian;
+                 p.frame_set_queue_size = frame_set_queue_size;
+                 return std::make_unique<SimulatedFrameFactory>(p);
+             }),
+             py::arg("allocator"),
+             py::arg("normalized") = true,
+             py::arg("gaussian") = true,
+             py::arg("frame_set_queue_size") = 4,
+             "normalized (default True): calibrate scales/offsets to the metadata's\n"
+             "per-zone noise variance (else arbitrary uniform-junk). gaussian (default\n"
+             "True): simulated Gaussian int4 data clamped to [-7,+7] (else uniform\n"
+             "[-8,+7]). frame_set_queue_size (default 4): output-queue depth (how many\n"
+             "randomized sets the producer may stay ahead of the consumer).")
+        .def_readonly("nbeams", &SimulatedFrameFactory::nbeams)
+        .def_readonly("normalized", &SimulatedFrameFactory::normalized)
+        .def_readonly("gaussian", &SimulatedFrameFactory::gaussian)
+        .def_readonly("frame_set_queue_size", &SimulatedFrameFactory::frame_set_queue_size)
+        .def("get_frame_set", &SimulatedFrameFactory::get_frame_set,
+            py::call_guard<py::gil_scoped_release>(),
+            "Block until a randomized AssembledFrameSet is available and return it\n"
+            "(FIFO / allocator order). Throws if the factory is stopped.")
+        .def("stop", [](SimulatedFrameFactory &self) { self.stop(); },
+            py::call_guard<py::gil_scoped_release>(),
+            "Stop the factory (and its allocator); wakes all threads. Idempotent.")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.
@@ -701,12 +751,11 @@ void register_core_bindings(pybind11::module &m)
         "    fxe.stop()   # signals workers and any in-flight entry points to exit")
           .def(py::init<const std::shared_ptr<const XEngineMetadata> &,
                         const std::vector<std::string> &,
-                        int, long, bool, bool, bool, const std::string &>(),
+                        int, long, bool, bool, const std::string &>(),
                py::arg("xmd"), py::arg("ip_addrs"), py::arg("nworkers"),
                py::arg("time_samples_per_chunk"),
                py::arg("debug") = false,
                py::arg("paced") = true,
-               py::arg("normalized") = true,
                py::arg("rpc_address") = "",
                "Create a FakeXEngine and spawn 'nworkers' worker threads.\n\n"
                "Workers inherit the vcpu affinity of the calling thread, so the\n"
@@ -730,11 +779,6 @@ void register_core_bindings(pybind11::module &m)
                "        to the FrbServer's MonitorRingbuf push stream and gates\n"
                "        each worker's sends to stay <=5 chunks ahead of\n"
                "        server-side rb_processed. Requires rpc_address.\n"
-               "    normalized (default True): If True, randomize_frames()\n"
-               "        calibrates each frame's scales/offsets (via\n"
-               "        AssembledFrame.randomize(xmd, gaussian=False)) so the dequantized data\n"
-               "        has the per-zone noise variance in xmd.noise_variance.\n"
-               "        If False, the scales/offsets are arbitrary junk.\n"
                "    rpc_address: 'ip:port' of the FrbServer's gRPC endpoint.\n"
                "        Required (non-empty) when paced=True; ignored (silently\n"
                "        accepted) when paced=False.")
@@ -878,19 +922,6 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If the FakeXEngine is stopped or worker_id\n"
                "    is out of range.")
-          .def("randomize_frames", &FakeXEngine::randomize_frames,
-               py::arg("fset"),
-               py::call_guard<py::gil_scoped_release>(),
-               "Fill every AssembledFrame in 'fset' with random data,\n"
-               "distributing the per-beam AssembledFrame.randomize() calls\n"
-               "across the randomizer-thread pool. Blocks until done.\n\n"
-               "'fset' must have exactly nbeams frames. The caller keeps\n"
-               "ownership and must keep 'fset' alive until this returns; on\n"
-               "return no randomizer thread is still touching it. NOT safe to\n"
-               "call concurrently with itself (single in-flight job).\n\n"
-               "Raises:\n"
-               "    RuntimeError: If the FakeXEngine is stopped, or fset's\n"
-               "    frame count does not match nbeams.")
           .def("get_minichunk_status", &FakeXEngine::get_minichunk_status,
                py::arg("worker_id"), py::arg("minichunk_index"),
                "Return the status byte for a previously-enqueued state-\n"

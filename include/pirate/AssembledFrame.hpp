@@ -238,10 +238,16 @@ struct AssembledFrameSet
     // Convenience accessor (bounds-checked). Equivalent to frames.at(ibeam).
     const std::shared_ptr<AssembledFrame> &get_frame(long ibeam) const;
 
-    // NOTE: there is intentionally no AssembledFrameSet::randomize(). To
-    // randomize a whole set, use FakeXEngine::randomize_frames(), which
-    // distributes the per-beam AssembledFrame::randomize() calls over a
-    // pool of randomizer threads for speed.
+    // randomize(): fill every frame in the set with random test data, by
+    // calling AssembledFrame::randomize(xmd, gaussian) on each frame in turn.
+    // 'xmd' and 'gaussian' are forwarded unchanged; see AssembledFrame::
+    // randomize() for their meaning (xmd null -> arbitrary scales/offsets;
+    // xmd non-null -> scales/offsets calibrated to xmd->noise_variance).
+    //
+    // This is the SERIAL (single-threaded) path -- simple, and used by tests.
+    // To randomize a stream of sets in PARALLEL (per-beam work distributed over
+    // a randomizer-thread pool), use a SimulatedFrameFactory instead.
+    void randomize(const std::shared_ptr<const XEngineMetadata> &xmd, bool gaussian);
 };
 
 

@@ -288,6 +288,7 @@ LIB_SRCFILES = \
   src_lib/ReferenceTree.cpp \
   src_lib/ResourceTracker.cpp \
   src_lib/RingbufCopyKernel.cu \
+  src_lib/SimulatedFrameFactory.cpp \
   src_lib/TreeGriddingKernel.cu \
   src_lib/YamlFile.cpp \
   src_lib/avx2_utils.cpp \
@@ -429,6 +430,7 @@ HFILES = \
   include/pirate/ReferenceTree.hpp \
   include/pirate/ResourceTracker.hpp \
   include/pirate/RingbufCopyKernel.hpp \
+  include/pirate/SimulatedFrameFactory.hpp \
   include/pirate/SlabAllocator.hpp \
   include/pirate/SparseTile.hpp \
   include/pirate/simpulse.hpp \

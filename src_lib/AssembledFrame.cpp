@@ -713,6 +713,17 @@ const shared_ptr<AssembledFrame> &AssembledFrameSet::get_frame(long ibeam) const
 }
 
 
+void AssembledFrameSet::randomize(const shared_ptr<const XEngineMetadata> &xmd, bool gaussian)
+{
+    // Serial per-frame randomization. See the header for the parallel
+    // alternative (SimulatedFrameFactory).
+    for (const auto &f : frames) {
+        xassert(f);   // AssembledFrameSet invariant: all frames[i] non-null
+        f->randomize(xmd, gaussian);
+    }
+}
+
+
 // -------------------------------------------------------------------------------------------------
 //
 // Static AssembledFrame member functions, for testing.

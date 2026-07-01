@@ -289,9 +289,6 @@ class NetworkTester:
             time_samples_per_chunk = p['time_samples_per_chunk'],
             debug = True,
             paced = p['paced'],
-            # The network test only checks transport/assembly, not data
-            # normalization, so skip the (calibrated) normalized path here.
-            normalized = False,
             rpc_address = f"127.0.0.1:{p['rpc_port']}",
         )
 
@@ -386,7 +383,10 @@ class NetworkTester:
 
                 while self.fspos <= ichunk:
                     self.framesets[self.fspos] = self.client_allocator.get_frame_set(consumer_id=0)
-                    fxe.randomize_frames(self.framesets[self.fspos])
+                    # Serial randomization. This transport/assembly test doesn't
+                    # check data normalization, so xmd=None (arbitrary
+                    # scales/offsets) and uniform int4 are fine.
+                    self.framesets[self.fspos].randomize(None, gaussian=False)
                     assert self.framesets[self.fspos].time_chunk_index == self.fspos
                     self.fspos += 1
 
