@@ -13,6 +13,7 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/utils.hpp"
+#include "../include/pirate/avx2_utils.hpp"   // test/time_avx2_simulate_4bit_noise
 
 using namespace std;
 using namespace pirate;
@@ -23,6 +24,10 @@ namespace pirate {
 
 void register_utils_bindings(pybind11::module &m)
 {
+    // avx2_simulate_4bit_noise() test + timing (see 'python -m pirate_frb test/time --sim').
+    m.def("test_avx2_simulate_4bit_noise", &test_avx2_simulate_4bit_noise);
+    m.def("time_avx2_simulate_4bit_noise", &time_avx2_simulate_4bit_noise, py::arg("nthreads"));
+
     // safe_memcpy_{h2g,g2h}_{sync,async}: host<->device cudaMemcpy* wrappers
     // that split at absolute cuda_host_register_chunk_size-aligned host
     // addresses. Use these whenever the host pointer COULD live in a

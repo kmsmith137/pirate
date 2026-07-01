@@ -57,6 +57,7 @@ def parse_test(subparsers):
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_upchan()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
+    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test')
 
 
 def rrange(registry_class):
@@ -76,10 +77,11 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'sim' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
+    from . import utils   # local import (utils pulls in heavier deps)
 
     for i in range(args.niter):
         print(f'\nIteration {i+1}/{args.niter}\n')
@@ -116,6 +118,9 @@ def test(args):
         
         if run_all_tests or args.gdqk:
             kernels.GpuDequantizationKernel.test_random()
+
+        if run_all_tests or args.sim:
+            utils.test_avx2_simulate_4bit_noise()
 
         if run_all_tests or args.cdd2:
             for _ in rrange(kernels.CoalescedDdKernel2):
@@ -242,9 +247,10 @@ def parse_time(subparsers):
     parser.add_argument('--cdd2', action='store_true', help='Runs CoalescedDdKernel2.time_selected()')
     parser.add_argument('--gdqk', action='store_true', help='Runs GpuDequantizationKernel.time_selected()')
     parser.add_argument('--gtgk', action='store_true', help='Runs GpuTreeGriddingKernel.time_selected()')
-    
+    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() timing')
+
 def time_command(args):
-    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk' ]
+    timing_flags = [ 'gldk', 'gddk', 'casm', 'chime', 'zomb', 'cdd2', 'gdqk', 'gtgk', 'sim' ]
     run_all_timings = not any(getattr(args,x) for x in timing_flags)
 
     if args.ncu:
@@ -256,6 +262,7 @@ def time_command(args):
         
     ksgpu.set_cuda_device(args.gpu)
     nthreads = args.nthreads if (args.nthreads > 0) else os.cpu_count()
+    from . import utils   # local import (utils pulls in heavier deps)
         
     if run_all_timings or args.gldk:
         kernels.GpuLaggedDownsamplingKernel.time_selected()
@@ -276,6 +283,8 @@ def time_command(args):
         kernels.GpuDequantizationKernel.time_selected()
     if run_all_timings or args.gtgk:
         kernels.GpuTreeGriddingKernel.time_selected()
+    if run_all_timings or args.sim:
+        utils.time_avx2_simulate_4bit_noise(nthreads)
 
 
 #####################################   show_hardware command  #####################################

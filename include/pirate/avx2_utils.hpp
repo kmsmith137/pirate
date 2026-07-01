@@ -24,6 +24,24 @@ namespace pirate {
 void avx2_simulate_4bit_noise(unsigned int *dst, long nelts_4bit);
 
 
+// Returns the variance of the (post-quantization, clamped) int4 output of avx2_simulate_4bit_noise(),
+// computed exactly from the quantization thresholds. Slightly larger than 2.5^2 (the int4 quantization
+// adds ~1/12, partly offset by the [-7,7] clamp). Not for hot loops -- recomputed from a length-15 sum
+// on each call.
+double avx2_4bit_noise_variance();
+
+
+// Unit test (dispatched from 'python -m pirate_frb test --sim'): generates noise, unpacks it, and
+// checks the level histogram against the quantized-Gaussian(rms=2.5) distribution (and that the
+// -8 sentinel never occurs). Throws on failure. Since seeding is from std::random_device, this
+// checks the distribution statistically, not exact bytes.
+void test_avx2_simulate_4bit_noise();
+
+// Timing (dispatched from 'python -m pirate_frb time --sim'): reports avx2_simulate_4bit_noise()
+// throughput for 1 thread and for 'nthreads' threads (as total and per-thread).
+void time_avx2_simulate_4bit_noise(long nthreads);
+
+
 }  // namespace pirate
 
 #endif  // _PIRATE_AVX2_UTILS_HPP
