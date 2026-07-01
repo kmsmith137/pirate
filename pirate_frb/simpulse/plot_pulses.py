@@ -110,8 +110,56 @@ def plot3(plt, matplotlib):
               filename='plot3.png')
 
 
+def plot4(plt, matplotlib):
+    """Two channelizations of the same dispersed + scattered pulse, as waterfalls (32 channels x
+    time): channels even in freq (the freq^-2 dispersion sweep -> a CURVED track) vs even in
+    freq^-2 (== even in dispersion delay -> a STRAIGHT track). Low-freq channels show the longer
+    scattering tails (sm = 0.1 ms at 1 GHz)."""
+    freq_lo, freq_hi = 400.0, 800.0
+    time_sample_ms = 1.0
+    dm, sm, width = 2.0, 0.1, 0.5e-3    # DM=2, SM=0.1 ms at 1 GHz, pulse width 0.5 ms
+    nchan = 32
+
+    # Frame the pulse near t=0 on the zero-based grid (shared by both panels).
+    d_hi = simpulse.dispersion_delay(dm, freq_hi)
+    d_lo = simpulse.dispersion_delay(dm, freq_lo)
+    lead = 0.1*(d_lo - d_hi) + 4.0*width + simpulse.scattering_time(sm, freq_hi) + 2.0*time_sample_ms*1e-3
+    uat = -d_hi + lead
+
+    edges_top = np.linspace(freq_lo, freq_hi, nchan + 1)                    # even in freq
+    edges_bot = np.linspace(freq_lo**-2, freq_hi**-2, nchan + 1) ** -0.5    # even in freq^-2 (ordered low->high freq)
+
+    def make(edges):
+        return simpulse.SinglePulse(pulse_nt=1024, time_sample_ms=time_sample_ms, freq_edges_MHz=edges,
+                                    dm=dm, sm=sm, intrinsic_width=width, fluence=1.0,
+                                    spectral_index=0.0, undispersed_arrival_time=uat)
+
+    sp_top, sp_bot = make(edges_top), make(edges_bot)
+    out_nt = max(sp_top.nt_min, sp_bot.nt_min)
+
+    def waterfall(sp):
+        a = np.zeros((sp.nfreq, out_nt), dtype=np.float32)
+        sp.add_to_timestream(a)
+        return a
+
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+    for (ax, sp, title) in [(axes[0], sp_top, 'top: 32 channels even in freq'),
+                            (axes[1], sp_bot, r'bottom: 32 channels even in freq$^{-2}$')]:
+        im = ax.imshow(waterfall(sp), origin='lower', aspect='auto', interpolation='nearest',
+                       extent=[0, out_nt*time_sample_ms, 0, nchan], cmap='inferno')
+        ax.set_ylabel('channel (low -> high freq)')
+        ax.set_title(title)
+        fig.colorbar(im, ax=ax, label='intensity')
+    axes[1].set_xlabel('time (ms)')
+    fig.suptitle('DM=2, SM=0.1 ms@1GHz, width=0.5 ms, 400-800 MHz, dt=1 ms')
+    fig.tight_layout()
+    fig.savefig('plot4.png')
+    plt.close(fig)
+    print('wrote plot4.png')
+
+
 def make_plots():
-    """Generate plot1.png, plot2.png, plot3.png in the current directory."""
+    """Generate plot1.png, plot2.png, plot3.png, plot4.png in the current directory."""
     import matplotlib
     matplotlib.use('Agg')   # 'Agg' enables silent output to file
     import matplotlib.pyplot as plt
@@ -119,3 +167,4 @@ def make_plots():
     plot1(plt, matplotlib)
     plot2(plt, matplotlib)
     plot3(plt, matplotlib)
+    plot4(plt, matplotlib)
