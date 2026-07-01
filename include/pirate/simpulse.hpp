@@ -37,17 +37,24 @@ extern double scattering_time(double sm, double freq_MHz);
 
 
 struct SinglePulse {
-    long    pulse_nt;          // number of samples used "under the hood" to represent the pulse (1024 is a good default)
-    long    nfreq;             // number of frequency channels, assumed equally spaced
-    double  freq_lo_MHz;       // lower limit of frequency band
-    double  freq_hi_MHz;       // upper limit of frequency band
+    // Constructor arguments, bundled into a Params struct (see the constructor below).
+    struct Params
+    {
+        long   pulse_nt = 1024;                 // "under the hood" samples (power of two; 1024 is a good default)
+        long   nfreq = 0;                       // number of frequency channels (assumed equally spaced)
+        double freq_lo_MHz = 0.0;               // lower limit of frequency band
+        double freq_hi_MHz = 0.0;               // upper limit of frequency band
+        double dm = 0.0;                        // dispersion measure in standard units (pc cm^{-3})
+        double sm = 0.0;                        // scattering measure: scattering time in milliseconds (not seconds) at 1 GHz
+        double intrinsic_width = 0.0;           // frequency-independent Gaussian width in seconds
+        double fluence = 1.0;                   // integrated flux (units: whatever add_to_timestream() outputs, times seconds)
+        double spectral_index = 0.0;            // exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha
+        double undispersed_arrival_time = 0.0;  // arrival time at nu=infty, in seconds relative to an arbitrary origin
+    };
 
-    double  dm;                       // dispersion measure in its standard units (pc cm^{-3})
-    double  sm;                       // scattering measure: scattering time in milliseconds at 1 GHz
-    double  intrinsic_width;          // frequency-independent Gaussian width in seconds
-    double  fluence;                  // F(nu_0) = int I(t) dt evaluated at central frequency
-    double  spectral_index;           // F(nu) = F(nu_0) (nu/nu_0)^alpha
-    double  undispersed_arrival_time; // arrival time at nu=infty, in seconds relative to an arbitrary origin
+    // Construction parameters, immutable after construction. Public so callers can read them;
+    // also exposed to python as read-only attributes (SinglePulse.pulse_nt, .nfreq, .dm, ...).
+    const Params params;
 
     // Under-the-hood representation of the pulse (not normally needed from outside).
     // All "internal" times are relative to undispersed_arrival_time.
@@ -59,22 +66,7 @@ struct SinglePulse {
     double max_t1;                      // maximum of all pulse_t1 values
     double max_dt;                      // maximum of all (pulse_t1 - pulse_t0) values
 
-    // Constructor arguments:
-    //   pulse_nt = number of "under the hood" samples (suggest power of two; 1024 is usually a good choice).
-    //   nfreq, freq_lo_MHz, freq_hi_MHz = specification of frequency channels (assumed equally spaced).
-    //   dm = dispersion measure in standard units (pc cm^{-3}).
-    //   sm = scattering measure (scattering time in milliseconds, not seconds, at 1 GHz).
-    //   intrinsic_width = frequency-independent Gaussian width in seconds.
-    //   fluence = integrated flux (units: whatever the output of add_to_timestream() has, times seconds).
-    //   spectral_index = exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.
-    //   undispersed_arrival_time = arrival time as freq->infty, in seconds relative to an arbitrary origin.
-    SinglePulse(long pulse_nt, long nfreq, double freq_lo_MHz, double freq_hi_MHz,
-                double dm, double sm, double intrinsic_width, double fluence,
-                double spectral_index, double undispersed_arrival_time);
-
-    void set_fluence(double fluence);
-    void set_spectral_index(double spectral_index);
-    void set_undispersed_arrival_time(double undispersed_arrival_time);
+    SinglePulse(const Params &params);
 
     // Returns the earliest and latest arrival times in the band [freq_lo_MHz, freq_hi_MHz].
     // (Both are larger than undispersed_arrival_time, unless the intrinsic width is very large.)

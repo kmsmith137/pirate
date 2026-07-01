@@ -85,25 +85,28 @@ template<typename T>
 static void add_pulse_to_frequency_channel(const SinglePulse &sp, T *out, double out_t0, double out_t1,
                                            long out_nt, long ifreq, double weight)
 {
+    const long pulse_nt = sp.params.pulse_nt;
+    const double undispersed_arrival_time = sp.params.undispersed_arrival_time;
+
     xassert(out != nullptr);
     xassert(out_nt > 0);
     xassert(out_t0 < out_t1);
-    xassert((ifreq >= 0) && (ifreq < sp.nfreq));
+    xassert((ifreq >= 0) && (ifreq < sp.params.nfreq));
 
     // Convert input times to "sample coords".
-    double s0 = sp.pulse_nt * (out_t0 - sp.undispersed_arrival_time - sp.pulse_t0[ifreq]) / (sp.pulse_t1[ifreq] - sp.pulse_t0[ifreq]);
-    double s1 = sp.pulse_nt * (out_t1 - sp.undispersed_arrival_time - sp.pulse_t0[ifreq]) / (sp.pulse_t1[ifreq] - sp.pulse_t0[ifreq]);
+    double s0 = pulse_nt * (out_t0 - undispersed_arrival_time - sp.pulse_t0[ifreq]) / (sp.pulse_t1[ifreq] - sp.pulse_t0[ifreq]);
+    double s1 = pulse_nt * (out_t1 - undispersed_arrival_time - sp.pulse_t0[ifreq]) / (sp.pulse_t1[ifreq] - sp.pulse_t0[ifreq]);
 
-    if ((s0 >= sp.pulse_nt) || (s1 <= 0))
+    if ((s0 >= pulse_nt) || (s1 <= 0))
         return;
 
     double out_dt = (out_t1 - out_t0) / out_nt;
-    double w = weight * sp.fluence * sp.pulse_freq_wt[ifreq] / out_dt;
-    const double *cs = &sp.pulse_cumsum[ifreq * (sp.pulse_nt+1)];
+    double w = weight * sp.params.fluence * sp.pulse_freq_wt[ifreq] / out_dt;
+    const double *cs = &sp.pulse_cumsum[ifreq * (pulse_nt+1)];
 
     for (long it = 0; it < out_nt; it++) {
-        double a = interpolate_cumsum(sp.pulse_nt, cs, s0 + (it)   * (s1-s0) / (double)out_nt);
-        double b = interpolate_cumsum(sp.pulse_nt, cs, s0 + (it+1) * (s1-s0) / (double)out_nt);
+        double a = interpolate_cumsum(pulse_nt, cs, s0 + (it)   * (s1-s0) / (double)out_nt);
+        double b = interpolate_cumsum(pulse_nt, cs, s0 + (it+1) * (s1-s0) / (double)out_nt);
         out[it] += w * (b - a);
     }
 }
@@ -114,13 +117,15 @@ static void add_pulse_to_frequency_channel(const SinglePulse &sp, T *out, double
 static void get_pulse_n_samples(const SinglePulse &sp, long *sparse_i0, long *sparse_n,
                                 double out_t0, double out_t1, long out_nt, long ifreq)
 {
+    const double undispersed_arrival_time = sp.params.undispersed_arrival_time;
+
     xassert(out_nt > 0);
     xassert(out_t0 < out_t1);
-    xassert((ifreq >= 0) && (ifreq < sp.nfreq));
+    xassert((ifreq >= 0) && (ifreq < sp.params.nfreq));
 
     double out_dt = (out_t1 - out_t0) / out_nt;
-    double pulse_t0 = sp.undispersed_arrival_time + sp.pulse_t0[ifreq];
-    double pulse_t1 = sp.undispersed_arrival_time + sp.pulse_t1[ifreq];
+    double pulse_t0 = undispersed_arrival_time + sp.pulse_t0[ifreq];
+    double pulse_t1 = undispersed_arrival_time + sp.pulse_t1[ifreq];
 
     if ((pulse_t0 > out_t1) || (pulse_t1 < out_t0)) {
         *sparse_i0 = 0;
@@ -151,7 +156,7 @@ static void add_pulse_to_frequency_channel_sparse(const SinglePulse &sp, T *out,
     xassert(out != nullptr);
     xassert(out_nt > 0);
     xassert(out_t0 < out_t1);
-    xassert((ifreq >= 0) && (ifreq < sp.nfreq));
+    xassert((ifreq >= 0) && (ifreq < sp.params.nfreq));
 
     double out_dt = (out_t1 - out_t0) / out_nt;
     get_pulse_n_samples(sp, sparse_i0, sparse_n, out_t0, out_t1, out_nt, ifreq);
@@ -169,13 +174,20 @@ static void add_pulse_to_frequency_channel_sparse(const SinglePulse &sp, T *out,
 // SinglePulse: constructor + methods.
 
 
-SinglePulse::SinglePulse(long pulse_nt_, long nfreq_, double freq_lo_MHz_, double freq_hi_MHz_,
-                         double dm_, double sm_, double intrinsic_width_, double fluence_,
-                         double spectral_index_, double undispersed_arrival_time_)
-    : pulse_nt(pulse_nt_), nfreq(nfreq_), freq_lo_MHz(freq_lo_MHz_), freq_hi_MHz(freq_hi_MHz_),
-      dm(dm_), sm(sm_), intrinsic_width(intrinsic_width_), fluence(fluence_),
-      spectral_index(spectral_index_), undispersed_arrival_time(undispersed_arrival_time_)
+SinglePulse::SinglePulse(const Params &params)
+    : params(params)
 {
+    // Local aliases (read-only) for the construction params used below, so the synthesis math
+    // reads cleanly. The 'params' member holds the authoritative copy.
+    const long pulse_nt = params.pulse_nt;
+    const long nfreq = params.nfreq;
+    const double freq_lo_MHz = params.freq_lo_MHz;
+    const double freq_hi_MHz = params.freq_hi_MHz;
+    const double dm = params.dm;
+    const double sm = params.sm;
+    const double intrinsic_width = params.intrinsic_width;
+    const double fluence = params.fluence;
+
     xassert(pulse_nt >= 64);   // using fewer time samples than this is probably a mistake
     xassert(nfreq > 0);
     xassert(freq_lo_MHz > 0.0);
@@ -278,6 +290,11 @@ SinglePulse::SinglePulse(long pulse_nt_, long nfreq_, double freq_lo_MHz_, doubl
 
 void SinglePulse::_compute_freq_wt()
 {
+    const double spectral_index = params.spectral_index;
+    const double freq_lo_MHz = params.freq_lo_MHz;
+    const double freq_hi_MHz = params.freq_hi_MHz;
+    const long nfreq = params.nfreq;
+
     // Disallow 'extreme' spectral_index values (pow() can blow up).
     xassert((spectral_index >= -20.1) && (spectral_index <= 20.1));
 
@@ -290,35 +307,18 @@ void SinglePulse::_compute_freq_wt()
 }
 
 
-void SinglePulse::set_fluence(double fluence_)
-{
-    xassert(fluence_ >= 0.0);
-    this->fluence = fluence_;
-}
-
-
-void SinglePulse::set_spectral_index(double spectral_index_)
-{
-    this->spectral_index = spectral_index_;
-    this->_compute_freq_wt();
-}
-
-
-void SinglePulse::set_undispersed_arrival_time(double undispersed_arrival_time_)
-{
-    this->undispersed_arrival_time = undispersed_arrival_time_;
-}
-
-
 void SinglePulse::get_endpoints(double &t0, double &t1) const
 {
-    t0 = this->undispersed_arrival_time + this->min_t0;
-    t1 = this->undispersed_arrival_time + this->max_t1;
+    t0 = params.undispersed_arrival_time + min_t0;
+    t1 = params.undispersed_arrival_time + max_t1;
 }
 
 
 void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double out_t0, double out_t1, double weight) const
 {
+    const long nfreq = params.nfreq;
+    const double undispersed_arrival_time = params.undispersed_arrival_time;
+
     xassert(out.ndim == 2);
     xassert(out.shape[0] == nfreq);
     xassert(out.shape[1] > 0);
@@ -341,6 +341,9 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double out_t0, dou
 
 long SinglePulse::get_n_sparse(double out_t0, double out_t1, long out_nt) const
 {
+    const long nfreq = params.nfreq;
+    const double undispersed_arrival_time = params.undispersed_arrival_time;
+
     xassert(out_nt > 0);
     xassert(out_t0 < out_t1);
 
@@ -363,6 +366,9 @@ void SinglePulse::add_to_timestream_sparse(ksgpu::Array<float> &out, ksgpu::Arra
                                            ksgpu::Array<long> &out_n, double out_t0, double out_t1,
                                            long out_nt, double weight) const
 {
+    const long nfreq = params.nfreq;
+    const double undispersed_arrival_time = params.undispersed_arrival_time;
+
     xassert(out.ndim == 1);
     xassert(out.is_fully_contiguous());
     xassert((out_i0.ndim == 1) && (out_i0.shape[0] == nfreq) && out_i0.is_fully_contiguous());
@@ -400,6 +406,9 @@ void SinglePulse::add_to_timestream_sparse(ksgpu::Array<float> &out, ksgpu::Arra
 
 double SinglePulse::get_signal_to_noise(double sample_dt, double sample_rms, double sample_t0) const
 {
+    const long nfreq = params.nfreq;
+    const double undispersed_arrival_time = params.undispersed_arrival_time;
+
     xassert(sample_dt > 0.0);
     xassert(sample_rms > 0.0);
 
@@ -431,6 +440,9 @@ double SinglePulse::get_signal_to_noise(double sample_dt, double sample_rms, dou
 double SinglePulse::get_signal_to_noise(double sample_dt, const ksgpu::Array<double> &sample_rms,
                                         const ksgpu::Array<double> &channel_weights, double sample_t0) const
 {
+    const long nfreq = params.nfreq;
+    const double undispersed_arrival_time = params.undispersed_arrival_time;
+
     xassert(sample_dt > 0.0);
     xassert((sample_rms.ndim == 1) && (sample_rms.shape[0] == nfreq) && sample_rms.is_fully_contiguous());
 
@@ -493,11 +505,11 @@ double SinglePulse::get_signal_to_noise(double sample_dt, const ksgpu::Array<dou
 
 void SinglePulse::print(ostream &os) const
 {
-    os << "SinglePulse(pulse_nt=" << pulse_nt << ",nfreq=" << nfreq
-       << ",freq_lo_MHz=" << freq_lo_MHz << ",freq_hi_MHz=" << freq_hi_MHz
-       << ",dm=" << dm << ",sm=" << sm << ",intrinsic_width=" << intrinsic_width
-       << ",fluence=" << fluence << ",spectral_index=" << spectral_index
-       << ",undispersed_arrival_time=" << undispersed_arrival_time << ")";
+    os << "SinglePulse(pulse_nt=" << params.pulse_nt << ",nfreq=" << params.nfreq
+       << ",freq_lo_MHz=" << params.freq_lo_MHz << ",freq_hi_MHz=" << params.freq_hi_MHz
+       << ",dm=" << params.dm << ",sm=" << params.sm << ",intrinsic_width=" << params.intrinsic_width
+       << ",fluence=" << params.fluence << ",spectral_index=" << params.spectral_index
+       << ",undispersed_arrival_time=" << params.undispersed_arrival_time << ")";
 }
 
 
