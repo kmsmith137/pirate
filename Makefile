@@ -290,6 +290,7 @@ LIB_SRCFILES = \
   src_lib/RingbufCopyKernel.cu \
   src_lib/TreeGriddingKernel.cu \
   src_lib/YamlFile.cpp \
+  src_lib/avx2_utils.cpp \
   src_lib/file_utils.cpp \
   src_lib/network_utils.cpp \
   src_lib/scratch.cu \
@@ -387,6 +388,7 @@ CUDAGEN_PYFILES = \
 # (Otherwise they won't show up in 'pip install' or pypi.)
 HFILES = \
   include/pirate/AssembledFrame.hpp \
+  include/pirate/avx2_utils.hpp \
   include/pirate/Barrier.hpp \
   include/pirate/BumpAllocator.hpp \
   include/pirate/CasmBeamformer.hpp \
