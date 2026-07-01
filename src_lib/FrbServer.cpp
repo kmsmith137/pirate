@@ -1,4 +1,5 @@
 #include "../include/pirate/FrbServer.hpp"
+#include "../include/pirate/BumpAllocator.hpp"    // gpu_allocator / host_allocator (complete type)
 #include "../include/pirate/FileWriter.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
 #include "../include/pirate/Dedisperser.hpp"        // GpuDedisperser

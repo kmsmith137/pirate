@@ -31,6 +31,7 @@ namespace pirate {
 #endif
 
 
+struct BumpAllocator;     // BumpAllocator.hpp (only shared_ptr<> members here)
 struct FileWriter;        // FileWriter.hpp
 struct DedispersionPlan;  // DedispersionPlan.hpp
 struct GpuDedisperser;    // Dedisperser.hpp

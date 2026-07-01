@@ -23,6 +23,7 @@
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Barrier.hpp"
 #include "../include/pirate/AssembledFrame.hpp"
+#include "../include/pirate/XEngineMetadata.hpp"   // XEngineMetadata::make_fiducial()
 
 
 namespace fs = std::filesystem;
