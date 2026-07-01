@@ -595,63 +595,22 @@ class SinglePulseInjections:
     # No class docstring here: SinglePulse's docstring lives in the pybind11 binding
     # (option 1 in notes/docstrings.md).
 
-    def get_sparse(self, out_t0, out_t1, out_nt, weight=1.0):
+    def get_signal_to_noise(self, sample_rms=1.0, channel_weights=None):
         """
-        Returns a sparse representation of the pulse, as a tuple ``(i0, n, data)``.
-
-        ``i0`` and ``n`` are length-nfreq int64 arrays (channel i's samples start at dense time
-        index ``i0[i]``, and there are ``n[i]`` of them); ``data`` is a float32 array of length
-        ``sum(n)`` holding the packed per-channel samples, in low-to-high frequency order.
-
-        Parameters
-        ----------
-        out_t0 : float
-            Start time of the dense output region (seconds).
-        out_t1 : float
-            End time of the dense output region (seconds).
-        out_nt : int
-            Number of samples in the dense output region.
-        weight : float
-            Scaling factor for the pulse amplitude (default 1).
-
-        Returns
-        -------
-        tuple
-            ``(i0, n, data)``: int64, int64, and float32 arrays.
-        """
-        nsparse = self.get_n_sparse(out_t0, out_t1, out_nt)
-        data = np.zeros(nsparse, dtype=np.float32)
-        i0 = np.zeros(self.nfreq, dtype=np.int64)
-        n = np.zeros(self.nfreq, dtype=np.int64)
-        # Skip the C++ call if the pulse doesn't overlap the window (nsparse == 0): the all-zero
-        # i0/n and empty data are already correct, and ksgpu's array converter rejects a
-        # zero-length numpy array (Array::check_invariants(): data != nullptr with size 0).
-        if nsparse > 0:
-            self.add_to_timestream_sparse(data, i0, n, out_t0, out_t1, out_nt, weight)
-        return (i0, n, data)
-
-    def get_signal_to_noise(self, sample_dt, sample_rms=1.0, channel_weights=None, sample_t0=0.0):
-        """
-        Total signal-to-noise over all frequency channels and time samples combined.
-
-        The signal-to-noise of a sampled pulse depends on ``sample_dt`` (the sample length in
-        seconds), and weakly on ``sample_t0`` (the start time of an arbitrarily chosen sample).
+        Total signal-to-noise over all frequency channels and time samples combined, computed from
+        the precomputed samples on the construction-time grid.
 
         ``sample_rms`` is the per-sample RMS noise: either a scalar (all channels equal) or a
         length-nfreq array. ``channel_weights`` is the channel weighting: a scalar, a length-nfreq
-        array, or None. If ``channel_weights`` is None, then ``1/sample_rms^2`` weighting is
-        assumed (NOT uniform weighting).
+        array, or None. If ``channel_weights`` is None, then ``1/sample_rms^2`` weighting is assumed
+        (NOT uniform weighting).
 
         Parameters
         ----------
-        sample_dt : float
-            Sample length in seconds.
         sample_rms : float or array
             Per-sample RMS noise (scalar, or length-nfreq array).
         channel_weights : float, array, or None
             Channel weighting (scalar, length-nfreq array, or None -> ``1/sample_rms^2``).
-        sample_t0 : float
-            Start time of an arbitrarily chosen sample (seconds).
 
         Returns
         -------
@@ -664,15 +623,14 @@ class SinglePulseInjections:
 
         # Case 1: scalar rms + scalar/None weights -> scalar overload.
         if (sample_rms.ndim == 0) and ((cw is None) or (cw.ndim == 0)):
-            return self._get_signal_to_noise_scalar(sample_dt, float(sample_rms), sample_t0)
+            return self._get_signal_to_noise_scalar(float(sample_rms))
 
         # Vector path: broadcast a scalar rms (or scalar channel_weights) to length nfreq.
-        # Note: .astype() forces a WRITEABLE contiguous copy. ksgpu's array converter rejects
-        # read-only arrays (np.broadcast_to returns a read-only view; np.ascontiguousarray would
-        # keep it read-only), see ksgpu convert_array_from_python().
+        # .astype() forces a WRITEABLE contiguous copy (ksgpu's converter rejects read-only arrays;
+        # np.broadcast_to returns a read-only view). See ksgpu convert_array_from_python().
         rms = np.broadcast_to(sample_rms, (nfreq,)).astype(np.float64, order='C')
         if cw is not None:
             cw = np.broadcast_to(cw, (nfreq,)).astype(np.float64, order='C')
 
         # 'cw' is now either None (C++ uses the 1/rms^2 default) or a length-nfreq float64 array.
-        return self._get_signal_to_noise_vector(sample_dt, rms, cw, sample_t0)
+        return self._get_signal_to_noise_vector(rms, cw)

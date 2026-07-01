@@ -2,9 +2,13 @@
 test_pulse_upsampling: checks that the pulse simulation is (approximately) invariant under
 upsampling in frequency and/or time. Ported from simpulse/test_pulse_upsampling.py.
 
-The test is APPROXIMATE and is not expected to pass to machine precision. It PRINTS the
-correlation coefficient and residual for the operator to interpret; it does not raise.
-Run it via 'python -m pirate_frb test_simpulse'.
+Time sampling is now a construction parameter (time_sample_ms), and the grid is zero-based, so a
+time-upsampled pulse is one built with a smaller time_sample_ms (= coarse / nupsample). The pulse
+is framed near t=0 (via undispersed_arrival_time) so the zero-based dense arrays stay compact.
+
+The test is APPROXIMATE and is not expected to pass to machine precision. It PRINTS the correlation
+coefficient and residual for the operator to interpret; it does not raise. Run it via
+'python -m pirate_frb test_simpulse'.
 """
 
 import numpy as np
@@ -56,24 +60,15 @@ class upsampling_test_instance:
         self.intrinsic_width = log_uniform(0.01, 10.0) * self.tsamp
         self.fluence = np.random.uniform(1.0, 2.0)
         self.spectral_index = np.random.uniform(-1.0, 1.0)
-        self.undispersed_arrival_time = np.random.uniform(0.0, 1000.0 * self.tsamp)
 
-        t0 = simpulse.dispersion_delay(self.dm, self.freq_hi_MHz)
-        t1 = simpulse.dispersion_delay(self.dm, self.freq_lo_MHz + (self.freq_hi_MHz - self.freq_lo_MHz) / self.nfreq)
-        t2 = simpulse.dispersion_delay(self.dm, self.freq_lo_MHz)
-
-        dt_s = 2.0 * self.tsamp
-        dt_d = 2.0 * (t2 - t1)
-        dt_i = 5.0 * self.intrinsic_width
-        dt_sc = 10.0 * simpulse.scattering_time(self.sm, self.freq_lo_MHz)
-
-        self.pulse_t0 = self.undispersed_arrival_time + t0 - dt_s - dt_d - dt_i
-        self.pulse_t1 = self.undispersed_arrival_time + t2 + dt_s + dt_d + dt_i + dt_sc
-        self.conservative_pulse_width = dt_s + dt_d + dt_i + dt_sc
-
-        self.out_t0 = self.pulse_t0 + np.random.uniform(0.0, 100.0 * self.tsamp)
-        self.out_nt = int((self.pulse_t1 - self.out_t0) / self.tsamp) + np.random.randint(1, 100)
-        self.out_t1 = self.out_t0 + self.out_nt * self.tsamp
+        # Frame the pulse near t=0 on the zero-based grid: choose undispersed_arrival_time so the
+        # earliest (highest-frequency) channel's pulse starts just after t=0. (Uses the same
+        # conservative leading-margin estimate as the original code's window placement.)
+        d0 = simpulse.dispersion_delay(self.dm, self.freq_hi_MHz)
+        d1 = simpulse.dispersion_delay(self.dm, self.freq_lo_MHz + (self.freq_hi_MHz - self.freq_lo_MHz) / self.nfreq)
+        d2 = simpulse.dispersion_delay(self.dm, self.freq_lo_MHz)
+        lead = 2.0*self.tsamp + 2.0*(d2 - d1) + 5.0*self.intrinsic_width   # dt_s + dt_d + dt_i
+        self.undispersed_arrival_time = -d0 + lead
 
         # Non-uniform (but not-too-irregular) coarse channel edges spanning [freq_lo, freq_hi], to
         # exercise the unequal-width code path. Channel widths stay within [0.2, 1.8] x the uniform
@@ -86,8 +81,7 @@ class upsampling_test_instance:
     def __repr__(self):
         keys = ['nfreq', 'freq_lo_MHz', 'freq_hi_MHz', 'tsamp', 'diagonal_dm',
                 'sm0', 'dm', 'sm', 'intrinsic_width', 'fluence', 'spectral_index',
-                'undispersed_arrival_time', 'pulse_t0', 'pulse_t1',
-                'conservative_pulse_width', 'out_t0', 'out_t1', 'out_nt']
+                'undispersed_arrival_time']
 
         ret = 'upsampling_test_instance('
         first = True
@@ -112,9 +106,10 @@ class upsampling_test_instance:
         parts.append(edges[-1:])
         return np.concatenate(parts)
 
-    def _make_single_pulse_object(self, freq_edges_MHz):
+    def _make_single_pulse_object(self, freq_edges_MHz, tsamp_sec):
         return simpulse.SinglePulse(
             pulse_nt = 1024,
+            time_sample_ms = 1.0e3 * tsamp_sec,
             freq_edges_MHz = freq_edges_MHz,
             dm = self.dm,
             sm = self.sm,
@@ -125,24 +120,29 @@ class upsampling_test_instance:
         )
 
     def run_test(self, nupfreq, nupsample):
-        # Coarse (non-uniform) channelization; fine = each coarse channel split into nupfreq equal parts.
+        # Coarse (non-uniform) channelization at time_sample = tsamp; the fine pulse subdivides each
+        # coarse channel into nupfreq equal sub-channels AND samples nupsample times finer in time.
         coarse_edges = self.coarse_edges_MHz
         fine_edges = self._upsample_edges(coarse_edges, nupfreq)
 
-        s0 = self._make_single_pulse_object(coarse_edges)
-        s1 = self._make_single_pulse_object(fine_edges) if (nupfreq != 1) else s0
+        s0 = self._make_single_pulse_object(coarse_edges, self.tsamp)
+        s1 = self._make_single_pulse_object(fine_edges, self.tsamp / nupsample)
+
+        # Size the coarse grid to hold both pulses (they share undispersed_arrival_time, so
+        # s1.nt_min ~ nupsample * s0.nt_min up to rounding).
+        out_nt = max(int(s0.nt_min), -(-int(s1.nt_min) // nupsample))
 
         # add_to_timestream() requires float32 output arrays.
-        a0 = np.zeros((self.nfreq, self.out_nt), dtype=np.float32)
-        a1 = np.zeros((self.nfreq * nupfreq, self.out_nt * nupsample), dtype=np.float32)
+        a0 = np.zeros((self.nfreq, out_nt), dtype=np.float32)
+        a1 = np.zeros((self.nfreq * nupfreq, out_nt * nupsample), dtype=np.float32)
 
-        s0.add_to_timestream(a0, self.out_t0, self.out_t1)
-        s1.add_to_timestream(a1, self.out_t0, self.out_t1)
+        s0.add_to_timestream(a0)
+        s1.add_to_timestream(a1)
 
         # Upcast to float64 for the (approximate) correlation diagnostics below. The output arrays
         # are float32; that quantization is the thing being tested, so we keep it in a0/a1.
         a0 = a0.astype(np.float64)
-        a1 = downsample_2d(a1.astype(np.float64), self.nfreq, self.out_nt) / (nupfreq * nupsample)
+        a1 = downsample_2d(a1.astype(np.float64), self.nfreq, out_nt) / (nupfreq * nupsample)
 
         t = np.sum(a0*a0) * np.sum(a1*a1)
         d = np.sum((a0-a1)**2)**0.5 / t**0.25

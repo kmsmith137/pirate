@@ -8,7 +8,6 @@
 // to the pirate conventions: C++17, pybind11, MKL (instead of FFTW), 'long' indices,
 // ksgpu::Array interfaces, and xassert error-checking.
 
-#include <vector>
 #include <string>
 #include <iostream>
 
@@ -33,7 +32,9 @@ extern double scattering_time(double sm, double freq_MHz);
 
 // -------------------------------------------------------------------------------------------------
 //
-// struct SinglePulse: one dispersed, scattered pulse, in a fixed frequency channelization.
+// struct SinglePulse: one dispersed, scattered pulse, on a fixed frequency channelization and a
+// fixed (zero-based) time sampling. The constructor precomputes the pulse as a sparse array of
+// per-channel time samples; add_to_timestream() then scatters it into a dense (nfreq, out_nt) array.
 
 
 struct SinglePulse {
@@ -41,6 +42,7 @@ struct SinglePulse {
     struct Params
     {
         long   pulse_nt = 1024;                 // "under the hood" samples (power of two; 1024 is a good default)
+        double time_sample_ms = 0.0;            // time-sample duration in ms; REQUIRED (dt = 1e-3*time_sample_ms sec, must be > 0)
 
         // Sorted (strictly increasing) array of length (nfreq+1). The i-th frequency channel spans
         // frequency range [freq_edges_MHz[i], freq_edges_MHz[i+1]]. Channel widths need NOT be equal.
@@ -57,70 +59,42 @@ struct SinglePulse {
     };
 
     // Construction parameters, immutable after construction. Public so callers can read them; also
-    // exposed to python as read-only attributes (SinglePulse.pulse_nt, .dm, ..., .freq_edges_MHz,
-    // plus the derived .nfreq / .freq_lo_MHz / .freq_hi_MHz).
+    // exposed to python as read-only attributes (SinglePulse.pulse_nt, .time_sample_ms, .dm, ...,
+    // .freq_edges_MHz, plus the derived .nfreq / .freq_lo_MHz / .freq_hi_MHz).
     const Params params;
 
-    // Under-the-hood representation of the pulse (not normally needed from outside).
-    // All "internal" times are relative to undispersed_arrival_time.
-    std::vector<double> pulse_t0;       // (nfreq,) start time of pulse in i-th channel
-    std::vector<double> pulse_t1;       // (nfreq,) end time of pulse in i-th channel
-    std::vector<double> pulse_freq_wt;  // (nfreq,) per-channel weight from spectral index
-    std::vector<double> pulse_cumsum;   // (nfreq, pulse_nt+1) cumulative sum of pulse, normalized to sum=1
-    double min_t0;                      // minimum of all pulse_t0 values
-    double max_t1;                      // maximum of all pulse_t1 values
-    double max_dt;                      // maximum of all (pulse_t1 - pulse_t0) values
+    // Precomputed SPARSE representation of the pulse, on the zero-based time grid where sample 'it'
+    // (0 <= it) spans [it*dt, (it+1)*dt] seconds, dt = 1e-3*time_sample_ms. Computed in the ctor.
+    // Frequencies are ordered LOW to HIGH. (Also exposed to python, read-only.)
+    ksgpu::Array<long>  sparse_i0;      // (nfreq,) first dense-grid sample index of channel i's pulse
+    ksgpu::Array<long>  sparse_n;       // (nfreq,) number of samples of channel i's pulse
+    ksgpu::Array<long>  sparse_offset;  // (nfreq,) offset into sparse_data (= sum_{j<i} sparse_n[j])
+    ksgpu::Array<float> sparse_data;    // (sum(sparse_n),) packed samples; fluence + spectral weight baked in
+    long nt_min;                        // = max_i (sparse_i0[i] + sparse_n[i]); smallest out_nt with no clipping
 
     SinglePulse(const Params &params);
 
-    // Returns the earliest and latest arrival times in the band [freq_lo_MHz, freq_hi_MHz].
-    // (Both are larger than undispersed_arrival_time, unless the intrinsic width is very large.)
-    void get_endpoints(double &t0, double &t1) const;
-
-    // Adds the pulse to a "block" of (frequency, time) samples (sometimes called incrementally,
-    // as a stream of blocks is generated). 'out' is a 2-d array with shape (nfreq, out_nt), and
-    // 'out_t0'/'out_t1' are the endpoints of the sampled region (seconds, same origin as
-    // undispersed_arrival_time). Time samples must be contiguous (out.strides[1] == 1).
+    // Adds the pulse to a "block" of (frequency, time) samples 'out', a 2-d float32 array of shape
+    // (nfreq, out_nt), scaled by 'weight'. The grid is zero-based (sample 'it' spans
+    // [it*dt, (it+1)*dt] seconds); samples at index >= out_nt are clipped (use out_nt >= nt_min for
+    // no clipping). Time samples must be contiguous (out.strides[1] == 1).
     //
-    // Frequencies are ordered LOW to HIGH (pulse channel i -> row i). NOTE: this is the opposite
-    // of the ordering used in bonsai/rf_pipelines (and pirate intensity arrays), which is high to
-    // low. The original simpulse offered a 'freq_hi_to_lo' option, implemented with a NEGATIVE row
-    // stride; ksgpu::Array forbids negative strides (Array::check_invariants() asserts strides>=0),
-    // so we drop that option. A caller wanting high-to-low ordering must reverse the frequency axis
-    // itself (e.g. add into a temporary, then copy reversed).
-    void add_to_timestream(ksgpu::Array<float> &out, double out_t0, double out_t1,
-                           double weight = 1.0) const;
+    // Frequencies are ordered LOW to HIGH (pulse channel i -> row i). NOTE: this is the opposite of
+    // bonsai/rf_pipelines (and pirate intensity arrays), which is high to low; a caller targeting
+    // those must reverse the frequency axis itself.
+    void add_to_timestream(ksgpu::Array<float> &out, double weight = 1.0) const;
 
-    // Returns the total number of samples needed to represent this pulse in sparse form (summed
-    // over all frequency channels). Use this to size the 'out' array for add_to_timestream_sparse().
-    long get_n_sparse(double out_t0, double out_t1, long out_nt) const;
-
-    // Sparse version of add_to_timestream():
-    //   - 'out': 1-d, length >= get_n_sparse(). Per-channel samples are packed in order (low->high freq).
-    //   - 'out_i0': length nfreq. Channel i's samples start at dense time index out_i0[i].
-    //   - 'out_n': length nfreq. Channel i has out_n[i] samples; its packed data starts at sum(out_n[:i]).
-    void add_to_timestream_sparse(ksgpu::Array<float> &out, ksgpu::Array<long> &out_i0,
-                                  ksgpu::Array<long> &out_n, double out_t0, double out_t1,
-                                  long out_nt, double weight = 1.0) const;
-
-    // Returns total signal-to-noise over all frequency channels and time samples combined.
-    // Depends on 'sample_dt' (sample length in seconds) and weakly on 'sample_t0' (start time of
-    // an arbitrarily chosen sample).
-    double get_signal_to_noise(double sample_dt, double sample_rms = 1.0,
-                               double sample_t0 = 0.0) const;
-
-    // Vector version: 'sample_rms' and 'channel_weights' are length-nfreq arrays. If
-    // 'channel_weights' is empty (the default), then 1/sample_rms^2 weighting is assumed.
-    double get_signal_to_noise(double sample_dt, const ksgpu::Array<double> &sample_rms,
-                               const ksgpu::Array<double> &channel_weights = ksgpu::Array<double>(),
-                               double sample_t0 = 0.0) const;
+    // Returns total signal-to-noise over all frequency channels and time samples combined, computed
+    // from the precomputed samples on the construction-time grid. 'sample_rms' is the per-sample RMS
+    // noise (scalar overload) or a length-nfreq array (vector overload). For the vector overload, if
+    // 'channel_weights' is empty (the default), 1/sample_rms^2 weighting is assumed.
+    double get_signal_to_noise(double sample_rms = 1.0) const;
+    double get_signal_to_noise(const ksgpu::Array<double> &sample_rms,
+                               const ksgpu::Array<double> &channel_weights = ksgpu::Array<double>()) const;
 
     // String representation.
     void print(std::ostream &os) const;
     std::string str() const;
-
-    // Internal helper (recomputes pulse_freq_wt from spectral_index).
-    void _compute_freq_wt();
 
     // We make SinglePulse noncopyable, even though the default copy constructor is a sensible
     // "deep" copy, to catch performance bugs (a deep copy is probably unintentional).
