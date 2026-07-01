@@ -41,9 +41,13 @@ struct SinglePulse {
     struct Params
     {
         long   pulse_nt = 1024;                 // "under the hood" samples (power of two; 1024 is a good default)
-        long   nfreq = 0;                       // number of frequency channels (assumed equally spaced)
-        double freq_lo_MHz = 0.0;               // lower limit of frequency band
-        double freq_hi_MHz = 0.0;               // upper limit of frequency band
+
+        // Sorted (strictly increasing) array of length (nfreq+1). The i-th frequency channel spans
+        // frequency range [freq_edges_MHz[i], freq_edges_MHz[i+1]]. Channel widths need NOT be equal.
+        // So nfreq = freq_edges_MHz.size - 1, freq_lo_MHz = freq_edges_MHz[0], and
+        // freq_hi_MHz = freq_edges_MHz[nfreq]. The constructor deep-copies this array.
+        ksgpu::Array<double> freq_edges_MHz;
+
         double dm = 0.0;                        // dispersion measure in standard units (pc cm^{-3})
         double sm = 0.0;                        // scattering measure: scattering time in milliseconds (not seconds) at 1 GHz
         double intrinsic_width = 0.0;           // frequency-independent Gaussian width in seconds
@@ -52,8 +56,9 @@ struct SinglePulse {
         double undispersed_arrival_time = 0.0;  // arrival time at nu=infty, in seconds relative to an arbitrary origin
     };
 
-    // Construction parameters, immutable after construction. Public so callers can read them;
-    // also exposed to python as read-only attributes (SinglePulse.pulse_nt, .nfreq, .dm, ...).
+    // Construction parameters, immutable after construction. Public so callers can read them; also
+    // exposed to python as read-only attributes (SinglePulse.pulse_nt, .dm, ..., .freq_edges_MHz,
+    // plus the derived .nfreq / .freq_lo_MHz / .freq_hi_MHz).
     const Params params;
 
     // Under-the-hood representation of the pulse (not normally needed from outside).
@@ -121,6 +126,12 @@ struct SinglePulse {
     // "deep" copy, to catch performance bugs (a deep copy is probably unintentional).
     SinglePulse(const SinglePulse &) = delete;
     SinglePulse &operator=(const SinglePulse &) = delete;
+
+private:
+    // Validates freq_edges_MHz (1-d, contiguous, length >= 2, positive, strictly increasing) and
+    // returns a copy of 'params' whose freq_edges_MHz is an owned deep copy -- so the stored member
+    // is self-contained (independent of the caller's array). Called from the ctor's init list.
+    static Params _validate(const Params &params);
 };
 
 

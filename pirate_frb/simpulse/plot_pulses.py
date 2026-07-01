@@ -73,7 +73,7 @@ def plot1(plt, matplotlib):
        - low frequency pulse should show scattering
        - no dispersion broadening visible
     """
-    sp = simpulse.SinglePulse(pulse_nt=1024, nfreq=512, freq_lo_MHz=1000.0, freq_hi_MHz=2000.0,
+    sp = simpulse.SinglePulse(pulse_nt=1024, freq_edges_MHz=np.linspace(1000.0, 2000.0, 513),
                               dm=10.0, sm=4.0, intrinsic_width=0.005, fluence=30.0,
                               spectral_index=2.0, undispersed_arrival_time=0.100)
 
@@ -86,7 +86,7 @@ def plot1(plt, matplotlib):
 
 def plot2(plt, matplotlib):
     """Boxcars labeled by time intervals."""
-    sp = simpulse.SinglePulse(pulse_nt=1024, nfreq=7, freq_lo_MHz=1000.0, freq_hi_MHz=2000.0,
+    sp = simpulse.SinglePulse(pulse_nt=1024, freq_edges_MHz=np.linspace(1000.0, 2000.0, 8),
                               dm=10.0, sm=0.0, intrinsic_width=0.0, fluence=1.0,
                               spectral_index=0.0, undispersed_arrival_time=0.100)
 
@@ -102,7 +102,7 @@ def plot3(plt, matplotlib):
     Same as plot1, but with intrinsic_width set to zero (so pulse width is dominated by scattering)
     and spectral_index set to zero.
     """
-    sp = simpulse.SinglePulse(pulse_nt=1024, nfreq=512, freq_lo_MHz=1000.0, freq_hi_MHz=2000.0,
+    sp = simpulse.SinglePulse(pulse_nt=1024, freq_edges_MHz=np.linspace(1000.0, 2000.0, 513),
                               dm=10.0, sm=4.0, intrinsic_width=0.0, fluence=30.0,
                               spectral_index=0.0, undispersed_arrival_time=0.100)
 

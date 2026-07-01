@@ -37,30 +37,29 @@ void register_simpulse_bindings(pybind11::module &m)
     py::class_<SinglePulse>(m, "SinglePulse",
         "One dispersed, scattered FRB pulse, in a fixed frequency channelization.\n"
         "\n"
-        "Frequency channels are equally spaced and ordered LOW to HIGH. (NOTE: bonsai/rf_pipelines\n"
-        "and pirate intensity arrays use the OPPOSITE, high-to-low, ordering.)\n"
+        "Frequency channels are ordered LOW to HIGH and may have UNEQUAL widths (channel i spans\n"
+        "``[freq_edges_MHz[i], freq_edges_MHz[i+1]]``). NOTE: bonsai/rf_pipelines and pirate intensity\n"
+        "arrays use the OPPOSITE, high-to-low, ordering.\n"
         "\n"
-        "Attributes (read-only; these are the construction parameters, fixed after construction):\n"
+        "Attributes (read-only; the construction parameters, fixed after construction):\n"
         "\n"
         "- ``pulse_nt`` (int) -- number of under-the-hood samples representing the pulse.\n"
-        "- ``nfreq`` (int) -- number of frequency channels.\n"
-        "- ``freq_lo_MHz`` (float) -- lower edge of the frequency band.\n"
-        "- ``freq_hi_MHz`` (float) -- upper edge of the frequency band.\n"
+        "- ``freq_edges_MHz`` (array) -- sorted, length (nfreq+1); channel i spans edges[i]..edges[i+1].\n"
         "- ``dm`` (float) -- dispersion measure (pc cm^{-3}).\n"
         "- ``sm`` (float) -- scattering measure (scattering time in ms at 1 GHz).\n"
         "- ``intrinsic_width`` (float) -- frequency-independent Gaussian width in seconds.\n"
         "- ``fluence`` (float) -- integrated flux at the central frequency.\n"
         "- ``spectral_index`` (float) -- exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.\n"
-        "- ``undispersed_arrival_time`` (float) -- arrival time as freq->infty, in seconds.\n")
+        "- ``undispersed_arrival_time`` (float) -- arrival time as freq->infty, in seconds.\n"
+        "\n"
+        "Also derived (read-only): ``nfreq``, ``freq_lo_MHz``, ``freq_hi_MHz`` (from freq_edges_MHz).\n")
 
-        .def(py::init([](long pulse_nt, long nfreq, double freq_lo_MHz, double freq_hi_MHz,
+        .def(py::init([](long pulse_nt, const Array<double> &freq_edges_MHz,
                          double dm, double sm, double intrinsic_width, double fluence,
                          double spectral_index, double undispersed_arrival_time) {
                  SinglePulse::Params p;
                  p.pulse_nt = pulse_nt;
-                 p.nfreq = nfreq;
-                 p.freq_lo_MHz = freq_lo_MHz;
-                 p.freq_hi_MHz = freq_hi_MHz;
+                 p.freq_edges_MHz = freq_edges_MHz;
                  p.dm = dm;
                  p.sm = sm;
                  p.intrinsic_width = intrinsic_width;
@@ -69,21 +68,23 @@ void register_simpulse_bindings(pybind11::module &m)
                  p.undispersed_arrival_time = undispersed_arrival_time;
                  return new SinglePulse(p);
              }),
-             py::arg("pulse_nt"), py::arg("nfreq"), py::arg("freq_lo_MHz"), py::arg("freq_hi_MHz"),
+             py::arg("pulse_nt"), py::arg("freq_edges_MHz"),
              py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"), py::arg("fluence"),
              py::arg("spectral_index"), py::arg("undispersed_arrival_time"))
 
         // Read-only views of the construction parameters (SinglePulse::params).
         .def_property_readonly("pulse_nt", [](const SinglePulse &s) { return s.params.pulse_nt; })
-        .def_property_readonly("nfreq", [](const SinglePulse &s) { return s.params.nfreq; })
-        .def_property_readonly("freq_lo_MHz", [](const SinglePulse &s) { return s.params.freq_lo_MHz; })
-        .def_property_readonly("freq_hi_MHz", [](const SinglePulse &s) { return s.params.freq_hi_MHz; })
+        .def_property_readonly("freq_edges_MHz", [](const SinglePulse &s) { return s.params.freq_edges_MHz; })
         .def_property_readonly("dm", [](const SinglePulse &s) { return s.params.dm; })
         .def_property_readonly("sm", [](const SinglePulse &s) { return s.params.sm; })
         .def_property_readonly("intrinsic_width", [](const SinglePulse &s) { return s.params.intrinsic_width; })
         .def_property_readonly("fluence", [](const SinglePulse &s) { return s.params.fluence; })
         .def_property_readonly("spectral_index", [](const SinglePulse &s) { return s.params.spectral_index; })
         .def_property_readonly("undispersed_arrival_time", [](const SinglePulse &s) { return s.params.undispersed_arrival_time; })
+        // Derived read-only attributes, computed from freq_edges_MHz.
+        .def_property_readonly("nfreq", [](const SinglePulse &s) { return s.params.freq_edges_MHz.size - 1; })
+        .def_property_readonly("freq_lo_MHz", [](const SinglePulse &s) { return s.params.freq_edges_MHz.data[0]; })
+        .def_property_readonly("freq_hi_MHz", [](const SinglePulse &s) { return s.params.freq_edges_MHz.data[s.params.freq_edges_MHz.size - 1]; })
 
         .def("get_endpoints", [](const SinglePulse &self) {
                  double t0, t1;

@@ -91,7 +91,7 @@ static void add_pulse_to_frequency_channel(const SinglePulse &sp, T *out, double
     xassert(out != nullptr);
     xassert(out_nt > 0);
     xassert(out_t0 < out_t1);
-    xassert((ifreq >= 0) && (ifreq < sp.params.nfreq));
+    xassert((ifreq >= 0) && (ifreq < sp.params.freq_edges_MHz.size - 1));
 
     // Convert input times to "sample coords".
     double s0 = pulse_nt * (out_t0 - undispersed_arrival_time - sp.pulse_t0[ifreq]) / (sp.pulse_t1[ifreq] - sp.pulse_t0[ifreq]);
@@ -121,7 +121,7 @@ static void get_pulse_n_samples(const SinglePulse &sp, long *sparse_i0, long *sp
 
     xassert(out_nt > 0);
     xassert(out_t0 < out_t1);
-    xassert((ifreq >= 0) && (ifreq < sp.params.nfreq));
+    xassert((ifreq >= 0) && (ifreq < sp.params.freq_edges_MHz.size - 1));
 
     double out_dt = (out_t1 - out_t0) / out_nt;
     double pulse_t0 = undispersed_arrival_time + sp.pulse_t0[ifreq];
@@ -156,7 +156,7 @@ static void add_pulse_to_frequency_channel_sparse(const SinglePulse &sp, T *out,
     xassert(out != nullptr);
     xassert(out_nt > 0);
     xassert(out_t0 < out_t1);
-    xassert((ifreq >= 0) && (ifreq < sp.params.nfreq));
+    xassert((ifreq >= 0) && (ifreq < sp.params.freq_edges_MHz.size - 1));
 
     double out_dt = (out_t1 - out_t0) / out_nt;
     get_pulse_n_samples(sp, sparse_i0, sparse_n, out_t0, out_t1, out_nt, ifreq);
@@ -174,24 +174,43 @@ static void add_pulse_to_frequency_channel_sparse(const SinglePulse &sp, T *out,
 // SinglePulse: constructor + methods.
 
 
-SinglePulse::SinglePulse(const Params &params)
-    : params(params)
+// Validates freq_edges_MHz and returns a copy of 'params' whose freq_edges_MHz is an owned deep
+// copy, so the constructed pulse is self-contained. (Declared in simpulse.hpp; called from the
+// constructor's member-init list.)
+SinglePulse::Params SinglePulse::_validate(const Params &params)
 {
-    // Local aliases (read-only) for the construction params used below, so the synthesis math
-    // reads cleanly. The 'params' member holds the authoritative copy.
+    xassert(params.freq_edges_MHz.ndim == 1);
+    xassert(params.freq_edges_MHz.is_fully_contiguous());
+
+    long nfreq = params.freq_edges_MHz.size - 1;
+    xassert(nfreq >= 1);   // need at least one frequency channel (i.e. >= 2 edges)
+
+    const double *edges = params.freq_edges_MHz.data;
+    xassert(edges[0] > 0.0);   // lowest frequency edge must be positive (freqs are used as divisors)
+    xassert(is_sorted(std::vector<double>(edges, edges + nfreq + 1)));   // strictly increasing
+
+    Params ret = params;
+    ret.freq_edges_MHz = params.freq_edges_MHz.clone();   // deep copy -> the pulse owns its edges
+    return ret;
+}
+
+
+SinglePulse::SinglePulse(const Params &p)
+    : params(_validate(p))
+{
+    // Local aliases (read-only) for the construction params used below, so the synthesis math reads
+    // cleanly. 'params' is the (validated) member, whose freq_edges_MHz is an owned deep copy.
     const long pulse_nt = params.pulse_nt;
-    const long nfreq = params.nfreq;
-    const double freq_lo_MHz = params.freq_lo_MHz;
-    const double freq_hi_MHz = params.freq_hi_MHz;
     const double dm = params.dm;
     const double sm = params.sm;
     const double intrinsic_width = params.intrinsic_width;
     const double fluence = params.fluence;
 
+    // The i-th channel spans [edges[i], edges[i+1]]; channel widths need not be equal.
+    const double *edges = params.freq_edges_MHz.data;
+    const long nfreq = params.freq_edges_MHz.size - 1;
+
     xassert(pulse_nt >= 64);   // using fewer time samples than this is probably a mistake
-    xassert(nfreq > 0);
-    xassert(freq_lo_MHz > 0.0);
-    xassert(freq_hi_MHz > freq_lo_MHz);
     xassert(dm >= 0.0);
     xassert(sm >= 0.0);
     xassert(intrinsic_width >= 0.0);
@@ -228,8 +247,8 @@ SinglePulse::SinglePulse(const Params &params)
 
     // The following loop synthesizes the pulse. We sample at t_i = t0 + (i+0.5)*(t1-t0)/pulse_nt.
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-        double nu_lo = freq_lo_MHz + (ifreq)   * (freq_hi_MHz - freq_lo_MHz) / (double)nfreq;
-        double nu_hi = freq_lo_MHz + (ifreq+1) * (freq_hi_MHz - freq_lo_MHz) / (double)nfreq;
+        double nu_lo = edges[ifreq];
+        double nu_hi = edges[ifreq+1];
         double nu_c = (nu_lo + nu_hi) / 2.0;
 
         double dm_delay0 = dispersion_delay(dm, nu_hi);
@@ -291,17 +310,16 @@ SinglePulse::SinglePulse(const Params &params)
 void SinglePulse::_compute_freq_wt()
 {
     const double spectral_index = params.spectral_index;
-    const double freq_lo_MHz = params.freq_lo_MHz;
-    const double freq_hi_MHz = params.freq_hi_MHz;
-    const long nfreq = params.nfreq;
+    const double *edges = params.freq_edges_MHz.data;
+    const long nfreq = params.freq_edges_MHz.size - 1;
 
     // Disallow 'extreme' spectral_index values (pow() can blow up).
     xassert((spectral_index >= -20.1) && (spectral_index <= 20.1));
 
-    double nu0 = (freq_lo_MHz + freq_hi_MHz) / 2.0;
+    double nu0 = 0.5 * (edges[0] + edges[nfreq]);   // band-center reference frequency nu_0
 
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-        double nu = freq_lo_MHz + (ifreq+0.5) * (freq_hi_MHz - freq_lo_MHz) / (double)nfreq;
+        double nu = 0.5 * (edges[ifreq] + edges[ifreq+1]);   // channel center frequency
         pulse_freq_wt[ifreq] = pow(nu/nu0, spectral_index);
     }
 }
@@ -316,7 +334,7 @@ void SinglePulse::get_endpoints(double &t0, double &t1) const
 
 void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double out_t0, double out_t1, double weight) const
 {
-    const long nfreq = params.nfreq;
+    const long nfreq = params.freq_edges_MHz.size - 1;
     const double undispersed_arrival_time = params.undispersed_arrival_time;
 
     xassert(out.ndim == 2);
@@ -341,7 +359,7 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double out_t0, dou
 
 long SinglePulse::get_n_sparse(double out_t0, double out_t1, long out_nt) const
 {
-    const long nfreq = params.nfreq;
+    const long nfreq = params.freq_edges_MHz.size - 1;
     const double undispersed_arrival_time = params.undispersed_arrival_time;
 
     xassert(out_nt > 0);
@@ -366,7 +384,7 @@ void SinglePulse::add_to_timestream_sparse(ksgpu::Array<float> &out, ksgpu::Arra
                                            ksgpu::Array<long> &out_n, double out_t0, double out_t1,
                                            long out_nt, double weight) const
 {
-    const long nfreq = params.nfreq;
+    const long nfreq = params.freq_edges_MHz.size - 1;
     const double undispersed_arrival_time = params.undispersed_arrival_time;
 
     xassert(out.ndim == 1);
@@ -406,7 +424,7 @@ void SinglePulse::add_to_timestream_sparse(ksgpu::Array<float> &out, ksgpu::Arra
 
 double SinglePulse::get_signal_to_noise(double sample_dt, double sample_rms, double sample_t0) const
 {
-    const long nfreq = params.nfreq;
+    const long nfreq = params.freq_edges_MHz.size - 1;
     const double undispersed_arrival_time = params.undispersed_arrival_time;
 
     xassert(sample_dt > 0.0);
@@ -440,7 +458,7 @@ double SinglePulse::get_signal_to_noise(double sample_dt, double sample_rms, dou
 double SinglePulse::get_signal_to_noise(double sample_dt, const ksgpu::Array<double> &sample_rms,
                                         const ksgpu::Array<double> &channel_weights, double sample_t0) const
 {
-    const long nfreq = params.nfreq;
+    const long nfreq = params.freq_edges_MHz.size - 1;
     const double undispersed_arrival_time = params.undispersed_arrival_time;
 
     xassert(sample_dt > 0.0);
@@ -505,8 +523,11 @@ double SinglePulse::get_signal_to_noise(double sample_dt, const ksgpu::Array<dou
 
 void SinglePulse::print(ostream &os) const
 {
-    os << "SinglePulse(pulse_nt=" << params.pulse_nt << ",nfreq=" << params.nfreq
-       << ",freq_lo_MHz=" << params.freq_lo_MHz << ",freq_hi_MHz=" << params.freq_hi_MHz
+    const double *edges = params.freq_edges_MHz.data;
+    const long nfreq = params.freq_edges_MHz.size - 1;
+
+    os << "SinglePulse(pulse_nt=" << params.pulse_nt << ",nfreq=" << nfreq
+       << ",freq_lo_MHz=" << edges[0] << ",freq_hi_MHz=" << edges[nfreq]
        << ",dm=" << params.dm << ",sm=" << params.sm << ",intrinsic_width=" << params.intrinsic_width
        << ",fluence=" << params.fluence << ",spectral_index=" << params.spectral_index
        << ",undispersed_arrival_time=" << params.undispersed_arrival_time << ")";

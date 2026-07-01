@@ -75,6 +75,14 @@ class upsampling_test_instance:
         self.out_nt = int((self.pulse_t1 - self.out_t0) / self.tsamp) + np.random.randint(1, 100)
         self.out_t1 = self.out_t0 + self.out_nt * self.tsamp
 
+        # Non-uniform (but not-too-irregular) coarse channel edges spanning [freq_lo, freq_hi], to
+        # exercise the unequal-width code path. Channel widths stay within [0.2, 1.8] x the uniform
+        # width -- deliberately not very irregular (very narrow channels tend to expose corner cases).
+        N = self.nfreq
+        df = np.random.uniform(0.0, 0.8 * (self.freq_hi_MHz - self.freq_lo_MHz) / N, size=N)
+        edges = np.concatenate([[0.0], np.cumsum(df)])   # length N+1, edges[0]=0, edges[-1]=sum(df)
+        self.coarse_edges_MHz = edges + np.linspace(self.freq_lo_MHz, self.freq_hi_MHz - edges[-1], N + 1)
+
     def __repr__(self):
         keys = ['nfreq', 'freq_lo_MHz', 'freq_hi_MHz', 'tsamp', 'diagonal_dm',
                 'sm0', 'dm', 'sm', 'intrinsic_width', 'fluence', 'spectral_index',
@@ -93,12 +101,21 @@ class upsampling_test_instance:
         ret += '\n)'
         return ret
 
-    def _make_single_pulse_object(self, nupfreq=1):
+    @staticmethod
+    def _upsample_edges(edges, nupfreq):
+        """Subdivide each coarse channel [edges[i], edges[i+1]] into 'nupfreq' EQUAL sub-channels.
+        Returns the fine edge array of length nupfreq*(len(edges)-1) + 1."""
+        if nupfreq == 1:
+            return edges
+        n = len(edges) - 1
+        parts = [np.linspace(edges[i], edges[i+1], nupfreq + 1)[:-1] for i in range(n)]
+        parts.append(edges[-1:])
+        return np.concatenate(parts)
+
+    def _make_single_pulse_object(self, freq_edges_MHz):
         return simpulse.SinglePulse(
             pulse_nt = 1024,
-            nfreq = self.nfreq * nupfreq,
-            freq_lo_MHz = self.freq_lo_MHz,
-            freq_hi_MHz = self.freq_hi_MHz,
+            freq_edges_MHz = freq_edges_MHz,
             dm = self.dm,
             sm = self.sm,
             intrinsic_width = self.intrinsic_width,
@@ -108,8 +125,12 @@ class upsampling_test_instance:
         )
 
     def run_test(self, nupfreq, nupsample):
-        s0 = self._make_single_pulse_object()
-        s1 = self._make_single_pulse_object(nupfreq) if (nupfreq != 1) else s0
+        # Coarse (non-uniform) channelization; fine = each coarse channel split into nupfreq equal parts.
+        coarse_edges = self.coarse_edges_MHz
+        fine_edges = self._upsample_edges(coarse_edges, nupfreq)
+
+        s0 = self._make_single_pulse_object(coarse_edges)
+        s1 = self._make_single_pulse_object(fine_edges) if (nupfreq != 1) else s0
 
         # add_to_timestream() requires float32 output arrays.
         a0 = np.zeros((self.nfreq, self.out_nt), dtype=np.float32)
