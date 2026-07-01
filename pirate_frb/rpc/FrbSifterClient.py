@@ -1,3 +1,7 @@
+import sys
+import threading
+import time
+
 import grpc
 import numpy as np
 import yaml
@@ -124,6 +128,12 @@ class FrbSifterClient:
         self.server_address = server_address
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_sifter_pb2_grpc.FrbSifterStub(self.channel)
+        # send_events() dispatches FrbEvents RPCs asynchronously via stub.*.future().
+        # Retain each in-flight future (else GC could cancel the RPC) and drain them in
+        # close(). Mutated from both the caller thread (send_events) and grpc callback
+        # threads (_on_send_done), so guard with a lock.
+        self._pending = set()
+        self._pending_lock = threading.Lock()
 
     def send_configuration(self, pirate_yaml, xengine_yaml,
                             dedispersion_plan_yaml, grouper_yaml,
@@ -183,6 +193,13 @@ class FrbSifterClient:
 
         Sent once per FPGA window, after send_configuration().
 
+        Asynchronous / fire-and-forget: the request is built and validated
+        synchronously (so the caller's arrays are snapshotted before returning), then
+        the RPC is dispatched on a grpc background thread and this method returns
+        immediately without waiting for the reply. Transport errors and not-ok replies
+        are therefore logged to stderr, not raised. close() waits briefly for the
+        in-flight sends to finish.
+
         Parameters
         ----------
         beam_set_id : int
@@ -209,8 +226,10 @@ class FrbSifterClient:
         Raises
         ------
         RuntimeError
-            On failure: malformed input, a gRPC transport error, or a not-ok reply
-            from the sifter.
+            Synchronously, for malformed input (a bad 'events' type, or a
+            coarsegrain_snr that can't be converted to a 1-d float32 array). Transport
+            errors and not-ok sifter replies occur on the background thread and are
+            logged, not raised.
         """
         if not isinstance(events, FrbSifterEvents):
             raise RuntimeError(f"FrbSifterClient.send_events: 'events' must be a "
@@ -226,14 +245,31 @@ class FrbSifterClient:
             events = events.to_proto(),
             coarsegrain_snr = cg_snr,
         )
+        # Fire-and-forget: dispatch on a grpc background thread and return immediately.
+        # Retain the future (else GC could cancel the RPC); _on_send_done drops it again
+        # and logs any failure.
+        future = self.stub.FrbEvents.future(request)
+        with self._pending_lock:
+            self._pending.add(future)
+        future.add_done_callback(self._on_send_done)
+
+    def _on_send_done(self, future):
+        """Done-callback for an async send_events() RPC (runs on a grpc thread)."""
+        with self._pending_lock:
+            self._pending.discard(future)
         try:
-            reply = self.stub.FrbEvents(request)
+            reply = future.result()
+        except grpc.FutureCancelledError:
+            return                              # channel closed / shutting down
         except grpc.RpcError as e:
-            raise RuntimeError(f"FrbSifterClient.send_events: RPC to sifter at "
-                               f"{self.server_address!r} failed: {e}") from e
+            if e.code() == grpc.StatusCode.CANCELLED:
+                return                          # expected on channel close
+            print(f"FrbSifterClient.send_events: async RPC to sifter at "
+                  f"{self.server_address!r} failed: {e}", file=sys.stderr, flush=True)
+            return
         if not reply.ok:
-            raise RuntimeError(f"FrbSifterClient.send_events: sifter at {self.server_address!r} "
-                               f"rejected the message: {reply.message!r}")
+            print(f"FrbSifterClient.send_events: sifter at {self.server_address!r} "
+                  f"rejected the message: {reply.message!r}", file=sys.stderr, flush=True)
 
     @staticmethod
     def _to_yaml(name, value):
@@ -266,11 +302,26 @@ class FrbSifterClient:
                                f"got shape {arr.shape}")
         return arr
 
-    def close(self):
-        """Close the gRPC channel.
+    def close(self, drain_timeout=2.0):
+        """Wait (briefly) for in-flight async sends, then close the gRPC channel.
+
+        send_events() dispatches its RPCs asynchronously; close() waits up to
+        'drain_timeout' seconds (total) for the pending ones to finish -- so a clean
+        shutdown doesn't cancel the last events -- then closes the channel (which
+        cancels anything still in flight).
 
         Automatically called if the FrbSifterClient is used as a context manager.
         """
+        with self._pending_lock:
+            pending = list(self._pending)
+        deadline = time.monotonic() + drain_timeout
+        for fut in pending:
+            try:
+                fut.result(timeout=max(0.0, deadline - time.monotonic()))
+            except grpc.FutureTimeoutError:
+                break                 # out of drain budget; cancel the rest on close
+            except grpc.RpcError:
+                pass                  # failure already logged by _on_send_done
         self.channel.close()
 
     def __enter__(self):
