@@ -18,11 +18,10 @@ import numpy as np
 from .. import simpulse
 
 
-def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, fluence, spectral_index,
-                nsamp):
-    """Build a SinglePulse with equal-width channels, framed near t=0 and sampled at ~nsamp samples
-    across the pulse. The framing (extent/undispersed_arrival_time_sec) is independent of nsamp, so
-    coarse- and fine-nsamp pulses overlay on the time axis."""
+def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, spectral_index, nsamp):
+    """Build a SinglePulse with equal-width channels (unit noise variance), framed near t=0 and
+    sampled at ~nsamp samples across the pulse. The framing (extent/undispersed_arrival_time_sec) is
+    independent of nsamp, so coarse- and fine-nsamp pulses overlay on the time axis."""
     d_hi = simpulse.dispersion_delay(dm, freq_hi_MHz)
     d_lo = simpulse.dispersion_delay(dm, freq_lo_MHz)
 
@@ -37,20 +36,32 @@ def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, fluenc
         internal_nt = 1024,
         time_sample_ms = 1.0e3 * extent / nsamp,
         freq_edges_MHz = edges,
+        freq_variances = np.ones(nfreq),
         dm = dm, sm = sm, intrinsic_width = intrinsic_width,
-        fluence = fluence, spectral_index = spectral_index,
+        spectral_index = spectral_index,
         undispersed_arrival_time_sec = -d_hi + lead)
 
 
 def make_plot(plt, matplotlib, pulse_args, ifreq_list, color_list, label_list, filename):
     assert len(ifreq_list) == len(color_list) == len(label_list)
 
-    # Coarse (solid; shows the time-sample rectangles) + fine (dotted; smooth reference).
+    # Coarse (solid; shows the time-sample rectangles) + fine (dotted; smooth reference), overlaid.
+    # The SNR normalization is resolution-dependent (a finer grid spreads the same SNR over more
+    # samples -> smaller per-sample values), so rescale the fine curve to the coarse's peak (over the
+    # plotted channels) so the two resolutions overlay and show the same shape.
+    coarse_peak = None
     for (nsamp, ls, labelled) in [(100, '-', True), (1000, ':', False)]:
         sp = _make_pulse(nsamp=nsamp, **pulse_args)
         out_nt = sp.nt_min
         ts = np.zeros((sp.nfreq, out_nt), dtype=np.float32)
         sp.add_to_timestream(ts)
+        ts = ts.astype(np.float64)
+
+        peak = max(float(ts[ifreq].max()) for ifreq in ifreq_list)
+        if coarse_peak is None:
+            coarse_peak = peak
+        elif peak > 0.0:
+            ts *= coarse_peak / peak
 
         # Sample 'it' spans [it*dt, (it+1)*dt]; draw each channel as a histogram (step) vs time in ms.
         edges_ms = np.arange(out_nt + 1) * sp.time_sample_ms
@@ -81,7 +92,7 @@ def plot1(plt, matplotlib):
     """Some Gaussians with a little bit of dispersion and scattering (low-freq channel scatters)."""
     make_plot(plt, matplotlib,
               dict(freq_lo_MHz=1000.0, freq_hi_MHz=2000.0, nfreq=512,
-                   dm=10.0, sm=4.0, intrinsic_width=0.005, fluence=30.0, spectral_index=2.0),
+                   dm=10.0, sm=4.0, intrinsic_width=0.005, spectral_index=2.0),
               ifreq_list=[0, 256, 511],
               color_list=['r', 'b', 'm'],
               label_list=['1 GHz', '1.5 GHz', '2.0 GHz'],
@@ -92,7 +103,7 @@ def plot2(plt, matplotlib):
     """Boxcars (pure dispersion; no scattering or intrinsic width)."""
     make_plot(plt, matplotlib,
               dict(freq_lo_MHz=1000.0, freq_hi_MHz=2000.0, nfreq=7,
-                   dm=10.0, sm=0.0, intrinsic_width=0.0, fluence=1.0, spectral_index=0.0),
+                   dm=10.0, sm=0.0, intrinsic_width=0.0, spectral_index=0.0),
               ifreq_list=[0, 2, 4, 6],
               color_list=['r', 'b', 'm', 'k'],
               label_list=['ch 0', 'ch 2', 'ch 4', 'ch 6'],
@@ -103,7 +114,7 @@ def plot3(plt, matplotlib):
     """Like plot1, but intrinsic_width=0 (scattering-dominated) and spectral_index=0."""
     make_plot(plt, matplotlib,
               dict(freq_lo_MHz=1000.0, freq_hi_MHz=2000.0, nfreq=512,
-                   dm=10.0, sm=4.0, intrinsic_width=0.0, fluence=30.0, spectral_index=0.0),
+                   dm=10.0, sm=4.0, intrinsic_width=0.0, spectral_index=0.0),
               ifreq_list=[0, 256, 511],
               color_list=['r', 'b', 'm'],
               label_list=['1 GHz', '1.5 GHz', '2.0 GHz'],
@@ -131,7 +142,7 @@ def plot4(plt, matplotlib):
 
     def make(edges):
         return simpulse.SinglePulse(internal_nt=1024, time_sample_ms=time_sample_ms, freq_edges_MHz=edges,
-                                    dm=dm, sm=sm, intrinsic_width=width, fluence=1.0,
+                                    freq_variances=np.ones(nchan), dm=dm, sm=sm, intrinsic_width=width,
                                     spectral_index=0.0, undispersed_arrival_time_sec=uat)
 
     sp_top, sp_bot = make(edges_top), make(edges_bot)

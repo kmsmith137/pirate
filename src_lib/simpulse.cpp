@@ -6,7 +6,6 @@
 #include <vector>
 #include <complex>
 #include <sstream>
-#include <cstring>
 #include <algorithm>
 #include <stdexcept>
 
@@ -85,9 +84,9 @@ static double interpolate_cumsum(long internal_nt, const double *arr, double s)
 // SinglePulse: constructor + methods.
 
 
-// Validates freq_edges_MHz and returns a copy of 'params' whose freq_edges_MHz is an owned deep
-// copy, so the constructed pulse is self-contained. (Declared in simpulse.hpp; called from the
-// constructor's member-init list.)
+// Validates freq_edges_MHz and freq_variances, and returns 'params' unchanged. The array members
+// are stored BY REFERENCE (the ksgpu::Array copy shares the caller's data; not deep-copied).
+// Declared in simpulse.hpp; called from the constructor's member-init list.
 SinglePulse::Params SinglePulse::_validate(const Params &params)
 {
     xassert(params.freq_edges_MHz.ndim == 1);
@@ -100,35 +99,42 @@ SinglePulse::Params SinglePulse::_validate(const Params &params)
     xassert(edges[0] > 0.0);   // lowest frequency edge must be positive (freqs are used as divisors)
     xassert(is_sorted(std::vector<double>(edges, edges + nfreq + 1)));   // strictly increasing
 
-    Params ret = params;
-    ret.freq_edges_MHz = params.freq_edges_MHz.clone();   // deep copy -> the pulse owns its edges
-    return ret;
+    // freq_variances: length nfreq, contiguous, all strictly positive.
+    xassert(params.freq_variances.ndim == 1);
+    xassert(params.freq_variances.is_fully_contiguous());
+    xassert(params.freq_variances.size == nfreq);
+    const double *var = params.freq_variances.data;
+    for (long ifreq = 0; ifreq < nfreq; ifreq++)
+        xassert(var[ifreq] > 0.0);
+
+    return params;   // arrays stored by reference (not deep-copied)
 }
 
 
 SinglePulse::SinglePulse(const Params &p)
     : params(_validate(p))
 {
-    // Local aliases (read-only) for the construction params. 'params' is the (validated) member,
-    // whose freq_edges_MHz is an owned deep copy.
+    // Local aliases (read-only) for the construction params. 'params' is the (validated) member;
+    // its freq_edges_MHz and freq_variances are stored by reference (not deep-copied).
     const long internal_nt = params.internal_nt;
     const double time_sample_ms = params.time_sample_ms;
     const double dm = params.dm;
     const double sm = params.sm;
     const double intrinsic_width = params.intrinsic_width;
-    const double fluence = params.fluence;
     const double undispersed_arrival_time_sec = params.undispersed_arrival_time_sec;
 
-    // The i-th channel spans [edges[i], edges[i+1]]; channel widths need not be equal.
+    // The i-th channel spans [edges[i], edges[i+1]]; channel widths need not be equal. 'variances'
+    // is the per-channel noise variance, used to normalize the pulse to params.snr (after the loop).
     const double *edges = params.freq_edges_MHz.data;
+    const double *variances = params.freq_variances.data;
     const long nfreq = params.freq_edges_MHz.size - 1;
 
-    xassert(internal_nt >= 64);          // using fewer time samples than this is probably a mistake
+    xassert(internal_nt >= 64);       // using fewer time samples than this is probably a mistake
     xassert(time_sample_ms > 0.0);    // required; determines the (zero-based) time grid
     xassert(dm >= 0.0);
     xassert(sm >= 0.0);
     xassert(intrinsic_width >= 0.0);
-    xassert(fluence >= 0.0);
+    xassert(params.snr >= 0.0);
 
     // Implementing delta-function pulses wouldn't be a big deal, but creates corner cases, and so
     // far there hasn't been a strong reason to implement it.
@@ -165,7 +171,8 @@ SinglePulse::SinglePulse(const Params &p)
     check_dfti(DftiSetValue(plan, DFTI_PLACEMENT, DFTI_NOT_INPLACE), "DftiSetValue(PLACEMENT)");
     check_dfti(DftiCommitDescriptor(plan), "DftiCommitDescriptor");
 
-    long total = 0;   // running sum of freq_nt (== length of 'data')
+    long total = 0;       // running sum of freq_nt (== length of 'data')
+    double snr_sq = 0.0;  // sum over samples of (sample^2 / variance), at the arbitrary initial norm
     nt_min = 0;
 
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
@@ -225,12 +232,16 @@ SinglePulse::SinglePulse(const Params &p)
         nt_min = std::max(nt_min, i0 + n);
 
         // --- fill this channel's samples for dense indices [i0, i1) into 'data' ---
-        // (This is the old add_pulse_to_frequency_channel, inlined; 'weight' baked in as 1.)
-        double w = fluence * freq_wt / dt;   // per-call weight is applied later, in add_to_timestream()
+        // Arbitrary initial normalization (spectral weight, no fluence); the whole pulse is rescaled
+        // to params.snr after the loop. Accumulate snr_sq = sum(sample^2 / variance) meanwhile.
+        double w = freq_wt / dt;
+        double var_i = variances[ifreq];
         for (long it = i0; it < i1; it++) {
             double a = interpolate_cumsum(internal_nt, cumsum.data(), internal_nt * ((double)it     * dt - pt0) / (t1 - t0));
             double b = interpolate_cumsum(internal_nt, cumsum.data(), internal_nt * ((double)(it+1) * dt - pt0) / (t1 - t0));
-            data.push_back((float)(w * (b - a)));
+            double sk = w * (b - a);
+            data.push_back((float)sk);
+            snr_sq += sk * sk / var_i;
         }
     }
 
@@ -240,9 +251,15 @@ SinglePulse::SinglePulse(const Params &p)
         throw runtime_error("pirate::simpulse::SinglePulse: pulse has no samples on the zero-based time grid"
                             " (is undispersed_arrival_time_sec very negative?)");
 
-    // Copy the packed samples into the member array.
+    // Normalize the pulse to the requested matched-filter SNR. The initial (arbitrary) normalization
+    // has SNR = sqrt(snr_sq) = sqrt(sum sample^2/variance); scaling every sample by
+    // (params.snr / initial_snr) makes sum(sample^2 / variance) == params.snr^2.
+    xassert(snr_sq > 0.0);
+    double scale = params.snr / sqrt(snr_sq);
+
     sparse_data = ksgpu::Array<float>({total}, ksgpu::af_uhost);
-    memcpy(sparse_data.data, data.data(), total * sizeof(float));
+    for (long k = 0; k < total; k++)
+        sparse_data.data[k] = (float)(data[k] * scale);
 }
 
 
@@ -277,70 +294,6 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double weight) con
 }
 
 
-double SinglePulse::get_signal_to_noise(double sample_rms) const
-{
-    xassert(sample_rms > 0.0);
-
-    double acc = 0.0;
-    for (long k = 0; k < sparse_data.size; k++)
-        acc += square((double)sparse_data.data[k]);
-
-    return sqrt(acc) / sample_rms;
-}
-
-
-double SinglePulse::get_signal_to_noise(const ksgpu::Array<double> &sample_rms,
-                                        const ksgpu::Array<double> &channel_weights) const
-{
-    const long nfreq = params.freq_edges_MHz.size - 1;
-    xassert((sample_rms.ndim == 1) && (sample_rms.shape[0] == nfreq) && sample_rms.is_fully_contiguous());
-
-    const double *rms = sample_rms.data;
-
-    // An empty 'channel_weights' (the default) means "use 1/sample_rms^2 weighting".
-    const double *cw = nullptr;
-    bool have_cw = (channel_weights.data != nullptr) && (channel_weights.size > 0);
-    if (have_cw) {
-        xassert((channel_weights.ndim == 1) && (channel_weights.shape[0] == nfreq) && channel_weights.is_fully_contiguous());
-        cw = channel_weights.data;
-    }
-
-    for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-        xassert(rms[ifreq] >= 0.0);
-        if (cw != nullptr)
-            xassert(cw[ifreq] >= 0.0);
-    }
-
-    vector<double> wtmp;
-    if (cw == nullptr) {
-        wtmp.resize(nfreq);
-        for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-            xassert(rms[ifreq] > 0.0);   // need positive rms to form 1/rms^2 default weighting
-            wtmp[ifreq] = 1.0 / (rms[ifreq] * rms[ifreq]);
-        }
-        cw = &wtmp[0];
-    }
-
-    double sig_ampl = 0.0;
-    double noise_var = 0.0;
-
-    for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-        long off = freq_sd_off.data[ifreq];
-        long n = freq_nt.data[ifreq];
-
-        double t = 0.0;   // sum of squared samples in this channel
-        for (long j = 0; j < n; j++)
-            t += square((double)sparse_data.data[off + j]);
-
-        sig_ampl += cw[ifreq] * t;
-        noise_var += square(cw[ifreq] * rms[ifreq]) * t;
-    }
-
-    xassert(noise_var > 0.0);   // too many sample_rms (or channel_weights) values were zero
-    return sig_ampl / sqrt(noise_var);
-}
-
-
 void SinglePulse::print(ostream &os) const
 {
     const double *edges = params.freq_edges_MHz.data;
@@ -349,7 +302,7 @@ void SinglePulse::print(ostream &os) const
     os << "SinglePulse(internal_nt=" << params.internal_nt << ",time_sample_ms=" << params.time_sample_ms
        << ",nfreq=" << nfreq << ",freq_lo_MHz=" << edges[0] << ",freq_hi_MHz=" << edges[nfreq]
        << ",dm=" << params.dm << ",sm=" << params.sm << ",intrinsic_width=" << params.intrinsic_width
-       << ",fluence=" << params.fluence << ",spectral_index=" << params.spectral_index
+       << ",snr=" << params.snr << ",spectral_index=" << params.spectral_index
        << ",undispersed_arrival_time_sec=" << params.undispersed_arrival_time_sec << ")";
 }
 

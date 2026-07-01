@@ -58,7 +58,6 @@ class upsampling_test_instance:
         self.dm = np.random.uniform(0.5, 2.0) * self.diagonal_dm
         self.sm = log_uniform(1.0e-2, 3.0) * self.sm0
         self.intrinsic_width = log_uniform(0.01, 10.0) * self.tsamp
-        self.fluence = np.random.uniform(1.0, 2.0)
         self.spectral_index = np.random.uniform(-1.0, 1.0)
 
         # Frame the pulse near t=0 on the zero-based grid: choose undispersed_arrival_time_sec so the
@@ -80,7 +79,7 @@ class upsampling_test_instance:
 
     def __repr__(self):
         keys = ['nfreq', 'freq_lo_MHz', 'freq_hi_MHz', 'tsamp', 'diagonal_dm',
-                'sm0', 'dm', 'sm', 'intrinsic_width', 'fluence', 'spectral_index',
+                'sm0', 'dm', 'sm', 'intrinsic_width', 'spectral_index',
                 'undispersed_arrival_time_sec']
 
         ret = 'upsampling_test_instance('
@@ -106,15 +105,15 @@ class upsampling_test_instance:
         parts.append(edges[-1:])
         return np.concatenate(parts)
 
-    def _make_single_pulse_object(self, freq_edges_MHz, tsamp_sec):
+    def _make_single_pulse_object(self, freq_edges_MHz, freq_variances, tsamp_sec):
         return simpulse.SinglePulse(
             internal_nt = 1024,
             time_sample_ms = 1.0e3 * tsamp_sec,
             freq_edges_MHz = freq_edges_MHz,
+            freq_variances = freq_variances,
             dm = self.dm,
             sm = self.sm,
             intrinsic_width = self.intrinsic_width,
-            fluence = self.fluence,
             spectral_index = self.spectral_index,
             undispersed_arrival_time_sec = self.undispersed_arrival_time_sec
         )
@@ -125,8 +124,16 @@ class upsampling_test_instance:
         coarse_edges = self.coarse_edges_MHz
         fine_edges = self._upsample_edges(coarse_edges, nupfreq)
 
-        s0 = self._make_single_pulse_object(coarse_edges, self.tsamp)
-        s1 = self._make_single_pulse_object(fine_edges, self.tsamp / nupsample)
+        # Unit per-channel noise variance for both pulses. (The pulses are normalized to a fixed SNR,
+        # but that normalization is channelization- and sampling-dependent: a finer grid resolves the
+        # pulse better -- e.g. narrower frequency channels smear the pulse less -- giving a higher
+        # matched-filter SNR for the same shape. So a0 and a1 differ in overall scale, and we compare
+        # SHAPES below, after rescaling that scale out.)
+        var_coarse = np.ones(self.nfreq)
+        var_fine = np.ones(self.nfreq * nupfreq)
+
+        s0 = self._make_single_pulse_object(coarse_edges, var_coarse, self.tsamp)
+        s1 = self._make_single_pulse_object(fine_edges, var_fine, self.tsamp / nupsample)
 
         # Size the coarse grid to hold both pulses (they share undispersed_arrival_time_sec, so
         # s1.nt_min ~ nupsample * s0.nt_min up to rounding).
@@ -143,6 +150,12 @@ class upsampling_test_instance:
         # are float32; that quantization is the thing being tested, so we keep it in a0/a1.
         a0 = a0.astype(np.float64)
         a1 = downsample_2d(a1.astype(np.float64), self.nfreq, out_nt) / (nupfreq * nupsample)
+
+        # Rescale a1 to a0's overall norm (the SNR normalization is resolution-dependent; see above),
+        # so the correlation/residual below measure SHAPE consistency rather than the overall scale.
+        n0, n1 = np.sum(a0*a0), np.sum(a1*a1)
+        if n1 > 0:
+            a1 = a1 * np.sqrt(n0 / n1)
 
         t = np.sum(a0*a0) * np.sum(a1*a1)
         d = np.sum((a0-a1)**2)**0.5 / t**0.25

@@ -41,21 +41,23 @@ struct SinglePulse {
     // Constructor arguments, bundled into a Params struct (see the constructor below).
     struct Params
     {
-        long   internal_nt = 1024;                 // "under the hood" samples (power of two; 1024 is a good default)
-        double time_sample_ms = 0.0;            // time-sample duration in ms; REQUIRED (dt = 1e-3*time_sample_ms sec, must be > 0)
-
-        // Sorted (strictly increasing) array of length (nfreq+1). The i-th frequency channel spans
-        // frequency range [freq_edges_MHz[i], freq_edges_MHz[i+1]]. Channel widths need NOT be equal.
-        // So nfreq = freq_edges_MHz.size - 1, freq_lo_MHz = freq_edges_MHz[0], and
-        // freq_hi_MHz = freq_edges_MHz[nfreq]. The constructor deep-copies this array.
-        ksgpu::Array<double> freq_edges_MHz;
-
         double dm = 0.0;                        // dispersion measure in standard units (pc cm^{-3})
         double sm = 0.0;                        // scattering measure: scattering time in milliseconds (not seconds) at 1 GHz
         double intrinsic_width = 0.0;           // frequency-independent Gaussian width in seconds
-        double fluence = 1.0;                   // integrated flux (units: whatever add_to_timestream() outputs, times seconds)
         double spectral_index = 0.0;            // exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha
         double undispersed_arrival_time_sec = 0.0;  // arrival time at nu=infty, in seconds relative to an arbitrary origin
+        double time_sample_ms = 0.0;            // time-sample duration in ms; REQUIRED (dt = 1e-3*time_sample_ms sec, must be > 0)
+        double snr = 30.0;                      // signal-to-noise, assuming perfect matched filter.
+        
+        // Sorted (strictly increasing) array of length (nfreq+1). The i-th frequency channel spans
+        // frequency range [freq_edges_MHz[i], freq_edges_MHz[i+1]]. Channel widths need NOT be equal.
+        ksgpu::Array<double> freq_edges_MHz;
+
+        // Length (nfreq), must be positive.
+        ksgpu::Array<double> freq_variances;
+
+        // "under the hood" samples (power of two; 1024 is a good default)
+        long internal_nt = 1024;                 
     };
 
     // Construction parameters, immutable after construction. Public so callers can read them; also
@@ -69,7 +71,7 @@ struct SinglePulse {
     ksgpu::Array<long>  freq_it0;     // (nfreq,) first dense-grid sample index of channel i's pulse
     ksgpu::Array<long>  freq_nt;      // (nfreq,) number of samples of channel i's pulse
     ksgpu::Array<long>  freq_sd_off;  // (nfreq,) offset into sparse_data (= sum_{j<i} freq_nt[j])
-    ksgpu::Array<float> sparse_data;  // (sum(freq_nt),) packed samples; fluence + spectral weight baked in
+    ksgpu::Array<float> sparse_data;  // (sum(freq_nt),) packed samples; spectral weight + snr norm baked in
     long                nt_min;       // = max_i (freq_it0[i] + freq_nt[i]); smallest out_nt with no clipping
 
     SinglePulse(const Params &params);
@@ -84,14 +86,6 @@ struct SinglePulse {
     // those must reverse the frequency axis itself.
     void add_to_timestream(ksgpu::Array<float> &out, double weight = 1.0) const;
 
-    // Returns total signal-to-noise over all frequency channels and time samples combined, computed
-    // from the precomputed samples on the construction-time grid. 'sample_rms' is the per-sample RMS
-    // noise (scalar overload) or a length-nfreq array (vector overload). For the vector overload, if
-    // 'channel_weights' is empty (the default), 1/sample_rms^2 weighting is assumed.
-    double get_signal_to_noise(double sample_rms = 1.0) const;
-    double get_signal_to_noise(const ksgpu::Array<double> &sample_rms,
-                               const ksgpu::Array<double> &channel_weights = ksgpu::Array<double>()) const;
-
     // String representation.
     void print(std::ostream &os) const;
     std::string str() const;
@@ -103,8 +97,8 @@ struct SinglePulse {
 
 private:
     // Validates freq_edges_MHz (1-d, contiguous, length >= 2, positive, strictly increasing) and
-    // returns a copy of 'params' whose freq_edges_MHz is an owned deep copy -- so the stored member
-    // is self-contained (independent of the caller's array). Called from the ctor's init list.
+    // freq_variances (length nfreq, positive), and returns 'params' unchanged. The array members are
+    // stored BY REFERENCE (not deep-copied). Called from the ctor's init list.
     static Params _validate(const Params &params);
 };
 

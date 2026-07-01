@@ -1,9 +1,6 @@
 // Python bindings for the FRB pulse-simulation code (pirate_frb.simpulse subpackage).
 // C++ classes/functions are defined in include/pirate/simpulse.hpp + src_lib/simpulse.cpp;
-// see pirate_pybind11.cpp for the main module.
-//
-// Method injection (in pirate_frb/pybind11_injections.py): SinglePulse.get_signal_to_noise
-// (scalar-vs-vector dispatch over the private _get_signal_to_noise_{scalar,vector} bindings).
+// see pirate_pybind11.cpp for the main module. (SinglePulse has no method injections.)
 
 #define PY_ARRAY_UNIQUE_SYMBOL PyArray_API_pirate
 #define NO_IMPORT_ARRAY  // Secondary file: don't call _import_array()
@@ -49,10 +46,11 @@ void register_simpulse_bindings(pybind11::module &m)
         "- ``internal_nt`` (int) -- number of under-the-hood samples representing the pulse.\n"
         "- ``time_sample_ms`` (float) -- time-sample duration in ms (dt = 1e-3*time_sample_ms sec).\n"
         "- ``freq_edges_MHz`` (array) -- sorted, length (nfreq+1); channel i spans edges[i]..edges[i+1].\n"
+        "- ``freq_variances`` (array) -- per-channel noise variance, length nfreq (all positive).\n"
         "- ``dm`` (float) -- dispersion measure (pc cm^{-3}).\n"
         "- ``sm`` (float) -- scattering measure (scattering time in ms at 1 GHz).\n"
         "- ``intrinsic_width`` (float) -- frequency-independent Gaussian width in seconds.\n"
-        "- ``fluence`` (float) -- integrated flux at the central frequency.\n"
+        "- ``snr`` (float) -- target signal-to-noise (perfect matched filter); sets the normalization. Default 30.\n"
         "- ``spectral_index`` (float) -- exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.\n"
         "- ``undispersed_arrival_time_sec`` (float) -- arrival time as freq->infty, in seconds.\n"
         "\n"
@@ -61,32 +59,34 @@ void register_simpulse_bindings(pybind11::module &m)
         "clipping) and the derived ``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
 
         .def(py::init([](long internal_nt, double time_sample_ms, const Array<double> &freq_edges_MHz,
-                         double dm, double sm, double intrinsic_width, double fluence,
-                         double spectral_index, double undispersed_arrival_time_sec) {
+                         const Array<double> &freq_variances, double dm, double sm, double intrinsic_width,
+                         double spectral_index, double undispersed_arrival_time_sec, double snr) {
                  SinglePulse::Params p;
                  p.internal_nt = internal_nt;
                  p.time_sample_ms = time_sample_ms;
                  p.freq_edges_MHz = freq_edges_MHz;
+                 p.freq_variances = freq_variances;
                  p.dm = dm;
                  p.sm = sm;
                  p.intrinsic_width = intrinsic_width;
-                 p.fluence = fluence;
                  p.spectral_index = spectral_index;
                  p.undispersed_arrival_time_sec = undispersed_arrival_time_sec;
+                 p.snr = snr;
                  return new SinglePulse(p);
              }),
              py::arg("internal_nt"), py::arg("time_sample_ms"), py::arg("freq_edges_MHz"),
-             py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"), py::arg("fluence"),
-             py::arg("spectral_index"), py::arg("undispersed_arrival_time_sec"))
+             py::arg("freq_variances"), py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"),
+             py::arg("spectral_index"), py::arg("undispersed_arrival_time_sec"), py::arg("snr") = 30.0)
 
         // Read-only views of the construction parameters (SinglePulse::params).
         .def_property_readonly("internal_nt", [](const SinglePulse &s) { return s.params.internal_nt; })
         .def_property_readonly("time_sample_ms", [](const SinglePulse &s) { return s.params.time_sample_ms; })
         .def_property_readonly("freq_edges_MHz", [](const SinglePulse &s) { return s.params.freq_edges_MHz; })
+        .def_property_readonly("freq_variances", [](const SinglePulse &s) { return s.params.freq_variances; })
         .def_property_readonly("dm", [](const SinglePulse &s) { return s.params.dm; })
         .def_property_readonly("sm", [](const SinglePulse &s) { return s.params.sm; })
         .def_property_readonly("intrinsic_width", [](const SinglePulse &s) { return s.params.intrinsic_width; })
-        .def_property_readonly("fluence", [](const SinglePulse &s) { return s.params.fluence; })
+        .def_property_readonly("snr", [](const SinglePulse &s) { return s.params.snr; })
         .def_property_readonly("spectral_index", [](const SinglePulse &s) { return s.params.spectral_index; })
         .def_property_readonly("undispersed_arrival_time_sec", [](const SinglePulse &s) { return s.params.undispersed_arrival_time_sec; })
 
@@ -109,21 +109,6 @@ void register_simpulse_bindings(pybind11::module &m)
              "The grid is zero-based (sample it spans [it*dt, (it+1)*dt] seconds); samples at index\n"
              ">= out_nt are clipped (size out_nt >= nt_min for no clipping). 'out' must be float32,\n"
              "with contiguous time samples, ordered low to high in frequency.")
-
-        // get_signal_to_noise() overloads, bound under private names; the public dispatch (scalar
-        // vs vector, channel-weight defaulting) is the get_signal_to_noise injection.
-        .def("_get_signal_to_noise_scalar",
-             py::overload_cast<double>(&SinglePulse::get_signal_to_noise, py::const_),
-             py::arg("sample_rms"))
-
-        .def("_get_signal_to_noise_vector",
-             [](const SinglePulse &self, const Array<double> &sample_rms, py::object channel_weights) {
-                 if (channel_weights.is_none())
-                     return self.get_signal_to_noise(sample_rms, Array<double>());
-                 Array<double> cw = channel_weights.cast<Array<double>>();
-                 return self.get_signal_to_noise(sample_rms, cw);
-             },
-             py::arg("sample_rms"), py::arg("channel_weights"))
 
         .def("__repr__", &SinglePulse::str)
     ;
