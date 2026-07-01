@@ -1070,21 +1070,37 @@ void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
         pf_params.fill_host_weights(host_weights, avar.tree_variance.at(itree), /*randomize=*/ false);
 
         // Fill the first beam slot via to_gpu(), then duplicate it to all 'nslots' beam slots with
-        // GPU->GPU memcopies. wt_arrays[itree] is dense in (slot, beam): each beam block is
-        // 'beam_nelts' consecutive elements (incl. any internal padding) and the blocks are
-        // back-to-back, so beam slot k starts at element offset k*beam_nelts.
+        // GPU->GPU memcopies. wt_arrays[itree] flattens its (nbatches_wt, beams_per_batch) axes into
+        // 'nslots' back-to-back beam blocks, each 'beam_nelts' apart, so beam slot k starts at element
+        // offset k*beam_nelts.
         const GpuPfWeightLayout &wl = cdd2_kernels.at(itree)->pf_weight_layout;
         Array<void> dst0 = wt_arrays.at(itree).slice(0, 0).slice(0, 0, 1);   // first beam slot, (1,ndm_wt,...)
         wl.to_gpu(dst0, host_weights);
 
-        const long beam_nelts = extended_wt_strides.at(itree).at(1);   // per-beam stride (dense)
+        const long beam_nelts = extended_wt_strides.at(itree).at(1);   // slot-to-slot (per-beam) stride
         const long beam_nbytes = (beam_nelts * dtype.nbits) / 8;
-        
-        xassert_eq(extended_wt_strides.at(itree).at(0), beams_per_batch * beam_nelts);        
+        xassert_eq(extended_wt_strides.at(itree).at(0), beams_per_batch * beam_nelts);
+
+        // Per-slot copy size = ONE beam block's VALID strided extent (1 + sum over the inner,
+        // per-beam axes of (shape-1)*stride), which is <= beam_nelts. This is deliberately smaller
+        // than the slot stride 'beam_nelts': the weight layout pads each beam block's trailing bytes
+        // (touter_byte_stride is 128-byte aligned; see GpuPfWeightLayout), and wt_arrays is allocated
+        // to the array's strided extent (Array.cpp _array_init_dchecked), which trims the LAST beam
+        // block's trailing pad. Copying the full 'beam_nbytes' into the last slot would therefore
+        // overrun the allocation (-> cudaMemcpy "invalid argument", or silent corruption of a
+        // neighboring allocation). The pad bytes are never read by the cdd2 kernel, so copying only
+        // the valid extent per slot -- with the dst still offset by the full beam_nbytes stride --
+        // reproduces the weights exactly.
+        const vector<long> &bshape   = cdd2_kernels.at(itree)->expected_wt_shape;    // [beams_per_batch, ...inner]
+        const vector<long> &bstrides = cdd2_kernels.at(itree)->expected_wt_strides;
+        long beam_valid_nelts = 1;
+        for (size_t i = 1; i < bshape.size(); i++)   // inner (single-beam) axes only; skip axis 0 (beams)
+            beam_valid_nelts += (bshape.at(i) - 1) * bstrides.at(i);
+        const long beam_valid_nbytes = (beam_valid_nelts * dtype.nbits) / 8;
+
         char *base = (char *) wt_arrays.at(itree).data;
-        
         for (long k = 1; k < nslots; k++)
-            CUDA_CALL(cudaMemcpy(base + k * beam_nbytes, base, beam_nbytes, cudaMemcpyDeviceToDevice));
+            CUDA_CALL(cudaMemcpy(base + k * beam_nbytes, base, beam_valid_nbytes, cudaMemcpyDeviceToDevice));
     }
 
     // Ensure all GPU copies have completed before returning.
