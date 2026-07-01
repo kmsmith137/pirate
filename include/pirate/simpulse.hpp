@@ -56,8 +56,14 @@ struct SinglePulse {
         // Length (nfreq), must be positive.
         ksgpu::Array<double> freq_variances;
 
+        // If false, then an exception is raised if any freq_it0 is < 0.
+        // If true, then the part of the pulse with negative arrival times is silently discarded.
+        // (Note that if the entire pulse is at negative times, i.e. all (freq_it0 + freq_nt <= 0),
+        // then an exception is thrown in any case.)
+        bool allow_negative_arrival_times = false;
+
         // "under the hood" samples (power of two; 1024 is a good default)
-        long internal_nt = 1024;                 
+        long internal_nt = 1024;
     };
 
     // Construction parameters, immutable after construction. Public so callers can read them; also

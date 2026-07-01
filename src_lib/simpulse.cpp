@@ -221,9 +221,24 @@ SinglePulse::SinglePulse(const Params &p)
         // --- sparse indices on the zero-based grid (sample 'it' spans [it*dt, (it+1)*dt]) ---
         double pt0 = undispersed_arrival_time_sec + t0;   // absolute pulse start (seconds)
         double pt1 = undispersed_arrival_time_sec + t1;   // absolute pulse end
-        long i0 = std::max(0L, (long)floor(pt0 / dt));
-        long i1 = std::max(0L, (long)ceil (pt1 / dt));
-        long n = i1 - i0;
+        long i0 = (long)floor(pt0 / dt);           // first sample index (may be < 0)
+        long i1 = std::max(0L, (long)ceil(pt1 / dt));
+
+        // A pulse that starts before t=0. By default this is an error; if allow_negative_arrival_times
+        // is set, clip the t<0 part (i0 -> 0) and keep the rest. (If nothing survives -- e.g. every
+        // channel is entirely at t<0 -- the total<=0 check after the loop still throws.)
+        if (i0 < 0) {
+            if (!params.allow_negative_arrival_times) {
+                stringstream ss;
+                ss << "pirate::simpulse::SinglePulse: channel " << ifreq << " has samples at t < 0"
+                   << " (first sample index " << i0 << "). Increase undispersed_arrival_time_sec, or"
+                   << " set allow_negative_arrival_times=true to clip the t<0 part.";
+                throw runtime_error(ss.str());
+            }
+            i0 = 0;   // clip: silently discard the part of the pulse at t < 0
+        }
+
+        long n = i1 - i0;   // >= 0 (i1 >= 0 and i1 >= i0, since pt1 > pt0)
 
         freq_it0.data[ifreq] = i0;
         freq_nt.data[ifreq] = n;
@@ -303,7 +318,8 @@ void SinglePulse::print(ostream &os) const
        << ",nfreq=" << nfreq << ",freq_lo_MHz=" << edges[0] << ",freq_hi_MHz=" << edges[nfreq]
        << ",dm=" << params.dm << ",sm=" << params.sm << ",intrinsic_width=" << params.intrinsic_width
        << ",snr=" << params.snr << ",spectral_index=" << params.spectral_index
-       << ",undispersed_arrival_time_sec=" << params.undispersed_arrival_time_sec << ")";
+       << ",undispersed_arrival_time_sec=" << params.undispersed_arrival_time_sec
+       << ",allow_negative_arrival_times=" << params.allow_negative_arrival_times << ")";
 }
 
 

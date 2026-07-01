@@ -53,6 +53,8 @@ void register_simpulse_bindings(pybind11::module &m)
         "- ``snr`` (float) -- target signal-to-noise (perfect matched filter); sets the normalization. Default 30.\n"
         "- ``spectral_index`` (float) -- exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.\n"
         "- ``undispersed_arrival_time_sec`` (float) -- arrival time as freq->infty, in seconds.\n"
+        "- ``allow_negative_arrival_times`` (bool) -- if False (default), a pulse with samples at t<0\n"
+        "  is an error; if True, the t<0 part is clipped. Default False.\n"
         "\n"
         "Precomputed sparse representation (arrays): ``freq_it0`` / ``freq_nt`` / ``freq_sd_off``\n"
         "(length nfreq, int) and ``sparse_data`` (float). Also ``nt_min`` (smallest out_nt with no\n"
@@ -60,7 +62,8 @@ void register_simpulse_bindings(pybind11::module &m)
 
         .def(py::init([](long internal_nt, double time_sample_ms, const Array<double> &freq_edges_MHz,
                          const Array<double> &freq_variances, double dm, double sm, double intrinsic_width,
-                         double spectral_index, double undispersed_arrival_time_sec, double snr) {
+                         double spectral_index, double undispersed_arrival_time_sec, double snr,
+                         bool allow_negative_arrival_times) {
                  SinglePulse::Params p;
                  p.internal_nt = internal_nt;
                  p.time_sample_ms = time_sample_ms;
@@ -72,11 +75,13 @@ void register_simpulse_bindings(pybind11::module &m)
                  p.spectral_index = spectral_index;
                  p.undispersed_arrival_time_sec = undispersed_arrival_time_sec;
                  p.snr = snr;
+                 p.allow_negative_arrival_times = allow_negative_arrival_times;
                  return new SinglePulse(p);
              }),
              py::arg("internal_nt"), py::arg("time_sample_ms"), py::arg("freq_edges_MHz"),
              py::arg("freq_variances"), py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"),
-             py::arg("spectral_index"), py::arg("undispersed_arrival_time_sec"), py::arg("snr") = 30.0)
+             py::arg("spectral_index"), py::arg("undispersed_arrival_time_sec"), py::arg("snr") = 30.0,
+             py::arg("allow_negative_arrival_times") = false)
 
         // Read-only views of the construction parameters (SinglePulse::params).
         .def_property_readonly("internal_nt", [](const SinglePulse &s) { return s.params.internal_nt; })
@@ -89,6 +94,7 @@ void register_simpulse_bindings(pybind11::module &m)
         .def_property_readonly("snr", [](const SinglePulse &s) { return s.params.snr; })
         .def_property_readonly("spectral_index", [](const SinglePulse &s) { return s.params.spectral_index; })
         .def_property_readonly("undispersed_arrival_time_sec", [](const SinglePulse &s) { return s.params.undispersed_arrival_time_sec; })
+        .def_property_readonly("allow_negative_arrival_times", [](const SinglePulse &s) { return s.params.allow_negative_arrival_times; })
 
         // Precomputed sparse representation.
         .def_readonly("freq_it0", &SinglePulse::freq_it0)
