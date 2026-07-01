@@ -148,7 +148,7 @@ struct SimulatedFrameFactory
     // ----- Threads -----
 
     std::thread producer_thread;
-    long num_randomizers = 0;                   // = min(nbeams, num_vcpus/2)
+    long num_randomizers = 0;                   // = min(nbeams, num_vcpus/2); ctor requires > 0
     std::vector<std::thread> randomizer_threads;
 
     // ----- Public interface -----
@@ -157,7 +157,8 @@ struct SimulatedFrameFactory
     // metadata, sizes + spawns the randomizer pool and the producer thread. The
     // spawned threads inherit the caller's vcpu affinity, so Python callers must
     // construct inside a ThreadAffinity context manager. Throws if the allocator
-    // is null, frame_set_queue_size < 1, or the allocator has no metadata yet.
+    // is null, frame_set_queue_size < 1, the allocator has no metadata yet, or
+    // num_randomizers would be 0 (needs nbeams >= 1 and a >= 2-vcpu affinity).
     explicit SimulatedFrameFactory(const Params &params);
 
     // Destructor: stop() (which also stops the allocator) then joins the
@@ -196,9 +197,8 @@ private:
     void randomizer_main();
 
     // Randomize one set: dispatch its per-beam work across the randomizer pool
-    // and block until complete (or do it serially if num_randomizers == 0).
-    // Throws if the factory is stopped (the in-flight job is still fully drained
-    // first, so 'fset' remains safe to release).
+    // and block until complete. Throws if the factory is stopped (the in-flight
+    // job is still fully drained first, so 'fset' remains safe to release).
     void _randomize_set(AssembledFrameSet &fset);
 
     // Helper for entry points. Caller must hold 'lock'. Rethrows 'error' if

@@ -3,6 +3,7 @@
 
 #include <algorithm>   // std::min
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -48,13 +49,17 @@ SimulatedFrameFactory::SimulatedFrameFactory(const Params &params) :
     // size of THIS (constructor-calling) thread's vcpu affinity. The spawned
     // randomizer threads (and the producer) inherit that same affinity. The /2
     // leaves headroom for the FakeXEngine worker threads that share the vcpus.
-    // num_randomizers can legitimately be 0 (e.g. single-vcpu affinity);
-    // _randomize_set() handles that by doing the work serially.
-    {
-        vector<int> vcpu_list = get_thread_affinity();
-        num_randomizers = std::min(nbeams, long(vcpu_list.size()) / 2);
-        if (num_randomizers < 0)
-            num_randomizers = 0;
+    // We require num_randomizers > 0 (so _randomize_set() always has a pool to
+    // dispatch to) -- i.e. nbeams >= 1 and a caller affinity of >= 2 vcpus.
+    long num_vcpus = long(get_thread_affinity().size());
+    num_randomizers = std::min(nbeams, num_vcpus / 2);
+    if (num_randomizers <= 0) {
+        stringstream ss;
+        ss << "SimulatedFrameFactory: num_randomizers must be > 0, but got "
+           << num_randomizers << " = min(nbeams=" << nbeams << ", num_vcpus/2="
+           << (num_vcpus / 2) << "). Requires nbeams >= 1 and a caller vcpu"
+              " affinity of size >= 2 (construct inside a ThreadAffinity context).";
+        throw runtime_error(ss.str());
     }
     randomizer_threads.reserve(num_randomizers);
 
@@ -204,17 +209,6 @@ void SimulatedFrameFactory::_randomize_set(AssembledFrameSet &fset)
 {
     // Sets from our allocator always have exactly 'nbeams' frames.
     xassert_eq(long(fset.frames.size()), nbeams);
-
-    // Degenerate pool (e.g. single-vcpu affinity): honor the stop contract, then
-    // randomize serially in this (producer) thread.
-    if (num_randomizers == 0) {
-        {
-            lock_guard<mutex> lk(lock);
-            _throw_if_stopped("SimulatedFrameFactory::_randomize_set");
-        }
-        fset.randomize(normalized ? xmd : nullptr, gaussian);
-        return;
-    }
 
     unique_lock<mutex> lk(lock);
     _throw_if_stopped("SimulatedFrameFactory::_randomize_set");
