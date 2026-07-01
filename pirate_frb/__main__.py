@@ -1256,6 +1256,8 @@ def parse_run_toy_grouper(subparsers):
     parser.add_argument('-d', '--delay', type=float, default=0.0, metavar='SECONDS',
                         help="Artificial per-chunk delay (seconds) inserted into the grouper "
                              "loop, e.g. -d 0.001 for a 1 ms delay (default: 0, no delay).")
+    parser.add_argument('--histogram', metavar='FILE',
+                        help='Write a histogram of SNR values to the given filename upon termination')
     # Exactly one of -s/-S is required.
     sifter_group = parser.add_mutually_exclusive_group(required=True)
     sifter_group.add_argument('-s', '--sifter', metavar='SIFTER_ADDR',
@@ -1271,12 +1273,16 @@ def run_toy_grouper_command(args):
     # single address), and fail-fast: if any child exits, run_processes() stops the
     # rest. A fresh process (not fork) avoids CUDA-after-fork hazards.
     if len(args.grouper_addrs) == 1:
-        run_toy_grouper(args.grouper_addrs[0], sifter_addr=args.sifter, delay=args.delay)
+        run_toy_grouper(args.grouper_addrs[0], sifter_addr=args.sifter, delay=args.delay,
+                        histogram=args.histogram)
         return
     from .utils import run_processes
     # Re-pass exactly one of the (mutually-exclusive, required) sifter flags.
     sifter_flag = ['--sifter', args.sifter] if (args.sifter is not None) else ['--no-sifter']
     base = [sys.executable, '-m', 'pirate_frb', 'run_toy_grouper', *sifter_flag, '--delay', str(args.delay)]
+    # FIXME - not sure this makes sense - multiple copies, same filename??
+    if args.histogram:
+        base.extend(['--histogram', args.histogram])
     rc = run_processes([base + [addr] for addr in args.grouper_addrs])
     if rc:
         sys.exit(rc)

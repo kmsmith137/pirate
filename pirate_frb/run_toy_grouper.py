@@ -10,7 +10,7 @@ import itertools
 import time
 
 
-def _run_toy_grouper(grouper, sifter=None, delay=0.0):
+def _run_toy_grouper(grouper, sifter=None, delay=0.0, do_histogram=False):
     """
     Main grouper loop (factored out of run_toy_grouper to reduce nesting).
 
@@ -41,6 +41,14 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
         
         print(f'{grouper.grouper_ip_addr}: connected to sifter at {sifter.server_address}, '
               f'sent ConfigMessage', flush=True)
+
+    if do_histogram:
+        lo,hi = -10, +100
+        nbins = int((hi - lo)/0.1)
+        grouper.g_histogram = cp.zeros(nbins, int)
+        grouper.g_histogram_bins = cp.linspace(lo, hi, nbins+1)
+        grouper.g_histogram_bins[0]  = -1e6
+        grouper.g_histogram_bins[-1] = +1e6
 
     # The grouper receives dedispersion outputs as an outer loop over time chunks,
     # followed by an inner loop over beam batches. Dedispersion outputs are arrays
@@ -84,6 +92,11 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
                     g_idm   = cp.where(upd, idm, g_idm)
                     g_itime = cp.where(upd, itime, g_itime)
 
+                    if do_histogram:
+                        # SNR histogram
+                        h,_ = cp.histogram(tree_out.ravel(), bins=grouper.g_histogram_bins)
+                        grouper.g_histogram += h
+
         # Now we have the (snr, itree, ibeam, idm, itime) of a single "event".
         # We copy this data from the GPU to the host, and do a little math to convert
         # to "physical" quantities such as DM and arrival time. The math is explained
@@ -105,7 +118,7 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
             time.sleep(delay)
 
 
-def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
+def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, histogram=None):
     """Run a toy FrbGrouper consumer at 'grouper_addr' (e.g. '127.0.0.1:7000').
 
     Acts as the downstream consumer of an FrbServer producer over CUDA IPC.
@@ -133,7 +146,7 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
     # 'with' exits (after the grouper's).
     with sifter_cm as sifter, FrbGrouper(grouper_addr) as grouper:
         try:
-            _run_toy_grouper(grouper, sifter, delay)
+            _run_toy_grouper(grouper, sifter, delay, do_histogram=(histogram is not None))
         except KeyboardInterrupt:
             print(f'{grouper_addr}: interrupted; shutting down', flush=True)
         except RuntimeError as e:
@@ -144,4 +157,12 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
                 print(f'{grouper_addr}: producer disconnected ({e}); exiting', flush=True)
             else:
                 raise
+        finally:
+            if histogram:
+                print('Grouper finally: writing histogram file' + histogram)
+                with open(histogram, 'wb') as f:
+                    import pickle
+                    print('Writing', histogram)
+                    pickle.dump(dict(histogram=grouper.g_histogram.get(),
+                                     histogram_bins=grouper.g_histogram_bins.get()), f)
         # FrbGrouper.__exit__ restores affinity/device + closes on every path.
