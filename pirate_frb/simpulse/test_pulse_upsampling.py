@@ -4,7 +4,7 @@ upsampling in frequency and/or time. Ported from simpulse/test_pulse_upsampling.
 
 Time sampling is now a construction parameter (time_sample_ms), and the grid is zero-based, so a
 time-upsampled pulse is one built with a smaller time_sample_ms (= coarse / nupsample). The pulse
-is framed near t=0 (via undispersed_arrival_time) so the zero-based dense arrays stay compact.
+is framed near t=0 (via undispersed_arrival_time_sec) so the zero-based dense arrays stay compact.
 
 The test is APPROXIMATE and is not expected to pass to machine precision. It PRINTS the correlation
 coefficient and residual for the operator to interpret; it does not raise. Run it via
@@ -61,14 +61,14 @@ class upsampling_test_instance:
         self.fluence = np.random.uniform(1.0, 2.0)
         self.spectral_index = np.random.uniform(-1.0, 1.0)
 
-        # Frame the pulse near t=0 on the zero-based grid: choose undispersed_arrival_time so the
+        # Frame the pulse near t=0 on the zero-based grid: choose undispersed_arrival_time_sec so the
         # earliest (highest-frequency) channel's pulse starts just after t=0. (Uses the same
         # conservative leading-margin estimate as the original code's window placement.)
         d0 = simpulse.dispersion_delay(self.dm, self.freq_hi_MHz)
         d1 = simpulse.dispersion_delay(self.dm, self.freq_lo_MHz + (self.freq_hi_MHz - self.freq_lo_MHz) / self.nfreq)
         d2 = simpulse.dispersion_delay(self.dm, self.freq_lo_MHz)
         lead = 2.0*self.tsamp + 2.0*(d2 - d1) + 5.0*self.intrinsic_width   # dt_s + dt_d + dt_i
-        self.undispersed_arrival_time = -d0 + lead
+        self.undispersed_arrival_time_sec = -d0 + lead
 
         # Non-uniform (but not-too-irregular) coarse channel edges spanning [freq_lo, freq_hi], to
         # exercise the unequal-width code path. Channel widths stay within [0.2, 1.8] x the uniform
@@ -81,7 +81,7 @@ class upsampling_test_instance:
     def __repr__(self):
         keys = ['nfreq', 'freq_lo_MHz', 'freq_hi_MHz', 'tsamp', 'diagonal_dm',
                 'sm0', 'dm', 'sm', 'intrinsic_width', 'fluence', 'spectral_index',
-                'undispersed_arrival_time']
+                'undispersed_arrival_time_sec']
 
         ret = 'upsampling_test_instance('
         first = True
@@ -108,7 +108,7 @@ class upsampling_test_instance:
 
     def _make_single_pulse_object(self, freq_edges_MHz, tsamp_sec):
         return simpulse.SinglePulse(
-            pulse_nt = 1024,
+            internal_nt = 1024,
             time_sample_ms = 1.0e3 * tsamp_sec,
             freq_edges_MHz = freq_edges_MHz,
             dm = self.dm,
@@ -116,7 +116,7 @@ class upsampling_test_instance:
             intrinsic_width = self.intrinsic_width,
             fluence = self.fluence,
             spectral_index = self.spectral_index,
-            undispersed_arrival_time = self.undispersed_arrival_time
+            undispersed_arrival_time_sec = self.undispersed_arrival_time_sec
         )
 
     def run_test(self, nupfreq, nupsample):
@@ -128,7 +128,7 @@ class upsampling_test_instance:
         s0 = self._make_single_pulse_object(coarse_edges, self.tsamp)
         s1 = self._make_single_pulse_object(fine_edges, self.tsamp / nupsample)
 
-        # Size the coarse grid to hold both pulses (they share undispersed_arrival_time, so
+        # Size the coarse grid to hold both pulses (they share undispersed_arrival_time_sec, so
         # s1.nt_min ~ nupsample * s0.nt_min up to rounding).
         out_nt = max(int(s0.nt_min), -(-int(s1.nt_min) // nupsample))
 

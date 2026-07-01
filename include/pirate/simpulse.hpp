@@ -41,7 +41,7 @@ struct SinglePulse {
     // Constructor arguments, bundled into a Params struct (see the constructor below).
     struct Params
     {
-        long   pulse_nt = 1024;                 // "under the hood" samples (power of two; 1024 is a good default)
+        long   internal_nt = 1024;                 // "under the hood" samples (power of two; 1024 is a good default)
         double time_sample_ms = 0.0;            // time-sample duration in ms; REQUIRED (dt = 1e-3*time_sample_ms sec, must be > 0)
 
         // Sorted (strictly increasing) array of length (nfreq+1). The i-th frequency channel spans
@@ -55,22 +55,22 @@ struct SinglePulse {
         double intrinsic_width = 0.0;           // frequency-independent Gaussian width in seconds
         double fluence = 1.0;                   // integrated flux (units: whatever add_to_timestream() outputs, times seconds)
         double spectral_index = 0.0;            // exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha
-        double undispersed_arrival_time = 0.0;  // arrival time at nu=infty, in seconds relative to an arbitrary origin
+        double undispersed_arrival_time_sec = 0.0;  // arrival time at nu=infty, in seconds relative to an arbitrary origin
     };
 
     // Construction parameters, immutable after construction. Public so callers can read them; also
-    // exposed to python as read-only attributes (SinglePulse.pulse_nt, .time_sample_ms, .dm, ...,
+    // exposed to python as read-only attributes (SinglePulse.internal_nt, .time_sample_ms, .dm, ...,
     // .freq_edges_MHz, plus the derived .nfreq / .freq_lo_MHz / .freq_hi_MHz).
     const Params params;
 
     // Precomputed SPARSE representation of the pulse, on the zero-based time grid where sample 'it'
     // (0 <= it) spans [it*dt, (it+1)*dt] seconds, dt = 1e-3*time_sample_ms. Computed in the ctor.
     // Frequencies are ordered LOW to HIGH. (Also exposed to python, read-only.)
-    ksgpu::Array<long>  sparse_i0;      // (nfreq,) first dense-grid sample index of channel i's pulse
-    ksgpu::Array<long>  sparse_n;       // (nfreq,) number of samples of channel i's pulse
-    ksgpu::Array<long>  sparse_offset;  // (nfreq,) offset into sparse_data (= sum_{j<i} sparse_n[j])
-    ksgpu::Array<float> sparse_data;    // (sum(sparse_n),) packed samples; fluence + spectral weight baked in
-    long nt_min;                        // = max_i (sparse_i0[i] + sparse_n[i]); smallest out_nt with no clipping
+    ksgpu::Array<long>  freq_it0;     // (nfreq,) first dense-grid sample index of channel i's pulse
+    ksgpu::Array<long>  freq_nt;      // (nfreq,) number of samples of channel i's pulse
+    ksgpu::Array<long>  freq_sd_off;  // (nfreq,) offset into sparse_data (= sum_{j<i} freq_nt[j])
+    ksgpu::Array<float> sparse_data;  // (sum(freq_nt),) packed samples; fluence + spectral weight baked in
+    long                nt_min;       // = max_i (freq_it0[i] + freq_nt[i]); smallest out_nt with no clipping
 
     SinglePulse(const Params &params);
 

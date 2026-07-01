@@ -39,14 +39,14 @@ void register_simpulse_bindings(pybind11::module &m)
         "[it*dt, (it+1)*dt]).\n"
         "\n"
         "The constructor precomputes the pulse as a SPARSE array of per-channel time samples\n"
-        "(sparse_i0 / sparse_n / sparse_offset / sparse_data); add_to_timestream() scatters it into a\n"
+        "(freq_it0 / freq_nt / freq_sd_off / sparse_data); add_to_timestream() scatters it into a\n"
         "dense (nfreq, out_nt) array. Frequency channels are ordered LOW to HIGH and may have UNEQUAL\n"
         "widths (channel i spans ``[freq_edges_MHz[i], freq_edges_MHz[i+1]]``). NOTE: bonsai/rf_pipelines\n"
         "and pirate intensity arrays use the OPPOSITE, high-to-low, ordering.\n"
         "\n"
         "Attributes (read-only). Construction parameters:\n"
         "\n"
-        "- ``pulse_nt`` (int) -- number of under-the-hood samples representing the pulse.\n"
+        "- ``internal_nt`` (int) -- number of under-the-hood samples representing the pulse.\n"
         "- ``time_sample_ms`` (float) -- time-sample duration in ms (dt = 1e-3*time_sample_ms sec).\n"
         "- ``freq_edges_MHz`` (array) -- sorted, length (nfreq+1); channel i spans edges[i]..edges[i+1].\n"
         "- ``dm`` (float) -- dispersion measure (pc cm^{-3}).\n"
@@ -54,17 +54,17 @@ void register_simpulse_bindings(pybind11::module &m)
         "- ``intrinsic_width`` (float) -- frequency-independent Gaussian width in seconds.\n"
         "- ``fluence`` (float) -- integrated flux at the central frequency.\n"
         "- ``spectral_index`` (float) -- exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.\n"
-        "- ``undispersed_arrival_time`` (float) -- arrival time as freq->infty, in seconds.\n"
+        "- ``undispersed_arrival_time_sec`` (float) -- arrival time as freq->infty, in seconds.\n"
         "\n"
-        "Precomputed sparse representation (arrays): ``sparse_i0`` / ``sparse_n`` / ``sparse_offset``\n"
+        "Precomputed sparse representation (arrays): ``freq_it0`` / ``freq_nt`` / ``freq_sd_off``\n"
         "(length nfreq, int) and ``sparse_data`` (float). Also ``nt_min`` (smallest out_nt with no\n"
         "clipping) and the derived ``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
 
-        .def(py::init([](long pulse_nt, double time_sample_ms, const Array<double> &freq_edges_MHz,
+        .def(py::init([](long internal_nt, double time_sample_ms, const Array<double> &freq_edges_MHz,
                          double dm, double sm, double intrinsic_width, double fluence,
-                         double spectral_index, double undispersed_arrival_time) {
+                         double spectral_index, double undispersed_arrival_time_sec) {
                  SinglePulse::Params p;
-                 p.pulse_nt = pulse_nt;
+                 p.internal_nt = internal_nt;
                  p.time_sample_ms = time_sample_ms;
                  p.freq_edges_MHz = freq_edges_MHz;
                  p.dm = dm;
@@ -72,15 +72,15 @@ void register_simpulse_bindings(pybind11::module &m)
                  p.intrinsic_width = intrinsic_width;
                  p.fluence = fluence;
                  p.spectral_index = spectral_index;
-                 p.undispersed_arrival_time = undispersed_arrival_time;
+                 p.undispersed_arrival_time_sec = undispersed_arrival_time_sec;
                  return new SinglePulse(p);
              }),
-             py::arg("pulse_nt"), py::arg("time_sample_ms"), py::arg("freq_edges_MHz"),
+             py::arg("internal_nt"), py::arg("time_sample_ms"), py::arg("freq_edges_MHz"),
              py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"), py::arg("fluence"),
-             py::arg("spectral_index"), py::arg("undispersed_arrival_time"))
+             py::arg("spectral_index"), py::arg("undispersed_arrival_time_sec"))
 
         // Read-only views of the construction parameters (SinglePulse::params).
-        .def_property_readonly("pulse_nt", [](const SinglePulse &s) { return s.params.pulse_nt; })
+        .def_property_readonly("internal_nt", [](const SinglePulse &s) { return s.params.internal_nt; })
         .def_property_readonly("time_sample_ms", [](const SinglePulse &s) { return s.params.time_sample_ms; })
         .def_property_readonly("freq_edges_MHz", [](const SinglePulse &s) { return s.params.freq_edges_MHz; })
         .def_property_readonly("dm", [](const SinglePulse &s) { return s.params.dm; })
@@ -88,12 +88,12 @@ void register_simpulse_bindings(pybind11::module &m)
         .def_property_readonly("intrinsic_width", [](const SinglePulse &s) { return s.params.intrinsic_width; })
         .def_property_readonly("fluence", [](const SinglePulse &s) { return s.params.fluence; })
         .def_property_readonly("spectral_index", [](const SinglePulse &s) { return s.params.spectral_index; })
-        .def_property_readonly("undispersed_arrival_time", [](const SinglePulse &s) { return s.params.undispersed_arrival_time; })
+        .def_property_readonly("undispersed_arrival_time_sec", [](const SinglePulse &s) { return s.params.undispersed_arrival_time_sec; })
 
         // Precomputed sparse representation.
-        .def_readonly("sparse_i0", &SinglePulse::sparse_i0)
-        .def_readonly("sparse_n", &SinglePulse::sparse_n)
-        .def_readonly("sparse_offset", &SinglePulse::sparse_offset)
+        .def_readonly("freq_it0", &SinglePulse::freq_it0)
+        .def_readonly("freq_nt", &SinglePulse::freq_nt)
+        .def_readonly("freq_sd_off", &SinglePulse::freq_sd_off)
         .def_readonly("sparse_data", &SinglePulse::sparse_data)
         .def_readonly("nt_min", &SinglePulse::nt_min)
 

@@ -21,7 +21,7 @@ from .. import simpulse
 def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, fluence, spectral_index,
                 nsamp):
     """Build a SinglePulse with equal-width channels, framed near t=0 and sampled at ~nsamp samples
-    across the pulse. The framing (extent/undispersed_arrival_time) is independent of nsamp, so
+    across the pulse. The framing (extent/undispersed_arrival_time_sec) is independent of nsamp, so
     coarse- and fine-nsamp pulses overlay on the time axis."""
     d_hi = simpulse.dispersion_delay(dm, freq_hi_MHz)
     d_lo = simpulse.dispersion_delay(dm, freq_lo_MHz)
@@ -34,12 +34,12 @@ def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, fluenc
 
     edges = np.linspace(freq_lo_MHz, freq_hi_MHz, nfreq + 1)
     return simpulse.SinglePulse(
-        pulse_nt = 1024,
+        internal_nt = 1024,
         time_sample_ms = 1.0e3 * extent / nsamp,
         freq_edges_MHz = edges,
         dm = dm, sm = sm, intrinsic_width = intrinsic_width,
         fluence = fluence, spectral_index = spectral_index,
-        undispersed_arrival_time = -d_hi + lead)
+        undispersed_arrival_time_sec = -d_hi + lead)
 
 
 def make_plot(plt, matplotlib, pulse_args, ifreq_list, color_list, label_list, filename):
@@ -130,9 +130,9 @@ def plot4(plt, matplotlib):
     edges_bot = np.linspace(freq_lo**-2, freq_hi**-2, nchan + 1) ** -0.5    # even in freq^-2 (ordered low->high freq)
 
     def make(edges):
-        return simpulse.SinglePulse(pulse_nt=1024, time_sample_ms=time_sample_ms, freq_edges_MHz=edges,
+        return simpulse.SinglePulse(internal_nt=1024, time_sample_ms=time_sample_ms, freq_edges_MHz=edges,
                                     dm=dm, sm=sm, intrinsic_width=width, fluence=1.0,
-                                    spectral_index=0.0, undispersed_arrival_time=uat)
+                                    spectral_index=0.0, undispersed_arrival_time_sec=uat)
 
     sp_top, sp_bot = make(edges_top), make(edges_bot)
     out_nt = max(sp_top.nt_min, sp_bot.nt_min)

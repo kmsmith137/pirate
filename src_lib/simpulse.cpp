@@ -63,18 +63,18 @@ static void check_dfti(MKL_LONG status, const char *what)
 }
 
 
-// Helper called by the constructor. 'arr' has length (pulse_nt+1); 's' is a time in "sample coords",
-// i.e. elements of 'arr' correspond to times s = 0, 1, ..., pulse_nt.
-static double interpolate_cumsum(long pulse_nt, const double *arr, double s)
+// Helper called by the constructor. 'arr' has length (internal_nt+1); 's' is a time in "sample coords",
+// i.e. elements of 'arr' correspond to times s = 0, 1, ..., internal_nt.
+static double interpolate_cumsum(long internal_nt, const double *arr, double s)
 {
     if (s < 1.0e-10)
         return 0.0;
-    if (s > pulse_nt - 1.0e-10)
-        return arr[pulse_nt];
+    if (s > internal_nt - 1.0e-10)
+        return arr[internal_nt];
 
     long is = (long)s;
     double ds = s - is;
-    xassert((is >= 0) && (is < pulse_nt));
+    xassert((is >= 0) && (is < internal_nt));
 
     return (1.0-ds)*arr[is] + ds*arr[is+1];
 }
@@ -111,19 +111,19 @@ SinglePulse::SinglePulse(const Params &p)
 {
     // Local aliases (read-only) for the construction params. 'params' is the (validated) member,
     // whose freq_edges_MHz is an owned deep copy.
-    const long pulse_nt = params.pulse_nt;
+    const long internal_nt = params.internal_nt;
     const double time_sample_ms = params.time_sample_ms;
     const double dm = params.dm;
     const double sm = params.sm;
     const double intrinsic_width = params.intrinsic_width;
     const double fluence = params.fluence;
-    const double undispersed_arrival_time = params.undispersed_arrival_time;
+    const double undispersed_arrival_time_sec = params.undispersed_arrival_time_sec;
 
     // The i-th channel spans [edges[i], edges[i+1]]; channel widths need not be equal.
     const double *edges = params.freq_edges_MHz.data;
     const long nfreq = params.freq_edges_MHz.size - 1;
 
-    xassert(pulse_nt >= 64);          // using fewer time samples than this is probably a mistake
+    xassert(internal_nt >= 64);          // using fewer time samples than this is probably a mistake
     xassert(time_sample_ms > 0.0);    // required; determines the (zero-based) time grid
     xassert(dm >= 0.0);
     xassert(sm >= 0.0);
@@ -139,17 +139,17 @@ SinglePulse::SinglePulse(const Params &p)
     const double nu0 = 0.5 * (edges[0] + edges[nfreq]);  // spectral reference frequency nu_0
 
     // Per-channel index arrays (members).
-    sparse_i0     = ksgpu::Array<long>({nfreq}, ksgpu::af_uhost);
-    sparse_n      = ksgpu::Array<long>({nfreq}, ksgpu::af_uhost);
-    sparse_offset = ksgpu::Array<long>({nfreq}, ksgpu::af_uhost);
+    freq_it0     = ksgpu::Array<long>({nfreq}, ksgpu::af_uhost);
+    freq_nt      = ksgpu::Array<long>({nfreq}, ksgpu::af_uhost);
+    freq_sd_off = ksgpu::Array<long>({nfreq}, ksgpu::af_uhost);
 
     // FFT scratch + a per-channel cumsum temp (reused each iteration -- these are the old
     // "time-sampling-agnostic" arrays, now one dimension lower since they aren't retained).
-    long nfft = 2 * pulse_nt;
+    long nfft = 2 * internal_nt;
     long nfft2 = nfft/2 + 1;
     vector<double> bufr(nfft, 0.0);
     vector<complex<double>> bufc(nfft2, complex<double>(0.0, 0.0));
-    vector<double> cumsum(pulse_nt + 1);
+    vector<double> cumsum(internal_nt + 1);
 
     // Accumulates the packed per-channel samples; copied into the member sparse_data after the loop.
     vector<float> data;
@@ -165,7 +165,7 @@ SinglePulse::SinglePulse(const Params &p)
     check_dfti(DftiSetValue(plan, DFTI_PLACEMENT, DFTI_NOT_INPLACE), "DftiSetValue(PLACEMENT)");
     check_dfti(DftiCommitDescriptor(plan), "DftiCommitDescriptor");
 
-    long total = 0;   // running sum of sparse_n (== length of 'data')
+    long total = 0;   // running sum of freq_nt (== length of 'data')
     nt_min = 0;
 
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
@@ -182,14 +182,14 @@ SinglePulse::SinglePulse(const Params &p)
         double t0 = dm_delay0 - 0.1*dm_width - 4.0*intrinsic_width - tscatt;
         double t1 = dm_delay1 + 0.1*dm_width + 4.0*intrinsic_width + 10.0*tscatt;
         double tc = (dm_delay0 + dm_delay1) / 2.0;              // pulse center in channel
-        double dt_center = tc - (t0 + (t1-t0)/(2.0*pulse_nt));  // pulse center relative to first sample
+        double dt_center = tc - (t0 + (t1-t0)/(2.0*internal_nt));  // pulse center relative to first sample
         double freq_wt = pow(nu_c/nu0, params.spectral_index);  // spectral weight (folds in _compute_freq_wt)
 
         xassert(t0 < t1);
 
         // --- FFT synthesis of the pulse -> cumsum[] (normalized to sum=1) ---
-        // We sample the pulse at t_i = t0 + (i+0.5)*(t1-t0)/pulse_nt.
-        double omega0 = 2.0*M_PI * (double)pulse_nt / (double)nfft / (t1-t0);
+        // We sample the pulse at t_i = t0 + (i+0.5)*(t1-t0)/internal_nt.
+        double omega0 = 2.0*M_PI * (double)internal_nt / (double)nfft / (t1-t0);
         for (long j = 0; j < nfft2; j++) {
             double omega = omega0 * j;
 
@@ -206,21 +206,21 @@ SinglePulse::SinglePulse(const Params &p)
 
         // Cumulative sum (cleaning up samples which are negative due to discretization), normalized.
         cumsum[0] = 0.0;
-        for (long it = 0; it < pulse_nt; it++)
+        for (long it = 0; it < internal_nt; it++)
             cumsum[it+1] = cumsum[it] + max(bufr[it], 0.0);
-        for (long it = 0; it < pulse_nt+1; it++)
-            cumsum[it] = cumsum[it] / cumsum[pulse_nt];
+        for (long it = 0; it < internal_nt+1; it++)
+            cumsum[it] = cumsum[it] / cumsum[internal_nt];
 
         // --- sparse indices on the zero-based grid (sample 'it' spans [it*dt, (it+1)*dt]) ---
-        double pt0 = undispersed_arrival_time + t0;   // absolute pulse start (seconds)
-        double pt1 = undispersed_arrival_time + t1;   // absolute pulse end
+        double pt0 = undispersed_arrival_time_sec + t0;   // absolute pulse start (seconds)
+        double pt1 = undispersed_arrival_time_sec + t1;   // absolute pulse end
         long i0 = std::max(0L, (long)floor(pt0 / dt));
         long i1 = std::max(0L, (long)ceil (pt1 / dt));
         long n = i1 - i0;
 
-        sparse_i0.data[ifreq] = i0;
-        sparse_n.data[ifreq] = n;
-        sparse_offset.data[ifreq] = total;
+        freq_it0.data[ifreq] = i0;
+        freq_nt.data[ifreq] = n;
+        freq_sd_off.data[ifreq] = total;
         total += n;
         nt_min = std::max(nt_min, i0 + n);
 
@@ -228,8 +228,8 @@ SinglePulse::SinglePulse(const Params &p)
         // (This is the old add_pulse_to_frequency_channel, inlined; 'weight' baked in as 1.)
         double w = fluence * freq_wt / dt;   // per-call weight is applied later, in add_to_timestream()
         for (long it = i0; it < i1; it++) {
-            double a = interpolate_cumsum(pulse_nt, cumsum.data(), pulse_nt * ((double)it     * dt - pt0) / (t1 - t0));
-            double b = interpolate_cumsum(pulse_nt, cumsum.data(), pulse_nt * ((double)(it+1) * dt - pt0) / (t1 - t0));
+            double a = interpolate_cumsum(internal_nt, cumsum.data(), internal_nt * ((double)it     * dt - pt0) / (t1 - t0));
+            double b = interpolate_cumsum(internal_nt, cumsum.data(), internal_nt * ((double)(it+1) * dt - pt0) / (t1 - t0));
             data.push_back((float)(w * (b - a)));
         }
     }
@@ -238,7 +238,7 @@ SinglePulse::SinglePulse(const Params &p)
 
     if (total <= 0)
         throw runtime_error("pirate::simpulse::SinglePulse: pulse has no samples on the zero-based time grid"
-                            " (is undispersed_arrival_time very negative?)");
+                            " (is undispersed_arrival_time_sec very negative?)");
 
     // Copy the packed samples into the member array.
     sparse_data = ksgpu::Array<float>({total}, ksgpu::af_uhost);
@@ -260,9 +260,9 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double weight) con
     const float wf = (float)weight;
 
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-        long i0 = sparse_i0.data[ifreq];
-        long n = sparse_n.data[ifreq];
-        long off = sparse_offset.data[ifreq];
+        long i0 = freq_it0.data[ifreq];
+        long n = freq_nt.data[ifreq];
+        long off = freq_sd_off.data[ifreq];
 
         // Clip to [0, out_nt). i0 >= 0 by construction; clip the high end.
         long n_eff = std::min(n, out_nt - i0);
@@ -325,8 +325,8 @@ double SinglePulse::get_signal_to_noise(const ksgpu::Array<double> &sample_rms,
     double noise_var = 0.0;
 
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
-        long off = sparse_offset.data[ifreq];
-        long n = sparse_n.data[ifreq];
+        long off = freq_sd_off.data[ifreq];
+        long n = freq_nt.data[ifreq];
 
         double t = 0.0;   // sum of squared samples in this channel
         for (long j = 0; j < n; j++)
@@ -346,11 +346,11 @@ void SinglePulse::print(ostream &os) const
     const double *edges = params.freq_edges_MHz.data;
     const long nfreq = params.freq_edges_MHz.size - 1;
 
-    os << "SinglePulse(pulse_nt=" << params.pulse_nt << ",time_sample_ms=" << params.time_sample_ms
+    os << "SinglePulse(internal_nt=" << params.internal_nt << ",time_sample_ms=" << params.time_sample_ms
        << ",nfreq=" << nfreq << ",freq_lo_MHz=" << edges[0] << ",freq_hi_MHz=" << edges[nfreq]
        << ",dm=" << params.dm << ",sm=" << params.sm << ",intrinsic_width=" << params.intrinsic_width
        << ",fluence=" << params.fluence << ",spectral_index=" << params.spectral_index
-       << ",undispersed_arrival_time=" << params.undispersed_arrival_time << ")";
+       << ",undispersed_arrival_time_sec=" << params.undispersed_arrival_time_sec << ")";
 }
 
 
