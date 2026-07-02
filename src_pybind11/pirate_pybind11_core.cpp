@@ -201,21 +201,19 @@ void register_core_bindings(pybind11::module &m)
             "metadata's beam_ids / beam_positions_{x,y} are length-1 (just this\n"
             "frame's beam) and freq_channels is empty. See XEngineMetadata.hpp.")
         .def("randomize", &AssembledFrame::randomize,
-            // xmd may be None (-> null shared_ptr). No default: gaussian is required, and a
-            // trailing-defaults rule would then force a default on xmd too.
-            py::arg("xmd"), py::arg("gaussian"),
+            // No defaults: both flags are required (be explicit at the call site).
+            py::arg("normalize"), py::arg("gaussian"),
             py::call_guard<py::gil_scoped_release>(),
             "Fill the frame with random int4 data (intended for testing).\n\n"
             "gaussian=False: data is uniform over [-8, +7]. gaussian=True: data is\n"
             "simulated Gaussian noise quantized to int4 and clamped to [-7, +7]\n"
             "(the -8 sentinel is never produced).\n\n"
-            "scales/offsets (same regardless of 'gaussian'): if xmd is None, scales\n"
-            "are uniform in [0, 1] and offsets in [-1, 1]. If xmd is given, offset =\n"
-            "0 and scale = sqrt(variance / Vq) per frequency zone -- Vq = 17.5\n"
-            "(uniform, folding the -8 sentinel to 0) or avx2_4bit_noise_variance()\n"
-            "(gaussian) -- so the dequantized data has the per-zone variance\n"
-            "xmd.noise_variance. Requires xmd.zone_nfreq to sum to the frame's\n"
-            "nfreq, with one noise_variance entry per zone.\n\n"
+            "scales/offsets (same regardless of 'gaussian'): normalize=False -> scales\n"
+            "are uniform in [0, 1] and offsets in [-1, 1]. normalize=True -> offset = 0\n"
+            "and scale = sqrt(variance / Vq) per frequency zone -- Vq = 17.5 (uniform,\n"
+            "folding the -8 sentinel to 0) or avx2_4bit_noise_variance() (gaussian) --\n"
+            "so the dequantized data has the per-zone variance in this frame's own\n"
+            "metadata.noise_variance.\n\n"
             "Thread-safe with respect to the RNG (uses ksgpu's per-thread default\n"
             "RNG), but the caller must ensure no other thread concurrently reads or\n"
             "writes the same frame's data buffer -- only the RNG is protected.")
@@ -242,16 +240,13 @@ void register_core_bindings(pybind11::module &m)
         .def("validate", &AssembledFrameSet::validate,
             "Defensive consistency check; throws on inconsistency. Cheap.")
         .def("randomize", &AssembledFrameSet::randomize,
-            // xmd may be None (-> null shared_ptr). No default: matches
-            // AssembledFrame.randomize (a trailing-defaults rule would force
-            // a default on xmd too).
-            py::arg("xmd"), py::arg("gaussian"),
+            py::arg("normalize"), py::arg("gaussian"),
             py::call_guard<py::gil_scoped_release>(),
             "Fill every frame in the set with random int4 test data, by calling\n"
-            "AssembledFrame.randomize(xmd, gaussian) on each frame in turn (serial,\n"
-            "single-threaded). See AssembledFrame.randomize for the meaning of xmd\n"
-            "and gaussian. To randomize a stream of sets in parallel, use a\n"
-            "SimulatedFrameFactory.")
+            "AssembledFrame.randomize(normalize, gaussian) on each frame in turn\n"
+            "(serial, single-threaded). See AssembledFrame.randomize for the meaning\n"
+            "of normalize and gaussian. To randomize a stream of sets in parallel,\n"
+            "use a SimulatedFrameFactory.")
     ;
 
     // AssembledFrameAllocator: allocates AssembledFrameSets for multiple consumers.

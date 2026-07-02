@@ -892,7 +892,7 @@ struct SsdWorker : public Hwtest::Worker
             // can't inflate the measured SSD write throughput.
             auto xmd = XEngineMetadata::make_fiducial({32768}, {400.0, 800.0}, {0}, 1.0);
             asdf_frame = AssembledFrame::make_uninitialized(xmd, 2048, 0, 0);
-            asdf_frame->randomize(nullptr, /*gaussian=*/ false);
+            asdf_frame->randomize(/*normalize=*/ false, /*gaussian=*/ false);
             asdf_nbytes = asdf_frame->nfreq * asdf_frame->ntime / 2;
         }
         else {

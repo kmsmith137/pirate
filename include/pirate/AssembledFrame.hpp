@@ -158,22 +158,23 @@ struct AssembledFrame
     //         [-7,+7] via avx2_simulate_4bit_noise() (the -8 sentinel never occurs).
     //
     // scales/offsets are filled the same way regardless of 'gaussian':
-    //   - xmd is null:  scales uniform in [0,1], offsets uniform in [-1,1].
-    //   - xmd non-null: CALIBRATED -- offset = 0 and scale = S per frequency zone, chosen so the
-    //         dequantized data has the per-zone noise variance xmd->noise_variance. (S = sqrt(V/Vq),
-    //         where Vq is the int4 data variance: 17.5 for uniform [folding the -8 sentinel to 0],
-    //         avx2_4bit_noise_variance() for gaussian. See src_lib/AssembledFrame.cpp for the
-    //         derivation.) Requires xmd->zone_nfreq to sum to this frame's nfreq, and
-    //         xmd->noise_variance to have one entry per zone.
+    //   - normalize=false: scales uniform in [0,1], offsets uniform in [-1,1].
+    //   - normalize=true:  CALIBRATED -- offset = 0 and scale = S per frequency zone, chosen so the
+    //         dequantized data has the per-zone noise variance in this frame's own 'metadata'
+    //         (metadata->noise_variance). (S = sqrt(V/Vq), where Vq is the int4 data variance:
+    //         17.5 for uniform [folding the -8 sentinel to 0], avx2_4bit_noise_variance() for
+    //         gaussian. See src_lib/AssembledFrame.cpp for the derivation.) 'metadata' is non-null
+    //         by invariant, and its zone_nfreq sums to this frame's nfreq by construction.
     //
     // Thread-safety: snapshots the lock-protected 'scales_offsets'/'data' Arrays
     // under the lock, then fills them without the lock held (the snapshot pins
-    // the slab so a concurrent _reap_locked() cannot free it underneath). Safe
-    // to call concurrently with reaping; on a reaped (empty) frame it is a no-op.
-    // Callers still must not run two randomize() (or other writers) on the SAME
-    // frame concurrently -- the buffer contents are not lock-protected.
+    // the slab so a concurrent _reap_locked() cannot free it underneath). 'metadata'
+    // is immutable (never reaped), so reading it needs no lock. Safe to call
+    // concurrently with reaping; on a reaped (empty) frame it is a no-op. Callers
+    // still must not run two randomize() (or other writers) on the SAME frame
+    // concurrently -- the buffer contents are not lock-protected.
 
-    void randomize(const std::shared_ptr<const XEngineMetadata> &xmd, bool gaussian);
+    void randomize(bool normalize, bool gaussian);
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.
@@ -238,16 +239,17 @@ struct AssembledFrameSet
     // Convenience accessor (bounds-checked). Equivalent to frames.at(ibeam).
     const std::shared_ptr<AssembledFrame> &get_frame(long ibeam) const;
 
-    // randomize(): fill every frame in the set with random test data, by
-    // calling AssembledFrame::randomize(xmd, gaussian) on each frame in turn.
-    // 'xmd' and 'gaussian' are forwarded unchanged; see AssembledFrame::
-    // randomize() for their meaning (xmd null -> arbitrary scales/offsets;
-    // xmd non-null -> scales/offsets calibrated to xmd->noise_variance).
+    // randomize(): fill every frame in the set with random test data, by calling
+    // AssembledFrame::randomize(normalize, gaussian) on each frame in turn.
+    // 'normalize' and 'gaussian' are forwarded unchanged; see AssembledFrame::
+    // randomize() for their meaning (normalize=false -> arbitrary scales/offsets;
+    // normalize=true -> scales/offsets calibrated to each frame's metadata
+    // noise_variance).
     //
     // This is the SERIAL (single-threaded) path -- simple, and used by tests.
     // To randomize a stream of sets in PARALLEL (per-beam work distributed over
     // a randomizer-thread pool), use a SimulatedFrameFactory instead.
-    void randomize(const std::shared_ptr<const XEngineMetadata> &xmd, bool gaussian);
+    void randomize(bool normalize, bool gaussian);
 };
 
 

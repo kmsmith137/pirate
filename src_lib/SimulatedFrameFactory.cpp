@@ -1,5 +1,6 @@
 #include "../include/pirate/SimulatedFrameFactory.hpp"
-#include "../include/pirate/system_utils.hpp"   // get_thread_affinity()
+#include "../include/pirate/system_utils.hpp"    // get_thread_affinity()
+#include "../include/pirate/XEngineMetadata.hpp"  // get_metadata()->get_nbeams()
 
 #include <algorithm>   // std::min
 #include <memory>
@@ -19,8 +20,9 @@ namespace pirate {
 
 
 // File-scope helper: validate Params and fetch the allocator's (already-set)
-// metadata. Called from the constructor's initializer list, so the const members
-// 'xmd' / 'nbeams' can be initialized directly.
+// metadata. Called from the constructor's initializer list, so the const member
+// 'nbeams' can be initialized directly (per-frame randomize() reads each frame's
+// own metadata, so the factory does not retain the metadata itself).
 static shared_ptr<const XEngineMetadata>
 validate_and_get_metadata(const SimulatedFrameFactory::Params &params)
 {
@@ -42,8 +44,7 @@ SimulatedFrameFactory::SimulatedFrameFactory(const Params &params) :
     normalized(params.normalized),
     gaussian(params.gaussian),
     frame_set_queue_size(params.frame_set_queue_size),
-    xmd(validate_and_get_metadata(params)),
-    nbeams(xmd->get_nbeams())
+    nbeams(validate_and_get_metadata(params)->get_nbeams())
 {
     // Size the randomizer pool: min(nbeams, num_vcpus/2), where num_vcpus is the
     // size of THIS (constructor-calling) thread's vcpu affinity. The spawned
@@ -272,7 +273,7 @@ void SimulatedFrameFactory::_randomizer_main()
 
         std::exception_ptr ex;
         try {
-            frame->randomize(normalized ? xmd : nullptr, gaussian);
+            frame->randomize(normalized, gaussian);
         } catch (...) {
             ex = std::current_exception();
         }

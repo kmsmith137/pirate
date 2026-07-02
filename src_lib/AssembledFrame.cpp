@@ -716,13 +716,13 @@ const shared_ptr<AssembledFrame> &AssembledFrameSet::get_frame(long ibeam) const
 }
 
 
-void AssembledFrameSet::randomize(const shared_ptr<const XEngineMetadata> &xmd, bool gaussian)
+void AssembledFrameSet::randomize(bool normalize, bool gaussian)
 {
     // Serial per-frame randomization. See the header for the parallel
     // alternative (SimulatedFrameFactory).
     for (const auto &f : frames) {
         xassert(f);   // AssembledFrameSet invariant: all frames[i] non-null
-        f->randomize(xmd, gaussian);
+        f->randomize(normalize, gaussian);
     }
 }
 
@@ -777,7 +777,7 @@ shared_ptr<AssembledFrame> AssembledFrame::make_uninitialized(
 }
 
 
-void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd, bool gaussian)
+void AssembledFrame::randomize(bool normalize, bool gaussian)
 {
     // Thread-safety: the array STATE (empty vs nonempty, and which slab the
     // arrays point at) is lock-protected -- a concurrent _reap_locked() on the
@@ -821,8 +821,8 @@ void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd, boo
         __half *so = static_cast<__half *>(so_arr.data);
         long npairs = so_nelts / 2;
 
-        if (!xmd) {
-            // No metadata: scales uniform in [0, 1], offsets uniform in [-1, 1].
+        if (!normalize) {
+            // Un-normalized: scales uniform in [0, 1], offsets uniform in [-1, 1].
             std::uniform_real_distribution<float> dist_scale ( 0.0f, 1.0f);
             std::uniform_real_distribution<float> dist_offset(-1.0f, 1.0f);
             for (long i = 0; i < npairs; i++) {
@@ -833,7 +833,7 @@ void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd, boo
         else {
             // Calibrated scales/offsets: offset = 0 and scale = S per frequency
             // zone, chosen so the dequantized 'data' array has the per-zone noise
-            // variance xmd->noise_variance.
+            // variance in this frame's own metadata (metadata->noise_variance).
             //
             // Derivation of S
             // ---------------
@@ -858,8 +858,9 @@ void AssembledFrame::randomize(const shared_ptr<const XEngineMetadata> &xmd, boo
             long mpc   = so_arr.shape[1];          // (scale, offset) pairs per frequency
             xassert_eq(npairs, nfreq * mpc);
 
-            const std::vector<long>   &zone_nfreq = xmd->zone_nfreq;
-            const std::vector<double> &zone_var   = xmd->noise_variance;
+            xassert(metadata);   // non-null by invariant (immutable; never reaped)
+            const std::vector<long>   &zone_nfreq = metadata->zone_nfreq;
+            const std::vector<double> &zone_var   = metadata->noise_variance;
             xassert_eq((long) zone_nfreq.size(), (long) zone_var.size());   // one variance per zone
 
             // Expand the per-zone scale S = sqrt(V / 17.5) into a per-frequency

@@ -384,9 +384,9 @@ class NetworkTester:
                 while self.fspos <= ichunk:
                     self.framesets[self.fspos] = self.client_allocator.get_frame_set(consumer_id=0)
                     # Serial randomization. This transport/assembly test doesn't
-                    # check data normalization, so xmd=None (arbitrary
+                    # check data normalization, so normalize=False (arbitrary
                     # scales/offsets) and uniform int4 are fine.
-                    self.framesets[self.fspos].randomize(None, gaussian=False)
+                    self.framesets[self.fspos].randomize(normalize=False, gaussian=False)
                     assert self.framesets[self.fspos].time_chunk_index == self.fspos
                     self.fspos += 1
 

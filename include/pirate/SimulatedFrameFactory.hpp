@@ -10,7 +10,6 @@
 #include <condition_variable>
 
 #include "AssembledFrame.hpp"   // AssembledFrameSet, AssembledFrameAllocator
-#include "XEngineMetadata.hpp"
 
 
 namespace pirate {
@@ -57,8 +56,9 @@ namespace pirate {
 //     consumes that allocator, stopping it on shutdown is safe.
 //   - The allocator MUST already be initialized (initialize_metadata() and
 //     initialize_initial_chunk()) before the factory is constructed. The
-//     constructor reads the metadata (for nbeams and the calibration xmd) via
-//     get_metadata(blocking=false) and throws if it is not yet available.
+//     constructor reads the metadata (for nbeams) via get_metadata(blocking=false)
+//     and throws if it is not yet available. (Per-frame calibration reads each
+//     frame's own metadata, so the factory need not hold the metadata itself.)
 //   - vcpu affinity: the constructor spawns the producer + randomizer threads,
 //     which inherit the caller's affinity. Python callers MUST construct the
 //     factory inside a ThreadAffinity context manager.
@@ -77,9 +77,9 @@ struct SimulatedFrameFactory
         std::shared_ptr<AssembledFrameAllocator> allocator;
 
         // If true, each frame's scales/offsets are calibrated to the per-zone
-        // noise variance in the allocator's metadata (AssembledFrame::randomize
-        // is called with a non-null xmd); if false they get arbitrary
-        // (uniform-junk) values (xmd == nullptr). See AssembledFrame::randomize.
+        // noise variance in that frame's metadata (AssembledFrame::randomize is
+        // called with normalize=true); if false they get arbitrary (uniform-junk)
+        // values (normalize=false). See AssembledFrame::randomize.
         bool normalized = true;
 
         // If true, the int4 data is simulated Gaussian noise clamped to [-7,+7]
@@ -102,10 +102,8 @@ struct SimulatedFrameFactory
     // The factory is the sole consumer of 'allocator'.
     static constexpr int consumer_id = 0;
 
-    // Calibration metadata + beam count, read from the allocator at construction
-    // (the allocator must already have been initialized). 'xmd' is passed to
-    // AssembledFrame::randomize() when 'normalized' is true.
-    const std::shared_ptr<const XEngineMetadata> xmd;
+    // Beam count, read from the allocator's metadata at construction (the
+    // allocator must already have been initialized).
     const long nbeams;
 
     // ----- Synchronization (all members below protected by 'lock') -----
