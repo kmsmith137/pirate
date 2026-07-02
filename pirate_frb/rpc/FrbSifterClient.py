@@ -1,3 +1,4 @@
+import math
 import sys
 import threading
 import time
@@ -44,7 +45,7 @@ class FrbSifterEvents:
         """Coerce an FPGA-count scalar to a non-negative int (raises ValueError otherwise)."""
         try:
             value = int(value)
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError, OverflowError) as e:
             raise ValueError(f"FrbSifterEvents: {name} must be an integer, got {value!r}") from e
         if value < 0:
             raise ValueError(f"FrbSifterEvents: {name} must be >= 0, got {value}")
@@ -118,8 +119,9 @@ class FrbSifterClient:
       sifter replies.
     - ``raise_exception_on_timeout`` (bool, default True) -- what happens when an async
       send (timeout > 0) expires: if True the timeout is re-raised from the next
-      send_events(); if False the event is silently dropped and a message is printed to
-      stdout (so a sifter that is offline or not responding is visible).
+      send_events() (or printed by close() if there is no next send); if False the event
+      is dropped and a message is printed to stdout (so a sifter that is offline or not
+      responding is visible).
 
     Usage::
 
@@ -136,8 +138,9 @@ class FrbSifterClient:
                  raise_exception_on_timeout=True):
         self.server_address = server_address
         self.timeout = float(timeout)               # per-send deadline (s); 0 = synchronous
-        if self.timeout < 0:
-            raise ValueError(f"FrbSifterClient: timeout must be >= 0 seconds, got {timeout!r}")
+        if not math.isfinite(self.timeout) or self.timeout < 0:
+            raise ValueError(f"FrbSifterClient: timeout must be a finite value >= 0 seconds, "
+                             f"got {timeout!r}")
         self.raise_exception_on_timeout = bool(raise_exception_on_timeout)
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_sifter_pb2_grpc.FrbSifterStub(self.channel)
@@ -219,8 +222,10 @@ class FrbSifterClient:
         returns immediately; an event not delivered within ``timeout`` seconds expires
         (handled per ``raise_exception_on_timeout`` -- see the class docstring). If
         ``timeout == 0`` the send is synchronous: it blocks until the sifter replies and
-        raises on any transport error or not-ok reply. A not-ok reply is always logged.
-        close() waits briefly for in-flight sends to finish.
+        raises on any transport error or not-ok reply. (In the async case those are
+        instead handled by the background callback: a not-ok reply is logged, and a
+        failed/expired send follows ``raise_exception_on_timeout``.) close() waits
+        briefly for in-flight sends to finish.
 
         Parameters
         ----------
@@ -323,7 +328,7 @@ class FrbSifterClient:
         thread). raise_exception_on_timeout=True -> stash the error to re-raise from the
         next send_events(); False -> print a message to stdout and drop it."""
         msg = (f"FrbSifterClient.send_events: event to sifter at {self.server_address!r} "
-               f"expired -- sifter offline or not responding ({code_name})")
+               f"was not delivered ({code_name}); sifter offline or not responding?")
         if self.raise_exception_on_timeout:
             with self._pending_lock:
                 if self._deferred_error is None:   # keep the first; coalesce a burst
@@ -376,21 +381,32 @@ class FrbSifterClient:
         send_events() dispatches its RPCs asynchronously; close() waits up to
         'drain_timeout' seconds (total) for the pending ones to finish -- so a clean
         shutdown doesn't cancel the last events -- then closes the channel (which
-        cancels anything still in flight).
+        cancels anything still in flight). A leftover deferred timeout
+        (raise_exception_on_timeout=True) that no subsequent send_events() will report
+        is printed here rather than raised, so close() can't mask an exception that is
+        unwinding through __exit__.
 
         Automatically called if the FrbSifterClient is used as a context manager.
         """
+        try:
+            with self._pending_lock:
+                pending = list(self._pending)
+            deadline = time.monotonic() + drain_timeout
+            for fut in pending:
+                try:
+                    fut.result(timeout=max(0.0, deadline - time.monotonic()))
+                except grpc.FutureTimeoutError:
+                    break                 # out of drain budget; cancel the rest on close
+                except (grpc.RpcError, grpc.FutureCancelledError):
+                    pass                  # handled by _on_send_done
+        finally:
+            self.channel.close()          # always close, even if the drain raises
+        # Surface -- but don't raise -- a timeout no later send_events() will report.
         with self._pending_lock:
-            pending = list(self._pending)
-        deadline = time.monotonic() + drain_timeout
-        for fut in pending:
-            try:
-                fut.result(timeout=max(0.0, deadline - time.monotonic()))
-            except grpc.FutureTimeoutError:
-                break                 # out of drain budget; cancel the rest on close
-            except grpc.RpcError:
-                pass                  # failure already logged by _on_send_done
-        self.channel.close()
+            err = self._deferred_error
+            self._deferred_error = None
+        if err is not None:
+            print(str(err), file=sys.stderr, flush=True)
 
     def __enter__(self):
         return self
