@@ -68,6 +68,9 @@ class FrbGrouperInjections:
     - ``dedispersion_config_yaml`` (dict) -- parsed dedispersion config.
     - ``dedispersion_plan_yaml`` (dict) -- parsed dedispersion plan.
     - ``dm_per_unit_delay`` (float) -- DM of a full-band delay of one input time sample.
+    - ``steady_state_it0`` (list of int arrays). A dedispersion output array element
+      (ichunk, beam, itree, idm, it) is "steady-state", i.e. unaffected by initial
+      zero-padding, if: ``ichunk*nt_out + it >= steady_state_it0[itree][idm]``. 
     """
     # This class docstring (above) is the FrbGrouper docstring: the pybind11 binding
     # deliberately sets none, and ksgpu.inject_methods copies this one onto the class
@@ -192,6 +195,9 @@ class FrbGrouperInjections:
           - _tree_{ndm_out,nt_out,d_lo,d_hi,delta}: per-tree numpy arrays, indexed
             by tree index.
 
+        Also sets the per-tree steady-state boundary (steady_state_it0, documented
+        in the class docstring).
+
         The tables are small numpy (host) arrays: create_events() indexes them on the
         CPU, since for the tiny event arrays a GPU kernel launch would cost more than
         the CPU compute.
@@ -213,6 +219,7 @@ class FrbGrouperInjections:
         # Per-tree geometry from (ids, delta, T_ds, D_ds) via the tex equations,
         # cross-checked against the plan's stored ndm_out/nt_out/dm_min/dm_max.
         ndm_l, nt_l, dlo_l, dhi_l, delta_l = [], [], [], [], []
+        ss_it0_l = []
         for i, tr in enumerate(trees):
             ids, delta = tr['ds_level'], tr['delta_rank']
             T_ds, D_ds = tr['time_downsampling'], tr['dm_downsampling']
@@ -232,6 +239,27 @@ class FrbGrouperInjections:
                                        f"the plan ({exp}) for tree {i}")
             ndm_l.append(ndm); nt_l.append(nt); dlo_l.append(dlo); dhi_l.append(dhi)
             delta_l.append(delta)
+
+            # Steady-state boundary: element (ichunk, idm, it) is unaffected by the
+            # zero-padding before the start of acquisition iff
+            #     n*T_ds >= d0 + (idm+1)*D_ds - 1 + 4*Wmax,    n = ichunk*nt_out + it
+            # in "tree" samples (= 2^ids input samples; max_width has these units too).
+            # Here d0 = dlo/2^(delta+ids) is the tree's lowest internal delay, and DM
+            # bin idm covers internal delays [d0 + idm*D_ds, d0 + (idm+1)*D_ds): the
+            # dedispersion output at internal delay d and (trigger-freq) time tau
+            # references input samples [tau - d, tau], subband multiplets reference
+            # within that range, output time bin n starts at tree sample n*T_ds, and
+            # the causal peak-finding kernels reach back up to 2*Wmax - 1 more samples
+            # (padded to 4*Wmax). Solving for the smallest steady-state n (ceil
+            # division; exact for integer n) gives the per-idm array below.
+            Wmax = tr['max_width']
+            d0 = dlo // 2**(delta + ids)
+            dmax = d0 + (np.arange(ndm, dtype=np.int64) + 1) * D_ds - 1  # max internal delay in bin idm
+            ss_it0_l.append((dmax + 4*Wmax + T_ds - 1) // T_ds)
+
+        # Per-tree steady-state boundary (see the loop above + class docstring):
+        # (ichunk*nt_out + it) >= steady_state_it0[itree][idm]  ==>  steady-state.
+        self.steady_state_it0 = ss_it0_l   # list of int64 arrays, shape (ndm_out,)
 
         # Per-tree lookup tables (numpy/host arrays), indexed by tree index.
         self._tree_ndm_out = np.asarray(ndm_l,   dtype=np.float64)
