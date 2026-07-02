@@ -54,14 +54,16 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         return;
     }
 
-    // Register bindings from other files, in order: core, kernels, casm, loose_ends, utils
+    // Register bindings from other files. simpulse is registered BEFORE core because
+    // AssembledFrame.randomize (in core) has a default argument of type
+    // shared_ptr<const SinglePulse>, which pybind can only convert once SinglePulse is registered.
+    register_simpulse_bindings(m);
     register_core_bindings(m);
     register_avar_bindings(m);
     register_kernel_bindings(m);
     register_casm_bindings(m);
     register_chime_bindings(m);
     register_loose_ends_bindings(m);
-    register_simpulse_bindings(m);
     register_utils_bindings(m);
 
     // pirate::constants, exposed to python as pirate_frb.constants.<name>. Bound as a (never-

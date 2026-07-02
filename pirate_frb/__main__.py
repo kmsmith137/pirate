@@ -57,7 +57,7 @@ def parse_test(subparsers):
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_upchan()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
-    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test')
+    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection test')
 
 
 def rrange(registry_class):
@@ -121,6 +121,7 @@ def test(args):
 
         if run_all_tests or args.sim:
             utils.test_avx2_simulate_4bit_noise()
+            tests.test_pulse_injection()
 
         if run_all_tests or args.cdd2:
             for _ in rrange(kernels.CoalescedDdKernel2):

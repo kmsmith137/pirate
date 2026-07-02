@@ -20,6 +20,7 @@ namespace pirate {
 
 class SlabAllocator;     // defined in SlabAllocator.hpp
 struct XEngineMetadata;  // defined in XEngineMetadata.hpp
+namespace simpulse { struct SinglePulse; }  // defined in simpulse.hpp
 
 
 // AssembledFrame: This central data structure represents one data frame on the server,
@@ -152,7 +153,7 @@ struct AssembledFrame
     make_uninitialized(const std::shared_ptr<const XEngineMetadata> &xmd,
                        long ntime, long beam_id, long time_chunk_index);
 
-    // randomize(): fill the frame with random test data.
+    // randomize(): fill the frame with random test data (optionally with an injected FRB pulse).
     //   - gaussian=false: data buffer = uniform bits (int4s uniform over [-8,+7]).
     //   - gaussian=true:  data buffer = simulated Gaussian noise quantized to int4, clamped to
     //         [-7,+7] via avx2_simulate_4bit_noise() (the -8 sentinel never occurs).
@@ -162,19 +163,30 @@ struct AssembledFrame
     //   - normalize=true:  CALIBRATED -- offset = 0 and scale = S per frequency zone, chosen so the
     //         dequantized data has the per-zone noise variance in this frame's own 'metadata'
     //         (metadata->noise_variance). (S = sqrt(V/Vq), where Vq is the int4 data variance:
-    //         17.5 for uniform [folding the -8 sentinel to 0], avx2_4bit_noise_variance() for
+    //         17.5 for uniform [folding the -8 sentinel to 0], avx2_4bit_postquant_noise_rms()^2 for
     //         gaussian. See src_lib/AssembledFrame.cpp for the derivation.) 'metadata' is non-null
     //         by invariant, and its zone_nfreq sums to this frame's nfreq by construction.
+    //
+    // Pulse injection ('sp' nonempty): add a simulated FRB on top of the noise. REQUIRES
+    // gaussian=true and normalize=true (throws otherwise), and that 'sp' is consistent with this
+    // frame's 'metadata' -- same nfreq, per-channel freq edges, per-channel noise variances, and
+    // time-sample duration (throws otherwise). The pulse channel i maps DIRECTLY to frame row i
+    // (both ordered low-to-high in frequency). 'dt_sp' is the frame's time offset relative to the
+    // pulse: frame time sample it_frame corresponds to pulse sample (it_frame + dt_sp). The pulse
+    // is sparse, so most of the frame is still the fast avx2 noise fill; only each channel's
+    // (contiguous) pulse samples are recomputed as quantize(signal/S[f] + prequant_rms*gaussian).
+    // Partial overlap (part of the pulse falls outside [0,ntime)) is fine -- it is simply clipped.
     //
     // Thread-safety: snapshots the lock-protected 'scales_offsets'/'data' Arrays
     // under the lock, then fills them without the lock held (the snapshot pins
     // the slab so a concurrent _reap_locked() cannot free it underneath). 'metadata'
-    // is immutable (never reaped), so reading it needs no lock. Safe to call
+    // and 'sp' are immutable, so reading them needs no lock. Safe to call
     // concurrently with reaping; on a reaped (empty) frame it is a no-op. Callers
     // still must not run two randomize() (or other writers) on the SAME frame
     // concurrently -- the buffer contents are not lock-protected.
 
-    void randomize(bool normalize, bool gaussian);
+    void randomize(bool normalize, bool gaussian,
+                   const std::shared_ptr<const simpulse::SinglePulse> &sp, long dt_sp);
     
     // Members after this point are internal state.
     // These members are protected by the mutex, and are not saved to the ASDF file.
@@ -249,6 +261,11 @@ struct AssembledFrameSet
     // This is the SERIAL (single-threaded) path -- simple, and used by tests.
     // To randomize a stream of sets in PARALLEL (per-beam work distributed over
     // a randomizer-thread pool), use a SimulatedFrameFactory instead.
+    //
+    // Note that we don't currently include SinglePulse arguments (to simulate
+    // FRBs), as we do in AssembledFrame::randomize() above. This is because
+    // AssembledFrameSet::randomize() is only called by 'pirate_frb test --net',
+    // which doesn't simulate FRBs.
     void randomize(bool normalize, bool gaussian);
 };
 

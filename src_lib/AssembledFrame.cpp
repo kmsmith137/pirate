@@ -5,7 +5,8 @@
 #include "../include/pirate/file_utils.hpp"   // FileDeleteGuard
 #include "../include/pirate/inlines.hpp"      // xdiv(), align_up()
 #include "../include/pirate/constants.hpp"    // bytes_per_gpu_cache_line
-#include "../include/pirate/avx2_utils.hpp"   // avx2_simulate_4bit_noise(), avx2_4bit_noise_variance()
+#include "../include/pirate/avx2_utils.hpp"   // avx2_simulate_4bit_noise(), avx2_4bit_postquant_noise_rms()
+#include "../include/pirate/simpulse.hpp"     // simpulse::SinglePulse (pulse injection)
 
 #include <ksgpu/xassert.hpp>
 #include <ksgpu/mem_utils.hpp>
@@ -18,7 +19,8 @@
 #include <fcntl.h>     // open(), O_RDONLY
 #include <unistd.h>    // fsync(), close()
 
-#include <cmath>       // std::sqrt
+#include <algorithm>   // std::min, std::max (pulse-injection clamp)
+#include <cmath>       // std::sqrt, std::floor
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -722,7 +724,7 @@ void AssembledFrameSet::randomize(bool normalize, bool gaussian)
     // alternative (SimulatedFrameFactory).
     for (const auto &f : frames) {
         xassert(f);   // AssembledFrameSet invariant: all frames[i] non-null
-        f->randomize(normalize, gaussian);
+        f->randomize(normalize, gaussian, nullptr, 0);   // no pulse injection at the set level
     }
 }
 
@@ -777,8 +779,125 @@ shared_ptr<AssembledFrame> AssembledFrame::make_uninitialized(
 }
 
 
-void AssembledFrame::randomize(bool normalize, bool gaussian)
+// Helper for AssembledFrame::randomize() pulse injection: throw unless the SinglePulse is
+// consistent with the frame's metadata -- same nfreq, per-channel frequency edges, per-channel
+// noise variances, and time-sample duration. (These must match for the injected pulse's dispersion
+// sweep to land on the right channels/samples and for its snr normalization to be correct.)
+static void check_pulse_consistency(long nf, const XEngineMetadata &md, const simpulse::SinglePulse &sp)
 {
+    const simpulse::SinglePulse::Params &spp = sp.params;
+
+    // nfreq (checked first: the loops below index per channel).
+    xassert_eq(spp.freq_variances.size, nf);
+    xassert_eq(spp.freq_edges_MHz.size, nf + 1);
+    xassert_eq(md.get_total_nfreq(), nf);
+
+    // Time-sample duration: dt_sp is an INTEGER sample offset, so the pulse's dt must equal the
+    // frame's (dt_ns_per_seq * seq_per_frb_time_sample).
+    double frame_dt_ms = (double) md.dt_ns_per_seq * (double) md.seq_per_frb_time_sample / 1.0e6;
+    if (std::fabs(frame_dt_ms - spp.time_sample_ms) > 1.0e-6 * frame_dt_ms) {
+        std::stringstream ss;
+        ss << "AssembledFrame::randomize: SinglePulse time_sample_ms (" << spp.time_sample_ms
+           << ") does not match the frame's time-sample duration (" << frame_dt_ms << " ms)";
+        throw std::runtime_error(ss.str());
+    }
+
+    // Per-channel frequency edges + noise variances, reconstructed from the zone structure (equal
+    // channel width within a zone; zones ordered low-to-high, matching SinglePulse's channel order).
+    const std::vector<long>   &zn = md.zone_nfreq;       // nzones
+    const std::vector<double> &ze = md.zone_freq_edges;  // nzones+1, increasing MHz
+    const std::vector<double> &zv = md.noise_variance;   // nzones
+    const double *sp_edges = spp.freq_edges_MHz.data;    // nf+1
+    const double *sp_var   = spp.freq_variances.data;    // nf
+    const double edge_tol = 1.0e-6 * (ze.back() - ze.front());
+
+    if (std::fabs(sp_edges[0] - ze.front()) > edge_tol)
+        throw std::runtime_error("AssembledFrame::randomize: SinglePulse freq_edges_MHz[0] does not"
+                                 " match the frame's low band edge");
+
+    long f = 0;
+    for (size_t z = 0; z < zn.size(); z++) {
+        double w = (ze[z+1] - ze[z]) / (double) zn[z];
+        for (long k = 0; k < zn[z]; k++, f++) {
+            double edge_hi = ze[z] + (double)(k+1) * w;   // upper edge of channel f
+            if (std::fabs(sp_edges[f+1] - edge_hi) > edge_tol) {
+                std::stringstream ss;
+                ss << "AssembledFrame::randomize: SinglePulse freq_edges_MHz[" << (f+1) << "] ("
+                   << sp_edges[f+1] << ") does not match the frame channel edge (" << edge_hi << ")";
+                throw std::runtime_error(ss.str());
+            }
+            double vtol = 1.0e-6 * (zv[z] > 0.0 ? zv[z] : 1.0);
+            if (std::fabs(sp_var[f] - zv[z]) > vtol) {
+                std::stringstream ss;
+                ss << "AssembledFrame::randomize: SinglePulse freq_variances[" << f << "] ("
+                   << sp_var[f] << ") does not match the frame per-channel noise variance ("
+                   << zv[z] << ")";
+                throw std::runtime_error(ss.str());
+            }
+        }
+    }
+    xassert_eq(f, nf);
+}
+
+
+// Helper for AssembledFrame::randomize() pulse injection: overwrite each channel's (contiguous)
+// pulse samples in the already-noise-filled int4 'data_arr'. Frame row f == SinglePulse channel f
+// (both low-to-high). The pulse occupies pulse-time [freq_it0[f], freq_it0[f]+freq_nt[f]); frame
+// time it_frame maps to pulse time (it_frame + dt_sp). Each pulse sample becomes
+// quantize(signal/S[f] + prequant_rms*gaussian) -- matching avx2_simulate_4bit_noise()'s inverse-CDF
+// levels -- where the signal (post-scaled units) is divided by S[f] into pre-scaled units first.
+static void inject_single_pulse(const ksgpu::Array<void> &data_arr, long nfreq, long ntime,
+                                const std::vector<float> &S, const simpulse::SinglePulse &sp,
+                                long dt_sp, std::mt19937 &rng)
+{
+    std::normal_distribution<float> gdist(0.0f, avx2_4bit_prequant_noise_rms);   // rms = 2.5
+    unsigned char *bytes = static_cast<unsigned char *>(data_arr.data);
+
+    const long  *it0v = sp.freq_it0.data;
+    const long  *ntv  = sp.freq_nt.data;
+    const long  *offv = sp.freq_sd_off.data;
+    const float *sd   = sp.sparse_data.data;
+
+    for (long f = 0; f < nfreq; f++) {
+        long nt_ch = ntv[f];
+        if (nt_ch == 0)
+            continue;                                   // no pulse in this channel
+
+        // Frame-time window of this channel's pulse run, clipped to [0, ntime). Partial (or zero)
+        // overlap is fine -- a frame is one chunk of a longer stream.
+        long t0 = std::max(0L,    it0v[f]         - dt_sp);
+        long t1 = std::min(ntime, it0v[f] + nt_ch - dt_sp);
+        if (t0 >= t1)
+            continue;
+
+        float inv_S = 1.0f / S[f];
+        long  row = f * ntime;                          // int4 index of row start (even; ntime % 256 == 0)
+        long  sd0 = offv[f], it0 = it0v[f];
+        for (long t = t0; t < t1; t++) {
+            long  k = (t + dt_sp) - it0;                // invariant: 0 <= k < nt_ch
+            float x = sd[sd0 + k] * inv_S + gdist(rng); // pre-scaled signal + pre-scaled noise
+            int   q = std::min(7, std::max(-7, (int) std::floor(x + 0.5f)));   // round-half-up, clamp; never -8
+            long  idx = row + t;                        // int4 index; nibble parity == t parity
+            unsigned char &b = bytes[idx >> 1];
+            if (idx & 1) b = (unsigned char)((b & 0x0F) | ((q & 0xF) << 4));   // high nibble (odd t)
+            else         b = (unsigned char)((b & 0xF0) |  (q & 0xF));         // low  nibble (even t)
+        }
+    }
+}
+
+
+void AssembledFrame::randomize(bool normalize, bool gaussian,
+                               const shared_ptr<const simpulse::SinglePulse> &sp, long dt_sp)
+{
+    // Pulse injection preconditions + consistency, validated up front (before touching buffers).
+    if (sp) {
+        if (!gaussian || !normalize)
+            throw std::runtime_error("AssembledFrame::randomize: signal injection (sp != null)"
+                                     " requires gaussian=true and normalize=true");
+        xassert(metadata);   // non-null by invariant
+        check_pulse_consistency(nfreq, *metadata, *sp);
+    }
+
     // Thread-safety: the array STATE (empty vs nonempty, and which slab the
     // arrays point at) is lock-protected -- a concurrent _reap_locked() on the
     // reaper / ssd-writer thread can drop 'scales_offsets'/'data' and free the
@@ -811,6 +930,39 @@ void AssembledFrame::randomize(bool normalize, bool gaussian)
     // not protected.
     std::mt19937 &rng = ksgpu::default_rng();
 
+    // Per-frequency calibrated scale S[f] = sqrt(V_f / Vq), computed once (only when 'normalize')
+    // and shared by the scales_offsets fill AND the pulse injection.
+    //
+    // Derivation: the dequantizer computes out = scale*v + offset for each int4 sample v, EXCEPT the
+    // sentinel v = -8 dequantizes to 0 (see GpuDequantizationKernel). With offset = 0, out = S*w
+    // where w = 0 if v = -8 else v. Var(out) = S^2 * Var(w); matching the per-zone target variance
+    // V_f (metadata->noise_variance) gives S = sqrt(V_f / Vq), Vq = Var(w):
+    //   - uniform (gaussian=false): v uniform over [-8,7] (folding -8 -> 0) gives Vq = 280/16 = 17.5.
+    //   - gaussian (gaussian=true): v never equals -8, so Vq = avx2_4bit_postquant_noise_rms()^2.
+    std::vector<float> S;   // empty unless 'normalize'
+    if (normalize) {
+        double postquant_rms = avx2_4bit_postquant_noise_rms();
+        double data_variance = gaussian ? (postquant_rms * postquant_rms) : 17.5;
+
+        xassert(metadata);   // non-null by invariant (immutable; never reaped)
+        const std::vector<long>   &zone_nfreq = metadata->zone_nfreq;
+        const std::vector<double> &zone_var   = metadata->noise_variance;
+        xassert_eq((long) zone_nfreq.size(), (long) zone_var.size());   // one variance per zone
+
+        // Expand the per-zone scale into a per-frequency array (zones are contiguous channel ranges).
+        S.resize(nfreq);
+        long f = 0;
+        for (size_t z = 0; z < zone_nfreq.size(); z++) {
+            xassert(zone_var[z] >= 0.0);
+            float Sz = (float) std::sqrt(zone_var[z] / data_variance);
+            for (long k = 0; k < zone_nfreq[z]; k++) {
+                xassert(f < nfreq);
+                S[f++] = Sz;
+            }
+        }
+        xassert_eq(f, nfreq);   // zone_nfreq must sum to this frame's nfreq
+    }
+
     // Fill scales_offsets first (matches slab order). The (scale, offset) pairs
     // are laid out as a contiguous (nfreq, mpc, 2) array, so pair index i maps to
     // frequency channel (i / mpc).
@@ -831,56 +983,14 @@ void AssembledFrame::randomize(bool normalize, bool gaussian)
             }
         }
         else {
-            // Calibrated scales/offsets: offset = 0 and scale = S per frequency
-            // zone, chosen so the dequantized 'data' array has the per-zone noise
-            // variance in this frame's own metadata (metadata->noise_variance).
-            //
-            // Derivation of S
-            // ---------------
-            // The dequantizer computes  out = scale*v + offset  for each int4
-            // sample v, EXCEPT the sentinel v = -8 dequantizes to 0 regardless of
-            // scale/offset (see GpuDequantizationKernel: "data == -8 -> 0"). With
-            // offset = 0 the dequantized value is  out = S * w, where w is the
-            // "effective" sample: w = 0 if v = -8, else w = v. Then
-            // Var(out) = S^2 * Var(w), and matching the target zone variance V
-            // gives  S = sqrt(V / Var(w)), where Var(w) depends on the data fill:
-            //
-            //   - uniform (gaussian=false): v is uniform over [-8, 7], so
-            //     (folding -8 -> 0) w is 0 w.p. 2/16 and each of {+-1, ..., +-7}
-            //     w.p. 1/16. Mean-zero, with Var(w) = E[w^2] =
-            //     (1/16)(2 * sum_{k=1..7} k^2) = 280/16 = 17.5.
-            //   - gaussian (gaussian=true): v never equals -8 (clamped to
-            //     [-7, 7]), so w = v and Var(w) = avx2_4bit_noise_variance().
-            double data_variance = gaussian ? avx2_4bit_noise_variance() : 17.5;
-
+            // Calibrated: scale = S[f] (computed above), offset = 0.
             xassert(so_arr.ndim == 3);
-            long nfreq = so_arr.shape[0];
-            long mpc   = so_arr.shape[1];          // (scale, offset) pairs per frequency
-            xassert_eq(npairs, nfreq * mpc);
-
-            xassert(metadata);   // non-null by invariant (immutable; never reaped)
-            const std::vector<long>   &zone_nfreq = metadata->zone_nfreq;
-            const std::vector<double> &zone_var   = metadata->noise_variance;
-            xassert_eq((long) zone_nfreq.size(), (long) zone_var.size());   // one variance per zone
-
-            // Expand the per-zone scale S = sqrt(V / 17.5) into a per-frequency
-            // array (zones are contiguous channel ranges given by zone_nfreq).
-            std::vector<__half> scale_by_freq(nfreq);
-            long f = 0;
-            for (size_t z = 0; z < zone_nfreq.size(); z++) {
-                xassert(zone_var[z] >= 0.0);
-                __half S = __float2half_rn((float) std::sqrt(zone_var[z] / data_variance));
-                for (long k = 0; k < zone_nfreq[z]; k++) {
-                    xassert(f < nfreq);
-                    scale_by_freq[f++] = S;
-                }
-            }
-            xassert_eq(f, nfreq);   // zone_nfreq must sum to this frame's nfreq
-
+            long mpc = so_arr.shape[1];             // (scale, offset) pairs per frequency
+            xassert_eq(npairs, nfreq * mpc);        // nfreq is the frame member == so_arr.shape[0]
             __half zero = __float2half_rn(0.0f);
             for (long i = 0; i < npairs; i++) {
-                so[2*i + 0] = scale_by_freq[i / mpc];   // scale (frequency = i / mpc)
-                so[2*i + 1] = zero;                     // offset = 0
+                so[2*i + 0] = __float2half_rn(S[i / mpc]);   // scale (frequency = i / mpc)
+                so[2*i + 1] = zero;                          // offset = 0
             }
         }
     }
@@ -889,7 +999,14 @@ void AssembledFrame::randomize(bool normalize, bool gaussian)
         xassert(data_arr.data != nullptr);
         xassert(data_arr.is_fully_contiguous());   // contiguous sweep below
 
-        if (gaussian) {
+        if (sp) {
+            // Signal + noise (gaussian && normalize guaranteed by the precondition above; S is
+            // populated). Fill the whole frame with pure noise (fast SIMD), then overwrite each
+            // channel's sparse pulse samples.
+            avx2_simulate_4bit_noise(static_cast<unsigned int *>(data_arr.data), data_arr.size);
+            inject_single_pulse(data_arr, nfreq, ntime, S, *sp, dt_sp, rng);
+        }
+        else if (gaussian) {
             // Simulated Gaussian noise quantized to int4 in [-7,7] (the -8 sentinel is never
             // produced). data_arr.size is the int4 element count = nfreq*ntime, a multiple of 64
             // (ntime is a multiple of 256), as required by avx2_simulate_4bit_noise().

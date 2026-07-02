@@ -30,7 +30,7 @@ void register_simpulse_bindings(pybind11::module &m)
 
     // -------------------------------------------------------------------------------- SinglePulse
 
-    py::class_<SinglePulse>(m, "SinglePulse",
+    py::class_<SinglePulse, std::shared_ptr<SinglePulse>>(m, "SinglePulse",
         "One dispersed, scattered FRB pulse, on a fixed frequency channelization and a fixed,\n"
         "zero-based time sampling (dt = 1e-3 * time_sample_ms seconds; sample it spans\n"
         "[it*dt, (it+1)*dt]).\n"
@@ -38,8 +38,7 @@ void register_simpulse_bindings(pybind11::module &m)
         "The constructor precomputes the pulse as a SPARSE array of per-channel time samples\n"
         "(freq_it0 / freq_nt / freq_sd_off / sparse_data); add_to_timestream() scatters it into a\n"
         "dense (nfreq, out_nt) array. Frequency channels are ordered LOW to HIGH and may have UNEQUAL\n"
-        "widths (channel i spans ``[freq_edges_MHz[i], freq_edges_MHz[i+1]]``). NOTE: bonsai/rf_pipelines\n"
-        "and pirate intensity arrays use the OPPOSITE, high-to-low, ordering.\n"
+        "widths (channel i spans ``[freq_edges_MHz[i], freq_edges_MHz[i+1]]``).\n"
         "\n"
         "Attributes (read-only). Construction parameters:\n"
         "\n"

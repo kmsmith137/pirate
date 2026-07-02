@@ -273,7 +273,7 @@ void SimulatedFrameFactory::_randomizer_main()
 
         std::exception_ptr ex;
         try {
-            frame->randomize(normalized, gaussian);
+            frame->randomize(normalized, gaussian, nullptr, 0);   // no pulse injection
         } catch (...) {
             ex = std::current_exception();
         }

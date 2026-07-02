@@ -33,7 +33,8 @@ namespace pirate {
 // never produced (it is reserved as a "masked" sentinel there).
 
 
-static const double SIGMA = 2.5;
+// Pre-quantization Gaussian rms. Single source is the header constant.
+static const double SIGMA = avx2_4bit_prequant_noise_rms;
 
 // 14 signed-flipped thresholds: (U[j]-1) ^ 0x80000000. A signed AVX2 compare of (u ^ 0x80000000)
 // against this then computes the unsigned predicate "u >= U[j]" (AVX2 has no unsigned compare).
@@ -77,7 +78,7 @@ static double discrete_level_prob(int L, const uint32_t U[14])
 }
 
 
-double avx2_4bit_noise_variance()
+double avx2_4bit_postquant_noise_rms()
 {
     uint32_t U[14];
     recover_uint32_thresholds(U);
@@ -87,7 +88,7 @@ double avx2_4bit_noise_variance()
         mean += p * (double) L;
         m2   += p * (double) L * (double) L;
     }
-    return m2 - mean * mean;                                    // symmetric, so mean ~ 0
+    return std::sqrt(m2 - mean * mean);                        // rms; symmetric, so mean ~ 0
 }
 
 
@@ -273,7 +274,7 @@ void test_avx2_simulate_4bit_noise()
     var -= mean * mean;
 
     printf("    test_avx2_simulate_4bit_noise: pass  (n=%ld, mean=%+.4f, rms=%.4f [analytic %.4f], max deviation=%.1f sigma)\n",
-           n, mean, std::sqrt(var), std::sqrt(avx2_4bit_noise_variance()), max_sigma);
+           n, mean, std::sqrt(var), avx2_4bit_postquant_noise_rms(), max_sigma);
 }
 
 

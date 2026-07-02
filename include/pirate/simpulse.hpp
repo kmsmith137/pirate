@@ -86,10 +86,6 @@ struct SinglePulse {
     // of shape (nfreq, out_nt), scaled by 'weight'. The grid is zero-based (sample 'it' spans
     // [it*dt, (it+1)*dt] seconds); samples at index >= out_nt are clipped (use out_nt >= nt_min for
     // no clipping). Time samples must be contiguous (out.strides[1] == 1).
-    //
-    // Frequencies are ordered LOW to HIGH (pulse channel i -> row i). NOTE: this is the opposite of
-    // bonsai/rf_pipelines (and pirate intensity arrays), which is high to low; a caller targeting
-    // those must reverse the frequency axis itself.
     void add_to_timestream(ksgpu::Array<float> &out, double weight = 1.0) const;
 
     // String representation.
