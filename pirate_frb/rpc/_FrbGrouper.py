@@ -22,6 +22,15 @@ class FrbGrouperInjections:
     This is a complex class, and the docstrings just summarize syntax.
     For a lot more info, see the grouper-specific parts of the sphinx docs.
 
+    Constructor::
+
+        g = pirate_frb.rpc.FrbGrouper(ip_addr)
+
+    where ``ip_addr`` (str) is the grouper's own ``ip:port`` listen address (e.g.
+    '127.0.0.1:7000'); the producer (an FrbServer running pirate) connects to it and
+    hands off the GpuDedisperser output ring buffer over CUDA IPC. Use the object as a
+    context manager (see below).
+
     Usage summary::
 
         with pirate_frb.rpc.FrbGrouper('127.0.0.1:7000') as g:
