@@ -214,23 +214,38 @@ class Hardware:
         return self._vcpu_list_from_pcie_bus_id(bus_id)
     
     def vcpu_list_from_dirname(self, dirname):
-        disk = self.disk_from_dirname(dirname)
-        return self.vcpu_list_from_disk(disk)
+        d_name, d_mountpoint, d_fstype, d_id = self._mount_from_dirname(dirname)
+
+        # tmpfs (shared memory, e.g. /dev/shm) lives in host RAM, not on a PCIe
+        # device, and isn't tied to a single NUMA node -- any vCPU can reach it
+        # (pages are placed by first-touch on the faulting CPU's node). So return
+        # every vCPU on the machine (all NUMA domains), rather than trying to map
+        # a nonexistent block device to a PCIe bus id.
+        if d_fstype == 'tmpfs':
+            return list(range(self.num_vcpus))
+
+        return self.vcpu_list_from_disk(d_name)
 
     def disk_from_dirname(self, dirname):
+        return self._mount_from_dirname(dirname)[0]
+
+    def _mount_from_dirname(self, dirname):
+        """Returns the /proc/mounts entry (device_name, mount_point, fstype,
+        device_id) whose filesystem contains 'dirname' (matched by st_dev)."""
+
         dev_id = os.stat(dirname).st_dev  # Device ID (major:minor)
 
-        for d_name, d_mountpoint, d_id in self._parse_proc_mounts:
-            if dev_id == d_id:
-                return d_name
+        for entry in self._parse_proc_mounts:
+            if dev_id == entry[3]:
+                return entry
 
-        raise RuntimeError(f"Couldn't find disk for dirname {dirname} (by searching /proc/mounts for st_dev={dev_id})")
-        
+        raise RuntimeError(f"Couldn't find mount for dirname {dirname} (by searching /proc/mounts for st_dev={dev_id})")
+
     @functools.cache
     def mount_point_from_device(self, device_name):
         """The 'device_name' is e.g. /dev/nvme0n1p2 or just 'nvme0n1p2'."""
 
-        for d_name, d_mountpoint, d_id in self._parse_proc_mounts:
+        for d_name, d_mountpoint, d_fstype, d_id in self._parse_proc_mounts:
             if os.path.basename(device_name) == os.path.basename(d_name):
                 return d_mountpoint
 
@@ -519,22 +534,24 @@ class Hardware:
 
     @functools.cached_property
     def _parse_proc_mounts(self):
-        """Parses /proc/mounts and returns a list of triples (device_name, mount_point, device_id).
-        
-        Here, the 'device_name' is e.g. '/dev/nvme0n1p2', and the device_id is the numerical ID
-        returned by os.stat(dirname).st_dev."""
-        
+        """Parses /proc/mounts and returns a list of tuples
+        (device_name, mount_point, fstype, device_id).
+
+        Here, the 'device_name' is e.g. '/dev/nvme0n1p2' (or 'tmpfs'/'shm' for
+        shared memory), 'fstype' is e.g. 'ext4' or 'tmpfs', and the 'device_id'
+        is the numerical ID returned by os.stat(dirname).st_dev."""
+
         ret = [ ]
 
         # FIXME figure out how remove entries that don't correspond to real block devices.
         # (/proc/mounts contains a bunch of weird stuff like /sys/kernel/tracing.)
-        
+
         with open("/proc/mounts") as f:
             for line in f:
-                device, mountpoint, *_ = line.split()
+                device, mountpoint, fstype, *_ = line.split()
                 try:
                     dev_id = os.stat(mountpoint).st_dev  # Device ID (major:minor)
-                    ret.append((device, mountpoint, dev_id))
+                    ret.append((device, mountpoint, fstype, dev_id))
                 except:
                     pass
         
