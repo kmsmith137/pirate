@@ -90,6 +90,12 @@ struct SimulatedFrameFactory
         // Depth of the bounded output queue -- i.e. how many randomized sets the
         // producer may stay ahead of the consumer. Must be >= 1.
         long frame_set_queue_size = 4;
+
+        // Number of randomizer threads in the pool (parallelizes the per-beam
+        // AssembledFrame::randomize() calls within a set). Must be >= 1; the
+        // default 0 means "unset". run_fake_xengine sizes this as
+        // min(nbeams, num_vcpus/2).
+        long num_randomizer_threads = 0;
     };
 
     // ----- Params-derived, constant after construction -----
@@ -98,6 +104,7 @@ struct SimulatedFrameFactory
     const bool normalized;
     const bool gaussian;
     const long frame_set_queue_size;
+    const long num_randomizer_threads;
 
     // The factory is the sole consumer of 'allocator'.
     static constexpr int consumer_id = 0;
@@ -146,17 +153,16 @@ struct SimulatedFrameFactory
     // ----- Threads -----
 
     std::thread producer_thread;
-    long num_randomizers = 0;                   // = min(nbeams, num_vcpus/2); ctor requires > 0
-    std::vector<std::thread> randomizer_threads;
+    std::vector<std::thread> randomizer_threads;   // size = Params::num_randomizer_threads
 
     // ----- Public interface -----
 
     // Constructor: validates params, reads the (already-initialized) allocator
-    // metadata, sizes + spawns the randomizer pool and the producer thread. The
-    // spawned threads inherit the caller's vcpu affinity, so Python callers must
-    // construct inside a ThreadAffinity context manager. Throws if the allocator
-    // is null, frame_set_queue_size < 1, the allocator has no metadata yet, or
-    // num_randomizers would be 0 (needs nbeams >= 1 and a >= 2-vcpu affinity).
+    // metadata, and spawns the randomizer pool (Params::num_randomizer_threads
+    // threads) and the producer thread. The spawned threads inherit the caller's
+    // vcpu affinity, so Python callers must construct inside a ThreadAffinity
+    // context manager. Throws if the allocator is null, frame_set_queue_size < 1,
+    // num_randomizer_threads < 1, or the allocator has no metadata yet.
     explicit SimulatedFrameFactory(const Params &params);
 
     // Destructor: stop() (which also stops the allocator) then joins the

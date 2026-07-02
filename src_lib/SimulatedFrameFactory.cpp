@@ -1,10 +1,7 @@
 #include "../include/pirate/SimulatedFrameFactory.hpp"
-#include "../include/pirate/system_utils.hpp"    // get_thread_affinity()
 #include "../include/pirate/XEngineMetadata.hpp"  // get_metadata()->get_nbeams()
 
-#include <algorithm>   // std::min
 #include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -30,6 +27,7 @@ validate_and_get_metadata(const SimulatedFrameFactory::Params &params)
         throw runtime_error("SimulatedFrameFactory: params.allocator is null");
 
     xassert_ge(params.frame_set_queue_size, 1);
+    xassert_ge(params.num_randomizer_threads, 1);   // caller-supplied (see run_fake_xengine)
 
     shared_ptr<const XEngineMetadata> md = params.allocator->get_metadata(/*blocking=*/false);
     if (!md)
@@ -44,25 +42,15 @@ SimulatedFrameFactory::SimulatedFrameFactory(const Params &params) :
     normalized(params.normalized),
     gaussian(params.gaussian),
     frame_set_queue_size(params.frame_set_queue_size),
+    num_randomizer_threads(params.num_randomizer_threads),
     nbeams(validate_and_get_metadata(params)->get_nbeams())
 {
-    // Size the randomizer pool: min(nbeams, num_vcpus/2), where num_vcpus is the
-    // size of THIS (constructor-calling) thread's vcpu affinity. The spawned
-    // randomizer threads (and the producer) inherit that same affinity. The /2
-    // leaves headroom for the FakeXEngine worker threads that share the vcpus.
-    // We require num_randomizers > 0 (so _randomize_set() always has a pool to
-    // dispatch to) -- i.e. nbeams >= 1 and a caller affinity of >= 2 vcpus.
-    long num_vcpus = long(get_thread_affinity().size());
-    num_randomizers = std::min(nbeams, num_vcpus / 2);
-    if (num_randomizers <= 0) {
-        stringstream ss;
-        ss << "SimulatedFrameFactory: num_randomizers must be > 0, but got "
-           << num_randomizers << " = min(nbeams=" << nbeams << ", num_vcpus/2="
-           << (num_vcpus / 2) << "). Requires nbeams >= 1 and a caller vcpu"
-              " affinity of size >= 2 (construct inside a ThreadAffinity context).";
-        throw runtime_error(ss.str());
-    }
-    randomizer_threads.reserve(num_randomizers);
+    // The randomizer pool parallelizes the per-beam AssembledFrame::randomize()
+    // calls within a set. num_randomizer_threads is caller-supplied (validated
+    // >= 1 above); run_fake_xengine sizes it as min(nbeams, num_vcpus/2). The
+    // spawned randomizer threads (and the producer) inherit the caller's vcpu
+    // affinity, so a Python caller must construct inside a ThreadAffinity context.
+    randomizer_threads.reserve(num_randomizer_threads);
 
     // Spawn the randomizer pool, then the producer. If any spawn throws, wake and
     // join whatever started, then rethrow. We deliberately do NOT call the full
@@ -71,7 +59,7 @@ SimulatedFrameFactory::SimulatedFrameFactory(const Params &params) :
     // either never started or is joined below, and the randomizers just need
     // is_stopped + a notify to exit.
     try {
-        for (long i = 0; i < num_randomizers; i++)
+        for (long i = 0; i < num_randomizer_threads; i++)
             randomizer_threads.push_back(std::thread(&SimulatedFrameFactory::randomizer_main, this));
 
         producer_thread = std::thread(&SimulatedFrameFactory::producer_main, this);

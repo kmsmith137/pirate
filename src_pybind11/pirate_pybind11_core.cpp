@@ -359,24 +359,31 @@ void register_core_bindings(pybind11::module &m)
         "constructed inside a ThreadAffinity context manager -- the spawned threads\n"
         "inherit the caller's vcpu affinity. stop() propagates to the allocator.")
         .def(py::init([](std::shared_ptr<AssembledFrameAllocator> allocator,
-                         bool normalized, bool gaussian, long frame_set_queue_size) {
+                         long num_randomizer_threads, bool normalized, bool gaussian,
+                         long frame_set_queue_size) {
                  SimulatedFrameFactory::Params p;
                  p.allocator = std::move(allocator);
+                 p.num_randomizer_threads = num_randomizer_threads;
                  p.normalized = normalized;
                  p.gaussian = gaussian;
                  p.frame_set_queue_size = frame_set_queue_size;
                  return std::make_unique<SimulatedFrameFactory>(p);
              }),
              py::arg("allocator"),
+             py::arg("num_randomizer_threads"),
              py::arg("normalized") = true,
              py::arg("gaussian") = true,
              py::arg("frame_set_queue_size") = 4,
-             "normalized (default True): calibrate scales/offsets to the metadata's\n"
-             "per-zone noise variance (else arbitrary uniform-junk). gaussian (default\n"
-             "True): simulated Gaussian int4 data clamped to [-7,+7] (else uniform\n"
-             "[-8,+7]). frame_set_queue_size (default 4): output-queue depth (how many\n"
-             "randomized sets the producer may stay ahead of the consumer).")
+             "num_randomizer_threads (>= 1): size of the randomizer-thread pool that\n"
+             "parallelizes per-beam randomize() within a set; the caller sizes it\n"
+             "(run_fake_xengine uses min(nbeams, num_vcpus/2)). normalized (default\n"
+             "True): calibrate scales/offsets to the metadata's per-zone noise variance\n"
+             "(else arbitrary uniform-junk). gaussian (default True): simulated Gaussian\n"
+             "int4 data clamped to [-7,+7] (else uniform [-8,+7]). frame_set_queue_size\n"
+             "(default 4): output-queue depth (how many randomized sets the producer may\n"
+             "stay ahead of the consumer).")
         .def_readonly("nbeams", &SimulatedFrameFactory::nbeams)
+        .def_readonly("num_randomizer_threads", &SimulatedFrameFactory::num_randomizer_threads)
         .def_readonly("normalized", &SimulatedFrameFactory::normalized)
         .def_readonly("gaussian", &SimulatedFrameFactory::gaussian)
         .def_readonly("frame_set_queue_size", &SimulatedFrameFactory::frame_set_queue_size)

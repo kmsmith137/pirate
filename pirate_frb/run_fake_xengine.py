@@ -141,6 +141,17 @@ class RunFakeXEngineHelper:
         n_sets = frame_set_queue_size + 4
         capacity = n_sets * self._frame_set_nbytes(cfg, xmd)
 
+        # Size the SimulatedFrameFactory's randomizer-thread pool: min(nbeams, num_vcpus/2).
+        # num_vcpus is the data-NIC vcpu affinity (vcpu_list) that the factory's threads
+        # inherit; the /2 leaves headroom for the FakeXEngine worker threads sharing those
+        # vcpus. The factory requires >= 1 randomizer thread.
+        num_randomizer_threads = min(cfg.fake_nbeams, len(vcpu_list) // 2)
+        if num_randomizer_threads < 1:
+            raise RuntimeError(
+                f"[{rpc_addr}] num_randomizer_threads = {num_randomizer_threads} ="
+                f" min(nbeams={cfg.fake_nbeams}, num_vcpus/2={len(vcpu_list) // 2});"
+                f" requires nbeams >= 1 and a data-NIC vcpu affinity of size >= 2")
+
         with ThreadAffinity(vcpu_list):
             fxe = FakeXEngine(
                 xmd, list(cfg.data_ip_addrs), self.nworkers,
@@ -168,6 +179,7 @@ class RunFakeXEngineHelper:
             # initialized (above), and inside this ThreadAffinity context.
             factory = SimulatedFrameFactory(
                 allocator,
+                num_randomizer_threads=num_randomizer_threads,
                 normalized=self.normalized,
                 gaussian=self.gaussian,
                 frame_set_queue_size=frame_set_queue_size,
