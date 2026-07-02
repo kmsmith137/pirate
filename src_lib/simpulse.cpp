@@ -30,6 +30,8 @@ namespace simpulse {
 
 double dispersion_delay(double dm, double freq_MHz)
 {
+    xassert(dm >= 0.0);
+    xassert(freq_MHz > 0.0);   // used as a divisor
     // constants::k_dm is in (ms . MHz^2) per (pc cm^{-3}); convert the delay to seconds.
     return 1.0e-3 * constants::k_dm * dm / (freq_MHz * freq_MHz);
 }
@@ -37,6 +39,8 @@ double dispersion_delay(double dm, double freq_MHz)
 
 double scattering_time(double sm, double freq_MHz)
 {
+    xassert(sm >= 0.0);
+    xassert(freq_MHz > 0.0);   // used as a divisor (and pow(negative, 4.4) is NaN)
     // 'sm' is the scattering time in milliseconds at 1 GHz.
     return 1.0e-3 * sm / pow(freq_MHz/1000.0, 4.4);
 }
@@ -60,6 +64,15 @@ static void check_dfti(MKL_LONG status, const char *what)
         throw runtime_error(ss.str());
     }
 }
+
+
+// RAII wrapper for a MKL DFTI descriptor, so it is freed on every exit path from the constructor
+// (including exceptions thrown in the per-channel loop, e.g. the "samples at t<0" error).
+struct DftiHandle
+{
+    DFTI_DESCRIPTOR_HANDLE h = nullptr;
+    ~DftiHandle() { if (h) DftiFreeDescriptor(&h); }
+};
 
 
 // Helper called by the constructor. 'arr' has length (internal_nt+1); 's' is a time in "sample coords",
@@ -91,6 +104,7 @@ SinglePulse::Params SinglePulse::_validate(const Params &params)
 {
     xassert(params.freq_edges_MHz.ndim == 1);
     xassert(params.freq_edges_MHz.is_fully_contiguous());
+    xassert(params.freq_edges_MHz.on_host());   // host code dereferences .data below
 
     long nfreq = params.freq_edges_MHz.size - 1;
     xassert(nfreq >= 1);   // need at least one frequency channel (i.e. >= 2 edges)
@@ -102,6 +116,7 @@ SinglePulse::Params SinglePulse::_validate(const Params &params)
     // freq_variances: length nfreq, contiguous, all strictly positive.
     xassert(params.freq_variances.ndim == 1);
     xassert(params.freq_variances.is_fully_contiguous());
+    xassert(params.freq_variances.on_host());   // host code dereferences .data below
     xassert(params.freq_variances.size == nfreq);
     const double *var = params.freq_variances.data;
     for (long ifreq = 0; ifreq < nfreq; ifreq++)
@@ -130,6 +145,7 @@ SinglePulse::SinglePulse(const Params &p)
     const long nfreq = params.freq_edges_MHz.size - 1;
 
     xassert(internal_nt >= 64);       // using fewer time samples than this is probably a mistake
+    xassert(is_power_of_two(internal_nt));   // the FFT size is 2*internal_nt
     xassert(time_sample_ms > 0.0);    // required; determines the (zero-based) time grid
     xassert(dm >= 0.0);
     xassert(sm >= 0.0);
@@ -165,7 +181,8 @@ SinglePulse::SinglePulse(const Params &p)
     // convention as FFTW, and (like FFTW) MKL is UNNORMALIZED by default, so no scale factor is
     // needed. DFTI_COMPLEX_COMPLEX selects the (n/2+1) packed conjugate-even layout that matches
     // FFTW's c2r input. We build the descriptor once and reuse it across the nfreq loop.
-    DFTI_DESCRIPTOR_HANDLE plan = nullptr;
+    DftiHandle plan_guard;                        // frees the descriptor on any exit path (RAII)
+    DFTI_DESCRIPTOR_HANDLE &plan = plan_guard.h;
     check_dfti(DftiCreateDescriptor(&plan, DFTI_DOUBLE, DFTI_REAL, 1, nfft), "DftiCreateDescriptor");
     check_dfti(DftiSetValue(plan, DFTI_CONJUGATE_EVEN_STORAGE, DFTI_COMPLEX_COMPLEX), "DftiSetValue(CONJUGATE_EVEN_STORAGE)");
     check_dfti(DftiSetValue(plan, DFTI_PLACEMENT, DFTI_NOT_INPLACE), "DftiSetValue(PLACEMENT)");
@@ -215,6 +232,16 @@ SinglePulse::SinglePulse(const Params &p)
         cumsum[0] = 0.0;
         for (long it = 0; it < internal_nt; it++)
             cumsum[it+1] = cumsum[it] + max(bufr[it], 0.0);
+
+        // Guard the normalization against a degenerate (all-nonpositive) synthesized profile, which
+        // would divide by zero below and poison the pulse with NaNs (otherwise only caught much later).
+        if (cumsum[internal_nt] <= 0.0) {
+            stringstream ss;
+            ss << "pirate::simpulse::SinglePulse: channel " << ifreq << " produced a degenerate pulse"
+               << " profile (FFT synthesis yielded no positive samples); check the pulse parameters";
+            throw runtime_error(ss.str());
+        }
+
         for (long it = 0; it < internal_nt+1; it++)
             cumsum[it] = cumsum[it] / cumsum[internal_nt];
 
@@ -260,8 +287,6 @@ SinglePulse::SinglePulse(const Params &p)
         }
     }
 
-    DftiFreeDescriptor(&plan);
-
     if (total <= 0)
         throw runtime_error("pirate::simpulse::SinglePulse: pulse has no samples on the zero-based time grid"
                             " (is undispersed_arrival_time_sec very negative?)");
@@ -282,10 +307,11 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double weight) con
 {
     const long nfreq = params.freq_edges_MHz.size - 1;
 
-    xassert(out.ndim == 2);
-    xassert(out.shape[0] == nfreq);
-    xassert(out.shape[1] > 0);
-    xassert(out.strides[1] == 1);   // time samples must be contiguous in memory
+    xassert(out.on_host());            // host code dereferences out.data below
+    xassert_eq(out.ndim, 2);
+    xassert_eq(out.shape[0], nfreq);
+    xassert_gt(out.shape[1], 0L);
+    xassert_eq(out.strides[1], 1L);    // time samples must be contiguous in memory
 
     const long out_nt = out.shape[1];
     const long row_stride = out.strides[0];   // row stride, in elements (ksgpu strides are in dtype units)

@@ -37,6 +37,7 @@ def _make_pulse(freq_lo_MHz, freq_hi_MHz, nfreq, dm, sm, intrinsic_width, spectr
         time_sample_ms = 1.0e3 * extent / nsamp,
         freq_edges_MHz = edges,
         freq_variances = np.ones(nfreq),
+        snr = 30.0,
         dm = dm, sm = sm, intrinsic_width = intrinsic_width,
         spectral_index = spectral_index,
         undispersed_arrival_time_sec = -d_hi + lead)
@@ -142,7 +143,7 @@ def plot4(plt, matplotlib):
 
     def make(edges):
         return simpulse.SinglePulse(internal_nt=1024, time_sample_ms=time_sample_ms, freq_edges_MHz=edges,
-                                    freq_variances=np.ones(nchan), dm=dm, sm=sm, intrinsic_width=width,
+                                    freq_variances=np.ones(nchan), snr=30.0, dm=dm, sm=sm, intrinsic_width=width,
                                     spectral_index=0.0, undispersed_arrival_time_sec=uat)
 
     sp_top, sp_bot = make(edges_top), make(edges_bot)

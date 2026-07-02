@@ -43,14 +43,14 @@ void register_simpulse_bindings(pybind11::module &m)
         "\n"
         "Attributes (read-only). Construction parameters:\n"
         "\n"
-        "- ``internal_nt`` (int) -- number of under-the-hood samples representing the pulse.\n"
+        "- ``internal_nt`` (int) -- number of under-the-hood samples (a power of two). Default 1024.\n"
         "- ``time_sample_ms`` (float) -- time-sample duration in ms (dt = 1e-3*time_sample_ms sec).\n"
         "- ``freq_edges_MHz`` (array) -- sorted, length (nfreq+1); channel i spans edges[i]..edges[i+1].\n"
         "- ``freq_variances`` (array) -- per-channel noise variance, length nfreq (all positive).\n"
         "- ``dm`` (float) -- dispersion measure (pc cm^{-3}).\n"
         "- ``sm`` (float) -- scattering measure (scattering time in ms at 1 GHz).\n"
         "- ``intrinsic_width`` (float) -- frequency-independent Gaussian width in seconds.\n"
-        "- ``snr`` (float) -- target signal-to-noise (perfect matched filter); sets the normalization. Default 30.\n"
+        "- ``snr`` (float) -- target signal-to-noise (perfect matched filter); sets the normalization.\n"
         "- ``spectral_index`` (float) -- exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.\n"
         "- ``undispersed_arrival_time_sec`` (float) -- arrival time as freq->infty, in seconds.\n"
         "- ``allow_negative_arrival_times`` (bool) -- if False (default), a pulse with samples at t<0\n"
@@ -60,28 +60,31 @@ void register_simpulse_bindings(pybind11::module &m)
         "(length nfreq, int) and ``sparse_data`` (float). Also ``nt_min`` (smallest out_nt with no\n"
         "clipping) and the derived ``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
 
-        .def(py::init([](long internal_nt, double time_sample_ms, const Array<double> &freq_edges_MHz,
-                         const Array<double> &freq_variances, double dm, double sm, double intrinsic_width,
-                         double spectral_index, double undispersed_arrival_time_sec, double snr,
-                         bool allow_negative_arrival_times) {
+        .def(py::init([](double dm, double sm, double intrinsic_width, double spectral_index,
+                         double undispersed_arrival_time_sec, double time_sample_ms, double snr,
+                         const Array<double> &freq_edges_MHz, const Array<double> &freq_variances,
+                         bool allow_negative_arrival_times, long internal_nt) {
                  SinglePulse::Params p;
-                 p.internal_nt = internal_nt;
-                 p.time_sample_ms = time_sample_ms;
-                 p.freq_edges_MHz = freq_edges_MHz;
-                 p.freq_variances = freq_variances;
                  p.dm = dm;
                  p.sm = sm;
                  p.intrinsic_width = intrinsic_width;
                  p.spectral_index = spectral_index;
                  p.undispersed_arrival_time_sec = undispersed_arrival_time_sec;
+                 p.time_sample_ms = time_sample_ms;
                  p.snr = snr;
+                 p.freq_edges_MHz = freq_edges_MHz;
+                 p.freq_variances = freq_variances;
                  p.allow_negative_arrival_times = allow_negative_arrival_times;
+                 p.internal_nt = internal_nt;
                  return new SinglePulse(p);
              }),
-             py::arg("internal_nt"), py::arg("time_sample_ms"), py::arg("freq_edges_MHz"),
-             py::arg("freq_variances"), py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"),
-             py::arg("spectral_index"), py::arg("undispersed_arrival_time_sec"), py::arg("snr") = 30.0,
-             py::arg("allow_negative_arrival_times") = false)
+             // Argument order matches the C++ Params members. Only the last two (allow_negative_arrival_times,
+             // internal_nt) have defaults -- the required arrays sit mid-struct, so everything before them
+             // (including snr) must be a required argument.
+             py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"), py::arg("spectral_index"),
+             py::arg("undispersed_arrival_time_sec"), py::arg("time_sample_ms"), py::arg("snr"),
+             py::arg("freq_edges_MHz"), py::arg("freq_variances"),
+             py::arg("allow_negative_arrival_times") = false, py::arg("internal_nt") = 1024)
 
         // Read-only views of the construction parameters (SinglePulse::params).
         .def_property_readonly("internal_nt", [](const SinglePulse &s) { return s.params.internal_nt; })
@@ -113,8 +116,8 @@ void register_simpulse_bindings(pybind11::module &m)
              "Add the pulse to a 2-d (nfreq, out_nt) float32 array, in place, scaled by 'weight'.\n"
              "\n"
              "The grid is zero-based (sample it spans [it*dt, (it+1)*dt] seconds); samples at index\n"
-             ">= out_nt are clipped (size out_nt >= nt_min for no clipping). 'out' must be float32,\n"
-             "with contiguous time samples, ordered low to high in frequency.")
+             ">= out_nt are clipped (size out_nt >= nt_min for no clipping). 'out' must be a host (CPU)\n"
+             "float32 array with contiguous time samples, ordered low to high in frequency.")
 
         .def("__repr__", &SinglePulse::str)
     ;

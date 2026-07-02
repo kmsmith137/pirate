@@ -111,6 +111,7 @@ class upsampling_test_instance:
             time_sample_ms = 1.0e3 * tsamp_sec,
             freq_edges_MHz = freq_edges_MHz,
             freq_variances = freq_variances,
+            snr = 30.0,
             dm = self.dm,
             sm = self.sm,
             intrinsic_width = self.intrinsic_width,

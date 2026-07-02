@@ -47,7 +47,7 @@ struct SinglePulse {
         double spectral_index = 0.0;            // exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha
         double undispersed_arrival_time_sec = 0.0;  // arrival time at nu=infty, in seconds relative to an arbitrary origin
         double time_sample_ms = 0.0;            // time-sample duration in ms; REQUIRED (dt = 1e-3*time_sample_ms sec, must be > 0)
-        double snr = 30.0;                      // signal-to-noise, assuming perfect matched filter.
+        double snr = 0.0;                       // signal-to-noise, assuming perfect matched filter.
         
         // Sorted (strictly increasing) array of length (nfreq+1). The i-th frequency channel spans
         // frequency range [freq_edges_MHz[i], freq_edges_MHz[i+1]]. Channel widths need NOT be equal.
@@ -82,8 +82,8 @@ struct SinglePulse {
 
     SinglePulse(const Params &params);
 
-    // Adds the pulse to a "block" of (frequency, time) samples 'out', a 2-d float32 array of shape
-    // (nfreq, out_nt), scaled by 'weight'. The grid is zero-based (sample 'it' spans
+    // Adds the pulse to a "block" of (frequency, time) samples 'out', a 2-d, host (CPU) float32 array
+    // of shape (nfreq, out_nt), scaled by 'weight'. The grid is zero-based (sample 'it' spans
     // [it*dt, (it+1)*dt] seconds); samples at index >= out_nt are clipped (use out_nt >= nt_min for
     // no clipping). Time samples must be contiguous (out.strides[1] == 1).
     //
