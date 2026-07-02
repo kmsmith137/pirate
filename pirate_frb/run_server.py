@@ -108,7 +108,7 @@ def _parse_config(filename):
         'rb_host_memory_per_server', 'dd_host_memory_per_server',
         'gpu_memory_per_server',
         'use_hugepages', 'data_ip_addrs', 'rpc_ip_addrs', 'grouper_ip_addrs',
-        'ssd_dirs', 'ssd_devices', 'ssd_threads_per_server',
+        'check_mountpoints', 'ssd_dirs', 'ssd_threads_per_server',
         'nfs_dir', 'nfs_threads_per_server',
     ]
 
@@ -176,13 +176,22 @@ def _parse_config(filename):
         if not isinstance(addr, str):
             raise RuntimeError(f"{filename}: grouper_ip_addrs[{i}] must be a string, got {type(addr).__name__}")
 
-    for key in ('ssd_dirs', 'ssd_devices'):
-        val = config[key]
-        if not isinstance(val, list) or len(val) != n:
-            raise RuntimeError(f"{filename}: '{key}' must be a list of length {n}")
-        for i, v in enumerate(val):
-            if not isinstance(v, str):
-                raise RuntimeError(f"{filename}: {key}[{i}] must be a string, got {type(v).__name__}")
+    # check_mountpoints: list of directories (any length) that must be actual
+    # mountpoints -- validated at runtime by _check_mountpoints(), which catches
+    # a filesystem that isn't mounted.
+    cm = config['check_mountpoints']
+    if not isinstance(cm, list):
+        raise RuntimeError(f"{filename}: 'check_mountpoints' must be a list, got {type(cm).__name__}")
+    for i, v in enumerate(cm):
+        if not isinstance(v, str):
+            raise RuntimeError(f"{filename}: check_mountpoints[{i}] must be a string, got {type(v).__name__}")
+
+    sd = config['ssd_dirs']
+    if not isinstance(sd, list) or len(sd) != n:
+        raise RuntimeError(f"{filename}: 'ssd_dirs' must be a list of length {n}")
+    for i, v in enumerate(sd):
+        if not isinstance(v, str):
+            raise RuntimeError(f"{filename}: ssd_dirs[{i}] must be a string, got {type(v).__name__}")
 
     for key in ('ssd_threads_per_server', 'nfs_threads_per_server',
                 'min_data_mtu', 'min_rpc_mtu', 'ringbuf_nchunks'):
@@ -214,6 +223,26 @@ def _resolve_ip_addrs(config, hw, filename):
     rpc = config['rpc_ip_addrs']
     for i in range(len(rpc)):
         rpc[i] = resolve_addr(hw, rpc[i], context=f"{filename}: rpc_ip_addrs[{i}]: ")
+
+
+def _check_mountpoints(config, config_yml_filename):
+    """Raise unless every directory in config['check_mountpoints'] is a mountpoint.
+
+    Intended to catch a misconfiguration where a filesystem isn't mounted -- in
+    that case its intended mountpoint is just an ordinary directory on the parent
+    filesystem. Called before we create the SSD/NFS subdirectories, so a missing
+    mount fails loudly instead of silently scattering data across the root fs.
+    (os.path.ismount() also returns False for a nonexistent path, which is the
+    behavior we want here.)
+    """
+    for d in config['check_mountpoints']:
+        if not os.path.ismount(d):
+            raise RuntimeError(
+                f"{d} was specified in 'check_mountpoints', but is not a mountpoint. "
+                f"This is treated as a fatal error, intended to catch a misconfiguration "
+                f"where filesystems are not mounted. To resolve it, either remove {d} from "
+                f"'check_mountpoints' in {config_yml_filename}, or mount a filesystem on {d}."
+            )
 
 
 def _validate_hardware(config, hw):
@@ -262,15 +291,6 @@ def _validate_hardware(config, hw):
                 f"but server_cpus[{i}] = {expected_cpu}"
             )
 
-        # Verify SSD device matches.
-        actual_dev = hw.disk_from_dirname(ssd_dir)
-        expected_dev = config['ssd_devices'][i]
-        if os.path.basename(actual_dev) != os.path.basename(expected_dev):
-            raise RuntimeError(
-                f"Server {i}: ssd_dirs[{i}]={ssd_dir!r} is backed by "
-                f"device {actual_dev!r}, but ssd_devices[{i}]={expected_dev!r} (mismatch)"
-            )
-
 
 class RunServerHelper:
     """Encapsulates state and logic for 'pirate_frb run_server'.
@@ -283,6 +303,7 @@ class RunServerHelper:
     def __init__(self, server_config_filename, dedispersion_config_filename,
                  processing_delay_sec=0.0, no_grouper=False,
                  no_dedispersion=False):
+        self.server_config_filename = server_config_filename
         self.config = _parse_config(server_config_filename)
         self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
         self.n = self.config['num_servers']
@@ -337,6 +358,12 @@ class RunServerHelper:
             print(f"  no_dedispersion = True  (skip all GPU work; implies --no-grouper)")
 
     def _prepare_directories(self):
+        # Check configured mountpoints are actually mounted BEFORE creating any
+        # SSD/NFS subdirectories: if a filesystem isn't mounted, its mountpoint is
+        # just a directory on the root fs, and blindly os.makedirs'ing into it
+        # would scatter data across '/' instead of failing loudly.
+        _check_mountpoints(self.config, self.server_config_filename)
+
         # Resolve NFS dir and create SSD/NFS dirs if needed.
         # (Must happen before _run_hardware_check, which calls os.stat on ssd_dirs.)
         self.nfs_dir = _resolve_nfs_dir(self.config['nfs_dir'])
