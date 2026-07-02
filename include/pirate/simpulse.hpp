@@ -41,13 +41,13 @@ struct SinglePulse {
     // Constructor arguments, bundled into a Params struct (see the constructor below).
     struct Params
     {
-        double dm = 0.0;                        // dispersion measure in standard units (pc cm^{-3})
-        double sm = 0.0;                        // scattering measure: scattering time in milliseconds (not seconds) at 1 GHz
-        double intrinsic_width = 0.0;           // frequency-independent Gaussian width in seconds
-        double spectral_index = 0.0;            // exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha
-        double undispersed_arrival_time_sec = 0.0;  // arrival time at nu=infty, in seconds relative to an arbitrary origin
-        double time_sample_ms = 0.0;            // time-sample duration in ms; REQUIRED (dt = 1e-3*time_sample_ms sec, must be > 0)
-        double snr = 0.0;                       // signal-to-noise, assuming perfect matched filter.
+        double dm = -1.0;                              // dispersion measure in standard units (pc cm^{-3})
+        double sm = -1.0;                              // scattering measure: scattering time in ms (not se) at 1 GHz
+        double intrinsic_width = -1.0;                 // frequency-independent Gaussian width in seconds
+        double spectral_index = -1000.0;               // exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha
+        double undispersed_arrival_time_sec = -1.0e6;  // arrival time at nu=infty, in seconds
+        double time_sample_ms = -10.0;                 // time-sample duration in ms
+        double snr = -1.0;                             // signal-to-noise, assuming perfect matched filter.
         
         // Sorted (strictly increasing) array of length (nfreq+1). The i-th frequency channel spans
         // frequency range [freq_edges_MHz[i], freq_edges_MHz[i+1]]. Channel widths need NOT be equal.
@@ -55,6 +55,11 @@ struct SinglePulse {
 
         // Length (nfreq), must be positive.
         ksgpu::Array<double> freq_variances;
+
+        // Subband. If specified, then the simulated pulse is restricted to frequency channels
+        // that overlap the subbands.
+        double subband_freq_lo_MHz = 0.0;
+        double subband_freq_hi_MHz = 1.0e9;
 
         // If false, then an exception is raised if any freq_it0 is < 0.
         // If true, then the part of the pulse with negative arrival times is silently discarded.

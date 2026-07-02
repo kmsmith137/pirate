@@ -52,6 +52,8 @@ void register_simpulse_bindings(pybind11::module &m)
         "- ``snr`` (float) -- target signal-to-noise (perfect matched filter); sets the normalization.\n"
         "- ``spectral_index`` (float) -- exponent alpha in F(nu) = F(nu_0) (nu/nu_0)^alpha.\n"
         "- ``undispersed_arrival_time_sec`` (float) -- arrival time as freq->infty, in seconds.\n"
+        "- ``subband_freq_lo_MHz`` / ``subband_freq_hi_MHz`` (float) -- restrict the pulse to channels\n"
+        "  overlapping this subband; defaults [0, 1e9] (no restriction).\n"
         "- ``allow_negative_arrival_times`` (bool) -- if False (default), a pulse with samples at t<0\n"
         "  is an error; if True, the t<0 part is clipped. Default False.\n"
         "\n"
@@ -62,6 +64,7 @@ void register_simpulse_bindings(pybind11::module &m)
         .def(py::init([](double dm, double sm, double intrinsic_width, double spectral_index,
                          double undispersed_arrival_time_sec, double time_sample_ms, double snr,
                          const Array<double> &freq_edges_MHz, const Array<double> &freq_variances,
+                         double subband_freq_lo_MHz, double subband_freq_hi_MHz,
                          bool allow_negative_arrival_times, long internal_nt) {
                  SinglePulse::Params p;
                  p.dm = dm;
@@ -73,16 +76,19 @@ void register_simpulse_bindings(pybind11::module &m)
                  p.snr = snr;
                  p.freq_edges_MHz = freq_edges_MHz;
                  p.freq_variances = freq_variances;
+                 p.subband_freq_lo_MHz = subband_freq_lo_MHz;
+                 p.subband_freq_hi_MHz = subband_freq_hi_MHz;
                  p.allow_negative_arrival_times = allow_negative_arrival_times;
                  p.internal_nt = internal_nt;
                  return new SinglePulse(p);
              }),
-             // Argument order matches the C++ Params members. Only the last two (allow_negative_arrival_times,
-             // internal_nt) have defaults -- the required arrays sit mid-struct, so everything before them
-             // (including snr) must be a required argument.
+             // Argument order matches the C++ Params members. The trailing args with sensible defaults
+             // (subband_*, allow_negative_arrival_times, internal_nt) are optional; the required arrays sit
+             // mid-struct, so everything before them (including snr) must be a required argument.
              py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"), py::arg("spectral_index"),
              py::arg("undispersed_arrival_time_sec"), py::arg("time_sample_ms"), py::arg("snr"),
              py::arg("freq_edges_MHz"), py::arg("freq_variances"),
+             py::arg("subband_freq_lo_MHz") = 0.0, py::arg("subband_freq_hi_MHz") = 1.0e9,
              py::arg("allow_negative_arrival_times") = false, py::arg("internal_nt") = 1024)
 
         // Read-only views of the construction parameters (SinglePulse::params).
@@ -96,6 +102,8 @@ void register_simpulse_bindings(pybind11::module &m)
         .def_property_readonly("snr", [](const SinglePulse &s) { return s.params.snr; })
         .def_property_readonly("spectral_index", [](const SinglePulse &s) { return s.params.spectral_index; })
         .def_property_readonly("undispersed_arrival_time_sec", [](const SinglePulse &s) { return s.params.undispersed_arrival_time_sec; })
+        .def_property_readonly("subband_freq_lo_MHz", [](const SinglePulse &s) { return s.params.subband_freq_lo_MHz; })
+        .def_property_readonly("subband_freq_hi_MHz", [](const SinglePulse &s) { return s.params.subband_freq_hi_MHz; })
         .def_property_readonly("allow_negative_arrival_times", [](const SinglePulse &s) { return s.params.allow_negative_arrival_times; })
 
         // Precomputed sparse representation.

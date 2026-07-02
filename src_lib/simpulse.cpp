@@ -137,6 +137,8 @@ SinglePulse::SinglePulse(const Params &p)
     const double sm = params.sm;
     const double intrinsic_width = params.intrinsic_width;
     const double undispersed_arrival_time_sec = params.undispersed_arrival_time_sec;
+    const double subband_freq_lo_MHz = params.subband_freq_lo_MHz;
+    const double subband_freq_hi_MHz = params.subband_freq_hi_MHz;
 
     // The i-th channel spans [edges[i], edges[i+1]]; channel widths need not be equal. 'variances'
     // is the per-channel noise variance, used to normalize the pulse to params.snr (after the loop).
@@ -146,11 +148,22 @@ SinglePulse::SinglePulse(const Params &p)
 
     xassert(internal_nt >= 64);       // using fewer time samples than this is probably a mistake
     xassert(is_power_of_two(internal_nt));   // the FFT size is 2*internal_nt
-    xassert(time_sample_ms > 0.0);    // required; determines the (zero-based) time grid
-    xassert(dm >= 0.0);
-    xassert(sm >= 0.0);
-    xassert(intrinsic_width >= 0.0);
-    xassert(params.snr >= 0.0);
+    // These params have out-of-range sentinel defaults (see simpulse.hpp), so a value the caller
+    // forgot to set is caught here rather than silently used.
+    xassert_msg(dm >= 0.0, "pirate::simpulse::SinglePulse: dm is negative or uninitialized");
+    xassert_msg(sm >= 0.0, "pirate::simpulse::SinglePulse: sm is negative or uninitialized");
+    xassert_msg(intrinsic_width >= 0.0, "pirate::simpulse::SinglePulse: intrinsic_width is negative or uninitialized");
+    xassert_msg(params.spectral_index > -1000.0, "pirate::simpulse::SinglePulse: spectral_index is uninitialized");
+    xassert_msg(undispersed_arrival_time_sec > -1.0e6, "pirate::simpulse::SinglePulse: undispersed_arrival_time_sec is uninitialized");
+    xassert_msg(time_sample_ms > 0.0, "pirate::simpulse::SinglePulse: time_sample_ms is negative or uninitialized");
+    xassert_msg(params.snr >= 0.0, "pirate::simpulse::SinglePulse: snr is negative or uninitialized");
+
+    // Subband: the pulse is simulated only in channels overlapping [subband_freq_lo_MHz, subband_freq_hi_MHz]
+    // (the default [0, 1e9] overlaps every channel). The subband must overlap the frequency band.
+    xassert_lt(subband_freq_lo_MHz, subband_freq_hi_MHz);
+    if ((subband_freq_hi_MHz <= edges[0]) || (subband_freq_lo_MHz >= edges[nfreq]))
+        throw runtime_error("pirate::simpulse::SinglePulse: subband [subband_freq_lo_MHz, subband_freq_hi_MHz]"
+                            " does not overlap the frequency band");
 
     // Implementing delta-function pulses wouldn't be a big deal, but creates corner cases, and so
     // far there hasn't been a strong reason to implement it.
@@ -196,6 +209,16 @@ SinglePulse::SinglePulse(const Params &p)
         // --- per-channel pulse shape (delays, widths, spectral weight) ---
         double nu_lo = edges[ifreq];
         double nu_hi = edges[ifreq+1];
+
+        // Subband restriction: skip channels that don't overlap [subband_freq_lo_MHz, subband_freq_hi_MHz].
+        // A skipped channel contributes no samples (freq_nt = 0), and does not enter the SNR normalization.
+        if ((nu_hi <= subband_freq_lo_MHz) || (nu_lo >= subband_freq_hi_MHz)) {
+            freq_it0.data[ifreq] = 0;
+            freq_nt.data[ifreq] = 0;
+            freq_sd_off.data[ifreq] = total;
+            continue;
+        }
+
         double nu_c = (nu_lo + nu_hi) / 2.0;
 
         double dm_delay0 = dispersion_delay(dm, nu_hi);
@@ -345,6 +368,8 @@ void SinglePulse::print(ostream &os) const
        << ",dm=" << params.dm << ",sm=" << params.sm << ",intrinsic_width=" << params.intrinsic_width
        << ",snr=" << params.snr << ",spectral_index=" << params.spectral_index
        << ",undispersed_arrival_time_sec=" << params.undispersed_arrival_time_sec
+       << ",subband_freq_lo_MHz=" << params.subband_freq_lo_MHz
+       << ",subband_freq_hi_MHz=" << params.subband_freq_hi_MHz
        << ",allow_negative_arrival_times=" << params.allow_negative_arrival_times << ")";
 }
 
