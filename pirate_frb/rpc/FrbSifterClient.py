@@ -112,6 +112,14 @@ class FrbSifterClient:
     Attributes (read-only):
 
     - ``server_address`` (str) -- the sifter's ``ip:port`` address.
+    - ``timeout`` (float) -- per-send RPC deadline, in seconds. If > 0 (default 1),
+      send_events() is fire-and-forget and an event is dropped if it isn't delivered
+      within this many seconds. 0 means synchronous: send_events() blocks until the
+      sifter replies.
+    - ``raise_exception_on_timeout`` (bool, default True) -- what happens when an async
+      send (timeout > 0) expires: if True the timeout is re-raised from the next
+      send_events(); if False the event is silently dropped and a message is printed to
+      stdout (so a sifter that is offline or not responding is visible).
 
     Usage::
 
@@ -124,25 +132,36 @@ class FrbSifterClient:
     where 'events' is a FrbSifterEvents.
     """
 
-    def __init__(self, server_address: str = "localhost:50051"):
+    def __init__(self, server_address: str = "localhost:50051", timeout=1,
+                 raise_exception_on_timeout=True):
         self.server_address = server_address
+        self.timeout = float(timeout)               # per-send deadline (s); 0 = synchronous
+        if self.timeout < 0:
+            raise ValueError(f"FrbSifterClient: timeout must be >= 0 seconds, got {timeout!r}")
+        self.raise_exception_on_timeout = bool(raise_exception_on_timeout)
         self.channel = grpc.insecure_channel(server_address)
         self.stub = frb_sifter_pb2_grpc.FrbSifterStub(self.channel)
-        # send_events() dispatches FrbEvents RPCs asynchronously via stub.*.future().
-        # Retain each in-flight future (else GC could cancel the RPC) and drain them in
-        # close(). Mutated from both the caller thread (send_events) and grpc callback
-        # threads (_on_send_done), so guard with a lock.
+        # For timeout > 0, send_events() is fire-and-forget: each FrbEvents RPC is
+        # dispatched via stub.*.future() with a 'timeout'-second deadline. Retain each
+        # in-flight future (else GC could cancel the RPC) and drain them in close().
+        # Mutated from both the caller thread (send_events) and grpc callback threads
+        # (_on_send_done), so guard with a lock. A timed-out send can't raise from its
+        # callback thread; when raise_exception_on_timeout is True the error is stashed
+        # in _deferred_error and re-raised from the next send_events().
         self._pending = set()
         self._pending_lock = threading.Lock()
+        self._deferred_error = None
 
     def send_configuration(self, pirate_yaml, xengine_yaml,
                             dedispersion_plan_yaml, grouper_yaml,
                             search_ip_addr):
         """Send the initial ConfigMessage (CheckConfiguration RPC).
 
-        Sent once, before any events. Each yaml argument may be either a str (sent
-        unmodified) or any yaml-serializable object (``yaml.dump()``'d to a string
-        before sending).
+        Sent once, before any events. Unlike send_events(), this send is always
+        synchronous: it blocks until the sifter replies and raises on failure (the
+        client's ``timeout`` governs only send_events()). Each yaml argument may be
+        either a str (sent unmodified) or any yaml-serializable object
+        (``yaml.dump()``'d to a string before sending).
 
         Parameters
         ----------
@@ -193,12 +212,15 @@ class FrbSifterClient:
 
         Sent once per FPGA window, after send_configuration().
 
-        Asynchronous / fire-and-forget: the request is built and validated
-        synchronously (so the caller's arrays are snapshotted before returning), then
-        the RPC is dispatched on a grpc background thread and this method returns
-        immediately without waiting for the reply. Transport errors and not-ok replies
-        are therefore logged to stderr, not raised. close() waits briefly for the
-        in-flight sends to finish.
+        The request is built and validated synchronously (so the caller's arrays are
+        snapshotted before returning). Delivery then depends on the client's ``timeout``.
+        If ``timeout > 0`` (the default) this is fire-and-forget: the RPC is dispatched
+        on a grpc background thread with a ``timeout``-second deadline and this method
+        returns immediately; an event not delivered within ``timeout`` seconds expires
+        (handled per ``raise_exception_on_timeout`` -- see the class docstring). If
+        ``timeout == 0`` the send is synchronous: it blocks until the sifter replies and
+        raises on any transport error or not-ok reply. A not-ok reply is always logged.
+        close() waits briefly for in-flight sends to finish.
 
         Parameters
         ----------
@@ -227,10 +249,14 @@ class FrbSifterClient:
         ------
         RuntimeError
             Synchronously, for malformed input (a bad 'events' type, or a
-            coarsegrain_snr that can't be converted to a 1-d float32 array). Transport
-            errors and not-ok sifter replies occur on the background thread and are
-            logged, not raised.
+            coarsegrain_snr that can't be converted to a 1-d float32 array); with
+            timeout=0, also on a transport error or not-ok reply. With
+            raise_exception_on_timeout=True, a previous async send that timed out is
+            re-raised here (deferred from its background callback thread).
         """
+        # Surface a prior async timeout (raise_exception_on_timeout=True defers it here).
+        self._raise_deferred_error()
+
         if not isinstance(events, FrbSifterEvents):
             raise RuntimeError(f"FrbSifterClient.send_events: 'events' must be a "
                                f"FrbSifterEvents, got {type(events).__name__}")
@@ -245,16 +271,38 @@ class FrbSifterClient:
             events = events.to_proto(),
             coarsegrain_snr = cg_snr,
         )
-        # Fire-and-forget: dispatch on a grpc background thread and return immediately.
-        # Retain the future (else GC could cancel the RPC); _on_send_done drops it again
-        # and logs any failure.
-        future = self.stub.FrbEvents.future(request)
+
+        if self.timeout == 0:
+            # Synchronous: block until the reply, raise on any failure.
+            try:
+                reply = self.stub.FrbEvents(request)
+            except grpc.RpcError as e:
+                raise RuntimeError(f"FrbSifterClient.send_events: RPC to sifter at "
+                                   f"{self.server_address!r} failed: {e}") from e
+            if not reply.ok:
+                raise RuntimeError(f"FrbSifterClient.send_events: sifter at "
+                                   f"{self.server_address!r} rejected the message: "
+                                   f"{reply.message!r}")
+            return
+
+        # Fire-and-forget with a 'timeout'-second deadline: dispatch on a grpc background
+        # thread and return immediately. wait_for_ready=True so an offline sifter waits
+        # (up to the deadline) rather than failing fast, giving a uniform "expired after
+        # timeout" signal. Retain the future (else GC could cancel it); _on_send_done
+        # drops it and handles expiry / errors.
+        future = self.stub.FrbEvents.future(request, timeout=self.timeout, wait_for_ready=True)
         with self._pending_lock:
             self._pending.add(future)
         future.add_done_callback(self._on_send_done)
 
     def _on_send_done(self, future):
-        """Done-callback for an async send_events() RPC (runs on a grpc thread)."""
+        """Done-callback for an async send_events() RPC (runs on a grpc thread).
+
+        An RPC that didn't get through in time (DEADLINE_EXCEEDED, or a transport
+        failure -- sifter offline / not responding) is an "expired" event, surfaced per
+        raise_exception_on_timeout. A delivered-but-rejected reply (ok=False) is always
+        logged (the sifter is up, so it's a protocol/data issue, not connectivity).
+        """
         with self._pending_lock:
             self._pending.discard(future)
         try:
@@ -264,12 +312,32 @@ class FrbSifterClient:
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.CANCELLED:
                 return                          # expected on channel close
-            print(f"FrbSifterClient.send_events: async RPC to sifter at "
-                  f"{self.server_address!r} failed: {e}", file=sys.stderr, flush=True)
+            self._on_event_expired(e.code().name)
             return
         if not reply.ok:
             print(f"FrbSifterClient.send_events: sifter at {self.server_address!r} "
                   f"rejected the message: {reply.message!r}", file=sys.stderr, flush=True)
+
+    def _on_event_expired(self, code_name):
+        """Handle an event that couldn't be delivered within 'timeout' (runs on a grpc
+        thread). raise_exception_on_timeout=True -> stash the error to re-raise from the
+        next send_events(); False -> print a message to stdout and drop it."""
+        msg = (f"FrbSifterClient.send_events: event to sifter at {self.server_address!r} "
+               f"expired -- sifter offline or not responding ({code_name})")
+        if self.raise_exception_on_timeout:
+            with self._pending_lock:
+                if self._deferred_error is None:   # keep the first; coalesce a burst
+                    self._deferred_error = RuntimeError(msg)
+        else:
+            print(msg, flush=True)                 # stdout: make sifter outages visible
+
+    def _raise_deferred_error(self):
+        """If a prior async send timed out (raise_exception_on_timeout=True), re-raise it."""
+        with self._pending_lock:
+            err = self._deferred_error
+            self._deferred_error = None
+        if err is not None:
+            raise err
 
     @staticmethod
     def _to_yaml(name, value):
