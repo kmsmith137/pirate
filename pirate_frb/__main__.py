@@ -1338,7 +1338,7 @@ def parse_run_fake_xengine(subparsers):
     parser.add_argument('-P', '--unpaced', action='store_true',
                         help='Disable pacing -- send chunks as fast as possible '
                              '(default: pace to stay <=5 chunks ahead of server)')
-    parser.add_argument('-u', '--unnormalized', action='store_true',
+    parser.add_argument('-N', '--unnormalized', action='store_true',
                         help='Send unnormalized data -- leave scales/offsets '
                              'arbitrary (default: calibrate them to the per-zone '
                              'noise variance)')
@@ -1354,7 +1354,7 @@ def parse_run_fake_xengine(subparsers):
                         help='Inject simulated FRBs (parameters derived from the '
                              'server GetConfig: max DM, base-tree width, and the '
                              'frequency subbands). Prints one line per injected '
-                             'FRB. Incompatible with -u, -G, and -j.')
+                             'FRB. Incompatible with -N, -G, and -j.')
     parser.add_argument('-s', '--sifter', metavar='SIFTER_ADDR', default=None,
                         help='Send the simulated FRB events (from_simulator=True) to '
                              'an FrbSifter at this "ip:port". Requires -f.')
@@ -1363,10 +1363,10 @@ def parse_run_fake_xengine(subparsers):
 def run_fake_xengine_command(args):
     # FRB injection requires normalized + gaussian data (SimulatedFrameFactory
     # enforces this), and randomizes every chunk -- so it is incompatible with
-    # -u/--unnormalized, -G/--non-gaussian, and -j/--send-junk.
+    # -N/--unnormalized, -G/--non-gaussian, and -j/--send-junk.
     if args.frbs:
         bad = []
-        if args.unnormalized: bad.append('-u/--unnormalized')
+        if args.unnormalized: bad.append('-N/--unnormalized')
         if args.non_gaussian: bad.append('-G/--non-gaussian')
         if args.send_junk:    bad.append('-j/--send-junk')
         if bad:
