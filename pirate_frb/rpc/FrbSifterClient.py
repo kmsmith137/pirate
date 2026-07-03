@@ -23,6 +23,9 @@ class FrbSifterEvents:
     - ``dms`` (float32) -- dispersion measure
     - ``snrs`` (float32) -- signal-to-noise ratio
     - ``rfi_probs`` (float32) -- RFI probability
+    - ``widths_ms`` (float32) -- intrinsic pulse width in milliseconds
+    - ``subband_freqs_lo_MHz`` (float32) -- low edge of the event's frequency subband (MHz)
+    - ``subband_freqs_hi_MHz`` (float32) -- high edge of the event's frequency subband (MHz)
 
     Other attributes:
 
@@ -33,11 +36,14 @@ class FrbSifterEvents:
 
     # (attribute, proto FrbEvent field, numpy dtype) -- order follows the proto.
     _FIELDS = (
-        ("beam_ids",        "beam_id",        np.int32),
-        ("fpga_timestamps", "fpga_timestamp", np.int64),
-        ("dms",             "dm",             np.float32),
-        ("snrs",            "snr",            np.float32),
-        ("rfi_probs",       "rfi_prob",       np.float32),
+        ("beam_ids",             "beam_id",             np.int32),
+        ("fpga_timestamps",      "fpga_timestamp",      np.int64),
+        ("dms",                  "dm",                  np.float32),
+        ("snrs",                 "snr",                 np.float32),
+        ("rfi_probs",            "rfi_prob",            np.float32),
+        ("widths_ms",            "width_ms",            np.float32),
+        ("subband_freqs_lo_MHz", "subband_freq_lo_MHz", np.float32),
+        ("subband_freqs_hi_MHz", "subband_freq_hi_MHz", np.float32),
     )
 
     @staticmethod
@@ -52,6 +58,7 @@ class FrbSifterEvents:
         return value
 
     def __init__(self, beam_ids, fpga_timestamps, dms, snrs, rfi_probs,
+                 widths_ms, subband_freqs_lo_MHz, subband_freqs_hi_MHz,
                  chunk_fpga_start, chunk_fpga_end):
         self.chunk_fpga_start = self._check_fpga_count("chunk_fpga_start", chunk_fpga_start)
         self.chunk_fpga_end = self._check_fpga_count("chunk_fpga_end", chunk_fpga_end)
@@ -60,7 +67,9 @@ class FrbSifterEvents:
                              f">= chunk_fpga_start ({self.chunk_fpga_start})")
 
         values = dict(beam_ids=beam_ids, fpga_timestamps=fpga_timestamps, dms=dms,
-                      snrs=snrs, rfi_probs=rfi_probs)
+                      snrs=snrs, rfi_probs=rfi_probs, widths_ms=widths_ms,
+                      subband_freqs_lo_MHz=subband_freqs_lo_MHz,
+                      subband_freqs_hi_MHz=subband_freqs_hi_MHz)
         for attr, _, dtype in self._FIELDS:
             val = values[attr]
             if type(val).__module__.split('.', 1)[0] == 'cupy':

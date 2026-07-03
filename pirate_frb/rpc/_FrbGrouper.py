@@ -216,6 +216,13 @@ class FrbGrouperInjections:
         k_dm  = pirate_pybind11.constants.k_dm
         self.dm_per_unit_delay = cfg['time_sample_ms'] / (k_dm * (1.0/f_lo**2 - 1.0/f_hi**2))
 
+        # Toy-grouper placeholders for the per-event width_ms / subband_freq_{lo,hi}_MHz fields
+        # (see create_events): the intrinsic width is set to one time sample, and the subband to
+        # the FULL band. A real grouper would instead recover these from the out_argmax arrays.
+        self._time_sample_ms   = float(cfg['time_sample_ms'])
+        self._band_freq_lo_MHz = float(f_lo)
+        self._band_freq_hi_MHz = float(f_hi)
+
         # Per-tree geometry from (ids, delta, T_ds, D_ds) via the tex equations,
         # cross-checked against the plan's stored ndm_out/nt_out/dm_min/dm_max.
         ndm_l, nt_l, dlo_l, dhi_l, delta_l = [], [], [], [], []
@@ -316,8 +323,9 @@ class FrbGrouperInjections:
             The events translated into physical units (beam id, absolute FPGA
             timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events(). Also
             carries the chunk's absolute FPGA window (``chunk_fpga_start``,
-            ``chunk_fpga_end``). rfi_prob is set to zero (not computed by the toy
-            grouper).
+            ``chunk_fpga_end``). The per-event quantities not measured by the toy
+            grouper get placeholders: rfi_prob = 0, width_ms = one time sample, and
+            the subband = the full band (subband_freq_{lo,hi}_MHz).
         """
         import cupy as cp
 
@@ -367,14 +375,18 @@ class FrbGrouperInjections:
         offset = np.rint(t_full * self._seq_per_sample).astype(np.int64)
         fpga_timestamps = chunk_fpga_start + offset
 
-        # FrbSifterEvents casts dtypes and validates shapes. rfi_prob is zero for the
-        # toy grouper.
+        # FrbSifterEvents casts dtypes and validates shapes. The toy grouper doesn't measure these
+        # per-event quantities, so they get placeholders: rfi_prob = 0, width_ms = one time sample,
+        # and the subband = the full band (see _precompute_event_tables).
         return FrbSifterEvents(
             beam_ids = beam_ids,
             fpga_timestamps = fpga_timestamps,
             dms = dms,
             snrs = snr_h,
             rfi_probs = np.zeros(snr_h.shape, dtype=np.float32),
+            widths_ms = np.full(snr_h.shape, self._time_sample_ms, dtype=np.float32),
+            subband_freqs_lo_MHz = np.full(snr_h.shape, self._band_freq_lo_MHz, dtype=np.float32),
+            subband_freqs_hi_MHz = np.full(snr_h.shape, self._band_freq_hi_MHz, dtype=np.float32),
             chunk_fpga_start = chunk_fpga_start,
             chunk_fpga_end = chunk_fpga_end,
         )

@@ -222,7 +222,9 @@ Here are some details that are not obvious from the example code:
    fine-grained (dm, time, frequency subband, peak-finding width) is responsible
    for each coarse-grained maximum SNR. Currently, these `out_argmax` arrays are
    ignored by `FrbGrouper.create_events()`, which just uses the central (dm,time)
-   in each coarse-grained pixel.
+   in each coarse-grained pixel, and sends placeholder values for the per-event
+   `width_ms` (one time sample) and frequency subband (`subband_freq_{lo,hi}_MHz`,
+   set to the full band).
 
    In the future, I plan to add code to recover fine-grained information from
    the `out_argmax` array. (This is not as trivial as it sounds, since the `out_argmax`

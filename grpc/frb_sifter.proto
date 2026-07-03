@@ -66,6 +66,13 @@ message FrbEvent {
   float dm = 3;
   float snr = 4;
   float rfi_prob = 5;
+
+  // Currently, these members are set to placeholder values in the main search,
+  // but we do set them to meaningful values in the stream of simulated events from
+  // the fake X-engine.
+  float width_ms = 6;
+  float subband_freq_lo_MHz = 7;
+  float subband_freq_hi_MHz = 8;
 }
 
 // When events are sent from the search pipeline, we set from_simulator=false.
