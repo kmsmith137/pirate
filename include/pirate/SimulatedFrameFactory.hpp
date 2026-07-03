@@ -167,6 +167,62 @@ struct SimulatedFrameFactory
         bool verbose = true;
     };
 
+    // ----- Public interface -----
+
+    // Constructor: validates params, reads the (already-initialized) allocator
+    // metadata, and spawns the randomizer pool, the frb_simulator pool (if
+    // simulate_frbs), and the producer thread. The spawned threads inherit the
+    // caller's vcpu affinity, so Python callers must construct inside a
+    // ThreadAffinity context manager. Throws if the allocator is null or has no
+    // metadata yet, frame_set_queue_size < 1, num_randomizer_threads < 1, or
+    // (when simulate_frbs) any frb_* param is invalid -- see the Params docs.
+    explicit SimulatedFrameFactory(const Params &params);
+
+    // Noncopyable, nonmovable
+    SimulatedFrameFactory(const SimulatedFrameFactory &) = delete;
+    SimulatedFrameFactory &operator=(const SimulatedFrameFactory &) = delete;
+    SimulatedFrameFactory(SimulatedFrameFactory &&) = delete;
+    SimulatedFrameFactory &operator=(SimulatedFrameFactory &&) = delete;
+
+    // Destructor: stop() (which also stops the allocator) then joins the
+    // producer, randomizer, and frb_simulator threads.
+    ~SimulatedFrameFactory();
+
+    // Entry point: block until a randomized AssembledFrameSet is available, then
+    // return it (removing it from the output queue). Sets are returned in
+    // allocator order. Throws if the factory is stopped (rethrows the stored
+    // error, or "called on stopped instance"). The pybind11 wrapper releases the
+    // GIL.
+    std::shared_ptr<AssembledFrameSet> get_frame_set();
+
+    // Put the factory into the stopped state and wake every thread. First caller
+    // wins (stores 'e'); later callers return immediately. Also propagates stop()
+    // to the allocator (normal termination), which is what unblocks a producer
+    // parked in allocator->get_frame_set() on an exhausted pool. Thread-safe;
+    // callable from any thread (including the factory's own worker threads on
+    // error).
+    void stop(std::exception_ptr e = nullptr);
+
+    struct Event
+    {
+        long beam_id;
+        long fpga_timestamp;  // arrival time at lowest frequency in band, not lowest frequency of frb subband
+        double dm;
+        double snr;
+        double width_ms;
+        double subband_freq_lo_MHz;
+        double subband_freq_hi_MHz;
+    };
+
+    // Returns the recorded FRB-injection events (one per injected FRB) and clears the internal
+    // list, so each Event is returned exactly once. Thread-safe (locks); safe to call after stop()
+    // to drain any final events. Empty unless Params::simulate_frbs.
+    std::vector<Event> pop_events();
+
+    // ----- Synchronization (all members below protected by 'lock') -----
+
+    // ----- Synchronization (all members below protected by 'lock') -----
+    
     // Construction parameters (validated in the constructor), immutable after
     // construction.
     const Params params;
@@ -224,6 +280,10 @@ struct SimulatedFrameFactory
     // popped pulse into absolute frame coordinates (shift_samples) before injecting it.
     std::deque<std::shared_ptr<simpulse::SinglePulse>> pulse_queue;
 
+    // FRB-injection events: the producer push_back()s one per injected FRB (independent of
+    // Params::verbose). Drained by pop_events(). Unused unless simulate_frbs.
+    std::vector<Event> events;
+
     // ----- Randomizer-pool job state (single in-flight job) -----
     //
     // Job model (identical to the pool that used to live in FakeXEngine, but
@@ -258,43 +318,6 @@ struct SimulatedFrameFactory
     std::vector<std::thread> randomizer_threads;      // size = Params::num_randomizer_threads
     std::vector<std::thread> frb_simulator_threads;   // size = Params::num_frb_simulator_threads (0 unless simulate_frbs)
 
-    // ----- Public interface -----
-
-    // Constructor: validates params, reads the (already-initialized) allocator
-    // metadata, and spawns the randomizer pool, the frb_simulator pool (if
-    // simulate_frbs), and the producer thread. The spawned threads inherit the
-    // caller's vcpu affinity, so Python callers must construct inside a
-    // ThreadAffinity context manager. Throws if the allocator is null or has no
-    // metadata yet, frame_set_queue_size < 1, num_randomizer_threads < 1, or
-    // (when simulate_frbs) any frb_* param is invalid -- see the Params docs.
-    explicit SimulatedFrameFactory(const Params &params);
-
-    // Destructor: stop() (which also stops the allocator) then joins the
-    // producer, randomizer, and frb_simulator threads.
-    ~SimulatedFrameFactory();
-
-    // Entry point: block until a randomized AssembledFrameSet is available, then
-    // return it (removing it from the output queue). Sets are returned in
-    // allocator order. Throws if the factory is stopped (rethrows the stored
-    // error, or "called on stopped instance"). The pybind11 wrapper releases the
-    // GIL.
-    std::shared_ptr<AssembledFrameSet> get_frame_set();
-
-    // Put the factory into the stopped state and wake every thread. First caller
-    // wins (stores 'e'); later callers return immediately. Also propagates stop()
-    // to the allocator (normal termination), which is what unblocks a producer
-    // parked in allocator->get_frame_set() on an exhausted pool. Thread-safe;
-    // callable from any thread (including the factory's own worker threads on
-    // error).
-    void stop(std::exception_ptr e = nullptr);
-
-    // ----- Noncopyable, nonmovable -----
-
-    SimulatedFrameFactory(const SimulatedFrameFactory &) = delete;
-    SimulatedFrameFactory &operator=(const SimulatedFrameFactory &) = delete;
-    SimulatedFrameFactory(SimulatedFrameFactory &&) = delete;
-    SimulatedFrameFactory &operator=(SimulatedFrameFactory &&) = delete;
-
 private:
     // Producer thread main + try/catch wrapper (wrapper calls stop() on throw).
     void _producer_main();
@@ -323,12 +346,14 @@ private:
     // Non-const pulse: the producer shift_samples() it before injecting.
     std::shared_ptr<simpulse::SinglePulse> _pop_pulse();
 
-    // Print a one-line "injected FRB" message (only called when params.verbose):
-    // beam_id, dm, fpga_timestamp, intrinsic width (ms), and the pulse's subband
-    // [fmin, fmax] (MHz). Called AFTER the pulse has been shifted into absolute
-    // frame-sample coordinates (see _producer_main), so its arrival maps directly
-    // to an FPGA sequence number.
-    void _log_injected_frb(long beam_index, const simpulse::SinglePulse &sp) const;
+    // Build the Event describing an injected FRB. Called AFTER the pulse has been shifted into
+    // absolute frame-sample coordinates (see _producer_main), so its arrival maps directly to an
+    // FPGA sequence number. Reads the (immutable) metadata; no lock needed.
+    Event _make_event(long beam_index, const simpulse::SinglePulse &sp) const;
+
+    // Print a one-line "injected FRB" message from an Event (only called when params.verbose):
+    // beam_id, dm, fpga_timestamp, intrinsic width (ms), and the pulse's subband [fmin, fmax] (MHz).
+    void _log_event(const Event &ev) const;
 
     // Randomize one set: dispatch its per-beam work across the randomizer pool and block until
     // complete. sp_vec[b] is the beam's active pulse (already shifted into absolute frame

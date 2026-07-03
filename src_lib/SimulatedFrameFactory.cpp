@@ -226,6 +226,15 @@ shared_ptr<AssembledFrameSet> SimulatedFrameFactory::get_frame_set()
 }
 
 
+std::vector<SimulatedFrameFactory::Event> SimulatedFrameFactory::pop_events()
+{
+    lock_guard<mutex> lk(lock);
+    std::vector<Event> ret;
+    ret.swap(events);   // hand out the recorded events and leave 'events' empty (each popped once)
+    return ret;
+}
+
+
 void SimulatedFrameFactory::_throw_if_stopped(const char *method_name)
 {
     // Caller must hold 'lock'.
@@ -283,8 +292,15 @@ void SimulatedFrameFactory::_producer_main()
                 long target = tci * time_samples_per_chunk + phase_dist(rng);
                 active_frb[b]->shift_samples(target - active_frb[b]->it_start);
 
+                // Record the injection event (independent of Params::verbose). Brief lock; the
+                // producer holds no other lock here.
+                Event ev = _make_event(b, *active_frb[b]);
+                {
+                    lock_guard<mutex> lk(lock);
+                    events.push_back(ev);
+                }
                 if (params.verbose)
-                    _log_injected_frb(b, *active_frb[b]);
+                    _log_event(ev);
             }
         }
         first_set = false;
@@ -514,7 +530,8 @@ shared_ptr<simpulse::SinglePulse> SimulatedFrameFactory::_make_random_pulse()
 }
 
 
-void SimulatedFrameFactory::_log_injected_frb(long beam_index, const simpulse::SinglePulse &sp) const
+SimulatedFrameFactory::Event
+SimulatedFrameFactory::_make_event(long beam_index, const simpulse::SinglePulse &sp) const
 {
     // fpga_timestamp: the pulse's arrival time at the LOWEST frequency of the FULL band
     // (metadata->zone_freq_edges.front(), NOT the pulse's subband), as an FPGA sequence number.
@@ -522,25 +539,38 @@ void SimulatedFrameFactory::_log_injected_frb(long beam_index, const simpulse::S
     // undispersed_arrival_time_sec is the (shifted) absolute arrival: the arrival at freq_lo is at
     //   t = undispersed_arrival_time_sec + dispersion_delay(dm, freq_lo)   [seconds],
     // i.e. absolute frame sample t/dt (dt = 1e-3*time_sample_ms sec). One frame sample spans
-    // seq_per_frb_time_sample FPGA seq ticks (frame sample 0 <-> seq 0), so
-    //   fpga_timestamp = round((t/dt) * seq_per_frb_time_sample).
+    // seq_per_frb_time_sample FPGA seq ticks (frame sample 0 <-> seq 0), so multiplying an absolute
+    // frame-sample index by seq_per_frb_time_sample converts it to an fpga timestamp.
+    const long seq = metadata->seq_per_frb_time_sample;
     double dm = sp.params.dm;
     double freq_lo = metadata->zone_freq_edges.front();
     double dt_sec = 1.0e-3 * time_sample_ms;
     double t_arrival = sp.params.undispersed_arrival_time_sec + simpulse::dispersion_delay(dm, freq_lo);
-    double frb_sample = t_arrival / dt_sec;
-    long fpga_timestamp = std::llround(frb_sample * (double) metadata->seq_per_frb_time_sample);
 
-    // Build the whole line, then emit with a single '<<' so it can't interleave with
-    // other threads' console output mid-line. Field order: beam_id, dm, fpga_timestamp,
-    // intrinsic width (ms), subband [fmin, fmax] (MHz).
+    Event ev;
+    ev.beam_id             = metadata->beam_ids.at(beam_index);
+    ev.fpga_timestamp      = std::llround((t_arrival / dt_sec) * (double) seq);
+    ev.dm                  = dm;
+    ev.snr                 = sp.params.snr;
+    ev.width_ms            = sp.params.intrinsic_width * 1.0e3;
+    ev.subband_freq_lo_MHz = sp.params.subband_freq_lo_MHz;
+    ev.subband_freq_hi_MHz = sp.params.subband_freq_hi_MHz;
+    return ev;
+}
+
+
+void SimulatedFrameFactory::_log_event(const Event &ev) const
+{
+    // Build the whole line, then emit with a single '<<' so it can't interleave with other threads'
+    // console output mid-line. Field order: beam_id, dm, fpga_timestamp, intrinsic width (ms),
+    // subband [fmin, fmax] (MHz).
     std::ostringstream ss;
-    ss << "SimulatedFrameFactory: injected FRB: beam_id=" << metadata->beam_ids.at(beam_index)
-       << ", dm=" << dm
-       << ", fpga_timestamp=" << fpga_timestamp
-       << ", intrinsic_width=" << (sp.params.intrinsic_width * 1.0e3) << " ms"
-       << ", fmin=" << sp.params.subband_freq_lo_MHz << " MHz"
-       << ", fmax=" << sp.params.subband_freq_hi_MHz << " MHz\n";
+    ss << "SimulatedFrameFactory: injected FRB: beam_id=" << ev.beam_id
+       << ", dm=" << ev.dm
+       << ", fpga_timestamp=" << ev.fpga_timestamp
+       << ", intrinsic_width=" << ev.width_ms << " ms"
+       << ", fmin=" << ev.subband_freq_lo_MHz << " MHz"
+       << ", fmax=" << ev.subband_freq_hi_MHz << " MHz\n";
     std::cout << ss.str() << std::flush;
 }
 
