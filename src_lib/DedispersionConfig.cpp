@@ -245,6 +245,28 @@ double DedispersionConfig::dm_per_unit_delay() const
 }
 
 
+double DedispersionConfig::max_dm_of_all_trees() const
+{
+    // See DedispersionPlan.cpp: tree at downsampling level 'ids' searches up to
+    // dm_max = dm0 * 2^ids, with dm0 = dm_per_unit_delay() * 2^tree_rank. dm_max is
+    // monotonic in ids and does not depend on the early-trigger delta_rank, so the
+    // largest DM across all trees is at ids = num_downsampling_levels - 1.
+    xassert(num_downsampling_levels >= 1);
+    double dm0 = dm_per_unit_delay() * double(pow2(tree_rank));
+    return dm0 * double(pow2(num_downsampling_levels - 1));
+}
+
+
+long DedispersionConfig::max_width_of_base_tree() const
+{
+    // peak_finding_params is length num_downsampling_levels; index 0 is the base
+    // (ds_level=0) tree. Its max_width is in "tree" time samples, which at ds_level 0
+    // equals native (frame) time samples. (validate() guarantees this is nonempty.)
+    xassert(!peak_finding_params.empty());
+    return peak_finding_params.at(0).max_width;
+}
+
+
 Array<double> DedispersionConfig::make_channel_map() const
 {
     long nchan = pow2(tree_rank);

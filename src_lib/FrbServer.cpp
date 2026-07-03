@@ -1744,6 +1744,11 @@ void FrbRpcService::_GetConfig(const fs::GetConfigRequest *request, fs::GetConfi
         response->add_fake_zone_freq_edges(v);
     response->set_fake_time_sample_ms(c.time_sample_ms);
     response->set_fake_nbeams(c.beams_per_gpu);
+
+    // Search reach, used by the fake X-engine to bound the simulated FRBs it injects.
+    // (max_width is in frame time samples, not ms -- see DedispersionConfig.)
+    response->set_max_dm_of_all_trees(c.max_dm_of_all_trees());
+    response->set_max_width_of_base_tree(c.max_width_of_base_tree());
 }
 
 grpc::Status FrbRpcService::GetConfig(

@@ -145,6 +145,18 @@ struct DedispersionConfig
     // equal to one time sample.
     double dm_per_unit_delay() const;
 
+    // Returns the largest DM (pc cm^{-3}) searched by any dedispersion tree. Mirrors the
+    // per-tree dm_max = dm_per_unit_delay() * 2^tree_rank * 2^ds_level computed in the
+    // DedispersionPlan constructor; this is monotonic in ds_level and independent of
+    // early-trigger delta_rank, so the maximum is at ds_level = num_downsampling_levels-1.
+    // (Depends only on pre-metadata config fields, so it is valid on config_prefilled.)
+    double max_dm_of_all_trees() const;
+
+    // Returns the peak-finding kernel max_width of the base (non-downsampled, ds_level=0)
+    // tree, in time samples. At ds_level 0 the tree's time sampling equals the native
+    // (frame) time sampling, so this is a number of frame time samples (NOT milliseconds).
+    long max_width_of_base_tree() const;
+
     // Returns sum of zone_nfreq (i.e. total number of frequency channels across all zones).
     long get_total_nfreq() const;
 
