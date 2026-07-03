@@ -363,6 +363,9 @@ PYFILES = \
   pirate_frb/tests/test_assembled_frame_allocator.py \
   pirate_frb/tests/test_assembled_frame_asdf.py \
   pirate_frb/tests/test_network.py \
+  pirate_frb/tests/test_pulse_injection.py \
+  pirate_frb/tests/test_server.py \
+  pirate_frb/tests/utils.py \
   pirate_frb/utils/__init__.py \
   pirate_frb/utils/core.py \
   pirate_frb/utils/ThreadAffinity.py \
@@ -371,6 +374,7 @@ PYFILES = \
   pirate_frb/utils/safe_memcpy.py \
   pirate_frb/utils/show_asdf.py \
   pirate_frb/rpc/__init__.py \
+  pirate_frb/rpc/_FrbGrouper.py \
   pirate_frb/rpc/FileSubscriber.py \
   pirate_frb/rpc/FrbSearchClient.py \
   pirate_frb/rpc/FrbSifterClient.py

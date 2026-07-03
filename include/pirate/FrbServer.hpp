@@ -115,6 +115,12 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // grouper to be on the same physical GPU); the constructor enforces this.
         std::string grouper_ip_addr;
 
+        // Weight-ring depth (GpuDedisperser::Params::nbatches_wt) of the internal
+        // dedisperser. 0 (default) = num_active_batches. Must be >= num_active_batches
+        // if nonzero (enforced by the GpuDedisperser constructor). Only used by unit
+        // tests (e.g. 'test --serv'), which randomize the weight-ring depth.
+        long nbatches_wt = 0;
+
         // If true, the processing thread skips ALL GPU work: data is not even
         // copied host->device, and no dequantization / dedispersion kernels are
         // launched. The receive/assemble/ringbuf/reaper pipeline still runs in

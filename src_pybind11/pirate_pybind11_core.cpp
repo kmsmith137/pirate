@@ -1167,6 +1167,16 @@ void register_core_bindings(pybind11::module &m)
                "Start the worker threads.\n\n"
                "Raises:\n"
                "    RuntimeError: If called twice or after stop().")
+          .def("wait_until_listening", &Receiver::wait_until_listening,
+               py::call_guard<py::gil_scoped_release>(),
+               "Block until the listener thread has bound the listening socket\n"
+               "(i.e. a client's connect() will succeed). The GIL is released for\n"
+               "the duration of the call. Useful when the caller must not attempt\n"
+               "a connection before the Receiver is accepting (e.g. FakeXEngine,\n"
+               "whose lazy connect raises on ECONNREFUSED). Requires start() to\n"
+               "have been called (otherwise blocks until stop()).\n\n"
+               "Raises:\n"
+               "    RuntimeError: If the Receiver is stopped.")
           .def("get_status", [](Receiver &self) {
                long num_conn, num_bytes;
                self.get_status(num_conn, num_bytes);
@@ -1205,7 +1215,8 @@ void register_core_bindings(pybind11::module &m)
                            int cuda_device_id,
                            double processing_delay_sec,
                            const std::string &grouper_ip_addr,
-                           bool no_dedispersion) {
+                           bool no_dedispersion,
+                           long nbatches_wt) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -1219,6 +1230,7 @@ void register_core_bindings(pybind11::module &m)
                params.processing_delay_sec = processing_delay_sec;
                params.grouper_ip_addr = grouper_ip_addr;
                params.no_dedispersion = no_dedispersion;
+               params.nbatches_wt = nbatches_wt;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
@@ -1231,6 +1243,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("processing_delay_sec") = 0.0,
                py::arg("grouper_ip_addr") = "",
                py::arg("no_dedispersion") = false,
+               py::arg("nbatches_wt") = 0,
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -1265,7 +1278,10 @@ void register_core_bindings(pybind11::module &m)
                "        and no dequantization/dedispersion kernels run. The\n"
                "        receive/assemble/ringbuf/reaper pipeline still runs in full.\n"
                "        Implies no grouper, so grouper_ip_addr must be '' (the\n"
-               "        constructor asserts this).")
+               "        constructor asserts this).\n"
+               "    nbatches_wt (default 0): weight-ring depth of the internal\n"
+               "        GpuDedisperser. 0 = num_active_batches. If nonzero, must be\n"
+               "        >= num_active_batches. Only used by unit tests.")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"

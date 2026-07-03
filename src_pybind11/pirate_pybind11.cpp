@@ -18,10 +18,12 @@
 #include <ksgpu/pybind11.hpp>
 
 #include "../include/pirate/constants.hpp"
+#include "../include/pirate/CoalescedDdKernel2.hpp"    // GpuDedisperser.Dcore property
 #include "../include/pirate/CudaStreamPool.hpp"
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/PeakFindingKernel.hpp"     // ReferenceDedisperser.pf_kernels
 
 using namespace std;
 using namespace ksgpu;
@@ -389,6 +391,14 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
           .def_readonly("trees", &GpuDedisperser::trees)
           .def_readonly("resource_tracker", &GpuDedisperser::resource_tracker)
           .def_readonly("stream_pool", &GpuDedisperser::stream_pool)
+          .def_property_readonly("Dcore", [](const GpuDedisperser &self) {
+               std::vector<long> ret;
+               for (const auto &k : self.cdd2_kernels)
+                   ret.push_back(k->Dcore);
+               return ret;
+          }, "Per-tree internal time-downsampling factors of the GPU peak-finding\n"
+             "kernels (length ntrees). Pass to ReferenceDedisperser(Dcore=...) to make\n"
+             "the reference kernels mimic this GpuDedisperser exactly.")
           .def("allocate", &GpuDedisperser::allocate,
                py::arg("gpu_allocator"), py::arg("host_allocator"),
                "Allocate GPU and host memory buffers for dedispersion.\n\n"
@@ -508,6 +518,8 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
         // Input/weights buffers (write into these zero-copy views before dedisperse()):
         .def_readonly("input_array",     &ReferenceDedisperserBase::input_array)
         .def_readonly("wt_arrays",       &ReferenceDedisperserBase::wt_arrays)
+        // Per-tree ReferencePeakFindingKernels (e.g. for eval_tokens() in unit tests):
+        .def_readonly("pf_kernels",      &ReferenceDedisperserBase::pf_kernels)
         // Outputs (read after dedisperse()). out_var is empty unless enable_variances was set:
         .def_readonly("out_max",         &ReferenceDedisperserBase::out_max)
         .def_readonly("out_argmax",      &ReferenceDedisperserBase::out_argmax)

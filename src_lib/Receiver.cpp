@@ -234,6 +234,21 @@ shared_ptr<AssembledFrameSet> Receiver::get_frame_set()
 }
 
 
+// Entry point: block until the listener thread has bound the listening socket,
+// or throw if the Receiver is stopped first. See header comment for details.
+void Receiver::wait_until_listening()
+{
+    unique_lock<std::mutex> lock(mutex);
+
+    for (;;) {
+        _throw_if_stopped("Receiver::wait_until_listening");
+        if (is_listening)
+            return;
+        cv.wait(lock);
+    }
+}
+
+
 // Entry point: schedule eviction of all chunks with chunk_index <= evicted_chunk.
 // Asynchronous: sets the target and wakes the assembler. See header comment for
 // details.
@@ -277,6 +292,13 @@ void Receiver::_listener_main()
     listening_socket.set_reuseaddr();
     listening_socket.bind(ip_addr, tcp_port);
     listening_socket.listen();
+
+    // Announce that a client's connect() will now succeed (see wait_until_listening()).
+    {
+        lock_guard<std::mutex> lock(mutex);
+        is_listening = true;
+        cv.notify_all();
+    }
 
     for (;;) {
         unique_lock<std::mutex> lock(mutex);

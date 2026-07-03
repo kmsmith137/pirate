@@ -305,7 +305,8 @@ void register_kernel_bindings(pybind11::module &m)
 
     // Exposed for unit tests only (see PfVarianceConvolver.test_kernels_match_reference).
     // The reference peak-finder computes in float32 regardless of the configured dtype.
-    py::class_<ReferencePeakFindingKernel>(m, "ReferencePeakFindingKernel",
+    // shared_ptr holder: ReferenceDedisperser.pf_kernels returns shared_ptr elements.
+    py::class_<ReferencePeakFindingKernel, std::shared_ptr<ReferencePeakFindingKernel>>(m, "ReferencePeakFindingKernel",
         "Reference (CPU, float32) peak-finding kernel; exposed for unit tests.")
           .def(py::init([](const std::vector<long> &subband_counts, long max_kernel_width,
                            long beams_per_batch, long total_beams, long ndm_out, long ndm_wt,

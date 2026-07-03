@@ -57,7 +57,8 @@ def parse_test(subparsers):
     parser.add_argument('--avar', action='store_true', help='Runs tests related to analytic variance')
     parser.add_argument('--chime', action='store_true', help='Runs test_chime_frb_upchan()')
     parser.add_argument('--net', action='store_true', help='Runs network/allocator tests (AssembledFrameAllocator, etc.)')
-    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection test + simpulse negative-arrival-time test')
+    parser.add_argument('--serv', action='store_true', help='Runs end-to-end FakeXEngine -> FrbServer -> GpuDedisperser -> FrbGrouper test')
+    parser.add_argument('--sim', action='store_true', help='Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection test')
 
 
 def rrange(registry_class):
@@ -77,7 +78,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'sim' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'casm', 'chime', 'zomb', 'dd', 'avar', 'net', 'serv', 'sim' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
     
     ksgpu.set_cuda_device(args.gpu)
@@ -185,6 +186,9 @@ def test(args):
                 tests.test_assembled_frame_allocator()
             tests.test_assembled_frame_asdf()
             tests.test_network()
+
+        if run_all_tests or args.serv:
+            tests.test_server()
 
 
 ######################################   test_simpulse command  #####################################

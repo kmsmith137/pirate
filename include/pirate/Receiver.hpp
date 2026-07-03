@@ -80,6 +80,14 @@ struct Receiver
     // Thread-safe: returns current number of active TCP connections, and total bytes read.
     void get_status(long &num_connections, long &nbytes_cumul);
 
+    // Entry point: block until the listener thread has bound the listening
+    // socket (i.e. a client's connect() will succeed), or throw if the
+    // Receiver is stopped first. Useful when the caller must not attempt a
+    // connection before the Receiver is accepting (e.g. FakeXEngine, whose
+    // lazy connect throws on ECONNREFUSED). Requires start() to have been
+    // called (otherwise blocks until stop()).
+    void wait_until_listening();
+
     // Entry point: retrieve an assembled frame set (= one time chunk, all
     // beams) from the queue (blocking). Blocks until a set is available,
     // or throws if the Receiver is stopped. The returned set corresponds
@@ -127,6 +135,7 @@ struct Receiver
     mutable std::mutex mutex;
     mutable std::condition_variable cv;
     bool is_started = false;
+    bool is_listening = false;   // set by listener thread once the listening socket is bound
     bool is_stopped = false;
     std::exception_ptr error;
 
