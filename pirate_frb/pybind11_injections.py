@@ -618,9 +618,8 @@ class SimulatedFrameFactoryInjections:
         # list, either a python FrbSifterEvents object, or a C++ vector<SimulatedFrameFactory::Event>.
         # This function converts between the two, at the "python/C++ boundary".
         #
-        # This design is awkward but I think think it's the least bad option. (The only real alternative
-        # seems to be rewriting the FrbSifterClient in C++, and I'm kind of attached to the current python
-        # implementation.)
+        # This design is awkward but I think it's the least bad option. (The only real alternative seems
+        # to be rewriting the FrbSifterClient in C++, and I prefer the current python implementation.)
         
         events = self._pop_events()
         n = len(events)
