@@ -190,6 +190,16 @@ def test_negative_arrival_times():
     assert np.allclose(sd_a, sd_b, rtol=1.0e-5, atol=1.0e-6 * np.abs(sd_b).max()), \
         "sparse_data mismatch between shifted copies of the same pulse"
 
+    # shift_samples(K) shifts an existing pulse in place: it must reproduce sp_a shifted by K
+    # (freq_it0/it_start/it_end += K, uat += K*dt), with counts and sample VALUES untouched.
+    sp_c = SinglePulse(undispersed_arrival_time_sec=0.0, **common)
+    sp_c.shift_samples(K)
+    assert np.array_equal(np.asarray(sp_c.freq_it0), it0_a + K), "shift_samples didn't shift freq_it0 by K"
+    assert sp_c.it_start == sp_a.it_start + K and sp_c.it_end == sp_a.it_end + K
+    assert np.array_equal(np.asarray(sp_c.freq_nt), nt_a)                             # counts unchanged
+    assert np.array_equal(np.asarray(sp_c.sparse_data), np.asarray(sp_a.sparse_data))  # values unchanged
+    assert abs(sp_c.undispersed_arrival_time_sec - K * dt_ms * 1.0e-3) < 1.0e-12
+
     # add_to_timestream(out, out_it0): render A over an 'out' spanning [it_start, it_end), and B
     # over the same-size window shifted by K. The two dense renders must be identical (same pulse).
     nt = sp_a.it_end - sp_a.it_start

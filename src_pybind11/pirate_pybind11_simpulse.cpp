@@ -127,6 +127,11 @@ void register_simpulse_bindings(pybind11::module &m)
              "it_end. 'out' must be a host (CPU) float32 array with contiguous time samples, ordered low\n"
              "to high in frequency.")
 
+        .def("shift_samples", &SinglePulse::shift_samples, py::arg("delta_it"),
+             "Shift the pulse forward in time by delta_it samples (may be negative): adds delta_it to\n"
+             "every freq_it0 and to it_start/it_end, and (1e-3 * delta_it * time_sample_ms) to\n"
+             "undispersed_arrival_time_sec. sparse_data / freq_nt / freq_sd_off are unchanged.")
+
         .def("__repr__", &SinglePulse::str)
     ;
 }

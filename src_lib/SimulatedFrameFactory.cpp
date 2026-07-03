@@ -239,13 +239,11 @@ void SimulatedFrameFactory::_throw_if_stopped(const char *method_name)
 
 void SimulatedFrameFactory::_producer_main()
 {
-    // Per-beam active-FRB state (see class doc). Producer-thread-local: no other
-    // thread touches these vectors, so no locking is needed. active_frb_it0[b] is
-    // the offset added to pulse-sample coords to obtain absolute sample coords
-    // (T = t_sp + active_frb_it0), so pulse b occupies absolute samples
-    // [active_frb_it0[b] + sp->it_start, active_frb_it0[b] + sp->it_end).
-    vector<shared_ptr<const simpulse::SinglePulse>> active_frb(nbeams);
-    vector<long> active_frb_it0(nbeams, 0);
+    // Per-beam active-FRB state (see class doc). Producer-thread-local: no other thread touches
+    // this vector, so no locking is needed. Each pulse is shift_samples()'d into ABSOLUTE
+    // frame-sample coordinates when assigned, so pulse b occupies absolute samples
+    // [active_frb[b]->it_start, active_frb[b]->it_end) directly -- no separate offset is kept.
+    vector<shared_ptr<simpulse::SinglePulse>> active_frb(nbeams);
     bool first_set = true;
 
     std::mt19937 &rng = ksgpu::default_rng();
@@ -267,10 +265,10 @@ void SimulatedFrameFactory::_producer_main()
         // allocator's initial chunk index is caller-chosen).
         if (params.simulate_frbs && !first_set) {
             for (long b = 0; b < nbeams; b++) {
-                // Ready iff no active pulse, or the active pulse is entirely in the
-                // past (all its samples are before the current chunk).
+                // Ready iff no active pulse, or the active pulse is entirely in the past (its
+                // samples -- now in absolute coords -- all precede the current chunk).
                 bool ready = !active_frb[b]
-                    || (active_frb_it0[b] + active_frb[b]->it_end <= tci * time_samples_per_chunk);
+                    || (active_frb[b]->it_end <= tci * time_samples_per_chunk);
                 if (!ready)
                     continue;
 
@@ -278,13 +276,15 @@ void SimulatedFrameFactory::_producer_main()
                 if (!active_frb[b])
                     return;                     // stopped
 
-                // Place the pulse's EARLIEST sample (it_start) at a uniformly random phase within
-                // the current chunk. it_start can be negative (small-DM pulses; see
-                // _make_random_pulse) or large positive (high DM) -- the shift handles both.
-                active_frb_it0[b] = tci * time_samples_per_chunk + phase_dist(rng) - active_frb[b]->it_start;
+                // Shift the pulse so its EARLIEST sample (it_start) lands at a uniformly random
+                // phase within the current chunk. After the shift, the pulse's sample indices ARE
+                // absolute frame-sample indices. (delta_it can be negative -- shift_samples
+                // handles either sign.)
+                long target = tci * time_samples_per_chunk + phase_dist(rng);
+                active_frb[b]->shift_samples(target - active_frb[b]->it_start);
 
                 if (params.verbose)
-                    _log_injected_frb(b, *active_frb[b], active_frb_it0[b]);
+                    _log_injected_frb(b, *active_frb[b]);
             }
         }
         first_set = false;
@@ -292,7 +292,7 @@ void SimulatedFrameFactory::_producer_main()
         // Dispatch per-beam randomization (+ pulse injection) across the pool and
         // block until done. Throws if the factory was stopped (the in-flight job
         // still fully drains first, so 'fset' stays safe to drop).
-        _randomize_set(*fset, active_frb, active_frb_it0, tci);
+        _randomize_set(*fset, active_frb, tci);
 
         // Push to the bounded output queue (block while full).
         unique_lock<mutex> lk(lock);
@@ -317,13 +317,12 @@ void SimulatedFrameFactory::producer_main()
 
 
 void SimulatedFrameFactory::_randomize_set(AssembledFrameSet &fset,
-                                           const vector<shared_ptr<const simpulse::SinglePulse>> &sp_vec,
-                                           const vector<long> &it0_vec, long tci)
+                                           const vector<shared_ptr<simpulse::SinglePulse>> &sp_vec,
+                                           long tci)
 {
     // Sets from our allocator always have exactly 'nbeams' frames.
     xassert_eq(long(fset.frames.size()), nbeams);
     xassert_eq(long(sp_vec.size()), nbeams);
-    xassert_eq(long(it0_vec.size()), nbeams);
 
     unique_lock<mutex> lk(lock);
     _throw_if_stopped("SimulatedFrameFactory::_randomize_set");
@@ -335,12 +334,13 @@ void SimulatedFrameFactory::_randomize_set(AssembledFrameSet &fset,
     rand_ndone = 0;
     rand_total = nbeams;
 
-    // Per-beam pulse injection args. dt_sp maps frame-local time to pulse time:
-    // it_sp = it_frame + dt_sp (see AssembledFrame::randomize), i.e.
-    // dt_sp = tci*tspc - active_frb_it0. Unused (forced to 0) when sp is null.
+    // Per-beam pulse injection args. The pulse (if any) is in ABSOLUTE frame-sample coordinates
+    // (the producer shift_samples()'d it), so dt_sp maps the set's frame-local itime to the
+    // absolute sample index: it_sp = it_frame + tci*tspc (see AssembledFrame::randomize). Same
+    // for every beam; unused (forced to 0) when sp is null.
     for (long b = 0; b < nbeams; b++) {
         rand_sp[b] = sp_vec[b];
-        rand_dt_sp[b] = sp_vec[b] ? (tci * time_samples_per_chunk - it0_vec[b]) : 0;
+        rand_dt_sp[b] = sp_vec[b] ? (tci * time_samples_per_chunk) : 0;
     }
 
     rand_cv.notify_all();
@@ -442,7 +442,7 @@ void SimulatedFrameFactory::_frb_simulator_main()
 
         // Construct the pulse with the lock RELEASED -- this is the expensive part
         // (one FFT per channel in the subband).
-        shared_ptr<const simpulse::SinglePulse> sp = _make_random_pulse();
+        shared_ptr<simpulse::SinglePulse> sp = _make_random_pulse();
 
         // Push to the bounded pulse queue (block while full).
         unique_lock<mutex> lk(lock);
@@ -466,7 +466,7 @@ void SimulatedFrameFactory::frb_simulator_main()
 }
 
 
-shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_make_random_pulse()
+shared_ptr<simpulse::SinglePulse> SimulatedFrameFactory::_make_random_pulse()
 {
     std::mt19937 &rng = ksgpu::default_rng();   // per-thread; no locking needed
 
@@ -491,8 +491,8 @@ shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_make_random_puls
     long n = sub_dist(rng);
 
     // Arrival time: just the sub-sample phase, uniform over one time sample. There is NO
-    // constraint on where the pulse sits on the simpulse grid -- absolute placement happens via
-    // active_frb_it0 in the producer (see class doc), so small-DM pulses simply get negative
+    // constraint on where the pulse sits on the simpulse grid -- the producer shift_samples()'s
+    // it into absolute frame coordinates (see class doc), so small-DM pulses simply get negative
     // freq_it0 (SinglePulse always allows this; the producer uses it_start/it_end to place it).
     double dt_sec = 1.0e-3 * time_sample_ms;
     std::uniform_real_distribution<double> phase_dist(0.0, dt_sec);
@@ -514,21 +514,21 @@ shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_make_random_puls
 }
 
 
-void SimulatedFrameFactory::_log_injected_frb(long beam_index, const simpulse::SinglePulse &sp, long it0) const
+void SimulatedFrameFactory::_log_injected_frb(long beam_index, const simpulse::SinglePulse &sp) const
 {
     // fpga_timestamp: the pulse's arrival time at the LOWEST frequency of the FULL band
-    // (metadata->zone_freq_edges.front(), NOT the pulse's subband), as an FPGA sequence
-    // number. In the pulse's own time coordinate the arrival is at
+    // (metadata->zone_freq_edges.front(), NOT the pulse's subband), as an FPGA sequence number.
+    // The pulse has already been shifted into absolute frame-sample coordinates, so
+    // undispersed_arrival_time_sec is the (shifted) absolute arrival: the arrival at freq_lo is at
     //   t = undispersed_arrival_time_sec + dispersion_delay(dm, freq_lo)   [seconds],
-    // i.e. pulse sample t/dt (dt = 1e-3*time_sample_ms sec). The absolute frame time sample
-    // is it0 + t/dt (since T = t_sp + active_frb_it0), and one frame time sample spans
+    // i.e. absolute frame sample t/dt (dt = 1e-3*time_sample_ms sec). One frame sample spans
     // seq_per_frb_time_sample FPGA seq ticks (frame sample 0 <-> seq 0), so
-    //   fpga_timestamp = round((it0 + t/dt) * seq_per_frb_time_sample).
+    //   fpga_timestamp = round((t/dt) * seq_per_frb_time_sample).
     double dm = sp.params.dm;
     double freq_lo = metadata->zone_freq_edges.front();
     double dt_sec = 1.0e-3 * time_sample_ms;
     double t_arrival = sp.params.undispersed_arrival_time_sec + simpulse::dispersion_delay(dm, freq_lo);
-    double frb_sample = (double) it0 + t_arrival / dt_sec;
+    double frb_sample = t_arrival / dt_sec;
     long fpga_timestamp = std::llround(frb_sample * (double) metadata->seq_per_frb_time_sample);
 
     // Build the whole line, then emit with a single '<<' so it can't interleave with
@@ -545,7 +545,7 @@ void SimulatedFrameFactory::_log_injected_frb(long beam_index, const simpulse::S
 }
 
 
-shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_pop_pulse()
+shared_ptr<simpulse::SinglePulse> SimulatedFrameFactory::_pop_pulse()
 {
     unique_lock<mutex> lk(lock);
 
@@ -555,7 +555,7 @@ shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_pop_pulse()
     if (is_stopped)
         return nullptr;   // producer returns cleanly (stop() has already run)
 
-    shared_ptr<const simpulse::SinglePulse> sp = std::move(pulse_queue.front());
+    shared_ptr<simpulse::SinglePulse> sp = std::move(pulse_queue.front());
     pulse_queue.pop_front();
     sp_space_cv.notify_one();   // wake an frb simulator waiting for queue space
     return sp;

@@ -48,17 +48,18 @@ namespace pirate {
 //
 // FRB simulation model: the producer maintains one "active" pulse per beam
 // (producer-thread-local state). No pulses are injected into the first set.
-// At the start of each later set (time_chunk_index tci), a beam is "FRB-ready"
-// if it has no active pulse, or its active pulse is entirely in the past
-// (active_frb_it0 + sp->it_end <= tci * time_samples_per_chunk). Each FRB-ready
-// beam pops a fresh pulse from the pulse queue (blocking if empty) and places
-// it so its earliest sample lands at a uniformly random phase within the
-// current chunk: active_frb_it0 = tci*tspc + randint(0,tspc) - sp->it_start.
-// Injection happens inside the per-beam
-// randomize() call: frame->randomize(normalized, gaussian, sp, dt_sp) with
-// dt_sp = tci*tspc - active_frb_it0, so successive chunks receive successive
-// time-slices of the same pulse until it retires. After warmup, every beam
-// always has an active pulse; the per-beam FRB rate is roughly one per
+// At the start of each later set (time_chunk_index tci), a beam is "FRB-ready" if
+// it has no active pulse, or its active pulse is entirely in the past
+// (sp->it_end <= tci * time_samples_per_chunk). Each FRB-ready beam pops a fresh
+// pulse from the pulse queue (blocking if empty) and shift_samples() it so its
+// earliest sample lands at a uniformly random phase within the current chunk
+// (delta_it = tci*tspc + randint(0,tspc) - sp->it_start). After the shift the
+// pulse's sample indices ARE absolute frame-sample indices, so it carries its own
+// placement. Injection happens inside the per-beam randomize() call:
+// frame->randomize(normalized, gaussian, sp, dt_sp) with dt_sp = tci*tspc (mapping
+// the set's frame-local itime to the absolute sample index), so successive chunks
+// receive successive time-slices of the same pulse until it retires. After warmup,
+// every beam always has an active pulse; the per-beam FRB rate is roughly one per
 // max(1, pulse extent / tspc) chunks.
 //
 // Backpressure: there are three points, all stop()-interruptible and none able
@@ -219,8 +220,9 @@ struct SimulatedFrameFactory
     std::deque<std::shared_ptr<AssembledFrameSet>> ready_queue;
 
     // Bounded pulse queue (frb simulators -> producer), depth
-    // single_pulse_queue_size. Unused unless simulate_frbs.
-    std::deque<std::shared_ptr<const simpulse::SinglePulse>> pulse_queue;
+    // single_pulse_queue_size. Unused unless simulate_frbs. Non-const: the producer shifts a
+    // popped pulse into absolute frame coordinates (shift_samples) before injecting it.
+    std::deque<std::shared_ptr<simpulse::SinglePulse>> pulse_queue;
 
     // ----- Randomizer-pool job state (single in-flight job) -----
     //
@@ -311,29 +313,31 @@ private:
     // Construct one random SinglePulse (see the Params doc for the parameter
     // distributions). undispersed_arrival_time_sec is just uniform(0, dt) --
     // the sub-sample phase -- so small-DM pulses have negative freq_it0
-    // (SinglePulse always allows this); absolute placement happens via
-    // active_frb_it0 in the producer. Called by frb_simulator threads with the
-    // lock RELEASED; uses the per-thread ksgpu::default_rng().
-    std::shared_ptr<const simpulse::SinglePulse> _make_random_pulse();
+    // (SinglePulse always allows this); absolute placement happens when the
+    // producer shift_samples() the popped pulse. Called by frb_simulator threads
+    // with the lock RELEASED; uses the per-thread ksgpu::default_rng().
+    std::shared_ptr<simpulse::SinglePulse> _make_random_pulse();
 
     // Pop one pulse from pulse_queue, blocking while it is empty. Returns an
     // empty pointer if the factory is stopped (the producer then just returns).
-    std::shared_ptr<const simpulse::SinglePulse> _pop_pulse();
+    // Non-const pulse: the producer shift_samples() it before injecting.
+    std::shared_ptr<simpulse::SinglePulse> _pop_pulse();
 
     // Print a one-line "injected FRB" message (only called when params.verbose):
     // beam_id, dm, fpga_timestamp, intrinsic width (ms), and the pulse's subband
-    // [fmin, fmax] (MHz). Here 'it0' is the beam's active_frb_it0 (the pulse-sample
-    // -> absolute-frame-sample offset).
-    void _log_injected_frb(long beam_index, const simpulse::SinglePulse &sp, long it0) const;
+    // [fmin, fmax] (MHz). Called AFTER the pulse has been shifted into absolute
+    // frame-sample coordinates (see _producer_main), so its arrival maps directly
+    // to an FPGA sequence number.
+    void _log_injected_frb(long beam_index, const simpulse::SinglePulse &sp) const;
 
-    // Randomize one set: dispatch its per-beam work (with per-beam pulse
-    // injection args sp_vec/it0_vec, and dt_sp = tci * time_samples_per_chunk -
-    // it0_vec[b]) across the randomizer pool and block until complete. Throws
-    // if the factory is stopped (the in-flight job is still fully drained
-    // first, so 'fset' remains safe to release).
+    // Randomize one set: dispatch its per-beam work across the randomizer pool and block until
+    // complete. sp_vec[b] is the beam's active pulse (already shifted into absolute frame
+    // coordinates), or null; the per-beam dt_sp is tci * time_samples_per_chunk (maps the set's
+    // frame-local itime to the absolute sample index). Throws if the factory is stopped (the
+    // in-flight job is still fully drained first, so 'fset' remains safe to release).
     void _randomize_set(AssembledFrameSet &fset,
-                        const std::vector<std::shared_ptr<const simpulse::SinglePulse>> &sp_vec,
-                        const std::vector<long> &it0_vec, long tci);
+                        const std::vector<std::shared_ptr<simpulse::SinglePulse>> &sp_vec,
+                        long tci);
 
     // Helper for entry points. Caller must hold 'lock'. Rethrows 'error' if
     // non-null, else throws runtime_error("... called on stopped instance").

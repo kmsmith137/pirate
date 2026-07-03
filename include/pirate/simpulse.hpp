@@ -65,10 +65,11 @@ struct SinglePulse {
         long internal_nt = 1024;
     };
 
-    // Construction parameters, immutable after construction. Public so callers can read them; also
-    // exposed to python as read-only attributes (SinglePulse.internal_nt, .time_sample_ms, .dm, ...,
-    // .freq_edges_MHz, plus the derived .nfreq / .freq_lo_MHz / .freq_hi_MHz).
-    const Params params;
+    // Construction parameters. Public so callers can read them; also exposed to python as read-only
+    // attributes (SinglePulse.internal_nt, .time_sample_ms, .dm, ..., .freq_edges_MHz, plus the
+    // derived .nfreq / .freq_lo_MHz / .freq_hi_MHz). Treat as immutable after construction, EXCEPT
+    // that shift_samples() updates undispersed_arrival_time_sec.
+    Params params;
 
     // Precomputed SPARSE representation of the pulse, on the integer time grid where sample 'it'
     // spans [it*dt, (it+1)*dt] seconds, dt = 1e-3*time_sample_ms. Computed in the ctor. Sample
@@ -94,6 +95,12 @@ struct SinglePulse {
     // out_it0 <= it_start and out_it0 + out_nt >= it_end. Time samples must be contiguous
     // (out.strides[1] == 1), ordered low to high in frequency.
     void add_to_timestream(ksgpu::Array<float> out, long out_it0, float weight = 1.0f) const;
+
+    // Shift the pulse forward in time by delta_it samples (delta_it may be negative): adds delta_it
+    // to every freq_it0 and to it_start / it_end, and adds (1e-3 * delta_it * time_sample_ms) to
+    // params.undispersed_arrival_time_sec. The sparse sample values (sparse_data) and per-channel
+    // counts/offsets (freq_nt / freq_sd_off) are unchanged.
+    void shift_samples(long delta_it);
 
     // String representation.
     void print(std::ostream &os) const;

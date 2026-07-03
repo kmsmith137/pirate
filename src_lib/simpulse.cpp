@@ -369,6 +369,19 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> out, long out_it0, float
 }
 
 
+void SinglePulse::shift_samples(long delta_it)
+{
+    const long nfreq = params.freq_edges_MHz.size - 1;
+    long *it0 = freq_it0.data;
+    for (long ifreq = 0; ifreq < nfreq; ifreq++)
+        it0[ifreq] += delta_it;
+
+    it_start += delta_it;
+    it_end   += delta_it;
+    params.undispersed_arrival_time_sec += 1.0e-3 * (double) delta_it * params.time_sample_ms;
+}
+
+
 void SinglePulse::print(ostream &os) const
 {
     const double *edges = params.freq_edges_MHz.data;
