@@ -802,41 +802,36 @@ static void check_pulse_consistency(long nf, const XEngineMetadata &md, const si
         throw std::runtime_error(ss.str());
     }
 
-    // Per-channel frequency edges + noise variances, reconstructed from the zone structure (equal
-    // channel width within a zone; zones ordered low-to-high, matching SinglePulse's channel order).
-    const std::vector<long>   &zn = md.zone_nfreq;       // nzones
-    const std::vector<double> &ze = md.zone_freq_edges;  // nzones+1, increasing MHz
-    const std::vector<double> &zv = md.noise_variance;   // nzones
+    // Per-channel frequency edges + noise variances, expanded from the zone structure by the
+    // XEngineMetadata accessors (zones ordered low-to-high, matching SinglePulse's channel order).
+    std::vector<double> md_edges = md.get_channel_freq_edges();   // nf+1
+    std::vector<double> md_var   = md.get_channel_variances();    // nf
+    xassert_eq((long) md_edges.size(), nf + 1);
+    xassert_eq((long) md_var.size(), nf);
+
     const double *sp_edges = spp.freq_edges_MHz.data;    // nf+1
     const double *sp_var   = spp.freq_variances.data;    // nf
-    const double edge_tol = 1.0e-6 * (ze.back() - ze.front());
+    const double edge_tol = 1.0e-6 * (md_edges[nf] - md_edges[0]);
 
-    if (std::fabs(sp_edges[0] - ze.front()) > edge_tol)
-        throw std::runtime_error("AssembledFrame::randomize: SinglePulse freq_edges_MHz[0] does not"
-                                 " match the frame's low band edge");
-
-    long f = 0;
-    for (size_t z = 0; z < zn.size(); z++) {
-        double w = (ze[z+1] - ze[z]) / (double) zn[z];
-        for (long k = 0; k < zn[z]; k++, f++) {
-            double edge_hi = ze[z] + (double)(k+1) * w;   // upper edge of channel f
-            if (std::fabs(sp_edges[f+1] - edge_hi) > edge_tol) {
-                std::stringstream ss;
-                ss << "AssembledFrame::randomize: SinglePulse freq_edges_MHz[" << (f+1) << "] ("
-                   << sp_edges[f+1] << ") does not match the frame channel edge (" << edge_hi << ")";
-                throw std::runtime_error(ss.str());
-            }
-            double vtol = 1.0e-6 * (zv[z] > 0.0 ? zv[z] : 1.0);
-            if (std::fabs(sp_var[f] - zv[z]) > vtol) {
-                std::stringstream ss;
-                ss << "AssembledFrame::randomize: SinglePulse freq_variances[" << f << "] ("
-                   << sp_var[f] << ") does not match the frame per-channel noise variance ("
-                   << zv[z] << ")";
-                throw std::runtime_error(ss.str());
-            }
+    for (long f = 0; f <= nf; f++) {
+        if (std::fabs(sp_edges[f] - md_edges[f]) > edge_tol) {
+            std::stringstream ss;
+            ss << "AssembledFrame::randomize: SinglePulse freq_edges_MHz[" << f << "] ("
+               << sp_edges[f] << ") does not match the frame channel edge (" << md_edges[f] << ")";
+            throw std::runtime_error(ss.str());
         }
     }
-    xassert_eq(f, nf);
+
+    for (long f = 0; f < nf; f++) {
+        double vtol = 1.0e-6 * (md_var[f] > 0.0 ? md_var[f] : 1.0);
+        if (std::fabs(sp_var[f] - md_var[f]) > vtol) {
+            std::stringstream ss;
+            ss << "AssembledFrame::randomize: SinglePulse freq_variances[" << f << "] ("
+               << sp_var[f] << ") does not match the frame per-channel noise variance ("
+               << md_var[f] << ")";
+            throw std::runtime_error(ss.str());
+        }
+    }
 }
 
 
@@ -945,22 +940,12 @@ void AssembledFrame::randomize(bool normalize, bool gaussian,
         double data_variance = gaussian ? (postquant_rms * postquant_rms) : 17.5;
 
         xassert(metadata);   // non-null by invariant (immutable; never reaped)
-        const std::vector<long>   &zone_nfreq = metadata->zone_nfreq;
-        const std::vector<double> &zone_var   = metadata->noise_variance;
-        xassert_eq((long) zone_nfreq.size(), (long) zone_var.size());   // one variance per zone
+        std::vector<double> cv = metadata->get_channel_variances();
+        xassert_eq((long) cv.size(), nfreq);   // metadata's zone_nfreq must sum to this frame's nfreq
 
-        // Expand the per-zone scale into a per-frequency array (zones are contiguous channel ranges).
         S.resize(nfreq);
-        long f = 0;
-        for (size_t z = 0; z < zone_nfreq.size(); z++) {
-            xassert(zone_var[z] >= 0.0);
-            float Sz = (float) std::sqrt(zone_var[z] / data_variance);
-            for (long k = 0; k < zone_nfreq[z]; k++) {
-                xassert(f < nfreq);
-                S[f++] = Sz;
-            }
-        }
-        xassert_eq(f, nfreq);   // zone_nfreq must sum to this frame's nfreq
+        for (long f = 0; f < nfreq; f++)
+            S[f] = (float) std::sqrt(cv[f] / data_variance);
     }
 
     // Fill scales_offsets first (matches slab order). The (scale, offset) pairs

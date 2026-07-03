@@ -360,13 +360,26 @@ void register_core_bindings(pybind11::module &m)
         "inherit the caller's vcpu affinity. stop() propagates to the allocator.")
         .def(py::init([](std::shared_ptr<AssembledFrameAllocator> allocator,
                          long num_randomizer_threads, bool normalized, bool gaussian,
-                         long frame_set_queue_size) {
+                         long frame_set_queue_size, bool simulate_frbs,
+                         double frb_dm0, double frb_max_dm, double frb_max_width_ms,
+                         double frb_snr, std::vector<double> frb_subband_fmin_MHz,
+                         std::vector<double> frb_subband_fmax_MHz,
+                         long num_frb_simulator_threads, long single_pulse_queue_size) {
                  SimulatedFrameFactory::Params p;
                  p.allocator = std::move(allocator);
                  p.num_randomizer_threads = num_randomizer_threads;
                  p.normalized = normalized;
                  p.gaussian = gaussian;
                  p.frame_set_queue_size = frame_set_queue_size;
+                 p.simulate_frbs = simulate_frbs;
+                 p.frb_dm0 = frb_dm0;
+                 p.frb_max_dm = frb_max_dm;
+                 p.frb_max_width_ms = frb_max_width_ms;
+                 p.frb_snr = frb_snr;
+                 p.frb_subband_fmin_MHz = std::move(frb_subband_fmin_MHz);
+                 p.frb_subband_fmax_MHz = std::move(frb_subband_fmax_MHz);
+                 p.num_frb_simulator_threads = num_frb_simulator_threads;
+                 p.single_pulse_queue_size = single_pulse_queue_size;
                  return std::make_unique<SimulatedFrameFactory>(p);
              }),
              py::arg("allocator"),
@@ -374,6 +387,15 @@ void register_core_bindings(pybind11::module &m)
              py::arg("normalized") = true,
              py::arg("gaussian") = true,
              py::arg("frame_set_queue_size") = 4,
+             py::arg("simulate_frbs") = false,
+             py::arg("frb_dm0") = -1.0,
+             py::arg("frb_max_dm") = -1.0,
+             py::arg("frb_max_width_ms") = -1.0,
+             py::arg("frb_snr") = -1.0,
+             py::arg("frb_subband_fmin_MHz") = std::vector<double>(),
+             py::arg("frb_subband_fmax_MHz") = std::vector<double>(),
+             py::arg("num_frb_simulator_threads") = 0,
+             py::arg("single_pulse_queue_size") = 0,
              "num_randomizer_threads (>= 1): size of the randomizer-thread pool that\n"
              "parallelizes per-beam randomize() within a set; the caller sizes it\n"
              "(run_fake_xengine uses min(nbeams, num_vcpus/2)). normalized (default\n"
@@ -381,12 +403,45 @@ void register_core_bindings(pybind11::module &m)
              "(else arbitrary uniform-junk). gaussian (default True): simulated Gaussian\n"
              "int4 data clamped to [-7,+7] (else uniform [-8,+7]). frame_set_queue_size\n"
              "(default 4): output-queue depth (how many randomized sets the producer may\n"
-             "stay ahead of the consumer).")
+             "stay ahead of the consumer).\n\n"
+             "simulate_frbs (default False): inject simulated FRBs -- the producer keeps\n"
+             "one 'active' pulse per beam, placed at a random phase within the chunk\n"
+             "where it is assigned, and replaced once entirely in the past. Requires\n"
+             "normalized=True and gaussian=True, plus the remaining args:\n"
+             "frb_dm0/frb_max_dm (DM in [0, frb_max_dm], log(DM + frb_dm0) uniform),\n"
+             "frb_max_width_ms (intrinsic width log-uniform over [min(dt/3, wmax), wmax]),\n"
+             "frb_snr (matched-filter SNR over the pulse's subband),\n"
+             "frb_subband_fmin_MHz/frb_subband_fmax_MHz (equal-length lists; each pulse\n"
+             "picks one subband uniformly at random; each subband must overlap the band),\n"
+             "num_frb_simulator_threads (>= 1) and single_pulse_queue_size (>= 1;\n"
+             "~nbeams recommended, since up to nbeams pulses can be popped per chunk).")
         .def_readonly("nbeams", &SimulatedFrameFactory::nbeams)
-        .def_readonly("num_randomizer_threads", &SimulatedFrameFactory::num_randomizer_threads)
-        .def_readonly("normalized", &SimulatedFrameFactory::normalized)
-        .def_readonly("gaussian", &SimulatedFrameFactory::gaussian)
-        .def_readonly("frame_set_queue_size", &SimulatedFrameFactory::frame_set_queue_size)
+        .def_property_readonly("num_randomizer_threads",
+            [](const SimulatedFrameFactory &f) { return f.params.num_randomizer_threads; })
+        .def_property_readonly("normalized",
+            [](const SimulatedFrameFactory &f) { return f.params.normalized; })
+        .def_property_readonly("gaussian",
+            [](const SimulatedFrameFactory &f) { return f.params.gaussian; })
+        .def_property_readonly("frame_set_queue_size",
+            [](const SimulatedFrameFactory &f) { return f.params.frame_set_queue_size; })
+        .def_property_readonly("simulate_frbs",
+            [](const SimulatedFrameFactory &f) { return f.params.simulate_frbs; })
+        .def_property_readonly("frb_dm0",
+            [](const SimulatedFrameFactory &f) { return f.params.frb_dm0; })
+        .def_property_readonly("frb_max_dm",
+            [](const SimulatedFrameFactory &f) { return f.params.frb_max_dm; })
+        .def_property_readonly("frb_max_width_ms",
+            [](const SimulatedFrameFactory &f) { return f.params.frb_max_width_ms; })
+        .def_property_readonly("frb_snr",
+            [](const SimulatedFrameFactory &f) { return f.params.frb_snr; })
+        .def_property_readonly("frb_subband_fmin_MHz",
+            [](const SimulatedFrameFactory &f) { return f.params.frb_subband_fmin_MHz; })
+        .def_property_readonly("frb_subband_fmax_MHz",
+            [](const SimulatedFrameFactory &f) { return f.params.frb_subband_fmax_MHz; })
+        .def_property_readonly("num_frb_simulator_threads",
+            [](const SimulatedFrameFactory &f) { return f.params.num_frb_simulator_threads; })
+        .def_property_readonly("single_pulse_queue_size",
+            [](const SimulatedFrameFactory &f) { return f.params.single_pulse_queue_size; })
         .def("get_frame_set", &SimulatedFrameFactory::get_frame_set,
             py::call_guard<py::gil_scoped_release>(),
             "Block until a randomized AssembledFrameSet is available and return it\n"
@@ -708,6 +763,12 @@ void register_core_bindings(pybind11::module &m)
                "Returns sum of zone_nfreq (total frequency channels)")
           .def("get_nbeams", &XEngineMetadata::get_nbeams,
                "Returns the number of beams (= len(beam_ids))")
+          .def("get_channel_freq_edges", &XEngineMetadata::get_channel_freq_edges,
+               "Per-channel frequency edges (length get_total_nfreq()+1), expanded\n"
+               "from the zone structure (equal channel width within each zone)")
+          .def("get_channel_variances", &XEngineMetadata::get_channel_variances,
+               "Per-channel noise variance (length get_total_nfreq()):\n"
+               "noise_variance[z] broadcast across zone z's channels")
           .def("to_yaml_string", &XEngineMetadata::to_yaml_string,
                py::arg("verbose") = false,
                "Serialize to YAML string.\n\n"

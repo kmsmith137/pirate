@@ -90,6 +90,49 @@ long XEngineMetadata::get_total_nfreq() const
 }
 
 
+std::vector<double> XEngineMetadata::get_channel_freq_edges() const
+{
+    // Basic size relations asserted here (not just in validate()), so these accessors are
+    // safe to call on a not-yet-validated instance.
+    long nzones = long(zone_nfreq.size());
+    xassert(nzones >= 1);
+    xassert_eq(long(zone_freq_edges.size()), nzones + 1);
+
+    std::vector<double> ret;
+    ret.reserve(get_total_nfreq() + 1);
+    ret.push_back(zone_freq_edges[0]);
+
+    for (long z = 0; z < nzones; z++) {
+        xassert(zone_nfreq[z] > 0);
+        double w = (zone_freq_edges[z+1] - zone_freq_edges[z]) / double(zone_nfreq[z]);
+        for (long k = 0; k < zone_nfreq[z]; k++)
+            ret.push_back(zone_freq_edges[z] + double(k+1) * w);
+    }
+
+    return ret;
+}
+
+
+std::vector<double> XEngineMetadata::get_channel_variances() const
+{
+    long nzones = long(zone_nfreq.size());
+    xassert(nzones >= 1);
+    xassert_eq(long(noise_variance.size()), nzones);
+
+    std::vector<double> ret;
+    ret.reserve(get_total_nfreq());
+
+    for (long z = 0; z < nzones; z++) {
+        xassert(zone_nfreq[z] > 0);
+        xassert(noise_variance[z] >= 0.0);
+        for (long k = 0; k < zone_nfreq[z]; k++)
+            ret.push_back(noise_variance[z]);
+    }
+
+    return ret;
+}
+
+
 void XEngineMetadata::validate() const
 {
     // Check version.

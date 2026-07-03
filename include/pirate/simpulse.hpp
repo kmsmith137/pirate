@@ -62,9 +62,9 @@ struct SinglePulse {
         double subband_freq_hi_MHz = 1.0e9;
 
         // If false, then an exception is raised if any freq_it0 is < 0.
-        // If true, then the part of the pulse with negative arrival times is silently discarded.
-        // (Note that if the entire pulse is at negative times, i.e. all (freq_it0 + freq_nt <= 0),
-        // then an exception is thrown in any case.)
+        // If true, then freq_it0 may be negative (the pulse may have samples at t < 0, which
+        // are all kept). Consumers are responsible for clipping to their own time range
+        // (e.g. add_to_timestream() clips to [0, out_nt)).
         bool allow_negative_arrival_times = false;
 
         // "under the hood" samples (power of two; 1024 is a good default)
@@ -76,21 +76,26 @@ struct SinglePulse {
     // .freq_edges_MHz, plus the derived .nfreq / .freq_lo_MHz / .freq_hi_MHz).
     const Params params;
 
-    // Precomputed SPARSE representation of the pulse, on the zero-based time grid where sample 'it'
-    // (0 <= it) spans [it*dt, (it+1)*dt] seconds, dt = 1e-3*time_sample_ms. Computed in the ctor.
+    // Precomputed SPARSE representation of the pulse, on the integer time grid where sample 'it'
+    // spans [it*dt, (it+1)*dt] seconds, dt = 1e-3*time_sample_ms. Computed in the ctor. Sample
+    // indices are >= 0, unless allow_negative_arrival_times=true (then freq_it0 may be negative).
     // Frequencies are ordered LOW to HIGH. (Also exposed to python, read-only.)
     ksgpu::Array<long>  freq_it0;     // (nfreq,) first dense-grid sample index of channel i's pulse
     ksgpu::Array<long>  freq_nt;      // (nfreq,) number of samples of channel i's pulse
     ksgpu::Array<long>  freq_sd_off;  // (nfreq,) offset into sparse_data (= sum_{j<i} freq_nt[j])
     ksgpu::Array<float> sparse_data;  // (sum(freq_nt),) packed samples; spectral weight + snr norm baked in
-    long                nt_min;       // = max_i (freq_it0[i] + freq_nt[i]); smallest out_nt with no clipping
+    long                nt_min;       // = max_i (freq_it0[i] + freq_nt[i]); smallest out_nt with no
+                                      //   high-end clipping (samples at negative indices are clipped
+                                      //   by add_to_timestream() regardless of out_nt)
 
     SinglePulse(const Params &params);
 
     // Adds the pulse to a "block" of (frequency, time) samples 'out', a 2-d, host (CPU) float32 array
-    // of shape (nfreq, out_nt), scaled by 'weight'. The grid is zero-based (sample 'it' spans
-    // [it*dt, (it+1)*dt] seconds); samples at index >= out_nt are clipped (use out_nt >= nt_min for
-    // no clipping). Time samples must be contiguous (out.strides[1] == 1).
+    // of shape (nfreq, out_nt), scaled by 'weight'. Column 'it' of 'out' spans [it*dt, (it+1)*dt]
+    // seconds; samples outside [0, out_nt) are clipped (use out_nt >= nt_min so that nothing is
+    // clipped at the high end; samples at negative indices, possible only with
+    // allow_negative_arrival_times=true, are always clipped). Time samples must be contiguous
+    // (out.strides[1] == 1).
     void add_to_timestream(ksgpu::Array<float> &out, double weight = 1.0) const;
 
     // String representation.

@@ -268,27 +268,24 @@ SinglePulse::SinglePulse(const Params &p)
         for (long it = 0; it < internal_nt+1; it++)
             cumsum[it] = cumsum[it] / cumsum[internal_nt];
 
-        // --- sparse indices on the zero-based grid (sample 'it' spans [it*dt, (it+1)*dt]) ---
+        // --- sparse indices on the integer grid (sample 'it' spans [it*dt, (it+1)*dt]) ---
         double pt0 = undispersed_arrival_time_sec + t0;   // absolute pulse start (seconds)
         double pt1 = undispersed_arrival_time_sec + t1;   // absolute pulse end
-        long i0 = (long)floor(pt0 / dt);           // first sample index (may be < 0)
-        long i1 = std::max(0L, (long)ceil(pt1 / dt));
+        long i0 = (long)floor(pt0 / dt);   // first sample index (may be < 0)
+        long i1 = (long)ceil(pt1 / dt);
 
-        // A pulse that starts before t=0. By default this is an error; if allow_negative_arrival_times
-        // is set, clip the t<0 part (i0 -> 0) and keep the rest. (If nothing survives -- e.g. every
-        // channel is entirely at t<0 -- the total<=0 check after the loop still throws.)
-        if (i0 < 0) {
-            if (!params.allow_negative_arrival_times) {
-                stringstream ss;
-                ss << "pirate::simpulse::SinglePulse: channel " << ifreq << " has samples at t < 0"
-                   << " (first sample index " << i0 << "). Increase undispersed_arrival_time_sec, or"
-                   << " set allow_negative_arrival_times=true to clip the t<0 part.";
-                throw runtime_error(ss.str());
-            }
-            i0 = 0;   // clip: silently discard the part of the pulse at t < 0
+        // A pulse with samples before t=0. By default this is an error; if allow_negative_arrival_times
+        // is set, the t<0 samples are KEPT (freq_it0 < 0), and consumers are responsible for clipping
+        // to their own time range (e.g. add_to_timestream() clips to [0, out_nt)).
+        if ((i0 < 0) && !params.allow_negative_arrival_times) {
+            stringstream ss;
+            ss << "pirate::simpulse::SinglePulse: channel " << ifreq << " has samples at t < 0"
+               << " (first sample index " << i0 << "). Increase undispersed_arrival_time_sec, or"
+               << " set allow_negative_arrival_times=true to keep the t<0 samples (freq_it0 < 0).";
+            throw runtime_error(ss.str());
         }
 
-        long n = i1 - i0;   // >= 0 (i1 >= 0 and i1 >= i0, since pt1 > pt0)
+        long n = i1 - i0;   // >= 1, since pt1 > pt0
 
         freq_it0.data[ifreq] = i0;
         freq_nt.data[ifreq] = n;
@@ -310,9 +307,11 @@ SinglePulse::SinglePulse(const Params &p)
         }
     }
 
+    // Defensive: every channel overlapping the subband contributes n >= 1 samples, and the subband
+    // overlap was validated above, so this should be unreachable.
     if (total <= 0)
-        throw runtime_error("pirate::simpulse::SinglePulse: pulse has no samples on the zero-based time grid"
-                            " (is undispersed_arrival_time_sec very negative?)");
+        throw runtime_error("pirate::simpulse::SinglePulse: pulse has no samples (internal error --"
+                            " this should be unreachable)");
 
     // Normalize the pulse to the requested matched-filter SNR. The initial (arbitrary) normalization
     // has SNR = sqrt(snr_sq) = sqrt(sum sample^2/variance); scaling every sample by
@@ -345,14 +344,14 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double weight) con
         long n = freq_nt.data[ifreq];
         long off = freq_sd_off.data[ifreq];
 
-        // Clip to [0, out_nt). i0 >= 0 by construction; clip the high end.
-        long n_eff = std::min(n, out_nt - i0);
-        if ((i0 >= out_nt) || (n_eff <= 0))
-            continue;
+        // Clip to [0, out_nt) at both ends. (freq_it0 can be negative, if the pulse was
+        // constructed with allow_negative_arrival_times=true.) j0 >= j1 makes the loop a no-op.
+        long j0 = std::max(0L, -i0);
+        long j1 = std::min(n, out_nt - i0);
 
         float *row = out.data + ifreq * row_stride;
         const float *src = sparse_data.data + off;
-        for (long j = 0; j < n_eff; j++)
+        for (long j = j0; j < j1; j++)
             row[i0 + j] += wf * src[j];
     }
 }

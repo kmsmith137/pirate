@@ -142,6 +142,16 @@ struct XEngineMetadata
     // Number of beams (= length of beam_ids).
     long get_nbeams() const { return long(beam_ids.size()); }
 
+    // Per-channel frequency edges (length get_total_nfreq()+1), expanded from the zone
+    // structure: edge[0] = zone_freq_edges[0]; within zone z, the k-th channel's upper edge
+    // is zone_freq_edges[z] + (k+1) * (zone_freq_edges[z+1] - zone_freq_edges[z]) / zone_nfreq[z].
+    // Computed on each call (cost is one O(nfreq) fill).
+    std::vector<double> get_channel_freq_edges() const;
+
+    // Per-channel noise variance (length get_total_nfreq()): noise_variance[z] broadcast
+    // across zone z's channels. Computed on each call.
+    std::vector<double> get_channel_variances() const;
+
     // Write in YAML format.
     // If 'verbose' is true, include comments explaining the meaning of each field.
     void to_yaml(YAML::Emitter &emitter, bool verbose = false) const;

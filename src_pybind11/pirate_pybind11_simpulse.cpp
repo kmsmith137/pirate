@@ -55,11 +55,12 @@ void register_simpulse_bindings(pybind11::module &m)
         "- ``subband_freq_lo_MHz`` / ``subband_freq_hi_MHz`` (float) -- restrict the pulse to channels\n"
         "  overlapping this subband; defaults [0, 1e9] (no restriction).\n"
         "- ``allow_negative_arrival_times`` (bool) -- if False (default), a pulse with samples at t<0\n"
-        "  is an error; if True, the t<0 part is clipped. Default False.\n"
+        "  is an error; if True, freq_it0 may be negative (all samples are kept; consumers such as\n"
+        "  add_to_timestream() clip to their own time range). Default False.\n"
         "\n"
         "Precomputed sparse representation (arrays): ``freq_it0`` / ``freq_nt`` / ``freq_sd_off``\n"
         "(length nfreq, int) and ``sparse_data`` (float). Also ``nt_min`` (smallest out_nt with no\n"
-        "clipping) and the derived ``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
+        "high-end clipping) and the derived ``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
 
         .def(py::init([](double dm, double sm, double intrinsic_width, double spectral_index,
                          double undispersed_arrival_time_sec, double time_sample_ms, double snr,
@@ -122,9 +123,10 @@ void register_simpulse_bindings(pybind11::module &m)
              py::arg("out"), py::arg("weight") = 1.0,
              "Add the pulse to a 2-d (nfreq, out_nt) float32 array, in place, scaled by 'weight'.\n"
              "\n"
-             "The grid is zero-based (sample it spans [it*dt, (it+1)*dt] seconds); samples at index\n"
-             ">= out_nt are clipped (size out_nt >= nt_min for no clipping). 'out' must be a host (CPU)\n"
-             "float32 array with contiguous time samples, ordered low to high in frequency.")
+             "Column it of 'out' spans [it*dt, (it+1)*dt] seconds; samples outside [0, out_nt) are\n"
+             "clipped (size out_nt >= nt_min for no high-end clipping; negative sample indices, possible\n"
+             "only with allow_negative_arrival_times=True, are always clipped). 'out' must be a host\n"
+             "(CPU) float32 array with contiguous time samples, ordered low to high in frequency.")
 
         .def("__repr__", &SinglePulse::str)
     ;
