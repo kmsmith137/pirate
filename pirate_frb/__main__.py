@@ -1355,6 +1355,9 @@ def parse_run_fake_xengine(subparsers):
                              'server GetConfig: max DM, base-tree width, and the '
                              'frequency subbands). Prints one line per injected '
                              'FRB. Incompatible with -u, -G, and -j.')
+    parser.add_argument('-s', '--sifter', metavar='SIFTER_ADDR', default=None,
+                        help='Send the simulated FRB events (from_simulator=True) to '
+                             'an FrbSifter at this "ip:port". Requires -f.')
 
 
 def run_fake_xengine_command(args):
@@ -1372,11 +1375,18 @@ def run_fake_xengine_command(args):
                   f"randomizes every chunk).", file=sys.stderr)
             sys.exit(2)
 
+    # Sending events to a sifter only makes sense when FRBs are being simulated.
+    if args.sifter is not None and not args.frbs:
+        print("Error: -s/--sifter requires -f/--frbs (there are no events to send "
+              "without FRB simulation).", file=sys.stderr)
+        sys.exit(2)
+
     from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers,
                      paced=not args.unpaced, normalized=not args.unnormalized,
                      gaussian=not args.non_gaussian,
-                     send_junk=args.send_junk, simulate_frbs=args.frbs)
+                     send_junk=args.send_junk, simulate_frbs=args.frbs,
+                     sifter_addr=args.sifter)
 
 ####################################################################################################
 

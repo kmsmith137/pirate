@@ -5,6 +5,8 @@ import threading
 
 from datetime import datetime, timezone
 
+import numpy as np
+
 from .Hardware import Hardware
 from .utils import ThreadAffinity, extract_ip, check_mtu
 from .core import (
@@ -15,7 +17,7 @@ from .core import (
     SlabAllocator,
     XEngineMetadata,
 )
-from .rpc import FrbSearchClient
+from .rpc import FrbSearchClient, FrbSifterClient
 
 
 class RunFakeXEngineHelper:
@@ -27,7 +29,7 @@ class RunFakeXEngineHelper:
     """
 
     def __init__(self, rpc_addrs, nworkers=128, paced=True, normalized=True,
-                 gaussian=True, send_junk=False, simulate_frbs=False):
+                 gaussian=True, send_junk=False, simulate_frbs=False, sifter_addr=None):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -61,10 +63,17 @@ class RunFakeXEngineHelper:
         # simulate_frbs: if True, the SimulatedFrameFactory injects simulated FRBs,
         # with parameters derived from each receiver's GetConfig (see _frb_kwargs).
         self.simulate_frbs = simulate_frbs
+        # sifter_addr: if not None, an 'ip:port'; each receiver sends its simulated FRB
+        # events (from_simulator=True) to an FrbSifter there. Requires simulate_frbs.
+        self.sifter_addr = sifter_addr
+        if sifter_addr is not None and not simulate_frbs:
+            raise RuntimeError("run_fake_xengine: a sifter address (-s) requires FRB "
+                               "simulation (-f); there are no events to send otherwise")
         self.hw = Hardware()
         self.fake_xengines = []   # parallel to rpc_addrs (Phase 1 fills this)
         self.allocators = []      # parallel: AssembledFrameAllocator per receiver
         self.factories = []       # parallel: SimulatedFrameFactory per receiver
+        self.sifters = []         # parallel: FrbSifterClient (or None) per receiver
         self.fxe_vcpus = []       # parallel
         self.controllers = []     # parallel (Phase 2 fills this)
         self.exc_list = []        # list[(rpc_addr, BaseException)]
@@ -88,6 +97,9 @@ class RunFakeXEngineHelper:
         finally:
             # Defensive cleanup -- harmless if the main path already ran it.
             self._stop_all()
+            # Close the sifter channels after the controllers have been stopped/joined (above),
+            # so close()'s brief drain covers the last in-flight async sends.
+            self._close_sifters()
             print("All FakeXEngine(s) stopped.")
 
     def _build_all(self):
@@ -190,9 +202,15 @@ class RunFakeXEngineHelper:
                 **self._frb_kwargs(cfg, xmd, num_randomizer_threads),
             )
 
+        # Per-receiver sifter client (one gRPC channel per beamset). The channel is created
+        # here but not connected; the first send (in the controller) is what actually reaches
+        # the sifter. None when -s was not given.
+        sifter = FrbSifterClient(self.sifter_addr) if (self.sifter_addr is not None) else None
+
         self.fake_xengines.append(fxe)
         self.allocators.append(allocator)
         self.factories.append(factory)
+        self.sifters.append(sifter)
         self.fxe_vcpus.append(vcpu_list)
         paced_note = "paced" if self.paced else "unpaced"
         norm_note = "normalized" if self.normalized else "unnormalized"
@@ -202,8 +220,9 @@ class RunFakeXEngineHelper:
             frb_note = (f", FRBs (max_dm={factory.frb_max_dm:.0f}, "
                         f"max_width={factory.frb_max_width_ms:.2f} ms, "
                         f"N_subbands={len(factory.frb_subband_fmin_MHz)})")
+        sifter_note = f", sifter={self.sifter_addr}" if (sifter is not None) else ""
         print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, "
-              f"{paced_note}, {norm_note}, {data_note}{frb_note}).")
+              f"{paced_note}, {norm_note}, {data_note}{frb_note}{sifter_note}).")
 
     def _frb_kwargs(self, cfg, xmd, num_randomizer_threads):
         """SimulatedFrameFactory FRB-injection kwargs, or {} when --frbs is off.
@@ -294,19 +313,19 @@ class RunFakeXEngineHelper:
         # Spawning all controllers after Phase 1 completes means the cascade
         # in _controller_wrapper sees the complete self.fake_xengines list
         # the moment the first controller runs.
-        for rpc_addr, fxe, factory, vcpu_list in zip(
+        for rpc_addr, fxe, factory, sifter, vcpu_list in zip(
                 self.rpc_addrs, self.fake_xengines, self.factories,
-                self.fxe_vcpus):
+                self.sifters, self.fxe_vcpus):
             with ThreadAffinity(vcpu_list):
                 t = threading.Thread(
                     target=self._controller_wrapper,
-                    args=(rpc_addr, fxe, factory),
+                    args=(rpc_addr, fxe, factory, sifter),
                     daemon=True,
                 )
                 t.start()
             self.controllers.append(t)
 
-    def _controller_wrapper(self, rpc_addr, fxe, factory):
+    def _controller_wrapper(self, rpc_addr, fxe, factory, sifter):
         """Wraps _controller_main. On exit (normal or exceptional),
         cascade-stops every FakeXEngine, SimulatedFrameFactory, and allocator so
         sibling controllers exit promptly (via "called on stopped instance").
@@ -314,14 +333,14 @@ class RunFakeXEngineHelper:
         the main thread to surface.
         """
         try:
-            self._controller_main(rpc_addr, fxe, factory)
+            self._controller_main(rpc_addr, fxe, factory, sifter)
         except BaseException as e:
             with self.exc_lock:
                 self.exc_list.append((rpc_addr, e))
         finally:
             self._stop_all()
 
-    def _controller_main(self, rpc_addr, fxe, factory):
+    def _controller_main(self, rpc_addr, fxe, factory, sifter):
         """Drive one FakeXEngine in 'send-random-frames-forever' mode.
 
         A SimulatedFrameFactory (its producer + randomizer-thread pool)
@@ -355,6 +374,7 @@ class RunFakeXEngineHelper:
         send_junk = self.send_junk
 
         fset = None
+        beam_set_id = None      # set (with the sifter ConfigMessage) on the first chunk
         n = 0
         while True:
             chunk = n // mpc
@@ -370,10 +390,27 @@ class RunFakeXEngineHelper:
                 # send loop, so pop_events() may return events injected into a slightly later chunk
                 # than 'fset'; the window passed is fset's own chunk.
                 if self.simulate_frbs:
+                    # On the first chunk, send the one-time sifter ConfigMessage (only xengine_yaml
+                    # is meaningful; pirate/plan/grouper/search are empty for simulator events).
+                    if sifter is not None and beam_set_id is None:
+                        sifter.send_configuration(
+                            pirate_yaml="", xengine_yaml=fset.metadata.to_yaml_string(),
+                            dedispersion_plan_yaml="", grouper_yaml="", search_ip_addr="")
+                        beam_set_id = fset.metadata.beamset
+                        print(f"[{rpc_addr}] sent ConfigMessage to sifter at "
+                              f"{sifter.server_address}", flush=True)
+
                     seq_per_chunk = fset.ntime * fset.metadata.seq_per_frb_time_sample
                     tci = fset.time_chunk_index
                     events = factory.pop_events(tci * seq_per_chunk, (tci + 1) * seq_per_chunk)
                     self._print_events(rpc_addr, events)
+
+                    if sifter is not None:
+                        # coarsegrain_snr: per-beam max event SNR this chunk (0 for beams with no
+                        # events). beam_id == beam index for the fake X-engine (beam_ids = range).
+                        cg_snr = np.zeros(fset.nbeams, dtype=np.float32)
+                        np.maximum.at(cg_snr, events.beam_ids, events.snrs)
+                        sifter.send_events(beam_set_id, events, cg_snr, from_simulator=True)
 
             # Stay <= 2 minichunks ahead of every worker. For n < 2 the target
             # is negative, so wait_until_processed returns immediately
@@ -458,9 +495,20 @@ class RunFakeXEngineHelper:
             except Exception:
                 pass
 
+    def _close_sifters(self):
+        """Close every FrbSifterClient channel (idempotent). Called once from run()'s finally."""
+        for i, sifter in enumerate(self.sifters):
+            if sifter is None:
+                continue
+            try:
+                sifter.close()
+            except Exception:
+                pass
+            self.sifters[i] = None   # don't double-close on a second pass
+
 
 def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
-                     gaussian=True, send_junk=False, simulate_frbs=False):
+                     gaussian=True, send_junk=False, simulate_frbs=False, sifter_addr=None):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -494,8 +542,13 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
             reach, base-tree width, and frequency subbands -- see
             RunFakeXEngineHelper._frb_kwargs). Requires normalized and gaussian
             (the caller rejects the incompatible flags). Default False.
+        sifter_addr: if not None, an 'ip:port' string; each receiver sends its
+            simulated FRB events (from_simulator=True) to an FrbSifter there
+            (with a one-time ConfigMessage carrying only xengine_yaml). Requires
+            simulate_frbs. Default None.
     """
     helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced,
                                   normalized=normalized, gaussian=gaussian,
-                                  send_junk=send_junk, simulate_frbs=simulate_frbs)
+                                  send_junk=send_junk, simulate_frbs=simulate_frbs,
+                                  sifter_addr=sifter_addr)
     helper.run()
