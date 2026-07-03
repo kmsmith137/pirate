@@ -7,7 +7,6 @@
 #include <memory>
 #include <random>
 #include <sstream>
-#include <iostream>
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -292,15 +291,13 @@ void SimulatedFrameFactory::_producer_main()
                 long target = tci * time_samples_per_chunk + phase_dist(rng);
                 active_frb[b]->shift_samples(target - active_frb[b]->it_start);
 
-                // Record the injection event (independent of Params::verbose). Brief lock; the
-                // producer holds no other lock here.
+                // Record the injection event (drained by pop_events()). Brief lock; the producer
+                // holds no other lock here.
                 Event ev = _make_event(b, *active_frb[b]);
                 {
                     lock_guard<mutex> lk(lock);
                     events.push_back(ev);
                 }
-                if (params.verbose)
-                    _log_event(ev);
             }
         }
         first_set = false;
@@ -556,22 +553,6 @@ SimulatedFrameFactory::_make_event(long beam_index, const simpulse::SinglePulse 
     ev.subband_freq_lo_MHz = sp.params.subband_freq_lo_MHz;
     ev.subband_freq_hi_MHz = sp.params.subband_freq_hi_MHz;
     return ev;
-}
-
-
-void SimulatedFrameFactory::_log_event(const Event &ev) const
-{
-    // Build the whole line, then emit with a single '<<' so it can't interleave with other threads'
-    // console output mid-line. Field order: beam_id, dm, fpga_timestamp, intrinsic width (ms),
-    // subband [fmin, fmax] (MHz).
-    std::ostringstream ss;
-    ss << "SimulatedFrameFactory: injected FRB: beam_id=" << ev.beam_id
-       << ", dm=" << ev.dm
-       << ", fpga_timestamp=" << ev.fpga_timestamp
-       << ", intrinsic_width=" << ev.width_ms << " ms"
-       << ", fmin=" << ev.subband_freq_lo_MHz << " MHz"
-       << ", fmax=" << ev.subband_freq_hi_MHz << " MHz\n";
-    std::cout << ss.str() << std::flush;
 }
 
 

@@ -348,6 +348,23 @@ void register_core_bindings(pybind11::module &m)
             "Throws unless time_samples_per_chunk is a positive multiple of 256.")
     ;
 
+    // SimulatedFrameFactory::Event: one recorded FRB-injection event. Bound as a top-level
+    // python class "SimulatedFrameFactoryEvent". NOTE: this name is deliberately NOT re-exported
+    // into pirate_frb.core -- it is only reachable as pirate_frb.pirate_pybind11.SimulatedFrameFactoryEvent
+    // (see SimulatedFrameFactory._pop_events / the pop_events() injection).
+    py::class_<SimulatedFrameFactory::Event>(m, "SimulatedFrameFactoryEvent",
+        "One simulated-FRB injection event recorded by SimulatedFrameFactory (returned by\n"
+        "_pop_events()). fpga_timestamp is the arrival at the LOWEST frequency of the FULL band\n"
+        "(not the pulse's subband), as an FPGA sequence number.")
+        .def_readonly("beam_id", &SimulatedFrameFactory::Event::beam_id)
+        .def_readonly("fpga_timestamp", &SimulatedFrameFactory::Event::fpga_timestamp)
+        .def_readonly("dm", &SimulatedFrameFactory::Event::dm)
+        .def_readonly("snr", &SimulatedFrameFactory::Event::snr)
+        .def_readonly("width_ms", &SimulatedFrameFactory::Event::width_ms)
+        .def_readonly("subband_freq_lo_MHz", &SimulatedFrameFactory::Event::subband_freq_lo_MHz)
+        .def_readonly("subband_freq_hi_MHz", &SimulatedFrameFactory::Event::subband_freq_hi_MHz)
+    ;
+
     // SimulatedFrameFactory: hands a consumer a stream of pre-randomized
     // AssembledFrameSets. Bound with a kwargs constructor that fills Params.
     py::class_<SimulatedFrameFactory>(m, "SimulatedFrameFactory",
@@ -364,8 +381,7 @@ void register_core_bindings(pybind11::module &m)
                          double frb_dm0, double frb_max_dm, double frb_max_width_ms,
                          double frb_snr, std::vector<double> frb_subband_fmin_MHz,
                          std::vector<double> frb_subband_fmax_MHz,
-                         long num_frb_simulator_threads, long single_pulse_queue_size,
-                         bool verbose) {
+                         long num_frb_simulator_threads, long single_pulse_queue_size) {
                  SimulatedFrameFactory::Params p;
                  p.allocator = std::move(allocator);
                  p.num_randomizer_threads = num_randomizer_threads;
@@ -381,7 +397,6 @@ void register_core_bindings(pybind11::module &m)
                  p.frb_subband_fmax_MHz = std::move(frb_subband_fmax_MHz);
                  p.num_frb_simulator_threads = num_frb_simulator_threads;
                  p.single_pulse_queue_size = single_pulse_queue_size;
-                 p.verbose = verbose;
                  return std::make_unique<SimulatedFrameFactory>(p);
              }),
              py::arg("allocator"),
@@ -398,7 +413,6 @@ void register_core_bindings(pybind11::module &m)
              py::arg("frb_subband_fmax_MHz") = std::vector<double>(),
              py::arg("num_frb_simulator_threads") = 0,
              py::arg("single_pulse_queue_size") = 0,
-             py::arg("verbose") = true,
              "num_randomizer_threads (>= 1): size of the randomizer-thread pool that\n"
              "parallelizes per-beam randomize() within a set; the caller sizes it\n"
              "(run_fake_xengine uses min(nbeams, num_vcpus/2)). normalized (default\n"
@@ -418,8 +432,7 @@ void register_core_bindings(pybind11::module &m)
              "picks one subband uniformly at random; each subband must overlap the band),\n"
              "num_frb_simulator_threads (>= 1) and single_pulse_queue_size (>= 1;\n"
              "~nbeams recommended, since up to nbeams pulses can be popped per chunk).\n"
-             "verbose (default True): if simulate_frbs, print a line per injected FRB\n"
-             "(beam_id, dm, fpga_timestamp, intrinsic width in ms, and subband fmin/fmax).")
+             "Injected FRBs are recorded as events, retrievable via pop_events().")
         .def_readonly("nbeams", &SimulatedFrameFactory::nbeams)
         .def_property_readonly("num_randomizer_threads",
             [](const SimulatedFrameFactory &f) { return f.params.num_randomizer_threads; })
@@ -447,8 +460,6 @@ void register_core_bindings(pybind11::module &m)
             [](const SimulatedFrameFactory &f) { return f.params.num_frb_simulator_threads; })
         .def_property_readonly("single_pulse_queue_size",
             [](const SimulatedFrameFactory &f) { return f.params.single_pulse_queue_size; })
-        .def_property_readonly("verbose",
-            [](const SimulatedFrameFactory &f) { return f.params.verbose; })
         .def("get_frame_set", &SimulatedFrameFactory::get_frame_set,
             py::call_guard<py::gil_scoped_release>(),
             "Block until a randomized AssembledFrameSet is available and return it\n"
@@ -456,6 +467,22 @@ void register_core_bindings(pybind11::module &m)
         .def("stop", [](SimulatedFrameFactory &self) { self.stop(); },
             py::call_guard<py::gil_scoped_release>(),
             "Stop the factory (and its allocator); wakes all threads. Idempotent.")
+
+        // One awkward aspect of the current code: we have two very similar ways to represent an event
+        // list, either a python FrbSifterEvents object, or a C++ vector<SimulatedFrameFactory::Event>.
+        // The _pop_events() method returns the "C++ representation", where it will be converted to
+        // the "python representation" by the pop_events() method injection.
+        //
+        // This design is awkward but I think think it's the least bad option. (The only real alternative
+        // seems to be rewriting the FrbSifterClient in C++, and I'm kind of attached to the current python
+        // implementation.)
+
+        .def("_pop_events", &SimulatedFrameFactory::pop_events,
+            py::call_guard<py::gil_scoped_release>(),
+            "Return the recorded FRB-injection events (a list of SimulatedFrameFactoryEvent) and\n"
+            "clear the internal list, so each event is returned exactly once. This method is\n"
+            "wrapped by the pop_events() method injection, which returns an 'FrbSifterEvents'\n"
+            "(whereas _pop_events() returns vector<SimulatedFrameFactoryEvent>).")
     ;
 
     // CudaStreamPool: always accessed via shared_ptr.

@@ -242,7 +242,6 @@ class RunFakeXEngineHelper:
             frb_subband_fmax_MHz=fmax_list,
             num_frb_simulator_threads=num_randomizer_threads,
             single_pulse_queue_size=cfg.fake_nbeams,
-            verbose=True,
         )
 
     @staticmethod
@@ -315,14 +314,14 @@ class RunFakeXEngineHelper:
         the main thread to surface.
         """
         try:
-            self._controller_main(fxe, factory)
+            self._controller_main(rpc_addr, fxe, factory)
         except BaseException as e:
             with self.exc_lock:
                 self.exc_list.append((rpc_addr, e))
         finally:
             self._stop_all()
 
-    def _controller_main(self, fxe, factory):
+    def _controller_main(self, rpc_addr, fxe, factory):
         """Drive one FakeXEngine in 'send-random-frames-forever' mode.
 
         A SimulatedFrameFactory (its producer + randomizer-thread pool)
@@ -366,6 +365,16 @@ class RunFakeXEngineHelper:
             if (n % mpc) == 0 and not (send_junk and chunk >= 1):
                 fset = factory.get_frame_set()
 
+                # Drain and print this chunk's simulated-FRB injection events (the C++ producer
+                # records them; the printing lives here in Python). The factory runs ahead of this
+                # send loop, so pop_events() may return events injected into a slightly later chunk
+                # than 'fset'; the window passed is fset's own chunk.
+                if self.simulate_frbs:
+                    seq_per_chunk = fset.ntime * fset.metadata.seq_per_frb_time_sample
+                    tci = fset.time_chunk_index
+                    events = factory.pop_events(tci * seq_per_chunk, (tci + 1) * seq_per_chunk)
+                    self._print_events(rpc_addr, events)
+
             # Stay <= 2 minichunks ahead of every worker. For n < 2 the target
             # is negative, so wait_until_processed returns immediately
             # (per-worker last_processed_minichunk is -1).
@@ -385,6 +394,20 @@ class RunFakeXEngineHelper:
                 else:
                     fxe.enqueue_send_minichunk(w, n, fset)
             n += 1
+
+    @staticmethod
+    def _print_events(rpc_addr, events):
+        """Print one line per injected FRB (this printing was moved from C++ to Python).
+
+        'events' is the FrbSifterEvents returned by SimulatedFrameFactory.pop_events().
+        """
+        for i in range(len(events)):
+            print(f"[{rpc_addr}] injected FRB: beam_id={int(events.beam_ids[i])}, "
+                  f"dm={float(events.dms[i]):.4g}, "
+                  f"fpga_timestamp={int(events.fpga_timestamps[i])}, "
+                  f"width={float(events.widths_ms[i]):.4g} ms, "
+                  f"subband=[{float(events.subband_freqs_lo_MHz[i]):.1f}, "
+                  f"{float(events.subband_freqs_hi_MHz[i]):.1f}] MHz", flush=True)
 
     def _wait_for_controllers(self):
         try:
