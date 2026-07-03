@@ -80,9 +80,10 @@ namespace pirate {
 //     consumes that allocator, stopping it on shutdown is safe.
 //   - The allocator MUST already be initialized (initialize_metadata() and
 //     initialize_initial_chunk()) before the factory is constructed. The
-//     constructor reads the metadata (nbeams, time-sample duration, channel
-//     freq edges + noise variances) but does not retain it. (Per-frame
-//     calibration reads each frame's own metadata.)
+//     constructor reads and retains the metadata (for nbeams, the time-sample
+//     duration, the channel freq edges + noise variances, and -- for verbose
+//     FRB logging -- beam_ids, the full-band low edge, and the timekeeping
+//     fields). (Per-frame calibration still reads each frame's own metadata.)
 //   - vcpu affinity: the constructor spawns the producer + randomizer (+ frb
 //     simulator) threads, which inherit the caller's affinity. Python callers
 //     MUST construct the factory inside a ThreadAffinity context manager.
@@ -156,6 +157,12 @@ struct SimulatedFrameFactory
         // retire faster than one per beam per few chunks.
         long num_frb_simulator_threads = 0;
         long single_pulse_queue_size = 0;
+
+        // If true (and simulate_frbs==true), a one-line message is printed each
+        // time an FRB is assigned to a beam, giving its beam_id, dm, intrinsic
+        // width (ms), and fpga_timestamp (the arrival time at the lowest
+        // frequency of the FULL band, as an FPGA sequence number).
+        bool verbose = true;
     };
 
     // Construction parameters (validated in the constructor), immutable after
@@ -166,6 +173,12 @@ struct SimulatedFrameFactory
     static constexpr int consumer_id = 0;
 
     // ----- Derived from the allocator + its metadata at construction -----
+
+    // The allocator's (already-set) metadata, retained for nbeams and -- when
+    // simulate_frbs && verbose -- for beam_ids, the full-band low edge, and the
+    // timekeeping fields used to compute an injected FRB's fpga_timestamp.
+    // Immutable and never reaped (per the allocator invariant).
+    const std::shared_ptr<const XEngineMetadata> metadata;
 
     // Beam count (the allocator must already have been initialized).
     const long nbeams;
@@ -305,6 +318,11 @@ private:
     // Pop one pulse from pulse_queue, blocking while it is empty. Returns an
     // empty pointer if the factory is stopped (the producer then just returns).
     std::shared_ptr<const simpulse::SinglePulse> _pop_pulse();
+
+    // Print a one-line "injected FRB" message (only called when params.verbose):
+    // beam_id, dm, intrinsic width (ms), and fpga_timestamp. Here 'it0' is the
+    // beam's active_frb_it0 (the pulse-sample -> absolute-frame-sample offset).
+    void _log_injected_frb(long beam_index, const simpulse::SinglePulse &sp, long it0) const;
 
     // Randomize one set: dispatch its per-beam work (with per-beam pulse
     // injection args sp_vec/it0_vec, and dt_sp = tci * time_samples_per_chunk -

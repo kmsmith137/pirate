@@ -8,6 +8,7 @@
 #include <memory>
 #include <random>
 #include <sstream>
+#include <iostream>
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -85,17 +86,6 @@ validate_and_get_metadata(const SimulatedFrameFactory::Params &params)
 }
 
 
-// File-scope helper: frame time-sample duration in ms, from the allocator's metadata
-// (same expression that AssembledFrame::randomize() checks pulses against). Called from
-// the constructor's initializer list AFTER validate_and_get_metadata() -- member
-// declaration order guarantees this -- so the allocator and metadata are known to exist.
-static double frame_time_sample_ms(const SimulatedFrameFactory::Params &params)
-{
-    shared_ptr<const XEngineMetadata> md = params.allocator->get_metadata(/*blocking=*/false);
-    return (double) md->dt_ns_per_seq * (double) md->seq_per_frb_time_sample / 1.0e6;
-}
-
-
 // File-scope helper: smallest freq_it0 over channels with samples (freq_nt > 0).
 // Channels skipped by the pulse's subband have (freq_it0, freq_nt) = (0, 0) and must be
 // excluded -- otherwise a high-DM pulse (whose active freq_it0 are all >> 0) would
@@ -119,16 +109,17 @@ static long min_active_it0(const simpulse::SinglePulse &sp)
 
 SimulatedFrameFactory::SimulatedFrameFactory(const Params &params_) :
     params(params_),
-    nbeams(validate_and_get_metadata(params_)->get_nbeams()),
+    metadata(validate_and_get_metadata(params_)),   // validates params + returns the (retained) metadata
+    nbeams(metadata->get_nbeams()),
     time_samples_per_chunk(params_.allocator->time_samples_per_chunk),
-    time_sample_ms(frame_time_sample_ms(params_))
+    // Frame time-sample duration in ms (same expression AssembledFrame::randomize() checks pulses against).
+    time_sample_ms((double) metadata->dt_ns_per_seq * (double) metadata->seq_per_frb_time_sample / 1.0e6)
 {
     // Per-channel calibration arrays for simulated pulses (see header). Copied from the
     // metadata accessors once; every pulse's SinglePulse::Params then shares these buffers.
     if (params.simulate_frbs) {
-        shared_ptr<const XEngineMetadata> md = params.allocator->get_metadata(/*blocking=*/false);
-        vector<double> ce = md->get_channel_freq_edges();
-        vector<double> cv = md->get_channel_variances();
+        vector<double> ce = metadata->get_channel_freq_edges();
+        vector<double> cv = metadata->get_channel_variances();
 
         channel_freq_edges = ksgpu::Array<double> ({long(ce.size())}, ksgpu::af_uhost);
         channel_variances  = ksgpu::Array<double> ({long(cv.size())}, ksgpu::af_uhost);
@@ -315,6 +306,9 @@ void SimulatedFrameFactory::_producer_main()
                 // handles both.
                 long it_min = min_active_it0(*active_frb[b]);
                 active_frb_it0[b] = tci * time_samples_per_chunk + phase_dist(rng) - it_min;
+
+                if (params.verbose)
+                    _log_injected_frb(b, *active_frb[b], active_frb_it0[b]);
             }
         }
         first_set = false;
@@ -543,6 +537,34 @@ shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_make_random_puls
     sp.allow_negative_arrival_times = true;
 
     return make_shared<simpulse::SinglePulse>(sp);
+}
+
+
+void SimulatedFrameFactory::_log_injected_frb(long beam_index, const simpulse::SinglePulse &sp, long it0) const
+{
+    // fpga_timestamp: the pulse's arrival time at the LOWEST frequency of the FULL band
+    // (metadata->zone_freq_edges.front(), NOT the pulse's subband), as an FPGA sequence
+    // number. In the pulse's own time coordinate the arrival is at
+    //   t = undispersed_arrival_time_sec + dispersion_delay(dm, freq_lo)   [seconds],
+    // i.e. pulse sample t/dt (dt = 1e-3*time_sample_ms sec). The absolute frame time sample
+    // is it0 + t/dt (since T = t_sp + active_frb_it0), and one frame time sample spans
+    // seq_per_frb_time_sample FPGA seq ticks (frame sample 0 <-> seq 0), so
+    //   fpga_timestamp = round((it0 + t/dt) * seq_per_frb_time_sample).
+    double dm = sp.params.dm;
+    double freq_lo = metadata->zone_freq_edges.front();
+    double dt_sec = 1.0e-3 * time_sample_ms;
+    double t_arrival = sp.params.undispersed_arrival_time_sec + simpulse::dispersion_delay(dm, freq_lo);
+    double frb_sample = (double) it0 + t_arrival / dt_sec;
+    long fpga_timestamp = std::llround(frb_sample * (double) metadata->seq_per_frb_time_sample);
+
+    // Build the whole line, then emit with a single '<<' so it can't interleave with
+    // other threads' console output mid-line.
+    std::ostringstream ss;
+    ss << "SimulatedFrameFactory: injected FRB: beam_id=" << metadata->beam_ids.at(beam_index)
+       << ", dm=" << dm
+       << ", intrinsic_width=" << (sp.params.intrinsic_width * 1.0e3) << " ms"
+       << ", fpga_timestamp=" << fpga_timestamp << "\n";
+    std::cout << ss.str() << std::flush;
 }
 
 

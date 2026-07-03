@@ -364,7 +364,8 @@ void register_core_bindings(pybind11::module &m)
                          double frb_dm0, double frb_max_dm, double frb_max_width_ms,
                          double frb_snr, std::vector<double> frb_subband_fmin_MHz,
                          std::vector<double> frb_subband_fmax_MHz,
-                         long num_frb_simulator_threads, long single_pulse_queue_size) {
+                         long num_frb_simulator_threads, long single_pulse_queue_size,
+                         bool verbose) {
                  SimulatedFrameFactory::Params p;
                  p.allocator = std::move(allocator);
                  p.num_randomizer_threads = num_randomizer_threads;
@@ -380,6 +381,7 @@ void register_core_bindings(pybind11::module &m)
                  p.frb_subband_fmax_MHz = std::move(frb_subband_fmax_MHz);
                  p.num_frb_simulator_threads = num_frb_simulator_threads;
                  p.single_pulse_queue_size = single_pulse_queue_size;
+                 p.verbose = verbose;
                  return std::make_unique<SimulatedFrameFactory>(p);
              }),
              py::arg("allocator"),
@@ -396,6 +398,7 @@ void register_core_bindings(pybind11::module &m)
              py::arg("frb_subband_fmax_MHz") = std::vector<double>(),
              py::arg("num_frb_simulator_threads") = 0,
              py::arg("single_pulse_queue_size") = 0,
+             py::arg("verbose") = true,
              "num_randomizer_threads (>= 1): size of the randomizer-thread pool that\n"
              "parallelizes per-beam randomize() within a set; the caller sizes it\n"
              "(run_fake_xengine uses min(nbeams, num_vcpus/2)). normalized (default\n"
@@ -414,7 +417,9 @@ void register_core_bindings(pybind11::module &m)
              "frb_subband_fmin_MHz/frb_subband_fmax_MHz (equal-length lists; each pulse\n"
              "picks one subband uniformly at random; each subband must overlap the band),\n"
              "num_frb_simulator_threads (>= 1) and single_pulse_queue_size (>= 1;\n"
-             "~nbeams recommended, since up to nbeams pulses can be popped per chunk).")
+             "~nbeams recommended, since up to nbeams pulses can be popped per chunk).\n"
+             "verbose (default True): if simulate_frbs, print a line per injected FRB\n"
+             "(beam_id, dm, intrinsic width in ms, and fpga_timestamp).")
         .def_readonly("nbeams", &SimulatedFrameFactory::nbeams)
         .def_property_readonly("num_randomizer_threads",
             [](const SimulatedFrameFactory &f) { return f.params.num_randomizer_threads; })
@@ -442,6 +447,8 @@ void register_core_bindings(pybind11::module &m)
             [](const SimulatedFrameFactory &f) { return f.params.num_frb_simulator_threads; })
         .def_property_readonly("single_pulse_queue_size",
             [](const SimulatedFrameFactory &f) { return f.params.single_pulse_queue_size; })
+        .def_property_readonly("verbose",
+            [](const SimulatedFrameFactory &f) { return f.params.verbose; })
         .def("get_frame_set", &SimulatedFrameFactory::get_frame_set,
             py::call_guard<py::gil_scoped_release>(),
             "Block until a randomized AssembledFrameSet is available and return it\n"
