@@ -408,7 +408,8 @@ class RunServerHelper:
         # clean stack trace through run_server rather than from a server
         # worker thread later.
         for i, server in enumerate(self.servers):
-            print(f"Waiting for server {i}'s async BumpAllocators to initialize...")
+            print(f"Waiting for server {i}'s async BumpAllocators to initialize, "
+                  f"before accepting connections (may take some time).")
             server.host_allocator.wait_until_initialized()
             server.gpu_allocator.wait_until_initialized()
             # rb_bump is held in self._rb_bumps[i] so we can wait on it here.

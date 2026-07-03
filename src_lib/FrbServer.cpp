@@ -501,10 +501,16 @@ void FrbServer::_worker_main(int receiver_index)
                 xassert(frame_ringbuf[rb_slot] == frame);
             }
 
+            bool chunk_assembled = false;
             if (frame->finalize_count == num_receivers) {
                 // Frame received from last Receiver, so mark it assembled.
                 xassert(rb_assembled == frame_id);
                 rb_assembled++;
+                // A whole chunk is fully assembled when rb_assembled reaches a chunk
+                // boundary (its last beam was just finalized). rb_assembled advances
+                // in strict frame_id order, so this fires exactly once per chunk --
+                // from whichever Receiver's worker finalizes that chunk's last beam.
+                chunk_assembled = (rb_assembled % nbeams == 0);
             }
 
             _check_rb_invariants();
@@ -512,6 +518,18 @@ void FrbServer::_worker_main(int receiver_index)
             lock.unlock();
             frame_lock.unlock();
             cv.notify_all();
+
+            // Announce a fully-assembled chunk (once per chunk). The frame just
+            // finalized is the last beam of this set, so its chunk is 'ichunk'
+            // (== set->time_chunk_index); derive the FPGA window from the per-chunk
+            // sample count and seq-per-sample.
+            if (chunk_assembled) {
+                long seq_per_chunk = set->ntime * m->seq_per_frb_time_sample;
+                std::cout << "FrbServer: beamset=" << m->beamset
+                          << ", ichunk=" << ichunk
+                          << ", fpga=[" << (ichunk * seq_per_chunk)
+                          << ":" << ((ichunk + 1) * seq_per_chunk) << "]" << std::endl;
+            }
         }
 
         expected_frame_id += nbeams;
@@ -1227,6 +1245,8 @@ void FrbServer::_grouper_send_thread_main()
     }
 
     std::cout << "FrbServer: connected to grouper at " << params.grouper_ip_addr << std::endl;
+    std::cout << "FrbServer: waiting for X-engine node(s) to connect at "
+              << params.rpc_server_address << " (Ctrl-C to stop)" << std::endl;
 
     // (3) Open the Session stream. Recheck is_stopped first (see
     //     plans/grouper_client.md 4g): avoids starting an RPC we're about to

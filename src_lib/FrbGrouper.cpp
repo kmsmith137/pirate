@@ -177,15 +177,15 @@ bool FrbGrouper::wait_for_handshake(int timeout_ms)
     if (handshake_done)
         return true;
 
-    // Print a "waiting for client" message at ~1/sec (this is polled every
-    // ~0.5s by open() / the pybind binding). Throttled via last_waiting_print.
-    // Stop once a TCP connection is established (session_active is set by the
-    // Session handler's guard at connect time): past that point we are waiting
-    // on the handshake, not the connection, so the message would be misleading.
-    auto now = std::chrono::steady_clock::now();
-    if (!session_active && (now - last_waiting_print >= std::chrono::seconds(1))) {
-        last_waiting_print = now;
-        std::cout << "FrbGrouper: waiting for client to connect at "
+    // Print a one-time "waiting for FrbServer to connect" message (this is polled
+    // every ~0.5s by open() / the pybind binding). Guarded by waiting_print_done so
+    // it prints once, not repeatedly. Suppressed once a TCP connection is
+    // established (session_active is set by the Session handler's guard at connect
+    // time): past that point we are waiting on the handshake, not the connection,
+    // so the message would be misleading.
+    if (!session_active && !waiting_print_done) {
+        waiting_print_done = true;
+        std::cout << "FrbGrouper: waiting for FrbServer to connect at "
                   << grouper_ip_addr << " ..." << std::endl;
     }
 

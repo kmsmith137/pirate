@@ -418,7 +418,7 @@ class RunFakeXEngineHelper:
                     seq_per_chunk = fset.ntime * fset.metadata.seq_per_frb_time_sample
                     tci = fset.time_chunk_index
                     events = factory.pop_events(tci * seq_per_chunk, (tci + 1) * seq_per_chunk)
-                    self._print_events(rpc_addr, events)
+                    self._print_events(fset.metadata.beamset, tci, events)
 
                     if sifter is not None:
                         # coarsegrain_snr: per-beam max event SNR this chunk (0 for beams with no
@@ -451,13 +451,17 @@ class RunFakeXEngineHelper:
             n += 1
 
     @staticmethod
-    def _print_events(rpc_addr, events):
-        """Print one line per injected FRB (this printing was moved from C++ to Python).
+    def _print_events(beamset, ichunk, events):
+        """Print a per-chunk summary line, then one indented line per injected FRB.
 
-        'events' is the FrbSifterEvents returned by SimulatedFrameFactory.pop_events().
+        (This printing was moved from C++ to Python.) 'events' is the FrbSifterEvents
+        returned by SimulatedFrameFactory.pop_events(); its FPGA window is used for the
+        summary line. The summary is printed every chunk (even with zero events).
         """
+        print(f"fake_xengine: beamset={beamset}, ichunk={ichunk}, "
+              f"fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}]", flush=True)
         for i in range(len(events)):
-            print(f"[{rpc_addr}] injected FRB: beam_id={int(events.beam_ids[i])}, "
+            print(f"    injected FRB: beam_id={int(events.beam_ids[i])}, "
                   f"dm={float(events.dms[i]):.4g}, "
                   f"fpga_timestamp={int(events.fpga_timestamps[i])}, "
                   f"width={float(events.widths_ms[i]):.4g} ms, "

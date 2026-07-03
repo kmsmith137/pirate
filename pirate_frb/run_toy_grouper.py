@@ -96,9 +96,10 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
         events = grouper.create_events(ichunk, per_beam_tree[ibeam], ibeam,
                                        per_beam_idm[ibeam], per_beam_itime[ibeam], per_beam_max[ibeam])
 
-        top = float(events.snrs.max()) if len(events) else 0.0
-        print(f'{grouper.grouper_ip_addr}: {ichunk=}: {len(events)} event(s) with snr>{snr_threshold:g}'
-              f' (max snr={top:.3g})', flush=True)
+        coarse_snr_max = float(per_beam_max.max())
+        print(f'toy_grouper: beamset={grouper.xengine_yaml["beamset"]}, ichunk={ichunk}, '
+              f'fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}], '
+              f'coarse_snr_max={coarse_snr_max:.4g}, nevents={len(events)}', flush=True)
 
         if sifter is not None:
             # Send the FrbEventsMessage (even if nevents==0).

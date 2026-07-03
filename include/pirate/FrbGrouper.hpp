@@ -148,10 +148,10 @@ private:
     bool opened          = false;   // start_listening() called-once guard (single session)
     bool closed          = false;   // close() idempotency guard
 
-    // Throttles the "waiting for client" stdout message in wait_for_handshake()
-    // to ~1/sec (it is polled every ~0.5s). Under mutex. Default-init (epoch) so
-    // the first wait prints immediately.
-    std::chrono::steady_clock::time_point last_waiting_print {};
+    // Guards the one-time "waiting for FrbServer to connect" stdout message in
+    // wait_for_handshake() (which is polled every ~0.5s). Under mutex; set true
+    // after the message is printed once, so it does not repeat.
+    bool waiting_print_done = false;
 
     // Progress counters (under mutex).
     long rb_produced      = 0;      // (last produced_seq_id) + 1   [updated by receive loop]

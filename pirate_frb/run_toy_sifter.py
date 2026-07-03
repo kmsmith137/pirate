@@ -106,7 +106,7 @@ def run_toy_sifter(addr, max_workers=4):
                            "(already in use, or malformed 'ip:port'?)")
 
     server.start()
-    print(f"run_toy_sifter: listening on {addr} (Ctrl-C to stop)", flush=True)
+    print(f"run_toy_sifter: waiting for grouper(s) to connect at {addr} (Ctrl-C to stop)", flush=True)
     try:
         server.wait_for_termination()
     except KeyboardInterrupt:
