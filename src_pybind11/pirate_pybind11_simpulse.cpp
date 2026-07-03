@@ -54,19 +54,18 @@ void register_simpulse_bindings(pybind11::module &m)
         "- ``undispersed_arrival_time_sec`` (float) -- arrival time as freq->infty, in seconds.\n"
         "- ``subband_freq_lo_MHz`` / ``subband_freq_hi_MHz`` (float) -- restrict the pulse to channels\n"
         "  overlapping this subband; defaults [0, 1e9] (no restriction).\n"
-        "- ``allow_negative_arrival_times`` (bool) -- if False (default), a pulse with samples at t<0\n"
-        "  is an error; if True, freq_it0 may be negative (all samples are kept; consumers such as\n"
-        "  add_to_timestream() clip to their own time range). Default False.\n"
+        "\n"
+        "Sample indices may be negative (a pulse whose arrival extends to t < 0).\n"
         "\n"
         "Precomputed sparse representation (arrays): ``freq_it0`` / ``freq_nt`` / ``freq_sd_off``\n"
-        "(length nfreq, int) and ``sparse_data`` (float). Also ``nt_min`` (smallest out_nt with no\n"
-        "high-end clipping) and the derived ``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
+        "(length nfreq, int) and ``sparse_data`` (float). Also ``it_start`` (= min freq_it0) and\n"
+        "``it_end`` (= max(freq_it0 + freq_nt)) bracketing the pulse's grid range, and the derived\n"
+        "``nfreq`` / ``freq_lo_MHz`` / ``freq_hi_MHz``.\n")
 
         .def(py::init([](double dm, double sm, double intrinsic_width, double spectral_index,
                          double undispersed_arrival_time_sec, double time_sample_ms, double snr,
                          const Array<double> &freq_edges_MHz, const Array<double> &freq_variances,
-                         double subband_freq_lo_MHz, double subband_freq_hi_MHz,
-                         bool allow_negative_arrival_times, long internal_nt) {
+                         double subband_freq_lo_MHz, double subband_freq_hi_MHz, long internal_nt) {
                  SinglePulse::Params p;
                  p.dm = dm;
                  p.sm = sm;
@@ -79,18 +78,17 @@ void register_simpulse_bindings(pybind11::module &m)
                  p.freq_variances = freq_variances;
                  p.subband_freq_lo_MHz = subband_freq_lo_MHz;
                  p.subband_freq_hi_MHz = subband_freq_hi_MHz;
-                 p.allow_negative_arrival_times = allow_negative_arrival_times;
                  p.internal_nt = internal_nt;
                  return new SinglePulse(p);
              }),
              // Argument order matches the C++ Params members. The trailing args with sensible defaults
-             // (subband_*, allow_negative_arrival_times, internal_nt) are optional; the required arrays sit
-             // mid-struct, so everything before them (including snr) must be a required argument.
+             // (subband_*, internal_nt) are optional; the required arrays sit mid-struct, so everything
+             // before them (including snr) must be a required argument.
              py::arg("dm"), py::arg("sm"), py::arg("intrinsic_width"), py::arg("spectral_index"),
              py::arg("undispersed_arrival_time_sec"), py::arg("time_sample_ms"), py::arg("snr"),
              py::arg("freq_edges_MHz"), py::arg("freq_variances"),
              py::arg("subband_freq_lo_MHz") = 0.0, py::arg("subband_freq_hi_MHz") = 1.0e9,
-             py::arg("allow_negative_arrival_times") = false, py::arg("internal_nt") = 1024)
+             py::arg("internal_nt") = 1024)
 
         // Read-only views of the construction parameters (SinglePulse::params).
         .def_property_readonly("internal_nt", [](const SinglePulse &s) { return s.params.internal_nt; })
@@ -105,14 +103,14 @@ void register_simpulse_bindings(pybind11::module &m)
         .def_property_readonly("undispersed_arrival_time_sec", [](const SinglePulse &s) { return s.params.undispersed_arrival_time_sec; })
         .def_property_readonly("subband_freq_lo_MHz", [](const SinglePulse &s) { return s.params.subband_freq_lo_MHz; })
         .def_property_readonly("subband_freq_hi_MHz", [](const SinglePulse &s) { return s.params.subband_freq_hi_MHz; })
-        .def_property_readonly("allow_negative_arrival_times", [](const SinglePulse &s) { return s.params.allow_negative_arrival_times; })
 
         // Precomputed sparse representation.
         .def_readonly("freq_it0", &SinglePulse::freq_it0)
         .def_readonly("freq_nt", &SinglePulse::freq_nt)
         .def_readonly("freq_sd_off", &SinglePulse::freq_sd_off)
         .def_readonly("sparse_data", &SinglePulse::sparse_data)
-        .def_readonly("nt_min", &SinglePulse::nt_min)
+        .def_readonly("it_start", &SinglePulse::it_start)
+        .def_readonly("it_end", &SinglePulse::it_end)
 
         // Derived read-only attributes, computed from freq_edges_MHz.
         .def_property_readonly("nfreq", [](const SinglePulse &s) { return s.params.freq_edges_MHz.size - 1; })
@@ -120,13 +118,14 @@ void register_simpulse_bindings(pybind11::module &m)
         .def_property_readonly("freq_hi_MHz", [](const SinglePulse &s) { return s.params.freq_edges_MHz.data[s.params.freq_edges_MHz.size - 1]; })
 
         .def("add_to_timestream", &SinglePulse::add_to_timestream,
-             py::arg("out"), py::arg("weight") = 1.0,
+             py::arg("out"), py::arg("out_it0"), py::arg("weight") = 1.0f,
              "Add the pulse to a 2-d (nfreq, out_nt) float32 array, in place, scaled by 'weight'.\n"
              "\n"
-             "Column it of 'out' spans [it*dt, (it+1)*dt] seconds; samples outside [0, out_nt) are\n"
-             "clipped (size out_nt >= nt_min for no high-end clipping; negative sample indices, possible\n"
-             "only with allow_negative_arrival_times=True, are always clipped). 'out' must be a host\n"
-             "(CPU) float32 array with contiguous time samples, ordered low to high in frequency.")
+             "Column it of 'out' represents grid sample index (out_it0 + it), i.e. 'out' spans sample\n"
+             "indices [out_it0, out_it0 + out_nt) (out_it0 may be negative). 'out' MUST span the pulse's\n"
+             "full range: a RuntimeError is raised unless out_it0 <= it_start and out_it0 + out_nt >=\n"
+             "it_end. 'out' must be a host (CPU) float32 array with contiguous time samples, ordered low\n"
+             "to high in frequency.")
 
         .def("__repr__", &SinglePulse::str)
     ;

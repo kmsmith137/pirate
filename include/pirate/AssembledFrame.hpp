@@ -176,8 +176,8 @@ struct AssembledFrame
     // is sparse, so most of the frame is still the fast avx2 noise fill; only each channel's
     // (contiguous) pulse samples are recomputed as quantize(signal/S[f] + prequant_rms*gaussian).
     // Partial overlap (part of the pulse falls outside [0,ntime)) is fine -- it is simply clipped.
-    // sp->freq_it0 may be negative (a pulse built with allow_negative_arrival_times=true); the
-    // per-channel window clipping handles any (freq_it0, dt_sp) combination.
+    // sp->freq_it0 may be negative (a pulse whose arrival extends to t < 0); the per-channel
+    // window clipping handles any (freq_it0, dt_sp) combination.
     //
     // Thread-safety: snapshots the lock-protected 'scales_offsets'/'data' Arrays
     // under the lock, then fills them without the lock held (the snapshot pins

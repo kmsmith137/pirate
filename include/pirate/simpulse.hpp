@@ -61,12 +61,6 @@ struct SinglePulse {
         double subband_freq_lo_MHz = 0.0;
         double subband_freq_hi_MHz = 1.0e9;
 
-        // If false, then an exception is raised if any freq_it0 is < 0.
-        // If true, then freq_it0 may be negative (the pulse may have samples at t < 0, which
-        // are all kept). Consumers are responsible for clipping to their own time range
-        // (e.g. add_to_timestream() clips to [0, out_nt)).
-        bool allow_negative_arrival_times = false;
-
         // "under the hood" samples (power of two; 1024 is a good default)
         long internal_nt = 1024;
     };
@@ -78,25 +72,28 @@ struct SinglePulse {
 
     // Precomputed SPARSE representation of the pulse, on the integer time grid where sample 'it'
     // spans [it*dt, (it+1)*dt] seconds, dt = 1e-3*time_sample_ms. Computed in the ctor. Sample
-    // indices are >= 0, unless allow_negative_arrival_times=true (then freq_it0 may be negative).
-    // Frequencies are ordered LOW to HIGH. (Also exposed to python, read-only.)
-    ksgpu::Array<long>  freq_it0;     // (nfreq,) first dense-grid sample index of channel i's pulse
-    ksgpu::Array<long>  freq_nt;      // (nfreq,) number of samples of channel i's pulse
+    // indices may be negative (a pulse whose arrival extends to t < 0). Frequencies are ordered
+    // LOW to HIGH. (Also exposed to python, read-only.)
+    //
+    // Every channel -- including subband-skipped "inactive" channels, which have freq_nt == 0 --
+    // satisfies it_start <= freq_it0 <= (freq_it0 + freq_nt) <= it_end. (Inactive channels are
+    // assigned freq_it0 = it_start so this invariant holds without special-casing them.)
+    ksgpu::Array<long>  freq_it0;     // (nfreq,) first grid sample index of channel i's pulse
+    ksgpu::Array<long>  freq_nt;      // (nfreq,) number of samples of channel i's pulse (0 if inactive)
     ksgpu::Array<long>  freq_sd_off;  // (nfreq,) offset into sparse_data (= sum_{j<i} freq_nt[j])
     ksgpu::Array<float> sparse_data;  // (sum(freq_nt),) packed samples; spectral weight + snr norm baked in
-    long                nt_min;       // = max_i (freq_it0[i] + freq_nt[i]); smallest out_nt with no
-                                      //   high-end clipping (samples at negative indices are clipped
-                                      //   by add_to_timestream() regardless of out_nt)
+    long                it_start;     // = min_i freq_it0[i]                (min over active channels)
+    long                it_end;       // = max_i (freq_it0[i] + freq_nt[i]) (max over active channels)
 
     SinglePulse(const Params &params);
 
     // Adds the pulse to a "block" of (frequency, time) samples 'out', a 2-d, host (CPU) float32 array
-    // of shape (nfreq, out_nt), scaled by 'weight'. Column 'it' of 'out' spans [it*dt, (it+1)*dt]
-    // seconds; samples outside [0, out_nt) are clipped (use out_nt >= nt_min so that nothing is
-    // clipped at the high end; samples at negative indices, possible only with
-    // allow_negative_arrival_times=true, are always clipped). Time samples must be contiguous
-    // (out.strides[1] == 1).
-    void add_to_timestream(ksgpu::Array<float> &out, double weight = 1.0) const;
+    // of shape (nfreq, out_nt), scaled by 'weight'. Column 'it' of 'out' represents grid sample index
+    // (out_it0 + it), i.e. 'out' spans sample indices [out_it0, out_it0 + out_nt) (out_it0 may be
+    // negative). 'out' MUST span the pulse's full time range: an exception is raised unless
+    // out_it0 <= it_start and out_it0 + out_nt >= it_end. Time samples must be contiguous
+    // (out.strides[1] == 1), ordered low to high in frequency.
+    void add_to_timestream(ksgpu::Array<float> out, long out_it0, float weight = 1.0f) const;
 
     // String representation.
     void print(std::ostream &os) const;

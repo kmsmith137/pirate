@@ -53,9 +53,11 @@ def make_plot(plt, matplotlib, pulse_args, ifreq_list, color_list, label_list, f
     coarse_peak = None
     for (nsamp, ls, labelled) in [(100, '-', True), (1000, ':', False)]:
         sp = _make_pulse(nsamp=nsamp, **pulse_args)
-        out_nt = sp.nt_min
+        # _make_pulse frames the pulse at t > 0 (it_start >= 0), so an 'out' spanning [0, it_end)
+        # covers the pulse (out_it0 = 0).
+        out_nt = sp.it_end
         ts = np.zeros((sp.nfreq, out_nt), dtype=np.float32)
-        sp.add_to_timestream(ts)
+        sp.add_to_timestream(ts, 0)
         ts = ts.astype(np.float64)
 
         peak = max(float(ts[ifreq].max()) for ifreq in ifreq_list)
@@ -147,11 +149,12 @@ def plot4(plt, matplotlib):
                                     spectral_index=0.0, undispersed_arrival_time_sec=uat)
 
     sp_top, sp_bot = make(edges_top), make(edges_bot)
-    out_nt = max(sp_top.nt_min, sp_bot.nt_min)
+    # Both pulses are framed at t > 0 (it_start >= 0), so out_it0 = 0 with out_nt >= it_end covers them.
+    out_nt = max(sp_top.it_end, sp_bot.it_end)
 
     def waterfall(sp):
         a = np.zeros((sp.nfreq, out_nt), dtype=np.float32)
-        sp.add_to_timestream(a)
+        sp.add_to_timestream(a, 0)
         return a
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)

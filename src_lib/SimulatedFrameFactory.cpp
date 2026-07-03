@@ -4,7 +4,6 @@
 
 #include <cmath>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <random>
 #include <sstream>
@@ -83,27 +82,6 @@ validate_and_get_metadata(const SimulatedFrameFactory::Params &params)
     }
 
     return md;
-}
-
-
-// File-scope helper: smallest freq_it0 over channels with samples (freq_nt > 0).
-// Channels skipped by the pulse's subband have (freq_it0, freq_nt) = (0, 0) and must be
-// excluded -- otherwise a high-DM pulse (whose active freq_it0 are all >> 0) would
-// spuriously return 0.
-static long min_active_it0(const simpulse::SinglePulse &sp)
-{
-    long nfreq = sp.freq_it0.size;
-    const long *it0 = sp.freq_it0.data;
-    const long *nt = sp.freq_nt.data;
-
-    long ret = numeric_limits<long>::max();
-    for (long f = 0; f < nfreq; f++)
-        if (nt[f] > 0)
-            ret = min(ret, it0[f]);
-
-    // The SinglePulse constructor guarantees at least one channel has samples.
-    xassert(ret != numeric_limits<long>::max());
-    return ret;
 }
 
 
@@ -265,7 +243,7 @@ void SimulatedFrameFactory::_producer_main()
     // thread touches these vectors, so no locking is needed. active_frb_it0[b] is
     // the offset added to pulse-sample coords to obtain absolute sample coords
     // (T = t_sp + active_frb_it0), so pulse b occupies absolute samples
-    // [active_frb_it0[b] + min_active_it0, active_frb_it0[b] + nt_min).
+    // [active_frb_it0[b] + sp->it_start, active_frb_it0[b] + sp->it_end).
     vector<shared_ptr<const simpulse::SinglePulse>> active_frb(nbeams);
     vector<long> active_frb_it0(nbeams, 0);
     bool first_set = true;
@@ -292,7 +270,7 @@ void SimulatedFrameFactory::_producer_main()
                 // Ready iff no active pulse, or the active pulse is entirely in the
                 // past (all its samples are before the current chunk).
                 bool ready = !active_frb[b]
-                    || (active_frb_it0[b] + active_frb[b]->nt_min <= tci * time_samples_per_chunk);
+                    || (active_frb_it0[b] + active_frb[b]->it_end <= tci * time_samples_per_chunk);
                 if (!ready)
                     continue;
 
@@ -300,12 +278,10 @@ void SimulatedFrameFactory::_producer_main()
                 if (!active_frb[b])
                     return;                     // stopped
 
-                // Place the pulse's EARLIEST sample at a uniformly random phase within
-                // the current chunk. min_active_it0 can be negative (small-DM pulses;
-                // see _make_random_pulse) or large positive (high DM) -- the shift
-                // handles both.
-                long it_min = min_active_it0(*active_frb[b]);
-                active_frb_it0[b] = tci * time_samples_per_chunk + phase_dist(rng) - it_min;
+                // Place the pulse's EARLIEST sample (it_start) at a uniformly random phase within
+                // the current chunk. it_start can be negative (small-DM pulses; see
+                // _make_random_pulse) or large positive (high DM) -- the shift handles both.
+                active_frb_it0[b] = tci * time_samples_per_chunk + phase_dist(rng) - active_frb[b]->it_start;
 
                 if (params.verbose)
                     _log_injected_frb(b, *active_frb[b], active_frb_it0[b]);
@@ -514,11 +490,10 @@ shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_make_random_puls
     std::uniform_int_distribution<long> sub_dist(0, long(params.frb_subband_fmin_MHz.size()) - 1);
     long n = sub_dist(rng);
 
-    // Arrival time: just the sub-sample phase, uniform over one time sample. There is
-    // NO constraint on where the pulse sits on the simpulse grid -- absolute placement
-    // happens via active_frb_it0 in the producer (see class doc), so small-DM pulses
-    // simply get negative freq_it0 (hence allow_negative_arrival_times=true below,
-    // which is essential, not just defensive).
+    // Arrival time: just the sub-sample phase, uniform over one time sample. There is NO
+    // constraint on where the pulse sits on the simpulse grid -- absolute placement happens via
+    // active_frb_it0 in the producer (see class doc), so small-DM pulses simply get negative
+    // freq_it0 (SinglePulse always allows this; the producer uses it_start/it_end to place it).
     double dt_sec = 1.0e-3 * time_sample_ms;
     std::uniform_real_distribution<double> phase_dist(0.0, dt_sec);
 
@@ -534,7 +509,6 @@ shared_ptr<const simpulse::SinglePulse> SimulatedFrameFactory::_make_random_puls
     sp.freq_variances = channel_variances;
     sp.subband_freq_lo_MHz = params.frb_subband_fmin_MHz[n];
     sp.subband_freq_hi_MHz = params.frb_subband_fmax_MHz[n];
-    sp.allow_negative_arrival_times = true;
 
     return make_shared<simpulse::SinglePulse>(sp);
 }

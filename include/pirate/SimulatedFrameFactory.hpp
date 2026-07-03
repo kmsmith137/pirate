@@ -50,11 +50,11 @@ namespace pirate {
 // (producer-thread-local state). No pulses are injected into the first set.
 // At the start of each later set (time_chunk_index tci), a beam is "FRB-ready"
 // if it has no active pulse, or its active pulse is entirely in the past
-// (active_frb_it0 + nt_min <= tci * time_samples_per_chunk). Each FRB-ready
+// (active_frb_it0 + sp->it_end <= tci * time_samples_per_chunk). Each FRB-ready
 // beam pops a fresh pulse from the pulse queue (blocking if empty) and places
 // it so its earliest sample lands at a uniformly random phase within the
-// current chunk: active_frb_it0 = tci*tspc + randint(0,tspc) - min(freq_it0
-// over channels with freq_nt > 0). Injection happens inside the per-beam
+// current chunk: active_frb_it0 = tci*tspc + randint(0,tspc) - sp->it_start.
+// Injection happens inside the per-beam
 // randomize() call: frame->randomize(normalized, gaussian, sp, dt_sp) with
 // dt_sp = tci*tspc - active_frb_it0, so successive chunks receive successive
 // time-slices of the same pulse until it retires. After warmup, every beam
@@ -311,7 +311,7 @@ private:
     // Construct one random SinglePulse (see the Params doc for the parameter
     // distributions). undispersed_arrival_time_sec is just uniform(0, dt) --
     // the sub-sample phase -- so small-DM pulses have negative freq_it0
-    // (allow_negative_arrival_times=true); absolute placement happens via
+    // (SinglePulse always allows this); absolute placement happens via
     // active_frb_it0 in the producer. Called by frb_simulator threads with the
     // lock RELEASED; uses the per-thread ksgpu::default_rng().
     std::shared_ptr<const simpulse::SinglePulse> _make_random_pulse();

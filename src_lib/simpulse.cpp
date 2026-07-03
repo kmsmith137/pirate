@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <vector>
+#include <limits>
 #include <complex>
 #include <sstream>
 #include <algorithm>
@@ -203,7 +204,11 @@ SinglePulse::SinglePulse(const Params &p)
 
     long total = 0;       // running sum of freq_nt (== length of 'data')
     double snr_sq = 0.0;  // sum over samples of (sample^2 / variance), at the arbitrary initial norm
-    nt_min = 0;
+    // it_start/it_end: min freq_it0 and max (freq_it0 + freq_nt) over ACTIVE channels. Seeded to
+    // sentinels; there is always >= 1 active channel (guaranteed by the subband-overlap check + the
+    // total > 0 check below), so both are overwritten before use.
+    it_start = std::numeric_limits<long>::max();
+    it_end   = std::numeric_limits<long>::min();
 
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
         // --- per-channel pulse shape (delays, widths, spectral weight) ---
@@ -212,8 +217,8 @@ SinglePulse::SinglePulse(const Params &p)
 
         // Subband restriction: skip channels that don't overlap [subband_freq_lo_MHz, subband_freq_hi_MHz].
         // A skipped channel contributes no samples (freq_nt = 0), and does not enter the SNR normalization.
+        // Its freq_it0 is left for the post-loop fixup (set to it_start).
         if ((nu_hi <= subband_freq_lo_MHz) || (nu_lo >= subband_freq_hi_MHz)) {
-            freq_it0.data[ifreq] = 0;
             freq_nt.data[ifreq] = 0;
             freq_sd_off.data[ifreq] = total;
             continue;
@@ -269,29 +274,20 @@ SinglePulse::SinglePulse(const Params &p)
             cumsum[it] = cumsum[it] / cumsum[internal_nt];
 
         // --- sparse indices on the integer grid (sample 'it' spans [it*dt, (it+1)*dt]) ---
+        // Sample indices may be negative (a pulse whose arrival extends to t < 0); this is always
+        // allowed. Consumers handle the range via it_start/it_end (see add_to_timestream()).
         double pt0 = undispersed_arrival_time_sec + t0;   // absolute pulse start (seconds)
         double pt1 = undispersed_arrival_time_sec + t1;   // absolute pulse end
         long i0 = (long)floor(pt0 / dt);   // first sample index (may be < 0)
         long i1 = (long)ceil(pt1 / dt);
-
-        // A pulse with samples before t=0. By default this is an error; if allow_negative_arrival_times
-        // is set, the t<0 samples are KEPT (freq_it0 < 0), and consumers are responsible for clipping
-        // to their own time range (e.g. add_to_timestream() clips to [0, out_nt)).
-        if ((i0 < 0) && !params.allow_negative_arrival_times) {
-            stringstream ss;
-            ss << "pirate::simpulse::SinglePulse: channel " << ifreq << " has samples at t < 0"
-               << " (first sample index " << i0 << "). Increase undispersed_arrival_time_sec, or"
-               << " set allow_negative_arrival_times=true to keep the t<0 samples (freq_it0 < 0).";
-            throw runtime_error(ss.str());
-        }
-
         long n = i1 - i0;   // >= 1, since pt1 > pt0
 
         freq_it0.data[ifreq] = i0;
         freq_nt.data[ifreq] = n;
         freq_sd_off.data[ifreq] = total;
         total += n;
-        nt_min = std::max(nt_min, i0 + n);
+        it_start = std::min(it_start, i0);
+        it_end   = std::max(it_end, i0 + n);
 
         // --- fill this channel's samples for dense indices [i0, i1) into 'data' ---
         // Arbitrary initial normalization (spectral weight, no fluence); the whole pulse is rescaled
@@ -308,10 +304,17 @@ SinglePulse::SinglePulse(const Params &p)
     }
 
     // Defensive: every channel overlapping the subband contributes n >= 1 samples, and the subband
-    // overlap was validated above, so this should be unreachable.
+    // overlap was validated above, so this should be unreachable. (Also guarantees it_start/it_end
+    // were set by at least one active channel.)
     if (total <= 0)
         throw runtime_error("pirate::simpulse::SinglePulse: pulse has no samples (internal error --"
                             " this should be unreachable)");
+
+    // Assign inactive (subband-skipped, freq_nt == 0) channels freq_it0 = it_start, so that every
+    // channel satisfies it_start <= freq_it0 <= (freq_it0 + freq_nt) <= it_end.
+    for (long ifreq = 0; ifreq < nfreq; ifreq++)
+        if (freq_nt.data[ifreq] == 0)
+            freq_it0.data[ifreq] = it_start;
 
     // Normalize the pulse to the requested matched-filter SNR. The initial (arbitrary) normalization
     // has SNR = sqrt(snr_sq) = sqrt(sum sample^2/variance); scaling every sample by
@@ -325,7 +328,7 @@ SinglePulse::SinglePulse(const Params &p)
 }
 
 
-void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double weight) const
+void SinglePulse::add_to_timestream(ksgpu::Array<float> out, long out_it0, float weight) const
 {
     const long nfreq = params.freq_edges_MHz.size - 1;
 
@@ -336,23 +339,32 @@ void SinglePulse::add_to_timestream(ksgpu::Array<float> &out, double weight) con
     xassert_eq(out.strides[1], 1L);    // time samples must be contiguous in memory
 
     const long out_nt = out.shape[1];
+
+    // 'out' spans grid sample indices [out_it0, out_it0 + out_nt) and MUST cover the pulse's full
+    // range [it_start, it_end) -- no clipping. (This guarantees every write lands in bounds.)
+    if ((out_it0 > it_start) || (out_it0 + out_nt < it_end)) {
+        stringstream ss;
+        ss << "pirate::simpulse::SinglePulse::add_to_timestream: output array spans time samples ["
+           << out_it0 << ", " << (out_it0 + out_nt) << "), which does not cover the pulse's range ["
+           << it_start << ", " << it_end << ")";
+        throw runtime_error(ss.str());
+    }
+
     const long row_stride = out.strides[0];   // row stride, in elements (ksgpu strides are in dtype units)
-    const float wf = (float)weight;
+    const float wf = weight;
 
     for (long ifreq = 0; ifreq < nfreq; ifreq++) {
         long i0 = freq_it0.data[ifreq];
         long n = freq_nt.data[ifreq];
         long off = freq_sd_off.data[ifreq];
 
-        // Clip to [0, out_nt) at both ends. (freq_it0 can be negative, if the pulse was
-        // constructed with allow_negative_arrival_times=true.) j0 >= j1 makes the loop a no-op.
-        long j0 = std::max(0L, -i0);
-        long j1 = std::min(n, out_nt - i0);
-
+        // base >= 0 and base + n <= out_nt, guaranteed by the span check + the class invariant
+        // it_start <= freq_it0 <= freq_it0 + freq_nt <= it_end.
+        long base = i0 - out_it0;
         float *row = out.data + ifreq * row_stride;
         const float *src = sparse_data.data + off;
-        for (long j = j0; j < j1; j++)
-            row[i0 + j] += wf * src[j];
+        for (long j = 0; j < n; j++)
+            row[base + j] += wf * src[j];
     }
 }
 
@@ -368,8 +380,7 @@ void SinglePulse::print(ostream &os) const
        << ",snr=" << params.snr << ",spectral_index=" << params.spectral_index
        << ",undispersed_arrival_time_sec=" << params.undispersed_arrival_time_sec
        << ",subband_freq_lo_MHz=" << params.subband_freq_lo_MHz
-       << ",subband_freq_hi_MHz=" << params.subband_freq_hi_MHz
-       << ",allow_negative_arrival_times=" << params.allow_negative_arrival_times << ")";
+       << ",subband_freq_hi_MHz=" << params.subband_freq_hi_MHz << ")";
 }
 
 

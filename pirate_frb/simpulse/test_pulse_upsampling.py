@@ -137,15 +137,16 @@ class upsampling_test_instance:
         s1 = self._make_single_pulse_object(fine_edges, var_fine, self.tsamp / nupsample)
 
         # Size the coarse grid to hold both pulses (they share undispersed_arrival_time_sec, so
-        # s1.nt_min ~ nupsample * s0.nt_min up to rounding).
-        out_nt = max(int(s0.nt_min), -(-int(s1.nt_min) // nupsample))
+        # s1.it_end ~ nupsample * s0.it_end up to rounding). Both pulses are framed at t > 0
+        # (it_start >= 0), so out_it0 = 0 covers them.
+        out_nt = max(int(s0.it_end), -(-int(s1.it_end) // nupsample))
 
         # add_to_timestream() requires float32 output arrays.
         a0 = np.zeros((self.nfreq, out_nt), dtype=np.float32)
         a1 = np.zeros((self.nfreq * nupfreq, out_nt * nupsample), dtype=np.float32)
 
-        s0.add_to_timestream(a0)
-        s1.add_to_timestream(a1)
+        s0.add_to_timestream(a0, 0)
+        s1.add_to_timestream(a1, 0)
 
         # Upcast to float64 for the (approximate) correlation diagnostics below. The output arrays
         # are float32; that quantization is the thing being tested, so we keep it in a0/a1.

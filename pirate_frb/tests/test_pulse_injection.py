@@ -8,9 +8,9 @@ dequantizes, and checks:
   - the off-pulse residual variance matches the per-zone noise variance;
   - the consistency + precondition checks throw on misuse.
 
-test_negative_arrival_times(): checks that SinglePulse with allow_negative_arrival_times=True
-KEEPS samples at t < 0 (freq_it0 < 0) rather than discarding them, by comparing against the
-same pulse shifted later by an integer number of samples.
+test_negative_arrival_times(): checks that SinglePulse handles pulses whose arrival extends to
+t < 0 (negative freq_it0) -- the it_start/it_end invariant, integer-shift equivalence, and the
+add_to_timestream(out, out_it0) span contract.
 """
 
 import numpy as np
@@ -96,7 +96,8 @@ def test_pulse_injection():
     edges = np.linspace(flo, fhi, nfreq + 1)
     variances = np.full(nfreq, V)
     sp = _single_pulse(edges, variances, frame_dt_ms)
-    assert sp.nt_min <= ntime, f"pulse nt_min={sp.nt_min} exceeds ntime={ntime}; lower dm"
+    assert 0 <= sp.it_start and sp.it_end <= ntime, \
+        f"pulse range [{sp.it_start},{sp.it_end}) does not fit in [0,{ntime}); lower dm"
 
     frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
     frame.randomize(normalize=True, gaussian=True, sp=sp, dt_sp=dt_sp)
@@ -119,7 +120,7 @@ def test_pulse_injection():
     rvar = float(resid[expected == 0.0].var())
     assert abs(rvar / V - 1.0) < 0.15, f"off-pulse residual variance {rvar:.4f} != V={V}"
 
-    print(f"    injected pulse: nt_min={sp.nt_min}, matched-filter amp={amp:.3f}, "
+    print(f"    injected pulse: it=[{sp.it_start},{sp.it_end}), matched-filter amp={amp:.3f}, "
           f"off-pulse var={rvar:.4f} (V={V:.3f}) -- ok")
 
     # ---- consistency / precondition checks must throw ----
@@ -146,12 +147,11 @@ def test_pulse_injection():
 
 
 def test_negative_arrival_times():
-    """allow_negative_arrival_times=True keeps (not discards) samples at t < 0.
+    """SinglePulse handles pulses whose arrival extends to t < 0 (negative freq_it0).
 
-    Builds pulse A with negative freq_it0 in some (but not all) channels, and pulse B = the
-    same pulse shifted later by an integer number of samples K, so all of B's indices are
-    nonnegative. A and B must be the same pulse up to the index shift (nothing discarded from
-    A), and add_to_timestream() must clip A's negative-time part cleanly.
+    Checks the it_start/it_end invariant, that a pulse and its integer-sample-shifted copy are
+    identical up to the shift (nothing is discarded at t < 0), and add_to_timestream()'s
+    (out, out_it0) span contract.
     """
     print("  test_negative_arrival_times()...")
 
@@ -160,50 +160,63 @@ def test_negative_arrival_times():
     edges = np.linspace(400.0, 800.0, nfreq + 1)
     variances = np.full(nfreq, 1.0)
 
-    # dm=1: dispersion delay ~6.5 ms at 800 MHz, ~26 ms at 400 MHz. With intrinsic_width=2 ms
-    # and uat=0, the pulse starts at t ~ (delay - 8 ms): negative in the top channels, positive
-    # (by many samples) in the bottom channels -- exercising both signs of freq_it0.
+    # dm=1, uat=0: with intrinsic_width=2 ms, the pulse starts at t ~ (dispersion delay - 8 ms),
+    # negative in the top (high-freq) channels and positive (by many samples) in the bottom
+    # channels -- exercising both signs of freq_it0.
     common = dict(dm=1.0, sm=0.0, intrinsic_width=2.0e-3, spectral_index=0.0,
                   time_sample_ms=dt_ms, snr=20.0, freq_edges_MHz=edges, freq_variances=variances)
 
-    sp_a = SinglePulse(undispersed_arrival_time_sec=0.0, allow_negative_arrival_times=True, **common)
+    sp_a = SinglePulse(undispersed_arrival_time_sec=0.0, **common)
     it0_a = np.asarray(sp_a.freq_it0)
     nt_a = np.asarray(sp_a.freq_nt)
-    assert (nt_a > 0).all()   # no subband restriction -> every channel has samples
+    assert (nt_a > 0).all()   # no subband restriction -> every channel active
     assert (it0_a < 0).any() and (it0_a >= 0).any(), \
         f"test setup: expected mixed-sign freq_it0, got range [{it0_a.min()}, {it0_a.max()}]"
 
-    # Pulse B: identical, shifted later by K samples so all indices are nonnegative. Also
-    # re-exercises the (unchanged) allow_negative_arrival_times=False path.
-    K = 2 - int(it0_a.min())
-    sp_b = SinglePulse(undispersed_arrival_time_sec=K * dt_ms * 1.0e-3,
-                       allow_negative_arrival_times=False, **common)
-    it0_b = np.asarray(sp_b.freq_it0)
+    # it_start/it_end bracket every channel: it_start <= freq_it0 <= freq_it0+freq_nt <= it_end.
+    assert sp_a.it_start == int(it0_a.min())
+    assert sp_a.it_end == int((it0_a + nt_a).max())
+    assert (sp_a.it_start <= it0_a).all() and ((it0_a + nt_a) <= sp_a.it_end).all()
 
-    # Same pulse up to the shift: nothing was discarded from A.
-    assert np.array_equal(it0_b, it0_a + K), "freq_it0 mismatch (samples discarded or misaligned?)"
+    # Pulse B: identical params but arrival shifted later by an integer K samples. Nothing is
+    # discarded at t < 0, so B is exactly A shifted: same freq_nt/sparse_data, and freq_it0
+    # (hence it_start/it_end) offset by exactly K.
+    K = 100
+    sp_b = SinglePulse(undispersed_arrival_time_sec=K * dt_ms * 1.0e-3, **common)
+    assert np.array_equal(np.asarray(sp_b.freq_it0), it0_a + K), "freq_it0 not shifted by K"
     assert np.array_equal(np.asarray(sp_b.freq_nt), nt_a)
-    assert np.array_equal(np.asarray(sp_b.freq_sd_off), np.asarray(sp_a.freq_sd_off))
+    assert sp_b.it_start == sp_a.it_start + K and sp_b.it_end == sp_a.it_end + K
     sd_a, sd_b = np.asarray(sp_a.sparse_data), np.asarray(sp_b.sparse_data)
     assert np.allclose(sd_a, sd_b, rtol=1.0e-5, atol=1.0e-6 * np.abs(sd_b).max()), \
         "sparse_data mismatch between shifted copies of the same pulse"
 
-    # add_to_timestream() must clip A's negative part cleanly: A's dense output equals the
-    # t >= 0 portion of B's (shifted), and B's [0, K) region holds A's clipped t < 0 part.
-    assert sp_a.nt_min > 0 and sp_b.nt_min == sp_a.nt_min + K
-    dense_a = np.zeros((nfreq, sp_a.nt_min), np.float32)
-    dense_b = np.zeros((nfreq, sp_b.nt_min), np.float32)
-    sp_a.add_to_timestream(dense_a)
-    sp_b.add_to_timestream(dense_b)
-    assert np.allclose(dense_a, dense_b[:, K:], rtol=1.0e-5, atol=1.0e-6 * np.abs(dense_b).max())
-    assert (dense_b[:, :K] != 0).any(), "expected a nonzero t<0 part (clipped from A)"
+    # add_to_timestream(out, out_it0): render A over an 'out' spanning [it_start, it_end), and B
+    # over the same-size window shifted by K. The two dense renders must be identical (same pulse).
+    nt = sp_a.it_end - sp_a.it_start
+    dense_a = np.zeros((nfreq, nt), np.float32); sp_a.add_to_timestream(dense_a, sp_a.it_start)
+    dense_b = np.zeros((nfreq, nt), np.float32); sp_b.add_to_timestream(dense_b, sp_b.it_start)
+    assert (dense_a != 0).any()
+    assert np.allclose(dense_a, dense_b, rtol=1.0e-5, atol=1.0e-6 * np.abs(dense_a).max())
 
-    # The default (False) path must still throw on negative arrival times.
-    try:
-        SinglePulse(undispersed_arrival_time_sec=0.0, allow_negative_arrival_times=False, **common)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("expected RuntimeError: allow_negative_arrival_times=False with t<0 samples")
+    # A wider 'out' with a different out_it0 (still covering the range) places the pulse at
+    # column (freq_it0 - out_it0) and scales by 'weight'; the uncovered columns stay zero.
+    wide = np.zeros((nfreq, nt + 30), np.float32)
+    sp_a.add_to_timestream(wide, sp_a.it_start - 10, weight=2.0)
+    tol = 1.0e-6 * np.abs(dense_a).max() * 2
+    assert np.allclose(wide[:, 10:10+nt], 2.0 * dense_a, rtol=1.0e-5, atol=tol)
+    assert np.allclose(wide[:, :10], 0.0) and np.allclose(wide[:, 10+nt:], 0.0)
 
-    print(f"    shift-equivalence (K={K}) + low-end clipping + default-path throw -- ok")
+    # add_to_timestream() raises unless 'out' covers the full pulse range [it_start, it_end).
+    def _expect_throw(desc, fn):
+        try:
+            fn()
+        except RuntimeError:
+            return
+        raise AssertionError(f"expected RuntimeError: {desc}")
+    _expect_throw("out starts too late",
+                  lambda: sp_a.add_to_timestream(np.zeros((nfreq, nt), np.float32), sp_a.it_start + 1))
+    _expect_throw("out ends too early",
+                  lambda: sp_a.add_to_timestream(np.zeros((nfreq, nt - 1), np.float32), sp_a.it_start))
+
+    print(f"    it=[{sp_a.it_start},{sp_a.it_end}): shift-equivalence + "
+          f"add_to_timestream span contract -- ok")
