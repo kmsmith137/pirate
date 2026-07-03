@@ -216,7 +216,9 @@ struct GpuDedisperser
     static void test_random();
 
     // Static member function: do one test run with specified configuration.
-    static void test_one(const DedispersionConfig &config, long nchunks, long nbatches_out=0, bool host_only=false);
+    // nbatches_out=0 defaults to nstreams; nbatches_wt=0 defaults to nbatches_out.
+    static void test_one(const DedispersionConfig &config, long nchunks,
+                         long nbatches_out=0, long nbatches_wt=0, bool host_only=false);
 
     // Run timing benchmark (C++ version).
     // To run from command line: 'python -m pirate_frb time_dedisperser config.yml'.

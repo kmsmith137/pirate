@@ -430,9 +430,10 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                py::arg("consumer_id"), py::arg("seq_id"), py::arg("stream_ptr"))
           .def_static("test_random", &GpuDedisperser::test_random)
           .def_static("test_one", &GpuDedisperser::test_one,
-               py::arg("config"), 
-               py::arg("nchunks"), 
+               py::arg("config"),
+               py::arg("nchunks"),
                py::arg("nbatches_out") = 0,
+               py::arg("nbatches_wt") = 0,
                py::arg("host_only") = false)
           .def("time", &GpuDedisperser::time,
                py::arg("gpu_allocator"), py::arg("cpu_allocator"), py::arg("niterations"),

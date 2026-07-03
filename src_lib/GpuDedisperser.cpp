@@ -1131,7 +1131,7 @@ void GpuDedisperser::fill_all_weights(long itree, const Array<float> &pf_weights
 
 
 // Static member function.
-void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, bool host_only)
+void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, long nbatches_wt, bool host_only)
 {
     cout << "\n" << "GpuDedisperser::test()" << endl;
     config.emit_cpp();
@@ -1148,17 +1148,21 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     cout << "    nchunks = " << nchunks << ";\n"
          << "    nbatches_out = " << nbatches_out << ";"
          << "       // nstreams = " << nstreams << ", (chunks * batches) = " << (nchunks*nbatches) << "\n"
+         << "    nbatches_wt = " << nbatches_wt << ";\n"
          << "    host_only = " << host_only << ";" << endl;
-    
+
     if (host_only)
          cout << "    !!! Host-only test, GPU code will not be run !!!" << endl;
 
     if (nbatches_out == 0)
         nbatches_out = nstreams;
+    if (nbatches_wt == 0)
+        nbatches_wt = nbatches_out;
 
     xassert(nchunks > 0);
     xassert(nbatches_out > 0);
     xassert(nbatches_out <= nchunks * nbatches);
+    xassert(nbatches_wt > 0);   // GpuDedisperser ctor additionally checks nbatches_wt >= nstreams
 
     Array<double> freq_variance({nfreq}, af_uhost | af_zero);  // for PfAvarApproximation
     for (long ifreq = 0; ifreq < nfreq; ifreq++)
@@ -1178,7 +1182,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         params.plan = plan;
         params.stream_pool = CudaStreamPool::create(nstreams, compute_stream_priority);
         params.nbatches_out = nbatches_out;
-        params.nbatches_wt = nbatches_out;
+        params.nbatches_wt = nbatches_wt;
         params.num_consumers = 1;
         params.cuda_device_id = 0;
         params.initial_chunk = 0;   // test harness: outputs are zero-based
@@ -1216,7 +1220,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
     Array<float> dd_in_cpu({nbatches_out, beams_per_batch, nfreq, nt_in}, af_rhost | af_zero);
     Array<void> dd_in_gpu(dtype, {nbatches_out, beams_per_batch, nfreq, nt_in}, af_gpu | af_zero);
 
-    // Peak-finding weights arrays. We randomly generate them (nbatches_out) batches at a time.
+    // Peak-finding weights arrays. The GPU weight ring has 'nbatches_wt' slots (independent of
+    // nbatches_out); we hold a host copy of the whole ring and re-randomize it every group.
     vector<Array<float>> pf_wt_cpu(ntrees);
     for (long itree = 0; itree < ntrees; itree++) {
         const DedispersionTree &t = plan->trees.at(itree);
@@ -1225,7 +1230,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
         long T = t.nt_wt;
         long P = t.nprofiles;
         long N = t.frequency_subbands.N;
-        pf_wt_cpu.at(itree) = Array<float> ({nbatches_out,B,D,T,P,N}, af_rhost | af_zero);
+        pf_wt_cpu.at(itree) = Array<float> ({nbatches_wt,B,D,T,P,N}, af_rhost | af_zero);
     }
     
     for (long ichunk = 0; ichunk < nchunks; ichunk++) {
@@ -1264,14 +1269,14 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                 for (long itree = 0; itree < ntrees; itree++) {
                     Array<double> variances = avar->tree_variance.at(itree);
 
-                    for (long s = 0; s < ns; s++) {
+                    // Re-randomize the entire weight ring (all nbatches_wt slots), so every slot
+                    // that any batch in this group might select (seq_id % nbatches_wt) is valid.
+                    for (long s = 0; s < nbatches_wt; s++) {
                         Array<float> wcpu = pf_wt_cpu.at(itree).slice(0,s);
                         plan->stage2_pf_params.at(itree).fill_host_weights(wcpu, variances, /*randomize=*/ true);
                     }
 
-                    // Copy all nbatches_wt (== nbatches_out) slots to the GPU. On a final partial
-                    // group (ns < nbatches_out) the trailing slots hold stale weights, but they map
-                    // to seq_ids beyond seq_end and are never read.
+                    // Refresh the whole weight ring on the GPU (all nbatches_wt slots).
                     if (!host_only)
                         gdd->fill_all_weights(itree, pf_wt_cpu.at(itree));
                 }
@@ -1314,7 +1319,8 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
             // Back to the outer loops over (ichunk, ibatch).
 
             for (long itree = 0; itree < ntrees; itree++) {
-                Array<float> wt_cpu = pf_wt_cpu.at(itree).slice(0, seq_id - seq_base);
+                // Match the GPU's weight-slot selection in _launch_cdd2(): iwt = seq_id % nbatches_wt.
+                Array<float> wt_cpu = pf_wt_cpu.at(itree).slice(0, seq_id % nbatches_wt);
                 rdd0->wt_arrays.at(itree).fill(wt_cpu);
                 rdd1->wt_arrays.at(itree).fill(wt_cpu);
                 rdd2->wt_arrays.at(itree).fill(wt_cpu);
@@ -1399,7 +1405,11 @@ void GpuDedisperser::test_random()
     double t = rand_uniform(log(min_nbatches_out) + 1.0e-3, log(max_nbatches_out) + 1.0);
     long nbatches_out = min(long(exp(t)), max_nbatches_out);
 
-    GpuDedisperser::test_one(config, nchunks, nbatches_out);
+    // Independent weight-ring depth. Lower-bounded by nstreams (= min_nbatches_out), since the
+    // GpuDedisperser ctor requires nbatches_wt >= num_active_batches.
+    long nbatches_wt = ksgpu::rand_int(min_nbatches_out, 2*nbatches_out);
+
+    GpuDedisperser::test_one(config, nchunks, nbatches_out, nbatches_wt);
 }
 
 
