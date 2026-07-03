@@ -10,6 +10,7 @@ from .utils import ThreadAffinity, extract_ip, check_mtu
 from .core import (
     AssembledFrameAllocator,
     FakeXEngine,
+    FrequencySubbands,
     SimulatedFrameFactory,
     SlabAllocator,
     XEngineMetadata,
@@ -26,7 +27,7 @@ class RunFakeXEngineHelper:
     """
 
     def __init__(self, rpc_addrs, nworkers=128, paced=True, normalized=True,
-                 gaussian=True, send_junk=False):
+                 gaussian=True, send_junk=False, simulate_frbs=False):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -57,6 +58,9 @@ class RunFakeXEngineHelper:
         # then send all-zero SEND_JUNK for every subsequent chunk -- a cheap
         # load mode that skips per-chunk randomization.
         self.send_junk = send_junk
+        # simulate_frbs: if True, the SimulatedFrameFactory injects simulated FRBs,
+        # with parameters derived from each receiver's GetConfig (see _frb_kwargs).
+        self.simulate_frbs = simulate_frbs
         self.hw = Hardware()
         self.fake_xengines = []   # parallel to rpc_addrs (Phase 1 fills this)
         self.allocators = []      # parallel: AssembledFrameAllocator per receiver
@@ -183,6 +187,7 @@ class RunFakeXEngineHelper:
                 normalized=self.normalized,
                 gaussian=self.gaussian,
                 frame_set_queue_size=frame_set_queue_size,
+                **self._frb_kwargs(cfg, xmd, num_randomizer_threads),
             )
 
         self.fake_xengines.append(fxe)
@@ -192,8 +197,53 @@ class RunFakeXEngineHelper:
         paced_note = "paced" if self.paced else "unpaced"
         norm_note = "normalized" if self.normalized else "unnormalized"
         data_note = "gaussian" if self.gaussian else "uniform"
+        frb_note = ""
+        if self.simulate_frbs:
+            frb_note = (f", FRBs (max_dm={factory.frb_max_dm:.0f}, "
+                        f"max_width={factory.frb_max_width_ms:.2f} ms, "
+                        f"N_subbands={len(factory.frb_subband_fmin_MHz)})")
         print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, "
-              f"{paced_note}, {norm_note}, {data_note}).")
+              f"{paced_note}, {norm_note}, {data_note}{frb_note}).")
+
+    def _frb_kwargs(self, cfg, xmd, num_randomizer_threads):
+        """SimulatedFrameFactory FRB-injection kwargs, or {} when --frbs is off.
+
+        Derived from the receiver's GetConfig: the DM reach (max_dm_of_all_trees),
+        the base-tree peak-finding width (max_width_of_base_tree, in frame samples),
+        and the frequency subbands (frequency_subband_counts + the band edges).
+        """
+        if not self.simulate_frbs:
+            return {}
+
+        # Actual frame time-sample length in ms. make_fiducial() rounds
+        # seq_per_frb_time_sample to an integer, so this differs slightly from
+        # cfg.fake_time_sample_ms; max_width_of_base_tree counts frame samples, so
+        # the actual per-sample duration is the right conversion factor.
+        dt_ms = xmd.dt_ns_per_seq * xmd.seq_per_frb_time_sample / 1.0e6
+
+        # Frequency subbands: build a FrequencySubbands over the full band, then map
+        # each subband's coarse-freq index pair to physical (fmin, fmax). f_to_freq
+        # is DECREASING (index 0 = fmax = high freq), and n_to_flo < n_to_fhi are
+        # coarse indices, so the smaller index (n_to_flo) is the HIGHER freq -> fmax,
+        # and the larger index (n_to_fhi) is the LOWER freq -> fmin (the lo/hi swap).
+        band_fmin = cfg.fake_zone_freq_edges[0]     # zone_freq_edges is increasing
+        band_fmax = cfg.fake_zone_freq_edges[-1]
+        fs = FrequencySubbands(list(cfg.frequency_subband_counts), band_fmin, band_fmax)
+        fmin_list = [fs.f_to_freq[fs.n_to_fhi[n]] for n in range(fs.N)]
+        fmax_list = [fs.f_to_freq[fs.n_to_flo[n]] for n in range(fs.N)]
+
+        return dict(
+            simulate_frbs=True,
+            frb_dm0=50.0,
+            frb_max_dm=cfg.max_dm_of_all_trees,
+            frb_max_width_ms=cfg.max_width_of_base_tree * dt_ms,
+            frb_snr=30.0,
+            frb_subband_fmin_MHz=fmin_list,
+            frb_subband_fmax_MHz=fmax_list,
+            num_frb_simulator_threads=num_randomizer_threads,
+            single_pulse_queue_size=cfg.fake_nbeams,
+            verbose=True,
+        )
 
     @staticmethod
     def _frame_set_nbytes(cfg, xmd):
@@ -387,7 +437,7 @@ class RunFakeXEngineHelper:
 
 
 def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
-                     gaussian=True, send_junk=False):
+                     gaussian=True, send_junk=False, simulate_frbs=False):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -416,8 +466,13 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
             real data (SEND_MINICHUNK); every subsequent chunk is sent as
             all-zero junk (SEND_JUNK), skipping per-chunk randomization. If
             False (default), every chunk is randomized.
+        simulate_frbs: if True, the SimulatedFrameFactory injects simulated
+            FRBs, with parameters derived from each receiver's GetConfig (DM
+            reach, base-tree width, and frequency subbands -- see
+            RunFakeXEngineHelper._frb_kwargs). Requires normalized and gaussian
+            (the caller rejects the incompatible flags). Default False.
     """
     helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced,
                                   normalized=normalized, gaussian=gaussian,
-                                  send_junk=send_junk)
+                                  send_junk=send_junk, simulate_frbs=simulate_frbs)
     helper.run()

@@ -1350,14 +1350,33 @@ def parse_run_fake_xengine(subparsers):
                         help='Randomize+send only the first chunk; send all-zero '
                              'junk for every subsequent chunk (skips per-chunk '
                              'randomization)')
+    parser.add_argument('-f', '--frbs', action='store_true',
+                        help='Inject simulated FRBs (parameters derived from the '
+                             'server GetConfig: max DM, base-tree width, and the '
+                             'frequency subbands). Prints one line per injected '
+                             'FRB. Incompatible with -u, -G, and -j.')
 
 
 def run_fake_xengine_command(args):
+    # FRB injection requires normalized + gaussian data (SimulatedFrameFactory
+    # enforces this), and randomizes every chunk -- so it is incompatible with
+    # -u/--unnormalized, -G/--non-gaussian, and -j/--send-junk.
+    if args.frbs:
+        bad = []
+        if args.unnormalized: bad.append('-u/--unnormalized')
+        if args.non_gaussian: bad.append('-G/--non-gaussian')
+        if args.send_junk:    bad.append('-j/--send-junk')
+        if bad:
+            print(f"Error: -f/--frbs is incompatible with {', '.join(bad)} "
+                  f"(FRB injection requires normalized + gaussian data and "
+                  f"randomizes every chunk).", file=sys.stderr)
+            sys.exit(2)
+
     from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers,
                      paced=not args.unpaced, normalized=not args.unnormalized,
                      gaussian=not args.non_gaussian,
-                     send_junk=args.send_junk)
+                     send_junk=args.send_junk, simulate_frbs=args.frbs)
 
 ####################################################################################################
 
