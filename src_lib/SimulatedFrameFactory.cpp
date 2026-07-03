@@ -558,12 +558,15 @@ void SimulatedFrameFactory::_log_injected_frb(long beam_index, const simpulse::S
     long fpga_timestamp = std::llround(frb_sample * (double) metadata->seq_per_frb_time_sample);
 
     // Build the whole line, then emit with a single '<<' so it can't interleave with
-    // other threads' console output mid-line.
+    // other threads' console output mid-line. Field order: beam_id, dm, fpga_timestamp,
+    // intrinsic width (ms), subband [fmin, fmax] (MHz).
     std::ostringstream ss;
     ss << "SimulatedFrameFactory: injected FRB: beam_id=" << metadata->beam_ids.at(beam_index)
        << ", dm=" << dm
+       << ", fpga_timestamp=" << fpga_timestamp
        << ", intrinsic_width=" << (sp.params.intrinsic_width * 1.0e3) << " ms"
-       << ", fpga_timestamp=" << fpga_timestamp << "\n";
+       << ", fmin=" << sp.params.subband_freq_lo_MHz << " MHz"
+       << ", fmax=" << sp.params.subband_freq_hi_MHz << " MHz\n";
     std::cout << ss.str() << std::flush;
 }
 

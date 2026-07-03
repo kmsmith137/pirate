@@ -159,9 +159,10 @@ struct SimulatedFrameFactory
         long single_pulse_queue_size = 0;
 
         // If true (and simulate_frbs==true), a one-line message is printed each
-        // time an FRB is assigned to a beam, giving its beam_id, dm, intrinsic
-        // width (ms), and fpga_timestamp (the arrival time at the lowest
-        // frequency of the FULL band, as an FPGA sequence number).
+        // time an FRB is assigned to a beam, giving (in order) its beam_id, dm,
+        // fpga_timestamp (the arrival time at the lowest frequency of the FULL
+        // band, as an FPGA sequence number), intrinsic width (ms), and the
+        // pulse's subband [fmin, fmax] (MHz).
         bool verbose = true;
     };
 
@@ -320,8 +321,9 @@ private:
     std::shared_ptr<const simpulse::SinglePulse> _pop_pulse();
 
     // Print a one-line "injected FRB" message (only called when params.verbose):
-    // beam_id, dm, intrinsic width (ms), and fpga_timestamp. Here 'it0' is the
-    // beam's active_frb_it0 (the pulse-sample -> absolute-frame-sample offset).
+    // beam_id, dm, fpga_timestamp, intrinsic width (ms), and the pulse's subband
+    // [fmin, fmax] (MHz). Here 'it0' is the beam's active_frb_it0 (the pulse-sample
+    // -> absolute-frame-sample offset).
     void _log_injected_frb(long beam_index, const simpulse::SinglePulse &sp, long it0) const;
 
     // Randomize one set: dispatch its per-beam work (with per-beam pulse

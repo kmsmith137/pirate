@@ -419,7 +419,7 @@ void register_core_bindings(pybind11::module &m)
              "num_frb_simulator_threads (>= 1) and single_pulse_queue_size (>= 1;\n"
              "~nbeams recommended, since up to nbeams pulses can be popped per chunk).\n"
              "verbose (default True): if simulate_frbs, print a line per injected FRB\n"
-             "(beam_id, dm, intrinsic width in ms, and fpga_timestamp).")
+             "(beam_id, dm, fpga_timestamp, intrinsic width in ms, and subband fmin/fmax).")
         .def_readonly("nbeams", &SimulatedFrameFactory::nbeams)
         .def_property_readonly("num_randomizer_threads",
             [](const SimulatedFrameFactory &f) { return f.params.num_randomizer_threads; })
