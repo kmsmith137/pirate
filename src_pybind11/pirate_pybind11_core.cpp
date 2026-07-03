@@ -380,7 +380,7 @@ void register_core_bindings(pybind11::module &m)
                          long frame_set_queue_size, bool simulate_frbs,
                          double frb_dm0, double frb_max_dm, double frb_max_width_ms,
                          double frb_snr, std::vector<double> frb_subband_fmin_MHz,
-                         std::vector<double> frb_subband_fmax_MHz,
+                         std::vector<double> frb_subband_fmax_MHz, double frb_gap_sec,
                          long num_frb_simulator_threads, long single_pulse_queue_size) {
                  SimulatedFrameFactory::Params p;
                  p.allocator = std::move(allocator);
@@ -395,6 +395,7 @@ void register_core_bindings(pybind11::module &m)
                  p.frb_snr = frb_snr;
                  p.frb_subband_fmin_MHz = std::move(frb_subband_fmin_MHz);
                  p.frb_subband_fmax_MHz = std::move(frb_subband_fmax_MHz);
+                 p.frb_gap_sec = frb_gap_sec;
                  p.num_frb_simulator_threads = num_frb_simulator_threads;
                  p.single_pulse_queue_size = single_pulse_queue_size;
                  return std::make_unique<SimulatedFrameFactory>(p);
@@ -411,6 +412,7 @@ void register_core_bindings(pybind11::module &m)
              py::arg("frb_snr") = -1.0,
              py::arg("frb_subband_fmin_MHz") = std::vector<double>(),
              py::arg("frb_subband_fmax_MHz") = std::vector<double>(),
+             py::arg("frb_gap_sec") = 0.0,
              py::arg("num_frb_simulator_threads") = 0,
              py::arg("single_pulse_queue_size") = 0,
              "num_randomizer_threads (>= 1): size of the randomizer-thread pool that\n"
@@ -430,6 +432,8 @@ void register_core_bindings(pybind11::module &m)
              "frb_snr (matched-filter SNR over the pulse's subband),\n"
              "frb_subband_fmin_MHz/frb_subband_fmax_MHz (equal-length lists; each pulse\n"
              "picks one subband uniformly at random; each subband must overlap the band),\n"
+             "frb_gap_sec (>= 0, default 0: extra padding in seconds between consecutive\n"
+             "FRBs on a beam, rounded to whole time samples),\n"
              "num_frb_simulator_threads (>= 1) and single_pulse_queue_size (>= 1;\n"
              "~nbeams recommended, since up to nbeams pulses can be popped per chunk).\n"
              "Injected FRBs are recorded as events, retrievable via pop_events().")
@@ -456,6 +460,8 @@ void register_core_bindings(pybind11::module &m)
             [](const SimulatedFrameFactory &f) { return f.params.frb_subband_fmin_MHz; })
         .def_property_readonly("frb_subband_fmax_MHz",
             [](const SimulatedFrameFactory &f) { return f.params.frb_subband_fmax_MHz; })
+        .def_property_readonly("frb_gap_sec",
+            [](const SimulatedFrameFactory &f) { return f.params.frb_gap_sec; })
         .def_property_readonly("num_frb_simulator_threads",
             [](const SimulatedFrameFactory &f) { return f.params.num_frb_simulator_threads; })
         .def_property_readonly("single_pulse_queue_size",
@@ -473,9 +479,8 @@ void register_core_bindings(pybind11::module &m)
         // The _pop_events() method returns the "C++ representation", where it will be converted to
         // the "python representation" by the pop_events() method injection.
         //
-        // This design is awkward but I think think it's the least bad option. (The only real alternative
-        // seems to be rewriting the FrbSifterClient in C++, and I'm kind of attached to the current python
-        // implementation.)
+        // This design is awkward but I think it's the least bad option. (The only real alternative seems
+        // to be rewriting the FrbSifterClient in C++, and I prefer the current python implementation.)
 
         .def("_pop_events", &SimulatedFrameFactory::pop_events,
             py::call_guard<py::gil_scoped_release>(),

@@ -1360,6 +1360,9 @@ def parse_run_fake_xengine(subparsers):
                              'server GetConfig: max DM, base-tree width, and the '
                              'frequency subbands). Prints one line per injected '
                              'FRB. Incompatible with -N, -G, and -j.')
+    parser.add_argument('-g', '--gap', metavar='GAP_SEC', type=float, default=0.0,
+                        help='Extra padding (seconds) between consecutive simulated '
+                             'FRBs on a beam (default 0). Requires -f.')
     parser.add_argument('-s', '--sifter', metavar='SIFTER_ADDR', default=None,
                         help='Send the simulated FRB events (from_simulator=True) to '
                              'an FrbSifter at this "ip:port". Requires -f.')
@@ -1386,12 +1389,21 @@ def run_fake_xengine_command(args):
               "without FRB simulation).", file=sys.stderr)
         sys.exit(2)
 
+    # An inter-FRB gap only has meaning when FRBs are being simulated.
+    if args.gap != 0.0 and not args.frbs:
+        print("Error: -g/--gap requires -f/--frbs (there are no FRBs to space "
+              "without FRB simulation).", file=sys.stderr)
+        sys.exit(2)
+    if args.gap < 0.0:
+        print("Error: -g/--gap must be >= 0 seconds.", file=sys.stderr)
+        sys.exit(2)
+
     from .run_fake_xengine import run_fake_xengine
     run_fake_xengine(args.rpc_addrs, nworkers=args.workers,
                      paced=not args.unpaced, normalized=not args.unnormalized,
                      gaussian=not args.non_gaussian,
                      send_junk=args.send_junk, simulate_frbs=args.frbs,
-                     sifter_addr=args.sifter)
+                     sifter_addr=args.sifter, frb_gap_sec=args.gap)
 
 ####################################################################################################
 

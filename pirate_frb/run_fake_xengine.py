@@ -29,7 +29,8 @@ class RunFakeXEngineHelper:
     """
 
     def __init__(self, rpc_addrs, nworkers=128, paced=True, normalized=True,
-                 gaussian=True, send_junk=False, simulate_frbs=False, sifter_addr=None):
+                 gaussian=True, send_junk=False, simulate_frbs=False, sifter_addr=None,
+                 frb_gap_sec=0.0):
         # Strings are iterable, so a caller who passes a bare string would
         # silently iterate character-by-character. Short-circuit with a clear
         # error.
@@ -63,6 +64,9 @@ class RunFakeXEngineHelper:
         # simulate_frbs: if True, the SimulatedFrameFactory injects simulated FRBs,
         # with parameters derived from each receiver's GetConfig (see _frb_kwargs).
         self.simulate_frbs = simulate_frbs
+        # frb_gap_sec: extra padding (seconds) between consecutive FRBs on a beam,
+        # passed through to the SimulatedFrameFactory (see _frb_kwargs). 0 = none.
+        self.frb_gap_sec = frb_gap_sec
         # sifter_addr: if not None, an 'ip:port'; each receiver sends its simulated FRB
         # events (from_simulator=True) to an FrbSifter there. Requires simulate_frbs.
         self.sifter_addr = sifter_addr
@@ -217,9 +221,10 @@ class RunFakeXEngineHelper:
         data_note = "gaussian" if self.gaussian else "uniform"
         frb_note = ""
         if self.simulate_frbs:
+            gap_note = f", gap={factory.frb_gap_sec:g} s" if (factory.frb_gap_sec > 0) else ""
             frb_note = (f", FRBs (max_dm={factory.frb_max_dm:.0f}, "
                         f"max_width={factory.frb_max_width_ms:.2f} ms, "
-                        f"N_subbands={len(factory.frb_subband_fmin_MHz)})")
+                        f"N_subbands={len(factory.frb_subband_fmin_MHz)}{gap_note})")
         sifter_note = f", sifter={self.sifter_addr}" if (sifter is not None) else ""
         print(f"[{rpc_addr}] FakeXEngine started ({self.nworkers} workers, "
               f"{paced_note}, {norm_note}, {data_note}{frb_note}{sifter_note}).")
@@ -259,6 +264,7 @@ class RunFakeXEngineHelper:
             frb_snr=30.0,
             frb_subband_fmin_MHz=fmin_list,
             frb_subband_fmax_MHz=fmax_list,
+            frb_gap_sec=self.frb_gap_sec,
             num_frb_simulator_threads=num_randomizer_threads,
             single_pulse_queue_size=cfg.fake_nbeams,
         )
@@ -509,7 +515,8 @@ class RunFakeXEngineHelper:
 
 
 def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
-                     gaussian=True, send_junk=False, simulate_frbs=False, sifter_addr=None):
+                     gaussian=True, send_junk=False, simulate_frbs=False, sifter_addr=None,
+                     frb_gap_sec=0.0):
     """Main entry point for 'pirate_frb run_fake_xengine'.
 
     For each rpc_addr in rpc_addrs, sends a GetConfig RPC, synthesizes an
@@ -547,9 +554,12 @@ def run_fake_xengine(rpc_addrs, nworkers=128, paced=True, normalized=True,
             simulated FRB events (from_simulator=True) to an FrbSifter there
             (with a one-time ConfigMessage carrying only xengine_yaml). Requires
             simulate_frbs. Default None.
+        frb_gap_sec: extra padding (seconds, >= 0) between consecutive FRBs on a
+            beam, passed to the SimulatedFrameFactory (rounded to whole time
+            samples). Only meaningful with simulate_frbs. Default 0 (no extra gap).
     """
     helper = RunFakeXEngineHelper(rpc_addrs, nworkers, paced=paced,
                                   normalized=normalized, gaussian=gaussian,
                                   send_junk=send_junk, simulate_frbs=simulate_frbs,
-                                  sifter_addr=sifter_addr)
+                                  sifter_addr=sifter_addr, frb_gap_sec=frb_gap_sec)
     helper.run()

@@ -52,6 +52,7 @@ validate_and_get_metadata(const SimulatedFrameFactory::Params &params)
         xassert_gt(params.frb_max_dm, 0.0);
         xassert_gt(params.frb_max_width_ms, 0.0);
         xassert_gt(params.frb_snr, 0.0);
+        xassert_ge(params.frb_gap_sec, 0.0);   // extra inter-FRB padding (0 = none)
         xassert_ge(params.num_frb_simulator_threads, 1);
         xassert_ge(params.single_pulse_queue_size, 1);
 
@@ -257,6 +258,12 @@ void SimulatedFrameFactory::_producer_main()
     std::mt19937 &rng = ksgpu::default_rng();
     std::uniform_int_distribution<long> phase_dist(0, time_samples_per_chunk - 1);
 
+    // Extra inter-FRB padding (Params::frb_gap_sec) in whole time samples, added to
+    // every pulse's placement target below. A beam only becomes FRB-ready once its
+    // previous pulse has entirely passed, so this offset lands as fresh spacing
+    // between consecutive FRBs rather than a constant shift of the whole stream.
+    const long frb_gap_samples = std::llround(params.frb_gap_sec / (1.0e-3 * time_sample_ms));
+
     for (;;) {
         {
             unique_lock<mutex> lk(lock);
@@ -285,7 +292,7 @@ void SimulatedFrameFactory::_producer_main()
                 // phase within the current chunk. After the shift, the pulse's sample indices ARE
                 // absolute frame-sample indices. (delta_it can be negative -- shift_samples
                 // handles either sign.)
-                long target = tci * time_samples_per_chunk + phase_dist(rng);
+                long target = tci * time_samples_per_chunk + phase_dist(rng) + frb_gap_samples;
                 if (first_set)
                     target += time_samples_per_chunk;  // don't put FRBs in first chunk
                 active_frb[b]->shift_samples(target - active_frb[b]->it_start);

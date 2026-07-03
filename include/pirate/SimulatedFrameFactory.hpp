@@ -52,15 +52,16 @@ namespace pirate {
 // it has no active pulse, or its active pulse is entirely in the past
 // (sp->it_end <= tci * time_samples_per_chunk). Each FRB-ready beam pops a fresh
 // pulse from the pulse queue (blocking if empty) and shift_samples() it so its
-// earliest sample lands at a uniformly random phase within the current chunk
-// (delta_it = tci*tspc + randint(0,tspc) - sp->it_start). After the shift the
-// pulse's sample indices ARE absolute frame-sample indices, so it carries its own
-// placement. Injection happens inside the per-beam randomize() call:
-// frame->randomize(normalized, gaussian, sp, dt_sp) with dt_sp = tci*tspc (mapping
-// the set's frame-local itime to the absolute sample index), so successive chunks
-// receive successive time-slices of the same pulse until it retires. After warmup,
-// every beam always has an active pulse; the per-beam FRB rate is roughly one per
-// max(1, pulse extent / tspc) chunks.
+// earliest sample lands at a uniformly random phase within the current chunk,
+// plus an optional fixed inter-FRB gap (Params::frb_gap_sec, in whole time
+// samples): delta_it = tci*tspc + randint(0,tspc) + frb_gap_samples - sp->it_start.
+// After the shift the pulse's sample indices ARE absolute frame-sample indices, so
+// it carries its own placement. Injection happens inside the per-beam randomize()
+// call: frame->randomize(normalized, gaussian, sp, dt_sp) with dt_sp = tci*tspc
+// (mapping the set's frame-local itime to the absolute sample index), so successive
+// chunks receive successive time-slices of the same pulse until it retires. After
+// warmup, every beam always has an active pulse; the per-beam FRB rate is roughly
+// one per max(1, (pulse extent + frb_gap) / tspc) chunks.
 //
 // Backpressure: there are three points, all stop()-interruptible and none able
 // to deadlock (progress relies on the consumer draining the queue and on the
@@ -148,6 +149,13 @@ struct SimulatedFrameFactory
         double frb_snr = -1.0;
         std::vector<double> frb_subband_fmin_MHz;  // length num_subbands
         std::vector<double> frb_subband_fmax_MHz;  // length num_subbands
+
+        // Extra padding between consecutive FRBs on a beam, in seconds (>= 0;
+        // default 0). Converted to whole time samples (rounding to nearest) and
+        // added to each pulse's placement target, so a larger value spaces a
+        // beam's FRBs farther apart (see the class doc / _producer_main). 0 packs
+        // them as tightly as the per-beam active-pulse model allows.
+        double frb_gap_sec = 0.0;
 
         // Number of frb_simulator threads, and depth of the bounded pulse
         // queue they fill. Both must be >= 1 (defaults 0 mean "unset").
