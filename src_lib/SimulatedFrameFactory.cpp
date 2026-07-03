@@ -268,15 +268,12 @@ void SimulatedFrameFactory::_producer_main()
         shared_ptr<AssembledFrameSet> fset = params.allocator->get_frame_set(consumer_id);
         long tci = fset->time_chunk_index;
 
-        // Assign a fresh pulse to every FRB-ready beam (no pulses in the first set;
-        // "first" = first set produced, not time_chunk_index == 0, since the
-        // allocator's initial chunk index is caller-chosen).
-        if (params.simulate_frbs && !first_set) {
+        // Assign a fresh pulse to every FRB-ready beam.
+        if (params.simulate_frbs) {
             for (long b = 0; b < nbeams; b++) {
                 // Ready iff no active pulse, or the active pulse is entirely in the past (its
                 // samples -- now in absolute coords -- all precede the current chunk).
-                bool ready = !active_frb[b]
-                    || (active_frb[b]->it_end <= tci * time_samples_per_chunk);
+                bool ready = !active_frb[b] || (active_frb[b]->it_end <= tci * time_samples_per_chunk);
                 if (!ready)
                     continue;
 
@@ -289,6 +286,8 @@ void SimulatedFrameFactory::_producer_main()
                 // absolute frame-sample indices. (delta_it can be negative -- shift_samples
                 // handles either sign.)
                 long target = tci * time_samples_per_chunk + phase_dist(rng);
+                if (first_set)
+                    target += time_samples_per_chunk;  // don't put FRBs in first chunk
                 active_frb[b]->shift_samples(target - active_frb[b]->it_start);
 
                 // Record the injection event (drained by pop_events()). Brief lock; the producer
