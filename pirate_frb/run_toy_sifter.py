@@ -3,7 +3,8 @@
 Pure-Python (no C++) implementation of the FrbSifter service from
 frb_sifter.proto. The real sifter (chord-frb-sifter) aggregates FRB events from
 the groupers on all search nodes; this toy version simply receives each RPC and
-prints a one-line summary of the message, then returns a trivial ok=True reply.
+prints a summary of the message (one header line, plus one line per event for
+FrbEvents), then returns a trivial ok=True reply.
 Useful for smoke-testing a grouper's sifter-client path without running the real
 sifter.
 """
@@ -35,7 +36,7 @@ def _peer_ip(context):
 
 
 class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
-    """Implements FrbSifter; prints one summary line per received RPC."""
+    """Implements FrbSifter; prints a summary of each received RPC."""
 
     def CheckConfiguration(self, request, context):
         # Reject any client whose wire-protocol version does not match ours.
@@ -68,17 +69,21 @@ class ToyFrbSifterServicer(frb_sifter_pb2_grpc.FrbSifterServicer):
     def FrbEvents(self, request, context):
         # The message covers the FPGA window [chunk_fpga_start, chunk_fpga_end]: one
         # time chunk for a per-event grouper message, possibly several chunks for a
-        # coarse-grain-only message.
-        n_events = len(request.events)
-        line = (f"beamset={request.beam_set_id}, "
-                f"fpga=[{request.chunk_fpga_start}:{request.chunk_fpga_end}], "
-                f"nevents={n_events}")
-        if n_events > 0:
-            # Report the single highest-SNR event.
-            ev = max(request.events, key=lambda e: e.snr)
-            line += (f" (snr={ev.snr:.4g}, beam={ev.beam_id}, dm={ev.dm:.4g}, "
-                     f"fpga={ev.fpga_timestamp}, rfiprob={ev.rfi_prob:.4g})")
-        print(line, flush=True)
+        # coarse-grain-only message. A header line, then one line per event (4-space
+        # indented, formatted like run_fake_xengine's FRB log). Built as a single
+        # string and printed once, so the multi-line output can't interleave with a
+        # concurrent worker thread's.
+        cg = request.coarsegrain_snr
+        coarse_snr_max = max(cg) if len(cg) else 0.0
+        sim = "FROM_SIMULATOR " if request.from_simulator else ""
+        lines = [f"toy_sifter {sim}beamset={request.beam_set_id} "
+                 f"fpga=[{request.chunk_fpga_start}:{request.chunk_fpga_end}] "
+                 f"coarse_snr_max={coarse_snr_max:.4g}"]
+        for ev in request.events:
+            lines.append(f"    beam_id={ev.beam_id}, dm={ev.dm:.4g}, "
+                         f"fpga_timestamp={ev.fpga_timestamp}, width={ev.width_ms:.4g} ms, "
+                         f"subband=[{ev.subband_freq_lo_MHz:.1f}, {ev.subband_freq_hi_MHz:.1f}] MHz")
+        print("\n".join(lines), flush=True)
         return frb_sifter_pb2.FrbEventsReply(ok=True, message="")
 
 
