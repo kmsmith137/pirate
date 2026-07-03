@@ -443,8 +443,9 @@ class RunFakeXEngineHelper:
                   f"dm={float(events.dms[i]):.4g}, "
                   f"fpga_timestamp={int(events.fpga_timestamps[i])}, "
                   f"width={float(events.widths_ms[i]):.4g} ms, "
-                  f"subband=[{float(events.subband_freqs_lo_MHz[i]):.1f}, "
-                  f"{float(events.subband_freqs_hi_MHz[i]):.1f}] MHz", flush=True)
+                  f"subband=[{float(events.subband_freqs_lo_MHz[i]):.1f},"
+                  f"{float(events.subband_freqs_hi_MHz[i]):.1f}] MHz, "
+                  f"snr={float(events.snrs[i]):.4g}", flush=True)
 
     def _wait_for_controllers(self):
         try:
