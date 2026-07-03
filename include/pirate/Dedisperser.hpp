@@ -231,6 +231,14 @@ struct GpuDedisperser
     // GPU when it returns.
     void fill_analytic_weights(const ksgpu::Array<double> &freq_variances);
 
+    // Copies host-side peak-finding weights to the GPU weight arrays (wt_arrays[itree]) for a
+    // single tree, filling all 'nbatches_wt' weight slots. 'pf_weights' has shape
+    // (nbatches_wt, beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.N),
+    // with t = plan->trees[itree]. Unlike fill_analytic_weights(), the weights may differ per
+    // slot and per beam. Must be called after allocate(). Does NOT synchronize -- the caller
+    // owns any race conditions on the pf_weights (see the FIXME in the High-level API section).
+    void fill_all_weights(long itree, const ksgpu::Array<float> &pf_weights);
+
     // --------------------------  Public members  --------------------------
 
 protected:

@@ -1108,6 +1108,28 @@ void GpuDedisperser::fill_analytic_weights(const Array<double> &freq_variances)
 }
 
 
+// Copies host-side peak-finding weights to the GPU for one tree, filling all nbatches_wt
+// weight slots. See Dedisperser.hpp.
+void GpuDedisperser::fill_all_weights(long itree, const Array<float> &pf_weights)
+{
+    xassert(is_allocated);
+    xassert((itree >= 0) && (itree < ntrees));
+
+    const DedispersionTree &t = plan->trees.at(itree);
+    xassert_shape_eq(pf_weights, ({params.nbatches_wt, beams_per_batch, t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.N}));
+
+    // wt_arrays[itree] flattens (nbatches_wt, beams_per_batch, ...inner); slot 's' is the
+    // (beams_per_batch, ...inner) block, matching one pf_weights[s] of logical shape
+    // (beams_per_batch, ndm_wt, nt_wt, nprofiles, N) after to_gpu()'s layout transform
+    // (which also converts fp32 -> fp16 if needed).
+    const GpuPfWeightLayout &wl = cdd2_kernels.at(itree)->pf_weight_layout;
+    for (long s = 0; s < params.nbatches_wt; s++) {
+        Array<void> wgpu = wt_arrays.at(itree).slice(0, s);
+        wl.to_gpu(wgpu, pf_weights.slice(0, s));
+    }
+}
+
+
 // Static member function.
 void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, long nbatches_out, bool host_only)
 {
@@ -1232,7 +1254,7 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
                     dst.fill(src.convert(dtype));
                 }
 
-                // Simulate peak-finding weights, and copy to GPU.
+                // Simulate peak-finding weights (host-side), then copy to the GPU.
                 // As noted in Dedisperser.hpp, there's no explicit API protecting
                 // the weights, and the caller is responsible for thinking through race conditions.
                 // Out of paranoia, we put cudaDeviceSynchronize() here, but it shouldn't be necessary.
@@ -1241,18 +1263,17 @@ void GpuDedisperser::test_one(const DedispersionConfig &config, long nchunks, lo
 
                 for (long itree = 0; itree < ntrees; itree++) {
                     Array<double> variances = avar->tree_variance.at(itree);
-                    
+
                     for (long s = 0; s < ns; s++) {
                         Array<float> wcpu = pf_wt_cpu.at(itree).slice(0,s);
                         plan->stage2_pf_params.at(itree).fill_host_weights(wcpu, variances, /*randomize=*/ true);
-
-                        if (host_only)
-                            continue;
-
-                        const GpuPfWeightLayout &wl = gdd->cdd2_kernels.at(itree)->pf_weight_layout;
-                        Array<void> wgpu = gdd->wt_arrays.at(itree).slice(0,s);
-                        wl.to_gpu(wgpu, wcpu);
                     }
+
+                    // Copy all nbatches_wt (== nbatches_out) slots to the GPU. On a final partial
+                    // group (ns < nbatches_out) the trailing slots hold stale weights, but they map
+                    // to seq_ids beyond seq_end and are never read.
+                    if (!host_only)
+                        gdd->fill_all_weights(itree, pf_wt_cpu.at(itree));
                 }
 
                 if (!host_only) {

@@ -442,6 +442,15 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    gpu_allocator: BumpAllocator for GPU memory (for raw data arrays)\n"
                "    cpu_allocator: BumpAllocator for host memory (for raw data arrays)\n"
                "    niterations: Number of timing iterations")
+          .def("fill_all_weights", &GpuDedisperser::fill_all_weights,
+               py::arg("itree"), py::arg("pf_weights"),
+               "Copy host-side peak-finding weights to the GPU for one tree, filling all\n"
+               "nbatches_wt weight slots. Must call allocate() first.\n\n"
+               "Args:\n"
+               "    itree: tree index, in [0, ntrees)\n"
+               "    pf_weights: host ksgpu.Array<float>, shape (nbatches_wt, beams_per_batch,\n"
+               "        t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.N) with\n"
+               "        t = plan.trees[itree]. Weights may differ per slot and per beam.")
     ;
 
     // ReferenceDedisperser: CPU reference dedisperser (testing / variance studies).
