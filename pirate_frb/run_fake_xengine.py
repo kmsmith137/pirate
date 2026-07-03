@@ -74,6 +74,10 @@ class RunFakeXEngineHelper:
             raise RuntimeError("run_fake_xengine: a sifter address (-s) requires FRB "
                                "simulation (-f); there are no events to send otherwise")
         self.hw = Hardware()
+        # Running base for globally-unique beam_ids: each receiver gets a contiguous
+        # block [base, base+nbeams), advanced in _build_one so the blocks are disjoint
+        # across servers (downstream consumers generally assume beam_ids are unique).
+        self._beam_id_base = 0
         self.fake_xengines = []   # parallel to rpc_addrs (Phase 1 fills this)
         self.allocators = []      # parallel: AssembledFrameAllocator per receiver
         self.factories = []       # parallel: SimulatedFrameFactory per receiver
@@ -127,9 +131,14 @@ class RunFakeXEngineHelper:
             raise RuntimeError(f"[{rpc_addr}] reported empty data_ip_addrs")
 
         # Synthesize XEngineMetadata from the receiver's prefilled config.
-        # beam_ids = {0, 1, ..., nbeams-1} -- the receiver records whatever
-        # we send, so no cross-X-engine consensus to satisfy.
-        beam_ids = list(range(cfg.fake_nbeams))
+        # Assign this receiver a contiguous block of globally-unique beam_ids,
+        # [base, base+nbeams); the running base makes the blocks disjoint across
+        # servers (robust even if fake_nbeams differs per receiver), since
+        # downstream consumers generally assume beam_ids are unique. The receiver
+        # records whatever we send, so there's no cross-X-engine consensus to satisfy.
+        base = self._beam_id_base
+        beam_ids = list(range(base, base + cfg.fake_nbeams))
+        self._beam_id_base += cfg.fake_nbeams
         xmd = XEngineMetadata.make_fiducial(
             list(cfg.fake_zone_nfreq),
             list(cfg.fake_zone_freq_edges),
@@ -138,8 +147,8 @@ class RunFakeXEngineHelper:
         )
         # make_fiducial() defaults beamset=0; override it with this receiver's
         # index so that, with multiple servers, each one advertises a distinct
-        # beam-set id. (beam_ids stay 0..nbeams-1 on every server; the beamset
-        # is what disambiguates the sets downstream.)
+        # beam-set id. (Both the beamset and the disjoint beam_ids block above
+        # identify a receiver's beams downstream.)
         xmd.beamset = beamset
         # Anchor the X-engine clock (unix-timestamp-at-fpga-seq-0) to the
         # current UTC wall-clock time.
@@ -413,9 +422,12 @@ class RunFakeXEngineHelper:
 
                     if sifter is not None:
                         # coarsegrain_snr: per-beam max event SNR this chunk (0 for beams with no
-                        # events). beam_id == beam index for the fake X-engine (beam_ids = range).
+                        # events), indexed by LOCAL beam index in [0, nbeams). This receiver's
+                        # beam_ids are a contiguous globally-unique block, so the local index is
+                        # beam_id - base (base = this receiver's first beam_id).
+                        base = int(fset.metadata.beam_ids[0])
                         cg_snr = np.zeros(fset.nbeams, dtype=np.float32)
-                        np.maximum.at(cg_snr, events.beam_ids, events.snrs)
+                        np.maximum.at(cg_snr, events.beam_ids - base, events.snrs)
                         sifter.send_events(beam_set_id, events, cg_snr, from_simulator=True)
 
             # Stay <= 2 minichunks ahead of every worker. For n < 2 the target
