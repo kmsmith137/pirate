@@ -302,7 +302,7 @@ class RunServerHelper:
 
     def __init__(self, server_config_filename, dedispersion_config_filename,
                  processing_delay_sec=0.0, no_grouper=False,
-                 no_dedispersion=False):
+                 no_dedispersion=False, quiet=False):
         self.server_config_filename = server_config_filename
         self.config = _parse_config(server_config_filename)
         self.dedisp_config = DedispersionConfig.from_yaml(dedispersion_config_filename)
@@ -315,6 +315,9 @@ class RunServerHelper:
         # concrete 'ip:port' strings.
         _resolve_ip_addrs(self.config, self.hw, server_config_filename)
         self.processing_delay_sec = processing_delay_sec
+        # quiet: suppress the per-chunk "FrbServer: beamset=..." line (passed to
+        # every FrbServer built below).
+        self.quiet = quiet
         self.no_dedispersion = no_dedispersion
         # --no-dedispersion implies --no-grouper (no GPU work => no dedispersion
         # output for a grouper to consume), so fold it into self.no_grouper.
@@ -507,7 +510,8 @@ class RunServerHelper:
                                cuda_device_id=cuda_device_id,
                                processing_delay_sec=self.processing_delay_sec,
                                grouper_ip_addr=grouper_ip_addr,
-                               no_dedispersion=self.no_dedispersion)
+                               no_dedispersion=self.no_dedispersion,
+                               quiet=self.quiet)
             # server.start() is NOT called here. We defer all server.start()
             # calls to _build_all_servers's phase 3 so that the async
             # BumpAllocators across all servers can initialize concurrently
@@ -580,7 +584,7 @@ class RunServerHelper:
 
 def run_server(server_config_filename, dedispersion_config_filename,
                processing_delay_sec=0.0, no_grouper=False,
-               no_dedispersion=False):
+               no_dedispersion=False, quiet=False):
     """Main entry point for 'pirate_frb run_server'.
 
     processing_delay_sec (default 0): artificial per-frame delay (seconds)
@@ -595,10 +599,14 @@ def run_server(server_config_filename, dedispersion_config_filename,
     GPU work (data is not even copied host->device, and no dequantization /
     dedispersion kernels run); the receive/assemble/ringbuf/reaper pipeline
     still runs in full. Infrequently used corner case. Implies no_grouper.
+
+    quiet (default False): if True, suppress the per-chunk "FrbServer:
+    beamset=..." stdout line (one per assembled chunk) on every server.
     """
     helper = RunServerHelper(server_config_filename, dedispersion_config_filename,
                              processing_delay_sec=processing_delay_sec,
                              no_grouper=no_grouper,
-                             no_dedispersion=no_dedispersion)
+                             no_dedispersion=no_dedispersion,
+                             quiet=quiet)
     helper.run()
 

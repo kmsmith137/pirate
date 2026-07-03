@@ -131,6 +131,12 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
         // path with no GPU). --no-dedispersion implies --no-grouper, so
         // grouper_ip_addr must be empty when this is set (constructor asserts).
         bool no_dedispersion = false;
+
+        // If true, suppress the per-chunk "FrbServer: beamset=..." stdout line
+        // (printed once per fully-assembled chunk). Everything else is unaffected.
+        // Set true by callers that would otherwise be swamped by per-chunk output
+        // (e.g. the ephemeral test server, which assembles hundreds of chunks).
+        bool quiet = false;
     };
 
     // Factory method (constructor is private).

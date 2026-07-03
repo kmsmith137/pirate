@@ -519,11 +519,11 @@ void FrbServer::_worker_main(int receiver_index)
             frame_lock.unlock();
             cv.notify_all();
 
-            // Announce a fully-assembled chunk (once per chunk). The frame just
-            // finalized is the last beam of this set, so its chunk is 'ichunk'
-            // (== set->time_chunk_index); derive the FPGA window from the per-chunk
-            // sample count and seq-per-sample.
-            if (chunk_assembled) {
+            // Announce a fully-assembled chunk (once per chunk), unless params.quiet.
+            // The frame just finalized is the last beam of this set, so its chunk is
+            // 'ichunk' (== set->time_chunk_index); derive the FPGA window from the
+            // per-chunk sample count and seq-per-sample.
+            if (chunk_assembled && !params.quiet) {
                 long seq_per_chunk = set->ntime * m->seq_per_frb_time_sample;
                 std::cout << "FrbServer: beamset=" << m->beamset
                           << ", ichunk=" << ichunk

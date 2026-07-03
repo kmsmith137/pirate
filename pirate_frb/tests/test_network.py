@@ -231,7 +231,10 @@ class NetworkTester:
                                 host_allocator=host_alloc,
                                 gpu_allocator=gpu_alloc,
                                 cuda_device_id=0,
-                                no_dedispersion=p['no_dedispersion'])
+                                no_dedispersion=p['no_dedispersion'],
+                                # Suppress the per-chunk "FrbServer: beamset=..." line;
+                                # this test assembles hundreds of chunks.
+                                quiet=True)
         self.server.start()
 
     def _build_client(self):

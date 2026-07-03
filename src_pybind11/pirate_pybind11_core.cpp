@@ -1216,7 +1216,8 @@ void register_core_bindings(pybind11::module &m)
                            double processing_delay_sec,
                            const std::string &grouper_ip_addr,
                            bool no_dedispersion,
-                           long nbatches_wt) {
+                           long nbatches_wt,
+                           bool quiet) {
                FrbServer::Params params;
                params.config_prefilled = config_prefilled;
                params.receivers = std::move(receivers);
@@ -1231,6 +1232,7 @@ void register_core_bindings(pybind11::module &m)
                params.grouper_ip_addr = grouper_ip_addr;
                params.no_dedispersion = no_dedispersion;
                params.nbatches_wt = nbatches_wt;
+               params.quiet = quiet;
                return FrbServer::create(params);
           }),
                py::arg("config_prefilled"),
@@ -1244,6 +1246,7 @@ void register_core_bindings(pybind11::module &m)
                py::arg("grouper_ip_addr") = "",
                py::arg("no_dedispersion") = false,
                py::arg("nbatches_wt") = 0,
+               py::arg("quiet") = false,
                "Create an FrbServer.\n\n"
                "Args:\n"
                "    config_prefilled: DedispersionConfig. Four members\n"
@@ -1281,7 +1284,10 @@ void register_core_bindings(pybind11::module &m)
                "        constructor asserts this).\n"
                "    nbatches_wt (default 0): weight-ring depth of the internal\n"
                "        GpuDedisperser. 0 = num_active_batches. If nonzero, must be\n"
-               "        >= num_active_batches. Only used by unit tests.")
+               "        >= num_active_batches. Only used by unit tests.\n"
+               "    quiet (default False): if True, suppress the per-chunk\n"
+               "        'FrbServer: beamset=...' stdout line (one per assembled\n"
+               "        chunk). Everything else is unaffected.")
           .def("start", &FrbServer::start,
                "Start all Receivers.\n\n"
                "Raises:\n"
