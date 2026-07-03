@@ -54,19 +54,19 @@ with FrbGrouper(grouper_addr) as grouper:
     nbeams_tot = grouper.total_beams
     nbatches = grouper.nbatches
     beams_per_batch = nbeams_tot // nbatches
-    
+    snr_threshold = 10                          # emit one event per beam above this SNR
+
     # The grouper receives dedispersion outputs as an outer loop over time chunks,
     # followed by an inner loop over beam batches. Dedispersion outputs are arrays
     # (beams_per_batch, coarse_ndm, coarse_ntime). (One array for each dedispersion tree.)
 
     for ichunk in itertools.count():  # outer loop over time chunks
-        # GPU-resident accumulators, updated entirely on the GPU below.
-        gmax    = cp.full((), -cp.inf, dtype=cp.float32)   # max(snr)
-        g_tree  = cp.full((), -1, dtype=cp.int64)          # argmax(tree index)
-        g_ibeam = cp.full((), -1, dtype=cp.int64)          # argmax(beam index)
-        g_idm   = cp.full((), -1, dtype=cp.int64)          # argmax(dm index)
-        g_itime = cp.full((), -1, dtype=cp.int64)          # argmax(time index)
-        per_beam_max = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)
+        # Per-beam accumulators over (tree, dm, time): the peak SNR and its argmax.
+        # All GPU-resident, updated entirely on the GPU below.
+        per_beam_max   = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)  # peak snr
+        per_beam_tree  = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(tree index)
+        per_beam_idm   = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(dm index)
+        per_beam_itime = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(time index)
 
         for ibatch in range(nbatches):          # inner loop over beam batches
             beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
@@ -82,37 +82,40 @@ with FrbGrouper(grouper_addr) as grouper:
                 # Loop over dedispersion trees.
                 # 'tree_out' has shape (beams_per_batch, coarse_ndm, coarse_ntime).
                 for itree, tree_out in enumerate(outputs.out_max):
-                    # Per-beam max (over dm,time) for this batch's beams.
-                    sl = per_beam_max[beam0 : beam0 + beams_per_batch]
-                    cp.maximum(sl, tree_out.max(axis=(1, 2)), out=sl)
-
-                    # Global peak + argmax candidate from this tree.
+                    # Per-beam max SNR + its (dm, time) argmax for this batch's beams.
                     # Done entirely on GPU; no gpu<->host copies in sight!
-                    m = tree_out.max()
-                    lb, idm, itime = cp.unravel_index(tree_out.argmax(), tree_out.shape)
-                    upd = m > gmax
-                    gmax    = cp.where(upd, m, gmax)
-                    g_tree  = cp.where(upd, itree, g_tree)
-                    g_ibeam = cp.where(upd, beam0 + lb, g_ibeam)
-                    g_idm   = cp.where(upd, idm, g_idm)
-                    g_itime = cp.where(upd, itime, g_itime)
+                    bpb, ndm, nt = tree_out.shape
+                    flat = tree_out.reshape(bpb, ndm * nt)
+                    beam_max = flat.max(axis=1)
+                    beam_arg = flat.argmax(axis=1)
+                    beam_idm, beam_itime = beam_arg // nt, beam_arg % nt
 
-        # Now we have the (snr, itree, ibeam, idm, itime) of a single "event".
-        # We copy this data from the GPU to the host, and do a little math to convert
-        # to "physical" quantities such as DM and arrival time. The math is explained
-        # in notes/tree_dedispersion.tex, and is implemented in a helper method
-        # grouper.create_events(), which returns an FrbSifterEvents object.
+                    sl = slice(beam0, beam0 + bpb)
+                    upd = beam_max > per_beam_max[sl]
+                    per_beam_max[sl]   = cp.where(upd, beam_max,   per_beam_max[sl])
+                    per_beam_tree[sl]  = cp.where(upd, itree,      per_beam_tree[sl])
+                    per_beam_idm[sl]   = cp.where(upd, beam_idm,   per_beam_idm[sl])
+                    per_beam_itime[sl] = cp.where(upd, beam_itime, per_beam_itime[sl])
 
-        events = grouper.create_events(ichunk, g_tree, g_ibeam, g_idm, g_itime, gmax)
+        # Now we have one event per beam whose peak SNR exceeds threshold (0 <= nevents <= nbeams).
+        # Events are identified by (snr, itree, ibeam, idm, itime) on the GPU. We copy this data
+        # from the GPU to the CPU, and do a little math to convert to "physical" quantities such
+        # as DM and fpga_timestamp. The math is explained in notes/tree_dedispersion.tex, and is
+        # implemented in a helper method grouper.create_events(), which returns an FrbSifterEvents.
 
-        print(f'{grouper.grouper_ip_addr}: {ichunk=}: max snr={float(events.snrs):.3g}', flush=True)
+        ibeam = cp.nonzero(per_beam_max > snr_threshold)[0]   # global indices of above-threshold beams
+        events = grouper.create_events(ichunk, per_beam_tree[ibeam], ibeam,
+                                       per_beam_idm[ibeam], per_beam_itime[ibeam], per_beam_max[ibeam])
 
-        if sifter is not None:
-            # Send the FrbEventsMessage to the sifter.
-            sifter.send_events(
-                beam_set_id = beam_set_id,
-                events = events,
-                coarsegrain_snr = per_beam_max)
+        top = float(events.snrs.max()) if len(events) else 0.0
+        print(f'{grouper.grouper_ip_addr}: {ichunk=}: {len(events)} event(s) with snr>{snr_threshold:g}'
+              f' (max snr={top:.3g})', flush=True)
+
+        # Send the FrbEventsMessage (even if nevents==0).
+        sifter.send_events(
+            beam_set_id = beam_set_id,
+            events = events,
+            coarsegrain_snr = per_beam_max)
 ```
   
 ## FrbGrouper context manager

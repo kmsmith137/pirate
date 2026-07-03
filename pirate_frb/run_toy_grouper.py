@@ -10,13 +10,16 @@ import itertools
 import time
 
 
-def _run_toy_grouper(grouper, sifter=None, delay=0.0):
+def _run_toy_grouper(grouper, sifter=None, delay=0.0, snr_threshold=10.0):
     """
     Main grouper loop (factored out of run_toy_grouper to reduce nesting).
 
-    In the toy grouper, we don't do peak-finding or thresholding. We just send one
-    event per time chunk, corresponding to the (beam,dm,time) triple with highest
-    snr (even if the snr doesn't correspond to a statistically significant event!)
+    The toy grouper does a minimal thresholding: for each time chunk it emits one
+    event per beam whose peak SNR (over the tree/dm/time it searched) exceeds
+    snr_threshold -- so a chunk produces between 0 and nbeams events. Even when a
+    chunk has no beam above threshold, the EventMessage is still sent (it carries
+    coarsegrain_snr). coarsegrain_snr is unaffected by the threshold: it is always
+    the per-beam max SNR over the whole chunk.
 
     If 'delay' > 0, sleep that many seconds at the end of each chunk -- an
     artificial slowdown for testing how the producer behaves when the consumer
@@ -47,13 +50,12 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
     # (beams_per_batch, coarse_ndm, coarse_ntime). (One array for each dedispersion tree.)
 
     for ichunk in itertools.count():  # outer loop over time chunks
-        # GPU-resident accumulators, updated entirely on the GPU below.
-        gmax    = cp.full((), -cp.inf, dtype=cp.float32)   # max(snr)
-        g_tree  = cp.full((), -1, dtype=cp.int64)          # argmax(tree index)
-        g_ibeam = cp.full((), -1, dtype=cp.int64)          # argmax(beam index)
-        g_idm   = cp.full((), -1, dtype=cp.int64)          # argmax(dm index)
-        g_itime = cp.full((), -1, dtype=cp.int64)          # argmax(time index)
-        per_beam_max = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)
+        # Per-beam accumulators over (tree, dm, time): the peak SNR and its argmax.
+        # All GPU-resident, updated entirely on the GPU below.
+        per_beam_max   = cp.full((nbeams_tot,), -cp.inf, dtype=cp.float32)  # peak snr
+        per_beam_tree  = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(tree index)
+        per_beam_idm   = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(dm index)
+        per_beam_itime = cp.full((nbeams_tot,), -1, dtype=cp.int64)         # argmax(time index)
 
         for ibatch in range(nbatches):          # inner loop over beam batches
             beam0 = ibatch * beams_per_batch    # global index of this batch's first beam
@@ -69,33 +71,37 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
                 # Loop over dedispersion trees.
                 # 'tree_out' has shape (beams_per_batch, coarse_ndm, coarse_ntime).
                 for itree, tree_out in enumerate(outputs.out_max):
-                    # Per-beam max (over dm,time) for this batch's beams.
-                    sl = per_beam_max[beam0 : beam0 + beams_per_batch]
-                    cp.maximum(sl, tree_out.max(axis=(1, 2)), out=sl)
-
-                    # Global peak + argmax candidate from this tree.
+                    # Per-beam max SNR + its (dm, time) argmax for this batch's beams.
                     # Done entirely on GPU; no gpu<->host copies in sight!
-                    m = tree_out.max()
-                    lb, idm, itime = cp.unravel_index(tree_out.argmax(), tree_out.shape)
-                    upd = m > gmax
-                    gmax    = cp.where(upd, m, gmax)
-                    g_tree  = cp.where(upd, itree, g_tree)
-                    g_ibeam = cp.where(upd, beam0 + lb, g_ibeam)
-                    g_idm   = cp.where(upd, idm, g_idm)
-                    g_itime = cp.where(upd, itime, g_itime)
+                    bpb, ndm, nt = tree_out.shape
+                    flat = tree_out.reshape(bpb, ndm * nt)
+                    beam_max = flat.max(axis=1)
+                    beam_arg = flat.argmax(axis=1)
+                    beam_idm, beam_itime = beam_arg // nt, beam_arg % nt
 
-        # Now we have the (snr, itree, ibeam, idm, itime) of a single "event".
-        # We copy this data from the GPU to the host, and do a little math to convert
-        # to "physical" quantities such as DM and arrival time. The math is explained
-        # in notes/tree_dedispersion.tex, and is implemented in a helper method
-        # grouper.create_events(), which returns an FrbSifterEvents object.
+                    sl = slice(beam0, beam0 + bpb)
+                    upd = beam_max > per_beam_max[sl]
+                    per_beam_max[sl]   = cp.where(upd, beam_max,   per_beam_max[sl])
+                    per_beam_tree[sl]  = cp.where(upd, itree,      per_beam_tree[sl])
+                    per_beam_idm[sl]   = cp.where(upd, beam_idm,   per_beam_idm[sl])
+                    per_beam_itime[sl] = cp.where(upd, beam_itime, per_beam_itime[sl])
 
-        events = grouper.create_events(ichunk, g_tree, g_ibeam, g_idm, g_itime, gmax)
+        # Now we have one event per beam whose peak SNR exceeds threshold (0 <= nevents <= nbeams).
+        # Events are identified by (snr, itree, ibeam, idm, itime) on the GPU. We copy this data
+        # from the GPU to the CPU, and do a little math to convert to "physical" quantities such
+        # as DM and fpga_timestamp. The math is explained in notes/tree_dedispersion.tex, and is
+        # implemented in a helper method grouper.create_events(), which returns an FrbSifterEvents.
+        
+        ibeam = cp.nonzero(per_beam_max > snr_threshold)[0]   # global indices of above-threshold beams
+        events = grouper.create_events(ichunk, per_beam_tree[ibeam], ibeam,
+                                       per_beam_idm[ibeam], per_beam_itime[ibeam], per_beam_max[ibeam])
 
-        print(f'{grouper.grouper_ip_addr}: {ichunk=}: max snr={float(events.snrs):.3g}', flush=True)
+        top = float(events.snrs.max()) if len(events) else 0.0
+        print(f'{grouper.grouper_ip_addr}: {ichunk=}: {len(events)} event(s) with snr>{snr_threshold:g}'
+              f' (max snr={top:.3g})', flush=True)
 
         if sifter is not None:
-            # Send the FrbEventsMessage to the sifter.
+            # Send the FrbEventsMessage (even if nevents==0).
             sifter.send_events(
                 beam_set_id = beam_set_id,
                 events = events,
@@ -105,18 +111,19 @@ def _run_toy_grouper(grouper, sifter=None, delay=0.0):
             time.sleep(delay)
 
 
-def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
+def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0, snr_threshold=10.0):
     """Run a toy FrbGrouper consumer at 'grouper_addr' (e.g. '127.0.0.1:7000').
 
     Acts as the downstream consumer of an FrbServer producer over CUDA IPC.
     Blocks (in FrbGrouper.open(), via __enter__) until the producer connects, then
-    per chunk finds the peak SNR event (and the per-beam max) and prints it; if
-    'sifter_addr' is given, also reports to that FrbSifter. Runs until the producer
-    disconnects or Ctrl-C.
+    per chunk emits one event per beam whose peak SNR exceeds 'snr_threshold' (and
+    reports the per-beam max); if 'sifter_addr' is given, also reports to that
+    FrbSifter. Runs until the producer disconnects or Ctrl-C.
 
     'sifter_addr' is an 'ip:port' string, or None to run without a sifter.
-    'delay' (seconds) inserts an artificial per-chunk slowdown into the loop;
-    see _run_toy_grouper.
+    'delay' (seconds) inserts an artificial per-chunk slowdown into the loop.
+    'snr_threshold' (default 10) is the per-beam event threshold; see
+    _run_toy_grouper.
     """
     # Imported here (not at module top) so 'import pirate_frb' stays light.
     from .rpc import FrbGrouper, FrbSifterClient
@@ -133,7 +140,7 @@ def run_toy_grouper(grouper_addr, sifter_addr=None, delay=0.0):
     # 'with' exits (after the grouper's).
     with sifter_cm as sifter, FrbGrouper(grouper_addr) as grouper:
         try:
-            _run_toy_grouper(grouper, sifter, delay)
+            _run_toy_grouper(grouper, sifter, delay, snr_threshold)
         except KeyboardInterrupt:
             print(f'{grouper_addr}: interrupted; shutting down', flush=True)
         except RuntimeError as e:
