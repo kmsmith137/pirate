@@ -303,7 +303,8 @@ class ServerTester:
                                 gpu_allocator=gpu_alloc,
                                 cuda_device_id=0,
                                 grouper_ip_addr=f"127.0.0.1:{p['grouper_port']}",
-                                nbatches_wt=p['nbatches_wt'])
+                                nbatches_wt=p['nbatches_wt'],
+                                quiet=True)
 
     def _spawn_grouper_child(self):
         # 'spawn' (not fork): the parent has already initialized CUDA, and a
