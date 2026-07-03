@@ -9,6 +9,7 @@ from ..pirate_pybind11 import (
     GpuTreeGriddingKernel,
     PfOutputMicrokernel,
     PfWeightReaderMicrokernel,
+    ReferenceDequantizationKernel,
     ReferenceLagbuf,
     ReferenceTree,
     ReferenceTreeGriddingKernel,

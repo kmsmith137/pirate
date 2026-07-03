@@ -66,9 +66,10 @@ void register_kernel_bindings(pybind11::module &m)
         "The last axis of 'scales_offsets' is (scale, offset); one pair is shared by\n"
         "256 consecutive time samples of a single (beam, freq).\n\n"
         "IMPORTANT: Since numpy/cupy don't support int4 dtype (dtypes must be at least 8 bits),\n"
-        "the Python wrappers for apply_reference() and launch() accept the data array as\n"
-        "uint8 of shape (nbeams, nfreq, ntime//2), which is reinterpreted as int4 with\n"
-        "shape (nbeams, nfreq, ntime). The uint8 array must be fully contiguous.")
+        "the Python wrapper for launch() accepts the data array as uint8 of shape\n"
+        "(nbeams, nfreq, ntime//2), which is reinterpreted as int4 with shape\n"
+        "(nbeams, nfreq, ntime). The uint8 array must be fully contiguous.\n\n"
+        "For a CPU reference implementation, see ReferenceDequantizationKernel.")
           .def(py::init<Dtype, long, long, long>(),
                py::arg("dtype"), py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"),
                "Create a GpuDequantizationKernel.\n\n"
@@ -89,34 +90,6 @@ void register_kernel_bindings(pybind11::module &m)
                "Number of time samples")
           .def_readonly("resource_tracker", &GpuDequantizationKernel::resource_tracker,
                "ResourceTracker for memory/bandwidth accounting")
-          .def("apply_reference",
-               [](const GpuDequantizationKernel &self,
-                  Array<float> &out,
-                  const Array<void> &scales_offsets,
-                  const Array<void> &data_uint8) {
-                   // Array<void> on the Python boundary (numpy/cupy float16);
-                   // cast<__half>() does a runtime dtype check.
-                   const Array<__half> &scoff = scales_offsets.cast<__half>(
-                       "GpuDequantizationKernel.apply_reference: scales_offsets");
-                   Array<void> data_int4 = self.convert_uint8_to_int4(data_uint8);
-                   self.apply_reference(out, scoff, data_int4);
-               },
-               py::arg("out"), py::arg("scales_offsets"), py::arg("data_uint8"),
-               "Reference implementation (CPU, always outputs float32).\n\n"
-               "Args:\n"
-               "    out: Output array, shape (nbeams, nfreq, ntime), dtype float32,\n"
-               "         fully contiguous, on host\n"
-               "    scales_offsets: Array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
-               "                    fully contiguous, on host. Last axis is (scale, offset).\n"
-               "    data_uint8: Array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
-               "                fully contiguous, on host. Reinterpreted as int4 with shape\n"
-               "                (nbeams, nfreq, ntime).\n\n"
-               "Each (scale, offset) pair is converted from fp16 to fp32 immediately,\n"
-               "before any arithmetic. data == -8 is mapped to 0 in the output (see\n"
-               "class docstring).\n\n"
-               "Note: The data array is passed as uint8 because numpy/cupy don't support int4\n"
-               "(all dtypes must be at least 8 bits). Each uint8 element contains two\n"
-               "int4 values: low nibble = even index, high nibble = odd index.")
           .def("launch",
                [](const GpuDequantizationKernel &self,
                   Array<void> &out,
@@ -127,7 +100,7 @@ void register_kernel_bindings(pybind11::module &m)
                    // cast<__half>() does a runtime dtype check.
                    const Array<__half> &scoff = scales_offsets.cast<__half>(
                        "GpuDequantizationKernel.launch: scales_offsets");
-                   Array<void> data_int4 = self.convert_uint8_to_int4(data_uint8);
+                   Array<void> data_int4 = dequantization_uint8_to_int4(data_uint8, self.nbeams, self.nfreq, self.ntime);
                    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
                    self.launch(out, scoff, data_int4, stream);
                },
@@ -152,6 +125,61 @@ void register_kernel_bindings(pybind11::module &m)
                "Run randomized tests (called via 'python -m pirate_frb test --gdqk')")
           .def_static("time_selected", &GpuDequantizationKernel::time_selected,
                "Run timing benchmarks")
+    ;
+
+    // ReferenceDequantizationKernel: CPU reference for GpuDequantizationKernel (always
+    // outputs float32). No Python injections; apply() takes no dtype/stream argument.
+    py::class_<ReferenceDequantizationKernel>(m, "ReferenceDequantizationKernel",
+        "CPU reference implementation of the int4 -> float32 dequantization performed by\n"
+        "GpuDequantizationKernel (see that class for the affine-transform / missing-sample\n"
+        "conventions). Always outputs float32; there is no output-dtype argument.\n\n"
+        "IMPORTANT: Since numpy/cupy don't support int4 dtype (dtypes must be at least 8 bits),\n"
+        "the Python wrapper for apply() accepts the data array as uint8 of shape\n"
+        "(nbeams, nfreq, ntime//2), which is reinterpreted as int4 with shape\n"
+        "(nbeams, nfreq, ntime). The uint8 array must be fully contiguous.")
+          .def(py::init<long, long, long>(),
+               py::arg("nbeams"), py::arg("nfreq"), py::arg("ntime"),
+               "Create a ReferenceDequantizationKernel.\n\n"
+               "Args:\n"
+               "    nbeams: Number of beams\n"
+               "    nfreq: Number of frequency channels\n"
+               "    ntime: Number of time samples (must be divisible by 256)\n\n"
+               "Raises:\n"
+               "    RuntimeError: If any argument is non-positive or ntime is not divisible by 256")
+          .def_readonly("nbeams", &ReferenceDequantizationKernel::nbeams,
+               "Number of beams")
+          .def_readonly("nfreq", &ReferenceDequantizationKernel::nfreq,
+               "Number of frequency channels")
+          .def_readonly("ntime", &ReferenceDequantizationKernel::ntime,
+               "Number of time samples")
+          .def("apply",
+               [](ReferenceDequantizationKernel &self,
+                  Array<float> &out,
+                  const Array<void> &scales_offsets,
+                  const Array<void> &data_uint8) {
+                   // Array<void> on the Python boundary (numpy float16);
+                   // cast<__half>() does a runtime dtype check.
+                   const Array<__half> &scoff = scales_offsets.cast<__half>(
+                       "ReferenceDequantizationKernel.apply: scales_offsets");
+                   Array<void> data_int4 = dequantization_uint8_to_int4(data_uint8, self.nbeams, self.nfreq, self.ntime);
+                   self.apply(out, scoff, data_int4);
+               },
+               py::arg("out"), py::arg("scales_offsets"), py::arg("data_uint8"),
+               "Reference implementation (CPU, always outputs float32).\n\n"
+               "Args:\n"
+               "    out: Output array, shape (nbeams, nfreq, ntime), dtype float32,\n"
+               "         fully contiguous, on host\n"
+               "    scales_offsets: Array, shape (nbeams, nfreq, ntime//256, 2), dtype float16,\n"
+               "                    fully contiguous, on host. Last axis is (scale, offset).\n"
+               "    data_uint8: Array, shape (nbeams, nfreq, ntime//2), dtype uint8,\n"
+               "                fully contiguous, on host. Reinterpreted as int4 with shape\n"
+               "                (nbeams, nfreq, ntime).\n\n"
+               "Each (scale, offset) pair is converted from fp16 to fp32 immediately,\n"
+               "before any arithmetic. data == -8 is mapped to 0 in the output (see\n"
+               "class docstring).\n\n"
+               "Note: The data array is passed as uint8 because numpy/cupy don't support int4\n"
+               "(all dtypes must be at least 8 bits). Each uint8 element contains two\n"
+               "int4 values: low nibble = even index, high nibble = odd index.")
     ;
 
     py::class_<GpuLaggedDownsamplingKernel>(m, "GpuLaggedDownsamplingKernel")

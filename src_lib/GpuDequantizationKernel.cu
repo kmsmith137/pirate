@@ -309,12 +309,23 @@ GpuDequantizationKernel::GpuDequantizationKernel(Dtype dtype_, long nbeams_, lon
 
 // -------------------------------------------------------------------------------------------------
 //
-// apply_reference(): CPU reference implementation
+// ReferenceDequantizationKernel
 
 
-void GpuDequantizationKernel::apply_reference(Array<float> &out,
-                                              const Array<__half> &scales_offsets,
-                                              const Array<void> &data) const
+ReferenceDequantizationKernel::ReferenceDequantizationKernel(long nbeams_, long nfreq_, long ntime_)
+    : nbeams(nbeams_), nfreq(nfreq_), ntime(ntime_)
+{
+    xassert(nbeams > 0);
+    xassert(nfreq > 0);
+    xassert(ntime > 0);
+    xassert((ntime % 256) == 0);  // Required to match the GPU kernel's minichunk layout
+}
+
+
+// apply(): CPU reference implementation (always outputs float32).
+void ReferenceDequantizationKernel::apply(Array<float> &out,
+                                          const Array<__half> &scales_offsets,
+                                          const Array<void> &data)
 {
     Dtype dt_int4 = Dtype::from_str("int4");
 
@@ -432,10 +443,10 @@ void GpuDequantizationKernel::launch(Array<void> &out,
 
 // -------------------------------------------------------------------------------------------------
 //
-// convert_uint8_to_int4(): helper for pybind11 wrappers
+// dequantization_uint8_to_int4(): helper for pybind11 wrappers (shared by both kernels)
 
 
-Array<void> GpuDequantizationKernel::convert_uint8_to_int4(const Array<void> &in_uint8) const
+Array<void> dequantization_uint8_to_int4(const Array<void> &in_uint8, long nbeams, long nfreq, long ntime)
 {
     Dtype dtype_uint8(df_uint, 8);
     xassert_eq(in_uint8.dtype, dtype_uint8);
@@ -457,7 +468,7 @@ Array<void> GpuDequantizationKernel::convert_uint8_to_int4(const Array<void> &in
     in_int4.dtype = dtype_int4;
     in_int4.aflags = in_uint8.aflags;
     in_int4.base = in_uint8.base;
-    in_int4.check_invariants("GpuDequantizationKernel::convert_uint8_to_int4");
+    in_int4.check_invariants("dequantization_uint8_to_int4");
 
     return in_int4;
 }
@@ -513,7 +524,8 @@ void GpuDequantizationKernel::test_random()
 
     // Run reference
     GpuDequantizationKernel kernel(dtype, B, F, T);
-    kernel.apply_reference(href, h_scoff, h_data);
+    ReferenceDequantizationKernel ref_kernel(B, F, T);
+    ref_kernel.apply(href, h_scoff, h_data);
 
     // Run GPU kernel
     kernel.launch(gout, g_scoff, g_data, nullptr);
