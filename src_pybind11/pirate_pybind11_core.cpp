@@ -1168,13 +1168,17 @@ void register_core_bindings(pybind11::module &m)
                "Raises:\n"
                "    RuntimeError: If called twice or after stop().")
           .def("wait_until_listening", &Receiver::wait_until_listening,
+               py::arg("timeout_sec") = -1.0,
                py::call_guard<py::gil_scoped_release>(),
-               "Block until the listener thread has bound the listening socket\n"
-               "(i.e. a client's connect() will succeed). The GIL is released for\n"
-               "the duration of the call. Useful when the caller must not attempt\n"
-               "a connection before the Receiver is accepting (e.g. FakeXEngine,\n"
-               "whose lazy connect raises on ECONNREFUSED). Requires start() to\n"
-               "have been called (otherwise blocks until stop()).\n\n"
+               "Wait until the listener thread has bound the listening socket\n"
+               "(i.e. a client's connect() will succeed); returns True once it is.\n"
+               "If timeout_sec >= 0, give up after that many seconds and return\n"
+               "False; a negative timeout (default) waits forever. The GIL is\n"
+               "released for the duration of the call -- pass a finite timeout and\n"
+               "poll to stay responsive to signals / detect a dead peer. Useful\n"
+               "when the caller must not attempt a connection before the Receiver\n"
+               "is accepting (e.g. FakeXEngine, whose lazy connect raises on\n"
+               "ECONNREFUSED). Requires start() to have been called.\n\n"
                "Raises:\n"
                "    RuntimeError: If the Receiver is stopped.")
           .def("get_status", [](Receiver &self) {

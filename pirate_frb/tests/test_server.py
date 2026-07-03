@@ -64,7 +64,7 @@ from ..utils import ThreadAffinity
 from .utils import make_random_subscale_config, pick_receiver_worker_counts
 
 
-def _grouper_child_main(grouper_addr, nchunks, out_queue):
+def _grouper_child_main(grouper_addr, nchunks, out_queue, shutdown_event):
     """Child-process main: the ad hoc grouper consumer.
 
     Blocks in FrbGrouper.__enter__ until the producer (FrbServer) completes the
@@ -74,6 +74,13 @@ def _grouper_child_main(grouper_addr, nchunks, out_queue):
     docstring). All messages are tuples whose first element is a tag:
     ('handshake', ...), ('out', ...), ('done',), or ('error', traceback_str).
     """
+    # Ignore SIGINT: on Ctrl-C the whole process group gets it, but the parent
+    # must orchestrate this child's shutdown (stop the server first, then release
+    # us via shutdown_event -- see ServerTester.__exit__). Tearing ourselves down
+    # on SIGINT would close the grouper stream while the server is still running,
+    # which the server would report as an unexpected disconnect.
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         import cupy as cp
         from pirate_frb.rpc import FrbGrouper
@@ -89,7 +96,12 @@ def _grouper_child_main(grouper_addr, nchunks, out_queue):
                         gpu_max = [cp.asnumpy(a) for a in out.out_max]
                         gpu_tok = [cp.asnumpy(a) for a in out.out_argmax]
                     out_queue.put(('out', ichunk, ibatch, gpu_max, gpu_tok))
-        out_queue.put(('done',))
+            out_queue.put(('done',))
+            # Hold the grouper Session open until the parent has stopped the
+            # server. Then the server's receive thread is unblocked by its own
+            # stop() (is_stopped=True -> quiet) rather than by us disconnecting
+            # first (which it would report as an unexpected stream close).
+            shutdown_event.wait()
     except BaseException:
         import traceback
         out_queue.put(('error', traceback.format_exc()))
@@ -177,6 +189,7 @@ class ServerTester:
         self.server      = None
         self.child       = None
         self.queue       = None
+        self.shutdown_event = None
         self.xmd         = None
         self.fxe         = None
         self.factory     = None
@@ -200,10 +213,10 @@ class ServerTester:
             self.server.start()
             # With a grouper, FrbServer starts its Receivers only after the
             # grouper connection is READY (grouper_send_thread). FakeXEngine's
-            # lazy connect throws on ECONNREFUSED, so block here until every
+            # lazy connect throws on ECONNREFUSED, so wait here until every
             # Receiver is accepting before any minichunk can be sent.
             for r in self.receivers:
-                r.wait_until_listening()
+                self._wait_until_listening(r)
             self._build_client()
         except BaseException:
             self.__exit__(None, None, None)
@@ -215,11 +228,20 @@ class ServerTester:
             if self.fxe is not None:
                 self.fxe.stop()
             if self.server is not None:
-                # Stopping the server also breaks the grouper session, so a child
-                # still blocked in get_output() (failure paths) wakes and exits.
+                # Stop the server FIRST (before releasing the child): this sets
+                # is_stopped and cancels the grouper Session, so the server's
+                # grouper receive thread exits quietly instead of reporting the
+                # child's disconnect as unexpected. Also wakes a child still
+                # blocked in get_output() on the failure paths.
                 self.server.stop()
+            if self.shutdown_event is not None:
+                # Release the child from its post-'done' wait, now that the
+                # server is stopped, so it disconnects cleanly.
+                self.shutdown_event.set()
             if self.child is not None:
-                self.child.join(timeout=30)
+                # Clean shutdown returns promptly; the terminate() is a fallback
+                # for a child wedged in a C++ wait (e.g. grouper never connected).
+                self.child.join(timeout=10)
                 if self.child.is_alive():
                     self.child.terminate()
                     self.child.join(timeout=10)
@@ -311,9 +333,16 @@ class ServerTester:
         # forked child would inherit a broken CUDA context.
         ctx = multiprocessing.get_context('spawn')
         self.queue = ctx.Queue()
+        # Set (by __exit__, after server.stop()) to release the child from its
+        # post-'done' wait so it disconnects cleanly. See _grouper_child_main.
+        self.shutdown_event = ctx.Event()
+        # daemon=True: if the parent dies unexpectedly, the child is auto-killed
+        # rather than left orphaned (blocked in the grouper).
         self.child = ctx.Process(
             target=_grouper_child_main,
-            args=(f"127.0.0.1:{self.p['grouper_port']}", self.nchunks, self.queue),
+            args=(f"127.0.0.1:{self.p['grouper_port']}", self.nchunks,
+                  self.queue, self.shutdown_event),
+            daemon=True,
         )
         self.child.start()
 
@@ -359,6 +388,28 @@ class ServerTester:
                 gaussian=False,
             )
 
+    # ---- Blocking-wait helpers (poll so the parent stays interruptible) ----
+
+    def _check_child_alive(self):
+        """Raise if the grouper child died. The parent's waits below all depend
+        on the child being alive (the server's Receivers only start once the
+        child's grouper connects), so a dead child would otherwise hang us."""
+        if self.child is not None and not self.child.is_alive():
+            raise RuntimeError(
+                f"test_server: grouper child exited unexpectedly "
+                f"(exitcode={self.child.exitcode})")
+
+    def _wait_until_listening(self, r, timeout=60.0):
+        """Wait for Receiver r to start listening, polling with a finite C++
+        timeout so the parent processes signals (Ctrl-C) and can detect a dead
+        child instead of blocking forever in the GIL-released C++ call."""
+        t0 = time.monotonic()
+        while not r.wait_until_listening(timeout_sec=0.5):
+            self._check_child_alive()
+            if time.monotonic() - t0 > timeout:
+                raise RuntimeError("test_server: timed out waiting for a Receiver "
+                                   "to start listening (grouper never connected?)")
+
     # ---- Send helpers ----
 
     def _send_chunk(self, c):
@@ -403,6 +454,7 @@ class ServerTester:
             if self.server.is_stopped:
                 raise RuntimeError("test_server: FrbServer stopped while waiting "
                                    "for its dedisperser")
+            self._check_child_alive()
             if time.monotonic() - t0 > timeout:
                 raise RuntimeError("test_server: timed out waiting for the "
                                    "FrbServer's dedisperser")
@@ -469,11 +521,18 @@ class ServerTester:
     # ---- Compare ----
 
     def _queue_get(self, timeout=180.0):
-        try:
-            msg = self.queue.get(timeout=timeout)
-        except _queue.Empty:
-            raise RuntimeError("test_server: timed out waiting for a grouper-child "
-                               "message (pipeline wedged?)") from None
+        # Poll with a short block so the parent stays interruptible (Ctrl-C) and
+        # notices if the child died without sending anything (e.g. SIGKILL).
+        t0 = time.monotonic()
+        while True:
+            try:
+                msg = self.queue.get(timeout=1.0)
+                break
+            except _queue.Empty:
+                self._check_child_alive()
+                if time.monotonic() - t0 > timeout:
+                    raise RuntimeError("test_server: timed out waiting for a "
+                                       "grouper-child message (pipeline wedged?)") from None
         if msg[0] == 'error':
             raise RuntimeError(f"test_server: grouper child failed:\n{msg[1]}")
         return msg

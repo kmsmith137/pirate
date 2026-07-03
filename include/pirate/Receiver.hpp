@@ -80,13 +80,16 @@ struct Receiver
     // Thread-safe: returns current number of active TCP connections, and total bytes read.
     void get_status(long &num_connections, long &nbytes_cumul);
 
-    // Entry point: block until the listener thread has bound the listening
-    // socket (i.e. a client's connect() will succeed), or throw if the
-    // Receiver is stopped first. Useful when the caller must not attempt a
-    // connection before the Receiver is accepting (e.g. FakeXEngine, whose
-    // lazy connect throws on ECONNREFUSED). Requires start() to have been
-    // called (otherwise blocks until stop()).
-    void wait_until_listening();
+    // Entry point: wait until the listener thread has bound the listening
+    // socket (i.e. a client's connect() will succeed). Returns true once it is
+    // listening; throws if the Receiver is stopped first. If timeout_sec >= 0,
+    // give up after that many seconds and return false (still listening == false);
+    // a negative timeout (the default) waits forever. Useful when the caller must
+    // not attempt a connection before the Receiver is accepting (e.g. FakeXEngine,
+    // whose lazy connect throws on ECONNREFUSED). A finite timeout lets a Python
+    // caller poll so it stays responsive to signals / can detect a dead peer.
+    // Requires start() to have been called (otherwise waits until stop()/timeout).
+    bool wait_until_listening(double timeout_sec = -1.0);
 
     // Entry point: retrieve an assembled frame set (= one time chunk, all
     // beams) from the queue (blocking). Blocks until a set is available,

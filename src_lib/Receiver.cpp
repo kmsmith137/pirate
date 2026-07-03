@@ -234,18 +234,24 @@ shared_ptr<AssembledFrameSet> Receiver::get_frame_set()
 }
 
 
-// Entry point: block until the listener thread has bound the listening socket,
-// or throw if the Receiver is stopped first. See header comment for details.
-void Receiver::wait_until_listening()
+// Entry point: wait until the listener thread has bound the listening socket.
+// Returns true if now listening, false on timeout; throws if stopped first.
+// See header comment for details.
+bool Receiver::wait_until_listening(double timeout_sec)
 {
     unique_lock<std::mutex> lock(mutex);
 
-    for (;;) {
-        _throw_if_stopped("Receiver::wait_until_listening");
-        if (is_listening)
-            return;
-        cv.wait(lock);
-    }
+    // Predicate: wake on either "listening" or "stopped" (the throw happens
+    // outside the wait). Checked under the lock.
+    auto ready = [this] { return is_listening || is_stopped; };
+
+    if (timeout_sec < 0.0)
+        cv.wait(lock, ready);
+    else
+        cv.wait_for(lock, std::chrono::duration<double>(timeout_sec), ready);
+
+    _throw_if_stopped("Receiver::wait_until_listening");
+    return is_listening;
 }
 
 

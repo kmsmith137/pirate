@@ -8,6 +8,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>     // Server::Shutdown() deadline
 #include <cstring>    // memcpy
 #include <iostream>
 #include <sstream>
@@ -570,9 +571,15 @@ void FrbGrouper::close()
         send_thread.join();
 
     if (grpc_state && grpc_state->server) {
-        // The in-flight RPC was already cancelled by stop(), so this no-arg
-        // Shutdown() returns as soon as the handler has returned (prompt).
-        grpc_state->server->Shutdown();
+        // Shutdown with an (essentially immediate) deadline, NOT the no-arg
+        // overload. The in-flight RPC was already cancelled by stop() above, so
+        // there is nothing to drain -- but the deadline-less Server::Shutdown()
+        // still blocks ~3.5s internally before returning. Passing a deadline
+        // makes it return as soon as the (already-returned) handler is reaped;
+        // any RPC somehow still in flight at the deadline is force-cancelled,
+        // which is fine since we are tearing the server down.
+        grpc_state->server->Shutdown(std::chrono::system_clock::now()
+                                     + std::chrono::milliseconds(100));
         grpc_state->server->Wait();
     }
 }
