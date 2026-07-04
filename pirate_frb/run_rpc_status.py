@@ -1,78 +1,13 @@
 """Implementation of 'pirate_frb rpc_status' subcommand."""
 
 import sys
-import math
 import time
 import textwrap
 import threading
 
 import grpc
-import yaml
 
 from .rpc import FrbSearchClient
-
-
-class _ThroughputTracker:
-    """Per-connection helper that turns successive get_status() samples into
-    the bandwidth and 'real-time beams' figures shown on each status line.
-
-    'rt_beams' is the number of beams the server processes in real time, based
-    on measured throughput: if it processes N AssembledFrames (= delta
-    rb_processed) in delta_time seconds, the instantaneous value is
-    N * chunk_dur / delta_time, where chunk_dur is the seconds of data per
-    processed chunk. We smooth this with an EMA (rt_tau-second scale), and
-    don't start sampling until rb_processed is nonzero: rb_processed can jump
-    discontinuously at startup (if initial_time_chunk != 0), so we wait for
-    steady-state before sampling the rate. rt_beams stays omitted from the
-    status line until xengine_metadata arrives and set_chunk_dur() is called.
-    """
-
-    def __init__(self, rt_tau=10.0):
-        self.rt_tau = rt_tau          # EMA smoothing scale (seconds)
-        self.chunk_dur = None         # seconds of data per processed chunk (set once metadata arrives)
-        self.prev_time = None
-        self.prev_bytes = None
-        self.prev_processed = None    # previous rb_processed (tracked only once nonzero == steady-state)
-        self.rt_ema = None            # EMA of "real-time beams" throughput
-
-    def set_chunk_dur(self, chunk_dur):
-        """Supply seconds-of-data-per-chunk, enabling rt_beams once the
-        server's xengine_metadata is known."""
-        self.chunk_dur = chunk_dur
-
-    def update(self, status, now):
-        """Fold one (status, monotonic-timestamp) sample into the tracker and
-        return the formatted status-line suffix, e.g.
-        ", bw=1.23 Gbps, rt_beams=4.5". Each piece is omitted until it can be
-        computed (bandwidth needs a previous sample; rt_beams needs metadata
-        and steady-state)."""
-        bw_str = self._bandwidth_str(status, now)
-        rt_str = self._rt_beams_str(status, now)
-        self.prev_time = now
-        self.prev_bytes = status.num_bytes
-        return bw_str + rt_str
-
-    def _bandwidth_str(self, status, now):
-        if self.prev_time is None or (now - self.prev_time) <= 0:
-            return ""
-        delta_bytes = status.num_bytes - self.prev_bytes
-        delta_time = now - self.prev_time
-        gbps = (delta_bytes * 8) / (delta_time * 1e9)
-        return f", bw={gbps:.2f} Gbps"
-
-    def _rt_beams_str(self, status, now):
-        if (self.chunk_dur is not None) and (status.rb_processed > 0):
-            if (self.prev_processed is not None) and (now - self.prev_time) > 0:
-                delta_time = now - self.prev_time
-                inst = (status.rb_processed - self.prev_processed) * self.chunk_dur / delta_time
-                alpha = 1.0 - math.exp(-delta_time / self.rt_tau)
-                self.rt_ema = inst if (self.rt_ema is None) else (alpha * inst + (1.0 - alpha) * self.rt_ema)
-            self.prev_processed = status.rb_processed
-        else:
-            self.prev_processed = None
-        if self.rt_ema is None:
-            return ""
-        return f", rt_beams={self.rt_ema:.1f}"
 
 
 class _ServerMonitor:
@@ -92,18 +27,14 @@ class _ServerMonitor:
         get_xengine_metadata() once per second until it returns a non-empty
         YAML string, then prints it (once) and stops trying."""
         try:
-            cfg = self.client.get_config()
-            tracker = _ThroughputTracker()
-            tsamp_per_chunk = cfg.time_samples_per_chunk
             metadata_printed = False
 
             while not self.stop_event.is_set():
                 if not metadata_printed:
-                    metadata_printed = self._try_print_metadata(tracker, tsamp_per_chunk)
+                    metadata_printed = self._try_print_metadata()
 
                 status = self.client.get_status()
-                suffix = tracker.update(status, time.monotonic())
-                print(f"[{self.addr}] connections={status.num_connections}{suffix}, "
+                print(f"[{self.addr}] connections={status.num_connections}, "
                       f"rb=[{status.rb_start},{status.rb_reaped},{status.rb_processed},{status.rb_assembled},{status.rb_end}], "
                       f"free={status.num_free_frames}")
 
@@ -112,10 +43,10 @@ class _ServerMonitor:
             print(f"[{self.addr}] ERROR: {e}", file=sys.stderr)
             self.stop_event.set()
 
-    def _try_print_metadata(self, tracker, tsamp_per_chunk):
+    def _try_print_metadata(self):
         """Try once to fetch and print xengine_metadata. Returns True once it
         has been printed (caller then stops trying), False while it is still
-        unavailable. On success, derives chunk_dur and hands it to the tracker.
+        unavailable.
         """
         xmd_yaml = self.client.get_xengine_metadata(verbose=False)
         if not xmd_yaml:
@@ -125,14 +56,6 @@ class _ServerMonitor:
         print(f"[{self.addr}] xengine_metadata:")
         print(textwrap.indent(xmd_yaml.rstrip(), "  "))
         print()
-
-        # Seconds of data per processed chunk = (time samples per chunk) x
-        # (seconds per FRB time sample). The tracker uses this to convert the
-        # rb_processed rate into "real-time beams".
-        xmd = yaml.safe_load(xmd_yaml)
-        chunk_dur = (1.0e-9 * tsamp_per_chunk
-                     * xmd['seq_per_frb_time_sample'] * xmd['dt_ns_per_seq'])
-        tracker.set_chunk_dur(chunk_dur)
         return True
 
     def _sleep_one_second(self):
