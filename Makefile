@@ -142,14 +142,28 @@ PYTHON ?= python3
 # without retyping the flags, and tweak the optimization level via NVCC_OPT
 # (a debug build is just NVCC_OPT='-O0 -g') without retyping the whole command.
 # To time nvcc invocations, prepend: time -f "   %e seconds"
+#
+# -DNDEBUG is UNCONDITIONAL (not in NVCC_OPT). conda-forge builds libabseil
+# (a transitive grpc dep) with -DNDEBUG, and abseil's headers put certain
+# member functions -- e.g. absl::Mutex::Dtor / ~Mutex -- inline ONLY under
+# NDEBUG. Without it, translation units that include grpc++ headers emit an
+# undefined reference to `absl::lts_20250127::Mutex::Dtor()`, and libpirate.so
+# fails to link (import-time: undefined symbol _ZN4absl12lts_202501275Mutex4DtorEv).
+# xassert() is unaffected by NDEBUG, so no assertion coverage is lost.
 NVCC      ?= nvcc
 NVCC_OPT  ?= -O3
-NVCCFLAGS ?= -std=c++17 -m64 $(NVCC_OPT) -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
+NVCCFLAGS ?= -std=c++17 -m64 $(NVCC_OPT) -DNDEBUG -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
 
-# If using a conda env, add include and lib paths.
+# If using a conda env, add include, lib, and rpath paths. The rpath is what
+# makes libpirate.so self-locating: without it, libgrpc++/libprotobuf/libmkl_rt
+# are found at link time (via CONDA_LIBFLAGS) but not at runtime, forcing users
+# to prepend $CONDA_PREFIX/lib to LD_LIBRARY_PATH. With CONDA_RPATHFLAGS baked
+# into the linker line, the compiled DSO carries a RUNPATH pointing at
+# $CONDA_PREFIX/lib and no shell-side shim is needed.
 ifneq ($(CONDA_PREFIX),)
 CONDA_INCFLAGS = -I$(CONDA_PREFIX)/include
 CONDA_LIBFLAGS = -L$(CONDA_PREFIX)/lib
+CONDA_RPATHFLAGS = -Xcompiler '"-Wl,-rpath=$(CONDA_PREFIX)/lib"'
 endif
 
 # Extra nvcc flags needed to build Makefile dependencies
@@ -648,7 +662,7 @@ pirate_frb/rpc/grpc/__init__.py: $(GRPC_PROTO)
 # mkl_rt (Intel MKL single-dynamic-library; used by src_lib/simpulse.cpp for the DFTI c2r FFT).
 $(PIRATE_LIB): $(LIB_OFILES) makefile_helper.out
 	@mkdir -p lib
-	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) -shared -o $@ $(LIB_OFILES) -lksgpu -lyaml-cpp -lgrpc++ -lprotobuf -lmkl_rt -L$(KSGPU_DIR)/lib $(CONDA_LIBFLAGS) -Xcompiler '"-Wl,-rpath=$(KSGPU_DIR)/lib"'
+	$(NVCC) $(NVCCFLAGS) $(NVCC_ARCH) -shared -o $@ $(LIB_OFILES) -lksgpu -lyaml-cpp -lgrpc++ -lprotobuf -lmkl_rt -L$(KSGPU_DIR)/lib $(CONDA_LIBFLAGS) -Xcompiler '"-Wl,-rpath=$(KSGPU_DIR)/lib"' $(CONDA_RPATHFLAGS)
 
 # Build the python extension (pirate_frb/pirate_pybind11...so)
 # We want it to automatically pull in the C++ library pirate_frb/lib/libpirate.so.
