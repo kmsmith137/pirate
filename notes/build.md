@@ -23,38 +23,6 @@
 - Each `protoc` invocation emits several files at once (the four C++ outputs, or both Python stubs), so the rules are grouped multi-target pattern rules: one rule whose targets are all of those outputs, run once per `.proto`.
 - The shared library links against `-lgrpc++` and `-lprotobuf`.
 
-## NDEBUG and libabseil
-
-Grpc pulls in libabseil transitively. conda-forge builds libabseil with
-`-DNDEBUG`, and abseil's headers make a few member functions -- notably
-`absl::Mutex::Dtor()` -- inline **only** when `NDEBUG` is defined at the
-include site. If pirate compiles without `NDEBUG`, every TU that includes
-a grpc header emits an undefined reference to `absl::...::Mutex::Dtor()`
-that the abseil DSO does not export, and `libpirate.so` fails to load
-(`ImportError: undefined symbol: _ZN4absl...5Mutex4DtorEv`).
-
-We don't want `-DNDEBUG` global, because that would also neutralize
-`assert()` in CUDA kernels (and stdlib `assert()` in host code that
-still uses it). Instead we scope `NDEBUG` narrowly, using
-`#pragma push_macro`/`pop_macro`:
-
-- Hand-written source files that include grpc headers (`FrbServer.cpp`,
-  `FakeXEngine.cpp`) wrap the block of grpc/protobuf `#include`s in a
-  `push_macro("NDEBUG")` + `#define NDEBUG` / ... / `pop_macro("NDEBUG")`
-  pair. `NDEBUG` is active only while abseil is being parsed; the rest of
-  the TU is unaffected.
-
-- Protoc-generated `.grpc.pb.cc` files pull in grpc heavily and can't be
-  hand-edited (they are regenerated on every proto change). `grpc/wrap_ndebug.py`
-  runs after `protoc` in the Makefile and prepends/appends the same
-  `push_macro`/`pop_macro` pair around the whole file. The `.pb.cc` files
-  (protobuf without grpc) are left alone -- their undefined absl symbols
-  are all exported by libabseil and resolve at load time.
-
-If a future edit adds a grpc include to a new source file, expect the
-same undefined-`Mutex::Dtor` failure at import time. To rediscover the
-offending files, run `nm --undefined-only <file>.o | grep Mutex4Dtor`.
-
 ## File Structure
 
 ```
@@ -97,3 +65,35 @@ example, Dustin's `config.mk` is:
 EXTRA_INCDIRS = -I/usr/local/include -I/home/dstn/nvidia/mathdx/26.03/include
 # NVCC_OPT = -O0 -g
 ```
+
+## NDEBUG and libabseil
+
+Grpc pulls in libabseil transitively. conda-forge builds libabseil with
+`-DNDEBUG`, and abseil's headers make a few member functions -- notably
+`absl::Mutex::Dtor()` -- inline **only** when `NDEBUG` is defined at the
+include site. If pirate compiles without `NDEBUG`, every TU that includes
+a grpc header emits an undefined reference to `absl::...::Mutex::Dtor()`
+that the abseil DSO does not export, and `libpirate.so` fails to load
+(`ImportError: undefined symbol: _ZN4absl...5Mutex4DtorEv`).
+
+We don't want `-DNDEBUG` global, because that would also neutralize
+`assert()` in CUDA kernels (and stdlib `assert()` in host code that
+still uses it). Instead we scope `NDEBUG` narrowly, using
+`#pragma push_macro`/`pop_macro`:
+
+- Hand-written source files that include grpc headers (`FrbServer.cpp`,
+  `FakeXEngine.cpp`) wrap the block of grpc/protobuf `#include`s in a
+  `push_macro("NDEBUG")` + `#define NDEBUG` / ... / `pop_macro("NDEBUG")`
+  pair. `NDEBUG` is active only while abseil is being parsed; the rest of
+  the TU is unaffected.
+
+- Protoc-generated `.grpc.pb.cc` files pull in grpc heavily and can't be
+  hand-edited (they are regenerated on every proto change). `grpc/wrap_ndebug.py`
+  runs after `protoc` in the Makefile and prepends/appends the same
+  `push_macro`/`pop_macro` pair around the whole file. The `.pb.cc` files
+  (protobuf without grpc) are left alone -- their undefined absl symbols
+  are all exported by libabseil and resolve at load time.
+
+If a future edit adds a grpc include to a new source file, expect the
+same undefined-`Mutex::Dtor` failure at import time. To rediscover the
+offending files, run `nm --undefined-only <file>.o | grep Mutex4Dtor`.

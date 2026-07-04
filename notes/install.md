@@ -4,17 +4,6 @@
 linux machine with **a physical GPU**, and the cuda toolkit installed.
 I hope to improve this in the future!
 
-`pirate` is built as an editable install alongside a sibling
-[`ksgpu`](https://github.com/kmsmith137/ksgpu) checkout (GPU C++/CUDA
-core utils). The [`pipmake`](https://github.com/kmsmith137/pipmake) build backend
-is installed from PyPI (see step 2), so it does NOT need its own checkout. The
-recommended layout puts the two source checkouts side by side:
-
-```
-    SOMEDIR/ksgpu
-    SOMEDIR/pirate
-```
-
 1. Set up a conda environment. `pirate` relies on the **system** CUDA toolkit
 (`nvcc`, CUDA headers) and the **system** host compiler (`gcc`/`g++`); everything
 else is conda-installed. The repo ships two environment files -- pick one:
