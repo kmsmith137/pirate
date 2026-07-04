@@ -1109,6 +1109,7 @@ void FrbServer::_frame_finalizing_thread_main()
             long ichunk = completed_ichunk;
             auto now = std::chrono::steady_clock::now();
             double chunks_per_sec = -1.0;   // < 0 => not available yet (first printed chunk)
+            
             if (!t0_valid) {
                 t0_valid = true;
                 t0 = now;
@@ -1125,16 +1126,16 @@ void FrbServer::_frame_finalizing_thread_main()
                  << ", ichunk=" << ichunk
                  << ", fpga=[" << (ichunk * seq_per_chunk)
                  << ":" << ((ichunk + 1) * seq_per_chunk) << "]";
+            
             if (chunks_per_sec >= 0.0) {
                 double gbps = chunks_per_sec * double(bytes_per_chunk) * 8.0 / 1.0e9;
-                // rt_beams: "real-time beams" = (chunks/sec) * (seconds of data per
-                // chunk) * nbeams -- the effective number of beams kept up in real time.
                 double rt_beams = chunks_per_sec * chunk_len_sec * double(nbeams);
                 line << std::fixed << std::setprecision(2)
                      << ", Gbps=" << gbps
-                     << ", rt_beams=" << rt_beams;
+                     << ", beams=" << rt_beams
+                     << "/" << nbeams << "\n";
             }
-            std::cout << line.str() << std::endl;
+            std::cout << line.str() << std::flush;
         }
     }
 }
