@@ -1,15 +1,19 @@
 """Tests for SinglePulse injection / semantics (dispatched from 'pirate_frb test --sim').
 
-test_pulse_injection(): builds a frame of calibrated Gaussian noise with an injected pulse,
+test_pulse_injection(): builds frames of calibrated Gaussian noise with an injected pulse,
 dequantizes, and checks:
   - the -8 sentinel is never produced;
   - the pulse is present at the right (freq, time) with roughly the right amplitude (a matched
     filter against the expected pulse); a reversed frequency mapping or wrong dt_sp would give ~0;
   - the off-pulse residual variance matches the per-zone noise variance;
   - the consistency + precondition checks throw on misuse.
+  The pulse is injected at three (randomized) arrival times per call -- straddling t < 0
+  (a negative arrival time, early samples clipped), fully inside the frame, and straddling
+  t = ntime -- so inject_single_pulse()'s [0, ntime) clipping is exercised on both ends.
 
-test_negative_arrival_times(): checks that SinglePulse handles pulses whose arrival extends to
-t < 0 (negative freq_it0) -- the it_start/it_end invariant, integer-shift equivalence, and the
+test_pulse_invariants(): checks SinglePulse's sparse-representation invariants, using a pulse
+whose arrival extends to t < 0 (mixed-sign freq_it0) to stress the negative-time regime: the
+it_start/it_end bracketing invariant, integer-shift equivalence, shift_samples(), and the
 add_to_timestream(out, out_it0) span contract.
 """
 
@@ -71,9 +75,9 @@ def _make_frame(xmd, nbeams, nfreq, ntime):
     return fset.frames[0], alloc
 
 
-def _single_pulse(edges, variances, time_sample_ms, dm=10.0, snr=40.0):
+def _single_pulse(edges, variances, time_sample_ms, dm=10.0, snr=40.0, uat_sec=0.1):
     return SinglePulse(dm=dm, sm=0.0, intrinsic_width=2.0e-3, spectral_index=0.0,
-                       undispersed_arrival_time_sec=0.1, time_sample_ms=time_sample_ms, snr=snr,
+                       undispersed_arrival_time_sec=uat_sec, time_sample_ms=time_sample_ms, snr=snr,
                        freq_edges_MHz=edges, freq_variances=variances)
 
 
@@ -95,35 +99,64 @@ def test_pulse_injection():
     frame_dt_ms = xmd.dt_ns_per_seq * xmd.seq_per_frb_time_sample / 1.0e6
     edges = np.linspace(flo, fhi, nfreq + 1)
     variances = np.full(nfreq, V)
-    sp = _single_pulse(edges, variances, frame_dt_ms)
-    assert 0 <= sp.it_start and sp.it_end <= ntime, \
-        f"pulse range [{sp.it_start},{sp.it_end}) does not fit in [0,{ntime}); lower dm"
 
-    frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
-    frame.randomize(normalize=True, gaussian=True, sp=sp, dt_sp=dt_sp)
+    def _inject_and_check(sp, label):
+        """Inject 'sp' into a fresh frame, dequantize, and run the pulse-content + noise
+        checks. 'expected' is clipped to [0, ntime) exactly like inject_single_pulse(), so this
+        works whether or not the pulse straddles a frame edge."""
+        frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
+        frame.randomize(normalize=True, gaussian=True, sp=sp, dt_sp=dt_sp)
 
-    v = _unpack_int4(frame)
-    assert not (v == -8).any(), "gaussian+pulse produced a -8 sentinel"
+        v = _unpack_int4(frame)
+        assert not (v == -8).any(), f"[{label}] gaussian+pulse produced a -8 sentinel"
 
-    deq = _dequantize(frame)
-    expected = _expected_pulse(sp, nfreq, ntime, dt_sp)
-    assert expected.any(), "expected pulse is all-zero (bad test setup)"
+        deq = _dequantize(frame)
+        expected = _expected_pulse(sp, nfreq, ntime, dt_sp)
+        assert expected.any(), f"[{label}] expected pulse is all-zero (bad test setup)"
 
-    # Matched-filter amplitude ~1 iff the pulse landed at the right (freq, time) with the right
-    # scale. Reversed frequency mapping or a wrong dt_sp -> ~0. Loose bounds: int4 quantization
-    # and any saturation of bright samples pull it somewhat below 1.
-    amp = float(np.sum(deq * expected) / np.sum(expected * expected))
-    assert 0.3 < amp < 2.0, f"matched-filter amplitude {amp:.3f} out of range (mapping/scale bug?)"
+        # Matched-filter amplitude ~1 iff the (in-frame part of the) pulse landed at the right
+        # (freq, time) with the right scale. Reversed frequency mapping or a wrong dt_sp -> ~0.
+        # Loose bounds: int4 quantization and any saturation of bright samples pull it somewhat
+        # below 1. Each placement keeps >= ceil(L/2) samples in-frame, so the estimate is robust.
+        amp = float(np.sum(deq * expected) / np.sum(expected * expected))
+        assert 0.3 < amp < 2.0, f"[{label}] matched-filter amplitude {amp:.3f} out of range (mapping/scale bug?)"
 
-    # Off-pulse residual (= dequantized noise) variance should match the per-zone noise variance V.
-    resid = deq - expected
-    rvar = float(resid[expected == 0.0].var())
-    assert abs(rvar / V - 1.0) < 0.15, f"off-pulse residual variance {rvar:.4f} != V={V}"
+        # Off-pulse residual (= dequantized noise) variance should match the per-zone noise variance V.
+        resid = deq - expected
+        rvar = float(resid[expected == 0.0].var())
+        assert abs(rvar / V - 1.0) < 0.15, f"[{label}] off-pulse residual variance {rvar:.4f} != V={V}"
 
-    print(f"    injected pulse: it=[{sp.it_start},{sp.it_end}), matched-filter amp={amp:.3f}, "
-          f"off-pulse var={rvar:.4f} (V={V:.3f}) -- ok")
+        print(f"    {label}: it=[{sp.it_start},{sp.it_end}) vs frame [0,{ntime}), "
+              f"matched-filter amp={amp:.3f}, off-pulse var={rvar:.4f} (V={V:.3f}) -- ok")
+
+    # Learn the pulse's grid span L (with dt_sp=0, frame-time == pulse-time) from a uat=0
+    # reference. Since uat += K*dt shifts every freq_it0 -- hence it_start -- by exactly K
+    # integer samples, we can then place it_start at any target by choosing uat = K*dt.
+    sp0 = _single_pulse(edges, variances, frame_dt_ms, uat_sec=0.0)
+    it_start0, L = int(sp0.it_start), int(sp0.it_end) - int(sp0.it_start)
+    assert 2 <= L <= ntime, f"pulse span L={L} does not fit ntime={ntime}; adjust dm"
+
+    # Three placements exercising inject_single_pulse()'s [0, ntime) clipping: straddling t < 0
+    # (negative arrival -> early samples clipped), fully inside, and straddling t = ntime. Each
+    # keeps >= ceil(L/2) samples in-frame (matched filter stays robust). SinglePulse's own
+    # negative-time invariants are covered separately by test_pulse_invariants().
+    lo, hi = L // 2, L - L // 2   # hi == ceil(L/2)
+    targets = {
+        "straddle t<0":     np.random.randint(-lo, 0),                        # it_start in [-lo, -1]
+        "inside":           np.random.randint(0, ntime - L + 1),              # it_start in [0, ntime-L]
+        "straddle t=ntime": np.random.randint(ntime - L + 1, ntime - hi + 1),  # it_end in (ntime, ntime+lo]
+    }
+    for label, s in targets.items():
+        s = int(s)
+        sp = _single_pulse(edges, variances, frame_dt_ms, uat_sec=(s - it_start0) * frame_dt_ms * 1.0e-3)
+        assert int(sp.it_start) == s, f"[{label}] placement failed: it_start={sp.it_start} != {s}"
+        _inject_and_check(sp, label)
 
     # ---- consistency / precondition checks must throw ----
+    # Use a plain (fully-in-frame) pulse + a fresh frame; the checks throw before touching buffers.
+    sp = _single_pulse(edges, variances, frame_dt_ms)
+    frame, _alloc = _make_frame(xmd, len(beam_ids), nfreq, ntime)
+
     def _expect_throw(desc, fn):
         try:
             fn()
@@ -146,14 +179,15 @@ def test_pulse_injection():
     print("    consistency/precondition checks all threw -- ok")
 
 
-def test_negative_arrival_times():
-    """SinglePulse handles pulses whose arrival extends to t < 0 (negative freq_it0).
+def test_pulse_invariants():
+    """SinglePulse's sparse-representation invariants, stressed in the negative-time regime.
 
-    Checks the it_start/it_end invariant, that a pulse and its integer-sample-shifted copy are
-    identical up to the shift (nothing is discarded at t < 0), and add_to_timestream()'s
-    (out, out_it0) span contract.
+    Uses a pulse whose arrival extends to t < 0 (mixed-sign freq_it0) to check: the
+    it_start/it_end bracketing invariant; that a pulse and its integer-sample-shifted copy are
+    identical up to the shift (nothing is discarded at t < 0); shift_samples(); and
+    add_to_timestream()'s (out, out_it0) span contract.
     """
-    print("  test_negative_arrival_times()...")
+    print("  test_pulse_invariants()...")
 
     nfreq = 64
     dt_ms = 1.0

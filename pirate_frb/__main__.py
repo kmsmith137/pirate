@@ -123,7 +123,7 @@ def test(args):
         if run_all_tests or args.sim:
             utils.test_avx2_simulate_4bit_noise()
             tests.test_pulse_injection()
-            tests.test_negative_arrival_times()
+            tests.test_pulse_invariants()
 
         if run_all_tests or args.cdd2:
             for _ in rrange(kernels.CoalescedDdKernel2):
