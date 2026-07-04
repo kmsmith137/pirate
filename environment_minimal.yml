@@ -1,0 +1,53 @@
+# Minimal environment for running pirate.
+# If you're a developer, you probably want environment_dev.yml instead!
+#
+#   - We rely on the SYSTEM cuda toolkit (`nvcc`, cuda headers) and the
+#     SYSTEM host compiler (gcc/g++). Everything else is conda-installed.
+#
+#   - `libabseil<20260526` is pinned because v20260526 #includes a
+#     header (bmi2intrin.h) which gives an error in recent gcc versions
+#     (#error "Never use <bmi2intrin.h> directly; include <x86gprintrin.h> instead.")
+#     Drop this pin once conda-forge ships an abseil rebuild that stops
+#     including this gcc-private header.
+#
+# Usage (run from the parent directory that contains pipmake/, ksgpu/, pirate/):
+#
+#   conda env create -n ENV_NAME -f pirate/environment_minimal.yml
+#   conda activate ENV_NAME
+#
+#   # Ensure the asdf-cxx git submodule (used by pirate's C++ code) is checked out.
+#   (cd pirate && git submodule update --init --recursive)
+#
+#   # pirate needs --no-build-isolation so pip does NOT try to re-fetch ksgpu
+#   # (it lives in a sibling checkout, not on PyPI).
+#   (cd pipmake && pip install -e .)
+#   (cd ksgpu   && pip install -v -e .)
+#   (cd pirate  && pip install --no-build-isolation -v -e .)
+
+name: pirate_minimal
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - setuptools
+  - editables
+
+  # C++/CUDA build & link dependencies
+  - libgrpc          # C++ gRPC (grpcpp/, libgrpc++.so). Replaces the old `grpc-cpp` package name.
+  - libabseil<20260526
+  - mathdx           # cufftdx headers (used by pirate CUDA kernels)
+  - yaml-cpp         # C++ YAML parser (pirate/YamlFile.cpp)
+  - mkl-devel        # mkl_dfti.h + libmkl_rt.so (pirate/simpulse.cpp DFTI FFT)
+
+  # Python build-time headers
+  - pybind11
+  - numpy
+
+  # Python runtime (imported by pirate_frb / ksgpu at runtime or invoked during build)
+  - cupy
+  - grpcio           # `import grpc`
+  - grpcio-tools     # protoc + grpc_python_plugin; used by pirate Makefile
+  - pyyaml           # `import yaml` in pirate_frb
+  - argcomplete      # tab-completion for pirate_frb CLI
+  - asdf             # `asdftool` CLI for inspecting ASDF files written by pirate

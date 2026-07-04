@@ -1,0 +1,85 @@
+# Development environment for pirate. Superset of environment_minimal.yml:
+# adds scipy/matplotlib, jupyter tooling, sphinx docs, and editor/shell tools.
+#
+#   - We rely on the SYSTEM cuda toolkit (`nvcc`, cuda headers) and the
+#     SYSTEM host compiler (gcc/g++). Everything else is conda-installed.
+#
+#   - `cupy>=14` is pinned because adding scipy to the env drags cupy
+#     back to a CUDA-12 build unless we pin.
+#
+#   - `libabseil<20260526` is pinned because v20260526 #includes a
+#     header (bmi2intrin.h) which gives an error in recent gcc versions
+#     (#error "Never use <bmi2intrin.h> directly; include <x86gprintrin.h> instead.")
+#     Drop this pin once conda-forge ships an abseil rebuild that stops
+#     including this gcc-private header.
+#
+# Usage (run from the parent directory that contains pipmake/, ksgpu/, pirate/):
+#
+#   conda env create -n ENV_NAME -f pirate/environment_dev.yml
+#   conda activate ENV_NAME
+#
+#   # Ensure the asdf-cxx git submodule (used by pirate's C++ code) is checked out.
+#   (cd pirate && git submodule update --init --recursive)
+#
+#   # pirate needs --no-build-isolation so pip does NOT try to re-fetch ksgpu
+#   # (it lives in a sibling checkout, not on PyPI).
+#   (cd pipmake && pip install -e .)
+#   (cd ksgpu   && pip install -v -e .)
+#   (cd pirate  && pip install --no-build-isolation -v -e .)
+#
+# Note on `make docs`: sphinx html builds work out of the box (`python -m sphinx
+# -M html docs/source docs/build`). However, the full `make docs` target also runs
+# pdflatex on notes/*.tex. I didn't include conda packages for latex since they're
+# out of date, not actively maintained, and around ~500 MB. On ubuntu, I recommend
+# using system latex packages:
+#
+#    sudo apt install --no-install-recommends texlive-latex-base \
+#      texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended \
+#      texlive-science texlive-publishers texlive-pictures texlive-xetex latexmk biber 
+
+name: pirate_dev
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - setuptools
+  - editables
+
+  # C++/CUDA build & link dependencies (see environment-minimal.yml)
+  - libgrpc
+  - libabseil<20260526   # 20260526 direct-includes gcc's private <bmi2intrin.h>; see environment-minimal.yml
+  - mathdx
+  - yaml-cpp
+  - mkl-devel
+
+  # Python build-time headers
+  - pybind11
+  - numpy
+
+  # Python runtime
+  - cupy>=14         # pin: scipy would otherwise drag cupy back to a CUDA-12 build
+  - grpcio
+  - grpcio-tools
+  - pyyaml
+  - argcomplete
+  - asdf
+
+  # ---- extras beyond minimal ----
+  # Scientific python
+  - scipy
+  - matplotlib
+
+  # Interactive / notebook
+  - ipykernel
+  - jupyterlab
+
+  # Sphinx documentation (pirate `make docs`)
+  - sphinx
+  - sphinx-argparse
+  - furo
+  - myst-parser
+
+  # Editor / shell tooling
+  - emacs
+  - direnv
