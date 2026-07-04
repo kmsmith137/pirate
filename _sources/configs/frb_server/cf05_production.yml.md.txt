@@ -91,14 +91,20 @@ min_rpc_mtu: 1500
 #####################################  File-writing config  ######################################
 
 
-# 'ssd_dirs' and 'ssd_devices' are lists of length num_servers.
-# If an ssd_dir isn't backed by the corresponding ssd_device, then an exception is thrown.
-# (This is intended to catch misconfiguration where an SSD is not mounted.)
+# 'check_mountpoints' is intended to catch a misconfiguration where a file system isn't mounted.
+# If any of the listed directories aren't mountpoints, then an exception is raised.
+
+check_mountpoints: [ '/scratch2', '/mnt/cs00/data' ]
+
+# 'ssd_dirs' and 'ssd_devices' are lists of length num_servers. If an ssd_dir isn't on the
+# correct numa domain, then an exception is raised. (If this proves to be too restrictive
+# in the future, then I might introduce a config flag to relax it.)
 #
-# Note: on the chord frb nodes, /dev/nvme1n1 is on CPU0, and /dev/nvme0n1 is on CPU1.
+# Note: on the chord frb nodes,
+#   /scratch2 is the mountpoint of an SSD on CPU0
+#   /scratch is a subdirectory of /, which is an SSD on CPU1 (/scratch is not a mountpoint)
 
 ssd_dirs: [ '/scratch2', '/scratch' ]
-ssd_devices: [ '/dev/nvme1n1p1', '/dev/nvme0n1p2' ]
 ssd_threads_per_server: 4
 
 # Currently, all servers write to the same nfs_dir (i.e. 'nfs_dir' is a string,

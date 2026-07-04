@@ -220,6 +220,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
@@ -287,6 +288,14 @@
 <dd><p>The FrbGrouper manages pirate-grouper communication (from the grouper side).</p>
 <p>This is a complex class, and the docstrings just summarize syntax.
 For a lot more info, see the grouper-specific parts of the sphinx docs.</p>
+<p>Constructor:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">g</span> <span class="o">=</span> <span class="n">pirate_frb</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">FrbGrouper</span><span class="p">(</span><span class="n">ip_addr</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>where <code class="docutils literal notranslate"><span class="pre">ip_addr</span></code> (str) is the grouper’s own <code class="docutils literal notranslate"><span class="pre">ip:port</span></code> listen address (e.g.
+‘127.0.0.1:7000’); the producer (an FrbServer running pirate) connects to it and
+hands off the GpuDedisperser output ring buffer over CUDA IPC. Use the object as a
+context manager (see below).</p>
 <p>Usage summary:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pirate_frb</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">FrbGrouper</span><span class="p">(</span><span class="s1">&#39;127.0.0.1:7000&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">g</span><span class="p">:</span>
     <span class="k">for</span> <span class="n">ichunk</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">count</span><span class="p">():</span>       <span class="c1"># outer loop over time chunks</span>
@@ -324,6 +333,9 @@ For a lot more info, see the grouper-specific parts of the sphinx docs.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_config_yaml</span></code> (dict) – parsed dedispersion config.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">dedispersion_plan_yaml</span></code> (dict) – parsed dedispersion plan.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">dm_per_unit_delay</span></code> (float) – DM of a full-band delay of one input time sample.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">steady_state_it0</span></code> (list of int arrays). A dedispersion output array element
+(ichunk, beam, itree, idm, it) is “steady-state”, i.e. unaffected by initial
+zero-padding, if: <code class="docutils literal notranslate"><span class="pre">ichunk*nt_out</span> <span class="pre">+</span> <span class="pre">it</span> <span class="pre">&gt;=</span> <span class="pre">steady_state_it0[itree][idm]</span></code>.</p></li>
 </ul>
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.rpc.FrbGrouper.create_events">
@@ -359,8 +371,9 @@ of ‘initial_chunk’, which was sent in the pirate-grouper handshake.)</p></li
 <dd class="field-even"><p>The events translated into physical units (beam id, absolute FPGA
 timestamp, DM, SNR), ready to pass to FrbSifterClient.send_events(). Also
 carries the chunk’s absolute FPGA window (<code class="docutils literal notranslate"><span class="pre">chunk_fpga_start</span></code>,
-<code class="docutils literal notranslate"><span class="pre">chunk_fpga_end</span></code>). rfi_prob is set to zero (not computed by the toy
-grouper).</p>
+<code class="docutils literal notranslate"><span class="pre">chunk_fpga_end</span></code>). The per-event quantities not measured by the toy
+grouper get placeholders: rfi_prob = 0, width_ms = one time sample, and
+the subband = the full band (subband_freq_{lo,hi}_MHz).</p>
 </dd>
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
 <dd class="field-odd"><p><a class="reference internal" href="FrbSifterEvents.html#pirate_frb.rpc.FrbSifterEvents" title="pirate_frb.rpc.FrbSifterEvents">FrbSifterEvents</a></p>

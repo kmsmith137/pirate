@@ -220,6 +220,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
@@ -361,10 +362,16 @@
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">nfs_threads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9</span><span class="p">;</span><span class="w">               </span><span class="c1">// Number of FileWriter NFS threads</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">tree_rank</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span><span class="w">                </span><span class="c1">// From config_prefilled.tree_rank</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">beams_per_batch</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">11</span><span class="p">;</span><span class="w">          </span><span class="c1">// From config_prefilled.beams_per_batch</span>
+
+<span class="w">  </span><span class="c1">// Used by fake X-engine</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">int64</span><span class="w"> </span><span class="na">fake_zone_nfreq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">12</span><span class="p">;</span><span class="w"> </span><span class="c1">// From config_prefilled.zone_nfreq (pre-metadata)</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="na">fake_zone_freq_edges</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">13</span><span class="p">;</span><span class="w">  </span><span class="c1">// From config_prefilled.zone_freq_edges (pre-metadata)</span>
 <span class="w">  </span><span class="kt">double</span><span class="w"> </span><span class="na">fake_time_sample_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">14</span><span class="p">;</span><span class="w">     </span><span class="c1">// From config_prefilled.time_sample_ms (pre-metadata)</span>
 <span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">fake_nbeams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">15</span><span class="p">;</span><span class="w">              </span><span class="c1">// From config_prefilled.beams_per_gpu (pre-metadata)</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">int64</span><span class="w"> </span><span class="na">frequency_subband_counts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span><span class="p">;</span><span class="w">   </span><span class="c1">// config_prefilled.frequency_subband_counts}</span>
+<span class="w">  </span><span class="kt">double</span><span class="w"> </span><span class="na">max_dm_of_all_trees</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">17</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">int64</span><span class="w"> </span><span class="na">max_width_of_base_tree</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">18</span><span class="p">;</span><span class="w">   </span><span class="c1">// in samples, not ms</span>
 <span class="p">}</span>
 
 <span class="c1">// Request message for GetXEngineMetadata</span>

@@ -52,8 +52,9 @@ min_rpc_mtu: 1500
 #####################################  File-writing config  ######################################
 
 
+check_mountpoints: [ ]
+
 ssd_dirs: [ '/dev/shm/pirate_ssd' ]
-ssd_devices: [ 'tmpfs' ]
 ssd_threads_per_server: 4
 
 nfs_dir: '/dev/shm/pirate_nfs'

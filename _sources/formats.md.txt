@@ -13,5 +13,6 @@ notes/network_protocol
 xengine_metadata (v2) <configs/xengine_metadata.yml>
 dedispersion_config <configs/dedispersion/chord_sb2_et.yml>
 dedispersion_plan <configs/example_dedispersion_plan.yml>
+frb_server config <configs/frb_server/cf05_production.yml>
 _grpc_generated
 ```

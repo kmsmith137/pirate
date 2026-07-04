@@ -220,6 +220,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
@@ -294,7 +295,7 @@
 <p>The “toy” search is a subscale example which starts quickly, runs over the loopback network on
 a single node, and uses a small fraction of a single GPU.
 To run the full sequence (fake X-engine) -&gt; (FRB search) -&gt; (grouper) -&gt; (sifter),
-run the following commands in separate terminal windows:</p>
+run the following commands in separate terminal windows.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Window 1: start the sifter (waits for grouper to connect)</span>
 <span class="n">pirate_frb</span> <span class="n">run_toy_sifter</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span>
 
@@ -304,8 +305,12 @@ run the following commands in separate terminal windows:</p>
 <span class="c1"># Window 3: start the search (waits for fake X-engine to connect)</span>
 <span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span> <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">toy</span><span class="o">.</span><span class="n">yml</span>
 
-<span class="c1"># Window 4: start the fake X-engine. Data will start streaming through all 4 processes.</span>
-<span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
+<span class="c1"># Window 4: start the fake X-engine.</span>
+<span class="c1"># Data will start streaming through all 4 processes.</span>
+<span class="c1"># The -f flag randomly simulates FRBs.</span>
+<span class="c1"># The -g GAP_SEC flag puts a time gap between simulated FRBs.</span>
+<span class="c1"># The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.</span>
+<span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">g</span> <span class="mi">30</span> <span class="o">-</span><span class="n">s</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 
 <span class="c1"># Optional: in window 5, send RPC &quot;status&quot; requests to the server.</span>
 <span class="c1"># This will monitor connections, bytes received, files written, ring buffer state.</span>
@@ -318,9 +323,15 @@ run the following commands in separate terminal windows:</p>
 <span class="n">pirate_frb</span> <span class="n">rpc_write</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">6000</span>
 </pre></div>
 </div>
+<p>In this example, we simulated FRBs and sent two event streams to the sifter.
+One event stream is sent by the search code (via the grouper) and represents the outcome of the search.
+The other event stream is sent by the fake x-engine and represents the “truth”: the list of simulated
+FRBs with parameters (DMs, arrival times, etc.)
+These event streams are distinguished by the <code class="docutils literal notranslate"><span class="pre">from_simulator</span></code> flag
+(see <a class="reference internal" href="../grpc/frb_sifter.proto.html"><span class="std std-doc">frb_sifter.proto</span></a> or the sifter terminal output).</p>
 <p>Note that you don’t need to run this entire sequence every time!
 The programs above have command-line args to “short-circuit” the downstream programs.
-(For example, <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_server</span> <span class="pre">--no-grouper</span></code> or <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_toy_grouper</span> <span class="pre">--no-sifter</span></code>.)</p>
+(For example, <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_server</span> <span class="pre">---no-grouper</span></code> or <code class="docutils literal notranslate"><span class="pre">pirate_frb</span> <span class="pre">run_toy_grouper</span> <span class="pre">--no-sifter</span></code>.)</p>
 </section>
 <section id="running-a-production-search-cf00-cf05">
 <h2>Running a production search (cf00/cf05)<a class="headerlink" href="#running-a-production-search-cf00-cf05" title="Link to this heading">¶</a></h2>
@@ -331,16 +342,19 @@ sifter on cf05, but it could be run on cf00 (or a third node). Note that there
 are two grouper processes (one per GPU), each of which independently connects
 to the sifter.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Window cf05/1: start the sifter (waits for grouper to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_toy_sifter</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span>
+<span class="n">pirate_frb</span> <span class="n">run_toy_sifter</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span>
 
 <span class="c1"># Window cf05/2: start the grouper (waits for search to connect)</span>
-<span class="n">pirate_frb</span> <span class="n">run_toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7001</span>
+<span class="n">pirate_frb</span> <span class="n">run_toy_grouper</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7000</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">7001</span>
 
 <span class="c1"># Window cf05/3: start the search (waits for fake X-engine to connect)</span>
 <span class="n">pirate_frb</span> <span class="n">run_server</span> <span class="n">configs</span><span class="o">/</span><span class="n">frb_server</span><span class="o">/</span><span class="n">cf05_production</span><span class="o">.</span><span class="n">yml</span> <span class="n">configs</span><span class="o">/</span><span class="n">dedispersion</span><span class="o">/</span><span class="n">chord_sb2_et</span><span class="o">.</span><span class="n">yml</span>
 
-<span class="c1"># Window cf00/1: start the fake X-engine. Data will start streaming through all 4 processes.</span>
-<span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
+<span class="c1"># Window cf00/1: start the fake X-engine.</span>
+<span class="c1"># Data will start streaming through all 4 processes.</span>
+<span class="c1"># The -f flag randomly simulates FRBs.</span>
+<span class="c1"># The -s SIFTER_ADDR flag sends an event to the sifter for each simulated FRB.</span>
+<span class="n">pirate_frb</span> <span class="n">run_fake_xengine</span> <span class="o">-</span><span class="n">f</span> <span class="o">-</span><span class="n">s</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">7500</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 
 <span class="c1"># Optional: on either cf00 or cf05, send RPC &quot;status&quot; requests to the server.</span>
 <span class="n">pirate_frb</span> <span class="n">rpc_status</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
@@ -352,6 +366,8 @@ to the sifter.</p>
 <span class="n">pirate_frb</span> <span class="n">rpc_write</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6000</span> <span class="mf">10.222.3.5</span><span class="p">:</span><span class="mi">6001</span>
 </pre></div>
 </div>
+<p>See above for more info on the simulated FRB event streams, or on “short-circuting” the
+sequence of programs.</p>
 </section>
 </section>
 

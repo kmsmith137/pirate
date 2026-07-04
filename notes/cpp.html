@@ -220,6 +220,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
@@ -281,13 +282,30 @@
         <article role="main" id="furo-main-content">
           <section id="c-guidelines">
 <h1>C++ guidelines<a class="headerlink" href="#c-guidelines" title="Link to this heading">¶</a></h1>
-<ul class="simple">
+<ul>
 <li><p>Prefer private (or static) functions over anonymous scopes <code class="docutils literal notranslate"><span class="pre">{</span> <span class="pre">...</span> <span class="pre">}</span></code>.</p></li>
-<li><p>Use <code class="docutils literal notranslate"><span class="pre">//</span></code> comments, not <code class="docutils literal notranslate"><span class="pre">/*</span> <span class="pre">*/</span></code></p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">//</span></code> comments, not <code class="docutils literal notranslate"><span class="pre">/*</span> <span class="pre">*/</span></code>. Exception: <code class="docutils literal notranslate"><span class="pre">/*</span> <span class="pre">*/</span></code> is a good choice for inline
+argument-name annotations at a call site, e.g. <code class="docutils literal notranslate"><span class="pre">f(/*count=*/3,</span> <span class="pre">/*noisy=*/true)</span></code>.</p></li>
 <li><p>Use <code class="docutils literal notranslate"><span class="pre">long</span></code> for sizes and indices, not <code class="docutils literal notranslate"><span class="pre">int</span></code> or <code class="docutils literal notranslate"><span class="pre">size_t</span></code></p></li>
 <li><p>Use spaces, not tabs.</p></li>
 <li><p>Functions which take an <code class="docutils literal notranslate"><span class="pre">ostream</span> <span class="pre">&amp;</span></code> argument should not modify stream state in the caller.</p></li>
 <li><p>If a class <code class="docutils literal notranslate"><span class="pre">X</span></code> derives from <code class="docutils literal notranslate"><span class="pre">std::enable_shared_from_this</span></code>, then its constructor(s) must be protected, and the class must define <code class="docutils literal notranslate"><span class="pre">create()</span></code> static method(s) that return <code class="docutils literal notranslate"><span class="pre">shared_ptr&lt;X&gt;</span></code>.</p></li>
+<li><p>Minimize header <code class="docutils literal notranslate"><span class="pre">#include</span></code> dependencies. In a <code class="docutils literal notranslate"><span class="pre">.hpp</span></code>, if a type is only used by
+pointer, reference, or <code class="docutils literal notranslate"><span class="pre">std::shared_ptr&lt;T&gt;</span></code> (not by value, as a base class, or
+via member access / <code class="docutils literal notranslate"><span class="pre">sizeof</span></code>), forward-declare it instead of <code class="docutils literal notranslate"><span class="pre">#include</span></code>-ing its
+header, and move the <code class="docutils literal notranslate"><span class="pre">#include</span></code> into the <code class="docutils literal notranslate"><span class="pre">.cpp</span></code> file(s) that use the full type.
+This cuts recompilation when the included header changes. Match the declared
+keyword (<code class="docutils literal notranslate"><span class="pre">class</span></code> vs <code class="docutils literal notranslate"><span class="pre">struct</span></code>) and note where it lives, e.g.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">SlabAllocator</span><span class="p">;</span>     <span class="o">//</span> <span class="n">defined</span> <span class="ow">in</span> <span class="n">SlabAllocator</span><span class="o">.</span><span class="n">hpp</span>
+<span class="n">struct</span> <span class="n">XEngineMetadata</span><span class="p">;</span>  <span class="o">//</span> <span class="n">defined</span> <span class="ow">in</span> <span class="n">XEngineMetadata</span><span class="o">.</span><span class="n">hpp</span>
+</pre></div>
+</div>
+<p>Caveat: keep the full <code class="docutils literal notranslate"><span class="pre">#include</span></code> in the header when the complete type is needed
+there – a base class, a by-value member, an inline function that touches the
+type, or a <code class="docutils literal notranslate"><span class="pre">std::unique_ptr&lt;T&gt;</span></code> member of a class whose destructor is
+compiler-generated in the header (<code class="docutils literal notranslate"><span class="pre">unique_ptr</span></code> needs a complete type at the
+destructor; <code class="docutils literal notranslate"><span class="pre">shared_ptr</span></code> does not). When unsure, include it.</p>
+</li>
 </ul>
 <section id="ksgpu">
 <h2>ksgpu<a class="headerlink" href="#ksgpu" title="Link to this heading">¶</a></h2>

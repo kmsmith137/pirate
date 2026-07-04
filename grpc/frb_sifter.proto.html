@@ -220,6 +220,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
@@ -311,12 +312,10 @@
 <span class="c1">// is that placeholder (a ConfigMessage.protocol_version of 0 is therefore</span>
 <span class="c1">// invalid -- e.g. an old client that never set the field). Bump</span>
 <span class="c1">// PROTOCOL_VERSION_CURRENT on any incompatible wire-format change.</span>
-<span class="c1">//</span>
-<span class="c1">// NOTE: protocol_version (and this enum) is a pirate-local addition; it is not</span>
-<span class="c1">// (yet) present in the canonical upstream frb_sifter.proto referenced above.</span>
+
 <span class="kd">enum</span><span class="w"> </span><span class="n">ProtocolVersion</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="na">PROTOCOL_VERSION_UNSPECIFIED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
-<span class="w">  </span><span class="na">PROTOCOL_VERSION_CURRENT</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="na">PROTOCOL_VERSION_CURRENT</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="p">}</span>
 
 <span class="kd">message</span><span class="w"> </span><span class="nc">ConfigMessage</span><span class="w"> </span><span class="p">{</span>
@@ -325,8 +324,14 @@
 <span class="w">  </span><span class="c1">// does not match its own PROTOCOL_VERSION_CURRENT. Kept as a uint32 rather</span>
 <span class="w">  </span><span class="c1">// than the enum type so an out-of-range value from a newer client round-trips</span>
 <span class="w">  </span><span class="c1">// as a plain integer the sifter can report, instead of decoding to the proto3</span>
-<span class="w">  </span><span class="c1">// &quot;unknown enum&quot; sentinel.  </span>
+<span class="w">  </span><span class="c1">// &quot;unknown enum&quot; sentinel.</span>
+<span class="w">  </span>
 <span class="w">  </span><span class="kt">uint32</span><span class="w"> </span><span class="na">protocol_version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Currently, we initialize all 5 of these fields in the main search, but when</span>
+<span class="w">  </span><span class="c1">// we send simulated events with &#39;pirate_frb run_fake_xengine -f -s ...&#39;, fields</span>
+<span class="w">  </span><span class="c1">// other than &#39;xengine_yaml&#39; are empty strings (-&gt; yaml null).</span>
+<span class="w">  </span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">pirate_yaml</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">xengine_yaml</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">dedispersion_plan_yaml</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
@@ -349,6 +354,14 @@
 <span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="na">dm</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="na">snr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="na">rfi_prob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Currently, these members are set to placeholder values in the main search, but when</span>
+<span class="w">  </span><span class="c1">// we send simulated events with &#39;pirate_frb run_fake_xengine -f -s ...&#39;, we do set</span>
+<span class="w">  </span><span class="c1">// meaningful values.</span>
+<span class="w">  </span>
+<span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="na">width_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="na">subband_freq_lo_MHz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="na">subband_freq_hi_MHz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
 <span class="p">}</span>
 
 <span class="c1">// When events are sent from the search pipeline, we set from_simulator=false.</span>

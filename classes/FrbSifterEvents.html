@@ -220,6 +220,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
@@ -283,7 +284,7 @@
 <h1>FrbSifterEvents<a class="headerlink" href="#frbsifterevents" title="Link to this heading">¶</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="pirate_frb.rpc.FrbSifterEvents">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pirate_frb.rpc.</span></span><span class="sig-name descname"><span class="pre">FrbSifterEvents</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">beam_ids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fpga_timestamps</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">snrs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rfi_probs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_fpga_start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_fpga_end</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterEvents" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pirate_frb.rpc.</span></span><span class="sig-name descname"><span class="pre">FrbSifterEvents</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">beam_ids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fpga_timestamps</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">snrs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rfi_probs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">widths_ms</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subband_freqs_lo_MHz</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subband_freqs_hi_MHz</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_fpga_start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_fpga_end</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterEvents" title="Link to this definition">¶</a></dt>
 <dd><p>Helper class, representing FRB events to send to the sifter.</p>
 <p>Returned by FrbGrouper.create_events(), and passed to FrbSifterClient.send_events().</p>
 <p>Attributes (numpy arrays, shapes must be equal):</p>
@@ -293,6 +294,9 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">dms</span></code> (float32) – dispersion measure</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">snrs</span></code> (float32) – signal-to-noise ratio</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">rfi_probs</span></code> (float32) – RFI probability</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">widths_ms</span></code> (float32) – intrinsic pulse width in milliseconds</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">subband_freqs_lo_MHz</span></code> (float32) – low edge of the event’s frequency subband (MHz)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">subband_freqs_hi_MHz</span></code> (float32) – high edge of the event’s frequency subband (MHz)</p></li>
 </ul>
 <p>Other attributes:</p>
 <ul class="simple">

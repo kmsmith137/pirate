@@ -220,6 +220,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/dedispersion/chord_sb2_et.yml.html">dedispersion_config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_dedispersion_plan.yml.html">dedispersion_plan</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../configs/frb_server/cf05_production.yml.html">frb_server config</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
@@ -283,7 +284,7 @@
 <h1>FrbSifterClient<a class="headerlink" href="#frbsifterclient" title="Link to this heading">¶</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="pirate_frb.rpc.FrbSifterClient">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pirate_frb.rpc.</span></span><span class="sig-name descname"><span class="pre">FrbSifterClient</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">server_address</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'localhost:50051'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterClient" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">pirate_frb.rpc.</span></span><span class="sig-name descname"><span class="pre">FrbSifterClient</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">server_address</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'localhost:50051'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">raise_exception_on_timeout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterClient" title="Link to this definition">¶</a></dt>
 <dd><p>The FrbSifterClient manages grouper-sifter communication (from the grouper side).</p>
 <p>The grouper sends two types of messages to the sifter: a ConfigMessage
 (sent once), and FrbEventsMessages (sent once per FPGA window, typically
@@ -292,6 +293,15 @@ one per time chunk).</p>
 <p>Attributes (read-only):</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">server_address</span></code> (str) – the sifter’s <code class="docutils literal notranslate"><span class="pre">ip:port</span></code> address.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">timeout</span></code> (float) – per-send RPC deadline, in seconds. If &gt; 0 (default 1),
+send_events() is fire-and-forget and an event is dropped if it isn’t delivered
+within this many seconds. 0 means synchronous: send_events() blocks until the
+sifter replies.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">raise_exception_on_timeout</span></code> (bool, default True) – what happens when an async
+send (timeout &gt; 0) expires: if True the timeout is re-raised from the next
+send_events() (or printed by close() if there is no next send); if False the event
+is dropped and a message is printed to stdout (so a sifter that is offline or not
+responding is visible).</p></li>
 </ul>
 <p>Usage:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">FrbSifterClient</span><span class="p">(</span><span class="s2">&quot;localhost:7100&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">sifter</span><span class="p">:</span>
@@ -304,8 +314,15 @@ one per time chunk).</p>
 <p>where ‘events’ is a FrbSifterEvents.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="pirate_frb.rpc.FrbSifterClient.close">
-<span class="sig-name descname"><span class="pre">close</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterClient.close" title="Link to this definition">¶</a></dt>
-<dd><p>Close the gRPC channel.</p>
+<span class="sig-name descname"><span class="pre">close</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">drain_timeout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterClient.close" title="Link to this definition">¶</a></dt>
+<dd><p>Wait (briefly) for in-flight async sends, then close the gRPC channel.</p>
+<p>send_events() dispatches its RPCs asynchronously; close() waits up to
+‘drain_timeout’ seconds (total) for the pending ones to finish – so a clean
+shutdown doesn’t cancel the last events – then closes the channel (which
+cancels anything still in flight). A leftover deferred timeout
+(raise_exception_on_timeout=True) that no subsequent send_events() will report
+is printed here rather than raised, so close() can’t mask an exception that is
+unwinding through __exit__.</p>
 <p>Automatically called if the FrbSifterClient is used as a context manager.</p>
 </dd></dl>
 
@@ -313,9 +330,11 @@ one per time chunk).</p>
 <dt class="sig sig-object py" id="pirate_frb.rpc.FrbSifterClient.send_configuration">
 <span class="sig-name descname"><span class="pre">send_configuration</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pirate_yaml</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">xengine_yaml</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dedispersion_plan_yaml</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">grouper_yaml</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search_ip_addr</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterClient.send_configuration" title="Link to this definition">¶</a></dt>
 <dd><p>Send the initial ConfigMessage (CheckConfiguration RPC).</p>
-<p>Sent once, before any events. Each yaml argument may be either a str (sent
-unmodified) or any yaml-serializable object (<code class="docutils literal notranslate"><span class="pre">yaml.dump()</span></code>’d to a string
-before sending).</p>
+<p>Sent once, before any events. Unlike send_events(), this send is always
+synchronous: it blocks until the sifter replies and raises on failure (the
+client’s <code class="docutils literal notranslate"><span class="pre">timeout</span></code> governs only send_events()). Each yaml argument may be
+either a str (sent unmodified) or any yaml-serializable object
+(<code class="docutils literal notranslate"><span class="pre">yaml.dump()</span></code>’d to a string before sending).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -343,6 +362,17 @@ pirate. Sent as-is (not yaml-serialized).</p></li>
 <span class="sig-name descname"><span class="pre">send_events</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">beam_set_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">events</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">coarsegrain_snr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">from_simulator</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#pirate_frb.rpc.FrbSifterClient.send_events" title="Link to this definition">¶</a></dt>
 <dd><p>Send an FrbEventsMessage (FrbEvents RPC).</p>
 <p>Sent once per FPGA window, after send_configuration().</p>
+<p>The request is built and validated synchronously (so the caller’s arrays are
+snapshotted before returning). Delivery then depends on the client’s <code class="docutils literal notranslate"><span class="pre">timeout</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">timeout</span> <span class="pre">&gt;</span> <span class="pre">0</span></code> (the default) this is fire-and-forget: the RPC is dispatched
+on a grpc background thread with a <code class="docutils literal notranslate"><span class="pre">timeout</span></code>-second deadline and this method
+returns immediately; an event not delivered within <code class="docutils literal notranslate"><span class="pre">timeout</span></code> seconds expires
+(handled per <code class="docutils literal notranslate"><span class="pre">raise_exception_on_timeout</span></code> – see the class docstring). If
+<code class="docutils literal notranslate"><span class="pre">timeout</span> <span class="pre">==</span> <span class="pre">0</span></code> the send is synchronous: it blocks until the sifter replies and
+raises on any transport error or not-ok reply. (In the async case those are
+instead handled by the background callback: a not-ok reply is logged, and a
+failed/expired send follows <code class="docutils literal notranslate"><span class="pre">raise_exception_on_timeout</span></code>.) close() waits
+briefly for in-flight sends to finish.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -364,8 +394,11 @@ upstream (so the sifter can tell the two apart).</p></li>
 <dd class="field-even"><p>None</p>
 </dd>
 <dt class="field-odd">Raises<span class="colon">:</span></dt>
-<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.14)"><strong>RuntimeError</strong></a> – On failure: malformed input, a gRPC transport error, or a not-ok reply
-    from the sifter.</p>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.14)"><strong>RuntimeError</strong></a> – Synchronously, for malformed input (a bad ‘events’ type, or a
+    coarsegrain_snr that can’t be converted to a 1-d float32 array); with
+    timeout=0, also on a transport error or not-ok reply. With
+    raise_exception_on_timeout=True, a previous async send that timed out is
+    re-raised here (deferred from its background callback thread).</p>
 </dd>
 </dl>
 </dd></dl>
