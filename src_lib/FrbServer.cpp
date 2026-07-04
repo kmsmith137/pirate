@@ -15,6 +15,7 @@
 
 #include <chrono>    // duration<double> (processing-thread delay) + ms (MonitorRingbuf timeout)
 #include <thread>    // this_thread::sleep_for (processing-thread delay)
+#include <iomanip>   // setprecision (throughput suffix on the per-chunk line)
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -525,10 +526,51 @@ void FrbServer::_worker_main(int receiver_index)
             // per-chunk sample count and seq-per-sample.
             if (chunk_assembled && !params.quiet) {
                 long seq_per_chunk = set->ntime * m->seq_per_frb_time_sample;
-                std::cout << "FrbServer: beamset=" << m->beamset
-                          << ", ichunk=" << ichunk
-                          << ", fpga=[" << (ichunk * seq_per_chunk)
-                          << ":" << ((ichunk + 1) * seq_per_chunk) << "]" << std::endl;
+
+                // Average throughput since the first printed chunk. On that first
+                // chunk we just latch (t0, ichunk0) and print no rate; every later
+                // chunk reports (chunks since t0) / (elapsed) as chunks/sec, which we
+                // translate to Gbps and beams/sec below. throughput_* is shared across
+                // worker threads (any of them may print a chunk), so guard with 'mutex'.
+                auto now = std::chrono::steady_clock::now();
+                double chunks_per_sec = -1.0;   // < 0 => not available yet (first chunk)
+                {
+                    lock_guard<std::mutex> lk(mutex);
+                    if (!throughput_t0_valid) {
+                        throughput_t0_valid = true;
+                        throughput_t0 = now;
+                        throughput_ichunk0 = ichunk;
+                    } else {
+                        double elapsed = std::chrono::duration<double>(now - throughput_t0).count();
+                        long dchunks = ichunk - throughput_ichunk0;
+                        if ((elapsed > 0.0) && (dchunks > 0))
+                            chunks_per_sec = double(dchunks) / elapsed;
+                    }
+                }
+
+                std::ostringstream line;
+                line << "FrbServer: beamset=" << m->beamset
+                     << ", ichunk=" << ichunk
+                     << ", fpga=[" << (ichunk * seq_per_chunk)
+                     << ":" << ((ichunk + 1) * seq_per_chunk) << "]";
+                if (chunks_per_sec >= 0.0) {
+                    // Payload bytes per chunk = nbeams * (per-frame slab bytes: int4 data
+                    // + scales/offsets). Uses the same slab_nbytes() as the allocator, so
+                    // the figure stays in lockstep with the actual frame layout.
+                    long bytes_per_chunk = nbeams *
+                        AssembledFrameAllocator::slab_nbytes(m->get_total_nfreq(), set->ntime);
+                    double gbps = chunks_per_sec * double(bytes_per_chunk) * 8.0 / 1.0e9;
+                    // rt_beams: "real-time beams" = (chunks/sec) * (seconds of data
+                    // per chunk) * nbeams. The middle factor turns chunks/sec into a
+                    // real-time factor (data-seconds processed per wall second); times
+                    // nbeams gives the effective number of beams kept up in real time.
+                    double chunk_len_sec = double(seq_per_chunk) * double(m->dt_ns_per_seq) * 1.0e-9;
+                    double rt_beams = chunks_per_sec * chunk_len_sec * double(nbeams);
+                    line << std::fixed << std::setprecision(2)
+                         << ", Gbps=" << gbps
+                         << ", rt_beams=" << rt_beams;
+                }
+                std::cout << line.str() << std::endl;
             }
         }
 
