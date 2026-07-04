@@ -13,10 +13,7 @@ Some notes/caveats:
     linux machine with **a physical GPU**, and the cuda toolkit installed.
     I hope to improve this in the future!
 
-  - Uses the [`ksgpu`](https://github.com/kmsmith137/ksgpu/tree/chord) helper library,
-    but the **chord branch**, not the main branch. (I'm currently struggling
-    with branch divergence between unrelated projects -- will fix this some
-    day.)
+  - Uses the [`ksgpu`](https://github.com/kmsmith137/ksgpu) helper library.
 
 Documentation: HTML docs are at [kmsmith137.github.io/pirate](https://kmsmith137.github.io/pirate/)
 but may not be completely up-to-date. You can generate up-to-date docs with `make docs` and `make docs-serve`,

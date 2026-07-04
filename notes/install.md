@@ -5,20 +5,15 @@ linux machine with **a physical GPU**, and the cuda toolkit installed.
 I hope to improve this in the future!
 
 `pirate` is built as an editable install alongside a sibling
-[`ksgpu`](https://github.com/kmsmith137/ksgpu/tree/chord) checkout (GPU C++/CUDA
+[`ksgpu`](https://github.com/kmsmith137/ksgpu) checkout (GPU C++/CUDA
 core utils). The [`pipmake`](https://github.com/kmsmith137/pipmake) build backend
 is installed from PyPI (see step 2), so it does NOT need its own checkout. The
 recommended layout puts the two source checkouts side by side:
 
 ```
-    SOMEDIR/ksgpu     # 'chord' branch, not 'main' -- see warning below
+    SOMEDIR/ksgpu
     SOMEDIR/pirate
 ```
-
-**Warning.** If you're building `pirate`, then you need the `chord` branch of
-`ksgpu`, not the `main` branch. I'm currently trapped in Branch Divergence Hell,
-and the chord branch is many commits ahead of the main branch. I hope to emerge
-from Branch Divergence Hell soon!
 
 1. Set up a conda environment. `pirate` relies on the **system** CUDA toolkit
 (`nvcc`, CUDA headers) and the **system** host compiler (`gcc`/`g++`); everything
