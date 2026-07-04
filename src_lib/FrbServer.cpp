@@ -502,16 +502,10 @@ void FrbServer::_worker_main(int receiver_index)
                 xassert(frame_ringbuf[rb_slot] == frame);
             }
 
-            bool chunk_assembled = false;
             if (frame->finalize_count == num_receivers) {
                 // Frame received from last Receiver, so mark it assembled.
                 xassert(rb_assembled == frame_id);
                 rb_assembled++;
-                // A whole chunk is fully assembled when rb_assembled reaches a chunk
-                // boundary (its last beam was just finalized). rb_assembled advances
-                // in strict frame_id order, so this fires exactly once per chunk --
-                // from whichever Receiver's worker finalizes that chunk's last beam.
-                chunk_assembled = (rb_assembled % nbeams == 0);
             }
 
             _check_rb_invariants();
@@ -519,59 +513,9 @@ void FrbServer::_worker_main(int receiver_index)
             lock.unlock();
             frame_lock.unlock();
             cv.notify_all();
-
-            // Announce a fully-assembled chunk (once per chunk), unless params.quiet.
-            // The frame just finalized is the last beam of this set, so its chunk is
-            // 'ichunk' (== set->time_chunk_index); derive the FPGA window from the
-            // per-chunk sample count and seq-per-sample.
-            if (chunk_assembled && !params.quiet) {
-                long seq_per_chunk = set->ntime * m->seq_per_frb_time_sample;
-
-                // Average throughput since the first printed chunk. On that first
-                // chunk we just latch (t0, ichunk0) and print no rate; every later
-                // chunk reports (chunks since t0) / (elapsed) as chunks/sec, which we
-                // translate to Gbps and beams/sec below. throughput_* is shared across
-                // worker threads (any of them may print a chunk), so guard with 'mutex'.
-                auto now = std::chrono::steady_clock::now();
-                double chunks_per_sec = -1.0;   // < 0 => not available yet (first chunk)
-                {
-                    lock_guard<std::mutex> lk(mutex);
-                    if (!throughput_t0_valid) {
-                        throughput_t0_valid = true;
-                        throughput_t0 = now;
-                        throughput_ichunk0 = ichunk;
-                    } else {
-                        double elapsed = std::chrono::duration<double>(now - throughput_t0).count();
-                        long dchunks = ichunk - throughput_ichunk0;
-                        if ((elapsed > 0.0) && (dchunks > 0))
-                            chunks_per_sec = double(dchunks) / elapsed;
-                    }
-                }
-
-                std::ostringstream line;
-                line << "FrbServer: beamset=" << m->beamset
-                     << ", ichunk=" << ichunk
-                     << ", fpga=[" << (ichunk * seq_per_chunk)
-                     << ":" << ((ichunk + 1) * seq_per_chunk) << "]";
-                if (chunks_per_sec >= 0.0) {
-                    // Payload bytes per chunk = nbeams * (per-frame slab bytes: int4 data
-                    // + scales/offsets). Uses the same slab_nbytes() as the allocator, so
-                    // the figure stays in lockstep with the actual frame layout.
-                    long bytes_per_chunk = nbeams *
-                        AssembledFrameAllocator::slab_nbytes(m->get_total_nfreq(), set->ntime);
-                    double gbps = chunks_per_sec * double(bytes_per_chunk) * 8.0 / 1.0e9;
-                    // rt_beams: "real-time beams" = (chunks/sec) * (seconds of data
-                    // per chunk) * nbeams. The middle factor turns chunks/sec into a
-                    // real-time factor (data-seconds processed per wall second); times
-                    // nbeams gives the effective number of beams kept up in real time.
-                    double chunk_len_sec = double(seq_per_chunk) * double(m->dt_ns_per_seq) * 1.0e-9;
-                    double rt_beams = chunks_per_sec * chunk_len_sec * double(nbeams);
-                    line << std::fixed << std::setprecision(2)
-                         << ", Gbps=" << gbps
-                         << ", rt_beams=" << rt_beams;
-                }
-                std::cout << line.str() << std::endl;
-            }
+            // (The per-chunk "FrbServer: ..." status line is printed by the
+            // frame_finalizing_thread, when a chunk is fully PROCESSED by the GPU,
+            // not here at network-assembly time.)
         }
 
         expected_frame_id += nbeams;
@@ -1106,12 +1050,33 @@ void FrbServer::_frame_finalizing_thread_main()
     // above, so reading it here outside the lock is safe.)
     const long B = dedisperser->beams_per_batch;
 
+    // Per-chunk status-line geometry. Metadata is available by now (the plan was
+    // built from it before dedisperser_is_initialized, which we waited on above), so
+    // get_metadata(true) does not block. A chunk is fully PROCESSED when rb_processed
+    // reaches a chunk boundary (multiple of nbeams); rb_processed advances by B, a
+    // divisor of nbeams, in both the normal and --no-dedispersion paths, so it lands
+    // exactly on each boundary. bytes_per_chunk / chunk_len_sec feed Gbps + rt_beams.
+    shared_ptr<const XEngineMetadata> m = frame_allocator->get_metadata(true);
+    const long   nbeams          = m->get_nbeams();
+    const long   ntime           = frame_allocator->time_samples_per_chunk;
+    const long   seq_per_chunk   = ntime * m->seq_per_frb_time_sample;
+    const long   bytes_per_chunk = nbeams * AssembledFrameAllocator::slab_nbytes(m->get_total_nfreq(), ntime);
+    const double chunk_len_sec   = double(seq_per_chunk) * double(m->dt_ns_per_seq) * 1.0e-9;
+
+    // Average throughput since the first PRINTED chunk. Only this single thread
+    // touches these, so no locking is needed. t0_valid latches on the first printed
+    // chunk (which reports no rate -- there is no interval yet).
+    bool t0_valid = false;
+    std::chrono::steady_clock::time_point t0;
+    long ichunk0 = 0;
+
     for (long seq_id = 0; ; seq_id++) {
         // Blocks (on the host) until the GPU completes batch seq_id's H2G
         // copies. Throws "called on stopped instance" if stop() cascaded into
         // evrb_h2g; the wrapper below catches it.
         evrb_h2g_p->synchronize(seq_id, /*blocking=*/true);
 
+        long completed_ichunk = -1;   // >= 0 once rb_processed crosses a chunk boundary
         {
             unique_lock<std::mutex> lock(mutex);
             if (is_stopped) return;
@@ -1130,8 +1095,47 @@ void FrbServer::_frame_finalizing_thread_main()
 
             rb_processed += B;
             _check_rb_invariants();
+
+            // rb_processed just reached (ichunk+1)*nbeams => chunk 'ichunk' is done.
+            if (rb_processed % nbeams == 0)
+                completed_ichunk = rb_processed / nbeams - 1;
         }
         cv.notify_all();
+
+        // Announce a fully-processed chunk (once per chunk), unless params.quiet.
+        // Printed off-lock. See the assembly-time note in _worker_main: the status
+        // line lives here (processed by the GPU), not there (assembled by the net).
+        if ((completed_ichunk >= 0) && !params.quiet) {
+            long ichunk = completed_ichunk;
+            auto now = std::chrono::steady_clock::now();
+            double chunks_per_sec = -1.0;   // < 0 => not available yet (first printed chunk)
+            if (!t0_valid) {
+                t0_valid = true;
+                t0 = now;
+                ichunk0 = ichunk;
+            } else {
+                double elapsed = std::chrono::duration<double>(now - t0).count();
+                long dchunks = ichunk - ichunk0;
+                if ((elapsed > 0.0) && (dchunks > 0))
+                    chunks_per_sec = double(dchunks) / elapsed;
+            }
+
+            std::ostringstream line;
+            line << "FrbServer: beamset=" << m->beamset
+                 << ", ichunk=" << ichunk
+                 << ", fpga=[" << (ichunk * seq_per_chunk)
+                 << ":" << ((ichunk + 1) * seq_per_chunk) << "]";
+            if (chunks_per_sec >= 0.0) {
+                double gbps = chunks_per_sec * double(bytes_per_chunk) * 8.0 / 1.0e9;
+                // rt_beams: "real-time beams" = (chunks/sec) * (seconds of data per
+                // chunk) * nbeams -- the effective number of beams kept up in real time.
+                double rt_beams = chunks_per_sec * chunk_len_sec * double(nbeams);
+                line << std::fixed << std::setprecision(2)
+                     << ", Gbps=" << gbps
+                     << ", rt_beams=" << rt_beams;
+            }
+            std::cout << line.str() << std::endl;
+        }
     }
 }
 

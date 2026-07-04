@@ -8,7 +8,6 @@
 
 #include <ksgpu/xassert.hpp>
 
-#include <chrono>
 #include <condition_variable>
 #include <exception>
 #include <memory>
@@ -176,16 +175,6 @@ struct FrbServer : public std::enable_shared_from_this<FrbServer>
 
     // Maps (beam id) -> (position in metadata.beam_ids).
     std::unordered_map<long,int> beam_id_to_index;
-
-    // Throughput estimate for the per-chunk "FrbServer: ..." stdout line.
-    // Recorded on the FIRST printed chunk (t0 = wall time, ichunk0 = its chunk
-    // index); every later chunk reports the average rate
-    // (chunks since t0) / (elapsed), translated to Gbps + beams/sec. Any worker
-    // thread may print a given chunk, so these are guarded by 'mutex'. Unused
-    // when params.quiet (nothing is printed).
-    bool throughput_t0_valid = false;
-    std::chrono::steady_clock::time_point throughput_t0;
-    long throughput_ichunk0 = 0;
 
     // The frame_ringbuf is initialized at the same time as the metadata.
     // Ring buffer has length (params.ringbuf_nchunks * metadata.get_nbeams()).
