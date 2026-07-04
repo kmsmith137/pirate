@@ -4,69 +4,74 @@
 linux machine with **a physical GPU**, and the cuda toolkit installed.
 I hope to improve this in the future!
 
-1. Make sure you have cuda, cupy, curand, cufftdx (provided by the `mathdx`
-conda package), pybind11, yaml-cpp, asdf installed.
-On a CHIME/CHORD machine, this conda environment works for me (alternately,
-you can use `environment.yml` in the top-level pirate directory):
+`pirate` is built as an editable install alongside a sibling
+[`ksgpu`](https://github.com/kmsmith137/ksgpu/tree/chord) checkout (GPU C++/CUDA
+core utils). The [`pipmake`](https://github.com/kmsmith137/pipmake) build backend
+is installed from PyPI (see step 2), so it does NOT need its own checkout. The
+recommended layout puts the two source checkouts side by side:
+
 ```
-    # Note: due to messy cupy/grpc tension, falls back to python 3.11
-    # and grpc 1.51. Must specify an old setuptools (=80) to make this work.
-    # Last two lines are optional (scipy, sphinx, etc). 
-
-    conda create -c conda-forge -n ENVNAME \
-      grpc-cpp grpcio grpcio-tools protoletariat \
-      cupy mathdx pybind11 yaml-cpp asdf \
-      scipy matplotlib ipykernel argcomplete setuptools=80 \
-      sphinx sphinx-argparse furo myst-parser emacs
+    SOMEDIR/ksgpu     # 'chord' branch, not 'main' -- see warning below
+    SOMEDIR/pirate
 ```
-Note: I recommend the `miniforge` fork of conda, not the original conda.
 
-2. Install the `ksgpu` library (See instructions at https://github.com/kmsmith137/ksgpu/tree/chord).
-(This library was previously named `gputils`, but I renamed it since that name was taken on pypi.)
+**Warning.** If you're building `pirate`, then you need the `chord` branch of
+`ksgpu`, not the `main` branch. I'm currently trapped in Branch Divergence Hell,
+and the chord branch is many commits ahead of the main branch. I hope to emerge
+from Branch Divergence Hell soon!
 
-**Warning.** If you're building `pirate`, then you need the `chord` branch of `ksgpu`,
-not the `main` branch. I'm currently trapped in Branch Divergence Hell, and the chord
-branch is many commits ahead of the main branch. I hope to emerge from Branch Divergence
-Hell soon!
+1. Set up a conda environment. `pirate` relies on the **system** CUDA toolkit
+(`nvcc`, CUDA headers) and the **system** host compiler (`gcc`/`g++`); everything
+else is conda-installed. The repo ships two environment files -- pick one:
 
-3. Install `pirate`. The build system supports either python builds with `pip`,
-or C++ builds with `make`. Here's what I recommend:
+   - `environment_minimal.yml` -- just enough to build and run `pirate`.
+   - `environment_dev.yml` -- a superset of the minimal env that also installs
+     scipy/matplotlib, jupyterlab, the sphinx docs toolchain, and some
+     editor/shell tools. Use this if you're doing development.
+
+   Create the env from the parent directory that contains the `ksgpu/` and
+   `pirate/` checkouts:
 ```
-    # Step 1. Clone the repo and build with 'make', so that you can read
-    # the error messages if anything goes wrong. (pip either generates too
-    # little output or too much output, depending on whether you use -v).
+    conda env create -n ENVNAME -f pirate/environment_dev.yml   # or pirate/environment_minimal.yml
+    conda activate ENVNAME
+```
+   Each yml file's header comment documents its package pins (and, for the dev
+   env, how to build the LaTeX-based docs). I recommend the `miniforge` fork of
+   conda, not the original conda.
 
-    git clone --recursive https://github.com/kmsmith137/pirate
-    cd pirate
-    make -j 32
-
-    # Step 2: Run some unit tests, just to check that it worked.
-
-    python -m pirate_frb test -n 1
-
-    # Step 3 (optional): If everything looks good, build an editable pip install.
-    # This will let you import 'pirate' outside the build dir, and run with the
-    # syntax 'pirate_frb CMD ARGS' instead of 'python -m pirate_frb CMD ARGS'
-    # This only needs to be done once per conda env (or virtualenv).
-    
+2. Check out the `asdf-cxx` git submodule (used by pirate's C++ code), install
+the `pipmake` build backend from PyPI, then do editable `pip install`s of `ksgpu`
+and `pirate`.
+```
+    (cd pirate && git submodule update --init --recursive)
     pip install pipmake
-    pip install --no-build-isolation -v -e .    # -e for "editable" install
+    (cd ksgpu  && pip install --no-build-isolation -v -e .)
+    (cd pirate && pip install --no-build-isolation -v -e .)
+```
+Here, `--no-build-isolation` is needed since we assumed that `ksgpu` is a sibling
+checkout (rather than pulled from PyPI).
+Since `--no-build-isolation` does not auto-install build deps, we installed `pipmake`
+explicitly first.
 
-    # Step 4: In the future, if you want to rebuild pirate (e.g. after a
-    # git pull), you can ignore pip and build with 'make'. (This is only
-    # true for editable installs -- for a non-editable install you need
-    # to do 'pip install' again.)
+3. Verify the build by running some unit tests:
+```
+    python -m pirate_frb test -n 1
+```
+   After the editable install above, you can also run this as `pirate_frb test -n 1`.
 
-    git pull
-    make -j 32   # no pip install needed, if existing install is editable
+**Tip (debugging a broken build).** You can build `ksgpu` or `pirate` with
+`make -j 32` directly in the checkout. `make` prints readable compiler errors,
+whereas pip generates either too little or too much output depending on whether
+you pass `-v`. Because the installs above are editable, a later `make -j 32`
+(e.g. after `git pull`) is picked up automatically, with no need to re-run
+`pip install`.
 
-    # Step 5 (extremely optional): If you'd like autocomplete to work for the
-    # 'pirate_frb' shell command, do one of these:
-
+4. (Optional) Enable tab-completion for the `pirate_frb` shell command:
+```
        # Option 1: modifies global .bashrc
        echo 'eval "$(register-python-argcomplete pirate_frb)"' >> ~/.bashrc
-    
-       # Option 2: modifies activate hook in current conda env 
+
+       # Option 2: modifies activate hook in current conda env
        mkdir -p $CONDA_PREFIX/etc/conda/activate.d
        echo 'eval "$(register-python-argcomplete pirate_frb)"' \
           > $CONDA_PREFIX/etc/conda/activate.d/pirate_frb_complete.sh

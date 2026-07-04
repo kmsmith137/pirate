@@ -4,13 +4,21 @@
 #   - We rely on the SYSTEM cuda toolkit (`nvcc`, cuda headers) and the
 #     SYSTEM host compiler (gcc/g++). Everything else is conda-installed.
 #
+#   - `pipmake` (the pip build backend) is not on conda-forge, so it's NOT
+#     listed here; instead, `pip install pipmake` from PyPI in the build steps
+#     below. Both ksgpu and pirate are then built with --no-build-isolation, so
+#     they compile against the conda pybind11/numpy (ABI-consistent with the
+#     runtime env). For ksgpu the flag is optional/cautious; for pirate it is
+#     REQUIRED, since its build depends on the sibling ksgpu checkout, which is
+#     not on PyPI. ksgpu and pirate are built from sibling checkouts.
+#
 #   - `libabseil<20260526` is pinned because v20260526 #includes a
 #     header (bmi2intrin.h) which gives an error in recent gcc versions
 #     (#error "Never use <bmi2intrin.h> directly; include <x86gprintrin.h> instead.")
 #     Drop this pin once conda-forge ships an abseil rebuild that stops
 #     including this gcc-private header.
 #
-# Usage (run from the parent directory that contains pipmake/, ksgpu/, pirate/):
+# Usage (run from the parent directory that contains the ksgpu/ and pirate/ checkouts):
 #
 #   conda env create -n ENV_NAME -f pirate/environment_minimal.yml
 #   conda activate ENV_NAME
@@ -18,10 +26,12 @@
 #   # Ensure the asdf-cxx git submodule (used by pirate's C++ code) is checked out.
 #   (cd pirate && git submodule update --init --recursive)
 #
-#   # pirate needs --no-build-isolation so pip does NOT try to re-fetch ksgpu
-#   # (it lives in a sibling checkout, not on PyPI).
-#   (cd pipmake && pip install -e .)
-#   (cd ksgpu   && pip install -v -e .)
+#   # Install the pipmake build backend from PyPI (not on conda-forge), then
+#   # build both repos with --no-build-isolation, so they compile against the
+#   # conda pybind11/numpy. For ksgpu the flag is optional/cautious; for pirate
+#   # it is required (its build depends on the sibling ksgpu, not on PyPI).
+#   pip install pipmake
+#   (cd ksgpu   && pip install --no-build-isolation -v -e .)
 #   (cd pirate  && pip install --no-build-isolation -v -e .)
 
 name: pirate_minimal
