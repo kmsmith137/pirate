@@ -2,9 +2,20 @@
 #include "../include/pirate/YamlFile.hpp"         // YamlFile (DedispersionConfig::from_yaml)
 #include "../include/pirate/network_utils.hpp"    // parse_ip_address, is_loopback_address
 
+// See "NDEBUG and libabseil" in notes/build.md for the push_macro trick,
+// and its companion comment on -Wdeprecated-declarations. Uniform grpc
+// wrap idiom shared with FrbServer.cpp and FakeXEngine.cpp.
+#pragma push_macro("NDEBUG")
+#ifndef NDEBUG
+#  define NDEBUG
+#endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "../grpc/frb_grouper.grpc.pb.h"
 #include "../grpc/frb_grouper.pb.h"
 #include <grpcpp/grpcpp.h>
+#pragma GCC diagnostic pop
+#pragma pop_macro("NDEBUG")
 
 #include <cuda_runtime.h>
 

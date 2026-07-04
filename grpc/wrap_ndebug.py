@@ -33,10 +33,16 @@ PROLOGUE = """// AUTO-INSERTED by grpc/wrap_ndebug.py; see notes/build.md.
 #ifndef NDEBUG
 #  define NDEBUG
 #endif
+// Silence -Wdeprecated-declarations warnings emitted from inside grpc's own
+// public headers (e.g. IdentityKeyCertPair, set_certificate_provider).
+// They come from grpc-internal code that pirate does not call directly.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 """
 
 EPILOGUE = """
 // AUTO-INSERTED by grpc/wrap_ndebug.py.
+#pragma GCC diagnostic pop
 #pragma pop_macro("NDEBUG")
 """
 

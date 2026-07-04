@@ -97,3 +97,13 @@ still uses it). Instead we scope `NDEBUG` narrowly, using
 If a future edit adds a grpc include to a new source file, expect the
 same undefined-`Mutex::Dtor` failure at import time. To rediscover the
 offending files, run `nm --undefined-only <file>.o | grep Mutex4Dtor`.
+
+The same wraps also carry a `#pragma GCC diagnostic push` +
+`ignored "-Wdeprecated-declarations"` pair. Recent grpc versions ship a
+handful of already-`[[deprecated]]` APIs inside their own public
+headers (`IdentityKeyCertPair`, `TlsCredentialsOptions::set_certificate_provider`,
+...), and gcc emits deprecation warnings for every grpc-using TU. None
+of them are calls pirate makes -- they're inline uses inside grpc's own
+inline definitions -- so we silence them at the include site. The
+suppression is scoped the same way as NDEBUG: only the grpc includes,
+not any pirate code.
