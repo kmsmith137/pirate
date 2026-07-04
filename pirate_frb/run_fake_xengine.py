@@ -400,10 +400,20 @@ class RunFakeXEngineHelper:
             if (n % mpc) == 0 and not (send_junk and chunk >= 1):
                 fset = factory.get_frame_set()
 
-                # Drain and print this chunk's simulated-FRB injection events (the C++ producer
-                # records them; the printing lives here in Python). The factory runs ahead of this
-                # send loop, so pop_events() may return events injected into a slightly later chunk
-                # than 'fset'; the window passed is fset's own chunk.
+                # Per-chunk summary line, printed whether or not FRBs are simulated
+                # (with -f, one line per injected FRB follows below). The FPGA window
+                # is this chunk's own [tci*seq_per_chunk, (tci+1)*seq_per_chunk).
+                seq_per_chunk = fset.ntime * fset.metadata.seq_per_frb_time_sample
+                tci = fset.time_chunk_index
+                fpga_start, fpga_end = tci * seq_per_chunk, (tci + 1) * seq_per_chunk
+                print(f"fake_xengine: beamset={fset.metadata.beamset}, ichunk={tci}, "
+                      f"fpga=[{fpga_start}:{fpga_end}]", flush=True)
+
+                # With -f, drain and print this chunk's simulated-FRB injection events (the
+                # C++ producer records them; the printing lives here in Python), and with -s
+                # forward them to the sifter. The factory runs ahead of this send loop, so
+                # pop_events() may return events injected into a slightly later chunk than
+                # 'fset'; the window passed is fset's own chunk.
                 if self.simulate_frbs:
                     # On the first chunk, send the one-time sifter ConfigMessage (only xengine_yaml
                     # is meaningful; pirate/plan/grouper/search are empty for simulator events).
@@ -415,10 +425,8 @@ class RunFakeXEngineHelper:
                         print(f"[{rpc_addr}] sent ConfigMessage to sifter at "
                               f"{sifter.server_address}", flush=True)
 
-                    seq_per_chunk = fset.ntime * fset.metadata.seq_per_frb_time_sample
-                    tci = fset.time_chunk_index
-                    events = factory.pop_events(tci * seq_per_chunk, (tci + 1) * seq_per_chunk)
-                    self._print_events(fset.metadata.beamset, tci, events)
+                    events = factory.pop_events(fpga_start, fpga_end)
+                    self._print_events(events)
 
                     if sifter is not None:
                         # coarsegrain_snr: per-beam max event SNR this chunk (0 for beams with no
@@ -451,15 +459,13 @@ class RunFakeXEngineHelper:
             n += 1
 
     @staticmethod
-    def _print_events(beamset, ichunk, events):
-        """Print a per-chunk summary line, then one indented line per injected FRB.
+    def _print_events(events):
+        """Print one indented line per injected FRB, below the per-chunk summary line.
 
         (This printing was moved from C++ to Python.) 'events' is the FrbSifterEvents
-        returned by SimulatedFrameFactory.pop_events(); its FPGA window is used for the
-        summary line. The summary is printed every chunk (even with zero events).
+        returned by SimulatedFrameFactory.pop_events(); the summary line above it is
+        printed by the controller (whether or not FRBs are simulated).
         """
-        print(f"fake_xengine: beamset={beamset}, ichunk={ichunk}, "
-              f"fpga=[{events.chunk_fpga_start}:{events.chunk_fpga_end}]", flush=True)
         for i in range(len(events)):
             print(f"    injected FRB: beam_id={int(events.beam_ids[i])}, "
                   f"dm={float(events.dms[i]):.4g}, "
