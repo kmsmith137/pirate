@@ -20,10 +20,21 @@
 #include <sstream>
 #include <stdexcept>
 
+// grpc/protobuf headers pull in conda-forge's libabseil, which was built
+// with -DNDEBUG. absl::Mutex::Dtor() is only inlined when NDEBUG is
+// defined at the include site; otherwise it becomes an undefined external
+// symbol that the abseil DSO does not export, and libpirate.so fails to
+// load. So we push_macro NDEBUG on, include grpc, then pop it back. See
+// notes/build.md.
+#pragma push_macro("NDEBUG")
+#ifndef NDEBUG
+#  define NDEBUG
+#endif
 #include "../grpc/frb_search.grpc.pb.h"
 #include "../grpc/frb_grouper.grpc.pb.h"
 #include "../grpc/frb_grouper.pb.h"
 #include <grpcpp/grpcpp.h>
+#pragma pop_macro("NDEBUG")
 
 using namespace std;
 using namespace ksgpu;

@@ -142,17 +142,9 @@ PYTHON ?= python3
 # without retyping the flags, and tweak the optimization level via NVCC_OPT
 # (a debug build is just NVCC_OPT='-O0 -g') without retyping the whole command.
 # To time nvcc invocations, prepend: time -f "   %e seconds"
-#
-# -DNDEBUG is UNCONDITIONAL (not in NVCC_OPT). conda-forge builds libabseil
-# (a transitive grpc dep) with -DNDEBUG, and abseil's headers put certain
-# member functions -- e.g. absl::Mutex::Dtor / ~Mutex -- inline ONLY under
-# NDEBUG. Without it, translation units that include grpc++ headers emit an
-# undefined reference to `absl::lts_20250127::Mutex::Dtor()`, and libpirate.so
-# fails to link (import-time: undefined symbol _ZN4absl12lts_202501275Mutex4DtorEv).
-# xassert() is unaffected by NDEBUG, so no assertion coverage is lost.
 NVCC      ?= nvcc
 NVCC_OPT  ?= -O3
-NVCCFLAGS ?= -std=c++17 -m64 $(NVCC_OPT) -DNDEBUG -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
+NVCCFLAGS ?= -std=c++17 -m64 $(NVCC_OPT) -lineinfo --use_fast_math --compiler-options -Wall,-fPIC,-march=x86-64-v3
 
 # If using a conda env, add include, lib, and rpath paths. The rpath is what
 # makes libpirate.so self-locating: without it, libgrpc++/libprotobuf/libmkl_rt
@@ -514,7 +506,7 @@ DEPFILES := $(ALL_SRCFILES_CU:%.cu=%.d) $(ALL_SRCFILES_CPP:%.cpp=%.d) $(ALL_SRCF
 # its headers, and misc/asdf_cxx_config.hxx (the source for the generated config.hxx).
 SDIST_FILES := pyproject.toml Makefile makefile_helper.py autogenerate_kernel.py vendorize.py
 SDIST_FILES += $(PYFILES) $(CUDAGEN_PYFILES) $(LIB_SRCFILES) $(PYEXT_SRCFILES) $(HFILES) $(GRPC_PROTO)
-SDIST_FILES += grpc/finalize_grpc_stubs.py
+SDIST_FILES += grpc/finalize_grpc_stubs.py grpc/wrap_ndebug.py
 SDIST_FILES += $(ASDF_CXX_SRCFILES) $(ASDF_CXX_HFILES) misc/asdf_cxx_config.hxx
 
 # Some symlinks for the wheel:
@@ -618,10 +610,11 @@ grpc: $(GRPC_CCFILES) $(GRPC_HFILES) $(GRPC_PYFILES)
 # its dependents -- forcing a spurious rebuild of every grpc-dependent object,
 # both shared libs, and configs/example_asdf_header.yml on each invocation.)
 # Note: $* is the stem (the part matched by %).
-grpc/%.pb.cc grpc/%.pb.h grpc/%.grpc.pb.cc grpc/%.grpc.pb.h: grpc/%.proto
+grpc/%.pb.cc grpc/%.pb.h grpc/%.grpc.pb.cc grpc/%.grpc.pb.h: grpc/%.proto grpc/wrap_ndebug.py
 	protoc --cpp_out=grpc --grpc_out=grpc \
 	  --plugin=protoc-gen-grpc=$$(which grpc_cpp_plugin) \
 	  -I grpc $*.proto
+	$(PYTHON) grpc/wrap_ndebug.py grpc/$*.grpc.pb.cc
 
 # Generate Python protobuf + gRPC stubs from .proto. Likewise, one
 # grpc_tools.protoc invocation produces both _pb2.py and _pb2_grpc.py, so they
