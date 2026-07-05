@@ -3,6 +3,7 @@
 import shutil
 import glob
 import os
+import tomllib
 
 # -- Copy notes/*.md into docs/source/notes/ --------------------------------
 # The source of truth is notes/ at the repo root. We copy them here so Sphinx
@@ -134,8 +135,13 @@ with open(_cli_gen_path, 'w') as _fout:
 project = 'pirate_frb'
 copyright = '2026, Kendrick Smith'
 author = 'Kendrick Smith'
-version = '1.0.0'
-release = '1.0.0'
+
+# Read the version from pyproject.toml (the single source of truth) so the docs
+# never drift from the package version. pyproject.toml is at the repo root (see
+# _repo_root above); tomllib is stdlib on Python >= 3.11.
+with open(os.path.join(_repo_root, 'pyproject.toml'), 'rb') as _f:
+    release = tomllib.load(_f)['project']['version']
+version = release
 
 # -- General configuration ---------------------------------------------------
 
