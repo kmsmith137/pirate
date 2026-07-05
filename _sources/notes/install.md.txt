@@ -4,30 +4,23 @@
 linux machine with **a physical GPU**, and the cuda toolkit installed.
 I hope to improve this in the future!
 
-1. Make sure you have cuda, cupy, curand, cufftdx (provided by the `mathdx`
-conda package), pybind11, yaml-cpp, asdf installed.
-On a CHIME/CHORD machine, this conda environment works for me (alternately,
-you can use `environment.yml` in the top-level pirate directory):
+1. Set up a conda environment. `pirate` relies on the **system** CUDA toolkit
+(`nvcc`, CUDA headers) and the **system** host compiler (`gcc`/`g++`); everything
+else is conda-installed. The repo ships two environment files:
+
+   - `environment_minimal.yml` -- just enough to build and run `pirate`.
+   - `environment_dev.yml` -- a superset of the minimal env that also installs
+     scipy/matplotlib, jupyterlab, the sphinx docs toolchain, and some
+     editor/shell tools. Use this if you're doing development.
+
+To create the env:
 ```
-    # Note: due to messy cupy/grpc tension, falls back to python 3.11
-    # and grpc 1.51. Must specify an old setuptools (=80) to make this work.
-    # Last two lines are optional (scipy, sphinx, etc). 
-
-    conda create -c conda-forge -n ENVNAME \
-      grpc-cpp grpcio grpcio-tools protoletariat \
-      cupy mathdx pybind11 yaml-cpp asdf \
-      scipy matplotlib ipykernel argcomplete setuptools=80 \
-      sphinx sphinx-argparse furo myst-parser emacs
+    conda env create -n ENVNAME -f pirate/environment_dev.yml   # or pirate/environment_minimal.yml
+    conda activate ENVNAME
 ```
-Note: I recommend the `miniforge` fork of conda, not the original conda.
+I recommend the `miniforge` fork of conda, not the original conda.
 
-2. Install the `ksgpu` library (See instructions at https://github.com/kmsmith137/ksgpu/tree/chord).
-(This library was previously named `gputils`, but I renamed it since that name was taken on pypi.)
-
-**Warning.** If you're building `pirate`, then you need the `chord` branch of `ksgpu`,
-not the `main` branch. I'm currently trapped in Branch Divergence Hell, and the chord
-branch is many commits ahead of the main branch. I hope to emerge from Branch Divergence
-Hell soon!
+2. Install the `ksgpu` library (see instructions at https://github.com/kmsmith137/ksgpu).
 
 3. Install `pirate`. The build system supports either python builds with `pip`,
 or C++ builds with `make`. Here's what I recommend:

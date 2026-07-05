@@ -3,8 +3,7 @@
 ## ksgpu helper library
 
 Pirate uses `ksgpu`, a standalone helper library for CUDA/C++ development
-([github](https://github.com/kmsmith137/ksgpu/tree/chord), note: pirate uses the `chord` branch, not `main`).
-Here are the most heavily used features:
+([github](https://github.com/kmsmith137/ksgpu)). Here are the most heavily used features:
 
 - **`ksgpu::Array<T>`** (`ksgpu/Array.hpp`): A flexible N-dimensional array class.
   Supports GPU, pinned host, and regular host memory. Key methods include

@@ -1,23 +1,23 @@
 <!doctype html>
 <html class="no-js" lang="en" data-content_root="../">
-  <head><meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html" /><link rel="search" title="Search" href="../search.html" /><link rel="next" title="Hardware" href="hardware.html" /><link rel="prev" title="Writing a grouper" href="grouper_interface.html" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Hardware" href="hardware.html"><link rel="prev" title="Writing a grouper" href="grouper_interface.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
+    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>Build system - pirate_frb 1.0.0 documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=354aac6f" />
-    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=302659d7" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
 
 
 <style>
   body {
-    --color-code-background: #f8f8f8;
-  --color-code-foreground: black;
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
   --color-brand-primary: #007bff;
   --color-brand-content: #0056b3;
   
@@ -146,14 +146,10 @@
   </symbol>
 </svg>
 
-<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
-<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
-<label class="overlay sidebar-overlay" for="__navigation">
-  <div class="visually-hidden">Hide navigation sidebar</div>
-</label>
-<label class="overlay toc-overlay" for="__toc">
-  <div class="visually-hidden">Hide table of contents sidebar</div>
-</label>
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
 
 <a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
 
@@ -163,8 +159,7 @@
   <header class="mobile-header">
     <div class="header-left">
       <label class="nav-overlay-icon" for="__navigation">
-        <div class="visually-hidden">Toggle site navigation sidebar</div>
-        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
       </label>
     </div>
     <div class="header-center">
@@ -172,8 +167,7 @@
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
-        <button class="theme-toggle">
-          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
           <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
           <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
           <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
@@ -181,8 +175,7 @@
         </button>
       </div>
       <label class="toc-overlay-icon toc-header-icon" for="__toc">
-        <div class="visually-hidden">Toggle table of contents sidebar</div>
-        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
   </header>
@@ -190,7 +183,6 @@
     <div class="sidebar-container">
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
-  
   
   <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
   
@@ -214,7 +206,7 @@
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="hardware.html">Hardware</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../cli.html">CLI reference</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -224,14 +216,14 @@
 <li class="toctree-l2"><a class="reference internal" href="../_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbGrouper.html">FrbGrouper</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="pybind11.html">Pybind11</a></li>
@@ -266,8 +258,7 @@
   </a>
 </div>
 <div class="theme-toggle-container theme-toggle-content">
-            <button class="theme-toggle">
-              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
               <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
               <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
               <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
@@ -275,8 +266,7 @@
             </button>
           </div>
           <label class="toc-overlay-icon toc-content-icon" for="__toc">
-            <div class="visually-hidden">Toggle table of contents sidebar</div>
-            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
         <article role="main" id="furo-main-content">
@@ -351,6 +341,45 @@ example, Dustin’s <code class="docutils literal notranslate"><span class="pre"
 </pre></div>
 </div>
 </section>
+<section id="ndebug-and-libabseil">
+<h2>NDEBUG and libabseil<a class="headerlink" href="#ndebug-and-libabseil" title="Link to this heading">¶</a></h2>
+<p>Grpc pulls in libabseil transitively. conda-forge builds libabseil with
+<code class="docutils literal notranslate"><span class="pre">-DNDEBUG</span></code>, and abseil’s headers make a few member functions – notably
+<code class="docutils literal notranslate"><span class="pre">absl::Mutex::Dtor()</span></code> – inline <strong>only</strong> when <code class="docutils literal notranslate"><span class="pre">NDEBUG</span></code> is defined at the
+include site. If pirate compiles without <code class="docutils literal notranslate"><span class="pre">NDEBUG</span></code>, every TU that includes
+a grpc header emits an undefined reference to <code class="docutils literal notranslate"><span class="pre">absl::...::Mutex::Dtor()</span></code>
+that the abseil DSO does not export, and <code class="docutils literal notranslate"><span class="pre">libpirate.so</span></code> fails to load
+(<code class="docutils literal notranslate"><span class="pre">ImportError:</span> <span class="pre">undefined</span> <span class="pre">symbol:</span> <span class="pre">_ZN4absl...5Mutex4DtorEv</span></code>).</p>
+<p>We don’t want <code class="docutils literal notranslate"><span class="pre">-DNDEBUG</span></code> global, because that would also neutralize
+<code class="docutils literal notranslate"><span class="pre">assert()</span></code> in CUDA kernels (and stdlib <code class="docutils literal notranslate"><span class="pre">assert()</span></code> in host code that
+still uses it). Instead we scope <code class="docutils literal notranslate"><span class="pre">NDEBUG</span></code> narrowly, using
+<code class="docutils literal notranslate"><span class="pre">#pragma</span> <span class="pre">push_macro</span></code>/<code class="docutils literal notranslate"><span class="pre">pop_macro</span></code>:</p>
+<ul class="simple">
+<li><p>Hand-written source files that include grpc headers (<code class="docutils literal notranslate"><span class="pre">FrbServer.cpp</span></code>,
+<code class="docutils literal notranslate"><span class="pre">FakeXEngine.cpp</span></code>) wrap the block of grpc/protobuf <code class="docutils literal notranslate"><span class="pre">#include</span></code>s in a
+<code class="docutils literal notranslate"><span class="pre">push_macro(&quot;NDEBUG&quot;)</span></code> + <code class="docutils literal notranslate"><span class="pre">#define</span> <span class="pre">NDEBUG</span></code> / … / <code class="docutils literal notranslate"><span class="pre">pop_macro(&quot;NDEBUG&quot;)</span></code>
+pair. <code class="docutils literal notranslate"><span class="pre">NDEBUG</span></code> is active only while abseil is being parsed; the rest of
+the TU is unaffected.</p></li>
+<li><p>Protoc-generated <code class="docutils literal notranslate"><span class="pre">.grpc.pb.cc</span></code> files pull in grpc heavily and can’t be
+hand-edited (they are regenerated on every proto change). <code class="docutils literal notranslate"><span class="pre">grpc/wrap_ndebug.py</span></code>
+runs after <code class="docutils literal notranslate"><span class="pre">protoc</span></code> in the Makefile and prepends/appends the same
+<code class="docutils literal notranslate"><span class="pre">push_macro</span></code>/<code class="docutils literal notranslate"><span class="pre">pop_macro</span></code> pair around the whole file. The <code class="docutils literal notranslate"><span class="pre">.pb.cc</span></code> files
+(protobuf without grpc) are left alone – their undefined absl symbols
+are all exported by libabseil and resolve at load time.</p></li>
+</ul>
+<p>If a future edit adds a grpc include to a new source file, expect the
+same undefined-<code class="docutils literal notranslate"><span class="pre">Mutex::Dtor</span></code> failure at import time. To rediscover the
+offending files, run <code class="docutils literal notranslate"><span class="pre">nm</span> <span class="pre">--undefined-only</span> <span class="pre">&lt;file&gt;.o</span> <span class="pre">|</span> <span class="pre">grep</span> <span class="pre">Mutex4Dtor</span></code>.</p>
+<p>The same wraps also carry a <code class="docutils literal notranslate"><span class="pre">#pragma</span> <span class="pre">GCC</span> <span class="pre">diagnostic</span> <span class="pre">push</span></code> +
+<code class="docutils literal notranslate"><span class="pre">ignored</span> <span class="pre">&quot;-Wdeprecated-declarations&quot;</span></code> pair. Recent grpc versions ship a
+handful of already-<code class="docutils literal notranslate"><span class="pre">[[deprecated]]</span></code> APIs inside their own public
+headers (<code class="docutils literal notranslate"><span class="pre">IdentityKeyCertPair</span></code>, <code class="docutils literal notranslate"><span class="pre">TlsCredentialsOptions::set_certificate_provider</span></code>,
+…), and gcc emits deprecation warnings for every grpc-using TU. None
+of them are calls pirate makes – they’re inline uses inside grpc’s own
+inline definitions – so we silence them at the include site. The
+suppression is scoped the same way as NDEBUG: only the grpc includes,
+not any pirate code.</p>
+</section>
 </section>
 
         </article>
@@ -413,6 +442,7 @@ example, Dustin’s <code class="docutils literal notranslate"><span class="pre"
 <li><a class="reference internal" href="#grpc">gRPC</a></li>
 <li><a class="reference internal" href="#file-structure">File Structure</a></li>
 <li><a class="reference internal" href="#overriding-makefile-variables">Overriding Makefile variables</a></li>
+<li><a class="reference internal" href="#ndebug-and-libabseil">NDEBUG and libabseil</a></li>
 </ul>
 </li>
 </ul>
@@ -425,8 +455,8 @@ example, Dustin’s <code class="docutils literal notranslate"><span class="pre"
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=8d563738"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
-    <script src="../_static/scripts/furo.js?v=5fa4622c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

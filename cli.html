@@ -1,23 +1,23 @@
 <!doctype html>
 <html class="no-js" lang="en" data-content_root="./">
-  <head><meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="genindex.html" /><link rel="search" title="Search" href="search.html" /><link rel="next" title="File/network formats" href="formats.html" /><link rel="prev" title="Hardware" href="notes/hardware.html" />
+<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="File/network formats" href="formats.html"><link rel="prev" title="Hardware" href="notes/hardware.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2024.08.06 -->
+    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>CLI reference - pirate_frb 1.0.0 documentation</title>
-      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=8f2a1f02" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=354aac6f" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=302659d7" />
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
 
 
 <style>
   body {
-    --color-code-background: #f8f8f8;
-  --color-code-foreground: black;
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
   --color-brand-primary: #007bff;
   --color-brand-content: #0056b3;
   
@@ -146,14 +146,10 @@
   </symbol>
 </svg>
 
-<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation">
-<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc">
-<label class="overlay sidebar-overlay" for="__navigation">
-  <div class="visually-hidden">Hide navigation sidebar</div>
-</label>
-<label class="overlay toc-overlay" for="__toc">
-  <div class="visually-hidden">Hide table of contents sidebar</div>
-</label>
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
 
 <a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
 
@@ -163,8 +159,7 @@
   <header class="mobile-header">
     <div class="header-left">
       <label class="nav-overlay-icon" for="__navigation">
-        <div class="visually-hidden">Toggle site navigation sidebar</div>
-        <i class="icon"><svg><use href="#svg-menu"></use></svg></i>
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
       </label>
     </div>
     <div class="header-center">
@@ -172,8 +167,7 @@
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
-        <button class="theme-toggle">
-          <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
           <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
           <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
           <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
@@ -181,8 +175,7 @@
         </button>
       </div>
       <label class="toc-overlay-icon toc-header-icon" for="__toc">
-        <div class="visually-hidden">Toggle table of contents sidebar</div>
-        <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
   </header>
@@ -190,7 +183,6 @@
     <div class="sidebar-container">
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
-  
   
   <span class="sidebar-brand-text">pirate_frb 1.0.0 documentation</span>
   
@@ -214,7 +206,7 @@
 <li class="toctree-l1"><a class="reference internal" href="notes/build.html">Build system</a></li>
 <li class="toctree-l1"><a class="reference internal" href="notes/hardware.html">Hardware</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">CLI reference</a></li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="formats.html">File/network formats</a><input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><div class="visually-hidden">Toggle navigation of File/network formats</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="formats.html">File/network formats</a><input aria-label="Toggle navigation of File/network formats" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="configs/example_asdf_header.yml.html">ASDF file format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/network_protocol.html">X-&gt;FRB network protocol (v2)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="configs/xengine_metadata.yml.html">xengine_metadata (v2)</a></li>
@@ -224,14 +216,14 @@
 <li class="toctree-l2"><a class="reference internal" href="_grpc_generated.html">gRPC Protocol Definitions</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="python_class_reference.html">Python class reference</a><input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><div class="visually-hidden">Toggle navigation of Python class reference</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="python_class_reference.html">Python class reference</a><input aria-label="Toggle navigation of Python class reference" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="classes/FrbGrouper.html">FrbGrouper</a></li>
 <li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterClient.html">FrbSifterClient</a></li>
 <li class="toctree-l2"><a class="reference internal" href="classes/FrbSifterEvents.html">FrbSifterEvents</a></li>
 <li class="toctree-l2"><a class="reference internal" href="classes/GpuDedisperserOutputs.html">GpuDedisperserOutputs</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="llm_context.html">LLM context files</a><input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><div class="visually-hidden">Toggle navigation of LLM context files</div><i class="icon"><svg><use href="#svg-arrow-right"></use></svg></i></label><ul>
+<li class="toctree-l1 has-children"><a class="reference internal" href="llm_context.html">LLM context files</a><input aria-label="Toggle navigation of LLM context files" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="notes/cpp.html">C++ guidelines</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/gpu_kernels.html">GPU kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="notes/pybind11.html">Pybind11</a></li>
@@ -266,8 +258,7 @@
   </a>
 </div>
 <div class="theme-toggle-container theme-toggle-content">
-            <button class="theme-toggle">
-              <div class="visually-hidden">Toggle Light / Dark / Auto color theme</div>
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
               <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
               <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
               <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
@@ -275,8 +266,7 @@
             </button>
           </div>
           <label class="toc-overlay-icon toc-content-icon" for="__toc">
-            <div class="visually-hidden">Toggle table of contents sidebar</div>
-            <i class="icon"><svg><use href="#svg-toc"></use></svg></i>
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
         <article role="main" id="furo-main-content">
@@ -387,12 +377,13 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -d SECONDS, --delay SECONDS
-                        Artificial per-frame delay in the processing thread (seconds; default 0). Used to simulate slow GPU work for testing FakeXEngine pacing.
+  -d, --delay SECONDS   Artificial per-frame delay in the processing thread (seconds; default 0). Used to simulate slow GPU work for testing FakeXEngine
+                        pacing.
   -G, --no-grouper      Disable FrbGrouper RPC even if grouper_ip_addrs is set in the config (GpuDedisperser runs with num_consumers=0).
   -D, --no-dedispersion
-                        Skip ALL GPU work in the processing thread: data is not even copied host-&gt;GPU, and no dequantization or dedispersion kernels run. The receive/assemble/ringbuf path still runs in full (the dedisperser is still
-                        built, just never fed). Implies --no-grouper. Infrequently used corner case.
+                        Skip ALL GPU work in the processing thread: data is not even copied host-&gt;GPU, and no dequantization or dedispersion kernels run.
+                        The receive/assemble/ringbuf path still runs in full (the dedisperser is still built, just never fed). Implies --no-grouper.
+                        Infrequently used corner case.
   -q, --quiet           Suppress the per-chunk &quot;FrbServer: beamset=...&quot; line (printed once per assembled time chunk).
 </pre></div>
 </div>
@@ -404,15 +395,15 @@ options:
 Toy FrbGrouper consumer(s): per-chunk peak SNR + argmax, optionally reported to a sifter
 
 positional arguments:
-  grouper_addr          FrbGrouper listen address(es) &#39;ip:port&#39; (e.g. 127.0.0.1:7000). With more than one, each grouper runs in its own child subprocess; if any child exits, the parent and all siblings exit.
+  grouper_addr          FrbGrouper listen address(es) &#39;ip:port&#39; (e.g. 127.0.0.1:7000). With more than one, each grouper runs in its own child subprocess;
+                        if any child exits, the parent and all siblings exit.
 
 options:
   -h, --help            show this help message and exit
-  -d SECONDS, --delay SECONDS
-                        Artificial per-chunk delay (seconds) inserted into the grouper loop, e.g. -d 0.001 for a 1 ms delay (default: 0, no delay).
-  -t SNR_THRESHOLD, --snr-threshold SNR_THRESHOLD
+  -d, --delay SECONDS   Artificial per-chunk delay (seconds) inserted into the grouper loop, e.g. -d 0.001 for a 1 ms delay (default: 0, no delay).
+  -t, --snr-threshold SNR_THRESHOLD
                         Emit one event per chunk per beam whose peak SNR exceeds this threshold (default: 10).
-  -s SIFTER_ADDR, --sifter SIFTER_ADDR
+  -s, --sifter SIFTER_ADDR
                         Report to the FrbSifter at this &#39;ip:port&#39; (e.g. 127.0.0.1:7100):
   -S, --no-sifter       Run without a sifter (don&#39;t send any sifter RPCs).
 </pre></div>
@@ -443,16 +434,16 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -w WORKERS, --workers WORKERS
+  -w, --workers WORKERS
                         Number of worker threads per FakeXEngine (default 128)
   -P, --unpaced         Disable pacing -- send chunks as fast as possible (default: pace to stay &lt;=5 chunks ahead of server)
   -N, --unnormalized    Send unnormalized data -- leave scales/offsets arbitrary (default: calibrate them to the per-zone noise variance)
   -G, --non-gaussian    Fill int4 data with uniform noise over [-8,+7] (default: simulated Gaussian noise clamped to [-7,+7])
   -j, --send-junk       Randomize+send only the first chunk; send all-zero junk for every subsequent chunk (skips per-chunk randomization)
-  -f, --frbs            Inject simulated FRBs (parameters derived from the server GetConfig: max DM, base-tree width, and the frequency subbands). Prints one line per injected FRB. Incompatible with -N, -G, and -j.
-  -g GAP_SEC, --gap GAP_SEC
-                        Extra padding (seconds) between consecutive simulated FRBs on a beam (default 0). Requires -f.
-  -s SIFTER_ADDR, --sifter SIFTER_ADDR
+  -f, --frbs            Inject simulated FRBs (parameters derived from the server GetConfig: max DM, base-tree width, and the frequency subbands). Prints
+                        one line per injected FRB. Incompatible with -N, -G, and -j.
+  -g, --gap GAP_SEC     Extra padding (seconds) between consecutive simulated FRBs on a beam (default 0). Requires -f.
+  -s, --sifter SIFTER_ADDR
                         Send the simulated FRB events (from_simulator=True) to an FrbSifter at this &quot;ip:port&quot;. Requires -f.
 </pre></div>
 </div>
@@ -487,33 +478,33 @@ options:
 </section>
 <section id="test">
 <h3>test<a class="headerlink" href="#test" title="Link to this heading">¶</a></h3>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb test [-h] [-g GPU] [-n NITER] [--rt] [--pfwr] [--pfom] [--gldk] [--gddk] [--gpfk] [--grck] [--gtgk] [--gdqk] [--cdd2] [--casm] [--zomb] [--dd] [--avar] [--chime] [--net] [--serv] [--sim]
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>usage: pirate_frb test [-h] [-g GPU] [-n NITER] [--rt] [--pfwr] [--pfom] [--gldk] [--gddk] [--gpfk] [--grck] [--gtgk] [--gdqk] [--cdd2] [--casm] [--zomb]
+                       [--dd] [--avar] [--chime] [--net] [--serv] [--sim]
 
 Run unit tests (use flags to select specific tests)
 
 options:
-  -h, --help            show this help message and exit
-  -g GPU, --gpu GPU     GPU to use for tests (default 0)
-  -n NITER, --niter NITER
-                        Number of unit test iterations (default 100)
-  --rt                  Runs ReferenceTree and ReferenceLagbuf tests
-  --pfwr                Runs PfWeightReaderMicrokernel.test_random()
-  --pfom                Runs PfOutputMicrokernel.test_random()
-  --gldk                Runs GpuLaggedDownsamplingKernel.test_random()
-  --gddk                Runs GpuDedispersionKernel.test_random()
-  --gpfk                Runs GpuPeakFindingKernel.test_random()
-  --grck                Runs GpuRingbufCopyKernel.test_random()
-  --gtgk                Runs GpuTreeGriddingKernel.test_random()
-  --gdqk                Runs GpuDequantizationKernel.test_random()
-  --cdd2                Runs CoalescedDdKernel2.test_random()
-  --casm                Runs some casm tests
-  --zomb                Runs &quot;zombie&quot; tests (code that I wrote during protoyping that may never get used)
-  --dd                  Runs GpuDedisperser.test_random()
-  --avar                Runs tests related to analytic variance
-  --chime               Runs test_chime_frb_upchan()
-  --net                 Runs network/allocator tests (AssembledFrameAllocator, etc.)
-  --serv                Runs end-to-end FakeXEngine -&gt; FrbServer -&gt; GpuDedisperser -&gt; FrbGrouper test
-  --sim                 Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection test
+  -h, --help         show this help message and exit
+  -g, --gpu GPU      GPU to use for tests (default 0)
+  -n, --niter NITER  Number of unit test iterations (default 100)
+  --rt               Runs ReferenceTree and ReferenceLagbuf tests
+  --pfwr             Runs PfWeightReaderMicrokernel.test_random()
+  --pfom             Runs PfOutputMicrokernel.test_random()
+  --gldk             Runs GpuLaggedDownsamplingKernel.test_random()
+  --gddk             Runs GpuDedispersionKernel.test_random()
+  --gpfk             Runs GpuPeakFindingKernel.test_random()
+  --grck             Runs GpuRingbufCopyKernel.test_random()
+  --gtgk             Runs GpuTreeGriddingKernel.test_random()
+  --gdqk             Runs GpuDequantizationKernel.test_random()
+  --cdd2             Runs CoalescedDdKernel2.test_random()
+  --casm             Runs some casm tests
+  --zomb             Runs &quot;zombie&quot; tests (code that I wrote during protoyping that may never get used)
+  --dd               Runs GpuDedisperser.test_random()
+  --avar             Runs tests related to analytic variance
+  --chime            Runs test_chime_frb_upchan()
+  --net              Runs network/allocator tests (AssembledFrameAllocator, etc.)
+  --serv             Runs end-to-end FakeXEngine -&gt; FrbServer -&gt; GpuDedisperser -&gt; FrbGrouper test
+  --sim              Runs avx2_simulate_4bit_noise() distribution test + AssembledFrame pulse-injection test
 </pre></div>
 </div>
 </section>
@@ -524,9 +515,8 @@ options:
 Run simpulse tests (pulse-upsampling self-consistency) and write example plots to cwd
 
 options:
-  -h, --help            show this help message and exit
-  -n NITER, --niter NITER
-                        Number of upsampling-test iterations (default 100)
+  -h, --help         show this help message and exit
+  -n, --niter NITER  Number of upsampling-test iterations (default 100)
 </pre></div>
 </div>
 </section>
@@ -559,7 +549,7 @@ options:
   -h, --help            show this help message and exit
   -r, --random-variances
                         Use random per-channel input variances (config.make_random_freq_variances) instead of all-ones
-  -s SOPHISTICATION, --sophistication SOPHISTICATION
+  -s, --sophistication SOPHISTICATION
                         ReferenceDedisperser sophistication (0, 1, or 2; default 1)
 </pre></div>
 </div>
@@ -572,8 +562,8 @@ Run timings (use flags to select specific timings)
 
 options:
   -h, --help            show this help message and exit
-  -g GPU, --gpu GPU     GPU to use for timing (default 0)
-  -t NTHREADS, --nthreads NTHREADS
+  -g, --gpu GPU         GPU to use for timing (default 0)
+  -t, --nthreads NTHREADS
                         number of CPU threads (only for time_cpu_downsample)
   --ncu                 Just run a single kernel (intended for profiling with nvidia &#39;ncu&#39;)
   --gldk                Runs time_lagged_downsampling_kernels()
@@ -599,11 +589,9 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -n NITER, --niter NITER
-                        Number of iterations for timing (default 1000)
-  -b BEAMS, --beams BEAMS
-                        Override config.beams_per_gpu with specified value
-  -g MAX_GPU_CLAG, --max-gpu-clag MAX_GPU_CLAG
+  -n, --niter NITER     Number of iterations for timing (default 1000)
+  -b, --beams BEAMS     Override config.beams_per_gpu with specified value
+  -g, --max-gpu-clag MAX_GPU_CLAG
                         Override config.max_gpu_clag with specified value
   -H, --no-hugepages    Disable hugepages
   --python              Use Python/cupy timing instead of C++ (for testing pybind11 interface)
@@ -651,14 +639,15 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -v, --verbose         Include comments explaining the meaning of each field
-  -c, --config          Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the dedispersion_plan_yaml sent to the grouper)
-  -t, --time            Also print how long DedispersionPlan and C++ PfAvarApproximation construction took (non-deterministic lines; off by default so the output is reproducible)
+  -c, --config          Also print the DedispersionConfig, with a separator, before the plan (by default only the plan is printed, matching the
+                        dedispersion_plan_yaml sent to the grouper)
+  -t, --time            Also print how long DedispersionPlan and C++ PfAvarApproximation construction took (non-deterministic lines; off by default so the
+                        output is reproducible)
   -z, --zones           Include the per-clag mega_ringbuf host/gpu zone breakdown (independent of -v, which controls comments)
-  -s STREAMS, --streams STREAMS
+  -s, --streams STREAMS
                         Override config.num_active_batches with specified value
-  -b BEAMS, --beams BEAMS
-                        Override config.beams_per_gpu with specified value
-  -g MAX_GPU_CLAG, --max-gpu-clag MAX_GPU_CLAG
+  -b, --beams BEAMS     Override config.beams_per_gpu with specified value
+  -g, --max-gpu-clag MAX_GPU_CLAG
                         Override config.max_gpu_clag with specified value
   --channel-map         Show channel map tree-&gt;freq (warning: produces long output!)
   -r, --resources       Show resource tracking (all kernels must be precompiled)
@@ -745,12 +734,12 @@ Example networking-only run::
 See configs/hwtest/*.yml for more examples.
 
 positional arguments:
-  config_file           Path to YAML config file
+  config_file      Path to YAML config file
 
 options:
-  -h, --help            show this help message and exit
-  -t TIME, --time TIME  Number of seconds to run test (default 20)
-  -s, --send            Send data to test server (uses ip_addrs from config file)
+  -h, --help       show this help message and exit
+  -t, --time TIME  Number of seconds to run test (default 20)
+  -s, --send       Send data to test server (uses ip_addrs from config file)
 </pre></div>
 </div>
 </section>
@@ -777,7 +766,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -r PF_RANK, --pf-rank PF_RANK
+  -r, --pf-rank PF_RANK
                         Peak finding rank (default: 4)
 </pre></div>
 </div>
@@ -923,8 +912,8 @@ options:
     </aside>
   </div>
 </div><script src="_static/documentation_options.js?v=8d563738"></script>
-    <script src="_static/doctools.js?v=9bcbadda"></script>
-    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
-    <script src="_static/scripts/furo.js?v=5fa4622c"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>
