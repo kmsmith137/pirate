@@ -1173,7 +1173,6 @@ def parse_rpc_start_stream(subparsers):
 
 def rpc_start_stream(args):
     import yaml
-    import datetime
     from .rpc import FrbSearchClient
 
     if bool(args.beam_id) == bool(args.all_beams):
@@ -1182,13 +1181,6 @@ def rpc_start_stream(args):
         raise RuntimeError("rpc_start_stream: specify exactly one of -d or -D/--no-duration")
     if (args.duration is not None) and (args.duration <= 0):
         raise RuntimeError(f"rpc_start_stream: duration must be positive (got {args.duration})")
-
-    acq_name = args.acq_name
-    if acq_name is None:
-        # "{username}_{date}_{time}", e.g. kmsmith_26_07_05_143052.
-        # ($USER mirrors run_server's nfs_dir {user} interpolation.)
-        user = os.environ.get('USER', 'unknown')
-        acq_name = user + '_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S')
 
     addr = args.server_address
     client = FrbSearchClient(addr)
@@ -1201,7 +1193,7 @@ def rpc_start_stream(args):
         beam_ids = args.beam_id if args.beam_id else list(ss.beam_ids)
 
         if args.no_duration:
-            fpga_seq_end = 2**63 - 1
+            fpga_seq_end = None    # "run indefinitely"
         else:
             # Convert seconds to fpga seqs via dt_ns_per_seq (from the
             # X-engine metadata; non-empty since show_streams() succeeded).
@@ -1209,14 +1201,12 @@ def rpc_start_stream(args):
             dt_ns_per_seq = xmd['dt_ns_per_seq']
             fpga_seq_end = ss.current_fpga_seq + round(args.duration * 1.0e9 / dt_ns_per_seq)
 
-        filename_pattern = f"streams/{acq_name}/frame_b(BEAM)_t(CHUNK).asdf"
-
-        client.start_stream(
-            acq_name=acq_name,
-            filename_pattern=filename_pattern,
-            beam_ids=beam_ids,
-            fpga_seq_start=0,          # "start asap"
-            fpga_seq_end=fpga_seq_end,
+        # acq_name / filename_pattern default inside start_stream() when None;
+        # it returns the resolved values so we can report them.
+        acq_name, filename_pattern = client.start_stream(
+            beam_ids,
+            acq_name=args.acq_name,
+            fpga_seq_end=fpga_seq_end,   # fpga_seq_start defaults to 0 ("start asap")
         )
 
         end_str = "indefinite" if args.no_duration else str(fpga_seq_end)

@@ -1,5 +1,8 @@
 """FrbSearchClient - Python client for FrbServer gRPC service."""
 
+import os
+import datetime
+
 import grpc
 from .grpc import frb_search_pb2
 from .grpc import frb_search_pb2_grpc
@@ -123,12 +126,12 @@ class FrbSearchClient:
 
     def start_stream(
         self,
-        acq_name: str,
-        filename_pattern: str,
         beam_ids: list[int],
+        acq_name: str = None,
+        filename_pattern: str = None,
         fpga_seq_start: int = 0,
-        fpga_seq_end: int = 2**63 - 1
-    ) -> None:
+        fpga_seq_end: int = None
+    ) -> tuple[str, str]:
         """Register a "stream": data matching (beam_ids x fpga-seq range) is
         queued for disk writing automatically as it flows through the server.
 
@@ -138,21 +141,41 @@ class FrbSearchClient:
         NOT captured retroactively, even if fpga_seq_start is in the past.
 
         Args:
-            acq_name: Nonempty identifier, unique among active streams
-                (used by show_streams() / cancel_stream()).
-            filename_pattern: Pattern with (BEAM) and (CHUNK) placeholders,
-                same format as write_files().
             beam_ids: Nonempty list of beam IDs (no all-beams convention;
                 list beams explicitly -- show_streams() returns the full list).
+            acq_name: Nonempty identifier, unique among active streams
+                (used by show_streams() / cancel_stream()). If None (default),
+                a name "{username}_{date}_{time}" is generated, e.g.
+                "kmsmith_26_07_05_143052".
+            filename_pattern: Pattern with (BEAM) and (CHUNK) placeholders,
+                same format as write_files(). If None (default),
+                "streams/{acq_name}/frame_b(BEAM)_t(CHUNK).asdf" is used.
             fpga_seq_start: Start of the fpga-seq range (inclusive);
                 0 (default) means "start asap".
-            fpga_seq_end: End of the fpga-seq range (exclusive);
-                2**63 - 1 (default) means "run indefinitely".
+            fpga_seq_end: End of the fpga-seq range (exclusive). None
+                (default) means "run indefinitely" (sent as 2**63 - 1 on
+                the wire).
+
+        Returns:
+            (acq_name, filename_pattern): the resolved values that were sent
+            (useful to the caller when either defaulted from None).
 
         Raises grpc.RpcError on validation failure (empty/duplicate acq_name,
         unknown beam_id, bad pattern, range entirely in the past, or server
         not yet initialized).
         """
+        if acq_name is None:
+            # "{username}_{date}_{time}", e.g. kmsmith_26_07_05_143052.
+            # ($USER mirrors run_server's nfs_dir {user} interpolation.)
+            user = os.environ.get('USER', 'unknown')
+            acq_name = user + '_' + datetime.datetime.now().strftime('%y_%m_%d_%H%M%S')
+
+        if filename_pattern is None:
+            filename_pattern = f"streams/{acq_name}/frame_b(BEAM)_t(CHUNK).asdf"
+
+        if fpga_seq_end is None:
+            fpga_seq_end = 2**63 - 1   # "run indefinitely"
+
         request = frb_search_pb2.StartStreamRequest(
             acq_name=acq_name,
             filename_pattern=filename_pattern,
@@ -161,6 +184,7 @@ class FrbSearchClient:
             fpga_seq_end=fpga_seq_end
         )
         self.stub.StartStream(request)
+        return acq_name, filename_pattern
 
     def show_streams(self):
         """Query the server for its active streams.

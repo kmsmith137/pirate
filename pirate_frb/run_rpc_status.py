@@ -72,17 +72,18 @@ class _ServerMonitor:
             # subscribe_files() returns a FileSubscriber whose constructor has
             # already opened the stream and consumed the server's ready
             # sentinel; iteration yields (filename, error_message, acq_name)
-            # triples. (acq_name is always "" here: this subscription uses
-            # the default subscribe_streams=False, so stream-triggered files
-            # are not delivered.)
-            with self.client.subscribe_files() as sub:
+            # triples. subscribe_streams=True, so files written by streams
+            # (nonempty acq_name) are reported here too, alongside the usual
+            # WriteFiles-triggered files (acq_name == "").
+            with self.client.subscribe_files(subscribe_streams=True) as sub:
                 for filename, error_message, acq_name in sub:
                     if self.stop_event.is_set():
                         return
+                    tag = f" (stream {acq_name})" if acq_name else ""
                     if error_message:
-                        print(f"[{self.addr}] {filename} failed: {error_message}")
+                        print(f"[{self.addr}] {filename} failed: {error_message}{tag}")
                     else:
-                        print(f"[{self.addr}] {filename} received")
+                        print(f"[{self.addr}] {filename} received{tag}")
         except grpc.RpcError as e:
             # CANCELLED here is from something OTHER than our own close()
             # (which the FileSubscriber converts to clean StopIteration). In
