@@ -465,6 +465,16 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    pf_weights: host ksgpu.Array<float>, shape (nbatches_wt, beams_per_batch,\n"
                "        t.ndm_wt, t.nt_wt, t.nprofiles, t.frequency_subbands.N) with\n"
                "        t = plan.trees[itree]. Weights may differ per slot and per beam.")
+          .def("fill_analytic_weights", &GpuDedisperser::fill_analytic_weights,
+               py::arg("freq_variances"),
+               "Fill the peak-finding weight arrays with NON-random analytic weights,\n"
+               "derived from the per-channel noise variances. All weight slots and beams\n"
+               "get identical weights (unlike fill_all_weights). This is the weighting a\n"
+               "real search uses, so peak-finding out_max values come out as SNRs. Must\n"
+               "call allocate() first; blocks (cudaDeviceSynchronize) before returning.\n\n"
+               "Args:\n"
+               "    freq_variances: host ksgpu.Array<double>, length nfreq (all positive).\n"
+               "        Typically XEngineMetadata.get_channel_variances().")
     ;
 
     // ReferenceDedisperser: CPU reference dedisperser (testing / variance studies).
