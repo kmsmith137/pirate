@@ -100,11 +100,16 @@ message GetXEngineMetadataResponse {
   string yaml_string = 1;  // Empty string if metadata not yet available
 }
 
-// Request message for WriteFiles
+// Request message for WriteFiles.
+//
+// The time range is expressed as fpga sequence numbers (aka "fpga_seq" or
+// "fpga counts"), half-open: files are written for all chunks overlapping
+//   fpga_seq_start <= f < fpga_seq_end.
+// The server translates this to its internal (absolute) time-chunk indices.
 message WriteFilesRequest {
   repeated int64 beams = 1;           // List of beam IDs to write
-  int64 min_time_chunk_index = 2;     // First time chunk index (inclusive)
-  int64 max_time_chunk_index = 3;     // Last time chunk index (inclusive)
+  int64 fpga_seq_start = 2;           // Start of fpga-seq range (inclusive)
+  int64 fpga_seq_end = 3;             // End of fpga-seq range (exclusive)
   string filename_pattern = 4;        // Pattern with (BEAM) and (CHUNK) placeholders
 }
 

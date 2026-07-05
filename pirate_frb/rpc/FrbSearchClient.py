@@ -94,16 +94,18 @@ class FrbSearchClient:
     def write_files(
         self,
         beams: list[int],
-        min_time_chunk_index: int,
-        max_time_chunk_index: int,
+        fpga_seq_start: int,
+        fpga_seq_end: int,
         filename_pattern: str
     ) -> list[str]:
         """Request the server to write files to disk.
 
         Args:
             beams: List of beam IDs to write.
-            min_time_chunk_index: First time chunk index (inclusive).
-            max_time_chunk_index: Last time chunk index (inclusive).
+            fpga_seq_start: Start of the fpga-seq range (inclusive).
+            fpga_seq_end: End of the fpga-seq range (exclusive). Files are
+                written for all chunks overlapping
+                fpga_seq_start <= f < fpga_seq_end.
             filename_pattern: Pattern with (BEAM) and (CHUNK) placeholders,
                 e.g. "dir1/dir2/file_(BEAM)_(CHUNK).asdf"
 
@@ -112,8 +114,8 @@ class FrbSearchClient:
         """
         request = frb_search_pb2.WriteFilesRequest(
             beams=beams,
-            min_time_chunk_index=min_time_chunk_index,
-            max_time_chunk_index=max_time_chunk_index,
+            fpga_seq_start=fpga_seq_start,
+            fpga_seq_end=fpga_seq_end,
             filename_pattern=filename_pattern
         )
         response = self.stub.WriteFiles(request)

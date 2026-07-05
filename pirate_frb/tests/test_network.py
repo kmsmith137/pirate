@@ -461,11 +461,16 @@ class NetworkTester:
                 expanded[fn] = (safe_lower <= c <= safe_upper)
                 self.filename_meta[fn] = (c, b)
 
+        # write_files takes an fpga-seq range (half-open). Convert our inclusive
+        # chunk range [chunk_min, chunk_max] to [chunk_min*spc, (chunk_max+1)*spc),
+        # where spc = seq_per_chunk = time_samples_per_chunk * seq_per_frb_time_sample
+        # (same value the server uses, so it recovers exactly [chunk_min, chunk_max]).
+        spc = p['time_samples_per_chunk'] * self.xmd.seq_per_frb_time_sample
         filenames = self.rpc_client.write_files(
-            beams                = selected_beams,
-            min_time_chunk_index = chunk_min,
-            max_time_chunk_index = chunk_max,
-            filename_pattern     = filename_pattern,
+            beams            = selected_beams,
+            fpga_seq_start   = chunk_min * spc,
+            fpga_seq_end     = (chunk_max + 1) * spc,
+            filename_pattern = filename_pattern,
         )
 
         returned = set(filenames)

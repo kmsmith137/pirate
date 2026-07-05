@@ -1083,6 +1083,13 @@ def _rpc_write_one(addr):
         nbeams = len(beam_ids)
         print(f"[{addr}] Got metadata: {nbeams} beams, beam_ids={beam_ids}")
 
+        # seq_per_chunk (fpga seqs per time chunk) = time_samples_per_chunk *
+        # seq_per_frb_time_sample. The former comes from GetConfig, the latter
+        # from the X-engine metadata. Used to convert our chunk range (derived
+        # from the ring-buffer frame-id counters below) into the fpga-seq range
+        # that write_files expects.
+        seq_per_chunk = client.get_config().time_samples_per_chunk * metadata['seq_per_frb_time_sample']
+
         # Select random subset of beam IDs (1 to min(nbeams, 3)).
         n = random.randint(1, min(nbeams, 3))
         selected_beams = random.sample(beam_ids, n)
@@ -1121,13 +1128,14 @@ def _rpc_write_one(addr):
 
         print(f"[{addr}] Requesting time_chunk_index range [{t0}, {t1})")
 
-        # Send write_files RPC.
-        # Note: write_files takes (min_time_chunk_index, max_time_chunk_index) as inclusive range.
+        # Send write_files RPC. Convert the chunk range [t0, t1) to the
+        # half-open fpga-seq range [t0*seq_per_chunk, t1*seq_per_chunk) that
+        # write_files expects.
         filename_pattern = "test_(BEAM)_(CHUNK).asdf"
         filenames = client.write_files(
             beams=selected_beams,
-            min_time_chunk_index=t0,
-            max_time_chunk_index=t1 - 1,  # inclusive
+            fpga_seq_start=t0 * seq_per_chunk,
+            fpga_seq_end=t1 * seq_per_chunk,
             filename_pattern=filename_pattern
         )
 

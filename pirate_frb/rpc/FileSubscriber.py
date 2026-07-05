@@ -35,7 +35,7 @@ class FileSubscriber:
         with client.subscribe_files() as sub:
             filenames = client.write_files(
                 beams=[100, 101],
-                min_time_chunk_index=0, max_time_chunk_index=4,
+                fpga_seq_start=0, fpga_seq_end=4 * seq_per_chunk,
                 filename_pattern="x_(BEAM)_(CHUNK).asdf",
             )
             remaining = set(filenames)

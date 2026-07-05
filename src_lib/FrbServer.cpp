@@ -1563,78 +1563,92 @@ void FrbRpcService::_WriteFiles(const fs::WriteFilesRequest *request, fs::WriteF
     shared_ptr<FrbServer> s = _lock_state();
     shared_ptr<FileWriter> file_writer = s->params.file_writer;
 
-    // Convert beam_ids to beam_indices.
-    vector<int> beam_indices;
-    beam_indices.reserve(request->beams_size());
+    // RPC callers express the time range as fpga sequence numbers (aka fpga
+    // counts), half-open: files are written for all chunks overlapping
+    // [fpga_seq_start, fpga_seq_end). The FrbServer works internally in
+    // absolute time-chunk indices, so we translate to a chunk-index range
+    // here, up front, and use chunk indices for everything below.
+    long fpga_seq_start = request->fpga_seq_start();
+    long fpga_seq_end   = request->fpga_seq_end();
 
-    for (int i = 0; i < request->beams_size(); i++) {
-        long beam_id = request->beams(i);
-        auto it = s->beam_id_to_index.find(beam_id);
-        if (it == s->beam_id_to_index.end()) {
-            stringstream ss;
-            ss << "WriteFiles: unknown beam_id " << beam_id;
-            throw runtime_error(ss.str());
-        }
-        beam_indices.push_back(it->second);
-    }
-
-    // Validate time_chunk_index range.
-    long min_time_chunk_index = request->min_time_chunk_index();
-    long max_time_chunk_index = request->max_time_chunk_index();
-
-    if ((min_time_chunk_index < 0) || (min_time_chunk_index > max_time_chunk_index)) {
+    if ((fpga_seq_start < 0) || (fpga_seq_end <= fpga_seq_start)) {
         stringstream ss;
-        ss << "WriteFiles: invalid time_chunk_index range [" << min_time_chunk_index
-            << ", " << max_time_chunk_index << "]";
+        ss << "WriteFiles: invalid fpga_seq range [" << fpga_seq_start << ", "
+            << fpga_seq_end << ") (require 0 <= fpga_seq_start < fpga_seq_end)";
         throw runtime_error(ss.str());
     }
 
     // Construct FilenamePattern (validates that pattern contains "(BEAM)" and "(CHUNK)").
     FilenamePattern filename_pattern(request->filename_pattern());
 
-    // Get frames from ring buffer.
-    // We compute frame_id = time_chunk_index * nbeams + beam_index directly for each
-    // (time_chunk_index, beam_index) pair, rather than iterating over the entire ring
-    // buffer and checking each frame's metadata. This is O(num_time_chunks * num_beams)
-    // instead of O(ringbuf_size).
+    vector<int> beam_indices;
+    beam_indices.reserve(request->beams_size());
 
     vector<shared_ptr<AssembledFrame>> local_frames;
 
-    long num_time_chunks = max_time_chunk_index - min_time_chunk_index + 1;
-    local_frames.reserve(num_time_chunks * beam_indices.size());
+    {
+        unique_lock<std::mutex> server_lock(s->mutex);
 
-    // Pull nbeams from the canonical metadata (frame_allocator) before
-    // taking FrbServer::mutex. If metadata is not yet available, there are
-    // no frames to write and the filename list returned to the client is
-    // empty.
-    shared_ptr<const XEngineMetadata> m = s->frame_allocator->get_metadata(/*blocking=*/false);
-    if (!m)
-        return;
-    long rb_nbeams = m->get_nbeams();
+        // The fpga-seq <-> chunk mapping, the ring buffer, and beam_id_to_index
+        // only exist once the server has locked onto the stream: X-engine
+        // metadata parsed AND the initial fpga chunk established (both are
+        // prerequisites for rb_initialized). Fail if the server isn't there yet.
+        if (!s->rb_initialized)
+            throw runtime_error("WriteFiles: server has not yet established an initial fpga chunk");
 
-    unique_lock<std::mutex> server_lock(s->mutex);
+        // s->metadata is non-null once rb_initialized (published together).
+        long rb_nbeams = s->metadata->get_nbeams();
 
-    // Use rb_processed (not rb_assembled) as the upper bound: frames in
-    // [rb_processed, rb_assembled) are fully assembled but the GPU may
-    // still be mutating them, so they are NOT rpc-writeable.
-    long rb_size      = s->frame_ringbuf.size();
-    long rb_start     = s->rb_start;
-    long rb_processed = s->rb_processed;
+        // Chunk t spans fpga seqs [t*seq_per_chunk, (t+1)*seq_per_chunk),
+        // measured from fpga seq 0 (time_chunk_index is absolute), so fpga seq f
+        // lives in chunk floor(f / seq_per_chunk). Map the half-open fpga range
+        // to the inclusive range of chunks it touches.
+        long seq_per_chunk = s->frame_allocator->time_samples_per_chunk * s->metadata->seq_per_frb_time_sample;
+        xassert(seq_per_chunk > 0);
+        long min_time_chunk_index = fpga_seq_start / seq_per_chunk;
+        long max_time_chunk_index = (fpga_seq_end - 1) / seq_per_chunk;
 
-    min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
-    max_time_chunk_index = min(max_time_chunk_index, rb_processed / rb_nbeams);
+        // Convert beam_ids to beam_indices.
+        for (int i = 0; i < request->beams_size(); i++) {
+            long beam_id = request->beams(i);
+            auto it = s->beam_id_to_index.find(beam_id);
+            if (it == s->beam_id_to_index.end()) {
+                stringstream ss;
+                ss << "WriteFiles: unknown beam_id " << beam_id;
+                throw runtime_error(ss.str());
+            }
+            beam_indices.push_back(it->second);
+        }
 
-    for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
-        for (int b : beam_indices) {
-            long frame_id = t * rb_nbeams + b;
-            if ((frame_id >= rb_start) && (frame_id < rb_processed)) {
-                long rb_slot = frame_id % rb_size;
-                local_frames.push_back(s->frame_ringbuf[rb_slot]);
+        // Get frames from the ring buffer. We compute frame_id =
+        // time_chunk_index * nbeams + beam_index directly for each
+        // (time_chunk_index, beam_index) pair, rather than iterating over the
+        // entire ring buffer and checking each frame's metadata. This is
+        // O(num_time_chunks * num_beams) instead of O(ringbuf_size).
+        //
+        // Use rb_processed (not rb_assembled) as the upper bound: frames in
+        // [rb_processed, rb_assembled) are fully assembled but the GPU may
+        // still be mutating them, so they are NOT rpc-writeable.
+        long rb_size      = s->frame_ringbuf.size();
+        long rb_start     = s->rb_start;
+        long rb_processed = s->rb_processed;
+
+        min_time_chunk_index = max(min_time_chunk_index, rb_start / rb_nbeams);
+        max_time_chunk_index = min(max_time_chunk_index, rb_processed / rb_nbeams);
+
+        long num_time_chunks = max(0L, max_time_chunk_index - min_time_chunk_index + 1);
+        local_frames.reserve(num_time_chunks * beam_indices.size());
+
+        for (long t = min_time_chunk_index; t <= max_time_chunk_index; t++) {
+            for (int b : beam_indices) {
+                long frame_id = t * rb_nbeams + b;
+                if ((frame_id >= rb_start) && (frame_id < rb_processed)) {
+                    long rb_slot = frame_id % rb_size;
+                    local_frames.push_back(s->frame_ringbuf[rb_slot]);
+                }
             }
         }
     }
-
-    server_lock.unlock();
 
     // Process frames in reverse order: push filenames onto frame->save_paths,
     // then call file_writer->process_frame(). Reverse order ensures that frames
